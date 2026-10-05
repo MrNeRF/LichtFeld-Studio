@@ -50,16 +50,16 @@ namespace lfs::rendering {
 
         // Grows the scratch for `splats` sources, a width x height frame and
         // `capacity` tile instances.
-        [[nodiscard]] Result<void> reserve(uint32_t splats, uint32_t width, uint32_t height, uint32_t capacity);
+        [[nodiscard]] lfs::Result<void> reserve(uint32_t splats, uint32_t width, uint32_t height, uint32_t capacity);
 
         // Blends `count` ProjectedSplat records (and 3DGUT geometry) into
         // color(), depth() and pick(). An instance overflow sets status().error.
-        [[nodiscard]] Result<void> rasterize(const core::Tensor& projected, const core::Tensor* gut, uint32_t count,
+        [[nodiscard]] lfs::Result<void> rasterize(const core::Tensor& projected, const core::Tensor* gut, uint32_t count,
                                              SplatRasterMode mode, const SplatRasterParameters& parameters);
 
         // Writes the display image (UInt8 [H,W,4]) and linear view depth
         // (Float32 [H,W]); on overflow, the previous outputs when given.
-        [[nodiscard]] Result<void> present(const SplatPresentParameters& parameters, core::Tensor& rgba, core::Tensor& linear_depth,
+        [[nodiscard]] lfs::Result<void> present(const SplatPresentParameters& parameters, core::Tensor& rgba, core::Tensor& linear_depth,
                                            const core::Tensor* previous_rgba = nullptr, const core::Tensor* previous_depth = nullptr);
 
         [[nodiscard]] const core::Tensor& status() const; // RasterStatus bytes

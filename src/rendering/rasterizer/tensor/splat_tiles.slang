@@ -23,6 +23,7 @@ struct Parameters {
     Ptr<uint, Access.ReadWrite> source_keys;       // source-sorted frames: uncompacted depth keys
     Ptr<uint, Access.ReadWrite> source_ids;
     Ptr<uint64_t, Access.ReadWrite> group_offsets; // exclusive scan of the visible counts in `offsets`
+    Ptr<uint2, Access.ReadWrite> depth_jobs;       // depth batches: (tile, first instance) per chunk slot
 };
 [[vk::push_constant]] ConstantBuffer<Parameters> p;
 
@@ -221,4 +222,28 @@ void tile_ranges(uint3 tid : SV_DispatchThreadID) {
     }
     if (uint64_t(i) + 1ul == status.required)
         p.ranges[tile * 2u + 1u] = i + 1u;
+}
+
+uint depth_split_threshold(RasterStatus status, RasterParameters r) {
+    return status.required > uint64_t(r.tiles) * 896ul ? 2048u : 16384u;
+}
+
+// Depth batches: a long tile's instances split into kDepthChunkSize chunks,
+// each one blend job at slot begin / kDepthChunkSize + tile. Unused slots
+// stay ~0 (filled by the host).
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void tile_depth_batches(uint3 tid : SV_DispatchThreadID) {
+    const uint tile = tid.x;
+    const RasterParameters r = p.raster[0];
+    const RasterStatus status = p.status[0];
+    if (tile >= r.tiles || status.error != 0u || status.required > uint64_t(r.mask_limits.z))
+        return;
+    const uint begin = p.ranges[tile * 2u], end = p.ranges[tile * 2u + 1u];
+    const uint base = begin / kDepthChunkSize + tile;
+    const uint chunks = end - begin > depth_split_threshold(status, r)
+                            ? (end - begin) / kDepthChunkSize + ((end - begin) % kDepthChunkSize != 0u ? 1u : 0u)
+                            : (end > begin ? 1u : 0u);
+    for (uint chunk = 0u; chunk < chunks; ++chunk)
+        p.depth_jobs[base + chunk] = uint2(tile, begin + chunk * kDepthChunkSize);
 }

@@ -4,7 +4,7 @@
 # Single-source splat rasterizer: Slang passes run through the tensor library
 # on Metal and Vulkan. It replaces the native Metal and vksplat rasterizers
 # pass by pass.
-add_library(lfs_tensor_rasterizer STATIC splat_tile_binner.cpp splat_rasterizer.cpp)
+add_library(lfs_tensor_rasterizer STATIC splat_projector.cpp splat_tile_binner.cpp splat_rasterizer.cpp)
 target_compile_features(lfs_tensor_rasterizer PUBLIC cxx_std_23)
 set_target_properties(lfs_tensor_rasterizer PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(lfs_tensor_rasterizer PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -15,13 +15,19 @@ lfs_add_gpu_program(lfs_tensor_rasterizer splat_sort SOURCE splat_sort.slang
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_sort32 SOURCE splat_sort.slang
     COMPUTE sort_histogram sort_digit_scan sort_digit_offsets sort_scatter DEFINES LFS_SORT_KEY32=1)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_tiles SOURCE splat_tiles.slang
-    COMPUTE tile_counts tile_status source_key_groups source_compact source_permutation tile_instances tile_ranges)
+    COMPUTE tile_counts tile_status source_key_groups source_compact source_permutation tile_instances tile_ranges tile_depth_batches)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_project SOURCE splat_project.slang COMPUTE project_splats)
-# Blend variants: one fully specialized plain-viewer blend, and per raster mode
-# and group width generic blends that read their feature flags per dispatch.
+# Blend variants. The plain opaque view is specialized at compile time with
+# relaxed math, as the native rasterizer does: serial (128), and depth-batch
+# chunks (128|512) and prefix (128|512|1024). Generic blends per raster mode and
+# group width read their feature flags per dispatch.
 set(_blend_entries tile_blend tile_depth_compose)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs_fast SOURCE splat_blend.slang COMPUTE ${_blend_entries}
-    DEFINES LFS_BLEND_MODE=0 LFS_BLEND_FLAGS=128)
+    DEFINES LFS_BLEND_MODE=0 LFS_BLEND_FLAGS=128 RELAXED_MATH)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs_batch SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+    DEFINES LFS_BLEND_MODE=0 LFS_BLEND_FLAGS=640 RELAXED_MATH)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs_prefix SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+    DEFINES LFS_BLEND_MODE=0 LFS_BLEND_FLAGS=1664 RELAXED_MATH)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs32 SOURCE splat_blend.slang COMPUTE ${_blend_entries}
     DEFINES LFS_BLEND_MODE=0 LFS_BLEND_SINGLE_SIMD=1)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs64 SOURCE splat_blend.slang COMPUTE ${_blend_entries} DEFINES LFS_BLEND_MODE=0)

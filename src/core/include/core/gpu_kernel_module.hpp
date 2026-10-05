@@ -35,6 +35,10 @@ namespace lfs::core {
             uint32_t parameter_bytes;        // build-time Slang reflection
             std::span<const uint32_t> tensor_offsets;
             std::array<uint32_t, 3> thread_group{1, 1, 1};
+            // Metal compiles the entry with relaxed math (reassociation, fast
+            // functions; Inf/NaN still honored), as native opaque blending does.
+            // Other backends keep precise floating point.
+            bool relaxed_math = false;
         };
         enum class Access : uint8_t { Read,
                                       ReadWrite };

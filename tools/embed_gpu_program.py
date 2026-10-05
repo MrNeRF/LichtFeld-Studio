@@ -8,7 +8,9 @@ import sys
 
 
 def main():
-    directory, name, *artifacts = sys.argv[1:]
+    arguments = sys.argv[1:]
+    relaxed_math = "--relaxed-math" in arguments
+    directory, name, *artifacts = [a for a in arguments if a != "--relaxed-math"]
     assert len(artifacts) % 5 == 0, f"Expected groups of 5 artifact arguments, got {len(artifacts)}"
     root = pathlib.Path(directory)
     declaration = f"std::span<const lfs::core::GpuKernelModule::Entry> {name}_entries()"
@@ -39,7 +41,7 @@ def main():
         source.append('};')
         entries.append(f'{{"{entry}", M::Stage::{stage}, lfs::core::GpuBackend::{backend}, '
                        f'std::as_bytes(std::span({symbol})), {parameter_bytes}, {symbol}_offsets, '
-                       + '{' + ','.join(map(str, group)) + '}}')
+                       + '{' + ','.join(map(str, group)) + '}' + (', true' if relaxed_math else '') + '}')
     source += ['}', declaration + ' {', 'using M = lfs::core::GpuKernelModule;',
                'static const M::Entry entries[] = {' + ',\n'.join(entries) + '};', 'return entries;', '}']
     (root / f"{name}.cpp").write_text('\n'.join(source) + '\n', encoding="utf-8")

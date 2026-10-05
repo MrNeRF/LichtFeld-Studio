@@ -444,7 +444,7 @@ if(LFS_TENSOR_METAL)
     unset(_lfs_metal_arc_sources)
     set_target_properties(lfs_visualizer PROPERTIES OBJCXX_STANDARD 23 OBJCXX_STANDARD_REQUIRED YES)
     target_include_directories(lfs_visualizer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
-    target_link_libraries(lfs_visualizer PRIVATE lfs_metal_viewer)
+    target_link_libraries(lfs_visualizer PRIVATE lfs_metal_viewer lfs_tensor_rasterizer)
     target_link_libraries(lfs_visualizer PRIVATE "-framework QuartzCore")
 endif()
 

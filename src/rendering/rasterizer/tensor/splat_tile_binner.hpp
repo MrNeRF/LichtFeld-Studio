@@ -29,7 +29,7 @@ namespace lfs::rendering {
 
         // Reserves scratch for `splats` sources, `tiles` tiles and `capacity`
         // instances. Grows only.
-        [[nodiscard]] Result<void> reserve(uint32_t splats, uint32_t tiles, uint32_t capacity);
+        [[nodiscard]] lfs::Result<void> reserve(uint32_t splats, uint32_t tiles, uint32_t capacity);
 
         // `splats` holds `count` ProjectedSplat records; `raster` one
         // RasterParameters whose count, tiles, columns and capacity match.
@@ -37,14 +37,20 @@ namespace lfs::rendering {
         // `source_sorted` (raster flag 256) sorts the visible sources by depth
         // first and then only the tile bits of each instance: cheaper when
         // instances outnumber sources. Requires count <= capacity.
-        [[nodiscard]] Result<void> bin(const core::Tensor& splats, const core::Tensor& raster,
+        [[nodiscard]] lfs::Result<void> bin(const core::Tensor& splats, const core::Tensor& raster,
                                        uint32_t count, uint32_t tiles, bool source_sorted = false);
+
+        // Writes the depth-batch job of every chunk slot of the last bin() into
+        // `jobs` (Int32 pairs); slots of tiles below the split stay -1.
+        [[nodiscard]] lfs::Result<void> depth_batches(const core::Tensor& raster, uint32_t tiles, core::Tensor& jobs);
 
         // Results of the last bin(), valid on the tensor timeline.
         [[nodiscard]] const core::Tensor& status() const;  // RasterStatus bytes
         [[nodiscard]] const core::Tensor& keys() const;    // Int64 (tile << 32 | depth bits); uint32 tiles when source-sorted
         [[nodiscard]] const core::Tensor& indices() const; // UInt32 source per sorted key
         [[nodiscard]] const core::Tensor& ranges() const;  // UInt32 [tiles][begin, end)
+        // UInt32[21]: sort and range dispatches; [18..20] the depth-batch blend.
+        [[nodiscard]] const core::Tensor& dispatch_args() const;
 
     private:
         struct Impl;

@@ -198,6 +198,81 @@ namespace {
 
     // Full frames: native preprocessor + TileRasterizer against the Slang
     // projection + SplatRasterizer, on the same scene and camera.
+    // Replays a dumped viewer frame (count, Projection, raster parameters,
+    // ProjectedSplat records) through both rasterizers: timing and image.
+    int run_replay(id<MTLDevice> device, const char* path) {
+        const lfs::core::GpuBackendScope scope(GpuBackend::Metal);
+        FILE* file = std::fopen(path, "rb");
+        require(file != nullptr, "cannot open replay");
+        uint32_t count = 0;
+        Projection projection{};
+        lfs::rendering::SplatRasterParameters raster{};
+        require(std::fread(&count, 4, 1, file) == 1 && std::fread(&projection, sizeof(projection), 1, file) == 1 &&
+                    std::fread(&raster, sizeof(raster), 1, file) == 1, "short replay header");
+        std::vector<uint8_t> bytes(size_t(count) * 64);
+        require(std::fread(bytes.data(), bytes.size(), 1, file) == 1, "short replay body");
+        std::fclose(file);
+        const uint32_t width = raster.width, height = raster.height, capacity = raster.capacity;
+        auto queue = [device newCommandQueue];
+        auto projected_native = [device newBufferWithBytes:bytes.data() length:bytes.size() options:MTLResourceStorageModeShared];
+        TileRasterizer native(device);
+        std::vector<std::unique_ptr<RasterFrame>> ring;
+        for (int i = 0; i < 3; ++i)
+            ring.push_back(std::make_unique<RasterFrame>(device, width, height, count, capacity));
+        const simd_float4 background = simd_make_float4(raster.background[0], raster.background[1], raster.background[2], raster.background[3]);
+        constexpr int kFrames = 40;
+        std::array<id<MTLCommandBuffer>, 3> inflight{};
+        double gpu_ms = 0;
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < kFrames; ++i) {
+            if (inflight[i % 3]) {
+                [inflight[i % 3] waitUntilCompleted];
+                if (i >= 6)
+                    gpu_ms += (inflight[i % 3].GPUEndTime - inflight[i % 3].GPUStartTime) * 1e3;
+            }
+            auto command = [queue commandBuffer];
+            native.encode(command, {projected_native}, count, RasterMode::Gaussian, background, *ring[i % 3], {}, {}, projection);
+            [command commit];
+            inflight[i % 3] = command;
+        }
+        for (auto& command : inflight)
+            [command waitUntilCompleted];
+        const double native_wall = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / kFrames;
+        const auto native_status = ring[(kFrames - 1) % 3]->status();
+        const auto native_color = read_texture(device, queue, ring[(kFrames - 1) % 3]->color(), 8);
+
+        lfs::rendering::SplatRasterizer slang(GpuBackend::Metal);
+        const auto projected = tensor(bytes);
+        require(bool(slang.reserve(count, width, height, capacity)), "Slang reserve failed");
+        auto slang_start = std::chrono::steady_clock::now();
+        for (int i = 0; i < kFrames; ++i) {
+            if (i == 3) {
+                (void)download<uint64_t>(slang.status(), 1);
+                slang_start = std::chrono::steady_clock::now();
+            }
+            auto r = slang.rasterize(projected, nullptr, count, lfs::rendering::SplatRasterMode::Gaussian, raster);
+            require(bool(r), "Slang rasterize failed");
+        }
+        (void)download<uint64_t>(slang.status(), 1);
+        const double slang_wall = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - slang_start).count() / (kFrames - 3);
+        const auto slang_color = download<uint16_t>(slang.color(), size_t(width) * height * 4);
+        const auto* nc = reinterpret_cast<const _Float16*>(native_color.data());
+        const auto* sc = reinterpret_cast<const _Float16*>(slang_color.data());
+        double max_color = 0;
+        size_t over_one = 0;
+        for (size_t i = 0; i < size_t(width) * height; ++i) {
+            double pixel = 0;
+            for (int c = 0; c < 4; ++c)
+                pixel = std::max(pixel, std::fabs(double(nc[i * 4 + c]) - double(sc[i * 4 + c])));
+            max_color = std::max(max_color, pixel);
+            over_one += pixel > 1.0 / 255;
+        }
+        std::printf("replay %ux%u count=%u instances=%llu: native wall=%.2f ms gpu=%.2f ms | slang wall=%.2f ms | color max=%.2f/255 >1/255=%.4f%%\n",
+                    width, height, count, (unsigned long long)native_status.required_instances, native_wall, gpu_ms / (kFrames - 6),
+                    slang_wall, max_color * 255, 100.0 * over_one / (size_t(width) * height));
+        return 0;
+    }
+
     int run_frames(id<MTLDevice> device) {
         const lfs::core::GpuBackendScope scope(GpuBackend::Metal);
         auto module = M::load(splat_project_entries(), GpuBackend::Metal);
@@ -491,6 +566,8 @@ int main() {
             return LFS_METAL_TEST_REQUIRE_DEVICE ? 1 : 77;
         }
         try {
+            if (const char* replay = std::getenv("LFS_REPLAY"))
+                return run_replay(device, replay);
             return (run(device) | run_frames(device)) ? 1 : 0;
         } catch (const std::exception& error) {
             std::fprintf(stderr, "tensor raster parity: %s\n", error.what());

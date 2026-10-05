@@ -33,8 +33,8 @@ namespace lfs::core::internal {
                     if (entry.backend != GpuBackend::Metal) continue;
                     MTLCompileOptions* options = [MTLCompileOptions new];
                     options.languageVersion = MTLLanguageVersion3_1;
-                    options.mathMode = MTLMathModeSafe;
-                    options.mathFloatingPointFunctions = MTLMathFloatingPointFunctionsPrecise;
+                    options.mathMode = entry.relaxed_math ? MTLMathModeRelaxed : MTLMathModeSafe;
+                    options.mathFloatingPointFunctions = entry.relaxed_math ? MTLMathFloatingPointFunctionsFast : MTLMathFloatingPointFunctionsPrecise;
                     NSString* source = [[NSString alloc] initWithBytes:entry.code.data() length:entry.code.size() encoding:NSUTF8StringEncoding];
                     NSError* error = nil;
                     id<MTLLibrary> library = [reader_.device() newLibraryWithSource:source options:options error:&error];

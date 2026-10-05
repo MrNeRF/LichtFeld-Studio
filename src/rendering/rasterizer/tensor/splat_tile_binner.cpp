@@ -34,9 +34,9 @@ namespace lfs::rendering {
         struct TileParameters {
             uint64_t splats = 0, counts = 0, offsets = 0, status = 0, dispatch_args = 0, keys = 0;
             uint64_t indices = 0, ranges = 0, source_order = 0, source_counts = 0, raster = 0;
-            uint64_t source_keys = 0, source_ids = 0, group_offsets = 0;
+            uint64_t source_keys = 0, source_ids = 0, group_offsets = 0, depth_jobs = 0;
         };
-        static_assert(sizeof(ScanParameters) == 40 && sizeof(SortParameters) == 72 && sizeof(TileParameters) == 112);
+        static_assert(sizeof(ScanParameters) == 40 && sizeof(SortParameters) == 72 && sizeof(TileParameters) == 120);
 
         constexpr uint32_t kSortArgs = 0, kRangeArgs = 3, kDispatchArgs = 21;
 
@@ -68,10 +68,10 @@ namespace lfs::rendering {
         std::vector<ScanLevel> scan_levels;
         uint32_t sorted = 0;
 
-        Result<void> run(M& module, const M::Dispatch& dispatch) { return module.dispatch(dispatch); }
+        lfs::Result<void> run(M& module, const M::Dispatch& dispatch) { return module.dispatch(dispatch); }
 
         // Exclusive scan of `count` uint64 values, one level of block sums per call.
-        Result<void> scan_counts(const Tensor& input, const Tensor& output, const uint32_t count, const size_t level) {
+        lfs::Result<void> scan_counts(const Tensor& input, const Tensor& output, const uint32_t count, const size_t level) {
             if (count == 0)
                 return {};
             auto& storage = scan_levels.at(level);
@@ -94,7 +94,7 @@ namespace lfs::rendering {
                                .groups = {groups, 1, 1}, .group = {256, 1, 1}});
         }
 
-        Result<void> sort_pass(M& module, const uint32_t pass) {
+        lfs::Result<void> sort_pass(M& module, const uint32_t pass) {
             const uint32_t src = pass % 2, dst = 1 - src;
             const SortParameters parameters{.shift = pass * 8};
             const std::array bindings{M::Binding{0, &keys[src]}, M::Binding{8, &indices[src]},
@@ -130,7 +130,7 @@ namespace lfs::rendering {
 
     SplatTileBinner::~SplatTileBinner() = default;
 
-    Result<void> SplatTileBinner::reserve(const uint32_t splats, const uint32_t tiles, const uint32_t capacity) {
+    lfs::Result<void> SplatTileBinner::reserve(const uint32_t splats, const uint32_t tiles, const uint32_t capacity) {
         auto& s = *impl_;
         const core::GpuBackendScope scope(s.backend);
         if (splats > s.max_splats) {
@@ -166,11 +166,11 @@ namespace lfs::rendering {
         return {};
     }
 
-    Result<void> SplatTileBinner::bin(const Tensor& splats, const Tensor& raster, const uint32_t count, const uint32_t tiles,
+    lfs::Result<void> SplatTileBinner::bin(const Tensor& splats, const Tensor& raster, const uint32_t count, const uint32_t tiles,
                                       const bool source_sorted) {
         auto& s = *impl_;
         if (count > s.max_splats || tiles > s.max_tiles || s.capacity == 0 || tiles == 0 || (source_sorted && count > s.capacity))
-            return Result<void>::failure(make_error({.code = ErrorCode::InvalidArgument,
+            return lfs::Result<void>::failure(make_error({.code = ErrorCode::InvalidArgument,
                                                      .domain = ErrorDomain::Rendering,
                                                      .detail = std::format("Tile binning exceeds its reservation (count={}/{}, tiles={}/{}, capacity={}, source_sorted={})",
                                                                            count, s.max_splats, tiles, s.max_tiles, s.capacity, source_sorted),
@@ -193,7 +193,8 @@ namespace lfs::rendering {
                                       M::Binding{40, &s.keys[0], RW}, M::Binding{48, &s.indices[0], RW},
                                       M::Binding{56, nullptr}, M::Binding{64, &s.keys[1], RW}, M::Binding{72, &s.counts, RW},
                                       M::Binding{80, &raster}, M::Binding{88, &s.keys[1], RW},
-                                      M::Binding{96, &s.indices[1], RW}, M::Binding{104, &s.group_offsets, RW}};
+                                      M::Binding{96, &s.indices[1], RW}, M::Binding{104, &s.group_offsets, RW},
+                                      M::Binding{112, nullptr}};
             const M::Arguments arguments{bytes(parameters), bindings};
             if (auto r = s.run(*s.tiles, {.function = "source_key_groups", .arguments = arguments,
                                           .groups = {groups, 1, 1}, .group = {256, 1, 1}});
@@ -218,7 +219,8 @@ namespace lfs::rendering {
                                   M::Binding{40, &s.keys[0], RW}, M::Binding{48, &s.indices[0], RW},
                                   M::Binding{56, &s.ranges, RW}, M::Binding{64, source_sorted ? &s.keys[1] : nullptr, RW},
                                   M::Binding{72, source_sorted ? &s.counts : nullptr, RW}, M::Binding{80, &raster},
-                                  M::Binding{88, nullptr}, M::Binding{96, nullptr}, M::Binding{104, nullptr}};
+                                  M::Binding{88, nullptr}, M::Binding{96, nullptr}, M::Binding{104, nullptr},
+                                  M::Binding{112, nullptr}};
         const M::Arguments arguments{bytes(parameters), bindings};
         if (count != 0) {
             if (auto r = s.run(*s.tiles, {.function = "tile_counts", .arguments = arguments,
@@ -256,6 +258,21 @@ namespace lfs::rendering {
         return {};
     }
 
+    lfs::Result<void> SplatTileBinner::depth_batches(const Tensor& raster, const uint32_t tiles, Tensor& jobs) {
+        auto& s = *impl_;
+        const core::GpuBackendScope scope(s.backend);
+        jobs.fill_(-1.f); // every unused slot reads as tile ~0
+        const TileParameters parameters{};
+        const std::array bindings{M::Binding{0, nullptr}, M::Binding{8, nullptr}, M::Binding{16, nullptr},
+                                  M::Binding{24, &s.status}, M::Binding{32, nullptr}, M::Binding{40, nullptr},
+                                  M::Binding{48, nullptr}, M::Binding{56, &s.ranges}, M::Binding{64, nullptr},
+                                  M::Binding{72, nullptr}, M::Binding{80, &raster}, M::Binding{88, nullptr},
+                                  M::Binding{96, nullptr}, M::Binding{104, nullptr}, M::Binding{112, &jobs, RW}};
+        return s.run(*s.tiles, {.function = "tile_depth_batches", .arguments = {bytes(parameters), bindings},
+                                .groups = {ceil_div(tiles, 256), 1, 1}, .group = {256, 1, 1}});
+    }
+
+    const Tensor& SplatTileBinner::dispatch_args() const { return impl_->dispatch_args; }
     const Tensor& SplatTileBinner::status() const { return impl_->status; }
     const Tensor& SplatTileBinner::keys() const { return impl_->keys[impl_->sorted]; }
     const Tensor& SplatTileBinner::indices() const { return impl_->indices[impl_->sorted]; }

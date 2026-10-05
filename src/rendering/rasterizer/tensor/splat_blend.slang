@@ -58,7 +58,7 @@ struct Parameters {
     Ptr<float4, Access.ReadWrite> depth; // weighted depth, alpha, first or valid weight, median
     Ptr<uint, Access.ReadWrite> pick;
     uint logical_count;
-    uint padding;
+    uint dispatch_flags; // OR'd into the raster flags: 1024 for the depth-batch prefix pass
 };
 [[vk::push_constant]] ConstantBuffer<Parameters> p;
 
@@ -111,7 +111,7 @@ void write_pixel(uint2 pixel, RasterParameters r, float3 rgb, float transmittanc
 // Generic variants take their flags from the dispatch; the group width is fixed.
 void load_flags(RasterParameters r) {
 #ifndef LFS_BLEND_FLAGS
-    kRasterFlags = (r.unused & ~128u) | (LFS_BLEND_SINGLE_SIMD ? 128u : 0u);
+    kRasterFlags = (r.unused & ~128u) | p.dispatch_flags | (LFS_BLEND_SINGLE_SIMD ? 128u : 0u);
 #endif
 }
 
@@ -412,7 +412,10 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
                         const half edge = half(.01831563888873418f);
                         value = max(half(0), (value - edge) / (half(1) - edge));
                     }
-                    alpha = float(min(half(c.w) * value, half(.999f)));
+                    // half(.999f) is exactly .9990234375; a float min of two
+                    // half values equals their half min. (Slang folds a half
+                    // constant to an unsuffixed MSL literal, which is ambiguous.)
+                    alpha = min(float(half(c.w) * value), .9990234375f);
                 }
                 const float minimum_alpha = (kRasterFlags & 4u) != 0u ? 1.f / 255.f : .5f / 255.f;
                 if (alpha < (half_footprint ? float(half(minimum_alpha)) : minimum_alpha))

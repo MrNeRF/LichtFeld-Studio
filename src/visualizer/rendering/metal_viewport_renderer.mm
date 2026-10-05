@@ -14,6 +14,8 @@
 #include "scene_overlay_params.hpp"
 #include "selection_query.hpp"
 #include "splat_preprocessor.hpp"
+#include "splat_projector.hpp"
+#include "splat_rasterizer.hpp"
 #include "tile_rasterizer.hpp"
 #ifdef LFS_GRAPHICS_VULKAN
 #include "vulkan_scene_output.hpp"
@@ -22,6 +24,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -205,6 +208,7 @@ namespace lfs::vis {
             uint64_t gpu_tree_signature = 0;
             uint32_t gpu_capacity = 0, gpu_source_count = 0, gpu_chunks = 0;
             bool points = false;
+            bool tensor = false; // drawn by the tensor-program rasterizer
             Image color, depth;
         };
     } // namespace
@@ -226,6 +230,10 @@ namespace lfs::vis {
         SplatPreprocessor preprocessor{reader.device()};
         TileRasterizer rasterizer{reader.device()};
         std::shared_ptr<RasterScratch> raster_scratch = std::make_shared<RasterScratch>(reader.device());
+        // Opt-in single-source rasterizer (tensor programs) for the plain splat view.
+        const bool tensor_raster = std::getenv("LFS_TENSOR_RASTER") != nullptr;
+        std::unique_ptr<rendering::SplatProjector> projector;
+        core::Tensor tensor_projected;
         id<MTLBuffer> projected, gut_geometry;
         bool profiling_enabled = false;
         std::function<void()> retry_callback;
@@ -268,6 +276,10 @@ namespace lfs::vis {
             // the retry sizes from it instead of waiting for that frame's slot.
             std::shared_ptr<std::atomic<uint64_t>> overflow_required = std::make_shared<std::atomic<uint64_t>>(0);
             std::unique_ptr<MetalRadPager> pager;
+            // Tensor-program raster scratch and its display outputs. The outputs
+            // also serve as the previous image when a frame overflows.
+            std::unique_ptr<rendering::SplatRasterizer> tensor_raster;
+            core::Tensor tensor_rgba, tensor_depth;
         };
         std::unordered_map<RenderTargetId, TargetState, RenderTargetIdHash> targets;
         std::unordered_set<RenderTargetId, RenderTargetIdHash> released_targets;
@@ -597,7 +609,7 @@ namespace lfs::vis {
             }
             return lod_trees.insert_or_assign(&tree, std::move(metadata)).first->second;
         }
-        Frame& acquire(Slot output, const rendering::ViewportRenderRequest& request, uint32_t count, bool points = false) {
+        Frame& acquire(Slot output, const rendering::ViewportRenderRequest& request, uint32_t count, bool points = false, bool tensor = false) {
             auto& state = target(output);
             // The published image may be cached by the compositor even after
             // its last GPU consumer completes. Never recycle it until another
@@ -626,7 +638,7 @@ namespace lfs::vis {
                         throw std::runtime_error(std::format("Metal viewport instance count exceeds 32-bit indexing (required={}, capacity={})", status.required_instances, capacity));
                     capacity = std::max(capacity, withGrowthHeadroom(status.required_instances));
                 }
-                if (frame->points == points && frame->size == request.frame_view.size && frame->count >= count && frame->capacity >= capacity)
+                if (frame->points == points && frame->tensor == tensor && frame->size == request.frame_view.size && frame->count >= count && frame->capacity >= capacity)
                     return *frame;
             }
             // Account for all Metal allocations on the shared device, including
@@ -634,7 +646,7 @@ namespace lfs::vis {
             // can exhaust unified memory; retain the last completed output.
             const auto device = reader.device();
             const auto outputs = viewportOutputReservationBytes(request.frame_view.size.x, request.frame_view.size.y, points);
-            const bool grow_scratch = !points && (!raster_scratch->fits(request.frame_view.size.x, request.frame_view.size.y, count, capacity) ||
+            const bool grow_scratch = !points && !tensor && (!raster_scratch->fits(request.frame_view.size.x, request.frame_view.size.y, count, capacity) ||
                                                   !projected || projected.length < size_t(count) * sizeof(ProjectedSplat));
             const auto reservation = grow_scratch ? frameReservationBytes(request.frame_view.size.x, request.frame_view.size.y, count, capacity, false) : outputs;
             if (!frameFitsWorkingSet(device.currentAllocatedSize, reservation, device.recommendedMaxWorkingSetSize))
@@ -646,7 +658,22 @@ namespace lfs::vis {
             f.capacity = capacity;
             f.generation = ++generation;
             f.points = points;
-            if (!points) {
+            f.tensor = tensor;
+            if (tensor) {
+                auto& state = target(output);
+                const core::GpuBackendScope scope(core::GpuBackend::Metal);
+                if (!state.tensor_raster)
+                    state.tensor_raster = std::make_unique<rendering::SplatRasterizer>(core::GpuBackend::Metal);
+                if (auto reserved = state.tensor_raster->reserve(count, f.size.x, f.size.y, capacity); !reserved)
+                    throw lfs::Exception(reserved.error());
+                const size_t width = size_t(f.size.x), height = size_t(f.size.y);
+                if (!state.tensor_rgba.is_valid() || state.tensor_rgba.size(0) != height || state.tensor_rgba.size(1) != width) {
+                    state.tensor_rgba = core::Tensor::empty({height, width, 4}, core::Device::GPU, core::DataType::UInt8);
+                    state.tensor_depth = core::Tensor::empty({height, width}, core::Device::GPU, core::DataType::Float32);
+                }
+                if (!tensor_projected.is_valid() || tensor_projected.bytes() < size_t(count) * sizeof(ProjectedSplat))
+                    tensor_projected = core::Tensor::empty({std::max<size_t>(16, size_t(count) * sizeof(ProjectedSplat))}, core::Device::GPU, core::DataType::UInt8);
+            } else if (!points) {
                 f.raster = std::make_unique<RasterFrame>(device, f.size.x, f.size.y, count, capacity, raster_scratch);
                 if (!projected || projected.length < size_t(count) * sizeof(ProjectedSplat))
                     projected = [device newBufferWithLength:std::max<size_t>(16, size_t(count) * sizeof(ProjectedSplat)) options:MTLResourceStorageModePrivate];
@@ -1070,7 +1097,7 @@ namespace lfs::vis {
             auto previous = i.latestFrame(slot);
             if (previous && previous->points)
                 previous = nullptr;
-            if (previous && !previous->raster->busy()) {
+            if (previous && previous->raster && !previous->raster->busy()) {
                 const auto status = previous->raster->status();
                 if (status.required_instances > std::numeric_limits<uint32_t>::max())
                     throw std::runtime_error(std::format("Metal instance indexing overflow (required_instances={}, max={})", status.required_instances, std::numeric_limits<uint32_t>::max()));
@@ -1112,7 +1139,22 @@ namespace lfs::vis {
             const uint32_t logical_count = pager ? pager->nodes() : source_count;
             const uint32_t draw_count = gpu_lod ? uint32_t(std::clamp<size_t>(request.lod_gpu_traversal.output_capacity, gpu_tree->roots, std::min(gpu_tree->nodes, source_count))) : uint32_t(pager ? model.size() : request.lod_indices ? request.lod_count
                                                                                                                                                                                                                                           : model.size());
-            auto& f = i.acquire(slot, request, draw_count);
+            const auto selection = request.overlay.emphasis.mask.get();
+            const auto preview = request.overlay.emphasis.transient_mask.mask;
+            const bool selection_enabled = request.overlay.has_selection && selection && selection->is_valid();
+            const bool preview_enabled = preview && preview->is_valid();
+            const size_t node_count = request.overlay.emphasis.emphasized_node_mask.size();
+            const bool needs_overlay = request.filters.crop_region || request.filters.ellipsoid_region ||
+                                       !request.filters.crop_regions.empty() || !request.filters.ellipsoid_regions.empty() ||
+                                       request.filters.view_volume || selection_enabled || preview_enabled || node_count ||
+                                       request.overlay.emphasis.dim_non_emphasized || request.overlay.emphasis.flash_intensity > 0 ||
+                                       request.overlay.emphasis.focused_gaussian_id >= 0 || request.overlay.cursor.enabled ||
+                                       request.overlay.markers.show_rings || request.overlay.markers.show_center_markers;
+            // The tensor-program rasterizer covers the plain splat view so far;
+            // overlays, LOD cuts, 3DGUT and the portal profile stay native.
+            const bool tensor_frame = i.tensor_raster && !pager && !gpu_lod && !request.lod_indices && !request.gut &&
+                                      request.splat_render_profile == 0 && !needs_overlay;
+            auto& f = i.acquire(slot, request, draw_count, false, tensor_frame);
             if (i.profiling_enabled && !f.gpu_profile)
                 f.gpu_profile = std::make_unique<GpuProfile>(i.reader.device());
             auto* profile = i.profiling_enabled ? f.gpu_profile.get() : nullptr;
@@ -1271,17 +1313,6 @@ namespace lfs::vis {
                 scene.objects = {f.objects, 0};
                 scene.count = static_cast<uint32_t>(transforms.size());
             }
-            const auto selection = request.overlay.emphasis.mask.get();
-            const auto preview = request.overlay.emphasis.transient_mask.mask;
-            const bool selection_enabled = request.overlay.has_selection && selection && selection->is_valid();
-            const bool preview_enabled = preview && preview->is_valid();
-            const size_t node_count = request.overlay.emphasis.emphasized_node_mask.size();
-            const bool needs_overlay = request.filters.crop_region || request.filters.ellipsoid_region ||
-                                       !request.filters.crop_regions.empty() || !request.filters.ellipsoid_regions.empty() ||
-                                       request.filters.view_volume || selection_enabled || preview_enabled || node_count ||
-                                       request.overlay.emphasis.dim_non_emphasized || request.overlay.emphasis.flash_intensity > 0 ||
-                                       request.overlay.emphasis.focused_gaussian_id >= 0 || request.overlay.cursor.enabled ||
-                                       request.overlay.markers.show_rings || request.overlay.markers.show_center_markers;
             if (needs_overlay) {
                 static_assert(detail::ParamCount == 207);
                 static_assert(detail::ViewWindow == 206 && detail::SelectionFlags == 24 && detail::EmphasisFlags == 20);
@@ -1335,7 +1366,108 @@ namespace lfs::vis {
             const auto event = i.event;
             const PresentParameters present{request.color_exposure, portal ? 0u : uint32_t(request.color_tonemapping), uint32_t(request.transparent_background), uint32_t(previous != nullptr), request.depth_view_min, request.depth_view_max, uint32_t(request.depth_view), uint32_t(request.depth_visualization_mode), {background.x, background.y, background.z, 1}, {uint32_t(expected_depth), 0, 0, 0}};
             const bool refine = pager && (pager->pending() || !pager->rootReady());
-            f.command = i.reader.submit(inputs_tensors, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> views) {
+            // Completion: release presentation waits and record overflow demand
+            // from the frame's RasterStatus (shared storage) for the retry.
+            const auto finish = [&](id<MTLCommandBuffer> command, id<MTLBuffer> status_buffer, NSUInteger status_offset) {
+                const auto completion_event = event;
+                const auto completion_value = serial;
+                [command encodeSignalEvent:completion_event value:completion_value];
+                [command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+                    // Failed read-only producers must release presentation waits too;
+                    // their typed command error is inspected before resource reuse.
+                    if (completed.status == MTLCommandBufferStatusError && completion_event.signaledValue < completion_value)
+                        completion_event.signaledValue = completion_value;
+                }];
+                const auto completion_retry = i.retry_callback;
+                const auto overflow_required = i.target(slot).overflow_required;
+                [command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+                    const auto* status = reinterpret_cast<const RasterStatus*>(static_cast<const std::byte*>(status_buffer.contents) + status_offset);
+                    if (completed.status != MTLCommandBufferStatusError && status->error != RasterError::None) {
+                        uint64_t seen = overflow_required->load(std::memory_order_relaxed);
+                        while (status->required_instances > seen &&
+                               !overflow_required->compare_exchange_weak(seen, status->required_instances, std::memory_order_acq_rel)) {
+                        }
+                    }
+                    if (completion_retry && (completed.status == MTLCommandBufferStatusError || status->error != RasterError::None))
+                        completion_retry();
+                }];
+            };
+            // Tensor-program frame: projection, binning, blending and present run
+            // on the tensor timeline; one native blit publishes the outputs.
+            const auto submit_tensor = [&]() -> id<MTLCommandBuffer> {
+                auto& state = i.target(slot);
+                const core::GpuBackendScope scope(core::GpuBackend::Metal);
+                if (!i.projector)
+                    i.projector = std::make_unique<rendering::SplatProjector>(core::GpuBackend::Metal);
+                const auto resident = [](const core::Tensor& tensor) { return tensor.is_valid() && tensor.numel() ? &tensor : nullptr; };
+                rendering::SplatSources sources;
+                sources.means = &model.means_raw();
+                sources.scales = &model.scaling_raw();
+                sources.rotations = &model.rotation_raw();
+                sources.opacity = &model.opacity_raw();
+                sources.sh0 = &model.sh0_raw();
+                sources.sh_rest = degree ? &model.shN_raw() : nullptr;
+                sources.sh_bounds = degree ? &model.shN_value_bounds() : nullptr;
+                sources.deleted = resident(model.deleted());
+                sources.count = source_count;
+                sources.layout_rest = uint32_t(model.max_sh_coeffs_rest());
+                sources.storage = rendering::SplatShStorage(uint32_t(storage));
+                sources.half_attributes = model.non_sh_attrs_f16();
+                sources.deleted_count = sources.deleted ? uint32_t(std::min<size_t>(sources.deleted->bytes(), std::numeric_limits<uint32_t>::max())) : 0;
+                if (scene.count) {
+                    sources.objects = std::span(static_cast<const std::byte*>(f.objects.contents), size_t(scene.count) * sizeof(SceneObject));
+                    sources.object_indices = request.scene.transform_indices.get();
+                }
+                rendering::SplatProjection frame_projection;
+                static_assert(sizeof(frame_projection) == sizeof(projection));
+                std::memcpy(&frame_projection, &projection, sizeof(projection));
+                const bool transparent = request.transparent_background;
+                if (auto projected = i.projector->project(sources, frame_projection, degree, rendering::SplatPrimitive::Gaussian, !transparent, i.tensor_projected); !projected)
+                    throw lfs::Exception(projected.error());
+                // RasterParameters as the native rasterizer derives them for this view.
+                rendering::SplatRasterParameters raster;
+                raster.count = draw_count;
+                raster.width = uint32_t(f.size.x);
+                raster.height = uint32_t(f.size.y);
+                raster.columns = (raster.width + 15) / 16;
+                raster.tiles = raster.columns * ((raster.height + 15) / 16);
+                raster.capacity = f.capacity;
+                raster.flags = (expected_depth ? 2u : 0u) | 128u | (request.depth_view ? 2048u : 0u) | (transparent ? 16384u : 4096u) |
+                               (projection.extent.z == uint32_t(CameraModel::Equirectangular) ? 8192u : 0u);
+                raster.background = {background.x, background.y, background.z, transparent ? 0.f : 1.f};
+                raster.render_origin = {overlay.render_origin.x, overlay.render_origin.y, 0, 0};
+                raster.intrinsics = {projection.intrinsics.x, projection.intrinsics.y, projection.intrinsics.z, projection.intrinsics.w};
+                raster.clip = {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w};
+                raster.camera = {projection.extent.x, projection.extent.y, projection.extent.z, projection.extent.w};
+                raster.panorama = {projection.panorama.x, projection.panorama.y, projection.panorama.z, projection.panorama.w};
+                if (auto rasterized = state.tensor_raster->rasterize(i.tensor_projected, nullptr, draw_count, rendering::SplatRasterMode::Gaussian, raster); !rasterized)
+                    throw lfs::Exception(rasterized.error());
+                // An overflowing frame keeps the last tensor image of this extent.
+                const bool has_previous = previous && previous->tensor;
+                const rendering::SplatPresentParameters presented{present.exposure, present.tone, present.transparent, has_previous ? 1u : 0u,
+                                                                  present.depth_min, present.depth_max, present.depth_view, present.depth_mode,
+                                                                  {present.background.x, present.background.y, present.background.z, present.background.w},
+                                                                  {present.capture.x, 0, 0, 0},
+                                                                  {raster.width, raster.height, raster.width, raster.height}};
+                if (auto shown = state.tensor_raster->present(presented, state.tensor_rgba, state.tensor_depth,
+                                                              has_previous ? &state.tensor_rgba : nullptr, has_previous ? &state.tensor_depth : nullptr);
+                    !shown)
+                    throw lfs::Exception(shown.error());
+                const std::array<const core::Tensor*, 3> outputs{&state.tensor_rgba, &state.tensor_depth, &state.tensor_raster->status()};
+                return i.reader.submit(outputs, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> views) {
+                    if (i.next_readback)
+                        [command encodeWaitForEvent:i.readback_event value:i.next_readback];
+                    const NSUInteger width = raster.width, height = raster.height;
+                    auto blit = [command blitCommandEncoder];
+                    [blit copyFromBuffer:views[0].buffer sourceOffset:views[0].offset sourceBytesPerRow:width * 4 sourceBytesPerImage:width * height * 4
+                              sourceSize:MTLSizeMake(width, height, 1) toTexture:f.color.texture destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+                    [blit copyFromBuffer:views[1].buffer sourceOffset:views[1].offset sourceBytesPerRow:width * 4 sourceBytesPerImage:width * height * 4
+                              sourceSize:MTLSizeMake(width, height, 1) toTexture:f.depth.texture destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+                    [blit endEncoding];
+                    finish(command, views[2].buffer, views[2].offset);
+                });
+            };
+            f.command = f.tensor ? submit_tensor() : i.reader.submit(inputs_tensors, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> views) {
                 // A blit on the readback queue may still sample a recycled slot.
                 // GPU ordering protects it without waiting on the host each frame.
                 if (i.next_readback)
@@ -1375,29 +1507,7 @@ namespace lfs::vis {
                 [encoder setBuffer:f.raster->statusBuffer() offset:0 atIndex:1];
                 [encoder dispatchThreads:MTLSizeMake(f.size.x, f.size.y, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
                 [encoder endEncoding];
-                const auto completion_event = event;
-                const auto completion_value = serial;
-                [command encodeSignalEvent:completion_event value:completion_value];
-                [command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
-                    // Failed read-only producers must release presentation waits too;
-                    // their typed command error is inspected before resource reuse.
-                    if (completed.status == MTLCommandBufferStatusError && completion_event.signaledValue < completion_value)
-                        completion_event.signaledValue = completion_value;
-                }];
-                const auto completion_retry = i.retry_callback;
-                const auto completion_status = f.raster->statusBuffer();
-                const auto overflow_required = i.target(slot).overflow_required;
-                [command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
-                    const auto* status = static_cast<const RasterStatus*>(completion_status.contents);
-                    if (completed.status != MTLCommandBufferStatusError && status->error != RasterError::None) {
-                        uint64_t seen = overflow_required->load(std::memory_order_relaxed);
-                        while (status->required_instances > seen &&
-                               !overflow_required->compare_exchange_weak(seen, status->required_instances, std::memory_order_acq_rel)) {
-                        }
-                    }
-                    if (completion_retry && (completed.status == MTLCommandBufferStatusError || status->error != RasterError::None))
-                        completion_retry();
-                }];
+                finish(command, f.raster->statusBuffer(), 0);
             });
             if (pager && gpu_lod)
                 pager->noteRendererCompletion(serial);

@@ -14,14 +14,19 @@ function(lfs_add_gpu_program target name)
     # FindPython variables are directory-scoped; callers may be sibling directories.
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     # DEFINES (NAME or NAME=VALUE) specialize the module; build each variant
-    # as its own program.
-    cmake_parse_arguments(PROGRAM "" "SOURCE" "COMPUTE;VERTEX;FRAGMENT;DEFINES" ${ARGN})
+    # as its own program. RELAXED_MATH lets Metal reassociate and use fast
+    # functions (GpuKernelModule::Entry::relaxed_math).
+    cmake_parse_arguments(PROGRAM "RELAXED_MATH" "SOURCE" "COMPUTE;VERTEX;FRAGMENT;DEFINES" ${ARGN})
     list(TRANSFORM PROGRAM_DEFINES PREPEND "-D" OUTPUT_VARIABLE defines)
     get_filename_component(source "${PROGRAM_SOURCE}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
     set(directory "${CMAKE_CURRENT_BINARY_DIR}/gpu_programs/${name}")
     file(MAKE_DIRECTORY "${directory}")
     set(outputs)
     set(embed_args)
+    set(embed_flags)
+    if(PROGRAM_RELAXED_MATH)
+        set(embed_flags --relaxed-math)
+    endif()
     foreach(stage IN ITEMS COMPUTE VERTEX FRAGMENT)
         string(TOLOWER "${stage}" slang_stage)
         if(stage STREQUAL "COMPUTE")
@@ -67,7 +72,7 @@ function(lfs_add_gpu_program target name)
     endforeach()
     add_custom_command(OUTPUT "${directory}/${name}.cpp" "${directory}/${name}.hpp"
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/embed_gpu_program.py"
-            "${directory}" "${name}" ${embed_args}
+            "${directory}" "${name}" ${embed_args} ${embed_flags}
         DEPENDS ${outputs} "${CMAKE_SOURCE_DIR}/tools/embed_gpu_program.py" VERBATIM)
     # The syntax-only Windows preflight builds lfs_shader_headers before replaying
     # compile commands, so the generated header must be reachable from it.
