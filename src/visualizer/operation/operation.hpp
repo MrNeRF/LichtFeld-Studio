@@ -60,33 +60,4 @@ namespace lfs::vis::op {
     using OperationPtr = std::unique_ptr<Operation>;
     using OperationFactory = std::function<OperationPtr()>;
 
-    class OperationRegistry {
-    public:
-        static OperationRegistry& instance();
-
-        void registerOperation(std::string id, OperationFactory factory);
-        void unregisterOperation(const std::string& id);
-        [[nodiscard]] OperationPtr create(const std::string& id) const;
-        [[nodiscard]] bool hasOperation(const std::string& id) const;
-        [[nodiscard]] std::vector<std::string> getAllIds() const;
-
-    private:
-        OperationRegistry() = default;
-        std::unordered_map<std::string, OperationFactory> factories_;
-    };
-
-    inline OperationRegistry& operations() {
-        return OperationRegistry::instance();
-    }
-
-    template <typename Op>
-    struct OperationRegistrar {
-        explicit OperationRegistrar(std::string id) {
-            operations().registerOperation(std::move(id), [] { return std::make_unique<Op>(); });
-        }
-    };
-
-#define REGISTER_OPERATION(OpClass) \
-    static ::lfs::vis::op::OperationRegistrar<OpClass> _reg_##OpClass(OpClass{}.id())
-
 } // namespace lfs::vis::op

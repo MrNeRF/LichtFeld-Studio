@@ -230,7 +230,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         operation/undo_entry.cpp
         operation/depth_window_undo_entry.cpp
         operation/undo_history.cpp
-        operation/operation.cpp
         operation/pipeline.cpp
         operation/ops/select_ops.cpp
         operation/ops/edit_ops.cpp
