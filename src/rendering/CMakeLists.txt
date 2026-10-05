@@ -15,6 +15,8 @@ endif()
 add_subdirectory(rasterizer)
 
 set(RENDERING_TENSOR_SOURCES
+        mesh2splat_shared.cpp
+        mesh2splat_tensor.cpp
         selection_group_count.cpp
         selection_screen_ops.cpp
         selection_mask_ops.cpp
@@ -22,16 +24,18 @@ set(RENDERING_TENSOR_SOURCES
         export_post_process.cpp
         screen_overlay_renderer.cpp
 )
-if(LFS_USE_VULKAN)
+# The Vulkan converter needs geometry shaders, which MoltenVK lacks; Apple
+# builds use the tensor converter.
+if(LFS_USE_VULKAN AND NOT APPLE)
     list(APPEND RENDERING_TENSOR_SOURCES mesh2splat.cpp)
-else()
-    list(APPEND RENDERING_TENSOR_SOURCES mesh2splat_unavailable.cpp)
 endif()
 if(LFS_HAS_CUDA)
     list(APPEND RENDERING_TENSOR_SOURCES rasterizer/cuda/point_cloud_raster.cu)
 endif()
 
 add_library(lfs_rendering_tensor STATIC ${RENDERING_TENSOR_SOURCES})
+lfs_add_gpu_program(lfs_rendering_tensor mesh2splat_program SOURCE mesh2splat.slang
+    VERTEX mesh2splatVertex FRAGMENT mesh2splatFragment)
 
 target_link_libraries(lfs_rendering_tensor
         PUBLIC
@@ -62,6 +66,7 @@ target_include_directories(lfs_rendering_tensor
 
 target_compile_definitions(lfs_rendering_tensor PRIVATE
         $<$<PLATFORM_ID:Windows>:NOMINMAX>
+        $<$<OR:$<NOT:$<BOOL:${LFS_USE_VULKAN}>>,$<PLATFORM_ID:Darwin>>:LFS_MESH2SPLAT_TENSOR_DEFAULT>
 )
 
 add_library(lfs_rendering INTERFACE)

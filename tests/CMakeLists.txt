@@ -109,6 +109,18 @@ if(BUILD_TESTS)
             target_link_libraries(tensor_frosted_glass_contracts PRIVATE lfs_python_embed)
         endif()
     endif()
+    add_executable(mesh2splat_tensor_contracts test_mesh2splat_tensor.cpp)
+    target_compile_features(mesh2splat_tensor_contracts PRIVATE cxx_std_23)
+    target_link_libraries(mesh2splat_tensor_contracts PRIVATE
+        lfs_rendering_tensor lfs_core GTest::gtest_main)
+    if(LFS_USE_VULKAN AND NOT APPLE)
+        target_compile_definitions(mesh2splat_tensor_contracts PRIVATE
+            LFS_MESH2SPLAT_VULKAN_REFERENCE)
+    endif()
+    add_test(NAME Mesh2SplatTensorContracts COMMAND mesh2splat_tensor_contracts)
+    set_tests_properties(Mesh2SplatTensorContracts PROPERTIES
+        LABELS "tensor;gpu" TIMEOUT 180
+        ENVIRONMENT "MVK_CONFIG_FAST_MATH_ENABLED=0")
     if(LFS_TENSOR_VULKAN)
         add_executable(ui_texture_tensor_contracts test_ui_texture_tensor.cpp)
         target_compile_features(ui_texture_tensor_contracts PRIVATE cxx_std_23)
