@@ -423,8 +423,6 @@ TEST_F(NnOpsTest, LinearResidualMatchesAdd) {
 // single buffer for both needs a barrier between reading the block sum and
 // refilling it; without one a fast warp overwrites the sum while a slow warp is
 // still reading it, and roughly one launch in a few hundred comes out wrong.
-// Softmax reduces the row max and the row sum through shared memory and has the
-// same buffer-reuse hazard as LayerNorm.
 TEST_F(NnOpsTest, LayerNormIsBitwiseRepeatable) {
     const int rows = 1029;
     const int cols = 1024;
