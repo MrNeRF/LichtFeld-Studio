@@ -2784,6 +2784,7 @@
   "projects.dialog.scan_depth_message": "是否让 Projects 包含子文件夹中的项目？",
   "projects.action.add_existing": "添加现有项目...",
   "projects.tooltip.add_existing": "将现有 .licht 项目添加到目录",
+  "projects.tooltip.clean_missing": "从目录中移除此处显示的缺失项目。不会删除任何文件。",
   "projects.dialog.choose_existing": "选择现有 .licht",
   "projects.action.clear_search": "清除",
   "projects.status.no_search_results": "没有匹配的项目",

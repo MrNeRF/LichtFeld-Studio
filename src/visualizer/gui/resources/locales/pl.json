@@ -2784,6 +2784,7 @@
   "projects.dialog.scan_depth_message": "Czy Projects ma uwzględniać projekty w podfolderach?",
   "projects.action.add_existing": "Dodaj istniejący...",
   "projects.tooltip.add_existing": "Dodaj istniejący projekt .licht do katalogu",
+  "projects.tooltip.clean_missing": "Usuń z katalogu pokazane tutaj brakujące projekty. Żadne pliki nie są usuwane.",
   "projects.dialog.choose_existing": "Wybierz istniejący plik .licht",
   "projects.action.clear_search": "Wyczyść",
   "projects.status.no_search_results": "Brak pasujących projektów",

@@ -3978,6 +3978,40 @@ def test_publish_review_keeps_the_entered_details_for_the_next_attempt(panel_mod
         "title": "Playground", "description": "Small training of a playground"}
 
 
+def test_missing_filter_removes_the_shown_missing_entries_only(panel_module, monkeypatch, tmp_path):
+    from lfs_plugins.asset_index import AssetIndex
+
+    present_id, missing_id, other_missing_id = (str(uuid.uuid4()) for _ in range(3))
+    present = tmp_path / "present.licht"
+    present.write_bytes(b"local project")
+    catalog = tmp_path / "library.json"
+    catalog.write_text(json.dumps({
+        "schema_version": 6,
+        "folders": {"default": {"path": str(tmp_path)}},
+        "projects": {
+            present_id: {"path": str(present), "folder_id": "default", "name": "present", "name_origin": "user"},
+            missing_id: {"path": str(tmp_path / "archived.licht"), "folder_id": "default", "name": "archived", "name_origin": "user"},
+            other_missing_id: {"path": str(tmp_path / "deleted.licht"), "folder_id": "default", "name": "deleted", "name_origin": "user"},
+        },
+    }))
+    index = AssetIndex(library_path=catalog, default_folder_path=tmp_path)
+    assert index.load()
+    index.reconcile_all()
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = index
+    monkeypatch.setattr(panel, "refresh_catalog", lambda **kwargs: None)
+    assert not panel.get_can_clean_missing()
+    panel._active_filter = "missing"
+    panel._search_query = "arch"
+    assert panel.get_can_clean_missing()
+
+    panel.on_clean_missing()
+
+    remaining = json.loads(catalog.read_text())["projects"]
+    assert set(remaining) == {present_id, other_missing_id}
+    assert present.read_bytes() == b"local project"
+
+
 def test_gallery_union_has_one_linked_pair_and_remote_projection(panel_module):
     panel, local, remote = _gallery_fixture(panel_module)
     panel.select_gallery_scope()

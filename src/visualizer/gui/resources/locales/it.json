@@ -2784,6 +2784,7 @@
   "projects.dialog.scan_depth_message": "Projects deve includere i progetti nelle sottocartelle?",
   "projects.action.add_existing": "Aggiungi esistente...",
   "projects.tooltip.add_existing": "Aggiungi un progetto .licht esistente al catalogo",
+  "projects.tooltip.clean_missing": "Rimuovi dal catalogo i progetti mancanti mostrati qui. Nessun file viene eliminato.",
   "projects.dialog.choose_existing": "Scegli un .licht esistente",
   "projects.action.clear_search": "Cancella",
   "projects.status.no_search_results": "Nessun progetto corrispondente",

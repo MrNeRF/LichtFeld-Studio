@@ -2810,6 +2810,7 @@
   "projects.dialog.scan_depth_message": "Should Projects include projects in subfolders?",
   "projects.action.add_existing": "Add existing...",
   "projects.tooltip.add_existing": "Add an existing .licht project to the catalog",
+  "projects.tooltip.clean_missing": "Remove the missing projects shown here from the catalog. No files are deleted.",
   "projects.dialog.choose_existing": "Choose an existing .licht",
   "projects.action.clear_search": "Clear",
   "projects.status.no_search_results": "No projects match",

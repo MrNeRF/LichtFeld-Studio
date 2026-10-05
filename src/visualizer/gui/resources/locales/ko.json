@@ -2784,6 +2784,7 @@
   "projects.dialog.scan_depth_message": "하위 폴더의 프로젝트도 Projects에 포함할까요?",
   "projects.action.add_existing": "기존 항목 추가...",
   "projects.tooltip.add_existing": "기존 .licht 프로젝트를 카탈로그에 추가",
+  "projects.tooltip.clean_missing": "여기에 표시된 누락된 프로젝트를 카탈로그에서 제거합니다. 파일은 삭제되지 않습니다.",
   "projects.dialog.choose_existing": "기존 .licht 선택",
   "projects.action.clear_search": "지우기",
   "projects.status.no_search_results": "일치하는 프로젝트가 없습니다",

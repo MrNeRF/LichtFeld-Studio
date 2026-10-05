@@ -65,6 +65,11 @@
                   data-event-click="gallery_update_all" data-attr-title="gallery_update_all_label">
             <span class="asset-button-text">{{gallery_update_all_label}}</span>
           </button>
+          <button class="asset-button asset-button--icon asset-clean-missing" data-if="can_clean_missing"
+                  data-event-click="clean_missing" data-tooltip="projects.tooltip.clean_missing"
+                  aria-label="{{clean_missing_label}}">
+            <img src="../icon/broom.png"/>
+          </button>
           <button class="asset-button asset-button--icon asset-toolbar-view" data-event-click="open_view_menu"
                   data-tooltip="common.more" aria-label="{{view_menu_label}}">
             <img src="../icon/more-vertical.png"/>
