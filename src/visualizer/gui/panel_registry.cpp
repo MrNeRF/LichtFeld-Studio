@@ -1420,6 +1420,41 @@ apply_registered_chrome:
         return result;
     }
 
+    std::vector<PanelDetails> PanelRegistry::get_all_panels() {
+        std::lock_guard lock(mutex_);
+        std::vector<PanelDetails> result;
+        result.reserve(panels_.size());
+        for (const auto& panel : panels_) {
+            uint64_t stack_order = 0;
+            if (const auto interaction = floating_interactions_.find(panel.id);
+                interaction != floating_interactions_.end()) {
+                stack_order = interaction->second.stack_order;
+            }
+            result.push_back(PanelDetails{
+                panel.label,
+                panel.id,
+                panel.parent_id,
+                panel.space,
+                panel.order,
+                panel.enabled,
+                panel.options,
+                panel.poll_dependencies,
+                panel.is_native,
+                panel.initial_width,
+                panel.initial_height,
+                stack_order,
+            });
+        }
+        std::stable_sort(result.begin(), result.end(), [](const PanelDetails& a, const PanelDetails& b) {
+            if (a.space != b.space)
+                return a.space < b.space;
+            if (a.order != b.order)
+                return a.order < b.order;
+            return a.label < b.label;
+        });
+        return result;
+    }
+
     std::optional<PanelDetails> PanelRegistry::get_panel(const std::string& id) {
         std::lock_guard lock(mutex_);
         for (const auto& p : panels_) {

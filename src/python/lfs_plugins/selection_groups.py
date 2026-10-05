@@ -5,6 +5,7 @@
 import lichtfeld as lf
 
 from . import rml_widgets
+from .panels import panel_class
 from .types import Panel
 from .ui import RuntimeState, PanelStateBinding
 
@@ -17,6 +18,7 @@ def __lfs_after_reload__(runtime):
     runtime.ui.set_panel_parent("lfs.selection_groups", "lfs.rendering")
 
 
+@panel_class("selection_groups")
 class SelectionGroupsPanel(Panel):
     id = "lfs.selection_groups"
     label = "Selection Groups"

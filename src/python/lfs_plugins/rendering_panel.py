@@ -8,6 +8,7 @@ import os
 import lichtfeld as lf
 
 from . import rml_widgets as w
+from .panels import panel_class
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 from .ui import RuntimeState, PanelStateBinding, native_value as _native_store_value
@@ -286,6 +287,7 @@ RENDERING_INITIALLY_COLLAPSED = {
 }
 
 
+@panel_class("rendering")
 class RenderingPanel(Panel):
     id = "lfs.rendering"
     label = "window.rendering"

@@ -454,7 +454,7 @@ if(NOT LFS_GRAPHICS_VULKAN_BUILD)
     lfs_add_gpu_program(lfs_visualizer rmlui_composite_program
         SOURCE gui/rmlui/rmlui_composite.slang COMPUTE composite)
     lfs_add_gpu_program(lfs_visualizer rmlui_mask_program
-        SOURCE gui/rmlui/rmlui_mask.slang COMPUTE intersectMask)
+        SOURCE gui/rmlui/rmlui_mask.slang COMPUTE intersectMask clearRegion)
     lfs_add_gpu_program(lfs_visualizer viewport_compose_program
         SOURCE rendering/viewport_compose.slang COMPUTE composeViewport)
     lfs_add_gpu_program(lfs_visualizer split_view_tensor_program

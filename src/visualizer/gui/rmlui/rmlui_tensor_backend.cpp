@@ -78,16 +78,22 @@ namespace lfs::vis::gui {
         struct alignas(8) CompositeParameters {
             uint64_t source = 0;
             uint64_t destination = 0;
+            uint32_t target_width = 0;
+            uint32_t x = 0;
+            uint32_t y = 0;
             uint32_t width = 0;
             uint32_t height = 0;
             uint32_t replace = 0;
-            uint32_t padding = 0;
         };
         struct alignas(8) MaskParameters {
             uint64_t coverage = 0;
             uint64_t mask = 0;
+            uint32_t target_width = 0;
+            uint32_t x = 0;
+            uint32_t y = 0;
             uint32_t width = 0;
             uint32_t height = 0;
+            uint32_t clear_value = 0;
         };
 
         std::optional<std::uintptr_t> tensorUrlId(std::string_view source) {
@@ -111,7 +117,7 @@ namespace lfs::vis::gui {
         std::unique_ptr<Module> mask_program;
         Tensor* base = nullptr;
         Tensor dummy_texture;
-        Tensor clip_mask;
+        Tensor clip_mask, clip_coverage;
         Rml::Matrix4f transform = Rml::Matrix4f::Identity();
         Rml::Matrix4f context = Rml::Matrix4f::Identity();
         // Same scissor model as RenderInterface_VK: RmlUi regions are context
@@ -206,8 +212,34 @@ namespace lfs::vis::gui {
             if (!clip_mask.is_valid() || clip_mask.shape() != shape) {
                 clip_mask = Tensor::zeros(shape, Device::GPU, DataType::UInt8);
                 clip_mask.set_name("ui.clip_mask");
+                clip_coverage = Tensor::zeros(shape, Device::GPU, DataType::UInt8);
+                clip_coverage.set_name("ui.clip_coverage");
             }
             return true;
+        }
+
+        bool clearRegion(Tensor& target, const Module::Scissor rect,
+                         const uint32_t value = 0) {
+            if (!mask_program || !target.is_valid() || rect.width == 0 || rect.height == 0)
+                return false;
+            MaskParameters parameters{
+                .target_width = uint32_t(target.size(1)),
+                .x = rect.x,
+                .y = rect.y,
+                .width = rect.width,
+                .height = rect.height,
+                .clear_value = value,
+            };
+            const std::array bindings{
+                Module::Binding{0, &dummy_texture},
+                Module::Binding{8, &target, Module::Access::ReadWrite}};
+            auto result = mask_program->dispatch({
+                .function = "clearRegion",
+                .arguments = {std::as_bytes(std::span(&parameters, 1)), bindings},
+                .groups = {Module::groups_for(rect.width, 64), rect.height, 1}});
+            if (!result)
+                LOG_ERROR("Tensor RmlUi region clear failed: {}", result.error().detail());
+            return result.has_value();
         }
 
         void flush() {
@@ -306,12 +338,19 @@ namespace lfs::vis::gui {
                 if (it->shape() == shape) {
                     Tensor layer = std::move(*it);
                     free_layers.erase(it);
-                    layer.zero_();
+                    const Module::Scissor rect = capture_area.value_or(Module::Scissor{
+                        0, 0, uint32_t(base->size(1)), uint32_t(base->size(0))});
+                    if (!clearRegion(layer, rect))
+                        layer.zero_();
                     return layer;
                 }
             }
-            auto layer = Tensor::zeros(shape, Device::GPU, DataType::UInt8);
+            auto layer = Tensor::empty(shape, Device::GPU, DataType::UInt8);
             layer.set_name("ui.layer");
+            const Module::Scissor rect = capture_area.value_or(Module::Scissor{
+                0, 0, uint32_t(base->size(1)), uint32_t(base->size(0))});
+            if (!clearRegion(layer, rect))
+                layer.zero_();
             return layer;
         }
 
@@ -358,6 +397,7 @@ namespace lfs::vis::gui {
         impl_->layers.clear();
         impl_->layer_stack = {0};
         impl_->clip_mask = {};
+        impl_->clip_coverage = {};
         impl_->dummy_texture = {};
         impl_->draw_program.reset();
         impl_->composite_program.reset();
@@ -413,26 +453,35 @@ namespace lfs::vis::gui {
         Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) {
         if (indices.empty() || indices.size() % 3)
             return {};
-        std::vector<std::array<float, 2>> positions(indices.size()), texcoords(indices.size());
-        std::vector<std::array<float, 4>> colors(indices.size());
+        const std::size_t position_offset = 0;
+        const std::size_t color_offset = indices.size() * 2;
+        const std::size_t texcoord_offset = indices.size() * 6;
+        std::vector<float> attributes(indices.size() * 8);
         for (std::size_t i = 0; i < indices.size(); ++i) {
             if (indices[i] < 0 || std::size_t(indices[i]) >= vertices.size())
                 return {};
             const auto& vertex = vertices[indices[i]];
-            positions[i] = {vertex.position.x, vertex.position.y};
-            texcoords[i] = {vertex.tex_coord.x, vertex.tex_coord.y};
-            colors[i] = {vertex.colour.red / 255.0f, vertex.colour.green / 255.0f,
-                         vertex.colour.blue / 255.0f, vertex.colour.alpha / 255.0f};
+            attributes[position_offset + i * 2] = vertex.position.x;
+            attributes[position_offset + i * 2 + 1] = vertex.position.y;
+            attributes[color_offset + i * 4] = vertex.colour.red / 255.0f;
+            attributes[color_offset + i * 4 + 1] = vertex.colour.green / 255.0f;
+            attributes[color_offset + i * 4 + 2] = vertex.colour.blue / 255.0f;
+            attributes[color_offset + i * 4 + 3] = vertex.colour.alpha / 255.0f;
+            attributes[texcoord_offset + i * 2] = vertex.tex_coord.x;
+            attributes[texcoord_offset + i * 2 + 1] = vertex.tex_coord.y;
         }
         try {
             auto result = std::make_unique<Geometry>();
             auto& uploads = impl_->uploads;
-            result->positions = uploads.upload(std::span<const std::array<float, 2>>(positions),
-                                               {indices.size(), 2}, DataType::Float32);
-            result->colors = uploads.upload(std::span<const std::array<float, 4>>(colors),
-                                            {indices.size(), 4}, DataType::Float32);
-            result->texcoords = uploads.upload(std::span<const std::array<float, 2>>(texcoords),
-                                               {indices.size(), 2}, DataType::Float32);
+            const auto packed = uploads.upload(std::span<const float>(attributes),
+                                               {attributes.size()}, DataType::Float32);
+            const auto vertex_count = static_cast<int>(indices.size());
+            result->positions = packed.slice(0, position_offset, color_offset)
+                                    .reshape({vertex_count, 2});
+            result->colors = packed.slice(0, color_offset, texcoord_offset)
+                                 .reshape({vertex_count, 4});
+            result->texcoords = packed.slice(0, texcoord_offset, attributes.size())
+                                    .reshape({vertex_count, 2});
             result->positions.set_name("ui.geometry.positions");
             result->colors.set_name("ui.geometry.colors");
             result->texcoords.set_name("ui.geometry.texcoords");
@@ -552,26 +601,34 @@ namespace lfs::vis::gui {
             return;
         // Queued draws sample the current mask.
         impl_->flush();
+        const auto rect = impl_->drawScissor();
+        if (rect.width == 0 || rect.height == 0)
+            return;
         impl_->mask_enabled = false;
         const bool inverse = operation == Rml::ClipMaskOperation::SetInverse;
         if (operation == Rml::ClipMaskOperation::Intersect) {
-            Tensor coverage = Tensor::empty(impl_->clip_mask.shape(), Device::GPU, DataType::UInt8);
-            impl_->render(*geometry, translation, nullptr, coverage, "maskFragment", 1, true);
+            if (!impl_->clearRegion(impl_->clip_coverage, rect))
+                return;
+            impl_->render(*geometry, translation, nullptr, impl_->clip_coverage,
+                          "maskFragment");
             impl_->flush();
-            MaskParameters parameters{.width = uint32_t(coverage.size(1)),
-                                      .height = uint32_t(coverage.size(0))};
-            const std::array bindings{Module::Binding{0, &coverage},
+            MaskParameters parameters{.target_width = uint32_t(impl_->clip_mask.size(1)),
+                                      .x = rect.x,
+                                      .y = rect.y,
+                                      .width = rect.width,
+                                      .height = rect.height};
+            const std::array bindings{Module::Binding{0, &impl_->clip_coverage},
                                       Module::Binding{8, &impl_->clip_mask, Module::Access::ReadWrite}};
             auto result = impl_->mask_program->dispatch({.function = "intersectMask",
                                                          .arguments = {std::as_bytes(std::span(&parameters, 1)), bindings},
-                                                         .groups = {Module::groups_for(coverage.size(1), 64), uint32_t(coverage.size(0)), 1}});
+                                                         .groups = {Module::groups_for(rect.width, 64), rect.height, 1}});
             if (!result)
                 LOG_ERROR("Tensor RmlUi clip intersection failed: {}", result.error().detail());
         } else {
+            if (!impl_->clearRegion(impl_->clip_mask, rect, inverse ? 255u : 0u))
+                return;
             impl_->render(*geometry, translation, nullptr, impl_->clip_mask, "maskFragment",
-                          inverse ? 0.0f : 1.0f, true,
-                          inverse ? std::array<float, 4>{1, 1, 1, 1}
-                                  : std::array<float, 4>{0, 0, 0, 0});
+                          inverse ? 0.0f : 1.0f);
             impl_->flush();
         }
         impl_->mask_enabled = true;
@@ -602,14 +659,19 @@ namespace lfs::vis::gui {
             if (!std::exchange(warned, true))
                 LOG_WARN("RmlUi layer filters are not implemented by the tensor UI renderer");
         }
-        CompositeParameters parameters{.width = uint32_t(source->size(1)),
-                                       .height = uint32_t(source->size(0)),
+        const Module::Scissor rect = impl_->capture_area.value_or(Module::Scissor{
+            0, 0, uint32_t(source->size(1)), uint32_t(source->size(0))});
+        CompositeParameters parameters{.target_width = uint32_t(source->size(1)),
+                                       .x = rect.x,
+                                       .y = rect.y,
+                                       .width = rect.width,
+                                       .height = rect.height,
                                        .replace = blend == Rml::BlendMode::Replace};
         const std::array bindings{Module::Binding{0, source},
                                   Module::Binding{8, destination, Module::Access::ReadWrite}};
         auto result = impl_->composite_program->dispatch({.function = "composite",
                                                           .arguments = {std::as_bytes(std::span(&parameters, 1)), bindings},
-                                                          .groups = {Module::groups_for(source->size(1), 64), uint32_t(source->size(0)), 1}});
+                                                          .groups = {Module::groups_for(rect.width, 64), rect.height, 1}});
         if (!result)
             LOG_ERROR("Tensor RmlUi layer composite failed: {}", result.error().detail());
     }

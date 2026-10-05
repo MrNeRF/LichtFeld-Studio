@@ -742,14 +742,8 @@ namespace lfs::app {
             json panels = json::array();
             auto& registry = vis::gui::PanelRegistry::instance();
 
-            for (const auto space : kPanelSpaces) {
-                for (const auto& panel : registry.get_panels_for_space(space)) {
-                    if (auto details = registry.get_panel(panel.id)) {
-                        panels.push_back(panel_details_json(*details));
-                    } else {
-                        panels.push_back(panel_summary_json(panel));
-                    }
-                }
+            for (const auto& panel : registry.get_all_panels()) {
+                panels.push_back(panel_details_json(panel));
             }
 
             return json{

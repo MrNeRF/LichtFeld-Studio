@@ -385,6 +385,7 @@ namespace lfs::vis::gui {
         bool has_panels(PanelSpace space) const;
 
         std::vector<PanelSummary> get_panels_for_space(PanelSpace space);
+        std::vector<PanelDetails> get_all_panels();
         std::vector<std::string> get_panel_names(PanelSpace space) const;
         std::optional<PanelDetails> get_panel(const std::string& id);
         std::shared_ptr<IPanel> get_panel_instance(const std::string& id) const;

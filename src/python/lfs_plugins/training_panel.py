@@ -10,6 +10,7 @@ import lichtfeld as lf
 
 from . import rml_widgets as w
 from . import property_view
+from .panels import panel_class
 from .property_view import parse_number as _parse_num
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .training_confirm import (
@@ -222,6 +223,7 @@ BG_COLOR_TEXT_KEYS = tuple(key for key, _index in BG_COLOR_CHANNELS) + (
 )
 
 
+@panel_class("training")
 class TrainingPanel(Panel):
     id = "lfs.training"
     label = "window.training"
