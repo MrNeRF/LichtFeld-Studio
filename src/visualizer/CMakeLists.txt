@@ -46,7 +46,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:window/vulkan_graphics_context.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/viewport_reference_renderer.cpp>
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/viewport_tensor_renderer.cpp>
-        $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/viewport_tensor_meshes.cpp>
+        $<$<BOOL:${LFS_TENSOR_METAL}>:rendering/viewport_tensor_meshes.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:window/vulkan_context.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:window/vulkan_image_barrier_tracker.cpp>
         window/gpu_object_census.cpp
@@ -56,7 +56,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/camera_interaction_service.cpp
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/output_image_pool.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/mesh_offscreen_renderer.cpp>
-        $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/mesh_offscreen_renderer_unavailable.cpp>
+        $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/mesh_offscreen_renderer_tensor.cpp>
         rendering/viewer_splat_tensor_allocator.cpp
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/graphics_external_tensor_unavailable.cpp>
         rendering/rendering_manager.cpp
@@ -115,6 +115,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # GUI system
         gui/gui_manager.cpp
+        $<$<BOOL:${LFS_TENSOR_METAL}>:gui/rmlui/tensor_frosted_glass.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:gui/vulkan_ui_texture.cpp>
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:gui/tensor_ui_texture.cpp>
         gui/global_context_menu.cpp
@@ -455,15 +456,19 @@ if(NOT LFS_GRAPHICS_VULKAN_BUILD)
         SOURCE rendering/viewport_overlay.slang
         VERTEX overlayVertex shapeVertex frustumVertex texturedVertex pivotVertex environmentVertex
         FRAGMENT overlayFragment shapeFragment texturedFragment pivotFragment environmentFragment)
+    lfs_add_gpu_program(lfs_visualizer viewport_grid_program
+        SOURCE rendering/viewport_grid.slang
+        VERTEX gridVertex FRAGMENT gridFragment)
+endif()
+if(LFS_TENSOR_METAL)
+    lfs_add_gpu_program(lfs_visualizer rmlui_frosted_glass_program
+        SOURCE gui/rmlui/rmlui_frosted_glass.slang COMPUTE resampleRgba8)
     lfs_add_gpu_program(lfs_visualizer viewport_mesh_program
         SOURCE rendering/viewport_mesh.slang
         VERTEX meshVertex wireVertex shadowVertex
         FRAGMENT meshFragment wireFragment shadowFragment)
     lfs_add_gpu_program(lfs_visualizer viewport_depth_program
         SOURCE rendering/viewport_depth.slang COMPUTE seedDepth)
-    lfs_add_gpu_program(lfs_visualizer viewport_grid_program
-        SOURCE rendering/viewport_grid.slang
-        VERTEX gridVertex FRAGMENT gridFragment)
 endif()
 if(WIN32)
     target_compile_definitions(lfs_visualizer PRIVATE VK_USE_PLATFORM_WIN32_KHR)

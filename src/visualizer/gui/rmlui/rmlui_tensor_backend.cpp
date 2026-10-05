@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
 #include "gui/rmlui/rml_image_file.hpp"
+#include "gui/rmlui/tensor_frosted_glass.hpp"
 #include "gui/ui_texture.hpp"
 #include "rendering/tensor_frame_uploads.hpp"
 #include "rmlui_composite_program.hpp"
@@ -124,6 +125,7 @@ namespace lfs::vis::gui {
         Rml::LayerHandle next_layer = 1;
         std::size_t geometry_bytes = 0;
         std::size_t texture_bytes = 0;
+        TensorFrostedGlassBackdrop frosted_glass;
         uint64_t texture_generation = 0;
         bool preview_used = false;
 
@@ -338,6 +340,7 @@ namespace lfs::vis::gui {
         impl_->draw_program.reset();
         impl_->composite_program.reset();
         impl_->mask_program.reset();
+        impl_->frosted_glass.reset();
         impl_->base = nullptr;
         impl_->graphics = nullptr;
     }
@@ -570,7 +573,7 @@ namespace lfs::vis::gui {
         if (!filters.empty()) {
             static bool warned = false;
             if (!std::exchange(warned, true))
-                LOG_WARN("RmlUi filters, including frosted glass, are not implemented by the tensor UI renderer");
+                LOG_WARN("RmlUi layer filters are not implemented by the tensor UI renderer");
         }
         CompositeParameters parameters{.width = uint32_t(source->size(1)),
                                        .height = uint32_t(source->size(0)),
@@ -642,11 +645,41 @@ namespace lfs::vis::gui {
         ReleaseGeometry(geometry);
     }
 
-    bool TensorRmlUiRenderer::renderFrostedGlass(std::span<const UiFrostedGlassRegion>) {
-        // The layer path is tensor-native already. The dedicated separable blur
-        // program is added with the filter contract; returning false lets RmlUi
-        // use its opaque-panel fallback until that program is available.
-        return false;
+    bool TensorRmlUiRenderer::renderFrostedGlass(
+        const std::span<const UiFrostedGlassRegion> regions) {
+        if (!impl_->base || impl_->target() != impl_->base || regions.empty())
+            return false;
+        impl_->flush();
+        if (auto status = impl_->frosted_glass.update(*impl_->base); !status) {
+            LOG_ERROR("Tensor frosted glass backdrop failed: {}", status.error().detail());
+            return false;
+        }
+
+        Texture backdrop;
+        backdrop.image = std::make_shared<Tensor>(impl_->frosted_glass.image());
+        backdrop.linear = true;
+        constexpr float refraction_inset = 1.25f;
+        const float target_width = static_cast<float>(impl_->base->size(1));
+        const float target_height = static_cast<float>(impl_->base->size(0));
+        resetContextRenderState();
+        const auto draw_backdrop = [&](const float x1, const float y1,
+                                       const float x2, const float y2) {
+            if (x2 <= x1 || y2 <= y1)
+                return;
+            setContextClipRect(x1, y1, x2, y2);
+            renderTextureQuad(reinterpret_cast<Rml::TextureHandle>(&backdrop),
+                              -refraction_inset, -refraction_inset,
+                              target_width + 2.0f * refraction_inset,
+                              target_height + 2.0f * refraction_inset);
+        };
+        std::vector<TensorFrostedGlassRegion> tensor_regions;
+        tensor_regions.reserve(regions.size());
+        for (const auto& region : regions)
+            tensor_regions.push_back({region.x, region.y, region.width, region.height, region.radius});
+        for (const auto& rect : frostedGlassClipRects(tensor_regions, target_width, target_height))
+            draw_backdrop(rect.left, rect.top, rect.right, rect.bottom);
+        resetContextRenderState();
+        return true;
     }
     void TensorRmlUiRenderer::beginCacheCapture(int x, int y, int width, int height) {
         if (width <= 0 || height <= 0) {
@@ -663,7 +696,8 @@ namespace lfs::vis::gui {
     }
     bool TensorRmlUiRenderer::currentContextUsedPreviewTexture() const { return impl_->preview_used; }
     UiRendererMemoryStatistics TensorRmlUiRenderer::memoryStatistics() const {
-        return {.block_bytes = impl_->geometry_bytes + impl_->texture_bytes,
-                .allocation_bytes = impl_->geometry_bytes + impl_->texture_bytes};
+        const std::size_t backdrop_bytes = impl_->frosted_glass.bytes();
+        return {.block_bytes = impl_->geometry_bytes + impl_->texture_bytes + backdrop_bytes,
+                .allocation_bytes = impl_->geometry_bytes + impl_->texture_bytes + backdrop_bytes};
     }
 } // namespace lfs::vis::gui

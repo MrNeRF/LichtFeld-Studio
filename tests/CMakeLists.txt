@@ -76,6 +76,39 @@ if(LFS_TENSOR_METAL AND BUILD_TESTS AND NOT LFS_TENSOR_VULKAN)
 endif()
 
 if(BUILD_TESTS)
+    if(LFS_TENSOR_METAL)
+        add_executable(tensor_mesh_offscreen_contracts test_tensor_mesh_offscreen.cpp)
+        target_compile_features(tensor_mesh_offscreen_contracts PRIVATE cxx_std_23)
+        target_compile_definitions(tensor_mesh_offscreen_contracts PRIVATE
+            LFS_TEST_VULKAN_MESH_REFERENCE=$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>)
+        target_include_directories(tensor_mesh_offscreen_contracts PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/visualizer
+            ${CMAKE_SOURCE_DIR}/src/rendering/include)
+        target_link_libraries(tensor_mesh_offscreen_contracts PRIVATE
+            lfs_visualizer lfs_core GTest::gtest_main)
+        add_test(NAME TensorMeshOffscreenContracts COMMAND tensor_mesh_offscreen_contracts)
+        set_tests_properties(TensorMeshOffscreenContracts PROPERTIES
+            LABELS "tensor;gpu;rendering" TIMEOUT 180)
+
+        add_executable(tensor_frosted_glass_contracts test_tensor_frosted_glass.cpp)
+        target_compile_features(tensor_frosted_glass_contracts PRIVATE cxx_std_23)
+        target_include_directories(tensor_frosted_glass_contracts PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/visualizer)
+        target_link_libraries(tensor_frosted_glass_contracts PRIVATE
+            lfs_visualizer lfs_core GTest::gtest_main)
+        add_test(NAME TensorFrostedGlassContracts COMMAND tensor_frosted_glass_contracts)
+        set_tests_properties(TensorFrostedGlassContracts PROPERTIES
+            LABELS "tensor;gpu;ui" TIMEOUT 120)
+        if(APPLE)
+            find_package(Python REQUIRED COMPONENTS Development.Embed)
+            target_link_options(tensor_mesh_offscreen_contracts PRIVATE
+                "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
+            target_link_options(tensor_frosted_glass_contracts PRIVATE
+                "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
+            target_link_libraries(tensor_mesh_offscreen_contracts PRIVATE lfs_python_embed)
+            target_link_libraries(tensor_frosted_glass_contracts PRIVATE lfs_python_embed)
+        endif()
+    endif()
     if(LFS_TENSOR_VULKAN)
         add_executable(ui_texture_tensor_contracts test_ui_texture_tensor.cpp)
         target_compile_features(ui_texture_tensor_contracts PRIVATE cxx_std_23)
