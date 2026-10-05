@@ -73,10 +73,6 @@ namespace lfs::core {
         enqueue_range_on(source, byte_offset, byte_count, source.stream());
     }
 
-    void TensorReadback::enqueue(const Tensor& source, TensorWorkQueue& queue) {
-        enqueue(source, TensorExecutionTarget(queue));
-    }
-
     void TensorReadback::enqueue(const Tensor& source, TensorExecutionTarget target) {
         enqueue_range(source, 0, source.bytes(), target);
     }

@@ -83,8 +83,6 @@ namespace lfs::core {
         enum class Mode { Independent,
                           LegacyOrdered };
         explicit TensorWorkQueue(GpuBackend backend, Mode mode = Mode::Independent);
-        // Non-owning adapter for a backend execution target, including default.
-        TensorWorkQueue(GpuBackend backend, void* execution_target);
         TensorWorkQueue(GpuBackend backend, void* vulkan_device, void* consumer_timeline);
         class LFS_CORE_API Scope {
         public:
