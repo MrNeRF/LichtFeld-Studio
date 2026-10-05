@@ -3,6 +3,13 @@
 
 # Testing module - comprehensive tests for all components
 
+if(BUILD_TESTS OR BUILD_FORMAT_TESTS)
+    add_executable(apple_reframe_conversion_tests test_apple_reframe_conversion.cpp)
+    target_include_directories(apple_reframe_conversion_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(apple_reframe_conversion_tests PRIVATE cxx_std_23)
+    add_test(NAME AppleReframeConversion COMMAND apple_reframe_conversion_tests)
+endif()
+
 if((BUILD_TESTS OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS) AND
    (NOT APPLE OR (LFS_GRAPHICS_VULKAN_BUILD AND LFS_TENSOR_METAL)))
     add_subdirectory(metal_viewer)
@@ -593,6 +600,7 @@ if(NOT LFS_HAS_CUDA)
     set(TEST_SOURCES
         test_main.cpp
         test_tensor_backend_semantics.cpp
+        test_error_bus.cpp
         test_nodes_core.cpp
         test_nodes_scene.cpp
         test_nodes_modifier_manager.cpp

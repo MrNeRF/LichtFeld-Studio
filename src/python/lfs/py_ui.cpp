@@ -3356,6 +3356,10 @@ namespace lfs::python {
             nb::arg("default_name") = "project.licht", nb::arg("start_dir") = "",
             "Choose a destination for a new LichtFeld project. Returns empty string if cancelled.");
 
+        m.def("open_image_file_dialog", [](const std::string& start_dir) {
+            const auto path = lfs::vis::gui::OpenReframePhotoFileDialog(lfs::core::utf8_to_path(start_dir));
+            return path.empty() ? std::string{} : lfs::core::path_to_utf8(path); }, nb::arg("start_dir") = "", "Select a still photo; returns empty if cancelled");
+
         m.def(
             "open_ply_file_dialog",
             [](const std::string& start_dir) -> std::string {

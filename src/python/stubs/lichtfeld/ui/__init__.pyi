@@ -2976,3 +2976,8 @@ def unregister_property_group(group_id: str) -> None:
 
 def property_group_info(group_id: str) -> dict:
     """Get registered property metadata for a property group"""
+
+
+def open_image_file_dialog(start_dir: str = "") -> str:
+    """Choose a still photo; empty when cancelled."""
+    ...

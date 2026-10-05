@@ -64,6 +64,10 @@ namespace lfs::vis::gui {
             result.progress = result.success ? 1.0f : clampProgress(import_state.progress);
 
             if (import_state.active) {
+                if (import_state.cancellable) {
+                    result.action = ProgressOverlayPresentation::Action::CancelImport;
+                    result.action_label = LOC(Common::CANCEL);
+                }
                 if (import_state.dataset_type == "project") {
                     result.title = LOC(Progress::OPENING_PROJECT);
                 } else {
@@ -131,10 +135,12 @@ namespace lfs::vis::gui {
 
     RmlProgressOverlay::RmlProgressOverlay(RmlUIManager* rml_manager,
                                            std::function<void()> dismiss_import,
-                                           std::function<void()> cancel_video_export)
+                                           std::function<void()> cancel_video_export,
+                                           std::function<void()> cancel_import)
         : rml_manager_(rml_manager),
           dismiss_import_(std::move(dismiss_import)),
           cancel_video_export_(std::move(cancel_video_export)),
+          cancel_import_(std::move(cancel_import)),
           listener_(std::make_unique<OverlayEventListener>()) {
         assert(rml_manager_);
         listener_->overlay = this;
@@ -269,6 +275,8 @@ namespace lfs::vis::gui {
             dismiss_import_();
         else if (action == ProgressOverlayPresentation::Action::CancelVideoExport && cancel_video_export_)
             cancel_video_export_();
+        else if (action == ProgressOverlayPresentation::Action::CancelImport && cancel_import_)
+            cancel_import_();
         render_needed_ = true;
     }
 

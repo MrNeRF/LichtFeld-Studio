@@ -1,4 +1,5 @@
 {
+  "menu.file.create_splat_from_photo": "从照片创建 Splat — Apple Reframe（实验性）…",
   "node_editor.template_count_one": "{} 个模板",
   "node_editor.templates_title": "模板",
   "node_editor.template_all": "全部",

@@ -1,4 +1,5 @@
 {
+  "menu.file.create_splat_from_photo": "Create Splat from Photo — Apple Reframe (Experimental)…",
   "node_editor.template_count_one": "템플릿 {}개",
   "node_editor.templates_title": "템플릿",
   "node_editor.template_all": "전체",

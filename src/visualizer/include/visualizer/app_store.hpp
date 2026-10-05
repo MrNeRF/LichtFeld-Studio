@@ -84,6 +84,7 @@ namespace lfs::vis {
 
         struct LFS_VIS_API ImportOverlayState {
             bool active = false;
+            bool cancellable = false;
             bool show_completion = false;
             float progress = 0.0f;
             std::string stage;

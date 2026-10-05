@@ -3546,7 +3546,7 @@ namespace lfs::vis::gui {
                         .scale_y = settings.depth_filter_scale_y,
                         .offset_x = settings.depth_filter_offset_x,
                         .offset_y = settings.depth_filter_offset_y,
-                    };
+                };
                 appendCropAndFilterOverlays(params, viewport_layout.view, guide_view, settings, scene_state, scene_manager, gizmo,
                                             depth_window.scale_x,
                                             depth_window.scale_y,
@@ -3852,7 +3852,8 @@ namespace lfs::vis::gui {
         rml_progress_overlay_ = std::make_unique<RmlProgressOverlay>(
             &rmlui_manager_,
             [this] { async_tasks_.dismissImport(); },
-            [this] { async_tasks_.cancelVideoExport(); });
+            [this] { async_tasks_.cancelVideoExport(); },
+            [this] { async_tasks_.requestImportCancel(); });
         rml_toast_overlay_ = std::make_unique<RmlToastOverlay>(&rmlui_manager_);
         global_context_menu_ = std::make_unique<GlobalContextMenu>(&rmlui_manager_);
         lfs::python::set_global_context_menu(global_context_menu_.get());

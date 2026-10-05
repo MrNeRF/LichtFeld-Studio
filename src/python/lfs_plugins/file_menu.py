@@ -331,6 +331,31 @@ class ImportPlyOperator(Operator):
         return {"FINISHED"}
 
 
+class CreateSplatFromPhotoOperator(Operator):
+    label = "menu.file.create_splat_from_photo"
+    description = "Create editable Gaussian splats from one photo using Apple Reframe"
+
+    def execute(self, context) -> set:
+        if not _apple_reframe_available():
+            return {"CANCELLED"}
+        path = lf.ui.open_image_file_dialog("")
+        if not path:
+            return {"CANCELLED"}
+        if not _run_import(path, lambda: lf.create_splat_from_photo(path)):
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+def _apple_reframe_available() -> bool:
+    available = getattr(lf, "apple_reframe_available", None)
+    if not callable(available) or not callable(getattr(lf, "create_splat_from_photo", None)):
+        return False
+    try:
+        return bool(available())
+    except Exception:
+        return False
+
+
 class ImportSsogOperator(Operator):
     label = "menu.file.import_ssog"
     description = "Import a SSOG folder containing lod-meta.json"
@@ -936,6 +961,7 @@ class FileMenu:
                 [
                     menu_operator(ImportDatasetOperator),
                     menu_operator(ImportPlyOperator),
+                    *([menu_operator(CreateSplatFromPhotoOperator)] if _apple_reframe_available() else []),
                     menu_operator(ImportSsogOperator),
                     menu_operator(ImportMeshOperator),
                     menu_operator(ImportCheckpointOperator),
@@ -976,7 +1002,10 @@ _operator_classes = [
 
 
 def register():
-    for cls in _operator_classes:
+    classes = list(_operator_classes)
+    if callable(getattr(lf, "create_splat_from_photo", None)):
+        classes.append(CreateSplatFromPhotoOperator)
+    for cls in classes:
         lf.register_class(cls)
 
     lf.ui.on_show_new_project_dialog(_on_show_new_project_dialog)
@@ -994,5 +1023,8 @@ def register():
 
 
 def unregister():
-    for cls in reversed(_operator_classes):
+    classes = list(_operator_classes)
+    if callable(getattr(lf, "create_splat_from_photo", None)):
+        classes.append(CreateSplatFromPhotoOperator)
+    for cls in reversed(classes):
         lf.unregister_class(cls)

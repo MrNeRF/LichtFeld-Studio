@@ -385,6 +385,17 @@ endif()
 # Set C++ standard
 target_compile_features(lfs_io PUBLIC cxx_std_23)
 
+if(LFS_ENABLE_APPLE_REFRAME)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/apple_reframe/BuildHelper.cmake)
+    target_sources(lfs_io PRIVATE apple_reframe.mm)
+    set_source_files_properties(apple_reframe.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_compile_definitions(lfs_io PUBLIC LFS_HAS_APPLE_REFRAME=1)
+    target_link_libraries(lfs_io PRIVATE "-framework Foundation")
+    add_dependencies(lfs_io lfs_reframe_helper)
+else()
+    target_sources(lfs_io PRIVATE apple_reframe_unavailable.cpp)
+endif()
+
 # Enable position-independent code for shared library linking (Python module)
 set_target_properties(lfs_io PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
