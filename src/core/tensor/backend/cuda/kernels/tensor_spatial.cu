@@ -269,23 +269,46 @@ namespace lfs::core::tensor_ops {
                 return;
             const int32_t self = visit[t];
             int32_t mine = componentRoot(parent, self);
-            pointTreeMutualNeighbors(sorted, boxes, box_radii, sorted_radii, tree, points + static_cast<size_t>(self) * 3,
-                                     static_cast<int64_t>(t), radii[self], [&](const uint64_t j) {
-                                         int32_t other = componentRoot(parent, visit[j]);
-                                         while (mine != other) {
-                                             if (mine < other) {
-                                                 const int32_t seen = atomicCAS(parent + other, other, mine);
-                                                 if (seen == other)
-                                                     break;
-                                                 other = seen;
-                                             } else {
-                                                 const int32_t seen = atomicCAS(parent + mine, mine, other);
-                                                 if (seen == mine)
-                                                     break;
-                                                 mine = seen;
-                                             }
-                                         }
-                                     });
+            // Joins run between steps of the walk, never inside it: a warp that stops its walk for one lane's
+            // atomics and dependent loads costs several times the walk itself.
+            constexpr int kHeld = 64, kBatch = 8;
+            PointTreeMutualWalk walk;
+            pointTreeMutualBegin(walk, tree, radii[self]);
+            uint32_t held[kHeld];
+            while (!walk.done) {
+                const int count = pointTreeMutualStep(walk, sorted, boxes, box_radii, sorted_radii, tree,
+                                                      points + static_cast<size_t>(self) * 3, static_cast<int64_t>(t),
+                                                      radii[self], held);
+                for (int base = 0; base < count; base += kBatch) {
+                    // Loads for the whole batch first; a neighbour whose parent is this root needs no join.
+                    int32_t nodes[kBatch], ups[kBatch];
+#pragma unroll
+                    for (int k = 0; k < kBatch; ++k)
+                        nodes[k] = base + k < count ? visit[held[base + k]] : mine;
+#pragma unroll
+                    for (int k = 0; k < kBatch; ++k)
+                        ups[k] = base + k < count ? parent[nodes[k]] : mine;
+#pragma unroll
+                    for (int k = 0; k < kBatch; ++k) {
+                        if (ups[k] == mine)
+                            continue;
+                        int32_t other = componentRoot(parent, nodes[k]);
+                        while (mine != other) {
+                            if (mine < other) {
+                                const int32_t seen = atomicCAS(parent + other, other, mine);
+                                if (seen == other)
+                                    break;
+                                other = seen;
+                            } else {
+                                const int32_t seen = atomicCAS(parent + mine, mine, other);
+                                if (seen == mine)
+                                    break;
+                                mine = seen;
+                            }
+                        }
+                    }
+                }
+            }
         }
     } // namespace
 

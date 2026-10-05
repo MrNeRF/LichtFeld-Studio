@@ -90,35 +90,68 @@ namespace lfs::core::internal {
         return static_cast<int32_t>(found);
     }
 
-    // Visits every reference after sorted position rank whose distance from p is within both radius and its
-    // own radius (sorted_radii), passing its sorted position. box_radii holds the largest radius under each
-    // box: a box whose near distance exceeds the smaller of that and radius holds no such point.
-    template <typename Visit>
-    LFS_POINT_HD inline void pointTreeMutualNeighbors(const float* sorted, const float* boxes, const float* box_radii,
-                                                      const float* sorted_radii, const PointTreeProgram& tree,
-                                                      const float* p, const int64_t rank, const float radius,
-                                                      Visit&& visit) {
-        if (!(radius > 0.0f) || !pointFinite(radius) || tree.references == 0)
-            return;
+    // A resumable walk over the references after sorted position rank whose distance from p is within both
+    // radius and their own radius (sorted_radii). box_radii holds the largest radius under each box: a box
+    // whose near distance exceeds the smaller of that and radius holds no such point. Each step holds up to
+    // Capacity more of them, in walk order, so a caller can act on a batch outside the walk; the walk ends
+    // once done is set.
+    struct PointTreeMutualWalk {
         uint32_t next[kPointTreeMaxLevels];
         uint32_t end[kPointTreeMaxLevels];
+        uint32_t level = 0;
+        uint64_t j = 0;
+        uint64_t last = 0;
+        bool done = true;
+    };
+
+    LFS_POINT_HD inline void pointTreeMutualBegin(PointTreeMutualWalk& walk, const PointTreeProgram& tree,
+                                                  const float radius) {
+        walk.done = !(radius > 0.0f) || !pointFinite(radius) || tree.references == 0;
+        if (walk.done)
+            return;
+        walk.level = tree.levels - 1;
+        walk.next[walk.level] = 0;
+        walk.end[walk.level] = tree.level_count[walk.level];
+        walk.j = walk.last = 0;
+    }
+
+    template <int Capacity>
+    LFS_POINT_HD inline int pointTreeMutualStep(PointTreeMutualWalk& walk, const float* sorted, const float* boxes,
+                                                const float* box_radii, const float* sorted_radii,
+                                                const PointTreeProgram& tree, const float* p, const int64_t rank,
+                                                const float radius, uint32_t (&held)[Capacity]) {
+        // The cursor stays in registers while walking; only the per-level arrays live in the walk.
+        int count = 0;
         const uint32_t top = tree.levels - 1;
-        uint32_t level = top;
-        next[top] = 0;
-        end[top] = tree.level_count[top];
-        while (true) {
-            if (next[level] == end[level]) {
+        uint32_t level = walk.level;
+        uint64_t j = walk.j, last = walk.last;
+        bool done = walk.done;
+        while (!done) {
+            for (; j < last; ++j) {
+                const float* q = sorted + j * 3;
+                if (within(p, q, radius) && within(p, q, sorted_radii[j])) {
+                    held[count++] = static_cast<uint32_t>(j);
+                    if (count == Capacity) {
+                        walk.level = level;
+                        walk.j = j + 1;
+                        walk.last = last;
+                        return count;
+                    }
+                }
+            }
+            if (walk.next[level] == walk.end[level]) {
                 if (level == top)
-                    return;
-                ++level;
+                    done = true;
+                else
+                    ++level;
                 continue;
             }
-            const uint32_t node = next[level]++;
+            const uint32_t node = walk.next[level]++;
             const unsigned shift = kPointTreeFanoutBits * (level + 1);
             const uint64_t first = static_cast<uint64_t>(node) << shift;
-            const uint64_t last = first + (uint64_t(1) << shift) < tree.references ? first + (uint64_t(1) << shift)
-                                                                                   : tree.references;
-            if (static_cast<int64_t>(last) <= rank + 1)
+            const uint64_t end = first + (uint64_t(1) << shift) < tree.references ? first + (uint64_t(1) << shift)
+                                                                                  : tree.references;
+            if (static_cast<int64_t>(end) <= rank + 1)
                 continue;
             const size_t index = static_cast<size_t>(tree.level_offset[level]) + node;
             const float reach_radius = fminf(radius, box_radii[index]);
@@ -129,18 +162,34 @@ namespace lfs::core::internal {
                 continue;
             if (level != 0) {
                 --level;
-                next[level] = node << kPointTreeFanoutBits;
+                walk.next[level] = node << kPointTreeFanoutBits;
                 const uint32_t children = (node << kPointTreeFanoutBits) + kPointTreeFanout;
-                end[level] = children < tree.level_count[level] ? children : tree.level_count[level];
+                walk.end[level] = children < tree.level_count[level] ? children : tree.level_count[level];
                 continue;
             }
-            for (uint64_t j = first > static_cast<uint64_t>(rank + 1) ? first : static_cast<uint64_t>(rank + 1); j < last; ++j) {
-                const float* q = sorted + j * 3;
-                if (within(p, q, radius) && within(p, q, sorted_radii[j]))
-                    visit(j);
-            }
+            j = first > static_cast<uint64_t>(rank + 1) ? first : static_cast<uint64_t>(rank + 1);
+            last = end;
+        }
+        walk.done = true;
+        return count;
+    }
+
+    // Visits every reference of a PointTreeMutualWalk, passing its sorted position.
+    template <typename Visit>
+    LFS_POINT_HD inline void pointTreeMutualNeighbors(const float* sorted, const float* boxes, const float* box_radii,
+                                                      const float* sorted_radii, const PointTreeProgram& tree,
+                                                      const float* p, const int64_t rank, const float radius,
+                                                      Visit&& visit) {
+        PointTreeMutualWalk walk;
+        pointTreeMutualBegin(walk, tree, radius);
+        uint32_t held[kPointTreeFanout];
+        while (!walk.done) {
+            const int count = pointTreeMutualStep(walk, sorted, boxes, box_radii, sorted_radii, tree, p, rank, radius, held);
+            for (int k = 0; k < count; ++k)
+                visit(held[k]);
         }
     }
+
     // point_neighbor_spacing over a point tree of every finite point: the mean distance to the nearest three
     // others whose cells lie within one cell of p's (within two when those hold fewer than three), or four
     // cell widths with none. A box whose bounds lie in cells outside the range holds no candidate, since

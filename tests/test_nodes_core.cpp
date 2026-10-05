@@ -2105,13 +2105,18 @@ namespace {
                 x = parent[x] = parent[parent[x]];
             return x;
         };
+        std::vector<int> degree(count);
         for (size_t i = 0; i < count; ++i)
             for (size_t j = i + 1; j < count; ++j)
                 if (usable(i) && usable(j) && within(&xyz[i * 3], &xyz[j * 3], radii[i]) &&
                     within(&xyz[i * 3], &xyz[j * 3], radii[j])) {
                     const int a = root(int(i)), b = root(int(j));
                     parent[std::max(a, b)] = std::min(a, b);
+                    ++degree[i];
+                    ++degree[j];
                 }
+        // Walks hand out neighbours in batches of at most 64, so dense points take several.
+        EXPECT_GT(*std::max_element(degree.begin(), degree.end()), 256);
         std::vector<int> expected(count);
         for (size_t i = 0; i < count; ++i)
             expected[i] = root(int(i));
