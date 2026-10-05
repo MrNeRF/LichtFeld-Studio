@@ -367,10 +367,8 @@ namespace lfs::training {
                      lfs::core::path_to_utf8(init_file.filename()),
                      model->get_max_sh_degree());
 
-            TrainingModelGraphCapture context =
-                graph_capture ? *graph_capture : captureTrainingModelGraph(scene);
-            context.has_preserved_cropbox = false;
-            return makeGraphInstall(context, std::move(model));
+            return makeGraphInstall(graph_capture ? *graph_capture : captureTrainingModelGraph(scene),
+                                    std::move(model));
         }
 
         std::expected<std::unique_ptr<lfs::core::SplatData>, std::string> loadAddedSplat(
