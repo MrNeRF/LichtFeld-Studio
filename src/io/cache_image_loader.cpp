@@ -15,6 +15,8 @@
 
 #include <algorithm>
 #include <bit>
+#include <cassert>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <fstream>
 #include <iomanip>
@@ -341,23 +343,38 @@ namespace lfs::io {
 
     } // namespace
 
+    lfs::core::Tensor upload_rgb_image(const unsigned char* data, const int width, const int height, const int channels,
+                                       const LoadParams& params) {
+        assert(data && channels == 3);
+        const auto stream = static_cast<cudaStream_t>(params.cuda_stream);
+        return hwc_to_chw(upload_hwc(data, width, height, channels, stream),
+                          params.resize_factor, params.max_width, params.output_uint8, stream);
+    }
+
+    lfs::core::Tensor upload_rgb_image(const std::uint16_t* data, const int width, const int height, const int channels,
+                                       const LoadParams& params) {
+        assert(data && channels == 3);
+        const auto stream = static_cast<cudaStream_t>(params.cuda_stream);
+        return hwc_to_chw(upload_hwc(data, width, height, channels, stream),
+                          params.resize_factor, params.max_width, params.output_uint8, stream);
+    }
+
     lfs::core::Tensor load_rgb_image_cpu_decoded(
         const std::filesystem::path& path, const LoadParams& params, const bool decode_16bit) {
-        const auto stream = static_cast<cudaStream_t>(params.cuda_stream);
-        const auto finish = [&](const auto* data, const int width, const int height, const int channels) {
+        const auto require_rgb = [&](const void* data, const int channels) {
             if (!data || channels != 3)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
-            return hwc_to_chw(upload_hwc(data, width, height, channels, stream),
-                              params.resize_factor, params.max_width, params.output_uint8, stream);
         };
         if (decode_16bit) {
             auto [data, width, height, channels] = lfs::core::load_image_u16(path, 1, 0);
             const std::unique_ptr<uint16_t, decltype(&lfs::core::free_image)> owned(data, &lfs::core::free_image);
-            return finish(owned.get(), width, height, channels);
+            require_rgb(data, channels);
+            return upload_rgb_image(owned.get(), width, height, channels, params);
         }
         auto [data, width, height, channels] = lfs::core::load_image(path, 1, 0);
         const std::unique_ptr<unsigned char, decltype(&lfs::core::free_image)> owned(data, &lfs::core::free_image);
-        return finish(owned.get(), width, height, channels);
+        require_rgb(data, channels);
+        return upload_rgb_image(owned.get(), width, height, channels, params);
     }
 
     lfs::core::Tensor load_rgba_image_cpu_decoded(

@@ -265,6 +265,45 @@ TEST_F(PipelinedImageLoaderTest, UndistortedTrainingImageIsIdenticalForImmediate
     expect_identical(cold.tensor, hit.tensor);
 }
 
+// Catches decode-ahead changing what a load returns: with the image decoded ahead on the host, every CPU decode
+// branch (8-bit, 16-bit, float for undistortion) must return exactly the image a plain load returns.
+TEST_F(PipelinedImageLoaderTest, DecodeAheadReturnsTheSameImageAsAPlainLoad) {
+    const auto [width, height, channels] = lfs::core::get_image_info(mask_path_);
+    ASSERT_GT(width, 0);
+    ASSERT_GT(height, 0);
+    const float focal = 0.9765625f * static_cast<float>(width);
+    const auto undistort = lfs::core::compute_undistort_params(
+        focal, focal, 0.5f * width, 0.5f * height, width, height,
+        Tensor::from_vector({0.10f, -0.33f, 0.85f}, {3}, Device::CPU),
+        Tensor::from_vector({0.001f, -0.001f}, {2}, Device::CPU),
+        CameraModelType::PINHOLE, 0.0f);
+    LoadParams resized;
+    resized.max_width = 16;
+    resized.output_uint8 = false;
+    LoadParams undistorted;
+    undistorted.output_uint8 = true;
+    undistorted.undistort = &undistort;
+
+    for (const bool sixteen_bit : {false, true}) {
+        auto settings = config();
+        settings.use_16bit_color = sixteen_bit;
+        for (const auto* params : {&resized, &undistorted}) {
+            PipelinedImageLoader plain(settings);
+            const auto expected = plain.load_image_immediate(mask_path_, *params).cpu().contiguous();
+
+            PipelinedImageLoader ahead(settings);
+            ahead.decode_ahead(image_path_, *params);
+            ahead.decode_ahead(mask_path_, *params);
+            const auto actual = ahead.load_image_immediate(mask_path_, *params).cpu().contiguous();
+            ASSERT_EQ(actual.shape(), expected.shape());
+            ASSERT_EQ(actual.dtype(), expected.dtype());
+            EXPECT_EQ(std::memcmp(actual.data_ptr(), expected.data_ptr(), expected.bytes()), 0)
+                << "16-bit " << sixteen_bit << ", undistorted " << (params == &undistorted);
+            EXPECT_EQ(ahead.get_stats().cpu_decode_calls, plain.get_stats().cpu_decode_calls);
+        }
+    }
+}
+
 // Fails if a release frees nothing, spills a newer image before the oldest, or
 // loses pixels on the way through the spill.
 TEST_F(PipelinedImageLoaderTest, ReleaseHostCacheSpillsLeastRecentImagesFirst) {

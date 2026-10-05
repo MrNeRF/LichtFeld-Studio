@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -49,6 +50,12 @@ namespace lfs::io {
     // until the GPU conversion.
     LFS_IO_API lfs::core::Tensor load_rgb_image_cpu_decoded(
         const std::filesystem::path& path, const LoadParams& params, bool decode_16bit = false);
+    // The upload and resize half of load_rgb_image_cpu_decoded, for RGB pixels already decoded on the host by
+    // lfs::core::load_image (8-bit) or lfs::core::load_image_u16 (16-bit).
+    LFS_IO_API lfs::core::Tensor upload_rgb_image(const unsigned char* data, int width, int height, int channels,
+                                                  const LoadParams& params);
+    LFS_IO_API lfs::core::Tensor upload_rgb_image(const std::uint16_t* data, int width, int height, int channels,
+                                                  const LoadParams& params);
     // Same for RGBA sources; returns float32 [4, H, W] with alpha in [0, 1].
     LFS_IO_API lfs::core::Tensor load_rgba_image_cpu_decoded(
         const std::filesystem::path& path, int resize_factor, int max_width, void* cuda_stream = nullptr,

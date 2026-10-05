@@ -166,6 +166,19 @@ namespace lfs::training {
             config.use_16bit_color = params.dataset.loading_params.use_16bit_color;
             return std::make_unique<lfs::io::PipelinedImageLoader>(config);
         }
+
+        lfs::io::LoadParams evaluation_load_params(const lfs::core::Camera& camera,
+                                                   const lfs::core::param::TrainingParameters& params) {
+            lfs::io::LoadParams load_params;
+            load_params.resize_factor = params.dataset.resize_factor;
+            load_params.max_width = params.dataset.max_width;
+            load_params.output_uint8 = !params.dataset.loading_params.use_16bit_color;
+            load_params.cuda_stream = lfs::core::getCurrentCUDAStream();
+            if (params.optimization.undistort && camera.is_undistort_prepared() &&
+                params.optimization.eval_space == lfs::core::param::EvalSpace::Undistorted)
+                load_params.undistort = &camera.undistort_params();
+            return load_params;
+        }
     } // namespace
 
     lfs::core::Tensor image_for_metrics_and_save(const lfs::core::Tensor& image) {
@@ -440,15 +453,8 @@ namespace lfs::training {
                     fallback_image_loader = make_eval_image_loader(params);
                     image_loader = fallback_image_loader.get();
                 }
-                lfs::io::LoadParams load_params;
-                load_params.resize_factor = params.dataset.resize_factor;
-                load_params.max_width = params.dataset.max_width;
-                load_params.output_uint8 = !params.dataset.loading_params.use_16bit_color;
-                load_params.cuda_stream = lfs::core::getCurrentCUDAStream();
-                if (undistorted_reference)
-                    load_params.undistort = &camera.undistort_params();
                 inputs.gt_image = image_loader->load_image_immediate(
-                    camera.image_path(), load_params);
+                    camera.image_path(), evaluation_load_params(camera, params));
                 if (!inputs.gt_image.is_valid() || inputs.gt_image.ndim() != 3 ||
                     inputs.gt_image.shape()[0] != 3)
                     return evaluation_error("failed to load evaluation image", LFS_SOURCE_SITE_CURRENT());
@@ -1229,6 +1235,11 @@ namespace lfs::training {
                 image_loader,
                 eval_mesh(),
                 background);
+            // The next reference decodes on the host while this view is scored; its upload waits for its turn.
+            if (image_idx + 1 < val_dataset_size) {
+                const auto* const next = val_dataset->get_camera(image_idx + 1);
+                image_loader->decode_ahead(next->image_path(), evaluation_load_params(*next, _params));
+            }
             if (!prepared) {
                 LOG_WARN("Eval: skipping camera '{}' (view preparation failed: {})",
                          cam->image_name(), prepared.error().detail());

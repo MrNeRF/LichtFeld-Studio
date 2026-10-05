@@ -32,6 +32,7 @@
 #include <mutex>
 #include <semaphore>
 #include <sstream>
+#include <tuple>
 #include <vector>
 
 #ifdef _WIN32
@@ -1269,6 +1270,63 @@ namespace lfs::io {
         return decoded;
     }
 
+    void PipelinedImageLoader::decode_ahead(const std::filesystem::path& path, const LoadParams& params) {
+        const auto kind = host_decode_kind(path, params);
+        std::lock_guard lock(decode_ahead_mutex_);
+        decode_ahead_.reset();
+        if (!kind)
+            return;
+        decode_ahead_.emplace(DecodeAhead{
+            .path = path,
+            .kind = *kind,
+            .pixels = std::async(std::launch::async, [path, kind = *kind] { return decode_on_host(path, kind); })});
+    }
+
+    std::optional<PipelinedImageLoader::HostDecodeKind> PipelinedImageLoader::host_decode_kind(
+        const std::filesystem::path& path, const LoadParams& params) {
+        if (!config_.use_16bit_color && !load_params_need_processing(params))
+            return std::nullopt;
+        if (is_jpeg_file_signature(path) || load_cached_jpeg_blob(make_cache_key(path, params)))
+            return std::nullopt;
+        if (params.undistort)
+            return HostDecodeKind::Float32;
+        return config_.use_16bit_color ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8;
+    }
+
+    PipelinedImageLoader::HostPixels PipelinedImageLoader::decode_on_host(
+        const std::filesystem::path& path, const HostDecodeKind kind) {
+        switch (kind) {
+        case HostDecodeKind::Float32: {
+            auto [data, width, height, channels] = lfs::core::load_image_float(path);
+            return {{data, [](void* pixels) { lfs::core::free_image_float(static_cast<float*>(pixels)); }},
+                    width,
+                    height,
+                    channels};
+        }
+        case HostDecodeKind::UInt16: {
+            auto [data, width, height, channels] = lfs::core::load_image_u16(path, 1, 0);
+            return {{data, &lfs::core::free_image}, width, height, channels};
+        }
+        case HostDecodeKind::UInt8:
+            break;
+        }
+        auto [data, width, height, channels] = lfs::core::load_image(path, 1, 0);
+        return {{data, &lfs::core::free_image}, width, height, channels};
+    }
+
+    std::optional<PipelinedImageLoader::HostPixels> PipelinedImageLoader::take_decoded_ahead(
+        const std::filesystem::path& path, const HostDecodeKind kind) const {
+        std::optional<DecodeAhead> ahead;
+        {
+            std::lock_guard lock(decode_ahead_mutex_);
+            if (!decode_ahead_ || decode_ahead_->path != path || decode_ahead_->kind != kind)
+                return std::nullopt;
+            ahead = std::move(decode_ahead_);
+            decode_ahead_.reset();
+        }
+        return ahead->pixels.get();
+    }
+
     std::string PipelinedImageLoader::make_cache_key(const std::filesystem::path& path, const LoadParams& params) const {
         if (params.undistort) {
             std::ostringstream key;
@@ -1355,7 +1413,11 @@ namespace lfs::io {
             stream = decode_stream_;
         }
         if (params.undistort) {
-            auto [img_data, width, height, channels] = lfs::core::load_image_float(path);
+            auto ahead = take_decoded_ahead(path, HostDecodeKind::Float32);
+            auto [img_data, width, height, channels] =
+                ahead ? std::tuple{static_cast<float*>(ahead->data.release()), ahead->width, ahead->height,
+                                   ahead->channels}
+                      : lfs::core::load_image_float(path);
             if (!img_data)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
             convert_float_hwc_to_rgb(img_data, width, height, channels);
@@ -1371,7 +1433,18 @@ namespace lfs::io {
         } else {
             auto decode_params = params;
             decode_params.cuda_stream = stream;
-            decoded = load_rgb_image_cpu_decoded(path, decode_params, config_.use_16bit_color);
+            const bool sixteen_bit = config_.use_16bit_color;
+            if (auto ahead = take_decoded_ahead(path, sixteen_bit ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8)) {
+                if (!ahead->data || ahead->channels != 3)
+                    throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
+                const auto* const pixels = ahead->data.get();
+                decoded = sixteen_bit ? upload_rgb_image(static_cast<const std::uint16_t*>(pixels), ahead->width,
+                                                         ahead->height, ahead->channels, decode_params)
+                                      : upload_rgb_image(static_cast<const unsigned char*>(pixels), ahead->width,
+                                                         ahead->height, ahead->channels, decode_params);
+            } else {
+                decoded = load_rgb_image_cpu_decoded(path, decode_params, sixteen_bit);
+            }
         }
 
         return decoded;
