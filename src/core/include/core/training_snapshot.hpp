@@ -5,12 +5,27 @@
 #pragma once
 
 #include "core/export.hpp"
-#include "core/tensor_debug.hpp"
+#include "core/logger.hpp"
+#include "core/tensor.hpp"
 #include <filesystem>
+#include <format>
 #include <map>
+#include <optional>
 #include <string>
 
 namespace lfs::core::debug {
+
+    // Statistics stored in a training snapshot.
+    struct TensorStats {
+        float min = 0.0f;
+        float max = 0.0f;
+        float mean = 0.0f;
+        float std = 0.0f;
+        size_t numel = 0;
+        TensorShape shape;
+        DataType dtype = DataType::Float32;
+        bool is_cuda = false;
+    };
 
     // Memory info snapshot
     struct MemorySnapshot {

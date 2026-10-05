@@ -8,7 +8,6 @@
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
 #include "core/tensor_backend.hpp"
-#include "core/tensor_debug.hpp"
 #include "core/tensor_serialization_sink.hpp"
 #include "core/tensor_trace.hpp"
 
@@ -524,19 +523,6 @@ namespace {
                void (*)(std::ostream&, const T&, const TensorSerializationDescriptor&, const T*));
     LFS_FREEZE(TensorSerializationSink::write_tensor_payload,
                void (TensorSerializationSink::*)(std::ostream&, const T&, const T*, const TensorSerializationDescriptor&));
-    LFS_FREEZE(debug::TensorValidation::is_valid, bool (debug::TensorValidation::*)() const);
-    LFS_FREEZE(debug::TensorValidation::to_string, std::string (debug::TensorValidation::*)() const);
-    LFS_FREEZE(debug::validate_tensor_cpu, debug::TensorValidation (*)(const T&));
-    LFS_FREEZE(debug::validate_tensor_gpu, debug::TensorValidation (*)(const T&));
-    LFS_FREEZE(debug::validate_tensor, debug::TensorValidation (*)(const T&));
-    LFS_FREEZE(debug::log_tensor_validation, void (*)(const T&, const char*, const char*, int));
-    LFS_FREEZE(debug::TensorDiff::is_close, bool (debug::TensorDiff::*)(float, float) const);
-    LFS_FREEZE(debug::TensorDiff::to_string, std::string (debug::TensorDiff::*)() const);
-    LFS_FREEZE(debug::diff_tensors, debug::TensorDiff (*)(const T&, const T&, float));
-    LFS_FREEZE(debug::log_tensor_diff, void (*)(const T&, const T&, const char*, float));
-    LFS_FREEZE(debug::TensorStats::to_string, std::string (debug::TensorStats::*)() const);
-    LFS_FREEZE(debug::get_tensor_stats, debug::TensorStats (*)(const T&));
-    LFS_FREEZE(debug::log_tensor_info, void (*)(const T&, const char*));
     LFS_FREEZE(Tracer::instance, Tracer& (*)());
     LFS_FREEZE(Tracer::set_enabled, void (Tracer::*)(bool));
     LFS_FREEZE(Tracer::is_enabled, bool (Tracer::*)() const);
@@ -1023,19 +1009,6 @@ namespace {
         ct.to_vector_bool();
         ct.debug_values();
         ct.options();
-        debug::TensorValidation{}.is_valid();
-        debug::TensorValidation{}.to_string();
-        debug::validate_tensor_cpu(ct);
-        debug::validate_tensor_gpu(ct);
-        debug::validate_tensor(ct);
-        debug::log_tensor_validation(ct, "", "", 0);
-        debug::TensorDiff{}.is_close();
-        debug::TensorDiff{}.to_string();
-        debug::diff_tensors(ct, ct);
-        debug::log_tensor_diff(ct, ct, "");
-        debug::TensorStats{}.to_string();
-        debug::get_tensor_stats(ct);
-        debug::log_tensor_info(ct, "");
         debug::TensorOpTracer::instance();
         debug::TensorOpTracer::instance().set_enabled(true);
         debug::TensorOpTracer::instance().is_enabled();

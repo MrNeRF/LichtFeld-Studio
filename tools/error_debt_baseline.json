@@ -8,10 +8,6 @@
       "src/app/main.cpp:159"
     ],
     "core": [
-      "src/core/cuda/tensor_debug.cu:157",
-      "src/core/cuda/tensor_debug.cu:160",
-      "src/core/cuda/tensor_debug.cu:169",
-      "src/core/cuda/tensor_debug.cu:170",
       "src/core/memory_pressure.cpp:361",
       "src/core/scene.cpp:821",
       "src/core/tensor/backend/cuda/kernels/export_morton.cu:193"
