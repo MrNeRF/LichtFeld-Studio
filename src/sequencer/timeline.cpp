@@ -252,10 +252,6 @@ namespace lfs::sequencer {
         return interpolateSpline(keyframes_, time);
     }
 
-    std::vector<glm::vec3> Timeline::generatePath(const int samples_per_segment) const {
-        return generatePathPoints(keyframes_, samples_per_segment);
-    }
-
     std::vector<glm::vec3> Timeline::generatePathAtTimeStep(const float sample_step_seconds) const {
         if (keyframes_.size() < 2) {
             return keyframes_.empty() ? std::vector<glm::vec3>{}

@@ -370,13 +370,6 @@ namespace lfs::training {
         return tv_loss_scalar_;
     }
 
-    void BilateralGrid::tv_backward(float tv_weight) {
-        for (int i = 0; i < num_images_; ++i) {
-            slice_grad_.zero_();
-            tv_backward(tv_weight, i);
-        }
-    }
-
     void BilateralGrid::tv_backward(float tv_weight, int image_idx) {
         if (image_idx < 0 || image_idx >= num_images_) {
             throw std::out_of_range("BilateralGrid::tv_backward: image_idx out of range");
@@ -384,13 +377,6 @@ namespace lfs::training {
         const int slot = resident_slot(image_idx);
         const auto grid = resident_grids_.slice(0, slot, slot + 1);
         training_ops(lfs::core::default_gpu_backend()).bilateral->tv_backward(grid, slice_grad_, tv_weight, num_images_);
-    }
-
-    void BilateralGrid::optimizer_step() {
-        for (int i = 0; i < num_images_; ++i) {
-            optimizer_step(i);
-        }
-        flush_resident();
     }
 
     void BilateralGrid::optimizer_step(int image_idx) {
@@ -504,10 +490,6 @@ namespace lfs::training {
         resident_exp_avg_sq_ = lfs::core::Tensor::empty(shape, lfs::core::Device::GPU);
         slots_ = {};
         slot_clock_ = 0;
-    }
-
-    float* BilateralGrid::device_slice(lfs::core::Tensor& resident, const int slot) const {
-        return resident.ptr<float>() + static_cast<size_t>(slot) * slice_elements();
     }
 
     int BilateralGrid::resident_slot(const int image_idx) {

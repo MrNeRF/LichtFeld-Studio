@@ -128,7 +128,6 @@ namespace lfs::mcp {
 
     LFS_MCP_API JsonRpcRequest parse_request(const std::string& input);
     LFS_MCP_API std::string serialize_response(const JsonRpcResponse& response);
-    LFS_MCP_API std::string serialize_notification(const std::string& method, const json& params);
 
     LFS_MCP_API json tool_to_json(const McpTool& tool);
     LFS_MCP_API json resource_to_json(const McpResource& resource);
