@@ -161,7 +161,7 @@ kernel void mcmc_sample(constant McmcSampleParams& p [[buffer(0)]], uint i [[thr
         return;
     }
     // Keep small positive draws normal even when fast math flushes subnormals.
-    const float probability_scale = total < 1.0f ? 0x1p64f : 1.0f;
+    const float probability_scale = total < 1.0f ? 18446744073709551616.0f : 1.0f;
     const float u = mrnf_curand_uniform(mrnf_philox_block(p.seed, i).x) * (total * probability_scale);
     int left = 0;
     int right = int(p.categories) - 1;
