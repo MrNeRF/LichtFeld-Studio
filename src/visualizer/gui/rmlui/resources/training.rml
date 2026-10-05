@@ -129,9 +129,18 @@
       </div>
       <div class="setting-row"
            data-for="row : pv_basic_struct_rows"
-           data-attr-data-tooltip="row.tooltip_key"
-           data-class-steps-scale-lock-row="row.id == 'iterations'">
-        <span class="prop-label">{{row.label}}</span>
+           data-attr-data-tooltip="row.tooltip_key">
+        <span class="prop-label" data-if="row.id != 'iterations'">{{row.label}}</span>
+        <div class="prop-label prop-label--with-action" data-if="row.id == 'iterations'">
+          <span class="prop-label__text">{{row.label}}</span>
+          <button type="button"
+                  class="icon-btn steps-scale-lock-btn"
+                  data-class-selected="steps_scaling_lock_selected"
+                  data-attr-title="steps_scaling_lock_tooltip"
+                  data-event-click="toggle_step_scaling_lock">
+            <img data-attr-src="steps_scaling_lock_icon" />
+          </button>
+        </div>
         <input type="text" class="number-input" data-if="row.kind == 'number'"
                data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
                data-event-focus="pv_focus(row.id)"
@@ -147,14 +156,6 @@
         </select>
         <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
         <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
-        <button type="button"
-                class="icon-btn steps-scale-lock-btn"
-                data-if="row.id == 'iterations'"
-                data-class-selected="steps_scaling_lock_selected"
-                data-attr-title="steps_scaling_lock_tooltip"
-                data-event-click="toggle_step_scaling_lock">
-          <img data-attr-src="steps_scaling_lock_icon" />
-        </button>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.sh_degree" data-if="!pv_search_active">
         <span class="prop-label">{{label_sh_degree}}</span>

@@ -1115,10 +1115,12 @@ crf-curve {
     font-family: "JetBrains Mono";
 }
 
+/* Square and exactly as tall as the 18dp fields beside it. */
 .num-step-btn {
-    width: 20dp;
+    width: 18dp;
     height: 18dp;
-    padding: 0 0 1dp 0;
+    padding: 0;
+    box-sizing: border-box;
     text-align: center;
     line-height: 16dp;
     font-size: 12dp;
