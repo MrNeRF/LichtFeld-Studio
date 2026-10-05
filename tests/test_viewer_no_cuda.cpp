@@ -6,6 +6,9 @@
 #include "core/tensor_backend.hpp"
 #include "core/tensor_readback.hpp"
 #include "rendering/selection_ops.hpp"
+#if LFS_TENSOR_METAL
+#include "window/metal_graphics_context.hpp"
+#endif
 
 #include <array>
 #include <cstdint>
@@ -21,6 +24,18 @@ namespace {
     using lfs::app::GpuPreflightDecision;
 
 } // namespace
+
+#if LFS_TENSOR_METAL
+TEST(ViewerNoCuda, MetalShutdownReleasesReservedFrameSlot) {
+    if (!gpu_backend_available(GpuBackend::Metal))
+        GTEST_SKIP() << "Metal backend unavailable";
+    lfs::vis::MetalGraphicsContext graphics;
+    ASSERT_TRUE(graphics.initializeHeadless());
+    ASSERT_TRUE(graphics.waitForNextFrameSlot());
+    graphics.shutdown();
+    // Destroying a semaphore with an unreleased reservation traps in libdispatch.
+}
+#endif
 
 TEST(ViewerNoCuda, PreflightViewerOnlyCudaUsableUsesCuda) {
     EXPECT_EQ(decide_gpu_preflight(true, true, true), GpuPreflightDecision::UseCuda);

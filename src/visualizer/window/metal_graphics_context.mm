@@ -291,8 +291,10 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
         impl_->shutdown = true;
         if (impl_->active) {
             impl_->active = false;
-            impl_->releaseFrameSlot();
         }
+        // The event loop can reserve the next slot before beginFrame. Release
+        // that reservation even when no frame was subsequently started.
+        impl_->releaseFrameSlot();
         static_cast<void>(waitForSubmittedFrames());
         impl_->final_image = {};
         impl_->rgba8_present = nil;
