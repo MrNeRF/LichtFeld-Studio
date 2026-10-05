@@ -251,7 +251,6 @@ body {
 }
 
 .loss-tick {
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     text-align: right;
     white-space: nowrap;
