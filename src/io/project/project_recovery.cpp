@@ -772,10 +772,6 @@ namespace lfs::io::project {
         std::shared_ptr<State> state) noexcept
         : state_(std::move(state)) {}
 
-    bool RecoverySession::valid() const noexcept {
-        return state_ && state_->lock.valid();
-    }
-
     WriterLockLease
     RecoverySession::writer_lock() const noexcept {
         return state_ ? state_->lock
