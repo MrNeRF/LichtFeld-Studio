@@ -1772,6 +1772,7 @@ namespace {
                             1.0e-2f, 1.0e-2f);
         const Tensor rows = shaped(6 * 32, 106, {6, 32}), gamma = shaped(32, 107, {32}), beta = shaped(32, 108, {32});
         expect_same_on_both([&] { return nn::layer_norm(gpu(rows), gpu(gamma), gpu(beta)); }, 1.0e-5f, 1.0e-5f);
+        const Tensor q = shaped(2 * 3 * 20 * 16, 111, {2, 3, 20, 16}), k = shaped(2 * 3 * 28 * 16, 112, {2, 3, 28, 16});
         const Tensor v = shaped(2 * 3 * 28 * 16, 113, {2, 3, 28, 16});
         expect_same_on_both([&] { return nn::attention(gpu(q), gpu(k), gpu(v)); }, matrix_tolerance, matrix_tolerance);
 
