@@ -144,10 +144,6 @@ namespace lfs::core {
 
     } // namespace
 
-    Tensor Tensor::conv1x1(const Tensor& weight) const {
-        return conv1x1(weight, Tensor{});
-    }
-
     Tensor Tensor::conv1x1(const Tensor& weight, const Tensor& bias) const {
         assert_float32_same_device(*this, "conv1x1", {{"weight", &weight}});
         if (bias.is_valid()) {
@@ -372,10 +368,6 @@ namespace lfs::core {
         }
 
         return output;
-    }
-
-    Tensor Tensor::linear(const Tensor& weight) const {
-        return linear(weight, Tensor{});
     }
 
     Tensor Tensor::linear(const Tensor& weight, const Tensor& bias) const {

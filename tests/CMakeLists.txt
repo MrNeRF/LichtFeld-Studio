@@ -836,7 +836,6 @@ set(TEST_FILES
     test_tensor_masked_select_rows.cpp
     test_tensor_bitwise.cpp
     test_tensor_accessor.cpp
-    test_tensor_random_advanced.cpp
     test_tensor_indexing_advanced.cpp
     test_tensor_clamping.cpp
     test_tensor_cumsum_convenience.cpp

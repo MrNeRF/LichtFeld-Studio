@@ -189,8 +189,6 @@ namespace {
     [[maybe_unused]] constexpr auto kMoreFactoryOverloads = std::tuple{
         static_cast<T (*)(void*, S, Device, DataType, std::shared_ptr<void>)>(&T::from_external_owner),
         static_cast<T (*)(void*, S, Device, DataType, std::shared_ptr<void>, size_t)>(&T::from_external_owner),
-        static_cast<T (*)(void*, S, Device, DataType, std::shared_ptr<void>, size_t, cudaStream_t)>(
-            &T::from_external_owner),
         static_cast<T (*)(void*, S, Device, DataType, std::shared_ptr<void>, size_t, cudaStream_t, std::string)>(
             &T::from_external_owner),
         static_cast<T (*)(const T&, const T&, const T&)>(&T::where),
@@ -199,7 +197,6 @@ namespace {
         static_cast<T (T::*)(const T&, int) const>(&T::cat)};
 
     [[maybe_unused]] constexpr auto kMoreReduceOverloads = std::tuple{
-        static_cast<T (T::*)(ReduceOp) const>(&T::reduce),
         static_cast<T (T::*)(ReduceOp, const ReduceArgs&) const>(&T::reduce),
         static_cast<T (T::*)() const>(&T::any),
         static_cast<T (T::*)(std::span<const int>, bool) const>(&T::any),
@@ -218,7 +215,6 @@ namespace {
         static_cast<T (T::*)(const T&) const>(&T::mul),
         static_cast<T (T::*)(const T&) const>(&T::div),
         static_cast<T (T::*)(const T&) const>(&T::pow),
-        static_cast<T (T::*)(const T&) const>(&T::mod),
         static_cast<T (T::*)(const T&) const>(&T::maximum),
         static_cast<T (T::*)(const T&) const>(&T::minimum),
         static_cast<T (T::*)(const T&) const>(&T::eq),
@@ -237,25 +233,14 @@ namespace {
         static_cast<const void* (T::*)() const>(&T::data_ptr),
         static_cast<void* (T::*)()>(&T::storage_ptr),
         static_cast<const void* (T::*)() const>(&T::storage_ptr),
-        static_cast<void (*)()>(&T::log_storage_memory),
-        static_cast<void (*)(std::string_view)>(&T::log_storage_memory),
-        static_cast<void (T::*)(std::initializer_list<size_t>, bool)>(&T::set_bool),
         static_cast<void (T::*)(std::span<const size_t>, bool)>(&T::set_bool),
-        static_cast<bool (T::*)(std::initializer_list<size_t>) const>(&T::get_bool),
         static_cast<bool (T::*)(std::span<const size_t>) const>(&T::get_bool),
         static_cast<T& (T::*)(float)>(&T::fill_),
         static_cast<T& (T::*)(float, cudaStream_t)>(&T::fill_),
-        static_cast<T& (T::*)(S)>(&T::assert_shape),
-        static_cast<T& (T::*)(S, const std::string&)>(&T::assert_shape),
-        static_cast<void (T::*)() const>(&T::print_formatted),
-        static_cast<void (T::*)(const std::string&, size_t) const>(&T::print_formatted),
-        static_cast<float& (T::*)(std::initializer_list<size_t>)>(&T::at),
         static_cast<float (T::*)(std::initializer_list<size_t>) const>(&T::at)};
 
     [[maybe_unused]] constexpr auto kNnOverloads = std::tuple{
-        static_cast<T (T::*)(const T&) const>(&T::conv1x1),
         static_cast<T (T::*)(const T&, const T&) const>(&T::conv1x1),
-        static_cast<T (T::*)(const T&) const>(&T::linear),
         static_cast<T (T::*)(const T&, const T&) const>(&T::linear)};
 
     [[maybe_unused]] constexpr auto kStreamOverloads = std::tuple{
@@ -331,7 +316,6 @@ namespace {
     LFS_FREEZE(T::zeros_bool, T (*)(S, Device));
     LFS_FREEZE(T::ones_bool, T (*)(S, Device));
     LFS_FREEZE(T::linspace, T (*)(float, float, size_t, Device));
-    LFS_FREEZE(T::diag, T (*)(const T&));
     static_assert(std::is_same_v<
                   decltype(static_cast<T (*)(void*, S, Device, DataType, cudaStream_t)>(
                       &T::from_blob)),
@@ -342,10 +326,7 @@ namespace {
     LFS_FREEZE(T::rand, T (*)(S, Device, DataType));
     LFS_FREEZE(T::randn, T (*)(S, Device, DataType));
     LFS_FREEZE(T::uniform, T (*)(S, float, float, Device, DataType, std::optional<uint64_t>));
-    LFS_FREEZE(T::normal, T (*)(S, float, float, Device, DataType));
     LFS_FREEZE(T::randint, T (*)(S, int, int, Device, DataType));
-    LFS_FREEZE(T::bernoulli, T (*)(S, float, Device, DataType));
-    LFS_FREEZE(T::multinomial, T (*)(const T&, int, bool, std::optional<uint64_t>));
     LFS_FREEZE(T::rand_like, T (*)(const T&));
     LFS_FREEZE(T::randn_like, T (*)(const T&));
     LFS_FREEZE(T::manual_seed, void (*)(uint64_t));
@@ -366,9 +347,7 @@ namespace {
     LFS_FREEZE(T::broadcast_to, T (T::*)(const S&) const);
     LFS_FREEZE(T::can_broadcast_to, bool (T::*)(const S&) const);
     LFS_FREEZE(T::broadcast_shape, S (T::*)(const S&) const);
-    LFS_FREEZE(T::try_reshape, std::optional<T> (T::*)(S) const);
     LFS_FREEZE(T::view_as, T (T::*)(DataType) const);
-    LFS_FREEZE(T::split_batch, std::vector<T> (*)(const T&, size_t));
     LFS_FREEZE(T::sign, T (T::*)() const);
     LFS_FREEZE(T::reciprocal, T (T::*)() const);
     LFS_FREEZE(T::exp2, T (T::*)() const);
@@ -395,13 +374,11 @@ namespace {
     LFS_FREEZE(T::isinf, T (T::*)() const);
     LFS_FREEZE(T::isfinite, T (T::*)() const);
     LFS_FREEZE(T::logical_not, T (T::*)() const);
-    LFS_FREEZE(T::normalize, T (T::*)(int, float) const);
     LFS_FREEZE(T::logit, T (T::*)(float) const);
     LFS_FREEZE(T::clamp, T (T::*)(float, float) const);
     LFS_FREEZE(T::clamp_min, T (T::*)(float) const);
     LFS_FREEZE(T::clamp_max, T (T::*)(float) const);
     LFS_FREEZE(T::clamp_, T& (T::*)(float, float));
-    LFS_FREEZE(T::clamp_min_, T& (T::*)(float));
     LFS_FREEZE(T::clamp_max_, T& (T::*)(float));
     LFS_FREEZE(T::operator!, T (T::*)() const);
     LFS_FREEZE(T::operator~, T (T::*)() const);
@@ -416,12 +393,10 @@ namespace {
     LFS_FREEZE(T::min_with_indices, std::pair<T, T> (T::*)(int, bool) const);
     LFS_FREEZE(T::max_with_indices, std::pair<T, T> (T::*)(int, bool) const);
     LFS_FREEZE(T::sort, std::pair<T, T> (T::*)(int, bool) const);
-    LFS_FREEZE(T::any_scalar, bool (T::*)() const);
     LFS_FREEZE(T::mm, T (T::*)(const T&) const);
     LFS_FREEZE(T::bmm, T (T::*)(const T&) const);
     LFS_FREEZE(T::matmul, T (T::*)(const T&) const);
     LFS_FREEZE(T::dot, T (T::*)(const T&) const);
-    LFS_FREEZE(T::cdist, T (T::*)(const T&, float) const);
     LFS_FREEZE(T::masked_select, T (T::*)(const T&) const);
     LFS_FREEZE(T::masked_fill_, T& (T::*)(const T&, float));
     LFS_FREEZE(T::masked_fill, T (T::*)(const T&, float) const);
@@ -430,7 +405,6 @@ namespace {
     LFS_FREEZE(T::append_zeros, T& (T::*)(size_t));
     LFS_FREEZE(T::gather_lazy, PermutationExpr<TensorLeaf, TensorLeaf> (T::*)(const T&) const);
     LFS_FREEZE(T::nonzero, T (T::*)() const);
-    LFS_FREEZE(T::nonzero_split, std::vector<T> (T::*)() const);
     LFS_FREEZE(T::index_fill_, T& (T::*)(int, const T&, float));
     LFS_FREEZE(T::index_copy_, T& (T::*)(int, const T&, const T&));
     LFS_FREEZE(T::index_add_, T& (T::*)(int, const T&, const T&));
@@ -484,10 +458,7 @@ namespace {
     LFS_FREEZE(T::strides, const RankedDims& (T::*)() const);
     LFS_FREEZE(T::stride, size_t (T::*)(size_t) const);
     LFS_FREEZE(T::has_zero_stride, bool (T::*)() const);
-    LFS_FREEZE(T::assert_device, T& (T::*)(Device));
-    LFS_FREEZE(T::assert_dtype, T& (T::*)(DataType));
     LFS_FREEZE(T::assert_finite, T& (T::*)());
-    LFS_FREEZE(T::all_close, bool (T::*)(const T&, float, float) const);
     LFS_FREEZE(T::str, std::string (T::*)() const);
     LFS_FREEZE(T::to_vector_uint8, std::vector<uint8_t> (T::*)() const);
     LFS_FREEZE(T::to_vector_int64, std::vector<int64_t> (T::*)() const);
@@ -543,9 +514,8 @@ namespace {
     LFS_FREEZE(PinnedMemoryAllocator::set_force_fallback_for_testing, void (PinnedMemoryAllocator::*)(bool));
     LFS_FREEZE(PinnedMemoryAllocator::set_cache_limit_for_testing, void (PinnedMemoryAllocator::*)(size_t));
     LFS_FREEZE(PinnedMemoryAllocator::cache_limit_bytes, size_t (PinnedMemoryAllocator::*)() const);
+    LFS_FREEZE(T::log_storage_memory, void (*)(std::string_view));
     LFS_FREEZE(MemoryInfo::cuda, MemoryInfo (*)());
-    LFS_FREEZE(MemoryInfo::cpu, MemoryInfo (*)());
-    LFS_FREEZE(MemoryInfo::log, void (MemoryInfo::*)() const);
     LFS_FREEZE(save_tensor, void (*)(const T&, const std::string&));
     LFS_FREEZE(load_tensor, T (*)(const std::string&));
     LFS_FREEZE(TensorSerializationDescriptor::payload_bytes, std::uint64_t (TensorSerializationDescriptor::*)() const);
@@ -580,14 +550,6 @@ namespace {
     LFS_FREEZE(RP::item_int, int (RP::*)() const);
     LFS_FREEZE(RP::item_int64, int64_t (RP::*)() const);
     LFS_FREEZE(RP::operator Tensor, T (RP::*)() const);
-    LFS_FREEZE(RP::pow, T (RP::*)(float) const);
-    LFS_FREEZE(RP::sqrt, T (RP::*)() const);
-    LFS_FREEZE(RP::abs, T (RP::*)() const);
-    LFS_FREEZE(RP::neg, T (RP::*)() const);
-    LFS_FREEZE(RP::sum, T (RP::*)() const);
-    LFS_FREEZE(RP::mean, T (RP::*)() const);
-    LFS_FREEZE(RP::square, T (RP::*)() const);
-    LFS_FREEZE(MP::operator Tensor, T (MP::*)() const);
     LFS_FREEZE(TI::operator Tensor, T (TI::*)() const);
 #undef LFS_FREEZE
 
@@ -611,11 +573,9 @@ namespace {
         X::linspace(0.0f, 1.0f, 3, device);
         X::eye(3, device);
         X::eye(3, 4, device);
-        X::diag(ct);
         X::from_blob(data, shape, device, dtype, stream);
         X::from_external_owner(data, shape, device, dtype, owner);
         X::from_external_owner(data, shape, device, dtype, owner, 9);
-        X::from_external_owner(data, shape, device, dtype, owner, 9, stream);
         X::from_external_owner(data, shape, device, dtype, owner, 9, stream, std::string{});
         X::zeros_like(ct);
         X::ones_like(ct);
@@ -663,8 +623,6 @@ namespace {
         ct.can_broadcast_to(shape);
         ct.broadcast_shape(shape);
         t.reserve(8);
-        ct.try_reshape(shape);
-        X::split_batch(ct, 4);
     };
 
     template <typename Dims, typename Shape>
@@ -737,13 +695,11 @@ namespace {
         ct.isinf();
         ct.isfinite();
         ct.logical_not();
-        ct.normalize(-1, 1e-12f);
         ct.logit(1e-7f);
         ct.clamp(-1.0f, 1.0f);
         ct.clamp_min(-1.0f);
         ct.clamp_max(1.0f);
         t.clamp_(-1.0f, 1.0f);
-        t.clamp_min_(-1.0f);
         t.clamp_max_(1.0f);
         -ct;
         ~ct;
@@ -757,7 +713,6 @@ namespace {
         ct.mul(ct);
         ct.div(ct);
         ct.pow(ct);
-        ct.mod(ct);
         ct.maximum(ct);
         ct.minimum(ct);
         ct.add(1.0f);
@@ -811,7 +766,6 @@ namespace {
 
     template <typename X>
     concept ReductionSurface = requires(const X& ct, std::span<const int> dims) {
-        ct.reduce(ReduceOp::Sum);
         ct.reduce(ReduceOp::Sum, ReduceArgs{});
         ct.sum();
         ct.sum(dims, true);
@@ -861,7 +815,6 @@ namespace {
         ct.min_with_indices(0, true);
         ct.max_with_indices(0, true);
         ct.sort(0, false);
-        ct.any_scalar();
     };
 
     template <typename X>
@@ -870,7 +823,6 @@ namespace {
         ct.bmm(ct);
         ct.matmul(ct);
         ct.dot(ct);
-        ct.cdist(ct, 2.0f);
     };
 
     template <typename X>
@@ -880,8 +832,8 @@ namespace {
         t[ct];
         t[tensors];
         ct[ct];
-        t.set_bool({0}, true);
-        ct.get_bool({0});
+        t.set_bool(std::array<size_t, 1>{0}, true);
+        ct.get_bool(std::array<size_t, 1>{0});
         ct.masked_select(ct);
         t.masked_fill_(ct, 1.0f);
         ct.masked_fill(ct, 1.0f);
@@ -892,7 +844,6 @@ namespace {
         t.append_zeros(1);
         ct.gather_lazy(ct);
         ct.nonzero();
-        ct.nonzero_split();
         t.scatter_(0, ct, ct, ScatterMode::None);
         t.scatter_(0, ct, 1.0f, ScatterMode::None);
         t.index_fill_(0, ct, 1.0f);
@@ -913,10 +864,7 @@ namespace {
         X::rand(shape);
         X::randn(shape);
         X::uniform(shape);
-        X::normal(shape);
         X::randint(shape, 0, 4);
-        X::bernoulli(shape);
-        X::multinomial(ct, 2, true);
         X::rand_like(ct);
         X::randn_like(ct);
         X::manual_seed(1);
@@ -938,13 +886,10 @@ namespace {
         ct.relu();
         ct.gelu();
         ct.swish();
-        ct.normalize();
         ct.logit();
-        ct.conv1x1(ct);
         ct.conv1x1(ct, ct);
         ct.max_pool2d(2, 2, 0);
         ct.adaptive_avg_pool2d(2, 2);
-        ct.linear(ct);
         ct.linear(ct, ct);
         ct.conv1x1_bias_out(ct, ct, t);
         ct.conv1x1_bias_relu_out(ct, ct, t);
@@ -1029,7 +974,6 @@ namespace {
         X::shutdown_memory_pool();
         X::set_memory_pool_iteration(0);
         X::storage_memory_summary();
-        X::log_storage_memory();
         X::log_storage_memory(std::string_view{});
         PinnedMemoryAllocator::instance();
         PinnedMemoryAllocator::instance().allocate(1);
@@ -1048,7 +992,6 @@ namespace {
         PinnedMemoryAllocator::instance().set_cache_limit_for_testing(1);
         PinnedMemoryAllocator::instance().cache_limit_bytes();
         MemoryInfo::cuda();
-        MemoryInfo::cpu();
     };
 
     template <typename X>
@@ -1069,14 +1012,9 @@ namespace {
         ct.exportable_control();
         ct.exportable_region();
         ct.exportable_bound_generation();
-        t.assert_shape(S{});
-        t.assert_shape(S{}, text);
-        t.assert_device(Device::CPU);
-        t.assert_dtype(DataType::Float32);
         t.assert_finite();
         ct.has_nan();
         ct.has_inf();
-        ct.all_close(ct);
         ct.str();
         ct.to_vector();
         ct.to_vector_uint8();
@@ -1084,8 +1022,6 @@ namespace {
         ct.to_vector_int();
         ct.to_vector_bool();
         ct.debug_values();
-        ct.print_formatted();
-        ct.print_formatted(text, 4);
         ct.options();
         debug::TensorValidation{}.is_valid();
         debug::TensorValidation{}.to_string();
@@ -1116,7 +1052,6 @@ namespace {
         debug::TensorOpTracer::instance().clear_history();
         debug::TensorOpTracer::instance().get_history();
         debug::OpTraceGuard("", ct, SourceSite{"", 0, ""}).set_output(S{});
-        MemoryInfo{}.log();
     };
 
     template <typename E>
@@ -1264,16 +1199,8 @@ namespace {
         const_row * 1.0f;
         const_row / 1.0f;
         -const_row;
-        const_row.pow(2.0f);
-        const_row.sqrt();
-        const_row.abs();
-        const_row.neg();
-        const_row.sum();
-        const_row.mean();
-        const_row.square();
         masked = 1.0f;
         masked = ct;
-        static_cast<X>(masked);
         indexer = 1.0f;
         indexer = ct;
         static_cast<X>(indexer);

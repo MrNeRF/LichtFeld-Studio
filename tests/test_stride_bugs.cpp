@@ -8,6 +8,7 @@
  */
 
 #include "core/tensor.hpp"
+#include <array>
 #include <gtest/gtest.h>
 
 using namespace lfs::core;
@@ -47,17 +48,17 @@ TEST_F(StrideBugTest, SetBool_NonContiguousSlice) {
 
     // Set element [1][1] to true via the slice
     // In the 4x4 tensor, this should be position [1][1] = element 5 (0-indexed: row*4+col = 1*4+1 = 5)
-    slice.set_bool({1, 1}, true);
+    slice.set_bool(std::array<size_t, 2>{1, 1}, true);
 
     // Verify via get_bool on the slice
-    EXPECT_TRUE(slice.get_bool({1, 1})) << "set_bool/get_bool failed on non-contiguous tensor";
+    EXPECT_TRUE(slice.get_bool(std::array<size_t, 2>{1, 1})) << "set_bool/get_bool failed on non-contiguous tensor";
 
     // Verify the underlying data is correct
     // Element [1][1] in 4x4 should be true
-    EXPECT_TRUE(bool_tensor.get_bool({1, 1})) << "Underlying tensor should have [1][1] set to true";
+    EXPECT_TRUE(bool_tensor.get_bool(std::array<size_t, 2>{1, 1})) << "Underlying tensor should have [1][1] set to true";
 
     // Element [1][3] should NOT be affected (this is what happens with wrong strides)
-    EXPECT_FALSE(bool_tensor.get_bool({1, 3})) << "Element [1][3] should NOT be affected";
+    EXPECT_FALSE(bool_tensor.get_bool(std::array<size_t, 2>{1, 3})) << "Element [1][3] should NOT be affected";
 }
 
 TEST_F(StrideBugTest, GetBool_NonContiguousSlice) {
@@ -65,22 +66,22 @@ TEST_F(StrideBugTest, GetBool_NonContiguousSlice) {
     auto bool_tensor = Tensor::zeros({4, 4}, Device::CPU, DataType::Bool);
 
     // Set specific elements in the original tensor
-    bool_tensor.set_bool({0, 0}, true); // Linear idx 0
-    bool_tensor.set_bool({1, 0}, true); // Linear idx 4
-    bool_tensor.set_bool({1, 1}, true); // Linear idx 5
-    bool_tensor.set_bool({2, 2}, true); // Linear idx 10
+    bool_tensor.set_bool(std::array<size_t, 2>{0, 0}, true); // Linear idx 0
+    bool_tensor.set_bool(std::array<size_t, 2>{1, 0}, true); // Linear idx 4
+    bool_tensor.set_bool(std::array<size_t, 2>{1, 1}, true); // Linear idx 5
+    bool_tensor.set_bool(std::array<size_t, 2>{2, 2}, true); // Linear idx 10
 
     // Create a 3x3 slice
     auto slice = bool_tensor.slice(0, 0, 3).slice(1, 0, 3);
     ASSERT_FALSE(slice.is_contiguous());
 
     // Verify get_bool returns correct values on slice
-    EXPECT_TRUE(slice.get_bool({0, 0}));  // Maps to [0][0]
-    EXPECT_TRUE(slice.get_bool({1, 0}));  // Maps to [1][0]
-    EXPECT_TRUE(slice.get_bool({1, 1}));  // Maps to [1][1]
-    EXPECT_TRUE(slice.get_bool({2, 2}));  // Maps to [2][2]
-    EXPECT_FALSE(slice.get_bool({0, 1})); // Maps to [0][1]
-    EXPECT_FALSE(slice.get_bool({2, 0})); // Maps to [2][0]
+    EXPECT_TRUE(slice.get_bool(std::array<size_t, 2>{0, 0}));  // Maps to [0][0]
+    EXPECT_TRUE(slice.get_bool(std::array<size_t, 2>{1, 0}));  // Maps to [1][0]
+    EXPECT_TRUE(slice.get_bool(std::array<size_t, 2>{1, 1}));  // Maps to [1][1]
+    EXPECT_TRUE(slice.get_bool(std::array<size_t, 2>{2, 2}));  // Maps to [2][2]
+    EXPECT_FALSE(slice.get_bool(std::array<size_t, 2>{0, 1})); // Maps to [0][1]
+    EXPECT_FALSE(slice.get_bool(std::array<size_t, 2>{2, 0})); // Maps to [2][0]
 }
 
 // ============= index_put_ Tests =============
@@ -246,7 +247,7 @@ TEST_F(StrideBugTest, Any_NonContiguousSlice) {
     auto tensor = Tensor::zeros({4, 4}, Device::CPU, DataType::Bool);
 
     // Set element at [2][2] to true
-    tensor.set_bool({2, 2}, true);
+    tensor.set_bool(std::array<size_t, 2>{2, 2}, true);
 
     // Create 3x3 slice that includes [2][2]
     auto slice = tensor.slice(0, 0, 3).slice(1, 0, 3);
@@ -267,7 +268,7 @@ TEST_F(StrideBugTest, All_NonContiguousSlice) {
     EXPECT_TRUE(static_cast<bool>(slice.all().item())) << "all() should return true for slice of all-ones tensor";
 
     // Now set one element in the slice to false
-    tensor.set_bool({1, 1}, false);
+    tensor.set_bool(std::array<size_t, 2>{1, 1}, false);
 
     EXPECT_FALSE(static_cast<bool>(slice.all().item())) << "all() should return false after setting one element to false";
 }

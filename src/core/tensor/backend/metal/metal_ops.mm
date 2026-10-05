@@ -992,33 +992,30 @@ namespace lfs::core::internal {
         }
 
         struct MatrixFillParams {
-            uint64_t diagonal_offset;
             uint64_t output_offset;
             uint32_t columns;
             uint32_t count;
         };
 
-        // eye (kind 0) or diag (kind 1) into a [rows][columns] Float32 matrix.
+        // Identity into a [rows][columns] Float32 matrix.
         API_AVAILABLE(macos(26.0))
-        void encode_matrix_fill(const uint32_t kind, const StorageRef* const diagonal, const StorageRef output,
+        void encode_matrix_fill(const StorageRef output,
                                 const size_t rows, const size_t columns) {
             const size_t count = rows * columns;
             if (count == 0)
                 return;
-            LFS_ASSERT_MSG(output.dtype == DataType::Float32 && (diagonal == nullptr || diagonal->dtype == DataType::Float32),
-                           "Metal eye and diag write Float32");
+            LFS_ASSERT_MSG(output.dtype == DataType::Float32,
+                           "Metal eye writes Float32");
             const auto context = acquire_context();
             const auto output_at = context->locate(output);
-            const auto diagonal_at = diagonal != nullptr ? context->locate(*diagonal) : output_at;
             const MatrixFillParams params{
-                .diagonal_offset = diagonal_at.offset,
                 .output_offset = output_at.offset,
                 .columns = checked_u32(columns, "Metal matrix columns exceed uint32"),
                 .count = checked_u32(count, "Metal matrix element count exceeds uint32"),
             };
-            const std::array uses{output, diagonal != nullptr ? *diagonal : output};
-            context->dispatch(uses, {.pipeline = context->pipeline("matrix_fill", {{0, kind}}),
-                                     .buffers = {diagonal_at.address, output_at.address},
+            const std::array uses{output};
+            context->dispatch(uses, {.pipeline = context->pipeline("matrix_fill"),
+                                     .buffers = {output_at.address},
                                      .params = param_bytes(params),
                                      .grid = threads(count)});
         }
@@ -1340,51 +1337,28 @@ namespace lfs::core::internal {
         }
 
         // random_op kinds.
-        constexpr uint32_t kUniform = 0, kBernoulli = 1, kRandint = 2, kNormal = 3, kMultinomialReplacement = 4,
-                           kGumbelKeys = 5, kWeightStatistics = 7, kRunningSums = 8, kBlockOffsets = 9;
-        // Weights per block of running sums; kernels.metal's kSumBlock.
-        constexpr uint32_t kSumBlock = 1024;
-
-        // A power of two that brings the largest weight near 2^0.
-        float multinomial_scale(const float maximum) {
-            const uint32_t exponent = std::clamp((std::bit_cast<uint32_t>(maximum) >> 23) & 255u, 1u, 253u);
-            return std::bit_cast<float>((254u - exponent) << 23);
-        }
+        constexpr uint32_t kUniform = 0, kRandint = 2, kNormal = 3;
 
         struct RandomParams {
             uint64_t output_offset;
-            uint64_t weights_offset;
-            uint64_t keys_offset;
             uint64_t seed;
             uint32_t count;
-            uint32_t sample_count;
             int32_t low;
             int32_t high;
             float first;
             float second;
-            float total;
             uint32_t padding;
         };
-        static_assert(sizeof(RandomParams) == 64);
+        static_assert(sizeof(RandomParams) == 40);
 
         API_AVAILABLE(macos(26.0))
-        void encode_random(Context& context, const uint32_t kind, const StorageRef output, const StorageRef weights,
-                           const StorageRef keys, RandomParams params, const MTLSize grid) {
-            std::vector<StorageRef> uses;
-            std::array<uint64_t, 3> addresses{};
-            const auto bind = [&](const StorageRef& storage, const size_t slot, uint64_t& offset) {
-                if (storage.data == nullptr)
-                    return;
-                const auto at = context.locate(storage);
-                addresses[slot] = at.address;
-                offset = at.offset;
-                uses.push_back(storage);
-            };
-            bind(output, 0, params.output_offset);
-            bind(weights, 1, params.weights_offset);
-            bind(keys, 2, params.keys_offset);
+        void encode_random(Context& context, const uint32_t kind, const StorageRef output,
+                           RandomParams params, const MTLSize grid) {
+            const auto at = context.locate(output);
+            params.output_offset = at.offset;
+            const std::array uses{output};
             context.dispatch(uses, {.pipeline = context.pipeline("random_op", {{0, kind}}),
-                                    .buffers = {addresses[0], addresses[1], addresses[2]},
+                                    .buffers = {at.address},
                                     .params = param_bytes(params),
                                     .grid = grid,
                                     .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
@@ -1399,7 +1373,7 @@ namespace lfs::core::internal {
         void draw_elements(const uint32_t kind, const StorageRef output, const RandomProgram& program) {
             if (program.count == 0)
                 return;
-            encode_random(*acquire_context(), kind, output, {}, {},
+            encode_random(*acquire_context(), kind, output,
                           {.seed = program.seed,
                            .count = checked_u32(program.count, "Metal random count exceeds uint32"),
                            .low = program.low,
@@ -2125,11 +2099,6 @@ namespace lfs::core::internal {
         draw_elements(kUniform, output, program);
     }
 
-    void MetalBackendOps::bernoulli(const StorageRef output, const RandomProgram& program, ExecContext) {
-        LFS_FACADE_TRACE(bernoulli);
-        draw_elements(kBernoulli, output, program);
-    }
-
     void MetalBackendOps::randint(const StorageRef output, const RandomProgram& program, ExecContext) {
         LFS_FACADE_TRACE(randint);
         draw_elements(kRandint, output, program);
@@ -2139,60 +2108,6 @@ namespace lfs::core::internal {
     void MetalBackendOps::normal(const StorageRef output, StorageRef, const RandomProgram& program, ExecContext) {
         LFS_FACADE_TRACE(normal);
         draw_elements(kNormal, output, program);
-    }
-
-    void MetalBackendOps::multinomial(const StorageRef weights, const StorageRef output, const RandomProgram& program,
-                                      ExecContext) {
-        LFS_FACADE_TRACE(multinomial);
-        if (program.count == 0 || program.sample_count == 0)
-            return;
-        LFS_ASSERT_MSG(weights.dtype == DataType::Float32 && output.dtype == DataType::Int64,
-                       "Metal multinomial requires Float32 weights and Int64 samples");
-        const auto context = acquire_context();
-        const uint32_t categories = checked_u32(program.count, "Metal multinomial category count exceeds uint32");
-        const uint32_t samples = checked_u32(program.sample_count, "Metal multinomial sample count exceeds uint32");
-        // The weights are validated on the host, like the CUDA path.
-        struct WeightStatistics {
-            float maximum;
-            uint32_t invalid;
-        };
-        WeightStatistics statistics{};
-        {
-            const Scratch scratch(*context, sizeof(WeightStatistics));
-            encode_random(*context, kWeightStatistics, scratch.storage, weights, {}, {.count = categories},
-                          MTLSizeMake(1, 1, 1));
-            context->wait(context->pending(scratch.storage));
-            std::memcpy(&statistics, context->host(scratch.storage), sizeof(statistics));
-        }
-        LFS_ASSERT_MSG(statistics.invalid == 0, "multinomial weights must be finite and non-negative");
-        LFS_ASSERT_MSG(statistics.maximum > 0.0f, "multinomial weights must have a positive finite sum");
-        if (program.replacement) {
-            // Running sums within blocks, the blocks' offsets, then a binary
-            // search per draw. The weights are scaled so their maximum sits
-            // near 2^0, which keeps the sums finite.
-            const uint32_t blocks = (categories + kSumBlock - 1) / kSumBlock;
-            const Scratch sums(*context, (program.count + blocks + 1) * sizeof(float));
-            const RandomParams params{.seed = program.seed, .count = categories, .sample_count = samples, .first = multinomial_scale(statistics.maximum)};
-            encode_random(*context, kRunningSums, {}, weights, sums.storage, params, thread_groups(blocks));
-            encode_random(*context, kBlockOffsets, {}, weights, sums.storage, params, MTLSizeMake(1, 1, 1));
-            encode_random(*context, kMultinomialReplacement, output, weights, sums.storage, params,
-                          thread_groups(program.sample_count));
-            return;
-        }
-        LFS_ASSERT_MSG(program.sample_count <= program.count,
-                       "multinomial sample count exceeds weights without replacement");
-        // Gumbel-top-k: the sample_count largest perturbed log-weights. The
-        // sort is stable, so ties fall back to the lower index.
-        const Scratch keys(*context, program.count * sizeof(float));
-        const Scratch order(*context, program.count * sizeof(int64_t));
-        StorageRef key_values = keys.storage, key_order = order.storage;
-        key_values.dtype = DataType::Float32;
-        key_order.dtype = DataType::Int64;
-        encode_random(*context, kGumbelKeys, {}, weights, keys.storage,
-                      {.seed = program.seed, .count = categories, .sample_count = samples},
-                      thread_groups(program.count));
-        sort_lines(key_values, key_order, 1, program.count, 1, true);
-        encode_copy(*context, key_order, output, program.sample_count * sizeof(int64_t));
     }
 
     static void radius_query(const StorageRef points, const StorageRef references, const StorageRef heads,
@@ -3461,54 +3376,9 @@ namespace lfs::core::internal {
                     count, output, DataType::Float32);
     }
 
-    void MetalBackendOps::diag(const StorageRef diagonal, const StorageRef output, const size_t count, ExecContext) {
-        LFS_FACADE_TRACE(diag);
-        encode_matrix_fill(1, &diagonal, output, count, count);
-    }
-
     void MetalBackendOps::eye(const StorageRef output, const size_t rows, const size_t columns, ExecContext) {
         LFS_FACADE_TRACE(eye);
-        encode_matrix_fill(0, nullptr, output, rows, columns);
-    }
-
-    void MetalBackendOps::cdist(const StorageRef lhs, const StorageRef rhs, const StorageRef output,
-                                const size_t lhs_rows, const size_t rhs_rows, const size_t columns, const float p,
-                                ExecContext) {
-        LFS_FACADE_TRACE(cdist);
-        const size_t count = lhs_rows * rhs_rows;
-        if (count == 0)
-            return;
-        LFS_ASSERT_MSG(lhs.dtype == DataType::Float32 && rhs.dtype == DataType::Float32 &&
-                           output.dtype == DataType::Float32,
-                       "Metal cdist requires Float32");
-        struct CdistParams {
-            uint64_t lhs_offset;
-            uint64_t rhs_offset;
-            uint64_t output_offset;
-            uint32_t rows;
-            uint32_t columns;
-            uint32_t features;
-            float p;
-        };
-        const auto context = acquire_context();
-        const auto lhs_at = context->locate(lhs);
-        const auto rhs_at = context->locate(rhs);
-        const auto output_at = context->locate(output);
-        const CdistParams params{
-            .lhs_offset = lhs_at.offset,
-            .rhs_offset = rhs_at.offset,
-            .output_offset = output_at.offset,
-            .rows = checked_u32(lhs_rows, "Metal cdist rows exceed uint32"),
-            .columns = checked_u32(rhs_rows, "Metal cdist columns exceed uint32"),
-            .features = checked_u32(columns, "Metal cdist features exceed uint32"),
-            .p = p,
-        };
-        checked_u32(count, "Metal cdist output count exceeds uint32");
-        const std::array uses{lhs, rhs, output};
-        context->dispatch(uses, {.pipeline = context->pipeline("cdist"),
-                                 .buffers = {lhs_at.address, rhs_at.address, output_at.address},
-                                 .params = param_bytes(params),
-                                 .grid = threads(count)});
+        encode_matrix_fill(output, rows, columns);
     }
 
     void MetalBackendOps::max_pool2d(const StorageRef input, const StorageRef output,

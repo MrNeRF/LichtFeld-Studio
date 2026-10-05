@@ -314,24 +314,10 @@ namespace {
         EXPECT_FLOAT_EQ(dot.item(), 32.0f);
         expect_cuda_backend(dot);
 
-        // Catches diag and eye swapping square/rectangular dimensions.
-        const Tensor diagonal = Tensor::diag(Tensor::from_vector(
-            std::vector<float>{2.0f, 3.0f}, {2}, Device::GPU));
-        expect_values(diagonal, {2.0f, 0.0f, 0.0f, 3.0f});
-        expect_cuda_backend(diagonal);
+        // Catches eye swapping square/rectangular dimensions.
         const Tensor identity = Tensor::eye(2, 3, Device::GPU);
         expect_values(identity, {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f});
         expect_cuda_backend(identity);
-
-        // Catches cdist dropping p or the two independent row counts.
-        const Tensor distances = Tensor::from_vector(
-                                     std::vector<float>{0.0f, 0.0f, 3.0f, 4.0f},
-                                     {2, 2}, Device::GPU)
-                                     .cdist(Tensor::from_vector(
-                                                std::vector<float>{0.0f, 4.0f}, {1, 2}, Device::GPU),
-                                            2.0f);
-        expect_values(distances, {4.0f, 3.0f});
-        expect_cuda_backend(distances);
 
         // Catches the fused sgemm bias-ReLU epilogue bypassing its facade entry.
         const Tensor image = Tensor::ones({1, 1, 1, 500000}, Device::GPU);
@@ -396,11 +382,6 @@ namespace {
                                 [](const float value) { return value >= 2.0f && value <= 4.0f; }));
         expect_cuda_backend(uniform);
 
-        // Catches bernoulli losing p or selecting the wrong random entry.
-        const Tensor bernoulli = Tensor::bernoulli({128}, 1.0f, Device::GPU);
-        expect_values(bernoulli, std::vector<float>(128, 1.0f));
-        expect_cuda_backend(bernoulli);
-
         // Catches randint losing integer bounds or dtype metadata.
         const Tensor integers = Tensor::randint(
             {512}, -3, 5, Device::GPU, DataType::Int32);
@@ -408,14 +389,6 @@ namespace {
         EXPECT_TRUE(std::all_of(integer_values.begin(), integer_values.end(),
                                 [](const int value) { return value >= -3 && value < 5; }));
         expect_cuda_backend(integers);
-
-        // Catches multinomial swapping weight count and requested sample count.
-        const Tensor samples = Tensor::multinomial(
-            Tensor::from_vector(std::vector<float>{0.0f, 0.0f, 1.0f},
-                                {3}, Device::GPU),
-            64, true);
-        EXPECT_EQ(samples.to_vector_int64(), std::vector<int64_t>(64, 2));
-        expect_cuda_backend(samples);
 
         // Catches normal's odd-count scratch path overflowing or omitting its synchronous copy.
         Tensor normal = Tensor::zeros({257}, Device::GPU);

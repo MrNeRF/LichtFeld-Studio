@@ -75,32 +75,12 @@ namespace lfs::core::internal {
             cuda_pointer<float>(output), count, context.cuda_stream);
     }
 
-    void CudaBackendOps::diag(
-        const StorageRef diagonal, const StorageRef output, const size_t count,
-        const ExecContext context) {
-        LFS_FACADE_TRACE(diag);
-        tensor_ops::launch_diag(
-            cuda_const_pointer<float>(diagonal), cuda_pointer<float>(output),
-            count, context.cuda_stream);
-    }
-
     void CudaBackendOps::eye(
         const StorageRef output, const size_t rows, const size_t columns,
         const ExecContext context) {
         LFS_FACADE_TRACE(eye);
         tensor_ops::launch_eye(
             cuda_pointer<float>(output), rows, columns, context.cuda_stream);
-    }
-
-    void CudaBackendOps::cdist(
-        const StorageRef lhs, const StorageRef rhs, const StorageRef output,
-        const size_t lhs_rows, const size_t rhs_rows, const size_t columns,
-        const float p, const ExecContext context) {
-        LFS_FACADE_TRACE(cdist);
-        tensor_ops::launch_cdist(
-            cuda_const_pointer<float>(lhs), cuda_const_pointer<float>(rhs),
-            cuda_pointer<float>(output), lhs_rows, rhs_rows, columns, p,
-            context.cuda_stream);
     }
 
     void CudaBackendOps::max_pool2d(

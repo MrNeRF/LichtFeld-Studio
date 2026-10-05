@@ -99,16 +99,13 @@ namespace {
     // | launch_sgemm_batched | Tensor::bmm |
     // | launch_sgemm_bias_relu | Tensor::conv1x1_bias_relu_out with output_size >= 500000 |
     // | launch_dot_product | Tensor::dot |
-    // | launch_diag | Tensor::diag |
     // | launch_max_pool2d | Tensor::max_pool2d |
     // | launch_adaptive_avg_pool2d | Tensor::adaptive_avg_pool2d |
     // | launch_bias_add | Tensor::linear(weight, bias) |
     // | launch_bias_relu | Tensor::linear_bias_relu_out fallback |
     // | launch_relu | Tensor::relu_out |
     // | launch_uniform | Tensor::uniform |
-    // | launch_bernoulli | Tensor::bernoulli |
     // | launch_randint | Tensor::randint |
-    // | launch_multinomial | Tensor::multinomial |
     // | launch_strided_copy | Tensor::contiguous on rank 5 view |
     // | launch_strided_copy_immediate | Tensor::contiguous on rank 2 view |
     // | launch_strided_upload | non-contiguous CPU Tensor::to(Device::GPU) |
@@ -122,7 +119,6 @@ namespace {
     // | launch_clamp_fused | Tensor::clamp on Float32 |
     // | launch_clamp_scalar_int | Tensor::clamp_ on Int32 |
     // | launch_fused_pointwise_chain | chained Tensor pointwise expression materialization |
-    // | launch_cdist | Tensor::cdist |
     // | launch_eye | Tensor::eye |
     // | has_nan_gpu | Tensor::has_nan |
     // | has_inf_gpu | Tensor::has_inf |
@@ -222,16 +218,13 @@ namespace {
         ENTRY(launch_sgemm_batched, "Tensor::bmm", kF32, Tolerance),
         ENTRY(launch_sgemm_bias_relu, "Tensor::conv1x1_bias_relu_out", kF32, Tolerance),
         ENTRY(launch_dot_product, "Tensor::dot", kF32, Tolerance),
-        ENTRY(launch_diag, "Tensor::diag", kF32, Digest),
         ENTRY(launch_max_pool2d, "Tensor::max_pool2d", kF32, Digest),
         ENTRY(launch_adaptive_avg_pool2d, "Tensor::adaptive_avg_pool2d", kF32, Tolerance),
         ENTRY(launch_bias_add, "Tensor::linear(weight,bias)", kF32, Tolerance),
         ENTRY(launch_bias_relu, "Tensor::linear_bias_relu_out(fallback)", kF32, Tolerance),
         ENTRY(launch_relu, "Tensor::relu_out", kF32, Digest),
         ENTRY(launch_uniform, "Tensor::uniform", kF32, Stat),
-        ENTRY(launch_bernoulli, "Tensor::bernoulli", kF32, Stat),
         ENTRY(launch_randint, "Tensor::randint", kI32, Stat),
-        ENTRY(launch_multinomial, "Tensor::multinomial", kF32, Stat),
         ENTRY(launch_strided_copy, "Tensor::contiguous(rank5 view)", kSeven, Digest),
         ENTRY(launch_strided_copy_immediate, "Tensor::contiguous(rank2 view)", kSeven, Digest),
         ENTRY(launch_strided_upload, "Tensor::to(CUDA,CPU-view)", kSeven, Digest),
@@ -245,7 +238,6 @@ namespace {
         ENTRY(launch_clamp_fused, "Tensor::clamp", kF32, Digest),
         ENTRY(launch_clamp_scalar_int, "Tensor::clamp_(Int32)", kI32, Digest),
         ENTRY(launch_fused_pointwise_chain, "Tensor::add.mul.sub", kF32, Digest),
-        ENTRY(launch_cdist, "Tensor::cdist", kF32, Tolerance),
         ENTRY(launch_eye, "Tensor::eye", kF32, Digest),
         ENTRY(has_nan_gpu, "Tensor::has_nan", kF32, Digest),
         ENTRY(has_inf_gpu, "Tensor::has_inf", kF32, Digest),
@@ -489,11 +481,6 @@ namespace {
             inputs.input = make_tensor({elements(profile)}, dtype, seed);
             inputs.rhs = make_tensor({elements(profile)}, dtype, seed + 1);
         }
-        if (name == "launch_diag") {
-            const size_t diagonal_size =
-                profile.rows == 1 ? 7 : std::min<size_t>(profile.cols, 1031);
-            inputs.input = make_tensor({diagonal_size}, dtype, seed);
-        }
         if (name == "launch_max_pool2d" || name == "launch_adaptive_avg_pool2d") {
             const size_t h = std::max<size_t>(3, profile.rows);
             const size_t w = std::max<size_t>(5, profile.cols);
@@ -501,12 +488,6 @@ namespace {
         }
         if (name == "launch_relu") {
             prepare_empty_destinations(inputs, shape, dtype, execution_count);
-        }
-        if (name == "launch_multinomial") {
-            const size_t categories = std::max<size_t>(7, profile.cols);
-            std::vector<float> host_weights(categories, 1.0f);
-            inputs.input =
-                Tensor::from_vector(host_weights, {categories}, Device::CPU).to(Device::GPU);
         }
         if (name == "launch_strided_copy_immediate") {
             inputs.input = make_tensor({profile.cols, profile.rows}, dtype, seed).transpose(0, 1);
@@ -533,12 +514,6 @@ namespace {
         }
         if (name == "launch_clamp_scalar" || name == "launch_clamp_scalar_int") {
             prepare_destinations(inputs, inputs.a, execution_count, noncontiguous);
-        }
-        if (name == "launch_cdist") {
-            const size_t features = std::max<size_t>(3, std::min<size_t>(profile.cols, 16));
-            inputs.input = make_tensor({profile.rows, features}, dtype, seed);
-            inputs.rhs =
-                make_tensor({std::max<size_t>(3, profile.rows / 2), features}, dtype, seed + 1);
         }
         return inputs;
     }
@@ -653,7 +628,7 @@ namespace {
             return {output};
         }
         if (name == "launch_sgemm_tn")
-            return {inputs.input.linear(inputs.weight)};
+            return {inputs.input.linear(inputs.weight, Tensor{})};
         if (name == "launch_bias_add")
             return {inputs.input.linear(inputs.weight, inputs.bias)};
         if (name == "launch_bias_relu") {
@@ -665,8 +640,6 @@ namespace {
             return {inputs.input.bmm(inputs.rhs)};
         if (name == "launch_dot_product")
             return {inputs.input.dot(inputs.rhs)};
-        if (name == "launch_diag")
-            return {Tensor::diag(inputs.input)};
         if (name == "launch_max_pool2d")
             return {inputs.input.max_pool2d(2, 2, 0)};
         if (name == "launch_adaptive_avg_pool2d")
@@ -678,12 +651,8 @@ namespace {
         }
         if (name == "launch_uniform")
             return {Tensor::uniform(shape, -2.0f, 2.0f)};
-        if (name == "launch_bernoulli")
-            return {Tensor::bernoulli(shape, 0.35f)};
         if (name == "launch_randint")
             return {Tensor::randint(shape, -7, 8)};
-        if (name == "launch_multinomial")
-            return {Tensor::multinomial(inputs.input, elements(inputs.profile), true)};
         if (name == "launch_strided_copy_immediate")
             return {inputs.input.contiguous()};
         if (name == "launch_strided_upload")
@@ -730,8 +699,6 @@ namespace {
                 internal::ExecContext{output.stream()});
             return {std::move(output)};
         }
-        if (name == "launch_cdist")
-            return {inputs.input.cdist(inputs.rhs)};
         if (name == "launch_eye")
             return {Tensor::eye(inputs.profile.rows, inputs.profile.cols)};
         if (name == "has_nan_gpu" || name == "has_inf_gpu") {
@@ -912,14 +879,8 @@ namespace {
         const auto theoretical_cdf = [&](const float value) {
             if (launcher == "launch_uniform")
                 return std::clamp((value + 2.0) / 4.0, 0.0, 1.0);
-            if (launcher == "launch_bernoulli")
-                return value < 1.0f ? 0.65 : 1.0;
             if (launcher == "launch_randint")
                 return std::clamp((value + 8.0) / 15.0, 0.0, 1.0);
-            if (launcher == "launch_multinomial")
-                return std::clamp((value + 1.0) /
-                                      static_cast<double>(std::max<size_t>(7, profile.cols)),
-                                  0.0, 1.0);
             return 0.0;
         };
         // Evaluate the empirical CDF once per distinct value, on both sides of the
@@ -1155,16 +1116,13 @@ namespace {
         {"launch_sgemm_batched", {FacadeEntry::sgemm_batched}},
         {"launch_sgemm_bias_relu", {FacadeEntry::sgemm_bias_relu}},
         {"launch_dot_product", {FacadeEntry::dot_product}},
-        {"launch_diag", {FacadeEntry::diag}},
         {"launch_max_pool2d", {FacadeEntry::max_pool2d}},
         {"launch_adaptive_avg_pool2d", {FacadeEntry::adaptive_avg_pool2d}},
         {"launch_bias_add", {FacadeEntry::bias_add}},
         {"launch_bias_relu", {FacadeEntry::bias_relu}},
         {"launch_relu", {FacadeEntry::relu}},
         {"launch_uniform", {FacadeEntry::uniform}},
-        {"launch_bernoulli", {FacadeEntry::bernoulli}},
         {"launch_randint", {FacadeEntry::randint}},
-        {"launch_multinomial", {FacadeEntry::multinomial}},
         {"launch_strided_copy", {FacadeEntry::strided_copy}},
         {"launch_strided_copy_immediate", {FacadeEntry::strided_copy_immediate}},
         {"launch_strided_upload", {FacadeEntry::strided_upload}},
@@ -1178,7 +1136,6 @@ namespace {
         {"launch_clamp_fused", {FacadeEntry::clamp_fused}},
         {"launch_clamp_scalar_int", {FacadeEntry::clamp_scalar_int}},
         {"launch_fused_pointwise_chain", {FacadeEntry::fused_pointwise_chain, FacadeEntry::scalar}},
-        {"launch_cdist", {FacadeEntry::cdist}},
         {"launch_eye", {FacadeEntry::eye}},
         {"has_nan_gpu", {FacadeEntry::has_nan}},
         {"has_inf_gpu", {FacadeEntry::has_inf}},

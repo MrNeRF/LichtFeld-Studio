@@ -62,10 +62,7 @@ namespace lfs::core::internal {
         void sgemm_bias_relu(StorageRef, StorageRef, StorageRef, StorageRef,
                              const GemmProgram&, ExecContext) override;
         void dot_product(StorageRef, StorageRef, StorageRef, size_t, ExecContext) override;
-        void diag(StorageRef, StorageRef, size_t, ExecContext) override;
         void eye(StorageRef, size_t, size_t, ExecContext) override;
-        void cdist(StorageRef, StorageRef, StorageRef, size_t, size_t, size_t,
-                   float, ExecContext) override;
         void project_points(StorageRef, StorageRef, size_t, const PointProjection&,
                             const StorageRef*, size_t, const StorageRef*,
                             const StorageRef*, size_t, ExecContext) override;
@@ -133,9 +130,7 @@ namespace lfs::core::internal {
         void bias_relu(StorageRef, StorageRef, StorageRef, int, int, int, ExecContext) override;
         void relu(StorageRef, StorageRef, int, ExecContext) override;
         void uniform(StorageRef, const RandomProgram&, ExecContext) override;
-        void bernoulli(StorageRef, const RandomProgram&, ExecContext) override;
         void randint(StorageRef, const RandomProgram&, ExecContext) override;
-        void multinomial(StorageRef, StorageRef, const RandomProgram&, ExecContext) override;
         void normal(StorageRef, StorageRef, const RandomProgram&, ExecContext) override;
 
         void gather(StorageRef, StorageRef, StorageRef, const StridedLayout&,

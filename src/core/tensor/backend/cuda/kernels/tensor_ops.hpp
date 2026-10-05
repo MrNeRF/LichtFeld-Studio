@@ -239,19 +239,11 @@ namespace lfs::core::tensor_ops {
     LFS_CORE_API void launch_uniform(float* data, size_t n, float low, float high,
                                      unsigned long long seed, cudaStream_t stream);
 
-    LFS_CORE_API void launch_bernoulli(float* data, size_t n, float p,
-                                       unsigned long long seed, cudaStream_t stream);
-
     LFS_CORE_API void launch_randint(int* data, size_t n, int low, int high,
                                      unsigned long long seed, cudaStream_t stream);
 
-    LFS_CORE_API void launch_multinomial(const float* weights, int64_t* samples,
-                                         unsigned long n, unsigned long num_samples, bool replacement,
-                                         unsigned long long seed, cudaStream_t stream);
-
     // ============= Matrix Creation Operations =============
     LFS_CORE_API void launch_eye(float* data, size_t m, size_t n, cudaStream_t stream);
-    LFS_CORE_API void launch_diag(const float* diagonal, float* matrix, size_t n, cudaStream_t stream);
 
     LFS_CORE_API void launch_sgemm(const float* a, const float* b, float* c,
                                    size_t m, size_t n, size_t k, cudaStream_t stream);
@@ -413,8 +405,6 @@ namespace lfs::core::tensor_ops {
                                     int dim, DataType dtype, cudaStream_t stream);
 
     // ============= Pairwise Distance Operations =============
-    LFS_CORE_API void launch_cdist(const float* a, const float* b, float* out,
-                                   size_t N, size_t M, size_t D, float p, cudaStream_t stream);
 
     // ============= Sorting Operations =============
     LFS_CORE_API void launch_sort_1d(float* values, int64_t* indices, size_t n,

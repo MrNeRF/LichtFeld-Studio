@@ -27,32 +27,6 @@ TEST(TensorAdvancedTest, StackPreservesValuesAndRejectsEmptyInput) {
     EXPECT_EQ(result.cpu().to_vector(), (std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f}));
     EXPECT_THROW(Tensor::stack({}, 0), std::runtime_error);
 }
-
-TEST(TensorAdvancedTest, TryReshapeDistinguishesCompatibleShapes) {
-    const auto input = Tensor::arange(12.0f).to(Device::GPU);
-
-    const auto compatible = input.try_reshape({3, 4});
-    const auto incompatible = input.try_reshape({5, 3});
-
-    ASSERT_TRUE(compatible.has_value());
-    EXPECT_EQ(compatible->shape(), TensorShape({3, 4}));
-    EXPECT_EQ(compatible->cpu().to_vector(), input.cpu().to_vector());
-    EXPECT_FALSE(incompatible.has_value());
-}
-
-TEST(TensorAdvancedTest, SplitBatchPreservesTailAndValues) {
-    const auto input = Tensor::arange(1000.0f).to(Device::GPU).reshape({100, 10});
-
-    const auto batches = Tensor::split_batch(input, 32);
-
-    ASSERT_EQ(batches.size(), 4u);
-    EXPECT_EQ(batches[0].shape(), TensorShape({32, 10}));
-    EXPECT_EQ(batches[1].shape(), TensorShape({32, 10}));
-    EXPECT_EQ(batches[2].shape(), TensorShape({32, 10}));
-    EXPECT_EQ(batches[3].shape(), TensorShape({4, 10}));
-    EXPECT_EQ(Tensor::cat(batches, 0).cpu().to_vector(), input.cpu().to_vector());
-}
-
 TEST(TensorAdvancedTest, ApplyAndInplaceChainsHaveDistinctOwnership) {
     auto input = Tensor::ones({4}, Device::GPU);
     const auto applied = input.apply([](const Tensor& tensor) { return tensor.add(1.0f); })
@@ -88,19 +62,6 @@ TEST(TensorAdvancedTest, SpecialValuesAreDetectedAndClamped) {
     EXPECT_FLOAT_EQ(values[1], 10.0f);
     EXPECT_FLOAT_EQ(values[2], -10.0f);
 }
-
-TEST(TensorAdvancedTest, DiagPlacesValuesOnlyOnDiagonal) {
-    const auto diagonal = Tensor::from_vector(
-        std::vector<float>{1.0f, 2.0f, 3.0f}, {3}, Device::GPU);
-    const auto matrix = Tensor::diag(diagonal);
-
-    EXPECT_EQ(matrix.shape(), TensorShape({3, 3}));
-    EXPECT_EQ(matrix.cpu().to_vector(),
-              (std::vector<float>{1.0f, 0.0f, 0.0f,
-                                  0.0f, 2.0f, 0.0f,
-                                  0.0f, 0.0f, 3.0f}));
-}
-
 TEST(TensorAdvancedTest, ProfilingWrapperPreservesResult) {
     struct ProfilingGuard {
         ProfilingGuard() { Tensor::enable_profiling(true); }
@@ -113,16 +74,4 @@ TEST(TensorAdvancedTest, ProfilingWrapperPreservesResult) {
     });
 
     EXPECT_EQ(result.cpu().to_vector(), (std::vector<float>{3.0f, 3.0f, 3.0f, 3.0f}));
-}
-
-TEST(TensorAdvancedTest, MetadataAssertionsRejectMismatches) {
-    auto cuda_float = Tensor::ones({3, 4}, Device::GPU, DataType::Float32);
-    auto cpu_int = Tensor::zeros({3, 4}, Device::CPU, DataType::Int32);
-
-    EXPECT_NO_THROW(cuda_float.assert_shape({3, 4}, "shape"));
-    EXPECT_THROW(cuda_float.assert_shape({4, 3}, "shape"), TensorError);
-    EXPECT_NO_THROW(cuda_float.assert_device(Device::GPU));
-    EXPECT_THROW(cuda_float.assert_device(Device::CPU), TensorError);
-    EXPECT_NO_THROW(cpu_int.assert_dtype(DataType::Int32));
-    EXPECT_THROW(cpu_int.assert_dtype(DataType::Float32), TensorError);
 }

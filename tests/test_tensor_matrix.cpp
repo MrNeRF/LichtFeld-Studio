@@ -4,6 +4,7 @@
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
+#include "tensor_compare.hpp"
 #include <chrono>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -379,24 +380,6 @@ TEST_F(TensorMatrixTest, Eye) {
 
     compare_tensors(custom_rect, torch_rect, 1e-6f, 1e-7f, "Eye_Rectangular");
 }
-
-TEST_F(TensorMatrixTest, Diag) {
-    // Test creating diagonal matrix from vector
-    std::vector<float> diag_data = {1, 2, 3, 4, 5};
-
-    auto custom_diag_vec = Tensor::from_vector(diag_data, {5}, Device::GPU);
-    auto torch_diag_vec = torch::tensor(diag_data, torch::TensorOptions().device(torch::kCUDA));
-
-    auto custom_result = Tensor::diag(custom_diag_vec);
-    auto torch_result = torch::diag(torch_diag_vec);
-
-    compare_tensors(custom_result, torch_result, 1e-6f, 1e-7f, "Diag");
-
-    // Verify it's actually diagonal
-    EXPECT_EQ(custom_result.shape()[0], 5);
-    EXPECT_EQ(custom_result.shape()[1], 5);
-}
-
 // ============= Complex Matrix Operations =============
 
 TEST_F(TensorMatrixTest, MatMulChain) {
@@ -689,7 +672,7 @@ TEST_F(TensorMatrixTest, MatMulWithIdentity) {
     compare_tensors(custom_result, torch_result, 1e-4f, 1e-5f, "MatMulIdentity");
 
     // Result should be approximately equal to original
-    EXPECT_TRUE(custom_result.all_close(custom_a, 1e-4f, 1e-5f));
+    EXPECT_TRUE(lfs::test::tensor_values_close(custom_result, custom_a, 1e-4f, 1e-5f));
 }
 
 TEST_F(TensorMatrixTest, DiagMatMul) {
@@ -698,8 +681,8 @@ TEST_F(TensorMatrixTest, DiagMatMul) {
     std::vector<float> mat_data(4 * 5);
     std::iota(mat_data.begin(), mat_data.end(), 1.0f);
 
-    auto custom_diag_vec = Tensor::from_vector(diag_data, {4}, Device::GPU);
-    auto custom_diag = Tensor::diag(custom_diag_vec);
+    auto custom_diag = Tensor::from_vector(
+        std::vector<float>{1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4}, {4, 4}, Device::GPU);
     auto custom_mat = Tensor::from_vector(mat_data, {4, 5}, Device::GPU);
 
     auto torch_diag_vec = torch::tensor(diag_data, torch::TensorOptions().device(torch::kCUDA));

@@ -376,7 +376,7 @@ namespace lfs::core {
         LFS_ASSERT_MSG(dtype_size(args.dtype) != 0,
                        "tensor load received an invalid dtype");
         LFS_ASSERT_MSG(static_cast<int>(op) >= static_cast<int>(LoadOp::Empty) &&
-                           static_cast<int>(op) <= static_cast<int>(LoadOp::Multinomial),
+                           static_cast<int>(op) <= static_cast<int>(LoadOp::Randint),
                        "tensor load received an unknown operation");
 
         switch (op) {
@@ -961,133 +961,6 @@ namespace lfs::core {
             break;
         }
 
-        case LoadOp::Bernoulli: {
-            LFS_ASSERT_MSG(std::holds_alternative<float>(args.args),
-                           "bernoulli load requires a probability");
-            float p = std::get<float>(args.args);
-            LFS_ASSERT_MSG(args.dtype == DataType::Float32,
-                           "bernoulli currently supports only Float32");
-            LFS_ASSERT_MSG(std::isfinite(p) && p >= 0.0f && p <= 1.0f,
-                           "bernoulli probability must be in [0, 1]");
-            result = load(LoadOp::Empty, args);
-            if (!result.is_valid() || result.numel() == 0)
-                return result;
-
-            if (result.device_ == Device::GPU) {
-                internal::backend_ops_for(result).bernoulli(
-                    internal::storage_ref(result),
-                    internal::RandomProgram{
-                        .count = result.numel(),
-                        .first = p,
-                        .seed = RandomGenerator::instance().get_next_cuda_seed(),
-                    },
-                    internal::ExecContext{result.stream()});
-                // No sync - tensor operation
-            } else {
-                auto& gen = *static_cast<std::mt19937_64*>(
-                    RandomGenerator::instance().get_generator(Device::CPU));
-                std::bernoulli_distribution dist(p);
-                float* data = result.ptr<float>();
-                for (size_t i = 0; i < result.numel(); ++i) {
-                    data[i] = dist(gen) ? 1.0f : 0.0f;
-                }
-            }
-            break;
-        }
-
-        case LoadOp::Multinomial: {
-            LFS_ASSERT_MSG((std::holds_alternative<std::pair<void*, bool>>(args.args)),
-                           "multinomial load requires weights and replacement mode");
-            auto [weights_ptr, replacement] = std::get<std::pair<void*, bool>>(args.args);
-            const Tensor* weights = static_cast<const Tensor*>(weights_ptr);
-
-            LFS_ASSERT_MSG(weights != nullptr && weights->is_valid() && weights->ndim() == 1,
-                           "multinomial requires a valid rank-1 weight tensor");
-            LFS_ASSERT_MSG(weights->dtype() == DataType::Float32,
-                           "multinomial weights must be Float32");
-            LFS_ASSERT_MSG(args.device == weights->device(),
-                           "multinomial output and weights must use the same device");
-            LFS_ASSERT_MSG(args.dtype == DataType::Int64,
-                           "multinomial output must use Int64 dtype");
-
-            Tensor weights_materialized;
-            weights = &weights->contiguous_read(weights_materialized);
-
-            size_t n = weights->numel();
-            size_t num_samples = args.shape.elements();
-            LFS_ASSERT_MSG(n > 0 && num_samples > 0,
-                           "multinomial requires non-empty weights and output");
-            LFS_ASSERT_MSG(replacement || num_samples <= n,
-                           "multinomial sample count exceeds weights without replacement");
-
-            result = internal::allocate_like(*weights, args.shape, args.dtype);
-            if (!result.is_valid())
-                return result;
-
-            if (weights->device() == Device::GPU) {
-                prepare_inputs_for_stream({weights}, result.stream());
-                internal::backend_ops_for(*weights).multinomial(
-                    internal::storage_ref(*weights), internal::storage_ref(result),
-                    internal::RandomProgram{
-                        .count = n,
-                        .sample_count = num_samples,
-                        .seed = args.random_seed ? *args.random_seed : RandomGenerator::instance().get_next_cuda_seed(),
-                        .replacement = replacement,
-                    },
-                    internal::ExecContext{result.stream()});
-                // No sync - tensor operation
-            } else {
-                auto weights_data = weights->to_vector();
-
-                LFS_ASSERT_MSG(
-                    std::all_of(weights_data.begin(), weights_data.end(), [](float weight) {
-                        return std::isfinite(weight) && weight >= 0.0f;
-                    }),
-                    "multinomial weights must be finite and non-negative");
-                double sum = std::accumulate(weights_data.begin(), weights_data.end(), 0.0);
-                LFS_ASSERT_MSG(std::isfinite(sum) && sum > 0.0f,
-                               "multinomial weights must have a positive finite sum");
-
-                std::vector<double> cdf(n);
-                cdf[0] = weights_data[0] / sum;
-                for (size_t i = 1; i < n; ++i) {
-                    cdf[i] = cdf[i - 1] + weights_data[i] / sum;
-                }
-
-                std::mt19937_64 local_generator(args.random_seed.value_or(0));
-                auto& gen = args.random_seed ? local_generator : *static_cast<std::mt19937_64*>(RandomGenerator::instance().get_generator(Device::CPU));
-                std::uniform_real_distribution<double> dis(0.0, 1.0);
-
-                int64_t* samples = result.ptr<int64_t>();
-
-                if (replacement) {
-                    for (size_t i = 0; i < num_samples; ++i) {
-                        double u = dis(gen);
-                        auto it = std::lower_bound(cdf.begin(), cdf.end(), u);
-                        samples[i] = static_cast<int64_t>(std::distance(cdf.begin(), it));
-                    }
-                } else {
-                    std::vector<std::pair<float, int64_t>> keys(n);
-
-                    for (size_t i = 0; i < n; ++i) {
-                        float u = dis(gen);
-                        u = std::clamp(u, 1e-10f, 1.0f - 1e-10f);
-                        float gumbel = -std::log(-std::log(u));
-                        float log_weight = std::log(std::max(weights_data[i], 1e-10f));
-                        keys[i] = {log_weight + gumbel, static_cast<int64_t>(i)};
-                    }
-
-                    std::sort(keys.begin(), keys.end(),
-                              [](const auto& a, const auto& b) { return a.first > b.first; });
-
-                    for (size_t i = 0; i < num_samples; ++i) {
-                        samples[i] = keys[i].second;
-                    }
-                }
-            }
-            break;
-        }
-
         case LoadOp::Eye: {
             LFS_ASSERT_MSG(args.shape.rank() == 2,
                            "eye requires a rank-2 output shape");
@@ -1154,57 +1027,6 @@ namespace lfs::core {
         }
 
         return result;
-    }
-
-    Tensor Tensor::multinomial(const Tensor& weights, int num_samples, bool replacement, std::optional<uint64_t> seed) {
-        LFS_ASSERT_MSG(weights.is_valid() && weights.ndim() == 1,
-                       "multinomial requires valid rank-1 weights");
-        LFS_ASSERT_MSG(weights.dtype() == DataType::Float32,
-                       "multinomial weights must be Float32");
-        LFS_ASSERT_MSG(num_samples > 0,
-                       "multinomial sample count must be positive");
-        LFS_ASSERT_MSG(replacement || static_cast<size_t>(num_samples) <= weights.numel(),
-                       "multinomial cannot sample more entries than weights without replacement");
-
-        // The kernels scan weights densely. Force a contiguous logical copy at
-        // the API boundary so validation and
-        // device sampling always see the same probability mass (strided column
-        // views from densify LAS paths are training-reachable).
-        Tensor weights_materialized;
-        const Tensor& dense_weights = weights.contiguous_read(weights_materialized);
-        LFS_ASSERT_MSG(dense_weights.is_contiguous(),
-                       "multinomial requires contiguous weights after materialize firewall");
-
-        // Every GPU backend checks the weights on the device before sampling.
-        if (dense_weights.device() == Device::CPU) {
-            const float* const host_weights = dense_weights.ptr<float>();
-            double weight_sum = 0.0;
-            for (size_t index = 0; index < dense_weights.numel(); ++index) {
-                const float weight = host_weights[index];
-                LFS_ASSERT_MSG(std::isfinite(weight) && weight >= 0.0f,
-                               std::format("multinomial weight {} at index {} is not finite and non-negative",
-                                           weight, index));
-                weight_sum += weight;
-            }
-            LFS_ASSERT_MSG(std::isfinite(weight_sum) && weight_sum > 0.0,
-                           std::format("multinomial weights sum to {}, which is not positive and finite",
-                                       weight_sum));
-        }
-
-        LoadArgs args;
-        args.shape = TensorShape({static_cast<size_t>(num_samples)});
-        args.random_seed = seed;
-        args.device = dense_weights.device();
-        args.dtype = DataType::Int64; // Must be Int64 for MCMC compatibility (nonzero() returns Int64)
-        // Pass dense_weights (not the possibly-strided original) so LoadOp and
-        // launch_multinomial never observe non-contiguous storage.
-        args.args = std::pair<void*, bool>{
-            const_cast<void*>(static_cast<const void*>(&dense_weights)), replacement};
-        return load(LoadOp::Multinomial, args);
-    }
-
-    Tensor Tensor::reduce(const ReduceOp op) const {
-        return reduce(op, ReduceArgs{});
     }
 
     Tensor Tensor::reduce(ReduceOp op, const ReduceArgs& args) const {

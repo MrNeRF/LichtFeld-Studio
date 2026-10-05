@@ -28,38 +28,20 @@ namespace lfs::core::internal {
 
         // random.slang kinds.
         constexpr uint32_t kUniform = 0;
-        constexpr uint32_t kBernoulli = 1;
         constexpr uint32_t kRandint = 2;
         constexpr uint32_t kNormal = 3;
-        constexpr uint32_t kMultinomialReplacement = 4;
-        constexpr uint32_t kGumbelKeys = 5;
-        constexpr uint32_t kWeightStatistics = 7;
-        constexpr uint32_t kRunningSums = 8;
-        constexpr uint32_t kBlockOffsets = 9;
-        // Weights per block of running sums; random.slang's kSumBlock.
-        constexpr uint32_t kSumBlock = 1024;
-
-        // A power of two that brings the largest weight near 2^0.
-        float multinomial_scale(const float maximum) {
-            const uint32_t exponent = std::clamp((std::bit_cast<uint32_t>(maximum) >> 23) & 255u, 1u, 253u);
-            return std::bit_cast<float>((254u - exponent) << 23);
-        }
 
         struct RandomPush {
             uint64_t output_address;
-            uint64_t weights_address;
-            uint64_t keys_address;
             uint64_t seed;
             uint32_t count;
-            uint32_t sample_count;
             int32_t low;
             int32_t high;
             float first;
             float second;
-            float total;
             uint32_t pad0;
         };
-        static_assert(sizeof(RandomPush) == 64);
+        static_assert(sizeof(RandomPush) == 40);
 
         void record_random(VulkanContext& context, const uint32_t kind, const RandomPush& push,
                            const std::span<const StorageRef> reads,
@@ -98,48 +80,12 @@ namespace lfs::core::internal {
             record_random(*context, kind, push, {}, writes, dispatch_groups(*context, program.count));
         }
 
-        struct WeightStatistics {
-            float maximum;
-            uint32_t invalid;
-        };
-
-        // One workgroup finds the largest weight and flags negative or non-finite ones;
-        // the result is read back so the host can reject bad inputs like the CUDA
-        // path does.
-        WeightStatistics weight_statistics(VulkanContext& context, const StorageRef weights,
-                                           const size_t count) {
-            const StorageRef scratch = context.memory().allocate(16, 16, {});
-            const RandomPush push{
-                .output_address = address(scratch),
-                .weights_address = address(weights),
-                .count = checked_u32(count, "Vulkan multinomial category count exceeds uint32"),
-            };
-            const std::array reads{weights};
-            const std::array writes{scratch};
-            record_random(context, kWeightStatistics, push, reads, writes, 1);
-            WeightStatistics statistics{};
-            backend_ops(GpuBackend::Vulkan).copy_device_to_host(CopyRequest{
-                .src = scratch,
-                .dst = raw_storage_ref(&statistics),
-                .bytes = sizeof(statistics),
-                .synchronous = true,
-                .operation = "tensor.multinomial.weight_statistics",
-            });
-            context.memory().deallocate(scratch);
-            return statistics;
-        }
     } // namespace
 
     void VulkanBackendOps::uniform(
         const StorageRef output, const RandomProgram& program, ExecContext) {
         LFS_FACADE_TRACE(uniform);
         draw_elements(kUniform, output, program, program.seed);
-    }
-
-    void VulkanBackendOps::bernoulli(
-        const StorageRef output, const RandomProgram& program, ExecContext) {
-        LFS_FACADE_TRACE(bernoulli);
-        draw_elements(kBernoulli, output, program, program.seed);
     }
 
     void VulkanBackendOps::randint(
@@ -155,81 +101,6 @@ namespace lfs::core::internal {
         // every element from its own Philox block under the program seed, so odd
         // counts need no scratch.
         draw_elements(kNormal, output, program, program.seed);
-    }
-
-    void VulkanBackendOps::multinomial(
-        const StorageRef weights, const StorageRef output, const RandomProgram& program,
-        ExecContext) {
-        LFS_FACADE_TRACE(multinomial);
-        if (program.count == 0 || program.sample_count == 0) {
-            return;
-        }
-        LFS_ASSERT_MSG(weights.dtype == DataType::Float32 && output.dtype == DataType::Int64,
-                       "Vulkan multinomial requires Float32 weights and Int64 samples");
-        const auto context = acquire_vulkan_context();
-        const WeightStatistics statistics = weight_statistics(*context, weights, program.count);
-        LFS_ASSERT_MSG(statistics.invalid == 0,
-                       "multinomial weights must be finite and non-negative");
-        LFS_ASSERT_MSG(statistics.maximum > 0.0f,
-                       "multinomial weights must have a positive finite sum");
-        const uint32_t categories = checked_u32(program.count, "Vulkan multinomial category count exceeds uint32");
-        const uint32_t samples = checked_u32(program.sample_count, "Vulkan multinomial sample count exceeds uint32");
-        if (program.replacement) {
-            // Running sums within blocks, the blocks' offsets, then a binary
-            // search per draw. The weights are scaled so their maximum sits
-            // near 2^0, which keeps the sums finite.
-            const uint32_t blocks = (categories + kSumBlock - 1) / kSumBlock;
-            const StorageRef sums =
-                context->memory().allocate((program.count + blocks + 1) * sizeof(float), 16, {});
-            const RandomPush push{
-                .output_address = address(output),
-                .weights_address = address(weights),
-                .keys_address = address(sums),
-                .seed = program.seed,
-                .count = categories,
-                .sample_count = samples,
-                .first = multinomial_scale(statistics.maximum),
-            };
-            const std::array sum_reads{weights};
-            const std::array sum_writes{sums};
-            record_random(*context, kRunningSums, push, sum_reads, sum_writes, dispatch_groups(*context, blocks));
-            record_random(*context, kBlockOffsets, push, sum_writes, sum_writes, 1);
-            const std::array draw_reads{sums};
-            const std::array draw_writes{output};
-            record_random(*context, kMultinomialReplacement, push, draw_reads, draw_writes,
-                          dispatch_groups(*context, program.sample_count));
-            context->memory().deallocate(sums);
-            return;
-        }
-        LFS_ASSERT_MSG(program.sample_count <= program.count,
-                       "multinomial sample count exceeds weights without replacement");
-        // Gumbel-top-k: the sample_count largest perturbed log-weights. The
-        // sort is stable, so ties fall back to the lower index.
-        const StorageRef keys = context->memory().allocate(program.count * sizeof(float), 16, {});
-        const StorageRef order = context->memory().allocate(program.count * sizeof(int64_t), 16, {});
-        const RandomPush key_push{
-            .weights_address = address(weights),
-            .keys_address = address(keys),
-            .seed = program.seed,
-            .count = categories,
-            .sample_count = samples,
-        };
-        const std::array key_reads{weights};
-        const std::array key_writes{keys};
-        record_random(*context, kGumbelKeys, key_push, key_reads, key_writes,
-                      dispatch_groups(*context, program.count));
-        StorageRef key_values = keys, key_order = order;
-        key_values.dtype = DataType::Float32;
-        key_order.dtype = DataType::Int64;
-        sort_1d(key_values, key_order, program.count, SortProgram{.dim_size = program.count, .descending = true}, {});
-        copy_device_to_device(CopyRequest{
-            .src = key_order,
-            .dst = output,
-            .bytes = program.sample_count * sizeof(int64_t),
-            .synchronous = false,
-        });
-        context->memory().deallocate(keys);
-        context->memory().deallocate(order);
     }
 
 } // namespace lfs::core::internal

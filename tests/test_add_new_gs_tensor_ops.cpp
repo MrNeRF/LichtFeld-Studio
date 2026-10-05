@@ -413,65 +413,6 @@ TEST_F(AddNewGsTensorOpsTest, MultipleIndexSelect_LibTorchComparison) {
 }
 
 // Test 8: Multinomial sampling (THE KEY OPERATION in add_new_gs!)
-TEST_F(AddNewGsTensorOpsTest, MultinomialSampling_LibTorchComparison) {
-    const size_t N = 100;
-    const int n_samples = 20;
-
-    // Create probability weights (simulating opacities)
-    std::vector<float> probs(N);
-    for (size_t i = 0; i < N; ++i) {
-        probs[i] = 0.01f * (i % 10 + 1); // Values 0.01 to 0.10
-    }
-
-    // LFS
-    auto probs_lfs = Tensor::from_vector(probs, TensorShape{N}, Device::GPU);
-    auto sampled_lfs = Tensor::multinomial(probs_lfs, n_samples, true); // with replacement
-    auto result_lfs = sampled_lfs.cpu().to_vector_int();
-
-    // LibTorch
-    auto probs_torch = torch::from_blob(
-                           const_cast<float*>(probs.data()),
-                           {static_cast<long>(N)},
-                           torch::kFloat32)
-                           .clone()
-                           .cuda();
-    auto sampled_torch = probs_torch.multinomial(n_samples, true); // with replacement
-    auto result_torch = sampled_torch.cpu();
-
-    // Note: We can't compare exact indices (multinomial is random),
-    // but we can verify the output properties:
-
-    // 1. Correct number of samples
-    EXPECT_EQ(result_lfs.size(), static_cast<size_t>(n_samples));
-    EXPECT_EQ(result_torch.size(0), n_samples);
-
-    // 2. All indices are valid (within range [0, N))
-    for (size_t i = 0; i < result_lfs.size(); ++i) {
-        EXPECT_GE(result_lfs[i], 0) << "LFS: Index out of range at position " << i;
-        EXPECT_LT(result_lfs[i], static_cast<int>(N)) << "LFS: Index out of range at position " << i;
-    }
-
-    for (int i = 0; i < n_samples; ++i) {
-        int idx = result_torch[i].item<int>();
-        EXPECT_GE(idx, 0) << "Torch: Index out of range at position " << i;
-        EXPECT_LT(idx, static_cast<int>(N)) << "Torch: Index out of range at position " << i;
-    }
-
-    // 3. Test without replacement (should have no duplicates)
-    auto sampled_no_replace_lfs = Tensor::multinomial(probs_lfs, 10, false);
-    auto result_no_replace_lfs = sampled_no_replace_lfs.cpu().to_vector_int();
-
-    // All indices valid
-    for (size_t i = 0; i < 10; ++i) {
-        EXPECT_GE(result_no_replace_lfs[i], 0);
-        EXPECT_LT(result_no_replace_lfs[i], static_cast<int>(N));
-    }
-
-    // No duplicates when replacement=false
-    std::set<int> unique_no_replace(result_no_replace_lfs.begin(), result_no_replace_lfs.end());
-    EXPECT_EQ(unique_no_replace.size(), 10u) << "LFS: Without replacement should have no duplicates";
-}
-
 // Test 9: Flatten operation (used for multinomial sampling)
 TEST_F(AddNewGsTensorOpsTest, Flatten_LibTorchComparison) {
     // Test with 1D tensor (already flat)
