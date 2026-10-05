@@ -121,6 +121,7 @@ namespace {
         auto loaded = lfs::core::nn::models::Lpips::load(path, Device::GPU, dtype);
         if (!loaded)
             throw std::runtime_error(std::string(loaded.error().detail()));
+        EXPECT_GT(loaded->weights_bytes(), 0u);
         return std::move(*loaded);
     }
 

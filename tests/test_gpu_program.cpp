@@ -29,6 +29,7 @@ namespace {
         auto loaded = M::load(program_contract_entries(), GetParam());
         ASSERT_TRUE(loaded) << loaded.error().detail();
         auto module = std::move(*loaded);
+        EXPECT_EQ(module->backend(), GetParam());
         std::vector<float> values(1031);
         for (size_t i = 0; i < values.size(); ++i)
             values[i] = float(i) / 16 - 20;
