@@ -6,6 +6,7 @@
 #include "core/memory_pressure.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_metal_reader.hpp"
+#include "core/tensor_upload.hpp"
 #include "frame_budget.hpp"
 #include "gpu_profile.hpp"
 #include "lod_selector.hpp"
@@ -16,6 +17,7 @@
 #include "scene_overlay_params.hpp"
 #include "selection_query.hpp"
 #include "splat_preprocessor.hpp"
+#include "splat_lod_selector.hpp"
 #include "splat_projector.hpp"
 #include "splat_rasterizer.hpp"
 #include "tile_rasterizer.hpp"
@@ -25,8 +27,10 @@
 #endif
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <format>
 #include <limits>
 #include <map>
@@ -212,6 +216,25 @@ namespace lfs::vis {
             bool points = false;
             bool tensor = false; // drawn by the tensor-program rasterizer
             id<MTLBuffer> tensor_status; // host copy of its RasterStatus, read on completion
+            id<MTLBuffer> tensor_touches;   // host copy of the LOD cut's chunk touches
+            id<MTLBuffer> tensor_lod_counts; // host copy of the LOD cut's counts (selected, overflow, threshold)
+            // Results of a completed frame, from either rasterizer.
+            RasterStatus rasterStatus() const {
+                if (raster)
+                    return raster->status();
+                return tensor_status ? *static_cast<const RasterStatus*>(tensor_status.contents) : RasterStatus{};
+            }
+            bool lodResultReady() const {
+                return gpu_lod_active && (tensor ? tensor_lod_counts != nil : gpu_lod && !gpu_lod->busy()) &&
+                       command.status == MTLCommandBufferStatusCompleted;
+            }
+            LodCutStatus lodStatus() const {
+                if (!tensor)
+                    return gpu_lod->status();
+                const auto counts = static_cast<const uint32_t*>(tensor_lod_counts.contents);
+                return {counts[0], counts[1], std::bit_cast<float>(counts[2])};
+            }
+            id<MTLBuffer> lodTouches() const { return tensor ? tensor_touches : gpu_lod->touches().buffer; }
             Image color, depth;
         };
     } // namespace
@@ -219,6 +242,9 @@ namespace lfs::vis {
         MetalViewportPresentation* context = nullptr;
         struct NativeLodTree {
             LodTreeBuffers buffers;
+            // The same metadata as tensors for the tensor rasterizer: bounds,
+            // links, chunk_to_page, page_age, page_frames, page_to_chunk.
+            std::array<core::Tensor, 6> tensors;
             uint64_t signature = 0, last_used = 0;
             uint32_t nodes = 0, chunks = 0, roots = 0;
         };
@@ -282,6 +308,10 @@ namespace lfs::vis {
             std::unique_ptr<MetalRadPager> pager;
             // Tensor-program raster scratch and display outputs.
             std::unique_ptr<rendering::SplatRasterizer> tensor_raster;
+            std::unique_ptr<rendering::SplatLodSelector> tensor_lod;
+            core::GpuBackend tensor_lod_backend{};
+            std::array<core::Tensor, 3> tensor_page_maps; // chunk_to_page, page_age, page_to_chunk
+            std::deque<core::TensorUpload> tensor_uploads;
             core::GpuBackend tensor_backend{};
         };
         std::unordered_map<RenderTargetId, TargetState, RenderTargetIdHash> targets;
@@ -604,6 +634,16 @@ namespace lfs::vis {
             };
             metadata.buffers = {upload(bounds.data(), bounds.size() * 4), upload(links.data(), links.size() * 4), upload(maps.data(), maps.size() * 4),
                                 upload(age.data(), age.size() * 4), upload(frames.data(), frames.size() * 16), upload(maps.data(), maps.size() * 4)};
+            if (const auto backend = model.means_raw().device() == core::Device::GPU ? core::gpu_backend_of(model.means_raw()) : std::nullopt;
+                tensor_raster && backend) {
+                const core::GpuBackendScope scope(*backend);
+                const auto to_tensor = [](const void* data, size_t bytes) {
+                    return core::Tensor::from_blob(const_cast<void*>(data), {bytes}, core::Device::CPU, core::DataType::UInt8).to(core::Device::GPU);
+                };
+                metadata.tensors = {to_tensor(bounds.data(), bounds.size() * 4), to_tensor(links.data(), links.size() * 4),
+                                    to_tensor(maps.data(), maps.size() * 4), to_tensor(age.data(), age.size() * 4),
+                                    to_tensor(frames.data(), frames.size() * 16), to_tensor(maps.data(), maps.size() * 4)};
+            }
             // Views can use independent models. Bound the shared metadata
             // cache; command buffers retain evicted resources until GPU completion.
             if (!lod_trees.contains(&tree) && lod_trees.size() >= 4) {
@@ -1127,11 +1167,10 @@ namespace lfs::vis {
                 i.configurePager(*pager, model);
                 const Frame* completed = nullptr;
                 for (const auto& candidate : i.target(slot).frames)
-                    if (candidate && candidate->gpu_lod_active && candidate->gpu_lod && !candidate->gpu_lod->busy() &&
-                        candidate->rad_signature == pager->signature() && candidate->command.status == MTLCommandBufferStatusCompleted &&
+                    if (candidate && candidate->lodResultReady() && candidate->rad_signature == pager->signature() &&
                         (!completed || candidate->producer_value > completed->producer_value))
                         completed = candidate.get();
-                const auto touches = completed ? completed->gpu_lod->touches() : BufferSlice{};
+                const auto touches = completed ? BufferSlice{completed->lodTouches()} : BufferSlice{};
                 pager->advance(touches.buffer ? std::span<const uint32_t>(static_cast<const uint32_t*>(touches.buffer.contents), pager->cache().snapshot().logical_chunks) : std::span<const uint32_t>{});
                 if (wait_for_pages)
                     pager->waitForRoot();
@@ -1157,12 +1196,12 @@ namespace lfs::vis {
                                        request.overlay.emphasis.dim_non_emphasized || request.overlay.emphasis.flash_intensity > 0 ||
                                        request.overlay.emphasis.focused_gaussian_id >= 0 || request.overlay.cursor.enabled ||
                                        request.overlay.markers.show_rings || request.overlay.markers.show_center_markers;
-            // The tensor-program rasterizer covers every view except GPU-selected
-            // LOD cuts and paged RAD models, which stay native. It runs on the
-            // backend of the resident splats.
-            const auto splat_backend = core::gpu_backend_of(model.means_raw());
+            // The tensor-program rasterizer runs on the backend of the resident
+            // splats: the model, a paged model's preview prefix or its page pool.
+            const auto& resident_means = pager ? (gpu_lod ? pager->pool().regions[0] : pager->preview(model)[0]) : model.means_raw();
+            const auto splat_backend = resident_means.device() == core::Device::GPU ? core::gpu_backend_of(resident_means) : std::nullopt;
             const auto beside_splats = [&](const core::Tensor* tensor) { return !tensor || core::gpu_backend_of(*tensor) == splat_backend; };
-            const bool tensor_frame = i.tensor_raster && splat_backend && !pager && !gpu_lod && beside_splats(selection_enabled ? selection : nullptr) &&
+            const bool tensor_frame = i.tensor_raster && splat_backend && beside_splats(selection_enabled ? selection : nullptr) &&
                                       beside_splats(preview_enabled ? preview : nullptr);
             auto& f = i.acquire(slot, request, draw_count, false, tensor_frame ? splat_backend : std::nullopt);
             if (i.profiling_enabled && !f.gpu_profile)
@@ -1176,17 +1215,18 @@ namespace lfs::vis {
             LodSelection lod{};
             LodParameters lod_parameters{};
             if (gpu_lod) {
-                if (!i.lod_selector)
-                    i.lod_selector = std::make_unique<LodSelector>(i.reader.device());
-                if (!f.gpu_lod || f.gpu_capacity != draw_count || f.gpu_source_count != source_count || f.gpu_tree_signature != gpu_tree->signature) {
-                    f.gpu_lod = std::make_unique<LodCutFrame>(i.reader.device(), draw_count, source_count, gpu_tree->chunks);
-                    f.gpu_capacity = draw_count;
-                    f.gpu_source_count = source_count;
-                    f.gpu_tree_signature = gpu_tree->signature;
-                    f.gpu_chunks = gpu_tree->chunks;
+                if (!f.tensor) {
+                    if (!i.lod_selector)
+                        i.lod_selector = std::make_unique<LodSelector>(i.reader.device());
+                    if (!f.gpu_lod || f.gpu_capacity != draw_count || f.gpu_source_count != source_count || f.gpu_tree_signature != gpu_tree->signature)
+                        f.gpu_lod = std::make_unique<LodCutFrame>(i.reader.device(), draw_count, source_count, gpu_tree->chunks);
+                    lod = f.gpu_lod->selection(request.lod_debug_mode);
+                    lod.logical_count = logical_count;
                 }
-                lod = f.gpu_lod->selection(request.lod_debug_mode);
-                lod.logical_count = logical_count;
+                f.gpu_capacity = draw_count;
+                f.gpu_source_count = source_count;
+                f.gpu_tree_signature = gpu_tree->signature;
+                f.gpu_chunks = gpu_tree->chunks;
                 const auto& p = request.lod_gpu_traversal;
                 lod_parameters.node_count = gpu_tree->nodes;
                 lod_parameters.physical_node_count = source_count;
@@ -1416,20 +1456,23 @@ namespace lfs::vis {
                     i.projector = std::make_unique<rendering::SplatProjector>(state.tensor_backend);
                     i.projector_backend = state.tensor_backend;
                 }
-                const auto resident = [](const core::Tensor& tensor) { return tensor.is_valid() && tensor.numel() ? &tensor : nullptr; };
+                const auto resident = [](const core::Tensor* tensor) { return tensor && tensor->is_valid() && tensor->numel() ? tensor : nullptr; };
+                // The native inputs: the model, a paged model's preview prefix, or its page pool.
+                const bool rad_pool = storage == ShStorage::RadSigned8;
                 rendering::SplatSources sources;
-                sources.means = &model.means_raw();
-                sources.scales = &model.scaling_raw();
-                sources.rotations = &model.rotation_raw();
-                sources.opacity = &model.opacity_raw();
-                sources.sh0 = &model.sh0_raw();
-                sources.sh_rest = degree ? &model.shN_raw() : nullptr;
-                sources.sh_bounds = degree ? &model.shN_value_bounds() : nullptr;
-                sources.deleted = resident(model.deleted());
+                sources.means = tensors[0];
+                sources.scales = tensors[1];
+                sources.rotations = tensors[2];
+                sources.opacity = tensors[3];
+                sources.sh0 = tensors[4];
+                sources.sh_rest = degree ? tensors[5] : nullptr;
+                sources.sh_bounds = resident(tensors[6]);
+                sources.deleted = resident(tensors[7]);
                 sources.count = source_count;
                 sources.layout_rest = uint32_t(model.max_sh_coeffs_rest());
                 sources.storage = rendering::SplatShStorage(uint32_t(storage));
-                sources.half_attributes = model.non_sh_attrs_f16();
+                sources.half_attributes = rad_pool || model.non_sh_attrs_f16();
+                sources.page_splats = rad_pool ? uint32_t(core::SplatLodTree::kChunkSplats) : 0;
                 sources.deleted_count = sources.deleted ? uint32_t(std::min<size_t>(sources.deleted->bytes(), std::numeric_limits<uint32_t>::max())) : 0;
                 if (scene.count) {
                     sources.objects = std::span(static_cast<const std::byte*>(f.objects.contents), size_t(scene.count) * sizeof(SceneObject));
@@ -1448,17 +1491,55 @@ namespace lfs::vis {
                 // A host-selected LOD cut: physical indices, plus optional logical
                 // IDs, debug levels and transition weights.
                 const auto cut = [&](const auto* values) { return values ? std::span(values, draw_count) : std::span<std::remove_const_t<std::remove_pointer_t<decltype(values)>> const>{}; };
-                const bool lod_cut = request.lod_indices != nullptr;
+                const bool lod_cut = !gpu_lod && request.lod_indices != nullptr;
                 const auto lod_cut_tensors = lod_cut ? i.projector->upload_cut({cut(request.lod_indices), cut(request.lod_logical_indices), cut(request.lod_levels),
                                                                                  cut(request.lod_weights), request.lod_debug_mode, uint32_t(model.size())})
                                                      : rendering::SplatLodCut{};
+                // A GPU-selected cut: the tensor selector writes indices and its count.
+                rendering::SplatLodCut gpu_cut{};
+                if (gpu_lod) {
+                    if (!state.tensor_lod || state.tensor_lod_backend != state.tensor_backend) {
+                        state.tensor_lod = std::make_unique<rendering::SplatLodSelector>(state.tensor_backend);
+                        state.tensor_lod_backend = state.tensor_backend;
+                    }
+                    if (auto reserved = state.tensor_lod->reserve(draw_count, source_count, gpu_tree->chunks); !reserved)
+                        throw lfs::Exception(reserved.error());
+                    rendering::SplatLodTree tree;
+                    if (pager) {
+                        const auto& pool = pager->pool();
+                        const auto& snapshot = pager->cache().snapshot();
+                        const std::array<std::span<const uint32_t>, 3> maps{snapshot.chunk_to_page, snapshot.page_resident_frame, snapshot.page_to_chunk};
+                        std::erase_if(state.tensor_uploads, [](core::TensorUpload& upload) { return upload.poll(); });
+                        for (size_t n = 0; n < maps.size(); ++n) {
+                            auto& map = state.tensor_page_maps[n];
+                            const size_t bytes = std::max<size_t>(4, maps[n].size_bytes());
+                            if (!map.is_valid() || map.bytes() != bytes || core::gpu_backend_of(map) != state.tensor_backend)
+                                map = core::Tensor::zeros({bytes}, core::Device::GPU, core::DataType::UInt8);
+                            if (!maps[n].empty())
+                                state.tensor_uploads.emplace_back().enqueue_in_batch(map, std::as_bytes(maps[n]));
+                        }
+                        tree = {&pool.regions[7], &pool.regions[8], &state.tensor_page_maps[0], &state.tensor_page_maps[1], &pool.regions[6], &state.tensor_page_maps[2]};
+                    } else {
+                        const auto& t = gpu_tree->tensors;
+                        tree = {&t[0], &t[1], &t[2], &t[3], &t[4], &t[5]};
+                    }
+                    rendering::SplatLodParameters selection_parameters;
+                    static_assert(sizeof(selection_parameters) == sizeof(lod_parameters));
+                    std::memcpy(&selection_parameters, &lod_parameters, sizeof(lod_parameters));
+                    if (auto selected = state.tensor_lod->select(tree, selection_parameters); !selected)
+                        throw lfs::Exception(selected.error());
+                    const auto& selector = *state.tensor_lod;
+                    gpu_cut = {&selector.indices(), &selector.logical_indices(), &selector.levels(), &selector.weights(), &selector.counts(),
+                               draw_count, request.lod_debug_mode, logical_count};
+                }
+                const auto* cut_used = gpu_lod ? &gpu_cut : lod_cut ? &lod_cut_tensors : nullptr;
                 // Native projection flags: Spark opacity, portal edge math.
                 const bool spark_opacity = projection.display.z == 1.f;
                 const bool portal_edges = projection.rasterization.w == 1.f && projection.display.z == 0.f;
                 const bool tight = !transparent && !needs_overlay && !request.gut && !spark_opacity && !portal_math;
                 if (auto projected = i.projector->project(sources, frame_projection, degree, request.gut ? rendering::SplatPrimitive::Gut : rendering::SplatPrimitive::Gaussian,
                                                           tight, i.tensor_projected, request.gut ? &i.tensor_gut : nullptr, needs_overlay ? &overlay_inputs : nullptr,
-                                                          lod_cut ? &lod_cut_tensors : nullptr);
+                                                          cut_used);
                     !projected)
                     throw lfs::Exception(projected.error());
                 // RasterParameters as the native rasterizer derives them for this view.
@@ -1476,7 +1557,7 @@ namespace lfs::vis {
                 const bool gut = request.gut;
                 const bool macro_half = request.overlay.markers.show_rings && !transparent && !request.depth_view && !gut && !spark_opacity;
                 const bool precise_transparent = transparent && !gut && !spark_opacity;
-                raster.flags = (needs_overlay ? 1u : 0u) | (expected_depth ? 2u : 0u) | (portal_edges ? 4u : 0u) | (lod_cut ? 8u : 0u) |
+                raster.flags = (needs_overlay ? 1u : 0u) | (expected_depth ? 2u : 0u) | (portal_edges ? 4u : 0u) | (cut_used ? 8u : 0u) |
                                (spark_opacity ? 16u : 0u) | (gut && !spark_opacity ? 32u : 0u) | (macro_half ? 64u : 0u) |
                                (gut || spark_opacity ? 0u : 128u) | (request.depth_view ? 2048u : 0u) | (transparent ? 0u : 4096u) |
                                (precise_transparent ? 16384u : 0u) | (projection.extent.z == uint32_t(CameraModel::Equirectangular) && !gut ? 8192u : 0u);
@@ -1492,11 +1573,11 @@ namespace lfs::vis {
                                                                    selection_enabled ? selection : nullptr, preview_enabled ? preview : nullptr,
                                                                    needs_overlay ? host_bytes(f.selection_colors, sizeof(request.overlay.selection_colors)) : std::span<const std::byte>{}};
                 raster.mode = uint32_t(request.gut ? rendering::SplatRasterMode::Gut : rendering::SplatRasterMode::Gaussian);
-                const rendering::SplatRasterLogical raster_logical{lod_cut_tensors.logical_indices ? lod_cut_tensors.logical_indices : lod_cut_tensors.indices,
-                                                                   uint32_t(model.size())};
+                const rendering::SplatRasterLogical raster_logical{cut_used && cut_used->logical_indices ? cut_used->logical_indices : cut_used ? cut_used->indices : nullptr,
+                                                                   logical_count};
                 if (auto rasterized = state.tensor_raster->rasterize(i.tensor_projected, request.gut ? &i.tensor_gut : nullptr, draw_count,
                                                                      rendering::SplatRasterMode(raster.mode), raster,
-                                                                     needs_overlay ? &raster_overlay : nullptr, lod_cut ? &raster_logical : nullptr);
+                                                                     needs_overlay ? &raster_overlay : nullptr, cut_used ? &raster_logical : nullptr);
                     !rasterized)
                     throw lfs::Exception(rasterized.error());
                 rendering::SplatPresentParameters presented;
@@ -1512,7 +1593,20 @@ namespace lfs::vis {
                 if (auto shown = state.tensor_raster->present(presented); !shown)
                     throw lfs::Exception(shown.error());
                 const auto& raster_output = *state.tensor_raster;
-                const std::array<const core::Tensor*, 3> outputs{&raster_output.rgba(), &raster_output.linear_depth(), &raster_output.status()};
+                // LOD statistics and the RAD pager read the cut's counts and chunk
+                // touches after completion.
+                if (gpu_lod) {
+                    if (!f.tensor_touches || f.tensor_touches.length < size_t(gpu_tree->chunks) * 4)
+                        f.tensor_touches = [i.reader.device() newBufferWithLength:std::max<size_t>(16, size_t(gpu_tree->chunks) * 4) options:MTLResourceStorageModeShared];
+                    if (!f.tensor_lod_counts)
+                        f.tensor_lod_counts = [i.reader.device() newBufferWithLength:32 options:MTLResourceStorageModeShared];
+                    if (!f.tensor_touches || !f.tensor_lod_counts)
+                        throw lfs::Exception(nativeError("Metal LOD result staging allocation failed", lfs::ErrorCode::ResourceExhausted));
+                } else {
+                    f.tensor_lod_counts = nil;
+                }
+                const std::array<const core::Tensor*, 5> outputs{&raster_output.rgba(), &raster_output.linear_depth(), &raster_output.status(),
+                                                                 gpu_lod ? &state.tensor_lod->touches() : nullptr, gpu_lod ? &state.tensor_lod->counts() : nullptr};
                 return i.reader.submit(outputs, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> views) {
                     if (i.next_readback)
                         [command encodeWaitForEvent:i.readback_event value:i.next_readback];
@@ -1523,6 +1617,10 @@ namespace lfs::vis {
                     [blit copyFromBuffer:views[1].buffer sourceOffset:views[1].offset sourceBytesPerRow:width * 4 sourceBytesPerImage:width * height * 4
                               sourceSize:MTLSizeMake(width, height, 1) toTexture:f.depth.texture destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
                     [blit copyFromBuffer:views[2].buffer sourceOffset:views[2].offset toBuffer:f.tensor_status destinationOffset:0 size:sizeof(RasterStatus)];
+                    if (gpu_lod) {
+                        [blit copyFromBuffer:views[3].buffer sourceOffset:views[3].offset toBuffer:f.tensor_touches destinationOffset:0 size:size_t(gpu_tree->chunks) * 4];
+                        [blit copyFromBuffer:views[4].buffer sourceOffset:views[4].offset toBuffer:f.tensor_lod_counts destinationOffset:0 size:32];
+                    }
                     [blit endEncoding];
                     finish(command, f.tensor_status, 0);
                 });
@@ -1767,20 +1865,18 @@ namespace lfs::vis {
         status.capacity = latest->gpu_capacity;
         const Frame* completed = nullptr;
         for (const auto& candidate : i.target(slot).frames) {
-            if (candidate && candidate->gpu_lod_active && candidate->gpu_lod && !candidate->gpu_lod->busy() &&
-                candidate->gpu_tree_signature == latest->gpu_tree_signature &&
-                candidate->command.status == MTLCommandBufferStatusCompleted &&
+            if (candidate && candidate->lodResultReady() && candidate->gpu_tree_signature == latest->gpu_tree_signature &&
                 (!completed || candidate->producer_value > completed->producer_value))
                 completed = candidate.get();
         }
         if (!completed)
             return status;
-        const auto cut = completed->gpu_lod->status();
+        const auto cut = completed->lodStatus();
         status.capacity = completed->gpu_capacity;
         status.selected = std::min(cut.selected, completed->gpu_capacity);
         status.overflow = cut.overflow;
         status.pixel_scale_feedback = cut.threshold_multiplier;
-        const auto touches = completed->gpu_lod->touches();
+        const auto touches = BufferSlice{completed->lodTouches()};
         status.resident_chunks = status.chunk_count = status.pool_pages = completed->gpu_chunks;
         const auto& pager = i.target(slot).pager;
         if (pager && completed->rad_signature == pager->signature()) {
@@ -1811,8 +1907,8 @@ namespace lfs::vis {
             FrameDiagnostics result;
             result.input_splats = frame->count;
             result.reserved_instances = frame->capacity;
-            if (frame->raster) {
-                const auto status = frame->raster->status();
+            if (frame->raster || frame->tensor) {
+                const auto status = frame->rasterStatus();
                 result.required_instances = status.required_instances;
                 result.blend_threads = status.blend_threads;
                 result.maximum_tile_instances = status.maximum_tile_instances;
@@ -1841,9 +1937,9 @@ namespace lfs::vis {
                 throw std::runtime_error(std::format("Metal output command failed (target={}, command_status={}, error={})", slot.value, long(frame->command.status), frame->command.error.localizedDescription.UTF8String ?: "none"));
             if (frame->rad_bootstrap)
                 return false;
-            if (frame->gpu_lod && frame->gpu_lod_active && frame->gpu_lod->status().overflow)
+            if (frame->lodResultReady() && frame->lodStatus().overflow)
                 return false;
-            return !frame->raster || frame->raster->status().error == RasterError::None;
+            return frame->rasterStatus().error == RasterError::None;
         } catch (const std::exception& error) {
             return nativeError(error);
         }

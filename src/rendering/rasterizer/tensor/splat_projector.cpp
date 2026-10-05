@@ -105,7 +105,7 @@ namespace lfs::rendering {
         const std::array bindings{
             M::Binding{0, in.means}, M::Binding{8, in.scales}, M::Binding{16, in.rotations}, M::Binding{24, in.opacity},
             M::Binding{32, in.sh0}, M::Binding{40, degree ? in.sh_rest : nullptr},
-            M::Binding{48, degree && in.storage == SplatShStorage::Q16 ? in.sh_bounds : nullptr}, M::Binding{56, in.deleted},
+            M::Binding{48, degree && (in.storage == SplatShStorage::Q16 || in.storage == SplatShStorage::RadSigned8) ? in.sh_bounds : nullptr}, M::Binding{56, in.deleted},
             M::Binding{64, &projected, RW}, M::Binding{72, &s.frame}, M::Binding{80, &s.layout},
             M::Binding{88, object_count ? in.object_indices : nullptr}, M::Binding{96, object_count ? &s.objects : nullptr}, M::Binding{104, when(s.overlay_parameters)},
             M::Binding{112, when(s.overlay_flags), RW}, M::Binding{120, overlay && !overlay->node_mask.empty() ? &s.node_mask : nullptr}, M::Binding{128, primitive == SplatPrimitive::Gut ? gut : nullptr, RW},
