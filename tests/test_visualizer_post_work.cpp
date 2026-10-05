@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "python/python_compat.hpp"
 #include <SDL3/SDL.h>
 
 #include "core/checkpoint_format.hpp"
@@ -34,7 +35,9 @@
 #include "io/splat_chapter.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
+#include "python/gil.hpp"
 #include "python/python_runtime.hpp"
+#include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "scene/viewer_splat_quantize.hpp"
@@ -1644,6 +1647,58 @@ namespace lfs::vis {
         EXPECT_TRUE(viewer.collectFrameDemand(false, false).input_event);
         input.beginFrame();
         EXPECT_FALSE(viewer.inputFrameRequestsRender());
+    }
+
+    class SelectionSubmodeTest : public VisualizerImplResetTest {};
+
+    TEST_F(SelectionSubmodeTest, PublishesNativeEventDragAndNewViewerModes) {
+        const auto assert_mirror = [](gui::GizmoManager& gizmo) {
+            const int expected = static_cast<int>(gizmo.getSelectionSubMode());
+            EXPECT_EQ(lfs::python::get_selection_submode(), expected);
+            lfs::python::set_context({});
+            EXPECT_EQ(lfs::python::context().selection_submode, expected);
+        };
+        {
+            VisualizerImpl viewer(projectOptions());
+            auto& gizmo = viewer.getGuiManager()->gizmo();
+            for (int value = 0; value < 8; ++value) {
+                const auto mode = static_cast<SelectionSubMode>(value);
+                gizmo.setSelectionSubMode(mode);
+                EXPECT_EQ(gizmo.getSelectionSubMode(), mode);
+                assert_mirror(gizmo);
+                const auto next = static_cast<SelectionSubMode>((value + 1) % 8);
+                lfs::core::events::tools::SetSelectionSubMode{
+                    .selection_mode = static_cast<int>(next)}
+                    .emit();
+                EXPECT_EQ(gizmo.getSelectionSubMode(), next);
+                assert_mirror(gizmo);
+            }
+            for (const auto mode : {SelectionSubMode::Box, SelectionSubMode::Sphere}) {
+                gizmo.setSelectionVolumeFromDrag(mode, SelectionMode::Replace, 0,
+                                                 glm::vec3(0.0f), 1.0f);
+                EXPECT_EQ(gizmo.getSelectionSubMode(), mode);
+                assert_mirror(gizmo);
+            }
+        }
+        // A replacement viewer must not inherit the previous viewer's Sphere mirror.
+        VisualizerImpl replacement(projectOptions());
+        EXPECT_EQ(replacement.getGuiManager()->gizmo().getSelectionSubMode(), SelectionSubMode::Centers);
+        assert_mirror(replacement.getGuiManager()->gizmo());
+    }
+
+    TEST_F(SelectionSubmodeTest, PublicPythonGetterAndContextFollowNativeMode) {
+        ASSERT_TRUE(lfs::python::ensure_initialized());
+        VisualizerImpl viewer(projectOptions());
+        const lfs::python::GilAcquire gil;
+        const auto script = std::format(R"PY(
+import runpy
+import lichtfeld as lf
+contract = runpy.run_path(r"{}/tests/python/test_ui_api_completeness.py")
+contract["test_selection_submode_follows_native_mode"](lf)
+)PY",
+                                        PROJECT_ROOT_PATH);
+        const int result = PyRun_SimpleString(script.c_str());
+        EXPECT_EQ(result, 0);
     }
 
     std::filesystem::path make_real_dataset_subset(
