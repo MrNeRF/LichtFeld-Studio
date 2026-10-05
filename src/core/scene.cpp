@@ -906,12 +906,10 @@ namespace lfs::core {
             }
             if (visible_node_count > 1 && (visible_count > 1'000'000 ||
                                            (import_validation_.load() && combinedModelBuildPending()))) {
-                // A large invalidated multi-node cache is rebuilt by the worker.
-                // Keep the previous renderable cache (or the previous single
-                // node alias) until its replacement lands; on the first-ever
-                // load both are null, so this intentionally returns null rather
-                // than rebuilding synchronously on the render thread.
-                return single_node_model_ ? single_node_model_ : cached_combined_.get();
+                // Current transform slots may refer to different nodes than
+                // the old geometry, especially when revealing a node before
+                // the previously visible one. Wait for a coherent aggregate.
+                return nullptr;
             }
             if (visible_node_count < 2) {
                 // A stale multi-node worker must be drained before the
@@ -1469,8 +1467,9 @@ namespace lfs::core {
                     completed_combined_model_build_ = std::move(built);
                 }
                 combined_model_build_running_.store(false, std::memory_order_release);
-                if (import_validation_.load())
-                    events::state::CombinedModelBuildReady{.scene = this}.emit();
+                // Visibility edits also need a redraw when their aggregate
+                // is ready; otherwise an idle viewport retains the old frame.
+                events::state::CombinedModelBuildReady{.scene = this}.emit();
             });
     }
 
