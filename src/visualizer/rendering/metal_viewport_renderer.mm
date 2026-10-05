@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "metal_viewport_renderer.hpp"
+#include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/tensor_backend.hpp"
@@ -25,7 +26,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
-#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -232,7 +232,7 @@ namespace lfs::vis {
         TileRasterizer rasterizer{reader.device()};
         std::shared_ptr<RasterScratch> raster_scratch = std::make_shared<RasterScratch>(reader.device());
         // Opt-in single-source rasterizer (tensor programs) for the plain splat view.
-        const bool tensor_raster = std::getenv("LFS_TENSOR_RASTER") != nullptr;
+        const bool tensor_raster = core::environment::flag("LFS_TENSOR_RASTER");
         std::unique_ptr<rendering::SplatProjector> projector;
         core::Tensor tensor_projected;
         id<MTLBuffer> projected, gut_geometry;
