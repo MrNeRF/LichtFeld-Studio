@@ -1212,7 +1212,15 @@ guarantee.
 
 | Method                                                                            | Returns        | Description           |
 |-----------------------------------------------------------------------------------|----------------|-----------------------|
-| `template_list(list_type_id, list_id, data, prop_id, active_data, active_prop, rows=5)` | `(int, int)` | Live on `RmlUILayout`. Compatibility `UILayout` raises `TypeError` outside draw hooks and warns/returns inert values in draw hooks. |
+| `template_list(list_type_id, list_id, data, prop_id, active_data, active_prop, rows=5)` | `(int, int)` | Live on `RmlUILayout`; returns `(active_index, item_count)` and writes row selection to `active_data.active_prop`. Compatibility `UILayout` raises `TypeError` outside draw hooks and warns/returns inert values in draw hooks. |
+
+Register a custom list class with `lf.register_uilist(MyList)`. Its `list_id` (or class
+name when omitted) is the `list_type_id` passed to `template_list`. The instance
+receives `draw_item(layout, data, item, icon, active_data, active_prop, index)` once
+per item per draw. `layout` is a live `RmlUILayout` scoped to that row, `icon` is
+currently `0`, and the active-selection arguments are the same object and property
+passed to `template_list`. Instances persist until unregistered or replaced.
+Unregistered types use the ordinary list control.
 
 ### Layout Composition
 
