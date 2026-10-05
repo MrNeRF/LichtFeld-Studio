@@ -81,7 +81,7 @@ namespace {
         auto input = torch_to_lfs(input_torch);
         auto weight = torch_to_lfs(weight_torch);
 
-        auto output = input.conv1x1(weight, Tensor{});
+        auto output = input.conv1x1(weight, lfs::core::Tensor{});
 
         // PyTorch equivalent: reshape [1,3,32,32] -> [1024,3], matmul with [3,16], reshape back
         auto input_nhwc = input_torch.permute({0, 2, 3, 1}).contiguous();
@@ -104,7 +104,7 @@ namespace {
         auto input = torch_to_lfs(input_torch);
         auto weight = torch_to_lfs(weight_torch);
 
-        auto output = input.conv1x1(weight, Tensor{});
+        auto output = input.conv1x1(weight, lfs::core::Tensor{});
 
         auto input_nhwc = input_torch.permute({0, 2, 3, 1}).contiguous();
         auto input_2d = input_nhwc.reshape({4 * 64 * 64, 64});
@@ -259,7 +259,7 @@ namespace {
         auto input = torch_to_lfs(input_torch);
         auto weight = torch_to_lfs(weight_torch);
 
-        auto output = input.linear(weight, Tensor{});
+        auto output = input.linear(weight, lfs::core::Tensor{});
 
         auto expected = torch::linear(input_torch, weight_torch);
 
