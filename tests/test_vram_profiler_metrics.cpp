@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -229,6 +230,30 @@ namespace {
 
         const auto snap = p.snapshot();
         EXPECT_EQ(snap.process.cuda_slab_reserved_bytes, kReservedBytes);
+    }
+
+    TEST_F(VramProfilerMetricsTest, MetalAccountingPersistsWithoutDetailedTracing) {
+        auto& p = VramProfiler::instance();
+        p.setEnabled(false);
+        int allocation = 0;
+        p.recordAllocation(&allocation, 4096, VramAllocationMethod::Metal, "tensor.storage");
+        p.relabelAllocation(&allocation, "splat.positions");
+        p.updateMetalMemory(16384, 3072, 4096, 2048, 8192, 12288);
+
+        auto snap = p.snapshot();
+        EXPECT_EQ(snap.accounted_metal_live_bytes, 4096u);
+        EXPECT_TRUE(snap.process.metal_memory_valid);
+        EXPECT_EQ(snap.process.metal_tensor_rounding_slack_bytes, 1024u);
+        EXPECT_EQ(snap.process.metal_other_device_bytes, 10240u);
+        EXPECT_EQ(snap.process.metal_allocator_peak_reserved_bytes, 12288u);
+        EXPECT_TRUE(std::ranges::any_of(snap.rows, [](const auto& row) {
+            return row.scope == "metal.tensor" && row.label == "splat.positions" &&
+                   row.live_bytes == 4096;
+        }));
+
+        p.recordDeallocation(&allocation);
+        snap = p.snapshot();
+        EXPECT_EQ(snap.accounted_metal_live_bytes, 0u);
     }
 
     TEST_F(VramProfilerMetricsTest, LiveBytesDoesNotAccumulateAcrossIterations) {

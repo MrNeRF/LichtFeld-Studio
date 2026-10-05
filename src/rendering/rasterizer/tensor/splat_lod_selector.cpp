@@ -78,7 +78,8 @@ namespace lfs::rendering {
         if (capacity > s.capacity) {
             std::tie(s.indices, s.logical_indices, s.weights, s.levels) =
                 std::tuple_cat(carve_arena<4>({size_t(capacity) * 4, size_t(capacity) * 4,
-                                               size_t(capacity) * 4, size_t(capacity) * 4}));
+                                               size_t(capacity) * 4, size_t(capacity) * 4},
+                                              "rasterizer.lod_arena"));
             s.capacity = capacity;
         }
         if (chunks > s.chunks) {

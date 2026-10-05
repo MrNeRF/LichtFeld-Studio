@@ -2423,6 +2423,29 @@ NB_MODULE(lichtfeld, m) {
             for (std::size_t i = 0; i < names.size(); ++i)
                 unexplained[names[i].data()] = owners.unattributed_roots[i];
             result["unattributed_roots"] = unexplained;
+            nb::dict metal;
+            metal["valid"] = snapshot.process.metal_memory_valid;
+            metal["device_allocated_bytes"] = snapshot.process.metal_device_allocated_bytes;
+            metal["tensor_requested_bytes"] = snapshot.process.metal_tensor_requested_bytes;
+            metal["tensor_capacity_bytes"] = snapshot.process.metal_tensor_capacity_bytes;
+            metal["tensor_rounding_slack_bytes"] = snapshot.process.metal_tensor_rounding_slack_bytes;
+            metal["allocator_cached_bytes"] = snapshot.process.metal_allocator_cached_bytes;
+            metal["other_device_bytes"] = snapshot.process.metal_other_device_bytes;
+            metal["tensor_peak_capacity_bytes"] = snapshot.process.metal_tensor_peak_capacity_bytes;
+            metal["allocator_peak_reserved_bytes"] = snapshot.process.metal_allocator_peak_reserved_bytes;
+            nb::list rows;
+            for (const auto& row : snapshot.rows) {
+                if (!row.scope.starts_with("metal.") || row.live_bytes == 0)
+                    continue;
+                nb::dict item;
+                item["scope"] = row.scope;
+                item["label"] = row.label;
+                item["live_bytes"] = row.live_bytes;
+                item["peak_bytes"] = row.peak_bytes;
+                rows.append(std::move(item));
+            }
+            metal["rows"] = std::move(rows);
+            result["metal"] = std::move(metal);
             return result;
         },
         "Return a sampled process VRAM breakdown by owner category");

@@ -8,6 +8,7 @@
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_debug.hpp"
 #include "core/tensor_label.hpp"
 #include "core/tensor_serialization_sink.hpp"
 #include "core/tensor_trace.hpp"
@@ -197,6 +198,7 @@ namespace {
         static_cast<T (T::*)(const T&, int) const>(&T::cat)};
 
     [[maybe_unused]] constexpr auto kMoreReduceOverloads = std::tuple{
+        static_cast<T (T::*)(ReduceOp) const>(&T::reduce),
         static_cast<T (T::*)(ReduceOp, const ReduceArgs&) const>(&T::reduce),
         static_cast<T (T::*)() const>(&T::any),
         static_cast<T (T::*)(std::span<const int>, bool) const>(&T::any),
@@ -215,6 +217,7 @@ namespace {
         static_cast<T (T::*)(const T&) const>(&T::mul),
         static_cast<T (T::*)(const T&) const>(&T::div),
         static_cast<T (T::*)(const T&) const>(&T::pow),
+        static_cast<T (T::*)(const T&) const>(&T::mod),
         static_cast<T (T::*)(const T&) const>(&T::maximum),
         static_cast<T (T::*)(const T&) const>(&T::minimum),
         static_cast<T (T::*)(const T&) const>(&T::eq),
@@ -237,10 +240,15 @@ namespace {
         static_cast<bool (T::*)(std::span<const size_t>) const>(&T::get_bool),
         static_cast<T& (T::*)(float)>(&T::fill_),
         static_cast<T& (T::*)(float, cudaStream_t)>(&T::fill_),
+        static_cast<void (T::*)() const>(&T::print_formatted),
+        static_cast<void (T::*)(const std::string&, size_t) const>(&T::print_formatted),
+        static_cast<TensorElementProxy (T::*)(std::initializer_list<size_t>)>(&T::at),
         static_cast<float (T::*)(std::initializer_list<size_t>) const>(&T::at)};
 
     [[maybe_unused]] constexpr auto kNnOverloads = std::tuple{
+        static_cast<T (T::*)(const T&) const>(&T::conv1x1),
         static_cast<T (T::*)(const T&, const T&) const>(&T::conv1x1),
+        static_cast<T (T::*)(const T&) const>(&T::linear),
         static_cast<T (T::*)(const T&, const T&) const>(&T::linear)};
 
     [[maybe_unused]] constexpr auto kStreamOverloads = std::tuple{
@@ -316,6 +324,7 @@ namespace {
     LFS_FREEZE(T::zeros_bool, T (*)(S, Device));
     LFS_FREEZE(T::ones_bool, T (*)(S, Device));
     LFS_FREEZE(T::linspace, T (*)(float, float, size_t, Device));
+    LFS_FREEZE(T::diag, T (*)(const T&));
     static_assert(std::is_same_v<
                   decltype(static_cast<T (*)(void*, S, Device, DataType, cudaStream_t)>(
                       &T::from_blob)),
@@ -326,7 +335,10 @@ namespace {
     LFS_FREEZE(T::rand, T (*)(S, Device, DataType));
     LFS_FREEZE(T::randn, T (*)(S, Device, DataType));
     LFS_FREEZE(T::uniform, T (*)(S, float, float, Device, DataType, std::optional<uint64_t>));
+    LFS_FREEZE(T::normal, T (*)(S, float, float, Device, DataType));
     LFS_FREEZE(T::randint, T (*)(S, int, int, Device, DataType));
+    LFS_FREEZE(T::bernoulli, T (*)(S, float, Device, DataType));
+    LFS_FREEZE(T::multinomial, T (*)(const T&, int, bool, std::optional<uint64_t>));
     LFS_FREEZE(T::rand_like, T (*)(const T&));
     LFS_FREEZE(T::randn_like, T (*)(const T&));
     LFS_FREEZE(T::manual_seed, void (*)(uint64_t));
@@ -374,11 +386,13 @@ namespace {
     LFS_FREEZE(T::isinf, T (T::*)() const);
     LFS_FREEZE(T::isfinite, T (T::*)() const);
     LFS_FREEZE(T::logical_not, T (T::*)() const);
+    LFS_FREEZE(T::normalize, T (T::*)(int, float) const);
     LFS_FREEZE(T::logit, T (T::*)(float) const);
     LFS_FREEZE(T::clamp, T (T::*)(float, float) const);
     LFS_FREEZE(T::clamp_min, T (T::*)(float) const);
     LFS_FREEZE(T::clamp_max, T (T::*)(float) const);
     LFS_FREEZE(T::clamp_, T& (T::*)(float, float));
+    LFS_FREEZE(T::clamp_min_, T& (T::*)(float));
     LFS_FREEZE(T::clamp_max_, T& (T::*)(float));
     LFS_FREEZE(T::operator!, T (T::*)() const);
     LFS_FREEZE(T::operator~, T (T::*)() const);
@@ -397,13 +411,16 @@ namespace {
     LFS_FREEZE(T::bmm, T (T::*)(const T&) const);
     LFS_FREEZE(T::matmul, T (T::*)(const T&) const);
     LFS_FREEZE(T::dot, T (T::*)(const T&) const);
+    LFS_FREEZE(T::cdist, T (T::*)(const T&, float) const);
     LFS_FREEZE(T::masked_select, T (T::*)(const T&) const);
     LFS_FREEZE(T::masked_fill_, T& (T::*)(const T&, float));
     LFS_FREEZE(T::masked_fill, T (T::*)(const T&, float) const);
     LFS_FREEZE(T::take, T (T::*)(const T&) const);
     LFS_FREEZE(T::append_gather, T& (T::*)(const T&));
     LFS_FREEZE(T::append_zeros, T& (T::*)(size_t));
+    LFS_FREEZE(T::gather_lazy, PermutationExpr<TensorLeaf, TensorLeaf> (T::*)(const T&) const);
     LFS_FREEZE(T::nonzero, T (T::*)() const);
+    LFS_FREEZE(T::nonzero_split, std::vector<T> (T::*)() const);
     LFS_FREEZE(T::index_fill_, T& (T::*)(int, const T&, float));
     LFS_FREEZE(T::index_copy_, T& (T::*)(int, const T&, const T&));
     LFS_FREEZE(T::index_add_, T& (T::*)(int, const T&, const T&));
@@ -458,6 +475,7 @@ namespace {
     LFS_FREEZE(T::stride, size_t (T::*)(size_t) const);
     LFS_FREEZE(T::has_zero_stride, bool (T::*)() const);
     LFS_FREEZE(T::assert_finite, T& (T::*)());
+    LFS_FREEZE(T::all_close, bool (T::*)(const T&, float, float) const);
     LFS_FREEZE(T::str, std::string (T::*)() const);
     LFS_FREEZE(T::to_vector_uint8, std::vector<uint8_t> (T::*)() const);
     LFS_FREEZE(T::to_vector_int64, std::vector<int64_t> (T::*)() const);
@@ -513,7 +531,6 @@ namespace {
     LFS_FREEZE(PinnedMemoryAllocator::set_force_fallback_for_testing, void (PinnedMemoryAllocator::*)(bool));
     LFS_FREEZE(PinnedMemoryAllocator::set_cache_limit_for_testing, void (PinnedMemoryAllocator::*)(size_t));
     LFS_FREEZE(PinnedMemoryAllocator::cache_limit_bytes, size_t (PinnedMemoryAllocator::*)() const);
-    LFS_FREEZE(T::log_storage_memory, void (*)(std::string_view));
     LFS_FREEZE(MemoryInfo::cuda, MemoryInfo (*)());
     LFS_FREEZE(save_tensor, void (*)(const T&, const std::string&));
     LFS_FREEZE(load_tensor, T (*)(const std::string&));
@@ -523,6 +540,19 @@ namespace {
                void (*)(std::ostream&, const T&, const TensorSerializationDescriptor&, const T*));
     LFS_FREEZE(TensorSerializationSink::write_tensor_payload,
                void (TensorSerializationSink::*)(std::ostream&, const T&, const T*, const TensorSerializationDescriptor&));
+    LFS_FREEZE(debug::TensorValidation::is_valid, bool (debug::TensorValidation::*)() const);
+    LFS_FREEZE(debug::TensorValidation::to_string, std::string (debug::TensorValidation::*)() const);
+    LFS_FREEZE(debug::validate_tensor_cpu, debug::TensorValidation (*)(const T&));
+    LFS_FREEZE(debug::validate_tensor_gpu, debug::TensorValidation (*)(const T&));
+    LFS_FREEZE(debug::validate_tensor, debug::TensorValidation (*)(const T&));
+    LFS_FREEZE(debug::log_tensor_validation, void (*)(const T&, const char*, const char*, int));
+    LFS_FREEZE(debug::TensorDiff::is_close, bool (debug::TensorDiff::*)(float, float) const);
+    LFS_FREEZE(debug::TensorDiff::to_string, std::string (debug::TensorDiff::*)() const);
+    LFS_FREEZE(debug::diff_tensors, debug::TensorDiff (*)(const T&, const T&, float));
+    LFS_FREEZE(debug::log_tensor_diff, void (*)(const T&, const T&, const char*, float));
+    LFS_FREEZE(debug::TensorStats::to_string, std::string (debug::TensorStats::*)() const);
+    LFS_FREEZE(debug::get_tensor_stats, debug::TensorStats (*)(const T&));
+    LFS_FREEZE(debug::log_tensor_info, void (*)(const T&, const char*));
     LFS_FREEZE(Tracer::instance, Tracer& (*)());
     LFS_FREEZE(Tracer::set_enabled, void (Tracer::*)(bool));
     LFS_FREEZE(Tracer::is_enabled, bool (Tracer::*)() const);
@@ -536,6 +566,7 @@ namespace {
     LFS_FREEZE(RP::item_int, int (RP::*)() const);
     LFS_FREEZE(RP::item_int64, int64_t (RP::*)() const);
     LFS_FREEZE(RP::operator Tensor, T (RP::*)() const);
+    LFS_FREEZE(MP::operator Tensor, T (MP::*)() const);
     LFS_FREEZE(TI::operator Tensor, T (TI::*)() const);
 #undef LFS_FREEZE
 
@@ -559,6 +590,7 @@ namespace {
         X::linspace(0.0f, 1.0f, 3, device);
         X::eye(3, device);
         X::eye(3, 4, device);
+        X::diag(ct);
         X::from_blob(data, shape, device, dtype, stream);
         X::from_external_owner(data, shape, device, dtype, owner);
         X::from_external_owner(data, shape, device, dtype, owner, 9);
@@ -681,11 +713,13 @@ namespace {
         ct.isinf();
         ct.isfinite();
         ct.logical_not();
+        ct.normalize(-1, 1e-12f);
         ct.logit(1e-7f);
         ct.clamp(-1.0f, 1.0f);
         ct.clamp_min(-1.0f);
         ct.clamp_max(1.0f);
         t.clamp_(-1.0f, 1.0f);
+        t.clamp_min_(-1.0f);
         t.clamp_max_(1.0f);
         -ct;
         ~ct;
@@ -699,6 +733,7 @@ namespace {
         ct.mul(ct);
         ct.div(ct);
         ct.pow(ct);
+        ct.mod(ct);
         ct.maximum(ct);
         ct.minimum(ct);
         ct.add(1.0f);
@@ -752,6 +787,7 @@ namespace {
 
     template <typename X>
     concept ReductionSurface = requires(const X& ct, std::span<const int> dims) {
+        ct.reduce(ReduceOp::Sum);
         ct.reduce(ReduceOp::Sum, ReduceArgs{});
         ct.sum();
         ct.sum(dims, true);
@@ -809,6 +845,7 @@ namespace {
         ct.bmm(ct);
         ct.matmul(ct);
         ct.dot(ct);
+        ct.cdist(ct, 2.0f);
     };
 
     template <typename X>
@@ -828,7 +865,9 @@ namespace {
         ct.take(ct);
         t.append_gather(ct);
         t.append_zeros(1);
+        ct.gather_lazy(ct);
         ct.nonzero();
+        ct.nonzero_split();
         t.scatter_(0, ct, ct, ScatterMode::None);
         t.scatter_(0, ct, 1.0f, ScatterMode::None);
         t.index_fill_(0, ct, 1.0f);
@@ -849,7 +888,10 @@ namespace {
         X::rand(shape);
         X::randn(shape);
         X::uniform(shape);
+        X::normal(shape);
         X::randint(shape, 0, 4);
+        X::bernoulli(shape);
+        X::multinomial(ct, 2, true);
         X::rand_like(ct);
         X::randn_like(ct);
         X::manual_seed(1);
@@ -871,10 +913,13 @@ namespace {
         ct.relu();
         ct.gelu();
         ct.swish();
+        ct.normalize();
         ct.logit();
+        ct.conv1x1(ct);
         ct.conv1x1(ct, ct);
         ct.max_pool2d(2, 2, 0);
         ct.adaptive_avg_pool2d(2, 2);
+        ct.linear(ct);
         ct.linear(ct, ct);
         ct.conv1x1_bias_out(ct, ct, t);
         ct.conv1x1_bias_relu_out(ct, ct, t);
@@ -959,7 +1004,6 @@ namespace {
         X::shutdown_memory_pool();
         X::set_memory_pool_iteration(0);
         X::storage_memory_summary();
-        X::log_storage_memory(std::string_view{});
         PinnedMemoryAllocator::instance();
         PinnedMemoryAllocator::instance().allocate(1);
         PinnedMemoryAllocator::instance().deallocate(pointer, stream);
@@ -1000,6 +1044,7 @@ namespace {
         t.assert_finite();
         ct.has_nan();
         ct.has_inf();
+        ct.all_close(ct);
         ct.str();
         ct.to_vector();
         ct.to_vector_uint8();
@@ -1007,7 +1052,22 @@ namespace {
         ct.to_vector_int();
         ct.to_vector_bool();
         ct.debug_values();
+        ct.print_formatted();
+        ct.print_formatted(text, 4);
         ct.options();
+        debug::TensorValidation{}.is_valid();
+        debug::TensorValidation{}.to_string();
+        debug::validate_tensor_cpu(ct);
+        debug::validate_tensor_gpu(ct);
+        debug::validate_tensor(ct);
+        debug::log_tensor_validation(ct, "", "", 0);
+        debug::TensorDiff{}.is_close();
+        debug::TensorDiff{}.to_string();
+        debug::diff_tensors(ct, ct);
+        debug::log_tensor_diff(ct, ct, "");
+        debug::TensorStats{}.to_string();
+        debug::get_tensor_stats(ct);
+        debug::log_tensor_info(ct, "");
         debug::TensorOpTracer::instance();
         debug::TensorOpTracer::instance().set_enabled(true);
         debug::TensorOpTracer::instance().is_enabled();
@@ -1045,6 +1105,13 @@ namespace {
         X::lazy_telemetry_snapshot();
         X::reset_lazy_telemetry();
         X::clear_lazy_ir_for_testing();
+        ct.gather_lazy(ct).eval();
+        ct.gather_lazy(ct).shape();
+        ct.gather_lazy(ct).device();
+        ct.gather_lazy(ct).dtype();
+        ct.gather_lazy(ct).stream_hint();
+        ct.gather_lazy(ct).snapshot();
+        ct.gather_lazy(ct).map(operation);
         TensorLeaf(t).eval();
         TensorLeaf(t).shape();
         TensorLeaf(t).device();
@@ -1061,6 +1128,8 @@ namespace {
     using UnaryExpression = UnaryExpr<LeafExpr, ops::abs_op>;
     using NestedUnaryExpression = UnaryExpr<UnaryExpression, ops::neg_op>;
     using BinaryExpression = BinaryExpr<LeafExpr, LeafExpr, ops::add_op>;
+    using PermutationExpression = PermutationExpr<LeafExpr, LeafExpr>;
+    using GatherUnaryExpression = UnaryExpr<PermutationExpression, ops::abs_op>;
 
     [[maybe_unused]] constexpr auto kExprOverloads = std::tuple{
         static_cast<LeafExpr& (LeafExpr::*)()>(&LeafExpr::derived),
@@ -1071,12 +1140,17 @@ namespace {
         static_cast<const NestedUnaryExpression& (NestedUnaryExpression::*)() const>(
             &NestedUnaryExpression::derived),
         static_cast<BinaryExpression& (BinaryExpression::*)()>(&BinaryExpression::derived),
-        static_cast<const BinaryExpression& (BinaryExpression::*)() const>(&BinaryExpression::derived)};
+        static_cast<const BinaryExpression& (BinaryExpression::*)() const>(&BinaryExpression::derived),
+        static_cast<PermutationExpression& (PermutationExpression::*)()>(&PermutationExpression::derived),
+        static_cast<const PermutationExpression& (PermutationExpression::*)() const>(
+            &PermutationExpression::derived)};
 
     template <typename X>
     concept ConcreteExprSurface = requires(const LeafExpr& leaf, const UnaryExpression& unary,
                                            const NestedUnaryExpression& nested,
                                            const BinaryExpression& binary,
+                                           const PermutationExpression& permutation,
+                                           const GatherUnaryExpression& gather_unary,
                                            ops::neg_op operation) {
         leaf.eval_impl();
         leaf.snapshot_impl();
@@ -1106,6 +1180,19 @@ namespace {
         binary.device_impl();
         binary.dtype_impl();
         binary.stream_hint_impl();
+        permutation.eval_impl();
+        permutation.snapshot_impl();
+        permutation.map(operation);
+        permutation.shape_impl();
+        permutation.device_impl();
+        permutation.dtype_impl();
+        permutation.stream_hint_impl();
+        gather_unary.eval_impl();
+        gather_unary.snapshot_impl();
+        gather_unary.shape_impl();
+        gather_unary.device_impl();
+        gather_unary.dtype_impl();
+        gather_unary.stream_hint_impl();
     };
 
     template <typename X>
@@ -1134,6 +1221,7 @@ namespace {
         -const_row;
         masked = 1.0f;
         masked = ct;
+        static_cast<X>(masked);
         indexer = 1.0f;
         indexer = ct;
         static_cast<X>(indexer);
@@ -1158,6 +1246,8 @@ namespace {
     static_assert(ExprBaseSurface<UnaryExpression>);
     static_assert(ExprBaseSurface<NestedUnaryExpression>);
     static_assert(ExprBaseSurface<BinaryExpression>);
+    static_assert(ExprBaseSurface<PermutationExpression>);
+    static_assert(ExprBaseSurface<GatherUnaryExpression>);
     static_assert(ConcreteExprSurface<T>);
     static_assert(RowSurface<T>);
 

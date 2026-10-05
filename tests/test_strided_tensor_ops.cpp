@@ -8,6 +8,7 @@
  *   - masked_select / masked_fill_ on strided views
  *   - index_put_ on view destinations (offset + non-contiguous)
  *   - densification_info.index_select(dim=1) on [2, N]
+ *   - Tensor::multinomial with non-contiguous (strided column) weights
  *
  * Reference for every test: explicit host CPU loops over logical indices
  * (NOT LibTorch — the contract is logical layout semantics).
@@ -352,6 +353,67 @@ TEST_F(StridedTensorOpsTest, DensificationInfo_IndexSelectDim1_StridedSource_CUD
 // With replacement, 200 samples must almost always hit index 1.
 // Physical linear scan of the column-strided storage would read a different
 // probability mass → wrong mode.
+
+TEST_F(StridedTensorOpsTest, Multinomial_StridedColumnWeights_CUDA) {
+    // own [3,2] = [[0, 0],[100,0],[0,0]]; column 0 is logical weights [0,100,0]
+    // with physical stride 2 (non-contiguous rank-1 after squeeze).
+    auto own = Tensor::from_vector(
+        {0.f, 0.f,
+         100.f, 0.f,
+         0.f, 0.f},
+        {3, 2}, Device::GPU);
+    auto strided_w = own.slice(1, 0, 1).squeeze(); // [3]
+    ASSERT_EQ(strided_w.ndim(), 1u);
+    ASSERT_EQ(strided_w.numel(), 3u);
+    {
+        const auto w = host_f32(strided_w);
+        ASSERT_EQ(w.size(), 3u);
+        EXPECT_FLOAT_EQ(w[0], 0.f);
+        EXPECT_FLOAT_EQ(w[1], 100.f);
+        EXPECT_FLOAT_EQ(w[2], 0.f);
+    }
+    // Prefer non-contiguous input; if squeeze densified it, still check the
+    // logical distribution (contiguous firewall must preserve values either way).
+    if (!strided_w.is_contiguous()) {
+        GTEST_LOG_(INFO) << "multinomial input is non-contiguous";
+    }
+
+    constexpr int N = 200;
+    auto samples = Tensor::multinomial(strided_w, N, /*replacement=*/true);
+    ASSERT_EQ(samples.numel(), static_cast<size_t>(N));
+    auto s = samples.cpu().to_vector_int64();
+    int count1 = 0;
+    for (int64_t v : s) {
+        EXPECT_GE(v, 0);
+        EXPECT_LT(v, 3);
+        if (v == 1)
+            ++count1;
+    }
+    // With weights [0,100,0], every sample must be index 1
+    EXPECT_EQ(count1, N) << "multinomial on strided weights must sample logical "
+                            "probabilities (mode=1); got count1="
+                         << count1;
+}
+
+TEST_F(StridedTensorOpsTest, Multinomial_StridedColumnWeights_CPU) {
+    auto own = Tensor::from_vector(
+        {0.f, 0.f,
+         100.f, 0.f,
+         0.f, 0.f},
+        {3, 2}, Device::CPU);
+    auto strided_w = own.slice(1, 0, 1).squeeze();
+    const auto w = host_f32(strided_w);
+    ASSERT_EQ(w.size(), 3u);
+    EXPECT_FLOAT_EQ(w[1], 100.f);
+
+    constexpr int N = 100;
+    auto samples = Tensor::multinomial(strided_w, N, true);
+    auto s = samples.to_vector_int64();
+    for (int64_t v : s) {
+        EXPECT_EQ(v, 1) << "CPU multinomial must honor logical strided weights";
+    }
+}
+
 // Sanity: contiguous densification_info dim0 row extract still works (control)
 TEST_F(StridedTensorOpsTest, DensificationInfo_RowExtractDim0_Control) {
     constexpr size_t N = 5;

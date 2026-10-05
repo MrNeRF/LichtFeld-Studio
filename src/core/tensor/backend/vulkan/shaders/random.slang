@@ -1,24 +1,38 @@
 static const uint LFS_LOCAL_SIZE_X = 256;
-static const uint LFS_PUSH_CONSTANT_SIZE = 40;
+static const uint LFS_PUSH_CONSTANT_SIZE = 64;
 
-// 0 uniform [first, second), 2 randint [low, high), 3 normal(first, second).
+// 0 uniform [first, second), 1 bernoulli(first), 2 randint [low, high),
+// 3 normal(first, second), 4 multinomial with replacement over the running
+// sums of kinds 8 and 9, 5 Gumbel keys for sampling without replacement (the
+// host sorts them), 7 weight statistics (output[0] = maximum, output[1] =
+// invalid flag) in a single workgroup, 8 running sums of the scaled weights
+// within blocks of kSumBlock, a thread per block, 9 the blocks' offsets and
+// the total, in one thread. Metal's random_op adds the same sums in the same
+// order, so both draw the same samples.
 [SpecializationConstant]
 const uint kKind = 0;
 
+groupshared float sharedMaximum[LFS_LOCAL_SIZE_X];
+groupshared uint sharedInvalid[LFS_LOCAL_SIZE_X];
 
 struct Parameters
 {
     uint64_t outputAddress;
+    uint64_t weightsAddress;
+    uint64_t keysAddress;
     uint64_t seed;
     uint count;
+    uint sampleCount;
     int low;
     int high;
     float first;
     float second;
+    float total;
     uint pad0;
 };
 
 static const float kUnitScale = 1.0f / 16777216.0f;
+static const uint kSumBlock = 1024;
 static const float kTwoPi = 6.28318530717958647692f;
 
 // Philox4x32-10 (Salmon et al. 2011): the element index is the counter and
@@ -78,7 +92,75 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : SV
 {
     const uint3 numWorkgroups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
     const uint stride = numWorkgroups.x * LFS_LOCAL_SIZE_X;
-    const uint total = parameters.count;
+    if (kKind == 7)
+    {
+        Ptr<float, Access.Read> weights = (Ptr<float, Access.Read>)parameters.weightsAddress;
+        const uint thread = groupThreadId.x;
+        float maximum = 0.0f;
+        uint invalid = 0u;
+        for (uint index = thread; index < parameters.count; index += LFS_LOCAL_SIZE_X)
+        {
+            const float weight = weights[index];
+            if (!(weight >= 0.0f) || isinf(weight))
+                invalid = 1u;
+            maximum = max(maximum, weight);
+        }
+        sharedMaximum[thread] = maximum;
+        sharedInvalid[thread] = invalid;
+        GroupMemoryBarrierWithGroupSync();
+        for (uint span = LFS_LOCAL_SIZE_X / 2; span > 0; span >>= 1)
+        {
+            if (thread < span)
+            {
+                sharedMaximum[thread] = max(sharedMaximum[thread], sharedMaximum[thread + span]);
+                sharedInvalid[thread] |= sharedInvalid[thread + span];
+            }
+            GroupMemoryBarrierWithGroupSync();
+        }
+        if (thread == 0)
+        {
+            ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[0] = sharedMaximum[0];
+            ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[1] = sharedInvalid[0];
+        }
+        return;
+    }
+    const uint blocks = (parameters.count + kSumBlock - 1) / kSumBlock;
+    if (kKind == 8)
+    {
+        // The weights, scaled by a power of two (exact), summed in order
+        // within the block.
+        Ptr<float, Access.Read> weights = (Ptr<float, Access.Read>)parameters.weightsAddress;
+        Ptr<float, Access.ReadWrite> sums = (Ptr<float, Access.ReadWrite>)parameters.keysAddress;
+        for (uint block = dispatchThreadId.x; block < blocks; block += stride)
+        {
+            const uint end = min(parameters.count, (block + 1) * kSumBlock);
+            float running = 0.0f;
+            for (uint category = block * kSumBlock; category < end; ++category)
+            {
+                running += weights[category] * parameters.first;
+                sums[category] = running;
+            }
+        }
+        return;
+    }
+    if (kKind == 9)
+    {
+        // Each block's offset is the running sum of the block totals before
+        // it; the running sum of category i is its block's offset plus its
+        // sum within the block, which never decreases along the categories.
+        if (dispatchThreadId.x != 0)
+            return;
+        Ptr<float, Access.ReadWrite> sums = (Ptr<float, Access.ReadWrite>)parameters.keysAddress;
+        float offset = 0.0f;
+        for (uint block = 0; block < blocks; ++block)
+        {
+            sums[parameters.count + block] = offset;
+            offset += sums[min(parameters.count, (block + 1) * kSumBlock) - 1];
+        }
+        sums[parameters.count + blocks] = offset;
+        return;
+    }
+    const uint total = kKind == 4 ? parameters.sampleCount : parameters.count;
     for (uint index = dispatchThreadId.x; index < total; index += stride)
     {
         const uint4 words = draw(index, parameters.seed);
@@ -92,6 +174,11 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : SV
                     value = floatBelow(parameters.second);
             }
             ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[index] = value;
+        }
+        else if (kKind == 1)
+        {
+            ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[index] =
+                unitInterval(words.x) < parameters.first ? 1.0f : 0.0f;
         }
         else if (kKind == 2)
         {
@@ -108,6 +195,50 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : SV
             const float z = radius * cos(kTwoPi * u2);
             ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[index] =
                 parameters.first + parameters.second * z;
+        }
+        else if (kKind == 4)
+        {
+            // The first category whose running sum exceeds the draw: a binary
+            // search over the blocks' last sums, then within the block.
+            Ptr<float, Access.Read> sums = (Ptr<float, Access.Read>)parameters.keysAddress;
+            const float u = unitInterval(words.x) * sums[parameters.count + blocks];
+            uint low = 0;
+            uint high = blocks;
+            while (low < high)
+            {
+                const uint middle = (low + high) / 2;
+                if (u < sums[parameters.count + middle] + sums[min(parameters.count, (middle + 1) * kSumBlock) - 1])
+                    high = middle;
+                else
+                    low = middle + 1;
+            }
+            uint sample = parameters.count - 1;
+            if (low < blocks)
+            {
+                const float offset = sums[parameters.count + low];
+                uint first = low * kSumBlock;
+                uint last = min(parameters.count, (low + 1) * kSumBlock);
+                while (first < last)
+                {
+                    const uint middle = (first + last) / 2;
+                    if (u < offset + sums[middle])
+                        last = middle;
+                    else
+                        first = middle + 1;
+                }
+                sample = min(first, parameters.count - 1);
+            }
+            ((Ptr<int64_t, Access.ReadWrite>)parameters.outputAddress)[index] = int64_t(sample);
+        }
+        else
+        {
+            Ptr<float, Access.Read> weights = (Ptr<float, Access.Read>)parameters.weightsAddress;
+            float u = unitInterval(words.x);
+            u = max(u, 1e-10f);
+            u = min(u, 0.9999999403953552f);
+            const float gumbel = -log(-log(u));
+            const float logWeight = (weights[index] > 0.0f ? log(weights[index]) : -asfloat(0x7f800000u));
+            ((Ptr<float, Access.ReadWrite>)parameters.keysAddress)[index] = logWeight + gumbel;
         }
     }
 }

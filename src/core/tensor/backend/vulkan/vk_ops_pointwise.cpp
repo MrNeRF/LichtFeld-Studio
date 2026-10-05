@@ -414,9 +414,9 @@ namespace lfs::core::internal {
         const bool integer = input.dtype == DataType::Int32;
         LFS_ASSERT_MSG(input.dtype == output.dtype &&
                            ((integer && minimum.kind == ScalarKind::Int32 && maximum.kind == ScalarKind::Int32) ||
-                            (input.dtype == DataType::Float32 && minimum.kind == ScalarKind::Float && maximum.kind == ScalarKind::Float)),
-                       "Vulkan clamp requires matching Float32 or Int32 operands");
-        const uint32_t type = integer ? 2u : 0u;
+                            ((input.dtype == DataType::Float32 || input.dtype == DataType::Float16) && minimum.kind == ScalarKind::Float && maximum.kind == ScalarKind::Float)),
+                       "Vulkan clamp requires matching Float32, Float16 or Int32 operands");
+        const uint32_t type = static_cast<uint32_t>(input.dtype);
         const std::array constants{0u, type, type, 5u, 0u, 0u};
         const uint64_t bounds = integer
                                     ? static_cast<uint32_t>(minimum.value.int32_value) | (uint64_t(static_cast<uint32_t>(maximum.value.int32_value)) << 32)

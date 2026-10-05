@@ -21,7 +21,7 @@ TEST(TensorKMeansWorkflowTest, KMeansPlusPlusSelectionPipeline) {
     centroids[0] = data[0];
 
     const auto active_centroids = centroids.slice(0, 0, 1);
-    const auto distances = data.sub(active_centroids).square().sum(1).sqrt();
+    const auto distances = data.cdist(active_centroids).min(1);
     const auto probabilities = distances.square() / distances.square().sum();
     const auto cumulative = probabilities.cumsum(0);
     const auto candidates = cumulative.ge(0.15f).nonzero();

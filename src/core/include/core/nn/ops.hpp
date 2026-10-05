@@ -93,12 +93,28 @@ namespace lfs::core::nn {
     [[nodiscard]] LFS_CORE_API Tensor layer_norm(const Tensor& input, const Tensor& weight,
                                                  const Tensor& bias, float eps = 1e-5f);
 
+    // RMSNorm over the last dimension: y = x / sqrt(mean(x²) + eps) * weight.
+    [[nodiscard]] LFS_CORE_API Tensor rms_norm(const Tensor& input, const Tensor& weight,
+                                               float eps = 1e-6f);
+
+    // Softmax over the last dimension. mask, if present, is added before the
+    // softmax (broadcastable to input).
+    [[nodiscard]] LFS_CORE_API Tensor softmax(const Tensor& input, const Tensor* mask = nullptr);
+
     // Scaled dot-product attention on [B, H, N, d] (or [B, H, Nq, d] vs [B, H, Nk, d]).
     // Online-softmax tiling; does not materialise the N×N score matrix.
     // scale <= 0 selects 1/sqrt(d). mask is additive and broadcastable to [B, H, Nq, Nk].
     [[nodiscard]] LFS_CORE_API Tensor attention(const Tensor& query, const Tensor& key,
                                                 const Tensor& value, const Tensor* mask = nullptr,
                                                 float scale = 0.0f);
+
+    // Fold sequence dim N into windows: [B, H, N, d] -> [B * n_windows, H, window, d],
+    // padding N up to a multiple of window with zeros.
+    [[nodiscard]] LFS_CORE_API Tensor window_partition(const Tensor& input, int window_size);
+
+    // Inverse of window_partition. original_n is the unpadded sequence length.
+    [[nodiscard]] LFS_CORE_API Tensor window_unpartition(const Tensor& windows, int window_size,
+                                                         int original_n);
 
     // 2D window partition for Hiera: [B, H, W, C] -> [B * nH * nW, ws, ws, C],
     // padding H/W up to a multiple of window_size with zeros (bottom/right).
@@ -158,6 +174,7 @@ namespace lfs::core::nn {
 
     [[nodiscard]] LFS_CORE_API Tensor gelu(const Tensor& input,
                                            GELUApprox approx = GELUApprox::Erf);
+    [[nodiscard]] LFS_CORE_API Tensor silu(const Tensor& input);
     [[nodiscard]] LFS_CORE_API Tensor relu(const Tensor& input);
     [[nodiscard]] LFS_CORE_API Tensor sigmoid(const Tensor& input);
 
@@ -203,5 +220,9 @@ namespace lfs::core::nn {
     // MoGe-2 unit-circle UV encoding as NCHW [1, 2, H, W].
     [[nodiscard]] LFS_CORE_API Tensor uv_grid(int height, int width, float aspect, DataType dtype,
                                               Device device, cudaStream_t stream);
+
+    // y = x + hidden * gamma with gamma broadcast on the last dimension.
+    [[nodiscard]] LFS_CORE_API Tensor residual_scale(const Tensor& x, const Tensor& hidden,
+                                                     const Tensor& gamma);
 
 } // namespace lfs::core::nn

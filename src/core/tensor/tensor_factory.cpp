@@ -224,6 +224,15 @@ namespace lfs::core {
         return load(LoadOp::Random, args);
     }
 
+    Tensor Tensor::normal(TensorShape shape, float mean, float std, Device device, DataType dtype) {
+        LoadArgs args;
+        args.shape = shape;
+        args.device = device;
+        args.dtype = dtype;
+        args.args = std::pair<float, float>{mean, std};
+        return load(LoadOp::Normal, args);
+    }
+
     Tensor Tensor::randint(TensorShape shape, int low, int high, Device device, DataType dtype) {
         LoadArgs args;
         args.shape = shape;
@@ -231,6 +240,15 @@ namespace lfs::core {
         args.dtype = dtype;
         args.args = std::pair<int, int>{low, high};
         return load(LoadOp::Randint, args);
+    }
+
+    Tensor Tensor::bernoulli(TensorShape shape, float p, Device device, DataType dtype) {
+        LoadArgs args;
+        args.shape = shape;
+        args.device = device;
+        args.dtype = dtype;
+        args.args = p;
+        return load(LoadOp::Bernoulli, args);
     }
 
     Tensor Tensor::arange(float end) {

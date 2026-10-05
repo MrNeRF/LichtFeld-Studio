@@ -132,16 +132,23 @@ namespace {
             const GpuBackendScope scope(GpuBackend::Vulkan);
             TensorWorkQueue independent(GpuBackend::Vulkan);
             TensorWorkQueue legacy(GpuBackend::Vulkan, TensorWorkQueue::Mode::LegacyOrdered);
+            TensorWorkQueue borrowed(GpuBackend::Vulkan, independent.native_handle());
+            TensorWorkQueue implicit(GpuBackend::Vulkan, nullptr);
             TensorFence fence(GpuBackend::Vulkan);
             EXPECT_EQ(independent.backend(), GpuBackend::Vulkan);
             EXPECT_TRUE(fence.ready());
             EXPECT_TRUE(independent.ready());
             independent.record(fence);
             legacy.wait_for(fence);
+            borrowed.wait_for(fence);
+            implicit.record(fence);
             independent.wait();
             legacy.wait();
+            borrowed.wait();
+            implicit.wait();
             EXPECT_TRUE(fence.ready());
             EXPECT_TRUE(independent.ready());
+            EXPECT_THROW(TensorWorkQueue(GpuBackend::Vulkan, reinterpret_cast<void*>(~uintptr_t{0})), std::runtime_error);
             std::atomic<bool> called{false};
             independent.enqueue_host_callback([](void* flag) {
                 static_cast<std::atomic<bool>*>(flag)->store(true);
@@ -151,10 +158,20 @@ namespace {
             EXPECT_TRUE(called.load());
         } else {
             EXPECT_THROW((void)TensorWorkQueue(GpuBackend::Vulkan), std::runtime_error);
+            EXPECT_THROW(TensorWorkQueue(GpuBackend::Vulkan, nullptr), std::runtime_error);
             EXPECT_THROW((void)TensorFence(GpuBackend::Vulkan), std::runtime_error);
         }
         if (!gpu_backend_available(GpuBackend::CUDA)) {
             EXPECT_THROW((void)TensorWorkQueue(GpuBackend::CUDA), std::runtime_error);
+#if !LFS_HAS_CUDA
+            EXPECT_THROW(TensorWorkQueue(GpuBackend::CUDA, nullptr), std::runtime_error);
+#else
+            // A borrowed adapter can exist without touching the runtime. Its
+            // first GPU operation must still report an unavailable device.
+            TensorWorkQueue borrowed(GpuBackend::CUDA, nullptr);
+            EXPECT_THROW(borrowed.wait(), std::runtime_error);
+            EXPECT_THROW((void)borrowed.ready(), std::runtime_error);
+#endif
             EXPECT_THROW(TensorWorkQueue(GpuBackend::CUDA, nullptr, nullptr), std::runtime_error);
             EXPECT_THROW((void)TensorFence(GpuBackend::CUDA), std::runtime_error);
         }
@@ -186,6 +203,8 @@ namespace {
         readback.enqueue(copy);
         readback.wait();
         EXPECT_EQ(destination.to_vector(), (std::vector<float>{1.f, 2.f, 3.f, 4.f, 5.f, 6.f}));
+        ASSERT_TRUE(reserved_allocation_bytes(source));
+        EXPECT_GE(*reserved_allocation_bytes(source), source.bytes());
     }
 
     TEST(TensorQueueContract, VulkanQueueUploadReadbackAndFenceReuse) {
@@ -327,28 +346,38 @@ namespace {
     TEST(TensorQueueContract, MetalQueuesFencesAndCallbacks) {
         if (!gpu_backend_available(GpuBackend::Metal)) {
             EXPECT_THROW((void)TensorWorkQueue(GpuBackend::Metal), std::runtime_error);
+            EXPECT_THROW(TensorWorkQueue(GpuBackend::Metal, nullptr), std::runtime_error);
             EXPECT_THROW((void)TensorFence(GpuBackend::Metal), std::runtime_error);
             GTEST_SKIP();
         }
         const GpuBackendScope scope(GpuBackend::Metal);
         TensorWorkQueue independent(GpuBackend::Metal);
         TensorWorkQueue legacy(GpuBackend::Metal, TensorWorkQueue::Mode::LegacyOrdered);
+        TensorWorkQueue borrowed(GpuBackend::Metal, independent.native_handle());
+        TensorWorkQueue implicit(GpuBackend::Metal, nullptr);
         TensorFence fence(GpuBackend::Metal);
         EXPECT_EQ(independent.backend(), GpuBackend::Metal);
         EXPECT_NE(independent.native_handle(), nullptr);
         EXPECT_NE(independent.native_handle(), legacy.native_handle());
+        EXPECT_EQ(borrowed.native_handle(), independent.native_handle());
+        EXPECT_EQ(implicit.native_handle(), nullptr);
         // Metal queues share a submission timeline. Drain work left by earlier
         // tests before asserting idle readiness; a fresh handle does not imply
         // an independent, already-completed GPU timeline.
-        independent.wait();
+        implicit.wait();
         EXPECT_TRUE(fence.ready());
         EXPECT_TRUE(independent.ready());
         independent.record(fence);
         legacy.wait_for(fence);
+        borrowed.wait_for(fence);
+        implicit.record(fence);
         independent.wait();
         legacy.wait();
+        borrowed.wait();
+        implicit.wait();
         EXPECT_TRUE(fence.ready());
         EXPECT_TRUE(independent.ready());
+        EXPECT_THROW(TensorWorkQueue(GpuBackend::Metal, reinterpret_cast<void*>(~uintptr_t{0})), std::runtime_error);
         EXPECT_THROW(fence.record(reinterpret_cast<void*>(~uintptr_t{0})), std::invalid_argument);
         EXPECT_THROW(fence.record(TensorExecutionTarget::default_queue(GpuBackend::Vulkan)), std::invalid_argument);
 

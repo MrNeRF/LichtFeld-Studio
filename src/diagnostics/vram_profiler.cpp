@@ -60,11 +60,12 @@ namespace lfs::diagnostics {
             bool current_sample = false;
         };
 
-        // Vulkan current-state rows are the ownership registry for long-lived VMA
-        // allocations. Most of those objects exist before detailed profiling is
-        // enabled, so keep this small registry independent of high-volume tracing.
+        // Current-state rows are the ownership registry for long-lived GPU
+        // allocations. Most exist before detailed profiling is enabled, so keep
+        // this small registry independent of high-volume tracing.
         [[nodiscard]] bool is_persistent_current_scope(const std::string_view scope) {
-            return scope.starts_with("vulkan.") || scope.starts_with("vksplat");
+            return scope.starts_with("vulkan.") || scope.starts_with("vksplat") ||
+                   scope.starts_with("metal.");
         }
 
         struct AllocationRecord {
@@ -388,6 +389,7 @@ namespace lfs::diagnostics {
             case VramAllocationMethod::Async: return "async";
             case VramAllocationMethod::Direct: return "direct";
             case VramAllocationMethod::Arena: return "arena";
+            case VramAllocationMethod::Metal: return "metal";
             case VramAllocationMethod::External: return "external";
             case VramAllocationMethod::Unknown:
             default: return "unknown";
@@ -502,17 +504,21 @@ namespace lfs::diagnostics {
         if (!enabled) {
             std::lock_guard lock(impl_->mutex);
             for (auto it = impl_->metrics.begin(); it != impl_->metrics.end();) {
-                if (!it->second.current_sample || it->second.live_bytes == 0 ||
+                if (it->second.live_bytes == 0 ||
                     !is_persistent_current_scope(it->first.scope)) {
                     it = impl_->metrics.erase(it);
                 } else {
                     ++it;
                 }
             }
-            impl_->allocations.clear();
+            std::erase_if(impl_->allocations, [](const auto& item) {
+                return item.second.method != VramAllocationMethod::Metal;
+            });
             impl_->scope_nodes.clear();
             impl_->accounted_live_bytes = 0;
-            impl_->accounted_peak_bytes = 0;
+            for (const auto& [_, allocation] : impl_->allocations)
+                impl_->accounted_live_bytes += allocation.bytes;
+            impl_->accounted_peak_bytes = impl_->accounted_live_bytes;
             impl_->allocation_events = 0;
             impl_->free_events = 0;
             impl_->iter_allocation_events_start = 0;
@@ -772,12 +778,13 @@ namespace lfs::diagnostics {
                                         const std::size_t bytes,
                                         const VramAllocationMethod method,
                                         std::string_view label) {
-        if (!enabled() || !ptr || bytes == 0) {
+        const bool persistent = method == VramAllocationMethod::Metal;
+        if ((!enabled() && !persistent) || !ptr || bytes == 0) {
             return;
         }
 
         MetricKey key{
-            .scope = current_scope(),
+            .scope = persistent ? "metal.tensor" : current_scope(),
             .label = label.empty() ? method_label(method) : std::string(label),
         };
 
@@ -802,7 +809,7 @@ namespace lfs::diagnostics {
     }
 
     void VramProfiler::relabelAllocation(void* ptr, std::string_view label) {
-        if (!enabled() || !ptr || label.empty()) {
+        if (!ptr || label.empty()) {
             return;
         }
         std::lock_guard lock(impl_->mutex);
@@ -835,7 +842,7 @@ namespace lfs::diagnostics {
     }
 
     void VramProfiler::recordDeallocation(void* ptr) {
-        if (!enabled() || !ptr) {
+        if (!ptr) {
             return;
         }
 
@@ -889,6 +896,45 @@ namespace lfs::diagnostics {
         metric.method = method;
         metric.current_sample = true;
         upsert_scope_node(impl_->scope_nodes, scope, false, false, false);
+        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void VramProfiler::updateMetalMemory(const std::size_t device_allocated_bytes,
+                                         const std::size_t tensor_requested_bytes,
+                                         const std::size_t tensor_capacity_bytes,
+                                         const std::size_t allocator_cached_bytes,
+                                         const std::size_t tensor_peak_capacity_bytes,
+                                         const std::size_t allocator_peak_reserved_bytes) {
+        std::lock_guard lock(impl_->mutex);
+        auto& process = impl_->process;
+        process.metal_device_allocated_bytes = device_allocated_bytes;
+        process.metal_tensor_requested_bytes = tensor_requested_bytes;
+        process.metal_tensor_capacity_bytes = tensor_capacity_bytes;
+        process.metal_tensor_rounding_slack_bytes =
+            tensor_capacity_bytes > tensor_requested_bytes
+                ? tensor_capacity_bytes - tensor_requested_bytes
+                : 0;
+        process.metal_allocator_cached_bytes = allocator_cached_bytes;
+        process.metal_tensor_peak_capacity_bytes = tensor_peak_capacity_bytes;
+        process.metal_allocator_peak_reserved_bytes = allocator_peak_reserved_bytes;
+        process.metal_memory_valid = true;
+        const auto set_sample = [&](std::string_view label, const std::size_t bytes) {
+            MetricKey key{"metal.allocator", std::string(label)};
+            auto& metric = impl_->metrics[std::move(key)];
+            metric.live_bytes = bytes;
+            metric.peak_bytes = std::max(metric.peak_bytes, bytes);
+            metric.allocated_bytes = std::max(metric.allocated_bytes, bytes);
+            metric.allocation_count = std::max<std::uint64_t>(metric.allocation_count,
+                                                               bytes > 0 ? 1 : 0);
+            metric.method = VramAllocationMethod::Metal;
+            metric.current_sample = true;
+        };
+        set_sample("live requested", tensor_requested_bytes);
+        set_sample("live capacity", tensor_capacity_bytes);
+        set_sample("live size-class slack", process.metal_tensor_rounding_slack_bytes);
+        set_sample("reusable cache", allocator_cached_bytes);
+        set_sample("device currentAllocatedSize", device_allocated_bytes);
+        upsert_scope_node(impl_->scope_nodes, "metal.allocator", false, false, false);
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -1413,6 +1459,9 @@ namespace lfs::diagnostics {
             case VramAllocationMethod::Arena:
                 out.accounted_arena_live_bytes += bytes;
                 break;
+            case VramAllocationMethod::Metal:
+                out.accounted_metal_live_bytes += bytes;
+                break;
             case VramAllocationMethod::External:
                 out.accounted_external_live_bytes += bytes;
                 break;
@@ -1431,6 +1480,12 @@ namespace lfs::diagnostics {
         out.accounted_peak_bytes = impl_->accounted_peak_bytes;
         out.training_state = impl_->training_state;
         out.process = impl_->process;
+        const auto metal_known = out.process.metal_tensor_capacity_bytes +
+                                 out.process.metal_allocator_cached_bytes;
+        out.process.metal_other_device_bytes =
+            out.process.metal_device_allocated_bytes > metal_known
+                ? out.process.metal_device_allocated_bytes - metal_known
+                : 0;
         out.rows.reserve(impl_->metrics.size() + impl_->static_metrics.size());
         std::unordered_map<std::string, VramTreeNodeSnapshot> tree_nodes;
 

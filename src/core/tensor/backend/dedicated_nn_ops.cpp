@@ -31,11 +31,11 @@ namespace lfs::core::nn::dedicated {
         return out;
     }
 
-    Tensor norm(const Tensor& input, const Tensor& weight, const Tensor& bias, const float eps) {
+    Tensor norm(const Tensor& input, const Tensor& weight, const Tensor* bias, const float eps) {
         const std::size_t cols = input.shape()[input.ndim() - 1];
         auto out = internal::allocate_like(input, input.shape(), input.dtype());
         internal::backend_ops_for(input).nn_norm(internal::storage_ref(input), internal::storage_ref(weight),
-                                                 internal::storage_ref(bias), internal::storage_ref(out),
+                                                 optional_storage(bias), internal::storage_ref(out),
                                                  {.rows = input.numel() / cols, .cols = cols, .eps = eps}, {});
         return out;
     }

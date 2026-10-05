@@ -178,6 +178,17 @@ TEST(StridedTensorHardening, A5_BoolAndUInt8VectorExportsUseLogicalOrder) {
     const std::vector<uint8_t> expected_bytes = {1, 3, 2, 4};
     EXPECT_EQ(byte_view.to_vector_uint8(), expected_bytes);
 }
+
+TEST(StridedTensorHardening, A6_CPUAllCloseComparesLogicalOrder) {
+    auto transposed = lfs_float_tensor({1, 2, 3, 4}, {2, 2}, Device::CPU).transpose(0, 1);
+    auto dense_physical_order = lfs_float_tensor({1, 2, 3, 4}, {2, 2}, Device::CPU);
+
+    const auto torch_transposed = torch::tensor({{1.0f, 2.0f}, {3.0f, 4.0f}}).transpose(0, 1);
+    const auto torch_dense = torch::tensor({{1.0f, 2.0f}, {3.0f, 4.0f}});
+    EXPECT_EQ(transposed.all_close(dense_physical_order),
+              torch::allclose(torch_transposed, torch_dense));
+}
+
 TEST_F(CudaTest, A7_CUDASpecialValueScansFollowViewStrides) {
     const float nan = std::numeric_limits<float>::quiet_NaN();
     auto base = lfs_float_tensor({0, 0, 0, 0, 0, 0, nan, 0, 0}, {3, 3}, Device::GPU);
@@ -484,4 +495,34 @@ TEST_F(CudaTest, A19_MaskedScatterTreatsUInt8MaskAsTruthValues) {
                                           torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
     theirs.masked_scatter_(torch_mask, torch::tensor({10.0f, 20.0f}, torch::kCUDA));
     expect_float_values_match(ours, theirs, "A19 UInt8 masked scatter");
+}
+
+TEST_F(CudaTest, A20_MultinomialSamplesLogicalStridedWeights) {
+    const auto base = lfs_float_tensor({1, 100, 0, 0}, {2, 2}, Device::GPU);
+    const auto weights = base.transpose(0, 1).slice(0, 0, 1).squeeze(0);
+    const auto torch_base = torch::tensor({{1.0f, 100.0f}, {0.0f, 0.0f}}, torch::kCUDA);
+    const auto torch_weights = torch_base.transpose(0, 1).slice(0, 0, 1).squeeze(0);
+
+    const auto ours = Tensor::multinomial(weights, 512, true);
+    const auto theirs = torch::multinomial(torch_weights, 512, true);
+    const auto ours_values = ours.cpu().to_vector_int64();
+    const auto torch_cpu = theirs.cpu().contiguous();
+    const auto* torch_values = torch_cpu.data_ptr<int64_t>();
+    EXPECT_EQ(std::count(ours_values.begin(), ours_values.end(), 0),
+              std::count(torch_values, torch_values + torch_cpu.numel(), int64_t{0}));
+}
+
+TEST_F(CudaTest, A21_DiagReadsRankOneStride_CPUAndCUDA) {
+    const std::vector<float> values = {1, 2, 3, 4};
+    for (const Device device : {Device::CPU, Device::GPU}) {
+        const auto base = lfs_float_tensor(values, {2, 2}, device);
+        const auto diagonal = base.transpose(0, 1).slice(0, 0, 1).squeeze(0);
+        auto torch_base = torch::tensor(values).reshape({2, 2});
+        if (device == Device::GPU) {
+            torch_base = torch_base.cuda();
+        }
+        const auto torch_diagonal = torch_base.transpose(0, 1).slice(0, 0, 1).squeeze(0);
+        expect_float_values_match(Tensor::diag(diagonal), torch::diag(torch_diagonal),
+                                  device == Device::CPU ? "A21 diag CPU" : "A21 diag CUDA");
+    }
 }

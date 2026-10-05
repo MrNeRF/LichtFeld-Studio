@@ -48,6 +48,10 @@
 #include <utility>
 #include <vector>
 
+#ifdef __APPLE__
+#include <malloc/malloc.h>
+#endif
+
 // TBB includes
 #include <tbb/parallel_for.h>
 #include <tbb/task_arena.h>
@@ -1476,7 +1480,9 @@ namespace lfs::io {
         float* ptr = nullptr;
         size_t count = 0;
         size_t requested_count = 0;
+        size_t allocated_bytes = 0;
         bool alloc_failed = false;
+        bool mapped = false;
 
         HostBuffer() = default;
         explicit HostBuffer(const size_t element_count, const bool zero_initialize = false)
@@ -1489,18 +1495,49 @@ namespace lfs::io {
                 count = 0;
                 return;
             }
+            allocated_bytes = count * sizeof(float);
+#ifdef __APPLE__
+            (void)zero_initialize;
+            ptr = static_cast<float*>(mmap(nullptr, allocated_bytes,
+                                           PROT_READ | PROT_WRITE,
+                                           MAP_PRIVATE | MAP_ANON, -1, 0));
+            if (ptr == MAP_FAILED)
+                ptr = nullptr;
+            else
+                mapped = true;
+#else
             ptr = static_cast<float*>(zero_initialize
                                           ? std::calloc(count, sizeof(float))
-                                          : std::malloc(count * sizeof(float)));
+                                          : std::malloc(allocated_bytes));
+#endif
             if (!ptr) {
                 alloc_failed = true;
                 count = 0;
+                allocated_bytes = 0;
             }
         }
 
         ~HostBuffer() {
-            if (ptr)
+            reset();
+        }
+
+        void reset() noexcept {
+            if (ptr) {
+#ifdef __APPLE__
+                if (mapped)
+                    munmap(ptr, allocated_bytes);
+                else
+                    std::free(ptr);
+#else
                 std::free(ptr);
+#endif
+            }
+            ptr = nullptr;
+            count = 0;
+            requested_count = 0;
+            allocated_bytes = 0;
+            alloc_failed = false;
+            mapped = false;
         }
 
         HostBuffer(const HostBuffer&) = delete;
@@ -1509,12 +1546,7 @@ namespace lfs::io {
         HostBuffer(HostBuffer&& other) noexcept { swap(other); }
         HostBuffer& operator=(HostBuffer&& other) noexcept {
             if (this != &other) {
-                if (ptr)
-                    std::free(ptr);
-                ptr = nullptr;
-                count = 0;
-                requested_count = 0;
-                alloc_failed = false;
+                reset();
                 swap(other);
             }
             return *this;
@@ -1525,7 +1557,9 @@ namespace lfs::io {
             std::swap(ptr, other.ptr);
             std::swap(count, other.count);
             std::swap(requested_count, other.requested_count);
+            std::swap(allocated_bytes, other.allocated_bytes);
             std::swap(alloc_failed, other.alloc_failed);
+            std::swap(mapped, other.mapped);
         }
     };
 
@@ -1541,7 +1575,22 @@ namespace lfs::io {
             return !means.alloc_failed && !sh0.alloc_failed && !shN_swizzled.alloc_failed &&
                    !opacity.alloc_failed && !scaling.alloc_failed && !rotation.alloc_failed;
         }
+
+        void reset() noexcept {
+            means.reset();
+            sh0.reset();
+            shN_swizzled.reset();
+            opacity.reset();
+            scaling.reset();
+            rotation.reset();
+        }
     };
+
+    void return_ply_staging_to_os() noexcept {
+#ifdef __APPLE__
+        malloc_zone_pressure_relief(nullptr, 0);
+#endif
+    }
 
     [[nodiscard]] PlyImportValidation extract_and_validate_ply_payload(
         const char* const vertex_data,
@@ -2106,21 +2155,25 @@ namespace lfs::io {
             Tensor opacity = allocate_float_tensor(
                 host_span(host.opacity), {N, 1}, options, "SplatData.opacity");
 
-            TensorUploadBatch uploads;
-            uploads.enqueue(means, host_span(host.means), "SplatData.means");
-            uploads.enqueue(sh0, host_span(host.sh0), "SplatData.sh0");
-            if (!encode_shN_q16) {
-                uploads.enqueue(shN, host_span(host.shN_swizzled), "SplatData.shN");
-            }
-            uploads.enqueue(scaling, host_span(host.scaling), "SplatData.scaling");
-            uploads.enqueue(rotation, host_span(host.rotation), "SplatData.rotation");
-            uploads.enqueue(opacity, host_span(host.opacity), "SplatData.opacity");
-            uploads.wait();
-            if (encode_shN_q16) {
-                encode_host_shN_to_q16_tensor(
-                    host.shN_swizzled, shN, shN_bounds, N, layout_rest, options);
+            {
+                TensorUploadBatch uploads;
+                uploads.enqueue(means, host_span(host.means), "SplatData.means");
+                uploads.enqueue(sh0, host_span(host.sh0), "SplatData.sh0");
+                if (!encode_shN_q16) {
+                    uploads.enqueue(shN, host_span(host.shN_swizzled), "SplatData.shN");
+                }
+                uploads.enqueue(scaling, host_span(host.scaling), "SplatData.scaling");
+                uploads.enqueue(rotation, host_span(host.rotation), "SplatData.rotation");
+                uploads.enqueue(opacity, host_span(host.opacity), "SplatData.opacity");
+                uploads.wait();
+                if (encode_shN_q16) {
+                    encode_host_shN_to_q16_tensor(
+                        host.shN_swizzled, shN, shN_bounds, N, layout_rest, options);
+                }
             }
             const auto upload_complete_at = std::chrono::steady_clock::now();
+            host.reset();
+            return_ply_staging_to_os();
 
             // Calculate SH degree
             int sh_degree = static_cast<int>(std::sqrt(shN_dim1 + ply_constants::SH_DEGREE_OFFSET)) - ply_constants::SH_DEGREE_OFFSET;

@@ -1098,7 +1098,7 @@ TEST_F(TensorMaskingTest, PaddingMaskCreation) {
 
     for (size_t b = 0; b < batch; ++b) {
         for (size_t s = 0; s < static_cast<size_t>(lengths[b]); ++s) {
-            cpu_mask_custom.ptr<float>()[b * seq_len + s] = 1.0f;
+            cpu_mask_custom.at({b, s}) = 1.0f;
             cpu_mask_torch[b][s] = 1.0f;
         }
     }
@@ -1256,9 +1256,9 @@ TEST_F(TensorMaskingTest, StructuredDropout) {
     auto cpu_mask_torch = token_mask_torch.cpu();
 
     // Drop specific tokens
-    cpu_mask_custom.ptr<float>()[1] = 0.0f;
-    cpu_mask_custom.ptr<float>()[3] = 0.0f;
-    cpu_mask_custom.ptr<float>()[seq_len + 2] = 0.0f;
+    cpu_mask_custom.at({0, 1, 0}) = 0.0f;
+    cpu_mask_custom.at({0, 3, 0}) = 0.0f;
+    cpu_mask_custom.at({1, 2, 0}) = 0.0f;
 
     cpu_mask_torch[0][1][0] = 0.0f;
     cpu_mask_torch[0][3][0] = 0.0f;

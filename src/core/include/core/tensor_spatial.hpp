@@ -161,6 +161,7 @@ namespace lfs::core {
     // points. Int32 [N] labels; each label is the smallest index in its
     // component. Points outside the optional Bool [N] selection, and
     // nonfinite points, are their own component and connect nothing.
+    LFS_CORE_API Tensor radius_connected_components(const Tensor& points, float radius);
     LFS_CORE_API Tensor radius_connected_components(const Tensor& points, float radius, const Tensor& selected);
 
     // Connected components where two points join when their distance is within

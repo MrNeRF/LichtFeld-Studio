@@ -82,6 +82,20 @@ namespace {
         EXPECT_LT(in_place_stats.maximum, 6.0f);
         EXPECT_NEAR(in_place_stats.mean, 5.5, 0.02);
     }
+
+    TEST_F(TensorVulkanRandom, BernoulliMatchesTheProbability) {
+        // Catches a threshold applied to the wrong operand or a non-binary output.
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        constexpr size_t count = 1000000;
+        const std::vector<float> values = Tensor::bernoulli({count}, 0.35f, Device::GPU).cpu().to_vector();
+        size_t ones = 0;
+        for (const float value : values) {
+            ASSERT_TRUE(value == 0.0f || value == 1.0f);
+            ones += value == 1.0f ? 1 : 0;
+        }
+        EXPECT_NEAR(static_cast<double>(ones) / count, 0.35, 0.003);
+    }
+
     TEST_F(TensorVulkanRandom, RandintCoversTheHalfOpenRangeUniformly) {
         // Catches an off-by-one at either end of [low, high) and a biased bucket.
         GpuBackendScope scope(GpuBackend::Vulkan);
@@ -127,4 +141,58 @@ namespace {
         EXPECT_NEAR(stats.mean, 0.0, 0.06);
         EXPECT_NEAR(stats.variance, 1.0, 0.08);
     }
+
+    TEST_F(TensorVulkanRandom, MultinomialWithReplacementFollowsTheWeights) {
+        // Catches a cumulative scan that skips the first category, a draw scaled
+        // by the wrong total, and a zero-weight category that is still drawn.
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        const Tensor weights = Tensor::from_vector({0.1f, 0.0f, 0.2f, 0.3f, 0.4f}, {5}, Device::CPU).to(Device::GPU);
+        constexpr int samples = 400000;
+        const Tensor draws = Tensor::multinomial(weights, samples, true);
+        ASSERT_EQ(draws.dtype(), DataType::Int64);
+        const std::vector<float> values = draws.cpu().to(DataType::Float32).to_vector();
+        std::array<size_t, 5> counts{};
+        for (const float value : values) {
+            const int category = static_cast<int>(value);
+            ASSERT_GE(category, 0);
+            ASSERT_LT(category, 5);
+            ++counts[static_cast<size_t>(category)];
+        }
+        EXPECT_EQ(counts[1], 0u);
+        const std::array expected{0.1, 0.0, 0.2, 0.3, 0.4};
+        for (size_t category = 0; category < 5; ++category) {
+            EXPECT_NEAR(static_cast<double>(counts[category]) / samples, expected[category], 0.004) << "category " << category;
+        }
+    }
+
+    TEST_F(TensorVulkanRandom, MultinomialWithoutReplacementIsAPermutationFavouringHeavyWeights) {
+        // Catches duplicate categories in a draw without replacement, a rank
+        // selection that writes out of range, and keys that ignore the weights.
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        constexpr size_t categories = 100;
+        std::vector<float> host_weights(categories);
+        for (size_t i = 0; i < categories; ++i) {
+            host_weights[i] = static_cast<float>(i + 1);
+        }
+        const Tensor weights = Tensor::from_vector(host_weights, {categories}, Device::CPU).to(Device::GPU);
+        const std::vector<float> full = Tensor::multinomial(weights, categories, false).cpu().to(DataType::Float32).to_vector();
+        const std::set<float> distinct(full.begin(), full.end());
+        EXPECT_EQ(distinct.size(), categories);
+        EXPECT_EQ(*distinct.begin(), 0.0f);
+        EXPECT_EQ(*distinct.rbegin(), static_cast<float>(categories - 1));
+        double heaviest_position = 0.0;
+        double lightest_position = 0.0;
+        constexpr int trials = 100;
+        for (int trial = 0; trial < trials; ++trial) {
+            const std::vector<float> draw = Tensor::multinomial(weights, 10, false).cpu().to(DataType::Float32).to_vector();
+            ASSERT_EQ(draw.size(), 10u);
+            EXPECT_EQ(std::set<float>(draw.begin(), draw.end()).size(), 10u) << "trial " << trial;
+            heaviest_position += std::count_if(draw.begin(), draw.end(), [](const float v) { return v >= 90.0f; });
+            lightest_position += std::count_if(draw.begin(), draw.end(), [](const float v) { return v < 10.0f; });
+        }
+        EXPECT_GT(heaviest_position, 4.0 * lightest_position + 1.0);
+        const Tensor negative = Tensor::from_vector({1.0f, -1.0f, 2.0f}, {3}, Device::CPU).to(Device::GPU);
+        EXPECT_THROW(static_cast<void>(Tensor::multinomial(negative, 2, true)), std::exception);
+    }
+
 } // namespace

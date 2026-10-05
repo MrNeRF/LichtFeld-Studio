@@ -6,12 +6,16 @@
 #include "core/gpu_backend_fwd.hpp"
 #include "core/tensor_fwd.hpp"
 
+#include <optional>
 namespace lfs::core {
 
     LFS_CORE_API void gpu_device_barrier(GpuBackend backend);
     // Release cached allocations belonging to one already-live backend.
     LFS_CORE_API void gpu_trim_cached_memory(GpuBackend backend);
     LFS_CORE_API int gpu_device_count(GpuBackend backend);
+    // Known backing storage extent, including reserved tensor capacity. Excludes allocator
+    // bookkeeping; borrowed storage and CPU views without extent metadata return nullopt.
+    LFS_CORE_API std::optional<std::size_t> reserved_allocation_bytes(const Tensor& tensor);
     // Bytes a GPU allocation of `bytes` occupies on the backend's allocator.
     LFS_CORE_API std::size_t gpu_allocation_bytes(GpuBackend backend, std::size_t bytes);
 

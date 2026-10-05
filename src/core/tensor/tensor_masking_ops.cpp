@@ -87,9 +87,6 @@ namespace lfs::core {
                 return;
             }
 
-            const Tensor cpu_indices = indices.device() == Device::CPU
-                                           ? indices.contiguous()
-                                           : indices.cpu().contiguous();
             const auto assert_value = [&](const int64_t value, const size_t position) {
                 LFS_ASSERT_MSG(value >= std::numeric_limits<int>::min() &&
                                    value <= std::numeric_limits<int>::max(),
@@ -104,6 +101,23 @@ namespace lfs::core {
                                            operation, value, position, upper_bound));
             };
 
+            if (indices.device() == Device::GPU) {
+                const auto minimum = indices.min();
+                const auto maximum = indices.max();
+                const auto read_index = [&](const Tensor& scalar) -> int64_t {
+                    return indices.dtype() == DataType::Int64 ? scalar.item<int64_t>() : scalar.item<int>();
+                };
+                const int64_t lowest = read_index(minimum), highest = read_index(maximum);
+                LFS_ASSERT_MSG(lowest >= std::numeric_limits<int>::min() && highest <= std::numeric_limits<int>::max(),
+                               std::string(operation) + ": indices cannot be represented by the Int32 kernel");
+                if (check_bounds) {
+                    const int64_t lower_bound = allow_negative ? -static_cast<int64_t>(upper_bound) : 0;
+                    LFS_ASSERT_MSG(lowest >= lower_bound && highest < static_cast<int64_t>(upper_bound),
+                                   std::string(operation) + ": indices are out of bounds");
+                }
+                return;
+            }
+            const Tensor cpu_indices = indices.contiguous();
             if (cpu_indices.dtype() == DataType::Int64) {
                 const auto* values = cpu_indices.ptr<int64_t>();
                 for (size_t i = 0; i < cpu_indices.numel(); ++i) {
@@ -1998,6 +2012,17 @@ namespace lfs::core {
         return result;
     }
 
+    std::vector<Tensor> Tensor::nonzero_split() const {
+        std::vector<Tensor> result;
+        result.reserve(ndim());
+        Tensor coordinates = nonzero();
+        for (size_t axis = 0; axis < ndim(); ++axis) {
+            result.push_back(
+                coordinates.slice(1, axis, axis + 1).squeeze(1).contiguous());
+        }
+        return result;
+    }
+
     // Pythonic Indexing
     TensorIndexer Tensor::operator[](const Tensor& idx) {
         LFS_ASSERT_MSG(is_valid() && idx.is_valid(),
@@ -2045,6 +2070,54 @@ namespace lfs::core {
     }
 
     // Element Access
+    TensorElementProxy Tensor::at(std::initializer_list<size_t> indices) {
+        LFS_ASSERT_MSG(is_valid() && dtype_ == DataType::Float32,
+                       "mutable at() requires a valid Float32 tensor");
+        LFS_ASSERT_MSG(indices.size() == ndim(), "mutable at() index rank mismatch");
+        Tensor element = *this;
+        size_t dim = 0;
+        for (const size_t index : indices) {
+            LFS_ASSERT_MSG(index < shape_[dim], "mutable at() index is out of bounds");
+            element = element.slice(static_cast<int>(dim), index, index + 1);
+            ++dim;
+        }
+        return TensorElementProxy(element.squeeze());
+    }
+
+    TensorElementProxy::TensorElementProxy(Tensor element) : element_(std::move(element)) {}
+
+    TensorElementProxy::operator float() const { return element_.item<float>(); }
+
+    TensorElementProxy& TensorElementProxy::operator=(const float value) {
+        element_.fill_(value);
+        return *this;
+    }
+
+    TensorElementProxy& TensorElementProxy::operator=(const TensorElementProxy& other) {
+        element_.copy_(other.element_);
+        return *this;
+    }
+
+    TensorElementProxy& TensorElementProxy::operator+=(const float value) {
+        element_.add_(value);
+        return *this;
+    }
+
+    TensorElementProxy& TensorElementProxy::operator-=(const float value) {
+        element_.sub_(value);
+        return *this;
+    }
+
+    TensorElementProxy& TensorElementProxy::operator*=(const float value) {
+        element_.mul_(value);
+        return *this;
+    }
+
+    TensorElementProxy& TensorElementProxy::operator/=(const float value) {
+        element_.div_(value);
+        return *this;
+    }
+
     float Tensor::at(std::initializer_list<size_t> indices) const {
         LFS_ASSERT_MSG(is_valid(),
                        "at() requires a valid tensor");
@@ -2123,6 +2196,7 @@ namespace lfs::core {
     }
 
     // Location: After the existing get_bool/set_bool implementations (around line 800+)
+    // grep -C 3 "bool Tensor::get_bool"
 
     void Tensor::set_bool(std::span<const size_t> indices, bool value) {
 
@@ -2282,6 +2356,22 @@ namespace lfs::core {
                 break;
             }
         }
+    }
+
+    MaskedTensorProxy::operator Tensor() const {
+        LFS_ASSERT_MSG(tensor_ != nullptr && tensor_->is_valid() && mask_.is_valid(),
+                       "masked tensor conversion requires valid tensors");
+        LFS_ASSERT_MSG(is_bool_like(mask_.dtype()),
+                       "masked tensor conversion requires a Bool or UInt8 mask");
+        LFS_ASSERT_MSG(mask_.device() == tensor_->device(),
+                       "masked tensor conversion requires mask and tensor on the same device");
+        internal::require_same_gpu_backend(
+            *tensor_, mask_, "masked tensor conversion");
+        if (mask_.shape() == tensor_->shape()) {
+            return tensor_->masked_select(mask_);
+        }
+        // A one-dimensional mask selects rows from an N-dimensional tensor.
+        return tensor_->index_select(0, mask_);
     }
 
     void TensorIndexer::operator=(float value) {

@@ -352,14 +352,6 @@ namespace lfs::core {
         return storage_accounting_state().vulkan_external.live_bytes.load(std::memory_order_relaxed);
     }
 
-    void Tensor::log_storage_memory(const std::string_view label) {
-        if (label.empty()) {
-            LOG_INFO("{}", storage_memory_summary());
-        } else {
-            LOG_INFO("{} - {}", label, storage_memory_summary());
-        }
-    }
-
     // TensorLeaf implementation
     TensorLeaf::TensorLeaf(Tensor tensor)
         : tensor_ptr_(std::make_shared<Tensor>(std::move(tensor))) {}
@@ -2357,6 +2349,30 @@ namespace lfs::core {
 
     // ============= Special operations =============
 
+    Tensor Tensor::normalize(int dim, float eps) const {
+        LFS_ASSERT_MSG(is_valid(),
+                       "normalize requires a valid tensor");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
+                       "normalize currently supports only Float32");
+        LFS_ASSERT_MSG(std::isfinite(eps) && eps > 0.0f,
+                       "normalize epsilon must be finite and positive");
+        if (dim != -1) {
+            const int resolved = resolve_dim(dim);
+            LFS_ASSERT_MSG(resolved >= 0 && resolved < static_cast<int>(shape_.rank()),
+                           "normalize dimension is out of range");
+        }
+
+        if (dim == -1) {
+            auto m = mean();
+            auto s = std({}, false, false).add(eps);
+            return sub(m).div(s);
+        }
+        std::vector<int> axes = {dim};
+        auto m = mean(axes, true);
+        auto s = std(axes, true, false).add(eps);
+        return sub(m).div(s);
+    }
+
     Tensor Tensor::logit(float eps) const {
         LFS_ASSERT_MSG(is_valid(),
                        "logit requires a valid tensor");
@@ -2402,8 +2418,8 @@ namespace lfs::core {
         preserve_lazy_snapshots_before_write();
         LFS_ASSERT_MSG(is_valid(),
                        "clamp_ requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,
-                       "clamp_ currently supports only Float32 and Int32");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Float16 || dtype_ == DataType::Int32,
+                       "clamp_ currently supports Float32, Float16 and Int32");
         LFS_ASSERT_MSG(!std::isnan(min_val) && !std::isnan(max_val) && min_val <= max_val,
                        "clamp_ bounds must not be NaN and must be ordered");
         if (dtype_ == DataType::Int32) {
@@ -2427,7 +2443,7 @@ namespace lfs::core {
         }
 
         if (device_ == Device::GPU) {
-            if (dtype_ == DataType::Float32) {
+            if (dtype_ == DataType::Float32 || dtype_ == DataType::Float16) {
                 internal::backend_ops_for(*this).clamp_scalar(
                     internal::storage_ref(*this), internal::scalar_operand(min_val),
                     internal::scalar_operand(max_val), numel(),
@@ -2445,6 +2461,15 @@ namespace lfs::core {
                     internal::ExecContext{stream()});
             }
         } else {
+            if (dtype_ == DataType::Float16) {
+                const auto* src = ptr<detail::tensor_half_t>();
+                auto* dst = (*this).ptr<detail::tensor_half_t>();
+                for (size_t i = 0; i < numel(); ++i) {
+                    const float value = detail::tensor_half_to_float(src[i]);
+                    dst[i] = detail::tensor_float_to_half(std::isnan(value) ? value : std::clamp(value, min_val, max_val));
+                }
+                return *this;
+            }
             if (dtype_ == DataType::Float32) {
                 float* data = ptr<float>();
                 for (size_t i = 0; i < numel(); ++i) {
@@ -2469,10 +2494,16 @@ namespace lfs::core {
         return *this;
     }
 
+    Tensor& Tensor::clamp_min_(float min) {
+
+        preserve_lazy_snapshots_before_write();
+        return clamp_(min, std::numeric_limits<float>::infinity());
+    }
+
     Tensor& Tensor::clamp_max_(float max) {
 
         preserve_lazy_snapshots_before_write();
-        return clamp_(std::numeric_limits<float>::lowest(), max);
+        return clamp_(-std::numeric_limits<float>::infinity(), max);
     }
 
     // ============= Cumulative sum =============
@@ -2572,6 +2603,84 @@ namespace lfs::core {
         }
         oss << ")";
         return oss.str();
+    }
+
+    // ============= Debug Functions =============
+
+    void Tensor::print_formatted() const {
+        print_formatted({}, 10);
+    }
+
+    void Tensor::print_formatted(const std::string& name, size_t max_per_dim) const {
+        std::println("\n=== {} ===", name.empty() ? "Tensor" : name);
+        std::println("{}", str());
+
+        if (!is_valid()) {
+            std::println("  (invalid tensor)");
+            return;
+        }
+
+        if (numel() == 0) {
+            std::println("  []");
+        } else if (shape_.rank() <= 1) {
+            print_1d(max_per_dim);
+        } else if (shape_.rank() == 2) {
+            print_2d(max_per_dim);
+        } else {
+            std::println("  [Higher dimensional tensor - showing first slice]");
+            Tensor first_slice = *this;
+            while (first_slice.ndim() > 2)
+                first_slice = first_slice.slice(0, 0, 1).squeeze(0);
+            first_slice.print_2d(max_per_dim);
+        }
+    }
+
+    void Tensor::print_1d(size_t max_elem) const {
+        if (!is_valid())
+            return;
+
+        auto values = debug_values(std::min(max_elem, numel()));
+        std::print("  [");
+
+        for (size_t i = 0; i < values.size(); ++i) {
+            if (i > 0)
+                std::print(", ");
+            std::print("{:8.4f}", values[i]);
+        }
+
+        if (numel() > max_elem) {
+            std::print(", ... ({} more)", numel() - max_elem);
+        }
+        std::println("]");
+    }
+
+    void Tensor::print_2d(size_t max_per_dim) const {
+        if (!is_valid() || shape_.rank() != 2)
+            return;
+
+        size_t rows = std::min(max_per_dim, shape_[0]);
+        size_t cols = std::min(max_per_dim, shape_[1]);
+
+        auto values = slice(0, 0, rows).slice(1, 0, cols).debug_values(rows * cols);
+
+        for (size_t i = 0; i < rows; ++i) {
+            std::print("  [");
+            for (size_t j = 0; j < cols; ++j) {
+                if (j > 0)
+                    std::print(", ");
+                size_t idx = i * cols + j;
+                std::print("{:8.4f}", values[idx]);
+            }
+            if (shape_[1] > cols) {
+                std::print(", ... ({} more)", shape_[1] - cols);
+            }
+            std::print("]");
+
+            if (i == rows - 1 && shape_[0] > rows) {
+                std::print("  ... ({} more rows)", shape_[0] - rows);
+            }
+            std::println("");
+        }
     }
 
     // ============= Utility Functions =============
@@ -3017,6 +3126,62 @@ namespace lfs::core {
         }
         const float* const values = ptr<float>();
         return std::any_of(values, values + numel(), [](const float x) { return std::isinf(x); });
+    }
+
+    bool Tensor::all_close(const Tensor& other, float rtol, float atol) const {
+        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
+                       "all_close requires valid tensors");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
+                       "all_close currently supports only Float32 tensors");
+        LFS_ASSERT_MSG(std::isfinite(rtol) && std::isfinite(atol) &&
+                           rtol >= 0.0f && atol >= 0.0f,
+                       "all_close tolerances must be finite and non-negative");
+        LFS_ASSERT_MSG(device_ == other.device_, "all_close operands must share a device");
+        internal::require_same_gpu_backend(*this, other, "all_close");
+
+        if (shape_ != other.shape_ || dtype_ != other.dtype_) {
+            return false;
+        }
+
+        if (numel() == 0) {
+            return true;
+        }
+
+        Tensor a_materialized;
+        Tensor b_materialized;
+        const Tensor& a = contiguous_read(a_materialized);
+        const Tensor& b = other.contiguous_read(b_materialized);
+
+        if (a.device_ == Device::GPU) {
+            // Only flags and a count come back. Equal values, infinities
+            // included, are close; the clamped tolerance keeps an infinite b
+            // from accepting every difference, as the host loop does.
+            if (a.has_nan() || b.has_nan()) {
+                return false;
+            }
+            const Tensor tolerance = b.abs().mul(rtol).add(atol).clamp_max(std::numeric_limits<float>::max());
+            const Tensor close = a.eq(b).logical_or(a.sub(b).abs().le(tolerance));
+            return close.count_nonzero() == numel();
+        }
+
+        const float* const a_data = a.ptr<float>();
+        const float* const b_data = b.ptr<float>();
+
+        for (size_t i = 0; i < numel(); ++i) {
+            if (a_data[i] == b_data[i]) {
+                continue;
+            }
+            if (!std::isfinite(a_data[i]) || !std::isfinite(b_data[i])) {
+                return false;
+            }
+            float diff = std::abs(a_data[i] - b_data[i]);
+            float tol = atol + rtol * std::abs(b_data[i]);
+            if (diff > tol) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     // ============= Capacity Management =============

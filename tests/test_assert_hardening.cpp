@@ -113,6 +113,14 @@ namespace {
 
         EXPECT_THROW(values.masked_fill_(mask, 256.0f), std::runtime_error);
     }
+
+    TEST_F(AssertHardeningExpectedFailTest, RejectsAllCloseOnUnsupportedDtype) {
+        const auto lhs = Tensor::from_vector({1, 2}, {2}, Device::CPU);
+        const auto rhs = Tensor::from_vector({1, 2}, {2}, Device::CPU);
+
+        EXPECT_THROW((void)lhs.all_close(rhs), std::runtime_error);
+    }
+
     TEST_F(AssertHardeningExpectedFailTest, ArgmaxDispatchMatchesTorch) {
         const auto values = Tensor::from_vector({1.0f, 3.0f, 2.0f}, {3}, Device::CPU);
 
@@ -221,8 +229,11 @@ namespace {
     TEST_F(AssertHardeningCudaRegression, ZeroLengthMatrixFactoriesDoNotPoisonCuda) {
         ASSERT_EQ(cudaGetLastError(), cudaSuccess);
 
+        const auto empty = Tensor::empty({0}, Device::GPU);
+        const auto diagonal = Tensor::diag(empty);
         const auto identity = Tensor::eye(0, Device::GPU);
 
+        EXPECT_EQ(diagonal.shape(), lfs::core::TensorShape({0, 0}));
         EXPECT_EQ(identity.shape(), lfs::core::TensorShape({0, 0}));
         EXPECT_EQ(cudaGetLastError(), cudaSuccess);
     }

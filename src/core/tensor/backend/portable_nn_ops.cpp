@@ -86,12 +86,13 @@ namespace lfs::core::nn::portable {
         return affine(std::move(out), bias, activation, residual, scale).to(a.dtype());
     }
 
-    Tensor norm(const Tensor& input, const Tensor& weight, const Tensor& bias, float eps) {
+    Tensor norm(const Tensor& input, const Tensor& weight, const Tensor* bias, float eps) {
         const auto source = fp32(input);
-        const auto x = source.sub(source.mean(-1, true));
+        const auto x = bias ? source.sub(source.mean(-1, true)) : source;
         auto variance = x.mul(x).mean(-1, true);
         auto out = x.div(variance.add(eps).sqrt()).mul(fp32(weight));
-        out = out.add(fp32(bias));
+        if (bias)
+            out = out.add(fp32(*bias));
         return out.to(input.dtype());
     }
 

@@ -769,6 +769,20 @@ namespace lfs::core {
         return binary_op_with_promotion(other, ops::pow_op{});
     }
 
+    Tensor Tensor::mod(const Tensor& other) const {
+        if ((dtype_ == DataType::Int32 || dtype_ == DataType::Int64 ||
+             dtype_ == DataType::UInt8 || dtype_ == DataType::Bool) &&
+            (other.dtype_ == DataType::Int32 || other.dtype_ == DataType::Int64 ||
+             other.dtype_ == DataType::UInt8 || other.dtype_ == DataType::Bool)) {
+            // Counted where the divisor lives; only the count comes back.
+            const size_t nonzero = other.count_nonzero();
+            LFS_ASSERT_MSG(nonzero == other.numel(),
+                           std::format("integer modulo divisor has {} zero elements out of {}",
+                                       other.numel() - nonzero, other.numel()));
+        }
+        return binary_op_with_promotion(other, ops::mod_op{});
+    }
+
     Tensor Tensor::maximum(const Tensor& other) const {
         return binary_op_with_promotion(other, ops::maximum_op{});
     }

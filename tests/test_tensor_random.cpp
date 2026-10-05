@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include "tensor_compare.hpp"
 #include <cmath>
 #include <gtest/gtest.h>
 #include <numeric>
@@ -227,6 +226,18 @@ TEST_F(TensorRandomTest, RandnBasic) {
     // Expect less than 1% outliers beyond 3 sigma
     EXPECT_LT(outliers, values.size() * 0.01);
 }
+
+TEST_F(TensorRandomTest, NormalCustomParams) {
+    float target_mean = 5.0f;
+    float target_std = 2.0f;
+
+    auto t = Tensor::normal({2000}, target_mean, target_std, Device::GPU);
+
+    auto [mean, std] = compute_stats(t);
+    EXPECT_NEAR(mean, target_mean, 0.2f);
+    EXPECT_NEAR(std, target_std, 0.2f);
+}
+
 TEST_F(TensorRandomTest, NormalInPlace) {
     auto t = Tensor::empty({1000}, Device::GPU);
     t.normal_(10.0f, 3.0f);
@@ -319,6 +330,101 @@ TEST_F(TensorRandomTest, RandIntDistribution) {
     }
 }
 
+// ============= Bernoulli Tests =============
+
+TEST_F(TensorRandomTest, BernoulliBasic) {
+    float p = 0.7f;
+
+    auto t = Tensor::bernoulli({10000}, p, Device::GPU);
+
+    // Check all values are 0 or 1
+    auto values = t.to_vector();
+    for (float val : values) {
+        EXPECT_TRUE(val == 0.0f || val == 1.0f);
+    }
+
+    // Check probability
+    float sum = std::accumulate(values.begin(), values.end(), 0.0f);
+    float observed_p = sum / values.size();
+    EXPECT_NEAR(observed_p, p, 0.02f);
+}
+
+TEST_F(TensorRandomTest, BernoulliExtreme) {
+    // Test p = 0.0
+    auto t0 = Tensor::bernoulli({100}, 0.0f, Device::GPU);
+    auto values0 = t0.to_vector();
+    for (float val : values0) {
+        EXPECT_FLOAT_EQ(val, 0.0f);
+    }
+
+    // Test p = 1.0
+    auto t1 = Tensor::bernoulli({100}, 1.0f, Device::GPU);
+    auto values1 = t1.to_vector();
+    for (float val : values1) {
+        EXPECT_FLOAT_EQ(val, 1.0f);
+    }
+}
+
+TEST_F(TensorRandomTest, BernoulliMiddleProb) {
+    float p = 0.5f;
+
+    auto t = Tensor::bernoulli({5000}, p, Device::GPU);
+
+    auto values = t.to_vector();
+    float sum = std::accumulate(values.begin(), values.end(), 0.0f);
+    float observed_p = sum / values.size();
+    EXPECT_NEAR(observed_p, 0.5f, 0.03f);
+}
+
+// ============= Multinomial Tests =============
+
+TEST_F(TensorRandomTest, MultinomialBasic) {
+    std::vector<float> weights_data = {1.0f, 2.0f, 3.0f, 4.0f};
+    auto weights = Tensor::from_vector(weights_data, {4}, Device::GPU);
+
+    int num_samples = 1000;
+    auto samples = Tensor::multinomial(weights, num_samples, true);
+
+    // Shape should match
+    EXPECT_EQ(samples.numel(), static_cast<size_t>(num_samples));
+
+    // All samples should be in valid range [0, 4)
+    auto values = samples.to_vector_int();
+    for (int val : values) {
+        EXPECT_GE(val, 0);
+        EXPECT_LT(val, 4);
+    }
+
+    // Check distribution roughly matches probabilities
+    std::vector<int> counts(4, 0);
+    for (int val : values) {
+        counts[val]++;
+    }
+
+    // Probabilities should be proportional to weights: 1/10, 2/10, 3/10, 4/10
+    float total = 10.0f;
+    for (size_t i = 0; i < 4; ++i) {
+        float expected_prob = weights_data[i] / total;
+        float observed_prob = counts[i] / static_cast<float>(num_samples);
+        EXPECT_NEAR(observed_prob, expected_prob, 0.05f) << "Index " << i;
+    }
+}
+
+TEST_F(TensorRandomTest, MultinomialWithoutReplacement) {
+    std::vector<float> weights_data = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+    auto weights = Tensor::from_vector(weights_data, {5}, Device::GPU);
+
+    int num_samples = 3;
+    auto samples = Tensor::multinomial(weights, num_samples, false);
+
+    EXPECT_EQ(samples.numel(), static_cast<size_t>(num_samples));
+
+    // All samples should be unique
+    auto values = samples.to_vector_int();
+    std::set<int> unique_values(values.begin(), values.end());
+    EXPECT_EQ(unique_values.size(), values.size());
+}
+
 // ============= Seed Reproducibility Tests =============
 
 TEST_F(TensorRandomTest, ManualSeedReproducibility) {
@@ -330,7 +436,7 @@ TEST_F(TensorRandomTest, ManualSeedReproducibility) {
     auto t2 = Tensor::randn({100}, Device::GPU);
 
     // Should produce identical results
-    EXPECT_TRUE(lfs::test::tensor_values_close(t1, t2, 1e-6f, 1e-7f));
+    EXPECT_TRUE(t1.all_close(t2, 1e-6f, 1e-7f));
 }
 
 TEST_F(TensorRandomTest, DifferentSeedsDifferentResults) {
@@ -341,7 +447,7 @@ TEST_F(TensorRandomTest, DifferentSeedsDifferentResults) {
     auto t2 = Tensor::randn({100}, Device::GPU);
 
     // Different seeds should produce different results
-    EXPECT_FALSE(lfs::test::tensor_values_close(t1, t2));
+    EXPECT_FALSE(t1.all_close(t2));
 }
 
 TEST_F(TensorRandomTest, UniformSeedReproducibility) {
@@ -351,7 +457,7 @@ TEST_F(TensorRandomTest, UniformSeedReproducibility) {
     Tensor::manual_seed(999);
     auto t2 = Tensor::rand({200}, Device::GPU);
 
-    EXPECT_TRUE(lfs::test::tensor_values_close(t1, t2, 1e-6f, 1e-7f));
+    EXPECT_TRUE(t1.all_close(t2, 1e-6f, 1e-7f));
 }
 
 TEST_F(TensorRandomTest, RandIntSeedReproducibility) {
@@ -361,7 +467,7 @@ TEST_F(TensorRandomTest, RandIntSeedReproducibility) {
     Tensor::manual_seed(777);
     auto t2 = Tensor::randint({100}, 0, 10, Device::GPU, DataType::Float32);
 
-    EXPECT_TRUE(lfs::test::tensor_values_close(t1, t2, 1e-6f, 1e-7f));
+    EXPECT_TRUE(t1.all_close(t2, 1e-6f, 1e-7f));
 }
 
 // ============= Like Operations Tests =============
@@ -440,7 +546,7 @@ TEST_F(TensorRandomTest, CPUCUDASameSeedSameResults) {
     Tensor::manual_seed(999);
     auto cpu_t2 = Tensor::randn({100}, Device::CPU);
 
-    EXPECT_TRUE(lfs::test::tensor_values_close(cpu_t1, cpu_t2, 1e-6f, 1e-7f))
+    EXPECT_TRUE(cpu_t1.all_close(cpu_t2, 1e-6f, 1e-7f))
         << "CPU should be reproducible with same seed";
 
     // Test CUDA reproducibility
@@ -450,7 +556,7 @@ TEST_F(TensorRandomTest, CPUCUDASameSeedSameResults) {
     Tensor::manual_seed(999);
     auto cuda_t2 = Tensor::randn({100}, Device::GPU);
 
-    EXPECT_TRUE(lfs::test::tensor_values_close(cuda_t1, cuda_t2, 1e-6f, 1e-7f))
+    EXPECT_TRUE(cuda_t1.all_close(cuda_t2, 1e-6f, 1e-7f))
         << "CUDA should be reproducible with same seed";
 
     // Both should have similar distribution properties (but not identical values)
@@ -573,7 +679,7 @@ TEST_F(TensorRandomTest, ReshapePreservesData) {
     EXPECT_EQ(reshaped.shape().dims(), std::vector<size_t>({4, 5}));
 
     // Check that reshape preserves values
-    EXPECT_TRUE(lfs::test::tensor_values_close(reshaped.flatten(), original_copy, 1e-6f, 1e-7f));
+    EXPECT_TRUE(reshaped.flatten().all_close(original_copy, 1e-6f, 1e-7f));
 }
 
 TEST_F(TensorRandomTest, TransposePreservesData) {

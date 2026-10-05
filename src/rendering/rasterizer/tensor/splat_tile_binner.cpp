@@ -147,8 +147,10 @@ namespace lfs::rendering {
             size_t level_bytes = 0;
             for (const uint32_t groups : levels)
                 level_bytes += size_t(groups) * 16 + 512;
-            auto [counts, offsets, group_offsets, scan] = carve_arena<4>({size_t(splats) * 8, size_t(splats) * 8,
-                                                                          size_t(ceil_div(splats, 256)) * 8, level_bytes});
+            auto [counts, offsets, group_offsets, scan] = carve_arena<4>(
+                {size_t(splats) * 8, size_t(splats) * 8,
+                 size_t(ceil_div(splats, 256)) * 8, level_bytes},
+                "rasterizer.tile_scan_arena");
             s.counts = counts;
             s.offsets = offsets;
             s.group_offsets = group_offsets;
@@ -168,7 +170,8 @@ namespace lfs::rendering {
         if (capacity > s.capacity) {
             const size_t histogram = size_t(std::max(1u, ceil_div(capacity, 2048))) * 256 * 4;
             auto [keys0, keys1, indices0, indices1, counts, offsets] =
-                carve_arena<6>({size_t(capacity) * 8, size_t(capacity) * 8, size_t(capacity) * 4, size_t(capacity) * 4, histogram, histogram});
+                carve_arena<6>({size_t(capacity) * 8, size_t(capacity) * 8, size_t(capacity) * 4, size_t(capacity) * 4, histogram, histogram},
+                               "rasterizer.tile_sort_arena");
             s.keys = {keys0, keys1};
             s.indices = {indices0, indices1};
             s.histogram = counts;

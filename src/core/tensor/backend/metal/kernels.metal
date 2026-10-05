@@ -438,6 +438,10 @@ kernel void clamp_values(device const uchar* input_buffer [[buffer(0)]],
         const float value = ((device const float*)(input_buffer + params.input_offset))[index];
         ((device float*)(output_buffer + params.output_offset))[index] =
             isnan(value) ? value : min(max(value, params.float_minimum), params.float_maximum);
+    } else if (kInputDType == LFS_DT_Float16) {
+        const float value = float(((device const half*)(input_buffer + params.input_offset))[index]);
+        ((device half*)(output_buffer + params.output_offset))[index] =
+            half(isnan(value) ? value : min(max(value, params.float_minimum), params.float_maximum));
     } else {
         const int value = ((device const int*)(input_buffer + params.input_offset))[index];
         ((device int*)(output_buffer + params.output_offset))[index] =
@@ -1412,9 +1416,11 @@ kernel void scan(device uchar* data_buffer [[buffer(0)]],
 // wins, 4 scatter add, 5 index_put (flat, clamped), 6 index_fill, 7 winners
 // (the last position of each target, for mode 3), 8 checked Int64-to-Int32
 // index conversion. kBoundary is 0 assert (records a device fault and writes
-// zero), 1 clamp or 2 wrap. Elements move as kElementSize bytes; adds read kInputDType.
+// zero), 1 clamp or 2 wrap; kUnary applies abs (1), sqrt (2) or neg (3) after
+// a take. Elements move as kElementSize bytes; adds read kInputDType.
 
 constant uint kBoundary [[function_constant(17)]];
+constant uint kUnary [[function_constant(18)]];
 
 struct IndexParams {
     ulong input_offset;
@@ -1579,8 +1585,12 @@ kernel void index_op(device uchar* input_buffer [[buffer(0)]],
         ulong source = 0;
         if (!gather_source(tid, indices, params, fault, source))
             store_zero(values, tid);
-        else
+        else if (kUnary == 0)
             copy_element(input, source, values, tid);
+        else
+            ((device float*)values)[tid] = kUnary == 1 ? abs(((device const float*)input)[source])
+                                           : kUnary == 2 ? sqrt(((device const float*)input)[source])
+                                                         : -((device const float*)input)[source];
         return;
     }
     if (kOp == 5) {
@@ -1630,8 +1640,9 @@ kernel void index_op(device uchar* input_buffer [[buffer(0)]],
 // Masked ops, ported from mask.slang. kOp: 0 masked_fill, 1 and_live (keep a
 // mask byte only where the live mask is set), 2 compact select, 3 compact
 // scatter, 4 nonzero positions (Int64), 5 predicate values for an inclusive
-// scan; compacted slots are scan[i] - 1. kPredicate reads a byte mask (0) or
-// nonzero Float32 elements (1).
+// scan, 6 where_into (the fill where selected, else the source); compacted
+// slots are scan[i] - 1. kPredicate reads a byte mask (0) or nonzero Float32
+// elements (1).
 
 constant uint kPredicate [[function_constant(19)]];
 
@@ -1676,6 +1687,10 @@ kernel void mask_op(device uchar* data_buffer [[buffer(0)]],
             ((device long*)source)[scan[index] - 1] = long(index);
     } else if (kOp == 5) {
         scan[index] = selected ? 1u : 0u;
+    } else if (selected) {
+        store_fill(data, index, params.fill_low, params.fill_high);
+    } else {
+        copy_element(source, index, data, index);
     }
 }
 
@@ -1932,20 +1947,32 @@ kernel void radix_sort(device uchar* values_buffer [[buffer(0)]],
 // ---------------------------------------------------------------------------
 // Random draws, ported from random.slang: element i takes Philox4x32-10 with
 // counter i and the seed as key, so every element draws an independent,
-// reproducible 128-bit block. kOp: 0 uniform, 2 randint, 3 normal.
+// reproducible 128-bit block. kOp: 0 uniform [first, second), 1
+// bernoulli(first), 2 randint [low, high), 3 normal(first, second), 4
+// multinomial with replacement over the running sums of kOp 8 and 9, 5 Gumbel
+// keys for sampling without replacement (the host sorts them), 7 weight
+// statistics (maximum, invalid flag) in one threadgroup, 8 running sums of the
+// scaled weights within blocks of kSumBlock, a thread per block, 9 the blocks'
+// offsets and the total, in one thread. Vulkan's random.slang adds the same
+// sums in the same order, so both draw the same samples.
 
 struct RandomParams {
     ulong output_offset;
+    ulong weights_offset;
+    ulong keys_offset;
     ulong seed;
     uint count;
+    uint sample_count;
     int low;
     int high;
     float first;
     float second;
+    float total;
     uint padding;
 };
 
 constant float kUnitScale = 1.0f / 16777216.0f;
+constant uint kSumBlock = 1024;
 constant float kTwoPi = 6.28318530717958647692f;
 
 static uint4 philox_draw(ulong index, ulong seed) {
@@ -1971,10 +1998,70 @@ static float float_below(float value) {
 }
 
 kernel void random_op(device uchar* output_buffer [[buffer(0)]],
-                      constant RandomParams& params [[buffer(1)]],
-                      uint index [[thread_position_in_grid]]) {
+                      device const uchar* weights_buffer [[buffer(1)]],
+                      device uchar* keys_buffer [[buffer(2)]],
+                      constant RandomParams& params [[buffer(3)]],
+                      uint index [[thread_position_in_grid]],
+                      uint thread_index [[thread_index_in_threadgroup]],
+                      ushort lane [[thread_index_in_simdgroup]],
+                      ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float shared_values[kReduceThreads / 32];
+    threadgroup uint shared_flags[kReduceThreads / 32];
     device uchar* output = output_buffer + params.output_offset;
-    if (index >= params.count)
+    device const float* weights = (device const float*)(weights_buffer + params.weights_offset);
+    device float* keys = (device float*)(keys_buffer + params.keys_offset);
+    if (kOp == 7) {
+        float maximum = 0.0f;
+        uint invalid = 0u;
+        for (uint i = thread_index; i < params.count; i += kReduceThreads) {
+            const float weight = weights[i];
+            invalid |= !(weight >= 0.0f) || isinf(weight) ? 1u : 0u;
+            maximum = max(maximum, weight);
+        }
+        maximum = simd_max(maximum);
+        invalid = simd_or(invalid);
+        if (lane == 0) {
+            shared_values[simdgroup] = maximum;
+            shared_flags[simdgroup] = invalid;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        maximum = simd_max(lane < kReduceThreads / 32 ? shared_values[lane] : 0.0f);
+        invalid = simd_or(lane < kReduceThreads / 32 ? shared_flags[lane] : 0u);
+        if (thread_index == 0) {
+            ((device float*)output)[0] = maximum;
+            ((device uint*)output)[1] = invalid;
+        }
+        return;
+    }
+    const uint blocks = (params.count + kSumBlock - 1) / kSumBlock;
+    if (kOp == 8) {
+        // The weights, scaled by a power of two (exact), summed in order
+        // within the block.
+        if (index >= blocks)
+            return;
+        const uint end = min(params.count, (index + 1) * kSumBlock);
+        float running = 0.0f;
+        for (uint i = index * kSumBlock; i < end; ++i) {
+            running += weights[i] * params.first;
+            keys[i] = running;
+        }
+        return;
+    }
+    if (kOp == 9) {
+        // Each block's offset is the running sum of the block totals before
+        // it; the running sum of category i is its block's offset plus its
+        // sum within the block, which never decreases along the categories.
+        if (index != 0)
+            return;
+        float offset = 0.0f;
+        for (uint block = 0; block < blocks; ++block) {
+            keys[params.count + block] = offset;
+            offset += keys[min(params.count, (block + 1) * kSumBlock) - 1];
+        }
+        keys[params.count + blocks] = offset;
+        return;
+    }
+    if (index >= (kOp == 4 ? params.sample_count : params.count))
         return;
     const uint4 words = philox_draw(index, params.seed);
     if (kOp == 0) {
@@ -1985,12 +2072,44 @@ kernel void random_op(device uchar* output_buffer [[buffer(0)]],
                 value = float_below(params.second);
         }
         ((device float*)output)[index] = value;
+    } else if (kOp == 1) {
+        ((device float*)output)[index] = unit_interval(words.x) < params.first ? 1.0f : 0.0f;
     } else if (kOp == 2) {
         const ulong range = ulong(long(params.high) - long(params.low));
         ((device int*)output)[index] = int(long(params.low) + long((ulong(words.x) * range) >> 32));
     } else if (kOp == 3) {
         const float radius = sqrt(-2.0f * log(float((words.x >> 8) + 1u) * kUnitScale));
         ((device float*)output)[index] = params.first + params.second * (radius * cos(kTwoPi * unit_interval(words.y)));
+    } else if (kOp == 4) {
+        // The first category whose running sum exceeds the draw: a binary
+        // search over the blocks' last sums, then within the block.
+        device const float* offsets = keys + params.count;
+        const float u = unit_interval(words.x) * offsets[blocks];
+        uint low = 0, high = blocks;
+        while (low < high) {
+            const uint middle = (low + high) / 2;
+            if (u < offsets[middle] + keys[min(params.count, (middle + 1) * kSumBlock) - 1])
+                high = middle;
+            else
+                low = middle + 1;
+        }
+        uint sample = params.count - 1;
+        if (low < blocks) {
+            const float offset = offsets[low];
+            uint first = low * kSumBlock, last = min(params.count, (low + 1) * kSumBlock);
+            while (first < last) {
+                const uint middle = (first + last) / 2;
+                if (u < offset + keys[middle])
+                    last = middle;
+                else
+                    first = middle + 1;
+            }
+            sample = min(first, params.count - 1);
+        }
+        ((device long*)output)[index] = long(sample);
+    } else {
+        const float u = min(max(unit_interval(words.x), 1e-10f), 0.9999999403953552f);
+        keys[index] = (weights[index] > 0.0f ? log(weights[index]) : -INFINITY) - log(-log(u));
     }
 }
 
@@ -3687,27 +3806,76 @@ kernel void nn(device const uchar* input_buffer [[buffer(0)]],
 }
 
 // ---------------------------------------------------------------------------
-// Identity matrix: zero off the diagonal and one on it.
+// eye (kOp 0) and diag (kOp 1): a [rows][columns] Float32 matrix that is zero
+// off the diagonal and one, or the diagonal vector's element, on it.
 
 struct MatrixFillParams {
+    ulong diagonal_offset;
     ulong output_offset;
     uint columns;
     uint count;
 };
 
-kernel void matrix_fill(device uchar* output_buffer [[buffer(0)]],
-                        constant MatrixFillParams& params [[buffer(1)]],
+kernel void matrix_fill(device const uchar* diagonal_buffer [[buffer(0)]],
+                        device uchar* output_buffer [[buffer(1)]],
+                        constant MatrixFillParams& params [[buffer(2)]],
                         uint index [[thread_position_in_grid]]) {
     if (index >= params.count)
         return;
     const uint row = index / params.columns;
     float value = 0.0f;
     if (row == index - row * params.columns)
-        value = 1.0f;
+        value = kOp == 0 ? 1.0f : ((device const float*)(diagonal_buffer + params.diagonal_offset))[row];
     ((device float*)(output_buffer + params.output_offset))[index] = value;
 }
 
 // ---------------------------------------------------------------------------
+// out[i][j] = p-norm distance between row i of a and row j of b, with the
+// p == 0 (count of differing features) and p == infinity (largest absolute
+// difference) conventions of cdist.slang.
+
+struct CdistParams {
+    ulong lhs_offset;
+    ulong rhs_offset;
+    ulong output_offset;
+    uint rows;
+    uint columns;
+    uint features;
+    float p;
+};
+
+kernel void cdist(device const uchar* lhs_buffer [[buffer(0)]],
+                  device const uchar* rhs_buffer [[buffer(1)]],
+                  device uchar* output_buffer [[buffer(2)]],
+                  constant CdistParams& params [[buffer(3)]],
+                  uint index [[thread_position_in_grid]]) {
+    if (index >= params.rows * params.columns)
+        return;
+    const uint i = index / params.columns;
+    const uint j = index - i * params.columns;
+    device const float* a = (device const float*)(lhs_buffer + params.lhs_offset) + ulong(i) * params.features;
+    device const float* b = (device const float*)(rhs_buffer + params.rhs_offset) + ulong(j) * params.features;
+    const float p = params.p;
+    float distance = 0.0f;
+    for (uint d = 0; d < params.features; ++d) {
+        const float difference = a[d] - b[d];
+        if (p == 2.0f)
+            distance += difference * difference;
+        else if (p == 1.0f)
+            distance += abs(difference);
+        else if (p == 0.0f)
+            distance += a[d] != b[d] ? 1.0f : 0.0f;
+        else if (isinf(p))
+            distance = isnan(distance) || isnan(difference) ? distance + difference : max(distance, abs(difference));
+        else
+            distance += pow(abs(difference), p);
+    }
+    if (p == 2.0f)
+        distance = sqrt(distance);
+    else if (p != 1.0f && p != 0.0f && !isinf(p))
+        distance = pow(distance, 1.0f / p);
+    ((device float*)(output_buffer + params.output_offset))[index] = distance;
+}
 
 struct ProximityParams {
     device const float* queries;

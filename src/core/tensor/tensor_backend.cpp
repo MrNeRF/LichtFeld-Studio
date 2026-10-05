@@ -101,6 +101,27 @@ namespace lfs::core {
         return 0;
     }
 
+    std::optional<size_t> reserved_allocation_bytes(const Tensor& tensor) {
+        if (!tensor.is_valid() || tensor.is_external_storage())
+            return std::nullopt;
+        if (tensor.device() == Device::CPU) {
+            if (!tensor.owns_memory())
+                return tensor.is_empty() && !tensor.is_view() ? std::optional<size_t>{0} : std::nullopt;
+            const auto rows = tensor.ndim() == 0 ? size_t{1} : tensor.shape()[0];
+            const auto capacity = std::max(rows, tensor.capacity());
+            if (capacity == 0)
+                return size_t{0};
+            size_t row_bytes = dtype_size(tensor.dtype());
+            for (size_t axis = 1; axis < tensor.ndim(); ++axis)
+                row_bytes *= tensor.shape()[axis];
+            return row_bytes * capacity;
+        }
+        const auto storage = internal::storage_ref(tensor);
+        if (storage.meta && storage.meta->gpu_descriptor.byte_size != 0)
+            return static_cast<size_t>(storage.meta->gpu_descriptor.byte_size);
+        return tensor.is_empty() ? std::optional<size_t>{0} : std::nullopt;
+    }
+
     size_t gpu_allocation_bytes(const GpuBackend backend, const size_t bytes) {
         if (backend == GpuBackend::CUDA)
             return cuda_allocation_size(bytes);
@@ -278,6 +299,59 @@ namespace lfs::core {
             }
             if (!selected.empty())
                 impl_->backend(backend).wait(selected, point);
+        }
+    }
+
+    void where_into(Tensor& output, const Tensor& condition, float value, const Tensor& source) {
+        const auto backend = gpu_backend_of(output);
+        LFS_ASSERT_MSG(output.is_valid() && source.is_valid() && condition.is_valid() &&
+                           output.device() == source.device() && output.device() == condition.device() &&
+                           gpu_backend_of(source) == backend && gpu_backend_of(condition) == backend &&
+                           output.is_contiguous() && source.is_contiguous() && condition.is_contiguous() &&
+                           output.shape() == source.shape() && output.numel() == condition.numel() &&
+                           output.dtype() == source.dtype() && condition.dtype() == DataType::Bool &&
+                           (output.dtype() == DataType::Float32 || output.dtype() == DataType::Float16),
+                       "where_into requires matching contiguous Float32/Float16 tensors and a Bool mask");
+        internal::preserve_lazy_snapshots_before_write(output);
+        if (output.numel() == 0)
+            return;
+        if (output.device() == Device::CPU) {
+            const auto* mask = condition.ptr<unsigned char>();
+            if (output.dtype() == DataType::Float32) {
+                const auto values = source.clone();
+                for (size_t i = 0; i < output.numel(); ++i)
+                    output.ptr<float>()[i] = mask[i] ? value : values.ptr<float>()[i];
+            } else {
+                const auto values = source.clone();
+                const auto scalar = detail::tensor_float_to_half(value);
+                for (size_t i = 0; i < output.numel(); ++i)
+                    output.ptr<detail::tensor_half_t>()[i] = mask[i] ? scalar : values.ptr<detail::tensor_half_t>()[i];
+            }
+            return;
+        }
+        if (output.storage_ptr() == source.storage_ptr() && output.data_ptr() != source.data_ptr()) {
+            const auto snapshot = source.clone();
+            where_into(output, condition, value, snapshot);
+            return;
+        }
+        if (*backend == GpuBackend::CUDA) {
+#if LFS_HAS_CUDA
+            internal::cuda_where_into(output, condition, value, source);
+#else
+            throw TensorError("CUDA tensor backend is unavailable");
+#endif
+        } else if (*backend == GpuBackend::Metal) {
+#ifdef LFS_TENSOR_METAL
+            internal::metal_where_into(output, condition, value, source);
+#else
+            throw TensorError("Metal tensor backend is unavailable");
+#endif
+        } else {
+#ifdef LFS_TENSOR_VULKAN
+            internal::vulkan_where_into(output, condition, value, source);
+#else
+            throw TensorError("Vulkan tensor backend is unavailable");
+#endif
         }
     }
 

@@ -202,6 +202,7 @@ TEST_F(SliceMMBugTest, MMThenSlice_TransformsPattern) {
     auto torch_fix = createYRotationMatrixTorch(M_PI);
 
     LOG_INFO("Custom fixMat: ");
+    custom_fix.print_formatted("fixMat");
     std::cout << "Torch fixMat: " << torch_fix << std::endl;
 
     // Perform matrix multiplication: w2c @ fixMat
@@ -209,6 +210,7 @@ TEST_F(SliceMMBugTest, MMThenSlice_TransformsPattern) {
     auto torch_result = torch::mm(torch_w2c, torch_fix);
 
     LOG_INFO("Custom mm result: ");
+    custom_result.print_formatted("mm_result");
     std::cout << "Torch mm result: " << torch_result << std::endl;
 
     // Verify mm result
@@ -226,6 +228,7 @@ TEST_F(SliceMMBugTest, MMThenSlice_TransformsPattern) {
     auto torch_R_cont = torch_R.contiguous();
 
     LOG_INFO("Custom R contiguous: ");
+    custom_R_cont.print_formatted("R_contiguous");
     std::cout << "Torch R contiguous: " << torch_R_cont << std::endl;
 
     compare_tensors(custom_R_cont, torch_R_cont, 1e-4f, 1e-5f, "R_Matrix");
@@ -240,6 +243,7 @@ TEST_F(SliceMMBugTest, MMThenSlice_TransformsPattern) {
     auto torch_T_cont = torch_T.contiguous();
 
     LOG_INFO("Custom T contiguous: ");
+    custom_T_cont.print_formatted("T_contiguous");
     std::cout << "Torch T contiguous: " << torch_T_cont << std::endl;
 
     compare_tensors(custom_T_cont, torch_T_cont, 1e-4f, 1e-5f, "T_Vector");
@@ -462,6 +466,9 @@ TEST_F(SliceMMBugTest, ExactTransformsPattern) {
     LOG_INFO("=== Exact Transforms Pattern Test ===");
     LOG_INFO("Custom R shape: {}x{}", custom_R_cont.shape()[0], custom_R_cont.shape()[1]);
     LOG_INFO("Custom T shape: {}", custom_T_cont.shape()[0]);
+
+    custom_R_cont.print_formatted("Custom R");
+    custom_T_cont.print_formatted("Custom T");
 
     std::cout << "Torch R: " << torch_R_cont << std::endl;
     std::cout << "Torch T: " << torch_T_cont << std::endl;

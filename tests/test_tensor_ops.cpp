@@ -1021,6 +1021,16 @@ TEST_F(TensorOpsTest, CPUOperations) {
 
     compare_tensors(custom_result, torch_result, 1e-6f, 1e-7f, "CPU_Ops");
 }
+
+TEST_F(TensorOpsTest, NormalizeProducesZeroMeanAndUnitDeviation) {
+    const auto tensor = Tensor::from_vector(
+        std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f, 5.0f}, {5}, Device::GPU);
+    const auto normalized = tensor.normalize();
+
+    EXPECT_NEAR(normalized.mean_scalar(), 0.0f, 1e-5f);
+    EXPECT_NEAR(normalized.std_scalar(false), 1.0f, 1e-4f);
+}
+
 TEST_F(TensorOpsTest, Int32ScalarEqualityProducesExactBoolMask) {
     const auto labels = Tensor::from_vector(
         std::vector<int>{0, 1, 2, 1, 0, 2}, {6}, Device::GPU);

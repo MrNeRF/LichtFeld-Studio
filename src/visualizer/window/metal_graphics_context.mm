@@ -130,6 +130,7 @@ namespace lfs::vis {
             lfs::core::GpuBackendScope scope(lfs::core::GpuBackend::Metal);
             final_image = lfs::core::Tensor::zeros(shape, lfs::core::Device::GPU,
                                                     lfs::core::DataType::UInt8);
+            final_image.set_name("render.presentation");
         }
 
         // Every frame starts from the clear color, like a Vulkan render pass.
@@ -172,6 +173,7 @@ namespace lfs::vis {
                 lfs::core::Device::CPU, lfs::core::DataType::UInt8);
             lfs::core::GpuBackendScope scope(lfs::core::GpuBackend::Metal);
             final_image = cpu.to(lfs::core::Device::GPU);
+            final_image.set_name("render.presentation");
         }
     };
 

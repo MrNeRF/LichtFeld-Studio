@@ -139,6 +139,26 @@ TEST(TensorDeviceRuntime, VulkanMemoryStats) {
     EXPECT_EQ(stats.pool_used_current, 0u);
 }
 
+TEST(TensorDeviceRuntime, ReservedAllocationBytesUnsupportedWithoutTensor) {
+    using namespace lfs::core;
+    EXPECT_FALSE(reserved_allocation_bytes(Tensor{}));
+}
+
+TEST(TensorDeviceRuntime, CudaReservedAllocationExtent) {
+    using namespace lfs::core;
+    if (!gpu_backend_available(GpuBackend::CUDA))
+        GTEST_SKIP() << "Backend unavailable";
+    const GpuBackendScope scope(GpuBackend::CUDA);
+    const Tensor tensor = Tensor::empty({17}, Device::GPU);
+    EXPECT_EQ(reserved_allocation_bytes(tensor), tensor.bytes());
+}
+
+TEST(TensorDeviceRuntime, CpuReservedAllocationExtent) {
+    using namespace lfs::core;
+    const Tensor host = Tensor::empty({17}, Device::CPU);
+    EXPECT_EQ(reserved_allocation_bytes(host), host.bytes());
+}
+
 TEST(TensorDeviceRuntime, CudaPinnedAllocatorStats) {
 #if !LFS_HAS_CUDA
     GTEST_SKIP() << "CUDA support is not built";

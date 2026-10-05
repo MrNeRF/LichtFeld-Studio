@@ -250,6 +250,99 @@ namespace lfs::core {
     };
 
     // ============================================================================
+    // PERMUTATION EXPRESSION: Lazy gather/indexing using permutation
+    // ============================================================================
+
+    template <typename InputExpr, typename IndexExpr>
+    class PermutationExpr : public TensorExpr<PermutationExpr<InputExpr, IndexExpr>> {
+    private:
+        InputExpr input_;
+        IndexExpr indices_;
+        TensorShape shape_;
+        Device device_;
+        DataType dtype_;
+
+        // Allow UnaryExpr specialization to access private members
+        template <typename AnyInput, typename AnyOp>
+        friend class UnaryExpr;
+
+    public:
+        PermutationExpr(InputExpr input, IndexExpr indices,
+                        TensorShape shape, Device device, DataType dtype)
+            : input_(std::move(input)),
+              indices_(std::move(indices)),
+              shape_(std::move(shape)),
+              device_(device),
+              dtype_(dtype) {}
+
+        // Implemented in tensor_expr_impl.hpp
+        Tensor eval_impl() const;
+
+        PermutationExpr snapshot_impl() const {
+            return PermutationExpr(
+                input_.snapshot(), indices_.snapshot(), shape_, device_, dtype_);
+        }
+
+        // Apply unary operation to gathered result (fuses with gather!)
+        template <typename UnaryOp>
+        auto map(UnaryOp unary_op) const {
+            return UnaryExpr<PermutationExpr, UnaryOp>(
+                *this, unary_op, shape_, device_, dtype_);
+        }
+
+        const TensorShape& shape_impl() const { return shape_; }
+        Device device_impl() const { return device_; }
+        DataType dtype_impl() const { return dtype_; }
+        std::optional<GpuBackend> gpu_backend_impl() const { return input_.gpu_backend(); }
+        cudaStream_t stream_hint_impl() const {
+            if (cudaStream_t current = getCurrentCUDAStream()) {
+                return current;
+            }
+            if (cudaStream_t input = input_.stream_hint()) {
+                return input;
+            }
+            return indices_.stream_hint();
+        }
+    };
+
+    // ============================================================================
+    // UNARY EXPRESSION SPECIALIZATION: Fuses gather + unary operation
+    // ============================================================================
+
+    template <typename InputExpr, typename IndexExpr, typename UnaryOp>
+    class UnaryExpr<PermutationExpr<InputExpr, IndexExpr>, UnaryOp>
+        : public TensorExpr<UnaryExpr<PermutationExpr<InputExpr, IndexExpr>, UnaryOp>> {
+    private:
+        using PermExpr = PermutationExpr<InputExpr, IndexExpr>;
+        PermExpr perm_expr_;
+        UnaryOp op_;
+        TensorShape shape_;
+        Device device_;
+        DataType dtype_;
+
+    public:
+        UnaryExpr(PermExpr perm, UnaryOp op, TensorShape shape, Device device, DataType dtype)
+            : perm_expr_(std::move(perm)),
+              op_(op),
+              shape_(std::move(shape)),
+              device_(device),
+              dtype_(ops::returns_bool_v<UnaryOp> ? DataType::Bool : dtype) {}
+
+        // FUSED gather + unary! Implemented in tensor_expr_impl.hpp
+        Tensor eval_impl() const;
+
+        UnaryExpr snapshot_impl() const {
+            return UnaryExpr(perm_expr_.snapshot(), op_, shape_, device_, dtype_);
+        }
+
+        const TensorShape& shape_impl() const { return shape_; }
+        Device device_impl() const { return device_; }
+        DataType dtype_impl() const { return dtype_; }
+        std::optional<GpuBackend> gpu_backend_impl() const { return perm_expr_.gpu_backend(); }
+        cudaStream_t stream_hint_impl() const { return perm_expr_.stream_hint(); }
+    };
+
+    // ============================================================================
     // TensorLeaf::map implementation (after UnaryExpr is fully defined)
     // ============================================================================
 

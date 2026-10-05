@@ -27,6 +27,7 @@ TEST(TensorAdvancedTest, StackPreservesValuesAndRejectsEmptyInput) {
     EXPECT_EQ(result.cpu().to_vector(), (std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f}));
     EXPECT_THROW(Tensor::stack({}, 0), std::runtime_error);
 }
+
 TEST(TensorAdvancedTest, ApplyAndInplaceChainsHaveDistinctOwnership) {
     auto input = Tensor::ones({4}, Device::GPU);
     const auto applied = input.apply([](const Tensor& tensor) { return tensor.add(1.0f); })
@@ -62,6 +63,19 @@ TEST(TensorAdvancedTest, SpecialValuesAreDetectedAndClamped) {
     EXPECT_FLOAT_EQ(values[1], 10.0f);
     EXPECT_FLOAT_EQ(values[2], -10.0f);
 }
+
+TEST(TensorAdvancedTest, DiagPlacesValuesOnlyOnDiagonal) {
+    const auto diagonal = Tensor::from_vector(
+        std::vector<float>{1.0f, 2.0f, 3.0f}, {3}, Device::GPU);
+    const auto matrix = Tensor::diag(diagonal);
+
+    EXPECT_EQ(matrix.shape(), TensorShape({3, 3}));
+    EXPECT_EQ(matrix.cpu().to_vector(),
+              (std::vector<float>{1.0f, 0.0f, 0.0f,
+                                  0.0f, 2.0f, 0.0f,
+                                  0.0f, 0.0f, 3.0f}));
+}
+
 TEST(TensorAdvancedTest, ProfilingWrapperPreservesResult) {
     struct ProfilingGuard {
         ProfilingGuard() { Tensor::enable_profiling(true); }
