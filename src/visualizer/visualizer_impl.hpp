@@ -61,6 +61,7 @@ namespace lfs::vis {
     } // namespace tools
 
     class LFS_VIS_API VisualizerImpl : public Visualizer {
+        friend class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
         friend class gui::GuiManager;
         friend class gui::AsyncTaskManager;
 

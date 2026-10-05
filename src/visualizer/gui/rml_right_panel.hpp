@@ -21,8 +21,9 @@ namespace Rml {
 } // namespace Rml
 
 namespace lfs::vis {
+    class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
     struct Theme;
-}
+} // namespace lfs::vis
 namespace lfs::vis::gui {
 
     struct TabSnapshot {
@@ -74,6 +75,7 @@ namespace lfs::vis::gui {
         std::function<void()> on_resize_end;
 
     private:
+        friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
         bool updateTheme();
         bool syncTabData(const std::vector<TabSnapshot>& tabs, const std::string& active_tab);
         bool syncTabScrollState();

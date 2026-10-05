@@ -1512,6 +1512,140 @@ namespace {
 
 namespace lfs::vis {
 
+    class SequencerFrameDemandTest : public VisualizerImplResetTest {
+    protected:
+        static void SetUpTestSuite() {
+            ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
+                (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+        }
+        static void TearDownTestSuite() {
+            lfs::event::LocalizationManager::getInstance().reset();
+        }
+    };
+
+    TEST_F(SequencerFrameDemandTest, PropagatesPlaybackStreamAndPreviewDemand) {
+        VisualizerImpl viewer(projectOptions());
+        auto& gui = *viewer.getGuiManager();
+        auto& sequencer = gui.sequencerUI();
+        auto& controller = sequencer.controller();
+        gui.startup_overlay_.dismiss();
+        gui.ui_layout_settle_frames_ = 0;
+        gui.rml_right_panel_.render_needed_ = false;
+        gui.rml_viewport_overlay_.render_needed_ = false;
+        gui.rml_viewport_overlay_.document_sync_dirty_ = false;
+        // An unopened panel has pending localization, but must not keep us awake.
+        gui.panelLayout().setShowSequencer(false);
+        ASSERT_TRUE(sequencer.ui_state_.show_pip_preview);
+        ASSERT_FALSE(gui.needsAnimationFrame());
+        ASSERT_FALSE(lfs::python::has_frame_callback());
+        ASSERT_FALSE(lfs::python::has_scene_time_callback());
+
+        const auto expect_demand = [&](const bool expected) {
+            EXPECT_EQ(sequencer.needsAnimationFrame(), expected);
+            EXPECT_EQ(gui.needsAnimationFrame(), expected);
+            const auto demand = viewer.collectFrameDemand(false, false);
+            EXPECT_EQ(demand.gui_animation, expected);
+            EXPECT_FALSE(demand.python_animation);
+            EXPECT_FALSE(demand.input_event);
+            // Isolate the GUI contribution from initial scene dirtiness in this
+            // windowless fixture. Both scheduler gates must follow it alone.
+            VisualizerImpl::FrameDemand settled;
+            settled.gui_animation = demand.gui_animation;
+            EXPECT_EQ(settled.shouldRenderFrame(), expected);
+            EXPECT_EQ(settled.needsContinuousLoop(), expected);
+        };
+
+        controller.setPlySequence(temporary_.path, "sequence",
+                                  {temporary_.path / "frame_0.ply", temporary_.path / "frame_1.ply"},
+                                  {"frame_0", "frame_1"}, 1.0f);
+        ASSERT_EQ(controller.timeline().realKeyframeCount(), 0);
+        sequencer.ply_stream_states_.assign(2, gui::SequencerUIManager::PlyStreamFrameState::Resident);
+        sequencer.last_ply_sequence_frame_ = 0;
+        controller.play();
+        expect_demand(true);
+        const auto first_frame = controller.plySequenceFrameIndex(controller.playhead());
+        // Use the scheduler's real eligibility decision to reach another tick,
+        // without pointer input, callbacks, or crossing a displayed-frame boundary.
+        VisualizerImpl::FrameDemand settled;
+        settled.gui_animation = viewer.collectFrameDemand(false, false).gui_animation;
+        if (settled.needsContinuousLoop()) {
+            sequencer.last_playback_tick_time_ = std::chrono::steady_clock::now() - std::chrono::milliseconds(10);
+            sequencer.tickPlaybackBeforeSceneRender();
+        }
+        EXPECT_GT(controller.playhead(), 0.0f);
+        EXPECT_EQ(controller.plySequenceFrameIndex(controller.playhead()), first_frame);
+        EXPECT_EQ(sequencer.last_ply_sequence_frame_, first_frame);
+        expect_demand(true);
+        controller.pause();
+        expect_demand(false);
+
+        // Stage worker handoff states deterministically, without filesystem timing.
+        sequencer.ply_stream_inflight_ = true;
+        expect_demand(true);
+        sequencer.ply_stream_inflight_ = false;
+        sequencer.ply_stream_completed_.push_back({.generation = sequencer.ply_stream_generation_.load() + 1});
+        expect_demand(true);
+        sequencer.drainPlySequenceStream();
+        expect_demand(false);
+        sequencer.ply_stream_requests_.push_back(0);
+        expect_demand(true);
+        sequencer.ply_stream_requests_.clear();
+        expect_demand(false);
+
+        // Remove unrelated pending panel localization while probing PiP alone.
+        auto panel = std::move(sequencer.panel_);
+        gui.panelLayout().setShowSequencer(true);
+        sequencer.ui_state_.show_pip_preview = true;
+        sequencer.pip_needs_update_ = false;
+        sequencer.pip_last_key_ = sequencer.currentPipPreviewKey();
+        expect_demand(false);
+        controller.seek(0.5f);
+        // The pending key survives the real PiP rate-limit early return.
+        sequencer.pip_last_render_time_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        gui::UIContext context{};
+        context.viewer = &viewer;
+        sequencer.renderKeyframePreview(context);
+        expect_demand(true);
+        sequencer.pip_last_key_ = sequencer.currentPipPreviewKey();
+        expect_demand(false);
+        sequencer.ui_state_.show_pip_preview = false;
+        sequencer.panel_ = std::move(panel);
+        gui.panelLayout().setShowSequencer(false);
+        controller.clearPlySequence();
+        controller.addKeyframeAtTime({}, 0.0f);
+        controller.addKeyframeAtTime({}, 1.0f);
+        controller.play();
+        sequencer.tickPlaybackBeforeSceneRender();
+        expect_demand(true);
+        controller.pause();
+        controller.beginScrub();
+        expect_demand(true);
+        controller.endScrub();
+        expect_demand(false);
+        gui.panelLayout().setShowSequencer(true);
+        expect_demand(true);
+        gui.ui_hidden_ = true;
+        EXPECT_FALSE(gui.needsAnimationFrame());
+        controller.play();
+        EXPECT_TRUE(gui.needsAnimationFrame());
+        controller.pause();
+        EXPECT_FALSE(gui.needsAnimationFrame());
+        gui.ui_hidden_ = false;
+        gui.panelLayout().setShowSequencer(false);
+        expect_demand(false);
+
+        // Pointer dragging remains an independent redraw source.
+        viewer.window_manager_ = std::make_unique<WindowManager>("Demand test", 640, 480);
+        auto& input = const_cast<FrameInputBuffer&>(viewer.window_manager_->frameInput());
+        input.had_event = true;
+        input.mouse_moved = true;
+        input.mouse_down[0] = true;
+        EXPECT_TRUE(viewer.inputFrameRequestsRender());
+        EXPECT_TRUE(viewer.collectFrameDemand(false, false).input_event);
+        input.beginFrame();
+        EXPECT_FALSE(viewer.inputFrameRequestsRender());
+    }
+
     std::filesystem::path make_real_dataset_subset(
         const std::filesystem::path& destination,
         const std::size_t image_count = 4) {

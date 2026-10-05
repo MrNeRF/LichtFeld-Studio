@@ -29,8 +29,9 @@ namespace Rml {
 } // namespace Rml
 
 namespace lfs::vis {
+    class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
     struct Theme;
-}
+} // namespace lfs::vis
 namespace lfs::vis::gui {
 
     struct PanelInputState;
@@ -118,6 +119,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool blocksPointer(double screen_x, double screen_y) const;
 
     private:
+        friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
         struct ToolbarDragListener final : Rml::EventListener {
             RmlViewportOverlay* owner = nullptr;
             void ProcessEvent(Rml::Event& event) override;
