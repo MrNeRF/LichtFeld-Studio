@@ -555,7 +555,7 @@ const torch::Tensor COLOR_PINV_BLOCK_DIAG = torch::tensor({
             const auto lp = runCudaForward(params, plus, 4, 4, 0, 0).square().sum().item<float>();
             const auto lm = runCudaForward(params, minus, 4, 4, 0, 0).square().sum().item<float>();
             const float numerical = (lp - lm) / (2.0f * kEps);
-            const float analytical = lfs::core::Tensor(rgb_grad[i]).sum().item<float>();
+            const float analytical = rgb_grad[i].sum().item<float>();
             const float abs_diff = std::abs(analytical - numerical);
             if (std::max(std::abs(analytical), std::abs(numerical)) < 5e-3f && abs_diff < 5e-3f) {
                 continue;
