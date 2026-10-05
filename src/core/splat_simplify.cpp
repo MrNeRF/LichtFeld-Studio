@@ -33,7 +33,6 @@ namespace lfs::core {
 
     namespace {
 
-        constexpr float kTwoPiPow1p5 = 0x1.f7fccep+3f;
         constexpr float kEpsCov = 1e-8f;
         constexpr float kMinScale = 1e-12f;
         constexpr float kMinQuatNorm = 1e-12f;

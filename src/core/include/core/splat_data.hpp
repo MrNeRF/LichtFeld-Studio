@@ -539,7 +539,6 @@ namespace lfs::core {
 
         // Allow free functions in splat_data_transform.cpp to access private members
         friend LFS_CORE_API SplatData& transform(SplatData&, const glm::mat4&);
-        friend LFS_CORE_API SplatData crop_by_cropbox(const SplatData&, const lfs::geometry::BoundingBox&, bool);
         friend LFS_CORE_API SplatData extract_by_mask(const SplatData&, const Tensor&);
         friend LFS_CORE_API void random_choose(SplatData&, int, int);
     };

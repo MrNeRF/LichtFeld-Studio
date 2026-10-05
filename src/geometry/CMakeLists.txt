@@ -6,7 +6,6 @@
 set(GEOMETRY_SOURCES
     euclidean_transform.cpp
     bounding_box.cpp
-    geometry_misc.cpp
 )
 
 add_library(lfs_geometry STATIC ${GEOMETRY_SOURCES})
