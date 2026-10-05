@@ -1308,26 +1308,17 @@ namespace lfs::vis::gui {
                     // The predictor works in a square canonical image. Preserve
                     // its Gaussian covariance and restore source proportions
                     // through the node transform (also captured by undo/redo).
-                    const auto center = photo_view ? photo_view->center : std::array<float, 3>{0.0f, 0.0f, 1.0f};
-                    const glm::vec3 translation{-aspect * center[0], -center[1], -center[2]};
+                    const auto placement = io::reframe::groundedPlacement(
+                        aspect, photo_view ? photo_view->bounds_min : std::array<float, 3>{-1.0f, -1.0f, 0.0f},
+                        photo_view ? photo_view->bounds_max : std::array<float, 3>{1.0f, 1.0f, 2.0f});
+                    const glm::vec3 translation{placement.translation[0], placement.translation[1], placement.translation[2]};
                     const auto transform = glm::translate(glm::mat4{1.0f}, translation) *
-                                           glm::scale(glm::mat4{1.0f}, glm::vec3{aspect, 1.0f, 1.0f});
+                                           glm::scale(glm::mat4{1.0f}, glm::vec3{aspect, 1.0f, 1.0f} * placement.scale);
                     node_name = scene_manager->addGeneratedSplatNode(
                         std::make_unique<core::SplatData>(std::move(*model)), "",
                         completion.request.name_hint, true, "Create Splat from Photo", transform);
                     if (node_name.empty())
                         throw std::runtime_error("Could not attach reconstructed splats");
-                    auto& view = viewer_->screens().activeView3D();
-                    const auto extent = view.camera.windowSize;
-                    const float viewport_aspect = float(std::max(extent.x, 1)) / float(std::max(extent.y, 1));
-                    view.settings.orthographic = false;
-                    view.settings.focal_length_mm = rendering::vFovToFocalLength(
-                        io::reframe::fitVerticalFov(aspect, viewport_aspect));
-                    // Raw data uses +Y down/+Z forward; the visualizer world
-                    // flips Y/Z at its single data-to-world boundary.
-                    view.camera.setViewMatrix(glm::mat3{1.0f}, rendering::visualizerWorldPointFromDataWorld(translation));
-                    view.camera.camera.setPivot(glm::vec3{0.0f});
-                    view.camera.camera.saveHomePosition();
                     if (auto* rendering_manager = viewer_->getRenderingManager())
                         rendering_manager->markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
                 } else if (completion.request.replace_scene && splat_load_state_.loaded_count == 0) {

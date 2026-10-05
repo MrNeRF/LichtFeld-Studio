@@ -48,11 +48,12 @@ color coefficients in linear light. Conversion changes SH0 from linear light
 to the viewer's sRGB encoding, normalizes quaternions, takes the logarithm of
 scales and converts alpha to logits with finite endpoint clamping. The resulting
 tensors use the active GPU backend. A node transform restores the source image
-aspect ratio from Apple's square canonical rays and places the reconstructed
-scene's robust center at the origin. The standard dataset-to-world boundary
-keeps it upright in LichtFeld's scene axes. The active camera starts at
-the original viewpoint, upright, with a 90-degree canonical vertical field of
-view widened when needed to fit a landscape image. Home returns to this view.
+aspect ratio from Apple's square canonical rays. The visible reconstruction's
+conservative three-sigma bounds rest on the scene's Y=0 ground plane and are
+centered horizontally. Oversized reconstructions are uniformly reduced to a
+four-unit envelope suitable for the standard camera; smaller ones are not enlarged.
+The standard dataset-to-world boundary keeps it upright in LichtFeld's scene axes.
+Import does not alter the camera, FOV, pivot, projection mode or Home position.
 Background pixels are reconstructed too; this feature does not remove them.
 
 Private interfaces and installed models can change across OS updates. A failed

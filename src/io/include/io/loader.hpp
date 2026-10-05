@@ -135,7 +135,8 @@ namespace lfs::io {
 
     struct PhotoReconstructionView {
         float source_aspect = 1.0f;
-        std::array<float, 3> center{0.0f, 0.0f, 1.0f};
+        std::array<float, 3> bounds_min{-1.0f, -1.0f, 0.0f};
+        std::array<float, 3> bounds_max{1.0f, 1.0f, 2.0f};
     };
 
     struct LoadResult {

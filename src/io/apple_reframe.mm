@@ -15,6 +15,7 @@
 #include <cstring>
 #include <fstream>
 #include <mutex>
+#include <limits>
 #include <thread>
 
 namespace lfs::io {
@@ -217,23 +218,31 @@ namespace lfs::io {
             result.data = std::move(splat);
             result.scene_center = Tensor::zeros({3}, Device::CPU);
             result.loader_used = "Apple Reframe";
-            std::array<std::vector<float>, 3> centers;
-            for (size_t i = 0; i < count; i += std::max<size_t>(1, count / 4096)) {
-                if (means[3 * i + 2] > 0.01f && opacity[i] > -2.944439f) {
-                    for (size_t axis = 0; axis < 3; ++axis)
-                        centers[axis].push_back(means[3 * i + axis]);
-                }
-            }
-            if (centers[2].empty())
-                throw std::runtime_error("Reframe returned no positive scene depth");
             PhotoReconstructionView view;
             view.source_aspect = float(width) / float(height);
-            for (size_t axis = 0; axis < 3; ++axis) {
-                auto& values = centers[axis];
-                const auto median = values.begin() + values.size() / 2;
-                std::nth_element(values.begin(), median, values.end());
-                view.center[axis] = *median;
+            view.bounds_min.fill(std::numeric_limits<float>::infinity());
+            view.bounds_max.fill(-std::numeric_limits<float>::infinity());
+            bool has_visible_geometry = false;
+            for (size_t i = 0; i < count; ++i) {
+                if ((i & 4095) == 0)
+                    throw_if_load_cancel_requested(options);
+                if (means[3 * i + 2] <= 0.01f || opacity[i] <= -2.944439f)
+                    continue;
+                // Bound the rotated Gaussian ellipsoid at three sigma.
+                const auto radii = reframe::supportRadii(
+                    {scaling[3 * i], scaling[3 * i + 1], scaling[3 * i + 2]},
+                    {rotation[4 * i], rotation[4 * i + 1], rotation[4 * i + 2], rotation[4 * i + 3]});
+                for (size_t axis = 0; axis < 3; ++axis) {
+                    const float position = means[3 * i + axis];
+                    if (!std::isfinite(position))
+                        throw std::runtime_error("Reframe returned a non-finite position");
+                    view.bounds_min[axis] = std::min(view.bounds_min[axis], position - radii[axis]);
+                    view.bounds_max[axis] = std::max(view.bounds_max[axis], position + radii[axis]);
+                }
+                has_visible_geometry = true;
             }
+            if (!has_visible_geometry)
+                throw std::runtime_error("Reframe returned no positive scene depth");
             result.photo_view = view;
             result.load_time = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
             return result;

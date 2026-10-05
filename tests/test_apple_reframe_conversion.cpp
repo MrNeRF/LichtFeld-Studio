@@ -13,8 +13,17 @@ int main() {
     require(std::abs(viewerSh0((0.21404114f - 0.5f) / c0)) < 1e-5f);
     require(std::abs(viewerSh0(-0.5f / c0) * c0 + 0.5f) < 1e-6f);
     require(std::abs(viewerSh0(0.5f / c0) * c0 + 0.5f - 1.0f) < 1e-6f);
-    require(std::abs(fitVerticalFov(0.5f, 1.5f) - 90.0f) < 1e-5f);
-    require(std::abs(fitVerticalFov(2.0f, 1.0f) - 126.8699f) < 1e-4f);
+    const auto radii = supportRadii({std::log(1.0f), std::log(2.0f), std::log(3.0f)}, {1, 0, 0, 0});
+    require(std::abs(radii[0] - 3.0f) < 1e-5f && std::abs(radii[1] - 6.0f) < 1e-5f);
+    const auto rotated = supportRadii({std::log(1.0f), std::log(2.0f), std::log(3.0f)}, {std::sqrt(0.5f), 0, 0, std::sqrt(0.5f)});
+    require(std::abs(rotated[0] - 6.0f) < 1e-5f && std::abs(rotated[1] - 3.0f) < 1e-5f);
+    const auto large = groundedPlacement(2.0f, {-2.0f, -1.0f, 1.0f}, {2.0f, 3.0f, 5.0f});
+    require(std::abs(large.scale - 0.5f) < 1e-6f);
+    require(std::abs(large.translation[1] + large.scale * 3.0f) < 1e-6f);
+    require(std::abs(large.translation[2] + 1.5f) < 1e-6f);
+    const auto small = groundedPlacement(1.0f, {0.0f, -0.5f, 0.0f}, {1.0f, 0.5f, 1.0f});
+    require(small.scale == 1.0f);
+    require(small.translation[0] == -0.5f && small.translation[1] == -0.5f);
     for (float alpha : {0.0f, 0.25f, 0.9f, 1.0f}) {
         const auto logit = opacityLogit(alpha);
         require(std::isfinite(logit));

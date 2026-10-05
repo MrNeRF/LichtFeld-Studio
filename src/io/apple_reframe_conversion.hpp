@@ -19,11 +19,48 @@ namespace lfs::io::reframe {
         return (srgb - 0.5f) / c0;
     }
 
-    inline float fitVerticalFov(float source_aspect, float viewport_aspect) {
-        if (!std::isfinite(source_aspect) || !std::isfinite(viewport_aspect) || source_aspect <= 0 || viewport_aspect <= 0)
+    inline std::array<float, 3> supportRadii(const std::array<float, 3>& log_scales,
+                                             const std::array<float, 4>& q) {
+        const float w = q[0], x = q[1], y = q[2], z = q[3];
+        const std::array<std::array<float, 3>, 3> rows{{{1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)},
+                                                        {2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)},
+                                                        {2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)}}};
+        std::array<float, 3> radii{};
+        for (size_t axis = 0; axis < 3; ++axis) {
+            float variance = 0;
+            for (size_t component = 0; component < 3; ++component) {
+                const float projected = rows[axis][component] * std::exp(log_scales[component]);
+                variance += projected * projected;
+            }
+            radii[axis] = 3.0f * std::sqrt(variance);
+        }
+        return radii;
+    }
+
+    struct Placement {
+        float scale = 1.0f;
+        std::array<float, 3> translation{};
+    };
+
+    inline Placement groundedPlacement(float aspect, const std::array<float, 3>& lower,
+                                       const std::array<float, 3>& upper) {
+        if (!std::isfinite(aspect) || aspect <= 0)
             throw std::runtime_error("Invalid reconstruction aspect ratio");
-        // Apple's canonical reconstruction spans [-1,1] on both image axes.
-        return 2.0f * std::atan(std::max(1.0f, source_aspect / viewport_aspect)) * 180.0f / 3.14159265358979323846f;
+        for (size_t axis = 0; axis < 3; ++axis) {
+            if (!std::isfinite(lower[axis]) || !std::isfinite(upper[axis]) || upper[axis] < lower[axis])
+                throw std::runtime_error("Invalid reconstruction bounds");
+        }
+        // A four-unit envelope fits the standard scene camera. Never enlarge
+        // small reconstructions or depend on the user's current camera/FOV.
+        const float extent = std::max({aspect * (upper[0] - lower[0]), upper[1] - lower[1], upper[2] - lower[2]});
+        Placement result;
+        result.scale = extent > 4.0f ? 4.0f / extent : 1.0f;
+        // Data +Y points down; the viewer flips Y/Z. The bottom edge is
+        // therefore data max-Y, and must become world Y=0.
+        result.translation = {-result.scale * aspect * (lower[0] + upper[0]) * 0.5f,
+                              -result.scale * upper[1],
+                              -result.scale * (lower[2] + upper[2]) * 0.5f};
+        return result;
     }
     // Reframe already returns degree-zero SH coefficients and linear activated
     // scales/opacity. SplatData stores log scales and opacity logits.
