@@ -22,8 +22,8 @@ builds**. The disabled build compiles the unavailable backend and neither
 builds nor installs the helper, private Swift interface/linking adapters, or
 model resolver. Use a fresh packaging destination when switching variants.
 
-On a supported Mac, choose **File → Import → Create Splat from Photo — Apple
-Reframe (Experimental)**. The item is absent unless all of these are true:
+On a supported Mac, choose **File → Import → Create Splat from Photo - Apple
+Reframe**. The item is absent unless all of these are true:
 
 - This build includes the optional backend and its executable helper.
 - The process runs natively on Apple Silicon with macOS 27 or newer.
