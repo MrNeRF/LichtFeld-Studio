@@ -97,11 +97,13 @@ namespace lfs::training {
             return static_cast<const MetalFastState*>(saved.backend.get());
         }
 
-        void reserve(Tensor& buffer, const size_t count, const DataType dtype) {
+        void reserve(Tensor& buffer, const size_t count, const DataType dtype,
+                     const std::string_view name) {
             if (buffer.is_valid() && buffer.dtype() == dtype && buffer.numel() >= count)
                 return;
             buffer = Tensor();
             buffer = Tensor::empty({std::max<size_t>(count + count / 4, 1024)}, Device::GPU, dtype);
+            buffer.set_name(std::string(name));
         }
 
         uint32_t div_up(const uint64_t value, const uint64_t divisor) {
@@ -164,7 +166,7 @@ namespace lfs::training {
         void exclusive_scan(MetalFastState& s, const Tensor& input, Tensor& output, const uint32_t n,
                             Tensor* const total) {
             const uint32_t blocks = div_up(n, kScanBlock);
-            reserve(s.block_sums, blocks, DataType::UInt32);
+            reserve(s.block_sums, blocks, DataType::UInt32, "fast.scan.block_sums");
             const ScanParams params{mk::address(input), mk::address(output), mk::address(s.block_sums),
                                     total != nullptr ? mk::address(*total) : 0, n, blocks};
             launch("fast_scan_reduce", params, {&input, &s.block_sums}, blocks, 1, 256);
@@ -182,7 +184,7 @@ namespace lfs::training {
         // holding the result.
         uint32_t sort_instances(MetalFastState& s, const uint32_t capacity, const uint32_t end_bit) {
             const uint32_t blocks = div_up(capacity, kSortBlock);
-            reserve(s.histogram, size_t{256} * blocks, DataType::UInt32);
+            reserve(s.histogram, size_t{256} * blocks, DataType::UInt32, "fast.sort.histogram");
             uint32_t current = 0;
             for (uint32_t shift = 0; shift < end_bit; shift += 8) {
                 auto& keys_in = s.keys[current];
@@ -246,10 +248,13 @@ namespace lfs::training {
             return {.code = code, .has_work = false, .message = s.message};
         }
 
-        void ensure_output(Tensor& tensor, const size_t channels, const int height, const int width) {
+        void ensure_output(Tensor& tensor, const size_t channels, const int height, const int width,
+                           const std::string_view name) {
             const core::TensorShape shape({channels, static_cast<size_t>(height), static_cast<size_t>(width)});
-            if (!tensor.is_valid() || tensor.shape() != shape)
+            if (!tensor.is_valid() || tensor.shape() != shape) {
                 tensor = Tensor::empty(shape, Device::GPU, DataType::Float32);
+                tensor.set_name(std::string(name));
+            }
         }
 
         lfs::gpu_ops::RasterResult forward(lfs::gpu_ops::FastSaved& saved, const lfs::gpu_ops::SplatInputs& splats,
@@ -334,27 +339,28 @@ namespace lfs::training {
                     s.width = width;
                     s.height = height;
                 }
-                ensure_output(s.image, 3, height, width);
-                ensure_output(s.alpha, 1, height, width);
+                ensure_output(s.image, 3, height, width, "fast.output.image");
+                ensure_output(s.alpha, 1, height, width, "fast.output.alpha");
                 if (params.render_depth)
-                    ensure_output(s.depth, 1, height, width);
+                    ensure_output(s.depth, 1, height, width, "fast.output.depth");
                 else
                     s.depth = Tensor();
                 if (params.render_normal)
-                    ensure_output(s.normal, 3, height, width);
+                    ensure_output(s.normal, 3, height, width, "fast.output.normal");
 
-                reserve(s.mean_box, size_t{n} * 4, DataType::Float32);
-                reserve(s.conic_opacity, size_t{n} * 4, DataType::Float32);
-                reserve(s.color_depth, size_t{n} * 4, DataType::Float32);
-                reserve(s.tile_info, size_t{n} * 4, DataType::UInt32);
-                reserve(s.n_touched, n, DataType::UInt32);
-                reserve(s.offsets, n, DataType::UInt32);
+                reserve(s.mean_box, size_t{n} * 4, DataType::Float32, "fast.preprocess.mean_box");
+                reserve(s.conic_opacity, size_t{n} * 4, DataType::Float32, "fast.preprocess.conic_opacity");
+                reserve(s.color_depth, size_t{n} * 4, DataType::Float32, "fast.preprocess.color_depth");
+                reserve(s.tile_info, size_t{n} * 4, DataType::UInt32, "fast.preprocess.tile_info");
+                reserve(s.n_touched, n, DataType::UInt32, "fast.preprocess.n_touched");
+                reserve(s.offsets, n, DataType::UInt32, "fast.preprocess.offsets");
                 if (params.render_normal)
-                    reserve(s.normals, size_t{n} * 4, DataType::Float32);
-                reserve(s.ranges, size_t{n_tiles} * 2, DataType::UInt32);
-                reserve(s.final_transmittance, size_t{n_tiles} * kTilePixels, DataType::Float32);
-                reserve(s.n_contrib, pixels, DataType::UInt32);
-                reserve(s.counts, 2, DataType::UInt32);
+                    reserve(s.normals, size_t{n} * 4, DataType::Float32, "fast.preprocess.normals");
+                reserve(s.ranges, size_t{n_tiles} * 2, DataType::UInt32, "fast.tiles.ranges");
+                reserve(s.final_transmittance, size_t{n_tiles} * kTilePixels, DataType::Float32,
+                        "fast.tiles.final_transmittance");
+                reserve(s.n_contrib, pixels, DataType::UInt32, "fast.tiles.n_contrib");
+                reserve(s.counts, 2, DataType::UInt32, "fast.sort.counts");
 
                 const bool share = max_screen_share.is_valid() && max_screen_share.ndim() == 1 &&
                                    max_screen_share.numel() >= n;
@@ -416,8 +422,10 @@ namespace lfs::training {
                 const auto encode_raster = [&](const uint32_t capacity) {
                     fill(s.ranges, size_t{n_tiles} * 2, 0);
                     for (uint32_t i = 0; i < 2; ++i) {
-                        reserve(s.keys[i], capacity, DataType::UInt32);
-                        reserve(s.values[i], capacity, DataType::UInt32);
+                        reserve(s.keys[i], capacity, DataType::UInt32,
+                                i == 0 ? "fast.sort.keys0" : "fast.sort.keys1");
+                        reserve(s.values[i], capacity, DataType::UInt32,
+                                i == 0 ? "fast.sort.values0" : "fast.sort.values1");
                     }
                     const InstanceParams inst{mk::address(s.mean_box), mk::address(s.conic_opacity),
                                               mk::address(s.tile_info), mk::address(s.n_touched),
@@ -465,7 +473,7 @@ namespace lfs::training {
                 // reads a copy that the raster tail does not touch, submitted with
                 // the scan, while the GPU runs the tail sized for the capacity of
                 // earlier frames. A frame needing more encodes the tail again.
-                reserve(s.count_copy, 2, DataType::UInt32);
+                reserve(s.count_copy, 2, DataType::UInt32, "fast.readback.count_copy");
                 s.count_copy.slice(0, 0, 2).copy_(s.counts.slice(0, 0, 2));
                 core::TensorFence counted(core::GpuBackend::Metal);
                 counted.record(core::TensorExecutionTarget::current());
@@ -672,9 +680,9 @@ namespace lfs::training {
             if (!std::ranges::any_of(adam.groups, [](const auto& g) { return g.enabled; }))
                 throw std::runtime_error("FastGS fused Adam state is not available");
 
-            reserve(s.grads, size_t{f.n} * kGradStride, DataType::Float32);
+            reserve(s.grads, size_t{f.n} * kGradStride, DataType::Float32, "fast.backward.grads");
             if (normal_channel) {
-                reserve(s.normal_grads, size_t{f.n} * 4, DataType::Float32);
+                reserve(s.normal_grads, size_t{f.n} * 4, DataType::Float32, "fast.backward.normal_grads");
             }
             const Tensor none;
             const Tensor& normal_grads_use = normal_channel ? s.normal_grads : none;

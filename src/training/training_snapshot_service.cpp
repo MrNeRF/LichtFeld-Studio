@@ -760,8 +760,12 @@ namespace lfs::training {
         // last immutable owner has released it. A new shared_ptr control block
         // prevents old weak owners from acquiring a buffer being overwritten.
         struct StagingPool {
+            explicit StagingPool(const std::size_t max_retired_bytes)
+                : max_retired_bytes(max_retired_bytes) {}
+
             std::mutex mutex;
             std::unique_ptr<TrainingSnapshotBytes> retired;
+            const std::size_t max_retired_bytes;
 
             std::unique_ptr<TrainingSnapshotBytes> take(const std::size_t bytes) {
                 std::scoped_lock lock(mutex);
@@ -773,7 +777,7 @@ namespace lfs::training {
 
             void release(std::unique_ptr<TrainingSnapshotBytes> bytes) {
                 std::scoped_lock lock(mutex);
-                if (!retired)
+                if (!retired && bytes->size() <= max_retired_bytes)
                     retired = std::move(bytes);
             }
 
@@ -813,6 +817,8 @@ namespace lfs::training {
                 throw std::invalid_argument(
                     "Snapshot ring must be non-zero and no larger than 512 MiB");
             }
+            staging_pool = std::make_shared<StagingPool>(
+                config.ring_slots * config.band_bytes);
         }
 
         ~Impl() {
@@ -1360,7 +1366,7 @@ namespace lfs::training {
         std::condition_variable ring_condition;
         std::deque<std::size_t> drain_queue;
         std::vector<std::jthread> drain_threads;
-        std::shared_ptr<StagingPool> staging_pool = std::make_shared<StagingPool>();
+        std::shared_ptr<StagingPool> staging_pool;
         double measured_bandwidth = 0.0;
 
         mutable std::mutex metrics_mutex;

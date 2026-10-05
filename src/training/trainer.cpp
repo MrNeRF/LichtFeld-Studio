@@ -8616,6 +8616,20 @@ namespace lfs::training {
                 finish_project_writer();
             }
         }
+
+        // No training or evaluation work follows this boundary. Release the
+        // raster/loss workspaces and decoded-image cache before staging the
+        // terminal checkpoint so they do not overlap the save payload.
+        clearActiveImageLoader();
+        cache_loader.clear_cpu_cache();
+        release_training_transient_state_at_boundary();
+        if (training_ops_ != nullptr && training_ops_->fast != nullptr)
+            training_ops_->fast->release_caches(fast_saved_);
+        training_session_ops().resize_arena("B3 training end", true);
+        if (training_ops_ != nullptr && training_ops_->gsplat != nullptr)
+            training_ops_->gsplat->release_caches(gsplat_saved_);
+        lfs::core::Tensor::trim_memory_pool();
+
         TrainerProjectSavePolicy terminal_save_policy;
         std::optional<std::filesystem::path> terminal_project_path;
         {
@@ -8728,8 +8742,6 @@ namespace lfs::training {
             is_running_ = false;
         }
         training_complete_ = true;
-        clearActiveImageLoader();
-        cache_loader.clear_cpu_cache();
         lfs::core::image_io::wait_for_pending_saves();
 
         try {
@@ -8758,14 +8770,6 @@ namespace lfs::training {
             }));
         }
 
-        // B3: training has stopped or completed; the editor may remain alive.
-        release_training_transient_state_at_boundary();
-        if (training_ops_ != nullptr && training_ops_->fast != nullptr)
-            training_ops_->fast->release_caches(fast_saved_);
-        training_session_ops().resize_arena("B3 training end", true);
-        if (training_ops_ != nullptr && training_ops_->gsplat != nullptr)
-            training_ops_->gsplat->release_caches(gsplat_saved_);
-        lfs::core::Tensor::trim_memory_pool();
         training_session_ops().dump_arena_statistics();
 
         auto& command_center = lfs::training::CommandCenter::instance();
