@@ -20,6 +20,9 @@ namespace lfs::vis {
         Spatial,
         Temporal,
         FirstExternal,
+        // Keep dynamically allocated Vulkan plugin identities ABI-stable.
+        MetalFxSpatial = 0xfffffff0u,
+        MetalFxTemporal,
     };
 
     enum class SceneUpscalerFallback : std::uint8_t {
@@ -53,6 +56,16 @@ namespace lfs::vis {
 
         constexpr bool operator==(const SceneUpscalerSelection&) const = default;
     };
+
+    [[nodiscard]] constexpr bool isMetalFxBackend(SceneUpscalerBackend backend) noexcept {
+        return backend == SceneUpscalerBackend::MetalFxSpatial ||
+               backend == SceneUpscalerBackend::MetalFxTemporal;
+    }
+    [[nodiscard]] constexpr bool isTemporalSceneUpscaler(SceneUpscalerBackend backend) noexcept {
+        return backend == SceneUpscalerBackend::Temporal ||
+               backend == SceneUpscalerBackend::MetalFxTemporal;
+    }
+    [[nodiscard]] LFS_VIS_API bool metalFxBackendAvailable(SceneUpscalerBackend backend);
 
     // Built-in backends plus every optional plugin that is installed.
     [[nodiscard]] LFS_VIS_API std::vector<SceneUpscalerDescriptor> sceneUpscalerDescriptors();

@@ -294,6 +294,7 @@ namespace lfs::vis {
         // preparation. Rendering uses this feedback on the next frame so a failed
         // reconstruction pipeline never receives a reduced-resolution image.
         void reportSceneUpscalerRuntimeSelection(ViewId view, SceneUpscalerSelection selection);
+        static void logSceneUpscalerRequest(ViewRenderState&, const RenderSettings&);
         [[nodiscard]] SceneUpscalerSelection sceneUpscalerRuntimeSelection(ViewId view = kNoView) const;
         [[nodiscard]] bool sceneUpscalerModeUnsupported(ViewId view) const;
 

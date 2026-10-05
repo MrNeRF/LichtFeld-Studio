@@ -19,6 +19,8 @@ The built-in registry exposes:
 | `native` | Off | `native` (1.0) | None |
 | `spatial` | Spatial | `quality` (0.75), `balanced` (0.67), `performance` (0.50) | None |
 | `temporal` | Temporal | `quality` (0.75), `balanced` (0.67), `performance` (0.50) | Depth, motion, jitter and per-view color/depth history |
+| `metalfx_spatial` | Apple MetalFX Spatial (native Metal) | `quality` (2/3), `balanced` (1/1.7), `performance` (0.50) | None |
+| `metalfx_temporal` | Apple MetalFX Temporal (native Metal) | `quality` (2/3), `balanced` (1/1.7), `performance` (0.50) | Depth, motion and jitter; history is owned by the MetalFX feature |
 | `amd-fsr3` | AMD FSR 3.1 (optional) | `quality` (2/3), `balanced` (1/1.7), `performance` (0.50) | Depth, motion and jitter; history is owned by the FidelityFX feature |
 
 The renderer's existing `render_scale` remains the base scene scale. A selected
@@ -84,6 +86,57 @@ frames and then releases the per-view color and depth history allocations. The
 immutable compute-pipeline state remains available for a later Temporal
 selection, avoiding persistent history VRAM without paying full pipeline
 creation cost on every backend switch.
+
+## Native Metal reconstruction
+
+Apple builds with Metal graphics expose `metalfx_spatial` and
+`metalfx_temporal` only when the system GPU supports the corresponding MetalFX
+scaler. These are framework-backed built-ins, not Vulkan provider modules.
+They do not require the FidelityFX SDK, CUDA, MoltenVK, or Vulkan headers.
+Vulkan graphics builds retain FSR through their existing provider ABI; they do
+not advertise MetalFX. Preferences and Python/MCP use the same registry and
+requested/effective/fallback contract for both graphics APIs.
+
+The existing `spatial` and `temporal` modes execute their common Slang kernels
+on Metal tensors. They retain the original presets and reconstruction math.
+Temporal reconstruction supports perspective and orthographic Gaussian views
+and PLY comparison, with independent main/left/right histories for each
+viewport owner. Calibrated/cropped panels derive motion from crop-local
+intrinsics. Ground-truth comparison, panorama, appearance correction, and
+point-cloud temporal requests report `unsupported_mode` and remain native.
+MetalFX Spatial also reconstructs regular Gaussian and point-cloud views and
+PLY panels. GT comparison keeps its existing full-resolution reference/display
+path; no MetalFX work is applied to the reference image.
+
+MetalFX uses RGBA16Float color/output textures, R32Float non-reversed raster
+depth, and RG32Float current-to-previous motion in top-left render pixels.
+The shared motion kernel uses unjittered camera matrices. Raster jitter is
+passed separately in render pixels; macOS 26 does not need the newer
+jittered-motion descriptor option. View-space depth is converted on the GPU.
+MetalFX writes opaque alpha, so output conversion restores scene coverage by
+bilinearly sampling the current color alpha at jitter-corrected coordinates.
+Coverage is not reconstructed by MetalFX's internal temporal history.
+
+Texture conversion and scaler execution are ordered through
+`MetalTensorReader::submitWrites`. Input snapshots, output storage and the
+feature are retained through command completion; resize and release do not
+wait on the CPU. Tensor consumers wait through the existing GPU timeline.
+A feature is recreated when extents change. Camera cuts, scene/backend/preset
+changes, projection/crop changes and explicit resets invalidate only the
+corresponding temporal history. Ineligible modes release history. Encoding
+failures retain the last complete frame and then fall back to native; changing
+the backend or preset permits a retry. Asynchronous GPU write failures use the
+existing sticky tensor failure contract.
+
+This remains a viewport stage. The existing offline video preflight contract
+does not execute FSR or MetalFX in the export worker.
+
+GPU regression target: `metal_scene_upscaler_contracts`. It covers native
+producer/consumer ordering, alpha, independent panels/owners, crop calibration,
+jitter, reset reasons, resize, destruction with pending work and invalid inputs.
+The same target includes shared tracker/coordinator/registry contracts and
+basic Metal spatial/temporal checks. Existing `tensor_rasterizer_contracts`
+provide CPU-oracle and image-convergence coverage for the basic kernels.
 
 ## Optional reconstruction providers
 

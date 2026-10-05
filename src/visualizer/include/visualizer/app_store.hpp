@@ -226,6 +226,7 @@ namespace lfs::vis {
             DepthWindowDrawGeneration,
             DepthWindowDrawCommitValue,
             ViewerBackendValue,
+            SceneUpscalerGeneration,
         };
 
         AppStore();
@@ -265,6 +266,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<std::uint64_t> scripts_generation;
         lfs::core::reactive::Observable<std::uint64_t> language_generation;
         lfs::core::reactive::Observable<std::uint64_t> render_settings_generation;
+        lfs::core::reactive::Observable<std::uint64_t> scene_upscaler_generation;
         lfs::core::reactive::Observable<std::uint64_t> viewport_toolbar_generation;
         lfs::core::reactive::Observable<std::uint64_t> depth_window_draw_generation;
         lfs::core::reactive::Observable<DepthWindowDrawCommit> depth_window_draw_commit;

@@ -27,6 +27,7 @@ namespace lfs::vis {
     struct TensorSceneTemporalResult {
         std::shared_ptr<lfs::core::Tensor> color;
         std::uint64_t sequence = 0;
+        TemporalResetReason reset_reasons = TemporalResetReason::None;
     };
 
     class TensorSceneTemporalPipeline {

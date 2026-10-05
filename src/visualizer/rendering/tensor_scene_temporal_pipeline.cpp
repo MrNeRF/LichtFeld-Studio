@@ -83,7 +83,10 @@ namespace lfs::vis {
 
     lfs::Result<TensorSceneTemporalResult> TensorSceneTemporalPipeline::resolve(
         const TensorSceneTemporalRequest& request) {
-        if (!request.color || !request.depth ||
+        if (static_cast<size_t>(request.view) >= static_cast<size_t>(TemporalViewId::Count) ||
+            !request.color || !request.depth ||
+            request.frame.view.size != request.render_extent ||
+            request.frame.output_extent != request.output_extent ||
             request.render_extent.x <= 0 || request.render_extent.y <= 0 ||
             request.output_extent.x <= 0 || request.output_extent.y <= 0) {
             return lfs::Result<TensorSceneTemporalResult>(
@@ -123,7 +126,7 @@ namespace lfs::vis {
                             request.flip_y ? 1u : 0u,
                             request.frame.view.orthographic ? 2u : 1u},
             .depth_info = {request.frame.view.near_plane, request.frame.view.far_plane,
-                           request.flip_y ? 1.0f : 0.0f, 0.0f},
+                           request.flip_y ? 1.0f : 0.0f, float(request.depth->size(1))},
         };
         if (auto result = impl_->kernels.motion(*request.depth, motion_params, motion); !result) {
             impl_->coordinator.discard(prepared, TemporalResetReason::ResolveFailure);
@@ -179,7 +182,8 @@ namespace lfs::vis {
             return lfs::Result<TensorSceneTemporalResult>(std::move(result).error());
         }
         impl_->color_history[slot] = std::make_shared<lfs::core::Tensor>(resolved);
-        impl_->depth_history[slot] = request.depth;
+        // A public caller may mutate or recycle its input before the next frame.
+        impl_->depth_history[slot] = std::make_shared<lfs::core::Tensor>(request.depth->clone());
         if (!impl_->coordinator.commit(prepared, SceneHistoryStorage::Tensor,
                                        SceneHistoryStorage::Tensor)) {
             reset(request.view, TemporalResetReason::ResolveFailure);
@@ -189,11 +193,13 @@ namespace lfs::vis {
         return TensorSceneTemporalResult{
             .color = impl_->color_history[slot],
             .sequence = prepared.frame.sequence + 1,
+            .reset_reasons = prepared.frame.reset_reasons,
         };
     }
 
     void TensorSceneTemporalPipeline::reset(const TemporalViewId view,
                                             const TemporalResetReason reason) {
+        if (Impl::index(view) >= impl_->color_history.size()) return;
         impl_->coordinator.reset(view, reason);
         impl_->color_history[Impl::index(view)].reset();
         impl_->depth_history[Impl::index(view)].reset();

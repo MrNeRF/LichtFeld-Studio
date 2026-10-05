@@ -2213,7 +2213,12 @@
     "backend_no_frame": "설정된 렌더러입니다. 아직 장면 프레임이 없습니다.",
     "backend_fallback": "이 프레임에서는 Metal을 사용할 수 없어 Vulkan을 사용합니다.",
     "renderer_backend_short": "R",
-    "tensor_backend_short": "T"
+    "tensor_backend_short": "T",
+    "upscaler_backend_short": "U",
+    "upscaler_backend": "업스케일러",
+    "upscaler_pending": "다음 렌더링 프레임을 기다리는 중",
+    "upscaler_unsupported": "이 보기 모드에서는 지원되지 않아 꺼짐",
+    "upscaler_unavailable": "사용할 수 없어 꺼짐"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub URL 또는 단축 형식:",

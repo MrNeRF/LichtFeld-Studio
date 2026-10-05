@@ -118,3 +118,10 @@ body,
 .backend-label {
     color: @{text_dim};
 }
+
+#upscaler-toggle { color: @{text}; background-color: #00000000; }
+#upscaler-popup { color: @{text}; background-color: @{surface}; border-color: @{border}; }
+.upscaler-choice { color: @{text}; background-color: #00000000; }
+.upscaler-choice:hover { background-color: @{surface_bright}; }
+.upscaler-choice.selected { color: @{primary}; background-color: @{surface_bright}; }
+.upscaler-presets-label { color: @{text_dim}; }

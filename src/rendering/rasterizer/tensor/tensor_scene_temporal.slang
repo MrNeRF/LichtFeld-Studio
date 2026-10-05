@@ -59,7 +59,8 @@ void scene_motion(uint3 tid : SV_DispatchThreadID) {
     uint2 depthPixel = pixel;
     if (p.depthInfo.z > 0.5f)
         depthPixel.y = extent.y - 1u - depthPixel.y;
-    float depth = p.depth[depthPixel.y * extent.x + depthPixel.x];
+    uint depthStride = p.depthInfo.w > 0.0f ? uint(p.depthInfo.w) : extent.x;
+    float depth = p.depth[depthPixel.y * depthStride + depthPixel.x];
     if (p.renderInfo.w != 0u)
         depth = viewDepthToNdc(depth);
     if (!isfinite(depth) || depth < 0.0f || depth >= 1.0f) {

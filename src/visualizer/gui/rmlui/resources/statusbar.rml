@@ -120,6 +120,13 @@
             <span class="backend-label">{{ renderer_label }}</span>
             <span class="backend-value">{{ renderer_value }}</span>
         </div>
+        <div id="upscaler-backend-chip" class="backend-chip" data-attr-title="upscaler_tooltip">
+            <button id="upscaler-toggle" data-attrif-disabled="safe_mode" data-event-click="toggle_upscaler_menu()">
+                <span class="backend-label">{{ upscaler_label }}</span>
+                <span class="backend-value">{{ upscaler_value }}</span>
+            </button>
+            <div id="upscaler-popup" class="hidden" data-class-hidden="!upscaler_menu_expanded" data-rml="upscaler_menu"></div>
+        </div>
         <div id="tensor-backend-chip" class="backend-chip" data-attr-title="tensor_tooltip">
             <span class="backend-label">{{ tensor_label }}</span>
             <span class="backend-value">{{ tensor_value }}</span>

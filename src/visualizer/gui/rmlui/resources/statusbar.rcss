@@ -527,7 +527,6 @@ body.fit-9 #status-right {
     flex: 1 1 0px;
     margin-left: 4dp;
     min-width: 0;
-    overflow: hidden;
 }
 
 body.fit-9 #gpu-mem {
@@ -577,3 +576,15 @@ body.fit-8 #mcp-summary { display: none; }
 body.fit-8 #mcp-compact { display: block; }
 body.fit-8 #mcp-chip { margin-right: 4dp; padding: 0 3dp; }
 body.fit-8 #fps-value { margin-left: 6dp; min-width: 110dp; }
+
+#upscaler-toggle { display: flex; align-items: center; gap: 5dp; padding: 0; border-width: 0; cursor: pointer; }
+#upscaler-popup {
+    pointer-events: auto; position: absolute; right: 0; bottom: 20dp;
+    width: 240dp; max-height: 300dp; overflow-y: auto;
+    padding: 6dp; border-width: 1dp; border-radius: 4dp; box-sizing: border-box;
+}
+.upscaler-choice { display: block; width: 100%; padding: 5dp 8dp; text-align: left; border-width: 0; cursor: pointer; }
+.upscaler-presets-label { padding: 6dp 8dp 3dp; font-size: 10dp; }
+
+body.fit-8 #upscaler-backend-chip .backend-value { display: none; }
+body.fit-9 #fps-value { margin-left: 4dp; min-width: 100dp; }

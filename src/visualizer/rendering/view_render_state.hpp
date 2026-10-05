@@ -37,6 +37,7 @@
 
 namespace lfs::vis {
     class TensorSceneTemporalPipeline;
+    class MetalSceneUpscaler;
     struct FramebufferViewportRect {
         glm::ivec2 top_left{0, 0};
         glm::ivec2 size{0, 0};
@@ -87,6 +88,7 @@ namespace lfs::vis {
         std::uint64_t temporal_scene_revision_ = 1;
         TemporalConvergenceController temporal_convergence_;
         std::shared_ptr<TensorSceneTemporalPipeline> tensor_temporal_pipeline_;
+        std::shared_ptr<MetalSceneUpscaler> metal_scene_upscaler_;
         std::atomic<std::uint64_t> temporal_camera_cut_generation_{0};
         std::uint64_t consumed_temporal_camera_cut_generation_ = 0;
         bool scene_reconstruction_request_logged_ = false;
@@ -137,6 +139,8 @@ namespace lfs::vis {
         SceneUpscalerSelection scene_upscaler_runtime_selection_{};
         // The requested reconstruction cannot serve the current view mode.
         bool scene_upscaler_mode_unsupported_ = false;
+        bool scene_upscaler_runtime_failed_ = false;
+        std::string scene_upscaler_runtime_config_;
         mutable std::mutex depth_window_transition_mutex_;
         ViewportInteractionContext viewport_interaction_context_;
     };

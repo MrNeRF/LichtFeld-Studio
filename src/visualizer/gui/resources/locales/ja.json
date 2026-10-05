@@ -2213,7 +2213,12 @@
     "backend_no_frame": "設定済みのレンダラー。シーンのフレームはまだありません。",
     "backend_fallback": "このフレームではMetalを使用できないため、Vulkanを使用しています。",
     "renderer_backend_short": "R",
-    "tensor_backend_short": "T"
+    "tensor_backend_short": "T",
+    "upscaler_backend_short": "U",
+    "upscaler_backend": "アップスケーラー",
+    "upscaler_pending": "次の描画フレームを待機中",
+    "upscaler_unsupported": "この表示モードでは非対応のためオフ",
+    "upscaler_unavailable": "利用できないためオフ"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub URL または短縮形式:",

@@ -866,6 +866,23 @@ namespace lfs::vis {
         return RenderSettings(settings_, view_source_.viewSettings(view_source_.activeView()).value());
     }
 
+    void RenderingManager::logSceneUpscalerRequest(ViewRenderState& view, const RenderSettings& settings) {
+        if (view.scene_reconstruction_request_logged_ &&
+            view.last_scene_reconstruction_backend_ == settings.scene_upscaler &&
+            view.last_scene_reconstruction_preset_ == settings.scene_upscaler_preset)
+            return;
+        if (view.scene_reconstruction_request_logged_)
+            LOG_INFO("Scene reconstruction request: {}/{} -> {}/{} (input_scale={:.4f})",
+                view.last_scene_reconstruction_backend_, view.last_scene_reconstruction_preset_,
+                settings.scene_upscaler, settings.scene_upscaler_preset, settings.scene_upscaler_scale);
+        else
+            LOG_INFO("Scene reconstruction initial request: {}/{} (input_scale={:.4f})",
+                settings.scene_upscaler, settings.scene_upscaler_preset, settings.scene_upscaler_scale);
+        view.scene_reconstruction_request_logged_ = true;
+        view.last_scene_reconstruction_backend_ = settings.scene_upscaler;
+        view.last_scene_reconstruction_preset_ = settings.scene_upscaler_preset;
+    }
+
     void RenderingManager::reportSceneUpscalerRuntimeSelection(
         const ViewId id, const SceneUpscalerSelection selection) {
         bool changed = false;
@@ -880,8 +897,14 @@ namespace lfs::vis {
         // preset scale, while fallback must replace any cached reduced source with
         // a full-resolution native frame. TEMPORAL deliberately avoids restarting
         // the convergence sequence as CAMERA would.
-        if (changed)
+        if (changed) {
+            LOG_INFO("Scene reconstruction effective: {} -> {} (fallback={})",
+                sceneUpscalerBackendId(selection.requested), sceneUpscalerBackendId(selection.effective),
+                sceneUpscalerFallbackId(selection.fallback));
+            auto& generation = app_store().scene_upscaler_generation;
+            generation.set(generation.get() + 1);
             markViewDirty(id, DirtyFlag::TEMPORAL, lfs::vis::FrameReason::SceneChange);
+        }
     }
 
     SceneUpscalerSelection RenderingManager::sceneUpscalerRuntimeSelection(const ViewId view) const {

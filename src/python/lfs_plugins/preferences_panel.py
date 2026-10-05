@@ -116,6 +116,7 @@ class PreferencesPanel(Panel):
         self._file_associations = []
         self._mount_count = 0
         self._portal_state_binding = PanelStateBinding()
+        self._scene_state_binding = PanelStateBinding()
         self._scrub_fields = ScrubFieldController(
             self.SPEED_SCRUB_FIELD_DEFS,
             self._get_scrub_value,
@@ -345,6 +346,12 @@ class PreferencesPanel(Panel):
                 "click", lambda _ev: self._on_close(None, None, None)
             )
         self._document = doc
+        self._scene_state_binding.close()
+        self._scene_state_binding.set_handle(self._handle).watch(
+            RuntimeState.render_settings_generation,
+            refresh=self._sync_scene_upscaler_preset_records,
+            dirty=("scene_upscaler_idx", "scene_upscaler_preset_idx", "scene_upscaler_has_preset"),
+        )
         self._portal_state_binding.close()
         self._portal_state_binding.watch(
             RuntimeState.account_state,
@@ -377,6 +384,7 @@ class PreferencesPanel(Panel):
             self._scrub_fields.mount(doc)
 
     def on_unmount(self, doc):
+        self._scene_state_binding.close()
         self._portal_state_binding.close()
         self._scrub_fields.unmount()
         self._keymap.on_unmount()

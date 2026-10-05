@@ -58,6 +58,12 @@ namespace lfs::vis::gui {
         static void updateBackends(RmlStatusBar& status_bar, std::optional<lfs::rendering::ViewerBackend> active_backend) {
             status_bar.updateBackendContent(active_backend);
         }
+        static void updateUpscaler(RmlStatusBar& bar, const RenderSettings& settings, SceneUpscalerSelection selection) {
+            bar.updateUpscalerContent(settings, selection);
+        }
+        static void setUpscalerExpanded(RmlStatusBar& bar, bool expanded) {
+            bar.model_.upscaler_menu_expanded = expanded;
+        }
         static bool applyTooltip(RmlStatusBar& status_bar, int width = 2400, int bar_height = 22) {
             return status_bar.applyHoverTooltip(width, bar_height, 700);
         }
@@ -203,6 +209,9 @@ namespace {
         model.renderer_label = "R";
         model.renderer_value = "Vulkan";
         model.renderer_tooltip = "Scene renderer";
+        model.upscaler_label = "U";
+        model.upscaler_value = "AMD FSR 3.1";
+        model.upscaler_tooltip = "Scene reconstruction";
         model.tensor_label = "T";
         model.tensor_value = "CUDA";
         model.tensor_tooltip = "Tensor compute backend";
@@ -397,6 +406,14 @@ namespace {
             bound &= constructor.Bind("renderer_label", &model_.renderer_label);
             bound &= constructor.Bind("renderer_value", &model_.renderer_value);
             bound &= constructor.Bind("renderer_tooltip", &model_.renderer_tooltip);
+            bound &= constructor.Bind("upscaler_label", &model_.upscaler_label);
+            bound &= constructor.Bind("upscaler_value", &model_.upscaler_value);
+            bound &= constructor.Bind("upscaler_tooltip", &model_.upscaler_tooltip);
+            bound &= constructor.Bind("upscaler_menu", &model_.upscaler_menu);
+            bound &= constructor.Bind("upscaler_menu_expanded", &model_.upscaler_menu_expanded);
+            bound &= constructor.BindEventCallback("toggle_upscaler_menu", [](auto, auto&, const auto&) {});
+            bound &= constructor.BindEventCallback("choose_upscaler", [](auto, auto&, const auto&) {});
+            bound &= constructor.BindEventCallback("choose_upscaler_preset", [](auto, auto&, const auto&) {});
             bound &= constructor.Bind("tensor_label", &model_.tensor_label);
             bound &= constructor.Bind("tensor_value", &model_.tensor_value);
             bound &= constructor.Bind("tensor_tooltip", &model_.tensor_tooltip);
@@ -491,7 +508,10 @@ namespace {
         ASSERT_NE(fps, nullptr);
         EXPECT_EQ(renderer->GetAttribute<Rml::String>("title", ""), model_.renderer_tooltip);
         EXPECT_EQ(tensor->GetAttribute<Rml::String>("title", ""), model_.tensor_tooltip);
-        EXPECT_LT(renderer->GetAbsoluteOffset().x, tensor->GetAbsoluteOffset().x);
+        auto* upscaler = document_->GetElementById("upscaler-backend-chip");
+        ASSERT_NE(upscaler, nullptr);
+        EXPECT_LT(renderer->GetAbsoluteOffset().x, upscaler->GetAbsoluteOffset().x);
+        EXPECT_LT(upscaler->GetAbsoluteOffset().x, tensor->GetAbsoluteOffset().x);
         EXPECT_LT(fps->GetAbsoluteOffset().x, renderer->GetAbsoluteOffset().x);
         EXPECT_NE(renderer->GetInnerRML().find(">R<"), Rml::String::npos);
         EXPECT_NE(tensor->GetInnerRML().find(">T<"), Rml::String::npos);
@@ -516,6 +536,32 @@ namespace {
         EXPECT_EQ(renderer->GetAttribute<Rml::String>("title", ""), model_.renderer_tooltip);
         assertNoVerticalOverflow(document_);
         assertFlexSiblingsDoNotOverlap(document_);
+    }
+
+    TEST_F(StatusBarFitTest, UpscalerShowsEffectiveBackendAndExplainsPendingAndFallback) {
+        using namespace lfs::vis;
+        RenderSettings settings;
+        settings.scene_upscaler = "temporal";
+        settings.scene_upscaler_preset = "quality";
+        auto& state = gui::RmlStatusBarTestAccess::model(status_bar_);
+        gui::RmlStatusBarTestAccess::updateUpscaler(status_bar_, settings,
+            {SceneUpscalerBackend::Temporal, SceneUpscalerBackend::Temporal, SceneUpscalerFallback::None});
+        const auto active_label = state.upscaler_value;
+        EXPECT_FALSE(active_label.empty());
+        gui::RmlStatusBarTestAccess::updateUpscaler(status_bar_, settings,
+            {SceneUpscalerBackend::Temporal, SceneUpscalerBackend::Native, SceneUpscalerFallback::UnsupportedMode});
+        EXPECT_NE(state.upscaler_value, active_label);
+        EXPECT_NE(state.upscaler_tooltip.find(LOC("status_bar.upscaler_unsupported")), std::string::npos);
+        const auto native_label = state.upscaler_value;
+        gui::RmlStatusBarTestAccess::updateUpscaler(status_bar_, settings, {});
+        EXPECT_EQ(state.upscaler_value, native_label);
+        EXPECT_NE(state.upscaler_tooltip.find(LOC("status_bar.upscaler_pending")), std::string::npos);
+        for (const auto backend : {SceneUpscalerBackend::Native, SceneUpscalerBackend::Spatial,
+                                   SceneUpscalerBackend::Temporal, SceneUpscalerBackend::MetalFxSpatial,
+                                   SceneUpscalerBackend::MetalFxTemporal}) {
+            const auto marker = "choose_upscaler('" + std::string(sceneUpscalerBackendId(backend)) + "')";
+            EXPECT_EQ(state.upscaler_menu.find(marker) != std::string::npos, sceneUpscalerBackendAvailable(backend));
+        }
     }
 
     TEST_F(StatusBarFitTest, BackendBadgeFollowsActiveViewInsteadOfLastPublishedView) {
@@ -695,6 +741,46 @@ namespace {
                                                         context_y + 5.0f));
 
         lfs::vis::gui::RmlStatusBarTestAccess::setMcpExpanded(status_bar_, false);
+        EXPECT_EQ(status_bar_.overlayHeight(), 0.0f);
+    }
+
+    TEST_F(StatusBarFitTest, UpscalerMenuUsesMeasuredOverlayAndRemainsClickable) {
+        EXPECT_EQ(status_bar_.overlayHeight(), 0.0f);
+        EXPECT_FALSE(status_bar_.isOverlayPoint(2300.0f, -20.0f, 2400.0f));
+
+        lfs::vis::gui::RmlStatusBarTestAccess::setUpscalerExpanded(status_bar_, true);
+        model_.upscaler_menu = "<button class='upscaler-choice'>MetalFX Spatial</button><button class='upscaler-choice'>MetalFX Temporal</button>";
+        model_handle_.DirtyVariable("upscaler_menu");
+        model_.upscaler_menu_expanded = true;
+        model_handle_.DirtyVariable("upscaler_menu_expanded");
+        context_->SetDimensions({2400, static_cast<int>(22.0f + status_bar_.overlayHeight())});
+        ASSERT_TRUE(document_->SetProperty(
+            "height", std::format("{}px", 22.0f + status_bar_.overlayHeight())));
+        context_->Update();
+
+        auto* const popup = document_->GetElementById("upscaler-popup");
+        ASSERT_NE(popup, nullptr);
+        const auto offset = popup->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const float center_x = offset.x + popup->GetOffsetWidth() * 0.5f;
+        const float center_y = offset.y + popup->GetOffsetHeight() * 0.5f -
+                               status_bar_.overlayHeight();
+        EXPECT_TRUE(status_bar_.isOverlayPoint(center_x, center_y, 2400.0f));
+        EXPECT_FALSE(status_bar_.isOverlayPoint(100.0f, -20.0f, 2400.0f));
+
+        lfs::vis::gui::RmlUIManager manager;
+        manager.beginFrameCursorTracking();
+        constexpr float bar_x = 30.0f;
+        constexpr float bar_y = 700.0f;
+        lfs::vis::gui::RmlStatusBarTestAccess::trackRenderedFrame(
+            status_bar_, manager, bar_x, bar_y);
+        const float context_y = bar_y - status_bar_.overlayHeight();
+        EXPECT_TRUE(manager.activeOverlayContainsPoint(
+            bar_x + center_x,
+            context_y + offset.y + popup->GetOffsetHeight() * 0.5f));
+        EXPECT_FALSE(manager.activeOverlayContainsPoint(bar_x + 100.0f,
+                                                        context_y + 5.0f));
+
+        lfs::vis::gui::RmlStatusBarTestAccess::setUpscalerExpanded(status_bar_, false);
         EXPECT_EQ(status_bar_.overlayHeight(), 0.0f);
     }
 

@@ -13,6 +13,7 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/status_bar_mining.hpp"
 #include "rendering/viewer_backend.hpp"
+#include "rendering/scene_upscaler_registry.hpp"
 #include "visualizer/rendering/rendering_types.hpp"
 #include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/DataModelHandle.h>
@@ -109,6 +110,8 @@ namespace lfs::vis::gui {
         void updateHoverTooltip();
         void updateTooltipScheduling();
         void resetTooltip();
+        LFS_VIS_API void updateUpscalerContent(const RenderSettings& settings, SceneUpscalerSelection runtime);
+        void selectUpscaler(const std::string& backend_id, const std::optional<std::string>& preset_id = std::nullopt);
         bool updateTheme();
         bool layoutFits(float reserve_px) const;
         LFS_VIS_API void fitToAvailableWidth(bool allow_expand);
@@ -286,6 +289,8 @@ namespace lfs::vis::gui {
             std::string fps_label;
             std::string renderer_label, renderer_value, renderer_tooltip;
             std::string tensor_label, tensor_value, tensor_tooltip;
+            std::string upscaler_label, upscaler_value, upscaler_tooltip, upscaler_menu;
+            bool upscaler_menu_expanded = false;
             bool preview_reduced = false;
             std::string preview_reduced_text;
             std::string git_commit;

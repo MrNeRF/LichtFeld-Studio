@@ -805,16 +805,14 @@ namespace lfs::vis {
     }
 
     void ViewportReferenceRenderer::prepare(GraphicsContext&, const ViewportFrameDesc& desc,
-                                            ViewRenderState&) {
-        impl_->upscaler = {
-            .requested = desc.scene_upscaler,
-            .effective = desc.scene_upscaler_mode_unsupported
-                             ? SceneUpscalerBackend::Native
-                             : desc.scene_upscaler,
-            .fallback = desc.scene_upscaler_mode_unsupported
-                            ? SceneUpscalerFallback::UnsupportedMode
-                            : SceneUpscalerFallback::None,
-        };
+                                            ViewRenderState& view) {
+        const bool available = static_cast<std::uint32_t>(desc.scene_upscaler) <
+                                   static_cast<std::uint32_t>(SceneUpscalerBackend::FirstExternal) ||
+                               (isMetalFxBackend(desc.scene_upscaler) && metalFxBackendAvailable(desc.scene_upscaler));
+        impl_->upscaler = resolveSceneUpscalerSelection(desc.scene_upscaler,
+            available && !desc.scene_upscaler_mode_unsupported && !view.scene_upscaler_runtime_failed_,
+            desc.scene_upscaler_mode_unsupported ? SceneUpscalerFallback::UnsupportedMode :
+                                                  SceneUpscalerFallback::RuntimeUnavailable);
     }
 
     void ViewportReferenceRenderer::record(const GraphicsFrame& frame,

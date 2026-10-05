@@ -52,6 +52,33 @@ endif()
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+
+if((BUILD_TESTS OR BUILD_VISUALIZER_TESTS) AND LFS_TENSOR_METAL AND NOT LFS_GRAPHICS_VULKAN_BUILD)
+    add_executable(metal_scene_upscaler_contracts
+        test_metal_scene_upscaler.cpp
+        test_temporal_frame_tracker.cpp
+        test_scene_temporal_coordinator.cpp
+        test_scene_upscaler_registry.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_upscaler_registry.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_upscaler_plugin_unavailable.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/tensor_scene_temporal_pipeline.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/metal_scene_upscaler.mm
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_coordinator.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_plan.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_resolve.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/temporal_frame_tracker.cpp)
+    target_include_directories(metal_scene_upscaler_contracts PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/visualizer
+        ${CMAKE_SOURCE_DIR}/src/rendering/include
+        ${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/tensor)
+    target_compile_features(metal_scene_upscaler_contracts PRIVATE cxx_std_23)
+    set_target_properties(metal_scene_upscaler_contracts PROPERTIES OBJCXX_STANDARD 23 OBJCXX_STANDARD_REQUIRED YES)
+    target_link_libraries(metal_scene_upscaler_contracts PRIVATE
+        lfs_tensor_rasterizer GTest::gtest_main "-framework MetalFX" "-framework Metal" "-framework Foundation")
+    add_test(NAME MetalSceneUpscalerContracts COMMAND metal_scene_upscaler_contracts)
+    set_tests_properties(MetalSceneUpscalerContracts PROPERTIES LABELS "viewer;metal;gpu;upscaler" TIMEOUT 180)
+endif()
+
 # The tensor HDR tonemapper against libplacebo, on clips ffmpeg encodes.
 if(LFS_TENSOR_METAL AND BUILD_TESTS)
     find_package(PkgConfig REQUIRED)

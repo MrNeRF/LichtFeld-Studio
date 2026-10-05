@@ -2213,7 +2213,12 @@
     "backend_no_frame": "Moteur configuré ; aucune image de scène pour le moment.",
     "backend_fallback": "Metal est indisponible pour cette image ; Vulkan est utilisé.",
     "renderer_backend_short": "R",
-    "tensor_backend_short": "T"
+    "tensor_backend_short": "T",
+    "upscaler_backend_short": "U",
+    "upscaler_backend": "Upscaler",
+    "upscaler_pending": "En attente de la prochaine image rendue",
+    "upscaler_unsupported": "Non pris en charge dans cette vue ; désactivé",
+    "upscaler_unavailable": "Indisponible ; désactivé"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "URL GitHub ou raccourci :",

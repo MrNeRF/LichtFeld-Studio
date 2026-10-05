@@ -52,6 +52,11 @@ namespace lfs::vis {
                 .input_scale = 0.50f,
             },
         };
+        constexpr std::array METALFX_PRESETS{
+            SceneUpscalerPreset{"quality", "preferences.scene_reconstruction_quality", 2.0f / 3.0f},
+            SceneUpscalerPreset{"balanced", "preferences.scene_reconstruction_balanced", 1.0f / 1.7f},
+            SceneUpscalerPreset{"performance", "preferences.scene_reconstruction_performance", 0.5f},
+        };
         const std::array DESCRIPTORS{
             SceneUpscalerDescriptor{
                 .backend = SceneUpscalerBackend::Native,
@@ -71,6 +76,18 @@ namespace lfs::vis {
                 .label_key = "preferences.scene_reconstruction_temporal",
                 .presets = TEMPORAL_PRESETS,
             },
+            SceneUpscalerDescriptor{
+                .backend = SceneUpscalerBackend::MetalFxSpatial,
+                .id = "metalfx_spatial",
+                .presets = METALFX_PRESETS,
+                .display_name = "Apple MetalFX Spatial",
+            },
+            SceneUpscalerDescriptor{
+                .backend = SceneUpscalerBackend::MetalFxTemporal,
+                .id = "metalfx_temporal",
+                .presets = METALFX_PRESETS,
+                .display_name = "Apple MetalFX Temporal",
+            },
         };
 
     } // namespace
@@ -78,6 +95,8 @@ namespace lfs::vis {
     std::vector<SceneUpscalerDescriptor> sceneUpscalerDescriptors() {
         std::vector<SceneUpscalerDescriptor> available;
         for (const auto& descriptor : DESCRIPTORS) {
+            if (isMetalFxBackend(descriptor.backend) && !metalFxBackendAvailable(descriptor.backend))
+                continue;
             auto* const plugin = sceneUpscalerPlugin(descriptor.backend);
             if (plugin == nullptr || plugin->available())
                 available.push_back(descriptor);
@@ -188,3 +207,9 @@ namespace lfs::vis {
     }
 
 } // namespace lfs::vis
+
+#if !defined(LFS_TENSOR_METAL) || defined(LFS_GRAPHICS_VULKAN)
+namespace lfs::vis {
+    bool metalFxBackendAvailable(SceneUpscalerBackend) { return false; }
+}
+#endif

@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -376,4 +377,27 @@ TEST(PreferencesMigration, InvalidProjectManagerPreferencesFallBackWithoutContam
     EXPECT_THROW(preferences.setProjectManagerDefaultView("tiles"), std::invalid_argument);
     EXPECT_THROW(preferences.setProjectManagerState("[]"), std::invalid_argument);
     EXPECT_EQ(readPreferences(*paths).at("theme"), "dark");
+}
+
+TEST(PreferencesMigration, StartupClearsBackendMissingFromBuildAndPreservesOptions) {
+    const auto home = makeHome("lfs_preferences_tensor_missing");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    const auto missing = std::find(lfs::core::kCompiledGpuBackends.begin(),
+                                   lfs::core::kCompiledGpuBackends.end(), lfs::core::GpuBackend::Vulkan) ==
+                         lfs::core::kCompiledGpuBackends.end();
+    if (!missing) GTEST_SKIP() << "Vulkan is compiled in this configuration";
+    writePreferences(*paths, {{"schema_version", 2}, {"tensor_backend", {{"backend", "vulkan"},
+                                                  {"vulkan_device", "0"},
+                                                  {"vulkan_validation", 2}}}});
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    ASSERT_EQ(preferences.tensorBackend().backend, lfs::core::GpuBackend::Vulkan);
+    const auto sanitized = preferences.sanitizeTensorBackend();
+    EXPECT_FALSE(sanitized.backend);
+    EXPECT_EQ(sanitized.options.vulkan_device, "0");
+    EXPECT_EQ(sanitized.options.vulkan_validation, 2);
+    EXPECT_FALSE(preferences.tensorBackend().backend);
+    EXPECT_EQ(readPreferences(*paths).at("tensor_backend").at("backend"), "auto");
 }

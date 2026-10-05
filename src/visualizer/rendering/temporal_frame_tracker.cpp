@@ -35,6 +35,8 @@ namespace lfs::vis {
         bool projectionChanged(const lfs::rendering::FrameView& lhs,
                                const lfs::rendering::FrameView& rhs) {
             if (lhs.orthographic != rhs.orthographic ||
+                lhs.subregion_origin != rhs.subregion_origin ||
+                lhs.subregion_full_size != rhs.subregion_full_size ||
                 different(lhs.focal_length_mm, rhs.focal_length_mm) ||
                 different(lhs.near_plane, rhs.near_plane) ||
                 different(lhs.far_plane, rhs.far_plane) ||
@@ -61,18 +63,35 @@ namespace lfs::vis {
         }
 
         std::optional<glm::mat4> projectionFromView(const lfs::rendering::FrameView& view) {
-            if (view.size.x <= 0 || view.size.y <= 0 || view.intrinsics_override.has_value() ||
+            if (view.size.x <= 0 || view.size.y <= 0 ||
                 !std::isfinite(view.near_plane) || !std::isfinite(view.far_plane) ||
                 view.near_plane <= 0.0f || view.far_plane <= view.near_plane) {
                 return std::nullopt;
             }
-            return lfs::rendering::createProjectionMatrixFromFocal(
-                view.size,
-                view.focal_length_mm,
-                view.orthographic,
-                view.ortho_scale,
-                view.near_plane,
-                view.far_plane);
+            auto projection = lfs::rendering::createProjectionMatrixFromFocal(
+                view.size, view.focal_length_mm, view.orthographic, view.ortho_scale,
+                view.near_plane, view.far_plane);
+            if (!view.intrinsics_override && view.subregion_full_size == glm::ivec2(0))
+                return projection;
+            const auto intrinsics = view.getCameraIntrinsics();
+            if (!std::isfinite(intrinsics.focal_x) || !std::isfinite(intrinsics.focal_y) ||
+                !std::isfinite(intrinsics.center_x) || !std::isfinite(intrinsics.center_y) ||
+                intrinsics.focal_x <= 0 || intrinsics.focal_y <= 0)
+                return std::nullopt;
+            // Match the rasterizer's crop-local calibration exactly. Motion
+            // addresses a panel texture, not the full viewport camera image.
+            const float cx = intrinsics.center_x - view.subregion_origin.x;
+            const float cy = intrinsics.center_y - view.subregion_origin.y;
+            projection[0][0] = 2.f * intrinsics.focal_x / view.size.x;
+            projection[1][1] = 2.f * intrinsics.focal_y / view.size.y;
+            if (view.orthographic) {
+                projection[3][0] = 2.f * cx / view.size.x - 1.f;
+                projection[3][1] = 1.f - 2.f * cy / view.size.y;
+            } else {
+                projection[2][0] = 1.f - 2.f * cx / view.size.x;
+                projection[2][1] = 2.f * cy / view.size.y - 1.f;
+            }
+            return projection;
         }
 
         std::optional<TemporalProjectionPair> makeTemporalViewProjectionPairWithJitters(

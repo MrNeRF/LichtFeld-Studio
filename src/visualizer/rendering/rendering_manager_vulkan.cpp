@@ -787,25 +787,7 @@ namespace lfs::vis {
         const bool resize_deferring = !context.preparing_import && view_state.frame_lifecycle_service_.isResizeDeferring();
         const auto requested_upscaler = sceneUpscalerBackendFromId(frame_settings.scene_upscaler)
                                             .value_or(SceneUpscalerBackend::Native);
-        if (!view_state.scene_reconstruction_request_logged_ ||
-            view_state.last_scene_reconstruction_backend_ != frame_settings.scene_upscaler ||
-            view_state.last_scene_reconstruction_preset_ != frame_settings.scene_upscaler_preset) {
-            if (view_state.scene_reconstruction_request_logged_) {
-                LOG_INFO("Scene reconstruction request: {}/{} -> {}/{} (input_scale={:.4f})",
-                         view_state.last_scene_reconstruction_backend_, view_state.last_scene_reconstruction_preset_,
-                         frame_settings.scene_upscaler,
-                         frame_settings.scene_upscaler_preset,
-                         frame_settings.scene_upscaler_scale);
-            } else {
-                LOG_INFO("Scene reconstruction initial request: {}/{} (input_scale={:.4f})",
-                         frame_settings.scene_upscaler,
-                         frame_settings.scene_upscaler_preset,
-                         frame_settings.scene_upscaler_scale);
-                view_state.scene_reconstruction_request_logged_ = true;
-            }
-            view_state.last_scene_reconstruction_backend_ = frame_settings.scene_upscaler;
-            view_state.last_scene_reconstruction_preset_ = frame_settings.scene_upscaler_preset;
-        }
+        logSceneUpscalerRequest(view_state, frame_settings);
         const auto reported_upscaler = sceneUpscalerRuntimeSelection(context.view);
         const bool reconstruction_runtime_ready =
             reported_upscaler.requested == requested_upscaler &&

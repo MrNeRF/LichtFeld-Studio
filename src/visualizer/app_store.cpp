@@ -50,6 +50,7 @@ namespace lfs::vis {
           scripts_generation(store_, Field::ScriptsGeneration, "scripts_generation", 0),
           language_generation(store_, Field::LanguageGeneration, "language_generation", 0),
           render_settings_generation(store_, Field::RenderSettingsGeneration, "render_settings_generation", 0),
+          scene_upscaler_generation(store_, Field::SceneUpscalerGeneration, "scene_upscaler_generation", 0),
           viewport_toolbar_generation(store_, Field::ViewportToolbarGeneration, "viewport_toolbar_generation", 0),
           depth_window_draw_generation(store_, Field::DepthWindowDrawGeneration, "depth_window_draw_generation", 0),
           depth_window_draw_commit(store_, Field::DepthWindowDrawCommitValue, "depth_window_draw_commit", AppStore::DepthWindowDrawCommit{}),

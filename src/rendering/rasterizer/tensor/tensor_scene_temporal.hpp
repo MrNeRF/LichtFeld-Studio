@@ -16,7 +16,7 @@ namespace lfs::rendering {
         std::array<float, 16> inverse_current_view_projection{};
         std::array<float, 16> previous_view_projection{};
         std::array<std::uint32_t, 4> render_info{}; // width, height, flip_y, depth encoding
-        std::array<float, 4> depth_info{};          // near, far, source flip_y, unused
+        std::array<float, 4> depth_info{};          // near, far, source flip_y, depth row stride (0 = render width)
     };
 
     struct TensorSceneResolveParameters {

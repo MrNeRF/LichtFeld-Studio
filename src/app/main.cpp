@@ -336,7 +336,7 @@ int main(int argc, char* argv[]) {
     }
     const auto tensor_preferences = use_default_preferences
                                         ? lfs::vis::TensorPreferenceState{}
-                                        : lfs::vis::UserPreferences::instance().tensorBackend();
+                                        : lfs::vis::UserPreferences::instance().sanitizeTensorBackend();
     const auto options_status = lfs::core::set_tensor_backend_options(tensor_preferences.options);
     // An automatic preference leaves the choice to default_gpu_backend().
     const auto backend_status = tensor_preferences.backend
