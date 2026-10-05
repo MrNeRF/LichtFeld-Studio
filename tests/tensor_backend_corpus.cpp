@@ -78,6 +78,7 @@ namespace {
     // | launch_sort_1d | Tensor::sort on rank 1 |
     // | launch_sort_2d | Tensor::sort on rank 2 |
     // | launch_gather | Tensor::gather |
+    // | launch_gather_fused_unary | Tensor::gather_lazy(...).map(...).eval |
     // | launch_take | Tensor::take |
     // | launch_index_select | Tensor::index_select |
     // | launch_scatter | Tensor::scatter_ |
@@ -196,6 +197,7 @@ namespace {
         ENTRY(launch_sort_1d, "Tensor::sort(rank1)", kF32, Permutation),
         ENTRY(launch_sort_2d, "Tensor::sort(rank2)", kF32, Permutation),
         ENTRY(launch_gather, "Tensor::gather", kF32, Digest),
+        ENTRY(launch_gather_fused_unary, "Tensor::gather_lazy.map.eval", kF32, Digest),
         ENTRY(launch_take, "Tensor::take", kF32, Digest),
         ENTRY(launch_index_select, "Tensor::index_select", kIndex, Digest),
         ENTRY(launch_scatter, "Tensor::scatter_", kScatter, Digest),
@@ -384,7 +386,8 @@ namespace {
             inputs.input = name == "launch_sort_1d" ? make_tensor({elements(profile)}, dtype, seed)
                                                     : inputs.a;
         }
-        if (name == "launch_gather" || name == "launch_take") {
+        if (name == "launch_gather" || name == "launch_take" ||
+            name == "launch_gather_fused_unary") {
             inputs.input = inputs.a.flatten();
             inputs.indices = indices(inputs.input.numel(), inputs.input.numel(), seed + 3);
         }
@@ -575,6 +578,8 @@ namespace {
             return {inputs.input.gather(0, inputs.indices)};
         if (name == "launch_take")
             return {inputs.input.take(inputs.indices)};
+        if (name == "launch_gather_fused_unary")
+            return {inputs.input.gather_lazy(inputs.indices).map(lfs::core::ops::abs_op{}).eval()};
         if (name == "launch_index_select")
             return {a.index_select(0, inputs.indices)};
         if (name == "launch_scatter" || name == "launch_index_copy" || name == "launch_index_add") {
@@ -1089,6 +1094,7 @@ namespace {
         {"launch_sort_1d", {FacadeEntry::sort_1d}},
         {"launch_sort_2d", {FacadeEntry::sort_2d}},
         {"launch_gather", {FacadeEntry::gather, FacadeEntry::index_select}},
+        {"launch_gather_fused_unary", {FacadeEntry::gather_fused_unary}},
         {"launch_take", {FacadeEntry::index_select}},
         {"launch_index_select", {FacadeEntry::index_select}},
         {"launch_scatter", {FacadeEntry::scatter}},

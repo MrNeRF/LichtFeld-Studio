@@ -8,6 +8,7 @@
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_debug.hpp"
 #include "core/tensor_label.hpp"
 #include "core/tensor_serialization_sink.hpp"
 #include "core/tensor_trace.hpp"
@@ -403,6 +404,7 @@ namespace {
     LFS_FREEZE(T::take, T (T::*)(const T&) const);
     LFS_FREEZE(T::append_gather, T& (T::*)(const T&));
     LFS_FREEZE(T::append_zeros, T& (T::*)(size_t));
+    LFS_FREEZE(T::gather_lazy, PermutationExpr<TensorLeaf, TensorLeaf> (T::*)(const T&) const);
     LFS_FREEZE(T::nonzero, T (T::*)() const);
     LFS_FREEZE(T::index_fill_, T& (T::*)(int, const T&, float));
     LFS_FREEZE(T::index_copy_, T& (T::*)(int, const T&, const T&));
@@ -523,6 +525,19 @@ namespace {
                void (*)(std::ostream&, const T&, const TensorSerializationDescriptor&, const T*));
     LFS_FREEZE(TensorSerializationSink::write_tensor_payload,
                void (TensorSerializationSink::*)(std::ostream&, const T&, const T*, const TensorSerializationDescriptor&));
+    LFS_FREEZE(debug::TensorValidation::is_valid, bool (debug::TensorValidation::*)() const);
+    LFS_FREEZE(debug::TensorValidation::to_string, std::string (debug::TensorValidation::*)() const);
+    LFS_FREEZE(debug::validate_tensor_cpu, debug::TensorValidation (*)(const T&));
+    LFS_FREEZE(debug::validate_tensor_gpu, debug::TensorValidation (*)(const T&));
+    LFS_FREEZE(debug::validate_tensor, debug::TensorValidation (*)(const T&));
+    LFS_FREEZE(debug::log_tensor_validation, void (*)(const T&, const char*, const char*, int));
+    LFS_FREEZE(debug::TensorDiff::is_close, bool (debug::TensorDiff::*)(float, float) const);
+    LFS_FREEZE(debug::TensorDiff::to_string, std::string (debug::TensorDiff::*)() const);
+    LFS_FREEZE(debug::diff_tensors, debug::TensorDiff (*)(const T&, const T&, float));
+    LFS_FREEZE(debug::log_tensor_diff, void (*)(const T&, const T&, const char*, float));
+    LFS_FREEZE(debug::TensorStats::to_string, std::string (debug::TensorStats::*)() const);
+    LFS_FREEZE(debug::get_tensor_stats, debug::TensorStats (*)(const T&));
+    LFS_FREEZE(debug::log_tensor_info, void (*)(const T&, const char*));
     LFS_FREEZE(Tracer::instance, Tracer& (*)());
     LFS_FREEZE(Tracer::set_enabled, void (Tracer::*)(bool));
     LFS_FREEZE(Tracer::is_enabled, bool (Tracer::*)() const);
@@ -828,6 +843,7 @@ namespace {
         ct.take(ct);
         t.append_gather(ct);
         t.append_zeros(1);
+        ct.gather_lazy(ct);
         ct.nonzero();
         t.scatter_(0, ct, ct, ScatterMode::None);
         t.scatter_(0, ct, 1.0f, ScatterMode::None);
@@ -1008,6 +1024,19 @@ namespace {
         ct.to_vector_bool();
         ct.debug_values();
         ct.options();
+        debug::TensorValidation{}.is_valid();
+        debug::TensorValidation{}.to_string();
+        debug::validate_tensor_cpu(ct);
+        debug::validate_tensor_gpu(ct);
+        debug::validate_tensor(ct);
+        debug::log_tensor_validation(ct, "", "", 0);
+        debug::TensorDiff{}.is_close();
+        debug::TensorDiff{}.to_string();
+        debug::diff_tensors(ct, ct);
+        debug::log_tensor_diff(ct, ct, "");
+        debug::TensorStats{}.to_string();
+        debug::get_tensor_stats(ct);
+        debug::log_tensor_info(ct, "");
         debug::TensorOpTracer::instance();
         debug::TensorOpTracer::instance().set_enabled(true);
         debug::TensorOpTracer::instance().is_enabled();
@@ -1045,6 +1074,13 @@ namespace {
         X::lazy_telemetry_snapshot();
         X::reset_lazy_telemetry();
         X::clear_lazy_ir_for_testing();
+        ct.gather_lazy(ct).eval();
+        ct.gather_lazy(ct).shape();
+        ct.gather_lazy(ct).device();
+        ct.gather_lazy(ct).dtype();
+        ct.gather_lazy(ct).stream_hint();
+        ct.gather_lazy(ct).snapshot();
+        ct.gather_lazy(ct).map(operation);
         TensorLeaf(t).eval();
         TensorLeaf(t).shape();
         TensorLeaf(t).device();
@@ -1061,6 +1097,10 @@ namespace {
     using UnaryExpression = UnaryExpr<LeafExpr, ops::abs_op>;
     using NestedUnaryExpression = UnaryExpr<UnaryExpression, ops::neg_op>;
     using BinaryExpression = BinaryExpr<LeafExpr, LeafExpr, ops::add_op>;
+    using ScalarOperation = ops::scalar_right_op<ops::add_op, float>;
+    using ScalarExpression = ScalarUnaryExpr<LeafExpr, ScalarOperation>;
+    using PermutationExpression = PermutationExpr<LeafExpr, LeafExpr>;
+    using GatherUnaryExpression = UnaryExpr<PermutationExpression, ops::abs_op>;
 
     [[maybe_unused]] constexpr auto kExprOverloads = std::tuple{
         static_cast<LeafExpr& (LeafExpr::*)()>(&LeafExpr::derived),
@@ -1071,12 +1111,20 @@ namespace {
         static_cast<const NestedUnaryExpression& (NestedUnaryExpression::*)() const>(
             &NestedUnaryExpression::derived),
         static_cast<BinaryExpression& (BinaryExpression::*)()>(&BinaryExpression::derived),
-        static_cast<const BinaryExpression& (BinaryExpression::*)() const>(&BinaryExpression::derived)};
+        static_cast<const BinaryExpression& (BinaryExpression::*)() const>(&BinaryExpression::derived),
+        static_cast<ScalarExpression& (ScalarExpression::*)()>(&ScalarExpression::derived),
+        static_cast<const ScalarExpression& (ScalarExpression::*)() const>(&ScalarExpression::derived),
+        static_cast<PermutationExpression& (PermutationExpression::*)()>(&PermutationExpression::derived),
+        static_cast<const PermutationExpression& (PermutationExpression::*)() const>(
+            &PermutationExpression::derived)};
 
     template <typename X>
     concept ConcreteExprSurface = requires(const LeafExpr& leaf, const UnaryExpression& unary,
                                            const NestedUnaryExpression& nested,
                                            const BinaryExpression& binary,
+                                           const ScalarExpression& scalar,
+                                           const PermutationExpression& permutation,
+                                           const GatherUnaryExpression& gather_unary,
                                            ops::neg_op operation) {
         leaf.eval_impl();
         leaf.snapshot_impl();
@@ -1106,6 +1154,26 @@ namespace {
         binary.device_impl();
         binary.dtype_impl();
         binary.stream_hint_impl();
+        scalar.eval_impl();
+        scalar.snapshot_impl();
+        scalar.map(operation);
+        scalar.shape_impl();
+        scalar.device_impl();
+        scalar.dtype_impl();
+        scalar.stream_hint_impl();
+        permutation.eval_impl();
+        permutation.snapshot_impl();
+        permutation.map(operation);
+        permutation.shape_impl();
+        permutation.device_impl();
+        permutation.dtype_impl();
+        permutation.stream_hint_impl();
+        gather_unary.eval_impl();
+        gather_unary.snapshot_impl();
+        gather_unary.shape_impl();
+        gather_unary.device_impl();
+        gather_unary.dtype_impl();
+        gather_unary.stream_hint_impl();
     };
 
     template <typename X>
@@ -1158,6 +1226,9 @@ namespace {
     static_assert(ExprBaseSurface<UnaryExpression>);
     static_assert(ExprBaseSurface<NestedUnaryExpression>);
     static_assert(ExprBaseSurface<BinaryExpression>);
+    static_assert(ExprBaseSurface<ScalarExpression>);
+    static_assert(ExprBaseSurface<PermutationExpression>);
+    static_assert(ExprBaseSurface<GatherUnaryExpression>);
     static_assert(ConcreteExprSurface<T>);
     static_assert(RowSurface<T>);
 

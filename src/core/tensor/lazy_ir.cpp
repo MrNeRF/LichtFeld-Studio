@@ -374,6 +374,39 @@ namespace lfs::core::internal {
         register_node_locked(runtime, output.debug_id(), LazyOpKind::Binary, op_name, std::move(inputs), output);
     }
 
+    void lazy_ir_record_scalar_unary(const Tensor& input,
+                                     const Tensor& output,
+                                     std::string_view op_name) {
+        if (!lazy_ir_active()) {
+            return;
+        }
+        if (output.debug_id() == 0) {
+            return;
+        }
+        auto& runtime = lazy_ir_runtime();
+        std::lock_guard<std::mutex> lock(runtime.mutex);
+        std::vector<uint64_t> inputs = {ensure_leaf_node_locked(runtime, input)};
+        register_node_locked(runtime, output.debug_id(), LazyOpKind::ScalarUnary, op_name, std::move(inputs), output);
+    }
+
+    void lazy_ir_record_permutation(const Tensor& input,
+                                    const Tensor& indices,
+                                    const Tensor& output,
+                                    std::string_view op_name) {
+        if (!lazy_ir_active()) {
+            return;
+        }
+        if (output.debug_id() == 0) {
+            return;
+        }
+        auto& runtime = lazy_ir_runtime();
+        std::lock_guard<std::mutex> lock(runtime.mutex);
+        std::vector<uint64_t> inputs = {
+            ensure_leaf_node_locked(runtime, input),
+            ensure_leaf_node_locked(runtime, indices)};
+        register_node_locked(runtime, output.debug_id(), LazyOpKind::Permutation, op_name, std::move(inputs), output);
+    }
+
     void lazy_ir_record_reduce(const Tensor& input,
                                const Tensor& output,
                                std::string_view op_name) {

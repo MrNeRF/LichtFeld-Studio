@@ -345,6 +345,12 @@ namespace lfs::core::tensor_ops {
                                     size_t rank, int dim, size_t total_elements,
                                     int boundary_mode, cudaStream_t stream);
 
+    // Fused gather + unary operation using thrust::permutation_iterator for zero-copy
+    template <typename UnaryOp>
+    void launch_gather_fused_unary(const float* input, const int* indices, float* output,
+                                   size_t input_size, size_t index_size,
+                                   UnaryOp op, cudaStream_t stream = nullptr);
+
     // Template declarations for scatter operations
     template <typename T>
     void launch_scatter(T* output, const int* indices, const T* src,

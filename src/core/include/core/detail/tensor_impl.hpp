@@ -1979,6 +1979,7 @@ namespace lfs::core {
         Tensor& append_zeros(size_t n_rows);
 
         // Lazy indexing operations (returns expression template)
+        auto gather_lazy(const Tensor& indices) const -> PermutationExpr<TensorLeaf, TensorLeaf>;
 
         Tensor nonzero() const;
 
@@ -2485,6 +2486,28 @@ namespace lfs::core {
 
         static MemoryInfo cuda();
     };
+
+    // ========================================================================
+    // Inline implementation of lazy gather operation
+    // ========================================================================
+
+    inline auto Tensor::gather_lazy(const Tensor& indices) const -> PermutationExpr<TensorLeaf, TensorLeaf> {
+        LFS_ASSERT_MSG(is_valid() && indices.is_valid(),
+                       "gather_lazy requires valid tensors");
+        LFS_ASSERT_MSG(indices.dtype() == DataType::Int32,
+                       "gather_lazy indices must be Int32");
+        LFS_ASSERT_MSG(indices.device() == device_,
+                       "gather_lazy indices must be on the input device");
+        internal::require_same_gpu_backend(*this, indices, "gather_lazy");
+
+        // Create expression that will lazily gather elements
+        return PermutationExpr<TensorLeaf, TensorLeaf>(
+            TensorLeaf(*this),
+            TensorLeaf(indices),
+            indices.shape(), // Output shape matches indices shape
+            device_,
+            dtype_);
+    }
 
     // Parallel first-touch for a large ordinary (pageable) host allocation.
     // The caller must have allocated the storage with empty_pageable_host() or

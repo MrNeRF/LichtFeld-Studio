@@ -1058,6 +1058,7 @@ namespace lfs::core::internal {
             StorageRef values{};
             StorageRef winners{};
             uint32_t boundary = 0;
+            uint32_t unary = 0;
             IndexParams params{};
         };
 
@@ -1082,7 +1083,7 @@ namespace lfs::core::internal {
             launch.params.total = checked_u32(launch.total, "Metal index operation count exceeds uint32");
             const auto dtype = static_cast<uint32_t>(launch.dtype);
             const auto pipeline = context.pipeline(
-                "index_op", {{0, launch.mode}, {1, dtype}, {2, dtype}, {5, static_cast<uint32_t>(dtype_size(launch.dtype))}, {17, launch.boundary}});
+                "index_op", {{0, launch.mode}, {1, dtype}, {2, dtype}, {5, static_cast<uint32_t>(dtype_size(launch.dtype))}, {17, launch.boundary}, {18, launch.unary}});
             context.dispatch(uses, {.pipeline = pipeline,
                                     .buffers = {addresses[0], addresses[1], addresses[2], addresses[3]},
                                     .params = param_bytes(launch.params),
@@ -1953,6 +1954,19 @@ namespace lfs::core::internal {
                        "gather rank exceeds MAX_TENSOR_RANK");
         encode_index(*acquire_context(),
                      {.mode = kGatherMode, .dtype = input.dtype, .total = program.total_elements, .input = input, .indices = indices, .values = output, .boundary = static_cast<uint32_t>(program.boundary_mode), .params = {.rank = static_cast<uint32_t>(input_layout.rank), .index_rank = static_cast<uint32_t>(index_layout.rank), .dim = static_cast<uint32_t>(program.dim), .input_dims = shader_dims(input_layout), .index_dims = shader_dims(index_layout)}});
+    }
+
+    void MetalBackendOps::gather_fused_unary(const StorageRef input, const StorageRef indices, const StorageRef output,
+                                             const PointwiseOp unary, const IndexProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(gather_fused_unary);
+        LFS_ASSERT_MSG(input.dtype == DataType::Float32 && output.dtype == DataType::Float32,
+                       "Metal fused gather supports only Float32");
+        const uint32_t unary_code = unary == PointwiseOp::Abs ? 1u : unary == PointwiseOp::Sqrt ? 2u
+                                                                 : unary == PointwiseOp::Neg    ? 3u
+                                                                                                : 0u;
+        LFS_ASSERT_MSG(unary_code != 0, "unsupported fused gather unary operation");
+        encode_index(*acquire_context(),
+                     {.mode = kTakeMode, .dtype = DataType::Float32, .total = program.index_size, .input = input, .indices = indices, .values = output, .unary = unary_code, .params = {.input_size = checked_u32(program.input_size, "Metal gather input size exceeds uint32")}});
     }
 
     void MetalBackendOps::index_select(const StorageRef input, const StorageRef indices, const StorageRef output,

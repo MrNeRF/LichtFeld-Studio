@@ -270,6 +270,7 @@ set(CORE_SOURCES
         splat_exportable_storage.cpp
         sh_value_quant.cpp
         shareable_allocation_limit.cpp
+        tensor_debug.cpp
         mesh_data.cpp
         nodes/types.cpp
         nodes/registry.cpp

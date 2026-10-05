@@ -125,6 +125,8 @@ namespace lfs::core::internal {
 
         void gather(StorageRef, StorageRef, StorageRef, const StridedLayout&,
                     const StridedLayout&, const IndexProgram&, ExecContext) override;
+        void gather_fused_unary(StorageRef, StorageRef, StorageRef, PointwiseOp,
+                                const IndexProgram&, ExecContext) override;
         void index_select(StorageRef, StorageRef, StorageRef, const StridedLayout&,
                           const IndexProgram&, ExecContext) override;
         void scatter(StorageRef, StorageRef, StorageRef, const StridedLayout&,

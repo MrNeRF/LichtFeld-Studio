@@ -92,6 +92,35 @@ namespace lfs::core::internal {
         LFS_CUDA_CHECK(cudaGetLastError());
     }
 
+    void CudaBackendOps::gather_fused_unary(
+        const StorageRef input, const StorageRef indices, const StorageRef output,
+        const PointwiseOp unary, const IndexProgram& program,
+        const ExecContext context) {
+        LFS_FACADE_TRACE(gather_fused_unary);
+        switch (unary) {
+        case PointwiseOp::Abs:
+            tensor_ops::launch_gather_fused_unary(
+                cuda_const_pointer<float>(input), cuda_const_pointer<int>(indices),
+                cuda_pointer<float>(output), program.input_size, program.index_size,
+                ops::abs_op{}, context.cuda_stream);
+            return;
+        case PointwiseOp::Sqrt:
+            tensor_ops::launch_gather_fused_unary(
+                cuda_const_pointer<float>(input), cuda_const_pointer<int>(indices),
+                cuda_pointer<float>(output), program.input_size, program.index_size,
+                ops::sqrt_op{}, context.cuda_stream);
+            return;
+        case PointwiseOp::Neg:
+            tensor_ops::launch_gather_fused_unary(
+                cuda_const_pointer<float>(input), cuda_const_pointer<int>(indices),
+                cuda_pointer<float>(output), program.input_size, program.index_size,
+                ops::neg_op{}, context.cuda_stream);
+            return;
+        default:
+            LFS_ASSERT_MSG(false, "unsupported fused gather unary operation");
+        }
+    }
+
     void CudaBackendOps::index_select(
         const StorageRef input, const StorageRef indices, const StorageRef output,
         const StridedLayout& input_layout, const IndexProgram& program,
