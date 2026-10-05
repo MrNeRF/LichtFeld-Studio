@@ -24,7 +24,6 @@ namespace lfs::io {
     // Memory info
     std::size_t get_total_physical_memory();
     std::size_t get_available_physical_memory();
-    double get_memory_usage_ratio();
 
     // Constants
     inline constexpr std::size_t BYTES_PER_GB = 1024ULL * 1024 * 1024;

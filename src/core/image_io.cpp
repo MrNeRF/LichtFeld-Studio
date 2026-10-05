@@ -938,19 +938,8 @@ namespace lfs::core {
         }
     } // namespace
 
-    void flip_normal_prior_yz_hwc(float* data, const size_t pixel_count) {
-        flip_normal_prior_yz(data + 1, data + 2, pixel_count, 3);
-    }
-
     void flip_normal_prior_yz_chw(float* data, const size_t pixel_count) {
         flip_normal_prior_yz(data + pixel_count, data + 2 * pixel_count, pixel_count, 1);
-    }
-
-    void transform_normal_prior_world_to_camera_hwc(
-        float* data, const size_t pixel_count, const std::array<float, 9>& w2c) {
-        for (size_t i = 0; i < pixel_count; ++i) {
-            transform_normal_world_to_camera(data[i * 3], data[i * 3 + 1], data[i * 3 + 2], w2c);
-        }
     }
 
     void transform_normal_prior_world_to_camera_chw(
@@ -1065,13 +1054,6 @@ namespace lfs::core::image_io {
         }
     }
 
-    size_t BatchImageSaver::pending_count_if_initialized() {
-        if (auto* saver = try_instance()) {
-            return saver->pending_count();
-        }
-        return 0;
-    }
-
     BatchImageSaver::BatchImageSaver(size_t num_workers)
         : num_workers_(std::max(size_t(1), std::min(num_workers, std::min(size_t(8), size_t(std::thread::hardware_concurrency()))))),
           max_pending_tasks_(num_workers_) {
@@ -1142,11 +1124,6 @@ namespace lfs::core::image_io {
     void BatchImageSaver::wait_all() {
         std::unique_lock<std::mutex> lock(queue_mutex_);
         cv_finished_.wait(lock, [this] { return task_queue_.empty() && active_tasks_ == 0; });
-    }
-
-    size_t BatchImageSaver::pending_count() const {
-        std::unique_lock<std::mutex> lock(queue_mutex_);
-        return task_queue_.size() + active_tasks_;
     }
 
     void BatchImageSaver::worker_thread() {
