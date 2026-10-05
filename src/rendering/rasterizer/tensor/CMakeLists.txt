@@ -4,7 +4,7 @@
 # Single-source splat rasterizer: Slang passes run through the tensor library
 # on Metal and Vulkan. It replaces the native Metal and vksplat rasterizers
 # pass by pass.
-add_library(lfs_tensor_rasterizer STATIC splat_projector.cpp splat_tile_binner.cpp splat_rasterizer.cpp)
+add_library(lfs_tensor_rasterizer STATIC splat_projector.cpp splat_tile_binner.cpp splat_rasterizer.cpp splat_lod_selector.cpp)
 target_compile_features(lfs_tensor_rasterizer PUBLIC cxx_std_23)
 set_target_properties(lfs_tensor_rasterizer PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(lfs_tensor_rasterizer PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -17,6 +17,7 @@ lfs_add_gpu_program(lfs_tensor_rasterizer splat_sort32 SOURCE splat_sort.slang
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_tiles SOURCE splat_tiles.slang
     COMPUTE tile_counts tile_status source_key_groups source_compact source_permutation tile_instances tile_ranges tile_depth_batches)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_project SOURCE splat_project.slang COMPUTE project_splats)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_lod SOURCE splat_lod.slang COMPUTE select_lod)
 # Blend variants. The plain opaque view is specialized at compile time with
 # relaxed math, as the native rasterizer does: serial (128), and depth-batch
 # chunks (128|512) and prefix (128|512|1024). Generic blends per raster mode and
@@ -44,5 +45,7 @@ cmake_path(ABSOLUTE_PATH CMAKE_CURRENT_SOURCE_DIR NORMALIZE OUTPUT_VARIABLE _ras
 cmake_path(GET _rasterizer_dir PARENT_PATH _rasterizer_dir)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/splat_types.slang" "${CMAKE_CURRENT_SOURCE_DIR}/splat_overlay.slang"
+    # Match the native selector's path spelling so Ninja coalesces the shared dependency.
+    "${_rasterizer_dir}/metal/../vulkan/shader/src/slang/config.slang"
     "${_rasterizer_dir}/vulkan/shader/src/slang/portal_compact.inc"
     "${_rasterizer_dir}/vulkan/shader/src/slang/display_color.inc")

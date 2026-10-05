@@ -1449,15 +1449,16 @@ namespace lfs::vis {
                 // IDs, debug levels and transition weights.
                 const auto cut = [&](const auto* values) { return values ? std::span(values, draw_count) : std::span<std::remove_const_t<std::remove_pointer_t<decltype(values)>> const>{}; };
                 const bool lod_cut = request.lod_indices != nullptr;
-                const rendering::SplatLodInputs lod_inputs{cut(request.lod_indices), cut(request.lod_logical_indices), cut(request.lod_levels),
-                                                           cut(request.lod_weights), request.lod_debug_mode, uint32_t(model.size())};
+                const auto lod_cut_tensors = lod_cut ? i.projector->upload_cut({cut(request.lod_indices), cut(request.lod_logical_indices), cut(request.lod_levels),
+                                                                                 cut(request.lod_weights), request.lod_debug_mode, uint32_t(model.size())})
+                                                     : rendering::SplatLodCut{};
                 // Native projection flags: Spark opacity, portal edge math.
                 const bool spark_opacity = projection.display.z == 1.f;
                 const bool portal_edges = projection.rasterization.w == 1.f && projection.display.z == 0.f;
                 const bool tight = !transparent && !needs_overlay && !request.gut && !spark_opacity && !portal_math;
                 if (auto projected = i.projector->project(sources, frame_projection, degree, request.gut ? rendering::SplatPrimitive::Gut : rendering::SplatPrimitive::Gaussian,
                                                           tight, i.tensor_projected, request.gut ? &i.tensor_gut : nullptr, needs_overlay ? &overlay_inputs : nullptr,
-                                                          lod_cut ? &lod_inputs : nullptr);
+                                                          lod_cut ? &lod_cut_tensors : nullptr);
                     !projected)
                     throw lfs::Exception(projected.error());
                 // RasterParameters as the native rasterizer derives them for this view.
@@ -1491,7 +1492,8 @@ namespace lfs::vis {
                                                                    selection_enabled ? selection : nullptr, preview_enabled ? preview : nullptr,
                                                                    needs_overlay ? host_bytes(f.selection_colors, sizeof(request.overlay.selection_colors)) : std::span<const std::byte>{}};
                 raster.mode = uint32_t(request.gut ? rendering::SplatRasterMode::Gut : rendering::SplatRasterMode::Gaussian);
-                const rendering::SplatRasterLogical raster_logical{&i.projector->logical_ids(), uint32_t(model.size())};
+                const rendering::SplatRasterLogical raster_logical{lod_cut_tensors.logical_indices ? lod_cut_tensors.logical_indices : lod_cut_tensors.indices,
+                                                                   uint32_t(model.size())};
                 if (auto rasterized = state.tensor_raster->rasterize(i.tensor_projected, request.gut ? &i.tensor_gut : nullptr, draw_count,
                                                                      rendering::SplatRasterMode(raster.mode), raster,
                                                                      needs_overlay ? &raster_overlay : nullptr, lod_cut ? &raster_logical : nullptr);
