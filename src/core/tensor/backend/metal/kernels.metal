@@ -2104,8 +2104,8 @@ kernel void random_op(device uchar* output_buffer [[buffer(0)]],
         }
         ((device long*)output)[index] = long(sample);
     } else {
-        const float u = min(max(unit_interval(words.x), 1e-10f), 1.0f - 1e-10f);
-        keys[index] = log(max(weights[index], 1e-10f)) - log(-log(u));
+        const float u = min(max(unit_interval(words.x), 1e-10f), 0.9999999403953552f);
+        keys[index] = (weights[index] > 0.0f ? log(weights[index]) : -INFINITY) - log(-log(u));
     }
 }
 

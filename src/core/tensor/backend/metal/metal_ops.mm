@@ -2165,7 +2165,7 @@ namespace lfs::core::internal {
         const auto context = acquire_context();
         const uint32_t categories = checked_u32(program.count, "Metal multinomial category count exceeds uint32");
         const uint32_t samples = checked_u32(program.sample_count, "Metal multinomial sample count exceeds uint32");
-        // The weights are validated on the host, like the CUDA path.
+        // Validate on the device and read back only the two summary values.
         struct WeightStatistics {
             float maximum;
             uint32_t invalid;

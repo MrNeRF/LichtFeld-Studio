@@ -235,9 +235,9 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : SV
             Ptr<float, Access.Read> weights = (Ptr<float, Access.Read>)parameters.weightsAddress;
             float u = unitInterval(words.x);
             u = max(u, 1e-10f);
-            u = min(u, 1.0f - 1e-10f);
+            u = min(u, 0.9999999403953552f);
             const float gumbel = -log(-log(u));
-            const float logWeight = log(max(weights[index], 1e-10f));
+            const float logWeight = (weights[index] > 0.0f ? log(weights[index]) : -asfloat(0x7f800000u));
             ((Ptr<float, Access.ReadWrite>)parameters.keysAddress)[index] = logWeight + gumbel;
         }
     }

@@ -1063,17 +1063,17 @@ namespace lfs::core {
                 if (replacement) {
                     for (size_t i = 0; i < num_samples; ++i) {
                         double u = dis(gen);
-                        auto it = std::lower_bound(cdf.begin(), cdf.end(), u);
-                        samples[i] = static_cast<int64_t>(std::distance(cdf.begin(), it));
+                        auto it = std::upper_bound(cdf.begin(), cdf.end(), u);
+                        samples[i] = static_cast<int64_t>(std::min(static_cast<size_t>(std::distance(cdf.begin(), it)), n - 1));
                     }
                 } else {
                     std::vector<std::pair<float, int64_t>> keys(n);
 
                     for (size_t i = 0; i < n; ++i) {
                         float u = dis(gen);
-                        u = std::clamp(u, 1e-10f, 1.0f - 1e-10f);
+                        u = std::clamp(u, 1e-10f, 0.9999999403953552f);
                         float gumbel = -std::log(-std::log(u));
-                        float log_weight = std::log(std::max(weights_data[i], 1e-10f));
+                        float log_weight = std::log(weights_data[i]);
                         keys[i] = {log_weight + gumbel, static_cast<int64_t>(i)};
                     }
 

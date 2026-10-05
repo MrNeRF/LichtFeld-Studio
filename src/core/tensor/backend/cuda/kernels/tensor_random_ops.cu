@@ -135,11 +135,11 @@ namespace lfs::core::tensor_ops {
         float u = curand_uniform(&state);
 
         u = fmaxf(u, 1e-10f);
-        u = fminf(u, 1.0f - 1e-10f);
+        u = fminf(u, 0.9999999403953552f);
 
         float gumbel = -logf(-logf(u));
 
-        float log_weight = logf(fmaxf(weights[idx], 1e-10f));
+        float log_weight = (weights[idx] > 0.0f ? logf(weights[idx]) : -INFINITY);
         keys[idx] = log_weight + gumbel;
     }
 
