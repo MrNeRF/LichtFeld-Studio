@@ -401,25 +401,6 @@ namespace lfs::vis {
         return request;
     }
 
-    lfs::rendering::SplitViewGaussianPanelRenderState buildSplitViewGaussianPanelRenderState(
-        const FrameContext& ctx, const glm::ivec2 render_size,
-        const Viewport* const source_viewport,
-        const std::optional<SplitViewPanelId> render_panel) {
-        const auto request = buildViewportRenderRequest(ctx, render_size, source_viewport, render_panel);
-        return lfs::rendering::SplitViewGaussianPanelRenderState{
-            .frame_view = request.frame_view,
-            .scaling_modifier = request.scaling_modifier,
-            .antialiasing = request.antialiasing,
-            .mip_filter = request.mip_filter,
-            .sh_degree = request.sh_degree,
-            .raster_backend = request.raster_backend,
-            .gut = request.gut,
-            .equirectangular = request.equirectangular,
-            .scene = request.scene,
-            .filters = request.filters,
-            .overlay = request.overlay};
-    }
-
     lfs::rendering::SplitViewPointCloudPanelRenderState buildSplitViewPointCloudPanelRenderState(
         const FrameContext& ctx, const glm::ivec2 render_size, const Viewport* const source_viewport) {
         const Viewport& viewport = source_viewport ? *source_viewport : ctx.viewport;
@@ -479,19 +460,6 @@ namespace lfs::vis {
 
         applyPointCloudCropVolume(request.filters, ctx);
         return request;
-    }
-
-    const core::SceneNode* plyComparisonNodeForPanel(
-        const core::Scene& scene,
-        const size_t split_view_offset,
-        const SplitViewPanelId panel) {
-        const auto visible_nodes = scene.getVisibleSplatNodeSlots();
-        const auto pair = plyComparisonPairForOffset(visible_nodes.size(), split_view_offset);
-        if (!pair) {
-            return nullptr;
-        }
-        const size_t index = panel == SplitViewPanelId::Right ? pair->second : pair->first;
-        return visible_nodes[index].node;
     }
 
     void applyPlyComparisonNodeScope(

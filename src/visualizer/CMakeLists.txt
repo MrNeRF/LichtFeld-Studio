@@ -77,7 +77,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/lod_page_cache.cpp
         rendering/lod_upload_engine.cpp
         rendering/spark_lod_controller.cpp
-        $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/split_view_composition.cpp>
         rendering/split_view_service.cpp
         rendering/viewport_artifact_service.cpp
         rendering/viewport_frame_lifecycle_service.cpp

@@ -29,18 +29,4 @@ namespace lfs::vis {
         EXPECT_EQ(artifacts.viewerBackend(), rendering::ViewerBackend::Cuda);
     }
 
-    TEST(ViewerBackendMetadata, PreservesCachedFrameIdentityWithoutCapturingPixels) {
-        ViewportArtifactService artifacts;
-        rendering::FrameMetadata frame;
-        frame.valid = true;
-        frame.viewer_backend = rendering::ViewerBackend::Metal;
-        FrameResources resources;
-        resources.cached_metadata = makeCachedRenderMetadata(frame);
-        resources.cached_result_size = {128, 48};
-        artifacts.updateFromFrameResources(resources, true);
-        EXPECT_EQ(artifacts.viewerBackend(), rendering::ViewerBackend::Metal);
-        EXPECT_FALSE(artifacts.getCapturedImageIfCurrent());
-        artifacts.updateFromImageOutput({}, frame, {128, 48}, true);
-        EXPECT_EQ(artifacts.viewerBackend(), rendering::ViewerBackend::Metal);
-    }
 } // namespace lfs::vis

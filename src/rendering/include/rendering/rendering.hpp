@@ -310,66 +310,12 @@ namespace lfs::rendering {
         FrameMetadata metadata;
     };
 
-    // Split view support
-    enum class PanelContentType {
-        Model3D,     // Regular 3D model rendering
-        Image2D,     // GT image display
-        CachedRender // Previously rendered frame
-    };
-
-    struct SplitViewGaussianPanelRenderState {
-        FrameView frame_view;
-        float scaling_modifier = 1.0f;
-        bool antialiasing = false;
-        bool mip_filter = false;
-        int sh_degree = 3;
-        GaussianRasterBackend raster_backend = GaussianRasterBackend::ThreeDgs;
-        bool gut = false;
-        bool equirectangular = false;
-        GaussianSceneState scene;
-        GaussianFilterState filters;
-        GaussianOverlayState overlay;
-    };
-
     struct SplitViewPointCloudPanelRenderState {
         FrameView frame_view;
         PointCloudRenderState render;
         PointCloudSceneState scene;
         PointCloudFilterState filters;
         PointCloudOverlayState overlay;
-    };
-
-    struct SplitViewPanelContent {
-        PanelContentType type = PanelContentType::Model3D;
-        const lfs::core::SplatData* model = nullptr;
-        glm::mat4 model_transform{1.0f};
-        std::optional<SplitViewGaussianPanelRenderState> gaussian_render;
-        std::optional<SplitViewPointCloudPanelRenderState> point_cloud_render;
-        uint64_t image_handle = 0;
-    };
-
-    struct SplitViewPanelPresentation {
-        float start_position = 0.0f;
-        float end_position = 1.0f;
-        glm::vec2 texcoord_scale{1.0f, 1.0f};
-        std::optional<bool> flip_y;
-        bool normalize_x_to_panel = false;
-    };
-
-    struct SplitViewPanel {
-        SplitViewPanelContent content;
-        SplitViewPanelPresentation presentation;
-    };
-
-    struct SplitViewCompositeState {
-        glm::ivec2 output_size{0, 0};
-        glm::vec3 background_color{0.0f, 0.0f, 0.0f};
-    };
-
-    struct SplitViewPresentationState {
-        glm::vec4 divider_color{0.29f, 0.33f, 0.42f, 1.0f};
-        bool letterbox = false;
-        glm::ivec2 content_size{0, 0};
     };
 
     // Render modes

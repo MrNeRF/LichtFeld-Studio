@@ -21,7 +21,6 @@
 
 namespace lfs::vis {
 
-    constexpr int GPU_ALIGNMENT = 16;
     inline constexpr std::size_t DEFAULT_LOD_MAX_SPLATS = 2'500'000;
     inline constexpr float DEFAULT_LOD_PIXEL_SCALE_LIMIT = 0.0001f;
     inline constexpr float DEFAULT_LOD_RENDER_SCALE = 1.0f;
@@ -196,24 +195,6 @@ namespace lfs::vis {
             1,
             total_width - 1);
     }
-
-    [[nodiscard]] inline std::array<SplitViewPanelLayout, 2> makeSplitViewPanelLayouts(
-        const int total_width,
-        const float split_position) {
-        const int divider_x = splitViewDividerPixel(total_width, split_position);
-        return {{
-            {.panel = SplitViewPanelId::Left,
-             .x = 0,
-             .width = divider_x,
-             .start_position = 0.0f,
-             .end_position = split_position},
-            {.panel = SplitViewPanelId::Right,
-             .x = divider_x,
-             .width = std::max(total_width - divider_x, 0),
-             .start_position = split_position,
-             .end_position = 1.0f},
-        }};
-    };
 
     struct PlyComparisonPanelLayout {
         SplitViewPanelLayout panel;
