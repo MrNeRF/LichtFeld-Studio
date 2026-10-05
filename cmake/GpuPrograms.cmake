@@ -5,13 +5,14 @@ find_program(LFS_GPU_SLANGC NAMES slangc
     HINTS "${VCPKG_INSTALLED_DIR}/${VCPKG_HOST_TRIPLET}/tools/shader-slang"
           "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/shader-slang"
     PATH_SUFFIXES tools/shader-slang REQUIRED)
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 # One Slang module, any number of compute entries, and optional raster entries.
 # Artifacts are embedded, so installed builds never depend on source/build paths.
 # MSL is generated at build time; Metal loads it using the system compiler. This
 # works with Command Line Tools, without the optional offline Metal Toolchain.
 function(lfs_add_gpu_program target name)
+    # FindPython variables are directory-scoped; callers may be sibling directories.
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
     cmake_parse_arguments(PROGRAM "" "SOURCE" "COMPUTE;VERTEX;FRAGMENT" ${ARGN})
     get_filename_component(source "${PROGRAM_SOURCE}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
     set(directory "${CMAKE_CURRENT_BINARY_DIR}/gpu_programs/${name}")
