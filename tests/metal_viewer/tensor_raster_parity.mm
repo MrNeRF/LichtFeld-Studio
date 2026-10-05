@@ -7,6 +7,8 @@
 #include "core/tensor_backend.hpp"
 #include "splat_preprocessor.hpp"
 #include "splat_project.hpp"
+#include "splat_rasterizer.hpp"
+#include "tile_rasterizer.hpp"
 
 #include <algorithm>
 #include <array>
@@ -173,6 +175,133 @@ namespace {
         return diff;
     }
 
+    // Reads a private texture through a shared staging buffer.
+    std::vector<uint8_t> read_texture(id<MTLDevice> device, id<MTLCommandQueue> queue, id<MTLTexture> texture, size_t pixel_bytes) {
+        const size_t row = texture.width * pixel_bytes, bytes = row * texture.height;
+        auto staging = [device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
+        auto command = [queue commandBuffer];
+        auto blit = [command blitCommandEncoder];
+        [blit copyFromTexture:texture sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
+                   sourceSize:MTLSizeMake(texture.width, texture.height, 1) toBuffer:staging destinationOffset:0
+          destinationBytesPerRow:row destinationBytesPerImage:bytes];
+        [blit endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        std::vector<uint8_t> result(bytes);
+        std::memcpy(result.data(), staging.contents, bytes);
+        return result;
+    }
+
+    // Full frames: native preprocessor + TileRasterizer against the Slang
+    // projection + SplatRasterizer, on the same scene and camera.
+    int run_frames(id<MTLDevice> device) {
+        const lfs::core::GpuBackendScope scope(GpuBackend::Metal);
+        auto module = M::load(splat_project_entries(), GpuBackend::Metal);
+        require(bool(module), "Slang projection did not load");
+        SplatPreprocessor preprocessor(device);
+        TileRasterizer native(device);
+        lfs::rendering::SplatRasterizer slang(GpuBackend::Metal);
+        auto queue = [device newCommandQueue];
+        const uint32_t count = 60000, width = 1280, height = 720, capacity = 8'000'000;
+        const auto scene = make_scene(count, 21);
+        int failures = 0;
+        for (const auto& config : {Config{"frame-perspective-sh3", CameraModel::Perspective, PrimitiveMode::Gaussian, ShStorage::CanonicalFloat32, 3, false, false},
+                                   Config{"frame-mip", CameraModel::Perspective, PrimitiveMode::Gaussian, ShStorage::CanonicalFloat32, 3, true, false}}) {
+            const auto projection = make_projection(config);
+            const simd_float4 background = simd_make_float4(.1f, .2f, .3f, 1);
+            // Native.
+            SplatBuffers in;
+            in.count = count;
+            in.layout_rest = 15;
+            in.storage = config.storage;
+            in.means = {native_buffer(device, scene.means)};
+            in.log_scales = {native_buffer(device, scene.scales)};
+            in.rotations = {native_buffer(device, scene.rotations)};
+            in.opacity_logits = {native_buffer(device, scene.opacity)};
+            in.sh0 = {native_buffer(device, scene.sh0)};
+            in.sh_rest = {native_buffer(device, scene.rest)};
+            in.sh_bounds = {native_buffer(device, scene.q16_bounds)};
+            auto projected_native = [device newBufferWithLength:count * sizeof(ProjectedSplat) options:MTLResourceStorageModePrivate];
+            RasterFrame frame(device, width, height, count, capacity);
+            auto command = [queue commandBuffer];
+            preprocessor.encode(command, in, projection, config.degree, config.mode, {projected_native});
+            native.encode(command, {projected_native}, count, RasterMode::Gaussian, background, frame, {}, {}, projection);
+            [command commit];
+            [command waitUntilCompleted];
+            require(command.status == MTLCommandBufferStatusCompleted, "Native frame failed");
+            const auto native_status = frame.status();
+            const auto native_color = read_texture(device, queue, frame.color(), 8);
+            const auto native_depth = read_texture(device, queue, frame.depth(), 16);
+
+            // Slang.
+            const std::array<uint32_t, 12> layout{count, 15, 0, 0, 0, 0, 0, count, 0, 0, count, count};
+            const auto means = tensor(scene.means), scales = tensor(scene.scales), rotations = tensor(scene.rotations);
+            const auto opacity = tensor(scene.opacity), sh0 = tensor(scene.sh0), rest = tensor(scene.rest), bounds = tensor(scene.q16_bounds);
+            const auto frame_tensor = tensor(std::vector<Projection>{projection});
+            const auto layout_tensor = tensor(std::vector<uint32_t>(layout.begin(), layout.end()));
+            auto projected = Tensor::zeros({count * sizeof(ProjectedSplat)}, Device::GPU, DataType::UInt8);
+            struct Parameters {
+                uint64_t pointers[22] = {};
+                uint32_t sh_storage, sh_degree, primitive_mode, tight_bounds;
+            } parameters{.sh_storage = uint32_t(config.storage), .sh_degree = config.degree, .primitive_mode = 0, .tight_bounds = 0};
+            const std::array bindings{
+                M::Binding{0, &means}, M::Binding{8, &scales}, M::Binding{16, &rotations}, M::Binding{24, &opacity},
+                M::Binding{32, &sh0}, M::Binding{40, &rest}, M::Binding{48, &bounds}, M::Binding{56, nullptr},
+                M::Binding{64, &projected, M::Access::ReadWrite}, M::Binding{72, &frame_tensor}, M::Binding{80, &layout_tensor},
+                M::Binding{88, nullptr}, M::Binding{96, nullptr}, M::Binding{104, nullptr}, M::Binding{112, nullptr},
+                M::Binding{120, nullptr}, M::Binding{128, nullptr}, M::Binding{136, nullptr},
+                M::Binding{144, nullptr}, M::Binding{152, nullptr}, M::Binding{160, nullptr}, M::Binding{168, nullptr}};
+            auto projected_ok = (*module)->dispatch({.function = "project_splats", .arguments = {std::as_bytes(std::span(&parameters, 1)), bindings},
+                                                     .groups = {M::groups_for(count, 256), 1, 1}, .group = {256, 1, 1}});
+            require(bool(projected_ok), "Slang projection failed");
+            lfs::rendering::SplatRasterParameters raster{};
+            raster.count = count;
+            raster.width = width;
+            raster.height = height;
+            raster.columns = (width + 15) / 16;
+            raster.tiles = raster.columns * ((height + 15) / 16);
+            raster.capacity = capacity;
+            raster.flags = 128; // one subgroup per 8x4 pixels, as native picks for Gaussians
+            raster.background = {background.x, background.y, background.z, background.w};
+            raster.intrinsics = {projection.intrinsics.x, projection.intrinsics.y, projection.intrinsics.z, projection.intrinsics.w};
+            raster.clip = {projection.clip_scale.x, projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w};
+            raster.camera = {projection.extent.x, projection.extent.y, projection.extent.z, projection.extent.w};
+            raster.panorama = {projection.panorama.x, projection.panorama.y, projection.panorama.z, projection.panorama.w};
+            require(bool(slang.reserve(count, width, height, capacity)), "Slang reserve failed");
+            auto rasterized = slang.rasterize(projected, nullptr, count, lfs::rendering::SplatRasterMode::Gaussian, raster);
+            require(bool(rasterized), std::format("Slang rasterize failed: {}", rasterized ? "" : rasterized.error().detail()));
+            const auto slang_color = download<uint16_t>(slang.color(), size_t(width) * height * 4);
+            const auto slang_depth = download<float>(slang.depth(), size_t(width) * height * 4);
+            const auto status = download<uint64_t>(slang.status(), 3);
+            // Compare.
+            const auto* nc = reinterpret_cast<const _Float16*>(native_color.data());
+            const auto* sc = reinterpret_cast<const _Float16*>(slang_color.data());
+            const auto* nd = reinterpret_cast<const float*>(native_depth.data());
+            double max_color = 0, sum_color = 0;
+            size_t over_one = 0, median_diff = 0;
+            for (size_t i = 0; i < size_t(width) * height; ++i) {
+                double pixel_max = 0;
+                for (int c = 0; c < 4; ++c) {
+                    const double d = std::fabs(double(nc[i * 4 + c]) - double(sc[i * 4 + c]));
+                    pixel_max = std::max(pixel_max, d);
+                    sum_color += d;
+                }
+                max_color = std::max(max_color, pixel_max);
+                over_one += pixel_max > 1.0 / 255;
+                const float a = nd[i * 4 + 3], b = slang_depth[i * 4 + 3];
+                median_diff += std::fabs(a - b) > 1e-3f * std::max(1.f, std::fabs(a));
+            }
+            const size_t pixels = size_t(width) * height;
+            const bool ok = status[0] == native_status.required_instances && max_color * 255 <= 2 && over_one * 1000 <= pixels &&
+                            median_diff * 1000 <= pixels;
+            std::printf("%-28s instances native=%llu slang=%llu color max=%.2f/255 mean=%.4f/255 >1/255=%.4f%% median_depth_diff=%.4f%% %s\n",
+                        config.name, (unsigned long long)native_status.required_instances, (unsigned long long)status[0], max_color * 255,
+                        sum_color / (pixels * 4) * 255, 100.0 * over_one / pixels, 100.0 * median_diff / pixels, ok ? "ok" : "FAIL");
+            failures += ok ? 0 : 1;
+        }
+        return failures;
+    }
+
     int run(id<MTLDevice> device) {
         const lfs::core::GpuBackendScope scope(GpuBackend::Metal);
         auto module = M::load(splat_project_entries(), GpuBackend::Metal);
@@ -287,7 +416,7 @@ int main() {
             return LFS_METAL_TEST_REQUIRE_DEVICE ? 1 : 77;
         }
         try {
-            return run(device);
+            return (run(device) | run_frames(device)) ? 1 : 0;
         } catch (const std::exception& error) {
             std::fprintf(stderr, "tensor raster parity: %s\n", error.what());
             return 1;

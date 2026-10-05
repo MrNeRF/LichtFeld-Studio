@@ -46,3 +46,25 @@ float3 overlay_projection_color(float3 color, float2 center, uint flags, Ptr<flo
         color = float3(dot(color, float3(.2126f, .7152f, .0722f)) * .25f);
     return color;
 }
+
+uint overlay_selection(Ptr<float4, Access.Read> p, uint source, uint flags, float2 center,
+                       Ptr<uint8_t, Access.Read> selection, Ptr<uint8_t, Access.Read> preview, uint2 mask_limits) {
+    if (overlay_enabled(p[21].y))
+        return 0;
+    const uint group = (source < mask_limits.x && overlay_enabled(p[24].x)) ? uint(selection[source]) & 127u : 0u;
+    const bool selectable = (flags & 2u) == 0u;
+    const bool committed = group > 0u;
+    const bool in_preview = !overlay_enabled(p[206].z) && overlay_enabled(p[24].y) && source < mask_limits.y && preview[source] != 0u;
+    const float2 delta = center - p[23].xy;
+    const bool brush = overlay_enabled(p[23].w) && selectable && dot(delta, delta) <= p[23].z * p[23].z;
+    const bool additive = overlay_enabled(p[24].z);
+    const bool focus = selectable && int(round(p[24].w)) == int(source);
+    const bool highlighted = (in_preview && !committed && additive) || (in_preview && committed && !additive) ||
+                             (brush && additive && !committed) || (brush && !additive && committed) || focus;
+    return group | (highlighted ? 128u : 0u);
+}
+
+float3 overlay_target(uint status, Ptr<float4, Access.Read> colors) {
+    const uint group = status & 127u;
+    return colors[(status & 128u) != 0u ? (group != 0u ? 257u : 256u) : group].xyz;
+}

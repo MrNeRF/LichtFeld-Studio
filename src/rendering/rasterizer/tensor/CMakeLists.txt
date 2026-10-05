@@ -4,7 +4,7 @@
 # Single-source splat rasterizer: Slang passes run through the tensor library
 # on Metal and Vulkan. It replaces the native Metal and vksplat rasterizers
 # pass by pass.
-add_library(lfs_tensor_rasterizer STATIC splat_tile_binner.cpp)
+add_library(lfs_tensor_rasterizer STATIC splat_tile_binner.cpp splat_rasterizer.cpp)
 target_compile_features(lfs_tensor_rasterizer PUBLIC cxx_std_23)
 set_target_properties(lfs_tensor_rasterizer PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(lfs_tensor_rasterizer PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -15,6 +15,20 @@ lfs_add_gpu_program(lfs_tensor_rasterizer splat_sort SOURCE splat_sort.slang
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_tiles SOURCE splat_tiles.slang
     COMPUTE tile_counts tile_status tile_instances tile_ranges)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_project SOURCE splat_project.slang COMPUTE project_splats)
+# Blend variants: one fully specialized plain-viewer blend, and per raster mode
+# and group width generic blends that read their feature flags per dispatch.
+set(_blend_entries tile_blend tile_depth_compose)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs_fast SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+    DEFINES LFS_BLEND_MODE=0 LFS_BLEND_FLAGS=128)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs32 SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+    DEFINES LFS_BLEND_MODE=0 LFS_BLEND_SINGLE_SIMD=1)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs64 SOURCE splat_blend.slang COMPUTE ${_blend_entries} DEFINES LFS_BLEND_MODE=0)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_points SOURCE splat_blend.slang COMPUTE ${_blend_entries} DEFINES LFS_BLEND_MODE=1)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_discs SOURCE splat_blend.slang COMPUTE ${_blend_entries} DEFINES LFS_BLEND_MODE=2)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut32 SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+    DEFINES LFS_BLEND_MODE=3 LFS_BLEND_SINGLE_SIMD=1)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut64 SOURCE splat_blend.slang COMPUTE ${_blend_entries} DEFINES LFS_BLEND_MODE=3)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_present SOURCE splat_present.slang COMPUTE present_viewer)
 # Parity tests load the passes directly against the native kernels.
 target_include_directories(lfs_tensor_rasterizer PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/gpu_programs/splat_project")
 # Shared includes of the Slang passes; the program rules depend only on their sources.
