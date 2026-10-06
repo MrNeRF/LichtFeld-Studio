@@ -1799,6 +1799,7 @@
     "stop": "停止",
     "running": "実行中...",
     "already_running": "スクリプトはすでに実行中です。",
+    "system_exit": "エディタースクリプトで SystemExit が発生しました",
     "python": "Python",
     "syntax": "構文",
     "outline": "アウトライン",

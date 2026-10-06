@@ -1492,7 +1492,7 @@ namespace lfs::vis::gui::panels {
                     interrupted = PyErr_ExceptionMatches(PyExc_KeyboardInterrupt);
                     if (PyErr_ExceptionMatches(PyExc_SystemExit)) {
                         PyErr_Clear();
-                        addError("SystemExit raised in editor script");
+                        addError(LOC(lichtfeld::Strings::PythonConsole::SYSTEM_EXIT));
                     } else {
                         PyErr_Print();
                     }

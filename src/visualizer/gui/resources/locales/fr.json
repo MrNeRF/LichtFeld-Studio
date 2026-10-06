@@ -1799,6 +1799,7 @@
     "stop": "Arrêter",
     "running": "En cours...",
     "already_running": "Un script est déjà en cours d'exécution.",
+    "system_exit": "SystemExit levé dans le script de l'éditeur",
     "python": "Python",
     "syntax": "Syntaxe",
     "outline": "Plan",

@@ -1799,6 +1799,7 @@
     "stop": "Stopp",
     "running": "Wird ausgeführt...",
     "already_running": "Ein Skript wird bereits ausgeführt.",
+    "system_exit": "SystemExit im Editor-Skript ausgelöst",
     "python": "Python",
     "syntax": "Syntax",
     "outline": "Gliederung",

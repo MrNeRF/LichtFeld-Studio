@@ -1797,6 +1797,7 @@
     "stop": "Stop",
     "running": "Running...",
     "already_running": "A script is already running.",
+    "system_exit": "SystemExit raised in editor script",
     "python": "Python",
     "syntax": "Syntax",
     "outline": "Outline",

@@ -1799,6 +1799,7 @@
     "stop": "Zatrzymaj",
     "running": "Uruchamianie...",
     "already_running": "Skrypt jest już uruchomiony.",
+    "system_exit": "W skrypcie edytora zgłoszono SystemExit",
     "python": "Python",
     "syntax": "Składnia",
     "outline": "Zarys",

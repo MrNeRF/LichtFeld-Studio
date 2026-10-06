@@ -1799,6 +1799,7 @@
     "stop": "Interrompi",
     "running": "In esecuzione...",
     "already_running": "Uno script è già in esecuzione.",
+    "system_exit": "SystemExit sollevato nello script dell'editor",
     "python": "Python",
     "syntax": "Sintassi",
     "outline": "Struttura",
