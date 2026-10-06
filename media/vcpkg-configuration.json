@@ -1,0 +1,5 @@
+{
+  "overlay-ports": [
+    "../.github/overlays/openexr"
+  ]
+}

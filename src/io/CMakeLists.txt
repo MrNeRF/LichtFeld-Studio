@@ -49,6 +49,8 @@ add_library(lfs_video STATIC
         include/io/media/media_probe.hpp
         media_probe_ffmpeg.hpp
         media_probe.cpp
+        include/io/media/media_ingest.hpp
+        ${CMAKE_SOURCE_DIR}/src/media/media_ingest.cpp
         include/io/media/frame_sink.hpp
         include/io/media/file_frame_sink.hpp
         frame_sink.cpp

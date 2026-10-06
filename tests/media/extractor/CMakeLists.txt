@@ -32,6 +32,7 @@ else()
 endif()
 get_filename_component(MEDIA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
 add_executable(media_extraction_runner runner.cpp support.cpp probe_unit_contracts.cpp frame_sink_contracts.cpp
+    ${MEDIA_ROOT}/src/media/media_ingest.cpp
     ${MEDIA_ROOT}/src/io/media_probe.cpp
     ${MEDIA_ROOT}/src/io/frame_sink.cpp
     ${MEDIA_ROOT}/src/io/file_frame_sink.cpp
@@ -85,5 +86,26 @@ add_test(NAME MediaFrameSinkUnitContracts COMMAND media_extraction_runner --sink
 set_tests_properties(MediaFrameSinkUnitContracts PROPERTIES LABELS "media;cpu;offline" TIMEOUT 30)
 if(WIN32)
     set_tests_properties(MediaFrameSinkUnitContracts PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
+endif()
+
+# Reuse the application's dependency prefix and existing Release job. This is the
+# standalone CPU package, not the main app CMake/CUDA/shader configuration.
+add_subdirectory(${MEDIA_ROOT}/media ${CMAKE_CURRENT_BINARY_DIR}/standalone-media)
+add_test(NAME MediaIngestCLIContracts
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../test_ingest_cli.py
+        --cli $<TARGET_FILE:media-ingest> --runner $<TARGET_FILE:media_extraction_runner>)
+add_test(NAME MediaIngestPackageConsumer
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../test_ingest_package.py
+        --build ${CMAKE_CURRENT_BINARY_DIR}/standalone-media --cmake ${CMAKE_COMMAND}
+        --generator "${CMAKE_GENERATOR}" --toolchain "${CMAKE_TOOLCHAIN_FILE}"
+        --triplet "${VCPKG_TARGET_TRIPLET}" --packages "${VCPKG_INSTALLED_DIR}"
+        --prefix "${CMAKE_PREFIX_PATH}" --deployment-target "${CMAKE_OSX_DEPLOYMENT_TARGET}"
+        --osx-architectures "${CMAKE_OSX_ARCHITECTURES}")
+set_tests_properties(MediaIngestCLIContracts MediaIngestPackageConsumer PROPERTIES
+    LABELS "media;cpu;offline;integration" TIMEOUT 300
+    ENVIRONMENT "LFS_MEDIA_TEST_FFMPEG=${LFS_MEDIA_TEST_FFMPEG};LFS_MEDIA_TEST_FFPROBE=${LFS_MEDIA_TEST_FFPROBE}")
+if(WIN32)
+    set_tests_properties(MediaIngestCLIContracts MediaIngestPackageConsumer PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
 endif()

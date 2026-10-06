@@ -88,3 +88,6 @@ generatedSchema.usda
 # only creates merge-conflict churn).
 src/rendering/rasterizer/vulkan/shader/generated/*.spv
 src/rendering/rasterizer/vulkan/shader/radix_sort/*.spv
+
+!tests/media/test_ingest_cli.py
+!tests/media/test_ingest_package.py

@@ -111,6 +111,8 @@ namespace lfs::io {
         // Synchronous CPU delivery. output_dir, file naming and generate_metadata
         // do not cause filesystem output; the supplied sink owns that policy.
         bool extractToSink(const Params& params, media::FrameSink& sink, std::string& error);
+        // CPU sink delivery with compatibility filename deduplication and schema-2 metadata.
+        bool extractFilesToSink(const Params& params, media::FrameSink& sink, std::string& error);
         [[nodiscard]] ExtractionOutcome lastOutcome() const;
 
     private:

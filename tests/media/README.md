@@ -112,3 +112,16 @@ lifetimes, budget accounting, delivery indices and legacy compatibility limits.
 Native sink checks also cover structured layout/copy errors and JPEG zero/default
 and clamped qualities, comparing exact writer bytes; PNG ignores JPEG quality.
 The extractor lifecycle suite includes non-standard callback exceptions.
+
+## Standalone CPU library and CLI
+
+The extractor CTest project also builds the production `lfs_media` and
+`media-ingest` targets. `MediaIngestCLIContracts` adds eight Python methods for
+CLI probe/extraction, compatibility bytes/names/metadata, strict arguments,
+Unicode paths and real output failures. `MediaIngestPackageConsumer` installs
+and relocates the SDK, then builds/runs an external C++ consumer with only its
+public headers and exported CMake target. It tests ownership, budget errors,
+structured/native sink errors, cancellation, scaling and file metadata.
+The tests reuse the existing dependency prefix and Release CI steps.
+
+See [the standalone guide](../../docs/development/media-ingest-core-cli.md).

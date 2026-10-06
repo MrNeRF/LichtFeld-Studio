@@ -3,7 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "video_frame_extractor.hpp"
+#if defined(LFS_MEDIA_CPU_ONLY)
+#include "media/cpu_diagnostics.hpp"
+#else
 #include "core/include/core/logger.hpp"
+#endif
 #include "core/path_utils.hpp"
 #include "hdr_libplacebo.hpp"
 #include "hdr_tonemap.hpp"
@@ -397,7 +401,7 @@ namespace lfs::io {
                 if (*p == state->pixel_format)
                     return *p;
             }
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !defined(LFS_MEDIA_CPU_ONLY)
             // A decoder can advertise VideoToolbox yet reject a particular stream profile.
             // Keep FFmpeg's software decoder usable when no hardware format is offered.
             if (state->pixel_format == AV_PIX_FMT_VIDEOTOOLBOX) {
@@ -769,10 +773,11 @@ namespace lfs::io {
 
     class VideoFrameExtractor::Impl {
     public:
-        bool extract(const Params& params, std::string& error, media::FrameSink* provided_sink = nullptr) {
+        bool extract(const Params& params, std::string& error, media::FrameSink* provided_sink = nullptr, bool legacy_file_policy = false) {
             outcome_ = ExtractionOutcome::Failed;
             error.clear();
-            const bool custom_sink = provided_sink != nullptr;
+            const bool external_sink = provided_sink != nullptr;
+            const bool custom_sink = external_sink && !legacy_file_policy;
             media::FileFrameSink file_sink({params.output_dir, params.filename_pattern,
                                             params.format == ImageFormat::PNG ? media::FrameFileFormat::PNG : media::FrameFileFormat::JPEG,
                                             params.jpg_quality});
@@ -901,7 +906,7 @@ namespace lfs::io {
                 const AVCodec* codec = nullptr;
 #if LFS_HAS_CUDA
                 const char* hw_decoder_name = dv_profile > 0 ? nullptr : get_hw_decoder_name(codec_id);
-                if (!custom_sink && hw_decoder_name) {
+                if (!external_sink && hw_decoder_name) {
                     codec = avcodec_find_decoder_by_name(hw_decoder_name);
                     if (codec) {
                         if (av_hwdevice_ctx_create(&hw_device_ctx, AV_HWDEVICE_TYPE_CUDA, nullptr,
@@ -918,8 +923,8 @@ namespace lfs::io {
                     }
                 }
 #endif
-#if defined(__APPLE__)
-                if (!custom_sink && dv_profile == 0 && !codec) {
+#if defined(__APPLE__) && !defined(LFS_MEDIA_CPU_ONLY)
+                if (!external_sink && dv_profile == 0 && !codec) {
                     const AVCodec* const software_codec = avcodec_find_decoder(codec_id);
                     if (software_codec) {
                         for (int i = 0;; ++i) {
@@ -1155,7 +1160,7 @@ namespace lfs::io {
                 window_est_frames = std::max(1, window_est_frames);
 
                 media::SinkSession session;
-                if (custom_sink)
+                if (external_sink)
                     session.source = media::detail::describeContext(fmt_ctx);
                 session.source.stream_info_probed = probe.metadata_complete;
                 const bool swap_dimensions = params.rotation == 90 || params.rotation == 270;
@@ -1202,7 +1207,7 @@ namespace lfs::io {
 
 #if LFS_HAS_CUDA
                 const bool use_gpu_jpeg =
-                    !custom_sink && params.format == ImageFormat::JPG && NvCodecImageLoader::is_available();
+                    !external_sink && params.format == ImageFormat::JPG && NvCodecImageLoader::is_available();
 #else
                 constexpr bool use_gpu_jpeg = false;
 #endif
@@ -2484,6 +2489,10 @@ namespace lfs::io {
 
     bool VideoFrameExtractor::extractToSink(const Params& params, media::FrameSink& sink, std::string& error) {
         return impl_->extract(params, error, &sink);
+    }
+
+    bool VideoFrameExtractor::extractFilesToSink(const Params& params, media::FrameSink& sink, std::string& error) {
+        return impl_->extract(params, error, &sink, true);
     }
 
     ExtractionOutcome VideoFrameExtractor::lastOutcome() const {
