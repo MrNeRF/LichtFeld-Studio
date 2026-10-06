@@ -31,6 +31,16 @@ namespace lfs::python {
     using namespace lfs::core::prop;
     using lfs::training::CommandCenter;
 
+    namespace {
+
+        void validate_resize_factor(const int value) {
+            if (value < -1 || value == 0) {
+                throw std::invalid_argument("resize_factor must be -1 (auto) or a positive factor");
+            }
+        }
+
+    } // namespace
+
     std::any resolve_optimization_default(
         const PropertyMeta& meta,
         const OptimizationParameters& source) {
@@ -142,7 +152,10 @@ namespace lfs::python {
         add_int(
             "resize_factor", "Resize Factor", -1, -1, 8, "Image resize factor (-1 = auto)", false,
             [](const DatasetConfig& c) { return c.resize_factor; },
-            [](DatasetConfig& c, int v) { c.resize_factor = v; });
+            [](DatasetConfig& c, int v) {
+                validate_resize_factor(v);
+                c.resize_factor = v;
+            });
 
         add_int(
             "test_every", "Test Every", 8, 1, 10000, "Use every Nth image for testing", true,
@@ -1305,6 +1318,7 @@ namespace lfs::python {
                 [](PyDatasetConfig& self, int v) {
                     if (!self.can_edit())
                         throw std::runtime_error("Cannot edit dataset params during training");
+                    validate_resize_factor(v);
                     self.params().resize_factor = v;
                 },
                 "Image resize factor (-1 = auto)")

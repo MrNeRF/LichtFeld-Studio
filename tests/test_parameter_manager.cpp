@@ -8,6 +8,7 @@
 #include "core/parameters.hpp"
 #include "core/services.hpp"
 #include "io/project_chapters.hpp"
+#include "python/lfs/py_params.hpp"
 #include "training/training_manager.hpp"
 
 #include <array>
@@ -25,6 +26,25 @@ namespace {
         const auto* test = ::testing::UnitTest::GetInstance()->current_test_info();
         return std::filesystem::temp_directory_path() /
                std::format("lfs_{}_{}.json", test->name(), std::random_device{}());
+    }
+
+    TEST(DatasetParamsValidationTest, ResizeFactorRegistrySetterRejectsBelowMinimum) {
+        lfs::python::register_dataset_properties();
+        const auto meta = lfs::core::prop::PropertyRegistry::instance().get_property("dataset", "resize_factor");
+        ASSERT_TRUE(meta.has_value());
+        ASSERT_TRUE(meta->setter);
+
+        lfs::core::param::DatasetConfig config;
+        auto ref = lfs::core::prop::PropertyObjectRef::cpp(&config);
+        EXPECT_THROW(meta->setter(ref, std::any(-2)), std::invalid_argument);
+        EXPECT_EQ(config.resize_factor, -1);
+        EXPECT_THROW(meta->setter(ref, std::any(0)), std::invalid_argument);
+        EXPECT_EQ(config.resize_factor, -1);
+
+        meta->setter(ref, std::any(-1));
+        EXPECT_EQ(config.resize_factor, -1);
+        meta->setter(ref, std::any(4));
+        EXPECT_EQ(config.resize_factor, 4);
     }
 
     TEST(ParameterManagerTest, EditableDatasetUsesConfigurationAuthorityWithHeadlessFallback) {
