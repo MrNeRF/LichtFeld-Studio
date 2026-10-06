@@ -403,6 +403,10 @@ namespace lfs::io {
             return params.resize_factor > 1 || params.max_width > 0 || params.undistort != nullptr;
         }
 
+        [[nodiscard]] bool decodes_float(const std::filesystem::path& path, const LoadParams& params) {
+            return params.decode_float && lfs::core::image_quantization_step(path) == 0.0f;
+        }
+
         void convert_float_hwc_to_rgb(
             float*& data, const int width, const int height, int& channels) {
             if (channels == 3)
@@ -532,7 +536,7 @@ namespace lfs::io {
                     tensor.shape()[0],
                     stream);
                 tensor = std::move(uint8_tensor);
-            } else {
+            } else if (!params.decode_float) {
                 tensor = quantize_rgb_to_u16_grid(tensor, stream);
             }
             const cudaError_t status = cudaStreamSynchronize(stream);
@@ -1189,7 +1193,7 @@ namespace lfs::io {
                               describe_current_exception("non-standard nvImageCodec exception"));
                 }
             }
-        } else if (!decodes_16bit(params) && !needs_requested_processing) {
+        } else if (!decodes_16bit(params) && !decodes_float(path, params) && !needs_requested_processing) {
             const std::string path_str = lfs::core::path_to_utf8(path);
             int w = 0, h = 0, ch = 0;
             unsigned char* img_data = stbi_load(path_str.c_str(), &w, &h, &ch, 3);
@@ -1288,7 +1292,7 @@ namespace lfs::io {
             return std::nullopt;
         if (is_jpeg_file_signature(path) || load_cached_jpeg_blob(make_cache_key(path, params)))
             return std::nullopt;
-        if (params.undistort)
+        if (params.undistort || decodes_float(path, params))
             return HostDecodeKind::Float32;
         return decodes_16bit(params) ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8;
     }
@@ -1332,11 +1336,15 @@ namespace lfs::io {
             std::ostringstream key;
             key << lfs::core::path_to_utf8(path) << ":udr4_" << std::hex
                 << undistort_cache_hash(params, decodes_16bit(params), 0x726762ULL);
+            if (params.decode_float)
+                key << "_f32";
             return key.str();
         }
         auto key = lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
         if (decodes_16bit(params))
             key += "_16b";
+        if (params.decode_float)
+            key += "_f32";
         return key;
     }
 
@@ -1412,7 +1420,7 @@ namespace lfs::io {
             }
             stream = decode_stream_;
         }
-        if (params.undistort) {
+        if (params.undistort || decodes_float(path, params)) {
             auto ahead = take_decoded_ahead(path, HostDecodeKind::Float32);
             auto [img_data, width, height, channels] =
                 ahead ? std::tuple{static_cast<float*>(ahead->data.release()), ahead->width, ahead->height,
@@ -1429,7 +1437,11 @@ namespace lfs::io {
             gpu_staging = cpu_tensor.to(Device::CUDA, stream);
             synchronize_async_upload_before_free(stream, "image");
             lfs::core::free_image_float(img_data);
-            decoded = gpu_staging.permute({2, 0, 1}).contiguous();
+            const auto [target_width, target_height] =
+                lfs::core::resized_image_dimensions(width, height, params.resize_factor, params.max_width);
+            decoded = params.undistort || (target_width == width && target_height == height)
+                          ? gpu_staging.permute({2, 0, 1}).contiguous()
+                          : lfs::core::lanczos_resize(gpu_staging, target_height, target_width, 2, stream);
         } else {
             auto decode_params = params;
             decode_params.cuda_stream = stream;

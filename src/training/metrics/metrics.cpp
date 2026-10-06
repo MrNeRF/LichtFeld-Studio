@@ -174,9 +174,15 @@ namespace lfs::training {
             lfs::io::LoadParams load_params;
             load_params.resize_factor = params.dataset.resize_factor;
             load_params.max_width = params.dataset.max_width;
-            const int bit_depth = evaluation_bit_depth(camera.image_path(), params.optimization.eval_bit_depth);
-            load_params.output_uint8 = bit_depth == 8;
-            load_params.decode_16bit = bit_depth == 16;
+            // Only an 8-bit reference evaluated on the 8-bit grid loads as bytes. Other references are decoded at the
+            // file's full precision and put on the requested grid after resizing, so both images are rounded once
+            // and alike.
+            const bool exact_uint8 =
+                evaluation_bit_depth(camera.image_path(), params.optimization.eval_bit_depth) == 8 &&
+                evaluation_bit_depth(camera.image_path(), lfs::core::param::EvalBitDepth::Auto) == 8;
+            load_params.output_uint8 = exact_uint8;
+            load_params.decode_16bit = !exact_uint8;
+            load_params.decode_float = !exact_uint8;
             load_params.skip_blob_cache = true;
             load_params.cuda_stream = lfs::core::getCurrentCUDAStream();
             if (params.optimization.undistort && camera.is_undistort_prepared() &&
@@ -570,13 +576,13 @@ namespace lfs::training {
                     image_loader = fallback_image_loader.get();
                 }
                 inputs.bit_depth = evaluation_bit_depth(camera.image_path(), params.optimization.eval_bit_depth);
-                inputs.gt_image = image_loader->load_image_immediate(
-                    camera.image_path(), evaluation_load_params(camera, params));
+                const auto load_params = evaluation_load_params(camera, params);
+                inputs.gt_image = image_loader->load_image_immediate(camera.image_path(), load_params);
                 if (!inputs.gt_image.is_valid() || inputs.gt_image.ndim() != 3 ||
                     inputs.gt_image.shape()[0] != 3)
                     return evaluation_error("failed to load evaluation image", LFS_SOURCE_SITE_CURRENT());
-                if (inputs.bit_depth == 32 && inputs.gt_image.dtype() == lfs::core::DataType::Float32)
-                    inputs.gt_image = inputs.gt_image.clamp(0.0f, 1.0f).contiguous();
+                if (!load_params.output_uint8)
+                    inputs.gt_image = image_for_metrics(inputs.gt_image.to(lfs::core::DataType::Float32), inputs.bit_depth);
 
                 if (undistorted_reference) {
                     auto [source_width, source_height, source_channels] =
@@ -1619,9 +1625,12 @@ namespace lfs::training {
             lfs::core::Tensor flip_map;
             if (_params.optimization.eval_flip) {
                 try {
-                    flip_map = flip_error_map(gt_float, r_output.image);
-                    if (mask.is_valid())
-                        flip_map = flip_map * mask_as_float01(mask);
+                    // Pixels outside the mask are blanked in both images first, so the filters cannot carry
+                    // differences from there into the scored area.
+                    flip_map = mask.is_valid()
+                                   ? flip_error_map(mask_image(gt_float, mask), mask_image(r_output.image, mask)) *
+                                         mask_as_float01(mask)
+                                   : flip_error_map(gt_float, r_output.image);
                     const float flip = mask.is_valid()
                                            ? flip_map.sum().item<float>() / mask_as_float01(mask).sum().item<float>()
                                            : flip_map.mean().item<float>();

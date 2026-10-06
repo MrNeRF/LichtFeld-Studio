@@ -703,7 +703,8 @@ TEST(MetricsEvaluator, DownscaledGroundTruthMatchesGpuLanczos) {
 }
 
 // Catches a 16-bit reference rounded to 8 bits, a render quantized to a grid other than the reference's,
-// and a forced depth that does not override the file's own encoding.
+// a forced depth that does not override the file's own encoding, and a forced float depth that decodes a
+// 16-bit file through 8 bits.
 TEST(MetricsEvaluator, EvaluationBitDepthFollowsTheReferenceEncoding) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";
@@ -757,8 +758,19 @@ TEST(MetricsEvaluator, EvaluationBitDepthFollowsTheReferenceEncoding) {
 
     const auto forced8 = prepare(path16, EvalBitDepth::Eight);
     EXPECT_EQ(forced8.inputs.bit_depth, 8);
-    EXPECT_EQ(forced8.inputs.gt_image.dtype(), DataType::UInt8);
+    const auto gt8 = forced8.inputs.gt_image.cpu().to_vector();
+    for (int c = 0; c < 3; ++c)
+        for (int i = 0; i < kW * kH; ++i)
+            EXPECT_FLOAT_EQ(gt8[static_cast<size_t>(c) * kW * kH + i] * 255.0f,
+                            std::round(pixels16[static_cast<size_t>(i) * 3 + c] * 255.0f / 65535.0f));
     EXPECT_FLOAT_EQ(rendered_value(forced8), std::round(kRendered * 255.0f) / 255.0f);
+
+    const auto float16 = prepare(path16, EvalBitDepth::Float);
+    EXPECT_EQ(float16.inputs.bit_depth, 32);
+    const auto gt_float = float16.inputs.gt_image.cpu().to_vector();
+    ASSERT_EQ(gt_float.size(), gt16.size());
+    for (size_t i = 0; i < gt_float.size(); ++i)
+        EXPECT_NEAR(gt_float[i], gt16[i], 1e-6f) << i;
 
     const auto forced_float = prepare(path8, EvalBitDepth::Float);
     EXPECT_EQ(forced_float.inputs.bit_depth, 32);
@@ -1498,6 +1510,7 @@ TEST(ViewEvaluationJson, FileFormatStaysFixed) {
         .psnr = 24.0f,
         .ssim = 0.8f,
         .lpips = 0.2f,
+        .flip = 0.1f,
         .evaluated_pixel_fraction = 0.75f,
         .validity_mask_applied = true};
     const lfs::training::ViewMetrics skipped{
@@ -1518,9 +1531,9 @@ TEST(ViewEvaluationJson, FileFormatStaysFixed) {
     EXPECT_EQ(keys(record), (std::vector<std::string>{"evaluations", "height", "width"}));
     ASSERT_EQ(record.at("evaluations").size(), 2u);
     EXPECT_EQ(keys(record.at("evaluations")[0]),
-              (std::vector<std::string>{"evaluated_pixel_fraction", "lpips", "masked", "psnr", "split", "ssim", "step", "validity_mask_applied"}));
+              (std::vector<std::string>{"bit_depth", "evaluated_pixel_fraction", "flip", "lpips", "masked", "psnr", "split", "ssim", "step", "validity_mask_applied"}));
     EXPECT_EQ(keys(record.at("evaluations")[1]),
-              (std::vector<std::string>{"evaluated_pixel_fraction", "lpips", "masked", "psnr", "skipped_reason", "split", "ssim", "step", "validity_mask_applied"}));
+              (std::vector<std::string>{"bit_depth", "evaluated_pixel_fraction", "lpips", "masked", "psnr", "skipped_reason", "split", "ssim", "step", "validity_mask_applied"}));
     EXPECT_TRUE(record.at("evaluations")[0].at("step").is_number_integer());
     EXPECT_TRUE(record.at("evaluations")[0].at("psnr").is_number_float());
     EXPECT_TRUE(record.at("evaluations")[0].at("masked").is_boolean());
