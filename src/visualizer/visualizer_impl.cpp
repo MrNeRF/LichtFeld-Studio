@@ -1596,10 +1596,13 @@ namespace lfs::vis {
                 if (path.empty()) {
                     return;
                 }
-                if (auto saved =
-                        command.path.empty()
-                            ? projectSaveAsFromDialog(path, true)
-                            : projectSaveAs(path, true);
+                if (auto saved = command.path.empty()
+                                     ? projectSaveAsFromDialog(
+                                           path, true,
+                                           command.fresh_training_start)
+                                     : projectSaveAs(
+                                           path, true,
+                                           command.fresh_training_start);
                     !saved) {
                     publish_project_error(
                         "Save Project As",
@@ -4256,6 +4259,14 @@ namespace lfs::vis {
     VisualizerImpl::projectSaveAs(
         const std::filesystem::path& path,
         const bool regenerate_preview) {
+        return projectSaveAs(path, regenerate_preview, false);
+    }
+
+    lfs::Result<void>
+    VisualizerImpl::projectSaveAs(
+        const std::filesystem::path& path,
+        const bool regenerate_preview,
+        const bool fresh_training_start) {
         if (!project_lifecycle_) {
             return visualizerFailure<void>(
                 lfs::ErrorCode::Unavailable,
@@ -4264,7 +4275,8 @@ namespace lfs::vis {
                 "project.lifecycle");
         }
         return project_lifecycle_->saveAs(
-            path, regenerate_preview);
+            path, regenerate_preview, false,
+            fresh_training_start);
     }
 
     lfs::Result<void>
@@ -4302,7 +4314,8 @@ namespace lfs::vis {
     lfs::Result<void>
     VisualizerImpl::projectSaveAsFromDialog(
         const std::filesystem::path& path,
-        const bool regenerate_preview) {
+        const bool regenerate_preview,
+        const bool fresh_training_start) {
         if (!project_lifecycle_) {
             return visualizerFailure<void>(
                 lfs::ErrorCode::Unavailable,
@@ -4311,7 +4324,8 @@ namespace lfs::vis {
                 "project.lifecycle");
         }
         return project_lifecycle_->saveAs(
-            path, regenerate_preview, true);
+            path, regenerate_preview, true,
+            fresh_training_start);
     }
 
     bool VisualizerImpl::projectContainsEmbeddedSecrets()

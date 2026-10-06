@@ -118,6 +118,9 @@ namespace lfs::io::project {
         // missing THMB.
         std::span<const std::byte> preview_png;
         bool remove_preview = false;
+        // Save As may omit run metrics from the destination while preserving
+        // the open source document if publication fails.
+        bool omit_metrics = false;
         // When enabled, an ordinary explicit save creates a dataset preview
         // only when the opened source has no THMB.
         bool regenerate_dataset_preview = true;

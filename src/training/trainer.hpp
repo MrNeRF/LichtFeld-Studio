@@ -77,6 +77,8 @@ namespace lfs::vis {
     class VisualizerImplResetTest_EditModeSaveRetainsUnboundCheckpointHistory_Test;
     class VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionRegistersProjectInMru_Test;
     class VisualizerImplResetTest_SaveAsAfterAutoCreatedTrainingKeepsOriginalAndCheckpoint_Test;
+    class VisualizerImplResetTest_FreshTrainingStartSaveAsDropsCheckpointHistory_Test;
+    class VisualizerImplResetTest_FailedFreshTrainingStartSaveAsPreservesSourceHistory_Test;
     class VisualizerImplResetTest_CompletedAutoCreatedTrainingSavesRealMasterOnClose_Test;
     class VisualizerImplResetTest_SaveAsAfterUntitledTrainingRoutesThroughFinishedTrainer_Test;
     class VisualizerImplResetTest_FinishedTrainingStartReportsOverwriteConflict_Test;
@@ -472,6 +474,8 @@ namespace lfs::training {
         friend class lfs::vis::VisualizerImplResetTest_EditModeSaveRetainsUnboundCheckpointHistory_Test;
         friend class lfs::vis::VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionRegistersProjectInMru_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsAfterAutoCreatedTrainingKeepsOriginalAndCheckpoint_Test;
+        friend class lfs::vis::VisualizerImplResetTest_FreshTrainingStartSaveAsDropsCheckpointHistory_Test;
+        friend class lfs::vis::VisualizerImplResetTest_FailedFreshTrainingStartSaveAsPreservesSourceHistory_Test;
         friend class lfs::vis::VisualizerImplResetTest_CompletedAutoCreatedTrainingSavesRealMasterOnClose_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsAfterUntitledTrainingRoutesThroughFinishedTrainer_Test;
         friend class lfs::vis::VisualizerImplResetTest_FinishedTrainingStartReportsOverwriteConflict_Test;

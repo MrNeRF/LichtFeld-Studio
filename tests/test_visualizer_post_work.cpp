@@ -10869,6 +10869,205 @@ contract["test_selection_submode_follows_native_mode"](lf)
     }
 
     TEST_F(VisualizerImplResetTest,
+           FreshTrainingStartSaveAsDropsCheckpointHistory) {
+        const auto& temporary = temporary_.path;
+        const auto dataset = temporary / "fresh-run-dataset";
+        const auto destination = temporary / "fresh-run.licht";
+        write_minimal_transforms_dataset(dataset);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ = std::make_unique<InputController>(
+                nullptr, viewer.getViewport());
+            viewer.getSceneManager()->changeContentType(
+                SceneManager::ContentType::Dataset);
+            viewer.getSceneManager()->setDatasetPath(dataset);
+            auto params = viewer.getDataLoader()->getParameters();
+            params.dataset.data_path = dataset;
+            viewer.getDataLoader()->setParameters(params);
+
+            auto* const lifecycle = viewer.project_lifecycle_.get();
+            auto& scene = viewer.getScene();
+            const auto cameras = scene.addGroup("Train cameras");
+            scene.addCamera("camera.png", cameras,
+                            make_project_request_test_camera());
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            ASSERT_TRUE(lifecycle->prepareTrainingStartProject());
+            const auto source = trainer->bound_project_path();
+            ASSERT_TRUE(source.has_value());
+            lifecycle->scratch_lock_.reset();
+            auto source_lock = *source;
+            source_lock += ".lock";
+            std::filesystem::remove(source_lock);
+            std::filesystem::remove(*source);
+
+            const auto training_uuid = lfs::core::generate_uuid_v4();
+            const auto checkpoint_uuid = lfs::core::generate_uuid_v4();
+            write_resumable_project_with_checkpoint(
+                *source, training_uuid, checkpoint_uuid, dataset);
+            auto history = lfs::io::project::ProjectDocument::open(*source);
+            ASSERT_TRUE(history)
+                << lfs::format_for_developer(history.error());
+            const auto older_checkpoint =
+                lfs::core::generate_uuid_v4();
+            ASSERT_TRUE(history->set_checkpoint(
+                older_checkpoint,
+                make_training_autosave_checkpoint_payload(
+                    older_checkpoint, dataset)));
+            history->edit_metrics().loss_history.push_back(
+                {.iteration = 11, .value = 0.5f});
+            lfs::io::project::ProjectDocumentSaveOptions history_save;
+            history_save.commit.commit_uuid =
+                lfs::core::generate_uuid_v4();
+            ASSERT_TRUE(history->save(*source, history_save));
+
+            trainer->last_project_snapshot_path_ = *source;
+            trainer->last_project_writer_error_.clear();
+            ASSERT_NE(trainer->project_snapshot_service_, nullptr);
+            trainer->project_snapshot_service_
+                ->testing_advance_completed_snapshots(1);
+            lifecycle->adopted_training_snapshot_count_ = 0;
+            ASSERT_TRUE(lifecycle->adoptCompletedTrainingSnapshot());
+            ASSERT_EQ(lifecycle->document_->checkpoint_uuids().size(), 2u);
+
+            lfs::core::events::cmd::ResetTraining{}.emit();
+            ASSERT_NE(viewer.getTrainer(), nullptr);
+            const auto source_commit =
+                lfs::io::project::ProjectReader::open(*source);
+            ASSERT_TRUE(source_commit)
+                << lfs::format_for_developer(source_commit.error());
+            const auto source_commit_uuid =
+                source_commit->commit().commit_uuid;
+            const auto source_project_uuid =
+                source_commit->superblock().project_uuid;
+            const auto source_lineage = source_commit->lineage();
+            ASSERT_GE(source_lineage.size(), 2u);
+
+            ASSERT_TRUE(lifecycle->saveAs(destination, false, true, true));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                    lifecycle->updateMaintenance();
+                    return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+                }));
+
+            auto fresh = lfs::io::project::ProjectDocument::open(destination);
+            ASSERT_TRUE(fresh)
+                << lfs::format_for_developer(fresh.error());
+            EXPECT_TRUE(fresh->checkpoint_uuids().empty());
+            EXPECT_TRUE(fresh->metrics().loss_history.empty());
+            EXPECT_TRUE(fresh->metrics().psnr_history.empty());
+            EXPECT_NE(fresh->project_uuid(), source_project_uuid);
+            ASSERT_NE(fresh->source_reader(), nullptr);
+            const auto fresh_lineage =
+                fresh->source_reader()->lineage();
+            for (const auto& commit : fresh_lineage) {
+                EXPECT_FALSE(std::ranges::any_of(
+                    source_lineage, [&](const auto& old_commit) {
+                        return old_commit.commit_uuid ==
+                               commit.commit_uuid;
+                    }));
+            }
+            EXPECT_TRUE(std::filesystem::exists(*source));
+            std::error_code size_error;
+            const auto destination_size =
+                std::filesystem::file_size(
+                    destination, size_error);
+            ASSERT_FALSE(size_error)
+                << size_error.message();
+            EXPECT_LT(destination_size, 1'000'000u);
+            auto source_after =
+                lfs::io::project::ProjectReader::open(*source);
+            ASSERT_TRUE(source_after)
+                << lfs::format_for_developer(source_after.error());
+            EXPECT_EQ(source_after->commit().commit_uuid,
+                      source_commit_uuid);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           FailedFreshTrainingStartSaveAsPreservesSourceHistory) {
+        const auto& temporary = temporary_.path;
+        const auto dataset = temporary / "failed-save-dataset";
+        const auto blocked_parent = temporary / "save-parent-is-a-file";
+        {
+            std::ofstream blocker(blocked_parent);
+            ASSERT_TRUE(blocker);
+            blocker << "not a directory";
+            ASSERT_TRUE(blocker.good());
+        }
+        const auto destination = blocked_parent / "destination.licht";
+        write_minimal_transforms_dataset(dataset);
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.getTrainerManager()->restoreProjectMetrics(
+            lfs::io::project::MetricsChapter{});
+        struct ClearTestMetrics {
+            TrainerManager* manager;
+            ~ClearTestMetrics() {
+                manager->restoreProjectMetrics(
+                    lfs::io::project::MetricsChapter{});
+            }
+        } clear_test_metrics{viewer.getTrainerManager()};
+        viewer.input_controller_ = std::make_unique<InputController>(
+            nullptr, viewer.getViewport());
+        viewer.getSceneManager()->changeContentType(
+            SceneManager::ContentType::Dataset);
+        viewer.getSceneManager()->setDatasetPath(dataset);
+        auto params = viewer.getDataLoader()->getParameters();
+        params.dataset.data_path = dataset;
+        viewer.getDataLoader()->setParameters(params);
+        const auto cameras = viewer.getScene().addGroup("Train cameras");
+        viewer.getScene().addCamera(
+            "camera.png", cameras, make_project_request_test_camera());
+        viewer.getTrainerManager()->setTrainer(
+            std::make_unique<lfs::training::Trainer>(viewer.getScene()));
+
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        ASSERT_TRUE(lifecycle->prepareTrainingStartProject());
+        const auto source = viewer.getTrainer()->bound_project_path();
+        ASSERT_TRUE(source.has_value());
+        lifecycle->scratch_lock_.reset();
+        auto document = lifecycle->document_;
+        ASSERT_NE(document, nullptr);
+        const auto checkpoint_uuid = lfs::core::generate_uuid_v4();
+        ASSERT_TRUE(document->set_checkpoint(
+            checkpoint_uuid,
+            make_training_autosave_checkpoint_payload(checkpoint_uuid, dataset)));
+        document->edit_metrics().loss_history = {
+            {.iteration = 9, .value = 0.25f}};
+        viewer.getTrainerManager()->restoreProjectMetrics(document->metrics());
+
+        auto fresh_save = lifecycle->saveAs(destination, false, true, true);
+        ASSERT_TRUE(fresh_save)
+            << lfs::format_for_developer(fresh_save.error());
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            lifecycle->updateMaintenance();
+            return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+        }));
+        EXPECT_FALSE(std::filesystem::exists(destination));
+        ASSERT_EQ(document->checkpoint_uuids().size(), 1u);
+        ASSERT_EQ(document->metrics().loss_history.size(), 1u);
+        EXPECT_FLOAT_EQ(document->metrics().loss_history.front().value, 0.25f);
+
+        ASSERT_TRUE(lifecycle->save(false));
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            lifecycle->updateMaintenance();
+            return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+        }));
+        auto saved_source = lfs::io::project::ProjectDocument::open(*source);
+        ASSERT_TRUE(saved_source)
+            << lfs::format_for_developer(saved_source.error());
+        EXPECT_EQ(saved_source->checkpoint_uuids().size(), 1u);
+        ASSERT_EQ(saved_source->metrics().loss_history.size(), 1u);
+        EXPECT_FLOAT_EQ(saved_source->metrics().loss_history.front().value, 0.25f);
+    }
+
+    TEST_F(VisualizerImplResetTest,
            UntitledStartConflictNeverReportsExistingOutputProject) {
         const auto& temporary = temporary_.path;
         const auto output_path = temporary / "conflict-out";

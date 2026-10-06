@@ -75,6 +75,8 @@ namespace lfs::vis {
     class VisualizerImplResetTest_StartTrainingWithCliOutputPathBindsProjectThere_Test;
     class VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionRegistersProjectInMru_Test;
     class VisualizerImplResetTest_SaveAsAfterAutoCreatedTrainingKeepsOriginalAndCheckpoint_Test;
+    class VisualizerImplResetTest_FreshTrainingStartSaveAsDropsCheckpointHistory_Test;
+    class VisualizerImplResetTest_FailedFreshTrainingStartSaveAsPreservesSourceHistory_Test;
     class VisualizerImplResetTest_UntitledStartConflictNeverReportsExistingOutputProject_Test;
     class VisualizerImplResetTest_CompletedAutoCreatedTrainingSavesRealMasterOnClose_Test;
     class VisualizerImplResetTest_SaveSucceedsOnAutoCreatedTrainingProject_Test;
@@ -227,7 +229,8 @@ namespace lfs::vis::project {
         [[nodiscard]] lfs::Result<void>
         saveAs(const std::filesystem::path& path,
                bool regenerate_preview,
-               bool allow_existing_destination_replacement = false);
+               bool allow_existing_destination_replacement = false,
+               bool fresh_training_start = false);
         [[nodiscard]] lfs::Result<void>
         compact();
         void cancelCleanup();
@@ -404,6 +407,8 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_StartTrainingWithCliOutputPathBindsProjectThere_Test;
         friend class lfs::vis::VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionRegistersProjectInMru_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsAfterAutoCreatedTrainingKeepsOriginalAndCheckpoint_Test;
+        friend class lfs::vis::VisualizerImplResetTest_FreshTrainingStartSaveAsDropsCheckpointHistory_Test;
+        friend class lfs::vis::VisualizerImplResetTest_FailedFreshTrainingStartSaveAsPreservesSourceHistory_Test;
         friend class lfs::vis::VisualizerImplResetTest_UntitledStartConflictNeverReportsExistingOutputProject_Test;
         friend class lfs::vis::VisualizerImplResetTest_CompletedAutoCreatedTrainingSavesRealMasterOnClose_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveSucceedsOnAutoCreatedTrainingProject_Test;

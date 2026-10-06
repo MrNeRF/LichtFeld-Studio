@@ -2608,7 +2608,7 @@ class TrainingPanel(Panel):
         return _project_has_path()
 
     def _save_as_then_start(self):
-        accepted = _invoke_project_save_as()
+        accepted = _invoke_project_save_as(fresh_training_start=True)
         if accepted is False:
             return
         if self._project_is_bound():

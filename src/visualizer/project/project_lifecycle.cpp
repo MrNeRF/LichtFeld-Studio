@@ -7278,7 +7278,8 @@ namespace lfs::vis::project {
     ProjectLifecycle::saveAs(
         const std::filesystem::path& path,
         const bool regenerate_preview,
-        const bool allow_existing_destination_replacement) {
+        const bool allow_existing_destination_replacement,
+        const bool fresh_training_start) {
         if (close_save_state_.load(
                 std::memory_order_acquire) ==
             CloseSaveState::Saving) {
@@ -7389,6 +7390,11 @@ namespace lfs::vis::project {
             return lfs::Status::failure(
                 std::move(synchronized).error());
         }
+        std::vector<lfs::core::Uuid> excluded_checkpoints;
+        if (fresh_training_start) {
+            excluded_checkpoints =
+                document_->checkpoint_uuids();
+        }
         auto preview = explicitSavePreviewPng(regenerate_preview);
         if (!preview) {
             return lfs::Status::failure(
@@ -7421,6 +7427,8 @@ namespace lfs::vis::project {
                     lfs::core::generate_uuid_v4(),
                 .save_as_project_uuid =
                     save_as_project_uuid,
+                .save_as_excluded_checkpoints =
+                    std::move(excluded_checkpoints),
                 .index_compression =
                     lfs::io::project::
                         IndexCompression::Zstd,
@@ -7429,6 +7437,8 @@ namespace lfs::vis::project {
                 .allow_existing_destination_replacement =
                     allow_existing_destination_replacement,
                 .preview_png = *preview,
+                .remove_preview = fresh_training_start,
+                .omit_metrics = fresh_training_start,
                 .writer_lock_lease =
                     recovery_session_ &&
                             recovered_master_path_ &&

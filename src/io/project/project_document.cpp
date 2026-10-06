@@ -4071,7 +4071,7 @@ namespace lfs::io::project {
             add_encoded(sequencer_key, impl_->sequencer.to_bytes(),
                         json_options());
         }
-        if (impl_->dirty_or_new(metrics_key)) {
+        if (impl_->dirty_or_new(metrics_key) && !options.omit_metrics) {
             auto bytes = impl_->metrics.to_bytes();
             if (!bytes) {
                 return std::move(bytes).error();
@@ -4186,6 +4186,8 @@ namespace lfs::io::project {
             sequencer_key,
             metrics_key,
         };
+        if (options.omit_metrics)
+            desired.erase(metrics_key);
         for (const auto& [uuid, ignored] : impl_->splats) {
             (void)ignored;
             desired.insert(

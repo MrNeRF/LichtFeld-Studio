@@ -114,6 +114,10 @@ namespace lfs::vis {
         projectSaveAs(const std::filesystem::path& path,
                       bool regenerate_preview = true) override;
         lfs::Result<void>
+        projectSaveAs(const std::filesystem::path& path,
+                      bool regenerate_preview,
+                      bool fresh_training_start);
+        lfs::Result<void>
         projectCreateAt(
             const std::filesystem::path& path,
             ProjectSwitchDisposition disposition =
@@ -325,6 +329,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_RestoreThenTrainWritesNewCheckpoint_Test;
         friend class VisualizerImplResetTest_HeadlessOpenPrintsHydrationStagesWhenBenchPathSet_Test;
         friend class VisualizerImplResetTest_ResetTrainingPreservesExplicitInitPath_Test;
+        friend class VisualizerImplResetTest_FreshTrainingStartSaveAsDropsCheckpointHistory_Test;
+        friend class VisualizerImplResetTest_FailedFreshTrainingStartSaveAsPreservesSourceHistory_Test;
         friend class VisualizerImplResetTest_ResetTrainingStopsTrainerDuringStarting_Test;
         friend class VisualizerImplResetTest_DirtyProjectSwitchRequiresExplicitDiscardAuthorization_Test;
         friend class VisualizerImplResetTest_NewProjectDirtyGateRunsBelowEveryCommandEntry_Test;
@@ -487,7 +493,8 @@ namespace lfs::vis {
     private:
         lfs::Result<void> projectSaveAsFromDialog(
             const std::filesystem::path& path,
-            bool regenerate_preview);
+            bool regenerate_preview,
+            bool fresh_training_start = false);
         void abandonSaveAndExitAttempt();
         void armStopSaveAndExit(
             std::optional<std::filesystem::path>
