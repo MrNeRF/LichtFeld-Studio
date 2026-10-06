@@ -1690,6 +1690,20 @@ TEST(ArgumentParserTest, ViewModeHonorsMcpPortOverride) {
     EXPECT_EQ((*parsed)->mcp_port, std::optional<int>(45690));
 }
 
+TEST(ArgumentParserTest, HeadlessModeRejectsMcpPortOverride) {
+    const auto data_path = make_test_path("lfs_arg_parser_headless_mcp_data");
+    const auto output_path = make_test_path("lfs_arg_parser_headless_mcp_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+        "--output-path", output_path.c_str(), "--mcp-port", "45690"};
+    const auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed);
+    EXPECT_NE(parsed.error().find("headless"), std::string::npos);
+    EXPECT_NE(parsed.error().find("--mcp-port"), std::string::npos);
+}
+
 #ifndef LFS_BUILD_PORTABLE
 TEST(ArgumentParserTest, ViewModeHonorsNoSplash) {
     const auto directory = make_test_path("lfs_arg_parser_view_no_splash");

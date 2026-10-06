@@ -114,6 +114,10 @@ the same install. A second instance fails to bind and shows "MCP Error" in the
 status bar. To isolate a second instance for this launch only, start it with
 `--mcp-port=45678`. The saved preference is not changed.
 
+The embedded MCP server is available in GUI launches. Headless training and
+camera-path rendering do not start a listener, so `--mcp-port` is rejected in
+those modes.
+
 Before mutating anything, check `serverInfo.version` from the `initialize`
 response. It is the build's git-describe string (for example
 `v0.5.3-361-g59682b11`) and identifies the binary that answered. Two instances

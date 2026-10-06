@@ -872,7 +872,7 @@ namespace {
 #endif
             ::args::Flag debug_python(ui_group, "debug_python", "Start debugpy listener on port 5678 for plugin debugging", {"debug-python"});
             ::args::ValueFlag<int> debug_python_port(ui_group, "port", "Port for debugpy listener (default: 5678)", {"debug-python-port"});
-            ::args::ValueFlag<int> mcp_port(ui_group, "port", "Override the MCP server port for this launch (does not change the saved preference)", {"mcp-port"});
+            ::args::ValueFlag<int> mcp_port(ui_group, "port", "Override the MCP server port for this GUI launch (not available in headless mode; does not change the saved preference)", {"mcp-port"});
 
             // =============================================================================
             // PERF / PROFILING
@@ -1042,6 +1042,10 @@ namespace {
 #endif
             const std::optional<int> per_launch_mcp_port =
                 mcp_port ? std::optional<int>(::args::get(mcp_port)) : std::nullopt;
+            if (per_launch_mcp_port && (headless || render_camera_path)) {
+                return std::unexpected(
+                    "ERROR: --mcp-port is not supported in headless mode; enable the GUI");
+            }
 
             // Viewer mode: file or directory. Bare positional paths are rewritten to
             // -v in parse_args_and_params so they share this branch.
