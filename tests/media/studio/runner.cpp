@@ -4,8 +4,8 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_profiler.hpp"
-#include "io/media/media_ingest.hpp"
 #include "io/media_studio_backends.hpp"
+#include "media/media_ingest.hpp"
 #include <algorithm>
 #include <cuda_runtime.h>
 #include <fstream>

@@ -5,9 +5,9 @@
 #include "video_player.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/path_utils.hpp"
-#include "hdr_libplacebo.hpp"
-#include "hdr_tonemap.hpp"
-#include "media_probe_ffmpeg.hpp"
+#include "media/hdr_renderer.hpp"
+#include "media/hdr_tonemap.hpp"
+#include "media/media_probe_ffmpeg.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>

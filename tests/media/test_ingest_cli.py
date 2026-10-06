@@ -9,6 +9,7 @@ import os
 import platform
 import re
 import signal
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -23,6 +24,42 @@ FFPROBE=os.environ.get("LFS_MEDIA_TEST_FFPROBE","ffprobe")
 CLI=None
 RUNNER=None
 VERSION_HEADER=None
+CONSUMERS=[]
+SYMBOLS_TOOL=None
+BUILD_DIR=None
+BUILD_CONFIG=None
+
+def defined_symbols(path, exports=False):
+    if sys.platform == "win32":
+        tool=SYMBOLS_TOOL or shutil.which("dumpbin")
+        if not tool:
+            raise RuntimeError("MSVC symbol inspection tool is required")
+        command=[str(tool)]
+        if Path(tool).name.lower() in ("link.exe", "link"):
+            command.append("/dump")
+        command.extend(["/exports", str(path)])
+        output=subprocess.check_output(command,text=True,errors="replace")
+        return set(re.findall(r"^\s+\d+\s+[0-9A-Fa-f]+\s+(?:[0-9A-Fa-f]+\s+)?([A-Za-z_][A-Za-z0-9_]*)",output,re.M))
+    tool=SYMBOLS_TOOL or shutil.which("nm")
+    if not tool:
+        raise RuntimeError("nm is required for provider ownership contracts")
+    flags=["-gU"] if sys.platform == "darwin" else (["-D","--defined-only"] if exports else ["--defined-only"])
+    output=subprocess.check_output([str(tool),*flags,str(path)],text=True,errors="replace")
+    names=set()
+    for line in output.splitlines():
+        fields=line.split()
+        if len(fields)>=3:
+            name=fields[-1].split("@")[0]
+            if sys.platform == "darwin" and name.startswith("_"):
+                name=name[1:]
+            # Local static inline helpers in public FFmpeg headers are not
+            # independent archive implementations in a consumer.
+            if exports or fields[-2].isupper() or name.startswith("ff_"):
+                names.add(name)
+    return names
+
+def ffmpeg_public(name):
+    return re.match(r"^(av|avcodec|avformat|avutil|avfilter|avdevice|avio|sws|swr)_",name)
 class IngestCLI(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -59,6 +96,50 @@ class IngestCLI(unittest.TestCase):
             with self.subTest(symbol=symbol):
                 with self.assertRaises(ValueError):
                     ctypes.c_uint64.in_dll(library,symbol)
+    def test_ffmpeg_has_one_explicit_provider(self):
+        # Release binaries may be stripped. Check the generated final link
+        # commands as well as binary symbols; ownership cannot depend on nm
+        # retaining a consumer's ordinary symbol table.
+        reply=BUILD_DIR/".cmake/api/v1/reply"
+        indexes=list(reply.glob("index-*.json"))
+        self.assertTrue(indexes,"Root CMake codemodel is required")
+        index=json.loads(max(indexes,key=lambda p:p.stat().st_mtime_ns).read_text(encoding="utf-8"))
+        model_ref=next(item for item in index["objects"] if item["kind"]=="codemodel")
+        model=json.loads((reply/model_ref["jsonFile"]).read_text(encoding="utf-8"))
+        configuration=next(item for item in model["configurations"] if item["name"]==BUILD_CONFIG)
+        providers=set()
+        archives=re.compile(r"(?:lib)?(?:avcodec|avformat|avutil|avfilter|avdevice|swscale|swresample)d?\.(?:a|lib)\b|(?<![\w-])-l(?:avcodec|avformat|avutil|avfilter|avdevice|swscale|swresample)\b",re.I)
+        for ref in configuration["targets"]:
+            target=json.loads((reply/ref["jsonFile"]).read_text(encoding="utf-8"))
+            fragments=target.get("link",{}).get("commandFragments",[])
+            ffmpeg=[item["fragment"] for item in fragments if archives.search(item["fragment"])]
+            if ffmpeg:
+                providers.add(target["name"])
+                self.assertEqual(target["name"],"lfs_media",f"FFmpeg linked independently by {target['name']}: {ffmpeg}")
+        self.assertEqual(providers,{"lfs_media"})
+        filename="lfs_media.dll" if sys.platform=="win32" else ("liblfs_media.dylib" if sys.platform=="darwin" else "liblfs_media.so")
+        provider=CLI.parent/filename
+        exports=defined_symbols(provider,exports=True)
+        required={"avformat_open_input","avcodec_alloc_context3","avcodec_send_frame",
+                  "av_frame_alloc","av_packet_alloc","sws_scale","swr_alloc"}
+        self.assertTrue(required<=exports,f"Missing public provider APIs: {required-exports}")
+        self.assertFalse({name for name in exports if name.startswith(("ff_","avpriv_"))},
+                         "Internal FFmpeg symbols must not escape the provider")
+        self.assertTrue(CONSUMERS,"Root application consumers must be supplied")
+        for consumer in [CLI,RUNNER,*CONSUMERS]:
+            with self.subTest(consumer=consumer.name):
+                self.assertTrue(consumer.is_file(),f"Build the root media_contracts target: missing {consumer}")
+                symbols=defined_symbols(consumer)
+                copies={name for name in symbols if ffmpeg_public(name) or name.startswith(("ff_","avpriv_"))}
+                self.assertFalse(copies,f"FFmpeg implementation leaked into {consumer}: {sorted(copies)[:10]}")
+                if sys.platform=="win32":
+                    tool=SYMBOLS_TOOL or shutil.which("dumpbin")
+                    command=[str(tool)]
+                    if Path(tool).name.lower() in ("link.exe","link"):
+                        command.append("/dump")
+                    imports=subprocess.check_output([*command,"/imports",str(consumer)],text=True,errors="replace")
+                    self.assertFalse(re.findall(r"\b(?:avcodec|avformat|avutil|avfilter|avdevice|swscale|swresample)-\d+\.dll\b",imports,re.I),
+                                     "Consumers must import FFmpeg through lfs_media")
     def test_probe_rational_inventory_and_unicode_no_output(self):
         before={p.name:p.read_bytes() for p in self.corpus.iterdir()}
         result,_=self.invoke("probe",self.source())
@@ -162,5 +243,14 @@ class IngestCLI(unittest.TestCase):
 if __name__=="__main__":
     parser=argparse.ArgumentParser();parser.add_argument("--cli",type=Path,required=True);parser.add_argument("--runner",type=Path,required=True)
     parser.add_argument("--version-header",type=Path,required=True)
+    parser.add_argument("--application",type=Path,required=True)
+    parser.add_argument("--visualizer",type=Path,required=True)
+    parser.add_argument("--python-module",type=Path,required=True)
+    parser.add_argument("--build-dir",type=Path,required=True)
+    parser.add_argument("--config",required=True)
+    parser.add_argument("--symbols-tool",type=Path)
     args,remaining=parser.parse_known_args();CLI=args.cli.resolve();RUNNER=args.runner.resolve();VERSION_HEADER=args.version_header.resolve()
+    CONSUMERS=[args.application.resolve(),args.visualizer.resolve(),args.python_module.resolve()]
+    SYMBOLS_TOOL=args.symbols_tool
+    BUILD_DIR=args.build_dir.resolve();BUILD_CONFIG=args.config
     unittest.main(argv=[__file__,*remaining])

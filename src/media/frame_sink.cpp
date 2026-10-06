@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "io/media/frame_sink.hpp"
+#include "media/frame_sink.hpp"
 #include <cstring>
 #include <limits>
 #include <utility>

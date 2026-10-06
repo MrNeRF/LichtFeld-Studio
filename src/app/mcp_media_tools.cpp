@@ -5,7 +5,7 @@
 #include "core/guarded_task.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
-#include "io/media/media_ingest.hpp"
+#include "media/media_ingest.hpp"
 #include "media/media_json.hpp"
 #include <algorithm>
 #include <climits>

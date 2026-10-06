@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "core/export.hpp"
-#include "io/media/frame_sink.hpp"
+#include "media/frame_sink.hpp"
 #include <filesystem>
 #include <unordered_set>
 

@@ -11,7 +11,7 @@
 #include <string>
 #include <string_view>
 
-#include "io/hdr_tonemap.hpp"
+#include "media/hdr_tonemap.hpp"
 
 namespace lfs::media {
     class FrameSink;

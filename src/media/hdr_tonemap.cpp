@@ -2,7 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "hdr_tonemap.hpp"
+#include "media/hdr_tonemap.hpp"
 
 namespace lfs::io {
 

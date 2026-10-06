@@ -13,8 +13,8 @@
 #include "gui/string_keys.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/utils/native_file_dialog.hpp"
-#include "io/media/media_ingest.hpp"
 #include "io/media_studio_backends.hpp"
+#include "media/media_ingest.hpp"
 #include <cctype>
 
 #include <RmlUi/Core.h>

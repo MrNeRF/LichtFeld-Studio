@@ -2,14 +2,14 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "video_frame_extractor.hpp"
+#include "media/video_frame_extractor.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
-#include "hdr_libplacebo.hpp"
-#include "hdr_tonemap.hpp"
-#include "io/media/file_frame_sink.hpp"
+#include "media/file_frame_sink.hpp"
+#include "media/hdr_renderer.hpp"
+#include "media/hdr_tonemap.hpp"
 #include "media/media_backends.hpp"
-#include "media_probe_ffmpeg.hpp"
+#include "media/media_probe_ffmpeg.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>

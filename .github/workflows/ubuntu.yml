@@ -171,15 +171,8 @@ jobs:
       - name: Run offline media regression tests
         if: matrix.build_type == 'Release'
         run: |
-          cmake -S tests/media -B build-media-fixtures
-          ctest --test-dir build-media-fixtures --output-on-failure --no-tests=error
-          cmake -S tests/media/extractor -B build-media-extractor -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_INSTALLED_DIR="$PWD/build/vcpkg_installed" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_MANIFEST_INSTALL=OFF
-          cmake --build build-media-extractor --parallel 2
-          ctest --test-dir build-media-extractor --output-on-failure --no-tests=error
+          cmake --build build --target media_contracts --parallel 2
+          ctest --test-dir build -L media --output-on-failure --no-tests=error
 
       - name: Run viewer backend policy contracts
         run: |

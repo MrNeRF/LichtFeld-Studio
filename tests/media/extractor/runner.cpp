@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/path_utils.hpp"
-#include "io/media/file_frame_sink.hpp"
-#include "io/media/media_probe.hpp"
-#include "io/video_frame_extractor.hpp"
 #include "io/video_player.hpp"
+#include "media/file_frame_sink.hpp"
+#include "media/media_probe.hpp"
+#include "media/video_frame_extractor.hpp"
 #include <fstream>
 #include <iostream>
 #include <nlohmann/json.hpp>

@@ -132,12 +132,14 @@
       "src/io/project/splat_chapter.cpp:536",
       "src/io/project/splat_chapter.cpp:731",
       "src/io/project/splat_chapter.cpp:759",
-      "src/io/project/splat_chapter.cpp:901",
-      "src/io/video_frame_extractor.cpp:2457"
+      "src/io/project/splat_chapter.cpp:901"
     ],
     "mcp": [
       "src/mcp/llm_client.cpp:143",
       "src/mcp/llm_client.cpp:173"
+    ],
+    "media": [
+      "src/media/video_frame_extractor.cpp:2272"
     ],
     "preprocessing": [
       "src/preprocessing/preprocess.cpp:1322"

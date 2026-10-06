@@ -3,6 +3,17 @@
 Branch: `codex/media-baseline-tests`.
 Starting revision: `94fa31753408ff4e8f344c3c04adacf56a6983ae` (`upstream/dev`).
 
+## Current test entry point
+
+The commands and harness descriptions below record the original baseline branch.
+Media tests now belong to the application root build and use its production
+targets. Configure the app normally with `BUILD_TESTS`, `BUILD_FORMAT_TESTS` or
+`BUILD_VISUALIZER_TESTS`, build `media_contracts`, and run
+`ctest --test-dir build -C Release -L media --output-on-failure --no-tests=error`.
+For fixture-only verification use `python tests/media/test_fixture_preparation.py`.
+The former standalone `tests/media` and `tests/media/extractor` configurations
+have been removed. See [current test instructions](../../tests/media/README.md).
+
 ## Scope
 
 This branch prepares the baseline for Media Ingest: the current video extractor

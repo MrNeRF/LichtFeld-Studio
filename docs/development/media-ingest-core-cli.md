@@ -44,8 +44,9 @@ The old nested `media/` project, duplicate manifests, SDK export/install logic,
 private core copies and diagnostic shims have been removed. A separate distributable
 SDK/package is deferred until the shared module's contracts and dependency
 qualification are stable; there is no `LichtFeldMedia::media` package export in
-this revision. The offline test project configures the production leaf targets
-without configuring Studio, and is a test harness rather than another product.
+this revision. Media contracts are registered by `tests/CMakeLists.txt` in the
+root build and consume its production targets; no second production configuration
+or standalone test project discovers dependencies.
 
 ## Capabilities and host backends
 
@@ -143,16 +144,17 @@ partial frames and inspect the structured result.
 
 ## Verification
 
-Configure `tests/media/extractor` with the existing codec/development prefix and
-build all targets before running CTest. It builds the real shared diagnostics,
-logger, error, codecs, media and binding sources, without substitutes. Existing
-Release jobs continue to run this project; no CI job/workflow is added.
+Configure the application with its existing preset/toolchain and enable
+`BUILD_TESTS`, `BUILD_FORMAT_TESTS` or `BUILD_VISUALIZER_TESTS`. The root
+`media_contracts` target builds the production consumers and media test runners.
+Existing Release jobs build and run these targets; no CI job/workflow is added.
+The CPU reference preview runner disables hardware decode for its own player
+translation unit. Studio's `lfs_video` and native GPU tests keep their configured
+backends. Shared leaf modules are the same targets used by the application.
 
 ```sh
-cmake -S tests/media/extractor -B build-media-extractor -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_TOOLCHAIN_FILE=/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
-cmake --build build-media-extractor --config Release
-ctest --test-dir build-media-extractor -C Release --output-on-failure
+cmake --build build --target media_contracts --config Release --parallel 2
+ctest --test-dir build -C Release -L media --output-on-failure --no-tests=error
 ```
 
 Contracts compare independent RGB/PTS references, legacy output bytes/names/
@@ -173,12 +175,33 @@ and do not download a public corpus.
 ## Dependencies
 
 The root package baseline/overlays and existing FFmpeg/image codec stack are reused.
-OpenImageIO is not required or reintroduced. `FFMPEG_LIBRARIES` passes through
-`target_link_libraries` so static vcpkg optimized/debug qualifiers remain valid.
-On Linux, `lfs_media` keeps FFmpeg's static avcodec/avutil archive symbols local.
-Their x86 assembly uses direct references to internal data; leaving that data
-interposable prevents linking the shared module. This applies in Release and
-hidden-symbol builds and in the offline production harness.
+OpenImageIO is not required or reintroduced. FFmpeg is discovered once in the root
+configuration; only `lfs_media` links its libraries. Package `optimized`/`debug`
+qualifiers and transitive dependencies are preserved. Existing Studio adapters
+receive public FFmpeg headers and resolve their calls through `lfs_media`.
+
+On static-package platforms, the provider retains FFmpeg's complete public API
+objects with whole-archive linking. An ELF version script or Mach-O export list
+explicitly exposes the public `av_*`, `avcodec_*`, `avformat_*`, `avutil_*`,
+`avfilter_*`, `avdevice_*`, `avio_*`, `sws_*` and `swr_*` APIs, alongside exported
+LichtFeld C++ APIs. Other FFmpeg/codec implementation symbols, including `ff_*`
+and `avpriv_*`, stay private. This also prevents x86 assembly constants from
+becoming interposable. Windows' existing shared package is forwarded through
+`lfs_media.dll`; consumers import the provider instead of importing FFmpeg DLLs
+directly. A static Windows package uses an explicit export definition instead.
+
+Root CLI contracts inspect the actual provider and the application, visualizer
+and complete Python module. They require decoding, encoding and resampling APIs,
+reject internal exports and independent FFmpeg implementations, and check Windows
+consumer imports. Linux additionally checks private assembly constants by lookup.
+The root CMake codemodel verifies that only the provider's final link command
+contains FFmpeg libraries, including in stripped Release binaries.
+
+This public FFmpeg ABI is an interim compatibility boundary. Fully encapsulating
+FFmpeg requires moving preview/encoding implementations behind media-owned frame
+contracts and adapting Studio's HDR/tensor users. Public FFmpeg exports can be
+removed only after those consumers stop calling that ABI.
+
 License obligations follow the repository GPL-3.0-or-later distribution and exact
 installed package notices. FFmpeg's effective license is build dependent; the
 runtime reports it alongside configuration flags. There is no separate manifest

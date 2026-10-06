@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "core/export.hpp"
-#include "io/hdr_libplacebo.hpp"
+#include "media/hdr_renderer.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <memory>

@@ -23,16 +23,8 @@ target_compile_definitions(spz_lib PUBLIC SPZ_BUILD_EXTENSIONS)
 target_compile_features(spz_lib PUBLIC cxx_std_17)
 set_target_properties(spz_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-# Video encoding library (FFmpeg + CUDA for GPU-accelerated encoding)
+# Video host adapters use the single FFmpeg provider in lfs_media.
 find_package(PkgConfig REQUIRED)
-# vcpkg swaps FFmpeg's codec between master (x264) and dev (openh264); do not reuse FindPkgConfig's cached library list.
-unset(__pkg_config_checked_FFMPEG CACHE)
-pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
-        libavcodec
-        libavformat
-        libswscale
-        libavutil
-)
 if(LFS_USE_VULKAN)
     pkg_check_modules(LIBPLACEBO REQUIRED IMPORTED_TARGET libplacebo)
 endif()
@@ -85,7 +77,6 @@ target_link_libraries(lfs_video
         lfs_core
         lfs_media
         PRIVATE
-        PkgConfig::FFMPEG
         spdlog::spdlog
         nlohmann_json::nlohmann_json
         $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>

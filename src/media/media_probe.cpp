@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/path_utils.hpp"
-#include "media_probe_ffmpeg.hpp"
+#include "media/media_probe_ffmpeg.hpp"
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/display.h>

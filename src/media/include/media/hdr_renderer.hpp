@@ -5,7 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
-#include "hdr_tonemap.hpp"
+#include "media/hdr_tonemap.hpp"
 
 #include <memory>
 #include <string>

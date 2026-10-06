@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "core/export.hpp"
-#include "io/media/media_probe.hpp"
+#include "media/media_probe.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <memory>

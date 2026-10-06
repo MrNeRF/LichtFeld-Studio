@@ -2,12 +2,12 @@
 
 ## Implemented API
 
-`src/io/include/io/media/media_probe.hpp` exposes `lfs::media::MediaProbe::inspect`
+`src/media/include/media/media_probe.hpp` exposes `lfs::media::MediaProbe::inspect`
 using owned C++ data and `lfs::Result<MediaDescription>` from `core/error.hpp`.
 The public header requires neither FFmpeg headers nor
-GUI, renderer or JSON types. Implementation is currently compiled into the
-existing `lfs_video` target and the standalone CPU test runner. `lfs_video`
-propagates its core dependency to consumers of the public result type.
+GUI, renderer or JSON types. Implementation belongs to the shared `lfs_media`
+target used by Studio and the root CPU test runner. `lfs_media` propagates the
+shared error dependency to consumers of the public result type.
 
 | Contract | Result |
 |---|---|
@@ -70,18 +70,13 @@ The JSON adapter is test support, not a public command-line interface.
 
 ## Commands
 
-Reuse the installed application dependencies without another vcpkg install:
+Use the application's root preset/toolchain with `BUILD_TESTS`,
+`BUILD_FORMAT_TESTS` or `BUILD_VISUALIZER_TESTS` enabled. Reuse the existing
+configured build; there is no separate media production configuration:
 
 ```sh
-cmake -S tests/media/extractor -B build-media-extractor -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_TOOLCHAIN_FILE=/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake \
-  -DVCPKG_INSTALLED_DIR=/absolute/path/to/application-build/vcpkg_installed \
-  -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_MANIFEST_INSTALL=OFF
-cmake --build build-media-extractor --parallel 2
-ctest --test-dir build-media-extractor --output-on-failure --no-tests=error
-cmake -S tests/media -B build-media-fixtures
-ctest --test-dir build-media-fixtures --output-on-failure --no-tests=error
+cmake --build build --target media_contracts --config Release --parallel 2
+ctest --test-dir build -C Release -L media --output-on-failure --no-tests=error
 ```
 
 Use the application's actual triplet on other platforms. Python 3.10+, FFmpeg and

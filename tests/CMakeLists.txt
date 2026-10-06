@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # Testing module - comprehensive tests for all components
-if(BUILD_TESTS OR BUILD_VISUALIZER_TESTS)
-    add_subdirectory(media/studio)
+if(BUILD_TESTS OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS)
+    add_subdirectory(media)
 endif()
 
 if(BUILD_TESTS OR BUILD_FORMAT_TESTS)
@@ -96,13 +96,11 @@ endif()
 # The tensor HDR tonemapper against libplacebo, on clips ffmpeg encodes.
 if(LFS_TENSOR_METAL AND BUILD_TESTS)
     find_package(PkgConfig REQUIRED)
-    pkg_check_modules(HDR_TEST_FFMPEG REQUIRED libavcodec libavformat libavutil)
     find_program(LFS_HDR_TEST_FFMPEG NAMES ffmpeg)
     add_executable(hdr_tonemap_contracts test_hdr_tonemap_tensor.cpp)
     target_compile_features(hdr_tonemap_contracts PRIVATE cxx_std_23)
-    # FFmpeg links through lfs_video; a second link merges "-framework X" pairs.
+    # FFmpeg's public ABI and headers come from lfs_media through lfs_video.
     target_include_directories(hdr_tonemap_contracts PRIVATE ${CMAKE_SOURCE_DIR}/src/io)
-    target_include_directories(hdr_tonemap_contracts SYSTEM PRIVATE ${HDR_TEST_FFMPEG_INCLUDE_DIRS})
     target_compile_definitions(hdr_tonemap_contracts PRIVATE LFS_HDR_TEST_FFMPEG="${LFS_HDR_TEST_FFMPEG}"
         $<$<BOOL:${LFS_USE_VULKAN}>:LFS_USE_VULKAN>)
     target_link_libraries(hdr_tonemap_contracts PRIVATE lfs_video lfs_core GTest::gtest_main)
@@ -772,14 +770,11 @@ if(NOT LFS_HAS_CUDA)
     add_executable(lichtfeld_tests ${TEST_SOURCES})
     target_compile_definitions(lichtfeld_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
     if(APPLE)
-        find_package(PkgConfig REQUIRED)
-        pkg_check_modules(VIDEO_TEST_FFMPEG REQUIRED IMPORTED_TARGET
-            libavcodec libavformat libavutil)
         target_sources(lichtfeld_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/io/stb_image_impl.cpp)
         # lfs_video already links FFmpeg; linking it a second time lets CMake
         # merge the duplicated "-framework X" pairs into a broken link line.
         target_include_directories(lichtfeld_tests SYSTEM PRIVATE
-            ${CMAKE_SOURCE_DIR}/external ${VIDEO_TEST_FFMPEG_INCLUDE_DIRS})
+            ${CMAKE_SOURCE_DIR}/external)
         target_link_libraries(lichtfeld_tests PRIVATE lfs_video nlohmann_json::nlohmann_json)
     endif()
     target_compile_features(lichtfeld_tests PRIVATE cxx_std_23)

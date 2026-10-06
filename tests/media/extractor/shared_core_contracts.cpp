@@ -3,8 +3,8 @@
 #include "core/assert.hpp"
 #include "core/error_bus.hpp"
 #include "diagnostics/gpu_backend.hpp"
-#include "io/media/media_ingest.hpp"
 #include "media/media_backends.hpp"
+#include "media/media_ingest.hpp"
 #include <algorithm>
 #include <atomic>
 #include <stdexcept>

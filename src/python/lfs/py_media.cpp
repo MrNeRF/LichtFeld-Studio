@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "py_media.hpp"
-#include "io/media/media_ingest.hpp"
+#include "media/media_ingest.hpp"
 #include <exception>
 #include <memory>
 #include <nanobind/stl/array.h>

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/path_utils.hpp"
-#include "io/media/media_ingest.hpp"
 #include "media/media_backends.hpp"
+#include "media/media_ingest.hpp"
 #include <array>
 #include <fstream>
 #include <nlohmann/json.hpp>

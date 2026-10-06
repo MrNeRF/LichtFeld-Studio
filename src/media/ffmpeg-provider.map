@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+# SPDX-License-Identifier: GPL-3.0-or-later
+{
+    global:
+        _Z*3lfs*;
+        av_*; avcodec_*; avformat_*; avutil_*; avfilter_*; avdevice_*; avio_*;
+        sws_*; swr_*;
+    local:
+        *;
+};

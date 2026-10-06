@@ -623,6 +623,17 @@ find_package(spdlog REQUIRED)
 find_package(Freetype REQUIRED)
 find_package(WebP REQUIRED)
 find_package(OpenEXR 3.4.15 CONFIG REQUIRED)
+# Migrate the old I/O pkg-config cache before the single package discovery.
+get_property(_lfs_ffmpeg_cache_type CACHE FFMPEG_LIBRARIES PROPERTY TYPE)
+if(_lfs_ffmpeg_cache_type STREQUAL "INTERNAL" OR
+   (FFMPEG_LIBRARIES AND NOT FFMPEG_LIBRARY_DIRS))
+    get_cmake_property(_lfs_ffmpeg_cache_variables CACHE_VARIABLES)
+    list(FILTER _lfs_ffmpeg_cache_variables INCLUDE REGEX "^FFMPEG_")
+    foreach(_lfs_ffmpeg_cache IN LISTS _lfs_ffmpeg_cache_variables)
+        unset(${_lfs_ffmpeg_cache} CACHE)
+    endforeach()
+endif()
+find_package(FFMPEG REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(libdeflate CONFIG REQUIRED)
@@ -766,7 +777,7 @@ if(LFS_HIDDEN_SYMBOLS AND NOT WIN32)
         # FFmpeg assembly uses direct references to archive-local data in the shared visualizer.
         # SPZ globals must stay local too: the Python module links another copy of its archive.
         target_link_options(lfs_visualizer PRIVATE
-            "LINKER:--exclude-libs,libavcodec.a:libavutil.a:libspz_lib.a")
+            "LINKER:--exclude-libs,libspz_lib.a")
     endif()
 endif()
 

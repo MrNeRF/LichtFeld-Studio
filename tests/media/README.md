@@ -9,12 +9,11 @@ below; probe/preview orientation contracts are covered in the CPU harness.
 
 ## Run
 
-Python 3.10+, CMake 3.24+, FFmpeg and ffprobe with FFV1/rawvideo/NUT support are
+Python 3.10+, the application root CMake/toolchain, FFmpeg and ffprobe with FFV1/rawvideo/NUT support are
 required. Missing tools fail preparation rather than silently skipping it.
 
 ```sh
-cmake -S tests/media -B build-media-fixtures
-ctest --test-dir build-media-fixtures --output-on-failure
+python tests/media/test_fixture_preparation.py
 python scripts/prepare_media_fixtures.py --output /path/to/new-corpus
 ```
 
@@ -56,23 +55,22 @@ tests depend on network access.
 ## Production extraction contracts
 
 ```sh
-cmake -S tests/media/extractor -B build-media-extractor -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_TOOLCHAIN_FILE=/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
-cmake --build build-media-extractor --config Release
-ctest --test-dir build-media-extractor -C Release --output-on-failure
+# Configure the app normally with BUILD_TESTS, BUILD_FORMAT_TESTS or
+# BUILD_VISUALIZER_TESTS enabled, then use that root build directory.
+cmake --build build --target media_contracts --config Release --parallel 2
+ctest --test-dir build -C Release -L media --output-on-failure --no-tests=error
 ```
 
-Alternatively reuse an existing dynamic package prefix with `-DCMAKE_PREFIX_PATH`.
-The offline test manifest pins the repository's vcpkg baseline and reuses only the OpenEXR
-overlay; it does not change the app manifest or add OpenImageIO. FFmpeg development
-libraries, JSON and the production image-codec dependencies are required. Windows
-CTest adds the package DLL directory to PATH; override `MEDIA_RUNTIME_LIBRARY_DIR`
-when runtime DLLs are in a different location.
+All production modules and dependency discovery belong to the root configuration.
+Use the application's manifest, preset and package prefix. FFmpeg is linked only
+by `lfs_media`; its public ABI temporarily serves existing Studio adapters.
+Windows CTest adds the configured package DLL directory to PATH.
 
 The test adapter takes a JSON request and calls production extraction/probe/preview
-code. The project builds the real shared diagnostics, logger, errors, image codecs
-and media module, plus the actual Python binding group. No logging/assert/HDR
-substitutes or private core copies are used. It does not link tensor/GPU targets.
+code. The root test runners use the real shared diagnostics, logger, errors, image
+codecs and media module, plus the actual Python binding group. No logging/assert/HDR
+substitutes or private core copies are used. CPU runners do not link tensor/GPU
+targets; native Studio qualification uses the full production graph.
 
 Extraction contracts cover independent pixels/PTS, trim/naming, VFR, rotation,
 resize, JPEG/YUV tolerances, metadata, invalid input, cancellation, sink lifecycle,
@@ -87,8 +85,10 @@ results; the POSIX SIGTERM contract is explicitly skipped on Windows. Python
 contracts exercise ownership, GIL and callbacks through the real binding source.
 The Linux x86 CLI contracts also verify that FFmpeg's internal assembly constants
 are absent from the shared module's dynamic lookup scope; public media operations
-remain covered by the extraction contracts. Static FFmpeg must link successfully
-before these runtime checks can run.
+remain covered by the extraction contracts. The provider ownership check also requires public encoding/resampling APIs,
+rejects internal exports and FFmpeg definitions in the executable, visualizer
+and complete Python module, and rejects direct Windows FFmpeg imports.
+Static FFmpeg must link successfully before these runtime checks can run.
 
 The current interval/FPS end-boundary difference is characterized explicitly:
 interval includes a frame at an exactly matching end timestamp, FPS excludes it.
@@ -98,15 +98,15 @@ contracts describe the baseline and do not advertise future Media Ingest guarant
 
 ## Shared probe and preview checks
 
-The same extractor CTest directory also compiles the production MediaProbe and
-VideoPlayer, runs six additional Python probe/preview tests, and registers native
+The same root media CTest group uses production MediaProbe and a CPU
+VideoPlayer reference, runs six additional Python probe/preview tests, and registers native
 MediaProbeUnitContracts assertions. These checks use MPEG-4/MOV, PCM/WAV and lavfi
 sine in addition to the original FFV1/rawvideo/NUT fixture capabilities. They run
 inside the existing Release CI jobs without another workflow or job. See
 ../../docs/development/media-probe-contracts.md for API, behavior and verification.
 ## CPU frame sinks
 
-The same CTest project also builds production FrameSurface/MemoryFrameSink and
+The same root CTest group uses production FrameSurface/MemoryFrameSink and
 FileFrameSink, with eight additional extraction Python methods and the native
 MediaFrameSinkUnitContracts suite. They verify retained ownership, rational source
 PTS and decode identity, transformations/window/tail selection, no implicit disk
@@ -123,9 +123,8 @@ The extractor lifecycle suite includes non-standard callback exceptions.
 
 ## Shared module, CLI and Python
 
-The extractor CTest project builds production `lfs_media`, its shared core leaf
-libraries and optional CLI. It also builds the actual `py_media.cpp` binding
-group. The nested standalone SDK/package consumer has been removed; future
+The root media targets use production `lfs_media`, its shared core leaf
+libraries and CLI. They also build the actual `py_media.cpp` binding group. The nested standalone SDK/package consumer has been removed; future
 packaging follows the root module after contract/platform qualification.
 The existing Release CI steps run the CPU suites without an additional job.
 See [the module guide](../../docs/development/media-ingest-core-cli.md).

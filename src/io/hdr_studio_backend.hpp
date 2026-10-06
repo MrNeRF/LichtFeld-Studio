@@ -5,7 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
-#include "hdr_libplacebo.hpp"
+#include "media/hdr_renderer.hpp"
 
 #include <memory>
 #include <string>

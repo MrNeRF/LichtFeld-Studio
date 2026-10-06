@@ -6,8 +6,8 @@
 
 #include "core/export.hpp"
 #include "gui/ui_texture.hpp"
-#include "io/video_frame_extractor.hpp"
 #include "io/video_player.hpp"
+#include "media/video_frame_extractor.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 
 #include <RmlUi/Core/EventListener.h>
