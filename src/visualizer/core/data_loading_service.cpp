@@ -82,6 +82,10 @@ namespace lfs::vis {
                                 project_info->hydration_state ==
                                     "hydrating";
         }
+        const bool additive_during_hydration =
+            project_hydrating &&
+            scene_manager_->getContentType() !=
+                SceneManager::ContentType::Dataset;
 
         // Checkpoint files get special handling - redirect to training resume flow
         if (isCheckpointFile(cmd.path)) {
@@ -92,7 +96,7 @@ namespace lfs::vis {
         // An additive load during hydration joins the project being opened; an
         // explicit replacement still clears it.
         const bool replace_scene =
-            viewer_ ? ((cmd.replace || !project_hydrating) &&
+            viewer_ ? ((cmd.replace || !additive_during_hydration) &&
                        viewer_->loadFileWouldReplaceScene(false, cmd.replace))
                     : (cmd.replace ||
                        scene_manager_->getContentType() ==
@@ -118,7 +122,7 @@ namespace lfs::vis {
             // files in this batch and later queued batches append to it.
             const bool replace_first =
                 cmd.replace ||
-                (!project_hydrating &&
+                (!additive_during_hydration &&
                  scene_manager_->getContentType() !=
                      SceneManager::ContentType::SplatFiles);
             if (!viewer_ || !viewer_->getGuiManager() ||
