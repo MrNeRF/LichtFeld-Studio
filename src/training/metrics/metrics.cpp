@@ -37,6 +37,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -112,6 +113,21 @@ namespace lfs::training {
             return image.dtype() == lfs::core::DataType::UInt8
                        ? image.to(lfs::core::DataType::Float32) / 255.0f
                        : image;
+        }
+
+        // Saved evaluation images are named after their camera; a repeated stem keeps its view index.
+        std::vector<std::string> eval_image_stems(const CameraDataset& dataset) {
+            std::vector<std::string> stems;
+            stems.reserve(dataset.size());
+            std::unordered_set<std::string> used;
+            for (size_t i = 0; i < dataset.size(); ++i) {
+                auto stem = lfs::core::path_to_utf8(
+                    lfs::core::utf8_to_path(dataset.get_camera(i)->image_name()).stem());
+                if (stem.empty() || !used.insert(stem).second)
+                    stem = stem.empty() ? std::to_string(i) : std::format("{}_{}", stem, i);
+                stems.push_back(std::move(stem));
+            }
+            return stems;
         }
 
         lfs::core::Tensor mask_as_float01(const lfs::core::Tensor& mask) {
@@ -998,16 +1014,21 @@ namespace lfs::training {
                 assert(metric_mask.shape()[1] == inputs.gt_image.shape()[2]);
             }
 
+            const bool user_mask_applied = inputs.user_mask.is_valid() || mesh != nullptr || points != nullptr ||
+                                           mask_splat != nullptr ||
+                                           lfs::core::param::is_eval_mask_depth(params.optimization.eval_mask);
             return PreparedEvaluationView{
                 .inputs = std::move(inputs),
                 .output = std::move(rendered->output),
                 .raw_image = std::move(rendered->raw_image),
                 .metric_mask = std::move(metric_mask),
+                .validity_mask = std::move(validity_mask),
                 .render_geometry = geometry,
                 .validity_mask_applied = warp_to_distorted,
                 .erode_ssim_mask = warp_to_distorted || mesh != nullptr || points != nullptr || mask_folder != nullptr ||
                                    mask_splat != nullptr ||
-                                   lfs::core::param::is_eval_mask_depth(params.optimization.eval_mask)};
+                                   lfs::core::param::is_eval_mask_depth(params.optimization.eval_mask),
+                .user_mask_applied = user_mask_applied};
         } catch (const std::exception& e) {
             // LFS-CENSUS-OK(empty-catch): converted into a typed evaluation error
             return evaluation_error(e.what(), LFS_SOURCE_SITE_CURRENT());
@@ -1405,6 +1426,8 @@ namespace lfs::training {
         }
 
         const size_t val_dataset_size = val_dataset->size();
+        const auto image_stems = _params.optimization.enable_save_eval_images ? eval_image_stems(*val_dataset)
+                                                                              : std::vector<std::string>{};
         size_t skipped_images = 0;
         size_t evaluated_images = 0;
         size_t saved_images = 0;
@@ -1516,6 +1539,8 @@ namespace lfs::training {
             auto render_raw = std::move(prepared->raw_image);
             const auto render_geometry = prepared->render_geometry;
             const bool erode_ssim_mask = prepared->erode_ssim_mask;
+            const bool user_mask_applied = prepared->user_mask_applied;
+            const auto prepared_validity = prepared->validity_mask;
             const bool distorted_coordinates =
                 _params.optimization.undistort && cam->is_undistort_prepared() &&
                 _params.optimization.eval_space == lfs::core::param::EvalSpace::Distorted;
@@ -1703,7 +1728,7 @@ namespace lfs::training {
                                     r_output.normal.clamp(-1.0f, 1.0f).mul(0.5f) + 0.5f,
                                     prior.clamp(-1.0f, 1.0f).mul(0.5f) + 0.5f};
                                 lfs::core::image_io::save_images_async(
-                                    eval_dir / (std::to_string(image_idx) + "_normals.png"),
+                                    eval_dir / (image_stems[image_idx] + "_normals.png"),
                                     normal_maps,
                                     true, // horizontal: rendered | prior
                                     4,
@@ -1780,18 +1805,7 @@ namespace lfs::training {
             }
 
             if (_params.optimization.enable_save_eval_images) {
-                auto gt_vis = image_as_float01(gt_image);
-                auto render_vis = r_output.image;
-                if (mask.is_valid()) {
-                    auto mask_f = mask_as_float01(mask);
-                    const int C = static_cast<int>(gt_image.shape()[0]);
-                    const int H = static_cast<int>(mask_f.shape()[0]);
-                    const int W = static_cast<int>(mask_f.shape()[1]);
-                    auto mask_3d = mask_f.unsqueeze(0).expand({C, H, W});
-                    gt_vis = gt_vis * mask_3d;
-                    render_vis = r_output.image * mask_3d;
-                }
-                const std::vector<lfs::core::Tensor> rgb_images = {gt_vis.clone(), render_vis.clone()};
+                const auto& stem = image_stems[image_idx];
                 auto stamp = _params.include_provenance ? lfs::core::make_provenance_stamp()
                                                         : lfs::core::make_minimal_provenance_stamp();
                 if (_params.include_provenance) {
@@ -1800,23 +1814,45 @@ namespace lfs::training {
                     if (!strategy.empty())
                         stamp.strategy = std::string(strategy);
                 }
-                lfs::core::image_io::save_images_async(
-                    eval_dir / (std::to_string(image_idx) + ".png"),
-                    rgb_images,
-                    true, // horizontal
-                    4,    // separator width
-                    lfs::core::provenance_to_json(stamp));
+                const auto metadata = lfs::core::provenance_to_json(stamp);
+                auto gt_vis = image_as_float01(gt_image);
+                auto render_vis = r_output.image;
+                if (user_mask_applied) {
+                    // Rows: as rendered, with the mask applied, with the inverted mask applied inside the valid view.
+                    assert(mask.is_valid() && mask.ndim() == 2);
+                    const auto scored = mask_as_float01(mask);
+                    const auto valid = prepared_validity.is_valid() ? mask_as_float01(prepared_validity)
+                                                                    : lfs::core::Tensor::full(scored.shape(), 1.0f,
+                                                                                              scored.device());
+                    const auto left_out = (scored * -1.0f + 1.0f) * valid;
+                    const size_t C = gt_vis.shape()[0], H = gt_vis.shape()[1], W = gt_vis.shape()[2];
+                    const auto gap_column = lfs::core::Tensor::full({C, H, 4}, 1.0f, gt_vis.device());
+                    const auto gap_row = lfs::core::Tensor::full({C, 4, 2 * W + 4}, 1.0f, gt_vis.device());
+                    const auto row = [&](const lfs::core::Tensor& weight) {
+                        const auto w = weight.unsqueeze(0).expand({C, H, W});
+                        return lfs::core::Tensor::cat({gt_vis * w, gap_column, render_vis * w}, 2);
+                    };
+                    const auto as_rendered = lfs::core::Tensor::cat({gt_vis, gap_column, render_vis}, 2);
+                    lfs::core::image_io::save_image_async(
+                        eval_dir / (stem + ".png"),
+                        lfs::core::Tensor::cat({as_rendered, gap_row, row(scored), gap_row, row(left_out)}, 1).contiguous(),
+                        metadata);
+                } else {
+                    if (mask.is_valid()) {
+                        const auto mask_3d = mask_as_float01(mask).unsqueeze(0).expand(
+                            {gt_vis.shape()[0], gt_vis.shape()[1], gt_vis.shape()[2]});
+                        gt_vis = gt_vis * mask_3d;
+                        render_vis = render_vis * mask_3d;
+                    }
+                    lfs::core::image_io::save_images_async(eval_dir / (stem + ".png"), {gt_vis.clone(), render_vis.clone()},
+                                                           true, // horizontal
+                                                           4,    // separator width
+                                                           metadata);
+                }
                 if (flip_map.is_valid()) {
                     lfs::core::image_io::save_image_async(
-                        eval_dir / (std::to_string(image_idx) + "_flip.png"),
+                        eval_dir / (stem + "_flip.png"),
                         flip_error_image(flip_map).to(lfs::core::DataType::Float32).div(255.0f));
-                }
-                if (view.validity_mask_applied) {
-                    lfs::core::image_io::save_image_async(
-                        eval_dir / (std::to_string(image_idx) + "_metric_mask.png"),
-                        mask.to(lfs::core::DataType::Float32)
-                            .unsqueeze(0)
-                            .expand({3, view.height, view.width}));
                 }
                 saved_images++;
             }

@@ -477,7 +477,7 @@ TEST(MetricsEvaluator, FlipIsReportedAndSavedOnlyWhenEnabled) {
         const auto metrics = evaluator.evaluate(1, splat, dataset, background);
         ASSERT_TRUE(metrics.valid);
         ASSERT_EQ(metrics.views.size(), 1u);
-        const auto flip_png = params.dataset.output_path / "eval_step_1" / "0_flip.png";
+        const auto flip_png = params.dataset.output_path / "eval_step_1" / "_DSC8679_flip.png";
         EXPECT_EQ(metrics.views[0].flip.has_value(), enabled);
         EXPECT_EQ(metrics.flip.has_value(), enabled);
         EXPECT_EQ(std::filesystem::exists(flip_png), enabled);
@@ -490,6 +490,89 @@ TEST(MetricsEvaluator, FlipIsReportedAndSavedOnlyWhenEnabled) {
         const auto [flip_width, flip_height, flip_channels] = lfs::core::get_image_info(flip_png);
         EXPECT_EQ(flip_width, width);
         EXPECT_EQ(flip_height, height);
+    }
+    std::filesystem::remove_all(tmp);
+}
+
+// Fails when a masked evaluation does not save one 3x2 image per view (as rendered, mask applied, inverted mask
+// applied) and nothing else, or names its files by evaluation index instead of the camera; an evaluation without a
+// mask keeps the 1x2 pair.
+TEST(MetricsEvaluator, MaskedEvaluationSavesGridNamedAfterTheCamera) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_eval_mask_grid";
+    std::filesystem::remove_all(tmp);
+    const auto image_path = std::filesystem::path(TEST_DATA_DIR) / "bicycle" / "images_8" / "_DSC8679.JPG";
+    const auto [width, height, channels] = lfs::core::get_image_info(image_path);
+    ASSERT_GT(width, 0);
+    auto dataset = std::make_shared<CameraDataset>(
+        std::vector<std::shared_ptr<Camera>>{make_eval_camera(image_path, {}, width, height),
+                                             make_eval_camera(image_path, {}, width, height)},
+        DatasetConfig{}, CameraDataset::Split::ALL);
+    auto splat = make_front_facing_splat();
+    auto background = Tensor::zeros({3}, Device::CUDA);
+
+    struct Rgb {
+        std::vector<uint8_t> pixels;
+        int width = 0, height = 0;
+        const uint8_t* at(int x, int y) const { return &pixels[(static_cast<size_t>(y) * width + x) * 3]; }
+    };
+    const auto read_rgb = [](const std::filesystem::path& path) {
+        auto [data, image_width, image_height, image_channels] = lfs::core::load_image(path);
+        EXPECT_NE(data, nullptr) << path;
+        Rgb rgb{std::vector<uint8_t>(static_cast<size_t>(image_width) * image_height * 3), image_width, image_height};
+        for (size_t pixel = 0; data && pixel < rgb.pixels.size() / 3; ++pixel)
+            std::memcpy(&rgb.pixels[pixel * 3], data + pixel * image_channels, 3);
+        lfs::core::free_image(data);
+        return rgb;
+    };
+
+    for (const bool masked : {true, false}) {
+        auto params = make_eval_params(tmp / (masked ? "masked" : "plain"));
+        params.optimization.enable_save_eval_images = true;
+        std::filesystem::create_directories(params.dataset.output_path);
+        MetricsEvaluator evaluator(params);
+        if (masked)
+            evaluator.set_eval_mesh(lfs::training::make_evaluation_box(
+                lfs::training::axis_aligned_box_corners({-1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f}),
+                false));
+        ASSERT_TRUE(evaluator.evaluate(1, splat, dataset, background).valid);
+
+        const auto dir = params.dataset.output_path / "eval_step_1";
+        EXPECT_FALSE(std::filesystem::exists(dir / "0.png"));
+        EXPECT_TRUE(std::filesystem::exists(dir / "_DSC8679_1.png"));
+        EXPECT_FALSE(std::filesystem::exists(dir / "_DSC8679_unmasked.png"));
+        EXPECT_FALSE(std::filesystem::exists(dir / "_DSC8679_metric_mask.png"));
+        const auto saved = read_rgb(dir / "_DSC8679.png");
+        ASSERT_EQ(saved.width, 2 * width + 4);
+        ASSERT_EQ(saved.height, masked ? 3 * height + 8 : height);
+        if (!masked)
+            continue;
+
+        // Every pixel shows in exactly one of the two lower rows, unchanged, and the box splits the view.
+        size_t inside = 0, outside = 0, mismatches = 0;
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                for (const int half : {0, width + 4}) {
+                    const uint8_t* rendered = saved.at(half + x, y);
+                    const uint8_t* applied = saved.at(half + x, y + height + 4);
+                    const uint8_t* inverted = saved.at(half + x, y + 2 * (height + 4));
+                    const bool in_applied = applied[0] | applied[1] | applied[2];
+                    const bool in_inverted = inverted[0] | inverted[1] | inverted[2];
+                    inside += in_applied;
+                    outside += in_inverted;
+                    mismatches += in_applied && in_inverted;
+                    for (int c = 0; c < 3; ++c)
+                        mismatches += applied[c] + inverted[c] != rendered[c];
+                }
+            }
+        }
+        EXPECT_GT(inside, 0u);
+        EXPECT_GT(outside, 0u);
+        EXPECT_EQ(mismatches, 0u);
     }
     std::filesystem::remove_all(tmp);
 }

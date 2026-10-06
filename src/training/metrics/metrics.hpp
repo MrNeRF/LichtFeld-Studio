@@ -185,9 +185,11 @@ namespace lfs::training {
         RenderOutput output;
         lfs::core::Tensor raw_image;
         lfs::core::Tensor metric_mask;
+        lfs::core::Tensor validity_mask; // [H,W] where the render warped to the source grid has a pixel
         EvaluationRenderGeometry render_geometry;
         bool validity_mask_applied = false;
         bool erode_ssim_mask = false;
+        bool user_mask_applied = false;
     };
 
     struct EvaluationMesh {
