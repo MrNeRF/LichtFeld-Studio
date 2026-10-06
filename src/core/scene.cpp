@@ -686,6 +686,7 @@ namespace lfs::core {
         Transaction transaction(*this);
         PointCloudRetirement previous;
         previous.cloud = std::exchange(node->point_cloud, std::move(point_cloud));
+        node->point_cloud_revision->fetch_add(1, std::memory_order_release);
         previous.evaluated = std::move(node->evaluated_point_cloud);
         previous.merged = std::move(prepared_point_cloud_render_);
         if (initial_point_cloud_ == previous.cloud)

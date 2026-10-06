@@ -68,6 +68,17 @@ def main():
             else:
                 raise AssertionError("Invalid metadata accepted")
 
+        for points, colors, expected_error in (
+            (np.zeros((2, 3), np.uint8), np.zeros((2, 3), np.uint8), "Positions must have dtype float32"),
+            (np.zeros((2, 3), np.float32), np.zeros((2, 3), np.float64), "Colors must have dtype float32 or uint8"),
+        ):
+            try:
+                original.set_data_async(points, colors)
+            except ValueError as error:
+                assert str(error) == expected_error
+            else:
+                raise AssertionError("Invalid dtype accepted")
+
         bad = original.set_data_async(
             np.zeros((2, 3), np.float32), np.full((2, 3), 2, np.float32)
         )

@@ -85,7 +85,10 @@ namespace lfs::vis {
         std::shared_ptr<PointCloudUpdateTicket> submit(PointCloudUpdateTarget target, PointCloudUpdateInput input);
         // Called only on the scene thread. Never waits for preparation or GPU completion.
         void publishReady(const Publish& publish);
+        // Cancel outstanding tickets; subsequent submissions remain valid.
         void cancelAll();
+        // Reject new submissions and cancel outstanding tickets without waiting.
+        void stop();
         // Join before Python finalization or graphics teardown, with no GIL held.
         void shutdown();
         [[nodiscard]] bool hasReady() const;

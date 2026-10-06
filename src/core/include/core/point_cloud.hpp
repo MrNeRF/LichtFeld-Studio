@@ -5,21 +5,15 @@
 #pragma once
 
 #include "core/tensor.hpp"
-#include "core/tensor_vulkan_interop.hpp"
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace lfs::core {
-    // Prepared off the viewer thread. The leases and tensor storage survive every
-    // renderer submission that uses them. Only valid for these exact tensors.
-    struct PointCloudRenderBuffers {
-        Tensor positions;
-        Tensor colors;
-        TensorVulkanBuffer positions_buffer;
-        TensorVulkanBuffer colors_buffer;
-        VulkanTimelinePoint ready;
-    };
+    // Opaque viewer-prepared resources. Core only retains their lifetime;
+    // the definition and backend interop details live in the visualizer.
+    struct PointCloudRenderBuffers;
 
     // Unified point cloud structure using lfs::core::Tensor
     struct PointCloud {

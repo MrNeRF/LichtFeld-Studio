@@ -242,7 +242,7 @@ namespace lfs::python {
             nb::gil_scoped_acquire gil;
             delete p;
         });
-        const auto source = [](nb::object object, nb::ndarray<nb::numpy, nb::device::cpu>& array) {
+        const auto source = [](nb::object object, nb::ndarray<nb::numpy, nb::device::cpu>& array, const bool colors) {
             if (nb::isinstance<PyTensor>(object))
                 return nb::cast<const PyTensor&>(object).tensor();
             if (!nb::try_cast(object, array, false))
@@ -251,14 +251,14 @@ namespace lfs::python {
                 (array.shape(0) > 0 && (array.stride(1) != 1 || (array.shape(0) > 1 && array.stride(0) != 3))))
                 throw nb::value_error("Point-cloud arrays must be C-contiguous [N, 3]");
             const auto dtype = array.dtype();
-            if (dtype != nb::dtype<float>() && dtype != nb::dtype<uint8_t>())
-                throw nb::value_error("Point-cloud arrays must have dtype float32 or uint8");
+            if (dtype != nb::dtype<float>() && (!colors || dtype != nb::dtype<uint8_t>()))
+                throw nb::value_error(colors ? "Colors must have dtype float32 or uint8" : "Positions must have dtype float32");
             return core::Tensor::from_blob(array.data(), {array.shape(0), size_t{3}}, core::Device::CPU,
                                            dtype == nb::dtype<float>() ? core::DataType::Float32 : core::DataType::UInt8);
         };
         vis::PointCloudUpdateInput input;
-        input.points = source(owners->points, owners->points_array);
-        input.colors = source(owners->colors, owners->colors_array);
+        input.points = source(owners->points, owners->points_array, false);
+        input.colors = source(owners->colors, owners->colors_array, true);
         input.source_owners = owners;
         if (centroid)
             input.centroid = glm::vec3(std::get<0>(*centroid), std::get<1>(*centroid), std::get<2>(*centroid));

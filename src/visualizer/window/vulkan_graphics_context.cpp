@@ -3,6 +3,7 @@
 
 #include "vulkan_graphics_context.hpp"
 #include "core/point_cloud.hpp"
+#include "rendering/point_cloud_render_buffers.hpp"
 
 #include "core/logger.hpp"
 #include "core/tensor_backend_vulkan.hpp"

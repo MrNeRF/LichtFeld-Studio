@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "point_cloud_vulkan_renderer.hpp"
+#include "point_cloud_render_buffers.hpp"
 #include "vulkan_scene_output.hpp"
 #include <unordered_map>
 #include <unordered_set>

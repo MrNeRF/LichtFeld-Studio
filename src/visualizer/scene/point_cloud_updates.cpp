@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "point_cloud_updates.hpp"
 #include "core/tensor_upload.hpp"
+#include "rendering/point_cloud_render_buffers.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -83,9 +84,16 @@ namespace lfs::vis {
         : prepare_(std::move(prepare)), wake_(std::move(wake)), resolve_on_scene_(resolve_on_scene), worker_([this] { run(); }) {}
     PointCloudUpdateManager::~PointCloudUpdateManager() { shutdown(); }
     void PointCloudUpdateManager::shutdown() {
-        cancelAll();
+        stop();
         if (worker_.joinable())
             worker_.join();
+    }
+    void PointCloudUpdateManager::stop() {
+        {
+            std::lock_guard lock(mutex_);
+            stopping_ = true;
+        }
+        cancelAll();
     }
     std::shared_ptr<PointCloudUpdateTicket> PointCloudUpdateManager::submit(
         PointCloudUpdateTarget target, PointCloudUpdateInput input) {
@@ -133,7 +141,6 @@ namespace lfs::vis {
     void PointCloudUpdateManager::cancelAll() {
         {
             std::lock_guard lock(mutex_);
-            stopping_ = true;
             for (const auto& request : requests_)
                 request->ticket->cancel();
         }
@@ -318,10 +325,11 @@ namespace lfs::vis {
             } else {
                 Tensor points_host, colors_host, colors_gpu, centroid_gpu;
                 TensorUpload points_upload, colors_upload;
-                // Pinned staging also makes snapshot ownership explicit: no producer
-                // pointer is retained by published tensors. Copies never run on the viewer.
+                // Request pinned CPU staging (the allocator may fall back to pageable
+                // storage). Published tensors never retain producer pointers, and
+                // these snapshot copies never run on the viewer.
                 if (input.points.device() == Device::CPU) {
-                    points_host = Tensor::empty(shape, Device::CPU, DataType::Float32);
+                    points_host = Tensor::empty(shape, Device::CPU, DataType::Float32, /*use_pinned=*/true);
                     std::memcpy(points_host.data_ptr(), input.points.data_ptr(), points_host.bytes());
                     const auto* points = points_host.ptr<float>();
                     glm::dvec3 sum(0.0);
@@ -335,7 +343,7 @@ namespace lfs::vis {
                         centroid = glm::vec3(sum / static_cast<double>(n));
                 }
                 if (input.colors.device() == Device::CPU) {
-                    colors_host = Tensor::empty(shape, Device::CPU, DataType::Float32);
+                    colors_host = Tensor::empty(shape, Device::CPU, DataType::Float32, /*use_pinned=*/true);
                     auto* colors = colors_host.ptr<float>();
                     const auto* f = input.colors.dtype() == DataType::Float32 ? input.colors.ptr<float>() : nullptr;
                     const auto* u = input.colors.dtype() == DataType::UInt8 ? input.colors.ptr<uint8_t>() : nullptr;
@@ -403,6 +411,8 @@ namespace lfs::vis {
                     if (color.dtype() == DataType::UInt8)
                         color = color.to(DataType::Float32) / 255.0f;
                     std::vector<float> rotation, offset{transform[3][0], transform[3][1], transform[3][2]};
+                    // GLM stores columns. Flattening them into the row-major tensor
+                    // gives R^T, so row positions P * R^T + t match GLM's M * p.
                     for (int column = 0; column < 3; ++column)
                         for (int row = 0; row < 3; ++row)
                             rotation.push_back(transform[column][row]);

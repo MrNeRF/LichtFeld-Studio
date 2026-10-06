@@ -93,6 +93,42 @@ TEST(PointCloudUpdates, CancelledReadyResultNeverPublishes) {
     EXPECT_TRUE(until([&] { return manager.retainedRequests() == 0; }));
 }
 
+TEST(PointCloudUpdates, CancelAllAllowsLaterSubmissionsButStopRejectsThem) {
+    PointCloudUpdateManager manager(prepare, [] {}, true);
+    auto destination = target();
+    auto cancelled = manager.submit(destination, input());
+    manager.cancelAll();
+    EXPECT_EQ(cancelled->state(), "cancelled");
+    auto later = manager.submit(destination, input(3));
+    manager.resolveQueued([](auto&, auto&) {});
+    ASSERT_TRUE(until([&] { return later->inputsReleased() && manager.hasReady(); }));
+    manager.publishReady([](const auto&, const auto& result, auto&) { EXPECT_EQ(result.cloud->size(), 3); });
+    EXPECT_EQ(later->state(), "published");
+    manager.stop();
+    EXPECT_THROW(manager.submit(destination, input()), std::runtime_error);
+    manager.shutdown();
+    EXPECT_TRUE(cancelled->inputsReleased());
+    EXPECT_EQ(manager.retainedRequests(), 0);
+}
+
+TEST(PointCloudUpdates, StopDoesNotWaitForActivePreparation) {
+    std::promise<void> started, finish;
+    auto gate = finish.get_future().share();
+    PointCloudUpdateManager manager([&](auto& in, const auto& release) {
+        started.set_value();
+        gate.wait();
+        return prepare(in, release); }, [] {});
+    auto ticket = manager.submit(target(), input());
+    EXPECT_EQ(started.get_future().wait_for(3s), std::future_status::ready);
+    manager.stop();
+    EXPECT_EQ(ticket->state(), "cancelled");
+    EXPECT_FALSE(ticket->inputsReleased());
+    EXPECT_THROW(manager.submit(target(), input()), std::runtime_error);
+    finish.set_value();
+    manager.shutdown();
+    EXPECT_TRUE(ticket->inputsReleased());
+}
+
 TEST(PointCloudUpdates, FailurePreservesVisibleDataAndReleasesInputs) {
     PointCloudUpdateManager manager([](auto&, const auto&) -> PointCloudUpdateManager::Prepared { throw std::bad_alloc(); }, [] {});
     auto ticket = manager.submit(target(), input());
@@ -159,11 +195,13 @@ TEST(PointCloudUpdates, ScenePublicationUpdatesTrainingReferenceCountAndCentroid
     auto before = std::make_shared<PointCloud>(host(2), host(2));
     const auto id = scene.addPointCloud("cloud", before);
     auto* node = scene.getNodeById(id);
+    const auto revision = node->point_cloud_revision->load();
     scene.setInitialPointCloud(before);
     auto after = std::make_shared<PointCloud>(host(3), host(3));
     auto retired = scene.publishNodePointCloud(node->uuid, after, glm::vec3(4.0f));
     EXPECT_EQ(retired.cloud, before);
     EXPECT_EQ(node->point_cloud, after);
+    EXPECT_EQ(node->point_cloud_revision->load(), revision + 1);
     EXPECT_EQ(scene.getInitialPointCloud(), after);
     EXPECT_EQ(node->gaussian_count.load(), 3);
     EXPECT_EQ(node->centroid, glm::vec3(4.0f));
@@ -171,6 +209,37 @@ TEST(PointCloudUpdates, ScenePublicationUpdatesTrainingReferenceCountAndCentroid
     const auto uuid = node->uuid;
     scene.removeNode("cloud");
     EXPECT_THROW(scene.publishNodePointCloud(uuid, after, {}), std::runtime_error);
+}
+
+TEST(PointCloudUpdates, AsyncPublicationInvalidatesPreviouslyCapturedRevision) {
+    Scene scene;
+    const auto id = scene.addPointCloud("cloud", std::make_shared<PointCloud>(host(2), host(2)));
+    const auto* node = scene.getNodeById(id);
+    auto destination = target();
+    destination.scene = &scene;
+    destination.uuid = node->uuid;
+    destination.revision = node->point_cloud_revision;
+    destination.expected_revision = destination.revision->load();
+    PointCloudUpdateManager manager(prepare, [] {});
+    auto stale = manager.submit(destination, input());
+    ASSERT_TRUE(until([&] { return manager.hasReady(); }));
+    auto current = std::make_shared<PointCloud>(host(3), host(3));
+    auto retired = scene.publishNodePointCloud(node->uuid, current, glm::vec3(4.0f));
+    const auto publish = [&](const auto& target, const auto& result, auto& old) {
+        if (target.revision->load() != target.expected_revision)
+            throw std::runtime_error("target replaced");
+        old = scene.publishNodePointCloud(target.uuid, result.cloud, result.centroid);
+    };
+    manager.publishReady(publish);
+    EXPECT_EQ(stale->state(), "failed");
+    EXPECT_EQ(scene.getNodeByUuid(destination.uuid)->point_cloud, current);
+    destination.expected_revision = destination.revision->load();
+    auto fresh = manager.submit(destination, input(4));
+    ASSERT_TRUE(until([&] { return fresh->inputsReleased() && manager.hasReady(); }));
+    manager.publishReady(publish);
+    EXPECT_EQ(fresh->state(), "published");
+    EXPECT_EQ(scene.getNodeByUuid(destination.uuid)->point_cloud->size(), 4);
+    EXPECT_EQ(destination.revision->load(), destination.expected_revision + 1);
 }
 
 TEST(PointCloudUpdates, SceneResolutionDoesNotStartAnUploadOrRetireSourcesOnViewer) {
@@ -211,9 +280,11 @@ TEST(PointCloudUpdates, ClearInvalidatesEpochButRenamePreservesIt) {
 }
 
 #if LFS_GRAPHICS_VULKAN
+#include "rendering/point_cloud_render_buffers.hpp"
 #include "rendering/point_cloud_vulkan_renderer.hpp"
 #include "window/vulkan_graphics_context.hpp"
 #include <cstdlib>
+#include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 
 TEST(PointCloudUpdatesGpu, IndependentSnapshotAndRendererLeasesAvoidHostRoundtrip) {
@@ -328,15 +399,24 @@ TEST(PointCloudUpdatesGpu, MergedViewPreservesNodeOrderAndEmptyReplacement) {
     after->means.ptr<float>()[0] = 3.0f;
     auto in = input(1);
     in.points.ptr<float>()[0] = 2.0f;
-    in.companions = {{before, glm::mat4(1.0f)}, {after, glm::mat4(1.0f)}};
+    auto companion_transform = glm::translate(glm::mat4(1.0f), glm::vec3(5, -2, 3));
+    companion_transform = glm::rotate(companion_transform, 0.7f, glm::normalize(glm::vec3(1, 2, 3)));
+    companion_transform = glm::scale(companion_transform, glm::vec3(2, 3, 4));
+    in.transform = glm::translate(glm::mat4(1.0f), glm::vec3(-3, 4, 7));
+    in.transform = glm::rotate(in.transform, -0.4f, glm::vec3(0, 1, 0));
+    in.companions = {{before, companion_transform}, {after, glm::mat4(1.0f)}};
     in.target_index = 1;
+    const auto expected_before = companion_transform * glm::vec4(1, 0, 0, 1);
+    const auto expected_target = in.transform * glm::vec4(2, 0, 0, 1);
     auto result = native_prepare(in, [] {});
     ASSERT_TRUE(result.merged);
     ASSERT_TRUE(result.merged->render_buffers);
     auto points = result.merged->means.cpu();
     ASSERT_EQ(points.size(0), 3);
-    EXPECT_FLOAT_EQ(points.ptr<float>()[0], 1.0f);
-    EXPECT_FLOAT_EQ(points.ptr<float>()[3], 2.0f);
+    for (size_t axis = 0; axis < 3; ++axis) {
+        EXPECT_NEAR(points.ptr<float>()[axis], expected_before[axis], 1e-5);
+        EXPECT_NEAR(points.ptr<float>()[3 + axis], expected_target[axis], 1e-5);
+    }
     EXPECT_FLOAT_EQ(points.ptr<float>()[6], 3.0f);
     in = input(0);
     in.companions = {{before, glm::mat4(1.0f)}, {after, glm::mat4(1.0f)}};

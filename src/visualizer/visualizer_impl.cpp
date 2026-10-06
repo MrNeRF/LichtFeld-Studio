@@ -1389,7 +1389,7 @@ namespace lfs::vis {
         }
 
         if (auto updates = point_cloud_updates_.load())
-            updates->cancelAll();
+            updates->stop();
         python::request_plugin_preload_stop();
 
         for (auto& work : pending_work) {
