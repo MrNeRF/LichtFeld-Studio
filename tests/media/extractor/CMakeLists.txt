@@ -31,8 +31,10 @@ else()
     endforeach()
 endif()
 get_filename_component(MEDIA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
-add_executable(media_extraction_runner runner.cpp support.cpp probe_unit_contracts.cpp
+add_executable(media_extraction_runner runner.cpp support.cpp probe_unit_contracts.cpp frame_sink_contracts.cpp
     ${MEDIA_ROOT}/src/io/media_probe.cpp
+    ${MEDIA_ROOT}/src/io/frame_sink.cpp
+    ${MEDIA_ROOT}/src/io/file_frame_sink.cpp
     ${MEDIA_ROOT}/src/io/video_player.cpp
     ${MEDIA_ROOT}/src/io/video_frame_extractor.cpp
     ${MEDIA_ROOT}/src/io/hdr_tonemap.cpp
@@ -76,5 +78,12 @@ add_test(NAME MediaProbeUnitContracts COMMAND media_extraction_runner --probe-un
 set_tests_properties(MediaProbeUnitContracts PROPERTIES LABELS "media;cpu;offline" TIMEOUT 30)
 if(WIN32)
     set_tests_properties(MediaProbeUnitContracts PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
+endif()
+
+add_test(NAME MediaFrameSinkUnitContracts COMMAND media_extraction_runner --sink-unit)
+set_tests_properties(MediaFrameSinkUnitContracts PROPERTIES LABELS "media;cpu;offline" TIMEOUT 30)
+if(WIN32)
+    set_tests_properties(MediaFrameSinkUnitContracts PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
 endif()

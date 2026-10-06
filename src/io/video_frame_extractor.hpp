@@ -12,6 +12,10 @@
 
 #include "io/hdr_tonemap.hpp"
 
+namespace lfs::media {
+    class FrameSink;
+}
+
 namespace lfs::io {
 
     // Supports %d, %0Nd zero-padding, %% escaping, and legacy %000 zero-padding.
@@ -104,6 +108,9 @@ namespace lfs::io {
                                                  int source_height, double stream_time_base,
                                                  ValidatedLayout& layout, std::string& error);
         bool extract(const Params& params, std::string& error);
+        // Synchronous CPU delivery. output_dir, file naming and generate_metadata
+        // do not cause filesystem output; the supplied sink owns that policy.
+        bool extractToSink(const Params& params, media::FrameSink& sink, std::string& error);
         [[nodiscard]] ExtractionOutcome lastOutcome() const;
 
     private:

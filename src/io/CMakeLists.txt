@@ -49,6 +49,10 @@ add_library(lfs_video STATIC
         include/io/media/media_probe.hpp
         media_probe_ffmpeg.hpp
         media_probe.cpp
+        include/io/media/frame_sink.hpp
+        include/io/media/file_frame_sink.hpp
+        frame_sink.cpp
+        file_frame_sink.cpp
         video_frame_extractor.hpp
         video_frame_extractor.cpp
         hdr_tonemap.hpp

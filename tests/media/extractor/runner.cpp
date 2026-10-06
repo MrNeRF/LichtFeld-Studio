@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/path_utils.hpp"
+#include "io/media/file_frame_sink.hpp"
 #include "io/media/media_probe.hpp"
 #include "io/video_frame_extractor.hpp"
 #include "io/video_player.hpp"
@@ -10,6 +11,7 @@
 #include <stdexcept>
 
 int runProbeUnitContracts();
+int runFrameSinkUnitContracts();
 
 // Test adapter only: decoding, selection, geometry, codecs and metadata execute
 // the production sources directly. The JSON protocol is not a public CLI.
@@ -19,6 +21,8 @@ int main(int argc, char** argv) {
     try {
         if (argc != 2)
             throw std::runtime_error("Expected one JSON request path");
+        if (std::string_view(argv[1]) == "--sink-unit")
+            return runFrameSinkUnitContracts();
         if (std::string_view(argv[1]) == "--probe-unit")
             return runProbeUnitContracts();
         std::ifstream input(lfs::core::utf8_to_path(argv[1]));
@@ -99,6 +103,7 @@ int main(int argc, char** argv) {
             params.custom_height = request.at("height").get<int>();
         }
         params.sharpness.enabled = request.value("sharpness", false);
+        params.sharpness.window_mode = request.value("window", false);
         params.sharpness.threshold = request.value("threshold", 0.0);
         int progressed = 0;
         json progress = json::array();
@@ -110,11 +115,86 @@ int main(int argc, char** argv) {
         params.cancel_requested = [&]() { return cancel_after >= 0 && progressed >= cancel_after; };
         VideoFrameExtractor extractor;
         std::string error;
-        const bool success = extractor.extract(params, error);
+        using namespace lfs::media;
+        struct ObservedSink : FrameSink {
+            MemoryFrameSink memory;
+            const json& request;
+            json events = json::array();
+            size_t accepted = 0;
+            size_t terminal_count = 0;
+            size_t abort_count = 0;
+            SinkSession session;
+            ObservedSink(const json& r) : memory(r.value("budget", size_t{256 * 1024 * 1024}), r.value("frame_limit", size_t{100000})), request(r) {}
+            static SinkResult failure(lfs::ErrorCode code, std::string detail) {
+                return SinkResult::failure(lfs::make_error({.code = code, .domain = lfs::ErrorDomain::IO, .detail = std::move(detail), .detection = LFS_SOURCE_SITE_CURRENT()}));
+            }
+            SinkResult begin(const SinkSession& value) override {
+                events.push_back("begin");
+                session = value;
+                if (request.value("fail_begin", false))
+                    return failure(lfs::ErrorCode::Unavailable, "injected begin failure");
+                return memory.begin(value);
+            }
+            SinkResult write(const FrameView& frame) override {
+                events.push_back("write");
+                if (request.value("throw_write", false))
+                    throw std::runtime_error("injected write exception");
+                if (request.value("throw_unknown", false))
+                    throw 7;
+                if (request.value("fail_after", -1) == static_cast<int>(accepted))
+                    return failure(lfs::ErrorCode::Unavailable, "injected write failure");
+                if (request.value("sink_cancel_after", -1) == static_cast<int>(accepted))
+                    return failure(lfs::ErrorCode::Cancelled, "injected cancellation");
+                auto result = memory.write(frame);
+                if (result)
+                    ++accepted;
+                return result;
+            }
+            SinkResult complete(const SinkSummary& summary) override {
+                events.push_back("complete");
+                terminal_count = summary.frames_accepted;
+                if (request.value("fail_complete", false))
+                    return failure(lfs::ErrorCode::Unavailable, "injected completion failure");
+                return memory.complete(summary);
+            }
+            void abort(const SinkSummary& summary) noexcept override {
+                // No allocating event append in this noexcept callback.
+                ++abort_count;
+                terminal_count = summary.frames_accepted;
+                memory.abort(summary);
+            }
+        } observed(request);
+        const auto sink_mode = request.value("sink", "legacy");
+        FileFrameSink file_sink({params.output_dir, params.filename_pattern,
+                                 params.format == ImageFormat::PNG ? FrameFileFormat::PNG : FrameFileFormat::JPEG,
+                                 params.jpg_quality});
+        const bool success = sink_mode == "memory" ? extractor.extractToSink(params, observed, error)
+                             : sink_mode == "file" ? extractor.extractToSink(params, file_sink, error)
+                                                   : extractor.extract(params, error);
         const auto outcome = extractor.lastOutcome();
         const char* state = outcome == ExtractionOutcome::Completed ? "completed" : outcome == ExtractionOutcome::Cancelled ? "cancelled"
                                                                                                                             : "failed";
-        std::cout << json{{"success", success}, {"outcome", state}, {"error", error}, {"progress", progress}}.dump() << '\n';
+        json output{{"success", success}, {"outcome", state}, {"error", error}, {"progress", progress}};
+        if (sink_mode == "memory") {
+            if (observed.memory.outcome() && *observed.memory.outcome() != SinkOutcome::Completed)
+                observed.events.push_back("abort");
+            output["events"] = observed.events;
+            output["accepted"] = observed.terminal_count;
+            output["abort_count"] = observed.abort_count;
+            output["payload_bytes"] = observed.memory.payloadBytes();
+            output["session_size"] = {observed.session.output.width, observed.session.output.height};
+            output["frames"] = json::array();
+            for (const auto& surface : observed.memory.frames()) {
+                const auto view = surface.view();
+                json frame{{"size", {view.layout.width, view.layout.height}}, {"stride", view.layout.row_stride}, {"decode_index", view.info.decode_index}, {"delivery_index", view.info.delivery_index}, {"source_frame", view.info.legacy_source_frame}, {"seconds", view.info.relative_seconds}, {"score", view.info.sharpness_score}, {"timestamp_origin", static_cast<int>(view.info.timestamp_origin)}, {"pixels", request.value("include_pixels", true) ? json(std::vector<uint8_t>(view.pixels.begin(), view.pixels.end())) : json(nullptr)}};
+                if (view.info.source_timestamp) {
+                    frame["ticks"] = view.info.source_timestamp->ticks;
+                    frame["time_base"] = {view.info.source_timestamp->time_base.numerator, view.info.source_timestamp->time_base.denominator};
+                }
+                output["frames"].push_back(std::move(frame));
+            }
+        }
+        std::cout << output.dump() << '\n';
         // A failed extraction is a result to assert, not a harness crash.
         return 0;
     } catch (const std::exception& error) {

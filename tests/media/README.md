@@ -96,3 +96,15 @@ MediaProbeUnitContracts assertions. These checks use MPEG-4/MOV, PCM/WAV and lav
 sine in addition to the original FFV1/rawvideo/NUT fixture capabilities. They run
 inside the existing Release CI jobs without another workflow or job. See
 ../../docs/development/media-probe-contracts.md for API, behavior and verification.
+## CPU frame sinks
+
+The same CTest project also builds production FrameSurface/MemoryFrameSink and
+FileFrameSink, with eight additional extraction Python methods and the native
+MediaFrameSinkUnitContracts suite. They verify retained ownership, rational source
+PTS and decode identity, transformations/window/tail selection, no implicit disk
+output, memory limits, failure/cancellation lifecycle, PNG/JPEG equivalence,
+padded rows and real writer failure. Core structured error implementation is
+compiled directly; test diagnostics remain on stderr.
+
+See [frame sink contracts](../../docs/development/media-frame-sinks.md) for callback
+lifetimes, budget accounting, delivery indices and legacy compatibility limits.

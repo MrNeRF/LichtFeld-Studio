@@ -40,6 +40,111 @@ class ExtractionContracts(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
         return json.loads(result.stdout), output
 
+    def test_memory_sink_preserves_pixels_pts_and_ownership(self):
+        for fixture in ("cfr-asymmetric", "vfr-asymmetric"):
+            result, output = self.extract(fixture, sink="memory")
+            self.assertTrue(result["success"], result["error"])
+            self.assertFalse(output.exists())
+            self.assertEqual(result["events"], ["begin"] + ["write"] * len(result["frames"]) + ["complete"])
+            source = self.corpus / (fixture + ".nut")
+            ref = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_frames", "-show_streams", "-of", "json", str(source)]))
+            pixels = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(source), "-f", "rawvideo", "-pix_fmt", "rgb24", "-fps_mode", "passthrough", "-"])
+            for index, frame in enumerate(result["frames"]):
+                self.assertEqual(frame["decode_index"], index)
+                self.assertEqual(frame["delivery_index"], index)
+                self.assertEqual(frame["ticks"], int(ref["frames"][index]["best_effort_timestamp"]))
+                self.assertEqual(frame["time_base"], [int(v) for v in ref["streams"][0]["time_base"].split("/")])
+                self.assertEqual(bytes(frame["pixels"]), pixels[index*6144:(index+1)*6144])
+            self.assertEqual(result["payload_bytes"], len(result["frames"])*6144)
+
+    def test_memory_sink_matches_file_transform_selection(self):
+        for options in ({"rotation":90}, {"scale":0.5}, {"width":40,"height":24},
+                        {"start":0.1,"end":0.3}, {"mode":"fps","fps":5},
+                        {"sharpness":True,"window":True,"interval":2}):
+            with self.subTest(options=options):
+                memory, no_files = self.extract(sink="memory", **options)
+                legacy, output = self.extract(**options)
+                self.assertTrue(memory["success"], memory["error"])
+                self.assertTrue(legacy["success"], legacy["error"])
+                self.assertFalse(no_files.exists())
+                images = sorted(output.glob("*.png"))
+                self.assertEqual(len(images), len(memory["frames"]))
+                for image, frame in zip(images, memory["frames"]):
+                    rgb = subprocess.check_output([FFMPEG,"-v","error","-i",str(image),"-f","rawvideo","-pix_fmt","rgb24","-"])
+                    self.assertEqual(bytes(frame["pixels"]),rgb)
+                metadata = json.loads((output / "extraction_metadata.json").read_text())
+                # Compare source identity even when a window is flushed after later decoding.
+                for frame, entry in zip(memory["frames"], metadata["frames"]):
+                    self.assertEqual(frame["source_frame"],entry["source_frame"])
+                    self.assertEqual(frame["decode_index"],entry["source_frame"]-1)
+                    self.assertAlmostEqual(frame["seconds"],entry["timestamp"],places=6)
+
+    def test_sink_failure_and_cancellation_retain_partial_results(self):
+        for options, outcome, count, events in (
+            ({"fail_after":1},"failed",1,["begin","write","write","abort"]),
+            ({"sink_cancel_after":1},"cancelled",1,["begin","write","write","abort"]),
+            ({"cancel_after":1},"cancelled",1,["begin","write","abort"]),
+            ({"budget":6144},"failed",1,["begin","write","write","abort"]),
+            ({"frame_limit":1},"failed",1,["begin","write","write","abort"]),
+            ({"fail_begin":True},"failed",0,["begin","abort"]),
+            ({"throw_write":True},"failed",0,["begin","write","abort"]),
+            ({"throw_unknown":True},"failed",0,["begin","write","abort"]),
+            ({"fail_complete":True},"failed",4,["begin"]+["write"]*4+["complete","abort"])):
+            with self.subTest(options=options):
+                result, output = self.extract(sink="memory", **options)
+                self.assertFalse(result["success"])
+                self.assertEqual(result["outcome"],outcome)
+                self.assertEqual(len(result["frames"]),count)
+                self.assertEqual(result["accepted"],count)
+                self.assertEqual(result["events"],events)
+                self.assertEqual(result["abort_count"],1)
+                self.assertFalse(output.exists())
+
+    def test_memory_ignores_filesystem_policy_and_reports_rotated_session(self):
+        blocked = self.root / "memory-output-blocked"
+        blocked.write_bytes(b"existing file")
+        result, _ = self.extract(sink="memory",output=str(blocked),naming="absent/subdir/frame_%d",rotation=90)
+        self.assertTrue(result["success"],result["error"])
+        self.assertEqual(blocked.read_bytes(),b"existing file")
+        self.assertEqual(result["session_size"],[32,64])
+        self.assertTrue(all(f["size"] == [32,64] for f in result["frames"]))
+
+    def test_retained_fps_tail_keeps_original_decode_identity(self):
+        result, _ = self.extract(sink="memory",mode="fps",fps=100,end=0.35)
+        self.assertTrue(result["success"],result["error"])
+        frames = result["frames"]
+        self.assertEqual([f["delivery_index"] for f in frames],list(range(len(frames))))
+        repeated = [f for f in frames if f["decode_index"] == 3]
+        self.assertGreater(len(repeated),1)
+        self.assertTrue(all(f["ticks"] == repeated[0]["ticks"] and f["pixels"] == repeated[0]["pixels"] for f in repeated))
+
+    def test_invalid_input_never_begins_sink(self):
+        for options in ({"interval":0},{"input":str(self.root/"absent.nut")}):
+            result, output = self.extract(sink="memory", **options)
+            self.assertFalse(result["success"])
+            self.assertEqual(result["events"],[])
+            self.assertEqual(result["abort_count"],0)
+            self.assertFalse(output.exists())
+
+    def test_file_sink_matches_legacy_png_and_jpeg(self):
+        for format in ("png","jpg"):
+            legacy, old = self.extract(format=format,rotation=90)
+            actual, output = self.extract(sink="file",format=format,rotation=90)
+            self.assertTrue(actual["success"],actual["error"])
+            self.assertTrue(legacy["success"],legacy["error"])
+            self.assertFalse((output/"extraction_metadata.json").exists())
+            self.assertEqual({p.name:p.read_bytes() for p in old.glob("*."+format)},
+                             {p.name:p.read_bytes() for p in output.glob("*."+format)})
+
+    def test_file_writer_failure_is_failed_and_preserves_completed_files(self):
+        work = Path(tempfile.mkdtemp(prefix="blocked-",dir=self.root))
+        (work/"frame_002.png").mkdir()
+        result, output = self.extract(output=str(work))
+        self.assertFalse(result["success"])
+        self.assertEqual(result["outcome"],"failed")
+        self.assertTrue((work/"frame_001.png").is_file())
+        self.assertEqual(len(result["progress"]),1)
+
     def probe(self, source=None, **options):
         work = Path(tempfile.mkdtemp(prefix="probe-", dir=self.root))
         request = {"operation": "probe", "input": str(source or self.corpus / "cfr-asymmetric.nut"), **options}
