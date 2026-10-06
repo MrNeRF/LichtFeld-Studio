@@ -107,7 +107,7 @@ namespace lfs::python {
         return PyTensor(tensor_from_vec3(visualizer_pose_from_camera(*cam_).translation).cuda(), true);
     }
 
-    PyTensor PyCamera::K() const { return PyTensor(cam_->K(), true); }
+    PyTensor PyCamera::K() const { return PyTensor(cam_->K().squeeze(0), true); }
 
     PyTensor PyCamera::view_matrix() const {
         const auto pose = visualizer_pose_from_camera(*cam_);

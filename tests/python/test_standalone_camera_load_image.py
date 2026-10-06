@@ -43,6 +43,7 @@ def test_io_loaded_camera_loads_image_without_application_context(lf, tmp_path):
     dataset = lf.io.load(str(dataset_path))
     camera = dataset.cameras[0]
     assert camera.has_image
+    assert tuple(camera.K.shape) == (3, 3)
 
     image = camera.load_image(output_uint8=True)
     assert image.is_cuda
