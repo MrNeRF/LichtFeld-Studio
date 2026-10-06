@@ -257,6 +257,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
         test_menu_bar_title.cpp
+        test_point_cloud_updates.cpp
 
         test_preferences_migration.cpp
         test_scene_upscaler_registry.cpp
