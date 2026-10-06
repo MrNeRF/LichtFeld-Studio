@@ -68,6 +68,15 @@
 
 class PythonIntegrationTest : public ::testing::Test {
 protected:
+    static void TearDownTestSuite() {
+        // Release retained UI callbacks while Python and its GIL are alive.
+        // Windows DLL detach must not destroy these objects after process exit.
+        if (Py_IsInitialized()) {
+            const lfs::python::GilAcquire gil;
+            lfs::python::invoke_python_cleanup();
+        }
+    }
+
     void SetUp() override {
         const auto module_dir = lfs::test::findPythonModuleDir();
         ASSERT_FALSE(module_dir.empty()) << "Could not locate built lichtfeld module for Python tests";
