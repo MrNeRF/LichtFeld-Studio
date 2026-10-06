@@ -199,7 +199,7 @@ jobs:
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake -S tests/media -B build-media-fixtures
           if errorlevel 1 exit /b 1
-          ctest --test-dir build-media-fixtures --output-on-failure --no-tests=error
+          ctest --test-dir build-media-fixtures -C Release --output-on-failure --no-tests=error
           if errorlevel 1 exit /b 1
           cmake -S tests/media/extractor -B build-media-extractor -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%VCPKG_ROOT%/scripts/buildsystems/vcpkg.cmake" -DVCPKG_INSTALLED_DIR="%CD%/%BUILD_DIR%/vcpkg_installed" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_MANIFEST_INSTALL=OFF
           if errorlevel 1 exit /b 1
