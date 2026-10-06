@@ -129,6 +129,180 @@ namespace lfs::core {
                 return std::nullopt;
             }
 
+            [[nodiscard]] bool is_json_integer(const nlohmann::json& value) {
+                return value.is_number_integer() || value.is_number_unsigned();
+            }
+
+            [[nodiscard]] bool is_json_int32(const nlohmann::json& value) {
+                return is_json_integer(value) &&
+                       value.get<long double>() >= std::numeric_limits<int>::min() &&
+                       value.get<long double>() <= std::numeric_limits<int>::max();
+            }
+
+            [[nodiscard]] bool is_json_size_t(const nlohmann::json& value) {
+                return is_json_integer(value) && value.get<long double>() >= 0.0L &&
+                       value.get<long double>() <= std::numeric_limits<size_t>::max();
+            }
+
+            [[nodiscard]] std::string_view optimization_json_type_name(const PropType type) {
+                switch (type) {
+                case PropType::Bool: return "boolean";
+                case PropType::Int: return "integer";
+                case PropType::Float: return "number";
+                case PropType::String:
+                case PropType::Enum: return "string";
+                case PropType::SizeT: return "non-negative integer";
+                case PropType::Vec3:
+                case PropType::Color3: return "array of 3 numbers";
+                case PropType::IntVector: return "array of integers";
+                case PropType::FloatVector: return "array of numbers";
+                default: return "valid JSON value";
+                }
+            }
+
+            [[nodiscard]] bool optimization_json_type_matches(
+                const PropType type,
+                const nlohmann::json& value) {
+                switch (type) {
+                case PropType::Bool: return value.is_boolean();
+                case PropType::Int: return is_json_int32(value);
+                case PropType::Float: return value.is_number();
+                case PropType::String:
+                case PropType::Enum: return value.is_string();
+                case PropType::SizeT: return is_json_size_t(value);
+                case PropType::Vec3:
+                case PropType::Color3:
+                    return value.is_array() && value.size() == 3 &&
+                           std::ranges::all_of(value, [](const auto& component) { return component.is_number(); });
+                case PropType::IntVector:
+                    return value.is_array() && std::ranges::all_of(value, is_json_integer);
+                case PropType::FloatVector:
+                    return value.is_array() && std::ranges::all_of(value, [](const auto& item) { return item.is_number(); });
+                default: return true;
+                }
+            }
+
+            [[nodiscard]] std::optional<std::string> validate_optimization_json_types(
+                const nlohmann::json& json) {
+                if (!json.is_object())
+                    return std::nullopt;
+                const auto check = [&json](const std::string_view key, const std::string_view expected, auto predicate)
+                    -> std::optional<std::string> {
+                    if (json.contains(key) && !predicate(json.at(key)))
+                        return std::format("Invalid type for optimization.{}; expected {}", key, expected);
+                    return std::nullopt;
+                };
+                if (auto error = check("strategy", "string", [](const auto& value) { return value.is_string(); }))
+                    return error;
+                if (auto error = check("enable_save_eval_images", "boolean", [](const auto& value) { return value.is_boolean(); }))
+                    return error;
+                if (auto error = check("ppisp_sidecar_path", "string", [](const auto& value) { return value.is_string(); }))
+                    return error;
+                if (auto error = check("bg_image_path", "string", [](const auto& value) { return value.is_string(); }))
+                    return error;
+
+                const auto group = optimization_property_snapshot();
+                for (const auto& meta : group.properties) {
+                    const std::string key(optimization_json_key(meta));
+                    if (!json.contains(key))
+                        continue;
+                    const auto& value = json.at(key);
+                    if (!optimization_json_type_matches(meta.type, value)) {
+                        return std::format(
+                            "Invalid type for optimization.{}; expected {}",
+                            meta.id, optimization_json_type_name(meta.type));
+                    }
+                }
+
+                for (const auto& key : {"eval_steps", "save_steps"}) {
+                    if (!json.contains(key))
+                        continue;
+                    const auto& value = json.at(key);
+                    if (!value.is_array() || !std::ranges::all_of(value, is_json_size_t)) {
+                        return std::format(
+                            "Invalid type for optimization.{}; expected array of non-negative integers",
+                            key);
+                    }
+                }
+                if (json.contains("bg_color")) {
+                    const auto& value = json.at("bg_color");
+                    if (!value.is_array() || value.size() != 3 ||
+                        !std::ranges::all_of(value, [](const auto& component) { return component.is_number(); })) {
+                        return "Invalid type for optimization.bg_color; expected array of 3 numbers";
+                    }
+                }
+                return std::nullopt;
+            }
+
+            [[nodiscard]] std::optional<std::string> validate_dataset_json_types(const nlohmann::json& json) {
+                if (!json.is_object())
+                    return std::nullopt;
+                const auto check = [&json](const std::string_view key, const std::string_view expected, auto predicate)
+                    -> std::optional<std::string> {
+                    if (json.contains(key) && !predicate(json.at(key)))
+                        return std::format("Invalid type for dataset.{}; expected {}", key, expected);
+                    return std::nullopt;
+                };
+                if (auto error = check("data_path", "string", [](const auto& v) { return v.is_string(); }))
+                    return error;
+                if (auto error = check("output_folder", "string", [](const auto& v) { return v.is_string(); }))
+                    return error;
+                if (auto error = check("output_path", "string", [](const auto& v) { return v.is_string(); }))
+                    return error;
+                if (auto error = check("images", "string", [](const auto& v) { return v.is_string(); }))
+                    return error;
+                if (auto error = check("resize_factor", "integer", is_json_int32))
+                    return error;
+                if (auto error = check("max_width", "integer", is_json_int32))
+                    return error;
+                if (auto error = check("min_track_length", "integer", is_json_int32))
+                    return error;
+                if (auto error = check("test_every", "integer", is_json_int32))
+                    return error;
+                if (auto error = check("timelapse_images", "array of strings", [](const auto& v) { return v.is_array() && std::ranges::all_of(v, [](const auto& item) { return item.is_string(); }); }))
+                    return error;
+                if (auto error = check("timelapse_every", "integer", is_json_int32))
+                    return error;
+                if (auto error = check("output_name", "string", [](const auto& v) { return v.is_string(); }))
+                    return error;
+                if (auto error = check("invert_masks", "boolean", [](const auto& v) { return v.is_boolean(); }))
+                    return error;
+                if (auto error = check("mask_threshold", "number", [](const auto& v) { return v.is_number(); }))
+                    return error;
+                if (auto error = check("centralize_dataset", "string", [](const auto& v) { return v.is_string(); }))
+                    return error;
+                if (auto error = check("loading_params", "object", [](const auto& v) { return v.is_object(); }))
+                    return error;
+                if (json.contains("loading_params")) {
+                    const auto& loading = json.at("loading_params");
+                    for (const auto key : {"use_cpu_memory", "print_cache_status", "use_16bit_color", "use_8bit_color"}) {
+                        if (loading.contains(key) && !loading.at(key).is_boolean())
+                            return std::format("Invalid type for dataset.loading_params.{}; expected boolean", key);
+                    }
+                    for (const auto key : {"min_cpu_free_memory_ratio", "min_cpu_free_GB"}) {
+                        if (loading.contains(key) && !loading.at(key).is_number())
+                            return std::format("Invalid type for dataset.loading_params.{}; expected number", key);
+                    }
+                    if (loading.contains("print_status_freq_num") && !is_json_int32(loading.at("print_status_freq_num")))
+                        return "Invalid type for dataset.loading_params.print_status_freq_num; expected integer";
+                }
+                return std::nullopt;
+            }
+
+            [[nodiscard]] std::optional<std::string> validate_server_json_types(const nlohmann::json& json) {
+                if (!json.is_object())
+                    return std::nullopt;
+                if (json.contains("tcp_server_connection_port") &&
+                    !is_json_int32(json.at("tcp_server_connection_port")))
+                    return "Invalid type for server.tcp_server_connection_port; expected integer";
+                if (json.contains("tcp_broadcast_connection_port") &&
+                    !is_json_int32(json.at("tcp_broadcast_connection_port")))
+                    return "Invalid type for server.tcp_broadcast_connection_port; expected integer";
+                if (json.contains("tcp_connection") && !json.at("tcp_connection").is_boolean())
+                    return "Invalid type for server.tcp_connection; expected boolean";
+                return std::nullopt;
+            }
+
             void write_registered_optimization_properties(
                 nlohmann::json& json,
                 const OptimizationParameters& params) {
@@ -1118,8 +1292,24 @@ namespace lfs::core {
             const auto& opt_json = json.contains("optimization") ? json["optimization"] : json;
 
             try {
+                if (!opt_json.is_object())
+                    return std::unexpected("Optimization parameters must be a JSON object");
+                if (const auto error = validate_optimization_json_types(opt_json))
+                    return std::unexpected("Error parsing optimization parameters: " + *error);
                 if (const auto error = validate_registered_optimization_enums(opt_json))
                     return std::unexpected("Error parsing optimization parameters: " + *error);
+                if (json.contains("dataset")) {
+                    if (!json["dataset"].is_object())
+                        return std::unexpected("Dataset parameters must be a JSON object");
+                    if (const auto error = validate_dataset_json_types(json["dataset"]))
+                        return std::unexpected(*error);
+                }
+                if (json.contains("server")) {
+                    if (!json["server"].is_object())
+                        return std::unexpected("Server parameters must be a JSON object");
+                    if (const auto error = validate_server_json_types(json["server"]))
+                        return std::unexpected(*error);
+                }
 
                 auto params = OptimizationParameters::from_json(opt_json);
                 if (auto error = params.validate(); !error.empty())
@@ -1156,6 +1346,9 @@ namespace lfs::core {
             }
 
             try {
+                if (const auto error = validate_optimization_json_types(opt_json)) {
+                    return std::unexpected(config_import_error(*error, path));
+                }
                 if (const auto error = validate_registered_optimization_enums(opt_json)) {
                     return std::unexpected(config_import_error(*error, path));
                 }
@@ -1175,6 +1368,9 @@ namespace lfs::core {
                     if (!json["dataset"].is_object()) {
                         return std::unexpected(config_import_error("Dataset parameters must be a JSON object", path));
                     }
+                    if (const auto error = validate_dataset_json_types(json["dataset"])) {
+                        return std::unexpected(config_import_error(*error, path));
+                    }
                     apply_dataset_json_overlay(params.dataset, json["dataset"]);
                 }
                 if (json.contains("server")) {
@@ -1183,14 +1379,30 @@ namespace lfs::core {
                     }
                     const auto& server_json = json["server"];
                     if (server_json.contains("tcp_server_connection_port")) {
+                        if (!is_json_integer(server_json["tcp_server_connection_port"]) ||
+                            server_json["tcp_server_connection_port"].get<long double>() < std::numeric_limits<int>::min() ||
+                            server_json["tcp_server_connection_port"].get<long double>() > std::numeric_limits<int>::max()) {
+                            return std::unexpected(config_import_error(
+                                "Invalid type for server field 'tcp_server_connection_port'; expected integer", path));
+                        }
                         params.server.tcp_server_connection_port =
                             server_json["tcp_server_connection_port"].get<int>();
                     }
                     if (server_json.contains("tcp_broadcast_connection_port")) {
+                        if (!is_json_integer(server_json["tcp_broadcast_connection_port"]) ||
+                            server_json["tcp_broadcast_connection_port"].get<long double>() < std::numeric_limits<int>::min() ||
+                            server_json["tcp_broadcast_connection_port"].get<long double>() > std::numeric_limits<int>::max()) {
+                            return std::unexpected(config_import_error(
+                                "Invalid type for server field 'tcp_broadcast_connection_port'; expected integer", path));
+                        }
                         params.server.tcp_broadcast_connection_port =
                             server_json["tcp_broadcast_connection_port"].get<int>();
                     }
                     if (server_json.contains("tcp_connection")) {
+                        if (!server_json["tcp_connection"].is_boolean()) {
+                            return std::unexpected(config_import_error(
+                                "Invalid type for server field 'tcp_connection'; expected boolean", path));
+                        }
                         params.server.tcp_connection = server_json["tcp_connection"].get<bool>();
                     }
                 }

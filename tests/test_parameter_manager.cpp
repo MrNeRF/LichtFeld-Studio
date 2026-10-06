@@ -402,6 +402,32 @@ namespace {
         std::filesystem::remove(config_path, ec);
     }
 
+    TEST(ParameterManagerTest, ConfigImportRejectsWrongJsonTypesWithFieldAndExpectedType) {
+        const auto config_path = unique_temp_config_path();
+        const std::array<std::pair<nlohmann::json, std::string_view>, 7> cases = {{
+            {nlohmann::json{{"dataset", {{"max_width", "160"}}}}, "max_width"},
+            {nlohmann::json{{"optimization", {{"max_cap", 100.5}}}}, "max_cap"},
+            {nlohmann::json{{"dataset", {{"images", 123}}}}, "images"},
+            {nlohmann::json{{"optimization", {{"bg_color", "black"}}}}, "bg_color"},
+            {nlohmann::json{{"optimization", {{"eval_steps", {1, 2.5}}}}}, "eval_steps"},
+            {nlohmann::json{{"dataset", {{"loading_params", {{"use_cpu_memory", "yes"}}}}}}, "loading_params.use_cpu_memory"},
+            {nlohmann::json{{"server", {{"tcp_connection", "yes"}}}}, "tcp_connection"},
+        }};
+
+        for (const auto& [config, field] : cases) {
+            SCOPED_TRACE(field);
+            std::ofstream(config_path) << config.dump();
+            const auto imported = lfs::core::param::read_training_parameters_from_json(config_path);
+            ASSERT_FALSE(imported.has_value());
+            const auto detail = imported.error().detail();
+            EXPECT_NE(detail.find(field), std::string::npos);
+            EXPECT_NE(detail.find("expected"), std::string::npos);
+        }
+
+        std::error_code ec;
+        std::filesystem::remove(config_path, ec);
+    }
+
     TEST(ParameterManagerTest, SessionDefaultsCanReplaceCheckpointImportState) {
         lfs::vis::ParameterManager manager;
         const auto load_result = manager.ensureLoaded();

@@ -790,6 +790,37 @@ TEST(ArgumentParserTest, CommandLineOverridesConfigAfterLoading) {
     EXPECT_FLOAT_EQ((*parsed)->optimization.opacity_lr, 0.0375f);
 }
 
+TEST(ArgumentParserTest, ConfigRejectsWrongDatasetJsonTypeBeforeApplyingOverrides) {
+    const auto dir = std::filesystem::path(make_test_path("lfs_arg_parser_config_wrong_dataset_type"));
+    const auto config_path = dir / "config.json";
+    std::filesystem::create_directories(dir);
+    const auto config = nlohmann::json{
+        {"optimization", lfs::core::param::OptimizationParameters::mrnf_defaults().to_json()},
+        {"dataset", {{"max_width", "160"}}},
+    };
+    std::ofstream(config_path) << config.dump();
+
+    const auto data_path = (dir / "data").string();
+    const auto output_path = (dir / "output").string();
+    const auto config_text = config_path.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--config",
+        config_text.c_str()};
+
+    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("dataset.max_width"), std::string::npos) << parsed.error();
+    EXPECT_NE(parsed.error().find("integer"), std::string::npos) << parsed.error();
+}
+
 TEST(ArgumentParserTest, Mesh2SplatParsesOutputPathAndOptions) {
     const auto dir = make_test_path("lfs_mesh2splat_arg_parser");
     const auto input = std::filesystem::path(dir) / "input.obj";
