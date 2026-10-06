@@ -1156,6 +1156,10 @@ namespace lfs::core {
             }
 
             try {
+                if (const auto error = validate_registered_optimization_enums(opt_json)) {
+                    return std::unexpected(config_import_error(*error, path));
+                }
+
                 TrainingParameters params = defaults;
                 params.optimization = OptimizationParameters::mrnf_defaults();
                 if (opt_json.contains("strategy")) {

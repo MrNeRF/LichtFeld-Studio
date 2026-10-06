@@ -10,12 +10,14 @@
 #include "io/project_chapters.hpp"
 #include "training/training_manager.hpp"
 
+#include <array>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <random>
+#include <string_view>
 
 namespace {
 
@@ -375,6 +377,29 @@ namespace {
         EXPECT_EQ(partial->dataset.max_width, 640);
         EXPECT_EQ(partial->server.tcp_server_connection_port, 23456);
         EXPECT_EQ(partial->optimization.iterations, 4321u);
+    }
+
+    TEST(ParameterManagerTest, ConfigImportRejectsUnknownOptimizationEnums) {
+        const auto config_path = unique_temp_config_path();
+        const std::array<std::pair<std::string_view, std::string_view>, 2> cases = {{
+            {"bg_mode", "solid_color"},
+            {"eval_space", "distorted"},
+        }};
+
+        for (const auto& [field, accepted_value] : cases) {
+            SCOPED_TRACE(field);
+            std::ofstream(config_path)
+                << nlohmann::json{{"optimization", {{field, "unknown-value"}}}}.dump();
+            const auto imported =
+                lfs::core::param::read_training_parameters_from_json(config_path);
+            ASSERT_FALSE(imported.has_value());
+            const auto detail = imported.error().detail();
+            EXPECT_NE(detail.find(field), std::string::npos);
+            EXPECT_NE(detail.find(accepted_value), std::string::npos);
+        }
+
+        std::error_code ec;
+        std::filesystem::remove(config_path, ec);
     }
 
     TEST(ParameterManagerTest, SessionDefaultsCanReplaceCheckpointImportState) {
