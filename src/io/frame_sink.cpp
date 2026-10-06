@@ -3,7 +3,6 @@
 #include "io/media/frame_sink.hpp"
 #include <cstring>
 #include <limits>
-#include <stdexcept>
 #include <utility>
 
 namespace lfs::media {
@@ -13,25 +12,27 @@ namespace lfs::media {
         }
     } // namespace
 
-    std::size_t FrameView::requiredBytes() const {
+    Result<std::size_t> FrameView::requiredBytes() const {
         if (layout.format != FramePixelFormat::RGB8 || layout.width <= 0 || layout.height <= 0)
-            throw std::invalid_argument("Frame requires positive RGB8 dimensions");
+            return Result<std::size_t>(make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Frame requires positive RGB8 dimensions", .detection = LFS_SOURCE_SITE_CURRENT()}));
         const auto width = static_cast<std::size_t>(layout.width);
         if (width > std::numeric_limits<std::size_t>::max() / 3)
-            throw std::invalid_argument("Frame row size overflows");
+            return Result<std::size_t>(make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Frame row size overflows", .detection = LFS_SOURCE_SITE_CURRENT()}));
         const auto row_bytes = width * 3;
         const auto rows = static_cast<std::size_t>(layout.height - 1);
         if (layout.row_stride < row_bytes ||
             (rows && layout.row_stride > (std::numeric_limits<std::size_t>::max() - row_bytes) / rows))
-            throw std::invalid_argument("Frame stride is invalid or overflows");
+            return Result<std::size_t>(make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Frame stride is invalid or overflows", .detection = LFS_SOURCE_SITE_CURRENT()}));
         const auto required = rows * layout.row_stride + row_bytes;
         if (pixels.size() < required)
-            throw std::invalid_argument("Frame pixel buffer is shorter than its layout");
+            return Result<std::size_t>(make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Frame pixel buffer is shorter than its layout", .detection = LFS_SOURCE_SITE_CURRENT()}));
         return required;
     }
-    FrameSurface FrameSurface::copyOf(const FrameView& source) {
+    Result<FrameSurface> FrameSurface::copyOf(const FrameView& source) {
         const auto size = source.requiredBytes();
-        auto pixels = std::make_shared<std::vector<std::uint8_t>>(size, 0);
+        if (!size)
+            return Result<FrameSurface>(size.error());
+        auto pixels = std::make_shared<std::vector<std::uint8_t>>(*size, 0);
         const auto row_bytes = static_cast<std::size_t>(source.layout.width) * 3;
         for (int row = 0; row < source.layout.height; ++row) {
             const auto offset = static_cast<std::size_t>(row) * source.layout.row_stride;
@@ -60,17 +61,16 @@ namespace lfs::media {
     SinkResult MemoryFrameSink::write(const FrameView& frame) {
         if (!active_)
             return sinkError(ErrorCode::FailedPrecondition, "Memory sink is not active");
-        std::size_t required;
-        try {
-            required = frame.requiredBytes();
-        } catch (const std::invalid_argument& error) {
-            return sinkError(ErrorCode::InvalidArgument, error.what());
-        }
-        if (frames_.size() >= frame_limit_ || required > payload_budget_ - payload_bytes_)
+        const auto required = frame.requiredBytes();
+        if (!required)
+            return SinkResult::failure(required.error());
+        if (frames_.size() >= frame_limit_ || *required > payload_budget_ - payload_bytes_)
             return sinkError(ErrorCode::ResourceExhausted, "Memory sink payload or frame limit exceeded");
         auto snapshot = FrameSurface::copyOf(frame);
-        frames_.push_back(std::move(snapshot));
-        payload_bytes_ += required;
+        if (!snapshot)
+            return SinkResult::failure(snapshot.error());
+        frames_.push_back(std::move(*snapshot));
+        payload_bytes_ += *required;
         return {};
     }
     SinkResult MemoryFrameSink::complete(const SinkSummary&) {

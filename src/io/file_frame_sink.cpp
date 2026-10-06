@@ -4,9 +4,9 @@
 #include "core/image_codecs.hpp"
 #include "core/path_utils.hpp"
 #include "io/video_frame_extractor.hpp"
+#include <algorithm>
 #include <cstring>
 #include <limits>
-#include <stdexcept>
 #include <utility>
 
 namespace lfs::media {
@@ -20,9 +20,11 @@ namespace lfs::media {
     SinkResult FileFrameSink::begin(const SinkSession&) {
         if (active_)
             return sinkError(ErrorCode::FailedPrecondition, "File sink already active");
-        if (options_.output_directory.empty() || options_.jpeg_quality < 1 || options_.jpeg_quality > 100 ||
+        if (options_.output_directory.empty() ||
             (options_.format != FrameFileFormat::PNG && options_.format != FrameFileFormat::JPEG))
-            return sinkError(ErrorCode::InvalidArgument, "Invalid file sink directory, format or JPEG quality");
+            return sinkError(ErrorCode::InvalidArgument, "Invalid file sink directory or format");
+        if (options_.format == FrameFileFormat::JPEG)
+            options_.jpeg_quality = options_.jpeg_quality == 0 ? 90 : std::clamp(options_.jpeg_quality, 1, 100);
         std::error_code directory_error;
         std::filesystem::create_directories(options_.output_directory, directory_error);
         if (directory_error) {
@@ -39,11 +41,9 @@ namespace lfs::media {
     SinkResult FileFrameSink::write(const FrameView& frame) {
         if (!active_)
             return sinkError(ErrorCode::FailedPrecondition, "File sink is not active");
-        try {
-            (void)frame.requiredBytes();
-        } catch (const std::invalid_argument& error) {
-            return sinkError(ErrorCode::InvalidArgument, error.what());
-        }
+        const auto required = frame.requiredBytes();
+        if (!required)
+            return SinkResult::failure(required.error());
         const auto row_bytes = static_cast<std::size_t>(frame.layout.width) * 3;
         const auto height = static_cast<std::size_t>(frame.layout.height);
         if (row_bytes > std::numeric_limits<std::size_t>::max() / height)

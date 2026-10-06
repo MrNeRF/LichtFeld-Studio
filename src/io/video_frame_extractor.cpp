@@ -2461,6 +2461,7 @@ namespace lfs::io {
                 abort_sink(media::SinkOutcome::Failed);
                 return false;
             } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): User-supplied sink/progress callbacks may throw non-standard exceptions; release decoder resources and terminate the sink lifecycle.
                 cleanup();
                 error = "Unknown extraction failure";
                 abort_sink(media::SinkOutcome::Failed);

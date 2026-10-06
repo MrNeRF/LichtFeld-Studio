@@ -9,11 +9,12 @@ target. This is an extraction boundary, not yet a separately installed library.
 
 `FrameLayout` contains positive width/height, byte stride and pixel format.
 `FrameView` borrows read-only pixels during `FrameSink::write`. `requiredBytes()`
-validates dimensions, format, stride, overflow and buffer size before copying.
+returns `lfs::Result<std::size_t>` and validates dimensions, format, stride, overflow
+and buffer size before copying. Invalid layouts return `InvalidArgument`.
 The minimum span is `(height - 1) * stride + width * 3`; trailing padding after
 the last row is unnecessary. The view does not extend its owner's lifetime.
 
-`FrameSurface::copyOf(view)` creates an immutable owning snapshot, copies only
+`FrameSurface::copyOf(view)` returns `lfs::Result<FrameSurface>` and creates an immutable owning snapshot, copies only
 visible row bytes and zeroes internal padding. Copying a surface shares its
 immutable pixel ownership. Retained pixels stay valid after decoder reuse or
 extraction teardown. A default/moved-from surface has an empty view, which does
@@ -136,3 +137,6 @@ Benchmark qualification must compare the same compiler, dependency versions,
 input and options, separating file output from retained memory. File/memory are
 different workloads. Local results and exact revision bookkeeping belong in the
 implementation plan/PR description, not in this durable contract document.
+
+JPEG quality preserves the legacy writer policy: zero selects 90; other values
+are clamped to 1–100. PNG ignores JPEG quality.

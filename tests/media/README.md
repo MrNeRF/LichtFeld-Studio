@@ -108,3 +108,7 @@ compiled directly; test diagnostics remain on stderr.
 
 See [frame sink contracts](../../docs/development/media-frame-sinks.md) for callback
 lifetimes, budget accounting, delivery indices and legacy compatibility limits.
+
+Native sink checks also cover structured layout/copy errors and JPEG zero/default
+and clamped qualities, comparing exact writer bytes; PNG ignores JPEG quality.
+The extractor lifecycle suite includes non-standard callback exceptions.

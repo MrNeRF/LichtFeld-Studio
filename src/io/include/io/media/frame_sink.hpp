@@ -35,12 +35,12 @@ namespace lfs::media {
         FrameLayout layout;
         FrameInfo info;
         std::span<const std::uint8_t> pixels;
-        [[nodiscard]] std::size_t requiredBytes() const;
+        [[nodiscard]] Result<std::size_t> requiredBytes() const;
     };
     // Immutable owning snapshot; copies share ownership, never decoder storage.
     class FrameSurface {
     public:
-        [[nodiscard]] static FrameSurface copyOf(const FrameView& source);
+        [[nodiscard]] static Result<FrameSurface> copyOf(const FrameView& source);
         [[nodiscard]] FrameView view() const;
 
     private:

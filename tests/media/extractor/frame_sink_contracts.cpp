@@ -4,6 +4,8 @@
 #include "io/media/file_frame_sink.hpp"
 #include "io/media/frame_sink.hpp"
 #include <chrono>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 
@@ -18,7 +20,9 @@ int runFrameSinkUnitContracts() {
     std::vector<uint8_t> pixels{1, 2, 3, 99, 99, 4, 5, 6};
     FrameView frame{{1, 2, 5, FramePixelFormat::RGB8}, {}, pixels};
     frame.info.source_timestamp = Timestamp{-42, {1, 1000}};
-    auto surface = FrameSurface::copyOf(frame);
+    auto snapshot = FrameSurface::copyOf(frame);
+    require(snapshot.has_value(), "valid snapshot accepted");
+    auto surface = std::move(*snapshot);
     auto copied = surface;
     pixels.assign(8, 0);
     surface = {};
@@ -38,11 +42,12 @@ int runFrameSinkUnitContracts() {
             invalid.pixels = invalid.pixels.first(2);
         if (variant == 4)
             invalid.layout.format = static_cast<FramePixelFormat>(-1);
-        bool rejected = false;
-        try {
-            (void)FrameSurface::copyOf(invalid);
-        } catch (const std::invalid_argument&) { rejected = true; }
-        require(rejected, "invalid frame rejected before allocation/copy");
+        const auto required = invalid.requiredBytes();
+        require(!required && required.error().code() == lfs::ErrorCode::InvalidArgument,
+                "invalid layout returns structured error without throwing");
+        const auto rejected = FrameSurface::copyOf(invalid);
+        require(!rejected && rejected.error().code() == lfs::ErrorCode::InvalidArgument,
+                "invalid snapshot rejected before allocation/copy");
     }
     MemoryFrameSink memory(8, 2);
     require(!memory.write(view).has_value(), "inactive write rejected");
@@ -76,6 +81,30 @@ int runFrameSinkUnitContracts() {
     require(!files.write(file_view).has_value(), "duplicate filenames rejected");
     files.abort({SinkOutcome::Failed, 1, {}});
     std::filesystem::remove(directory / "frame_1.png");
+    for (const int quality : {0, -5, 101}) {
+        const auto suffix = std::to_string(quality);
+        FileFrameSink png({directory, "png_" + suffix + "_%d", FrameFileFormat::PNG, quality});
+        require(png.begin({}).has_value() && png.write(file_view).has_value(), "PNG ignores JPEG quality");
+        (void)png.complete({SinkOutcome::Completed, 1, {}});
+        FileFrameSink jpeg({directory, "jpeg_" + suffix + "_%d", FrameFileFormat::JPEG, quality});
+        require(jpeg.begin({}).has_value() && jpeg.write(file_view).has_value(), "JPEG preserves default and clamping");
+        (void)jpeg.complete({SinkOutcome::Completed, 1, {}});
+        const auto expected_quality = quality == 0 ? 90 : quality < 1 ? 1
+                                                                      : 100;
+        const auto expected = directory / ("expected_" + suffix + ".jpg");
+        const std::vector<uint8_t> packed{1, 2, 3, 4, 5, 6};
+        require(lfs::core::image_codecs::write_jpeg(expected, packed.data(), 1, 2, 3,
+                                                    expected_quality, std::nullopt, error, expected_quality > 90),
+                "reference JPEG written");
+        auto read_bytes = [](const auto& path) {
+            std::ifstream stream(path, std::ios::binary);
+            return std::vector<char>(std::istreambuf_iterator<char>(stream), {});
+        };
+        require(read_bytes(directory / ("jpeg_" + suffix + "_1.jpg")) == read_bytes(expected), "JPEG normalization matches writer bytes");
+        std::filesystem::remove(directory / ("png_" + suffix + "_1.png"));
+        std::filesystem::remove(directory / ("jpeg_" + suffix + "_1.jpg"));
+        std::filesystem::remove(expected);
+    }
     std::filesystem::remove(directory);
     return 0;
 }
