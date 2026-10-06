@@ -1135,6 +1135,45 @@ namespace lfs::vis {
             EXPECT_FALSE(manager.gt_comparison_full_source_slot_);
             EXPECT_FALSE(manager.gt_comparison_cuda_image_);
         }
+        void cropResizeAndPendingPan() {
+            using namespace lfs::core;
+            if (!gpu_backend_available(GpuBackend::CUDA))
+                GTEST_SKIP() << "CUDA device required for native display upload";
+            const Camera camera(Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+                                70.0f, 72.0f, 50.5f, 40.5f, Tensor(), Tensor(), CameraModelType::PINHOLE,
+                                "0.png", "0.png", {}, 101, 81, 0);
+            manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+                .owner = owner,
+                .status = Status::Ready,
+                .source_key = {.camera_uid = 0, .image_path = "0.png"},
+                .generation = 1,
+                .cpu_source = image({101, 81})};
+            auto& view = manager.viewState(owner);
+            auto frame = manager.prepareGTActualFrame(view, camera, {20, 18}, nullptr);
+            ASSERT_TRUE(frame.snapshot);
+            manager.publishGTComparisonActualFrame(view, *frame.snapshot);
+            manager.setGTComparisonCropOrigin({11, 17}, owner);
+            const glm::dvec2 center{21, 26};
+            for (int i = 0; i < 20; ++i) {
+                const glm::ivec2 extent = i % 2 ? glm::ivec2{20, 18} : glm::ivec2{21, 19};
+                frame = manager.prepareGTActualFrame(view, camera, extent, nullptr);
+                ASSERT_TRUE(frame.snapshot);
+                manager.publishGTComparisonActualFrame(view, *frame.snapshot);
+                EXPECT_EQ(view.gt_comparison_actual_size_state_.desired_crop_center, center);
+            }
+            EXPECT_EQ(frame.snapshot->crop.origin, glm::ivec2(11, 17));
+            // A resize has prepared a new tile but the user still sees the old
+            // committed crop. Panning must anchor to that displayed extent.
+            frame = manager.prepareGTActualFrame(view, camera, {21, 19}, nullptr);
+            ASSERT_TRUE(frame.snapshot);
+            manager.setGTComparisonCropOrigin({9, 14}, owner);
+            const glm::dvec2 panned_center{19, 23};
+            EXPECT_EQ(view.gt_comparison_actual_size_state_.desired_crop_center, panned_center);
+            frame = manager.prepareGTActualFrame(view, camera, {21, 19}, nullptr);
+            ASSERT_TRUE(frame.snapshot);
+            EXPECT_EQ(view.gt_comparison_actual_size_state_.desired_crop_center, panned_center);
+            EXPECT_EQ(frame.snapshot->crop, detail::cropGTComparisonFromCenter({101, 81}, {21, 19}, panned_center));
+        }
         void globalInvalidation() {
             auto& a = manager.viewState(owner);
             const auto source = image();
@@ -1246,6 +1285,7 @@ namespace lfs::vis {
         }
     };
 
+    TEST_F(RenderingManagerGTComparisonReviewTest, PreparedResizeAndPanPreserveDesiredCenter) { cropResizeAndPendingPan(); }
     TEST_F(RenderingManagerGTComparisonReviewTest, UnrelatedViewResetPreservesOwnerAndTeardownReleases) { ownership(); }
     TEST_F(RenderingManagerGTComparisonReviewTest, SameSizedCameraSwitchRejectsPreviousFitAndNativeCompletion) { cameraSwitch(); }
     TEST_F(RenderingManagerGTComparisonReviewTest, EightKAdmissionReservationsAndCompletionProtectDisplayedImage) { budget(); }

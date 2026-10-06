@@ -799,12 +799,7 @@ namespace lfs::vis {
                 view.gt_comparison_actual_size_state_.source_generation != lookup.generation ||
                 state.cpu_source != lookup.source;
             const bool reset_crop =
-                source_changed ||
-                view.gt_comparison_actual_size_state_.full_extent != full_extent ||
-                !detail::isGTComparisonCropValidForViewport(
-                    full_extent,
-                    view.gt_comparison_actual_size_state_.framebuffer_extent,
-                    view.gt_comparison_actual_size_state_.crop);
+                source_changed || view.gt_comparison_actual_size_state_.full_extent != full_extent;
             if (reset_crop || !state.desired_crop_center)
                 state.desired_crop_center = glm::dvec2(full_extent) * 0.5;
             const auto crop = detail::cropGTComparisonFromCenter(full_extent, physical_viewport,
