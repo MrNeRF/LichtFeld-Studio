@@ -575,8 +575,8 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 65
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 65
+    assert len(property_view.MIGRATED_PROP_IDS) == 66
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 66
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
