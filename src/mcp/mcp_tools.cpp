@@ -341,13 +341,22 @@ namespace lfs::mcp {
         }
 
         // A mistyped argument is the caller's error and must not reach the handler, where
-        // reading it would throw as an internal failure. Null keeps its per-tool meaning.
+        // reading it would throw as an internal failure. Null keeps its per-tool meaning
+        // except for boolean fields, whose schemas require an actual boolean value.
         json checked_arguments = arguments;
         if (properties.is_object() && arguments.is_object()) {
             for (const auto& [key, value] : arguments.items()) {
                 const auto property = properties.find(key);
-                if (value.is_null() || property == properties.end() || !property->is_object())
+                if (property == properties.end() || !property->is_object())
                     continue;
+                if (value.is_null()) {
+                    const auto type = property->find("type");
+                    if (type == property->end() || !type->is_string() ||
+                        type->get<std::string>() != "boolean" ||
+                        property->value("nullable", false)) {
+                        continue;
+                    }
+                }
                 if (auto error = check_against_schema(checked_arguments[key], *property, key)) {
                     return parameter_error_envelope(
                         lfs::ErrorCode::InvalidArgument, *error, key,

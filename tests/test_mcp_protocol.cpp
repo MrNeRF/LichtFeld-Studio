@@ -1457,6 +1457,33 @@ namespace lfs::mcp {
         EXPECT_EQ(last_arguments["count"], 7) << "a numeric string for an integer parameter was not converted";
     }
 
+    TEST(McpProtocolTest, OptionalBooleanNullIsRejectedBeforeTheHandler) {
+        static constexpr const char* tool_name = "test.optional_bool";
+        ScopedToolRegistration cleanup(tool_name);
+        int handler_calls = 0;
+        ToolRegistry::instance().register_tool(
+            McpTool{
+                .name = tool_name,
+                .description = "Optional boolean parameter",
+                .input_schema = {.type = "object",
+                                 .properties = json{{"include_poll", {{"type", "boolean"}}}},
+                                 .required = {}},
+                .metadata = McpToolMetadata{.category = "test", .kind = "query"}},
+            [&](const json&) -> json {
+                ++handler_calls;
+                return json{{"success", true}};
+            });
+
+        const auto result = ToolRegistry::instance().call_tool(
+            tool_name, json{{"include_poll", nullptr}});
+        const auto error = result.value("error", json::object());
+        EXPECT_EQ(error.value("code", std::string{}), "InvalidArgument");
+        EXPECT_EQ(error.value("details", json::object())
+                      .value("parameter", std::string{}),
+                  "include_poll");
+        EXPECT_EQ(handler_calls, 0);
+    }
+
     TEST(McpProtocolTest, ArrayShapesAndNumericBoundsAreValidatedBeforeTheHandler) {
         static constexpr const char* tool_name = "test.schema_bounds";
         ScopedToolRegistration cleanup(tool_name);
