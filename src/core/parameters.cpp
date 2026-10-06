@@ -85,6 +85,50 @@ namespace lfs::core {
                 return std::move(*group);
             }
 
+            [[nodiscard]] std::optional<std::string> validate_registered_optimization_enums(
+                const nlohmann::json& json) {
+                if (!json.is_object())
+                    return std::nullopt;
+
+                const auto group = optimization_property_snapshot();
+                for (const auto& meta : group.properties) {
+                    if (meta.type != PropType::Enum)
+                        continue;
+
+                    const std::string key(optimization_json_key(meta));
+                    if (!json.contains(key))
+                        continue;
+
+                    std::string accepted_values;
+                    for (const auto& item : meta.enum_items) {
+                        if (!accepted_values.empty())
+                            accepted_values += ", ";
+                        accepted_values += item.wire_value.empty() ? item.identifier : item.wire_value;
+                    }
+
+                    const auto& value = json.at(key);
+                    if (!value.is_string()) {
+                        return std::format(
+                            "Invalid value {} for optimization field '{}'; accepted values: {}",
+                            value.dump(), meta.id, accepted_values);
+                    }
+
+                    const auto wire_value = value.get<std::string>();
+                    const auto item = std::ranges::find_if(meta.enum_items, [&wire_value](const auto& candidate) {
+                        const auto& candidate_wire = candidate.wire_value.empty()
+                                                         ? candidate.identifier
+                                                         : candidate.wire_value;
+                        return candidate_wire == wire_value;
+                    });
+                    if (item == meta.enum_items.end()) {
+                        return std::format(
+                            "Invalid value '{}' for optimization field '{}'; accepted values: {}",
+                            wire_value, meta.id, accepted_values);
+                    }
+                }
+                return std::nullopt;
+            }
+
             void write_registered_optimization_properties(
                 nlohmann::json& json,
                 const OptimizationParameters& params) {
@@ -173,8 +217,9 @@ namespace lfs::core {
                             return candidate_wire == wire_value;
                         });
                         if (item == meta.enum_items.end()) {
-                            throw std::invalid_argument(std::format(
-                                "Invalid value '{}' for optimization field '{}'", wire_value, meta.id));
+                            LOG_WARN("Unknown enum value '{}' for optimization field '{}'; keeping current value",
+                                     wire_value, meta.id);
+                            break;
                         }
                         meta.setter(ref, std::any(item->value));
                         break;
@@ -220,13 +265,6 @@ namespace lfs::core {
                         params.strategy = std::string(canonical);
                     } else {
                         LOG_WARN("Invalid strategy '{}' in JSON, using default", strategy);
-                    }
-                }
-                if (json.contains("eval_space")) {
-                    const auto eval_space = json.at("eval_space").get<std::string>();
-                    if (!eval_space_from_string(eval_space)) {
-                        throw std::invalid_argument(
-                            "eval_space must be 'distorted' or 'undistorted'");
                     }
                 }
                 if (const auto removed = json.find("background_improvements");
@@ -1080,6 +1118,9 @@ namespace lfs::core {
             const auto& opt_json = json.contains("optimization") ? json["optimization"] : json;
 
             try {
+                if (const auto error = validate_registered_optimization_enums(opt_json))
+                    return std::unexpected("Error parsing optimization parameters: " + *error);
+
                 auto params = OptimizationParameters::from_json(opt_json);
                 if (auto error = params.validate(); !error.empty())
                     return std::unexpected("Invalid optimization parameters: " + error);

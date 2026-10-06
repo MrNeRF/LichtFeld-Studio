@@ -436,6 +436,18 @@ namespace {
         }
     }
 
+    TEST_F(TrainingParametersTest, UnknownRegisteredEnumsKeepCurrentDefaultsWhenLoading) {
+        const auto defaults = OptimizationParameters::mrnf_defaults();
+        auto json = defaults.to_json();
+        json["bg_mode"] = "future-background";
+        json["normal_loss_space"] = "future-normal-space";
+
+        const auto restored = OptimizationParameters::from_json(json);
+
+        EXPECT_EQ(restored.bg_mode, defaults.bg_mode);
+        EXPECT_EQ(restored.normal_loss_space, defaults.normal_loss_space);
+    }
+
     TEST_F(TrainingParametersTest, NormalAutoGenerateRoundTripAndDefault) {
         auto params = OptimizationParameters::mrnf_defaults();
         EXPECT_TRUE(params.normal_auto_generate);

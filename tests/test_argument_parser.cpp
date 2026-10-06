@@ -1339,6 +1339,26 @@ TEST(ArgumentParserTest, TrainingConfigRejectsUnknownNormalLossSpace) {
     auto parsed = lfs::core::param::read_optim_params_from_json(config_path);
     ASSERT_FALSE(parsed.has_value());
     EXPECT_NE(parsed.error().find("normal_loss_space"), std::string::npos) << parsed.error();
+    EXPECT_NE(parsed.error().find("bogus"), std::string::npos) << parsed.error();
+    EXPECT_NE(parsed.error().find("camera-opencv"), std::string::npos) << parsed.error();
+    EXPECT_NE(parsed.error().find("world"), std::string::npos) << parsed.error();
+}
+
+TEST(ArgumentParserTest, TrainingConfigRejectsUnknownBackgroundMode) {
+    const auto config_path = std::filesystem::path(make_test_path("lfs_invalid_bg_mode_config")) / "config.json";
+    {
+        auto config_json = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
+        config_json["bg_mode"] = "future-mode";
+        std::ofstream config_file(config_path);
+        config_file << config_json.dump(2);
+    }
+
+    auto parsed = lfs::core::param::read_optim_params_from_json(config_path);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("bg_mode"), std::string::npos) << parsed.error();
+    EXPECT_NE(parsed.error().find("future-mode"), std::string::npos) << parsed.error();
+    EXPECT_NE(parsed.error().find("solid_color"), std::string::npos) << parsed.error();
+    EXPECT_NE(parsed.error().find("modulation"), std::string::npos) << parsed.error();
 }
 
 TEST(ArgumentParserTest, TrainingParsesNoNormalAutoGenerate) {
