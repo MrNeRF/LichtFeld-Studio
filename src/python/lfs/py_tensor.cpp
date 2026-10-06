@@ -80,7 +80,7 @@ namespace lfs::python {
                 r.bits = 8;
                 break;
             case DataType::Bool:
-                r.code = kDLUInt;
+                r.code = kDLBool;
                 r.bits = 8;
                 break;
             default: throw std::runtime_error("Unsupported dtype for DLPack");
@@ -101,6 +101,8 @@ namespace lfs::python {
                 return DataType::Int64;
             if (dt.code == kDLUInt && dt.bits == 8)
                 return DataType::UInt8;
+            if (dt.code == kDLBool && dt.bits == 8)
+                return DataType::Bool;
             throw std::runtime_error("Unsupported DLPack dtype");
         }
 
