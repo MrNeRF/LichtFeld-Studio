@@ -12,6 +12,7 @@
 
 #include <cassert>
 #include <format>
+#include <stdexcept>
 
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
@@ -25,7 +26,14 @@ namespace lfs::python {
     namespace OM = OpenMesh;
 
     PyMeshData PyMeshData::to_device(const std::string& device) const {
-        const auto target = (device == "cuda" || device == "gpu") ? core::Device::CUDA : core::Device::CPU;
+        core::Device target;
+        if (device == "cuda" || device == "gpu") {
+            target = core::Device::CUDA;
+        } else if (device == "cpu") {
+            target = core::Device::CPU;
+        } else {
+            throw std::invalid_argument("Unknown device: " + device);
+        }
         return PyMeshData(std::make_shared<core::MeshData>(data_->to(target)));
     }
 
