@@ -270,22 +270,29 @@ namespace lfs::training::kernels {
             for (int first_row = 0; first_row < height; first_row += band_rows) {
                 const int rows = std::min(band_rows, (height - first_row + VERTICAL_TILE_HEIGHT - 1) / VERTICAL_TILE_HEIGHT * VERTICAL_TILE_HEIGHT);
                 const int horizontal_blocks = horizontal_tiles * (rows + 2 * filter.radius);
-                if (image.dtype() == DataType::UInt8)
+                if (image.dtype() == DataType::UInt8) {
                     hessian_horizontal<<<horizontal_blocks, HORIZONTAL_TILE_WIDTH, 0, stream>>>(
                         image.ptr<uint8_t>(), workspace.horizontal.ptr<float>(), height, width, first_row - filter.radius, band_stride, filter);
-                else
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.hessian_horizontal_u8");
+                } else {
                     hessian_horizontal<<<horizontal_blocks, HORIZONTAL_TILE_WIDTH, 0, stream>>>(
                         image.ptr<float>(), workspace.horizontal.ptr<float>(), height, width, first_row - filter.radius, band_stride, filter);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.hessian_horizontal_f32");
+                }
                 hessian_vertical<<<vertical_tiles*(rows / VERTICAL_TILE_HEIGHT), vertical_threads, 0, stream>>>(
                     workspace.horizontal.ptr<float>(), output.ptr<float>(), height, width, first_row, band_stride, filter, first_scale);
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.hessian_vertical");
             }
             first_scale = false;
         }
         const int reduction_blocks = std::min(blocks, 1024);
-        if (image.dtype() == DataType::UInt8)
+        if (image.dtype() == DataType::UInt8) {
             structure_sum<<<reduction_blocks, BLOCK_SIZE, 0, stream>>>(output.ptr<float>(), image.ptr<uint8_t>(), workspace.reduction.ptr<float>(), n);
-        else
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.sum_u8");
+        } else {
             structure_sum<<<reduction_blocks, BLOCK_SIZE, 0, stream>>>(output.ptr<float>(), image.ptr<float>(), workspace.reduction.ptr<float>(), n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.sum_f32");
+        }
         normalize_structure<<<blocks, BLOCK_SIZE, 0, stream>>>(output.ptr<float>(), workspace.reduction.ptr<float>(), reduction_blocks, n);
         nvtxRangePop();
         LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.ridge");
@@ -305,10 +312,11 @@ namespace lfs::training::kernels {
         const int blocks = (height * width + BLOCK_SIZE - 1) / BLOCK_SIZE;
         const auto stream = structure.stream();
         output.set_stream(stream);
-        if (base_weight.is_valid() && (base_weight.dtype() == DataType::UInt8 || base_weight.dtype() == DataType::Bool))
+        if (base_weight.is_valid() && (base_weight.dtype() == DataType::UInt8 || base_weight.dtype() == DataType::Bool)) {
             weight_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(structure.ptr<float>(), base_weight.ptr<uint8_t>(), output.ptr<float>(),
                                                              height, width, gain, valid_padding);
-        else {
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.weight_u8");
+        } else {
             LFS_ASSERT(!base_weight.is_valid() || base_weight.dtype() == DataType::Float32);
             weight_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(structure.ptr<float>(), base_weight.is_valid() ? base_weight.ptr<float>() : nullptr,
                                                              output.ptr<float>(), height, width, gain, valid_padding);

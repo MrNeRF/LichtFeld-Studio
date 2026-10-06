@@ -339,12 +339,13 @@ namespace lfs::training::kernels::blob_seeding {
             box_downsample_rgb<<<grid, BLOCK_SIZE, 0, stream>>>(source.ptr<uint8_t>(), output.ptr<float>(),
                                                                 source_height, source_width, height, width, factor,
                                                                 255.0f);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.blob_seeding.downsample_u8");
         } else {
             box_downsample_rgb<<<grid, BLOCK_SIZE, 0, stream>>>(source.ptr<float>(), output.ptr<float>(),
                                                                 source_height, source_width, height, width, factor,
                                                                 1.0f);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.blob_seeding.downsample_f32");
         }
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.blob_seeding.downsample");
         return output;
     }
 

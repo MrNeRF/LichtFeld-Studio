@@ -904,14 +904,31 @@ namespace lfs::app {
             }
         }
 
-        std::expected<std::any, std::string> optimization_value_from_json(const core::prop::PropertyMeta& meta,
-                                                                          const json& value) {
+        lfs::Error optimization_value_error(const core::prop::PropertyMeta& meta, std::string message) {
+            lfs::SmallFields fields;
+            fields.add("property", meta.id);
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::MCP,
+                .severity = lfs::Severity::Error,
+                .retryability = lfs::Retryability::NotRetryable,
+                .operation_id = {},
+                .user_message = message,
+                .detail = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = std::move(fields),
+                .native = std::nullopt,
+            });
+        }
+
+        lfs::Result<std::any> optimization_value_from_json(const core::prop::PropertyMeta& meta,
+                                                           const json& value) {
             using core::prop::PropType;
-            const auto in_range = [&meta](const double v) -> std::expected<void, std::string> {
+            const auto in_range = [&meta](const double v) -> lfs::Result<void> {
                 if ((meta.min_value && v < *meta.min_value) || (meta.max_value && v > *meta.max_value))
-                    return std::unexpected(std::format("{} must be within [{}, {}]", meta.id,
-                                                       meta.min_value.value_or(-INFINITY),
-                                                       meta.max_value.value_or(INFINITY)));
+                    return lfs::Result<void>::failure(optimization_value_error(
+                        meta, std::format("{} must be within [{}, {}]", meta.id, meta.min_value.value_or(-INFINITY),
+                                          meta.max_value.value_or(INFINITY))));
                 return {};
             };
             try {
@@ -922,13 +939,13 @@ namespace lfs::app {
                 case PropType::Float:
                 case PropType::SizeT: {
                     if (!value.is_number())
-                        return std::unexpected(meta.id + " must be a number");
+                        return optimization_value_error(meta, meta.id + " must be a number");
                     if (auto checked = in_range(value.get<double>()); !checked)
-                        return std::unexpected(checked.error());
+                        return checked.error();
                     if (meta.type == PropType::Float)
                         return std::any(value.get<float>());
                     if (!value.is_number_integer())
-                        return std::unexpected(meta.id + " must be an integer");
+                        return optimization_value_error(meta, meta.id + " must be an integer");
                     if (meta.type == PropType::Int)
                         return std::any(value.get<int>());
                     return std::any(value.get<size_t>());
@@ -940,13 +957,13 @@ namespace lfs::app {
                     for (const auto& item : meta.enum_items)
                         if (enum_wire_value(item) == wire)
                             return std::any(item.value);
-                    return std::unexpected(meta.id + " must be one of the listed options");
+                    return optimization_value_error(meta, meta.id + " must be one of the listed options");
                 }
                 default:
-                    return std::unexpected(meta.id + " cannot be set over MCP");
+                    return optimization_value_error(meta, meta.id + " cannot be set over MCP");
                 }
             } catch (const json::exception&) {
-                return std::unexpected(meta.id + " has the wrong value type");
+                return optimization_value_error(meta, meta.id + " has the wrong value type");
             }
         }
 
@@ -3257,7 +3274,7 @@ namespace lfs::app {
                         }
                         auto converted = optimization_value_from_json(*meta, value);
                         if (!converted)
-                            return json{{"error", converted.error()}};
+                            return json{{"error", converted.error().user_message()}};
                         changes.push_back({std::move(*meta), std::move(*converted)});
                     }
 

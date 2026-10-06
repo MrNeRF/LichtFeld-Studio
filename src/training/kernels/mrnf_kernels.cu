@@ -208,15 +208,17 @@ namespace lfs::training::mrnf_strategy {
         const int blocks = static_cast<int>((N + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
 
-        if (rendered_count != nullptr)
+        if (rendered_count != nullptr) {
             mrnf_decay_kernel<true><<<blocks, threads, 0, s>>>(
                 raw_opacities, log_scales, frozen_mask, frozen_mask_size,
                 opacity_decay, scale_decay, train_t, N, rendered_count);
-        else
+            LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay_with_rendered_count");
+        } else {
             mrnf_decay_kernel<false><<<blocks, threads, 0, s>>>(
                 raw_opacities, log_scales, frozen_mask, frozen_mask_size,
                 opacity_decay, scale_decay, train_t, N, nullptr);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay");
+            LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay_without_rendered_count");
+        }
     }
 
     __global__ void fold_densification_error_and_zero_kernel(

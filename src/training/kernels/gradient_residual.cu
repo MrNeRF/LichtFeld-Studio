@@ -205,11 +205,14 @@ namespace lfs::training::kernels {
         auto launch = [&]<typename T, typename M>(const T* target_ptr, const M* mask) {
             gradient_residual_forward<<<blocks, BLOCK_SIZE, 0, stream>>>(
                 image.ptr<float>(), target_ptr, mask, workspace.partial.ptr<float>(), height, width, GRADIENT_LOSS_EPSILON);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.gradient_residual.forward");
             gradient_residual_reduce<<<1, BLOCK_SIZE, 0, stream>>>(
                 workspace.partial.ptr<float>(), workspace.totals.ptr<float>(), workspace.loss.ptr<float>(), blocks, weight);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.gradient_residual.reduce");
             gradient_residual_backward<<<tiles, tile_threads, 0, stream>>>(
                 image.ptr<float>(), target_ptr, mask, workspace.totals.ptr<float>(), gradient.ptr<float>(),
                 height, width, GRADIENT_LOSS_EPSILON);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.gradient_residual.backward");
         };
         auto launch_masked = [&]<typename T>(const T* target_ptr) {
             if (pixel_weight.is_valid() && pixel_weight.dtype() != DataType::Float32)
@@ -221,7 +224,6 @@ namespace lfs::training::kernels {
             launch_masked(target.ptr<uint8_t>());
         else
             launch_masked(target.ptr<float>());
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.gradient_residual");
         return workspace.loss;
     }
 } // namespace lfs::training::kernels
