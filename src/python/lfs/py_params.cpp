@@ -333,9 +333,14 @@ namespace lfs::python {
 
         std::any old_value;
         modify_params([&](auto& p) {
-            auto ref = PropertyObjectRef::cpp(&p);
-            old_value = meta->getter(ref);
-            meta->setter(ref, new_value);
+            auto candidate = p;
+            auto current_ref = PropertyObjectRef::cpp(&p);
+            auto candidate_ref = PropertyObjectRef::cpp(&candidate);
+            old_value = meta->getter(current_ref);
+            meta->setter(candidate_ref, new_value);
+            if (const auto error = candidate.validate(); !error.empty())
+                throw std::invalid_argument(error);
+            p = std::move(candidate);
         });
         PropertyRegistry::instance().notify("optimization", prop_id, old_value, new_value);
     }
@@ -846,7 +851,7 @@ namespace lfs::python {
             .def_prop_rw(
                 "iterations",
                 [](PyOptimizationParams& self) { return self.params().iterations; },
-                [](PyOptimizationParams&, size_t v) { modify_params([v](auto& p) { p.iterations = v; }); },
+                [](PyOptimizationParams& self, size_t v) { self.set("iterations", nb::cast(v)); },
                 "Maximum training iterations")
             .def_prop_rw(
                 "means_lr",
@@ -856,32 +861,32 @@ namespace lfs::python {
             .def_prop_rw(
                 "means_lr_end",
                 [](PyOptimizationParams& self) { return self.params().means_lr_end; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.means_lr_end = v; }); },
+                [](PyOptimizationParams& self, float v) { self.set("means_lr_end", nb::cast(v)); },
                 "Target end learning rate for gaussian positions")
             .def_prop_rw(
                 "shs_lr",
                 [](PyOptimizationParams& self) { return self.params().shs_lr; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.shs_lr = v; }); },
+                [](PyOptimizationParams& self, float v) { self.set("shs_lr", nb::cast(v)); },
                 "Learning rate for spherical harmonics")
             .def_prop_rw(
                 "opacity_lr",
                 [](PyOptimizationParams& self) { return self.params().opacity_lr; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.opacity_lr = v; }); },
+                [](PyOptimizationParams& self, float v) { self.set("opacity_lr", nb::cast(v)); },
                 "Learning rate for opacity")
             .def_prop_rw(
                 "scaling_lr",
                 [](PyOptimizationParams& self) { return self.params().scaling_lr; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.scaling_lr = v; }); },
+                [](PyOptimizationParams& self, float v) { self.set("scaling_lr", nb::cast(v)); },
                 "Learning rate for gaussian scales")
             .def_prop_rw(
                 "scaling_lr_end",
                 [](PyOptimizationParams& self) { return self.params().scaling_lr_end; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.scaling_lr_end = v; }); },
+                [](PyOptimizationParams& self, float v) { self.set("scaling_lr_end", nb::cast(v)); },
                 "Target end learning rate for gaussian scales")
             .def_prop_rw(
                 "rotation_lr",
                 [](PyOptimizationParams& self) { return self.params().rotation_lr; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.rotation_lr = v; }); },
+                [](PyOptimizationParams& self, float v) { self.set("rotation_lr", nb::cast(v)); },
                 "Learning rate for rotations")
             .def_prop_rw(
                 "cropbox_lr_scale",
@@ -896,17 +901,17 @@ namespace lfs::python {
             .def_prop_rw(
                 "lambda_dssim",
                 [](PyOptimizationParams& self) { return self.params().lambda_dssim; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.lambda_dssim = v; }); },
+                [](PyOptimizationParams& self, float v) { self.set("lambda_dssim", nb::cast(v)); },
                 "Weight for structural similarity loss")
             .def_prop_rw(
                 "sh_degree",
                 [](PyOptimizationParams& self) { return self.params().sh_degree; },
-                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.sh_degree = v; }); },
+                [](PyOptimizationParams& self, int v) { self.set("sh_degree", nb::cast(v)); },
                 "Spherical harmonics degree (0-3)")
             .def_prop_rw(
                 "max_cap",
                 [](PyOptimizationParams& self) { return self.params().max_cap; },
-                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.max_cap = v; }); },
+                [](PyOptimizationParams& self, int v) { self.set("max_cap", nb::cast(v)); },
                 "Maximum number of gaussians")
             .def_prop_ro(
                 "strategy", [](PyOptimizationParams& self) { return self.params().strategy; },
@@ -945,7 +950,7 @@ namespace lfs::python {
             .def_prop_rw(
                 "eval_mask_opacity",
                 [](PyOptimizationParams& self) { return self.params().eval_mask_opacity; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.eval_mask_opacity = v; }); },
+                [](PyOptimizationParams& self, float v) { self.set("eval_mask_opacity", nb::cast(v)); },
                 "Rendered opacity a pixel needs to count as covered by a splat mask; lower widens the mask past the outline, higher pulls it in")
             .def_prop_rw(
                 "densify_error_map",
@@ -957,19 +962,17 @@ namespace lfs::python {
             .def_prop_rw(
                 "max_screen_share",
                 [](PyOptimizationParams& self) { return self.params().max_screen_share; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.max_screen_share = v; }); },
+                [](PyOptimizationParams& self, float v) { self.set("max_screen_share", nb::cast(v)); },
                 "Shrink Gaussians that cover more than this share of the view; 0 or 1 disables")
             .def_prop_rw(
                 "screen_share_penalty",
                 [](PyOptimizationParams& self) { return self.params().screen_share_penalty; },
-                [](PyOptimizationParams&, float v) {
-                    modify_params([v](auto& p) { p.screen_share_penalty = v; });
-                },
+                [](PyOptimizationParams& self, float v) { self.set("screen_share_penalty", nb::cast(v)); },
                 "Soft hinge weight on log-scale for Gaussians over the screen-share cap")
             .def_prop_rw(
                 "steps_scaler",
                 [](PyOptimizationParams& self) { return self.params().steps_scaler; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.steps_scaler = v; }); },
+                [](PyOptimizationParams& self, float v) { self.set("steps_scaler", nb::cast(v)); },
                 "Scale factor for training step counts")
             .def(
                 "apply_step_scaling",
@@ -1008,9 +1011,7 @@ namespace lfs::python {
             .def_prop_rw(
                 "exposure_correction_grid_start_iter",
                 [](PyOptimizationParams& self) { return self.params().exposure_correction_grid_start_iter; },
-                [](PyOptimizationParams&, int v) {
-                    modify_params([v](auto& p) { p.exposure_correction_grid_start_iter = v; });
-                },
+                [](PyOptimizationParams& self, int v) { self.set("exposure_correction_grid_start_iter", nb::cast(v)); },
                 "Iteration at which the local residual grid starts training")
             .def_prop_rw(
                 "use_bilateral_grid",
@@ -1059,12 +1060,12 @@ namespace lfs::python {
             .def_prop_rw(
                 "ppisp_controller_activation_step",
                 [](PyOptimizationParams& self) { return self.params().ppisp_controller_activation_step; },
-                [](PyOptimizationParams& self, int v) { self.params().ppisp_controller_activation_step = v; },
+                [](PyOptimizationParams& self, int v) { self.set("ppisp_controller_activation_step", nb::cast(v)); },
                 "Iteration to start controller distillation (negative = default schedule)")
             .def_prop_rw(
                 "ppisp_controller_lr",
                 [](PyOptimizationParams& self) { return self.params().ppisp_controller_lr; },
-                [](PyOptimizationParams& self, float v) { self.params().ppisp_controller_lr = v; },
+                [](PyOptimizationParams& self, float v) { self.set("ppisp_controller_lr", nb::cast(v)); },
                 "Learning rate for PPISP controller")
             .def_prop_rw(
                 "ppisp_freeze_gaussians",
@@ -1121,7 +1122,7 @@ namespace lfs::python {
             .def_prop_rw(
                 "depth_loss_weight",
                 [](PyOptimizationParams& self) { return self.params().depth_loss_weight; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.depth_loss_weight = std::max(0.0f, v); }); },
+                [](PyOptimizationParams& self, float v) { self.set("depth_loss_weight", nb::cast(v)); },
                 "Weight for depth-map supervision")
             .def_prop_rw(
                 "depth_loss_mode",
@@ -1141,31 +1142,27 @@ namespace lfs::python {
             .def_prop_rw(
                 "normal_loss_weight",
                 [](PyOptimizationParams& self) { return self.params().normal_loss_weight; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.normal_loss_weight = std::max(0.0f, v); }); },
+                [](PyOptimizationParams& self, float v) { self.set("normal_loss_weight", nb::cast(v)); },
                 "Weight for prior normal supervision")
             .def_prop_rw(
                 "normal_consistency_weight",
                 [](PyOptimizationParams& self) { return self.params().normal_consistency_weight; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.normal_consistency_weight = std::max(0.0f, v); }); },
+                [](PyOptimizationParams& self, float v) { self.set("normal_consistency_weight", nb::cast(v)); },
                 "Weight for depth-normal consistency supervision")
             .def_prop_rw(
                 "normal_flatten_weight",
                 [](PyOptimizationParams& self) { return self.params().normal_flatten_weight; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.normal_flatten_weight = std::max(0.0f, v); }); },
+                [](PyOptimizationParams& self, float v) { self.set("normal_flatten_weight", nb::cast(v)); },
                 "Min-axis scale flattening weight while normal supervision is active")
             .def_prop_rw(
                 "normal_start_fraction",
                 [](PyOptimizationParams& self) { return self.params().normal_start_fraction; },
-                [](PyOptimizationParams&, float v) {
-                    modify_params([v](auto& p) { p.normal_start_fraction = std::clamp(v, 0.0f, 1.0f); });
-                },
+                [](PyOptimizationParams& self, float v) { self.set("normal_start_fraction", nb::cast(v)); },
                 "Fraction of total iterations at which normal supervision starts")
             .def_prop_rw(
                 "normal_end_fraction",
                 [](PyOptimizationParams& self) { return self.params().normal_end_fraction; },
-                [](PyOptimizationParams&, float v) {
-                    modify_params([v](auto& p) { p.normal_end_fraction = std::clamp(v, 0.0f, 1.0f); });
-                },
+                [](PyOptimizationParams& self, float v) { self.set("normal_end_fraction", nb::cast(v)); },
                 "Fraction of total iterations at which normal supervision stops; 1.0 keeps it on until the end")
             .def_prop_rw(
                 "normal_loss_space",
