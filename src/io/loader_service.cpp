@@ -52,10 +52,9 @@ namespace lfs::io {
             if (!tensor.is_valid() || tensor.numel() == 0) {
                 return true; // empty/absent — nothing to migrate
             }
-            // Plain device tensors are not the renderer's pool. Both backends
-            // are ready only once the caller allocator has supplied them.
-            return tensor.is_external_storage() &&
-                   tensor.external_storage_kind() == "vulkan_external_buffer";
+            return tensor.is_renderer_storage() ||
+                   (tensor.is_external_storage() &&
+                    tensor.external_storage_kind() == "vulkan_external_buffer");
         }
 
         [[nodiscard]] bool pagedRadGpuResidencyRequested(const lfs::core::SplatData& model) {

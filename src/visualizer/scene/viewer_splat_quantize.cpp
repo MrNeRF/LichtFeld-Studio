@@ -32,6 +32,9 @@ namespace lfs::vis {
             if (!tensor.is_valid() || tensor.numel() == 0) {
                 return true;
             }
+            if (tensor.is_renderer_storage()) {
+                return true;
+            }
             if (lfs::core::tensor_vulkan_buffer(tensor).has_value()) {
                 return true;
             }
