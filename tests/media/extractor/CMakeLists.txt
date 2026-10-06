@@ -31,7 +31,9 @@ else()
     endforeach()
 endif()
 get_filename_component(MEDIA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
-add_executable(media_extraction_runner runner.cpp support.cpp
+add_executable(media_extraction_runner runner.cpp support.cpp probe_unit_contracts.cpp
+    ${MEDIA_ROOT}/src/io/media_probe.cpp
+    ${MEDIA_ROOT}/src/io/video_player.cpp
     ${MEDIA_ROOT}/src/io/video_frame_extractor.cpp
     ${MEDIA_ROOT}/src/io/hdr_tonemap.cpp
     ${MEDIA_ROOT}/src/core/image_codecs.cpp
@@ -39,7 +41,7 @@ add_executable(media_extraction_runner runner.cpp support.cpp
 target_compile_features(media_extraction_runner PRIVATE cxx_std_23)
 target_compile_definitions(media_extraction_runner PRIVATE LFS_STATIC_BUILD LFS_HAS_CUDA=0)
 target_include_directories(media_extraction_runner PRIVATE
-    ${MEDIA_ROOT}/src ${MEDIA_ROOT}/src/core/include ${MEDIA_ROOT}/external
+    ${MEDIA_ROOT}/src ${MEDIA_ROOT}/src/io/include ${MEDIA_ROOT}/src/core/include ${MEDIA_ROOT}/external
     ${MEDIA_FFMPEG_INCLUDE})
 target_include_directories(media_extraction_runner BEFORE PRIVATE ${ZLIB_INCLUDE_DIRS})
 target_link_libraries(media_extraction_runner PRIVATE nlohmann_json::nlohmann_json
@@ -64,5 +66,12 @@ if(WIN32)
     endif()
     set(MEDIA_RUNTIME_LIBRARY_DIR "${MEDIA_RUNTIME_DEFAULT}" CACHE PATH "Runtime DLL directory for the SDR runner")
     set_tests_properties(MediaExtractionContracts PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
+endif()
+
+add_test(NAME MediaProbeUnitContracts COMMAND media_extraction_runner --probe-unit)
+set_tests_properties(MediaProbeUnitContracts PROPERTIES LABELS "media;cpu;offline" TIMEOUT 30)
+if(WIN32)
+    set_tests_properties(MediaProbeUnitContracts PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
 endif()

@@ -5,6 +5,7 @@
 #include "video_player.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "media_probe_ffmpeg.hpp"
 #include "hdr_libplacebo.hpp"
 #include "hdr_tonemap.hpp"
 
@@ -44,32 +45,6 @@ namespace lfs::io {
 
         [[nodiscard]] double monotonicSeconds() {
             return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-        }
-
-        [[nodiscard]] int findUsableHeaderVideoStream(const AVFormatContext* const context) {
-            if (!context)
-                return -1;
-
-            for (unsigned int i = 0; i < context->nb_streams; ++i) {
-                const AVStream* const stream = context->streams[i];
-                const AVCodecParameters* const parameters = stream ? stream->codecpar : nullptr;
-                if (parameters && parameters->codec_type == AVMEDIA_TYPE_VIDEO &&
-                    parameters->codec_id != AV_CODEC_ID_NONE && parameters->width > 0 &&
-                    parameters->height > 0) {
-                    return static_cast<int>(i);
-                }
-            }
-            return -1;
-        }
-
-        void discardNonVideoStreams(AVFormatContext* const context, const int video_stream_idx) {
-            if (!context)
-                return;
-
-            for (unsigned int i = 0; i < context->nb_streams; ++i)
-                context->streams[i]->discard = static_cast<int>(i) == video_stream_idx
-                                                   ? AVDISCARD_DEFAULT
-                                                   : AVDISCARD_ALL;
         }
 
         [[nodiscard]] bool configureVideoToRgbColorimetry(
@@ -220,60 +195,21 @@ namespace lfs::io {
                 return false;
             }
 
-            // Select the video stream before probing codec-level metadata.
-            video_stream_idx_ = findUsableHeaderVideoStream(fmt_ctx_);
-            if (video_stream_idx_ < 0) {
-                // Fallback for containers requiring packet probing.
-                if (avformat_find_stream_info(fmt_ctx_, nullptr) < 0) {
-                    close();
-                    return false;
-                }
-                video_stream_idx_ = findUsableHeaderVideoStream(fmt_ctx_);
-            }
-
+            const auto probe = media::detail::probeVideoStream(fmt_ctx_);
+            video_stream_idx_ = probe.stream_index;
             if (video_stream_idx_ < 0) {
                 close();
                 return false;
             }
-
-            discardNonVideoStreams(fmt_ctx_, video_stream_idx_);
-
-            // Probe the selected stream for HDR metadata stored in the bitstream.
-            if (avformat_find_stream_info(fmt_ctx_, nullptr) < 0) {
+            if (!probe.metadata_complete)
                 LOG_WARN("VideoPlayer: could not complete video-only stream metadata probe");
-            }
             av_seek_frame(fmt_ctx_, video_stream_idx_, 0, AVSEEK_FLAG_BACKWARD);
 
             AVStream* const stream = fmt_ctx_->streams[video_stream_idx_];
             const AVCodecID codec_id = stream->codecpar->codec_id;
 
-            // Read rotation metadata from stream (metadata dict or display matrix)
-            rotation_ = 0;
-            AVDictionaryEntry* tag = av_dict_get(stream->metadata, "rotate", nullptr, 0);
-            if (tag && tag->value) {
-                rotation_ = std::atoi(tag->value);
-            } else {
-                // Try display matrix side data (common in MP4/MOV from smartphones)
-                int32_t* display_matrix = nullptr;
-
-                // Check codecpar coded_side_data
-                for (int i = 0; i < stream->codecpar->nb_coded_side_data; i++) {
-                    if (stream->codecpar->coded_side_data[i].type == AV_PKT_DATA_DISPLAYMATRIX) {
-                        display_matrix = reinterpret_cast<int32_t*>(
-                            stream->codecpar->coded_side_data[i].data);
-                        break;
-                    }
-                }
-
-                if (display_matrix) {
-                    const double angle = av_display_rotation_get(display_matrix);
-                    // av_display_rotation_get returns CCW, our convention is CW
-                    rotation_ = static_cast<int>(std::round(-angle));
-                }
-            }
-            rotation_ = ((rotation_ % 360) + 360) % 360; // normalize
-            if (rotation_ != 0 && rotation_ != 90 && rotation_ != 180 && rotation_ != 270)
-                rotation_ = 0;
+            const auto source = media::detail::describeStream(stream);
+            rotation_ = media::legacyQuarterTurn(source.orientation);
 
             is_hdr_ = false;
             hdr_info_ = "SDR";
@@ -467,10 +403,8 @@ namespace lfs::io {
                 if (rotation_ == 0 && frame_) {
                     for (int i = 0; i < frame_->nb_side_data; i++) {
                         if (frame_->side_data[i]->type == AV_FRAME_DATA_DISPLAYMATRIX) {
-                            const double angle = av_display_rotation_get(
-                                reinterpret_cast<int32_t*>(frame_->side_data[i]->data));
-                            // av_display_rotation_get returns CCW, our convention is CW
-                            rotation_ = static_cast<int>(std::round(-angle));
+                            rotation_ = media::legacyQuarterTurn(media::detail::describeDisplayMatrix(
+                                frame_->side_data[i]->data, frame_->side_data[i]->size));
                             break;
                         }
                     }

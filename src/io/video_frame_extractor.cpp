@@ -6,6 +6,7 @@
 #include "core/image_codecs.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "media_probe_ffmpeg.hpp"
 #include "hdr_libplacebo.hpp"
 #include "hdr_tonemap.hpp"
 #if LFS_HAS_CUDA
@@ -79,32 +80,6 @@ namespace lfs::io {
 
         [[nodiscard]] double elapsedSeconds(const std::chrono::steady_clock::time_point started) {
             return std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-        }
-
-        [[nodiscard]] int findUsableHeaderVideoStream(const AVFormatContext* const context) {
-            if (!context)
-                return -1;
-
-            for (unsigned int i = 0; i < context->nb_streams; ++i) {
-                const AVStream* const stream = context->streams[i];
-                const AVCodecParameters* const parameters = stream ? stream->codecpar : nullptr;
-                if (parameters && parameters->codec_type == AVMEDIA_TYPE_VIDEO &&
-                    parameters->codec_id != AV_CODEC_ID_NONE && parameters->width > 0 &&
-                    parameters->height > 0) {
-                    return static_cast<int>(i);
-                }
-            }
-            return -1;
-        }
-
-        void discardNonVideoStreams(AVFormatContext* const context, const int video_stream_idx) {
-            if (!context)
-                return;
-
-            for (unsigned int i = 0; i < context->nb_streams; ++i)
-                context->streams[i]->discard = static_cast<int>(i) == video_stream_idx
-                                                   ? AVDISCARD_DEFAULT
-                                                   : AVDISCARD_ALL;
         }
 
         [[nodiscard]] bool configureVideoToRgbColorimetry(
@@ -871,37 +846,16 @@ namespace lfs::io {
                     return false;
                 }
 
-                // Frame extraction is video-only. Prefer the complete stream
-                // description already stored in container headers, avoiding a
-                // global probe of audio tracks which this workflow never uses.
-                int video_stream_idx = findUsableHeaderVideoStream(fmt_ctx);
+                const auto probe = media::detail::probeVideoStream(fmt_ctx);
+                const int video_stream_idx = probe.stream_index;
                 if (video_stream_idx < 0) {
-                    // Preserve compatibility with containers that need packet
-                    // probing to expose their video dimensions or codec.
-                    if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
-                        error = "Failed to find stream info";
-                        avformat_close_input(&fmt_ctx);
-                        return false;
-                    }
-                    video_stream_idx = findUsableHeaderVideoStream(fmt_ctx);
-                }
-
-                if (video_stream_idx == -1) {
-                    error = "No video stream found";
+                    error = probe.ffmpeg_error < 0 ? "Failed to find stream info" : "No video stream found";
                     avformat_close_input(&fmt_ctx);
                     return false;
                 }
-
-                discardNonVideoStreams(fmt_ctx, video_stream_idx);
-
                 AVStream* video_stream = fmt_ctx->streams[video_stream_idx];
-                // Metadata may live in HEVC packets instead of the container
-                // header (notably PQ/HLG signalling). Probe only after every
-                // non-video stream is discarded, then rewind so decoding and
-                // frame selection remain deterministic.
-                if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
+                if (!probe.metadata_complete)
                     LOG_WARN("Could not complete video-only stream metadata probe; some source metadata may be unavailable");
-                }
                 av_seek_frame(fmt_ctx, video_stream_idx, 0, AVSEEK_FLAG_BACKWARD);
                 const AVCodecID codec_id = video_stream->codecpar->codec_id;
                 int dv_profile = 0;

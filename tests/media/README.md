@@ -87,3 +87,12 @@ interval includes a frame at an exactly matching end timestamp, FPS excludes it.
 VFR `source_frame` is nominal-FPS-derived rather than a decoded ordinal. Cancelled
 jobs currently preserve completed images without a cancellation manifest. These
 contracts describe the baseline and do not advertise future Media Ingest guarantees.
+
+## Shared probe and preview checks
+
+The same extractor CTest directory also compiles the production MediaProbe and
+VideoPlayer, runs six additional Python probe/preview tests, and registers native
+MediaProbeUnitContracts assertions. These checks use MPEG-4/MOV, PCM/WAV and lavfi
+sine in addition to the original FFV1/rawvideo/NUT fixture capabilities. They run
+inside the existing Release CI jobs without another workflow or job. See
+../../docs/development/media-probe-contracts.md for API, behavior and verification.

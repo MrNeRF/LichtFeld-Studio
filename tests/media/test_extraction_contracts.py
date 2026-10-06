@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""SDR regression contracts against unchanged VideoFrameExtractor sources."""
+"""CPU regression contracts for production extraction, preview and media probe."""
 import argparse
 import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
+import struct
 import tempfile
 import unittest
 
@@ -38,6 +39,138 @@ class ExtractionContracts(unittest.TestCase):
         result = subprocess.run([str(RUNNER), str(path)], capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
         return json.loads(result.stdout), output
+
+    def probe(self, source=None, **options):
+        work = Path(tempfile.mkdtemp(prefix="probe-", dir=self.root))
+        request = {"operation": "probe", "input": str(source or self.corpus / "cfr-asymmetric.nut"), **options}
+        path = work / "request.json"
+        path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+        result = subprocess.run([str(RUNNER), str(path)], capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
+        return json.loads(result.stdout)
+
+    def test_probe_rgb_dimensions_rationals_and_no_output(self):
+        source = self.corpus / "cfr-asymmetric.nut"
+        before = {p.name: p.read_bytes() for p in self.corpus.iterdir() if p.is_file()}
+        result = self.probe(source)
+        self.assertTrue(result["success"], result["error"])
+        self.assertTrue(result["stream_info_probed"])
+        self.assertEqual(result["selected_video"], 0)
+        stream = result["streams"][0]
+        self.assertEqual((stream["codec"], stream["width"], stream["height"], stream["depth"]), ("ffv1", 64, 32, 8))
+        reference = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_streams", "-of", "json", str(source)]))["streams"][0]
+        self.assertEqual(stream["time_base"], [int(x) for x in reference["time_base"].split("/")])
+        self.assertEqual(stream["nominal_fps"], [int(x) for x in reference["r_frame_rate"].split("/")])
+        self.assertEqual(before, {p.name: p.read_bytes() for p in self.corpus.iterdir() if p.is_file()})
+        self.assertIsNone(stream["rotation"])
+
+    def test_probe_headers_and_vfr_keep_declared_rates(self):
+        for name in ("cfr-asymmetric", "vfr-asymmetric"):
+            source = self.corpus / (name + ".nut")
+            result = self.probe(source, headers_only=True)
+            self.assertTrue(result["success"], result["error"])
+            self.assertFalse(result["stream_info_probed"])
+            self.assertEqual(result["streams"][0]["width"], 64)
+            self.assertIsNotNone(result["streams"][0]["time_base"])
+
+    def test_probe_audio_and_multiple_video_streams(self):
+        source = self.root / "multi stream.nut"
+        fixtures.run([FFMPEG, "-v", "error", "-i", str(self.corpus / "cfr-asymmetric.nut"),
+                      "-f", "lavfi", "-i", "sine=frequency=400:sample_rate=8000:duration=0.5",
+                      "-map", "1:a", "-map", "0:v", "-map", "0:v", "-c:v", "copy", "-c:a", "pcm_s16le", str(source)])
+        result = self.probe(source)
+        self.assertTrue(result["success"], result["error"])
+        self.assertEqual([s["kind"] for s in result["streams"]], [1, 0, 0])
+        self.assertEqual(result["selected_video"], 1)
+        self.assertIsNone(result["streams"][0]["width"])
+        extracted, output = self.extract(input=str(source))
+        self.completed(extracted)
+        self.assert_frames(output, [0, 1, 2, 3])
+
+    def test_probe_audio_only_is_valid_without_selected_video(self):
+        source = self.root / "audio.wav"
+        fixtures.run([FFMPEG, "-v", "error", "-f", "lavfi", "-i", "sine=duration=0.2", str(source)])
+        result = self.probe(source)
+        self.assertTrue(result["success"], result["error"])
+        self.assertIsNone(result["selected_video"])
+        self.assertEqual(result["streams"][0]["kind"], 1)
+
+    def test_probe_invalid_input_and_options_have_structured_errors(self):
+        bad = self.root / "invalid input é.nut"
+        bad.write_bytes(b"not a media container")
+        for source in (bad, self.root / "missing é.nut"):
+            result = self.probe(source)
+            self.assertFalse(result["success"])
+            self.assertEqual(result["error_code"], 2)
+            self.assertLess(result["ffmpeg_code"], 0)
+        for timeout in (0, -1):
+            result = self.probe(timeout_ms=timeout)
+            self.assertFalse(result["success"])
+            self.assertEqual(result["error_code"], 1)
+
+    def test_probe_matrix_matches_real_player_and_explicit_extraction(self):
+        base = self.root / "rotation-base.mov"
+        fixtures.run([FFMPEG, "-v", "error", "-i", str(self.corpus / "cfr-asymmetric.nut"),
+                      "-c:v", "mpeg4", "-q:v", "1", str(base)])
+        for angle in (90, 180, 270):
+            with self.subTest(angle=angle):
+                source = self.root / f"rotation-{angle}.mov"
+                # Write a known track-header matrix directly. FFmpeg versions
+                # differ in whether remuxing a rotate tag creates this side data.
+                # Only fixture construction uses this tiny MOV atom walk.
+                data = bytearray(base.read_bytes())
+                def track_headers(start, end):
+                    offset = start
+                    while offset + 8 <= end:
+                        size, kind = struct.unpack_from(">I4s", data, offset)
+                        self.assertGreaterEqual(size, 8)
+                        self.assertLessEqual(offset + size, end)
+                        if kind == b"tkhd":
+                            yield offset
+                        elif kind in (b"moov", b"trak"):
+                            yield from track_headers(offset + 8, offset + size)
+                        offset += size
+                headers = list(track_headers(0, len(data)))
+                self.assertEqual(len(headers), 1)
+                offset = headers[0] + (60 if data[headers[0] + 8] == 1 else 48)
+                matrices = {90: (0, 65536, 0, -65536, 0, 0, 0, 0, 1 << 30),
+                            180: (-65536, 0, 0, 0, -65536, 0, 0, 0, 1 << 30),
+                            270: (0, -65536, 0, 65536, 0, 0, 0, 0, 1 << 30)}
+                struct.pack_into(">9i", data, offset, *matrices[angle])
+                source.write_bytes(data)
+                result = self.probe(source)
+                self.assertTrue(result["success"], result["error"])
+                stream = result["streams"][0]
+                reference = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_streams", "-of", "json", str(source)]))["streams"][0]
+                matrix = next(s for s in reference["side_data_list"] if s["side_data_type"] == "Display Matrix")
+                clockwise = (-matrix["rotation"]) % 360
+                self.assertEqual(stream["legacy_rotation"], clockwise)
+                self.assertEqual(stream["rotation_source"], 2)
+                self.assertEqual(len(stream["display_matrix"]), 9)
+                work = Path(tempfile.mkdtemp(prefix="preview-", dir=self.root))
+                request = work / "request.json"
+                request.write_text(json.dumps({"operation": "preview", "input": str(source)}), encoding="utf-8")
+                preview = subprocess.run([str(RUNNER), str(request)], capture_output=True, timeout=30)
+                self.assertEqual(preview.returncode, 0, preview.stderr.decode("utf-8", errors="replace"))
+                preview = json.loads(preview.stdout)
+                self.assertTrue(preview["success"], preview["error"])
+                self.assertEqual(preview["rotation"], clockwise)
+                # The SDR player delivers raw pixels; its caller applies rotation.
+                self.assertEqual(preview["size"], [64, 32])
+                self.assertFalse(preview["gpu_rotation"])
+                raw_pixels = fixtures.run([FFMPEG, "-v", "error", "-noautorotate", "-i", str(source),
+                                           "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+                self.assertEqual(len(preview["pixels"]), len(raw_pixels))
+                self.assertLessEqual(max(abs(a - b) for a, b in zip(preview["pixels"], raw_pixels)), 3)
+                filters = {90: "transpose=1", 180: "hflip,vflip", 270: "transpose=2"}
+                pixels = fixtures.run([FFMPEG, "-v", "error", "-noautorotate", "-i", str(source),
+                                       "-frames:v", "1", "-vf", filters[clockwise],
+                                       "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+                extracted, output = self.extract(input=str(source), rotation=clockwise)
+                self.completed(extracted)
+                frame = fixtures.decoded_rgb(output / "frame_001.png", FFMPEG)
+                self.assertEqual(len(frame), len(pixels))
+                self.assertLessEqual(max(abs(a - b) for a, b in zip(frame, pixels)), 3)
 
     def completed(self, result):
         self.assertTrue(result["success"], result["error"])
