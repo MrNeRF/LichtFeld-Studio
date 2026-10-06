@@ -108,7 +108,7 @@ namespace lfs::python {
         TriMesh mesh_data_to_trimesh(const PyMeshData& md) {
             TriMesh mesh;
             const auto& d = *md.data();
-            assert(d.vertices.shape()[1] == 3);
+            d.validate_indices();
 
             auto cpu_verts = d.vertices.to(core::Device::CPU).contiguous();
             auto vacc = cpu_verts.accessor<float, 2>();
