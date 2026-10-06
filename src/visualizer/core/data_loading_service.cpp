@@ -75,14 +75,25 @@ namespace lfs::vis {
             return;
         }
 
+        bool project_hydrating = false;
+        if (viewer_) {
+            const auto project_info = viewer_->projectGetInfo();
+            project_hydrating = project_info &&
+                                project_info->hydration_state ==
+                                    "hydrating";
+        }
+
         // Checkpoint files get special handling - redirect to training resume flow
         if (isCheckpointFile(cmd.path)) {
             handleLoadCheckpointForTrainingCommand(cmd.path, {}, {});
             return;
         }
 
+        // An additive load during hydration joins the project being opened; an
+        // explicit replacement still clears it.
         const bool replace_scene =
-            viewer_ ? viewer_->loadFileWouldReplaceScene(false, cmd.replace)
+            viewer_ ? ((cmd.replace || !project_hydrating) &&
+                       viewer_->loadFileWouldReplaceScene(false, cmd.replace))
                     : (cmd.replace ||
                        scene_manager_->getContentType() ==
                            SceneManager::ContentType::Dataset);
@@ -105,8 +116,11 @@ namespace lfs::vis {
                                    : cmd.paths;
             // The first successful file binds the application scene. Subsequent
             // files in this batch and later queued batches append to it.
-            const bool replace_first = cmd.replace ||
-                                       scene_manager_->getContentType() != SceneManager::ContentType::SplatFiles;
+            const bool replace_first =
+                cmd.replace ||
+                (!project_hydrating &&
+                 scene_manager_->getContentType() !=
+                     SceneManager::ContentType::SplatFiles);
             if (!viewer_ || !viewer_->getGuiManager() ||
                 !viewer_->getGuiManager()->asyncTasks().startSplatLoad(paths, replace_first, {}, {}, std::nullopt, cmd.user_batch && paths.size() > 1)) {
                 throw std::runtime_error("Import already in progress");
