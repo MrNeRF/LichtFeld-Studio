@@ -9,6 +9,7 @@
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "python/python_runtime.hpp"
 
+#include <cmath>
 #include <cstring>
 #include <cuda_runtime.h>
 #include <dlpack/dlpack.h>
@@ -327,10 +328,21 @@ namespace lfs::python {
             return tensor_.item<int64_t>();
         } else if (tensor_.dtype() == DataType::UInt8 || tensor_.dtype() == DataType::Bool) {
             return static_cast<int64_t>(tensor_.item<unsigned char>());
-        } else if (tensor_.dtype() == DataType::Float16) {
-            return static_cast<int64_t>(tensor_.to(DataType::Float32).item<float>());
         }
-        return static_cast<int64_t>(tensor_.item<float>());
+        const float value = tensor_.dtype() == DataType::Float16
+                                ? tensor_.to(DataType::Float32).item<float>()
+                                : tensor_.item<float>();
+        if (std::isnan(value)) {
+            throw std::domain_error("cannot convert NaN to integer");
+        }
+        if (!std::isfinite(value)) {
+            throw std::overflow_error("cannot convert infinity to integer");
+        }
+        constexpr double int64_limit = 9223372036854775808.0;
+        if (static_cast<double>(value) < -int64_limit || static_cast<double>(value) >= int64_limit) {
+            throw std::overflow_error("floating-point value is outside the int64 range");
+        }
+        return static_cast<int64_t>(value);
     }
 
     bool PyTensor::item_bool() const {
