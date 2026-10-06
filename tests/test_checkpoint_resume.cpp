@@ -592,7 +592,7 @@ namespace {
         std::error_code ec;
         std::filesystem::remove_all(temp_dir, ec);
         std::filesystem::create_directories(temp_dir);
-        const auto init_path = temp_dir / "bicycle_seed.ply";
+        const auto init_path = temp_dir / "initial_points.ply";
         ASSERT_TRUE(lfs::io::save_ply(*seed, {.output_path = init_path}).has_value());
         params.init_path = lfs::core::path_to_utf8(init_path);
         const glm::vec3 origin{1.0f, -2.0f, 0.5f};
