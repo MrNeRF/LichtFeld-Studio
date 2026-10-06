@@ -61,6 +61,10 @@ lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut_plain32 SOURCE splat_b
     DEFINES LFS_BLEND_MODE=3 LFS_BLEND_FLAGS=160 RELAXED_MATH)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut_plain64 SOURCE splat_blend.slang COMPUTE ${_blend_entries}
     DEFINES LFS_BLEND_MODE=3 LFS_BLEND_FLAGS=32 RELAXED_MATH)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut_batch SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+    DEFINES LFS_BLEND_MODE=3 LFS_BLEND_FLAGS=672 RELAXED_MATH)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut_prefix SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+    DEFINES LFS_BLEND_MODE=3 LFS_BLEND_FLAGS=1696 RELAXED_MATH)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_present SOURCE splat_present.slang COMPUTE present_viewer)
 lfs_add_gpu_program(lfs_tensor_rasterizer point_cloud SOURCE point_cloud.slang
     COMPUTE extractPointDepth VERTEX pointVertex FRAGMENT pointColorFragment pointDepthFragment)
