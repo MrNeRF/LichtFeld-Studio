@@ -2735,11 +2735,11 @@ namespace lfs::vis {
                     render_result->size);
                 view_state.viewport_artifact_service_.setDepthSampler(
                     [this, target = view_state.main_render_target_, size = render_result->size](
-                        int x, int y, std::optional<SplitViewPanelId>) {
+                        int x, int y, std::optional<SplitViewPanelId>, bool nonblocking) {
                         if (!point_scene_renderer_)
                             return -1.0f;
                         return point_scene_renderer_->sampleDepthAtPixel(
-                                                        {.pixel = {x, y}, .source_size = size, .target = target})
+                                                        {.pixel = {x, y}, .source_size = size, .target = target, .nonblocking = nonblocking})
                             .value_or(-1.0f);
                     });
 

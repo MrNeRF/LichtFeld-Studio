@@ -28,12 +28,12 @@ namespace {
 
     TEST(AlignDepth, PointDepthSamplerFollowsPublishedOutput) {
         lfs::vis::ViewportArtifactService artifacts;
-        artifacts.setDepthSampler([](int x, int y, auto) { return x == 2 && y == 3 ? 4.0f : -1.0f; });
+        artifacts.setDepthSampler([](int x, int y, auto, bool) { return x == 2 && y == 3 ? 4.0f : -1.0f; });
         EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(2, 3, {10, 10}), 4.0f);
         EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(0, 0, {10, 10}), -1.0f);
         artifacts.updateFromImageOutput({}, {}, {10, 10}, true);
         EXPECT_FALSE(artifacts.hasDepthSampler());
-        artifacts.setDepthSampler([](int, int, auto) { return 5.0f; });
+        artifacts.setDepthSampler([](int, int, auto, bool) { return 5.0f; });
         artifacts.clearViewportOutput();
         EXPECT_FALSE(artifacts.hasDepthSampler());
     }
@@ -65,6 +65,37 @@ namespace {
             const auto depth = renderer.sampleDepthAtPixel(context, {.pixel = {32, 32}, .source_size = {64, 64}, .target = target});
             ASSERT_TRUE(depth) << depth.error();
             EXPECT_NEAR(*depth, 5.0f, 1e-3f);
+            lfs::vis::SceneRenderer::DepthSampleRequest async_request{
+                .pixel = {32, 32},
+                .source_size = {64, 64},
+                .target = target,
+                .nonblocking = true};
+            const auto pending = renderer.sampleDepthAtPixel(context, async_request);
+            ASSERT_TRUE(pending);
+            EXPECT_LT(*pending, 0.0f);
+            EXPECT_TRUE(renderer.takeRefinementRequest());
+            ASSERT_TRUE(context.deviceWaitIdle());
+            const auto completed = renderer.sampleDepthAtPixel(context, async_request);
+            ASSERT_TRUE(completed);
+            EXPECT_NEAR(*completed, 5.0f, 1e-3f);
+            for (int i = 0; i < 1000; ++i) {
+                async_request.pixel = i % 2 ? glm::ivec2(0, 0) : glm::ivec2(32, 32);
+                ASSERT_TRUE(renderer.sampleDepthAtPixel(context, async_request));
+            }
+            EXPECT_FALSE(renderer.takeRefinementRequest());
+            // Overlay-only redraws must keep the completed snapshot usable.
+            ASSERT_TRUE(renderer.render(context, request, target));
+            async_request.pixel = {32, 32};
+            EXPECT_NEAR(renderer.sampleDepthAtPixel(context, async_request).value(), 5.0f, 1e-3f);
+            EXPECT_FALSE(renderer.takeRefinementRequest());
+            // A changed camera must never reuse the old surface snapshot.
+            request.view = glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, -1));
+            request.view_projection *= request.view;
+            ASSERT_TRUE(renderer.render(context, request, target));
+            EXPECT_LT(renderer.sampleDepthAtPixel(context, async_request).value(), 0.0f);
+            ASSERT_TRUE(context.deviceWaitIdle());
+            EXPECT_NEAR(renderer.sampleDepthAtPixel(context, async_request).value(), 6.0f, 1e-3f);
+            (void)renderer.takeRefinementRequest();
             const auto background = renderer.sampleDepthAtPixel(context, {.pixel = {0, 0}, .source_size = {64, 64}, .target = target});
             ASSERT_TRUE(background);
             EXPECT_LT(*background, 0.0f);

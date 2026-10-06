@@ -84,6 +84,7 @@ namespace lfs::vis {
 
         public:
             explicit VulkanPointSceneRenderer(VulkanContext& context) : context_(context) {}
+            bool takeRefinementRequest() override { return renderer_.takeRefinementRequest(); }
             std::expected<RenderResult, std::string> render(const RenderRequest& request, RenderTargetId target) override { return renderer_.render(context_, request, target); }
             std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImage(RenderTargetId target) override { return renderer_.readOutputImage(context_, target); }
             std::expected<float, std::string> sampleDepthAtPixel(const SceneRenderer::DepthSampleRequest& request) override { return renderer_.sampleDepthAtPixel(context_, request); }

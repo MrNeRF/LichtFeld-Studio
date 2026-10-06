@@ -472,7 +472,7 @@ namespace lfs::vis {
         int pickCameraFrustum(ViewId view, const glm::vec2& mouse_pos);
 
         // Depth access for tools (returns camera-space depth at pixel, or -1 if invalid).
-        float getDepthAtPixel(ViewId view, int x, int y, std::optional<SplitViewPanelId> panel = std::nullopt) const;
+        float getDepthAtPixel(ViewId view, int x, int y, std::optional<SplitViewPanelId> panel = std::nullopt, bool nonblocking = false) const;
         struct ExpectedDepthSampleRequest {
             ViewId view = kNoView;
             SceneManager* scene_manager = nullptr;

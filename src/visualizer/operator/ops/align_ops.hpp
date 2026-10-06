@@ -46,9 +46,12 @@ namespace lfs::vis::op {
         bool drag_active_ = false;
         std::optional<int> selected_point_;
         std::optional<SplitViewPanelId> pick_panel_;
+        std::optional<glm::dvec2> pending_pick_;
+        std::optional<int> pending_point_index_;
+        void resolvePendingPoint();
 
         [[nodiscard]] glm::vec3 unprojectScreenPoint(double x, double y,
-                                                     SplitViewPanelId* out_panel = nullptr) const;
+                                                     SplitViewPanelId* out_panel = nullptr, bool nonblocking = false, bool* pending = nullptr) const;
         [[nodiscard]] std::optional<int> hitTestPoint(double x, double y) const;
         [[nodiscard]] glm::vec3 resolvePickPanelCameraPosition() const;
         void syncPickedPointsToServices();

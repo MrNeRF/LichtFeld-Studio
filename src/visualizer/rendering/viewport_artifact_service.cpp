@@ -136,9 +136,9 @@ namespace lfs::vis {
         const int x,
         const int y,
         const glm::ivec2& fallback_viewport_size,
-        const std::optional<SplitViewPanelId> panel) const {
+        const std::optional<SplitViewPanelId> panel, const bool nonblocking) const {
         if (depth_sampler_)
-            return depth_sampler_(x, y, panel);
+            return depth_sampler_(x, y, panel, nonblocking);
 
         int viewport_width = rendered_size_.x;
         int viewport_height = rendered_size_.y;
