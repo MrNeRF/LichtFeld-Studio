@@ -106,7 +106,7 @@ namespace lfs::core::tensor_ops {
             case 17: return x * x;                         // Square
             case 18: return tanhf(x);                      // Tanh
             case 19: return rsqrtf(x);                     // Rsqrt
-            case 20: return float((x > 0) - (x < 0));      // Sign
+            case 20: return ops::sign_op{}(x);             // Sign
             case 21: return 1.0f / x;                      // Reciprocal
             case 22: return floorf(x);                     // Floor
             case 23: return ceilf(x);                      // Ceil

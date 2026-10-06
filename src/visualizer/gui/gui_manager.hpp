@@ -342,7 +342,7 @@ namespace lfs::vis {
                 std::filesystem::path locale_dir,
                 std::unordered_map<std::string, std::filesystem::file_time_type> previous_times,
                 bool detect_changes);
-            void launchDevResourceScan();
+            void launchDevResourceScan(bool detect_changes = true);
             bool consumeDevResourceScanResult();
             bool shouldDeferDevResourceHotReload() const;
             bool reloadLocalizationResources();

@@ -53,6 +53,10 @@ target_include_directories(media_extraction_runner BEFORE PRIVATE ${ZLIB_INCLUDE
 target_link_libraries(media_extraction_runner PRIVATE nlohmann_json::nlohmann_json
     OpenEXR::OpenEXRCore JPEG::JPEG PNG::PNG ZLIB::ZLIB TIFF::TIFF WebP::webp
     ${MEDIA_FFMPEG_LIBRARIES})
+# failure_report.cpp uses std::stacktrace, which GCC ships in libstdc++exp.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12)
+    target_link_libraries(media_extraction_runner PRIVATE stdc++exp)
+endif()
 if(MSVC)
     target_compile_definitions(media_extraction_runner PRIVATE NOMINMAX)
     target_compile_options(media_extraction_runner PRIVATE /utf-8 /W4)

@@ -326,7 +326,7 @@ namespace lfs::core {
 
         LFS_ASSERT_MSG(dim < shape_.rank(),
                        std::format("slice dimension {} is out of range for rank {}", dim, shape_.rank()));
-        LFS_ASSERT_MSG(start < end && end <= shape_[dim],
+        LFS_ASSERT_MSG(start <= end && end <= shape_[dim],
                        std::format("slice range [{}, {}) is invalid for dimension {} of size {}",
                                    start, end, dim, shape_[dim]));
 
@@ -364,11 +364,13 @@ namespace lfs::core {
         view.is_view_ = true;
         view.id_ = profiling_enabled_ ? next_id_++ : 0; // Only increment ID when profiling
 
-        // Adjust offset to point to slice start (in elements)
-        view.storage_offset_ = storage_offset_ + start * strides_[dim];
-
         // Adjust shape for the sliced dimension
         view.shape_ = TensorShape(new_dims);
+
+        // Empty views keep a valid offset, including chained endpoint slices.
+        view.storage_offset_ = view.numel() == 0
+                                   ? storage_offset_
+                                   : storage_offset_ + start * strides_[dim];
 
         // Check if strides match the new shape's expected contiguous layout
         // A sliced tensor is contiguous if its strides match row-major order for its shape

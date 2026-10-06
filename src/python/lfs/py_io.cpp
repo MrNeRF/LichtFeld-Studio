@@ -247,7 +247,9 @@ namespace lfs::python {
             }
 
             if (nb::isinstance<nb::ndarray<>>(value)) {
-                return PyTensor::from_numpy(nb::cast<nb::ndarray<>>(value)).tensor();
+                return PyTensor::from_numpy(
+                           nb::cast<nb::ndarray<nb::numpy, nb::device::cpu>>(value))
+                    .tensor();
             }
 
             throw_invalid_io_argument(

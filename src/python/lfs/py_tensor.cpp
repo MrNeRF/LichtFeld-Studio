@@ -136,7 +136,8 @@ namespace lfs::python {
         }
 
         // nanobind ndarray::stride(i) is in ELEMENTS (not bytes), matching DLPack.
-        bool ndarray_is_c_contiguous(const nb::ndarray<>& arr) {
+        template <typename Array>
+        bool ndarray_is_c_contiguous(const Array& arr) {
             const size_t ndim = arr.ndim();
             if (ndim == 0 || !arr.stride_ptr()) {
                 return true;
@@ -625,7 +626,8 @@ namespace lfs::python {
         return tensor_.count_nonzero();
     }
 
-    PyTensor PyTensor::from_numpy(nb::ndarray<> arr, bool copy) {
+    PyTensor PyTensor::from_numpy(
+        nb::ndarray<nb::numpy, nb::device::cpu> arr, bool copy) {
         if (!copy) {
             throw std::runtime_error(
                 "from_numpy: zero-copy import is not supported; omit copy or pass copy=True");
@@ -682,7 +684,7 @@ namespace lfs::python {
         SliceInfo info;
         auto [start, stop, step, count] = sl.compute(dim_size);
         info.start = start;
-        info.stop = stop;
+        info.stop = count == 0 ? start : stop;
         info.step = step;
         return info;
     }

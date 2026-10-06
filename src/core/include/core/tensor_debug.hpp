@@ -48,6 +48,11 @@ namespace lfs::core::debug {
         }
     }
 
+    struct TensorDiff;
+    // Declared before TensorDiff so its friend declaration names this exported
+    // function; MSVC rejects a later declaration with different linkage.
+    LFS_CORE_API TensorDiff diff_tensors(const Tensor& expected, const Tensor& actual, float tolerance = 1e-5f);
+
     // Tensor comparison result
     struct TensorDiff {
         bool shapes_match = true;
@@ -66,8 +71,6 @@ namespace lfs::core::debug {
         Tensor scale_;
         friend TensorDiff diff_tensors(const Tensor&, const Tensor&, float);
     };
-
-    LFS_CORE_API TensorDiff diff_tensors(const Tensor& expected, const Tensor& actual, float tolerance = 1e-5f);
 
     inline void log_tensor_diff(const Tensor& expected, const Tensor& actual,
                                 const char* name, const float tolerance = 1e-5f) {

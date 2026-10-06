@@ -18,6 +18,8 @@
 #include "splat_blend_gs_prefix.hpp"
 #include "splat_blend_gut_plain32.hpp"
 #include "splat_blend_gut_plain64.hpp"
+#include "splat_blend_gut_batch.hpp"
+#include "splat_blend_gut_prefix.hpp"
 #include "splat_blend_gut32.hpp"
 #include "splat_blend_gut64.hpp"
 #include "splat_blend_points.hpp"
@@ -47,8 +49,9 @@ namespace lfs::rendering {
         // parallel; a frame enables them once a completed frame had such a tile.
         constexpr uint32_t kDepthChunkSize = 576, kParallelMinTileInstances = 32768;
         // Features whose blend the depth batches do not cover: overlays,
-        // portal edges, logical IDs, Spark, GUT legacy color, macro half, panorama.
-        constexpr uint32_t kSerialOnlyFlags = 1 | 4 | 8 | 16 | 32 | 64 | 8192;
+        // portal edges, logical IDs, Spark, macro half, panorama. Plain GUT's
+        // legacy saturation is carried explicitly between depth chunks.
+        constexpr uint32_t kSerialOnlyFlags = 1 | 4 | 8 | 16 | 64 | 8192;
 
         struct BlendParameters {
             uint64_t pointers[19] = {};
@@ -73,7 +76,7 @@ namespace lfs::rendering {
         std::map<std::pair<uint32_t, bool>, std::unique_ptr<M>> blends;
         std::unique_ptr<M> fast_blend, batch_blend, prefix_blend;
         std::unique_ptr<M> depth_blend, depth_batch_blend, depth_prefix_blend;
-        std::unique_ptr<M> gut_plain32_blend, gut_plain64_blend, present;
+        std::unique_ptr<M> gut_plain32_blend, gut_plain64_blend, gut_batch_blend, gut_prefix_blend, present;
         Tensor raster, present_parameters, color, depth, pick, rgba, linear_depth, selection_colors;
         bool presented = false; // rgba and linear_depth hold an image of this extent
         // Replaced scratch returns to the tensor cache, which keeps blocks for
@@ -177,6 +180,15 @@ namespace lfs::rendering {
                 (flags & ~(kSourceSorted | kOpaqueBackground)) == (kGutSaturation | (single ? kSingleSimd : 0u)))
                 return load(single ? splat_blend_gut_plain32_entries() : splat_blend_gut_plain64_entries(),
                             single ? gut_plain32_blend : gut_plain64_blend);
+            if (mode == SplatRasterMode::Gut) {
+                switch (flags & ~(kSourceSorted | kOpaqueBackground)) {
+                case kGutSaturation | kSingleSimd | kDepthBatches:
+                    return load(splat_blend_gut_batch_entries(), gut_batch_blend);
+                case kGutSaturation | kSingleSimd | kDepthBatches | kDepthPrefix:
+                    return load(splat_blend_gut_prefix_entries(), gut_prefix_blend);
+                default: break;
+                }
+            }
             auto& slot = blends[{uint32_t(mode), single}];
             switch (mode) {
             case SplatRasterMode::Gaussian: return load(single ? splat_blend_gs32_entries() : splat_blend_gs64_entries(), slot);
@@ -243,14 +255,17 @@ namespace lfs::rendering {
         if (s.previous_fits(count, frame.capacity)) {
             if (s.previous.required > count / 4)
                 frame.flags |= kSourceSorted;
-            batches = mode == SplatRasterMode::Gaussian && (frame.flags & kSingleSimd) && !(frame.flags & kSerialOnlyFlags) &&
+            const bool batchable = mode == SplatRasterMode::Gaussian ||
+                                   (mode == SplatRasterMode::Gut && (frame.flags & kGutSaturation) != 0u);
+            batches = batchable && !(frame.flags & kSerialOnlyFlags) &&
                       s.previous.maximum_tile_instances > kParallelMinTileInstances && s.reserve_depth_batches(frame);
             if (batches) {
+                frame.flags |= kSingleSimd;
                 frame.flags |= kDepthBatches;
                 frame.mask_limits[2] = s.parallel_instances;
             }
             // Dense 3DGUT frames blend one subgroup per 8x4 pixels.
-            if (mode == SplatRasterMode::Gut && s.previous.required > uint64_t(frame.tiles) * 512)
+            if (!batches && mode == SplatRasterMode::Gut && s.previous.required > uint64_t(frame.tiles) * 512)
                 frame.flags |= kSingleSimd;
         }
         s.upload(s.raster, frame);

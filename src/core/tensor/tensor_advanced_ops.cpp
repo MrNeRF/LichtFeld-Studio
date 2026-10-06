@@ -160,16 +160,13 @@ namespace lfs::core {
                 return position.masked_fill(mask.logical_not(), past_end).min(dim, true);
             };
             const Tensor nan = x.isnan();
-            const Tensor later_nan = first(nan.logical_and(position.ne(0)));
+            const Tensor first_nan = first(nan);
             const float excluded = find_maximum ? -std::numeric_limits<float>::infinity()
                                                 : std::numeric_limits<float>::infinity();
             const Tensor finite = x.masked_fill(nan, excluded);
             const Tensor extreme = find_maximum ? finite.max(dim, true) : finite.min(dim, true);
             const Tensor first_extreme = first(finite.eq(extreme));
-            const Tensor leading_nan = nan.slice(dim, 0, 1);
-            const Tensor chosen = Tensor::where(
-                later_nan.lt(past_end), later_nan,
-                Tensor::where(leading_nan, Tensor::zeros_like(first_extreme), first_extreme));
+            const Tensor chosen = Tensor::where(first_nan.lt(past_end), first_nan, first_extreme);
             Tensor indices = chosen.to(DataType::Int64);
             Tensor values = x.gather(dim, indices);
             if (!keepdim) {
@@ -247,16 +244,15 @@ namespace lfs::core {
                         const size_t base = outer * dim_size * inner_size + inner;
                         float selected = src[base];
                         int64_t selected_index = 0;
-                        for (size_t index = 1; index < dim_size; ++index) {
+                        for (size_t index = 1; index < dim_size && !std::isnan(selected); ++index) {
                             const float candidate = src[base + index * inner_size];
                             if (std::isnan(candidate)) {
                                 selected = candidate;
                                 selected_index = static_cast<int64_t>(index);
                                 break;
                             }
-                            if (!std::isnan(selected) &&
-                                (find_maximum ? candidate > selected
-                                              : candidate < selected)) {
+                            if (find_maximum ? candidate > selected
+                                             : candidate < selected) {
                                 selected = candidate;
                                 selected_index = static_cast<int64_t>(index);
                             }

@@ -402,7 +402,7 @@ namespace lfs::core::internal {
                 case ExprOp::Square: result = mul(x, x); break;
                 case ExprOp::Tanh: result = tanh(x); break;
                 case ExprOp::Rsqrt: result = ext(GLSLstd450InverseSqrt, {x}); break;
-                case ExprOp::Sign: result = instruction(spv::OpConvertSToF, float_, {as_int(u(spv::OpISub, boolean(cmp(spv::OpFOrdGreaterThan, x, f(0))), boolean(cmp(spv::OpFOrdLessThan, x, f(0)))))}); break;
+                case ExprOp::Sign: result = choose(instruction(spv::OpIsNan, bool_, {x}), x, instruction(spv::OpConvertSToF, float_, {as_int(u(spv::OpISub, boolean(cmp(spv::OpFOrdGreaterThan, x, f(0))), boolean(cmp(spv::OpFOrdLessThan, x, f(0)))))}), float_); break;
                 case ExprOp::Reciprocal: result = div(f(1), x); break;
                 case ExprOp::Floor: result = ext(GLSLstd450Floor, {x}); break;
                 case ExprOp::Ceil: result = ext(GLSLstd450Ceil, {x}); break;

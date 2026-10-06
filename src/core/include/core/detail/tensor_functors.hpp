@@ -137,6 +137,10 @@ namespace lfs::core {
         struct sign_op {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
+                if constexpr (std::is_floating_point_v<T>) {
+                    if (float_is_nan(x))
+                        return x;
+                }
                 return T((x > T(0)) - (x < T(0)));
             }
         };

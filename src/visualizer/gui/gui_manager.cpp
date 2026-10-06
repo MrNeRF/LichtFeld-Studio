@@ -4887,7 +4887,7 @@ namespace lfs::vis::gui {
         // The baseline is only used by later change detection. Building it in
         // the init call needlessly blocks the first paint, so use the existing
         // worker and adopt its result from the normal render tick.
-        launchDevResourceScan();
+        launchDevResourceScan(false);
         dev_resource_watch_.next_scan = std::chrono::steady_clock::now() + std::chrono::seconds(1);
         LOG_INFO("Resource hot reload enabled (RmlUI: '{}', locales: '{}')",
                  dev_resource_watch_.rml_dir.empty() ? std::string("<disabled>")
@@ -4989,7 +4989,7 @@ namespace lfs::vis::gui {
         return result;
     }
 
-    void GuiManager::launchDevResourceScan() {
+    void GuiManager::launchDevResourceScan(const bool detect_changes) {
         if (dev_resource_watch_.scan_future.valid())
             return;
 
@@ -5001,12 +5001,13 @@ namespace lfs::vis::gui {
                 std::async(std::launch::async,
                            [rml_dir = std::move(rml_dir),
                             locale_dir = std::move(locale_dir),
-                            previous_times = std::move(previous_times)]() mutable {
+                            previous_times = std::move(previous_times),
+                            detect_changes]() mutable {
                                return GuiManager::scanDevResourceFilesSnapshot(
                                    std::move(rml_dir),
                                    std::move(locale_dir),
                                    std::move(previous_times),
-                                   true);
+                                   detect_changes);
                            });
         } catch (const std::exception& e) {
             LOG_WARN("Resource hot reload async scan could not start: {}", e.what());

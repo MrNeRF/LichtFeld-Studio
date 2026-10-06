@@ -1756,6 +1756,13 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_store.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_store_subscriptions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_arg_extrema_nan.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_empty_slices.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_sign_nan.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_inverse_trig_domain.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_global_keepdim.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_row_mask_assignment.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_repeat_regression.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_property.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tool_registry_activation.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_manager_regressions.py
@@ -1858,6 +1865,13 @@ add_test(NAME lichtfeld.python.gpu
     COMMAND ${Python_EXECUTABLE} -m pytest -q
         -m gpu
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_arg_extrema_nan.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_empty_slices.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_sign_nan.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_inverse_trig_domain.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_global_keepdim.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_row_mask_assignment.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_repeat_regression.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_property.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_nn_sam2.py
 )

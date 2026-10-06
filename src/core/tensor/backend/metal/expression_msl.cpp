@@ -220,7 +220,7 @@ static uint lfs_precise_divide(uint x, uint y) {
                 case ExprOp::Square: return bits(x + " * " + x);
                 case ExprOp::Tanh: return bits("tanh(" + x + ")");
                 case ExprOp::Rsqrt: return bits("rsqrt(" + x + ")");
-                case ExprOp::Sign: return bits("float(int(" + x + " > 0.0f) - int(" + x + " < 0.0f))");
+                case ExprOp::Sign: return bits("isnan(" + x + ") ? " + x + " : float(int(" + x + " > 0.0f) - int(" + x + " < 0.0f))");
                 case ExprOp::Reciprocal: return bits("1.0f / " + x);
                 case ExprOp::Floor: return bits("floor(" + x + ")");
                 case ExprOp::Ceil: return bits("ceil(" + x + ")");

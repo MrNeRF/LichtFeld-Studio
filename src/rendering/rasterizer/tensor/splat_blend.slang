@@ -117,6 +117,7 @@ void load_flags(RasterParameters r) {
 
 groupshared float4 means[64], conics[64], colors[64];
 groupshared GutSplat geometry[64];
+groupshared float gut_depths[64];
 groupshared half4 macro_chol[64];
 groupshared half2 macro_center[64];
 groupshared uint ids[64], finished[2], active_counts[2];
@@ -154,6 +155,7 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
                             (!overlays || (!overlay_enabled(p.overlay_params[22].x) && !overlay_enabled(p.overlay_params[22].y)));
     const bool compact_gut = kRasterMode == 3u && r.camera.z != 2u && (kRasterFlags & 4u) == 0u;
     const bool compact_candidates = compact_gs || compact_gut;
+    const bool plain_gut = kRasterMode == 3u && (kRasterFlags & (1u | 4u | 16u)) == 0u;
     const float2 ray_min = (float2(tile_origin) + .5f - r.intrinsics.zw) / r.intrinsics.xy;
     const float2 ray_max = (float2(tile_origin) + float2(7.5f, float(pixel_height) - .5f) - r.intrinsics.zw) / r.intrinsics.xy;
     const float4 plane_lengths = r.camera.z == 1u ? float4(1) : sqrt(1.f + float4(ray_min, ray_max) * float4(ray_min, ray_max));
@@ -182,6 +184,7 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
     float transmittance = 1, weighted_depth = 0, nearest = 0, median = 1e10f;
     float valid_depth_weight = 0;
     float3 rgb = 0;
+    bool gut_saturated = false;
     // Compose each half-precision batch in FP32.
     float3 composed_rgb = 0;
     float composed_transmittance = 1;
@@ -269,15 +272,17 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
                 ids[destination] = id;
                 if (kRasterMode == 3u) {
                     if (r.camera.z != 1u) {
-                        // Pinhole and spherical rays start at the camera:
-                        // cache the inverse-Gaussian origin once per batch.
                         const float3 delta = -g.mean_opacity.xyz;
                         g.mean_opacity.xyz = float3(dot(g.inverse0.xyz, delta), dot(g.inverse1.xyz, delta), dot(g.inverse2.xyz, delta));
                     }
                     geometry[destination] = g;
                 }
-                means[destination] = splat.mean_depth;
-                conics[destination] = splat.conic_opacity;
+                if (plain_gut)
+                    gut_depths[destination] = splat.mean_depth.z;
+                else {
+                    means[destination] = splat.mean_depth;
+                    conics[destination] = splat.conic_opacity;
+                }
                 colors[destination] = splat.color;
                 if (batch_half) {
                     const float4 c = splat.conic_opacity;
@@ -310,10 +315,14 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
                 const uint logical = (kRasterFlags & 8u) != 0u ? p.logical_ids[ids[j]] : ids[j];
                 if ((kRasterFlags & 8u) != 0u && logical >= p.logical_count)
                     continue;
-                float2 d = float2(pixel) - means[j].xy;
-                if ((kRasterFlags & 8192u) != 0u)
-                    d.x -= r.panorama.x * round(d.x / r.panorama.x);
-                const float4 c = conics[j];
+                float2 d = 0;
+                float4 c = 0;
+                if (!plain_gut) {
+                    d = float2(pixel) - means[j].xy;
+                    if ((kRasterFlags & 8192u) != 0u)
+                        d.x -= r.panorama.x * round(d.x / r.panorama.x);
+                    c = conics[j];
+                }
                 if (separate_median && median_transmittance > .5f) {
                     // Full-precision median, independent of the display footprint.
                     const float power = .5f * (c.x * d.x * d.x + c.z * d.y * d.y) + c.y * d.x * d.y;
@@ -342,13 +351,16 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
                                             ((kRasterMode == 0u && (kRasterFlags & (4u | 64u)) != 0u) ||
                                              (kRasterMode != 3u && (kRasterFlags & 16u) == 0u && overlays && overlay_enabled(p.overlay_params[22].y) &&
                                               (p.overlay_flags[ids[j]] & 2u) == 0u));
-                const float q = half_footprint ? 0.f : c.x * d.x * d.x + 2 * c.y * d.x * d.y + c.z * d.y * d.y;
-                if (q < 0 || !isfinite(q))
-                    continue;
+                float q = 0.f;
+                if (!plain_gut) {
+                    q = half_footprint ? 0.f : c.x * d.x * d.x + 2 * c.y * d.x * d.y + c.z * d.y * d.y;
+                    if (q < 0 || !isfinite(q))
+                        continue;
+                }
                 if ((kRasterFlags & 16u) == 0u && kRasterMode == 0u && !half_footprint && .5f * q > colors[j].w)
                     continue;
                 float alpha;
-                float splat_depth = means[j].z;
+                float splat_depth = plain_gut ? gut_depths[j] : means[j].z;
                 if (kRasterMode == 1u) {
                     alpha = dot(d, d) <= means[j].w * means[j].w ? c.w : 0;
                 } else if (kRasterMode == 2u) {
@@ -369,12 +381,13 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
                     const float denom = dot(local_direction, local_direction);
                     if (!isfinite(denom) || denom <= 1e-12f)
                         continue;
+                    const float projected_origin = dot(local_direction, local_origin);
                     const float3 distance = cross(local_direction * rsqrt(denom), local_origin);
                     const float power = .5f * dot(distance, distance);
                     if ((kRasterFlags & 16u) == 0u && power > colors[j].w)
                         continue;
                     alpha = g.mean_opacity.w * exp(-power);
-                    const float t = -dot(local_direction, local_origin) / denom;
+                    const float t = -projected_origin / denom;
                     const float z = gut_origin.z + t * gut_direction.z;
                     splat_depth = t > 0 && z > r.clip.x && isfinite(z) ? z : 1e10f;
                 } else if (half_footprint) {
@@ -493,6 +506,7 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
                     median = splat_depth;
                 // The GUT reference records depth before dropping a saturating splat.
                 if ((kRasterFlags & 32u) != 0u && next_transmittance < 1e-4f) {
+                    gut_saturated = true;
                     done = true;
                     break;
                 }
@@ -531,7 +545,7 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
         }
         if (depth_batch) {
             const uint at = slot * 256u + subtile * 32u + lane;
-            p.partial_color[at] = float4(rgb, transmittance);
+            p.partial_color[at] = float4(rgb, gut_saturated ? -transmittance : transmittance);
             p.partial_depth[at] = float4(weighted_depth, valid_depth_weight, nearest, median);
             p.partial_pick[at] = picked;
             return;
@@ -541,6 +555,7 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
 }
 
 groupshared float4 replay_means[64], replay_conics[64], replay_colors[64];
+groupshared GutSplat replay_geometry[64];
 groupshared uint replay_ids[64];
 
 // Combines the parallel depth chunks of long tiles. Partial colors and
@@ -563,20 +578,35 @@ void tile_depth_compose(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThre
         return;
     float3 rgb = 0;
     float transmittance = 1, weighted_depth = 0, valid_depth_weight = 0, nearest = 0, median = 1e10f;
+    bool gut_stopped = false;
     uint picked = 0xffffffffu;
+    float3 gut_origin = 0, gut_direction = float3(0, 0, 1);
+    if (kRasterMode == 3u && valid) {
+        const bool orthographic = r.camera.z == 1u;
+        if (r.camera.z == 2u) {
+            const float2 angle = ((float2(pixel) + .5f + r.panorama.zw) / r.panorama.xy - .5f) * float2(2.f * M_PI, M_PI);
+            const float elevation_cos = cos(angle.y);
+            gut_direction = float3(sin(angle.x) * elevation_cos, sin(angle.y), cos(angle.x) * elevation_cos);
+        } else {
+            const float2 xy = (float2(pixel) + .5f - r.intrinsics.zw) / r.intrinsics.xy;
+            gut_origin = orthographic ? float3(xy, 0) : float3(0);
+            gut_direction = orthographic ? float3(0, 0, 1) : float3(xy, 1);
+        }
+    }
     const uint chunks = (end - begin) / kDepthChunkSize + ((end - begin) % kDepthChunkSize != 0u ? 1u : 0u);
     for (uint chunk = 0; chunk < chunks; ++chunk) {
         const uint batch = begin + chunk * kDepthChunkSize;
-        const bool active = valid && transmittance >= 1e-4f;
+        const bool active = valid && !gut_stopped && transmittance >= 1e-4f;
         if (!WaveActiveAnyTrue(active))
             break;
         const uint slot = begin / kDepthChunkSize + tile + (batch - begin) / kDepthChunkSize;
         const uint at = slot * 256u + subtile * 32u + lane;
         const float4 rgba = active ? p.partial_color[at] : float4(0, 0, 0, 1);
         const float4 z = active ? p.partial_depth[at] : float4(0);
-        const float incoming = transmittance, next = incoming * rgba.w;
+        const bool local_gut_stop = kRasterMode == 3u && rgba.w < 0.f;
+        const float incoming = transmittance, next = incoming * abs(rgba.w);
         const bool crossing = active && incoming > .5f && next <= .5f;
-        const bool saturating = active && next < 1e-4f;
+        const bool saturating = active && (next < 1e-4f || local_gut_stop);
         bool replay = active && incoming != 1.f && (crossing || saturating);
         const bool replay_color = replay && saturating;
         if (active && !replay_color) {
@@ -590,6 +620,7 @@ void tile_depth_compose(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThre
             if (crossing && incoming == 1.f)
                 median = z.w;
             transmittance = next;
+            gut_stopped = local_gut_stop;
         }
         float replay_transmittance = incoming;
         const uint chunk_size = min(kDepthChunkSize, end - batch);
@@ -605,30 +636,59 @@ void tile_depth_compose(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThre
                 const uint source = source_offset + lane;
                 const uint id = source < available ? p.indices[offset + source] : 0u;
                 ProjectedSplat v = (ProjectedSplat)0;
+                GutSplat g = (GutSplat)0;
                 if (source < available)
                     v = p.splats[id];
-                const uint live = source < available && conic_intersects_pixels(v, live_min, live_max) ? 1u : 0u;
+                if (kRasterMode == 3u && source < available)
+                    g = p.gut[id];
+                const bool intersects = kRasterMode == 3u
+                                            ? all(int2(v.bounds.xy) < int2(live_max) + 2) && all(int2(v.bounds.zw) > int2(live_min) - 1)
+                                            : conic_intersects_pixels(v, live_min, live_max);
+                const uint live = source < available && intersects ? 1u : 0u;
                 const uint destination = candidates + WavePrefixSum(live);
                 candidates += WaveActiveSum(live);
                 if (live != 0u) {
                     replay_means[destination] = v.mean_depth;
-                    replay_means[destination].w = max(8.f, 2.f * log(max(v.conic_opacity.w, .5f / 255.f) * 510.f)) + 1e-3f;
+                    replay_means[destination].w = kRasterMode == 3u ? v.mean_depth.w : max(8.f, 2.f * log(max(v.conic_opacity.w, .5f / 255.f) * 510.f)) + 1e-3f;
                     replay_conics[destination] = v.conic_opacity;
                     replay_colors[destination] = v.color;
+                    if (kRasterMode == 3u) {
+                        replay_geometry[destination] = g;
+                        replay_colors[destination].w = max(4.f, log(max(g.mean_opacity.w, .5f / 255.f) * 510.f)) + 1e-4f;
+                    }
                     replay_ids[destination] = id;
                 }
             }
             GroupMemoryBarrierWithGroupSync(); // one subgroup per group
             for (uint j = 0; j < candidates && replay; ++j) {
-                const float2 d = float2(pixel) - replay_means[j].xy;
-                const float4 c = replay_conics[j];
-                const float q = c.x * d.x * d.x + 2 * c.y * d.x * d.y + c.z * d.y * d.y;
-                if (q < 0.f || !isfinite(q) || q > replay_means[j].w)
-                    continue;
-                const float alpha = min(c.w * exp(-.5f * q), .999f);
+                float alpha, splat_depth = replay_means[j].z;
+                if (kRasterMode == 3u) {
+                    const GutSplat g = replay_geometry[j];
+                    const float3 delta = gut_origin - g.mean_opacity.xyz;
+                    const float3 local_origin = float3(dot(g.inverse0.xyz, delta), dot(g.inverse1.xyz, delta), dot(g.inverse2.xyz, delta));
+                    const float3 local_direction = float3(dot(g.inverse0.xyz, gut_direction), dot(g.inverse1.xyz, gut_direction), dot(g.inverse2.xyz, gut_direction));
+                    const float denom = dot(local_direction, local_direction);
+                    if (!isfinite(denom) || denom <= 1e-12f)
+                        continue;
+                    const float projected_origin = dot(local_direction, local_origin);
+                    const float3 distance = cross(local_direction * rsqrt(denom), local_origin);
+                    const float power = .5f * dot(distance, distance);
+                    if (power > replay_colors[j].w)
+                        continue;
+                    alpha = min(g.mean_opacity.w * exp(-power), .999f);
+                    const float t = -projected_origin / denom;
+                    const float z = gut_origin.z + t * gut_direction.z;
+                    splat_depth = t > 0 && z > r.clip.x && isfinite(z) ? z : 1e10f;
+                } else {
+                    const float2 d = float2(pixel) - replay_means[j].xy;
+                    const float4 c = replay_conics[j];
+                    const float q = c.x * d.x * d.x + 2 * c.y * d.x * d.y + c.z * d.y * d.y;
+                    if (q < 0.f || !isfinite(q) || q > replay_means[j].w)
+                        continue;
+                    alpha = min(c.w * exp(-.5f * q), .999f);
+                }
                 if (alpha < .5f / 255.f)
                     continue;
-                const float splat_depth = replay_means[j].z;
                 if (replay_color) {
                     const float weight = alpha * replay_transmittance;
                     if (picked == 0xffffffffu) {
@@ -643,13 +703,18 @@ void tile_depth_compose(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThre
                     } else {
                         weighted_depth += splat_depth * weight;
                     }
-                    rgb += clamp(replay_colors[j].xyz, 0.f, 4.f) * weight;
                 }
                 const float remaining = replay_transmittance * (1 - alpha);
                 if (replay_transmittance > .5f && remaining <= .5f)
                     median = splat_depth;
-                replay_transmittance = remaining;
-                replay = remaining >= 1e-4f && (replay_color || remaining > .5f);
+                const bool legacy_drop = kRasterMode == 3u && (kRasterFlags & 32u) != 0u && remaining < 1e-4f;
+                if (replay_color && !legacy_drop)
+                    rgb += clamp(replay_colors[j].xyz, 0.f, 4.f) * (alpha * replay_transmittance);
+                if (!legacy_drop)
+                    replay_transmittance = remaining;
+                else
+                    gut_stopped = true;
+                replay = !legacy_drop && remaining >= 1e-4f && (replay_color || remaining > .5f);
             }
             GroupMemoryBarrierWithGroupSync(); // one subgroup per group
         }

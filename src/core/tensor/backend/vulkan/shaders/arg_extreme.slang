@@ -3,9 +3,9 @@ static const uint LFS_PUSH_CONSTANT_SIZE = 56;
 
 // Indexed extrema along the middle axis of an (outer, reduce, inner) view.
 // Each candidate becomes a 64-bit key whose largest value is the CPU loop's
-// choice: the high word orders values (inverted for the minimum), a NaN at
-// position 0 sits above every number and later NaNs above that; the low word
-// is the inverted position, so ties keep the first. With one chunk the first
+// choice: the high word orders values (inverted for the minimum) and puts
+// every NaN above every number; the low word is the inverted position, so ties
+// and NaNs keep the first. With one chunk the first
 // passes finish the output themselves.
 
 // 1 picks the maximum, 0 the minimum.
@@ -38,7 +38,7 @@ uint64_t extremeKey(float value, uint position)
     uint order;
     if ((bits & 0x7fffffffu) > 0x7f800000u)
     {
-        order = position == 0 ? 0xfffffffeu : 0xffffffffu;
+        order = 0xffffffffu;
     }
     else
     {

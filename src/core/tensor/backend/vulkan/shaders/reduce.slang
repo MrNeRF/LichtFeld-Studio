@@ -163,7 +163,7 @@ float applyChainOp(float value, ChainOp op, uint index)
     if (op.kind == 17) return value * value;
     if (op.kind == 18) return accurateTanh(value);
     if (op.kind == 19) return rsqrt(value);
-    if (op.kind == 20) return float((value > 0.0f) - (value < 0.0f));
+    if (op.kind == 20) return isnan(value) ? value : float((value > 0.0f) - (value < 0.0f));
     if (op.kind == 21) return 1.0f / value;
     if (op.kind == 22) return floor(value);
     if (op.kind == 23) return ceil(value);
