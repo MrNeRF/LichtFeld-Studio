@@ -2631,6 +2631,61 @@ namespace {
     }
 
     TEST_F(ProjectCheckpointTrainerInstall,
+           ConfiguredStepSavesSurviveAnActiveWriter) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_configured_step_saves_survive_writer";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        auto params = make_tiny_headless_params(output_path, 40);
+        params.optimization.save_steps = {10, 20, 30};
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        auto trainer = std::make_unique<lfs::training::Trainer>(scene);
+        ASSERT_TRUE(trainer->initialize(params));
+        lfs::training::grant_headless_project_saves(*trainer, params);
+
+        auto train = trainer->train();
+        ASSERT_TRUE(train) << lfs::format_for_developer(train.error());
+        trainer->shutdown();
+
+        auto document = lfs::io::project::ProjectDocument::open(
+            output_path / "project.licht");
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(document.error());
+
+        std::vector<int> iterations;
+        for (const auto& uuid : document->checkpoint_uuids()) {
+            std::optional<lfs::core::CheckpointHeader> header;
+            ASSERT_TRUE(document->find_checkpoint(uuid)->visit_stream(
+                [&](std::istream& stream, const std::uint64_t bytes)
+                    -> lfs::Result<void> {
+                    if (auto parsed =
+                            lfs::core::load_checkpoint_header(stream, bytes);
+                        parsed) {
+                        header = *parsed;
+                    }
+                    return {};
+                }));
+            ASSERT_TRUE(header);
+            iterations.push_back(header->iteration);
+        }
+        for (const int configured_iteration : {10, 20, 30}) {
+            EXPECT_NE(std::ranges::find(iterations, configured_iteration),
+                      iterations.end())
+                << "missing configured checkpoint at iteration "
+                << configured_iteration << "; history contains "
+                << testing::PrintToString(iterations);
+        }
+
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
            UngrantedTrainerNeverWritesProjectFiles) {
         const auto output_path =
             std::filesystem::temp_directory_path() /

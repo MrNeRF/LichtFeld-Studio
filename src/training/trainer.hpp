@@ -684,6 +684,7 @@ namespace lfs::training {
             double elapsed_ms,
             bool topology_changed);
         void join_finished_project_writer();
+        void wait_for_project_writer();
         void finish_project_writer();
         void fail_project_request_locked(
             std::uint64_t request_id,

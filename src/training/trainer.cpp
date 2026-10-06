@@ -4057,6 +4057,12 @@ namespace lfs::training {
         }
     }
 
+    void Trainer::wait_for_project_writer() {
+        if (project_writer_thread_.joinable()) {
+            project_writer_thread_.join();
+        }
+    }
+
     void Trainer::finish_project_writer() {
         if (project_writer_thread_.joinable()) {
             project_writer_thread_.join();
@@ -8164,6 +8170,13 @@ namespace lfs::training {
                             iter != get_total_iterations() &&
                             !save_regular_phase_output) {
                             if (may_save_at_step_boundary) {
+                                // Preserve every configured checkpoint at its
+                                // requested iteration. Drain an earlier writer
+                                // and any request it deferred before queueing
+                                // this step's snapshot.
+                                wait_for_project_writer();
+                                consume_requested_project_snapshot(iter);
+                                wait_for_project_writer();
                                 static_cast<void>(
                                     request_project_save(
                                         *step_project_path));
