@@ -412,7 +412,7 @@ def test_lazy_panel_metadata_matches_real_classes(panels_module):
     assert module.register_builtin_panels() is True
     fields = (
         "id", "label", "space", "order", "template", "height_mode", "size",
-        "options", "update_policy", "update_interval_ms", "style",
+        "options", "update_policy", "update_interval_ms", "style", "parent",
     )
     registered = {
         cls.__name__: cls
@@ -423,8 +423,10 @@ def test_lazy_panel_metadata_matches_real_classes(panels_module):
     for spec_name, spec in module.PANEL_SPECS.items():
         real = getattr(import_module(spec.module_name), spec.class_name)
         lazy = registered[spec.class_name]
-        assert [getattr(lazy, field) for field in fields] == [
-            getattr(real, field) for field in fields
+        # Child panels inherit their parent's space and must not define one.
+        checked = [field for field in fields if not (field == "space" and spec.parent)]
+        assert [getattr(lazy, field, None) for field in checked] == [
+            getattr(real, field, None) for field in checked
         ], spec_name
 
 

@@ -79,6 +79,8 @@ namespace lfs::vis {
         glm::vec3 last_navigation_translation_{0.0f};
         bool navigation_pose_valid_ = false;
         std::chrono::steady_clock::time_point camera_settle_deadline_{};
+        bool temporal_settle_pending_ = false;
+        std::chrono::steady_clock::time_point temporal_settle_deadline_{};
         std::atomic<DirtyMask> training_refresh_dirty_{0};
         std::atomic<double> training_preview_turn_ms_{0.0};
         int last_training_preview_iteration_ = -1;

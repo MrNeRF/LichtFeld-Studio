@@ -32,6 +32,8 @@
 
 namespace lfs::vis {
     namespace {
+        constexpr auto kTemporalCameraSettle = std::chrono::milliseconds(150);
+
         glm::ivec2 tensorImageSize(const lfs::core::Tensor& image) {
             const auto layout = lfs::rendering::detectImageLayout(image);
             return layout == lfs::rendering::ImageLayout::Unknown
@@ -128,7 +130,16 @@ namespace lfs::vis {
     }
 
     double RenderingManager::secondsUntilCameraSettle() const {
-        return std::numeric_limits<double>::infinity();
+        std::lock_guard lock(views_mutex_);
+        const auto now = std::chrono::steady_clock::now();
+        double remaining = std::numeric_limits<double>::infinity();
+        for (const auto& [id, view] : view_states_) {
+            if (view->temporal_settle_pending_)
+                remaining = std::min(remaining, std::max(0.0, std::chrono::duration<double>(
+                                                                  view->temporal_settle_deadline_ - now)
+                                                                  .count()));
+        }
+        return remaining;
     }
 
     void RenderingManager::pollParkedArenaRetry() {
@@ -138,6 +149,21 @@ namespace lfs::vis {
         if (point_scene_renderer_ && point_scene_renderer_->takeRefinementRequest())
             markDirty(DirtyFlag::CAMERA, FrameReason::AsyncCompletion,
                       "tensor_renderer_refinement_ready");
+
+        const auto now = std::chrono::steady_clock::now();
+        std::vector<ViewId> settled_views;
+        {
+            std::lock_guard lock(views_mutex_);
+            for (auto& [id, view] : view_states_) {
+                if (!view->temporal_settle_pending_ || now < view->temporal_settle_deadline_)
+                    continue;
+                view->temporal_settle_pending_ = false;
+                settled_views.push_back(id);
+            }
+        }
+        for (const auto id : settled_views)
+            markViewDirty(id, DirtyFlag::TEMPORAL, FrameReason::AsyncCompletion,
+                          "temporal_convergence_idle");
     }
 
     bool RenderingManager::importUsesCombinedModel() const { return true; }
@@ -295,6 +321,20 @@ namespace lfs::vis {
              .lod_transition_active = lod_controller_ && lod_controller_->transitionActive(),
              .frame_dirty = frame_dirty,
              .training_refresh_dirty = training_refresh_dirty});
+        if (!temporal_setup.eligible || temporal_setup.defer_convergence_until_idle)
+            view.temporal_settle_pending_ = false;
+        const auto complete_temporal_frame = [&] {
+            if (!view.temporal_convergence_.completeSuccessfulFrame())
+                return;
+            if (temporal_setup.defer_convergence_until_idle) {
+                view.temporal_settle_pending_ = true;
+                view.temporal_settle_deadline_ =
+                    std::chrono::steady_clock::now() + kTemporalCameraSettle;
+                return;
+            }
+            view.temporal_settle_pending_ = false;
+            requestViewFollowUp(view, DirtyFlag::TEMPORAL);
+        };
         {
             std::lock_guard lock(settings_mutex_);
             view.scene_upscaler_mode_unsupported_ =
@@ -608,8 +648,7 @@ namespace lfs::vis {
                     split.right.texcoord_offset = layouts[1].texcoord_offset;
                 }
                 view.consumed_temporal_camera_cut_generation_ = temporal_camera_cut_generation;
-                if (view.temporal_convergence_.completeSuccessfulFrame())
-                    requestViewFollowUp(view, DirtyFlag::TEMPORAL);
+                complete_temporal_frame();
                 return publish_split(
                     std::move(split), makeSplitMetadata(left->metadata, right->metadata,
                                                        frame_settings.split_position),
@@ -835,8 +874,7 @@ namespace lfs::vis {
             published_size = size;
             view.consumed_temporal_camera_cut_generation_ = temporal_camera_cut_generation;
         }
-        if (view.temporal_convergence_.completeSuccessfulFrame())
-            requestViewFollowUp(view, DirtyFlag::TEMPORAL);
+        complete_temporal_frame();
 
         ++view.vulkan_viewport_image_generation_;
         view.vulkan_viewport_image_ = image;

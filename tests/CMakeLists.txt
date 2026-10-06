@@ -73,6 +73,7 @@ if((BUILD_TESTS OR BUILD_VISUALIZER_TESTS) AND LFS_TENSOR_METAL AND NOT LFS_GRAP
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_coordinator.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_plan.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_resolve.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_frame_setup.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/temporal_frame_tracker.cpp)
     target_include_directories(metal_scene_upscaler_contracts PRIVATE
         ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/visualizer
@@ -433,6 +434,7 @@ if(BUILD_TEMPORAL_CPU_TESTS)
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_coordinator.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_plan.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_resolve.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_frame_setup.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/temporal_frame_tracker.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/passes/vulkan_scene_plugin_pipeline_contract.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/passes/vulkan_scene_temporal_pipeline_contract.cpp

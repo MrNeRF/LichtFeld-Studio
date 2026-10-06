@@ -2571,7 +2571,7 @@ namespace lfs::vis {
         }
         if (rendering_manager_ && rendering_manager_->hasParkedArenaRetry())
             consider_timeout(kArenaRetryPollSeconds, "arena_retry");
-        if (rendering_manager_ && trainer_manager_ && trainer_manager_->isRunning()) {
+        if (rendering_manager_) {
             const double settle_wait = rendering_manager_->secondsUntilCameraSettle();
             if (std::isfinite(settle_wait))
                 consider_timeout(std::max(kScheduledRedrawMinWaitSeconds, settle_wait), "camera_settle");

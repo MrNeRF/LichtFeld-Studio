@@ -29,6 +29,7 @@ namespace lfs::vis {
         bool eligible = false;
         bool mode_unsupported = false;
         bool training_refresh_only = false;
+        bool defer_convergence_until_idle = false;
         glm::vec2 jitter_pixels{0.0f};
     };
 

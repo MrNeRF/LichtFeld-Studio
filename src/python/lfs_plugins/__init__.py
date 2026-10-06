@@ -17,15 +17,9 @@ if TYPE_CHECKING:
     from .panels import PluginMarketplacePanel as PluginMarketplacePanel
 
 
-def _load_builtin_panel_api():
-    from .panels import PluginMarketplacePanel, register_builtin_panels as _register_builtin_panels
-
-    return PluginMarketplacePanel, _register_builtin_panels
-
-
 def register_builtin_panels():
     try:
-        _, builtin_register = _load_builtin_panel_api()
+        from .panels import register_builtin_panels as builtin_register
     except ModuleNotFoundError as exc:
         if exc.name != "lichtfeld":
             raise
@@ -76,8 +70,9 @@ _LAZY_MODULES = {"manager", "marketplace", "registry", "settings", "templates", 
 
 def __getattr__(name):
     if name == "PluginMarketplacePanel":
-        panel_cls, _ = _load_builtin_panel_api()
-        return panel_cls
+        from .plugin_marketplace_panel import PluginMarketplacePanel
+
+        return PluginMarketplacePanel
 
     if name in _LAZY_EXPORTS:
         from importlib import import_module

@@ -160,6 +160,11 @@ def panel_metadata(name, lf):
     }
 
 
+def _skip_panel_field(field, metadata):
+    # Child panels inherit their parent's space and must not declare one.
+    return field == "space" and bool(metadata["parent"])
+
+
 def panel_class(name):
     """Decorate an implementation class with the shared panel contract."""
     import lichtfeld as lf
@@ -168,7 +173,7 @@ def panel_class(name):
 
     def decorate(cls):
         for field in _PANEL_METADATA_FIELDS:
-            if field == "space" and metadata["parent"]:
+            if _skip_panel_field(field, metadata):
                 continue
             setattr(cls, field, metadata[field])
         return cls
@@ -229,7 +234,7 @@ def _register_lazy_panel(lf, name):
     LazyPanel.__qualname__ = spec.class_name
     LazyPanel.__module__ = "lfs_plugins.panels"
     for field in _PANEL_METADATA_FIELDS:
-        if field == "space" and spec.parent:
+        if _skip_panel_field(field, metadata):
             continue
         setattr(LazyPanel, field, metadata[field])
     if spec.has_poll:

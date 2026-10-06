@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "visualizer/rendering/temporal_frame_tracker.hpp"
+#include "visualizer/rendering/scene_temporal_frame_setup.hpp"
 
 #include <gtest/gtest.h>
 #include <limits>
@@ -171,6 +172,28 @@ namespace lfs::vis {
         convergence.prepare(true, false, true, 23, 23);
         EXPECT_EQ(convergence.remaining(), 23u);
         EXPECT_EQ(convergence.jitter(), temporalJitterPixels(18));
+    }
+
+    TEST(TemporalFrameTracker, CameraFramesDeferConvergenceButTemporalFollowUpsDoNotRestartIt) {
+        TemporalConvergenceController convergence;
+        const auto camera = prepareSceneTemporalFrame(
+            convergence,
+            {.backend_requested = true,
+             .runtime_ready = true,
+             .frame_dirty = DirtyFlag::CAMERA});
+        EXPECT_TRUE(camera.eligible);
+        EXPECT_TRUE(camera.defer_convergence_until_idle);
+        EXPECT_EQ(convergence.remaining(), TemporalConvergenceController::SAMPLE_COUNT);
+
+        ASSERT_TRUE(convergence.completeSuccessfulFrame());
+        const auto remaining = convergence.remaining();
+        const auto follow_up = prepareSceneTemporalFrame(
+            convergence,
+            {.backend_requested = true,
+             .runtime_ready = true,
+             .frame_dirty = DirtyFlag::TEMPORAL});
+        EXPECT_FALSE(follow_up.defer_convergence_until_idle);
+        EXPECT_EQ(convergence.remaining(), remaining);
     }
 
     TEST(TemporalFrameTracker, JitterOffsetsOnlyTheSuppliedSceneProjection) {

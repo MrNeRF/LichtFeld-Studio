@@ -726,6 +726,7 @@ namespace lfs::vis::gui {
 
     void RmlStatusBar::postStatusMessage(std::string text, const ErrorNoticeLevel level) {
         status_message_.post(std::move(text), level);
+        external_model_dirty_.store(true, std::memory_order_release);
     }
 
     bool RmlStatusBar::updateTheme() {
@@ -2086,6 +2087,8 @@ namespace lfs::vis::gui {
         const bool size_changed = (render_w != last_render_w_ || render_h != last_render_h_);
         const float dp_ratio = rml_context_->GetDensityIndependentPixelRatio();
         const bool dp_changed = dp_ratio != last_dp_ratio_;
+        if (external_model_dirty_.exchange(false, std::memory_order_acq_rel))
+            markModelDirty();
         const bool had_pending_model_dirty = model_dirty_;
         const bool theme_changed = updateTheme();
         const auto now = std::chrono::steady_clock::now();
@@ -2093,7 +2096,7 @@ namespace lfs::vis::gui {
             size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
             next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
             now >= next_refresh_at_;
-        const bool content_changed = updateContent(ctx);
+        const bool content_changed = refresh_due && updateContent(ctx);
         const bool section_signature_changed = section_signature_ != last_section_signature_;
         const bool needs_render = size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
                                   content_changed || tooltip_.revealDue() ||
@@ -2127,6 +2130,7 @@ namespace lfs::vis::gui {
             last_section_signature_ = section_signature_;
             last_render_w_ = render_w;
             last_render_h_ = render_h;
+            model_dirty_ = false;
         }
 
         trackRenderedContextFrame(x, y, overlay_height);

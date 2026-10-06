@@ -34,6 +34,8 @@ namespace lfs::vis {
                             allow_settle,
                             input.settle_sample_count,
                             input.jitter_phase_count);
+        result.defer_convergence_until_idle =
+            result.eligible && allow_settle && (input.frame_dirty & DirtyFlag::CAMERA) != 0;
         result.jitter_pixels = convergence.jitter();
         if (input.backend_requested && !input.runtime_ready)
             result.jitter_pixels = glm::vec2(0.0f);

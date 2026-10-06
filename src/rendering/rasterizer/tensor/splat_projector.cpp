@@ -8,6 +8,7 @@
 
 #include <deque>
 #include <format>
+#include <iterator>
 #include <span>
 
 namespace lfs::rendering {
@@ -41,10 +42,15 @@ namespace lfs::rendering {
         std::deque<core::TensorUpload> uploads;
 
         void upload(Tensor& destination, const std::span<const std::byte> bytes) {
-            std::erase_if(uploads, [](core::TensorUpload& slot) { return slot.poll(); });
             if (!destination.is_valid() || destination.bytes() != bytes.size())
                 destination = Tensor::empty({bytes.size()}, Device::GPU, DataType::UInt8);
-            uploads.emplace_back().enqueue_in_batch(destination, bytes);
+            auto slot = std::find_if(uploads.begin(), uploads.end(),
+                                     [](core::TensorUpload& candidate) { return candidate.poll(); });
+            if (slot == uploads.end()) {
+                uploads.emplace_back();
+                slot = std::prev(uploads.end());
+            }
+            slot->enqueue_in_batch(destination, bytes);
         }
     };
 

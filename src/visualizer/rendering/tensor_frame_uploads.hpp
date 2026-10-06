@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <iterator>
 #include <span>
 #include <vector>
 
@@ -18,11 +19,16 @@ namespace lfs::vis {
     public:
         lfs::core::Tensor upload(std::span<const std::byte> bytes, lfs::core::TensorShape shape,
                                  lfs::core::DataType dtype) {
-            std::erase_if(slots_, [](lfs::core::TensorUpload& slot) { return slot.poll(); });
             auto destination = lfs::core::Tensor::empty(shape, lfs::core::Device::GPU, dtype);
             if (bytes.empty())
                 return destination;
-            slots_.emplace_back().enqueue_in_batch(destination, bytes);
+            auto slot = std::find_if(slots_.begin(), slots_.end(),
+                                     [](lfs::core::TensorUpload& candidate) { return candidate.poll(); });
+            if (slot == slots_.end()) {
+                slots_.emplace_back();
+                slot = std::prev(slots_.end());
+            }
+            slot->enqueue_in_batch(destination, bytes);
             return destination;
         }
 
