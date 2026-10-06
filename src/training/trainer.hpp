@@ -928,6 +928,7 @@ namespace lfs::training {
         // Metrics evaluator - handles all evaluation logic
         std::unique_ptr<lfs::training::MetricsEvaluator> evaluator_;
         std::optional<std::filesystem::path> lpips_weights_path_;
+        std::optional<lfs::Error> deferred_evaluation_error_;
 
         // Single mutex that protects the model during training
         mutable std::shared_mutex render_mutex_;

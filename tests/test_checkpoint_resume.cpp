@@ -1439,6 +1439,37 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
+    TEST(CheckpointParamsJsonTest,
+         MissingImageBackgroundDoesNotBlockCheckpointLoad) {
+        const auto temp_dir =
+            std::filesystem::temp_directory_path() /
+            "lfs_checkpoint_missing_bg_image";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        auto params = make_params_json_test_params(temp_dir);
+        params.optimization.bg_mode =
+            lfs::core::param::BackgroundMode::Image;
+        params.optimization.bg_image_path =
+            temp_dir / "moved-background.png";
+        auto source_model = make_checkpoint_test_splat(2);
+        lfs::training::MCMC source_strategy(*source_model);
+        ASSERT_TRUE(lfs::test::write_checkpoint_fixture(
+                        temp_dir, 5, source_strategy, params,
+                        nullptr, nullptr, nullptr, nullptr)
+                        .has_value());
+
+        auto loaded = lfs::core::load_checkpoint_params(
+            lfs::test::checkpoint_fixture_path(temp_dir));
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+        EXPECT_EQ(loaded->optimization.bg_mode,
+                  lfs::core::param::BackgroundMode::Image);
+        EXPECT_EQ(loaded->optimization.bg_image_path,
+                  params.optimization.bg_image_path);
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
     constexpr lfs::training::ADMMSparsityOptimizer::Config kAdmmTestConfig{
         .sparsify_steps = 100,
         .init_rho = 0.001f,
@@ -2584,6 +2615,91 @@ namespace {
         }
         trainer->shutdown();
         EXPECT_TRUE(std::filesystem::exists(output_path / "project.licht"));
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           EvaluationWithNoIncludedViewsFailsTraining) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_eval_mask_skips_every_view";
+        const auto mask_path = output_path / "empty-masks";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(mask_path);
+
+        auto params = make_tiny_headless_params(output_path, 2);
+        params.optimization.enable_eval = true;
+        params.optimization.eval_steps = {1};
+        params.optimization.eval_mask =
+            "masks:" + lfs::core::path_to_utf8(mask_path);
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        lfs::training::Trainer trainer(scene);
+        ASSERT_TRUE(trainer.initialize(params));
+        lfs::training::grant_headless_project_saves(trainer, params);
+
+        auto train = trainer.train();
+        EXPECT_FALSE(train);
+        EXPECT_EQ(trainer.get_current_iteration(), 2);
+        trainer.shutdown();
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           MissingImageBackgroundFailsTrainerInitialization) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_missing_image_background_init";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        auto params = make_tiny_headless_params(output_path, 2);
+        params.optimization.bg_mode =
+            lfs::core::param::BackgroundMode::Image;
+        params.optimization.bg_image_path =
+            output_path / "missing-background.png";
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        lfs::training::Trainer trainer(scene);
+        const auto init = trainer.initialize(params);
+        ASSERT_FALSE(init.has_value());
+        EXPECT_NE(init.error().find("missing-background.png"),
+                  std::string::npos);
+        trainer.shutdown();
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           UnreadableImageBackgroundFailsTrainerInitialization) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_unreadable_image_background_init";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+        const auto image_path = output_path / "invalid-background.png";
+        std::ofstream(image_path, std::ios::binary) << "not an image";
+
+        auto params = make_tiny_headless_params(output_path, 2);
+        params.optimization.bg_mode =
+            lfs::core::param::BackgroundMode::Image;
+        params.optimization.bg_image_path = image_path;
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        lfs::training::Trainer trainer(scene);
+        const auto init = trainer.initialize(params);
+        ASSERT_FALSE(init.has_value());
+        EXPECT_NE(init.error().find("Failed to load image background"),
+                  std::string::npos);
+        trainer.shutdown();
         std::filesystem::remove_all(output_path, ec);
     }
 

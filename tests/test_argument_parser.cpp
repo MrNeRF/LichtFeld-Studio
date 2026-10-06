@@ -1456,6 +1456,31 @@ TEST(ArgumentParserTest, TrainingRejectsImageBackgroundWithoutPath) {
     EXPECT_NE(parsed.error().find("--bg-image-path is required"), std::string::npos);
 }
 
+TEST(ArgumentParserTest, TrainingParsesMissingImageBackgroundForRuntimeValidation) {
+    const auto data_path = make_test_path("lfs_arg_parser_bg_image_missing_file_data");
+    const auto output_path = make_test_path("lfs_arg_parser_bg_image_missing_file_output");
+    const auto image_path =
+        std::filesystem::path(output_path) / "missing-background.png";
+    const auto image_text = image_path.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--bg-mode",
+        "image",
+        "--bg-image-path",
+        image_text.c_str(),
+    };
+
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_EQ((*parsed)->optimization.bg_image_path, image_path);
+}
+
 TEST(ArgumentParserTest, ResumeCliFlagsPopulateExplicitOverrides) {
     const auto directory = make_test_path("lfs_arg_parser_resume_overrides");
     const auto project = std::filesystem::path(directory) / "session.licht";
