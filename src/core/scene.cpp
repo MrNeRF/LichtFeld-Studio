@@ -4891,6 +4891,11 @@ namespace lfs::core {
                         (src->shN_value_quantized() && src->shN_value_bounds().is_valid())
                             ? src->shN_value_bounds()
                             : lfs::core::Tensor{});
+                    if (src->lod_tree) {
+                        result->lod_tree =
+                            std::make_unique<lfs::core::SplatLodTree>(
+                                *src->lod_tree);
+                    }
                     return limit_degree(std::move(result));
                 }
 
