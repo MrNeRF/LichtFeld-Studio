@@ -1829,7 +1829,7 @@ namespace lfs::training {
                     const auto gap_column = lfs::core::Tensor::full({C, H, 4}, 1.0f, gt_vis.device());
                     const auto gap_row = lfs::core::Tensor::full({C, 4, 2 * W + 4}, 1.0f, gt_vis.device());
                     const auto row = [&](const lfs::core::Tensor& weight) {
-                        const auto w = weight.unsqueeze(0).expand({C, H, W});
+                        const auto w = weight.unsqueeze(0).expand({(int)C, (int)H, (int)W});
                         return lfs::core::Tensor::cat({gt_vis * w, gap_column, render_vis * w}, 2);
                     };
                     const auto as_rendered = lfs::core::Tensor::cat({gt_vis, gap_column, render_vis}, 2);
@@ -1840,7 +1840,7 @@ namespace lfs::training {
                 } else {
                     if (mask.is_valid()) {
                         const auto mask_3d = mask_as_float01(mask).unsqueeze(0).expand(
-                            {gt_vis.shape()[0], gt_vis.shape()[1], gt_vis.shape()[2]});
+                            {(int)gt_vis.shape()[0], (int)gt_vis.shape()[1], (int)gt_vis.shape()[2]});
                         gt_vis = gt_vis * mask_3d;
                         render_vis = render_vis * mask_3d;
                     }
