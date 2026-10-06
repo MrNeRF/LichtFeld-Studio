@@ -401,6 +401,8 @@ namespace lfs::training {
             bool at_step_boundaries = false; // save_steps + sparsity phase boundary
         };
         void set_trainer_project_save_policy(TrainerProjectSavePolicy policy);
+        void set_project_snapshot_payload_bindings(
+            lfs::io::project::ScenePayloadBindings bindings);
         [[nodiscard]] TrainerProjectSavePolicy
         trainer_project_save_policy() const;
         [[nodiscard]] std::optional<std::filesystem::path>
@@ -783,6 +785,8 @@ namespace lfs::training {
 
         std::unique_ptr<TrainingSnapshotService>
             project_snapshot_service_;
+        lfs::io::project::ScenePayloadBindings
+            project_snapshot_payload_bindings_;
         std::optional<PreparedTrainingSnapshot>
             prepared_project_snapshot_;
         std::shared_ptr<ProjectSnapshotChapters>

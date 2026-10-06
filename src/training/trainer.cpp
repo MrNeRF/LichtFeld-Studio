@@ -4586,7 +4586,8 @@ namespace lfs::training {
                 return capture_project_snapshot_cpu_state(
                     *scene_, checkpoint_params,
                     captured_uuid, iteration,
-                    *cpu_state);
+                    *cpu_state, {},
+                    project_snapshot_payload_bindings_);
             },
         };
 
@@ -9273,6 +9274,13 @@ namespace lfs::training {
         TrainerProjectSavePolicy policy) {
         std::lock_guard lock(project_snapshot_mutex_);
         trainer_project_save_policy_ = policy;
+    }
+
+    void Trainer::set_project_snapshot_payload_bindings(
+        lfs::io::project::ScenePayloadBindings bindings) {
+        std::lock_guard lock(project_snapshot_mutex_);
+        project_snapshot_payload_bindings_ =
+            std::move(bindings);
     }
 
     Trainer::TrainerProjectSavePolicy

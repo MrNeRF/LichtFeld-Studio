@@ -109,7 +109,8 @@ namespace lfs::training {
         const int iteration,
         ProjectSnapshotCpuState& output,
         const std::span<const lfs::core::Uuid>
-            selected_node_uuids) {
+            selected_node_uuids,
+        const lfs::io::project::ScenePayloadBindings& inherited_bindings) {
         if (snapshot_uuid.is_nil()) {
             return capture_error(
                 lfs::ErrorCode::InvalidArgument,
@@ -129,7 +130,7 @@ namespace lfs::training {
         }
 
         TrainingSnapshotCpuStateMetrics metrics;
-        lfs::io::project::ScenePayloadBindings bindings;
+        auto bindings = inherited_bindings;
         bindings.emplace(
             training_uuid,
             lfs::io::project::PayloadBinding{
@@ -198,7 +199,8 @@ namespace lfs::training {
         const int iteration,
         ProjectSnapshotCpuState& output,
         const std::span<const lfs::core::Uuid>
-            selected_node_uuids) {
+            selected_node_uuids,
+        const lfs::io::project::ScenePayloadBindings& inherited_bindings) {
         auto parameters =
             capture_parameters(checkpoint_params);
         if (!parameters) {
@@ -211,7 +213,7 @@ namespace lfs::training {
         return capture_project_snapshot_cpu_state(
             scene, *parameters, snapshot_uuid,
             iteration, output,
-            selected_node_uuids);
+            selected_node_uuids, inherited_bindings);
     }
 
     lfs::Result<void>

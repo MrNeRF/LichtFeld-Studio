@@ -2071,6 +2071,41 @@ namespace {
         EXPECT_EQ(roundtrip.frozen_ranges().size(), 2u);
     }
 
+    TEST(ProjectSnapshotTest, CapturesPayloadBindingsForSecondarySplats) {
+        lfs::core::Scene scene;
+        const auto training_id = scene.addSplat(
+            "training", make_checkpoint_test_splat(2));
+        ASSERT_NE(training_id, lfs::core::NULL_NODE);
+        scene.setTrainingModelNode(training_id);
+        const auto secondary_id = scene.addSplat(
+            "secondary", make_checkpoint_test_splat(2));
+        ASSERT_NE(secondary_id, lfs::core::NULL_NODE);
+        const auto secondary_uuid = scene.getNodeUuid(secondary_id);
+        const lfs::io::project::ScenePayloadBindings inherited_bindings{
+            {secondary_uuid,
+             lfs::io::project::PayloadBinding{
+                 .fourcc = "SPLT",
+                 .instance_uuid = secondary_uuid,
+                 .source_kind = "ply"}}};
+
+        lfs::core::param::TrainingParameters params;
+        params.optimization.strategy = "mcmc";
+        lfs::training::ProjectSnapshotCpuState state;
+        const auto captured =
+            lfs::training::capture_project_snapshot_cpu_state(
+                scene, params, lfs::test::licht::fixed_uuid(9991), 1,
+                state, {}, inherited_bindings);
+        ASSERT_TRUE(captured)
+            << lfs::format_for_developer(captured.error());
+        ASSERT_EQ(state.scene_graph.nodes.size(), 2u);
+        const auto secondary = std::ranges::find(
+            state.scene_graph.nodes, secondary_uuid,
+            &lfs::io::project::SceneNodeRecord::uuid);
+        ASSERT_NE(secondary, state.scene_graph.nodes.end());
+        ASSERT_TRUE(secondary->payload.has_value());
+        EXPECT_EQ(secondary->payload->fourcc, "SPLT");
+    }
+
     // Catches a mask spec that the trainer's setup dispatch mistakes for a mesh path or rejects
     // although the evaluator supports it.
     TEST(TrainerEvalMaskSetup, SpecsWithoutFilesInitializeTheTrainer) {
