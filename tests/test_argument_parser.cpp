@@ -1305,6 +1305,42 @@ TEST(ArgumentParserTest, NegativeShDegreeIntervalReportsSuppliedValue) {
     EXPECT_EQ(parsed.error().find("18446744073709551615"), std::string::npos);
 }
 
+TEST(ArgumentParserTest, TrainingRejectsInvalidNormalLossSpace) {
+    const auto data_path = make_test_path("lfs_arg_parser_invalid_normal_space_data");
+    const auto output_path = make_test_path("lfs_arg_parser_invalid_normal_space_output");
+
+    for (const auto& value : {"bogus", "WORLD", "", "42"}) {
+        SCOPED_TRACE(std::string("--normal-loss-space=") + value);
+        const char* argv[] = {
+            "LichtFeld-Studio",
+            "--headless",
+            "--data-path",
+            data_path.c_str(),
+            "--output-path",
+            output_path.c_str(),
+            "--normal-loss-space",
+            value};
+
+        auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(parsed.has_value());
+        EXPECT_NE(parsed.error().find("--normal-loss-space must be one of"), std::string::npos) << parsed.error();
+    }
+}
+
+TEST(ArgumentParserTest, TrainingConfigRejectsUnknownNormalLossSpace) {
+    const auto config_path = std::filesystem::path(make_test_path("lfs_invalid_normal_space_config")) / "config.json";
+    {
+        auto config_json = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
+        config_json["normal_loss_space"] = "bogus";
+        std::ofstream config_file(config_path);
+        config_file << config_json.dump(2);
+    }
+
+    auto parsed = lfs::core::param::read_optim_params_from_json(config_path);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("normal_loss_space"), std::string::npos) << parsed.error();
+}
+
 TEST(ArgumentParserTest, TrainingParsesNoNormalAutoGenerate) {
     const auto data_path = make_test_path("lfs_arg_parser_no_normal_auto_data");
     const auto output_path = make_test_path("lfs_arg_parser_no_normal_auto_output");

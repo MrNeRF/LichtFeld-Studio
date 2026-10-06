@@ -1444,6 +1444,16 @@ namespace {
                 eval_mask_val = std::move(*parsed);
             }
 
+            std::optional<lfs::core::param::NormalLossSpace> parsed_normal_loss_space;
+            if (cli_option_present({"--normal-loss-space"})) {
+                const auto value = ::args::get(normal_loss_space);
+                parsed_normal_loss_space = lfs::core::param::normal_loss_space_from_string(value);
+                if (!parsed_normal_loss_space) {
+                    return std::unexpected(
+                        "ERROR: --normal-loss-space must be one of auto, camera-opencv, camera-opengl, or world");
+                }
+            }
+
             // Create lambda to apply command line overrides after JSON loading
             auto apply_cmd_overrides = [&params,
                                         // Capture values, not references
@@ -1498,7 +1508,7 @@ namespace {
                                         normal_start_fraction_val = cli_option_present({"--normal-start-fraction"}) ? std::optional<float>(::args::get(normal_start_fraction)) : std::optional<float>(),
                                         normal_end_fraction_val = cli_option_present({"--normal-end-fraction"}) ? std::optional<float>(::args::get(normal_end_fraction)) : std::optional<float>(),
                                         ppisp_holdout_appearance_val = cli_option_present({"--ppisp-holdout-appearance"}) ? std::optional<std::string>(::args::get(ppisp_holdout_appearance)) : std::optional<std::string>(),
-                                        normal_loss_space_val = cli_option_present({"--normal-loss-space"}) ? std::optional<std::string>(::args::get(normal_loss_space)) : std::optional<std::string>(),
+                                        normal_loss_space_val = parsed_normal_loss_space,
                                         // Python scripts
                                         python_scripts_val = cli_option_present({"--python-script"}) ? std::optional<std::vector<std::string>>(::args::get(python_scripts)) : std::optional<std::vector<std::string>>(),
                                         centralize_val = cli_option_present({"--centralize"}) ? std::optional<std::string>(::args::get(centralize)) : std::optional<std::string>(),
@@ -1754,13 +1764,8 @@ namespace {
                 if (ppisp_holdout_appearance_val) {
                     opt.ppisp_holdout_appearance = *lfs::core::param::ppisp_holdout_appearance_from_string(*ppisp_holdout_appearance_val);
                 }
-                if (normal_loss_space_val) {
-                    if (const auto parsed = lfs::core::param::normal_loss_space_from_string(*normal_loss_space_val)) {
-                        opt.normal_loss_space = *parsed;
-                    } else {
-                        opt.normal_loss_space = static_cast<lfs::core::param::NormalLossSpace>(-1);
-                    }
-                }
+                if (normal_loss_space_val)
+                    opt.normal_loss_space = *normal_loss_space_val;
                 // Also propagate to dataset config for loading
                 ds.invert_masks = opt.invert_masks;
                 ds.mask_threshold = opt.mask_threshold;

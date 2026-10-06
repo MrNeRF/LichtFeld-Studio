@@ -172,8 +172,11 @@ namespace lfs::core {
                                                              : candidate.wire_value;
                             return candidate_wire == wire_value;
                         });
-                        if (item != meta.enum_items.end())
-                            meta.setter(ref, std::any(item->value));
+                        if (item == meta.enum_items.end()) {
+                            throw std::invalid_argument(std::format(
+                                "Invalid value '{}' for optimization field '{}'", wire_value, meta.id));
+                        }
+                        meta.setter(ref, std::any(item->value));
                         break;
                     }
                     default:
