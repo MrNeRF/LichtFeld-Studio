@@ -4,9 +4,14 @@
 
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
+#include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/ops/align_ops.hpp"
+#include "rendering/viewport_artifact_service.hpp"
+#if LFS_GRAPHICS_VULKAN
+#include "rendering/point_cloud_vulkan_renderer.hpp"
+#endif
 #include "scene/scene_manager.hpp"
 
 #include <cmath>
@@ -19,6 +24,53 @@ namespace {
     [[nodiscard]] glm::vec3 applyRot(const glm::mat4& m, const glm::vec3& v) {
         return glm::mat3(m) * v;
     }
+
+    TEST(AlignDepth, PointDepthSamplerFollowsPublishedOutput) {
+        lfs::vis::ViewportArtifactService artifacts;
+        artifacts.setDepthSampler([](int x, int y, auto) { return x == 2 && y == 3 ? 4.0f : -1.0f; });
+        EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(2, 3, {10, 10}), 4.0f);
+        EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(0, 0, {10, 10}), -1.0f);
+        artifacts.updateFromImageOutput({}, {}, {10, 10}, true);
+        EXPECT_FALSE(artifacts.hasDepthSampler());
+        artifacts.setDepthSampler([](int, int, auto) { return 5.0f; });
+        artifacts.clearViewportOutput();
+        EXPECT_FALSE(artifacts.hasDepthSampler());
+    }
+
+#if LFS_GRAPHICS_VULKAN
+    TEST(AlignDepth, VulkanPointCloudDepthMatchesSurfaceWithoutGaussians) {
+        lfs::vis::VulkanContext context;
+        ASSERT_TRUE(context.initHeadless()) << context.lastError();
+        lfs::vis::PointCloudVulkanRenderer renderer;
+        auto positions = lfs::core::Tensor::from_vector(std::vector<float>{0, 0, -5},
+                                                        {std::size_t{1}, std::size_t{3}}, lfs::core::Device::CPU);
+        auto colors = lfs::core::Tensor::from_vector(std::vector<float>{1, 1, 1},
+                                                     {std::size_t{1}, std::size_t{3}}, lfs::core::Device::CPU);
+        const lfs::vis::RenderTargetId target{1};
+        for (const bool orthographic : {false, true}) {
+            lfs::vis::PointSceneRenderer::RenderRequest request;
+            request.positions = &positions;
+            request.colors = &colors;
+            request.size = {64, 64};
+            request.orthographic = orthographic;
+            request.ortho_scale = 10.0f;
+            request.focal_y = 32.0f;
+            request.voxel_size = 0.5f;
+            request.synchronize_output = true;
+            request.view_projection = orthographic
+                                          ? glm::ortho(-5.0f, 5.0f, -5.0f, 5.0f, 0.1f, 8.0f)
+                                          : glm::perspective(glm::radians(90.0f), 1.0f, 0.1f, 100.0f);
+            ASSERT_TRUE(renderer.render(context, request, target));
+            const auto depth = renderer.sampleDepthAtPixel(context, {.pixel = {32, 32}, .source_size = {64, 64}, .target = target});
+            ASSERT_TRUE(depth) << depth.error();
+            EXPECT_NEAR(*depth, 5.0f, 1e-3f);
+            const auto background = renderer.sampleDepthAtPixel(context, {.pixel = {0, 0}, .source_size = {64, 64}, .target = target});
+            ASSERT_TRUE(background);
+            EXPECT_LT(*background, 0.0f);
+            EXPECT_FALSE(renderer.sampleDepthAtPixel(context, {.pixel = {64, 0}, .source_size = {64, 64}, .target = target}));
+        }
+    }
+#endif
 
     TEST(AlignEdgeToWorldX, IdentityUpMapsPositiveZEdgeToPlusX) {
         const glm::mat4 up(1.0f);
@@ -255,6 +307,30 @@ namespace lfs::vis::op {
         std::unique_ptr<OperatorContext> context_;
         AlignPickPointOperator operation_;
     };
+
+    TEST_F(AlignPreviewTest, PointCloudCanAlignBeforeTraining) {
+        auto& scene = manager_->getScene();
+        const auto dataset = scene.addDataset("dataset");
+        auto means = core::Tensor::from_vector(std::vector<float>{0, 2, 0, 1, 2, 1, 0, 3, 1},
+                                               {std::size_t{3}, std::size_t{3}}, core::Device::CPU);
+        auto colors = core::Tensor::from_vector(std::vector<float>(9, 1.0f),
+                                                {std::size_t{3}, std::size_t{3}}, core::Device::CPU);
+        scene.addPointCloud("points", std::make_shared<core::PointCloud>(std::move(means), std::move(colors)), dataset);
+        manager_->selectNode("points");
+        ASSERT_EQ(scene.getTotalGaussianCount(), 0u);
+        ASSERT_TRUE(operation_.poll(*context_));
+        const auto original = scene.getNode("points")->transform();
+        EXPECT_EQ(action(Services::AlignUiAction::Apply), OperatorResult::FINISHED);
+        EXPECT_NE(scene.getNode("points")->transform(), original);
+        ASSERT_TRUE(undoHistory().undo().success);
+        EXPECT_EQ(scene.getNode("points")->transform(), original);
+        manager_->selectNode("dataset");
+        EXPECT_TRUE(operation_.poll(*context_));
+        scene.setNodeLocked("dataset", true);
+        EXPECT_FALSE(operation_.poll(*context_));
+        manager_->clearSelection();
+        EXPECT_FALSE(operation_.poll(*context_));
+    }
 
     TEST_F(AlignPreviewTest, CancelRestoresOriginalTransformAfterTargetIsLocked) {
         const auto original = transform();

@@ -52,6 +52,9 @@ namespace lfs::vis {
             VulkanContext& context,
             RenderTargetId target);
 
+        [[nodiscard]] std::expected<float, std::string> sampleDepthAtPixel(
+            VulkanContext& context, const SceneRenderer::DepthSampleRequest& request);
+
         [[nodiscard]] bool hasRenderTarget(RenderTargetId target) const;
         [[nodiscard]] bool releaseRenderTarget(RenderTargetId target);
         void reset();

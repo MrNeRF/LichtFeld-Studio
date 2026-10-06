@@ -53,6 +53,10 @@ namespace lfs::vis {
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> resolveLazyCapture();
         [[nodiscard]] bool hasLazyCapture() const { return static_cast<bool>(lazy_capture_); }
 
+        using DepthSampleFn = std::function<float(int, int, std::optional<SplitViewPanelId>)>;
+        [[nodiscard]] bool hasDepthSampler() const { return static_cast<bool>(depth_sampler_); }
+        void setDepthSampler(DepthSampleFn fn) { depth_sampler_ = std::move(fn); }
+
         [[nodiscard]] float sampleLinearDepthAt(int x,
                                                 int y,
                                                 const glm::ivec2& fallback_viewport_size,
@@ -69,6 +73,7 @@ namespace lfs::vis {
         uint64_t captured_artifact_generation_ = 0;
         uint64_t lazy_captured_artifact_generation_ = 0;
         LazyCaptureFn lazy_capture_;
+        DepthSampleFn depth_sampler_;
     };
 
 } // namespace lfs::vis

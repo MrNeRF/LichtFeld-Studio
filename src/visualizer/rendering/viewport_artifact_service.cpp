@@ -61,6 +61,7 @@ namespace lfs::vis {
     void ViewportArtifactService::setMetadata(const CachedRenderMetadata& metadata) {
         const bool backend_changed = metadata_.viewer_backend != metadata.viewer_backend;
         metadata_ = metadata;
+        depth_sampler_ = {};
         // Wake the UI when published scene identity changes or a scene closes.
         // Repeated frames using the same renderer stay silent.
         if (backend_changed)
@@ -136,6 +137,9 @@ namespace lfs::vis {
         const int y,
         const glm::ivec2& fallback_viewport_size,
         const std::optional<SplitViewPanelId> panel) const {
+        if (depth_sampler_)
+            return depth_sampler_(x, y, panel);
+
         int viewport_width = rendered_size_.x;
         int viewport_height = rendered_size_.y;
         if (viewport_width <= 0 || viewport_height <= 0) {

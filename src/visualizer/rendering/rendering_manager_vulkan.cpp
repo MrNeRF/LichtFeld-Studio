@@ -2733,6 +2733,15 @@ namespace lfs::vis {
                     },
                     metadata,
                     render_result->size);
+                view_state.viewport_artifact_service_.setDepthSampler(
+                    [this, target = view_state.main_render_target_, size = render_result->size](
+                        int x, int y, std::optional<SplitViewPanelId>) {
+                        if (!point_scene_renderer_)
+                            return -1.0f;
+                        return point_scene_renderer_->sampleDepthAtPixel(
+                                                        {.pixel = {x, y}, .source_size = size, .target = target})
+                            .value_or(-1.0f);
+                    });
 
                 if (resize_result.completed) {
                     lfs::core::Tensor::trim_memory_pool();

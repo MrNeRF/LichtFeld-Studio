@@ -250,6 +250,9 @@ namespace lfs::vis {
         virtual std::expected<RenderResult, std::string> render(const RenderRequest&, RenderTargetId) = 0;
         virtual std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImage(RenderTargetId) = 0;
         virtual lfs::Result<SceneRenderer::OutputTensors> readOutputTensors(RenderTargetId) const;
+        virtual std::expected<float, std::string> sampleDepthAtPixel(const SceneRenderer::DepthSampleRequest&) {
+            return std::unexpected("Point renderer does not support depth sampling");
+        }
         virtual bool hasRenderTarget(RenderTargetId) const = 0;
         virtual bool releaseRenderTarget(RenderTargetId) = 0;
         virtual void reset() = 0;

@@ -1187,7 +1187,7 @@ namespace lfs::vis {
             x,
             y, viewState(view).frame_lifecycle_service_.lastViewportSize(),
             panel);
-        if (cached_depth > 0.0f) {
+        if (cached_depth > 0.0f || viewState(view).viewport_artifact_service_.hasDepthSampler()) {
             return cached_depth;
         }
 

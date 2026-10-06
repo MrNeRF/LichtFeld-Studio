@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <format>
 #include <glm/gtc/type_ptr.hpp>
@@ -482,6 +483,7 @@ namespace lfs::vis {
             std::string depth_vram_label;
 
             glm::ivec2 size{0, 0};
+            glm::mat4 clip_to_view{1.0f};
             VkImageLayout color_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             VkImageLayout depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             // Content identity (bumped after successful submit). Not a tracker key.
@@ -1118,7 +1120,8 @@ namespace lfs::vis {
             VkImageCreateInfo depth_info = color_info;
             depth_info.format = kDepthFormat;
             depth_info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                               VK_IMAGE_USAGE_SAMPLED_BIT;
+                               VK_IMAGE_USAGE_SAMPLED_BIT |
+                               VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
             VmaAllocationInfo depth_allocation_info{};
             r = vmaCreateImage(allocator, &depth_info, &ai, &slot.depth_image,
                                &slot.depth_alloc, &depth_allocation_info);
@@ -1984,6 +1987,7 @@ namespace lfs::vis {
             slot.color_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             slot.depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             ++slot.generation;
+            slot.clip_to_view = req.view * glm::inverse(req.view_projection);
 
             RenderResult result{};
             result.image = sceneImageHandle(slot.color_image);
@@ -2001,7 +2005,8 @@ namespace lfs::vis {
 
         std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& ctx,
-            RenderTargetId target) {
+            RenderTargetId target,
+            const SceneRenderer::DepthSampleRequest* depth_request = nullptr) {
             std::lock_guard<std::mutex> command_lock(command_mutex);
             if (!initialized || context == nullptr) {
                 return std::unexpected<std::string>("Point-cloud output readback requested before renderer initialization");
@@ -2023,6 +2028,19 @@ namespace lfs::vis {
             if (slot.color_image == VK_NULL_HANDLE || slot.size.x <= 0 || slot.size.y <= 0) {
                 return std::unexpected<std::string>("Point-cloud output readback requested for an empty output slot");
             }
+
+            glm::ivec2 depth_pixel{0, 0};
+            if (depth_request) {
+                const auto source = depth_request->source_size;
+                const auto pixel = depth_request->pixel;
+                if (source.x <= 0 || source.y <= 0 || pixel.x < 0 || pixel.y < 0 ||
+                    pixel.x >= source.x || pixel.y >= source.y) {
+                    return std::unexpected("Point-cloud depth pixel is outside the viewport");
+                }
+                depth_pixel = {pixel.x * slot.size.x / source.x, pixel.y * slot.size.y / source.y};
+            }
+            const auto image = depth_request ? slot.depth_image : slot.color_image;
+            const auto aspect = depth_request ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
 
             if (!ctx.waitForSubmittedFrames()) {
                 return std::unexpected<std::string>(ctx.lastError());
@@ -2049,8 +2067,8 @@ namespace lfs::vis {
             pending_stagings.clear();
 
             const VkDeviceSize byte_count =
-                static_cast<VkDeviceSize>(slot.size.x) *
-                static_cast<VkDeviceSize>(slot.size.y) *
+                static_cast<VkDeviceSize>(depth_request ? 1 : slot.size.x) *
+                static_cast<VkDeviceSize>(depth_request ? 1 : slot.size.y) *
                 static_cast<VkDeviceSize>(4);
             if (byte_count == 0) {
                 return std::unexpected<std::string>("Point-cloud output readback has zero bytes");
@@ -2117,35 +2135,36 @@ namespace lfs::vis {
             }
 
             const VkImageLayout restore_layout =
-                slot.color_layout != VK_IMAGE_LAYOUT_UNDEFINED
-                    ? slot.color_layout
+                (depth_request ? slot.depth_layout : slot.color_layout) != VK_IMAGE_LAYOUT_UNDEFINED
+                    ? (depth_request ? slot.depth_layout : slot.color_layout)
                     : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             ctx.imageBarriers().transitionImage(command_buffer,
-                                                slot.color_image,
+                                                image,
                                                 slot.image_generation,
-                                                VK_IMAGE_ASPECT_COLOR_BIT,
+                                                aspect,
                                                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
             VkBufferImageCopy copy_region{};
-            copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            copy_region.imageSubresource.aspectMask = aspect;
+            copy_region.imageOffset = {depth_pixel.x, depth_pixel.y, 0};
             copy_region.imageSubresource.layerCount = 1;
             copy_region.imageExtent = {
-                static_cast<std::uint32_t>(slot.size.x),
-                static_cast<std::uint32_t>(slot.size.y),
+                static_cast<std::uint32_t>(depth_request ? 1 : slot.size.x),
+                static_cast<std::uint32_t>(depth_request ? 1 : slot.size.y),
                 1};
             vkCmdCopyImageToBuffer(command_buffer,
-                                   slot.color_image,
+                                   image,
                                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                    staging.buffer,
                                    1,
                                    &copy_region);
 
             ctx.imageBarriers().transitionImage(command_buffer,
-                                                slot.color_image,
+                                                image,
                                                 slot.image_generation,
-                                                VK_IMAGE_ASPECT_COLOR_BIT,
+                                                aspect,
                                                 restore_layout);
-            slot.color_layout = restore_layout;
+            (depth_request ? slot.depth_layout : slot.color_layout) = restore_layout;
 
             r = vkEndCommandBuffer(command_buffer);
             if (r != VK_SUCCESS) {
@@ -2256,6 +2275,23 @@ namespace lfs::vis {
                 return std::unexpected<std::string>(vkError("vmaInvalidateAllocation(point-cloud readback)", r));
             }
 
+            if (depth_request) {
+                const float ndc = *static_cast<const float*>(staging.allocation_info.pMappedData);
+                float depth = -1.0f;
+                if (std::isfinite(ndc) && ndc < 1.0f) {
+                    // Vulkan stores clip Z/W directly. Use the submitted projection,
+                    // including orthographic mode, rather than current UI settings.
+                    const float nx = 2.0f * (depth_pixel.x + 0.5f) / slot.size.x - 1.0f;
+                    const float ny = 2.0f * (depth_pixel.y + 0.5f) / slot.size.y - 1.0f;
+                    const glm::vec4 view = slot.clip_to_view * glm::vec4(nx, ny, ndc, 1);
+                    depth = -view.z / view.w;
+                    if (!std::isfinite(depth) || depth <= 0.0f)
+                        depth = -1.0f;
+                }
+                return std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::from_vector(
+                    std::vector<float>{depth}, {std::size_t{1}}, lfs::core::Device::CPU));
+            }
+
             const auto* const rgba = static_cast<const std::uint8_t*>(staging.allocation_info.pMappedData);
             const int width = slot.size.x;
             const int height = slot.size.y;
@@ -2295,6 +2331,14 @@ namespace lfs::vis {
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
     PointCloudVulkanRenderer::readOutputImage(VulkanContext& context, RenderTargetId target) {
         return impl_->readOutputImage(context, target);
+    }
+
+    std::expected<float, std::string> PointCloudVulkanRenderer::sampleDepthAtPixel(
+        VulkanContext& context, const SceneRenderer::DepthSampleRequest& request) {
+        auto result = impl_->readOutputImage(context, request.target, &request);
+        if (!result)
+            return std::unexpected(result.error());
+        return (*result)->ptr<float>()[0];
     }
 
     bool PointCloudVulkanRenderer::hasRenderTarget(RenderTargetId target) const {

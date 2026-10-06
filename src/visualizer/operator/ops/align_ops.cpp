@@ -104,12 +104,12 @@ namespace lfs::vis::op {
         .shortcut = "",
         .flags = OperatorFlags::REGISTER,
         .source = OperatorSource::CPP,
-        .poll_deps = PollDependency::SCENE,
+        .poll_deps = PollDependency::SCENE | PollDependency::SELECTION,
     };
 
     bool AlignPickPointOperator::poll(const OperatorContext& ctx,
                                       const OperatorProperties* /*props*/) const {
-        return ctx.scene().getScene().getTotalGaussianCount() > 0;
+        return !resolveAlignmentTargets(ctx).empty();
     }
 
     OperatorResult AlignPickPointOperator::invoke(OperatorContext& /*ctx*/, OperatorProperties& props) {
