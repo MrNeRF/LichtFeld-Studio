@@ -561,6 +561,12 @@ namespace lfs::core {
         release_normal_cache();
     }
 
+    void Camera::set_mask_path(std::filesystem::path path) {
+        _mask_path = std::move(path);
+        _cached_mask = Tensor();
+        _mask_loaded = false;
+    }
+
     void Camera::set_mask_tensor(Tensor mask) {
         _in_memory_mask_raw = std::move(mask);
         // Force reprocessing on the next load_and_get_mask call.

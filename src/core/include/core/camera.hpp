@@ -174,6 +174,7 @@ namespace lfs::core {
         const std::filesystem::path& depth_path() const noexcept { return _depth_path; }
         const std::filesystem::path& normal_path() const noexcept { return _normal_path; }
         void set_normal_path(std::filesystem::path path);
+        void set_mask_path(std::filesystem::path path);
 
         // Sparse SfM observations for this image (COLMAP 2D points with a 3D id).
         // Pixel coordinates are in the camera's native width/height at load
