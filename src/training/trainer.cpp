@@ -4811,12 +4811,18 @@ namespace lfs::training {
                                             "stage project parameter snapshot",
                                             LFS_SOURCE_SITE_CURRENT()));
                             }
+                            auto bytes = captured->checkpoint_bytes->mapped_data();
+                            if (!bytes) {
+                                return lfs::Status::failure(
+                                    std::move(bytes).error().with_context(
+                                        "map captured CKPT bytes",
+                                        LFS_SOURCE_SITE_CURRENT()));
+                            }
                             auto lazy =
                                 lfs::io::project::
                                     LazyChunkValue::from_owned(
                                         captured->checkpoint_bytes,
-                                        std::span<const std::byte>(captured->checkpoint_bytes->data(),
-                                                                   captured->checkpoint_bytes->size()),
+                                        *bytes,
                                         captured->snapshot_uuid);
                             if (!lazy) {
                                 return lfs::Status::failure(

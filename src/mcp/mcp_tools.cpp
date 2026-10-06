@@ -677,6 +677,8 @@ namespace lfs::mcp {
                           project_capture.pinned_peak_bytes},
                          {"host_staging_bytes",
                           project_capture.host_staging_bytes},
+                         {"disk_staging_bytes",
+                          project_capture.disk_staging_bytes},
                          {"host_rss_delta_bytes",
                           project_capture.host_rss_delta_bytes},
                          {"host_memory_available_bytes",

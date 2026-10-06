@@ -11,6 +11,7 @@ namespace lfs::training {
         std::uint64_t device_snapshot_bytes = 0;
         std::uint64_t pinned_peak_bytes = 0;
         std::uint64_t host_staging_bytes = 0;
+        std::uint64_t disk_staging_bytes = 0;
         std::uint64_t host_rss_delta_bytes = 0;
         std::uint64_t host_memory_available_bytes = 0;
         std::uint64_t host_memory_required_bytes = 0;
