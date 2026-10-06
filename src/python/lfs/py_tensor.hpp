@@ -288,6 +288,7 @@ namespace lfs::python {
             int64_t step;
         };
         SliceInfo parse_slice(const nb::slice& sl, size_t dim_size) const;
+        core::Tensor index_view(const nb::object& key) const;
     };
 
     // Register PyTensor with nanobind

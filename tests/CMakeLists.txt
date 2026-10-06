@@ -1151,6 +1151,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_store_subscriptions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_float16_import.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_basic_indexing.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_arg_extrema_nan.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_empty_slices.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_empty_batch_matmul.py
@@ -1262,6 +1263,7 @@ add_test(NAME lichtfeld.python.gpu
     COMMAND ${Python_EXECUTABLE} -m pytest -q
         -m gpu
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_basic_indexing.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_arg_extrema_nan.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_empty_slices.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_empty_batch_matmul.py
