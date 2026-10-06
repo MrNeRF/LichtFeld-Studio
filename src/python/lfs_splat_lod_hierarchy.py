@@ -192,10 +192,15 @@ class SplatLodHierarchy:
         return list(self.levels[-1].row_node_ids)
 
     def is_leaf(self, node_id: int) -> bool:
-        return int(node_id) < self.leaf_count
+        node_id = int(node_id)
+        if node_id < 0:
+            raise KeyError(f"Unknown node id: {node_id}")
+        return node_id < self.leaf_count
 
     def children(self, node_id: int) -> list[int] | None:
         node_id = int(node_id)
+        if node_id < 0:
+            raise KeyError(f"Unknown node id: {node_id}")
         if node_id < self.leaf_count:
             return None
         merge_offset = node_id - self.leaf_count
