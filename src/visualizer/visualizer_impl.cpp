@@ -1146,6 +1146,45 @@ namespace lfs::vis {
                 }
                 wakeMainLoop();
             });
+        vis::set_view_render_settings_callbacks(
+            [this]() -> std::optional<vis::RenderSettingsTarget> {
+                return screen_service_.read([&](const auto& screen) -> std::optional<vis::RenderSettingsTarget> {
+                    const auto view = screen.activeView().value;
+                    if (!screen.view(screen::AreaId{view}))
+                        return std::nullopt;
+                    return vis::RenderSettingsTarget{view, screen_service_.screenEpoch()};
+                });
+            },
+            [this](const vis::RenderSettingsTarget target) -> std::optional<vis::RenderSettingsProxy> {
+                if (!rendering_manager_ || target.screen_epoch != screen_service_.screenEpoch())
+                    return std::nullopt;
+                const auto settings = rendering_manager_->trySettingsForView(target.view);
+                return settings ? std::optional{vis::to_proxy(*settings)} : std::nullopt;
+            },
+            [this](const vis::RenderSettingsTarget target, const vis::RenderSettingsProxy& proxy,
+                   const vis::RenderSettingsUpdateIntent intent) -> std::optional<vis::RenderSettingsProxy> {
+                if (!rendering_manager_ || target.screen_epoch != screen_service_.screenEpoch())
+                    return std::nullopt;
+                auto settings = rendering_manager_->trySettingsForView(target.view);
+                if (!settings)
+                    return std::nullopt;
+                const auto previous_upscaler = settings->scene_upscaler;
+                const auto previous_preset = settings->scene_upscaler_preset;
+                vis::apply_proxy(*settings, proxy);
+                const auto preset_update = intent.scene_upscaler_explicit && !intent.scene_upscaler_preset_explicit
+                                               ? SceneUpscalerPresetUpdate::RestoreRememberedForBackend
+                                               : SceneUpscalerPresetUpdate::UseRequested;
+                if (!rendering_manager_->updateSettingsForView(target.view, *settings, DirtyFlag::ALL, preset_update))
+                    return std::nullopt;
+                const auto applied = rendering_manager_->trySettingsForView(target.view);
+                if (!applied)
+                    return std::nullopt;
+                if (applied->scene_upscaler != previous_upscaler || applied->scene_upscaler_preset != previous_preset)
+                    saveSceneUpscalerPreference(applied->scene_upscaler, applied->scene_upscaler_preset);
+                wakeMainLoop();
+                return vis::to_proxy(*applied);
+            });
+        callback_cleanup_.add([] { vis::set_view_render_settings_callbacks(nullptr, nullptr, nullptr); });
         callback_cleanup_.add([] { vis::set_render_settings_callbacks(nullptr, nullptr); });
     }
 

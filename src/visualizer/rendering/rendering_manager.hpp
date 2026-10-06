@@ -291,6 +291,10 @@ namespace lfs::vis {
             SceneUpscalerPresetUpdate preset_update = SceneUpscalerPresetUpdate::UseRequested);
         RenderSettings getSettings() const;
         RenderSettings settingsForView(ViewId view) const;
+        [[nodiscard]] std::optional<RenderSettings> trySettingsForView(ViewId view) const;
+        [[nodiscard]] bool updateSettingsForView(
+            ViewId view, const RenderSettings& settings, DirtyMask dirty_flags = DirtyFlag::ALL,
+            SceneUpscalerPresetUpdate preset_update = SceneUpscalerPresetUpdate::UseRequested);
         void editViewSettings(ViewId view, const std::function<void(ViewSettings&)>& edit);
         [[nodiscard]] ViewId activeViewId() const { return view_source_.activeView(); }
         // The presentation pass reports its actual runtime choice after pipeline
@@ -947,7 +951,7 @@ namespace lfs::vis {
         [[nodiscard]] op::DepthWindowModeSnapshot depthWindowSnapshotLocked(ViewId view) const;
         void applyDepthWindowProjectionLocked(ViewId view, const DepthWindowState& state);
         void applyDepthWindowModeTransitionLocked(SplitViewMode previous_mode,
-                                                  SplitViewMode new_mode);
+                                                  SplitViewMode new_mode, ViewId view = kNoView);
 
         // Core components
         std::unique_ptr<lfs::rendering::RenderingEngine> engine_;

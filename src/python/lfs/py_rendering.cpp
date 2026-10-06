@@ -54,6 +54,24 @@ namespace lfs::python {
         constexpr std::uintmax_t MAX_RENDERED_ASSET_PREVIEW_BYTES =
             2ull * 1024ull * 1024ull * 1024ull;
 
+        // Render-setting values are C++ scalars/arrays; queued work must never
+        // retain a Python object or call Python equality while the GIL is released.
+        bool sameRenderSettingValue(const std::any& a, const std::any& b) {
+            if (a.type() != b.type())
+                return false;
+            if (a.type() == typeid(bool))
+                return std::any_cast<bool>(a) == std::any_cast<bool>(b);
+            if (a.type() == typeid(int))
+                return std::any_cast<int>(a) == std::any_cast<int>(b);
+            if (a.type() == typeid(float))
+                return std::any_cast<float>(a) == std::any_cast<float>(b);
+            if (a.type() == typeid(std::string))
+                return std::any_cast<const std::string&>(a) == std::any_cast<const std::string&>(b);
+            if (a.type() == typeid(std::array<float, 3>))
+                return std::any_cast<std::array<float, 3>>(a) == std::any_cast<std::array<float, 3>>(b);
+            throw std::runtime_error("Unsupported C++ render property value");
+        }
+
         enum class PreviewReadback {
             FloatRgb,
             UInt8Rgb,
@@ -972,66 +990,84 @@ namespace lfs::python {
           prop_(&settings_, "render_settings") {}
 
     void PyRenderSettings::set(const std::string& name, nb::object value) {
-        if (name == "scene_upscaler") {
-            const auto backend_id = nb::cast<std::string>(value);
-            const auto backend = vis::sceneUpscalerBackendFromId(backend_id);
-            if (!backend) {
-                throw nb::value_error(
-                    "Field 'scene_upscaler' must name a registered scene reconstruction backend");
-            }
-            if (!vis::sceneUpscalerBackendAvailable(*backend)) {
-                throw nb::value_error(
-                    "Field 'scene_upscaler' names a scene reconstruction backend "
-                    "that is not available in this process");
-            }
-        }
-        // Re-read live settings immediately before applying the requested property
-        // and its dependent normalization. A retained snapshot may be stale after
-        // a focus change or another write; dispatching it with DirtyFlag::ALL would
-        // overwrite unrelated settings.
-        const auto fresh = vis::get_render_settings();
-        if (fresh) {
-            settings_ = *fresh;
-        }
-        // RmlUI writes model values back during refresh. Publishing those
-        // unchanged values would invalidate the settings again on every frame.
-        if (!prop_.setattr(name, value, /*skip_unchanged=*/true)) {
-            return;
-        }
-        if (name == "raster_backend") {
-            const auto backend = static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend);
-            settings_.raster_backend =
-                static_cast<int>(rendering::normalizeViewerRasterBackend(backend, settings_.gut));
-            settings_.gut = rendering::isGutBackend(
-                static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend));
-        }
-        if (!fresh) {
-            return;
-        }
-        const auto apply_settings = [settings = settings_,
-                                     scene_upscaler_explicit = name == "scene_upscaler",
-                                     scene_upscaler_preset_explicit = name == "scene_upscaler_preset"]() {
-            vis::update_render_settings(settings,
-                                        {.scene_upscaler_explicit = scene_upscaler_explicit,
-                                         .scene_upscaler_preset_explicit = scene_upscaler_preset_explicit});
-            request_redraw();
-            return vis::get_render_settings();
-        };
-        std::optional<vis::RenderSettingsProxy> applied;
+        using core::prop::PropertyObjectRef;
+        auto meta = core::prop::PropertyRegistry::instance().get_property(prop_.group_id(), name);
+        if (!meta)
+            throw nb::attribute_error(("Unknown property: " + name).c_str());
+        if (meta->is_readonly())
+            throw nb::attribute_error(("Property is read-only: " + name).c_str());
+        if (meta->source != core::prop::PropSource::CPP)
+            throw nb::value_error("Render settings require a C++ property");
+        const auto target = vis::capture_render_settings_target();
         auto* const viewer = get_visualizer();
-        if (!viewer || viewer->isOnViewerThread()) {
-            applied = apply_settings();
-        } else if (viewer->acceptsPostedWork()) {
+        if (!target || !viewer || !viewer->acceptsPostedWork())
+            throw std::runtime_error("The target view is unavailable or the viewer is shutting down");
+
+        if (name == "scene_upscaler") {
+            const auto backend = vis::sceneUpscalerBackendFromId(nb::cast<std::string>(value));
+            if (!backend)
+                throw nb::value_error("Field 'scene_upscaler' must name a registered scene reconstruction backend");
+            if (!vis::sceneUpscalerBackendAvailable(*backend))
+                throw nb::value_error("Field 'scene_upscaler' names a scene reconstruction backend that is not available in this process");
+        }
+        // Run both conversion and the metadata setter under the GIL. In
+        // particular, enum strings are resolved before anything is enqueued.
+        auto validated = settings_;
+        auto validation_ref = PropertyObjectRef::cpp(&validated);
+        meta->setter(validation_ref, python_to_any(value, meta->type));
+        const std::any converted = meta->getter(validation_ref);
+        (void)sameRenderSettingValue(converted, converted);
+        struct Applied {
+            vis::RenderSettingsProxy settings;
+            std::any previous;
+            std::any current;
+            bool changed = false;
+        };
+        const auto apply_property = [target = *target, converted, getter = meta->getter, setter = meta->setter,
+                                     raster_backend = name == "raster_backend",
+                                     intent = vis::RenderSettingsUpdateIntent{
+                                         .scene_upscaler_explicit = name == "scene_upscaler",
+                                         .scene_upscaler_preset_explicit = name == "scene_upscaler_preset"}]() -> std::optional<Applied> {
+            auto fresh = vis::get_render_settings_for_view(target);
+            if (!fresh)
+                return std::nullopt;
+            auto ref = PropertyObjectRef::cpp(&*fresh);
+            const auto previous = getter(ref);
+            setter(ref, converted);
+            if (raster_backend) {
+                const auto backend = static_cast<rendering::GaussianRasterBackend>(fresh->raster_backend);
+                fresh->raster_backend = static_cast<int>(rendering::normalizeViewerRasterBackend(backend, fresh->gut));
+                fresh->gut = rendering::isGutBackend(static_cast<rendering::GaussianRasterBackend>(fresh->raster_backend));
+            }
+            // Equality is evaluated against live settings on the viewer thread,
+            // so an earlier queued write cannot be lost to a stale proxy echo.
+            if (sameRenderSettingValue(previous, getter(ref)))
+                return Applied{*fresh, previous, previous, false};
+            auto normalized = vis::update_render_settings_for_view(target, *fresh, intent);
+            if (!normalized)
+                return std::nullopt;
+            auto normalized_ref = PropertyObjectRef::cpp(&*normalized);
+            auto current = getter(normalized_ref);
+            const bool changed = !sameRenderSettingValue(previous, current);
+            return Applied{std::move(*normalized), previous, std::move(current), changed};
+        };
+        std::optional<Applied> applied;
+        if (viewer->isOnViewerThread()) {
+            applied = apply_property();
+        } else {
             nb::gil_scoped_release release;
             applied = vis::post_work_and_wait(
                 [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
-                apply_settings,
-                []() -> std::optional<vis::RenderSettingsProxy> { return std::nullopt; });
+                apply_property, []() -> std::optional<Applied> { return std::nullopt; });
         }
-        // Keep the Python proxy in sync with normalized settings after the
-        // viewer has applied them and this thread has reacquired the GIL.
-        if (applied) {
-            settings_ = std::move(*applied);
+        if (!applied)
+            throw std::runtime_error("The target view was removed or the viewer stopped accepting work");
+        settings_ = std::move(applied->settings);
+        if (applied->changed) {
+            auto ref = PropertyObjectRef::cpp(&settings_);
+            if (meta->on_update)
+                meta->on_update(ref, applied->previous, applied->current);
+            core::prop::PropertyRegistry::instance().notify(prop_.group_id(), name, applied->previous, applied->current);
         }
     }
 

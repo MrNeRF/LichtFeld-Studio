@@ -18,6 +18,7 @@
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/property_registry.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor_backend.hpp"
@@ -32,6 +33,7 @@
 #include "python_test_support.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
+#include "screen/screen_service.hpp"
 #include "tensor_test_support.hpp"
 #include "visualizer/ipc/render_settings_convert.hpp"
 #include "visualizer/ipc/view_context.hpp"
@@ -252,9 +254,9 @@ namespace {
             return std::exchange(project_save_started, false);
         }
 
-        [[nodiscard]] bool waitForQueuedWork(const std::chrono::milliseconds timeout) {
+        [[nodiscard]] bool waitForQueuedWork(const std::chrono::milliseconds timeout, const size_t count = 1) {
             std::unique_lock lock(queued_work_mutex);
-            return queued_work_cv.wait_for(lock, timeout, [this]() { return !queued_work.empty(); });
+            return queued_work_cv.wait_for(lock, timeout, [this, count]() { return queued_work.size() >= count; });
         }
 
         bool runNextQueuedWork() {
@@ -273,6 +275,20 @@ namespace {
             return true;
         }
 
+        bool cancelNextQueuedWork() {
+            WorkItem work;
+            {
+                std::lock_guard lock(queued_work_mutex);
+                if (queued_work.empty())
+                    return false;
+                work = std::move(queued_work.front());
+                queued_work.pop_front();
+            }
+            if (work.cancel)
+                work.cancel();
+            return true;
+        }
+
         bool on_viewer_thread = false;
         bool accepts_posted_work = true;
         bool queue_posted_work = false;
@@ -287,6 +303,45 @@ namespace {
         std::mutex queued_work_mutex;
         std::condition_variable queued_work_cv;
         std::deque<WorkItem> queued_work;
+    };
+
+    struct ViewSettingCallbacks {
+        lfs::vis::screen::ScreenService views;
+        lfs::vis::RenderingManager manager{views};
+        lfs::vis::ViewId first = views.activeView();
+        lfs::vis::ViewId second = views.screen().split(lfs::vis::screen::AreaId{first}, lfs::vis::screen::SplitAxis::Columns, 0.5f).value;
+        int commits = 0;
+        ViewSettingCallbacks() {
+            views.screen().setActiveView({first});
+            lfs::vis::set_render_settings_callbacks([&]() { return std::optional{lfs::vis::to_proxy(manager.getSettings())}; }, nullptr);
+            lfs::vis::set_view_render_settings_callbacks(
+                [&]() -> std::optional<lfs::vis::RenderSettingsTarget> {
+                    return views.read([&](const auto& screen) { return lfs::vis::RenderSettingsTarget{screen.activeView().value, views.screenEpoch()}; });
+                },
+                [&](const lfs::vis::RenderSettingsTarget target) -> std::optional<lfs::vis::RenderSettingsProxy> {
+                    if (target.screen_epoch != views.screenEpoch())
+                        return std::nullopt;
+                    const auto settings = manager.trySettingsForView(target.view);
+                    return settings ? std::optional{lfs::vis::to_proxy(*settings)} : std::nullopt;
+                },
+                [&](const lfs::vis::RenderSettingsTarget target, const lfs::vis::RenderSettingsProxy& proxy,
+                    lfs::vis::RenderSettingsUpdateIntent) -> std::optional<lfs::vis::RenderSettingsProxy> {
+                    if (target.screen_epoch != views.screenEpoch())
+                        return std::nullopt;
+                    auto settings = manager.trySettingsForView(target.view);
+                    if (!settings)
+                        return std::nullopt;
+                    lfs::vis::apply_proxy(*settings, proxy);
+                    if (!manager.updateSettingsForView(target.view, *settings))
+                        return std::nullopt;
+                    ++commits;
+                    return lfs::vis::to_proxy(manager.settingsForView(target.view));
+                });
+        }
+        ~ViewSettingCallbacks() {
+            lfs::vis::set_view_render_settings_callbacks(nullptr, nullptr, nullptr);
+            lfs::vis::set_render_settings_callbacks(nullptr, nullptr);
+        }
     };
 
     std::unique_ptr<lfs::core::SplatData> makeSingleWhiteSplat(const float x, const float y, const float z) {
@@ -1827,4 +1882,156 @@ for c, point, camera, forward in zip(calls, [(300, 150), (700, 150)],
     EXPECT_TRUE(run("lf.unregister_gizmo(CustomOverlay.gizmo_id)"));
     EXPECT_FALSE(lfs::python::has_viewport_draw_handlers());
     overlay.endFrame();
+}
+TEST_F(PythonIntegrationTest, RenderSettingsQueuedPropertiesSurviveFocusChangeWithoutLostUpdates) {
+    using namespace std::chrono_literals;
+    TestVisualizer viewer;
+    viewer.queue_posted_work = true;
+    const ScopedVisualizer scoped_viewer(&viewer);
+    ViewSettingCallbacks callbacks;
+    std::array<std::exception_ptr, 2> errors;
+    auto run = [&](int index, const char* statement) {
+        try {
+            (void)runPythonTensorSnippet(std::string("import lichtfeld as lf\ns=lf.get_render_settings()\n") + statement +
+                                         "\nresult_shape=(1,)\nresult_values=[1.0]");
+        } catch (...) { errors[index] = std::current_exception(); }
+    };
+    std::thread first([&] { run(0, "s.focal_length_mm=73.0"); });
+    const bool first_queued = viewer.waitForQueuedWork(5s);
+    std::thread second([&] { run(1, "s.show_grid=False"); });
+    const bool both_queued = viewer.waitForQueuedWork(5s, 2);
+    callbacks.views.edit([&](auto& screen) { screen.setActiveView({callbacks.second}); });
+    while (viewer.runNextQueuedWork()) {}
+    first.join();
+    second.join();
+    ASSERT_TRUE(first_queued);
+    ASSERT_TRUE(both_queued);
+    for (const auto& error : errors)
+        if (error)
+            std::rethrow_exception(error);
+    EXPECT_FLOAT_EQ(callbacks.manager.settingsForView(callbacks.first).focal_length_mm, 73.0f);
+    EXPECT_FALSE(callbacks.manager.settingsForView(callbacks.first).show_grid);
+    EXPECT_FLOAT_EQ(callbacks.manager.settingsForView(callbacks.second).focal_length_mm, 35.0f);
+    EXPECT_TRUE(callbacks.manager.settingsForView(callbacks.second).show_grid);
+    EXPECT_EQ(callbacks.views.activeView(), callbacks.second);
+    EXPECT_EQ(callbacks.commits, 2);
+}
+
+TEST_F(PythonIntegrationTest, RenderSettingsDeletedViewAndReplacedScreenFailWithoutRedirecting) {
+    using namespace std::chrono_literals;
+    for (const bool replace_screen : {false, true}) {
+        TestVisualizer viewer;
+        viewer.queue_posted_work = true;
+        const ScopedVisualizer scoped_viewer(&viewer);
+        ViewSettingCallbacks callbacks;
+        PythonTensorResult result;
+        std::exception_ptr error;
+        std::thread worker([&] {
+            try {
+                result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+s=lf.get_render_settings()
+failed=False
+try:
+    s.focal_length_mm=73.0
+except RuntimeError:
+    failed=True
+result_shape=(1,)
+result_values=[float(failed)]
+)PY");
+            } catch (...) { error = std::current_exception(); }
+        });
+        const bool queued = viewer.waitForQueuedWork(5s);
+        if (replace_screen)
+            callbacks.views.resetToDefault();
+        else
+            callbacks.views.edit([&](auto& screen) { EXPECT_TRUE(screen.close({callbacks.first})); });
+        while (viewer.runNextQueuedWork()) {}
+        worker.join();
+        ASSERT_TRUE(queued);
+        if (error)
+            std::rethrow_exception(error);
+        EXPECT_EQ(result.values, std::vector<float>{1.0f});
+        EXPECT_EQ(callbacks.commits, 0);
+        EXPECT_FLOAT_EQ(callbacks.manager.getSettings().focal_length_mm, 35.0f);
+    }
+}
+
+TEST_F(PythonIntegrationTest, RenderSettingsShutdownAndCancelledWorkReportFailure) {
+    using namespace std::chrono_literals;
+    TestVisualizer viewer;
+    const ScopedVisualizer scoped_viewer(&viewer);
+    ViewSettingCallbacks callbacks;
+    const std::string script = R"PY(
+import lichtfeld as lf
+s=lf.get_render_settings()
+failed=False
+try:
+    s.show_grid=False
+except RuntimeError:
+    failed=True
+result_shape=(1,)
+result_values=[float(failed)]
+)PY";
+    viewer.accepts_posted_work = false;
+    EXPECT_EQ(runPythonTensorSnippet(script).values, std::vector<float>{1.0f});
+    viewer.accepts_posted_work = true;
+    viewer.queue_posted_work = true;
+    PythonTensorResult result;
+    std::exception_ptr error;
+    std::thread worker([&] { try { result=runPythonTensorSnippet(script); } catch (...) { error=std::current_exception(); } });
+    const bool queued = viewer.waitForQueuedWork(5s);
+    EXPECT_TRUE(viewer.cancelNextQueuedWork());
+    worker.join();
+    ASSERT_TRUE(queued);
+    if (error)
+        std::rethrow_exception(error);
+    EXPECT_EQ(result.values, std::vector<float>{1.0f});
+    EXPECT_EQ(callbacks.commits, 0);
+}
+
+TEST_F(PythonIntegrationTest, RenderSettingsNormalizationSceneScopeAndNotificationsArePreserved) {
+    TestVisualizer viewer;
+    viewer.on_viewer_thread = true;
+    const ScopedVisualizer scoped_viewer(&viewer);
+    ViewSettingCallbacks callbacks;
+    int notifications = 0;
+    bool notified_with_gil = true;
+    auto& registry = lfs::core::prop::PropertyRegistry::instance();
+    // Import registers the render metadata before subscribing.
+    (void)runPythonTensorSnippet("import lichtfeld as lf\nresult_shape=(1,)\nresult_values=[1.0]");
+    const auto subscription = registry.subscribe("render_settings", "equirectangular", [&](const auto&, const auto&, const auto&, const auto&) {
+        ++notifications;
+        notified_with_gil = notified_with_gil && PyGILState_Check();
+    });
+    PythonTensorResult result;
+    try {
+        result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+s=lf.get_render_settings()
+s.gt_comparison_actual_size=True
+s.equirectangular=True
+normalized=not s.gt_comparison_actual_size
+s.equirectangular=True
+s.color_exposure=1.7
+invalid=False
+try:
+    s.focal_length_mm=object()
+except (TypeError,RuntimeError):
+    invalid=True
+result_shape=(2,)
+result_values=[float(normalized),float(invalid)]
+)PY");
+    } catch (...) {
+        registry.unsubscribe(subscription);
+        throw;
+    }
+    registry.unsubscribe(subscription);
+    EXPECT_EQ(result.values, (std::vector<float>{1.0f, 1.0f}));
+    EXPECT_EQ(notifications, 1);
+    EXPECT_TRUE(notified_with_gil);
+    EXPECT_TRUE(callbacks.manager.settingsForView(callbacks.first).equirectangular);
+    EXPECT_FALSE(callbacks.manager.settingsForView(callbacks.second).equirectangular);
+    EXPECT_FLOAT_EQ(callbacks.manager.settingsForView(callbacks.first).color_exposure, 1.7f);
+    EXPECT_FLOAT_EQ(callbacks.manager.settingsForView(callbacks.second).color_exposure, 1.7f);
 }
