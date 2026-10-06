@@ -647,6 +647,8 @@ namespace lfs::python {
         const auto nb_dtype = arr.dtype();
         if (nb_dtype == nb::dtype<float>()) {
             dtype = DataType::Float32;
+        } else if (nb_dtype == nb::dtype<NumpyFloat16>()) {
+            dtype = DataType::Float16;
         } else if (nb_dtype == nb::dtype<int32_t>()) {
             dtype = DataType::Int32;
         } else if (nb_dtype == nb::dtype<int64_t>()) {
@@ -665,6 +667,7 @@ namespace lfs::python {
         size_t elem_size = 4;
         switch (dtype) {
         case DataType::Float32: elem_size = 4; break;
+        case DataType::Float16: elem_size = 2; break;
         case DataType::Int32: elem_size = 4; break;
         case DataType::Int64: elem_size = 8; break;
         case DataType::UInt8:
