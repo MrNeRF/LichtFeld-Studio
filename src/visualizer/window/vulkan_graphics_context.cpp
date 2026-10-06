@@ -126,8 +126,10 @@ namespace lfs::vis {
     }
 
     void VulkanGraphicsContext::preparePointCloudStorage(lfs::core::PointCloud& cloud, lfs::core::TensorCompletion ready) {
-        if (cloud.size() == 0)
+        if (cloud.size() == 0) {
+            cloud.render_buffers.reset();
             return;
+        }
         auto& interop = context_.tensorInterop();
         auto positions = interop.buffer(cloud.means);
         auto colors = interop.buffer(cloud.colors);

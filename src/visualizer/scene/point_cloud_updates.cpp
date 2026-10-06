@@ -247,7 +247,7 @@ namespace lfs::vis {
             {
                 std::unique_lock lock(mutex_);
                 cv_.wait(lock, [&] {
-                    return stopping_ || std::any_of(requests_.begin(), requests_.end(), [](const auto& r) {
+                    return (stopping_ && requests_.empty()) || std::any_of(requests_.begin(), requests_.end(), [](const auto& r) {
                                return !r->active && !r->publishing && (terminal(r->ticket->state_.load()) || (r->resolved && !r->ready));
                            });
                 });

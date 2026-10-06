@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/events.hpp"
 #include "scene/point_cloud_updates.hpp"
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <future>
@@ -127,6 +128,29 @@ TEST(PointCloudUpdates, StopDoesNotWaitForActivePreparation) {
     finish.set_value();
     manager.shutdown();
     EXPECT_TRUE(ticket->inputsReleased());
+}
+
+TEST(PointCloudUpdates, ShutdownWaitsForPublicationAndRetiresAfterItFinishes) {
+    PointCloudUpdateManager manager(prepare, [] {});
+    auto ticket = manager.submit(target(), input());
+    ASSERT_TRUE(until([&] { return manager.hasReady(); }));
+    std::promise<void> started, finish;
+    auto gate = finish.get_future().share();
+    std::thread publisher([&] {
+        manager.publishReady([&](const auto&, const auto&, auto&) {
+            started.set_value();
+            gate.wait();
+        });
+    });
+    EXPECT_EQ(started.get_future().wait_for(3s), std::future_status::ready);
+    manager.stop();
+    auto stopped = std::async(std::launch::async, [&] { manager.shutdown(); });
+    EXPECT_EQ(stopped.wait_for(20ms), std::future_status::timeout);
+    finish.set_value();
+    publisher.join();
+    EXPECT_EQ(stopped.wait_for(3s), std::future_status::ready);
+    EXPECT_EQ(ticket->state(), "published");
+    EXPECT_EQ(manager.retainedRequests(), 0);
 }
 
 TEST(PointCloudUpdates, FailurePreservesVisibleDataAndReleasesInputs) {
@@ -279,6 +303,27 @@ TEST(PointCloudUpdates, ClearInvalidatesEpochButRenamePreservesIt) {
     EXPECT_NE(epoch->load(), version);
 }
 
+TEST(PointCloudUpdates, RestoreKeepsPreparedViewGenerationWithItsPayload) {
+    Scene scene;
+    auto cloud = std::make_shared<PointCloud>(host(2), host(2));
+    const auto id = scene.addPointCloud("cloud", cloud);
+    const auto uuid = scene.getNodeById(id)->uuid;
+    auto live_view = std::make_shared<PointCloud>(host(2), host(2));
+    auto retired = scene.publishNodePointCloud(uuid, cloud, {}, live_view);
+    ASSERT_EQ(scene.preparedPointCloudRender(), live_view);
+    auto staged = Scene::createRestoreStage(scene);
+    const auto staged_id = staged->addPointCloud("restored", cloud);
+    auto staged_view = std::make_shared<PointCloud>(host(2), host(2));
+    auto staged_retired = staged->publishNodePointCloud(staged->getNodeById(staged_id)->uuid, cloud, {}, staged_view);
+    ASSERT_EQ(staged->preparedPointCloudRender(), staged_view);
+    ASSERT_NE(staged->renderGeneration(), scene.renderGeneration());
+    auto previous = scene.commitRestoreStage(std::move(staged));
+    // Each cached view has its original generation, which is invalid after the
+    // graph swap. Never promote either view using the other scene's old tag.
+    EXPECT_FALSE(scene.preparedPointCloudRender());
+    EXPECT_FALSE(previous->preparedPointCloudRender());
+}
+
 #if LFS_GRAPHICS_VULKAN
 #include "rendering/point_cloud_render_buffers.hpp"
 #include "rendering/point_cloud_vulkan_renderer.hpp"
@@ -318,6 +363,24 @@ TEST(PointCloudUpdatesGpu, IndependentSnapshotAndRendererLeasesAvoidHostRoundtri
     request.prepared_buffers = current->render_buffers;
     request.size = {64, 64};
     auto frame = renderer.render(graphics.vulkanContext(), request, RenderTargetId{1});
+    ASSERT_TRUE(frame) << frame.error();
+    EXPECT_EQ(PointCloudOutputOwnershipTestAccess::hostVertexUploadBytes(renderer), 0);
+    // Prepared storage aliases the exact GPU tensors, unlike the legacy upload
+    // cache. Changed content/revisions do not require another vertex upload.
+    auto changed = host(1024);
+    std::fill_n(changed.ptr<float>(), changed.numel(), 0.5f);
+    const auto position_pointer = current->means.data_ptr();
+    current->means.copy_from(changed);
+    current->colors.copy_from(changed);
+    // Settle these test producer writes before rendering; published snapshots
+    // must not otherwise be concurrently mutated by the producer.
+    EXPECT_FLOAT_EQ(current->means.cpu().ptr<float>()[0], 0.5f);
+    EXPECT_FLOAT_EQ(current->colors.cpu().ptr<float>()[0], 0.5f);
+    EXPECT_EQ(current->means.data_ptr(), position_pointer);
+    EXPECT_FLOAT_EQ(current->render_buffers->positions.cpu().ptr<float>()[0], 0.5f);
+    ++request.positions_revision;
+    ++request.colors_revision;
+    frame = renderer.render(graphics.vulkanContext(), request, RenderTargetId{1});
     ASSERT_TRUE(frame) << frame.error();
     EXPECT_EQ(PointCloudOutputOwnershipTestAccess::hostVertexUploadBytes(renderer), 0);
     std::weak_ptr<const PointCloudRenderBuffers> previous = current->render_buffers;
@@ -430,5 +493,11 @@ TEST(PointCloudUpdatesGpu, MergedViewPreservesNodeOrderAndEmptyReplacement) {
     ASSERT_EQ(points.size(0), 2);
     EXPECT_FLOAT_EQ(points.ptr<float>()[0], 1.0f);
     EXPECT_FLOAT_EQ(points.ptr<float>()[3], 3.0f);
+    // The graphics hook can also prepare a reused cloud whose payload became
+    // empty; it must release the previous vertex leases in that case.
+    result.merged->means = host(0);
+    result.merged->colors = host(0);
+    graphics.preparePointCloudStorage(*result.merged, {});
+    EXPECT_FALSE(result.merged->render_buffers);
 }
 #endif

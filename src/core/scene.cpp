@@ -4248,6 +4248,7 @@ namespace lfs::core {
 
         point_cloud_update_epoch_->fetch_add(1, std::memory_order_release);
         prepared_point_cloud_render_.swap(staged->prepared_point_cloud_render_);
+        std::swap(prepared_point_cloud_render_generation_, staged->prepared_point_cloud_render_generation_);
         // The restore swaps the entire node graph. Join the worker before the
         // old graph moves into the returned Scene, so a later destruction of
         // that graph cannot race reads from the target's captured inputs.

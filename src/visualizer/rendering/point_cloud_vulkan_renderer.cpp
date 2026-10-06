@@ -1339,6 +1339,10 @@ namespace lfs::vis {
             }
 
             const auto& prepared = req.prepared_buffers;
+            // Leases bind these exact tensor allocations directly. Caller content
+            // revisions invalidate the legacy copied-buffer cache below, not this
+            // shared storage; comparing them to an upload-time revision would
+            // reject valid bindings after unrelated scene invalidations.
             const bool use_prepared = prepared &&
                                       prepared->positions.data_ptr() == req.positions->data_ptr() &&
                                       prepared->colors.data_ptr() == req.colors->data_ptr() &&
