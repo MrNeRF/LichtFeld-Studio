@@ -2134,7 +2134,10 @@ class TrainingPanel(Panel):
         if not params or not params.has_params():
             return False
         if prop in property_view.BOOL_PROPS:
-            return self._set_bool_prop(prop, bool(value))
+            updated = self._set_bool_prop(prop, bool(value))
+            if updated and prop == "random":
+                lf.ui.request_redraw()
+            return updated
         if prop == "mask_mode":
             return self._set_mask_mode(value)
         if prop == "bg_mode":
@@ -2145,6 +2148,13 @@ class TrainingPanel(Panel):
             params.set(prop, value)
         except (ValueError, TypeError, OverflowError, RuntimeError):
             return False
+        if prop in {
+            "init_extent",
+            "init_origin_x",
+            "init_origin_y",
+            "init_origin_z",
+        }:
+            lf.ui.request_redraw()
         return True
 
     def _set_iterations(self, params, val):

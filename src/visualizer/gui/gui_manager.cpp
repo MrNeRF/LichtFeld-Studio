@@ -1686,6 +1686,59 @@ namespace lfs::vis::gui {
             }
         }
 
+        void appendProjectedCenterCross(ViewportFrameDesc& params,
+                                        const VulkanGuideView& guide_view,
+                                        const RenderSettings& settings,
+                                        const glm::vec3& world,
+                                        const glm::vec4& color) {
+            const auto projected = projectSegmentToScreenClipped(
+                guide_view, settings, world, world);
+            if (!projected)
+                return;
+
+            constexpr float kHalfSize = 6.0f;
+            constexpr float kThickness = 2.0f;
+            appendShapeOverlayLine(params.shape_overlay_triangles,
+                                   params,
+                                   projected->a - glm::vec2(kHalfSize, 0.0f),
+                                   projected->a + glm::vec2(kHalfSize, 0.0f),
+                                   color,
+                                   kThickness);
+            appendShapeOverlayLine(params.shape_overlay_triangles,
+                                   params,
+                                   projected->a - glm::vec2(0.0f, kHalfSize),
+                                   projected->a + glm::vec2(0.0f, kHalfSize),
+                                   color,
+                                   kThickness);
+        }
+
+        void appendRandomInitializationPreview(
+            ViewportFrameDesc& params,
+            const VulkanGuideView& guide_view,
+            const RenderSettings& settings,
+            const lfs::core::param::OptimizationParameters& optimization) {
+            const glm::vec3 origin(
+                optimization.init_origin_x,
+                optimization.init_origin_y,
+                optimization.init_origin_z);
+            const glm::vec3 extent(optimization.init_extent);
+            constexpr glm::vec4 kPreviewColor(0.45f, 0.78f, 1.0f, 1.0f);
+            appendProjectedBox(params,
+                               guide_view,
+                               settings,
+                               origin - extent,
+                               origin + extent,
+                               lfs::rendering::DATA_TO_VISUALIZER_WORLD_AXES_4,
+                               kPreviewColor,
+                               2.0f);
+            appendProjectedCenterCross(
+                params,
+                guide_view,
+                settings,
+                lfs::rendering::visualizerWorldPointFromDataWorld(origin),
+                kPreviewColor);
+        }
+
         [[nodiscard]] glm::vec4 cropGuideColor(const glm::vec3& base_color,
                                                const bool inverse,
                                                const float flash) {
@@ -5495,6 +5548,19 @@ namespace lfs::vis::gui {
                                                scene_manager,
                                                overlay_scene_state ? &*overlay_scene_state : nullptr,
                                                gizmo_state);
+                if (scene_manager && scene_manager->hasDataset() &&
+                    viewer_->getEditorContext().forcePointCloudMode()) {
+                    if (const auto* const parameter_manager = viewer_->getParameterManager();
+                        parameter_manager && parameter_manager->isLoaded()) {
+                        const auto optimization = parameter_manager->copyActiveParams();
+                        if (optimization.random) {
+                            for (const auto& guide_view : collectVulkanGuideViews(camera, layout)) {
+                                appendRandomInitializationPreview(
+                                    params, guide_view, settings, optimization);
+                            }
+                        }
+                    }
+                }
                 appendVulkanViewportGizmoOverlay(params,
                                                  *viewer_, camera, layout,
                                                  current_ui_scale_,
