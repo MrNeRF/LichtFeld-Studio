@@ -207,6 +207,41 @@ TEST_F(SelectionServiceInteractionsTest, SelectionAfterVisibilityChangeUsesRefre
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 0, 1, 0}));
 }
 
+TEST_F(SelectionServiceInteractionsTest, BrushAndLassoAcceptSelectedNodeInMultiSplatScene) {
+    const auto copy_id = scene_manager_->getScene().addSplat(
+        "copy",
+        make_test_splat({
+            2.0f,
+            0.0f,
+            0.0f,
+            3.0f,
+            0.0f,
+            0.0f,
+        }));
+    ASSERT_NE(copy_id, lfs::core::NULL_NODE);
+    scene_manager_->selectNodes({"test"});
+    set_initial_selection({0, 0, 1, 0});
+    service_->setTestingScreenPositionsForCamera(0, make_screen_positions({
+                                                        10.0f,
+                                                        10.0f,
+                                                        80.0f,
+                                                        80.0f,
+                                                    }));
+
+    const auto brush = service_->selectBrush(10.0f, 10.0f, 5.0f, lfs::vis::SelectionMode::Replace, 0);
+    ASSERT_TRUE(brush.success) << brush.error;
+    EXPECT_EQ(brush.affected_count, 2u);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0, 1, 0}));
+
+    const auto lasso = service_->selectLasso(
+        {{0.0f, 0.0f}, {50.0f, 0.0f}, {0.0f, 50.0f}},
+        lfs::vis::SelectionMode::Replace,
+        0);
+    ASSERT_TRUE(lasso.success) << lasso.error;
+    EXPECT_EQ(lasso.affected_count, 2u);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0, 1, 0}));
+}
+
 TEST_F(SelectionServiceInteractionsTest, DeleteSelectedGaussiansMapsFullSelectionMaskAcrossHiddenNodes) {
     const auto copy_id = scene_manager_->getScene().addSplat(
         "copy",
