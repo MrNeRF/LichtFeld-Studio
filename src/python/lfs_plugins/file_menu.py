@@ -9,7 +9,6 @@ import time
 import uuid
 
 import lichtfeld as lf
-from .asset_index import display_name
 from .types import Operator
 from .layouts.menus import (
     menu_action,
@@ -208,6 +207,8 @@ def _open_recent_project(path: str) -> None:
 
 def format_recent_project_entry(path: str, tr) -> tuple[str, str]:
     """Return the compact recent-project label and full-path tooltip."""
+    from .asset_index import display_name
+
     windows_path = PureWindowsPath(path)
     display_path = windows_path if windows_path.drive or "\\" in path else Path(path)
     name = display_name({"path": display_path.as_posix(), "name": "", "name_origin": "stem"}) or path
