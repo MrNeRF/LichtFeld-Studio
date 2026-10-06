@@ -3122,10 +3122,15 @@ namespace lfs::training {
                     LOG_INFO("Evaluation mask: {} points from {}{}", means->shape()[0], *file, invert ? " (inverted)" : "");
                     evaluator_->set_eval_points(lfs::training::EvaluationPoints{.means = std::move(*means), .invert = invert});
                 } else if (const auto splat = lfs::core::param::parse_eval_mask_points(params_.optimization.eval_mask)) {
-                    const auto cloud = scene_ ? scene_->getInitialPointCloud() : nullptr;
-                    if (!cloud || !cloud->means.is_valid() || cloud->means.numel() == 0)
-                        return std::unexpected("Evaluation mask 'points' needs the dataset's initial point cloud, "
-                                               "which a resumed project does not keep");
+                    auto cloud = scene_ ? scene_->getInitialPointCloud() : nullptr;
+                    if (!cloud || !cloud->means.is_valid() || cloud->means.numel() == 0) {
+                        auto reloaded = lfs::training::loadInitialPointCloud(params_, origin);
+                        if (!reloaded)
+                            return std::unexpected(std::format("Evaluation mask 'points' needs the points training "
+                                                               "started from: {}",
+                                                               reloaded.error().user_message()));
+                        cloud = std::move(*reloaded);
+                    }
                     evaluator_->set_eval_points(lfs::training::EvaluationPoints{
                         .means = cloud->means.to(lfs::core::Device::CUDA).to(lfs::core::DataType::Float32).contiguous(),
                         .radius = (*splat)[0],

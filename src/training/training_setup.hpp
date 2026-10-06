@@ -123,6 +123,12 @@ namespace lfs::training {
         const lfs::core::param::TrainingParameters& params,
         lfs::core::Scene& scene);
 
+    /// Points a model trained with these parameters started from, in the training frame at
+    /// `training_origin`: the --init file when one was given, otherwise the dataset's sparse points.
+    /// A resumed project does not keep them; the evaluation points mask reloads them here.
+    [[nodiscard]] lfs::Result<std::shared_ptr<lfs::core::PointCloud>> loadInitialPointCloud(
+        const lfs::core::param::TrainingParameters& params, const glm::vec3& training_origin);
+
     /**
      * @brief Initialize training model from point cloud
      *
