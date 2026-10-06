@@ -777,6 +777,32 @@ TEST(ArgumentParserMetadataTest, BuiltHelpContainsRegistryDescriptionsAndDefault
     }
 }
 
+TEST(ArgumentParserTest, RandomInitializationOriginIsParsedAndCapturedAsOverrides) {
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--random",
+        "--init-num-pts",
+        "125000",
+        "--init-origin-x",
+        "1.25",
+        "--init-origin-y",
+        "-2.5",
+        "--init-origin-z",
+        "3.75",
+    };
+    const auto parsed = lfs::io::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.random);
+    EXPECT_EQ((*parsed)->optimization.init_num_pts, 125000);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.init_origin_x, 1.25f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.init_origin_y, -2.5f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.init_origin_z, 3.75f);
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("init_origin_x"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("init_origin_y"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("init_origin_z"));
+}
+
 TEST(ArgumentParserTest, CliOutputPathSetsExplicitAndSurvivesCreateForDataset) {
     const auto data_path = make_test_path("lfs_arg_parser_cli_output_data");
     const auto output_path = make_test_path("lfs_arg_parser_cli_output_out");

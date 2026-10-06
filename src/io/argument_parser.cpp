@@ -71,6 +71,9 @@ namespace lfs::io::args {
             OptimizationCliBinding{"--random", "random", Bool},
             OptimizationCliBinding{"--init-num-pts", "init_num_pts", Integer},
             OptimizationCliBinding{"--init-extent", "init_extent", Float},
+            OptimizationCliBinding{"--init-origin-x", "init_origin_x", Float},
+            OptimizationCliBinding{"--init-origin-y", "init_origin_y", Float},
+            OptimizationCliBinding{"--init-origin-z", "init_origin_z", Float},
             OptimizationCliBinding{"--mask-mode", "mask_mode", Enum, false,
                                    "; values: none, segment, ignore, segment_and_ignore, alpha_consistent"},
             OptimizationCliBinding{"--invert-masks", "invert_masks", Bool},
@@ -791,6 +794,9 @@ namespace {
             ::args::Flag random(init_group, "random", lfs::io::args::optimization_cli_help("--random"), {"random"});
             ::args::ValueFlag<int> init_num_pts(init_group, "init_num_pts", lfs::io::args::optimization_cli_help("--init-num-pts"), {"init-num-pts"});
             ::args::ValueFlag<float> init_extent(init_group, "init_extent", lfs::io::args::optimization_cli_help("--init-extent"), {"init-extent"});
+            ::args::ValueFlag<float> init_origin_x(init_group, "x", lfs::io::args::optimization_cli_help("--init-origin-x"), {"init-origin-x"});
+            ::args::ValueFlag<float> init_origin_y(init_group, "y", lfs::io::args::optimization_cli_help("--init-origin-y"), {"init-origin-y"});
+            ::args::ValueFlag<float> init_origin_z(init_group, "z", lfs::io::args::optimization_cli_help("--init-origin-z"), {"init-origin-z"});
 
             // =============================================================================
             // DATASET OPTIONS
@@ -1533,6 +1539,9 @@ namespace {
                                         cropbox_loss_weight_val = cli_option_present({"--cropbox-loss-weight"}) ? std::optional<float>(::args::get(cropbox_loss_weight)) : std::optional<float>(),
                                         init_num_pts_val = cli_option_present({"--init-num-pts"}) ? std::optional<int>(::args::get(init_num_pts)) : std::optional<int>(),
                                         init_extent_val = cli_option_present({"--init-extent"}) ? std::optional<float>(::args::get(init_extent)) : std::optional<float>(),
+                                        init_origin_x_val = cli_option_present({"--init-origin-x"}) ? std::optional<float>(::args::get(init_origin_x)) : std::optional<float>(),
+                                        init_origin_y_val = cli_option_present({"--init-origin-y"}) ? std::optional<float>(::args::get(init_origin_y)) : std::optional<float>(),
+                                        init_origin_z_val = cli_option_present({"--init-origin-z"}) ? std::optional<float>(::args::get(init_origin_z)) : std::optional<float>(),
                                         strategy_val = cli_option_present({"--strategy"}) ? std::optional<std::string>(::args::get(strategy)) : std::optional<std::string>(),
                                         timelapse_images_val = cli_option_present({"--timelapse-images"}) ? std::optional<std::vector<std::string>>(::args::get(timelapse_images)) : std::optional<std::vector<std::string>>(),
                                         timelapse_every_val = cli_option_present({"--timelapse-every"}) ? std::optional<int>(::args::get(timelapse_every)) : std::optional<int>(),
@@ -1709,6 +1718,9 @@ namespace {
                 setVal(cropbox_loss_weight_val, opt.cropbox_loss_weight);
                 setVal(init_num_pts_val, opt.init_num_pts);
                 setVal(init_extent_val, opt.init_extent);
+                setVal(init_origin_x_val, opt.init_origin_x);
+                setVal(init_origin_y_val, opt.init_origin_y);
+                setVal(init_origin_z_val, opt.init_origin_z);
                 setVal(strategy_val, opt.strategy);
                 setVal(timelapse_images_val, ds.timelapse_images);
                 setVal(timelapse_every_val, ds.timelapse_every);
@@ -1863,6 +1875,9 @@ namespace {
                 note_opt("cropbox_loss_weight", cropbox_loss_weight_val.has_value());
                 note_opt("init_num_pts", init_num_pts_val.has_value());
                 note_opt("init_extent", init_extent_val.has_value());
+                note_opt("init_origin_x", init_origin_x_val.has_value());
+                note_opt("init_origin_y", init_origin_y_val.has_value());
+                note_opt("init_origin_z", init_origin_z_val.has_value());
                 note_opt("strategy", strategy_val.has_value());
                 note_opt("sparsify_steps", sparsify_steps_val.has_value());
                 note_opt("init_rho", init_rho_val.has_value());

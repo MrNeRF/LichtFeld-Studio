@@ -931,6 +931,10 @@ namespace lfs::core {
                 return std::format("init_num_pts must be positive (got {})", init_num_pts);
             if (!std::isfinite(init_extent) || init_extent <= 0.0f)
                 return std::format("init_extent must be finite and positive (got {})", init_extent);
+            if (!std::isfinite(init_origin_x) || !std::isfinite(init_origin_y) ||
+                !std::isfinite(init_origin_z))
+                return std::format("random initialization origin must be finite (got {}, {}, {})",
+                                   init_origin_x, init_origin_y, init_origin_z);
             if (!std::isfinite(init_scaling) || init_scaling <= 0.0f)
                 return std::format("init_scaling must be finite and positive (got {})", init_scaling);
             if (!std::isfinite(init_opacity) || init_opacity <= 0.0f || init_opacity >= 1.0f)

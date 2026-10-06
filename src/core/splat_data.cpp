@@ -2322,12 +2322,22 @@ namespace lfs::core {
                     num_points = capacity;
                 }
                 const float extent = params.optimization.init_extent;
+                const Tensor origin = Tensor::from_vector(
+                    std::vector<float>{params.optimization.init_origin_x,
+                                       params.optimization.init_origin_y,
+                                       params.optimization.init_origin_z},
+                    {1, 3}, Device::GPU);
 
-                LOG_DEBUG("  Using random initialization: num_points={}, extent={}", num_points, extent);
+                LOG_DEBUG("  Using random initialization: num_points={}, extent={}, origin=({}, {}, {})",
+                          num_points, extent,
+                          params.optimization.init_origin_x,
+                          params.optimization.init_origin_y,
+                          params.optimization.init_origin_z);
                 positions = (Tensor::rand({static_cast<size_t>(num_points), 3}, Device::GPU)
                                  .mul(2.0f)
                                  .sub(1.0f))
-                                .mul(extent);
+                                .mul(extent)
+                                .add(origin);
                 colors = Tensor::rand({static_cast<size_t>(num_points), 3}, Device::GPU);
                 LOG_DEBUG("  Random positions created: shape={}, numel={}", positions.shape().str(), positions.numel());
                 LOG_DEBUG("  Random colors created: shape={}, numel={}", colors.shape().str(), colors.numel());

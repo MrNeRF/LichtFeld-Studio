@@ -837,6 +837,30 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.extent")
             .precision(1)
             .ui_step(0.5)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::init_origin_x,
+                        "init_origin_x", "Origin X", d.init_origin_x, -1000000.0f, 1000000.0f,
+                        "X coordinate of the random initialization volume center")
+            .locale("training.init.origin_x")
+            .tooltip("training.tooltip.origin_x")
+            .precision(3)
+            .ui_step(0.1)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::init_origin_y,
+                        "init_origin_y", "Origin Y", d.init_origin_y, -1000000.0f, 1000000.0f,
+                        "Y coordinate of the random initialization volume center")
+            .locale("training.init.origin_y")
+            .tooltip("training.tooltip.origin_y")
+            .precision(3)
+            .ui_step(0.1)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::init_origin_z,
+                        "init_origin_z", "Origin Z", d.init_origin_z, -1000000.0f, 1000000.0f,
+                        "Z coordinate of the random initialization volume center")
+            .locale("training.init.origin_z")
+            .tooltip("training.tooltip.origin_z")
+            .precision(3)
+            .ui_step(0.1)
 
             // Sparsity
             .all_strategies()
