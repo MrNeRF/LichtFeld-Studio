@@ -655,7 +655,7 @@ namespace lfs::python {
         SliceInfo info;
         auto [start, stop, step, count] = sl.compute(dim_size);
         info.start = start;
-        info.stop = stop;
+        info.stop = count == 0 ? start : stop;
         info.step = step;
         return info;
     }

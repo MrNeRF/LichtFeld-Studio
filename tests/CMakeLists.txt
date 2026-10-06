@@ -1147,6 +1147,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_store_subscriptions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_arg_extrema_nan.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_empty_slices.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_sign_nan.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_inverse_trig_domain.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_global_keepdim.py
@@ -1255,6 +1256,7 @@ add_test(NAME lichtfeld.python.gpu
         -m gpu
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_arg_extrema_nan.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_empty_slices.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_sign_nan.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_inverse_trig_domain.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_global_keepdim.py
