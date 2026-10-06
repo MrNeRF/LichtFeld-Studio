@@ -5,8 +5,11 @@ import argparse
 import importlib.util
 import json
 import os
+import re
+import signal
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 ROOT=Path(__file__).resolve().parents[2]
@@ -17,6 +20,7 @@ FFMPEG=os.environ.get("LFS_MEDIA_TEST_FFMPEG","ffmpeg")
 FFPROBE=os.environ.get("LFS_MEDIA_TEST_FFPROBE","ffprobe")
 CLI=None
 RUNNER=None
+VERSION_HEADER=None
 class IngestCLI(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -34,12 +38,15 @@ class IngestCLI(unittest.TestCase):
     def test_capabilities_and_help(self):
         result,_=self.invoke("capabilities")
         self.assertTrue(result["software_decode"])
-        self.assertFalse(result["hardware_decode"])
+        self.assertEqual(result["hardware_decode"],sys.platform == "darwin")
         self.assertFalse(result["hdr_to_sdr"])
         version,_=self.invoke("version")
         self.assertTrue(version["ffmpeg_license"])
-        self.assertEqual(version["version"],"0.1.0")
-        self.assertIn(b"media-ingest extract",subprocess.check_output([str(CLI),"--help"]))
+        self.assertTrue(version["version"])
+        expected=re.search(r'^#define GIT_TAGGED_VERSION "(.*)"',VERSION_HEADER.read_text(encoding="utf-8"),re.MULTILINE)
+        self.assertIsNotNone(expected)
+        self.assertEqual(version["version"],expected.group(1))
+        self.assertIn(b"--hdr-to-sdr",subprocess.check_output([str(CLI),"--help"]))
     def test_probe_rational_inventory_and_unicode_no_output(self):
         before={p.name:p.read_bytes() for p in self.corpus.iterdir()}
         result,_=self.invoke("probe",self.source())
@@ -113,7 +120,35 @@ class IngestCLI(unittest.TestCase):
         self.assertIn(str(output),result["error"]["message"])
         self.assertIn("native",result["error"])
         self.assertEqual(output.read_bytes(),b"keep")
+    @unittest.skipIf(sys.platform == "win32", "Windows terminate() does not deliver a CRT SIGTERM")
+    def test_sigterm_cancels_and_preserves_written_frames(self):
+        source=self.root/"long.nut"
+        subprocess.run([FFMPEG,"-v","error","-f","lavfi","-i","color=size=64x48:rate=100:duration=120",
+                        "-c:v","ffv1",str(source)],check=True,timeout=30)
+        output=self.root/"cancelled"
+        with tempfile.TemporaryFile() as stderr:
+            process=subprocess.Popen([str(CLI),"extract",str(source),"--output",str(output),"--interval","1"],
+                                     stdout=subprocess.PIPE,stderr=stderr)
+            try:
+                import time
+                deadline=time.monotonic()+20
+                while not (output/"frame_1.png").exists() and process.poll() is None and time.monotonic()<deadline:
+                    time.sleep(.01)
+                self.assertTrue((output/"frame_1.png").exists(),"extraction must start before cancellation")
+                process.send_signal(signal.SIGTERM)
+                stdout,_=process.communicate(timeout=20)
+                self.assertEqual(process.returncode,130,stdout)
+                result=json.loads(stdout)
+                self.assertEqual(result["error"]["code"],"Cancelled")
+                fields=[c["fields"] for c in result["error"]["context"]]
+                accepted=next(f["frames_accepted"] for f in fields if "frames_accepted" in f)
+                self.assertEqual(accepted,len(list(output.glob("*.png"))))
+                self.assertGreater(accepted,0)
+            finally:
+                if process.poll() is None:
+                    process.kill();process.communicate()
 if __name__=="__main__":
     parser=argparse.ArgumentParser();parser.add_argument("--cli",type=Path,required=True);parser.add_argument("--runner",type=Path,required=True)
-    args,remaining=parser.parse_known_args();CLI=args.cli.resolve();RUNNER=args.runner.resolve()
+    parser.add_argument("--version-header",type=Path,required=True)
+    args,remaining=parser.parse_known_args();CLI=args.cli.resolve();RUNNER=args.runner.resolve();VERSION_HEADER=args.version_header.resolve()
     unittest.main(argv=[__file__,*remaining])

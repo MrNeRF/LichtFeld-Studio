@@ -164,7 +164,7 @@ namespace lfs::core {
         // exception via rethrow-dispatch into an Error, tagging it with
         // context's domain/operation_id/site/name. Must be called only from
         // directly within a catch block (uses `throw;`). Never throws.
-        [[nodiscard]] LFS_CORE_API Error normalize_current_exception(const TaskContext& context) noexcept;
+        [[nodiscard]] LFS_ERROR_API Error normalize_current_exception(const TaskContext& context) noexcept;
 
         template <class T>
         [[nodiscard]] Result<T> task_failure_from_current_exception(const TaskContext& context) noexcept {
@@ -175,7 +175,7 @@ namespace lfs::core {
         // documented no-throw contract (spec Section 0.3). Reuses
         // ErrorReporter's existing ProcessBoundary guarantee (Phase 2)
         // instead of inventing a second fixed-buffer writer. Never throws.
-        LFS_CORE_API void report_completion_violation(const TaskContext& context) noexcept;
+        LFS_ERROR_API void report_completion_violation(const TaskContext& context) noexcept;
 
     } // namespace detail
 

@@ -57,6 +57,32 @@ class ExtractionContracts(unittest.TestCase):
                 self.assertEqual(bytes(frame["pixels"]), pixels[index*6144:(index+1)*6144])
             self.assertEqual(result["payload_bytes"], len(result["frames"])*6144)
 
+    def test_optional_jpeg_backend_failures_and_cpu_fallback(self):
+        reference, files = self.extract(format="jpg")
+        self.assertTrue(reference["success"], reference["error"])
+        encoded = next(files.glob("*.jpg"))
+        for mode, hardware, expected, count, calls in (("short", True, False, 0, 1),
+                ("empty", True, False, 0, 1), ("throw-later", True, False, 2, 1),
+                ("blocked", True, False, 1, 1), ("short", False, True, 4, 0),
+                ("unavailable", True, True, 4, 1), ("memory", True, True, 4, 0)):
+            with self.subTest(mode=mode, hardware=hardware):
+                work=Path(tempfile.mkdtemp(dir=self.root)); output=work/"output"
+                if mode == "blocked":
+                    output.mkdir(); (output/"frame_002.jpg").mkdir()
+                request={"operation":"jpeg-backend", "input":str(self.corpus/"cfr-asymmetric.nut"),
+                         "output":str(output),"backend_mode":mode,"allow_hardware":hardware,"encoded_reference":str(encoded)}
+                path=work/"request.json";path.write_text(json.dumps(request),encoding="utf-8")
+                result=subprocess.run([str(RUNNER),str(path)],capture_output=True,timeout=30)
+                self.assertEqual(result.returncode,0,result.stderr)
+                actual=json.loads(result.stdout)
+                self.assertEqual(actual["success"],expected,actual)
+                self.assertEqual(actual["accepted"],count,actual)
+                self.assertEqual(actual["factory_calls"],calls,actual)
+                written=[p for p in output.glob("*.jpg") if p.is_file()]
+                self.assertEqual(len(written),0 if mode == "memory" else count)
+                if expected and mode != "memory":
+                    self.assertEqual({p.name:p.read_bytes() for p in written}, {p.name:p.read_bytes() for p in files.glob("*.jpg")})
+
     def test_memory_sink_matches_file_transform_selection(self):
         for options in ({"rotation":90}, {"scale":0.5}, {"width":40,"height":24},
                         {"start":0.1,"end":0.3}, {"mode":"fps","fps":5},

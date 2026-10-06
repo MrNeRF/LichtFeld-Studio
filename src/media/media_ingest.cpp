@@ -2,8 +2,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "io/media/media_ingest.hpp"
 #include "io/video_frame_extractor.hpp"
+#include "media_backends.hpp"
 #include <cmath>
 #include <exception>
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavutil/avutil.h>
+}
+#ifdef __APPLE__
+extern "C" {
+#include <libavutil/hwcontext.h>
+}
+#endif
 
 namespace lfs::media {
     namespace {
@@ -33,6 +43,8 @@ namespace lfs::media {
             p.sharpness.window_mode = request.sharpness.window;
             p.sharpness.window_candidates_target = request.sharpness.window_candidates;
             p.cancel_requested = request.cancelled;
+            p.allow_hardware_decode = request.allow_hardware_decode;
+            p.convert_hdr_to_sdr = request.convert_hdr_to_sdr;
             return p;
         }
         struct TrackingSink final : FrameSink {
@@ -52,14 +64,20 @@ namespace lfs::media {
                     ++accepted;
                 return result;
             }
-            SinkResult complete(const SinkSummary& s) override { return track(destination.complete(s)); }
-            void abort(const SinkSummary& s) noexcept override { destination.abort(s); }
+            SinkResult complete(const SinkSummary& s) override {
+                accepted = s.frames_accepted;
+                return track(destination.complete(s));
+            }
+            void abort(const SinkSummary& s) noexcept override {
+                accepted = s.frames_accepted;
+                destination.abort(s);
+            }
         };
         Result<IngestReport> execute(const IngestRequest& request, FrameSink* sink, const FileExtraction* files) {
             std::size_t accepted = 0;
             try {
-                if (request.convert_hdr_to_sdr)
-                    return failure(ErrorCode::Unsupported, "HDR to SDR is unavailable in the CPU Media Ingest profile", 0);
+                if (request.convert_hdr_to_sdr && !detail::hasHdrBackend())
+                    return failure(ErrorCode::Unsupported, "HDR to SDR is unavailable in this host", 0);
                 if (request.input.empty() || request.input.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos)
                     return failure(ErrorCode::InvalidArgument, "Input path must be nonempty and contain no NUL", 0);
                 if (request.selection.mode != SelectionMode::FPS && request.selection.mode != SelectionMode::Interval)
@@ -119,7 +137,19 @@ namespace lfs::media {
             }
         }
     } // namespace
-    IngestCapabilities MediaIngest::capabilities() noexcept { return {}; }
+    Result<MediaDescription> MediaIngest::probe(const std::filesystem::path& path, const ProbeOptions& options) {
+        return MediaProbe::inspect(path, options);
+    }
+    IngestCapabilities MediaIngest::capabilities() noexcept {
+        IngestCapabilities value;
+        value.hardware_decode = detail::hasGpuJpegBackend();
+#ifdef __APPLE__
+        value.hardware_decode = av_hwdevice_find_type_by_name("videotoolbox") != AV_HWDEVICE_TYPE_NONE;
+#endif
+        value.hdr_to_sdr = detail::hasHdrBackend();
+        return value;
+    }
     Result<IngestReport> MediaIngest::extract(const IngestRequest& request, FrameSink& sink) { return execute(request, &sink, nullptr); }
+    CodecBuildInfo MediaIngest::codecBuildInfo() { return {av_version_info(), avcodec_license(), avcodec_configuration()}; }
     Result<IngestReport> MediaIngest::extractFiles(const IngestRequest& request, const FileExtraction& files) { return execute(request, nullptr, &files); }
 } // namespace lfs::media

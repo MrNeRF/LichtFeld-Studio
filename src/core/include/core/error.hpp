@@ -68,8 +68,8 @@ namespace lfs {
     // because every developer-facing string field (user_message, detail,
     // NativeError::name, frame operation, SmallFields string values) is
     // truncated through this single, independently-testable routine.
-    [[nodiscard]] LFS_CORE_API std::string truncate_utf8_safe(std::string value,
-                                                              std::size_t max_bytes) noexcept;
+    [[nodiscard]] LFS_ERROR_API std::string truncate_utf8_safe(std::string value,
+                                                               std::size_t max_bytes) noexcept;
 
     // How urgently a failure needs attention. Not part of the frozen
     // taxonomy (Section 5.2 names the field but does not enumerate values);
@@ -96,7 +96,7 @@ namespace lfs {
     // MCP request, export). Generated once at the owning boundary and
     // copied into every log/event/error touched by that action; the empty
     // id (value() == 0) means "no operation context was attached."
-    class LFS_CORE_API OperationId {
+    class LFS_ERROR_API OperationId {
     public:
         constexpr OperationId() noexcept = default;
 
@@ -130,7 +130,7 @@ namespace lfs {
     // itself COW or refcounted, just moved into the frame it describes.
     // Capacity is fixed at kMaxFieldsPerFrame; add() beyond that is a silent
     // no-op and sets overflowed() so a formatter can note the truncation.
-    class LFS_CORE_API SmallFields {
+    class LFS_ERROR_API SmallFields {
     public:
         using Value = std::variant<std::monostate, bool, std::int64_t, std::uint64_t, double, std::string>;
 
@@ -202,8 +202,8 @@ namespace lfs {
     // Declared before Error so the friend declarations inside the class are
     // not the first declarations MSVC sees — attaching dllexport/dllimport
     // only on a later redeclaration is C2375 (redefinition; different linkage).
-    [[nodiscard]] LFS_CORE_API Error make_error(ErrorInit init) noexcept;
-    [[nodiscard]] LFS_CORE_API Error make_immortal_error_for_testing(bool unknown_seed) noexcept;
+    [[nodiscard]] LFS_ERROR_API Error make_error(ErrorInit init) noexcept;
+    [[nodiscard]] LFS_ERROR_API Error make_immortal_error_for_testing(bool unknown_seed) noexcept;
 
     // One-pointer immutable COW error handle. See the file-level comment for
     // the ownership/COW contract. Public surface matches Section 5.2/7.2
@@ -212,7 +212,7 @@ namespace lfs {
     // constructible/observable: with_suppressed() and suppressed() (see
     // error.cpp for the reasoning) and is_immortal(), used by tests and by
     // future degraded-diagnostics handling to recognize the OOM-safe seed.
-    class [[nodiscard("discarded LichtFeld error")]] LFS_CORE_API Error {
+    class [[nodiscard("discarded LichtFeld error")]] LFS_ERROR_API Error {
     public:
         Error(const Error& other) noexcept;
         Error(Error&& other) noexcept;
@@ -255,8 +255,8 @@ namespace lfs {
 
         template <class>
         friend class Result;
-        friend LFS_CORE_API Error make_error(ErrorInit init) noexcept;
-        friend LFS_CORE_API Error make_immortal_error_for_testing(bool unknown_seed) noexcept;
+        friend LFS_ERROR_API Error make_error(ErrorInit init) noexcept;
+        friend LFS_ERROR_API Error make_immortal_error_for_testing(bool unknown_seed) noexcept;
     };
 
     static_assert(sizeof(Error) == sizeof(void*));
@@ -265,19 +265,19 @@ namespace lfs {
     // payload fails, returns the immortal diagnostic-OOM seed instead (see
     // error.cpp for where that seed lives and how it stays allocation-free
     // on the failing path).
-    [[nodiscard]] LFS_CORE_API Error make_error(ErrorInit init) noexcept;
+    [[nodiscard]] LFS_ERROR_API Error make_error(ErrorInit init) noexcept;
 
     // Test-only fault injection for the OOM-during-construction path. While
     // armed, the next (and only the next) make_error() call behaves as if
     // its payload allocation threw, exercising the exact catch branch a real
     // allocator failure would take without requiring a real OOM.
-    LFS_CORE_API void force_next_error_allocation_to_fail_for_testing(bool should_fail) noexcept;
+    LFS_ERROR_API void force_next_error_allocation_to_fail_for_testing(bool should_fail) noexcept;
 
     // Returns one of the two immortal seeds directly, for identity/bench
     // tests that want to reference them without forcing an allocation
     // failure. `unknown_seed` selects the "unknown terminal failure" seed
     // instead of the default diagnostic-OOM seed.
-    [[nodiscard]] LFS_CORE_API Error make_immortal_error_for_testing(bool unknown_seed = false) noexcept;
+    [[nodiscard]] LFS_ERROR_API Error make_immortal_error_for_testing(bool unknown_seed = false) noexcept;
 
     namespace detail {
 
@@ -589,7 +589,7 @@ namespace lfs {
     // Bridge for cold exception-oriented code (constructors, deep legacy
     // call chains, foreign-library catch boundaries). Carries the same
     // Error a Result would have, so catching does not destroy structure.
-    class LFS_CORE_API Exception final : public std::exception {
+    class LFS_ERROR_API Exception final : public std::exception {
     public:
         explicit Exception(Error error) noexcept
             : error_(std::move(error)) {}
@@ -609,7 +609,7 @@ namespace lfs {
     // source/fields, and a suppressed-error count. This is the developer
     // diagnostic used by Exception::what(); it is not the Phase 10 wire JSON
     // schema (Section 5.10), which is a distinct, not-yet-implemented format.
-    [[nodiscard]] LFS_CORE_API std::string format_for_developer(const Error& error);
+    [[nodiscard]] LFS_ERROR_API std::string format_for_developer(const Error& error);
 
     // Context required to bridge one legacy std::expected<T, std::string>
     // (or std::error_code) call into the typed taxonomy. Every call site is
@@ -628,8 +628,8 @@ namespace lfs {
     // Declared (not just used) before from_legacy_expected: the call inside
     // that template does not depend on T, so ordinary unqualified lookup
     // resolves it at the template's definition point, not at instantiation.
-    [[nodiscard]] LFS_CORE_API Error make_legacy_error(std::string legacy_message,
-                                                       LegacyErrorContext context);
+    [[nodiscard]] LFS_ERROR_API Error make_legacy_error(std::string legacy_message,
+                                                        LegacyErrorContext context);
 
     // The only generic string bridge. A successful legacy expected converts
     // to a successful Result<T>; a failed one becomes a typed Error carrying
@@ -656,9 +656,9 @@ namespace lfs {
     // Explicit adapter from a std::error_code (POSIX/filesystem/etc) call
     // site. `code`/`domain` classify it into the stable taxonomy; the native
     // std::error_code value/category name is preserved in NativeError.
-    [[nodiscard]] LFS_CORE_API Error from_std_error_code(std::error_code ec, ErrorCode code,
-                                                         ErrorDomain domain, std::string operation,
-                                                         core::SourceSite source);
+    [[nodiscard]] LFS_ERROR_API Error from_std_error_code(std::error_code ec, ErrorCode code,
+                                                          ErrorDomain domain, std::string operation,
+                                                          core::SourceSite source);
 
     // Closed reason set for LFS_FATAL_INVARIANT (allocator/crash
     // implementation files only; see Section 5.12). The macro itself is out

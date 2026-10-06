@@ -3,8 +3,9 @@
 This baseline block creates a reproducible corpus without using LichtFeld's
 encoder or a GPU. The preparation suite verifies the corpus itself; the separate
 `extractor` target compiles and exercises the real VideoFrameExtractor and image
-writers. HDR, automatic rotation metadata, telemetry, actual lens calibration and
-stitching are not covered yet. This is the first step towards Media Ingest.
+writers. The offline baseline does not qualify HDR, telemetry, lens calibration
+or stitching. Native Studio backend qualification is a separate suite described
+below; probe/preview orientation contracts are covered in the CPU harness.
 
 ## Run
 
@@ -62,25 +63,28 @@ ctest --test-dir build-media-extractor -C Release --output-on-failure
 ```
 
 Alternatively reuse an existing dynamic package prefix with `-DCMAKE_PREFIX_PATH`.
-The leaf manifest pins the repository's vcpkg baseline and reuses only the OpenEXR
+The offline test manifest pins the repository's vcpkg baseline and reuses only the OpenEXR
 overlay; it does not change the app manifest or add OpenImageIO. FFmpeg development
 libraries, JSON and the production image-codec dependencies are required. Windows
 CTest adds the package DLL directory to PATH; override `MEDIA_RUNTIME_LIBRARY_DIR`
 when runtime DLLs are in a different location.
 
-The test adapter takes a JSON request and calls `VideoFrameExtractor::extract`.
-Production selection, geometry, FFmpeg decode, PNG/JPEG codecs and schema-2
-metadata are compiled directly. Only the user log sink and HDR renderer boundary
-are test support: logs go to stderr, and reaching HDR throws instead of returning
-fake pixels. No GUI/Python embedding, CUDA or Slang compiler is linked.
+The test adapter takes a JSON request and calls production extraction/probe/preview
+code. The project builds the real shared diagnostics, logger, errors, image codecs
+and media module, plus the actual Python binding group. No logging/assert/HDR
+substitutes or private core copies are used. It does not link tensor/GPU targets.
 
-The sixteen extraction tests cover exact PNG pixels, interval/FPS selection,
-trim/source naming, VFR timestamps, explicit rotations, scale/custom dimensions,
-independent bilinear resize, JPEG flat-patch error (six 8-bit levels), metadata on/off,
-invalid requests, bad input, cancellation, output failure and sharpness rejection.
-BT.601/BT.709 limited-range YUV outputs are compared to independent FFmpeg decode.
-Resize/YUV comparisons allow up to three 8-bit levels for library-version rounding;
-lossless, unscaled PNG requires exact pixels.
+Extraction contracts cover independent pixels/PTS, trim/naming, VFR, rotation,
+resize, JPEG/YUV tolerances, metadata, invalid input, cancellation, sink lifecycle,
+limits and writer failures. Injected optional JPEG adapters additionally exercise
+incomplete batches, failure after accepted output, CPU fallback, hardware disable
+and custom sink isolation. Injection tests do not qualify a GPU.
+
+Shared-core contracts check one error bus/dedup table across DLL consumers, writer
+registration, production assertion behavior and delegated diagnostics/event state.
+CLI contracts check output parity, real version/help, errors/progress and partial
+results; the POSIX SIGTERM contract is explicitly skipped on Windows. Python
+contracts exercise ownership, GIL and callbacks through the real binding source.
 
 The current interval/FPS end-boundary difference is characterized explicitly:
 interval includes a frame at an exactly matching end timestamp, FPS excludes it.
@@ -104,7 +108,7 @@ MediaFrameSinkUnitContracts suite. They verify retained ownership, rational sour
 PTS and decode identity, transformations/window/tail selection, no implicit disk
 output, memory limits, failure/cancellation lifecycle, PNG/JPEG equivalence,
 padded rows and real writer failure. Core structured error implementation is
-compiled directly; test diagnostics remain on stderr.
+provided by the same shared library used by Studio.
 
 See [frame sink contracts](../../docs/development/media-frame-sinks.md) for callback
 lifetimes, budget accounting, delivery indices and legacy compatibility limits.
@@ -113,15 +117,28 @@ Native sink checks also cover structured layout/copy errors and JPEG zero/defaul
 and clamped qualities, comparing exact writer bytes; PNG ignores JPEG quality.
 The extractor lifecycle suite includes non-standard callback exceptions.
 
-## Standalone CPU library and CLI
+## Shared module, CLI and Python
 
-The extractor CTest project also builds the production `lfs_media` and
-`media-ingest` targets. `MediaIngestCLIContracts` adds eight Python methods for
-CLI probe/extraction, compatibility bytes/names/metadata, strict arguments,
-Unicode paths and real output failures. `MediaIngestPackageConsumer` installs
-and relocates the SDK, then builds/runs an external C++ consumer with only its
-public headers and exported CMake target. It tests ownership, budget errors,
-structured/native sink errors, cancellation, scaling and file metadata.
-The tests reuse the existing dependency prefix and Release CI steps.
+The extractor CTest project builds production `lfs_media`, its shared core leaf
+libraries and optional CLI. It also builds the actual `py_media.cpp` binding
+group. The nested standalone SDK/package consumer has been removed; future
+packaging follows the root module after contract/platform qualification.
+The existing Release CI steps run the CPU suites without an additional job.
+See [the module guide](../../docs/development/media-ingest-core-cli.md).
 
-See [the standalone guide](../../docs/development/media-ingest-core-cli.md).
+The same binding tests can also exercise the complete Studio module after building
+`lfs_py`: pass `--studio --module-dir <build>/src/python --runtime-dir <build>`
+to `test_media_bindings.py`, with `--dependency-dir` for required runtime DLLs on
+Windows. This mode also checks that `lichtfeld.__all__` exports `media` and uses
+Studio's typed Python errors. Generate and check the committed stubs using the
+existing `lichtfeld_stub` and `check_python_stubs` targets.
+
+## Native Studio backend qualification
+
+The root `MediaStudioBackendContracts` test uses real NVDEC/nvJPEG, HDR host
+adapters and CUDA profiler sampling/events. It belongs to existing test
+configurations, adds no CI job, and reports CTest skip code 77 when no CUDA device
+is present. See [module contracts](../../docs/development/media-ingest-core-cli.md)
+for the runtime graph, Python API, shared ownership and remaining boundaries.
+
+`MediaMcpContracts` builds the production MCP media adapter in the root test configuration. It validates probe/extraction, asynchronous state, event routing, duplicate-job rejection, cancellation and nested request errors using synthetic public-tool fixtures. It does not require a GPU device.

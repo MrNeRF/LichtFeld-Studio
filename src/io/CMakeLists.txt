@@ -46,20 +46,7 @@ add_library(lfs_video STATIC
         video/video_encoder.hpp
         video/video_encoder.cpp
         video/video_reconstruction.cpp
-        include/io/media/media_probe.hpp
-        media_probe_ffmpeg.hpp
-        media_probe.cpp
-        include/io/media/media_ingest.hpp
-        ${CMAKE_SOURCE_DIR}/src/media/media_ingest.cpp
-        include/io/media/frame_sink.hpp
-        include/io/media/file_frame_sink.hpp
-        frame_sink.cpp
-        file_frame_sink.cpp
-        video_frame_extractor.hpp
-        video_frame_extractor.cpp
-        hdr_tonemap.hpp
-        hdr_tonemap.cpp
-        hdr_libplacebo.hpp
+        media_studio_backends.cpp
         hdr_tonemap_tensor.hpp
         hdr_tonemap_tensor.cpp
         video_player.hpp
@@ -76,7 +63,8 @@ if(LFS_HAS_CUDA)
         video/color_convert.cuh
         video/color_convert.cu
         video/cuda_frame_handoff.hpp
-        video/cuda_frame_handoff.cpp)
+        video/cuda_frame_handoff.cpp
+        media_cuda_backend.cpp)
 endif()
 
 target_include_directories(lfs_video
@@ -95,6 +83,7 @@ target_include_directories(lfs_video SYSTEM PRIVATE
 target_link_libraries(lfs_video
         PUBLIC
         lfs_core
+        lfs_media
         PRIVATE
         PkgConfig::FFMPEG
         spdlog::spdlog

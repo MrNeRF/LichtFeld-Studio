@@ -259,7 +259,7 @@ namespace lfs::core {
                     ::close(fd);
             }
 
-            struct sigaction action {};
+            struct sigaction action{};
             action.sa_handler = SIG_DFL;
             sigemptyset(&action.sa_mask);
             action.sa_flags = 0;
@@ -364,6 +364,14 @@ namespace lfs::core {
             // into failure reporting or replace the original failure.
         }
     }
+
+    namespace {
+        // Register even before handler installation, preserving early reports.
+        [[maybe_unused]] const bool failure_writer_registered = [] {
+            register_failure_report_writer(write_crash_diagnostic);
+            return true;
+        }();
+    } // namespace
 
     void install_crash_handlers() {
         std::call_once(g_install_once, [] {

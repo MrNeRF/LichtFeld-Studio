@@ -3,38 +3,23 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "video_frame_extractor.hpp"
-#if defined(LFS_MEDIA_CPU_ONLY)
-#include "media/cpu_diagnostics.hpp"
-#else
-#include "core/include/core/logger.hpp"
-#endif
+#include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "hdr_libplacebo.hpp"
 #include "hdr_tonemap.hpp"
 #include "io/media/file_frame_sink.hpp"
+#include "media/media_backends.hpp"
 #include "media_probe_ffmpeg.hpp"
-#if LFS_HAS_CUDA
-#include "nvcodec_image_loader.hpp"
-#include "video/color_convert.cuh"
-#include "video/cuda_frame_handoff.hpp"
-#endif
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/dovi_meta.h>
 #include <libavutil/hwcontext.h>
-#if LFS_HAS_CUDA
-#include <libavutil/hwcontext_cuda.h>
-#endif
 #include <libavutil/imgutils.h>
 #include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
 }
-
-#if LFS_HAS_CUDA
-#include <cuda_runtime.h>
-#endif
 
 #include <nlohmann/json.hpp>
 
@@ -54,33 +39,9 @@ extern "C" {
 namespace lfs::io {
 
     namespace {
-        constexpr std::size_t MAX_JPEG_BATCH_FRAMES = 32;
-        constexpr std::size_t JPEG_BATCH_BYTE_BUDGET = 256ULL * 1024ULL * 1024ULL;
-#if LFS_HAS_CUDA
-        constexpr std::size_t MIN_CUDA_MEMORY_HEADROOM = 256ULL * 1024ULL * 1024ULL;
-#endif
         // Extraction runs off the UI thread and benefits from more parallel
         // HEVC decoding than the latency-sensitive preview path.
         constexpr int MAX_SW_DECODE_THREADS = 8;
-
-#if LFS_HAS_CUDA
-        void requireCudaSuccess(const cudaError_t result, const char* const operation) {
-            if (result != cudaSuccess) {
-                throw std::runtime_error(std::string(operation) + ": " +
-                                         cudaGetErrorString(result));
-            }
-        }
-        template <typename T>
-        void freeCudaBuffer(T*& buffer, const char* const name) {
-            if (!buffer)
-                return;
-            const cudaError_t result = cudaFree(buffer);
-            if (result != cudaSuccess) {
-                LOG_WARN("Failed to free {}: {}", name, cudaGetErrorString(result));
-            }
-            buffer = nullptr;
-        }
-#endif
 
         [[nodiscard]] double elapsedSeconds(const std::chrono::steady_clock::time_point started) {
             return std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
@@ -358,10 +319,15 @@ namespace lfs::io {
 
         void write_jpeg_to_file(const std::filesystem::path& path, const std::vector<uint8_t>& data) {
             std::ofstream file(path, std::ios::binary);
-            if (file) {
-                file.write(reinterpret_cast<const char*>(data.data()),
-                           static_cast<std::streamsize>(data.size()));
-            }
+            if (!file)
+                throw std::runtime_error("Failed to open JPEG output: " + lfs::core::path_to_utf8(path));
+            file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+            file.flush();
+            if (!file)
+                throw std::runtime_error("Failed to write JPEG output: " + lfs::core::path_to_utf8(path));
+            file.close();
+            if (!file)
+                throw std::runtime_error("Failed to close JPEG output: " + lfs::core::path_to_utf8(path));
         }
 
         const char* get_hw_decoder_name(AVCodecID codec_id) {
@@ -401,7 +367,7 @@ namespace lfs::io {
                 if (*p == state->pixel_format)
                     return *p;
             }
-#if defined(__APPLE__) && !defined(LFS_MEDIA_CPU_ONLY)
+#if defined(__APPLE__)
             // A decoder can advertise VideoToolbox yet reject a particular stream profile.
             // Keep FFmpeg's software decoder usable when no hardware format is offered.
             if (state->pixel_format == AV_PIX_FMT_VIDEOTOOLBOX) {
@@ -806,20 +772,16 @@ namespace lfs::io {
             AVPacket* packet = nullptr;
             AVBufferRef* hw_device_ctx = nullptr;
 
-            uint8_t* gpu_batch_buffer = nullptr;
-            uint8_t* gpu_rgb_buffer = nullptr;
-            uint8_t* gpu_rotated_buffer = nullptr;
             uint8_t* cpu_contiguous_buffer = nullptr;
             std::vector<uint8_t> rot_buf;
-#if LFS_HAS_CUDA
-            std::unique_ptr<NvCodecImageLoader> nvcodec;
-#endif
+            std::unique_ptr<media::detail::GpuJpegEncoder> gpu_jpeg;
             bool using_hw_decode = false;
             AVHWDeviceType hw_device_type = AV_HWDEVICE_TYPE_NONE;
             HwDecoderState hw_decoder_state;
             const char* decoder_backend = "ffmpeg_software";
 
             const auto cleanup = [&]() {
+                gpu_jpeg.reset();
                 if (sws_ctx)
                     sws_freeContext(sws_ctx);
                 av_frame_free(&frame);
@@ -831,11 +793,6 @@ namespace lfs::io {
                 avformat_close_input(&fmt_ctx);
                 delete[] cpu_contiguous_buffer;
                 cpu_contiguous_buffer = nullptr;
-#if LFS_HAS_CUDA
-                freeCudaBuffer(gpu_rgb_buffer, "CUDA RGB buffer");
-                freeCudaBuffer(gpu_batch_buffer, "CUDA JPEG batch buffer");
-                freeCudaBuffer(gpu_rotated_buffer, "CUDA rotation buffer");
-#endif
             };
 
             try {
@@ -904,9 +861,8 @@ namespace lfs::io {
 
                 // Decode Dolby Vision in software to preserve per-frame RPU metadata.
                 const AVCodec* codec = nullptr;
-#if LFS_HAS_CUDA
-                const char* hw_decoder_name = dv_profile > 0 ? nullptr : get_hw_decoder_name(codec_id);
-                if (!external_sink && hw_decoder_name) {
+                const char* hw_decoder_name = dv_profile > 0 || !media::detail::hasGpuJpegBackend() ? nullptr : get_hw_decoder_name(codec_id);
+                if (!custom_sink && params.allow_hardware_decode && hw_decoder_name) {
                     codec = avcodec_find_decoder_by_name(hw_decoder_name);
                     if (codec) {
                         if (av_hwdevice_ctx_create(&hw_device_ctx, AV_HWDEVICE_TYPE_CUDA, nullptr,
@@ -922,9 +878,9 @@ namespace lfs::io {
                         }
                     }
                 }
-#endif
-#if defined(__APPLE__) && !defined(LFS_MEDIA_CPU_ONLY)
-                if (!external_sink && dv_profile == 0 && !codec) {
+
+#if defined(__APPLE__)
+                if (!custom_sink && params.allow_hardware_decode && dv_profile == 0 && !codec) {
                     const AVCodec* const software_codec = avcodec_find_decoder(codec_id);
                     if (software_codec) {
                         for (int i = 0;; ++i) {
@@ -1205,108 +1161,15 @@ namespace lfs::io {
 
                 cpu_contiguous_buffer = new uint8_t[frame_size];
 
-#if LFS_HAS_CUDA
-                const bool use_gpu_jpeg =
-                    !external_sink && params.format == ImageFormat::JPG && NvCodecImageLoader::is_available();
-#else
-                constexpr bool use_gpu_jpeg = false;
-#endif
-                std::size_t jpeg_batch_size = 0;
-
-#if LFS_HAS_CUDA
-                if (use_gpu_jpeg) {
-                    std::size_t cuda_free_bytes = 0;
-                    std::size_t cuda_total_bytes = 0;
-                    const cudaError_t memory_info_result =
-                        cudaMemGetInfo(&cuda_free_bytes, &cuda_total_bytes);
-                    if (memory_info_result != cudaSuccess) {
-                        LOG_WARN(
-                            "Failed to query CUDA memory for JPEG batching: {}; "
-                            "falling back to CPU",
-                            cudaGetErrorString(memory_info_result));
-                    } else {
-                        const std::size_t headroom = std::max(
-                            MIN_CUDA_MEMORY_HEADROOM, cuda_total_bytes / 10);
-                        const std::size_t auxiliary_frame_count =
-                            using_hw_decode && !needs_scale &&
-                                    !convert_hdr_to_sdr
-                                ? (params.rotation == 0 ? 1 : 2)
-                                : 0;
-                        const std::size_t auxiliary_bytes =
-                            auxiliary_frame_count == 0 ||
-                                    frame_size <=
-                                        std::numeric_limits<std::size_t>::max() /
-                                            auxiliary_frame_count
-                                ? frame_size * auxiliary_frame_count
-                                : cuda_free_bytes;
-                        const std::size_t available_after_auxiliary =
-                            auxiliary_bytes < cuda_free_bytes
-                                ? cuda_free_bytes - auxiliary_bytes
-                                : 0;
-                        const std::size_t available_for_batch =
-                            headroom < available_after_auxiliary
-                                ? available_after_auxiliary - headroom
-                                : 0;
-                        jpeg_batch_size = std::min(
-                            {MAX_JPEG_BATCH_FRAMES,
-                             static_cast<std::size_t>(estimated_total),
-                             JPEG_BATCH_BYTE_BUDGET / frame_size,
-                             available_for_batch / frame_size});
-                    }
-
-                    if (jpeg_batch_size > 0) {
-                        NvCodecImageLoader::Options opts;
-                        nvcodec = std::make_unique<NvCodecImageLoader>(opts);
-                        const cudaError_t allocation_result = cudaMalloc(
-                            &gpu_batch_buffer, jpeg_batch_size * frame_size);
-                        if (allocation_result != cudaSuccess) {
-                            LOG_WARN(
-                                "Failed to allocate {}-frame CUDA JPEG batch: {}; "
-                                "falling back to CPU",
-                                jpeg_batch_size,
-                                cudaGetErrorString(allocation_result));
-                            gpu_batch_buffer = nullptr;
-                            jpeg_batch_size = 0;
-                        }
-                    } else if (memory_info_result == cudaSuccess) {
-                        LOG_WARN(
-                            "Insufficient CUDA memory headroom for JPEG batching; "
-                            "falling back to CPU");
-                    }
-
-                    if (using_hw_decode && gpu_batch_buffer && !needs_scale) {
-                        const std::size_t src_frame_size =
-                            static_cast<std::size_t>(src_width) * src_height * 3;
-                        const cudaError_t allocation_result =
-                            cudaMalloc(&gpu_rgb_buffer, src_frame_size);
-                        if (allocation_result != cudaSuccess) {
-                            LOG_WARN("Failed to allocate CUDA RGB buffer: {}",
-                                     cudaGetErrorString(allocation_result));
-                            gpu_rgb_buffer = nullptr;
-                        }
-                    }
-
-                    if (using_hw_decode && gpu_batch_buffer && gpu_rgb_buffer &&
-                        !needs_scale && !convert_hdr_to_sdr &&
-                        params.rotation != 0) {
-                        const cudaError_t allocation_result =
-                            cudaMalloc(&gpu_rotated_buffer, frame_size);
-                        if (allocation_result != cudaSuccess) {
-                            LOG_WARN(
-                                "Failed to allocate CUDA rotation buffer: {}; "
-                                "using the CPU conversion path",
-                                cudaGetErrorString(allocation_result));
-                            gpu_rotated_buffer = nullptr;
-                        }
-                    }
-                }
-#endif
-
-                const bool gpu_encoding_enabled = use_gpu_jpeg && gpu_batch_buffer != nullptr;
-                const bool full_gpu_pipeline_available =
-                    using_hw_decode && gpu_encoding_enabled && gpu_rgb_buffer && !needs_scale &&
-                    !convert_hdr_to_sdr &&
-                    (params.rotation == 0 || gpu_rotated_buffer);
+                if (!custom_sink && params.allow_hardware_decode && params.format == ImageFormat::JPG)
+                    gpu_jpeg = media::detail::createGpuJpegEncoder({src_width, src_height,
+                                                                    out_width, out_height, estimated_total, params.rotation, using_hw_decode,
+                                                                    needs_scale, convert_hdr_to_sdr});
+                const std::size_t jpeg_batch_size = gpu_jpeg ? gpu_jpeg->capacity() : 0;
+                const bool gpu_encoding_enabled = jpeg_batch_size > 0;
+                const bool full_gpu_pipeline_available = using_hw_decode && gpu_encoding_enabled &&
+                                                         hw_device_type == AV_HWDEVICE_TYPE_CUDA && gpu_jpeg->canConvertHardware() &&
+                                                         !needs_scale && !convert_hdr_to_sdr;
                 const auto throw_if_cancelled = [&]() {
                     if (params.cancel_requested && params.cancel_requested())
                         throw ExtractionCancelled{};
@@ -1316,6 +1179,7 @@ namespace lfs::io {
                 HdrTonemapTiming hdr_timing_total{};
                 double cuda_upload_seconds = 0.0;
                 double jpeg_encode_seconds = 0.0;
+                bool used_gpu_encoding = false;
                 double jpeg_write_seconds = 0.0;
                 const auto convert_frame_to_rgb8 = [&](AVFrame* source) {
                     if (convert_hdr_to_sdr) {
@@ -1473,32 +1337,30 @@ namespace lfs::io {
                 }
 
                 auto flush_jpeg_batch = [&]() {
-#if LFS_HAS_CUDA
                     if (batch_gpu_ptrs.empty())
                         return;
                     if (batch_encode_w <= 0 || batch_encode_h <= 0) {
-                        LOG_ERROR("JPEG batch dimensions not set ({}x{}), skipping {} queued frames",
-                                  batch_encode_w, batch_encode_h, batch_gpu_ptrs.size());
-                        batch_gpu_ptrs.clear();
-                        batch_filenames.clear();
-                        batch_meta.clear();
-                        batch_idx = 0;
-                        return;
+                        throw std::runtime_error("GPU JPEG batch dimensions are invalid");
                     }
                     throw_if_cancelled();
 
                     const auto jpeg_encode_started = std::chrono::steady_clock::now();
-                    auto encoded = nvcodec->encode_batch_rgb_to_jpeg(batch_gpu_ptrs, batch_encode_w, batch_encode_h,
-                                                                     params.jpg_quality);
+                    auto encoded = gpu_jpeg->encode(batch_gpu_ptrs, batch_encode_w, batch_encode_h,
+                                                    params.jpg_quality);
                     jpeg_encode_seconds += elapsedSeconds(jpeg_encode_started);
+                    if (encoded.size() != batch_gpu_ptrs.size() ||
+                        std::any_of(encoded.begin(), encoded.end(), [](const auto& bytes) { return bytes.empty(); }))
+                        throw std::runtime_error("GPU JPEG encoder returned an incomplete batch");
 
                     for (size_t i = 0; i < encoded.size(); i++) {
+                        throw_if_cancelled();
                         if (!encoded[i].empty()) {
                             const auto jpeg_write_started = std::chrono::steady_clock::now();
                             write_jpeg_to_file(batch_filenames[i], encoded[i]);
                             jpeg_write_seconds += elapsedSeconds(jpeg_write_started);
                             ++written_count;
                             ++accepted_frames;
+                            used_gpu_encoding = true;
                             if (!custom_sink && params.generate_metadata && i < batch_meta.size()) {
                                 saved_frames.push_back({lfs::core::path_to_utf8(batch_filenames[i].filename()),
                                                         batch_meta[i].timestamp,
@@ -1515,7 +1377,6 @@ namespace lfs::io {
                     batch_encode_h = 0;
                     batch_idx = 0;
                     throw_if_cancelled();
-#endif
                 };
 
                 auto generate_filename = [&](int frame_num) {
@@ -1645,24 +1506,9 @@ namespace lfs::io {
                     }
 
                     if (use_full_gpu_pipeline) {
-#if LFS_HAS_CUDA
-                        video::CudaFrameHandoff frame_handoff(hw_frame);
-                        const uint8_t* y_plane = hw_frame->data[0];
-                        const uint8_t* uv_plane = hw_frame->data[1];
-                        const int y_pitch = hw_frame->linesize[0];
-                        const int uv_pitch = hw_frame->linesize[1];
-
-                        video::nv12ToRgbCuda(y_plane, uv_plane, gpu_rgb_buffer,
-                                             src_width, src_height, y_pitch, uv_pitch, nullptr);
-                        requireCudaSuccess(cudaGetLastError(),
-                                           "CUDA NV12-to-RGB conversion failed");
-
+                        gpu_jpeg->convertHardware(hw_frame, params.sharpness.enabled ? cpu_contiguous_buffer : nullptr);
                         double frame_score = 0.0;
                         if (params.sharpness.enabled) {
-                            requireCudaSuccess(
-                                cudaMemcpy(cpu_contiguous_buffer, gpu_rgb_buffer,
-                                           frame_size, cudaMemcpyDeviceToHost),
-                                "CUDA sharpness readback failed");
                             frame_score = computeSharpnessScore(
                                 cpu_contiguous_buffer, out_width, out_height, params.sharpness.algorithm);
                             if (params.sharpness.window_mode) {
@@ -1674,51 +1520,29 @@ namespace lfs::io {
                                 cf.timestamp = current_frame_time;
                                 cf.source_frame = current_src_frame;
                                 window_candidates.push_back(std::move(cf));
+                                gpu_jpeg->finishHardware();
                                 return;
                             }
                             if (params.sharpness.threshold > 0.0 && frame_score < params.sharpness.threshold) {
                                 ++skipped_count;
                                 if (params.progress_callback)
                                     params.progress_callback(saved_count + skipped_count, estimated_total, skipped_count);
+                                gpu_jpeg->finishHardware();
                                 return;
                             }
                         }
 
                         if (!reserve_output_filename(filename, current_src_frame)) {
                             finish_selected_frame();
+                            gpu_jpeg->finishHardware();
                             return;
                         }
 
-                        const int rot = params.rotation;
-                        int batch_w = out_width;
-                        int batch_h = out_height;
-                        const uint8_t* batch_src = gpu_rgb_buffer;
-                        if (rot != 0) {
-                            const bool swap = (rot == 90 || rot == 270);
-                            const int rw = swap ? out_height : out_width;
-                            const int rh = swap ? out_width : out_height;
-                            batch_w = rw;
-                            batch_h = rh;
-                            batch_src = gpu_rotated_buffer;
-                            video::rotateRgbCuda(gpu_rgb_buffer, gpu_rotated_buffer,
-                                                 out_width, out_height, rot, nullptr);
-                            requireCudaSuccess(cudaGetLastError(),
-                                               "CUDA RGB rotation failed");
-                        }
-
                         if (batch_encode_w == 0) {
-                            batch_encode_w = batch_w;
-                            batch_encode_h = batch_h;
+                            batch_encode_w = swap_dimensions ? out_height : out_width;
+                            batch_encode_h = swap_dimensions ? out_width : out_height;
                         }
-
-                        void* dst_ptr =
-                            gpu_batch_buffer + batch_idx * frame_size;
-                        requireCudaSuccess(
-                            cudaMemcpy(dst_ptr, batch_src, frame_size,
-                                       cudaMemcpyDeviceToDevice),
-                            "CUDA JPEG batch copy failed");
-                        frame_handoff.finish();
-
+                        void* dst_ptr = gpu_jpeg->queueHardware(batch_idx);
                         batch_gpu_ptrs.push_back(dst_ptr);
                         batch_filenames.push_back(filename);
                         batch_meta.push_back({current_frame_time, current_src_frame, frame_score});
@@ -1727,7 +1551,6 @@ namespace lfs::io {
                         if (batch_idx >= jpeg_batch_size) {
                             flush_jpeg_batch();
                         }
-#endif
                     } else {
                         av_frame_unref(sw_frame);
                         const int transfer_result =
@@ -1816,18 +1639,13 @@ namespace lfs::io {
                         }
                         // --- End rotation ---
 
-#if LFS_HAS_CUDA
                         if (gpu_encoding_enabled) {
                             if (batch_encode_w == 0) {
                                 batch_encode_w = (hw_rot_w > 0) ? hw_rot_w : out_width;
                                 batch_encode_h = (hw_rot_h > 0) ? hw_rot_h : out_height;
                             }
-                            void* dst_ptr = gpu_batch_buffer + batch_idx * frame_size;
                             const auto cuda_upload_started = std::chrono::steady_clock::now();
-                            requireCudaSuccess(
-                                cudaMemcpy(dst_ptr, cpu_contiguous_buffer,
-                                           frame_size, cudaMemcpyHostToDevice),
-                                "CUDA JPEG upload failed");
+                            void* dst_ptr = gpu_jpeg->queueHost(batch_idx, cpu_contiguous_buffer);
                             cuda_upload_seconds += elapsedSeconds(cuda_upload_started);
 
                             batch_gpu_ptrs.push_back(dst_ptr);
@@ -1838,9 +1656,7 @@ namespace lfs::io {
                             if (batch_idx >= jpeg_batch_size) {
                                 flush_jpeg_batch();
                             }
-                        } else
-#endif
-                        {
+                        } else {
                             emit_rgb(hw_rot_w, hw_rot_h, cpu_contiguous_buffer, current_info, frame_score);
                             ++written_count;
                             if (!custom_sink && params.generate_metadata) {
@@ -1937,18 +1753,13 @@ namespace lfs::io {
                     }
                     // --- End rotation ---
 
-#if LFS_HAS_CUDA
                     if (gpu_encoding_enabled) {
                         if (batch_encode_w == 0) {
                             batch_encode_w = (sw_rot_w > 0) ? sw_rot_w : out_width;
                             batch_encode_h = (sw_rot_h > 0) ? sw_rot_h : out_height;
                         }
-                        void* dst_ptr = gpu_batch_buffer + batch_idx * frame_size;
                         const auto cuda_upload_started = std::chrono::steady_clock::now();
-                        requireCudaSuccess(
-                            cudaMemcpy(dst_ptr, cpu_contiguous_buffer, frame_size,
-                                       cudaMemcpyHostToDevice),
-                            "CUDA JPEG upload failed");
+                        void* dst_ptr = gpu_jpeg->queueHost(batch_idx, cpu_contiguous_buffer);
                         cuda_upload_seconds += elapsedSeconds(cuda_upload_started);
 
                         batch_gpu_ptrs.push_back(dst_ptr);
@@ -1959,9 +1770,7 @@ namespace lfs::io {
                         if (batch_idx >= jpeg_batch_size) {
                             flush_jpeg_batch();
                         }
-                    } else
-#endif
-                    {
+                    } else {
                         emit_rgb(sw_rot_w, sw_rot_h, cpu_contiguous_buffer, current_info, frame_score);
                         ++written_count;
                         if (!custom_sink && params.generate_metadata) {
@@ -2311,13 +2120,13 @@ namespace lfs::io {
                                             {"threads", using_hw_decode ? 0 : codec_ctx->thread_count},
                                         }},
                             {"tone_mapping", {
-                                                 {"backend", convert_hdr_to_sdr ? "libplacebo_vulkan" : "none"},
+                                                 {"backend", convert_hdr_to_sdr ? hdr_renderer->backendName() : std::string_view("none")},
                                                  {"enabled", convert_hdr_to_sdr},
                                                  {"output", convert_hdr_to_sdr ? "sRGB transfer, BT.709 primaries, full range, 8-bit dithered" : "source"},
                                              }},
                             {"image_encoder", {
-                                                  {"backend", gpu_encoding_enabled ? "nvimagecodec_cuda" : "cpu"},
-                                                  {"batch_size", gpu_encoding_enabled ? jpeg_batch_size : 1},
+                                                  {"backend", used_gpu_encoding ? "nvimagecodec_cuda" : "cpu"},
+                                                  {"batch_size", used_gpu_encoding ? jpeg_batch_size : 1},
                                               }},
                             {"frame_selection", {
                                                     {"strategy", sparse_seek_fallback ? "sequential_fallback" : use_sparse_keyframe_seek ? "keyframe_seek"

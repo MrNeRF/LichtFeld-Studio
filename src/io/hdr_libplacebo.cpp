@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "hdr_libplacebo.hpp"
 #include "core/include/core/logger.hpp"
+#include "hdr_studio_backend.hpp"
 
 extern "C" {
 #include <libavutil/frame.h>
@@ -43,7 +43,7 @@ namespace lfs::io {
         }
     } // namespace
 
-    class HdrLibplaceboRenderer::Impl {
+    class HdrStudioRenderer::Impl {
     public:
         ~Impl() {
             if (gpu_) {
@@ -279,32 +279,33 @@ namespace lfs::io {
         std::string initialization_error_;
     };
 
-    HdrLibplaceboRenderer::HdrLibplaceboRenderer() : impl_(std::make_unique<Impl>()) {}
-    HdrLibplaceboRenderer::~HdrLibplaceboRenderer() = default;
+    HdrStudioRenderer::HdrStudioRenderer() : impl_(std::make_unique<Impl>()) {}
+    HdrStudioRenderer::~HdrStudioRenderer() = default;
+    std::string_view HdrStudioRenderer::backendName() const noexcept { return "libplacebo_vulkan"; }
 
-    bool HdrLibplaceboRenderer::isAvailable(std::string& error) {
+    bool HdrStudioRenderer::isAvailable(std::string& error) {
         return impl_->isAvailable(error);
     }
 
-    bool HdrLibplaceboRenderer::tonemapToSdr(const AVFrame* const frame, const AVStream* const stream,
-                                             const HdrFormat source_format,
-                                             const int output_width, const int output_height,
-                                             std::vector<unsigned char>& output_rgb,
-                                             std::string& error, HdrTonemapTiming* const timing) {
+    bool HdrStudioRenderer::tonemapToSdr(const AVFrame* const frame, const AVStream* const stream,
+                                         const HdrFormat source_format,
+                                         const int output_width, const int output_height,
+                                         std::vector<unsigned char>& output_rgb,
+                                         std::string& error, HdrTonemapTiming* const timing) {
         return impl_->tonemap(frame, stream, source_format, output_width, output_height, 0,
                               output_rgb, error, timing, false, false);
     }
 
-    bool HdrLibplaceboRenderer::tonemapToSdrRgba(const AVFrame* const frame, const AVStream* const stream,
-                                                 const HdrFormat source_format,
-                                                 const int output_width, const int output_height,
-                                                 const int rotation_degrees,
-                                                 std::vector<unsigned char>& output_rgba,
-                                                 std::string& error) {
+    bool HdrStudioRenderer::tonemapToSdrRgba(const AVFrame* const frame, const AVStream* const stream,
+                                             const HdrFormat source_format,
+                                             const int output_width, const int output_height,
+                                             const int rotation_degrees,
+                                             std::vector<unsigned char>& output_rgba,
+                                             std::string& error) {
         return impl_->tonemap(frame, stream, source_format, output_width, output_height,
                               rotation_degrees, output_rgba, error, nullptr, true, true);
     }
 
-    void HdrLibplaceboRenderer::reset() { impl_->reset(); }
+    void HdrStudioRenderer::reset() { impl_->reset(); }
 
 } // namespace lfs::io

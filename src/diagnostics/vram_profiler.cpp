@@ -3,24 +3,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "diagnostics/vram_profiler.hpp"
-#include "core/cuda_types.hpp"
+#include "diagnostics/gpu_backend.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
-#if LFS_HAS_CUDA
-#include <cuda.h>
-#include <cuda_runtime.h>
-#endif
-#ifndef _WIN32
-#include <dlfcn.h>
-#if LFS_HAS_CUDA
-#include <nvml.h>
-#endif
-#include <unistd.h>
-#endif
 #include <deque>
 #include <iterator>
 #include <list>
@@ -80,97 +69,6 @@ namespace lfs::diagnostics {
         constexpr std::size_t kHistRingCapacity = 256;
         constexpr std::size_t kGpuEventPoolSize = 64;
         constexpr std::size_t kMarkerCapacity = 1024;
-
-#if !defined(_WIN32) && LFS_HAS_CUDA
-        // NVML finds the device through the CUDA runtime's PCI bus id.
-        struct NvmlMemorySample {
-            std::size_t process = 0;
-            std::size_t used = 0;
-            std::size_t total = 0;
-        };
-
-        [[nodiscard]] NvmlMemorySample nvml_memory_sample() {
-            using Device = void*;
-            struct DeviceMemoryInfo {
-                unsigned long long total;
-                unsigned long long free;
-                unsigned long long used;
-            };
-            struct Api {
-                void* lib = nullptr;
-                Device device = nullptr;
-                std::mutex mutex;
-                int (*handle)(const char*, Device*) = nullptr;
-                int (*processes)(Device, unsigned int*, nvmlProcessInfo_t*) = nullptr;
-                int (*graphics)(Device, unsigned int*, nvmlProcessInfo_t*) = nullptr;
-                int (*memory)(Device, DeviceMemoryInfo*) = nullptr;
-                Api() {
-                    lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY);
-                    if (!lib)
-                        return;
-                    const auto init = reinterpret_cast<int (*)()>(dlsym(lib, "nvmlInit_v2"));
-                    handle = reinterpret_cast<int (*)(const char*, Device*)>(
-                        dlsym(lib, "nvmlDeviceGetHandleByPciBusId_v2"));
-                    processes = reinterpret_cast<int (*)(Device, unsigned int*, nvmlProcessInfo_t*)>(
-                        dlsym(lib, "nvmlDeviceGetComputeRunningProcesses_v3"));
-                    graphics = reinterpret_cast<int (*)(Device, unsigned int*, nvmlProcessInfo_t*)>(
-                        dlsym(lib, "nvmlDeviceGetGraphicsRunningProcesses_v3"));
-                    memory = reinterpret_cast<int (*)(Device, DeviceMemoryInfo*)>(
-                        dlsym(lib, "nvmlDeviceGetMemoryInfo"));
-                    if (!init || !handle || !processes || init() != 0) {
-                        handle = nullptr;
-                        return;
-                    }
-                }
-                Device getDevice() {
-                    std::lock_guard lock(mutex);
-                    if (device)
-                        return device;
-                    if (!handle)
-                        return nullptr;
-                    int cuda_device = 0;
-                    char bus_id[32]{};
-                    if (cudaGetDevice(&cuda_device) != cudaSuccess ||
-                        cudaDeviceGetPCIBusId(bus_id, sizeof(bus_id), cuda_device) != cudaSuccess ||
-                        handle(bus_id, &device) != 0)
-                        device = nullptr;
-                    return device;
-                }
-            };
-            static Api api;
-            NvmlMemorySample sample;
-            const auto device = api.getDevice();
-            if (!device)
-                return sample;
-            if (api.memory) {
-                DeviceMemoryInfo info{};
-                if (api.memory(device, &info) == 0) {
-                    sample.used = static_cast<std::size_t>(info.used);
-                    sample.total = static_cast<std::size_t>(info.total);
-                }
-            }
-            for (const auto query : {api.processes, api.graphics}) {
-                if (!query)
-                    continue;
-                std::vector<nvmlProcessInfo_t> info(64);
-                auto count = static_cast<unsigned int>(info.size());
-                auto status = query(device, &count, info.data());
-                if (status == NVML_ERROR_INSUFFICIENT_SIZE) {
-                    info.resize(count);
-                    status = query(device, &count, info.data());
-                }
-                if (status != NVML_SUCCESS)
-                    continue;
-                for (unsigned int i = 0; i < count; ++i) {
-                    if (info[i].pid == static_cast<unsigned int>(getpid()) &&
-                        info[i].usedGpuMemory != NVML_VALUE_NOT_AVAILABLE)
-                        sample.process = std::max(sample.process,
-                                                  static_cast<std::size_t>(info[i].usedGpuMemory));
-                }
-            }
-            return sample;
-        }
-#endif
 
         template <std::size_t Capacity>
         struct RingBuffer {
@@ -234,8 +132,8 @@ namespace lfs::diagnostics {
 
         struct PendingGpuEvent {
             std::string scope;
-            cudaEvent_t start = nullptr;
-            cudaEvent_t stop = nullptr;
+            void* start = nullptr;
+            void* stop = nullptr;
             bool start_recorded = false;
             bool stop_recorded = false;
         };
@@ -343,43 +241,12 @@ namespace lfs::diagnostics {
             return join_scope_stack();
         }
 
-        bool cuda_context_live() {
-#if LFS_HAS_CUDA
-            static const auto get_state = [] {
-                void* entry = nullptr;
-                if (cudaGetDriverEntryPointByVersion("cuDevicePrimaryCtxGetState", &entry, 7000,
-                                                     cudaEnableDefault) != cudaSuccess)
-                    return decltype(&cuDevicePrimaryCtxGetState){};
-                return reinterpret_cast<decltype(&cuDevicePrimaryCtxGetState)>(entry);
-            }();
-            int device = 0;
-            unsigned flags = 0;
-            int active = 0;
-            return get_state && cudaGetDevice(&device) == cudaSuccess &&
-                   get_state(device, &flags, &active) == CUDA_SUCCESS && active != 0;
-#else
-            return false;
-#endif
-        }
+        std::atomic<const GpuDiagnosticsBackend*> g_gpu_backend{nullptr};
 
         [[nodiscard]] bool sample_cuda_used_bytes(std::size_t& used_bytes,
                                                   std::size_t* total_bytes = nullptr) {
-#if LFS_HAS_CUDA
-            if (!cuda_context_live())
-                return false;
-            std::size_t free_bytes = 0;
-            std::size_t total = 0;
-            if (cudaMemGetInfo(&free_bytes, &total) != cudaSuccess || total < free_bytes) {
-                return false;
-            }
-            used_bytes = total - free_bytes;
-            if (total_bytes) {
-                *total_bytes = total;
-            }
-            return true;
-#else
-            return false;
-#endif
+            const auto* backend = g_gpu_backend.load(std::memory_order_acquire);
+            return backend && backend->sample_used_bytes(used_bytes, total_bytes);
         }
 
         [[nodiscard]] std::string method_label(const VramAllocationMethod method) {
@@ -925,7 +792,7 @@ namespace lfs::diagnostics {
             metric.peak_bytes = std::max(metric.peak_bytes, bytes);
             metric.allocated_bytes = std::max(metric.allocated_bytes, bytes);
             metric.allocation_count = std::max<std::uint64_t>(metric.allocation_count,
-                                                               bytes > 0 ? 1 : 0);
+                                                              bytes > 0 ? 1 : 0);
             metric.method = VramAllocationMethod::Metal;
             metric.current_sample = true;
         };
@@ -1000,8 +867,8 @@ namespace lfs::diagnostics {
     }
 
     std::int32_t VramProfiler::acquireGpuEventPair(std::string_view scope, void* stream) {
-#if LFS_HAS_CUDA
-        if (!enabled() || !cuda_context_live()) {
+        const auto* backend = g_gpu_backend.load(std::memory_order_acquire);
+        if (!enabled() || !backend || !backend->context_live()) {
             return -1;
         }
         std::lock_guard lock(impl_->mutex);
@@ -1011,19 +878,19 @@ namespace lfs::diagnostics {
             }
             auto& slot = impl_->gpu_event_pool[i];
             if (!slot.start) {
-                if (cudaEventCreateWithFlags(&slot.start, cudaEventDefault) != cudaSuccess) {
+                if (!(slot.start = backend->create_event())) {
                     return -1;
                 }
             }
             if (!slot.stop) {
-                if (cudaEventCreateWithFlags(&slot.stop, cudaEventDefault) != cudaSuccess) {
+                if (!(slot.stop = backend->create_event())) {
                     return -1;
                 }
             }
             slot.scope = std::string(scope);
             slot.start_recorded = false;
             slot.stop_recorded = false;
-            if (cudaEventRecord(slot.start, static_cast<cudaStream_t>(stream)) != cudaSuccess) {
+            if (!backend->record_event(slot.start, stream)) {
                 return -1;
             }
             slot.start_recorded = true;
@@ -1031,14 +898,11 @@ namespace lfs::diagnostics {
             return static_cast<std::int32_t>(i);
         }
         return -1;
-#else
-        return -1;
-#endif
     }
 
     void VramProfiler::releaseGpuEventPair(const std::int32_t pair, void* stream) {
-#if LFS_HAS_CUDA
-        if (pair < 0 || static_cast<std::size_t>(pair) >= kGpuEventPoolSize) {
+        const auto* backend = g_gpu_backend.load(std::memory_order_acquire);
+        if (!backend || pair < 0 || static_cast<std::size_t>(pair) >= kGpuEventPoolSize) {
             return;
         }
         std::lock_guard lock(impl_->mutex);
@@ -1047,33 +911,31 @@ namespace lfs::diagnostics {
             return;
         }
         if (slot.start_recorded && slot.stop) {
-            if (cudaEventRecord(slot.stop, static_cast<cudaStream_t>(stream)) == cudaSuccess) {
+            if (backend->record_event(slot.stop, stream)) {
                 slot.stop_recorded = true;
                 impl_->gpu_event_pending.push_back(pair);
                 return;
             }
         }
         impl_->gpu_event_in_use[static_cast<std::size_t>(pair)] = false;
-#endif
     }
 
     void VramProfiler::drainGpuEvents() {
-#if LFS_HAS_CUDA
-        if (!enabled()) {
+        const auto* backend = g_gpu_backend.load(std::memory_order_acquire);
+        if (!enabled() || !backend) {
             return;
         }
         std::lock_guard lock(impl_->mutex);
         for (auto it = impl_->gpu_event_pending.begin(); it != impl_->gpu_event_pending.end();) {
             const auto idx = static_cast<std::size_t>(*it);
             auto& slot = impl_->gpu_event_pool[idx];
-            const auto status = cudaEventQuery(slot.stop);
-            if (status == cudaErrorNotReady) {
+            float elapsed_ms = 0.0f;
+            const auto status = backend->elapsed_time(slot.start, slot.stop, elapsed_ms);
+            if (status == GpuEventStatus::Pending) {
                 ++it;
                 continue;
             }
-            float elapsed_ms = 0.0f;
-            if (status == cudaSuccess &&
-                cudaEventElapsedTime(&elapsed_ms, slot.start, slot.stop) == cudaSuccess) {
+            if (status == GpuEventStatus::Ready) {
                 const auto parts = split_scope_path(slot.scope);
                 if (!parts.empty()) {
                     const auto path = join_parts(parts, parts.size());
@@ -1090,7 +952,6 @@ namespace lfs::diagnostics {
             impl_->gpu_event_in_use[idx] = false;
             it = impl_->gpu_event_pending.erase(it);
         }
-#endif
     }
 
     void VramProfiler::setGauge(std::string_view key, const double value) {
@@ -1240,15 +1101,13 @@ namespace lfs::diagnostics {
         std::lock_guard lock(impl_->mutex);
         if (impl_->cuda_device_baseline == 0)
             impl_->cuda_device_baseline = used;
-#if !defined(_WIN32) && LFS_HAS_CUDA
         if (impl_->cuda_context_baseline == 0) {
-            const auto process_bytes = nvml_memory_sample().process;
+            const auto process_bytes = process_device_memory_bytes().value_or(0);
             if (process_bytes) {
                 impl_->cuda_context_baseline = process_bytes;
                 impl_->process.cuda_context_baseline = process_bytes;
             }
         }
-#endif
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -1312,42 +1171,9 @@ namespace lfs::diagnostics {
             process = impl_->process;
         }
 
-#if LFS_HAS_CUDA
-        std::size_t free_bytes = 0;
-        std::size_t total_bytes = 0;
-        const bool cuda_live = cuda_context_live();
-        if (cuda_live && cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess && total_bytes >= free_bytes) {
-            process.cuda_used = total_bytes - free_bytes;
-            process.cuda_total = total_bytes;
-            process.cuda_memory_valid = true;
+        if (const auto* backend = g_gpu_backend.load(std::memory_order_acquire)) {
+            backend->sample_process(process);
         }
-#ifndef _WIN32
-        {
-            const auto usage = nvml_memory_sample();
-            process.process_used = usage.process;
-            process.total = usage.total ? usage.total : process.cuda_total;
-            process.total_used = std::min(usage.total ? usage.used : process.cuda_used, process.total);
-            process.process_memory_valid = usage.process > 0;
-        }
-#endif
-
-#if CUDART_VERSION >= 12080
-        int device = 0;
-        if (cuda_live && cudaGetDevice(&device) == cudaSuccess) {
-            cudaMemPool_t pool = nullptr;
-            if (cudaDeviceGetDefaultMemPool(&pool, device) == cudaSuccess) {
-                std::uint64_t used = 0;
-                std::uint64_t reserved = 0;
-                if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &used) == cudaSuccess &&
-                    cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &reserved) == cudaSuccess) {
-                    process.cuda_pool_used = static_cast<std::size_t>(used);
-                    process.cuda_pool_reserved = static_cast<std::size_t>(reserved);
-                    process.cuda_pool_valid = true;
-                }
-            }
-        }
-#endif
-#endif
 
         {
             std::lock_guard lock(impl_->mutex);
@@ -1889,12 +1715,19 @@ namespace lfs::diagnostics {
         }
     }
 
+    bool register_gpu_diagnostics_backend(const GpuDiagnosticsBackend& backend) noexcept {
+        if (!backend.context_live || !backend.sample_used_bytes || !backend.sample_process ||
+            !backend.process_memory_bytes || !backend.create_event || !backend.record_event || !backend.elapsed_time)
+            return false;
+        const GpuDiagnosticsBackend* expected = nullptr;
+        return g_gpu_backend.compare_exchange_strong(expected, &backend, std::memory_order_release,
+                                                     std::memory_order_acquire) ||
+               expected == &backend;
+    }
+
     std::optional<std::size_t> process_device_memory_bytes() {
-#if !defined(_WIN32) && LFS_HAS_CUDA
-        if (const auto bytes = nvml_memory_sample().process)
-            return bytes;
-#endif
-        return std::nullopt;
+        const auto* backend = g_gpu_backend.load(std::memory_order_acquire);
+        return backend ? backend->process_memory_bytes() : std::nullopt;
     }
 
 } // namespace lfs::diagnostics

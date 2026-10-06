@@ -35,17 +35,17 @@ namespace lfs::core {
         bool retryable = false;
     };
 
-    LFS_CORE_API void to_json(nlohmann::json& j, const WireError& e);
+    LFS_ERROR_API void to_json(nlohmann::json& j, const WireError& e);
 
     // The one sanitization point (Section 1.3/1.4 of the Phase 10 spec). Never
     // emits detail(), format_for_developer() text, frame sources, or any
     // non-allowlisted field: only the stable code/domain token, a safe
     // message, retryability, and the operation id.
-    [[nodiscard]] LFS_CORE_API WireError to_wire_error(const Error& error);
+    [[nodiscard]] LFS_ERROR_API WireError to_wire_error(const Error& error);
 
     // Full envelope: the five WireError fields plus the allowlisted "details"
     // object. Total serialized size never exceeds kMaxSerializedErrorBytes and
     // the result is always valid JSON (degradation ladder in error_envelope.cpp).
-    [[nodiscard]] LFS_CORE_API nlohmann::json to_wire_envelope(const Error& error);
+    [[nodiscard]] LFS_ERROR_API nlohmann::json to_wire_envelope(const Error& error);
 
 } // namespace lfs::core

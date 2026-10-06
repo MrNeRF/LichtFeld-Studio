@@ -31,34 +31,33 @@ else()
     endforeach()
 endif()
 get_filename_component(MEDIA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
-add_executable(media_extraction_runner runner.cpp support.cpp probe_unit_contracts.cpp frame_sink_contracts.cpp
-    ${MEDIA_ROOT}/src/media/media_ingest.cpp
-    ${MEDIA_ROOT}/src/io/media_probe.cpp
-    ${MEDIA_ROOT}/src/io/frame_sink.cpp
-    ${MEDIA_ROOT}/src/io/file_frame_sink.cpp
-    ${MEDIA_ROOT}/src/io/video_player.cpp
-    ${MEDIA_ROOT}/src/io/video_frame_extractor.cpp
-    ${MEDIA_ROOT}/src/io/hdr_tonemap.cpp
-    ${MEDIA_ROOT}/src/core/memory_domain.cpp
-    ${MEDIA_ROOT}/src/core/error.cpp
-    ${MEDIA_ROOT}/src/core/failure_report.cpp
-    ${MEDIA_ROOT}/src/core/image_codecs.cpp
-    ${MEDIA_ROOT}/src/core/image_exr.cpp)
+find_package(Threads REQUIRED)
+find_package(spdlog CONFIG REQUIRED)
+set(LFS_HAS_CUDA OFF)
+add_compile_definitions(LFS_HAS_CUDA=0)
+add_subdirectory(${MEDIA_ROOT}/src/diagnostics ${CMAKE_CURRENT_BINARY_DIR}/diagnostics)
+add_subdirectory(${MEDIA_ROOT}/src/core/logger ${CMAKE_CURRENT_BINARY_DIR}/logger)
+add_subdirectory(${MEDIA_ROOT}/src/core/error ${CMAKE_CURRENT_BINARY_DIR}/error)
+add_subdirectory(${MEDIA_ROOT}/src/core/image_codecs ${CMAKE_CURRENT_BINARY_DIR}/image-codecs)
+set(GIT_SRC_DIR "${MEDIA_ROOT}")
+set(GIT_VERSION_HEADER "${CMAKE_BINARY_DIR}/include/git_version.h")
+include(${MEDIA_ROOT}/cmake/GenerateGitVersion.cmake)
+add_custom_target(lfs_git_version COMMAND ${CMAKE_COMMAND}
+    "-DGIT_SRC_DIR=${MEDIA_ROOT}" "-DGIT_VERSION_HEADER=${GIT_VERSION_HEADER}"
+    -P "${MEDIA_ROOT}/cmake/GenerateGitVersion.cmake")
+set(LFS_BUILD_MEDIA_CLI ON)
+add_subdirectory(${MEDIA_ROOT}/src/media ${CMAKE_CURRENT_BINARY_DIR}/media)
+add_library(media_shared_core_bridge SHARED shared_core_bridge.cpp)
+target_link_libraries(media_shared_core_bridge PRIVATE lfs_error)
+set_target_properties(media_shared_core_bridge PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_executable(media_extraction_runner runner.cpp probe_unit_contracts.cpp frame_sink_contracts.cpp shared_core_contracts.cpp jpeg_backend_contracts.cpp
+    ${MEDIA_ROOT}/src/io/video_player.cpp)
 target_compile_features(media_extraction_runner PRIVATE cxx_std_23)
-target_compile_definitions(media_extraction_runner PRIVATE LFS_STATIC_BUILD LFS_HAS_CUDA=0)
+target_compile_definitions(media_extraction_runner PRIVATE LFS_HAS_CUDA=0)
 target_include_directories(media_extraction_runner PRIVATE
-    ${MEDIA_ROOT}/src ${MEDIA_ROOT}/src/io/include ${MEDIA_ROOT}/src/core/include ${MEDIA_ROOT}/external
-    ${MEDIA_FFMPEG_INCLUDE})
-target_include_directories(media_extraction_runner BEFORE PRIVATE ${ZLIB_INCLUDE_DIRS})
-target_link_libraries(media_extraction_runner PRIVATE nlohmann_json::nlohmann_json
-    OpenEXR::OpenEXRCore JPEG::JPEG PNG::PNG ZLIB::ZLIB TIFF::TIFF WebP::webp
-    ${MEDIA_FFMPEG_LIBRARIES})
-# failure_report.cpp uses std::stacktrace, which GCC ships in libstdc++exp.
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12)
-    target_link_libraries(media_extraction_runner PRIVATE stdc++exp)
-endif()
+    ${MEDIA_ROOT}/src ${MEDIA_ROOT}/src/io ${MEDIA_FFMPEG_INCLUDE})
+target_link_libraries(media_extraction_runner PRIVATE lfs_media lfs_image_codecs lfs_logger lfs_diagnostics media_shared_core_bridge ${MEDIA_FFMPEG_LIBRARIES})
 if(MSVC)
-    target_compile_definitions(media_extraction_runner PRIVATE NOMINMAX)
     target_compile_options(media_extraction_runner PRIVATE /utf-8 /W4)
 endif()
 add_test(NAME MediaExtractionContracts
@@ -93,24 +92,41 @@ if(WIN32)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
 endif()
 
-# Reuse the application's dependency prefix and existing Release job. This is the
-# standalone CPU package, not the main app CMake/CUDA/shader configuration.
-add_subdirectory(${MEDIA_ROOT}/media ${CMAKE_CURRENT_BINARY_DIR}/standalone-media)
+add_test(NAME MediaSharedCoreContracts COMMAND media_extraction_runner --shared-core-unit)
+set_tests_properties(MediaSharedCoreContracts PROPERTIES LABELS "media;cpu;offline" TIMEOUT 30)
+if(WIN32)
+    set_tests_properties(MediaSharedCoreContracts PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
+endif()
+
 add_test(NAME MediaIngestCLIContracts
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../test_ingest_cli.py
-        --cli $<TARGET_FILE:media-ingest> --runner $<TARGET_FILE:media_extraction_runner>)
-add_test(NAME MediaIngestPackageConsumer
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../test_ingest_package.py
-        --build ${CMAKE_CURRENT_BINARY_DIR}/standalone-media --cmake ${CMAKE_COMMAND}
-        --generator "${CMAKE_GENERATOR}" --compiler "${CMAKE_CXX_COMPILER}"
-        --resource-compiler "${CMAKE_RC_COMPILER}" --manifest-tool "${CMAKE_MT}" --toolchain "${CMAKE_TOOLCHAIN_FILE}"
-        --triplet "${VCPKG_TARGET_TRIPLET}" --packages "${VCPKG_INSTALLED_DIR}"
-        --prefix "${CMAKE_PREFIX_PATH}" --deployment-target "${CMAKE_OSX_DEPLOYMENT_TARGET}"
-        --osx-architectures "${CMAKE_OSX_ARCHITECTURES}")
-set_tests_properties(MediaIngestCLIContracts MediaIngestPackageConsumer PROPERTIES
+        --cli $<TARGET_FILE:media-ingest> --runner $<TARGET_FILE:media_extraction_runner>
+        --version-header ${GIT_VERSION_HEADER})
+set_tests_properties(MediaIngestCLIContracts PROPERTIES
     LABELS "media;cpu;offline;integration" TIMEOUT 300
     ENVIRONMENT "LFS_MEDIA_TEST_FFMPEG=${LFS_MEDIA_TEST_FFMPEG};LFS_MEDIA_TEST_FFPROBE=${LFS_MEDIA_TEST_FFPROBE}")
 if(WIN32)
-    set_tests_properties(MediaIngestCLIContracts MediaIngestPackageConsumer PROPERTIES
+    set_tests_properties(MediaIngestCLIContracts PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
 endif()
+
+# Compile the actual binding group against the same shared library. This stays
+# in the existing offline media job, without configuring tensor/GPU targets.
+find_package(Python 3.10 REQUIRED COMPONENTS Interpreter Development.Module)
+find_package(nanobind CONFIG REQUIRED)
+nanobind_add_module(media_test_bindings python_bindings.cpp
+    ${MEDIA_ROOT}/src/python/lfs/py_media.cpp)
+target_compile_features(media_test_bindings PRIVATE cxx_std_23)
+target_include_directories(media_test_bindings PRIVATE ${MEDIA_ROOT}/src)
+target_link_libraries(media_test_bindings PRIVATE lfs_media)
+if(MSVC)
+    target_compile_options(media_test_bindings PRIVATE /utf-8)
+endif()
+add_test(NAME MediaPythonBindingsContracts
+    COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../test_media_bindings.py
+        --module-dir $<TARGET_FILE_DIR:media_test_bindings> --runtime-dir ${CMAKE_BINARY_DIR}
+        --dependency-dir "${MEDIA_RUNTIME_LIBRARY_DIR}")
+set_tests_properties(MediaPythonBindingsContracts PROPERTIES LABELS "media;cpu;offline;integration"
+    TIMEOUT 180
+    ENVIRONMENT "LFS_MEDIA_TEST_FFMPEG=${LFS_MEDIA_TEST_FFMPEG};LFS_MEDIA_TEST_FFPROBE=${LFS_MEDIA_TEST_FFPROBE}")

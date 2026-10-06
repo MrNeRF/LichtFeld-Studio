@@ -738,6 +738,7 @@ if(LFS_BUILD_TRAINER)
         endif()
     endforeach()
 endif()
+add_subdirectory(src/media)      # Shared media library and optional CLI
 add_subdirectory(src/io)         # I/O module (lfs::io namespace)
 add_subdirectory(src/rendering)  # Rendering module (lfs::rendering namespace)
 add_subdirectory(src/sequencer)  # Sequencer module (lfs::sequencer namespace)
@@ -752,14 +753,14 @@ add_subdirectory(src/python)
 
 if(LFS_HIDDEN_SYMBOLS AND NOT WIN32)
     # Match the libraries using LFS_*_API DLL exports; leave static libraries alone.
-    set_target_properties(lfs_logger lfs_core lfs_visualizer lfs_mcp PROPERTIES
+    set_target_properties(lfs_logger lfs_error lfs_image_codecs lfs_media lfs_core lfs_visualizer lfs_mcp PROPERTIES
         CXX_VISIBILITY_PRESET hidden
         CUDA_VISIBILITY_PRESET hidden
         VISIBILITY_INLINES_HIDDEN ON
     )
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         # ELF shared links otherwise defer missing exports until Python imports the module.
-        foreach(_lfs_export_consumer IN ITEMS lfs_logger lfs_core lfs_visualizer lfs_mcp lfs_py)
+        foreach(_lfs_export_consumer IN ITEMS lfs_logger lfs_error lfs_image_codecs lfs_media lfs_core lfs_visualizer lfs_mcp lfs_py)
             target_link_options(${_lfs_export_consumer} PRIVATE "LINKER:--no-undefined")
         endforeach()
         # FFmpeg assembly uses direct references to archive-local data in the shared visualizer.
@@ -784,6 +785,7 @@ add_executable(${PROJECT_NAME}
     src/app/mcp_operator_schema.cpp
     src/app/mcp_operator_tools.cpp
     src/app/mcp_runtime_tools.cpp
+    src/app/mcp_media_tools.cpp
     src/app/mcp_sequencer_tools.cpp
     src/app/mcp_screen_tools.cpp
     src/app/mcp_node_tools.cpp
@@ -812,6 +814,12 @@ lfs_add_windows_version_resource(${PROJECT_NAME} "LichtFeld Studio")
 lfs_add_windows_version_resource(lfs_core "LichtFeld Studio core and tensor runtime")
 lfs_add_windows_version_resource(lfs_diagnostics "LichtFeld Studio diagnostics")
 lfs_add_windows_version_resource(lfs_logger "LichtFeld Studio logging")
+lfs_add_windows_version_resource(lfs_error "LichtFeld Studio shared errors")
+lfs_add_windows_version_resource(lfs_image_codecs "LichtFeld Studio image codecs")
+lfs_add_windows_version_resource(lfs_media "LichtFeld Studio media ingest")
+if(TARGET media-ingest)
+    lfs_add_windows_version_resource(media-ingest "LichtFeld Studio media ingest CLI")
+endif()
 lfs_add_windows_version_resource(lfs_event_bridge "LichtFeld Studio event bridge")
 lfs_add_windows_version_resource(lfs_visualizer "LichtFeld Studio visualizer")
 lfs_add_windows_version_resource(lfs_mcp "LichtFeld Studio MCP server")
@@ -863,6 +871,7 @@ set(LFS_APP_INTERNAL_LINK_LIBS
     lfs_core
     lfs_io
     lfs_video
+    lfs_media
     lfs_python_utils
 )
 if(LFS_BUILD_TRAINER)
@@ -1292,6 +1301,19 @@ if(WIN32 AND _exe_is_multi_config)
     )
 endif()
 
+if(APPLE)
+    set(_media_origin "@loader_path")
+elseif(UNIX)
+    set(_media_origin "$ORIGIN")
+endif()
+if(UNIX)
+    set_target_properties(lfs_error lfs_image_codecs lfs_media PROPERTIES
+        INSTALL_RPATH "${_media_origin};${_media_origin}/../lib")
+    if(TARGET media-ingest)
+        set_target_properties(media-ingest PROPERTIES
+            INSTALL_RPATH "${_media_origin};${_media_origin}/../lib")
+    endif()
+endif()
 # Platform-specific settings
 if(UNIX AND LFS_USE_VULKAN)
     if(APPLE)
@@ -1494,7 +1516,7 @@ include(GNUInstallDirs)
 include(InstallRequiredSystemLibraries)
 
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(TARGETS lfs_core
+install(TARGETS lfs_core lfs_error lfs_image_codecs lfs_media
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
@@ -1506,6 +1528,9 @@ install(TARGETS lfs_logger
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+if(TARGET media-ingest)
+    install(TARGETS media-ingest RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 install(TARGETS lfs_event_bridge
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -1717,6 +1742,9 @@ if(BUILD_PORTABLE)
     endfunction()
 
     bundle_runtime_deps("$<TARGET_FILE:${PROJECT_NAME}>" FALSE)
+    if(TARGET media-ingest)
+        bundle_runtime_deps("$<TARGET_FILE:media-ingest>" FALSE)
+    endif()
     if(LFS_MACOS_PORTABLE_APP)
         # The Python extension is dlopened and is not in the executable's link graph.
         bundle_runtime_deps("$<TARGET_FILE:lfs_py>" TRUE)

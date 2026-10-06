@@ -1,11 +1,9 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/path_utils.hpp"
+#include "git_version.h"
 #include "io/media/media_ingest.hpp"
-extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libavutil/avutil.h>
-}
+#include "media_json.hpp"
 #include <charconv>
 #include <cmath>
 #include <csignal>
@@ -60,38 +58,6 @@ namespace {
                 throw std::invalid_argument("Numeric arguments must be finite");
         return value;
     }
-    json rational(const std::optional<Rational>& value) {
-        return value ? json::array({value->numerator, value->denominator}) : json(nullptr);
-    }
-    json timestamp(const std::optional<Timestamp>& value) {
-        return value ? json{{"ticks", value->ticks}, {"time_base", {value->time_base.numerator, value->time_base.denominator}}} : json(nullptr);
-    }
-    template <class T>
-    json optional(const std::optional<T>& value) { return value ? json(*value) : json(nullptr); }
-    const char* streamKind(StreamKind kind) {
-        switch (kind) {
-        case StreamKind::Video: return "video";
-        case StreamKind::Audio: return "audio";
-        case StreamKind::Subtitle: return "subtitle";
-        case StreamKind::Data: return "data";
-        case StreamKind::Attachment: return "attachment";
-        default: return "unknown";
-        }
-    }
-    const char* orientationSource(OrientationSource source) {
-        switch (source) {
-        case OrientationSource::RotateTag: return "rotate_tag";
-        case OrientationSource::DisplayMatrix: return "display_matrix";
-        default: return "none";
-        }
-    }
-    json description(const MediaDescription& media) {
-        json result{{"container", media.container}, {"stream_info_probed", media.stream_info_probed}, {"start", timestamp(media.start)}, {"duration", timestamp(media.duration)}, {"selected_video_stream", optional(media.selected_video_stream)}, {"streams", json::array()}};
-        for (const auto& s : media.streams) {
-            result["streams"].push_back({{"index", s.index}, {"kind", streamKind(s.kind)}, {"codec", s.codec}, {"width", optional(s.width)}, {"height", optional(s.height)}, {"pixel_format", optional(s.pixel_format)}, {"time_base", rational(s.time_base)}, {"nominal_frame_rate", rational(s.nominal_frame_rate)}, {"average_frame_rate", rational(s.average_frame_rate)}, {"sample_aspect_ratio", rational(s.sample_aspect_ratio)}, {"start", timestamp(s.start)}, {"duration", timestamp(s.duration)}, {"declared_frame_count", optional(s.declared_frame_count)}, {"attached_picture", s.attached_picture}, {"default_disposition", s.default_disposition}, {"color", {{"primaries", optional(s.color.primaries)}, {"transfer", optional(s.color.transfer)}, {"matrix", optional(s.color.matrix)}, {"range", optional(s.color.range)}, {"component_depth", optional(s.color.component_depth)}}}, {"orientation", {{"source", orientationSource(s.orientation.source)}, {"rotate_tag", optional(s.orientation.rotate_tag)}, {"display_matrix", optional(s.orientation.display_matrix)}, {"clockwise_degrees", optional(s.orientation.clockwise_degrees)}, {"reflected", optional(s.orientation.reflected)}}}});
-        }
-        return result;
-    }
     int run(const std::vector<std::string>& args) {
         try {
             if (args.size() == 2 && (args[1] == "--help" || args[1] == "-h")) {
@@ -100,11 +66,12 @@ namespace {
                              "  [--start SECONDS] [--end SECONDS] [--rotate 0|90|180|270]\n"
                              "  [--scale N | --size WIDTH HEIGHT] [--format png|jpeg] [--quality N]\n"
                              "  [--name PATTERN] [--metadata] [--sharpness THRESHOLD] [--window]\n"
-                             "  [--algorithm laplacian|tenengrad|combined] [--candidates N] [--quiet]\n";
+                             "  [--algorithm laplacian|tenengrad|combined] [--candidates N] [--hdr-to-sdr] [--quiet]\n";
                 return 0;
             }
             if (args.size() == 2 && args[1] == "version") {
-                std::cout << json{{"schema_version", 1}, {"success", true}, {"version", "0.1.0"}, {"ffmpeg", av_version_info()}, {"ffmpeg_license", avcodec_license()}, {"ffmpeg_configuration", avcodec_configuration()}}.dump() << '\n';
+                const auto codecs = MediaIngest::codecBuildInfo();
+                std::cout << json{{"schema_version", 1}, {"success", true}, {"version", GIT_TAGGED_VERSION}, {"ffmpeg", codecs.ffmpeg_version}, {"ffmpeg_license", codecs.ffmpeg_license}, {"ffmpeg_configuration", codecs.ffmpeg_configuration}}.dump() << '\n';
                 return 0;
             }
             if (args.size() == 2 && args[1] == "capabilities") {
@@ -196,14 +163,15 @@ namespace {
                     throw std::invalid_argument("Unknown extract option: " + flag);
             }
             if (args[1] == "probe") {
-                const auto result = MediaProbe::inspect(request.input, probe);
+                const auto result = MediaIngest::probe(request.input, probe);
                 if (!result)
                     return failed(result.error());
-                std::cout << json{{"schema_version", 1}, {"success", true}, {"media", description(*result)}}.dump() << '\n';
+                std::cout << json{{"schema_version", 1}, {"success", true}, {"media", json_detail::description(*result)}}.dump() << '\n';
                 return 0;
             }
             cancellation = 0;
             std::signal(SIGINT, interrupt);
+            std::signal(SIGTERM, interrupt);
             request.cancelled = [] { return cancellation != 0; };
             if (!quiet)
                 request.progress = [](const IngestProgress& p) {

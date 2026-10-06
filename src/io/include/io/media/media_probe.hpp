@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "core/error.hpp"
+#include "core/export.hpp"
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -81,11 +82,11 @@ namespace lfs::media {
     };
     // Metadata only: no image output, hardware context or application runtime.
     // StreamInfo may read packets and use FFmpeg's software codec probing.
-    class MediaProbe {
+    class LFS_MEDIA_API MediaProbe {
     public:
         [[nodiscard]] static Result<MediaDescription> inspect(const std::filesystem::path& path,
                                                               const ProbeOptions& options = {});
     };
     // Legacy preview accepts quarter turns only; the description retains raw values.
-    [[nodiscard]] int legacyQuarterTurn(const Orientation& orientation);
+    [[nodiscard]] LFS_MEDIA_API int legacyQuarterTurn(const Orientation& orientation);
 } // namespace lfs::media

@@ -19,6 +19,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "git_version.h"
 #include "io/argument_parser.hpp"
+#include "io/media_studio_backends.hpp"
 #include "lfs_core_abi_stamp.h"
 #include "preferences.hpp"
 #include "preprocessing/preprocess.hpp"
@@ -318,6 +319,7 @@ int main(int argc, char* argv[]) {
 #endif
 
     lfs::core::install_crash_handlers();
+    lfs::io::registerStudioMediaBackends();
     lfs::core::record_session_start();
 #if LFS_HAS_CUDA
     lfs::core::initialize_cuda_diagnostics();

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "core/export.hpp"
 #include "io/media/file_frame_sink.hpp"
 #include <functional>
 
@@ -45,6 +46,7 @@ namespace lfs::media {
         double start_seconds = 0;
         double end_seconds = -1;
         bool convert_hdr_to_sdr = false;
+        bool allow_hardware_decode = true;
         std::function<void(const IngestProgress&)> progress;
         std::function<bool()> cancelled;
     };
@@ -64,11 +66,18 @@ namespace lfs::media {
         bool hardware_decode = false;
         bool hdr_to_sdr = false;
     };
-    // CPU profile: synchronous calls, no app runtime or GPU context. Failed
+    struct CodecBuildInfo {
+        std::string ffmpeg_version;
+        std::string ffmpeg_license;
+        std::string ffmpeg_configuration;
+    };
+    // Synchronous API; optional Studio backends are registered by the host. Failed
     // results retain accepted count as an error field; sinks retain partial data.
-    class MediaIngest {
+    class LFS_MEDIA_API MediaIngest {
     public:
         [[nodiscard]] static IngestCapabilities capabilities() noexcept;
+        [[nodiscard]] static CodecBuildInfo codecBuildInfo();
+        [[nodiscard]] static Result<MediaDescription> probe(const std::filesystem::path&, const ProbeOptions& = {});
         [[nodiscard]] static Result<IngestReport> extract(const IngestRequest&, FrameSink&);
         [[nodiscard]] static Result<IngestReport> extractFiles(const IngestRequest&, const FileExtraction&);
     };

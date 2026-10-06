@@ -7,16 +7,16 @@ struct AVFormatContext;
 struct AVStream;
 namespace lfs::media::detail {
     // Non-owning descriptions: no reads, seeks or changes to the supplied context.
-    [[nodiscard]] MediaDescription describeContext(const AVFormatContext* context);
-    [[nodiscard]] StreamDescription describeStream(const AVStream* stream);
-    [[nodiscard]] int findUsableHeaderVideoStream(const AVFormatContext* context);
+    [[nodiscard]] LFS_MEDIA_API MediaDescription describeContext(const AVFormatContext* context);
+    [[nodiscard]] LFS_MEDIA_API StreamDescription describeStream(const AVStream* stream);
+    [[nodiscard]] LFS_MEDIA_API int findUsableHeaderVideoStream(const AVFormatContext* context);
     struct VideoStreamProbe {
         int stream_index = -1;
         int ffmpeg_error = 0;
         bool metadata_complete = false;
     };
     // Probes at most once: a fallback full probe already supplies video metadata.
-    [[nodiscard]] VideoStreamProbe probeVideoStream(AVFormatContext* context);
-    void discardNonVideoStreams(AVFormatContext* context, int video_stream_index);
-    [[nodiscard]] Orientation describeDisplayMatrix(const unsigned char* data, std::size_t size);
+    [[nodiscard]] LFS_MEDIA_API VideoStreamProbe probeVideoStream(AVFormatContext* context);
+    LFS_MEDIA_API void discardNonVideoStreams(AVFormatContext* context, int video_stream_index);
+    [[nodiscard]] LFS_MEDIA_API Orientation describeDisplayMatrix(const unsigned char* data, std::size_t size);
 } // namespace lfs::media::detail

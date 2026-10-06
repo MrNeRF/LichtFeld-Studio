@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # Testing module - comprehensive tests for all components
+if(BUILD_TESTS OR BUILD_VISUALIZER_TESTS)
+    add_subdirectory(media/studio)
+endif()
 
 if(BUILD_TESTS OR BUILD_FORMAT_TESTS)
     add_executable(apple_reframe_conversion_tests test_apple_reframe_conversion.cpp)
@@ -574,6 +577,7 @@ target_compile_definitions(lichtfeld_format_tests PRIVATE
 if(WIN32)
     target_compile_definitions(lichtfeld_format_tests PRIVATE
         LFS_CORE_EXPORTS
+        LFS_ERROR_EXPORTS
         LFS_LOGGER_EXPORTS
     )
 else()

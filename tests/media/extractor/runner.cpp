@@ -12,6 +12,8 @@
 
 int runProbeUnitContracts();
 int runFrameSinkUnitContracts();
+int runSharedCoreContracts();
+nlohmann::json runJpegBackendContracts(const nlohmann::json&);
 
 // Test adapter only: decoding, selection, geometry, codecs and metadata execute
 // the production sources directly. The JSON protocol is not a public CLI.
@@ -25,8 +27,14 @@ int main(int argc, char** argv) {
             return runFrameSinkUnitContracts();
         if (std::string_view(argv[1]) == "--probe-unit")
             return runProbeUnitContracts();
+        if (std::string_view(argv[1]) == "--shared-core-unit")
+            return runSharedCoreContracts();
         std::ifstream input(lfs::core::utf8_to_path(argv[1]));
         const auto request = json::parse(input);
+        if (request.value("operation", "extract") == "jpeg-backend") {
+            std::cout << runJpegBackendContracts(request).dump() << '\n';
+            return 0;
+        }
         if (request.value("operation", "extract") == "preview") {
             VideoPlayer player;
             const bool success = player.open(lfs::core::utf8_to_path(request.at("input").get<std::string>()));

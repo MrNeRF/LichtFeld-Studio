@@ -351,7 +351,7 @@ class SceneNode:
     def world_transform(self) -> tuple:
         """World-space transform as 4x4 row-major tuple"""
 
-    def set_local_transform(self, arg: Annotated[NDArray[numpy.float32], dict(shape=(4, 4))], /) -> None:
+    def set_local_transform(self, arg: Annotated[NDArray[numpy.float32], dict(shape=(4, 4), device='cpu')], /) -> None:
         """Set local transform from a [4, 4] ndarray"""
 
     @property
@@ -580,12 +580,12 @@ class Scene:
         """Get world-space transform as 4x4 row-major tuple"""
 
     @overload
-    def set_node_transform(self, name: str, transform: Annotated[NDArray[numpy.float32], dict(shape=(4, 4))]) -> None:
-        """Set node local transform from a [4, 4] ndarray"""
-
-    @overload
     def set_node_transform(self, name: str, transform: lichtfeld.Tensor) -> None:
         """Set node local transform from a [4, 4] Tensor"""
+
+    @overload
+    def set_node_transform(self, name: str, transform: Annotated[NDArray[numpy.float32], dict(shape=(4, 4), device='cpu')]) -> None:
+        """Set node local transform from a [4, 4] ndarray"""
 
     def combined_model(self) -> SplatData | None:
         """Get the merged SplatData for all visible splats (None if empty)"""

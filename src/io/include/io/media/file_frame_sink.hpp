@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "core/export.hpp"
 #include "io/media/frame_sink.hpp"
 #include <filesystem>
 #include <unordered_set>
@@ -14,7 +15,7 @@ namespace lfs::media {
         FrameFileFormat format = FrameFileFormat::PNG;
         int jpeg_quality = 95;
     };
-    class FileFrameSink final : public FrameSink {
+    class LFS_MEDIA_API FileFrameSink final : public FrameSink {
     public:
         explicit FileFrameSink(FileFrameSinkOptions options);
         SinkResult begin(const SinkSession&) override;

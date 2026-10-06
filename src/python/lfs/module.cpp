@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <tuple>
 
+#include "io/media_studio_backends.hpp"
 #include "notification_bridge.hpp"
 #include "py_animation.hpp"
 #include "py_cameras.hpp"
@@ -27,6 +28,7 @@
 #include "py_gizmo.hpp"
 #include "py_io.hpp"
 #include "py_mcp.hpp"
+#include "py_media.hpp"
 #include "py_mesh.hpp"
 #include "py_mesh2splat.hpp"
 #include "py_nn.hpp"
@@ -3315,6 +3317,9 @@ NB_MODULE(lichtfeld, m) {
     // I/O submodule
     auto io_module = m.def_submodule("io", "File I/O operations");
     lfs::python::register_io(io_module);
+    lfs::io::registerStudioMediaBackends();
+    auto media_module = m.def_submodule("media", "Shared Media Ingest API");
+    lfs::python::register_media(media_module);
 
     auto diagnostics_module = m.def_submodule("diagnostics", "System diagnostics API");
     lfs::python::register_diagnostics(diagnostics_module);
@@ -3931,5 +3936,5 @@ Example:
         // Utilities
         "run", "list_scene", "mat4", "colormap", "help",
         // Submodules
-        "scene", "io", "packages", "mcp");
+        "scene", "io", "media", "packages", "mcp");
 }

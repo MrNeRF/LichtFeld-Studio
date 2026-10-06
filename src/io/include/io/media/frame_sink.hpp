@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "core/export.hpp"
 #include "io/media/media_probe.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -31,14 +32,14 @@ namespace lfs::media {
         double sharpness_score = 0;
     };
     // Read-only borrowed pixels, valid only during the synchronous sink callback.
-    struct FrameView {
+    struct LFS_MEDIA_API FrameView {
         FrameLayout layout;
         FrameInfo info;
         std::span<const std::uint8_t> pixels;
         [[nodiscard]] Result<std::size_t> requiredBytes() const;
     };
     // Immutable owning snapshot; copies share ownership, never decoder storage.
-    class FrameSurface {
+    class LFS_MEDIA_API FrameSurface {
     public:
         [[nodiscard]] static Result<FrameSurface> copyOf(const FrameView& source);
         [[nodiscard]] FrameView view() const;
@@ -65,7 +66,7 @@ namespace lfs::media {
     // One synchronous begin, ordered writes, then complete or abort. To retain
     // pixels beyond write(), take FrameSurface::copyOf(view). No callbacks run concurrently.
     // Failed/cancelled begin or complete attempts also receive abort. abort must not throw.
-    class FrameSink {
+    class LFS_MEDIA_API FrameSink {
     public:
         virtual ~FrameSink() = default;
         virtual SinkResult begin(const SinkSession&) { return {}; }
@@ -73,7 +74,7 @@ namespace lfs::media {
         virtual SinkResult complete(const SinkSummary&) { return {}; }
         virtual void abort(const SinkSummary&) noexcept {}
     };
-    class MemoryFrameSink final : public FrameSink {
+    class LFS_MEDIA_API MemoryFrameSink final : public FrameSink {
     public:
         explicit MemoryFrameSink(std::size_t payload_budget = 256ULL * 1024 * 1024,
                                  std::size_t frame_limit = 100000);

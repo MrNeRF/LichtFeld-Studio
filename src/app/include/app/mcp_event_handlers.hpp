@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "app/mcp_media_tools.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/nodes/events.hpp"
@@ -25,7 +26,12 @@ namespace lfs::app {
         SubscriptionQueue,
     };
 
-    inline constexpr std::array<std::string_view, 25> kMcpRuntimeEventTypes = {
+    inline constexpr std::array<std::string_view, 30> kMcpRuntimeEventTypes = {
+        "media.extract.started",
+        "media.extract.progress",
+        "media.extract.completed",
+        "media.extract.failed",
+        "media.extract.cancelled",
         "nodes.evaluation.started",
         "nodes.evaluation.progress",
         "nodes.evaluation.completed",
@@ -53,7 +59,12 @@ namespace lfs::app {
         "disk_space.save_failed",
     };
 
-    inline constexpr std::array<std::string_view, 31> kMcpSubscriptionEventTypes = {
+    inline constexpr std::array<std::string_view, 36> kMcpSubscriptionEventTypes = {
+        "media.extract.started",
+        "media.extract.progress",
+        "media.extract.completed",
+        "media.extract.failed",
+        "media.extract.cancelled",
         "nodes.evaluation.started",
         "nodes.evaluation.progress",
         "nodes.evaluation.completed",
@@ -144,6 +155,9 @@ namespace lfs::app {
                                      const McpEventStreamKind kind,
                                      PublishFn&& publish) {
         auto publisher = std::make_shared<std::decay_t<PublishFn>>(std::forward<PublishFn>(publish));
+        handlers.subscribe<MediaExtractEvent>([publisher](const auto& event) {
+            std::invoke(*publisher, "media.extract." + event.phase, event.data);
+        });
         handlers.subscribe<lfs::nodes::EvaluationEvent>([publisher](const auto& event) {
             std::invoke(*publisher, "nodes.evaluation." + event.phase,
                         nlohmann::json{{"job_id", "nodes.evaluate"}, {"generation", event.generation}, {"target", event.target}, {"node", event.node}, {"label", event.label}, {"completed", event.completed}, {"total", event.total}, {"ok", event.ok}});

@@ -4,6 +4,7 @@
   "builtin-baseline": "c3867e714dd3a51c272826eea77267876517ed99",
   "dependencies": [
     { "name": "ffmpeg", "default-features": false, "features": ["avcodec", "avformat", "swscale"] },
-    "nlohmann-json", "openexr", "libjpeg-turbo", "libpng", "zlib", "tiff", "libwebp"
+    "nlohmann-json", "openexr", "libjpeg-turbo", "libpng", "zlib", "tiff", "libwebp",
+    "spdlog", "nanobind"
   ]
 }

@@ -55,25 +55,25 @@ namespace lfs::core::image_codecs {
         return 1;
     }
 
-    bool probe(const std::filesystem::path& path, Probe& result, std::string& error);
-    bool decode(const std::filesystem::path& path, Image& result, std::string& error);
-    bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target, Probe& result, std::string& error);
-    bool decode_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error);
-    bool decode_memory_to_buffer(const std::uint8_t* data, size_t size, DecodeTarget& target, Probe& result, std::string& error);
+    LFS_IMAGE_CODECS_API bool probe(const std::filesystem::path& path, Probe& result, std::string& error);
+    LFS_IMAGE_CODECS_API bool decode(const std::filesystem::path& path, Image& result, std::string& error);
+    LFS_IMAGE_CODECS_API bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target, Probe& result, std::string& error);
+    LFS_IMAGE_CODECS_API bool decode_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error);
+    LFS_IMAGE_CODECS_API bool decode_memory_to_buffer(const std::uint8_t* data, size_t size, DecodeTarget& target, Probe& result, std::string& error);
 
     // RGB uses 4:2:0 by default; full_chroma selects 4:4:4 for high-quality exports.
-    LFS_CORE_API bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,
-                                 int width, int height, int channels, int quality,
-                                 const std::optional<std::string>& comment, std::string& error);
-    LFS_CORE_API bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,
-                                 int width, int height, int channels, int quality,
-                                 const std::optional<std::string>& comment, std::string& error,
-                                 bool full_chroma);
-    LFS_CORE_API bool write_png(const std::filesystem::path& path, const void* data,
-                                int width, int height, int channels, int bit_depth,
-                                int compression_level, const std::optional<std::string>& comment,
-                                std::string& error);
-    bool write_tiff(const std::filesystem::path& path, const std::uint8_t* data,
-                    int width, int height, int channels, std::string& error);
+    LFS_IMAGE_CODECS_API bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,
+                                         int width, int height, int channels, int quality,
+                                         const std::optional<std::string>& comment, std::string& error);
+    LFS_IMAGE_CODECS_API bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,
+                                         int width, int height, int channels, int quality,
+                                         const std::optional<std::string>& comment, std::string& error,
+                                         bool full_chroma);
+    LFS_IMAGE_CODECS_API bool write_png(const std::filesystem::path& path, const void* data,
+                                        int width, int height, int channels, int bit_depth,
+                                        int compression_level, const std::optional<std::string>& comment,
+                                        std::string& error);
+    LFS_IMAGE_CODECS_API bool write_tiff(const std::filesystem::path& path, const std::uint8_t* data,
+                                         int width, int height, int channels, std::string& error);
 
 } // namespace lfs::core::image_codecs

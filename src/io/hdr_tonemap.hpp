@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "core/export.hpp"
 
 namespace lfs::io {
 
@@ -17,16 +18,16 @@ namespace lfs::io {
         UNKNOWN,
     };
 
-    [[nodiscard]] HdrFormat detectHdrFormat(int color_trc, int bit_depth,
-                                            bool has_mastering_display_metadata = false,
-                                            bool has_content_light_metadata = false);
-    [[nodiscard]] HdrFormat detectDolbyVisionFormat(int color_trc, int dv_profile,
-                                                    int compatibility_id);
+    [[nodiscard]] LFS_MEDIA_API HdrFormat detectHdrFormat(int color_trc, int bit_depth,
+                                                          bool has_mastering_display_metadata = false,
+                                                          bool has_content_light_metadata = false);
+    [[nodiscard]] LFS_MEDIA_API HdrFormat detectDolbyVisionFormat(int color_trc, int dv_profile,
+                                                                  int compatibility_id);
 
-    [[nodiscard]] bool isHdrFormat(HdrFormat format);
-    [[nodiscard]] bool isHdrTonemapSupported(HdrFormat format);
+    [[nodiscard]] LFS_MEDIA_API bool isHdrFormat(HdrFormat format);
+    [[nodiscard]] LFS_MEDIA_API bool isHdrTonemapSupported(HdrFormat format);
 
     /// Human-readable label for HDR format
-    [[nodiscard]] const char* hdrFormatLabel(HdrFormat fmt);
+    [[nodiscard]] LFS_MEDIA_API const char* hdrFormatLabel(HdrFormat fmt);
 
 } // namespace lfs::io

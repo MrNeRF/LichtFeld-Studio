@@ -43,6 +43,9 @@ tests/data/nn/*
 !tests/python/**/*.py
 !tests/media/test_fixture_preparation.py
 !tests/media/test_extraction_contracts.py
+!tests/media/test_media_bindings.py
+!tests/media/test_studio_backends.py
+!tests/media/test_mcp_media.py
 !docs/plugins/examples/**/*.py
 !docs/docs/development/node-graph/examples/*.py
 !tools/*.py

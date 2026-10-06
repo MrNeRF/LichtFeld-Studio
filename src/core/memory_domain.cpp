@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "core/memory_pressure.hpp"
+#include "core/memory_domain.hpp"
 
 namespace lfs::core {
 

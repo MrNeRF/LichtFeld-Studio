@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/failure_report.hpp"
-#include "core/crash_handler.hpp"
+#include <atomic>
 
 #include "core/logger.hpp"
 
@@ -50,6 +50,8 @@ namespace lfs::core {
             std::string family;
             FailureReportSectionProvider provider;
         };
+
+        std::atomic<FailureReportWriter> g_writer{nullptr};
 
         constexpr size_t FAILURE_REPORT_DEDUP_CAPACITY = 64;
         std::mutex g_dedup_mutex;
@@ -126,6 +128,10 @@ namespace lfs::core {
         }
 
     } // namespace
+
+    void register_failure_report_writer(const FailureReportWriter writer) noexcept {
+        g_writer.store(writer, std::memory_order_release);
+    }
 
     void register_failure_report_section_provider(
         const std::string_view family,
@@ -256,8 +262,10 @@ namespace lfs::core {
                                                ? capture_host_stacktrace(report.stacktrace_skip_frames)
                                                : std::string{};
             const auto formatted = format_failure_report(report, stacktrace);
-            if (decision.count == 1)
-                write_crash_diagnostic(formatted);
+            if (decision.count == 1) {
+                if (const auto writer = g_writer.load(std::memory_order_acquire))
+                    writer(formatted);
+            }
             Logger::get().log_internal(level, report.location, formatted);
         } else {
             emit_failure_repeat_notice(decision, report.location, level);

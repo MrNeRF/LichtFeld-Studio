@@ -46,6 +46,7 @@
 #include "visualizer/visualizer.hpp"
 
 #include "app/mcp_gui_tools.hpp"
+#include "app/mcp_media_tools.hpp"
 #include "gui/gpu_memory_query.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
@@ -1665,6 +1666,7 @@ namespace lfs::app {
                 vis::setRuntimeServiceControls({});
                 mcp::setActiveMcpHttpServer(nullptr);
                 mcp_http.stop();
+                shutdown_media_extract_job();
             });
             if (!mcp_http.start({
                     .enabled = mcp_preferences.enabled,
@@ -1679,6 +1681,7 @@ namespace lfs::app {
             vis::setRuntimeServiceControls({});
             mcp::setActiveMcpHttpServer(nullptr);
             mcp_http.stop();
+            shutdown_media_extract_job();
 
             // GuiManager drains scheduled Python UI work while tearing down the
             // viewer. Keep the runtime/GIL available until that work and the

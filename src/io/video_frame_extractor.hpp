@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include <cstddef>
 #include <filesystem>
 #include <functional>
@@ -19,14 +20,14 @@ namespace lfs::media {
 namespace lfs::io {
 
     // Supports %d, %0Nd zero-padding, %% escaping, and legacy %000 zero-padding.
-    [[nodiscard]] std::string formatFrameFilenameStem(std::string_view pattern, int frame_number);
-    [[nodiscard]] std::size_t calculateFpsSampleCount(double start_time, double end_time,
-                                                      double target_fps);
-    [[nodiscard]] double fpsSampleTime(double start_time, double end_time,
-                                       double target_fps, std::size_t sample_index);
-    [[nodiscard]] bool frameCoversSampleTime(double frame_time, double frame_duration,
-                                             double sample_time);
-    [[nodiscard]] bool shouldFillRetainedFpsTail(bool reached_eof, bool reached_end);
+    [[nodiscard]] LFS_MEDIA_API std::string formatFrameFilenameStem(std::string_view pattern, int frame_number);
+    [[nodiscard]] LFS_MEDIA_API std::size_t calculateFpsSampleCount(double start_time, double end_time,
+                                                                    double target_fps);
+    [[nodiscard]] LFS_MEDIA_API double fpsSampleTime(double start_time, double end_time,
+                                                     double target_fps, std::size_t sample_index);
+    [[nodiscard]] LFS_MEDIA_API bool frameCoversSampleTime(double frame_time, double frame_duration,
+                                                           double sample_time);
+    [[nodiscard]] LFS_MEDIA_API bool shouldFillRetainedFpsTail(bool reached_eof, bool reached_end);
 
     enum class ExtractionMode {
         FPS,     // Extract at specific FPS
@@ -64,7 +65,7 @@ namespace lfs::io {
         bool window_mode = false;
     };
 
-    class VideoFrameExtractor {
+    class LFS_MEDIA_API VideoFrameExtractor {
     public:
         VideoFrameExtractor();
         ~VideoFrameExtractor();
@@ -96,6 +97,7 @@ namespace lfs::io {
             bool generate_metadata = false;
             int rotation = 0; // 0, 90, 180, 270
             bool convert_hdr_to_sdr = false;
+            bool allow_hardware_decode = true;
         };
 
         struct ValidatedLayout {
