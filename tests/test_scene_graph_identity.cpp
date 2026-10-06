@@ -10,6 +10,7 @@
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "lfs/py_scene.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
@@ -20,6 +21,7 @@
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -28,6 +30,23 @@ using lfs::core::Device;
 using lfs::core::Tensor;
 
 namespace {
+
+    TEST(PySceneNodeTest, DeletedNodeWrapperRaisesInsteadOfRebinding) {
+        lfs::core::Scene scene;
+        const auto deleted_id = scene.addGroup("deleted");
+        const auto original_uuid = scene.getNodeUuid(deleted_id);
+        lfs::python::PySceneNode wrapper(
+            scene.getNodeById(deleted_id), &scene);
+
+        scene.removeNodeById(deleted_id);
+        const auto replacement_id = scene.addGroup("replacement");
+        ASSERT_NE(replacement_id, lfs::core::NULL_NODE);
+        ASSERT_NE(scene.getNodeUuid(replacement_id), original_uuid);
+
+        EXPECT_THROW(wrapper.id(), std::runtime_error);
+        EXPECT_THROW(wrapper.uuid(), std::runtime_error);
+        EXPECT_THROW(wrapper.type(), std::runtime_error);
+    }
 
     class ScopedPlyRemovedSubscription {
     public:

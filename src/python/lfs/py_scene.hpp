@@ -19,6 +19,7 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 #include <optional>
+#include <stdexcept>
 
 namespace nb = nanobind;
 
@@ -212,18 +213,21 @@ namespace lfs::python {
     class PySceneNode {
     public:
         PySceneNode(core::SceneNode* node, core::Scene* scene)
-            : node_(node),
-              scene_(scene),
-              prop_(node, "scene_node") {
-            assert(node_ != nullptr);
+            : scene_(scene),
+              property_group_("scene_node") {
+            assert(node != nullptr);
             assert(scene_ != nullptr);
+            node_uuid_ = node->uuid;
         }
 
-        int32_t id() const { return node_->id; }
-        std::string uuid() const { return node_->uuid.to_string(); }
-        int32_t parent_id() const { return node_->parent_id; }
-        std::vector<int32_t> children() const { return node_->children; }
-        core::NodeType type() const { return node_->type; }
+        int32_t id() const { return node().id; }
+        std::string uuid() const {
+            (void)node();
+            return node_uuid_.to_string();
+        }
+        int32_t parent_id() const { return node().parent_id; }
+        std::vector<int32_t> children() const { return node().children; }
+        core::NodeType type() const { return node().type; }
 
         // Transform (special matrix conversion)
         void set_local_transform(nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> transform);
@@ -231,9 +235,10 @@ namespace lfs::python {
         nb::tuple world_transform() const;
 
         // Metadata (read-only)
-        size_t gaussian_count() const { return node_->gaussian_count.load(std::memory_order_acquire); }
+        size_t gaussian_count() const { return node().gaussian_count.load(std::memory_order_acquire); }
         std::tuple<float, float, float> centroid() const {
-            return {node_->centroid.x, node_->centroid.y, node_->centroid.z};
+            const auto& live = node();
+            return {live.centroid.x, live.centroid.y, live.centroid.z};
         }
 
         // Data accessors
@@ -245,82 +250,105 @@ namespace lfs::python {
         std::optional<PyKeyframeData> keyframe_data();
 
         // Camera node specific
-        int camera_uid() const { return node_->camera_uid; }
-        std::string image_path() const { return node_->image_path; }
-        std::string mask_path() const { return node_->mask_path; }
-        std::string depth_path() const { return node_->depth_path; }
-        bool has_camera() const { return node_->camera != nullptr; }
+        int camera_uid() const { return node().camera_uid; }
+        std::string image_path() const { return node().image_path; }
+        std::string mask_path() const { return node().mask_path; }
+        std::string depth_path() const { return node().depth_path; }
+        bool has_camera() const { return node().camera != nullptr; }
         bool has_mask() const {
-            if (!node_->camera)
+            const auto& live = node();
+            if (!live.camera)
                 return false;
-            return node_->camera->has_mask();
+            return live.camera->has_mask();
         }
         bool has_depth() const {
-            if (!node_->camera)
+            const auto& live = node();
+            if (!live.camera)
                 return false;
-            return node_->camera->has_depth();
+            return live.camera->has_depth();
         }
         std::optional<PyTensor> load_mask(int resize_factor = 1, int max_width = 0,
                                           bool invert = false, float threshold = 0.5f) {
-            if (!node_->camera || !node_->camera->has_mask())
+            const auto& live = node();
+            if (!live.camera || !live.camera->has_mask())
                 return std::nullopt;
-            return PyTensor(node_->camera->load_and_get_mask(resize_factor, max_width, invert, threshold), true);
+            return PyTensor(live.camera->load_and_get_mask(resize_factor, max_width, invert, threshold), true);
         }
         std::optional<PyTensor> load_depth(int resize_factor = 1, int max_width = 0) {
-            if (!node_->camera || !node_->camera->has_depth())
+            const auto& live = node();
+            if (!live.camera || !live.camera->has_depth())
                 return std::nullopt;
-            return PyTensor(node_->camera->load_and_get_depth(resize_factor, max_width), true);
+            return PyTensor(live.camera->load_and_get_depth(resize_factor, max_width), true);
         }
         std::optional<PyTensor> camera_R() const {
-            if (!node_->camera)
+            const auto& live = node();
+            if (!live.camera)
                 return std::nullopt;
-            return PyTensor(node_->camera->R(), false);
+            return PyTensor(live.camera->R(), false);
         }
         std::optional<PyTensor> camera_T() const {
-            if (!node_->camera)
+            const auto& live = node();
+            if (!live.camera)
                 return std::nullopt;
-            return PyTensor(node_->camera->T(), false);
+            return PyTensor(live.camera->T(), false);
         }
         std::optional<float> camera_focal_x() const {
-            if (!node_->camera)
+            const auto& live = node();
+            if (!live.camera)
                 return std::nullopt;
-            return node_->camera->focal_x();
+            return live.camera->focal_x();
         }
         std::optional<float> camera_focal_y() const {
-            if (!node_->camera)
+            const auto& live = node();
+            if (!live.camera)
                 return std::nullopt;
-            return node_->camera->focal_y();
+            return live.camera->focal_y();
         }
         std::optional<int> camera_width() const {
-            if (!node_->camera)
+            const auto& live = node();
+            if (!live.camera)
                 return std::nullopt;
-            return node_->camera->camera_width();
+            return live.camera->camera_width();
         }
         std::optional<int> camera_height() const {
-            if (!node_->camera)
+            const auto& live = node();
+            if (!live.camera)
                 return std::nullopt;
-            return node_->camera->camera_height();
+            return live.camera->camera_height();
         }
 
         // Property group interface for generic prop()
-        const std::string& property_group() const { return prop_.group_id(); }
-        nb::object get(const std::string& name) const { return prop_.getattr(name); }
-        void set(const std::string& name, nb::object value) { prop_.setattr(name, value); }
+        const std::string& property_group() const {
+            (void)node();
+            return property_group_;
+        }
+        nb::object get(const std::string& name) const {
+            return property().getattr(name);
+        }
+        void set(const std::string& name, nb::object value) {
+            property().setattr(name, value);
+        }
 
         // Property introspection
-        nb::dict prop_info(const std::string& name) const { return prop_.prop_info(name); }
+        nb::dict prop_info(const std::string& name) const {
+            return property().prop_info(name);
+        }
 
         // Descriptor protocol support
-        nb::object prop_getattr(const std::string& name) const { return prop_.getattr(name); }
+        nb::object prop_getattr(const std::string& name) const {
+            return property().getattr(name);
+        }
         void prop_setattr(const std::string& name, nb::object value) { set(name, value); }
 
         bool has_prop(const std::string& name) const {
+            (void)node();
             return core::prop::PropertyRegistry::instance().get_property(
-                                                               prop_.group_id(), name)
+                                                               property_group_, name)
                 .has_value();
         }
 
         nb::list python_dir() const {
+            (void)node();
             nb::list result;
             for (const char* attr : {"id", "uuid", "parent_id", "children", "type",
                                      "local_transform", "world_transform", "set_local_transform",
@@ -333,7 +361,7 @@ namespace lfs::python {
                                      "prop_info"}) {
                 result.append(attr);
             }
-            nb::list props = prop_.dir();
+            nb::list props = property().dir();
             for (size_t i = 0; i < nb::len(props); ++i) {
                 result.append(props[i]);
             }
@@ -341,9 +369,23 @@ namespace lfs::python {
         }
 
     private:
-        core::SceneNode* node_;
+        core::SceneNode& node() const {
+            if (scene_ == nullptr) {
+                throw std::runtime_error("SceneNode has been deleted");
+            }
+            if (auto* const live = scene_->getNodeByUuid(node_uuid_)) {
+                return *live;
+            }
+            throw std::runtime_error("SceneNode has been deleted");
+        }
+
+        PyProp<core::SceneNode> property() const {
+            return PyProp<core::SceneNode>(&node(), property_group_);
+        }
+
+        core::Uuid node_uuid_;
         core::Scene* scene_;
-        PyProp<core::SceneNode> prop_;
+        std::string property_group_;
     };
 
     // Node collection for scene.nodes property
