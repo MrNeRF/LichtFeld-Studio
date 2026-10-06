@@ -4,6 +4,8 @@
 #include "core/tensor/internal/private_access.hpp"
 
 #include "../gpu_backend_ops.hpp"
+#include "core/gpu_kernel_module.hpp"
+#include <mutex>
 
 #include <os/availability.h>
 
@@ -89,6 +91,7 @@ namespace lfs::core::internal {
         void update_labels(StorageRef, StorageRef, const LabelUpdateProgram&, ExecContext) override;
         void ppisp_apply(StorageRef input, StorageRef output, int width, int height, const PpispParams& params, ExecContext context) override;
         void environment_composite(StorageRef rgb, StorageRef alpha, StorageRef environment, StorageRef output, const EnvironmentCompositeParams& params, ExecContext context) override;
+        Tensor image_warp(const Tensor& input, const UndistortParams& params, int mode, bool inverse, Tensor* validity, ExecContext context) override;
         Tensor image_undistort(const Tensor& input, const UndistortParams& params, bool mask, ExecContext context) override;
         Tensor image_resize_prior(const Tensor& input, int height, int width, bool normal, ExecContext context) override;
         void histogram_u8(StorageRef, StorageRef, size_t, ExecContext) override;
@@ -195,6 +198,11 @@ namespace lfs::core::internal {
         // Signpost intervals, shown by Instruments.
         void push_range(const char* name) override;
         void pop_range() override;
+
+    private:
+        std::mutex image_warp_mutex_;
+        std::unique_ptr<GpuKernelModule> image_warp_program_;
+        uint64_t image_warp_context_id_ = 0;
     };
 
 } // namespace lfs::core::internal

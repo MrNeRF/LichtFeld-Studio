@@ -13,7 +13,7 @@ namespace lfs::core::internal {
     Tensor undistort_image_region_tensor(
         const Tensor& input, const UndistortParams& params,
         const int destination_x, const int destination_y, const int width, const int height) {
-        if (!input.is_valid() || input.ndim() != 3 ||
+        if (!input.is_valid() || input.ndim() != 3 || input.size(0) < 1 || input.size(0) > 4 ||
             (input.dtype() != DataType::UInt8 && input.dtype() != DataType::Float32) ||
             params.src_width <= 0 || params.src_height <= 0 ||
             input.size(1) != size_t(params.src_height) || input.size(2) != size_t(params.src_width)) {
@@ -29,7 +29,8 @@ namespace lfs::core::internal {
         // enter the area filter and blur pixels that the full call copies exactly.
         if (warp_math::is_identity_resample(params)) {
             auto crop = input.slice(1, destination_y, destination_y + height)
-                             .slice(2, destination_x, destination_x + width).contiguous();
+                            .slice(2, destination_x, destination_x + width)
+                            .contiguous();
             return crop.dtype() == DataType::UInt8 ? crop.to(DataType::Float32).div(255.0f) : crop.clone();
         }
         auto region = params;
@@ -37,10 +38,7 @@ namespace lfs::core::internal {
         region.dst_cy -= destination_y;
         region.dst_width = width;
         region.dst_height = height;
-        const auto source = input.dtype() == DataType::UInt8
-                                ? input.to(DataType::Float32).div(255.0f)
-                                : input;
-        return warp_image_tensor(source, region, 0, false, nullptr);
+        return warp_image_tensor(input, region, 0, false, nullptr);
     }
 
     Tensor undistort_image_tensor(const Tensor& input, const UndistortParams& p, const bool mask) {
@@ -57,8 +55,11 @@ namespace lfs::core::internal {
 
     Tensor warp_image_tensor(const Tensor& input, const UndistortParams& p, int mode, bool inverse, Tensor* validity) {
         const auto source = input.contiguous();
+        const bool rgb8 = source.dtype() == DataType::UInt8;
+        LFS_ASSERT_MSG(!rgb8 || (!inverse && mode == 0 && source.ndim() == 3),
+                       "UInt8 image warps support forward RGB undistortion only");
         if (!inverse && mode == 0 && warp_math::is_identity_resample(p))
-            return source.clone();
+            return rgb8 ? source.to(DataType::Float32).div(255.0f) : source.clone();
         if (input.device() == Device::GPU) {
             pin_operands({&source});
             const auto stream = prepare_inputs_for_stream({&source}, source.stream());
@@ -86,14 +87,14 @@ namespace lfs::core::internal {
         auto output = Tensor::zeros(scalar ? TensorShape{size_t(height), size_t(width)} : TensorShape{size_t(channels), size_t(height), size_t(width)}, Device::CPU);
         if (validity)
             *validity = Tensor::zeros({size_t(height), size_t(width)}, Device::CPU, DataType::UInt8);
-        if (!inverse && mode == 0 && warp_math::is_identity_resample(p))
-            return source.clone();
         const int quadrature = warp_math::area_quadrature(p);
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
                 if (mode == 0) {
                     if (inverse)
                         warp_math::distort_image_to_source_kernel(source.ptr<float>(), output.ptr<float>(), validity->ptr<uint8_t>(), channels, x, y, p);
+                    else if (rgb8)
+                        warp_math::undistort_image_kernel(source.ptr<uint8_t>(), output.ptr<float>(), channels, x, y, quadrature, p);
                     else
                         warp_math::undistort_image_kernel(source.ptr<float>(), output.ptr<float>(), channels, x, y, quadrature, p);
                 } else {

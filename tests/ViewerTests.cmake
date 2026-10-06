@@ -16,6 +16,7 @@ add_executable(lichtfeld_viewer_tests
     test_tensor_splat_affine.cpp
     test_tensor_sh_codec.cpp
     test_tensor_image_ops.cpp
+    test_tensor_image_regions.cpp
     test_viewer_appearance.cpp
     test_export_env_composite.cpp
     test_export_band_pack.cpp

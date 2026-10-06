@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "../../internal/image_warp_params.hpp"
 #include "../../internal/point_filter.hpp"
 #include "../../internal/rad_ops.hpp"
 #include "../export_pipeline.hpp"
@@ -8,6 +9,7 @@
 #include "../readback_buffer.hpp"
 #include "../scalar_operand.hpp"
 #include "../tensor_vulkan_interop.hpp"
+#include "image_warp_program.hpp"
 #include "metal_backend_ops.hpp"
 #include "metal_context.hpp"
 
@@ -2635,10 +2637,11 @@ namespace lfs::core::internal {
             .out_rotations = address_of(*context, out_rotations),
             .linear = linear,
             .count = checked_u32(n, "Metal affine splat count exceeds uint32"),
-            .matrices = matrices ? address_of(*context,*matrices) : 0,
+            .matrices = matrices ? address_of(*context, *matrices) : 0,
         };
         std::vector<StorageRef> uses{scales, rotations, out_scales, out_rotations};
-        if(matrices) uses.push_back(*matrices);
+        if (matrices)
+            uses.push_back(*matrices);
         dispatch_addressed(*context, uses, context->pipeline("affine_splat_geometry"), params, n);
     }
 
@@ -2712,6 +2715,55 @@ namespace lfs::core::internal {
             else
                 encode_rad_page(*context, params, pool, std::move(uses), {1, 3});
         }
+    }
+
+    Tensor MetalBackendOps::image_warp(const Tensor& input, const UndistortParams& p,
+                                       const int mode, const bool inverse, Tensor* validity, ExecContext) {
+        const GpuBackendScope scope(GpuBackend::Metal);
+        const int width = inverse ? p.src_width : p.dst_width;
+        const int height = inverse ? p.src_height : p.dst_height;
+        const int channels = input.ndim() == 2 ? 1 : int(input.size(0));
+        auto output = Tensor::zeros(mode == 4           ? TensorShape{size_t(height), size_t(width), 2}
+                                    : input.ndim() == 2 ? TensorShape{size_t(height), size_t(width)}
+                                                        : TensorShape{size_t(channels), size_t(height), size_t(width)},
+                                    Device::GPU, DataType::Float32);
+        Tensor mask;
+        if (validity)
+            mask = Tensor::zeros({size_t(height), size_t(width)}, Device::GPU, DataType::Int32);
+        auto camera = imageWarpCameraParams(p);
+        const auto parameters = Tensor::from_blob(&camera, {sizeof(camera)}, Device::CPU, DataType::UInt8).to(Device::GPU);
+        const ImageWarpDispatchParams params{
+            .width = width,
+            .height = height,
+            .channels = channels,
+            .mode = mode | (input.dtype() == DataType::UInt8 ? IMAGE_WARP_UINT8 : 0),
+            .inverse = inverse,
+            .quadrature = std::max(8, int(std::ceil(std::max(p.src_fx / p.dst_fx, p.src_fy / p.dst_fy))))};
+        const std::array bindings{
+            GpuKernelModule::Binding{0, &input},
+            GpuKernelModule::Binding{8, &output, GpuKernelModule::Access::ReadWrite},
+            GpuKernelModule::Binding{16, validity ? &mask : nullptr, GpuKernelModule::Access::ReadWrite},
+            GpuKernelModule::Binding{24, &parameters}};
+        {
+            std::lock_guard lock(image_warp_mutex_);
+            const auto context_id = acquire_context()->context_id();
+            if (!image_warp_program_ || image_warp_context_id_ != context_id) {
+                auto program = GpuKernelModule::load(image_warp_program_entries(), GpuBackend::Metal);
+                if (!program)
+                    throw lfs::Exception(std::move(program).error());
+                image_warp_program_ = std::move(*program);
+                image_warp_context_id_ = context_id;
+            }
+            auto dispatched = image_warp_program_->dispatch({.function = "imageWarp",
+                                                             .arguments = {std::as_bytes(std::span(&params, 1)), bindings},
+                                                             .groups = {std::min(65535u, GpuKernelModule::groups_for(size_t(width) * height, 256)), 1, 1},
+                                                             .group = {256, 1, 1}});
+            if (!dispatched)
+                throw lfs::Exception(std::move(dispatched).error());
+        }
+        if (validity)
+            *validity = mask.to(DataType::UInt8);
+        return output;
     }
 
     Tensor MetalBackendOps::image_undistort(const Tensor& input, const UndistortParams& p, const bool mask,
@@ -3607,6 +3659,11 @@ namespace lfs::core::internal {
     }
 
     void MetalBackendOps::shutdown() {
+        {
+            std::lock_guard lock(image_warp_mutex_);
+            image_warp_program_.reset();
+            image_warp_context_id_ = 0;
+        }
         shutdown_metal_backend();
     }
 

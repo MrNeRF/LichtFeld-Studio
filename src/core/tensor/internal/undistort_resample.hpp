@@ -249,8 +249,12 @@ namespace lfs::core::internal::warp_math {
         }
     }
 
+    inline float image_sample(const float value) { return value; }
+    inline float image_sample(const uint8_t value) { return static_cast<float>(value) / 255.0f; }
+
+    template <typename Sample>
     inline float bilinear_sample_renormalized(
-        const float* src,
+        const Sample* src,
         const int width, const int height, const int stride,
         const float sx, const float sy,
         const bool positive_only = false) {
@@ -267,7 +271,7 @@ namespace lfs::core::internal::warp_math {
                 const int x = x0 + dx;
                 if (x < 0 || x >= width || y < 0 || y >= height)
                     continue;
-                const float sample = src[y * stride + x];
+                const float sample = image_sample(src[y * stride + x]);
                 if (!isfinite(sample) || (positive_only && sample <= 0.0f))
                     continue;
                 const float wx = dx == 0 ? 1.0f - fx : fx;
@@ -282,7 +286,7 @@ namespace lfs::core::internal::warp_math {
             return 0.0f;
         const int nearest_x = min(max(static_cast<int>(floorf(sx + 0.5f)), 0), width - 1);
         const int nearest_y = min(max(static_cast<int>(floorf(sy + 0.5f)), 0), height - 1);
-        return src[nearest_y * stride + nearest_x];
+        return image_sample(src[nearest_y * stride + nearest_x]);
     }
 
     inline float lanczos3_weight(const float value) {
@@ -302,8 +306,9 @@ namespace lfs::core::internal::warp_math {
                                    (pi_value / LANCZOS_RADIUS)));
     }
 
+    template <typename Sample>
     inline bool lanczos3_sample(
-        const float* src,
+        const Sample* src,
         const int width, const int height, const int channels,
         const float sx, const float sy,
         float* values, float& absolute_inside, float& absolute_full) {
@@ -333,7 +338,7 @@ namespace lfs::core::internal::warp_math {
                 absolute_inside += fabsf(weight);
                 const int index = y * width + x;
                 for (int channel = 0; channel < channels; ++channel)
-                    weighted[channel] += src[channel * plane + index] * weight;
+                    weighted[channel] += image_sample(src[channel * plane + index]) * weight;
             }
         }
 
@@ -350,9 +355,10 @@ namespace lfs::core::internal::warp_math {
         return false;
     }
 
+    template <typename Sample>
     inline void
     undistort_image_kernel(
-        const float* src,
+        const Sample* src,
         float* dst,
         const int channels,
         const int ox, const int oy,
