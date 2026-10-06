@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_tensor.hpp"
+#include "core/checked_arithmetic.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/cuda_event_pool.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
@@ -1339,32 +1340,38 @@ namespace lfs::python {
     }
 
     PyTensor PyTensor::repeat(const std::vector<int64_t>& repeats) const {
-        // Repeat by tiling - expand and then reshape
-        std::vector<size_t> result_shape;
         const auto& orig_shape = tensor_.shape().dims();
-
-        // Pad original shape if needed
-        size_t ndim = std::max(orig_shape.size(), repeats.size());
+        const size_t ndim = std::max(orig_shape.size(), repeats.size());
         std::vector<size_t> padded_orig(ndim, 1);
-        for (size_t i = 0; i < orig_shape.size(); ++i) {
-            padded_orig[ndim - orig_shape.size() + i] = orig_shape[i];
-        }
-
-        // Calculate result shape
-        for (size_t i = 0; i < ndim; ++i) {
-            size_t rep = (i < repeats.size()) ? static_cast<size_t>(repeats[i]) : 1;
-            result_shape.push_back(padded_orig[i] * rep);
-        }
-
-        // Tile using expand and reshape pattern
-        Tensor result = tensor_;
+        std::copy(orig_shape.begin(), orig_shape.end(), padded_orig.end() - orig_shape.size());
+        std::vector<size_t> result_shape = padded_orig;
         for (size_t i = 0; i < repeats.size(); ++i) {
-            if (repeats[i] > 1) {
+            LFS_ASSERT_MSG(repeats[i] >= 0, "repeat counts must be nonnegative");
+            result_shape[i] = lfs::core::checked_product(
+                padded_orig[i], static_cast<size_t>(repeats[i]), "repeat dimension");
+        }
+        if (std::ranges::find(result_shape, 0) != result_shape.end()) {
+            return PyTensor(Tensor::empty(TensorShape(result_shape), tensor_.device(), tensor_.dtype()));
+        }
+        size_t elements = 1;
+        for (const size_t size : result_shape) {
+            elements = lfs::core::checked_product(elements, size, "repeat elements");
+        }
+
+        Tensor result = tensor_.contiguous().reshape(TensorShape(padded_orig)).clone();
+        for (size_t i = 0; i < repeats.size(); ++i) {
+            int64_t copies = 1;
+            while (copies <= repeats[i] / 2) {
                 result = Tensor::cat({result, result}, static_cast<int>(i));
-                // Continue tiling for larger repeats
-                for (int64_t j = 2; j < repeats[i]; j *= 2) {
-                    result = Tensor::cat({result, result}, static_cast<int>(i));
-                }
+                copies *= 2;
+            }
+            // Append only the remaining copies, rather than rounding up to
+            // the next power of two. The prefix contains whole input tiles.
+            const int64_t remaining = repeats[i] - copies;
+            if (remaining > 0) {
+                const auto tail = result.slice(static_cast<int>(i), 0,
+                                               padded_orig[i] * static_cast<size_t>(remaining));
+                result = Tensor::cat({result, tail}, static_cast<int>(i));
             }
         }
         return PyTensor(result);
