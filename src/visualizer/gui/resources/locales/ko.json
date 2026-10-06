@@ -555,7 +555,7 @@
       "eval_mask_clear": "평가 마스크 지우기",
       "eval_mask_cropbox": "학습을 시작할 때 배치된 학습 모델의 crop box가 덮는 픽셀만 평가합니다.",
       "eval_mask_folder": "이미지마다 마스크가 하나씩 있는 폴더를 선택합니다(파일 이름으로 대응). 흰색 픽셀이 평가됩니다.",
-      "eval_mask_spec": "마스크 소스를 입력하고 Enter를 누르세요: bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:<폴더> 또는 메시의 절대 경로.",
+      "eval_mask_spec": "마스크 소스를 입력하고 Enter를 누르세요: bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:[폴더] 또는 메시의 절대 경로.",
       "dataset_path": "현재 학습에 사용 중인 데이터셋 루트입니다.",
       "dataset_images": "데이터셋 안의 이미지 디렉터리입니다.",
       "dataset_output": "체크포인트와 학습 결과물이 기록되는 경로입니다. 실행 결과가 의도한 프로젝트/출력 폴더에 저장되는지 확인할 때 사용합니다.",

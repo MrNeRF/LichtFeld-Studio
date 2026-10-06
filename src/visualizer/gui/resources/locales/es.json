@@ -555,7 +555,7 @@
       "eval_mask_clear": "Quitar la máscara de evaluación",
       "eval_mask_cropbox": "Evaluar solo los píxeles cubiertos por la caja de recorte del modelo de entrenamiento, tal como está colocada al iniciar el entrenamiento.",
       "eval_mask_folder": "Elige una carpeta con una máscara por imagen, emparejada por nombre de archivo; se evalúan los píxeles blancos.",
-      "eval_mask_spec": "Escribe una fuente de máscara y pulsa Intro: bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:<carpeta> o una ruta absoluta de malla.",
+      "eval_mask_spec": "Escribe una fuente de máscara y pulsa Intro: bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:[carpeta] o una ruta absoluta de malla.",
       "dataset_path": "La raíz del dataset que se usa actualmente para el entrenamiento.",
       "dataset_images": "La carpeta de imágenes dentro del dataset.",
       "dataset_output": "Ruta donde se escriben checkpoints y artefactos entrenados. Úsala para comprobar que la ejecución guardará en la carpeta de proyecto/salida prevista.",

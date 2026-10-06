@@ -555,7 +555,7 @@
       "eval_mask_clear": "Evaluatiemasker wissen",
       "eval_mask_cropbox": "Alleen pixels evalueren die worden gedekt door de crop box van het trainingsmodel, zoals geplaatst bij de start van de training.",
       "eval_mask_folder": "Kies een map met één masker per afbeelding, gekoppeld op bestandsnaam; witte pixels worden geëvalueerd.",
-      "eval_mask_spec": "Typ een maskerbron en druk op Enter: bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:<map> of een absoluut mesh-pad.",
+      "eval_mask_spec": "Typ een maskerbron en druk op Enter: bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:[map] of een absoluut mesh-pad.",
       "dataset_path": "De dataset-root die momenteel voor training wordt gebruikt.",
       "dataset_images": "De afbeeldingsmap binnen de dataset.",
       "dataset_output": "Pad waar checkpoints en getrainde artefacten worden geschreven. Gebruik dit om te controleren of de run naar de bedoelde project-/outputmap opslaat.",

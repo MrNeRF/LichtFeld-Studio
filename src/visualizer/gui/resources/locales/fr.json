@@ -555,7 +555,7 @@
       "eval_mask_clear": "Effacer le masque d'évaluation",
       "eval_mask_cropbox": "Évaluer uniquement les pixels couverts par la boîte de recadrage du modèle d'entraînement, telle qu'elle est placée au début de l'entraînement.",
       "eval_mask_folder": "Choisir un dossier avec un masque par image, associé par nom de fichier ; les pixels blancs sont évalués.",
-      "eval_mask_spec": "Saisir une source de masque et appuyer sur Entrée : bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:<dossier> ou un chemin absolu de maillage.",
+      "eval_mask_spec": "Saisir une source de masque et appuyer sur Entrée : bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:[dossier] ou un chemin absolu de maillage.",
       "dataset_path": "La racine du dataset actuellement utilisée pour l'entraînement.",
       "dataset_images": "Le dossier d'images à l'intérieur du dataset.",
       "dataset_output": "Chemin où les checkpoints et artefacts entraînés sont écrits. Utilisez-le pour vérifier que l'exécution enregistrera dans le bon dossier de projet/sortie.",

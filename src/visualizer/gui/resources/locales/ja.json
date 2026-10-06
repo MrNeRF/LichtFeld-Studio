@@ -555,7 +555,7 @@
       "eval_mask_clear": "評価マスクをクリア",
       "eval_mask_cropbox": "学習開始時に配置されている学習モデルの crop box で覆われたピクセルのみを評価します。",
       "eval_mask_folder": "画像ごとに 1 枚のマスクを含むフォルダーを選択します（ファイル名で対応付け）。白いピクセルが評価されます。",
-      "eval_mask_spec": "マスクソースを入力して Enter を押します: bbox:x0,y0,z0,x1,y1,z1、depth:near,far、cropbox、masks:<フォルダー>、またはメッシュの絶対パス。",
+      "eval_mask_spec": "マスクソースを入力して Enter を押します: bbox:x0,y0,z0,x1,y1,z1、depth:near,far、cropbox、masks:[フォルダー]、またはメッシュの絶対パス。",
       "dataset_path": "トレーニングで現在使われているデータセットのルートです。",
       "dataset_images": "データセット内の画像ディレクトリです。",
       "dataset_output": "チェックポイントとトレーニング済み成果物を書き込むパスです。意図したプロジェクト/出力フォルダに保存されるか確認するために使います。",

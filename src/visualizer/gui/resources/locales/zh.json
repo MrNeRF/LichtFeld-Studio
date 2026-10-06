@@ -555,7 +555,7 @@
       "eval_mask_clear": "清除评估遮罩",
       "eval_mask_cropbox": "仅评估训练开始时所放置的训练模型 crop box 覆盖的像素。",
       "eval_mask_folder": "选择一个每张图像对应一个遮罩的文件夹（按文件名匹配）；白色像素参与评估。",
-      "eval_mask_spec": "输入遮罩来源并按 Enter：bbox:x0,y0,z0,x1,y1,z1、depth:near,far、cropbox、masks:<文件夹> 或网格的绝对路径。",
+      "eval_mask_spec": "输入遮罩来源并按 Enter：bbox:x0,y0,z0,x1,y1,z1、depth:near,far、cropbox、masks:[文件夹] 或网格的绝对路径。",
       "dataset_path": "当前用于训练的数据集根目录。",
       "dataset_images": "数据集内的图像目录。",
       "dataset_output": "写入 checkpoint 和训练产物的路径。用于确认运行会保存到预期的项目/输出文件夹。",

@@ -463,8 +463,12 @@ class TestTensorGPU:
         numpy.testing.assert_allclose(result.cpu().numpy(), expected)
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_half_clamp_preserves_dtype_and_values(lf, numpy, device):
+@pytest.mark.parametrize(
+    "device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)]
+)
+def test_half_clamp_preserves_dtype_and_values(lf, numpy, device, request):
+    if device == "cuda" and not request.getfixturevalue("gpu_available"):
+        pytest.skip("GPU not available")
     values = numpy.array([-numpy.inf, -2, 0.5, 2, numpy.inf, numpy.nan], dtype=numpy.float32)
     tensor = lf.Tensor.from_numpy(values).to("float16")
     if device == "cuda":

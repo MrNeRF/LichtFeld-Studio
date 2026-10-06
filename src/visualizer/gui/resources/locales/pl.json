@@ -555,7 +555,7 @@
       "eval_mask_clear": "Wyczyść maskę ewaluacji",
       "eval_mask_cropbox": "Oceniaj tylko piksele objęte crop boxem modelu treningowego, ustawionym w chwili rozpoczęcia treningu.",
       "eval_mask_folder": "Wybierz folder z jedną maską na obraz, dopasowaną po nazwie pliku; oceniane są białe piksele.",
-      "eval_mask_spec": "Wpisz źródło maski i naciśnij Enter: bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:<folder> lub bezwzględną ścieżkę siatki.",
+      "eval_mask_spec": "Wpisz źródło maski i naciśnij Enter: bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:[folder] lub bezwzględną ścieżkę siatki.",
       "dataset_path": "Katalog główny datasetu aktualnie używany do trenowania.",
       "dataset_images": "Katalog obrazów wewnątrz datasetu.",
       "dataset_output": "Ścieżka, gdzie zapisywane są checkpointy i wytrenowane artefakty. Użyj, aby sprawdzić, czy przebieg zapisze się w zamierzonym folderze projektu/wyjścia.",

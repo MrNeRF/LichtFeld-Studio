@@ -551,7 +551,7 @@
       "eval_mask_clear": "Clear the evaluation mask",
       "eval_mask_cropbox": "Evaluate only pixels covered by the crop box of the training model, as placed when training starts.",
       "eval_mask_folder": "Choose a folder with one mask per image, matched by file name; white pixels are evaluated.",
-      "eval_mask_spec": "Type a mask source and press Enter: bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:<folder> or an absolute mesh path.",
+      "eval_mask_spec": "Type a mask source and press Enter: bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:[folder] or an absolute mesh path.",
       "dataset_path": "The dataset root currently used for training.",
       "dataset_images": "The image directory inside the dataset.",
       "dataset_output": "Path where checkpoints and trained artifacts are written. Use it to verify the run will save to the intended project/output folder.",

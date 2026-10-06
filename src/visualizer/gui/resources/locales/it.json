@@ -555,7 +555,7 @@
       "eval_mask_clear": "Cancella la maschera di valutazione",
       "eval_mask_cropbox": "Valuta solo i pixel coperti dal crop box del modello di addestramento, come posizionato all'avvio dell'addestramento.",
       "eval_mask_folder": "Scegli una cartella con una maschera per immagine, abbinata per nome file; vengono valutati i pixel bianchi.",
-      "eval_mask_spec": "Inserisci una sorgente di maschera e premi Invio: bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:<cartella> o un percorso assoluto di mesh.",
+      "eval_mask_spec": "Inserisci una sorgente di maschera e premi Invio: bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:[cartella] o un percorso assoluto di mesh.",
       "dataset_path": "La radice del dataset attualmente usata per l'addestramento.",
       "dataset_images": "La cartella delle immagini all'interno del dataset.",
       "dataset_output": "Percorso in cui vengono scritti checkpoint e artefatti addestrati. Usalo per verificare che l'esecuzione salvi nella cartella progetto/output prevista.",

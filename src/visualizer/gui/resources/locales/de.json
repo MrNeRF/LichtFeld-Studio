@@ -555,7 +555,7 @@
       "eval_mask_clear": "Auswertungsmaske entfernen",
       "eval_mask_cropbox": "Nur Pixel auswerten, die von der Crop Box des Trainingsmodells abgedeckt werden, so wie sie beim Trainingsstart platziert ist.",
       "eval_mask_folder": "Einen Ordner mit einer Maske pro Bild wählen, zugeordnet über den Dateinamen; weiße Pixel werden ausgewertet.",
-      "eval_mask_spec": "Maskenquelle eingeben und Enter drücken: bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:<Ordner> oder ein absoluter Mesh-Pfad.",
+      "eval_mask_spec": "Maskenquelle eingeben und Enter drücken: bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:[Ordner] oder ein absoluter Mesh-Pfad.",
       "dataset_path": "Der aktuell für das Training verwendete Dataset-Stammordner.",
       "dataset_images": "Der Bildordner innerhalb des Datasets.",
       "dataset_output": "Pfad, in den Checkpoints und trainierte Artefakte geschrieben werden. Nutze dies, um zu prüfen, ob der Lauf in den richtigen Projekt-/Ausgabeordner speichert.",
