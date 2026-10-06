@@ -178,7 +178,10 @@ namespace lfs::python {
                 opts.ratio = ratio;
                 opts.lod_base = lod_base;
                 opts.opacity_prune_threshold = opacity_prune_threshold;
-                invoke_splat_simplify_start(source_name, opts);
+                {
+                    nb::gil_scoped_release release;
+                    invoke_splat_simplify_start(source_name, opts);
+                }
             },
             nb::arg("source_name"),
             nb::arg("ratio") = 0.1,
