@@ -6,11 +6,16 @@
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "input/input_controller.hpp"
+#include "input/key_codes.hpp"
+#include "internal/viewport.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/rendering_types.hpp"
 #include "scene/scene_manager.hpp"
 #include "selection/selection_service.hpp"
+#include "tools/selection_tool.hpp"
+#include "tools/tool_base.hpp"
 
 #include <algorithm>
 #include <gtest/gtest.h>
@@ -20,6 +25,12 @@
 using lfs::core::DataType;
 using lfs::core::Device;
 using lfs::core::Tensor;
+using lfs::vis::InputController;
+using lfs::vis::ToolContext;
+using lfs::vis::input::ACTION_PRESS;
+using lfs::vis::input::KEY_DELETE;
+using lfs::vis::input::KEYMOD_NONE;
+using lfs::vis::tools::SelectionTool;
 
 namespace {
 
@@ -150,7 +161,8 @@ protected:
                 0.0f,
             }));
 
-        service_ = std::make_unique<lfs::vis::SelectionService>(scene_manager_.get(), rendering_manager_.get());
+        scene_manager_->initSelectionService();
+        service_ = scene_manager_->getSelectionService();
         service_->setTestingViewport({
             .x = 0.0f,
             .y = 0.0f,
@@ -165,7 +177,6 @@ protected:
         lfs::event::EventBridge::instance().clear_all();
         lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
-        service_.reset();
         rendering_manager_.reset();
         scene_manager_.reset();
         lfs::vis::op::undoHistory().clear();
@@ -177,8 +188,59 @@ protected:
 
     std::unique_ptr<lfs::vis::SceneManager> scene_manager_;
     std::unique_ptr<lfs::vis::RenderingManager> rendering_manager_;
-    std::unique_ptr<lfs::vis::SelectionService> service_;
+    lfs::vis::SelectionService* service_ = nullptr;
 };
+
+TEST_F(SelectionServiceInteractionsTest, DeleteInSelectionToolDoesNotRemoveNodeWithoutGaussianSelection) {
+    const auto node_id = scene_manager_->getScene().getNodeIdByName("test");
+    ASSERT_NE(node_id, lfs::core::NULL_NODE);
+    scene_manager_->selectNode("test");
+    ASSERT_FALSE(scene_manager_->getScene().hasSelection());
+
+    Viewport viewport(100, 100);
+    ToolContext context(rendering_manager_.get(), scene_manager_.get(), &viewport, nullptr);
+    InputController controller(nullptr, viewport);
+    auto selection_tool = std::make_shared<SelectionTool>();
+    selection_tool->setEnabled(true);
+    controller.setSelectionTool(selection_tool);
+    controller.setToolContext(&context);
+
+    controller.handleKey(KEY_DELETE, ACTION_PRESS, KEYMOD_NONE);
+
+    EXPECT_NE(scene_manager_->getScene().getNodeById(node_id), nullptr);
+}
+
+TEST_F(SelectionServiceInteractionsTest, DeleteCommitsInteractiveSelectionThenDeletesOnlyThoseGaussians) {
+    auto settings = rendering_manager_->getSettings();
+    settings.point_cloud_mode = true;
+    rendering_manager_->updateSettings(settings);
+    scene_manager_->selectNode("test");
+    service_->setTestingScreenPositions(make_screen_positions({10.0f, 10.0f, 80.0f, 80.0f}));
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Rectangle,
+        lfs::vis::SelectionMode::Replace,
+        {0.0f, 0.0f},
+        0.0f));
+    service_->updateInteractiveSelection({50.0f, 50.0f});
+    ASSERT_TRUE(service_->isInteractiveSelectionActive());
+    ASSERT_FALSE(scene_manager_->getScene().hasSelection());
+
+    Viewport viewport(100, 100);
+    ToolContext context(rendering_manager_.get(), scene_manager_.get(), &viewport, nullptr);
+    InputController controller(nullptr, viewport);
+    auto selection_tool = std::make_shared<SelectionTool>();
+    selection_tool->setEnabled(true);
+    controller.setSelectionTool(selection_tool);
+    controller.setToolContext(&context);
+
+    controller.handleKey(KEY_DELETE, ACTION_PRESS, KEYMOD_NONE);
+
+    EXPECT_FALSE(service_->isInteractiveSelectionActive());
+    const auto* node = scene_manager_->getScene().getNode("test");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    EXPECT_EQ(deleted_values(*node->model), (std::vector<bool>{true, false}));
+}
 
 TEST_F(SelectionServiceInteractionsTest, SelectionAfterVisibilityChangeUsesRefreshedSelectedNodeMask) {
     const auto copy_id = scene_manager_->getScene().addSplat(
