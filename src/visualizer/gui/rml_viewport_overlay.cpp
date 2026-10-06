@@ -1584,9 +1584,21 @@ namespace lfs::vis::gui {
     }
 
     std::optional<double> RmlViewportOverlay::nextScheduledUpdateDelay() const {
+        std::optional<double> delay;
         if (std::isfinite(next_update_delay_) && next_update_delay_ > 0.0)
-            return next_update_delay_;
-        return std::nullopt;
+            delay = next_update_delay_;
+
+        // Passive document hooks poll toolbar state even when Rml itself has
+        // no animation deadline. Keep that poll alive while the frame loop idles.
+        if (document_ && vp_size_.x > 0 && vp_size_.y > 0 &&
+            (lfs::python::has_python_hooks("viewport_overlay", "document", true) ||
+             lfs::python::has_python_hooks("viewport_overlay", "document", false))) {
+            const auto elapsed = std::chrono::steady_clock::now() - last_document_hook_run_;
+            const double hook_delay = std::max(
+                0.001, std::chrono::duration<double>(kDocumentHookPollInterval - elapsed).count());
+            delay = delay ? std::min(*delay, hook_delay) : hook_delay;
+        }
+        return delay;
     }
 
 } // namespace lfs::vis::gui
