@@ -1169,28 +1169,28 @@ namespace lfs::python {
         if (dim.has_value()) {
             return PyTensor(tensor_.sum(*dim, keepdim));
         }
-        return PyTensor(tensor_.sum());
+        return PyTensor(tensor_.sum(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::mean(std::optional<int> dim, bool keepdim) const {
         if (dim.has_value()) {
             return PyTensor(tensor_.mean(*dim, keepdim));
         }
-        return PyTensor(tensor_.mean());
+        return PyTensor(tensor_.mean(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::max(std::optional<int> dim, bool keepdim) const {
         if (dim.has_value()) {
             return PyTensor(tensor_.max(*dim, keepdim));
         }
-        return PyTensor(tensor_.max());
+        return PyTensor(tensor_.max(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::min(std::optional<int> dim, bool keepdim) const {
         if (dim.has_value()) {
             return PyTensor(tensor_.min(*dim, keepdim));
         }
-        return PyTensor(tensor_.min());
+        return PyTensor(tensor_.min(std::span<const int>{}, keepdim));
     }
 
     float PyTensor::sum_scalar() const {
@@ -1214,21 +1214,21 @@ namespace lfs::python {
         if (dim.has_value()) {
             return PyTensor(tensor_.prod(*dim, keepdim));
         }
-        return PyTensor(tensor_.prod());
+        return PyTensor(tensor_.prod(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::std(std::optional<int> dim, bool keepdim) const {
         if (dim.has_value()) {
             return PyTensor(tensor_.std(*dim, keepdim));
         }
-        return PyTensor(tensor_.std());
+        return PyTensor(tensor_.std(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::var(std::optional<int> dim, bool keepdim) const {
         if (dim.has_value()) {
             return PyTensor(tensor_.var(*dim, keepdim));
         }
-        return PyTensor(tensor_.var());
+        return PyTensor(tensor_.var(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::argmax(std::optional<int> dim, bool keepdim) const {
@@ -1236,7 +1236,7 @@ namespace lfs::python {
             std::vector<int> axes = {*dim};
             return PyTensor(tensor_.argmax(axes, keepdim));
         }
-        return PyTensor(tensor_.argmax());
+        return PyTensor(tensor_.argmax(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::argmin(std::optional<int> dim, bool keepdim) const {
@@ -1244,21 +1244,21 @@ namespace lfs::python {
             std::vector<int> axes = {*dim};
             return PyTensor(tensor_.argmin(axes, keepdim));
         }
-        return PyTensor(tensor_.argmin());
+        return PyTensor(tensor_.argmin(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::all(std::optional<int> dim, bool keepdim) const {
         if (dim.has_value()) {
             return PyTensor(tensor_.all(*dim, keepdim));
         }
-        return PyTensor(tensor_.all());
+        return PyTensor(tensor_.all(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::any(std::optional<int> dim, bool keepdim) const {
         if (dim.has_value()) {
             return PyTensor(tensor_.any(*dim, keepdim));
         }
-        return PyTensor(tensor_.any());
+        return PyTensor(tensor_.any(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::norm(float p) const {
