@@ -350,6 +350,9 @@ namespace lfs::vis {
     }
 
     VisualizerImpl::~VisualizerImpl() {
+        // Join uploads before Python owners or the graphics device can be torn down.
+        if (auto updates = point_cloud_updates_.exchange(nullptr))
+            updates->shutdown();
         if (vksplat_spirv_preload_future_.valid())
             vksplat_spirv_preload_future_.wait();
         // ProjectLifecycle owns worker threads and calls back into the viewer
@@ -1385,6 +1388,8 @@ namespace lfs::vis {
             pending_render_work.swap(render_work_queue_);
         }
 
+        if (auto updates = point_cloud_updates_.load())
+            updates->cancelAll();
         python::request_plugin_preload_stop();
 
         for (auto& work : pending_work) {
@@ -2115,6 +2120,10 @@ namespace lfs::vis {
                 }
             }
             window_initialized_ = true;
+            auto* graphics = window_manager_->getGraphicsContext();
+            auto allocator = graphics->splatTensorAllocator();
+            point_cloud_updates_.store(std::make_shared<PointCloudUpdateManager>(
+                preparePointCloudUpdate(std::move(allocator), [graphics](core::PointCloud& cloud, core::TensorCompletion ready) { graphics->preparePointCloudStorage(cloud, std::move(ready)); }, graphics->pointCloudUploadDevice()), [this] { wakeMainLoop(); }, true));
 
             window_manager_->pollEvents();
             window_manager_->updateWindowSize();
@@ -2253,6 +2262,47 @@ namespace lfs::vis {
                 .emit();
         }
 
+        if (auto updates = point_cloud_updates_.load()) {
+            updates->resolveQueued([this](PointCloudUpdateTarget& target, PointCloudUpdateInput& input) {
+                auto& scene = getScene();
+                if (target.scene != &scene || target.scene_epoch != scene.pointCloudUpdateEpoch() ||
+                    target.scene_generation != target.scene_epoch->load(std::memory_order_acquire))
+                    throw std::runtime_error("Scene changed before point-cloud preparation");
+                const auto* node = scene.getNodeByUuid(target.uuid);
+                if (!node || node->type != core::NodeType::POINTCLOUD || node->point_cloud_revision != target.revision ||
+                    target.revision->load() != target.expected_revision)
+                    throw std::runtime_error("Point-cloud target was removed or replaced");
+                target.render_generation = scene.renderGeneration();
+                input.transform = scene.getWorldTransform(node->id);
+                input.target_visible = scene.isNodeEffectivelyVisible(node->id);
+                for (const auto* other : scene.getNodes()) {
+                    if (other->uuid == target.uuid || other->type != core::NodeType::POINTCLOUD ||
+                        !scene.isNodeEffectivelyVisible(other->id))
+                        continue;
+                    auto cloud = other->evaluated_point_cloud ? other->evaluated_point_cloud : other->point_cloud;
+                    if (cloud && cloud->size() > 0)
+                        input.companions.push_back({std::move(cloud), scene.getWorldTransform(other->id)});
+                }
+            });
+            updates->publishReady([this](const PointCloudUpdateTarget& target,
+                                         const PointCloudUpdateManager::Prepared& prepared,
+                                         core::Scene::PointCloudRetirement& retired) {
+                auto& scene = getScene();
+                if (target.scene != &scene || target.scene_epoch != scene.pointCloudUpdateEpoch() ||
+                    target.scene_generation != target.scene_epoch->load(std::memory_order_acquire))
+                    throw std::runtime_error("Scene changed before point-cloud publication");
+                auto* node = scene.getNodeByUuid(target.uuid);
+                if (!node || node->type != core::NodeType::POINTCLOUD ||
+                    node->point_cloud_revision != target.revision ||
+                    target.revision->load(std::memory_order_acquire) != target.expected_revision ||
+                    (prepared.merged && scene.renderGeneration() != target.render_generation))
+                    throw std::runtime_error("Point-cloud target was removed or replaced");
+                if (trainer_manager_ && trainer_manager_->isTrainingActive())
+                    throw std::runtime_error("Cannot replace a point cloud during active training");
+                retired = scene.publishNodePointCloud(target.uuid, prepared.cloud, prepared.centroid, prepared.merged);
+            });
+        }
+
         // Process MCP work queue
         {
             std::vector<WorkItem> work;
@@ -2371,7 +2421,8 @@ namespace lfs::vis {
 
     bool VisualizerImpl::hasPendingWork() const {
         std::lock_guard lock(work_queue_mutex_);
-        return !work_queue_.empty();
+        const auto updates = point_cloud_updates_.load();
+        return !work_queue_.empty() || (updates && updates->hasReady());
     }
 
     bool VisualizerImpl::isMotionOnlyWake() const {

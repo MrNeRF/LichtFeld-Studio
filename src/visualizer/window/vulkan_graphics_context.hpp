@@ -36,6 +36,8 @@ namespace lfs::vis {
         void flushPipelineCache() override;
         [[nodiscard]] lfs::core::SplatTensorAllocator
         splatTensorAllocator(bool preserve_float_shN = false) override;
+        void preparePointCloudStorage(lfs::core::PointCloud& cloud, lfs::core::TensorCompletion ready) override;
+        void* pointCloudUploadDevice() override { return static_cast<void*>(context_.device()); }
         void connectTensorBackend() override;
         void disconnectTensorBackend() override;
 

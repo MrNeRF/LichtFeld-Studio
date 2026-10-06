@@ -5,11 +5,22 @@
 #pragma once
 
 #include "core/tensor.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 #include <cstddef>
 #include <string>
 #include <vector>
 
 namespace lfs::core {
+    // Prepared off the viewer thread. The leases and tensor storage survive every
+    // renderer submission that uses them. Only valid for these exact tensors.
+    struct PointCloudRenderBuffers {
+        Tensor positions;
+        Tensor colors;
+        TensorVulkanBuffer positions_buffer;
+        TensorVulkanBuffer colors_buffer;
+        VulkanTimelinePoint ready;
+    };
+
     // Unified point cloud structure using lfs::core::Tensor
     struct PointCloud {
         Tensor means;  // [N, 3] float32
@@ -26,6 +37,8 @@ namespace lfs::core {
         Tensor opacity;  // [N, 1] float32
         Tensor scaling;  // [N, 3] float32
         Tensor rotation; // [N, 4] float32
+
+        std::shared_ptr<const PointCloudRenderBuffers> render_buffers;
 
         // Metadata
         std::vector<std::string> attribute_names;

@@ -3560,13 +3560,17 @@ namespace lfs::vis {
         // This keeps dataset "ready" scenes renderable before training has produced gaussians.
         if (!options.metadata_only && !hasRenderableGaussians(state.combined_model)) {
             if (visible_point_cloud_nodes.size() > 1) {
-                state.owned_point_cloud = buildMergedVisiblePointCloud(scene_, visible_point_cloud_nodes);
+                state.owned_point_cloud = scene_.preparedPointCloudRender();
+                if (!state.owned_point_cloud)
+                    state.owned_point_cloud = buildMergedVisiblePointCloud(scene_, visible_point_cloud_nodes);
                 state.point_cloud = state.owned_point_cloud.get();
                 state.point_cloud_transform =
                     rendering::dataWorldTransformToVisualizerWorld(glm::mat4(1.0f));
             }
             if (visible_point_cloud_nodes.size() == 1) {
-                state.point_cloud = scene_.effectivePointCloud(*visible_point_cloud_nodes.front());
+                const auto* node = visible_point_cloud_nodes.front();
+                state.owned_point_cloud = node->evaluated_point_cloud ? node->evaluated_point_cloud : node->point_cloud;
+                state.point_cloud = state.owned_point_cloud.get();
                 state.point_cloud_transform = rendering::dataWorldTransformToVisualizerWorld(
                     scene_.getWorldTransform(visible_point_cloud_nodes.front()->id));
             }

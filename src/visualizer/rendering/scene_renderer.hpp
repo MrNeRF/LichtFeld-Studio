@@ -14,6 +14,10 @@
 #include <string>
 #include <vector>
 
+namespace lfs::core {
+    struct PointCloudRenderBuffers;
+}
+
 namespace lfs::vis {
     class SceneTrainingInterop;
     // Scene APIs are selected once per platform. Opaque output handles describe
@@ -196,6 +200,7 @@ namespace lfs::vis {
             // revisions for in-place tensor mutations.
             const lfs::core::Tensor* positions = nullptr;
             const lfs::core::Tensor* colors = nullptr;
+            std::shared_ptr<const lfs::core::PointCloudRenderBuffers> prepared_buffers;
             std::uint64_t positions_revision = 0;
             std::uint64_t colors_revision = 0;
 

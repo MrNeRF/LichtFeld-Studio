@@ -62,6 +62,7 @@ namespace lfs::vis {
     };
 
     struct LFS_VIS_API PointCloudOutputOwnershipTestAccess {
+        static uint64_t hostVertexUploadBytes(const PointCloudVulkanRenderer& renderer);
         static const void* createEmptyOutput(PointCloudVulkanRenderer& renderer, RenderTargetId target);
         static const void* outputIdentity(const PointCloudVulkanRenderer& renderer, RenderTargetId target);
     };

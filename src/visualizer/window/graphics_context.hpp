@@ -5,6 +5,7 @@
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor_completion.hpp"
 #include "core/tensor_fwd.hpp"
 #include "renderer_terminal_state.hpp"
 
@@ -18,6 +19,10 @@
 #include <vector>
 
 struct SDL_Window;
+
+namespace lfs::core {
+    struct PointCloud;
+}
 
 namespace lfs::vis {
 
@@ -96,6 +101,9 @@ namespace lfs::vis {
         virtual void flushPipelineCache() = 0;
         [[nodiscard]] virtual lfs::core::SplatTensorAllocator
         splatTensorAllocator(bool preserve_float_shN = false) = 0;
+
+        virtual void preparePointCloudStorage(lfs::core::PointCloud&, lfs::core::TensorCompletion) {}
+        virtual void* pointCloudUploadDevice() { return nullptr; }
 
         // Backend-owned setup used while the window context is live.  This
         // keeps native tensor adoption out of WindowManager and its callers.

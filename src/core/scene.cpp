@@ -665,6 +665,7 @@ namespace lfs::core {
         auto* node = getMutableNode(name);
         if (!node || node->type != NodeType::POINTCLOUD || !point_cloud)
             return;
+        node->point_cloud_revision->fetch_add(1, std::memory_order_release);
         const auto count = point_cloud->size();
         const auto slices = capturePerNodeSelectionSlices(SelectionDomain::PointCloud);
         node->point_cloud = std::move(point_cloud);
@@ -674,6 +675,36 @@ namespace lfs::core {
         auto preserved = slices;
         preserved.erase(node->uuid);
         applyPerNodeSelectionSlices(SelectionDomain::PointCloud, preserved);
+    }
+
+    Scene::PointCloudRetirement Scene::publishNodePointCloud(
+        const Uuid& uuid, std::shared_ptr<PointCloud> point_cloud, const glm::vec3 centroid,
+        std::shared_ptr<PointCloud> merged) {
+        auto* node = getNodeByUuid(uuid);
+        if (!node || node->type != NodeType::POINTCLOUD || !point_cloud)
+            throw std::runtime_error("Point-cloud target no longer exists");
+        Transaction transaction(*this);
+        PointCloudRetirement previous;
+        previous.cloud = std::exchange(node->point_cloud, std::move(point_cloud));
+        previous.evaluated = std::move(node->evaluated_point_cloud);
+        previous.merged = std::move(prepared_point_cloud_render_);
+        if (initial_point_cloud_ == previous.cloud)
+            initial_point_cloud_ = node->point_cloud;
+        node->gaussian_count.store(node->point_cloud->size(), std::memory_order_release);
+        node->centroid = centroid;
+        node->payload_hydration = PayloadHydrationState::Loaded;
+        {
+            std::unique_lock lock(selection_mutex_);
+            previous.selection = std::move(point_cloud_selection_mask_);
+            has_point_cloud_selection_ = false;
+            selection_group_counts_dirty_ = true;
+        }
+        point_cloud_modified_ = true;
+        notifyMutation(MutationType::SELECTION_CHANGED);
+        notifyMutation(MutationType::MODEL_CHANGED);
+        prepared_point_cloud_render_ = std::move(merged);
+        prepared_point_cloud_render_generation_ = renderGeneration();
+        return previous;
     }
 
     void Scene::replaceNodeMesh(const std::string& name, std::shared_ptr<MeshData> mesh) {
@@ -776,6 +807,8 @@ namespace lfs::core {
     }
 
     void Scene::clear(const bool internal_import) {
+        point_cloud_update_epoch_->fetch_add(1, std::memory_order_release);
+        prepared_point_cloud_render_.reset();
         if (!internal_import)
             events::state::SceneReplacing{.scene = this}.emit();
         Transaction txn(*this);
@@ -4212,6 +4245,8 @@ namespace lfs::core {
         assert(!restore_staging_);
         assert(transaction_depth_ == 0);
 
+        point_cloud_update_epoch_->fetch_add(1, std::memory_order_release);
+        prepared_point_cloud_render_.swap(staged->prepared_point_cloud_render_);
         // The restore swaps the entire node graph. Join the worker before the
         // old graph moves into the returned Scene, so a later destruction of
         // that graph cannot race reads from the target's captured inputs.

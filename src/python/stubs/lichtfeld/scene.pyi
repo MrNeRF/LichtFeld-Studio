@@ -248,6 +248,21 @@ class Ellipsoid:
     def __dir__(self) -> list:
         """List available attributes"""
 
+class PointCloudUpdateTicket:
+    @property
+    def state(self) -> str: ...
+
+    @property
+    def error(self) -> str: ...
+
+    @property
+    def inputs_released(self) -> bool: ...
+
+    def cancel(self) -> bool:
+        """
+        Cancel before publication. In-flight source memory remains retained until inputs_released.
+        """
+
 class PointCloud:
     @property
     def means(self) -> lichtfeld.Tensor:
@@ -306,6 +321,11 @@ class PointCloud:
     def set_data(self, points: lichtfeld.Tensor, colors: lichtfeld.Tensor) -> None:
         """Replace point cloud data with new points and colors tensors"""
 
+    def set_data_async(self, points: object, colors: object, *, centroid: tuple[float, float, float] | None = None, queue_policy: str = 'latest') -> PointCloudUpdateTicket:
+        """
+        Queue an independent snapshot off the viewer thread. Keep inputs immutable until inputs_released; poll state for publication.
+        """
+
     def set_colors(self, colors: lichtfeld.Tensor) -> None:
         """Update colors without re-uploading positions [N, 3]"""
 
@@ -351,7 +371,7 @@ class SceneNode:
     def world_transform(self) -> tuple:
         """World-space transform as 4x4 row-major tuple"""
 
-    def set_local_transform(self, arg: Annotated[NDArray[numpy.float32], dict(shape=(4, 4))], /) -> None:
+    def set_local_transform(self, arg: Annotated[NDArray[numpy.float32], dict(shape=(4, 4), device='cpu')], /) -> None:
         """Set local transform from a [4, 4] ndarray"""
 
     @property
@@ -580,12 +600,12 @@ class Scene:
         """Get world-space transform as 4x4 row-major tuple"""
 
     @overload
-    def set_node_transform(self, name: str, transform: Annotated[NDArray[numpy.float32], dict(shape=(4, 4))]) -> None:
-        """Set node local transform from a [4, 4] ndarray"""
-
-    @overload
     def set_node_transform(self, name: str, transform: lichtfeld.Tensor) -> None:
         """Set node local transform from a [4, 4] Tensor"""
+
+    @overload
+    def set_node_transform(self, name: str, transform: Annotated[NDArray[numpy.float32], dict(shape=(4, 4), device='cpu')]) -> None:
+        """Set node local transform from a [4, 4] ndarray"""
 
     def combined_model(self) -> SplatData | None:
         """Get the merged SplatData for all visible splats (None if empty)"""

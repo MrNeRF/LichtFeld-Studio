@@ -421,6 +421,8 @@ namespace lfs::vis {
         // Cached input buffers — point clouds rarely change, so we re-upload only
         // when the cache key (tensor pointer / size) changes.
         struct InputCache {
+            std::shared_ptr<const lfs::core::PointCloudRenderBuffers> prepared_buffers;
+            uint64_t host_vertex_upload_bytes = 0;
             ManagedBuffer positions;
             ManagedBuffer colors;
             ManagedBuffer transforms;
@@ -1276,6 +1278,7 @@ namespace lfs::vis {
                 destroySlot(output.resources);
             retired_outputs.clear();
             submitted = completed = 0;
+            cache.prepared_buffers.reset();
             destroyBuffer(allocator, cache.positions);
             destroyBuffer(allocator, cache.colors);
             destroyBuffer(allocator, cache.transforms);
@@ -1334,55 +1337,76 @@ namespace lfs::vis {
                 return std::unexpected<std::string>("deleted mask must match positions");
             }
 
-            // positions
-            const void* pos_key = req.positions->ptr<float>();
-            if (pos_key != cache.cached_positions_ptr || cache.cached_positions_count != n_points ||
-                cache.cached_positions_revision != req.positions_revision ||
-                cache.positions.buffer == VK_NULL_HANDLE) {
-                std::vector<float> host;
-                if (!tensorToHost(*req.positions, host)) {
-                    return std::unexpected<std::string>("Failed to read positions to CPU");
-                }
-                if (auto r = uploadInto(cb, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                                        host.data(), host.size() * sizeof(float),
-                                        cache.positions, "positions");
-                    !r) {
-                    return r;
-                }
-                cache.cached_positions_ptr = pos_key;
+            const auto& prepared = req.prepared_buffers;
+            const bool use_prepared = prepared &&
+                                      prepared->positions.data_ptr() == req.positions->data_ptr() &&
+                                      prepared->colors.data_ptr() == req.colors->data_ptr() &&
+                                      prepared->positions_buffer.device == static_cast<void*>(device) &&
+                                      prepared->colors_buffer.device == static_cast<void*>(device) &&
+                                      prepared->positions_buffer.bytes >= n_points * 3 * sizeof(float) &&
+                                      prepared->colors_buffer.bytes >= n_points * 3 * sizeof(float) &&
+                                      req.positions->dtype() == lfs::core::DataType::Float32 &&
+                                      req.colors->dtype() == lfs::core::DataType::Float32;
+            if (prepared && !use_prepared)
+                return std::unexpected<std::string>("Prepared point-cloud storage does not match its tensors or renderer device");
+            // uploadIfChanged is called only after the previous submission's fence.
+            // Its held leases keep old vertex storage alive until that fence completes.
+            cache.prepared_buffers = use_prepared ? prepared : nullptr;
+            if (use_prepared) {
                 cache.cached_positions_count = n_points;
-                cache.cached_positions_revision = req.positions_revision;
-            }
+            } else {
+                // positions
+                const void* pos_key = req.positions->ptr<float>();
+                if (pos_key != cache.cached_positions_ptr || cache.cached_positions_count != n_points ||
+                    cache.cached_positions_revision != req.positions_revision ||
+                    cache.positions.buffer == VK_NULL_HANDLE) {
+                    std::vector<float> host;
+                    if (!tensorToHost(*req.positions, host)) {
+                        return std::unexpected<std::string>("Failed to read positions to CPU");
+                    }
+                    if (auto r = uploadInto(cb, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                            host.data(), host.size() * sizeof(float),
+                                            cache.positions, "positions");
+                        !r) {
+                        return r;
+                    }
+                    cache.host_vertex_upload_bytes += host.size() * sizeof(float);
+                    cache.cached_positions_ptr = pos_key;
+                    cache.cached_positions_count = n_points;
+                    cache.cached_positions_revision = req.positions_revision;
+                }
 
-            // colors (handle uint8 / float alike via Tensor::to). Key on the *source*
-            // tensor like positions above — keying on the converted temporary's pointer
-            // compares a fresh per-frame allocation each time, which both dangles and
-            // defeats the cache (forcing a full re-upload every frame for uint8 colors).
-            const void* col_key = req.colors->data_ptr();
-            const lfs::core::DataType col_dtype = req.colors->dtype();
-            if (col_key != cache.cached_colors_ptr || cache.cached_colors_count != n_points ||
-                cache.cached_colors_revision != req.colors_revision ||
-                cache.cached_colors_dtype != col_dtype || cache.colors.buffer == VK_NULL_HANDLE) {
-                const lfs::core::Tensor colors_f32 =
-                    col_dtype == lfs::core::DataType::Float32
-                        ? *req.colors
-                        : (col_dtype == lfs::core::DataType::UInt8
-                               ? req.colors->to(lfs::core::DataType::Float32) / 255.0f
-                               : req.colors->to(lfs::core::DataType::Float32));
-                std::vector<float> host;
-                if (!tensorToHost(colors_f32, host)) {
-                    return std::unexpected<std::string>("Failed to read colors to CPU");
+                // colors (handle uint8 / float alike via Tensor::to). Key on the *source*
+                // tensor like positions above — keying on the converted temporary's pointer
+                // compares a fresh per-frame allocation each time, which both dangles and
+                // defeats the cache (forcing a full re-upload every frame for uint8 colors).
+                const void* col_key = req.colors->data_ptr();
+                const lfs::core::DataType col_dtype = req.colors->dtype();
+                if (col_key != cache.cached_colors_ptr || cache.cached_colors_count != n_points ||
+                    cache.cached_colors_revision != req.colors_revision ||
+                    cache.cached_colors_dtype != col_dtype || cache.colors.buffer == VK_NULL_HANDLE) {
+                    const lfs::core::Tensor colors_f32 =
+                        col_dtype == lfs::core::DataType::Float32
+                            ? *req.colors
+                            : (col_dtype == lfs::core::DataType::UInt8
+                                   ? req.colors->to(lfs::core::DataType::Float32) / 255.0f
+                                   : req.colors->to(lfs::core::DataType::Float32));
+                    std::vector<float> host;
+                    if (!tensorToHost(colors_f32, host)) {
+                        return std::unexpected<std::string>("Failed to read colors to CPU");
+                    }
+                    if (auto r = uploadInto(cb, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                            host.data(), host.size() * sizeof(float),
+                                            cache.colors, "colors");
+                        !r) {
+                        return r;
+                    }
+                    cache.host_vertex_upload_bytes += host.size() * sizeof(float);
+                    cache.cached_colors_ptr = col_key;
+                    cache.cached_colors_count = n_points;
+                    cache.cached_colors_dtype = col_dtype;
+                    cache.cached_colors_revision = req.colors_revision;
                 }
-                if (auto r = uploadInto(cb, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                                        host.data(), host.size() * sizeof(float),
-                                        cache.colors, "colors");
-                    !r) {
-                    return r;
-                }
-                cache.cached_colors_ptr = col_key;
-                cache.cached_colors_count = n_points;
-                cache.cached_colors_dtype = col_dtype;
-                cache.cached_colors_revision = req.colors_revision;
             }
 
             // model_transforms (CPU vector of mat4)
@@ -1745,12 +1769,19 @@ namespace lfs::vis {
 
             updateDescriptorSet();
 
-            VkDeviceSize zero_offsets[2] = {0, 0};
-            VkBuffer vbufs[2] = {cache.positions.buffer, cache.colors.buffer};
+            const auto& prepared = cache.prepared_buffers;
+            VkDeviceSize zero_offsets[2] = {
+                prepared ? prepared->positions_buffer.offset : 0,
+                prepared ? prepared->colors_buffer.offset : 0};
+            VkBuffer vbufs[2] = {
+                prepared ? static_cast<VkBuffer>(prepared->positions_buffer.buffer) : cache.positions.buffer,
+                prepared ? static_cast<VkBuffer>(prepared->colors_buffer.buffer) : cache.colors.buffer};
+            const auto positions_bytes = prepared ? prepared->positions_buffer.bytes : cache.positions.size;
+            const auto colors_bytes = prepared ? prepared->colors_buffer.bytes : cache.colors.size;
             if (vbufs[0] == VK_NULL_HANDLE || vbufs[1] == VK_NULL_HANDLE ||
                 cache.cached_positions_count > std::numeric_limits<std::uint32_t>::max() ||
-                cache.positions.size < cache.cached_positions_count * sizeof(float) * 3u ||
-                cache.colors.size < cache.cached_positions_count * sizeof(float) * 3u) {
+                positions_bytes < cache.cached_positions_count * sizeof(float) * 3u ||
+                colors_bytes < cache.cached_positions_count * sizeof(float) * 3u) {
                 const std::string error = std::format(
                     "Point-cloud draw requires non-null vertex buffers, a 32-bit vertex count, and allocations large enough for all vertices (positions_buffer={:#x}, positions_size={}, colors_buffer={:#x}, colors_size={}, vertex_count={}, maximum_vertex_count={}, required_positions_bytes={}, required_colors_bytes={}) ({}:{})",
                     vkHandleValue(vbufs[0]),
@@ -1893,6 +1924,18 @@ namespace lfs::vis {
             si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             si.commandBufferCount = 1;
             si.pCommandBuffers = &command_buffer;
+            VkTimelineSemaphoreSubmitInfo timeline{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+            VkSemaphore upload_semaphore = prepared ? static_cast<VkSemaphore>(prepared->ready.semaphore) : VK_NULL_HANDLE;
+            uint64_t upload_value = prepared ? prepared->ready.value : 0;
+            VkPipelineStageFlags upload_stage = VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
+            if (upload_semaphore) {
+                timeline.waitSemaphoreValueCount = 1;
+                timeline.pWaitSemaphoreValues = &upload_value;
+                si.pNext = &timeline;
+                si.waitSemaphoreCount = 1;
+                si.pWaitSemaphores = &upload_semaphore;
+                si.pWaitDstStageMask = &upload_stage;
+            }
 
             // Phase 7C-P2 Appendix A.1: ResetPreWaitReplacement lifecycle.
             {
@@ -2308,6 +2351,10 @@ namespace lfs::vis {
 
     void PointCloudVulkanRenderer::reset() {
         impl_->destroy();
+    }
+
+    uint64_t PointCloudOutputOwnershipTestAccess::hostVertexUploadBytes(const PointCloudVulkanRenderer& renderer) {
+        return renderer.impl_->cache.host_vertex_upload_bytes;
     }
 
     const void* PointCloudOutputOwnershipTestAccess::createEmptyOutput(PointCloudVulkanRenderer& renderer, RenderTargetId target) {

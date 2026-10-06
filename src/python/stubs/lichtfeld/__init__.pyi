@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Sequence
 import enum
-from typing import TypeAlias, overload
+from typing import Annotated, TypeAlias, overload
 
 from numpy.typing import NDArray
 import typing_extensions
@@ -827,7 +827,7 @@ class Tensor:
         """Count non-zero elements"""
 
     @staticmethod
-    def from_numpy(arr: NDArray, copy: bool = True) -> Tensor:
+    def from_numpy(arr: Annotated[NDArray, dict(device='cpu')], copy: bool = True) -> Tensor:
         """Create tensor from NumPy array"""
 
     @staticmethod
