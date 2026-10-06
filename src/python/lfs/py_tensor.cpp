@@ -307,7 +307,7 @@ namespace lfs::python {
         }
         switch (tensor_.dtype()) {
         case DataType::Float32: return tensor_.item<float>();
-        case DataType::Float16: return tensor_.item<float>(); // Tensor handles conversion
+        case DataType::Float16: return tensor_.to(DataType::Float32).item<float>();
         case DataType::Int32: return static_cast<float>(tensor_.item<int>());
         case DataType::Int64: return static_cast<float>(tensor_.item<int64_t>());
         case DataType::UInt8: return static_cast<float>(tensor_.item<unsigned char>());
@@ -327,6 +327,8 @@ namespace lfs::python {
             return tensor_.item<int64_t>();
         } else if (tensor_.dtype() == DataType::UInt8 || tensor_.dtype() == DataType::Bool) {
             return static_cast<int64_t>(tensor_.item<unsigned char>());
+        } else if (tensor_.dtype() == DataType::Float16) {
+            return static_cast<int64_t>(tensor_.to(DataType::Float32).item<float>());
         }
         return static_cast<int64_t>(tensor_.item<float>());
     }
@@ -338,6 +340,9 @@ namespace lfs::python {
         }
         if (tensor_.dtype() == DataType::Bool) {
             return tensor_.item<unsigned char>() != 0;
+        }
+        if (tensor_.dtype() == DataType::Float16) {
+            return tensor_.to(DataType::Float32).item<float>() != 0.0f;
         }
         return tensor_.item<float>() != 0.0f;
     }
@@ -596,6 +601,10 @@ namespace lfs::python {
         switch (cpu_tensor.dtype()) {
         case DataType::Float32: {
             const auto values = cpu_tensor.to_vector();
+            return build_nested_list(dims, 0, offset, [&](size_t index) { return nb::cast(values[index]); });
+        }
+        case DataType::Float16: {
+            const auto values = cpu_tensor.to(DataType::Float32).to_vector();
             return build_nested_list(dims, 0, offset, [&](size_t index) { return nb::cast(values[index]); });
         }
         case DataType::Int32: {
