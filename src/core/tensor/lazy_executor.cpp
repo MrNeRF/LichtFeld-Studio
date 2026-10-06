@@ -389,7 +389,7 @@ namespace lfs::core::internal {
             case LazyPointwiseOpKind::Square: return x * x;
             case LazyPointwiseOpKind::Tanh: return std::tanh(x);
             case LazyPointwiseOpKind::Rsqrt: return 1.0f / std::sqrt(x);
-            case LazyPointwiseOpKind::Sign: return float((x > 0) - (x < 0));
+            case LazyPointwiseOpKind::Sign: return ops::sign_op{}(x);
             case LazyPointwiseOpKind::Reciprocal: return 1.0f / x;
             case LazyPointwiseOpKind::Floor: return std::floor(x);
             case LazyPointwiseOpKind::Ceil: return std::ceil(x);
