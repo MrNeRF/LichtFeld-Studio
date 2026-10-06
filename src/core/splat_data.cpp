@@ -2462,7 +2462,7 @@ namespace lfs::core {
 
             if (capacity > 0) {
                 // Fill the preallocated parameters in place so the pool sees no full-size temporaries.
-                means_.copy_from(params.optimization.random ? positions.mul(scene_scale) : positions);
+                means_.copy_from(positions);
 
                 if (lfs::core::param::is_mrnf_strategy(params.optimization.strategy)) {
                     if (num_points >= 3)
@@ -2494,12 +2494,7 @@ namespace lfs::core {
                 }
             } else {
                 // No capacity specified - use pool
-                Tensor means_temp;
-                if (params.optimization.random) {
-                    means_temp = positions.mul(scene_scale).gpu();
-                } else {
-                    means_temp = positions.gpu();
-                }
+                Tensor means_temp = positions.gpu();
 
                 Tensor scaling_temp;
                 if (lfs::core::param::is_mrnf_strategy(params.optimization.strategy)) {
