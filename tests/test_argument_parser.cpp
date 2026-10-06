@@ -1733,6 +1733,34 @@ TEST(ArgumentParserTest, ResumeConfigKeysPopulateExplicitOverrides) {
     EXPECT_EQ(restored.dataset.test_every, 64);
 }
 
+TEST(ArgumentParserTest, InitFileConflictsWithRandomInitialization) {
+    const auto data_path = make_test_path("lfs_arg_parser_random_init_data");
+    const auto output_path = make_test_path("lfs_arg_parser_random_init_output");
+    const auto init_path = std::filesystem::path(
+                               make_test_path("lfs_arg_parser_random_init_input")) /
+                           "init.ply";
+    std::ofstream(init_path).put('\n');
+    const auto init_text = init_path.string();
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--random",
+        "--init",
+        init_text.c_str(),
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("--init"), std::string::npos);
+    EXPECT_NE(parsed.error().find("--random"), std::string::npos);
+}
+
 TEST(ArgumentParserTest, ViewModeHonorsMcpPortOverride) {
     const auto directory = make_test_path("lfs_arg_parser_view_mcp_port");
     const auto ply = std::filesystem::path(directory) / "some.ply";
