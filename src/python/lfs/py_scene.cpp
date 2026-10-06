@@ -94,7 +94,7 @@ namespace lfs::python {
     }
 
     // Helper to convert ndarray to glm::mat4
-    static glm::mat4 ndarray_to_mat4(nb::ndarray<float, nb::shape<4, 4>> arr) {
+    static glm::mat4 ndarray_to_mat4(nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> arr) {
         glm::mat4 m;
         auto view = arr.view();
         for (int i = 0; i < 4; ++i) {
@@ -174,7 +174,8 @@ namespace lfs::python {
     }
 
     // PySceneNode implementation
-    void PySceneNode::set_local_transform(nb::ndarray<float, nb::shape<4, 4>> transform) {
+    void PySceneNode::set_local_transform(
+        nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> transform) {
         apply_node_transform_with_undo(node_->name, ndarray_to_mat4(transform), scene_);
     }
 
@@ -765,7 +766,9 @@ namespace lfs::python {
         return mat4_to_tuple(scene_->getWorldTransform(node_id));
     }
 
-    void PyScene::set_node_transform(const std::string& name, nb::ndarray<float, nb::shape<4, 4>> transform) {
+    void PyScene::set_node_transform(
+        const std::string& name,
+        nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> transform) {
         apply_node_transform_with_undo(name, ndarray_to_mat4(transform), scene_);
     }
 
@@ -1396,8 +1399,8 @@ Returns:
             .def("is_node_effectively_visible", &PyScene::is_node_effectively_visible, nb::arg("id"), "Check if a node is visible considering parent visibility")
             // Transforms
             .def("get_world_transform", &PyScene::get_world_transform, nb::arg("node_id"), "Get world-space transform as 4x4 row-major tuple")
-            .def("set_node_transform", &PyScene::set_node_transform, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] ndarray")
             .def("set_node_transform", &PyScene::set_node_transform_tensor, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] Tensor")
+            .def("set_node_transform", &PyScene::set_node_transform, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] ndarray")
             // Combined/training model
             .def("combined_model", &PyScene::combined_model, "Get the merged SplatData for all visible splats (None if empty)")
             .def("training_model", &PyScene::training_model, "Get the SplatData used for training (None if unavailable)")

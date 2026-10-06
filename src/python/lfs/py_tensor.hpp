@@ -58,7 +58,8 @@ namespace lfs::python {
         size_t count_nonzero() const;
 
         // Static factory: create from NumPy
-        static PyTensor from_numpy(nb::ndarray<> arr, bool copy = true);
+        static PyTensor from_numpy(nb::ndarray<nb::numpy, nb::device::cpu, nb::c_contig> arr,
+                                   bool copy = true);
 
         // Slicing (Phase 3)
         PyTensor getitem(const nb::object& key) const;

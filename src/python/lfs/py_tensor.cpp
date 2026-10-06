@@ -126,27 +126,6 @@ namespace lfs::python {
             }
         }
 
-        // nanobind ndarray::stride(i) is in ELEMENTS (not bytes), matching DLPack.
-        bool ndarray_is_c_contiguous(const nb::ndarray<>& arr) {
-            const size_t ndim = arr.ndim();
-            if (ndim == 0 || !arr.stride_ptr()) {
-                return true;
-            }
-            int64_t expected = 1;
-            for (size_t i = ndim; i-- > 0;) {
-                const int64_t extent = static_cast<int64_t>(arr.shape(i));
-                if (extent == 0) {
-                    return true;
-                }
-                // Extent-1 dims may carry arbitrary strides.
-                if (extent != 1 && arr.stride(i) != expected) {
-                    return false;
-                }
-                expected *= extent;
-            }
-            return true;
-        }
-
         template <typename Getter>
         nb::object build_nested_list(const std::vector<size_t>& dims, size_t dim, size_t& offset, const Getter& getter) {
             if (dims.empty()) {
@@ -623,16 +602,12 @@ namespace lfs::python {
         return tensor_.count_nonzero();
     }
 
-    PyTensor PyTensor::from_numpy(nb::ndarray<> arr, bool copy) {
+    PyTensor PyTensor::from_numpy(
+        nb::ndarray<nb::numpy, nb::device::cpu, nb::c_contig> arr, bool copy) {
         if (!copy) {
             throw std::runtime_error(
                 "from_numpy: zero-copy import is not supported; omit copy or pass copy=True");
         }
-        if (!ndarray_is_c_contiguous(arr)) {
-            throw std::runtime_error(
-                "from_numpy: array must be C-contiguous; call np.ascontiguousarray() first");
-        }
-
         // Get shape
         std::vector<size_t> shape_vec;
         for (size_t i = 0; i < arr.ndim(); ++i) {

@@ -226,7 +226,7 @@ namespace lfs::python {
         core::NodeType type() const { return node_->type; }
 
         // Transform (special matrix conversion)
-        void set_local_transform(nb::ndarray<float, nb::shape<4, 4>> transform);
+        void set_local_transform(nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> transform);
         nb::tuple local_transform() const;
         nb::tuple world_transform() const;
 
@@ -475,7 +475,8 @@ namespace lfs::python {
 
         // Transforms
         nb::tuple get_world_transform(int32_t node_id) const;
-        void set_node_transform(const std::string& name, nb::ndarray<float, nb::shape<4, 4>> transform);
+        void set_node_transform(const std::string& name,
+                                nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> transform);
         void set_node_transform_tensor(const std::string& name, const PyTensor& transform);
 
         // Combined model

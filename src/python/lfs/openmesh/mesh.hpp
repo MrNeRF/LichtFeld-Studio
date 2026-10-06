@@ -31,7 +31,7 @@ namespace OM = OpenMesh;
 namespace lfs::python::openmesh_bindings {
 
     template <class T>
-    using np_array = nb::ndarray<nb::numpy, T, nb::c_contig>;
+    using np_array = nb::ndarray<nb::numpy, nb::device::cpu, T, nb::c_contig>;
 
     template <class Mesh, class OtherMesh>
     void assign_connectivity(Mesh& _self, const OtherMesh& _other) {
@@ -792,10 +792,10 @@ namespace lfs::python::openmesh_bindings {
                  nb::arg("fh_from"), nb::arg("fh_to"), nb::arg("copy_build_in") = false)
 
             // ArrayKernel
-            .def("is_valid_handle", (bool(Mesh::*)(OM::VertexHandle) const) & Mesh::is_valid_handle)
-            .def("is_valid_handle", (bool(Mesh::*)(OM::HalfedgeHandle) const) & Mesh::is_valid_handle)
-            .def("is_valid_handle", (bool(Mesh::*)(OM::EdgeHandle) const) & Mesh::is_valid_handle)
-            .def("is_valid_handle", (bool(Mesh::*)(OM::FaceHandle) const) & Mesh::is_valid_handle)
+            .def("is_valid_handle", (bool (Mesh::*)(OM::VertexHandle) const) & Mesh::is_valid_handle)
+            .def("is_valid_handle", (bool (Mesh::*)(OM::HalfedgeHandle) const) & Mesh::is_valid_handle)
+            .def("is_valid_handle", (bool (Mesh::*)(OM::EdgeHandle) const) & Mesh::is_valid_handle)
+            .def("is_valid_handle", (bool (Mesh::*)(OM::FaceHandle) const) & Mesh::is_valid_handle)
 
             .def("delete_isolated_vertices",
                  [](Mesh& _self) {
