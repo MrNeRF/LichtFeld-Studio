@@ -61,6 +61,7 @@ namespace lfs::vis {
         std::vector<PointCloudUpdateCompanion> companions;
         glm::mat4 transform{1.0f};
         bool target_visible = true;
+        size_t target_index = 0; // preserve visible scene order in the merged view
     };
 
     class LFS_VIS_API PointCloudUpdateManager {

@@ -2276,7 +2276,11 @@ namespace lfs::vis {
                 input.transform = scene.getWorldTransform(node->id);
                 input.target_visible = scene.isNodeEffectivelyVisible(node->id);
                 for (const auto* other : scene.getNodes()) {
-                    if (other->uuid == target.uuid || other->type != core::NodeType::POINTCLOUD ||
+                    if (other->uuid == target.uuid) {
+                        input.target_index = input.companions.size();
+                        continue;
+                    }
+                    if (other->type != core::NodeType::POINTCLOUD ||
                         !scene.isNodeEffectivelyVisible(other->id))
                         continue;
                     auto cloud = other->evaluated_point_cloud ? other->evaluated_point_cloud : other->point_cloud;

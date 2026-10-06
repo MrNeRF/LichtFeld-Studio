@@ -97,6 +97,9 @@ namespace lfs::vis {
         const auto color_backend = core::gpu_backend_of(input.colors);
         if (backend && color_backend && backend != color_backend)
             throw std::invalid_argument("GPU inputs must use the same backend");
+        if ((backend && backend != core::default_gpu_backend()) ||
+            (color_backend && color_backend != core::default_gpu_backend()))
+            throw std::invalid_argument("GPU source backend must match the viewer backend; convert on the producer first");
         if (input.centroid && (!std::isfinite(input.centroid->x) || !std::isfinite(input.centroid->y) || !std::isfinite(input.centroid->z)))
             throw std::invalid_argument("Centroid must be finite");
         if (!target.revision)
@@ -303,6 +306,7 @@ namespace lfs::vis {
             const TensorShape shape{n, size_t{3}};
             auto cloud = std::make_shared<PointCloud>();
             glm::vec3 centroid = input.centroid.value_or(glm::vec3(0.0f));
+            TensorCompletion completion;
             if (n == 0) {
                 cloud->means = Tensor::empty(shape, Device::CPU, DataType::Float32);
                 cloud->colors = Tensor::empty(shape, Device::CPU, DataType::Float32);
@@ -310,85 +314,86 @@ namespace lfs::vis {
                 input.colors = {};
                 input.source_owners.reset();
                 release_inputs();
-                return PointCloudUpdateManager::Prepared{std::move(cloud), glm::vec3(0.0f)};
-            }
-            Tensor points_host, colors_host, colors_gpu, centroid_gpu;
-            TensorUpload points_upload, colors_upload;
-            // Pinned staging also makes snapshot ownership explicit: no producer
-            // pointer is retained by published tensors. Copies never run on the viewer.
-            if (input.points.device() == Device::CPU) {
-                points_host = Tensor::empty(shape, Device::CPU, DataType::Float32);
-                std::memcpy(points_host.data_ptr(), input.points.data_ptr(), points_host.bytes());
-                const auto* points = points_host.ptr<float>();
-                glm::dvec3 sum(0.0);
-                for (size_t i = 0; i < n * 3; ++i) {
-                    if (!std::isfinite(points[i]))
-                        throw std::invalid_argument("Positions must be finite");
+                centroid = glm::vec3(0.0f);
+            } else {
+                Tensor points_host, colors_host, colors_gpu, centroid_gpu;
+                TensorUpload points_upload, colors_upload;
+                // Pinned staging also makes snapshot ownership explicit: no producer
+                // pointer is retained by published tensors. Copies never run on the viewer.
+                if (input.points.device() == Device::CPU) {
+                    points_host = Tensor::empty(shape, Device::CPU, DataType::Float32);
+                    std::memcpy(points_host.data_ptr(), input.points.data_ptr(), points_host.bytes());
+                    const auto* points = points_host.ptr<float>();
+                    glm::dvec3 sum(0.0);
+                    for (size_t i = 0; i < n * 3; ++i) {
+                        if (!std::isfinite(points[i]))
+                            throw std::invalid_argument("Positions must be finite");
+                        if (!input.centroid)
+                            sum[i % 3] += points[i];
+                    }
                     if (!input.centroid)
-                        sum[i % 3] += points[i];
+                        centroid = glm::vec3(sum / static_cast<double>(n));
                 }
-                if (!input.centroid)
-                    centroid = glm::vec3(sum / static_cast<double>(n));
-            }
-            if (input.colors.device() == Device::CPU) {
-                colors_host = Tensor::empty(shape, Device::CPU, DataType::Float32);
-                auto* colors = colors_host.ptr<float>();
-                const auto* f = input.colors.dtype() == DataType::Float32 ? input.colors.ptr<float>() : nullptr;
-                const auto* u = input.colors.dtype() == DataType::UInt8 ? input.colors.ptr<uint8_t>() : nullptr;
-                for (size_t i = 0; i < n * 3; ++i) {
-                    colors[i] = f ? f[i] : static_cast<float>(u[i]) / 255.0f;
-                    if (!std::isfinite(colors[i]) || colors[i] < 0 || colors[i] > 1)
-                        throw std::invalid_argument("Float colors must be finite and in [0, 1]");
+                if (input.colors.device() == Device::CPU) {
+                    colors_host = Tensor::empty(shape, Device::CPU, DataType::Float32);
+                    auto* colors = colors_host.ptr<float>();
+                    const auto* f = input.colors.dtype() == DataType::Float32 ? input.colors.ptr<float>() : nullptr;
+                    const auto* u = input.colors.dtype() == DataType::UInt8 ? input.colors.ptr<uint8_t>() : nullptr;
+                    for (size_t i = 0; i < n * 3; ++i) {
+                        colors[i] = f ? f[i] : static_cast<float>(u[i]) / 255.0f;
+                        if (!std::isfinite(colors[i]) || colors[i] < 0 || colors[i] > 1)
+                            throw std::invalid_argument("Float colors must be finite and in [0, 1]");
+                    }
                 }
-            }
-            const bool cpu_inputs = input.points.device() == Device::CPU && input.colors.device() == Device::CPU;
-            if (cpu_inputs) {
-                input.points = {};
-                input.colors = {};
-                input.source_owners.reset();
-                release_inputs();
-            }
-            // Queue and uploads own in-flight work even if any subsequent step throws.
-            auto completion = queue.execute([&] {
-                cloud->means = allocator ? allocator(shape, n, DataType::Float32, "PointCloud.means")
-                                         : Tensor::empty(shape, Device::GPU, DataType::Float32);
-                cloud->colors = allocator ? allocator(shape, n, DataType::Float32, "PointCloud.colors")
-                                          : Tensor::empty(shape, Device::GPU, DataType::Float32);
-                if (points_host.is_valid())
-                    points_upload.enqueue(cloud->means, points_host, queue.native_handle());
-                else {
-                    cloud->means.copy_from(input.points);
-                    if (!input.centroid)
-                        centroid_gpu = cloud->means.mean(0);
+                const bool cpu_inputs = input.points.device() == Device::CPU && input.colors.device() == Device::CPU;
+                if (cpu_inputs) {
+                    input.points = {};
+                    input.colors = {};
+                    input.source_owners.reset();
+                    release_inputs();
                 }
-                if (colors_host.is_valid())
-                    colors_upload.enqueue(cloud->colors, colors_host, queue.native_handle());
-                else {
-                    if (input.colors.dtype() == DataType::UInt8) {
-                        colors_gpu = input.colors.to(DataType::Float32) / 255.0f;
-                        cloud->colors.copy_from(colors_gpu);
-                    } else
-                        cloud->colors.copy_from(input.colors);
+                // Queue and uploads own in-flight work even if any subsequent step throws.
+                completion = queue.execute([&] {
+                    cloud->means = allocator ? allocator(shape, n, DataType::Float32, "PointCloud.means")
+                                             : Tensor::empty(shape, Device::GPU, DataType::Float32);
+                    cloud->colors = allocator ? allocator(shape, n, DataType::Float32, "PointCloud.colors")
+                                              : Tensor::empty(shape, Device::GPU, DataType::Float32);
+                    if (points_host.is_valid())
+                        points_upload.enqueue(cloud->means, points_host, queue.native_handle());
+                    else {
+                        cloud->means.copy_from(input.points);
+                        if (!input.centroid)
+                            centroid_gpu = cloud->means.mean(0);
+                    }
+                    if (colors_host.is_valid())
+                        colors_upload.enqueue(cloud->colors, colors_host, queue.native_handle());
+                    else {
+                        if (input.colors.dtype() == DataType::UInt8) {
+                            colors_gpu = input.colors.to(DataType::Float32) / 255.0f;
+                            cloud->colors.copy_from(colors_gpu);
+                        } else
+                            cloud->colors.copy_from(input.colors);
+                    }
+                });
+                completion.wait(); // only this independent queue; never a host-wide drain
+                if (centroid_gpu.is_valid()) {
+                    const auto host = centroid_gpu.cpu();
+                    const auto* p = host.ptr<float>();
+                    centroid = {p[0], p[1], p[2]};
                 }
-            });
-            completion.wait(); // only this independent queue; never a host-wide drain
-            if (centroid_gpu.is_valid()) {
-                const auto host = centroid_gpu.cpu();
-                const auto* p = host.ptr<float>();
-                centroid = {p[0], p[1], p[2]};
-            }
-            if (!cpu_inputs) {
-                // Small scalar readbacks are worker-only and ordered on the upload queue.
-                if (!cloud->means.isfinite().all().item<bool>() || !cloud->colors.isfinite().all().item<bool>() ||
-                    cloud->colors.min().item<float>() < 0 || cloud->colors.max().item<float>() > 1)
-                    throw std::invalid_argument("Positions must be finite and colors must be in [0, 1]");
-                input.points = {};
-                input.colors = {};
-                input.source_owners.reset();
-                release_inputs();
+                if (!cpu_inputs) {
+                    // Small scalar readbacks are worker-only and ordered on the upload queue.
+                    if (!cloud->means.isfinite().all().item<bool>() || !cloud->colors.isfinite().all().item<bool>() ||
+                        cloud->colors.min().item<float>() < 0 || cloud->colors.max().item<float>() > 1)
+                        throw std::invalid_argument("Positions must be finite and colors must be in [0, 1]");
+                    input.points = {};
+                    input.colors = {};
+                    input.source_owners.reset();
+                    release_inputs();
+                }
             }
             std::shared_ptr<PointCloud> merged;
-            if (input.target_visible && !input.companions.empty()) {
+            if (!input.companions.empty() && (input.target_visible || input.companions.size() > 1)) {
                 std::vector<Tensor> positions, colors;
                 const auto append = [&](const PointCloud& source, const glm::mat4& transform) {
                     if (source.size() == 0)
@@ -407,9 +412,14 @@ namespace lfs::vis {
                     colors.push_back(std::move(color));
                 };
                 completion = queue.execute([&] {
-                    append(*cloud, input.transform);
-                    for (const auto& companion : input.companions)
-                        append(*companion.cloud, companion.transform);
+                    for (size_t i = 0; i <= input.companions.size(); ++i) {
+                        if (input.target_visible && i == input.target_index)
+                            append(*cloud, input.transform);
+                        if (i < input.companions.size()) {
+                            const auto& companion = input.companions[i];
+                            append(*companion.cloud, companion.transform);
+                        }
+                    }
                     auto pos = Tensor::cat(positions, 0);
                     auto col = Tensor::cat(colors, 0);
                     const auto count = pos.size(0);
@@ -429,12 +439,12 @@ namespace lfs::vis {
             if (cloud->render_buffers && completion.timeline().semaphore) {
                 auto buffers = std::make_shared<PointCloudRenderBuffers>(*cloud->render_buffers);
                 // The exported queue semaphore outlives all renderer submissions.
-                buffers->ready.keep_alive = std::move(queue_owner);
+                buffers->ready.keep_alive = queue_owner;
                 cloud->render_buffers = std::move(buffers);
             }
             if (merged && merged->render_buffers && completion.timeline().semaphore) {
                 auto buffers = std::make_shared<PointCloudRenderBuffers>(*merged->render_buffers);
-                buffers->ready.keep_alive = cloud->render_buffers->ready.keep_alive;
+                buffers->ready.keep_alive = queue_owner;
                 merged->render_buffers = std::move(buffers);
             }
             return PointCloudUpdateManager::Prepared{std::move(cloud), centroid, std::move(merged)};
