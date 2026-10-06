@@ -57,6 +57,9 @@ namespace lfs::vis {
             float ring_width = 0.01f;
             std::uint32_t* picked_ring_id_out = nullptr;
         };
+        // Nonblocking sampling returns this while the GPU snapshot is in flight.
+        static constexpr float kDepthSamplePending = -2.0f;
+
         struct DepthSampleRequest {
             glm::ivec2 pixel{0, 0};
             // Coordinate space of `pixel`. When positive, the renderer maps the

@@ -13,6 +13,7 @@
 #include "operator/operator_registry.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/scene_renderer.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
@@ -23,6 +24,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <limits>
 #include <unordered_set>
+#include <utility>
 
 namespace lfs::vis::op {
 
@@ -234,17 +236,7 @@ namespace lfs::vis::op {
 
             if (drag_active_ && press_point_index_ &&
                 static_cast<size_t>(*press_point_index_) < picked_points_.size()) {
-                SplitViewPanelId panel = SplitViewPanelId::Left;
-                const glm::vec3 world_pos =
-                    unprojectScreenPoint(mm->position.x, mm->position.y, &panel, true);
-                if (Viewport::isValidWorldPosition(world_pos)) {
-                    picked_points_[static_cast<size_t>(*press_point_index_)] = world_pos;
-                    if (!pick_panel_) {
-                        pick_panel_ = panel;
-                    }
-                    services().setAlignCameraPosition(resolvePickPanelCameraPosition());
-                    syncPickedPointsToServices();
-                }
+                (void)applyPointSample(sampleScreenPoint(mm->position), press_point_index_);
                 return OperatorResult::RUNNING_MODAL;
             }
             return OperatorResult::PASS_THROUGH;
@@ -301,25 +293,7 @@ namespace lfs::vis::op {
 
             if (is_pick_button && press_point_index_ &&
                 (was_dragging || move_dist > kClickDragThresholdPx)) {
-                const int idx = *press_point_index_;
-                if (idx >= 0 && static_cast<size_t>(idx) < picked_points_.size()) {
-                    SplitViewPanelId panel = SplitViewPanelId::Left;
-                    bool pending = false;
-                    const glm::vec3 world_pos =
-                        unprojectScreenPoint(mb->position.x, mb->position.y, &panel, true, &pending);
-                    if (pending) {
-                        pending_pick_ = mb->position;
-                        pending_point_index_ = idx;
-                    }
-                    if (Viewport::isValidWorldPosition(world_pos)) {
-                        picked_points_[static_cast<size_t>(idx)] = world_pos;
-                        if (!pick_panel_) {
-                            pick_panel_ = panel;
-                        }
-                        services().setAlignCameraPosition(resolvePickPanelCameraPosition());
-                        syncPickedPointsToServices();
-                    }
-                }
+                (void)requestPoint({mb->position, press_point_index_});
                 press_point_index_.reset();
                 return OperatorResult::RUNNING_MODAL;
             }
@@ -428,7 +402,6 @@ namespace lfs::vis::op {
 
     void AlignPickPointOperator::clearAllPoints() {
         pending_pick_.reset();
-        pending_point_index_.reset();
         press_active_ = false;
         picked_points_.clear();
         selected_point_.reset();
@@ -443,7 +416,6 @@ namespace lfs::vis::op {
 
     void AlignPickPointOperator::removeLastPoint() {
         pending_pick_.reset();
-        pending_point_index_.reset();
         press_active_ = false;
         press_point_index_.reset();
         drag_active_ = false;
@@ -464,7 +436,6 @@ namespace lfs::vis::op {
 
     void AlignPickPointOperator::removeSelectedPoint() {
         pending_pick_.reset();
-        pending_point_index_.reset();
         press_active_ = false;
         press_point_index_.reset();
         drag_active_ = false;
@@ -494,59 +465,46 @@ namespace lfs::vis::op {
             return false;
         }
 
-        SplitViewPanelId panel = SplitViewPanelId::Left;
-        bool pending = false;
-        const glm::vec3 world_pos = unprojectScreenPoint(x, y, &panel, true, &pending);
-        if (pending) {
-            pending_pick_ = glm::dvec2(x, y);
-            pending_point_index_.reset();
+        return requestPoint({{x, y}, std::nullopt});
+    }
+
+    bool AlignPickPointOperator::requestPoint(const PendingPick& pick) {
+        pending_pick_.reset();
+        const auto sample = sampleScreenPoint(pick.screen_position);
+        if (sample.pending) {
+            pending_pick_ = pick;
             return false;
         }
-        if (!Viewport::isValidWorldPosition(world_pos)) {
+        if (!Viewport::isValidWorldPosition(sample.world)) {
             setStatus(lichtfeld::Strings::Align::STATUS_NO_SURFACE);
             return false;
         }
+        return applyPointSample(sample, pick.point_index);
+    }
 
-        if (!pick_panel_) {
-            pick_panel_ = panel;
+    bool AlignPickPointOperator::applyPointSample(const PointSample& sample, std::optional<int> index) {
+        if (!Viewport::isValidWorldPosition(sample.world))
+            return false;
+        if (index) {
+            if (*index < 0 || static_cast<size_t>(*index) >= picked_points_.size())
+                return false;
+            picked_points_[*index] = sample.world;
+        } else {
+            if (picked_points_.size() >= 3)
+                return false;
+            picked_points_.push_back(sample.world);
+            selected_point_ = static_cast<int>(picked_points_.size()) - 1;
         }
-
+        if (!pick_panel_)
+            pick_panel_ = sample.panel;
         services().setAlignCameraPosition(resolvePickPanelCameraPosition());
-        picked_points_.push_back(world_pos);
-        selected_point_ = static_cast<int>(picked_points_.size()) - 1;
         syncPickedPointsToServices();
         return true;
     }
 
     void AlignPickPointOperator::resolvePendingPoint() {
-        if (!pending_pick_)
-            return;
-        SplitViewPanelId panel = SplitViewPanelId::Left;
-        bool pending = false;
-        const auto world = unprojectScreenPoint(pending_pick_->x, pending_pick_->y, &panel, true, &pending);
-        if (pending)
-            return;
-        const auto index = pending_point_index_;
-        pending_pick_.reset();
-        pending_point_index_.reset();
-        if (!Viewport::isValidWorldPosition(world)) {
-            setStatus(lichtfeld::Strings::Align::STATUS_NO_SURFACE);
-            return;
-        }
-        if (index) {
-            if (*index < 0 || static_cast<size_t>(*index) >= picked_points_.size())
-                return;
-            picked_points_[*index] = world;
-        } else {
-            if (picked_points_.size() >= 3)
-                return;
-            picked_points_.push_back(world);
-            selected_point_ = static_cast<int>(picked_points_.size()) - 1;
-        }
-        if (!pick_panel_)
-            pick_panel_ = panel;
-        services().setAlignCameraPosition(resolvePickPanelCameraPosition());
-        syncPickedPointsToServices();
+        if (const auto pick = std::exchange(pending_pick_, std::nullopt))
+            (void)requestPoint(*pick);
     }
 
     std::optional<int> AlignPickPointOperator::hitTestPoint(const double x, const double y) const {
@@ -638,15 +596,11 @@ namespace lfs::vis::op {
         return panel_info->viewport->camera.t;
     }
 
-    glm::vec3 AlignPickPointOperator::unprojectScreenPoint(const double x,
-                                                           const double y,
-                                                           SplitViewPanelId* out_panel, const bool nonblocking, bool* pending) const {
-        if (pending)
-            *pending = false;
+    AlignPickPointOperator::PointSample AlignPickPointOperator::sampleScreenPoint(const glm::dvec2 position) const {
         auto* rm = services().renderingOrNull();
         auto* gm = services().guiOrNull();
         if (!rm || !gm || !gm->getViewer()) {
-            return glm::vec3(Viewport::INVALID_WORLD_POS);
+            return {};
         }
 
         const auto viewport_pos = gm->getViewportPos();
@@ -656,19 +610,15 @@ namespace lfs::vis::op {
                                                        gm->getViewer()->getViewport(),
                                                        viewport_pos,
                                                        viewport_size,
-                                                       glm::vec2(static_cast<float>(x), static_cast<float>(y)));
+                                                       glm::vec2(static_cast<float>(position.x), static_cast<float>(position.y)));
         if (!panel_info || !panel_info->valid()) {
-            return glm::vec3(Viewport::INVALID_WORLD_POS);
-        }
-
-        if (out_panel) {
-            *out_panel = panel_info->panel;
+            return {};
         }
 
         const float scale_x = static_cast<float>(panel_info->render_width) / panel_info->width;
         const float scale_y = static_cast<float>(panel_info->render_height) / panel_info->height;
-        const float render_x = (static_cast<float>(x) - panel_info->x) * scale_x;
-        const float render_y = (static_cast<float>(y) - panel_info->y) * scale_y;
+        const float render_x = (static_cast<float>(position.x) - panel_info->x) * scale_x;
+        const float render_y = (static_cast<float>(position.y) - panel_info->y) * scale_y;
 
         Viewport projection_viewport = *panel_info->viewport;
         projection_viewport.windowSize = {panel_info->render_width, panel_info->render_height};
@@ -678,20 +628,21 @@ namespace lfs::vis::op {
         const int depth_y = static_cast<int>(render_y);
 
         // Hover, placement and marker dragging all follow the displayed surface.
-        const float depth = rm->getDepthAtPixel(rm->activeViewId(), depth_x, depth_y, panel_info->panel, nonblocking);
-        if (pending)
-            *pending = depth == -2.0f;
+        const float depth = rm->getDepthAtPixel(rm->activeViewId(), depth_x, depth_y, panel_info->panel, true);
+        if (depth == SceneRenderer::kDepthSamplePending)
+            return {.panel = panel_info->panel, .pending = true};
         if (!std::isfinite(depth) || depth <= 0.0f || depth >= 1e9f) {
-            return glm::vec3(Viewport::INVALID_WORLD_POS);
+            return {};
         }
 
-        return projection_viewport.unprojectPixel(
-            render_x,
-            render_y,
-            depth,
-            render_settings.focal_length_mm,
-            render_settings.orthographic,
-            render_settings.ortho_scale);
+        return {.world = projection_viewport.unprojectPixel(
+                    render_x,
+                    render_y,
+                    depth,
+                    render_settings.focal_length_mm,
+                    render_settings.orthographic,
+                    render_settings.ortho_scale),
+                .panel = panel_info->panel};
     }
 
     void AlignPickPointOperator::restorePreview(OperatorContext& ctx) {

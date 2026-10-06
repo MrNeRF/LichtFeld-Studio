@@ -510,7 +510,7 @@ namespace lfs::vis {
             slot = {};
         }
         void drainOutputs() {
-            if (depth_pending && vkGetFenceStatus(device, depth_fence) != VK_SUCCESS)
+            if (depth_snapshot.state == DepthSnapshot::State::Pending && vkGetFenceStatus(device, depth_snapshot.fence) != VK_SUCCESS)
                 return;
             if (fence != VK_NULL_HANDLE && vkGetFenceStatus(device, fence) == VK_SUCCESS)
                 completed = submitted;
@@ -535,21 +535,48 @@ namespace lfs::vis {
             return true;
         }
 
-        // One reusable snapshot for interaction. All GPU work is polled, never
-        // waited on by hover/drag. Identity includes the displayed surface and pose.
-        VkCommandPool depth_pool = VK_NULL_HANDLE;
-        VkCommandBuffer depth_command = VK_NULL_HANDLE;
-        VkFence depth_fence = VK_NULL_HANDLE;
-        ManagedBuffer depth_staging;
-        void* depth_mapped = nullptr;
-        bool depth_pending = false;
-        bool depth_ready = false;
-        bool depth_redraw = false;
-        RenderTargetId depth_target{};
-        std::uint64_t depth_identity = 0;
-        std::uint64_t depth_resource = 0;
-        glm::ivec2 depth_size{0};
-        glm::mat4 depth_clip_to_view{1.0f};
+        // One reusable snapshot for interaction. GPU completion is polled;
+        // completed snapshots remain valid across cursor/overlay-only redraws.
+        struct DepthSnapshot {
+            enum class State { Empty,
+                               Pending,
+                               Ready };
+            State state = State::Empty;
+            VkCommandPool pool = VK_NULL_HANDLE;
+            VkCommandBuffer command = VK_NULL_HANDLE;
+            VkFence fence = VK_NULL_HANDLE;
+            ManagedBuffer staging;
+            void* mapped = nullptr;
+            bool redraw = false;
+            RenderTargetId target{};
+            std::uint64_t identity = 0;
+            std::uint64_t resource = 0;
+            glm::ivec2 size{0};
+            glm::mat4 clip_to_view{1.0f};
+
+            bool matches(RenderTargetId requested_target, const OutputSlotResources& slot) const {
+                return state == State::Ready && target == requested_target &&
+                       identity == slot.depth_identity && resource == slot.image_generation && size == slot.size;
+            }
+
+            float sample(glm::ivec2 pixel, glm::ivec2 source) const {
+                const glm::ivec2 p{pixel.x * size.x / source.x, pixel.y * size.y / source.y};
+                const float ndc = static_cast<const float*>(mapped)[p.y * size.x + p.x];
+                if (!std::isfinite(ndc) || ndc >= 1.0f)
+                    return -1.0f;
+                const float nx = 2.0f * (p.x + 0.5f) / size.x - 1.0f;
+                const float ny = 2.0f * (p.y + 0.5f) / size.y - 1.0f;
+                const glm::vec4 view = clip_to_view * glm::vec4(nx, ny, ndc, 1);
+                const float depth = -view.z / view.w;
+                return std::isfinite(depth) && depth > 0 ? depth : -1.0f;
+            }
+        } depth_snapshot;
+
+        float requestDepthRetry() {
+            depth_snapshot.redraw = true;
+            lfs::python::request_redraw_after(0.001);
+            return SceneRenderer::kDepthSamplePending;
+        }
 
         std::expected<float, std::string> sampleDepthAsync(const SceneRenderer::DepthSampleRequest& request) {
             std::lock_guard lock(command_mutex);
@@ -562,63 +589,65 @@ namespace lfs::vis {
             if (source.x <= 0 || source.y <= 0 || pixel.x < 0 || pixel.y < 0 ||
                 pixel.x >= source.x || pixel.y >= source.y)
                 return std::unexpected("Point-cloud depth pixel is outside the viewport");
-            if (depth_pending) {
-                const auto status = vkGetFenceStatus(device, depth_fence);
+            if (depth_snapshot.state == DepthSnapshot::State::Pending) {
+                const auto status = vkGetFenceStatus(device, depth_snapshot.fence);
                 if (status == VK_NOT_READY) {
-                    depth_redraw = true;
-                    lfs::python::request_redraw_after(0.001);
-                    return -2.0f;
+                    return requestDepthRetry();
                 }
                 if (status != VK_SUCCESS)
                     return std::unexpected(vkError("vkGetFenceStatus(point-cloud depth)", status));
-                depth_pending = false;
-                const auto result = vmaInvalidateAllocation(allocator, depth_staging.allocation, 0, VK_WHOLE_SIZE);
+                depth_snapshot.state = DepthSnapshot::State::Empty;
+                const auto result = vmaInvalidateAllocation(allocator, depth_snapshot.staging.allocation, 0, VK_WHOLE_SIZE);
                 if (result != VK_SUCCESS)
                     return std::unexpected(vkError("vmaInvalidateAllocation(point-cloud depth)", result));
-                depth_ready = true;
+                depth_snapshot.state = DepthSnapshot::State::Ready;
             }
-            if (depth_ready && depth_target == request.target && depth_identity == slot.depth_identity &&
-                depth_resource == slot.image_generation && depth_size == slot.size) {
-                const glm::ivec2 p{pixel.x * depth_size.x / source.x, pixel.y * depth_size.y / source.y};
-                const float ndc = static_cast<const float*>(depth_mapped)[p.y * depth_size.x + p.x];
-                if (!std::isfinite(ndc) || ndc >= 1.0f)
-                    return -1.0f;
-                const float nx = 2.0f * (p.x + 0.5f) / depth_size.x - 1.0f;
-                const float ny = 2.0f * (p.y + 0.5f) / depth_size.y - 1.0f;
-                const glm::vec4 view = depth_clip_to_view * glm::vec4(nx, ny, ndc, 1);
-                const float depth = -view.z / view.w;
-                return std::isfinite(depth) && depth > 0 ? depth : -1.0f;
-            }
-            depth_ready = false;
-            if (depth_pool == VK_NULL_HANDLE || depth_command == VK_NULL_HANDLE || depth_fence == VK_NULL_HANDLE) {
-                if (depth_fence != VK_NULL_HANDLE)
-                    vkDestroyFence(device, depth_fence, nullptr);
-                if (depth_pool != VK_NULL_HANDLE)
-                    vkDestroyCommandPool(device, depth_pool, nullptr);
-                depth_pool = VK_NULL_HANDLE;
-                depth_command = VK_NULL_HANDLE;
-                depth_fence = VK_NULL_HANDLE;
+            if (depth_snapshot.matches(request.target, slot))
+                return depth_snapshot.sample(pixel, source);
+            depth_snapshot.state = DepthSnapshot::State::Empty;
+            if (auto result = ensureDepthSnapshotResources(slot.size); !result)
+                return std::unexpected(result.error());
+            if (auto result = submitDepthSnapshot(slot); !result)
+                return std::unexpected(result.error());
+            depth_snapshot.state = DepthSnapshot::State::Pending;
+            depth_snapshot.target = request.target;
+            depth_snapshot.identity = slot.depth_identity;
+            depth_snapshot.resource = slot.image_generation;
+            depth_snapshot.size = slot.size;
+            depth_snapshot.clip_to_view = slot.clip_to_view;
+            return requestDepthRetry();
+        }
+
+        std::expected<void, std::string> ensureDepthSnapshotResources(glm::ivec2 size) {
+            if (depth_snapshot.pool == VK_NULL_HANDLE || depth_snapshot.command == VK_NULL_HANDLE || depth_snapshot.fence == VK_NULL_HANDLE) {
+                if (depth_snapshot.fence != VK_NULL_HANDLE)
+                    vkDestroyFence(device, depth_snapshot.fence, nullptr);
+                if (depth_snapshot.pool != VK_NULL_HANDLE)
+                    vkDestroyCommandPool(device, depth_snapshot.pool, nullptr);
+                depth_snapshot.pool = VK_NULL_HANDLE;
+                depth_snapshot.command = VK_NULL_HANDLE;
+                depth_snapshot.fence = VK_NULL_HANDLE;
                 VkCommandPoolCreateInfo pool{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
                 pool.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
                 pool.queueFamilyIndex = context->graphicsQueueFamily();
-                auto result = vkCreateCommandPool(device, &pool, nullptr, &depth_pool);
+                auto result = vkCreateCommandPool(device, &pool, nullptr, &depth_snapshot.pool);
                 if (result != VK_SUCCESS)
                     return std::unexpected(vkError("vkCreateCommandPool(point-cloud depth)", result));
                 VkCommandBufferAllocateInfo allocate{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-                allocate.commandPool = depth_pool;
+                allocate.commandPool = depth_snapshot.pool;
                 allocate.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
                 allocate.commandBufferCount = 1;
-                result = vkAllocateCommandBuffers(device, &allocate, &depth_command);
+                result = vkAllocateCommandBuffers(device, &allocate, &depth_snapshot.command);
                 if (result != VK_SUCCESS)
                     return std::unexpected(vkError("vkAllocateCommandBuffers(point-cloud depth)", result));
                 VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-                result = vkCreateFence(device, &fence_info, nullptr, &depth_fence);
+                result = vkCreateFence(device, &fence_info, nullptr, &depth_snapshot.fence);
                 if (result != VK_SUCCESS)
                     return std::unexpected(vkError("vkCreateFence(point-cloud depth)", result));
             }
-            const VkDeviceSize bytes = VkDeviceSize(slot.size.x) * slot.size.y * sizeof(float);
-            if (depth_staging.size != bytes) {
-                destroyBuffer(allocator, depth_staging);
+            const VkDeviceSize bytes = VkDeviceSize(size.x) * size.y * sizeof(float);
+            if (depth_snapshot.staging.size != bytes) {
+                destroyBuffer(allocator, depth_snapshot.staging);
                 VkBufferCreateInfo buffer{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
                 buffer.size = bytes;
                 buffer.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -627,55 +656,51 @@ namespace lfs::vis {
                 allocation.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
                 VmaAllocationInfo info{};
                 const auto result = vmaCreateBuffer(allocator, &buffer, &allocation,
-                                                    &depth_staging.buffer, &depth_staging.allocation, &info);
+                                                    &depth_snapshot.staging.buffer, &depth_snapshot.staging.allocation, &info);
                 if (result != VK_SUCCESS)
                     return std::unexpected(vkError("vmaCreateBuffer(point-cloud depth)", result));
-                depth_staging.size = bytes;
-                depth_staging.vram_scope = "vulkan.point_cloud.depth_snapshot";
-                depth_staging.vram_label = "interaction";
+                depth_snapshot.staging.size = bytes;
+                depth_snapshot.staging.vram_scope = "vulkan.point_cloud.depth_snapshot";
+                depth_snapshot.staging.vram_label = "interaction";
                 lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
-                    depth_staging.vram_scope, depth_staging.vram_label, info.size);
-                depth_mapped = info.pMappedData;
+                    depth_snapshot.staging.vram_scope, depth_snapshot.staging.vram_label, info.size);
+                depth_snapshot.mapped = info.pMappedData;
             }
-            auto result = vkResetCommandBuffer(depth_command, 0);
+            return {};
+        }
+
+        std::expected<void, std::string> submitDepthSnapshot(const OutputSlotResources& slot) {
+            auto result = vkResetCommandBuffer(depth_snapshot.command, 0);
             if (result != VK_SUCCESS)
                 return std::unexpected(vkError("vkResetCommandBuffer(point-cloud depth)", result));
             VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
             begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            result = vkBeginCommandBuffer(depth_command, &begin);
+            result = vkBeginCommandBuffer(depth_snapshot.command, &begin);
             if (result != VK_SUCCESS)
                 return std::unexpected(vkError("vkBeginCommandBuffer(point-cloud depth)", result));
-            context->imageBarriers().transitionImage(depth_command, slot.depth_image, slot.image_generation,
+            context->imageBarriers().transitionImage(depth_snapshot.command, slot.depth_image, slot.image_generation,
                                                      VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
             VkBufferImageCopy copy{};
             copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
             copy.imageSubresource.layerCount = 1;
             copy.imageExtent = {uint32_t(slot.size.x), uint32_t(slot.size.y), 1};
-            vkCmdCopyImageToBuffer(depth_command, slot.depth_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                   depth_staging.buffer, 1, &copy);
-            context->imageBarriers().transitionImage(depth_command, slot.depth_image, slot.image_generation,
+            vkCmdCopyImageToBuffer(depth_snapshot.command, slot.depth_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   depth_snapshot.staging.buffer, 1, &copy);
+            context->imageBarriers().transitionImage(depth_snapshot.command, slot.depth_image, slot.image_generation,
                                                      VK_IMAGE_ASPECT_DEPTH_BIT, slot.depth_layout);
-            result = vkEndCommandBuffer(depth_command);
+            result = vkEndCommandBuffer(depth_snapshot.command);
             if (result != VK_SUCCESS)
                 return std::unexpected(vkError("vkEndCommandBuffer(point-cloud depth)", result));
-            result = vkResetFences(device, 1, &depth_fence);
+            result = vkResetFences(device, 1, &depth_snapshot.fence);
             if (result != VK_SUCCESS)
                 return std::unexpected(vkError("vkResetFences(point-cloud depth)", result));
             VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
             submit.commandBufferCount = 1;
-            submit.pCommandBuffers = &depth_command;
-            result = lfs::rendering::vk_queue_submit_synced(context->graphicsQueue(), 1, &submit, depth_fence);
+            submit.pCommandBuffers = &depth_snapshot.command;
+            result = lfs::rendering::vk_queue_submit_synced(context->graphicsQueue(), 1, &submit, depth_snapshot.fence);
             if (result != VK_SUCCESS)
                 return std::unexpected(vkError("vkQueueSubmit(point-cloud depth)", result));
-            depth_pending = true;
-            depth_redraw = true;
-            lfs::python::request_redraw_after(0.001);
-            depth_target = request.target;
-            depth_identity = slot.depth_identity;
-            depth_resource = slot.image_generation;
-            depth_size = slot.size;
-            depth_clip_to_view = slot.clip_to_view;
-            return -2.0f;
+            return {};
         }
 
         // Transient command pool / fence reused across frames.
@@ -1419,23 +1444,23 @@ namespace lfs::vis {
                 command_pool = VK_NULL_HANDLE;
                 command_buffer = VK_NULL_HANDLE;
             }
-            if (depth_pending) {
+            if (depth_snapshot.state == DepthSnapshot::State::Pending) {
                 const auto outcome = lfs::rendering::wait_fence_bounded(
-                    device, depth_fence, {}, {}, makeWaitContext("point_cloud.destroy.depth"));
+                    device, depth_snapshot.fence, {}, {}, makeWaitContext("point_cloud.destroy.depth"));
                 if (!outcome || *outcome != lfs::rendering::WaitOutcome::Ready) {
                     LOG_ERROR("Point-cloud depth snapshot did not retire during teardown; retaining resources");
                     return;
                 }
             }
-            if (depth_fence != VK_NULL_HANDLE)
-                vkDestroyFence(device, depth_fence, nullptr);
-            if (depth_pool != VK_NULL_HANDLE)
-                vkDestroyCommandPool(device, depth_pool, nullptr);
-            depth_fence = VK_NULL_HANDLE;
-            depth_pool = VK_NULL_HANDLE;
-            depth_command = VK_NULL_HANDLE;
-            destroyBuffer(allocator, depth_staging);
-            depth_pending = depth_ready = depth_redraw = false;
+            if (depth_snapshot.fence != VK_NULL_HANDLE)
+                vkDestroyFence(device, depth_snapshot.fence, nullptr);
+            if (depth_snapshot.pool != VK_NULL_HANDLE)
+                vkDestroyCommandPool(device, depth_snapshot.pool, nullptr);
+            depth_snapshot.fence = VK_NULL_HANDLE;
+            depth_snapshot.pool = VK_NULL_HANDLE;
+            depth_snapshot.command = VK_NULL_HANDLE;
+            destroyBuffer(allocator, depth_snapshot.staging);
+            depth_snapshot = {};
             for (auto& [target, slot] : slots)
                 destroySlot(slot);
             slots.clear();
@@ -2529,7 +2554,7 @@ namespace lfs::vis {
 
     bool PointCloudVulkanRenderer::takeRefinementRequest() {
         std::lock_guard lock(impl_->command_mutex);
-        return std::exchange(impl_->depth_redraw, false);
+        return std::exchange(impl_->depth_snapshot.redraw, false);
     }
 
     bool PointCloudVulkanRenderer::hasRenderTarget(RenderTargetId target) const {
