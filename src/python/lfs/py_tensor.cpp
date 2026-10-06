@@ -854,11 +854,21 @@ namespace lfs::python {
             auto& mask_py = nb::cast<PyTensor&>(key);
             const auto& mask_t = mask_py.tensor();
             if (mask_t.dtype() == DataType::UInt8 || mask_t.dtype() == DataType::Bool) {
+                Tensor logical_mask = mask_t;
+                if (mask_t.ndim() == 1 && tensor_.ndim() > 1) {
+                    LFS_ASSERT_MSG(mask_t.shape()[0] == tensor_.shape()[0],
+                                   "row mask length must match the first tensor dimension");
+                    // Match getitem: a rank-one mask selects entire rows.
+                    // Elementwise masking otherwise aligns it to the last axis.
+                    std::vector<size_t> mask_shape(tensor_.ndim(), 1);
+                    mask_shape[0] = mask_t.shape()[0];
+                    logical_mask = mask_t.contiguous().reshape(TensorShape(mask_shape)).broadcast_to(tensor_.shape()).contiguous();
+                }
                 if (is_scalar_value) {
-                    tensor_.masked_fill_(mask_t, scalar_value);
+                    tensor_.masked_fill_(logical_mask, scalar_value);
                 } else {
                     const auto& ct = static_cast<const Tensor&>(tensor_);
-                    auto proxy = ct[mask_t];
+                    auto proxy = ct[logical_mask];
                     proxy = val_tensor;
                 }
                 return;
