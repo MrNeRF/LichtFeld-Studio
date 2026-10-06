@@ -1875,14 +1875,56 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
 
     params->dataset.loading_params = lfs::core::param::LoadingParams{};
 
-    if (apply_overrides) {
-        apply_overrides();
-    }
     const auto flag_given = [&args](const std::string_view flag) {
         return std::ranges::any_of(args, [flag](const std::string& arg) {
             return arg == flag || (arg.starts_with(flag) && arg.size() > flag.size() && arg[flag.size()] == '=');
         });
     };
+    const auto flag_value = [&args](const std::string_view flag)
+        -> std::optional<std::string_view> {
+        const std::string joined = std::string(flag) + "=";
+        for (size_t i = 0; i < args.size(); ++i) {
+            if (args[i] == flag && i + 1 < args.size())
+                return args[i + 1];
+            if (args[i].starts_with(joined))
+                return std::string_view(args[i]).substr(joined.size());
+        }
+        return std::nullopt;
+    };
+    if (const auto value = flag_value("--sh-degree-interval");
+        value && !value->empty() && value->front() == '-') {
+        return std::unexpected(std::format(
+            "sh_degree_interval must be positive (got {})", *value));
+    }
+
+    if (apply_overrides) {
+        apply_overrides();
+    }
+    const auto validate_cli_nonnegative = [&flag_given](
+                                              const std::string_view flag,
+                                              const std::string_view name,
+                                              const float value) -> std::optional<std::string> {
+        if (!flag_given(flag))
+            return std::nullopt;
+        if (!std::isfinite(value) || value < 0.0f)
+            return std::format("{} must be finite and nonnegative (got {})", name, value);
+        return std::nullopt;
+    };
+    if (auto error = validate_cli_nonnegative(
+            "--normal-loss-weight", "normal_loss_weight", params->optimization.normal_loss_weight))
+        return std::unexpected("ERROR: " + *error);
+    if (auto error = validate_cli_nonnegative("--normal-consistency-weight", "normal_consistency_weight",
+                                              params->optimization.normal_consistency_weight))
+        return std::unexpected("ERROR: " + *error);
+    if (auto error = validate_cli_nonnegative("--normal-flatten-weight", "normal_flatten_weight",
+                                              params->optimization.normal_flatten_weight))
+        return std::unexpected("ERROR: " + *error);
+    if (flag_given("--max-screen-share") &&
+        (!std::isfinite(params->optimization.max_screen_share) ||
+         params->optimization.max_screen_share < 0.0f || params->optimization.max_screen_share > 1.0f))
+        return std::unexpected(std::format(
+            "ERROR: max_screen_share must be finite and within [0, 1] (got {})",
+            params->optimization.max_screen_share));
     if (flag_given("--eval-steps") && !params->optimization.enable_eval)
         return std::unexpected("--eval-steps needs --eval or --eval-all; without them no evaluation runs");
     if (flag_given("--eval-space") && !params->optimization.undistort) {

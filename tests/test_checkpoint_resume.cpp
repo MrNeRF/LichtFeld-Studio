@@ -1335,6 +1335,17 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
+    TEST(CheckpointParamsJsonTest, SavedNonstandardNumericRangesRemainLoadable) {
+        auto saved = lfs::core::param::OptimizationParameters{}.to_json();
+        saved["max_screen_share"] = 1.5f;
+        saved["normal_loss_weight"] = -1.0f;
+
+        const auto loaded = lfs::core::param::OptimizationParameters::from_json(saved);
+        EXPECT_FLOAT_EQ(loaded.max_screen_share, 1.5f);
+        EXPECT_FLOAT_EQ(loaded.normal_loss_weight, -1.0f);
+        EXPECT_TRUE(loaded.validate().empty());
+    }
+
     TEST(CheckpointParamsJsonTest, SplatCompositionParamsRoundTrip) {
         const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_params_json";
         std::error_code ec;
