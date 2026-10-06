@@ -270,9 +270,9 @@ namespace lfs::core {
 #ifdef __CUDA_ARCH__
                 if (x != x)
                     return x;
-                return asinf(fminf(fmaxf(x, T(-1)), T(1)));
+                return asinf(x);
 #else
-                return std::asin(clamp_value(x, T(-1), T(1)));
+                return std::asin(x);
 #endif
             }
         };
@@ -283,9 +283,9 @@ namespace lfs::core {
 #ifdef __CUDA_ARCH__
                 if (x != x)
                     return x;
-                return acosf(fminf(fmaxf(x, T(-1)), T(1)));
+                return acosf(x);
 #else
-                return std::acos(clamp_value(x, T(-1), T(1)));
+                return std::acos(x);
 #endif
             }
         };
