@@ -21,7 +21,9 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
+#include <format>
 #include <limits>
+#include <stdexcept>
 
 // Thrust headers
 #include <thrust/device_ptr.h>
@@ -2353,6 +2355,74 @@ namespace lfs::core::tensor_ops {
         }
     }
 
+    template <typename T>
+    void launch_cat_last_dim_typed(void* output, const std::vector<Tensor>& tensors, size_t num_rows, size_t row_size,
+                                   cudaStream_t stream) {
+        const size_t num_tensors = tensors.size();
+        const T** d_input_ptrs = static_cast<const T**>(
+            CudaMemoryPool::instance().allocate(num_tensors * sizeof(T*), stream));
+        size_t* d_input_sizes = static_cast<size_t*>(
+            CudaMemoryPool::instance().allocate(num_tensors * sizeof(size_t), stream));
+
+        if (!d_input_ptrs || !d_input_sizes) {
+            LOG_ERROR("Failed to allocate cat metadata from memory pool");
+            if (d_input_ptrs)
+                CudaMemoryPool::instance().deallocate(const_cast<T**>(d_input_ptrs), stream);
+            if (d_input_sizes)
+                CudaMemoryPool::instance().deallocate(d_input_sizes, stream);
+            return;
+        }
+
+        // Copy metadata to device
+        std::vector<const T*> h_input_ptrs(num_tensors);
+        std::vector<size_t> h_input_sizes(num_tensors);
+
+        for (size_t i = 0; i < num_tensors; ++i) {
+            h_input_ptrs[i] = static_cast<const T*>(tensors[i].data_ptr());
+            h_input_sizes[i] = tensors[i].shape()[tensors[i].shape().rank() - 1];
+        }
+
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(const_cast<T**>(d_input_ptrs), h_input_ptrs.data(),
+                            num_tensors * sizeof(T*), cudaMemcpyHostToDevice, stream),
+            "cat metadata pointer copy (tensor_count={})", num_tensors);
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(d_input_sizes, h_input_sizes.data(),
+                            num_tensors * sizeof(size_t), cudaMemcpyHostToDevice, stream),
+            "cat metadata size copy (tensor_count={})", num_tensors);
+
+        int block_size = 256;
+        size_t num_blocks = (num_rows + block_size - 1) / block_size;
+        const size_t max_blocks_x = 65535; // Safe limit for all CUDA devices
+
+        // Use 2D grid for large arrays to avoid exceeding grid dimension limits
+        if (num_blocks <= max_blocks_x) {
+            cat_last_dim_kernel_vectorized<<<num_blocks, block_size, 0, stream>>>(
+                static_cast<T*>(output),
+                d_input_ptrs,
+                d_input_sizes,
+                num_tensors,
+                num_rows,
+                row_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.cat_last_dim");
+        } else {
+            dim3 grid(std::min(num_blocks, max_blocks_x),
+                      (num_blocks + max_blocks_x - 1) / max_blocks_x);
+            cat_last_dim_kernel_vectorized<<<grid, block_size, 0, stream>>>(
+                static_cast<T*>(output),
+                d_input_ptrs,
+                d_input_sizes,
+                num_tensors,
+                num_rows,
+                row_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.cat_last_dim");
+        }
+
+        // Return metadata arrays to memory pool (instant, cached for reuse)
+        CudaMemoryPool::instance().deallocate(const_cast<T**>(d_input_ptrs), stream);
+        CudaMemoryPool::instance().deallocate(d_input_sizes, stream);
+    }
+
     void launch_cat_last_dim(
         void* output,
         const std::vector<Tensor>& tensors,
@@ -2386,70 +2456,13 @@ namespace lfs::core::tensor_ops {
             return;
         }
 
-        // GENERIC PATH: Use memory pool for metadata (NO thrust::device_vector!)
-        // Allocate from memory pool (fast, cached, no synchronization)
-        const float** d_input_ptrs = static_cast<const float**>(
-            CudaMemoryPool::instance().allocate(num_tensors * sizeof(float*), stream));
-        size_t* d_input_sizes = static_cast<size_t*>(
-            CudaMemoryPool::instance().allocate(num_tensors * sizeof(size_t), stream));
-
-        if (!d_input_ptrs || !d_input_sizes) {
-            LOG_ERROR("Failed to allocate cat metadata from memory pool");
-            if (d_input_ptrs)
-                CudaMemoryPool::instance().deallocate(const_cast<float**>(d_input_ptrs), stream);
-            if (d_input_sizes)
-                CudaMemoryPool::instance().deallocate(d_input_sizes, stream);
-            return;
+        switch (element_size) {
+        case 1: launch_cat_last_dim_typed<uint8_t>(output, tensors, num_rows, row_size, stream); break;
+        case 2: launch_cat_last_dim_typed<uint16_t>(output, tensors, num_rows, row_size, stream); break;
+        case 4: launch_cat_last_dim_typed<float>(output, tensors, num_rows, row_size, stream); break;
+        case 8: launch_cat_last_dim_typed<uint64_t>(output, tensors, num_rows, row_size, stream); break;
+        default: throw std::invalid_argument(std::format("cat: unsupported element size {}", element_size));
         }
-
-        // Copy metadata to device
-        std::vector<const float*> h_input_ptrs(num_tensors);
-        std::vector<size_t> h_input_sizes(num_tensors);
-
-        for (size_t i = 0; i < num_tensors; ++i) {
-            h_input_ptrs[i] = static_cast<const float*>(tensors[i].data_ptr());
-            h_input_sizes[i] = tensors[i].shape()[tensors[i].shape().rank() - 1];
-        }
-
-        LFS_CUDA_CHECK_MSG(
-            cudaMemcpyAsync(const_cast<float**>(d_input_ptrs), h_input_ptrs.data(),
-                            num_tensors * sizeof(float*), cudaMemcpyHostToDevice, stream),
-            "cat metadata pointer copy (tensor_count={})", num_tensors);
-        LFS_CUDA_CHECK_MSG(
-            cudaMemcpyAsync(d_input_sizes, h_input_sizes.data(),
-                            num_tensors * sizeof(size_t), cudaMemcpyHostToDevice, stream),
-            "cat metadata size copy (tensor_count={})", num_tensors);
-
-        int block_size = 256;
-        size_t num_blocks = (num_rows + block_size - 1) / block_size;
-        const size_t max_blocks_x = 65535; // Safe limit for all CUDA devices
-
-        // Use 2D grid for large arrays to avoid exceeding grid dimension limits
-        if (num_blocks <= max_blocks_x) {
-            cat_last_dim_kernel_vectorized<<<num_blocks, block_size, 0, stream>>>(
-                static_cast<float*>(output),
-                d_input_ptrs,
-                d_input_sizes,
-                num_tensors,
-                num_rows,
-                row_size);
-            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.cat_last_dim");
-        } else {
-            dim3 grid(std::min(num_blocks, max_blocks_x),
-                      (num_blocks + max_blocks_x - 1) / max_blocks_x);
-            cat_last_dim_kernel_vectorized<<<grid, block_size, 0, stream>>>(
-                static_cast<float*>(output),
-                d_input_ptrs,
-                d_input_sizes,
-                num_tensors,
-                num_rows,
-                row_size);
-            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.cat_last_dim");
-        }
-
-        // Return metadata arrays to memory pool (instant, cached for reuse)
-        CudaMemoryPool::instance().deallocate(const_cast<float**>(d_input_ptrs), stream);
-        CudaMemoryPool::instance().deallocate(d_input_sizes, stream);
     }
 
     template <typename T>
@@ -2487,16 +2500,9 @@ namespace lfs::core::tensor_ops {
         }
     }
 
-    void launch_cat_middle_dim(
-        void* output,
-        const std::vector<Tensor>& tensors,
-        size_t outer_size,
-        size_t inner_size,
-        int resolved_dim,
-        size_t element_size,
-        cudaStream_t stream) {
-        for (const auto& tensor : tensors)
-            pin_operands({&tensor});
+    template <typename T>
+    void launch_cat_middle_dim_typed(void* output, const std::vector<Tensor>& tensors, size_t outer_size,
+                                     size_t inner_size, int resolved_dim, cudaStream_t stream) {
         size_t num_tensors = tensors.size();
         size_t total_dim_size = 0;
         for (const auto& t : tensors) {
@@ -2505,33 +2511,32 @@ namespace lfs::core::tensor_ops {
 
         size_t total_elements = outer_size * total_dim_size * inner_size;
 
-        // OPTIMIZED: Use memory pool instead of thrust::device_vector
-        const float** d_input_ptrs = static_cast<const float**>(
-            CudaMemoryPool::instance().allocate(num_tensors * sizeof(float*), stream));
+        const T** d_input_ptrs = static_cast<const T**>(
+            CudaMemoryPool::instance().allocate(num_tensors * sizeof(T*), stream));
         size_t* d_input_sizes = static_cast<size_t*>(
             CudaMemoryPool::instance().allocate(num_tensors * sizeof(size_t), stream));
 
         if (!d_input_ptrs || !d_input_sizes) {
             LOG_ERROR("Failed to allocate cat_middle_dim metadata from memory pool");
             if (d_input_ptrs)
-                CudaMemoryPool::instance().deallocate(const_cast<float**>(d_input_ptrs), stream);
+                CudaMemoryPool::instance().deallocate(const_cast<T**>(d_input_ptrs), stream);
             if (d_input_sizes)
                 CudaMemoryPool::instance().deallocate(d_input_sizes, stream);
             return;
         }
 
         // Copy metadata to device
-        std::vector<const float*> h_input_ptrs(num_tensors);
+        std::vector<const T*> h_input_ptrs(num_tensors);
         std::vector<size_t> h_input_sizes(num_tensors);
 
         for (size_t i = 0; i < num_tensors; ++i) {
-            h_input_ptrs[i] = static_cast<const float*>(tensors[i].data_ptr());
+            h_input_ptrs[i] = static_cast<const T*>(tensors[i].data_ptr());
             h_input_sizes[i] = tensors[i].shape()[resolved_dim];
         }
 
         LFS_CUDA_CHECK_MSG(
-            cudaMemcpyAsync(const_cast<float**>(d_input_ptrs), h_input_ptrs.data(),
-                            num_tensors * sizeof(float*), cudaMemcpyHostToDevice, stream),
+            cudaMemcpyAsync(const_cast<T**>(d_input_ptrs), h_input_ptrs.data(),
+                            num_tensors * sizeof(T*), cudaMemcpyHostToDevice, stream),
             "cat-middle metadata pointer copy (tensor_count={})", num_tensors);
         LFS_CUDA_CHECK_MSG(
             cudaMemcpyAsync(d_input_sizes, h_input_sizes.data(),
@@ -2545,7 +2550,7 @@ namespace lfs::core::tensor_ops {
         // Use 2D grid for large arrays to avoid exceeding grid dimension limits
         if (num_blocks <= max_blocks_x) {
             cat_middle_dim_kernel<<<num_blocks, block_size, 0, stream>>>(
-                static_cast<float*>(output),
+                static_cast<T*>(output),
                 d_input_ptrs,
                 d_input_sizes,
                 num_tensors,
@@ -2557,7 +2562,7 @@ namespace lfs::core::tensor_ops {
             dim3 grid(std::min(num_blocks, max_blocks_x),
                       (num_blocks + max_blocks_x - 1) / max_blocks_x);
             cat_middle_dim_kernel<<<grid, block_size, 0, stream>>>(
-                static_cast<float*>(output),
+                static_cast<T*>(output),
                 d_input_ptrs,
                 d_input_sizes,
                 num_tensors,
@@ -2568,8 +2573,27 @@ namespace lfs::core::tensor_ops {
         }
 
         // Return metadata arrays to memory pool
-        CudaMemoryPool::instance().deallocate(const_cast<float**>(d_input_ptrs), stream);
+        CudaMemoryPool::instance().deallocate(const_cast<T**>(d_input_ptrs), stream);
         CudaMemoryPool::instance().deallocate(d_input_sizes, stream);
+    }
+
+    void launch_cat_middle_dim(
+        void* output,
+        const std::vector<Tensor>& tensors,
+        size_t outer_size,
+        size_t inner_size,
+        int resolved_dim,
+        size_t element_size,
+        cudaStream_t stream) {
+        for (const auto& tensor : tensors)
+            pin_operands({&tensor});
+        switch (element_size) {
+        case 1: launch_cat_middle_dim_typed<uint8_t>(output, tensors, outer_size, inner_size, resolved_dim, stream); break;
+        case 2: launch_cat_middle_dim_typed<uint16_t>(output, tensors, outer_size, inner_size, resolved_dim, stream); break;
+        case 4: launch_cat_middle_dim_typed<float>(output, tensors, outer_size, inner_size, resolved_dim, stream); break;
+        case 8: launch_cat_middle_dim_typed<uint64_t>(output, tensors, outer_size, inner_size, resolved_dim, stream); break;
+        default: throw std::invalid_argument(std::format("cat: unsupported element size {}", element_size));
+        }
     }
 
     // ============= EXPLICIT TEMPLATE INSTANTIATIONS =============
