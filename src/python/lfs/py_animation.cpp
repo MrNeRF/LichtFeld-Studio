@@ -146,14 +146,15 @@ namespace lfs::python {
     } // namespace
 
     void PyAnimationTrack::add_keyframe(float time, nb::object value, const std::string& easing) {
-        const auto anim_value = python_to_animation_value(value, track_->valueType());
-        track_->addKeyframe(time, anim_value, string_to_easing(easing));
+        auto& track = resolve();
+        const auto anim_value = python_to_animation_value(value, track.valueType());
+        track.addKeyframe(time, anim_value, string_to_easing(easing));
     }
 
-    void PyAnimationTrack::remove_keyframe(size_t index) { track_->removeKeyframe(index); }
+    void PyAnimationTrack::remove_keyframe(size_t index) { resolve().removeKeyframe(index); }
 
     nb::object PyAnimationTrack::evaluate(float time) const {
-        const auto result = track_->evaluate(time);
+        const auto result = resolve().evaluate(time);
         if (!result) {
             return nb::none();
         }
@@ -162,7 +163,7 @@ namespace lfs::python {
 
     nb::list PyAnimationTrack::keyframes() const {
         nb::list result;
-        for (const auto& kf : track_->keyframes()) {
+        for (const auto& kf : resolve().keyframes()) {
             nb::dict d;
             d["time"] = kf.time;
             d["value"] = animation_value_to_python(kf.value);
@@ -175,7 +176,7 @@ namespace lfs::python {
     PyAnimationTrack PyAnimationClip::add_track(const std::string& value_type, const std::string& target_path) {
         const auto type = string_to_value_type(value_type);
         const auto id = clip_->addTrack(type, target_path);
-        return PyAnimationTrack(clip_->getTrack(id));
+        return PyAnimationTrack(clip_, id, owner_);
     }
 
     void PyAnimationClip::remove_track(uint64_t id) { clip_->removeTrack(id); }
@@ -185,7 +186,7 @@ namespace lfs::python {
         if (!track) {
             return std::nullopt;
         }
-        return PyAnimationTrack(track);
+        return PyAnimationTrack(clip_, track->id(), owner_);
     }
 
     std::optional<PyAnimationTrack> PyAnimationClip::get_track_by_path(const std::string& path) {
@@ -193,13 +194,13 @@ namespace lfs::python {
         if (!track) {
             return std::nullopt;
         }
-        return PyAnimationTrack(track);
+        return PyAnimationTrack(clip_, track->id(), owner_);
     }
 
     nb::list PyAnimationClip::tracks() const {
         nb::list result;
         for (const auto id : clip_->trackIds()) {
-            result.append(PyAnimationTrack(clip_->getTrack(id)));
+            result.append(PyAnimationTrack(clip_, id, owner_));
         }
         return result;
     }
@@ -213,7 +214,9 @@ namespace lfs::python {
         return result;
     }
 
-    PyAnimationClip PyTimeline::animation_clip() { return PyAnimationClip(&timeline_->ensureAnimationClip()); }
+    PyAnimationClip PyTimeline::animation_clip() {
+        return PyAnimationClip(&timeline_->ensureAnimationClip(), owned_timeline_);
+    }
 
     nb::dict PyTimeline::evaluate_clip(float time) const {
         nb::dict result;
@@ -249,6 +252,7 @@ namespace lfs::python {
                  "Evaluate all tracks at the given time, returns dict of path -> value");
 
         nb::class_<PyTimeline>(m, "Timeline", "Animation timeline with camera keyframes and multi-track clips")
+            .def(nb::init<>())
             .def_prop_ro("has_animation_clip", &PyTimeline::has_animation_clip, "True if an animation clip exists")
             .def_prop_ro("keyframe_count", &PyTimeline::keyframe_count, "Number of camera keyframes")
             .def_prop_ro("camera_duration", &PyTimeline::camera_duration, "Duration of camera animation")
