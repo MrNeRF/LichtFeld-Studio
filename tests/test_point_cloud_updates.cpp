@@ -12,6 +12,11 @@
 using namespace lfs::core;
 using namespace lfs::vis;
 using namespace std::chrono_literals;
+namespace lfs::vis {
+    struct PointCloudUpdateTicketTestAccess {
+        static void fail(PointCloudUpdateTicket& ticket, std::string message) { ticket.fail(std::move(message)); }
+    };
+} // namespace lfs::vis
 namespace {
     Tensor host(size_t n = 2, DataType dtype = DataType::Float32) {
         auto t = Tensor::empty_pageable_host({n, size_t{3}}, dtype);
@@ -161,6 +166,43 @@ TEST(PointCloudUpdates, FailurePreservesVisibleDataAndReleasesInputs) {
     manager.publishReady([](const auto&, const auto&, auto&) { ADD_FAILURE() << "Failed upload published"; });
 }
 
+TEST(PointCloudUpdates, FailureMessageIsImmutableAfterFailureOrCancellation) {
+    PointCloudUpdateTicket ticket;
+    PointCloudUpdateTicketTestAccess::fail(ticket, "original failure");
+    ASSERT_EQ(ticket.state(), "failed");
+    EXPECT_EQ(ticket.error(), "original failure");
+    PointCloudUpdateTicketTestAccess::fail(ticket, "late failure");
+    EXPECT_EQ(ticket.error(), "original failure");
+    PointCloudUpdateTicket cancelled;
+    ASSERT_TRUE(cancelled.cancel());
+    PointCloudUpdateTicketTestAccess::fail(cancelled, "late failure");
+    EXPECT_EQ(cancelled.state(), "cancelled");
+    EXPECT_TRUE(cancelled.error().empty());
+}
+
+TEST(PointCloudUpdates, ConcurrentFailuresKeepOneImmutableMessageForReaders) {
+    PointCloudUpdateTicket ticket;
+    std::promise<void> start;
+    const auto gate = start.get_future().share();
+    std::vector<std::thread> writers;
+    for (int i = 0; i < 4; ++i) {
+        writers.emplace_back([&, i] {
+            gate.wait();
+            for (int attempt = 0; attempt < 1000; ++attempt)
+                PointCloudUpdateTicketTestAccess::fail(ticket, "failure " + std::to_string(i));
+        });
+    }
+    start.set_value();
+    EXPECT_TRUE(until([&] { return ticket.state() == "failed"; }));
+    const auto original = ticket.error();
+    EXPECT_FALSE(original.empty());
+    for (int i = 0; i < 1000; ++i)
+        EXPECT_EQ(ticket.error(), original);
+    for (auto& writer : writers)
+        writer.join();
+    EXPECT_EQ(ticket.error(), original);
+}
+
 TEST(PointCloudUpdates, PublicationRejectsStaleSceneAndTarget) {
     PointCloudUpdateManager manager(prepare, [] {});
     auto destination = target();
@@ -179,7 +221,20 @@ TEST(PointCloudUpdates, MetadataValidationAndEmptyCloud) {
     PointCloudUpdateManager manager(prepare, [] {});
     auto wrong_dtype = input();
     wrong_dtype.points = host(2, DataType::UInt8);
-    EXPECT_THROW(manager.submit(target(), wrong_dtype), std::invalid_argument);
+    try {
+        manager.submit(target(), wrong_dtype);
+        ADD_FAILURE() << "uint8 positions accepted";
+    } catch (const std::invalid_argument& error) {
+        EXPECT_STREQ(error.what(), "Positions must have dtype float32");
+    }
+    wrong_dtype = input();
+    wrong_dtype.colors = host(2, DataType::Int32);
+    try {
+        manager.submit(target(), wrong_dtype);
+        ADD_FAILURE() << "int32 colors accepted";
+    } catch (const std::invalid_argument& error) {
+        EXPECT_STREQ(error.what(), "Colors must have dtype float32 or uint8");
+    }
     auto wrong_count = input();
     wrong_count.colors = host(3);
     EXPECT_THROW(manager.submit(target(), wrong_count), std::invalid_argument);
@@ -285,6 +340,21 @@ TEST(PointCloudUpdates, SceneResolutionDoesNotStartAnUploadOrRetireSourcesOnView
     EXPECT_EQ(ticket->state(), "published");
 }
 
+TEST(PointCloudUpdates, ResolvedReservationCanGrowAndShrink) {
+    PointCloudUpdateManager manager(prepare, [] {}, true);
+    for (const auto [submitted_count, resolved_count] : {std::pair{size_t{1}, size_t{3}}, std::pair{size_t{3}, size_t{1}}}) {
+        auto ticket = manager.submit(target(), input(submitted_count));
+        EXPECT_EQ(manager.retainedBytes(), submitted_count * 128);
+        manager.resolveQueued([&](auto&, auto& in) { in = input(resolved_count); });
+        EXPECT_EQ(manager.retainedBytes(), resolved_count * 128);
+        ASSERT_TRUE(until([&] { return ticket->inputsReleased() && manager.hasReady(); }));
+        manager.publishReady([&](const auto&, const auto& result, auto&) { EXPECT_EQ(result.cloud->size(), resolved_count); });
+        EXPECT_EQ(ticket->state(), "published");
+        ASSERT_TRUE(until([&] { return manager.retainedRequests() == 0; }));
+        EXPECT_EQ(manager.retainedBytes(), 0);
+    }
+}
+
 TEST(PointCloudUpdates, ClearInvalidatesEpochButRenamePreservesIt) {
     Scene scene;
     const auto epoch = scene.pointCloudUpdateEpoch();
@@ -365,6 +435,17 @@ TEST(PointCloudUpdatesGpu, IndependentSnapshotAndRendererLeasesAvoidHostRoundtri
     auto frame = renderer.render(graphics.vulkanContext(), request, RenderTargetId{1});
     ASSERT_TRUE(frame) << frame.error();
     EXPECT_EQ(PointCloudOutputOwnershipTestAccess::hostVertexUploadBytes(renderer), 0);
+    // Reject a mismatched lease without a hidden host upload, then allow a
+    // corrected request to render normally using the original prepared storage.
+    auto other_colors = host(1024);
+    request.colors = &other_colors;
+    const auto rejected = renderer.render(graphics.vulkanContext(), request, RenderTargetId{1});
+    ASSERT_FALSE(rejected);
+    EXPECT_NE(rejected.error().find("Prepared point-cloud storage does not match"), std::string::npos);
+    EXPECT_EQ(PointCloudOutputOwnershipTestAccess::hostVertexUploadBytes(renderer), 0);
+    request.colors = &current->colors;
+    frame = renderer.render(graphics.vulkanContext(), request, RenderTargetId{1});
+    ASSERT_TRUE(frame) << frame.error();
     // Prepared storage aliases the exact GPU tensors, unlike the legacy upload
     // cache. Changed content/revisions do not require another vertex upload.
     auto changed = host(1024);

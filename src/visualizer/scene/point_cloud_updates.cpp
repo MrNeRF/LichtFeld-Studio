@@ -21,7 +21,7 @@ namespace lfs::vis {
             if (!tensor.is_valid() || tensor.ndim() != 2 || tensor.size(1) != 3 || !tensor.is_contiguous())
                 throw std::invalid_argument("Point-cloud inputs must be contiguous [N, 3] tensors");
             if (tensor.dtype() != core::DataType::Float32 && (!colors || tensor.dtype() != core::DataType::UInt8))
-                throw std::invalid_argument("Positions must be float32; colors must be float32 or uint8");
+                throw std::invalid_argument(colors ? "Colors must have dtype float32 or uint8" : "Positions must have dtype float32");
         }
     } // namespace
 
@@ -41,7 +41,8 @@ namespace lfs::vis {
         // Written before the release-store of Failed and immutable afterwards.
         if (state_.load(std::memory_order_acquire) != PointCloudUpdateState::Failed)
             return {};
-        return error_;
+        const auto error = error_.load(std::memory_order_acquire);
+        return error ? *error : std::string{};
     }
     bool PointCloudUpdateTicket::cancel() {
         auto state = state_.load(std::memory_order_acquire);
@@ -59,8 +60,15 @@ namespace lfs::vis {
         }
     }
     void PointCloudUpdateTicket::fail(std::string error) {
-        error_ = std::move(error);
         auto state = state_.load(std::memory_order_acquire);
+        if (terminal(state))
+            return;
+        // Only the first failure owns the immutable payload. Publish it before
+        // Failed, so concurrent/repeated failures cannot race error() readers.
+        std::shared_ptr<const std::string> expected;
+        if (!error_.compare_exchange_strong(expected, std::make_shared<const std::string>(std::move(error)),
+                                            std::memory_order_acq_rel, std::memory_order_acquire))
+            return;
         while (!terminal(state)) {
             if (state_.compare_exchange_weak(state, PointCloudUpdateState::Failed, std::memory_order_acq_rel))
                 return;
@@ -182,9 +190,14 @@ namespace lfs::vis {
                 }
                 const auto bytes = points * 128;
                 std::lock_guard lock(mutex_);
-                if (bytes - request->bytes > kMaxBytes - retained_bytes_)
-                    throw std::length_error("Merged point cloud exceeds the queue memory limit");
-                retained_bytes_ += bytes - request->bytes;
+                if (bytes > request->bytes) {
+                    const auto growth = bytes - request->bytes;
+                    if (growth > kMaxBytes - retained_bytes_)
+                        throw std::length_error("Merged point cloud exceeds the queue memory limit");
+                    retained_bytes_ += growth;
+                } else {
+                    retained_bytes_ -= request->bytes - bytes;
+                }
                 request->bytes = bytes;
             } catch (const std::exception& e) {
                 request->ticket->fail(e.what());

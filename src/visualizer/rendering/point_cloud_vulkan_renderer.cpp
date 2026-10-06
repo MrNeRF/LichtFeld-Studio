@@ -1353,6 +1353,9 @@ namespace lfs::vis {
                                       req.positions->dtype() == lfs::core::DataType::Float32 &&
                                       req.colors->dtype() == lfs::core::DataType::Float32;
             if (prepared && !use_prepared)
+                // Do not hide invalid handoff metadata behind a synchronous
+                // tensor download/upload on the render thread. The caller can
+                // clear or reprepare the stale metadata explicitly.
                 return std::unexpected<std::string>("Prepared point-cloud storage does not match its tensors or renderer device");
             // uploadIfChanged is called only after the previous submission's fence.
             // Its held leases keep old vertex storage alive until that fence completes.
@@ -1936,6 +1939,7 @@ namespace lfs::vis {
             if (upload_semaphore) {
                 timeline.waitSemaphoreValueCount = 1;
                 timeline.pWaitSemaphoreValues = &upload_value;
+                timeline.pNext = si.pNext;
                 si.pNext = &timeline;
                 si.waitSemaphoreCount = 1;
                 si.pWaitSemaphores = &upload_semaphore;

@@ -32,9 +32,10 @@ namespace lfs::vis {
 
     private:
         friend class PointCloudUpdateManager;
+        friend struct PointCloudUpdateTicketTestAccess;
         std::atomic<PointCloudUpdateState> state_{PointCloudUpdateState::Queued};
         std::atomic<bool> inputs_released_{false};
-        std::string error_;
+        std::atomic<std::shared_ptr<const std::string>> error_;
         void fail(std::string error);
         void supersede();
     };
