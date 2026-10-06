@@ -218,9 +218,13 @@ namespace lfs::core {
     }
 
     Tensor Tensor::arange(float start, float end, float step) {
+        return arange(start, end, step, Device::CUDA);
+    }
+
+    Tensor Tensor::arange(float start, float end, float step, Device device) {
         LoadArgs args;
         args.shape = TensorShape{};
-        args.device = Device::CUDA;
+        args.device = device;
         args.dtype = DataType::Float32;
         args.args = std::tuple<float, float, float>{start, end, step};
         return load(LoadOp::Arange, args);

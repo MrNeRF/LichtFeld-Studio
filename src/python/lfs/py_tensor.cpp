@@ -1707,10 +1707,7 @@ namespace lfs::python {
     PyTensor PyTensor::arange(float start, float end, float step,
                               const std::string& device,
                               const std::string& dtype) {
-        auto t = Tensor::arange(start, end, step);
-        if (device != "cuda") {
-            t = t.to(parse_device(device));
-        }
+        auto t = Tensor::arange(start, end, step, parse_device(device));
         if (dtype != "float32") {
             t = t.to(parse_dtype(dtype));
         }
