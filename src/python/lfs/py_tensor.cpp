@@ -349,6 +349,11 @@ namespace lfs::python {
 
     nb::object PyTensor::numpy(bool copy) const {
         validate();
+        if (!copy && tensor_.device() == Device::CPU && !tensor_.is_contiguous()) {
+            throw std::runtime_error(
+                "numpy(copy=False): non-contiguous CPU tensors cannot be exported without a copy; "
+                "call contiguous() or use copy=True");
+        }
         Tensor host = tensor_.device() == Device::CUDA ? tensor_.cpu() : tensor_;
         Tensor cpu_tensor = host.is_contiguous() ? std::move(host) : host.contiguous();
 
