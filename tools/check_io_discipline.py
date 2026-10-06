@@ -4,7 +4,7 @@
 """Report remaining I/O trap-class sites: unbounded setg, text-mode structured I/O.
 
 This is a conservative line-based heuristic, not a C++ parser. It scans
-src/io, src/sequencer, src/visualizer/project, and src/training. Use an
+src/io, src/media, src/sequencer, src/visualizer/project, and src/training. Use an
 allowlist of exact path:line exceptions. Findings print as file:line
 messages and the process exits non-zero when any remain.
 """
@@ -22,6 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ALLOWLIST = PROJECT_ROOT / "tools" / "io_discipline_allowlist.txt"
 DEFAULT_ROOTS = (
     PROJECT_ROOT / "src" / "io",
+    PROJECT_ROOT / "src" / "media",
     PROJECT_ROOT / "src" / "sequencer",
     PROJECT_ROOT / "src" / "visualizer" / "project",
     PROJECT_ROOT / "src" / "training",
@@ -71,7 +72,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         action="append",
         default=None,
-        help="source root to scan (repeatable; defaults to io/sequencer/project/training)",
+        help="source root to scan (repeatable; defaults to io/media/sequencer/project/training)",
     )
     parser.add_argument(
         "--allowlist",

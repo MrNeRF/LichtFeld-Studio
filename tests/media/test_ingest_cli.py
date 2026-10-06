@@ -59,7 +59,7 @@ def defined_symbols(path, exports=False):
     return names
 
 def ffmpeg_public(name):
-    return re.match(r"^(av|avcodec|avformat|avutil|avfilter|avdevice|avio|sws|swr)_",name)
+    return re.match(r"^(av|avcodec|avformat|avutil|avfilter|avdevice|avio|swscale|swresample|sws|swr)_",name)
 class IngestCLI(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -121,7 +121,7 @@ class IngestCLI(unittest.TestCase):
         provider=CLI.parent/filename
         exports=defined_symbols(provider,exports=True)
         required={"avformat_open_input","avcodec_alloc_context3","avcodec_send_frame",
-                  "av_frame_alloc","av_packet_alloc","sws_scale","swr_alloc"}
+                  "av_frame_alloc","av_packet_alloc","sws_scale","swr_alloc","swscale_version","swresample_version"}
         self.assertTrue(required<=exports,f"Missing public provider APIs: {required-exports}")
         self.assertFalse({name for name in exports if name.startswith(("ff_","avpriv_"))},
                          "Internal FFmpeg symbols must not escape the provider")

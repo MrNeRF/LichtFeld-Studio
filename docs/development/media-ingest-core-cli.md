@@ -183,7 +183,7 @@ receive public FFmpeg headers and resolve their calls through `lfs_media`.
 On static-package platforms, the provider retains FFmpeg's complete public API
 objects with whole-archive linking. An ELF version script or Mach-O export list
 explicitly exposes the public `av_*`, `avcodec_*`, `avformat_*`, `avutil_*`,
-`avfilter_*`, `avdevice_*`, `avio_*`, `sws_*` and `swr_*` APIs, alongside exported
+`avfilter_*`, `avdevice_*`, `avio_*`, `sws_*`, `swr_*`, `swscale_*` and `swresample_*` APIs, alongside exported
 LichtFeld C++ APIs. Other FFmpeg/codec implementation symbols, including `ff_*`
 and `avpriv_*`, stay private. This also prevents x86 assembly constants from
 becoming interposable. Windows' existing shared package is forwarded through

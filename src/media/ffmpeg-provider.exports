@@ -10,3 +10,6 @@ _avdevice_*
 _avio_*
 _sws_*
 _swr_*
+
+_swscale_*
+_swresample_*

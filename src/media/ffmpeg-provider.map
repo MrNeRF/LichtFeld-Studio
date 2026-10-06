@@ -4,7 +4,7 @@
     global:
         _Z*3lfs*;
         av_*; avcodec_*; avformat_*; avutil_*; avfilter_*; avdevice_*; avio_*;
-        sws_*; swr_*;
+        sws_*; swr_*; swscale_*; swresample_*;
     local:
         *;
 };
