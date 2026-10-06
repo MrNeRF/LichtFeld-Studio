@@ -101,18 +101,24 @@ namespace lfs::vis {
         };
 
         void setAlignPickedPoints(std::vector<glm::vec3> points) {
+            if (align_picked_points_ == points)
+                return;
             align_picked_points_ = std::move(points);
             if (!align_selected_point_ ||
                 *align_selected_point_ < 0 ||
                 static_cast<size_t>(*align_selected_point_) >= align_picked_points_.size()) {
                 align_selected_point_.reset();
             }
+            notifyAlignStateChanged();
         }
         [[nodiscard]] const std::vector<glm::vec3>& getAlignPickedPoints() const { return align_picked_points_; }
         void clearAlignPickedPoints() {
+            const bool changed = !align_picked_points_.empty();
             align_picked_points_.clear();
             align_selected_point_.reset();
             clearAlignStatusMessage();
+            if (changed)
+                notifyAlignStateChanged();
         }
 
         void setAlignSelectedPoint(std::optional<int> index) {
@@ -126,16 +132,31 @@ namespace lfs::vis {
         [[nodiscard]] std::optional<int> getAlignSelectedPoint() const { return align_selected_point_; }
         void clearAlignSelectedPoint() { align_selected_point_.reset(); }
 
-        void setAlignAxisSnapEnabled(const bool enabled) { align_axis_snap_enabled_ = enabled; }
+        void setAlignAxisSnapEnabled(const bool enabled) {
+            if (align_axis_snap_enabled_ == enabled)
+                return;
+            align_axis_snap_enabled_ = enabled;
+            notifyAlignStateChanged();
+        }
         [[nodiscard]] bool getAlignAxisSnapEnabled() const { return align_axis_snap_enabled_; }
 
-        void setAlignEdgeToAxisEnabled(const bool enabled) { align_edge_to_axis_enabled_ = enabled; }
+        void setAlignEdgeToAxisEnabled(const bool enabled) {
+            if (align_edge_to_axis_enabled_ == enabled)
+                return;
+            align_edge_to_axis_enabled_ = enabled;
+            notifyAlignStateChanged();
+        }
         [[nodiscard]] bool getAlignEdgeToAxisEnabled() const { return align_edge_to_axis_enabled_; }
 
         void setAlignCameraPosition(const glm::vec3& position) { align_camera_position_ = position; }
         [[nodiscard]] const glm::vec3& getAlignCameraPosition() const { return align_camera_position_; }
 
-        void setAlignPreviewEnabled(bool enabled) { align_preview_enabled_ = enabled; }
+        void setAlignPreviewEnabled(const bool enabled) {
+            if (align_preview_enabled_ == enabled)
+                return;
+            align_preview_enabled_ = enabled;
+            notifyAlignStateChanged();
+        }
         [[nodiscard]] bool getAlignPreviewEnabled() const { return align_preview_enabled_; }
 
         void requestAlignUiAction(const AlignUiAction action) { align_ui_action_ = action; }
@@ -178,14 +199,16 @@ namespace lfs::vis {
             gui_manager_ = nullptr;
             parameter_manager_ = nullptr;
             editor_context_ = nullptr;
-            align_picked_points_.clear();
+            clearAlignPickedPoints();
             align_selected_point_.reset();
             align_ui_action_ = AlignUiAction::None;
-            align_preview_enabled_ = false;
+            setAlignPreviewEnabled(false);
             clearAlignStatusMessage();
         }
 
     private:
+        void notifyAlignStateChanged();
+
         Services() = default;
         ~Services() = default;
         Services(const Services&) = delete;

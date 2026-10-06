@@ -54,12 +54,18 @@ namespace lfs::vis {
           viewport_toolbar_generation(store_, Field::ViewportToolbarGeneration, "viewport_toolbar_generation", 0),
           depth_window_draw_generation(store_, Field::DepthWindowDrawGeneration, "depth_window_draw_generation", 0),
           depth_window_draw_commit(store_, Field::DepthWindowDrawCommitValue, "depth_window_draw_commit", AppStore::DepthWindowDrawCommit{}),
+          align_state_generation(store_, Field::AlignStateGeneration, "align_state_generation", 0),
           viewer_backend(store_, Field::ViewerBackendValue, "viewer_backend", std::nullopt) {}
 
     AppStore& app_store() {
         // Subscription tokens can outlive static destruction across module boundaries.
         static AppStore* const instance = new AppStore;
         return *instance;
+    }
+
+    void publish_align_state_generation() {
+        auto& signal = app_store().align_state_generation;
+        signal.set(signal.get() + 1);
     }
 
     void publish_language_generation() {

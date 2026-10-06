@@ -13,6 +13,7 @@
 #include "rendering/point_cloud_vulkan_renderer.hpp"
 #endif
 #include "scene/scene_manager.hpp"
+#include "visualizer/app_store.hpp"
 
 #include <cmath>
 #include <glm/gtc/matrix_transform.hpp>
@@ -307,6 +308,36 @@ namespace lfs::vis::op {
         std::unique_ptr<OperatorContext> context_;
         AlignPickPointOperator operation_;
     };
+
+    TEST_F(AlignPreviewTest, AlignmentChangesNotifyUiOncePerFrame) {
+        auto& store = app_store();
+        (void)store.store().drain_dirty_into_frame();
+        int notifications = 0;
+        auto token = store.align_state_generation.subscribe([&](const auto&) { ++notifications; });
+        const auto generation = store.align_state_generation.get();
+
+        // Repeated synchronization of the same triangle must not keep the UI awake.
+        services().setAlignPickedPoints(services().getAlignPickedPoints());
+        services().setAlignPreviewEnabled(services().getAlignPreviewEnabled());
+        services().setAlignAxisSnapEnabled(services().getAlignAxisSnapEnabled());
+        services().setAlignEdgeToAxisEnabled(services().getAlignEdgeToAxisEnabled());
+        EXPECT_EQ(store.align_state_generation.get(), generation);
+
+        services().setAlignPickedPoints({{0, 0, 0}, {1, 0, 0}, {0, 0, 1}});
+        services().setAlignPreviewEnabled(true);
+        services().setAlignAxisSnapEnabled(true);
+        services().setAlignEdgeToAxisEnabled(true);
+        EXPECT_EQ(notifications, 0);
+        EXPECT_TRUE(store.store().drain_dirty_into_frame());
+        EXPECT_EQ(notifications, 1);
+
+        services().clearAlignPickedPoints();
+        EXPECT_TRUE(store.store().drain_dirty_into_frame());
+        EXPECT_EQ(notifications, 2);
+        services().clearAlignPickedPoints();
+        EXPECT_FALSE(store.store().drain_dirty_into_frame());
+        EXPECT_EQ(notifications, 2);
+    }
 
     TEST_F(AlignPreviewTest, PointCloudCanAlignBeforeTraining) {
         auto& scene = manager_->getScene();

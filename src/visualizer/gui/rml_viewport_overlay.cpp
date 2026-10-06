@@ -521,6 +521,7 @@ namespace lfs::vis::gui {
         document_sync_subscriptions_.push_back(store.scene_generation.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.selection_generation.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.active_tool.subscribe(mark_document_dirty));
+        document_sync_subscriptions_.push_back(store.align_state_generation.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.active_submode.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.transform_space.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.pivot_mode.subscribe(mark_document_dirty));
