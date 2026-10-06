@@ -7,6 +7,7 @@
 #include "core/camera_types.h"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/export.hpp"
+#include "core/image_loader.hpp"
 #include "core/tensor.hpp"
 #include "core/uuid.hpp"
 #include <array>
@@ -62,6 +63,8 @@ namespace lfs::core {
         // Load image from disk and return it
         Tensor load_and_get_image(int resize_factor = -1, int max_width = 0, bool output_uint8 = false,
                                   bool update_dimensions = true);
+        Tensor load_and_get_image(int resize_factor, int max_width, bool output_uint8,
+                                  bool update_dimensions, const ImageLoadFunc& image_loader);
 
         // Load mask from disk, process it, and return it (cached)
         Tensor load_and_get_mask(int resize_factor = -1, int max_width = 0,
