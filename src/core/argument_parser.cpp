@@ -626,6 +626,28 @@ namespace {
         return formats;
     }
 
+    std::optional<std::string> validateOutputFormatSuffix(
+        const std::filesystem::path& output_path,
+        const lfs::core::param::OutputFormat format) {
+        if (output_path.empty() || std::filesystem::is_directory(output_path)) {
+            return std::nullopt;
+        }
+
+        auto extension = output_path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](const unsigned char c) {
+                           return static_cast<char>(std::tolower(c));
+                       });
+        const auto expected_extension =
+            lfs::core::param::output_format_extension(format);
+        if (!extension.empty() && extension != expected_extension) {
+            return std::format(
+                "Output extension '{}' does not match selected format (expected '{}')",
+                extension, expected_extension);
+        }
+        return std::nullopt;
+    }
+
     std::expected<std::tuple<ParseResult, std::function<void()>>, std::string> parse_arguments(
         const std::vector<std::string>& args,
         lfs::core::param::TrainingParameters& params) {
@@ -2108,6 +2130,10 @@ namespace {
             }
         }
 
+        if (auto suffix = validateOutputFormatSuffix(params.output_path, params.format)) {
+            return std::unexpected(*suffix);
+        }
+
         if (tiles) {
             const std::string& spec = ::args::get(tiles);
             const std::size_t sep = spec.find_first_of("xX");
@@ -2244,6 +2270,13 @@ namespace {
                 params.formats = {*fmt};
             } else if (!params.output_path.extension().empty() && !std::filesystem::is_directory(params.output_path)) {
                 return std::unexpected(std::format("Unknown extension '{}'. Use --format", params.output_path.extension().string()));
+            }
+        }
+
+        if (params.formats.size() == 1) {
+            if (auto suffix =
+                    validateOutputFormatSuffix(params.output_path, params.format)) {
+                return std::unexpected(*suffix);
             }
         }
 

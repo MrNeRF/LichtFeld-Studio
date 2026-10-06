@@ -543,6 +543,9 @@ namespace lfs::core {
                                   SSOG,
                                   GLB };
 
+        [[nodiscard]] LFS_CORE_API std::string_view output_format_extension(
+            OutputFormat format) noexcept;
+
         // PLY -> RAD only: per-bucket LOD tree builder for the out-of-core
         // converter. BHATT is the quality-validated default; OCTREE trades
         // unvalidated quality for a much faster parallel build.

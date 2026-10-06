@@ -784,6 +784,42 @@ TEST(ArgumentParserTest, Mesh2SplatParsesOutputPathAndOptions) {
     EXPECT_FLOAT_EQ(mode->params.options.sigma, 0.5f);
 }
 
+TEST(ArgumentParserTest, ConvertRejectsOutputSuffixThatConflictsWithFormat) {
+    const auto directory = std::filesystem::path(
+        make_test_path("lfs_arg_parser_convert_suffix"));
+    const auto input = directory / "input.ply";
+    std::ofstream(input).put('\n');
+    const auto output = (directory / "output.ply").string();
+    const auto input_text = input.string();
+    const char* argv[] = {
+        "LichtFeld-Studio", "convert", input_text.c_str(),
+        "--format", "spz", "--output", output.c_str()};
+
+    const auto parsed = lfs::core::args::parse_args(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed);
+    EXPECT_NE(parsed.error().find("extension"), std::string::npos);
+    EXPECT_NE(parsed.error().find(".ply"), std::string::npos);
+}
+
+TEST(ArgumentParserTest, Mesh2SplatRejectsOutputSuffixThatConflictsWithFormat) {
+    const auto directory = std::filesystem::path(
+        make_test_path("lfs_arg_parser_mesh2splat_suffix"));
+    const auto input = directory / "input.obj";
+    std::ofstream(input) << "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
+    const auto output = (directory / "output.ply").string();
+    const auto input_text = input.string();
+    const char* argv[] = {
+        "LichtFeld-Studio", "mesh2splat", input_text.c_str(),
+        "--format", "spz", "--output", output.c_str()};
+
+    const auto parsed = lfs::core::args::parse_args(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed);
+    EXPECT_NE(parsed.error().find("extension"), std::string::npos);
+    EXPECT_NE(parsed.error().find(".ply"), std::string::npos);
+}
+
 TEST(ArgumentParserTest, Mesh2SplatParsesMultipleOutputFormats) {
     const auto dir = make_test_path("lfs_mesh2splat_multi_format_arg_parser");
     const auto input = std::filesystem::path(dir) / "input.obj";
