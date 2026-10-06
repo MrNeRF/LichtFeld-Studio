@@ -727,8 +727,8 @@ namespace lfs::core {
                 return std::format("late_lr_anneal must be finite and within (0, 1] (got {})", late_lr_anneal);
             if (!std::isfinite(scale_reg_decay_power) || scale_reg_decay_power < -1.0f)
                 return std::format("scale_reg_decay_power must be finite and at least -1 (got {})", scale_reg_decay_power);
-            if (perf_bench_warmup <= 0)
-                return std::format("perf_bench_warmup must be positive (got {})", perf_bench_warmup);
+            if (perf_bench_warmup < 0)
+                return std::format("perf_bench_warmup must be nonnegative (got {})", perf_bench_warmup);
             if (ppisp_warmup_steps < 0)
                 return std::format("ppisp_warmup_steps must be nonnegative (got {})", ppisp_warmup_steps);
             if (debug_python && (debug_python_port <= 0 || debug_python_port > 65535))

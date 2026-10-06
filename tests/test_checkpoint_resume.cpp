@@ -85,6 +85,12 @@ namespace lfs::training {
     };
 } // namespace lfs::training
 
+TEST(PerfBenchCollectorTest, ConfigureHonorsZeroWarmup) {
+    lfs::training::PerfBenchCollector::configure(true, 0);
+    EXPECT_EQ(lfs::training::PerfBenchCollector::warmup_iters(), 0);
+    lfs::training::PerfBenchCollector::configure(false, 200);
+}
+
 namespace {
 
     lfs::Error make_retry_test_error(const lfs::ErrorCode code) {

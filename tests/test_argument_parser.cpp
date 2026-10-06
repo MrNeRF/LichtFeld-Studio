@@ -1261,7 +1261,7 @@ TEST(ArgumentParserTest, TrainingRejectsOutOfRangeNumericFlags) {
         {{"--normal-loss-weight", "-1"}, "normal_loss_weight"},
         {{"--normal-consistency-weight", "-1"}, "normal_consistency_weight"},
         {{"--normal-flatten-weight", "-1"}, "normal_flatten_weight"},
-        {{"--perf-bench-warmup", "0"}, "perf_bench_warmup"},
+        {{"--perf-bench-warmup", "-1"}, "perf_bench_warmup"},
         {{"--max-screen-share", "-1"}, "max_screen_share"},
         {{"--max-screen-share", "2"}, "max_screen_share"},
     };
@@ -1282,6 +1282,18 @@ TEST(ArgumentParserTest, TrainingRejectsOutOfRangeNumericFlags) {
         EXPECT_NE(parsed.error().find(expected_error), std::string::npos)
             << extra.front() << " " << extra.back();
     }
+
+    std::vector<std::string> zero_warmup_args{
+        "LichtFeld-Studio", "--headless", "--data-path", data_path,
+        "--output-path", output_path, "--perf-bench-warmup", "0"};
+    std::vector<const char*> zero_warmup_argv;
+    zero_warmup_argv.reserve(zero_warmup_args.size());
+    for (const auto& arg : zero_warmup_args)
+        zero_warmup_argv.push_back(arg.c_str());
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(zero_warmup_argv.size()), zero_warmup_argv.data());
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_EQ((*parsed)->optimization.perf_bench_warmup, 0);
 }
 
 TEST(ArgumentParserTest, NegativeShDegreeIntervalReportsSuppliedValue) {
