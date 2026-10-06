@@ -136,12 +136,14 @@ namespace lfs::python {
             if (ndim == 0 || !arr.stride_ptr()) {
                 return true;
             }
+            for (size_t i = 0; i < ndim; ++i) {
+                if (arr.shape(i) == 0) {
+                    return true;
+                }
+            }
             int64_t expected = 1;
             for (size_t i = ndim; i-- > 0;) {
                 const int64_t extent = static_cast<int64_t>(arr.shape(i));
-                if (extent == 0) {
-                    return true;
-                }
                 // Extent-1 dims may carry arbitrary strides.
                 if (extent != 1 && arr.stride(i) != expected) {
                     return false;
