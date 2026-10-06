@@ -828,6 +828,12 @@ namespace lfs::core {
         }
 
         std::string DatasetConfig::validate() const {
+            // Exports go to output_path / output_name, so the name must stay inside it.
+            if (const auto name = lfs::core::utf8_to_path(output_name);
+                output_name == "." || name.has_root_path() || name.has_root_name() ||
+                std::ranges::any_of(name, [](const auto& part) { return part == ".."; })) {
+                return "output-name must stay inside the output path (no absolute paths or '..')";
+            }
             if (resize_factor != -1 && resize_factor < 1)
                 return std::format("resize_factor must be -1 or positive (got {})", resize_factor);
             if (test_every <= 0)

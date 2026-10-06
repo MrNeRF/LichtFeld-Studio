@@ -8992,6 +8992,31 @@ namespace lfs::training {
                 finish_project_writer();
             }
         }
+        if (!terminal_error && params_.save_project_at_iteration &&
+            !params_.save_project_path.empty()) {
+            std::optional<lfs::Error> save_error;
+            std::string save_error_message;
+            {
+                std::lock_guard lock(project_snapshot_mutex_);
+                save_error = last_project_writer_typed_error_;
+                save_error_message = last_project_writer_error_;
+            }
+            if (!save_error_message.empty()) {
+                if (save_error) {
+                    append_terminal_error(std::move(*save_error));
+                } else {
+                    append_terminal_error(lfs::make_error(lfs::ErrorInit{
+                        .code = lfs::ErrorCode::Internal,
+                        .domain = lfs::ErrorDomain::IO,
+                        .user_message = "Requested iteration project save failed.",
+                        .detail = std::format("Failed to save requested project '{}': {}",
+                                              lfs::core::path_to_utf8(params_.save_project_path),
+                                              save_error_message),
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    }));
+                }
+            }
+        }
         TrainerProjectSavePolicy terminal_save_policy;
         std::optional<std::filesystem::path> terminal_project_path;
         {

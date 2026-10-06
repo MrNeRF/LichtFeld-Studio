@@ -133,6 +133,27 @@ TEST(ArgumentParserTest, HeadlessResumeSelectsEmbeddedCheckpointFlow) {
     EXPECT_FALSE((*parsed)->project_path);
 }
 
+TEST(ArgumentParserTest, RejectsOutputNamePathComponents) {
+    const auto data_path = make_test_path("lfs_arg_parser_output_name_data");
+    const auto output_path = make_test_path("lfs_arg_parser_output_name_output");
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--train",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--output-name",
+        "../outside",
+    };
+
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed);
+    EXPECT_NE(parsed.error().find("output-name"), std::string::npos);
+}
+
 TEST(ArgumentParserTest,
      TrainingSaveProjectAtIterLeavesPathEmptyWithoutSaveProjectPath) {
     const auto data_path =

@@ -2556,6 +2556,38 @@ namespace {
     }
 
     TEST_F(ProjectCheckpointTrainerInstall,
+           FailedConfiguredProjectSaveFailsTraining) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_failed_configured_project_save";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        auto params = make_tiny_headless_params(output_path, 2);
+        params.save_project_at_iteration = 1;
+        params.save_project_path = output_path / "blocked.licht";
+        std::filesystem::create_directory(params.save_project_path);
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        auto trainer = std::make_unique<lfs::training::Trainer>(scene);
+        ASSERT_TRUE(trainer->initialize(params));
+        lfs::training::grant_headless_project_saves(*trainer, params);
+
+        auto train = trainer->train();
+        EXPECT_FALSE(train);
+        if (!train) {
+            EXPECT_NE(lfs::format_for_developer(train.error()).find("blocked.licht"),
+                      std::string::npos);
+        }
+        trainer->shutdown();
+        EXPECT_TRUE(std::filesystem::exists(output_path / "project.licht"));
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
            SaveProjectAtIterationSurvivesEarlierStepSave) {
         const auto output_path =
             std::filesystem::temp_directory_path() /
