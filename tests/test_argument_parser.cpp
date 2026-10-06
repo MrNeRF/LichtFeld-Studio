@@ -1614,6 +1614,32 @@ TEST(ArgumentParserTest, ResumeCliFlagsPopulateExplicitOverrides) {
     EXPECT_EQ(restored.optimization.max_cap, 42);
 }
 
+TEST(ArgumentParserTest, ResumeRejectsExplicitInitFile) {
+    const auto directory = make_test_path("lfs_arg_parser_resume_init_conflict");
+    const auto project = std::filesystem::path(directory) / "session.licht";
+    const auto init = std::filesystem::path(directory) / "init.ply";
+    std::ofstream(project).put('\n');
+    std::ofstream(init).put('\n');
+    const auto project_text = project.string();
+    const auto init_text = init.string();
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--resume",
+        project_text.c_str(),
+        "--headless",
+        "--train",
+        "--init",
+        init_text.c_str(),
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("--init"), std::string::npos);
+    EXPECT_NE(parsed.error().find("--resume"), std::string::npos);
+}
+
 TEST(ArgumentParserTest, ResumeConfigKeysPopulateExplicitOverrides) {
     const auto directory = make_test_path("lfs_arg_parser_resume_config_overrides");
     const auto project = std::filesystem::path(directory) / "session.licht";

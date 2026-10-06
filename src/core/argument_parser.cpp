@@ -1159,6 +1159,10 @@ namespace {
                 }
             }
             if (init_path) {
+                if (params.resume_checkpoint || params.resume_project) {
+                    return std::unexpected("--init cannot be used together with --resume");
+                }
+
                 const auto path_str = ::args::get(init_path);
                 params.init_path = path_str;
 
