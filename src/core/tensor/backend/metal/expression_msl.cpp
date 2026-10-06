@@ -234,11 +234,10 @@ static uint lfs_precise_divide(uint x, uint y) {
                 case ExprOp::Tan: return bits("tan(" + x + ")");
                 case ExprOp::Asin:
                 case ExprOp::Acos: {
-                    // Clamp rounding overshoot, but keep NaN.
-                    const auto bounded = bits("(isnan(" + x + ") ? " + x + " : clamp(" + x + ", -1.0f, 1.0f))");
-                    const auto root = bits("sqrt(fmax(0.0f, 1.0f - " + f(bounded) + " * " + f(bounded) + "))");
-                    return op == ExprOp::Asin ? bits("atan2(" + f(bounded) + ", " + f(root) + ")")
-                                              : bits("atan2(" + f(root) + ", " + f(bounded) + ")");
+                    const auto root = bits("sqrt(fmax(0.0f, 1.0f - " + x + " * " + x + "))");
+                    const auto result = op == ExprOp::Asin ? bits("atan2(" + x + ", " + f(root) + ")")
+                                                           : bits("atan2(" + f(root) + ", " + x + ")");
+                    return define("((as_type<uint>(" + x + ") & 0x7fffffffu) > 0x3f800000u ? 0x7fc00000u : " + v(result) + ")");
                 }
                 case ExprOp::Atan: return bits("atan(" + x + ")");
                 case ExprOp::Sinh: return bits("sinh(" + x + ")");

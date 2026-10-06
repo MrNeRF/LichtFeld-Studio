@@ -116,15 +116,17 @@ float accurateLog1p(float value)
 
 float accurateAsin(float value)
 {
-    // Clamp rounding overshoot, but keep NaN (clamp would drop it).
-    const float bounded = isnan(value) ? value : clamp(value, -1.0f, 1.0f);
+    if (isnan(value) || abs(value) > 1.0f)
+        return asfloat(0x7fc00000u);
+    const float bounded = value;
     return atan2(bounded, sqrt(max(0.0f, 1.0f - bounded * bounded)));
 }
 
 float accurateAcos(float value)
 {
-    // Clamp rounding overshoot, but keep NaN (clamp would drop it).
-    const float bounded = isnan(value) ? value : clamp(value, -1.0f, 1.0f);
+    if (isnan(value) || abs(value) > 1.0f)
+        return asfloat(0x7fc00000u);
+    const float bounded = value;
     return atan2(sqrt(max(0.0f, 1.0f - bounded * bounded)), bounded);
 }
 

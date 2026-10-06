@@ -2319,17 +2319,28 @@ class OptimizationParams:
 
     @property
     def eval_mask(self) -> str:
-        """Absolute mesh path used to select evaluated pixels"""
+        """
+        Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range, points or a splat); training is not affected
+        """
 
     @eval_mask.setter
     def eval_mask(self, arg: str, /) -> None: ...
 
     @property
     def eval_mask_invert(self) -> bool:
-        """Evaluate pixels outside the mesh coverage"""
+        """Scores the pixels outside the evaluation mask instead"""
 
     @eval_mask_invert.setter
     def eval_mask_invert(self, arg: bool, /) -> None: ...
+
+    @property
+    def eval_mask_opacity(self) -> float:
+        """
+        Rendered opacity a pixel needs to count as covered by a splat mask; lower widens the mask past the outline, higher pulls it in
+        """
+
+    @eval_mask_opacity.setter
+    def eval_mask_opacity(self, arg: float, /) -> None: ...
 
     @property
     def densify_error_map(self) -> DensifyErrorMap:

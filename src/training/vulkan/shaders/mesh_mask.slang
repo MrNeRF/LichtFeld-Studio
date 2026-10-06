@@ -278,6 +278,30 @@ groupshared bool sharedPrepared;
 void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Parameters p) {
     uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
     const Camera c = loadCamera(p.camera);
+    if (operation == 2) {
+        Ptr<float, Access.Read> means = (Ptr<float, Access.Read>)p.vertices;
+        const int radius = p.padding;
+        for (uint i = groupId.x * THREADS + lane; i < uint(p.vertexCount); i += groups.x * THREADS) {
+            const float3 view = transformPoint(c, float3(means[3*i], means[3*i+1], means[3*i+2]));
+            if (!(view.z > 1.0e-6f)) continue;
+            float nx = view.x / view.z, ny = view.y / view.z;
+            if (c.distorted) {
+                float dx, dy;
+                apply_distortion(nx, ny, c.model, c.distortion, c.numDistortion, dx, dy);
+                nx = dx; ny = dy;
+            }
+            const float u = c.fx * nx + c.cx, v = c.fy * ny + c.cy;
+            if (!isfinite(u) || !isfinite(v) || u < -radius || v < -radius || u >= c.width + radius || v >= c.height + radius) continue;
+            const int cu = int(floor(u)), cv = int(floor(v));
+            for (int dy = -radius; dy <= radius; ++dy)
+                for (int dx = -radius; dx <= radius; ++dx) {
+                    const int x = cu + dx, y = cv + dy;
+                    if (x >= 0 && x < c.width && y >= 0 && y < c.height && dx*dx + dy*dy <= radius*radius)
+                        markCovered(p, y*c.width+x);
+                }
+        }
+        return;
+    }
     Ptr<int, Access.ReadWrite> counters = (Ptr<int, Access.ReadWrite>)p.counters;
     Ptr<int, Access.ReadWrite> largeFaces = (Ptr<int, Access.ReadWrite>)p.largeFaces;
 

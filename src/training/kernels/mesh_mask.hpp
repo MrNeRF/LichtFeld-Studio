@@ -29,4 +29,14 @@ namespace lfs::training::kernels {
         float z_near,
         cudaStream_t stream = nullptr);
 
+    // Pixels within `radius` of each projected point, closed by `close` pixels so gaps between
+    // neighbouring points fill in. `distortion` projects through the source lens for distorted evaluation.
+    [[nodiscard]] lfs::core::Tensor splat_point_coverage(
+        const lfs::core::Tensor& means,
+        const MeshMaskCamera& camera,
+        int radius,
+        int close,
+        const lfs::core::UndistortParams* distortion = nullptr,
+        cudaStream_t stream = nullptr);
+
 } // namespace lfs::training::kernels

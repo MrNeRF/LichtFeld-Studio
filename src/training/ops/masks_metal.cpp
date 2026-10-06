@@ -147,10 +147,21 @@ namespace lfs::training {
                        std::min(kMeshMaskMaxLargeGroups, face_count), kMeshMaskThreads);
             return mask;
         }
+        core::Tensor point_coverage(In means, const MeshMaskCamera& camera, int radius,
+                                    const core::UndistortParams* distortion) {
+            auto mask = core::Tensor::zeros({static_cast<size_t>(camera.height), static_cast<size_t>(camera.width)}, core::Device::GPU, core::DataType::UInt8);
+            if (means.shape()[0] == 0)
+                return mask;
+            const auto points = means.contiguous();
+            const MeshCoverageParams params{.vertices = mk::address(points), .mask = mk::address(mask), .vertex_count = static_cast<int32_t>(points.shape()[0]), .padding = radius, .camera = pack_mesh_mask_camera(camera, nullptr, distortion)};
+            mk::launch_items("point_coverage", params, {&points, &mask}, points.shape()[0]);
+            return mask;
+        }
     } // namespace
 
     const lfs::gpu_ops::MaskOps& metal_masks_ops() {
         static const lfs::gpu_ops::MaskOps ops{
+            .point_coverage = point_coverage,
             .photometric_weight = photometric_weight,
             .opacity_penalty = opacity_penalty,
             .alpha_consistency = alpha_consistency,

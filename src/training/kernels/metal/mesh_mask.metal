@@ -347,3 +347,22 @@ kernel void mesh_coverage_large(constant MeshCoverageParams& p [[buffer(0)]],
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 }
+
+// Point disks use the same lens and camera frame as mesh evaluation masks.
+kernel void point_coverage(constant MeshCoverageParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+    if (i >= uint(p.vertex_count)) return;
+    constant MeshCoverageCamera& c = p.camera;
+    const float3 view = mesh_coverage_transform(c, float3(p.vertices[3*i], p.vertices[3*i+1], p.vertices[3*i+2]));
+    if (!(view.z > 1.0e-6f)) return;
+    const float2 projected = c.distorted ? mesh_coverage_distort(c, view.x/view.z, view.y/view.z) : view.xy/view.z;
+    const float u = c.fx*projected.x+c.cx, v = c.fy*projected.y+c.cy;
+    const int radius = p.padding;
+    if (!mesh_coverage_finite(u) || !mesh_coverage_finite(v) || u < -radius || v < -radius || u >= c.width+radius || v >= c.height+radius) return;
+    const int cu = int(floor(u)), cv = int(floor(v));
+    for (int dy = -radius; dy <= radius; ++dy)
+        for (int dx = -radius; dx <= radius; ++dx) {
+            const int x = cu+dx, y = cv+dy;
+            if (x >= 0 && x < c.width && y >= 0 && y < c.height && dx*dx+dy*dy <= radius*radius)
+                p.mask[y*c.width+x] = 1;
+        }
+}

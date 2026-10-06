@@ -274,7 +274,23 @@ namespace lfs::training {
             return mask;
         }
 
+        core::Tensor point_coverage(In means, const MeshMaskCamera& camera, int radius,
+                                    const core::UndistortParams* distortion) {
+            auto mask = Tensor::zeros({static_cast<size_t>(camera.height), static_cast<size_t>(camera.width)}, core::Device::GPU, core::DataType::UInt8);
+            if (means.shape()[0] == 0)
+                return mask;
+            const auto packed = pack_mesh_mask_camera(camera, nullptr, distortion);
+            const auto camera_block = Tensor::from_blob(const_cast<MeshMaskCameraBlock*>(&packed), {sizeof(packed)}, core::Device::CPU, core::DataType::UInt8).clone().to(core::Device::GPU);
+            const auto points = means.contiguous();
+            const auto points_ref = ref(points), camera_ref = ref(camera_block), mask_ref = ref(mask);
+            const MeshPush push{.vertices = vk::address(points_ref), .mask = vk::address(mask_ref), .camera = vk::address(camera_ref), .vertex_count = static_cast<int32_t>(points.shape()[0]), .padding = radius};
+            launch(acquire_vulkan_context(), push, 2, {points_ref, camera_ref}, {mask_ref},
+                   std::min(kMeshMaskMaxPrepareGroups, (static_cast<uint32_t>(points.shape()[0]) + 255u) / 256u), "mesh_mask");
+            return mask;
+        }
+
         const MaskOps kVulkanMaskOps{
+            .point_coverage = point_coverage,
             .photometric_weight = photometric_weight,
             .opacity_penalty = opacity_penalty,
             .alpha_consistency = alpha_consistency,

@@ -6,12 +6,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "rendering/mesh2splat.hpp"
-#include "mesh2splat_shared.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/tensor.hpp"
 #include "core/vulkan_helpers.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "mesh2splat_shared.hpp"
 #include "rendering/vulkan_result.hpp"
 #include "rendering/vulkan_wait.hpp"
 
@@ -1039,9 +1039,11 @@ void main() {
             mutable std::vector<VkCommandBuffer> retained_command_buffers_{};
         };
 
+        // Never destroyed: the Vulkan driver registers its own exit handlers after this context is first used, so
+        // they run first and a destructor at exit would call into a shut-down driver. The process releases the device.
         VulkanMesh2SplatContext& vulkan_context() {
-            static VulkanMesh2SplatContext context;
-            return context;
+            static auto* const context = new VulkanMesh2SplatContext;
+            return *context;
         }
 
         [[nodiscard]] std::optional<std::string> map_write(VkDevice device, Buffer& buffer, const void* data, VkDeviceSize size) {

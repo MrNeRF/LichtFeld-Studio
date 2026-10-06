@@ -2762,7 +2762,7 @@ namespace lfs::vis {
                             const auto projection = lfs::rendering::createProjectionMatrix(
                                 view.size, lfs::rendering::focalLengthToVFov(view.focal_length_mm),
                                 view.orthographic, view.ortho_scale, view.near_plane, view.far_plane);
-                            mesh_frame.depth_blit.depth_projection = {
+                            mesh_frame.depth_blit.ndc_to_view_coeffs = {
                                 projection[2][2], projection[3][2],
                                 projection[2][3], projection[3][3]};
                         }

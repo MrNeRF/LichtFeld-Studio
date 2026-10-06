@@ -625,6 +625,84 @@ namespace lfs::core {
         _mask_loaded = false;
     }
 
+    Tensor Camera::read_mask_image(const std::filesystem::path& path, const int resize_factor, const int max_width,
+                                   const bool apply_undistortion) const {
+        Tensor mask;
+        const bool warp_full_resolution = _undistort_prepared && apply_undistortion;
+        const ImageLoadParams params{
+            .path = path,
+            .resize_factor = warp_full_resolution ? 1 : resize_factor,
+            .max_width = warp_full_resolution ? 0 : max_width,
+            .stream = _stream};
+
+        mask = load_image_cached(params);
+
+        if (mask.device() != Device::GPU) {
+            mask = mask.to(Device::GPU, _stream);
+            finish_upload(_stream, "mask upload sync");
+        }
+
+        // Convert RGB [C,H,W] to grayscale [H,W]
+        if (mask.ndim() == 3 && mask.shape()[0] >= 3) {
+            const auto r = mask.slice(0, 0, 1).squeeze(0);
+            const auto g = mask.slice(0, 1, 2).squeeze(0);
+            const auto b = mask.slice(0, 2, 3).squeeze(0);
+            mask = (r + g + b) / 3.0f;
+        } else if (mask.ndim() == 3 && mask.shape()[0] == 1) {
+            mask = mask.squeeze(0);
+        }
+        return mask;
+    }
+
+    Tensor Camera::finish_mask(Tensor mask, const int resize_factor, const int max_width, const bool invert_mask,
+                               const float mask_threshold, const bool binarize, const bool apply_undistortion) const {
+        if (invert_mask) {
+            mask = Tensor::full(mask.shape(), 1.0f, mask.device()) - mask;
+        }
+
+        if (binarize && !(_undistort_prepared && apply_undistortion) &&
+            mask_threshold > 0.0f && mask_threshold < 1.0f) {
+            mask = mask.ge(mask_threshold).to(DataType::Float32);
+        }
+
+        if (_undistort_prepared && apply_undistortion) {
+            const auto scaled = prepare_undistort_params(
+                _undistort_params,
+                static_cast<int>(mask.shape()[1]),
+                static_cast<int>(mask.shape()[0]),
+                resize_factor,
+                max_width);
+            mask = undistort_mask_area(mask, scaled, _stream);
+        }
+
+        if (binarize) {
+            const float final_threshold = _undistort_prepared && apply_undistortion &&
+                                                  mask_threshold > 0.0f && mask_threshold < 1.0f
+                                              ? mask_threshold
+                                              : 0.5f;
+            mask = mask.ge(final_threshold).to(DataType::UInt8).contiguous();
+        } else {
+            // Keep Float32 [0,1] so undistorted samples match the pipelined
+            // loader / fused-kernel domain (kMaskKeepMin). Rounding through
+            // UInt8 truncates interpolated values such as 250.6 → 250.
+            mask = mask.contiguous();
+        }
+        finish_upload(_stream, "mask load sync");
+        return mask;
+    }
+
+    Tensor Camera::load_mask_file(const std::filesystem::path& path, const int resize_factor, const int max_width,
+                                  const bool invert_mask, const float mask_threshold, const bool binarize,
+                                  const bool apply_undistortion) const {
+#if LFS_HAS_CUDA
+        std::optional<CUDAStreamGuard> stream_guard;
+        if (default_gpu_backend() == GpuBackend::CUDA)
+            stream_guard.emplace(_stream);
+#endif
+        return finish_mask(read_mask_image(path, resize_factor, max_width, apply_undistortion), resize_factor,
+                           max_width, invert_mask, mask_threshold, binarize, apply_undistortion);
+    }
+
     Tensor Camera::load_and_get_mask(const int resize_factor, const int max_width,
                                      const bool invert_mask, const float mask_threshold,
                                      const bool binarize, const bool apply_undistortion) {
@@ -662,65 +740,13 @@ namespace lfs::core {
                 mask = mask.squeeze(2);
             }
         } else if (!_mask_path.empty() && std::filesystem::exists(_mask_path)) {
-            const bool warp_full_resolution = _undistort_prepared && apply_undistortion;
-            const ImageLoadParams params{
-                .path = _mask_path,
-                .resize_factor = warp_full_resolution ? 1 : resize_factor,
-                .max_width = warp_full_resolution ? 0 : max_width,
-                .stream = _stream};
-
-            mask = load_image_cached(params);
-
-            if (mask.device() != Device::GPU) {
-                mask = mask.to(Device::GPU, _stream);
-                finish_upload(_stream, "mask upload sync");
-            }
-
-            // Convert RGB [C,H,W] to grayscale [H,W]
-            if (mask.ndim() == 3 && mask.shape()[0] >= 3) {
-                const auto r = mask.slice(0, 0, 1).squeeze(0);
-                const auto g = mask.slice(0, 1, 2).squeeze(0);
-                const auto b = mask.slice(0, 2, 3).squeeze(0);
-                mask = (r + g + b) / 3.0f;
-            } else if (mask.ndim() == 3 && mask.shape()[0] == 1) {
-                mask = mask.squeeze(0);
-            }
+            mask = read_mask_image(_mask_path, resize_factor, max_width, apply_undistortion);
         } else {
             return Tensor();
         }
 
-        if (invert_mask) {
-            mask = Tensor::full(mask.shape(), 1.0f, mask.device()) - mask;
-        }
-
-        if (binarize && !(_undistort_prepared && apply_undistortion) &&
-            mask_threshold > 0.0f && mask_threshold < 1.0f) {
-            mask = mask.ge(mask_threshold).to(DataType::Float32);
-        }
-
-        if (_undistort_prepared && apply_undistortion) {
-            const auto scaled = prepare_undistort_params(
-                _undistort_params,
-                static_cast<int>(mask.shape()[1]),
-                static_cast<int>(mask.shape()[0]),
-                resize_factor,
-                max_width);
-            mask = undistort_mask_area(mask, scaled, _stream);
-        }
-
-        if (binarize) {
-            const float final_threshold = _undistort_prepared && apply_undistortion &&
-                                                  mask_threshold > 0.0f && mask_threshold < 1.0f
-                                              ? mask_threshold
-                                              : 0.5f;
-            mask = mask.ge(final_threshold).to(DataType::UInt8).contiguous();
-        } else {
-            // Keep Float32 [0,1] so undistorted samples match the pipelined
-            // loader / fused-kernel domain (kMaskKeepMin). Rounding through
-            // UInt8 truncates interpolated values such as 250.6 → 250.
-            mask = mask.contiguous();
-        }
-        finish_upload(_stream, "mask load sync");
+        mask = finish_mask(std::move(mask), resize_factor, max_width, invert_mask, mask_threshold, binarize,
+                           apply_undistortion);
         _cached_mask = mask;
         _mask_loaded = true;
         _cached_mask_resize_factor = resize_factor;

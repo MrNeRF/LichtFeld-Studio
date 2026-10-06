@@ -174,10 +174,13 @@ namespace lfs::io {
             ++stats_.cpu_decode_calls;
         }
         if (!params.undistort && !encoded)
-            return load_rgb_image_cpu_decoded(path, params, config_.use_16bit_color);
+            return load_rgb_decoded_ahead(path, params, config_.use_16bit_color);
         Tensor host;
         if (params.undistort) {
-            auto [data, width, height, channels] = lfs::core::load_image_float(path);
+            auto ahead = take_decoded_ahead(path, HostDecodeKind::Float32);
+            auto [data, width, height, channels] = ahead
+                                                       ? std::tuple{static_cast<float*>(ahead->data.release()), ahead->width, ahead->height, ahead->channels}
+                                                       : lfs::core::load_image_float(path);
             if (!data)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
             const std::unique_ptr<float, decltype(&lfs::core::free_image_float)> owner(data, lfs::core::free_image_float);

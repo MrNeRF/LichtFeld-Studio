@@ -308,7 +308,10 @@ namespace {
             !probe && probe.error().starts_with("No Vulkan device supports"))
             GTEST_SKIP() << probe.error();
         const Tolerance geometry{1e-6f, 1e-5f, 1e-6f, 1e-5f};
-        expect_vulkan_parity("textured_quad", textured_quad(uniform_texture()), GetParam(), geometry);
+        // Hardware sRGB decoding can approximate the analytical transfer function.
+        // Allow one input color step here; the analytic texel contract above stays tight.
+        expect_vulkan_parity("textured_quad", textured_quad(uniform_texture()), GetParam(),
+                             {geometry.mean, geometry.log_scale, geometry.rotation, 1.0f / 255.0f});
         expect_vulkan_parity("colored_cube", colored_cube(), GetParam(), geometry);
         expect_vulkan_parity("multi_material", multi_material_quads(), GetParam(), geometry);
         // Hardware samplers may quantize bilinear weights (commonly to 8 bits);

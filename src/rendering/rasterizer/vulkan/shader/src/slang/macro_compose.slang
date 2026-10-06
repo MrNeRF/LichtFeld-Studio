@@ -35,6 +35,9 @@ layout(binding=14) StructuredBuffer<float4> selection_colors;
 layout(binding=15) ByteAddressBuffer gaussian_overlay_flags;
 layout(binding=16) StructuredBuffer<float4> overlay_params;
 layout(binding=17) StructuredBuffer<int32_t> orig_ids;
+layout(binding=18) StructuredBuffer<uint32_t> exact_depth_sample_mask;
+#else
+layout(binding=12) StructuredBuffer<uint32_t> exact_depth_sample_mask;
 #endif
 
 [ForceInline] bool splat_overlaps_render_tile(Splat_2D_AlphaBlend g, uint2 tile_origin) {
@@ -227,7 +230,11 @@ bool depth_intersects_pixels(Splat_2D_AlphaBlend g, uint2 origin, uint2 maximum,
     const uint2 pix_coord = tile_coord * tile_size + groupThreadID.xy;
     const uint2 output_pixel = pix_coord - render_origin;
     const bool is_inside = output_pixel.x < uniforms.image_width && output_pixel.y < uniforms.image_height;
-    const bool exact_depth = (uniforms.mip_filter & 2u) != 0u;
+    const uint sample_tile = (output_pixel.y / 4u) * ((uniforms.image_width + 3u) / 4u) + output_pixel.x / 4u;
+    const bool exact_depth_enabled = (uniforms.mip_filter & 2u) != 0u;
+    bool exact_depth = exact_depth_enabled;
+    if (is_inside && (uniforms.mip_filter & 8u) != 0u)
+        exact_depth = exact_depth && (exact_depth_sample_mask[sample_tile / 32u] & (1u << (sample_tile % 32u))) != 0u;
     if (!is_inside && !exact_depth)
         return;
 
@@ -270,12 +277,12 @@ bool depth_intersects_pixels(Splat_2D_AlphaBlend g, uint2 origin, uint2 maximum,
     const uint wave_walk_begin = max(batch_begin, uniforms.wave_base);
     const uint wave_walk_end = min(batch_end, uniforms.wave_base + HIGS_RASTER_WAVE_BATCHES);
 
-    if (exact_depth && wave_walk_begin < wave_walk_end) {
+    if (exact_depth_enabled && wave_walk_begin < wave_walk_end) {
         const uint macro_begin = uint(max(macro_ranges[macro_tile_idx], 0));
         const uint macro_end = uint(max(macro_ranges[macro_tile_idx + 1u], int32_t(macro_begin)));
 
         float4 replay_state = float4(0.0f, 0.0f, 0.0f, depth_transmittance);
-        bool replay_active = is_inside && median_depth >= FAR_DEPTH;
+        bool replay_active = is_inside && exact_depth && median_depth >= FAR_DEPTH;
         for (uint depth_batch = wave_walk_begin; depth_batch < wave_walk_end; ++depth_batch) {
             if ((macro_batch_active_mask[depth_batch] & local_tile_mask) == 0u)
                 continue;
@@ -309,7 +316,7 @@ bool depth_intersects_pixels(Splat_2D_AlphaBlend g, uint2 origin, uint2 maximum,
             thread_rank;
         float4 partial_state = float4(macro_batch_pixel_state[partial_idx]);
 #if defined(LFS_VULKAN_MACOS_REFERENCE)
-        if ((uniforms.mip_filter & 8u) != 0u && partial_state.a < 0.0f)
+        if ((uniforms.mip_filter & 16u) != 0u && partial_state.a < 0.0f)
             partial_state.a = clamp(1.0f + partial_state.a + 0.00006103515625f, 0.0f, 1.0f);
 #endif
 

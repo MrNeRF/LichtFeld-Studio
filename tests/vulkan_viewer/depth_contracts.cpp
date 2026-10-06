@@ -67,7 +67,7 @@ namespace {
     };
 
     class Compose final : public VulkanGSPipeline {
-        _ComputePipeline plain_{12}, overlays_{18};
+        _ComputePipeline plain_{13}, overlays_{19};
 
     public:
         Compose(const lfs::core::VulkanDeviceHandles& h, VmaAllocator allocator, const std::filesystem::path& shaders) {
@@ -87,6 +87,8 @@ namespace {
                 buffers[i]->flush();
                 bindings.push_back(buffers[i]->view);
             }
+            buffers[18]->flush();
+            bindings.push_back(buffers[18]->view);
             beginCommandBatch();
             VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
             before.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
@@ -114,13 +116,13 @@ namespace {
     constexpr float kFarDepth = 1e10f, kGuard = -12345.f;
 
     void test_case(Compose& pipeline, VmaAllocator allocator, bool overlays, uint32_t profile,
-                   float first_alpha, float expected, uint32_t count, uint32_t width, bool split_wave) {
+                   float first_alpha, float expected, uint32_t count, uint32_t width, bool split_wave, bool sparse = false) {
         constexpr size_t partial_pixels = 2 * HIGS_MACRO_TILE_SIZE_TILES * HIGS_TILE_SIZE;
         const size_t pixels = size_t(width) * HIGS_TILE_HEIGHT;
-        const std::array<size_t, 18> sizes = {
+        const std::array<size_t, 19> sizes = {
             count * 4, 2 * 4, 4, count * 2 * 4, count * 4 * 4, count * 3 * 4, count * 4,
             partial_pixels * 4 * 2, 2 * 4, (pixels + 4) * 4 * 4, (pixels + 4) * 4, (pixels + 4) * 4,
-            count + 4, count + 4, 16 * 4 * 4, count + 4, 32 * 4 * 4, count * 4};
+            count + 4, count + 4, 16 * 4 * 4, count + 4, 32 * 4 * 4, count * 4, 4};
         std::vector<std::unique_ptr<HostBuffer>> buffers;
         for (size_t bytes : sizes)
             buffers.push_back(std::make_unique<HostBuffer>(allocator, bytes));
@@ -151,7 +153,8 @@ namespace {
         u.image_width = width;
         u.image_height = HIGS_TILE_HEIGHT;
         u.grid_width = u.grid_height = 1;
-        u.mip_filter = 2; // Production exact median request.
+        buffers[18]->as<uint32_t>()[0] = 1u; // Only the top-left 4x4 region.
+        u.mip_filter = sparse ? 10u : 2u;    // Exact depth with optional coverage.
         u.splat_render_profile = profile;
         pipeline.run(u, buffers, overlays);
         if (split_wave) {
@@ -174,8 +177,11 @@ namespace {
                 "Partial edge dispatch wrote outside the output extent");
         // Source zero is centered only on pixel (0,0); other pixels cannot
         // cross 50%. This also exercises inactive lanes as source broadcasters.
-        for (size_t p = 1; p < pixels; ++p)
-            require(buffers[10]->as<float>()[p] == kFarDepth, "Spurious depth outside Gaussian coverage");
+        for (size_t p = 1; p < pixels; ++p) {
+            const bool sampled = !sparse || (p % width < 4 && p / width < 4);
+            require(buffers[10]->as<float>()[p] == (sampled ? kFarDepth : 4.f),
+                    "Sparse coverage failed to separate exact and approximate depth");
+        }
 
         std::array<float, 4> exact_color;
         std::copy_n(buffers[9]->as<float>(), 4, exact_color.begin());
@@ -213,7 +219,9 @@ int main(int argc, char** argv) {
                 }
                 test_case(pipeline, allocator.value, overlays, profile, .49995f, 6.f, RASTER_BATCH_SIZE + 32, 1, false);
                 test_case(pipeline, allocator.value, overlays, profile, .49995f, 6.f, RASTER_BATCH_SIZE + 1, 8, true);
-                cases += 2;
+                test_case(pipeline, allocator.value, overlays, profile, .49995f, 6.f, RASTER_BATCH_SIZE + 1, 8, false, true);
+                test_case(pipeline, allocator.value, overlays, profile, .49995f, 6.f, RASTER_BATCH_SIZE + 1, 8, true, true);
+                cases += 4;
             }
         }
         std::printf("Vulkan HiGS depth contracts passed: %zu cases (FP16 boundary, profiles, overlays, edge lanes, wave continuation, empty reuse).\n", cases);

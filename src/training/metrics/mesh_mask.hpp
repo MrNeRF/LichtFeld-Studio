@@ -28,4 +28,8 @@ namespace lfs::training {
         float z_near,
         void* stream = nullptr);
 
+    [[nodiscard]] core::Tensor splat_point_coverage(const core::Tensor& means, const MeshMaskCamera& camera,
+                                                    int radius, int close, const core::UndistortParams* distortion = nullptr,
+                                                    void* stream = nullptr);
+
 } // namespace lfs::training

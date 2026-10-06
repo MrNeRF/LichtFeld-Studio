@@ -2,11 +2,11 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "metal_scene_upscaler.hpp"
 #include "rendering_manager.hpp"
 #include "rendering_manager_split_view.hpp"
 #include "scene_temporal_frame_setup.hpp"
 #include "tensor_scene_temporal_pipeline.hpp"
-#include "metal_scene_upscaler.hpp"
 
 #include "core/camera.hpp"
 #include "core/gpu_backend_fwd.hpp"
@@ -19,8 +19,8 @@
 #include "scene_renderer_factory.hpp"
 #include "viewport_appearance_correction.hpp"
 #include "viewport_request_builder.hpp"
-#include "vksplat_shared_scratch_install.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
+#include "vksplat_shared_scratch_install.hpp"
 #include "window/graphics_context.hpp"
 
 #include <algorithm>
@@ -259,8 +259,10 @@ namespace lfs::vis {
         const bool has_model = hasRenderableGaussians(model);
         const bool has_points = scene_state.point_cloud && scene_state.point_cloud->size() > 0;
         if (!has_model && !has_points && scene_state.meshes.empty()) {
-            if (view.tensor_temporal_pipeline_) view.tensor_temporal_pipeline_->resetAll();
-            if (view.metal_scene_upscaler_) view.metal_scene_upscaler_->resetAll();
+            if (view.tensor_temporal_pipeline_)
+                view.tensor_temporal_pipeline_->resetAll();
+            if (view.metal_scene_upscaler_)
+                view.metal_scene_upscaler_->resetAll();
             view.temporal_convergence_.prepare(false, false);
             // An empty scene is still a completed render. Leaving its invalidation
             // pending makes the frame-demand ledger repaint forever at display rate.
@@ -290,7 +292,7 @@ namespace lfs::vis {
                                        requested_upscaler == SceneUpscalerBackend::MetalFxSpatial;
         const bool temporal_requested = isTemporalSceneUpscaler(requested_upscaler);
         const bool temporal_split_supported = !split_active ||
-            splitViewUsesPLYComparison(frame_settings.split_view_mode);
+                                              splitViewUsesPLYComparison(frame_settings.split_view_mode);
         const bool temporal_mode_supported = !frame_settings.equirectangular &&
                                              !frame_settings.apply_appearance_correction &&
                                              temporal_split_supported && has_model &&
@@ -409,9 +411,8 @@ namespace lfs::vis {
         };
 
         const SceneTemporalQuality reconstruction_quality =
-            frame_settings.scene_upscaler_preset == "performance" ? SceneTemporalQuality::Performance :
-            frame_settings.scene_upscaler_preset == "quality" ? SceneTemporalQuality::Quality :
-                                                               SceneTemporalQuality::Balanced;
+            frame_settings.scene_upscaler_preset == "performance" ? SceneTemporalQuality::Performance : frame_settings.scene_upscaler_preset == "quality" ? SceneTemporalQuality::Quality
+                                                                                                                                                          : SceneTemporalQuality::Balanced;
         const auto reconstruct = [&](std::shared_ptr<core::Tensor> color,
                                      std::shared_ptr<core::Tensor> depth,
                                      const core::SplatData* panel_model,
@@ -424,18 +425,18 @@ namespace lfs::vis {
             const auto mix = [&](std::uint64_t value) {
                 generation ^= value + 0x9e3779b97f4a7c15ull + (generation << 6) + (generation >> 2);
             };
-            if (panel_model) { mix(panel_model->size()); mix(panel_model->param_layout_generation()); }
+            if (panel_model) {
+                mix(panel_model->size());
+                mix(panel_model->param_layout_generation());
+            }
             mix(view.temporal_scene_revision_);
             const TensorSceneTemporalRequest request{
-                .view = identity, .color = color, .depth = depth,
-                .frame = {.view = panel_view, .output_extent = output_extent,
-                          .jitter = panel_view.orthographic ? glm::vec2(0) :
-                              temporalJitterNdc(temporal_setup.jitter_pixels, panel_view.size),
-                          .render_scale = scale, .scene_generation = generation,
-                          .backend_key = (static_cast<std::uint64_t>(requested_upscaler) << 32) |
-                                         (static_cast<std::uint64_t>(reconstruction_quality) + 1),
-                          .camera_cut = temporal_camera_cut},
-                .render_extent = panel_view.size, .output_extent = output_extent,
+                .view = identity,
+                .color = color,
+                .depth = depth,
+                .frame = {.view = panel_view, .output_extent = output_extent, .jitter = panel_view.orthographic ? glm::vec2(0) : temporalJitterNdc(temporal_setup.jitter_pixels, panel_view.size), .render_scale = scale, .scene_generation = generation, .backend_key = (static_cast<std::uint64_t>(requested_upscaler) << 32) | (static_cast<std::uint64_t>(reconstruction_quality) + 1), .camera_cut = temporal_camera_cut},
+                .render_extent = panel_view.size,
+                .output_extent = output_extent,
                 .settings = sceneTemporalQualitySettings(reconstruction_quality)};
             if (metalfx_requested) {
                 if (!view.metal_scene_upscaler_)
@@ -455,19 +456,23 @@ namespace lfs::vis {
             }
             auto resolved = view.tensor_temporal_pipeline_->resolve(request);
             if (!resolved) {
-                    view.scene_upscaler_runtime_failed_ = true;
-                    return std::move(resolved).error();
-                }
+                view.scene_upscaler_runtime_failed_ = true;
+                return std::move(resolved).error();
+            }
             return std::move(resolved->color);
         };
         if (!temporal_setup.eligible) {
-            if (view.tensor_temporal_pipeline_) view.tensor_temporal_pipeline_->resetAll();
-            if (view.metal_scene_upscaler_) view.metal_scene_upscaler_->resetAll();
+            if (view.tensor_temporal_pipeline_)
+                view.tensor_temporal_pipeline_->resetAll();
+            if (view.metal_scene_upscaler_)
+                view.metal_scene_upscaler_->resetAll();
         }
 
         if (splitViewEnabled(frame_settings.split_view_mode)) {
-            if (view.tensor_temporal_pipeline_) view.tensor_temporal_pipeline_->reset(TemporalViewId::Main);
-            if (view.metal_scene_upscaler_) view.metal_scene_upscaler_->reset(TemporalViewId::Main);
+            if (view.tensor_temporal_pipeline_)
+                view.tensor_temporal_pipeline_->reset(TemporalViewId::Main);
+            if (view.metal_scene_upscaler_)
+                view.metal_scene_upscaler_->reset(TemporalViewId::Main);
             if (!view.split_left_render_target_.valid())
                 view.split_left_render_target_ = render_targets_.allocate();
             if (!view.split_right_render_target_.valid())
@@ -523,7 +528,9 @@ namespace lfs::vis {
                 lfs::rendering::FrameMetadata metadata{
                     .viewer_backend = lfs::rendering::ViewerBackend::Metal,
                     .depth_panels = {lfs::rendering::FramePanelMetadata{
-                        .depth = outputs->depth, .start_position = 0.0f, .end_position = 1.0f}},
+                        .depth = outputs->depth,
+                        .start_position = 0.0f,
+                        .end_position = 1.0f}},
                     .depth_panel_count = outputs->depth ? 1u : 0u,
                     .valid = true,
                     .far_plane = frame_settings.depth_clip_enabled
@@ -535,10 +542,11 @@ namespace lfs::vis {
                     const auto native_layouts = makePlyComparisonPanelLayouts(size.x, frame_settings.split_position);
                     const auto panel_index = *panel_id == SplitViewPanelId::Left ? 0u : 1u;
                     auto resolved = reconstruct(color, outputs->depth, &panel_model,
-                        temporal_panel_view,
-                        panel_index == 0 ? TemporalViewId::SplitLeft : TemporalViewId::SplitRight,
-                        {std::max(native_layouts[panel_index].panel.width, 1), size.y});
-                    if (!resolved) return std::unexpected(lfs::format_for_developer(resolved.error()));
+                                                temporal_panel_view,
+                                                panel_index == 0 ? TemporalViewId::SplitLeft : TemporalViewId::SplitRight,
+                                                {std::max(native_layouts[panel_index].panel.width, 1), size.y});
+                    if (!resolved)
+                        return std::unexpected(lfs::format_for_developer(resolved.error()));
                     color = std::move(*resolved);
                 }
                 return PanelOutput{std::move(color), std::move(outputs->depth), std::move(metadata)};
@@ -650,8 +658,7 @@ namespace lfs::vis {
                 view.consumed_temporal_camera_cut_generation_ = temporal_camera_cut_generation;
                 complete_temporal_frame();
                 return publish_split(
-                    std::move(split), makeSplitMetadata(left->metadata, right->metadata,
-                                                       frame_settings.split_position),
+                    std::move(split), makeSplitMetadata(left->metadata, right->metadata, frame_settings.split_position),
                     {.enabled = true,
                      .mode_label = "Split View",
                      .detail_label = std::format("{} | {}", left_slot.node->name, right_slot.node->name),
@@ -682,7 +689,7 @@ namespace lfs::vis {
                                                          : gt_mode == GTComparisonMode::Depth
                                                              ? camera->depth_path()
                                                              : camera->normal_path();
-            const bool has_reference = rgb_reference ? camera->has_image()
+            const bool has_reference = rgb_reference                        ? camera->has_image()
                                        : gt_mode == GTComparisonMode::Depth ? camera->has_depth()
                                                                             : camera->has_normal();
             GTComparisonImageLookup lookup;
@@ -691,17 +698,16 @@ namespace lfs::vis {
                     camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
                     camera->is_undistort_precomputed() &&
                     (rgb_reference || !camera->is_undistort_prepared());
-                lookup = getOrQueueGTComparisonImage({
-                    .camera_uid = camera->uid(),
-                    .mode = gt_mode,
-                    .image_path = reference_path,
-                    .preview_max_dimension = std::max(gt_size.x, gt_size.y),
-                    .image_size = gt_size,
-                    .undistort_requested = undistort,
-                    .undistort_params = undistort ? camera->undistort_params() : lfs::core::UndistortParams{},
-                    .depth_visualization_mode = frame_settings.depth_visualization_mode,
-                    .background_color = frame_settings.background_color,
-                    .camera = camera});
+                lookup = getOrQueueGTComparisonImage({.camera_uid = camera->uid(),
+                                                      .mode = gt_mode,
+                                                      .image_path = reference_path,
+                                                      .preview_max_dimension = std::max(gt_size.x, gt_size.y),
+                                                      .image_size = gt_size,
+                                                      .undistort_requested = undistort,
+                                                      .undistort_params = undistort ? camera->undistort_params() : lfs::core::UndistortParams{},
+                                                      .depth_visualization_mode = frame_settings.depth_visualization_mode,
+                                                      .background_color = frame_settings.background_color,
+                                                      .camera = camera});
                 if (lookup.status == GTComparisonImageStatus::Loading)
                     markViewDirty(context.view, DirtyFlag::SPLIT_VIEW, FrameReason::SettingsChange);
             } else {
@@ -869,7 +875,8 @@ namespace lfs::vis {
         if (reconstruction_runtime_ready && (spatial_requested || temporal_setup.eligible)) {
             auto resolved = reconstruct(image, depth, model, frame_context.makeFrameView(),
                                         TemporalViewId::Main, size);
-            if (!resolved) return keep_previous(lfs::format_for_developer(resolved.error()));
+            if (!resolved)
+                return keep_previous(lfs::format_for_developer(resolved.error()));
             image = std::move(*resolved);
             published_size = size;
             view.consumed_temporal_camera_cut_generation_ = temporal_camera_cut_generation;

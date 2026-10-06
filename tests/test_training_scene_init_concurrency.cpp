@@ -7,6 +7,7 @@
 #include "core/events.hpp"
 #include "core/mesh_data.hpp"
 #include "core/parameters.hpp"
+#include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
@@ -14,6 +15,8 @@
 #include "core/tensor_backend.hpp"
 #include "core/uuid.hpp"
 #include "cuda_backend_test.hpp"
+#include "io/exporter.hpp"
+#include "licht_test_support.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/core/services.hpp"
@@ -473,6 +476,31 @@ TEST_F(TrainingSceneInitConcurrencyTest, PrepareKeepsSeedsOutsideEnabledCropbox)
     EXPECT_EQ((*prepared)->preserved_cropbox_data.max, empty_box.max);
     EXPECT_EQ(scene.getNodeCount(), node_count);
     EXPECT_EQ(scene.getTrainingModel(), nullptr);
+}
+
+// Catches training from an --init splat dropping the crop box placed on its preview point cloud: the model then
+// trained without the crop box region and the cropbox evaluation mask found no crop box.
+TEST_F(TrainingSceneInitConcurrencyTest, PrepareFromInitSplatKeepsTheCropbox) {
+    lfs::core::Scene scene;
+    ASSERT_TRUE(populate_init_scene(scene));
+    const lfs::test::licht::TemporaryDirectory temp("lfs-init-splat-cropbox");
+    const auto init = temp.path / "init.ply";
+    ASSERT_TRUE(lfs::io::save_ply(*lfs::test::licht::make_splat(5),
+                                  {.output_path = init, .binary = true, .async = false}));
+    lfs::core::param::TrainingParameters params;
+    params.init_path = lfs::core::path_to_utf8(init);
+    params.optimization.sh_degree = 0;
+    params.optimization.max_cap = 16;
+    params.optimization.random = false;
+
+    const auto prepared = lfs::training::prepareTrainingModel(params, scene);
+    ASSERT_TRUE(prepared) << prepared.error();
+    ASSERT_TRUE(prepared->has_value());
+    EXPECT_EQ((*prepared)->model->size(), 5);
+    EXPECT_TRUE((*prepared)->has_preserved_cropbox);
+    EXPECT_TRUE((*prepared)->preserved_cropbox_data.enabled);
+    EXPECT_EQ((*prepared)->preserved_cropbox_data.min, glm::vec3(-100.0f));
+    EXPECT_EQ((*prepared)->preserved_cropbox_data.max, glm::vec3(100.0f));
 }
 
 TEST_F(TrainingSceneInitConcurrencyTest, StopTrainingReturnsWhileWorkerWaitsForOwner) {

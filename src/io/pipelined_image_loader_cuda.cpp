@@ -603,7 +603,10 @@ namespace lfs::io {
         Tensor decoded;
         Tensor gpu_staging;
         if (params.undistort) {
-            auto [img_data, width, height, channels] = lfs::core::load_image_float(path);
+            auto ahead = take_decoded_ahead(path, HostDecodeKind::Float32);
+            auto [img_data, width, height, channels] = ahead
+                                                           ? std::tuple{static_cast<float*>(ahead->data.release()), ahead->width, ahead->height, ahead->channels}
+                                                           : lfs::core::load_image_float(path);
             if (!img_data)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
             convert_float_hwc_to_rgb(img_data, width, height, channels);
@@ -619,7 +622,7 @@ namespace lfs::io {
         } else {
             auto decode_params = params;
             decode_params.cuda_stream = stream;
-            decoded = load_rgb_image_cpu_decoded(path, decode_params, config_.use_16bit_color);
+            decoded = load_rgb_decoded_ahead(path, decode_params, config_.use_16bit_color);
         }
 
         return decoded;

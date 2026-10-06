@@ -56,7 +56,13 @@ namespace lfs::training {
                               : kernels::rasterize_mesh_coverage(vertices, indices, camera, z_near);
         }
 
+        core::Tensor point_coverage(In means, const MeshMaskCamera& camera, int radius,
+                                    const core::UndistortParams* distortion) {
+            return kernels::splat_point_coverage(means, camera, radius, 0, distortion);
+        }
+
         const MaskOps kCudaMaskOps{
+            .point_coverage = point_coverage,
             .photometric_weight = photometric_weight,
             .opacity_penalty = opacity_penalty,
             .alpha_consistency = alpha_consistency,

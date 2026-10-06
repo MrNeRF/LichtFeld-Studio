@@ -31,6 +31,7 @@ namespace lfs::gpu_ops {
     };
 
     struct MaskOps {
+        core::Tensor (*point_coverage)(In means, const MeshMaskCamera&, int radius, const core::UndistortParams*) = nullptr;
         void (*photometric_weight)(In mask, In roi, Out weight, MaskPhotoMode);
         void (*opacity_penalty)(In alpha, In mask, In roi, Out grad_alpha,
                                 Out reduction_temp, Out loss, MaskOpacityMode, float power, float scale);

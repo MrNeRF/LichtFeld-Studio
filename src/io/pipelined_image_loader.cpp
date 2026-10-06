@@ -28,6 +28,7 @@
 #include <mutex>
 #include <semaphore>
 #include <sstream>
+#include <tuple>
 #include <vector>
 
 #ifdef _WIN32
@@ -655,6 +656,81 @@ namespace lfs::io {
             .pending_depth_bytes = pending_depth_bytes_.load(std::memory_order_acquire),
             .pending_normal_bytes = pending_normal_bytes_.load(std::memory_order_acquire),
         };
+    }
+
+    lfs::core::Tensor PipelinedImageLoader::load_rgb_decoded_ahead(
+        const std::filesystem::path& path, const LoadParams& params, const bool sixteen_bit) const {
+        if (auto ahead = take_decoded_ahead(path, sixteen_bit ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8)) {
+            if (!ahead->data || ahead->channels != 3)
+                throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
+            return sixteen_bit
+                       ? upload_rgb_image(static_cast<const std::uint16_t*>(ahead->data.get()), ahead->width, ahead->height, ahead->channels, params)
+                       : upload_rgb_image(static_cast<const unsigned char*>(ahead->data.get()), ahead->width, ahead->height, ahead->channels, params);
+        }
+        return load_rgb_image_cpu_decoded(path, params, sixteen_bit);
+    }
+
+    void PipelinedImageLoader::decode_ahead(const std::filesystem::path& path, const LoadParams& params) {
+        const auto kind = host_decode_kind(path, params);
+        std::lock_guard lock(decode_ahead_mutex_);
+        decode_ahead_.reset();
+        if (!kind)
+            return;
+        decode_ahead_.emplace(DecodeAhead{
+            .path = path,
+            .kind = *kind,
+            .pixels = std::async(std::launch::async, [path, kind = *kind] { return decode_on_host(path, kind); })});
+    }
+
+    std::optional<PipelinedImageLoader::HostDecodeKind> PipelinedImageLoader::host_decode_kind(
+        const std::filesystem::path& path, const LoadParams& params) {
+        if (config_.backend == lfs::core::GpuBackend::CUDA) {
+            if (!config_.use_16bit_color && !load_params_need_processing(params))
+                return std::nullopt;
+            std::ifstream file(path, std::ios::binary);
+            unsigned char signature[2]{};
+            file.read(reinterpret_cast<char*>(signature), sizeof(signature));
+            if ((file.gcount() == 2 && signature[0] == 0xff && signature[1] == 0xd8) ||
+                load_cached_jpeg_blob(make_cache_key(path, params)))
+                return std::nullopt;
+        }
+        if (params.undistort)
+            return HostDecodeKind::Float32;
+        return config_.use_16bit_color ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8;
+    }
+
+    PipelinedImageLoader::HostPixels PipelinedImageLoader::decode_on_host(
+        const std::filesystem::path& path, const HostDecodeKind kind) {
+        switch (kind) {
+        case HostDecodeKind::Float32: {
+            auto [data, width, height, channels] = lfs::core::load_image_float(path);
+            return {{data, [](void* pixels) { lfs::core::free_image_float(static_cast<float*>(pixels)); }},
+                    width,
+                    height,
+                    channels};
+        }
+        case HostDecodeKind::UInt16: {
+            auto [data, width, height, channels] = lfs::core::load_image_u16(path, 1, 0);
+            return {{data, &lfs::core::free_image}, width, height, channels};
+        }
+        case HostDecodeKind::UInt8:
+            break;
+        }
+        auto [data, width, height, channels] = lfs::core::load_image(path, 1, 0);
+        return {{data, &lfs::core::free_image}, width, height, channels};
+    }
+
+    std::optional<PipelinedImageLoader::HostPixels> PipelinedImageLoader::take_decoded_ahead(
+        const std::filesystem::path& path, const HostDecodeKind kind) const {
+        std::optional<DecodeAhead> ahead;
+        {
+            std::lock_guard lock(decode_ahead_mutex_);
+            if (!decode_ahead_ || decode_ahead_->path != path || decode_ahead_->kind != kind)
+                return std::nullopt;
+            ahead = std::move(decode_ahead_);
+            decode_ahead_.reset();
+        }
+        return ahead->pixels.get();
     }
 
     std::string PipelinedImageLoader::make_cache_key(const std::filesystem::path& path, const LoadParams& params) const {

@@ -510,3 +510,16 @@ TEST_F(ExtendedUnaryOpsVsTorchTest, Asin_Acos_Identity) {
             << "asin + acos != pi/2 at index " << i;
     }
 }
+
+TEST_F(ExtendedUnaryOpsVsTorchTest, InverseTrigDomainAndFusedChain) {
+    const float inf = std::numeric_limits<float>::infinity();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const std::vector<float> values{-inf, -2.f, std::nextafter(-1.f, -2.f), -1.f, -0.5f, -0.f,
+                                    0.f, 0.5f, 1.f, std::nextafter(1.f, 2.f), 2.f, inf, nan};
+    const auto input = Tensor::from_vector(values, {values.size()}, Device::GPU);
+    const auto reference = torch::tensor(values, torch::kFloat32);
+    compare_tensors_near(input.asin(), torch::asin(reference), 1e-6f, 1e-6f, "asin domain");
+    compare_tensors_near(input.acos(), torch::acos(reference), 1e-6f, 1e-6f, "acos domain");
+    compare_tensors_near((input + 0.0f).asin() + 0.0f, torch::asin(reference), 1e-6f, 1e-6f, "fused asin domain");
+    compare_tensors_near((input + 0.0f).acos() + 0.0f, torch::acos(reference), 1e-6f, 1e-6f, "fused acos domain");
+}

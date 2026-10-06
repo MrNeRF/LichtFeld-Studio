@@ -60,6 +60,7 @@ size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     ADD_OWNED(visible_dispatch);
     ADD_OWNED(macro_partials);
     ADD_OWNED(macro_active_mask);
+    ADD_OWNED(exact_depth_sample_mask);
     ADD_OWNED(macro_wave_args);
     ADD_OWNED(index_buffer_offset);
     ADD_OWNED(sorting_keys_1);
@@ -142,6 +143,7 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
     ADD_OWNED(visible_dispatch);
     ADD_OWNED(macro_partials);
     ADD_OWNED(macro_active_mask);
+    ADD_OWNED(exact_depth_sample_mask);
     ADD_OWNED(macro_wave_args);
     ADD_OWNED(index_buffer_offset);
     ADD_OWNED(sorting_keys_1);

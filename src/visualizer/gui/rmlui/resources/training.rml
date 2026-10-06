@@ -668,9 +668,18 @@
               <span class="prop-label">{{label_eval_mask}}</span>
               <span class="text-disabled">{{eval_mask_path_display}}</span>
             </div>
+            <div class="setting-row" data-tooltip="training.tooltip.eval_mask_spec">
+              <span class="prop-label">{{label_eval_mask_spec}}</span>
+              <input type="text" class="number-input" data-value="eval_mask_spec_str" />
+            </div>
             <div class="setting-row">
               <span class="prop-label">&#160;</span>
               <button class="btn btn--secondary" data-tooltip="training.tooltip.eval_mask_browse" data-event-click="action('browse_eval_mask')">{{label_browse}}</button>
+              <button class="btn btn--secondary" data-tooltip="training.tooltip.eval_mask_folder" data-event-click="action('browse_eval_mask_folder')">{{label_mask_folder}}</button>
+            </div>
+            <div class="setting-row">
+              <span class="prop-label">&#160;</span>
+              <button class="btn btn--secondary" data-tooltip="training.tooltip.eval_mask_cropbox" data-event-click="action('use_cropbox_eval_mask')">{{label_use_cropbox}}</button>
               <button class="btn btn--secondary" data-tooltip="training.tooltip.eval_mask_clear" data-if="has_eval_mask_clear" data-event-click="action('clear_eval_mask')">{{label_clear}}</button>
             </div>
           </div>
@@ -679,6 +688,18 @@
             <span class="prop-label">{{row.label}}</span>
             <input type="checkbox" data-checked="row.checked"
                    data-event-click="pv_value_change(row.id, !row.checked)" />
+          </div>
+          <div class="setting-row" data-for="row : pv_dataset_eval_mask_opacity_rows" data-if="dep_eval_mask_splat"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                   data-attr-data-pv-id="row.id"
+                   data-event-focus="pv_focus(row.id)"
+                   data-event-change="pv_change(row.id, ev.value)"
+                   data-event-blur="pv_blur(row.id, row.text)"
+                   data-event-escapecancel="pv_escape(row.id)" />
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
           <div class="setting-row" data-if="dep_eval_holdout &amp;&amp; pv_show_evaluation_fields" data-tooltip="training.tooltip.test_every">
             <span class="prop-label">{{label_test_every}}</span>

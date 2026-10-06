@@ -2716,15 +2716,73 @@ namespace lfs::training {
                 evaluator_->set_lpips_weights_path(*lpips_weights_path_);
             if (!params_.optimization.eval_mask.empty()) {
                 const glm::vec3 origin = scene_ ? scene_->getTrainingDataOrigin() : glm::vec3{0.0f};
-                auto mesh = lfs::training::load_evaluation_mesh(
-                    lfs::core::utf8_to_path(params_.optimization.eval_mask), {origin.x, origin.y, origin.z},
-                    params_.optimization.eval_mask_invert);
-                if (!mesh)
-                    return std::unexpected(std::format("Failed to load evaluation mesh '{}': {}",
-                                                       params_.optimization.eval_mask, mesh.error().detail()));
-                LOG_INFO("Evaluation mask: {} triangles from {}{}", mesh->indices.shape()[0],
-                         params_.optimization.eval_mask, params_.optimization.eval_mask_invert ? " (inverted)" : "");
-                evaluator_->set_eval_mesh(std::move(*mesh));
+                const bool invert = params_.optimization.eval_mask_invert;
+                if (const auto file = lfs::core::param::eval_mask_splat_file(params_.optimization.eval_mask)) {
+                    auto splat = lfs::training::load_evaluation_splat(lfs::core::utf8_to_path(std::string(*file)),
+                                                                      {origin.x, origin.y, origin.z});
+                    if (!splat)
+                        return std::unexpected(std::format("Failed to load evaluation splat '{}': {}", *file,
+                                                           splat.error().detail()));
+                    LOG_INFO("Evaluation mask: {} splats from {} at opacity {}{}", splat->size(), *file,
+                             params_.optimization.eval_mask_opacity, invert ? " (inverted)" : "");
+                    evaluator_->set_eval_splat(lfs::training::EvaluationSplat{
+                        .model = std::move(*splat),
+                        .opacity = params_.optimization.eval_mask_opacity,
+                        .invert = invert});
+                } else if (const auto file = lfs::core::param::eval_mask_points_file(params_.optimization.eval_mask)) {
+                    auto means = lfs::training::load_evaluation_points(lfs::core::utf8_to_path(std::string(*file)),
+                                                                       {origin.x, origin.y, origin.z});
+                    if (!means)
+                        return std::unexpected(std::format("Failed to load evaluation points '{}': {}", *file,
+                                                           means.error().detail()));
+                    LOG_INFO("Evaluation mask: {} points from {}{}", means->shape()[0], *file, invert ? " (inverted)" : "");
+                    evaluator_->set_eval_points(lfs::training::EvaluationPoints{.means = std::move(*means), .invert = invert});
+                } else if (const auto splat = lfs::core::param::parse_eval_mask_points(params_.optimization.eval_mask)) {
+                    const auto cloud = scene_ ? scene_->getInitialPointCloud() : nullptr;
+                    if (!cloud || !cloud->means.is_valid() || cloud->means.numel() == 0)
+                        return std::unexpected("Evaluation mask 'points' needs the dataset's initial point cloud, "
+                                               "which a resumed project does not keep");
+                    evaluator_->set_eval_points(lfs::training::EvaluationPoints{
+                        .means = cloud->means.to(lfs::core::Device::GPU).to(lfs::core::DataType::Float32).contiguous(),
+                        .radius = (*splat)[0],
+                        .close = (*splat)[1],
+                        .invert = invert});
+                    LOG_INFO("Evaluation mask: {} initial points, radius {} px, closed by {} px{}",
+                             cloud->means.shape()[0], (*splat)[0], (*splat)[1], invert ? " (inverted)" : "");
+                } else if (lfs::core::param::is_eval_mask_folder(params_.optimization.eval_mask)) {
+                    const auto folder = lfs::core::utf8_to_path(
+                        std::string(lfs::core::param::eval_mask_folder(params_.optimization.eval_mask)));
+                    std::error_code folder_error;
+                    if (!std::filesystem::is_directory(folder, folder_error))
+                        return std::unexpected(std::format("Evaluation mask folder '{}' does not exist",
+                                                           lfs::core::path_to_utf8(folder)));
+                    evaluator_->set_eval_mask_folder(
+                        std::make_shared<const lfs::io::MaskDirCache>(lfs::io::MaskDirCache::for_folder(folder)));
+                    LOG_INFO("Evaluation mask: masks from {}{}", lfs::core::path_to_utf8(folder), invert ? " (inverted)" : "");
+                } else if (lfs::core::param::is_eval_mask_cropbox(params_.optimization.eval_mask)) {
+                    const auto cropbox = scene_ ? lfs::training::resolve_training_cropbox_geom(*scene_) : std::nullopt;
+                    if (!cropbox)
+                        return std::unexpected("Evaluation mask 'cropbox' needs an enabled crop box on the training model");
+                    const bool cropbox_invert = invert != cropbox->inverse;
+                    evaluator_->set_eval_mesh(lfs::training::make_evaluation_box(
+                        lfs::training::training_cropbox_model_corners(*cropbox), cropbox_invert));
+                    LOG_INFO("Evaluation mask: crop box{}", cropbox_invert ? " (inverted)" : "");
+                } else if (lfs::core::param::is_eval_mask_depth(params_.optimization.eval_mask)) {
+                    LOG_INFO("Evaluation mask: {}{}", params_.optimization.eval_mask, invert ? " (inverted)" : "");
+                } else if (const auto box = lfs::core::param::parse_eval_mask_box(params_.optimization.eval_mask)) {
+                    evaluator_->set_eval_mesh(lfs::training::make_evaluation_box(
+                        lfs::training::axis_aligned_box_corners(*box, {origin.x, origin.y, origin.z}), invert));
+                    LOG_INFO("Evaluation mask: {}{}", params_.optimization.eval_mask, invert ? " (inverted)" : "");
+                } else {
+                    auto mesh = lfs::training::load_evaluation_mesh(
+                        lfs::core::utf8_to_path(params_.optimization.eval_mask), {origin.x, origin.y, origin.z}, invert);
+                    if (!mesh)
+                        return std::unexpected(std::format("Failed to load evaluation mesh '{}': {}",
+                                                           params_.optimization.eval_mask, mesh.error().detail()));
+                    LOG_INFO("Evaluation mask: {} triangles from {}{}", mesh->indices.shape()[0],
+                             params_.optimization.eval_mask, invert ? " (inverted)" : "");
+                    evaluator_->set_eval_mesh(std::move(*mesh));
+                }
             }
             if (params_.optimization.ppisp_active() && ppisp_ && ppisp_->isFinalized()) {
                 evaluator_->set_appearance([this](const lfs::core::Tensor& rgb, const lfs::core::Camera& cam) {
@@ -2989,7 +3047,8 @@ namespace lfs::training {
                             metrics_gsplat_saved_.backend = training_ops_->gsplat->create();
                         }
                         output = gsplat_infer(*training_ops_->gsplat, metrics_gsplat_saved_,
-                                              render_camera, model, background);
+                                              render_camera, model, background, 1.0f, false,
+                                              lfs::core::param::is_eval_mask_depth(params.optimization.eval_mask) ? GsplatRenderMode::RGB_ED : GsplatRenderMode::RGB);
                     } else {
                         if (training_ops_ == nullptr || training_ops_->fast == nullptr) {
                             throw std::runtime_error(*unavailable_training_family(
@@ -3034,7 +3093,7 @@ namespace lfs::training {
             },
             cached_inputs.gt_image.is_valid() ? &cached_inputs : nullptr,
             image_loader.get(),
-            evaluator_ ? evaluator_->eval_mesh() : nullptr);
+            evaluator_ ? evaluator_->mask_sources() : lfs::training::EvaluationMaskSources{});
         if (!prepared)
             return std::unexpected(std::string(prepared.error().detail()));
 
@@ -3719,6 +3778,12 @@ namespace lfs::training {
         if (project_writer_thread_.joinable() &&
             project_writer_done_.load(
                 std::memory_order_acquire)) {
+            project_writer_thread_.join();
+        }
+    }
+
+    void Trainer::wait_for_project_writer() {
+        if (project_writer_thread_.joinable()) {
             project_writer_thread_.join();
         }
     }
@@ -7851,6 +7916,13 @@ namespace lfs::training {
                             iter != get_total_iterations() &&
                             !save_regular_phase_output) {
                             if (may_save_at_step_boundary) {
+                                // Preserve every configured checkpoint at its
+                                // requested iteration. Drain an earlier writer
+                                // and any request it deferred before queueing
+                                // this step's snapshot.
+                                wait_for_project_writer();
+                                consume_requested_project_snapshot(iter);
+                                wait_for_project_writer();
                                 static_cast<void>(
                                     request_project_save(
                                         *step_project_path));

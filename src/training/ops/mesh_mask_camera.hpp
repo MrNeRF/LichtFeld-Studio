@@ -114,6 +114,8 @@ namespace lfs::training {
         expand_guard(distortion->src_fx, distortion->src_fy, distortion->src_cx, distortion->src_cy,
                      distortion->src_width, distortion->src_height);
         // Wide-angle rays can land far outside every frame; the guard must reach them.
+        if (!samples)
+            return packed;
         const auto magnitude = samples->abs();
         const auto extent = magnitude.masked_fill(magnitude.ne(magnitude), 0.0f).max({0, 1}).cpu();
         const float extent_x = extent.ptr<float>()[0];

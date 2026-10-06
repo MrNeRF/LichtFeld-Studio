@@ -416,10 +416,11 @@ namespace lfs::core::internal {
                 case ExprOp::Tan: result = ext(GLSLstd450Tan, {x}); break;
                 case ExprOp::Asin:
                 case ExprOp::Acos: {
-                    // Clamp rounding overshoot, but keep NaN.
-                    auto bounded = choose(instruction(spv::OpIsNan, bool_, {x}), x, ext(GLSLstd450FClamp, {x, f(-1), f(1)}), float_);
+                    const auto bounded = x;
                     auto root = ext(GLSLstd450Sqrt, {ext(GLSLstd450FMax, {f(0), sub(f(1), mul(bounded, bounded))})});
                     result = op == ExprOp::Asin ? ext(GLSLstd450Atan2, {bounded, root}) : ext(GLSLstd450Atan2, {root, bounded});
+                    result = choose(instruction(spv::OpLogicalOr, bool_, {instruction(spv::OpIsNan, bool_, {x}), cmp(spv::OpFOrdGreaterThan, ext(GLSLstd450FAbs, {x}), f(1))}),
+                                    f(std::numeric_limits<float>::quiet_NaN()), result, float_);
                     break;
                 }
                 case ExprOp::Atan: result = ext(GLSLstd450Atan, {x}); break;

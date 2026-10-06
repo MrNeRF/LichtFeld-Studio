@@ -629,6 +629,7 @@ set_tests_properties(lichtfeld_format_tests PROPERTIES
 
 add_executable(lichtfeld_frame_tests
     test_frame_demand_ledger.cpp
+    test_frustum_depth_coverage.cpp
     test_framerate_controller.cpp
     ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/framerate_controller.cpp)
 
@@ -916,6 +917,7 @@ set(TEST_FILES
     test_fused_noise_injection.cpp
     test_densification_info_zero.cpp
     test_densify_events_4x.cpp
+    test_median_selection_perf.cu
     test_training_state_ledger.cpp
     test_vram_ledger_model.cpp
     test_vram_owner_timeline.cpp

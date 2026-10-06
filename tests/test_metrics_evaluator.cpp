@@ -183,9 +183,9 @@ namespace {
                                                        const std::filesystem::path& mask_path,
                                                        const int width,
                                                        const int height) {
-        auto R = Tensor::eye(3, Device::CUDA);
+        auto R = Tensor::eye(3, Device::GPU);
         std::vector<float> t_data{0.0f, 0.0f, 4.0f};
-        auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
         auto radial = Tensor::from_vector({-0.3f}, lfs::core::TensorShape({1}), Device::CPU);
         auto cam = std::make_shared<Camera>(
             R, T, static_cast<float>(width), static_cast<float>(width),
@@ -200,7 +200,7 @@ namespace {
 
     SplatData make_hidden_splat() {
         auto splat = make_front_facing_splat();
-        splat.means() = Tensor::from_vector({0.0f, 0.0f, -10.0f}, lfs::core::TensorShape({1, 3}), Device::CUDA);
+        splat.means() = Tensor::from_vector({0.0f, 0.0f, -10.0f}, lfs::core::TensorShape({1, 3}), Device::GPU);
         return splat;
     }
 
@@ -322,7 +322,7 @@ TEST(MetricsEvaluatorTest, GpuQuantizationMatchesTensorExpressionBitwise) {
     for (int i = 0; i < (1 << 20); ++i)
         values.push_back(uniform(generator));
 
-    const auto input = Tensor::from_vector(values, {values.size()}, Device::CUDA);
+    const auto input = Tensor::from_vector(values, {values.size()}, Device::GPU);
     const auto expression = input.clamp(0.0f, 1.0f)
                                 .mul(255.0f)
                                 .add(0.5f)
@@ -488,7 +488,7 @@ TEST(MetricsEvaluatorUndistort, BiasCountsOnlyEvaluatedPixels) {
     ASSERT_FALSE(cam->image_size_loaded());
     auto dataset = std::make_shared<CameraDataset>(
         std::vector<std::shared_ptr<Camera>>{cam}, DatasetConfig{}, CameraDataset::Split::ALL);
-    auto background = Tensor::full({3}, 128.0f / 255.0f, Device::CUDA);
+    auto background = Tensor::full({3}, 128.0f / 255.0f, Device::GPU);
     auto params = make_eval_params(tmp / "out");
     params.optimization.undistort = true;
     std::filesystem::create_directories(params.dataset.output_path);
@@ -527,7 +527,7 @@ TEST(MetricsEvaluatorUndistort, UndistortedSpaceUsesAllUndistortedPixels) {
         cam->undistort_params(), kW, kH, 1, 0);
     auto dataset = std::make_shared<CameraDataset>(
         std::vector<std::shared_ptr<Camera>>{cam}, DatasetConfig{}, CameraDataset::Split::ALL);
-    auto background = Tensor::full({3}, 128.0f / 255.0f, Device::CUDA);
+    auto background = Tensor::full({3}, 128.0f / 255.0f, Device::GPU);
     auto params = make_eval_params(tmp / "out");
     params.optimization.undistort = true;
     params.optimization.eval_space = lfs::core::param::EvalSpace::Undistorted;
@@ -602,7 +602,7 @@ TEST(MetricsEvaluatorUndistort, UndistortedGroundTruthEqualsTrainingLoaderImage)
         const auto height = static_cast<size_t>(render_camera.image_height());
         const auto width = static_cast<size_t>(render_camera.image_width());
         lfs::training::RenderOutput output;
-        output.image = Tensor::zeros({size_t{3}, height, width}, Device::CUDA);
+        output.image = Tensor::zeros({size_t{3}, height, width}, Device::GPU);
         return lfs::training::EvaluationRenderResult{.output = std::move(output)};
     };
     const auto prepared = prepare_evaluation_view(
@@ -650,7 +650,7 @@ TEST_P(MetricsEvaluatorImages, DownscaledGroundTruthMatchesGpuLanczos) {
         const auto height = static_cast<size_t>(render_camera.image_height());
         const auto width = static_cast<size_t>(render_camera.image_width());
         lfs::training::RenderOutput output;
-        output.image = Tensor::zeros({size_t{3}, height, width}, Device::CUDA);
+        output.image = Tensor::zeros({size_t{3}, height, width}, Device::GPU);
         return lfs::training::EvaluationRenderResult{.output = std::move(output)};
     };
     const auto prepared = prepare_evaluation_view(*camera, params, render);
@@ -703,17 +703,17 @@ TEST_P(MetricsEvaluatorImages, RgbaReferenceShowsTheRenderBackgroundWhereTranspa
     params.optimization.bg_color = {0.0f, 0.0f, 0.0f};
     const std::array<float, 3> render_background{0.25f, 0.5f, 1.0f};
     const auto background = Tensor::from_vector(
-        std::vector<float>(render_background.begin(), render_background.end()), {3}, Device::CUDA);
+        std::vector<float>(render_background.begin(), render_background.end()), {3}, Device::GPU);
 
     const auto render = [](Camera& render_camera, float)
         -> lfs::Result<lfs::training::EvaluationRenderResult> {
         lfs::training::RenderOutput output;
         output.image = Tensor::zeros({size_t{3}, static_cast<size_t>(render_camera.image_height()),
                                       static_cast<size_t>(render_camera.image_width())},
-                                     Device::CUDA);
+                                     Device::GPU);
         return lfs::training::EvaluationRenderResult{.output = std::move(output)};
     };
-    const auto prepared = prepare_evaluation_view(*camera, params, render, nullptr, nullptr, nullptr, background);
+    const auto prepared = prepare_evaluation_view(*camera, params, render, nullptr, nullptr, {}, background);
     ASSERT_TRUE(prepared.has_value()) << prepared.error().detail();
     const auto gt = prepared->inputs.gt_image.to(DataType::Float32).cpu().contiguous();
     ASSERT_EQ(gt.shape(), lfs::core::TensorShape({3, kH, kW}));
@@ -766,7 +766,7 @@ TEST(MetricsEvaluatorUndistort, SharedPreparationMatchesCachedInteractiveInputsI
             assert(height > 0);
             assert(width > 0);
             auto image = Tensor::full({size_t{3}, height, width}, 128.0f / 255.0f,
-                                      Device::CUDA);
+                                      Device::GPU);
             lfs::training::RenderOutput output;
             output.image = image;
             output.width = static_cast<int>(width);
@@ -896,7 +896,7 @@ TEST_F(MetricsEvaluatorStreams, WaitsForRenderOutputsFromAnotherStream) {
         lfs::training::RenderOutput output;
         output.image = Tensor::full({size_t{3}, static_cast<size_t>(render_camera.image_height()),
                                      static_cast<size_t>(render_camera.image_width())},
-                                    130.0f / 255.0f, Device::CUDA);
+                                    130.0f / 255.0f, Device::GPU);
         return lfs::training::EvaluationRenderResult{.output = std::move(output)};
     };
 
@@ -948,7 +948,7 @@ TEST(MetricsEvaluatorUndistort, ThinMaskFallsBackToPartialSsimWindows) {
     auto cam = make_distorted_eval_camera(image_path, mask_path, kW, kH);
     auto dataset = std::make_shared<CameraDataset>(
         std::vector<std::shared_ptr<Camera>>{cam}, DatasetConfig{}, CameraDataset::Split::ALL);
-    auto background = Tensor::full({3}, 128.0f / 255.0f, Device::CUDA);
+    auto background = Tensor::full({3}, 128.0f / 255.0f, Device::GPU);
     auto params = make_eval_params(tmp / "out");
     params.optimization.undistort = true;
     params.optimization.mask_mode = lfs::core::param::MaskMode::Ignore;
@@ -970,6 +970,119 @@ TEST(MetricsEvaluatorUndistort, ThinMaskFallsBackToPartialSsimWindows) {
     std::filesystem::remove_all(tmp);
 }
 
+// Catches geometric masks projected through a pinhole when GUT renders a distorted camera natively,
+// without --undistort: they must select the same pixels as the source-lens path of --undistort.
+// Catches the splat mask scoring anything but what the splat covers when rendered with all its information:
+// the mask must equal the pixels whose rendered opacity reaches the cutoff, a higher cutoff a part of it, and the
+// inverse the rest.
+TEST(MetricsEvaluator, SplatMaskSelectsTheRenderedCoverage) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_splat_mask";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 64;
+    constexpr int kH = 48;
+    const auto image_path = tmp / "gt.png";
+    write_rgb_png(image_path, 130, 130, 130, kH, kW);
+    auto camera = make_eval_camera(image_path, {}, kW, kH);
+    // An elongated splat smaller than the view, so the mask has both covered and uncovered pixels.
+    const float opaque = std::log(0.99f / 0.01f);
+    lfs::training::EvaluationSplat splat{
+        .model = SplatData(0, Tensor::from_vector({0.3f, -0.2f, 1.0f}, {1, 3}, Device::GPU),
+                           Tensor::zeros({1, 1, 3}, Device::GPU), Tensor::zeros({1, 0, 3}, Device::GPU),
+                           Tensor::from_vector({-0.4f, -1.2f, -3.0f}, {1, 3}, Device::GPU),
+                           Tensor::from_vector({0.92f, 0.0f, 0.0f, 0.39f}, {1, 4}, Device::GPU),
+                           Tensor::full({1}, opaque, Device::GPU), 1.0f)};
+    const auto render = [](Camera& render_camera, float) -> lfs::Result<lfs::training::EvaluationRenderResult> {
+        lfs::training::RenderOutput output;
+        output.image = Tensor::zeros({size_t{3}, static_cast<size_t>(render_camera.image_height()),
+                                      static_cast<size_t>(render_camera.image_width())},
+                                     Device::GPU);
+        return lfs::training::EvaluationRenderResult{.output = std::move(output)};
+    };
+    const auto params = make_eval_params(tmp / "out");
+    const auto mask_of = [&] {
+        const auto prepared = prepare_evaluation_view(*camera, params, render, nullptr, nullptr, {.splat = &splat});
+        EXPECT_TRUE(prepared.has_value()) << prepared.error().detail();
+        return prepared->metric_mask.cpu().to_vector_uint8();
+    };
+
+    auto background = Tensor::zeros({3}, Device::GPU);
+    const auto& ops = *lfs::training::training_ops(lfs::core::default_gpu_backend()).fast;
+    lfs::gpu_ops::FastSaved saved{.backend = ops.create()};
+    const auto alpha = lfs::training::fast_infer(ops, saved, *camera, splat.model, background, params.optimization.mip_filter)
+                           .alpha.cpu()
+                           .to_vector();
+    ASSERT_EQ(alpha.size(), static_cast<size_t>(kW * kH));
+    const auto expected_at = [&](const float cutoff) {
+        std::vector<uint8_t> expected(alpha.size());
+        std::ranges::transform(alpha, expected.begin(), [cutoff](const float value) { return value >= cutoff ? 1 : 0; });
+        return expected;
+    };
+    splat.opacity = 0.5f;
+    const auto wide = expected_at(0.5f);
+    EXPECT_EQ(mask_of(), wide);
+    splat.opacity = 0.85f;
+    const auto expected = expected_at(0.85f);
+    const auto covered = std::ranges::count(expected, uint8_t{1});
+    ASSERT_GT(covered, 0);
+    ASSERT_LT(covered, std::ranges::count(wide, uint8_t{1}));
+    EXPECT_EQ(mask_of(), expected);
+    splat.invert = true;
+    const auto inverted = mask_of();
+    for (size_t i = 0; i < expected.size(); ++i)
+        ASSERT_EQ(inverted[i], 1 - expected[i]) << i;
+    std::filesystem::remove_all(tmp);
+}
+
+TEST(MetricsEvaluatorUndistort, PointMaskFollowsTheNativeGutLens) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_native_gut_point_mask";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 64;
+    constexpr int kH = 48;
+    const auto image_path = tmp / "gt.png";
+    write_rgb_png(image_path, 130, 130, 130, kH, kW);
+
+    const lfs::training::EvaluationPoints points{
+        .means = Tensor::from_vector({-1.4f, -0.9f, 0.0f, 1.4f, 0.9f, 0.0f, 0.0f, 0.0f, 0.0f},
+                                     lfs::core::TensorShape({3, 3}), Device::GPU),
+        .radius = 1,
+        .close = 0};
+    const auto render = [](Camera& render_camera, float) -> lfs::Result<lfs::training::EvaluationRenderResult> {
+        lfs::training::RenderOutput output;
+        output.image = Tensor::zeros({size_t{3}, static_cast<size_t>(render_camera.image_height()),
+                                      static_cast<size_t>(render_camera.image_width())},
+                                     Device::GPU);
+        return lfs::training::EvaluationRenderResult{.output = std::move(output)};
+    };
+    const auto mask_of = [&](Camera& camera, const bool gut, const bool undistort) {
+        auto params = make_eval_params(tmp / "out");
+        params.optimization.gut = gut;
+        params.optimization.undistort = undistort;
+        const auto prepared = prepare_evaluation_view(camera, params, render, nullptr, nullptr, {.points = &points});
+        EXPECT_TRUE(prepared.has_value()) << prepared.error().detail();
+        return prepared->metric_mask.cpu().to_vector_uint8();
+    };
+
+    auto prepared_camera = make_distorted_eval_camera(image_path, {}, kW, kH);
+    const auto source_lens = mask_of(*prepared_camera, false, true);
+    Camera native(Tensor::eye(3, Device::GPU), prepared_camera->T(), static_cast<float>(kW), static_cast<float>(kW),
+                  0.5f * kW, 0.5f * kH, Tensor::from_vector({-0.3f}, lfs::core::TensorShape({1}), Device::CPU),
+                  Tensor(), CameraModelType::PINHOLE, "gt.png", image_path, {}, kW, kH, 0);
+    const auto native_lens = mask_of(native, true, false);
+    EXPECT_EQ(native_lens, source_lens);
+    EXPECT_NE(mask_of(native, false, false), source_lens) << "the lens no longer moves these points";
+    std::filesystem::remove_all(tmp);
+}
+
 // Catches the evaluation copy of a prepared camera losing its undistorted state, which makes the
 // GUT renderer apply the lens distortion a second time.
 TEST(MetricsEvaluatorUndistort, TransformCopyKeepsPreparedUndistortion) {
@@ -984,9 +1097,9 @@ TEST(MetricsEvaluatorUndistort, TransformCopyKeepsPreparedUndistortion) {
 // mip filter is off: the footprint of a subpixel splat then shrinks about threefold.
 TEST(MetricsEvaluatorUndistort, SupersampledRenderKeepsTheSplatFootprint) {
     auto splat = make_front_facing_splat();
-    splat.scaling_raw() = Tensor::full({1, 3}, -4.2f, Device::CUDA);
-    splat.opacity_raw() = Tensor::zeros({1}, Device::CUDA);
-    auto background = Tensor::zeros({3}, Device::CUDA);
+    splat.scaling_raw() = Tensor::full({1, 3}, -4.2f, Device::GPU);
+    splat.opacity_raw() = Tensor::zeros({1}, Device::GPU);
+    auto background = Tensor::zeros({3}, Device::GPU);
     auto base = make_eval_camera("footprint.png", {}, 64, 64);
     auto supersampled = make_eval_camera("footprint.png", {}, 128, 128);
     const auto& ops = *lfs::training::training_ops(lfs::core::default_gpu_backend()).fast;
@@ -1031,7 +1144,7 @@ TEST_P(MetricsEvaluatorGeom, CoverageSelectsTheEvaluatedPixels) {
 
     for (const bool invert : {false, true}) {
         mesh.invert = invert;
-        const auto prepared = prepare_evaluation_view(*camera, params, render, nullptr, nullptr, &mesh);
+        const auto prepared = prepare_evaluation_view(*camera, params, render, nullptr, nullptr, {.mesh = &mesh});
         ASSERT_TRUE(prepared.has_value());
         EXPECT_TRUE(prepared->erode_ssim_mask);
         const auto mask = prepared->metric_mask.cpu().contiguous();
@@ -1045,7 +1158,7 @@ TEST_P(MetricsEvaluatorGeom, CoverageSelectsTheEvaluatedPixels) {
     mesh.invert = false;
     mesh.vertices = mesh.vertices - Tensor::from_vector({0.0f, 0.0f, 10.0f}, lfs::core::TensorShape({1, 3}),
                                                         Device::GPU);
-    EXPECT_FALSE(prepare_evaluation_view(*camera, params, render, nullptr, nullptr, &mesh).has_value());
+    EXPECT_FALSE(prepare_evaluation_view(*camera, params, render, nullptr, nullptr, {.mesh = &mesh}).has_value());
     std::filesystem::remove_all(tmp);
 }
 
@@ -1386,4 +1499,50 @@ TEST(MetricsEvaluatorInference, PreservesScreenShareWhileTrainingStillUpdatesIt)
     ASSERT_EQ(result.code, lfs::gpu_ops::RasterResult::Code::Success);
     ops.release(saved);
     EXPECT_GT(model._max_screen_share.item<float>(), 0.0f);
+}
+
+// Catches a depth mask that compares accumulated instead of expected depth, keeps faint pixels,
+// excludes the range bounds, or loses inversion.
+TEST(MetricsEvaluator, DepthMaskSelectsSolidPixelsInsideTheRange) {
+    if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend())) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_depth_eval_mask";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 6;
+    constexpr int kH = 4;
+    write_u8_hwc_png(tmp / "gt.png", std::vector<uint8_t>(static_cast<size_t>(kW) * kH * 3, 128), kH, kW);
+    auto camera = make_eval_camera(tmp / "gt.png", {}, kW, kH);
+    auto params = make_eval_params(tmp / "out");
+    params.optimization.eval_mask = "depth:2,4";
+
+    const std::array<float, kW> alpha_row{1.0f, 0.6f, 0.3f, 1.0f, 1.0f, 0.8f};
+    const std::array<float, kW> accumulated_row{3.0f, 1.8f, 0.9f, 5.0f, 2.0f, 4.0f};
+    const std::array<uint8_t, kW> expected_row{1, 1, 0, 0, 1, 0};
+    std::vector<float> alpha, accumulated;
+    for (int y = 0; y < kH; ++y) {
+        alpha.insert(alpha.end(), alpha_row.begin(), alpha_row.end());
+        accumulated.insert(accumulated.end(), accumulated_row.begin(), accumulated_row.end());
+    }
+    const auto render = [&](Camera&, float) -> lfs::Result<lfs::training::EvaluationRenderResult> {
+        lfs::training::RenderOutput output;
+        output.image = Tensor::zeros({size_t{3}, size_t{kH}, size_t{kW}}, Device::GPU);
+        output.alpha = Tensor::from_vector(alpha, {size_t{1}, size_t{kH}, size_t{kW}}, Device::GPU);
+        output.depth = Tensor::from_vector(accumulated, {size_t{1}, size_t{kH}, size_t{kW}}, Device::GPU);
+        return lfs::training::EvaluationRenderResult{.output = std::move(output)};
+    };
+
+    for (const bool invert : {false, true}) {
+        params.optimization.eval_mask_invert = invert;
+        const auto prepared = prepare_evaluation_view(*camera, params, render);
+        ASSERT_TRUE(prepared.has_value()) << prepared.error().detail();
+        const auto mask = prepared->metric_mask.cpu().contiguous().to_vector_uint8();
+        ASSERT_EQ(mask.size(), static_cast<size_t>(kW) * kH);
+        for (size_t i = 0; i < mask.size(); ++i)
+            EXPECT_EQ(mask[i], invert ? 1 - expected_row[i % kW] : expected_row[i % kW]) << i << " invert " << invert;
+    }
+    std::filesystem::remove_all(tmp);
 }

@@ -187,6 +187,32 @@ namespace {
         static inline std::vector<uint16_t> rgb16_, depth_;
     };
 
+    TEST_P(PipelinedLoaderBackends, DecodeAheadMatchesImmediateOnEachBackend) {
+        const GpuBackendScope scope(GetParam());
+        auto distortion = distorted_camera();
+        for (const bool sixteen_bit : {false, true}) {
+            for (const bool undistort : {false, true}) {
+                PipelinedLoaderConfig config;
+                config.backend = GetParam();
+                config.use_16bit_color = sixteen_bit;
+                config.io_threads = 1;
+                config.cold_process_threads = 1;
+                config.decoder_pool_size = 1;
+                lfs::io::LoadParams params;
+                params.max_width = WIDTH / 2;
+                params.output_uint8 = false;
+                params.undistort = undistort ? &distortion : nullptr;
+                PipelinedImageLoader plain(config), ahead(config);
+                const auto expected = plain.load_image_immediate(path(sixteen_bit ? "rgb16.png" : "rgb8.png"), params).cpu().contiguous();
+                ahead.decode_ahead(path(sixteen_bit ? "rgb16.png" : "rgb8.png"), params);
+                const auto actual = ahead.load_image_immediate(path(sixteen_bit ? "rgb16.png" : "rgb8.png"), params).cpu().contiguous();
+                ASSERT_EQ(actual.shape(), expected.shape());
+                ASSERT_EQ(actual.dtype(), expected.dtype());
+                EXPECT_EQ(actual.to_vector(), expected.to_vector());
+            }
+        }
+    }
+
     TEST_P(PipelinedLoaderBackends, ImagesMatchHostReference) {
         const TensorShape chw{3, HEIGHT, WIDTH};
 

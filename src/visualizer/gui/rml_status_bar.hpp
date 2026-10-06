@@ -12,8 +12,8 @@
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/status_bar_mining.hpp"
-#include "rendering/viewer_backend.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
+#include "rendering/viewer_backend.hpp"
 #include "visualizer/rendering/rendering_types.hpp"
 #include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/DataModelHandle.h>

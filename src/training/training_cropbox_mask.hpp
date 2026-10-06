@@ -6,6 +6,7 @@
 
 #include "core/tensor.hpp"
 
+#include <array>
 #include <glm/glm.hpp>
 #include <optional>
 
@@ -26,6 +27,10 @@ namespace lfs::training {
 
     [[nodiscard]] std::optional<TrainingCropBoxGeometry> resolve_training_cropbox_geom(
         const core::Scene& scene);
+
+    // Box corners in the training model frame; corner bits 0, 1, 2 select max over min on x, y, z.
+    [[nodiscard]] std::array<std::array<float, 3>, 8> training_cropbox_model_corners(
+        const TrainingCropBoxGeometry& geometry);
 
     [[nodiscard]] std::optional<TrainingCropBoxGeometry> resolve_training_cropbox_loss_geom(
         const core::Scene& scene,

@@ -33,25 +33,26 @@ void main(uint3 groupId:SV_GroupID,uint lane:SV_GroupIndex,uniform Parameters p)
     }
     if (operation == 10) {
         Ptr<uint, Access.ReadWrite> state = (Ptr<uint, Access.ReadWrite>)p.b;
-        if (lane == 0u) {
-            if (p.reserved == 24u) {
-                uint total = 0;
-                for (uint bin = 0; bin < 256u; ++bin) total += state[bin];
-                state[257] = total / 2u;
-                state[258] = total > 0u ? 1u : 0u;
-            }
-            uint rank = state[257];
-            if (state[258] != 0u) {
-                for (uint bin = 0; bin < 256u; ++bin) {
-                    uint count = state[bin];
-                    if (rank < count) {
-                        state[256] |= bin << p.reserved;
-                        state[257] = rank;
-                        break;
-                    }
-                    rank -= count;
-                }
-            }
+        const uint count = state[lane];
+        medianHistogram[lane] = count;
+        GroupMemoryBarrierWithGroupSync();
+        for (uint offset = 1u; offset < 256u; offset <<= 1u) {
+            const uint add = lane >= offset ? medianHistogram[lane - offset] : 0u;
+            GroupMemoryBarrierWithGroupSync();
+            medianHistogram[lane] += add;
+            GroupMemoryBarrierWithGroupSync();
+        }
+        const uint total = medianHistogram[255];
+        const uint rank = p.reserved == 24u ? total / 2u : state[257];
+        const uint prefix = p.reserved == 24u ? 0u : state[256];
+        const uint valid = p.reserved == 24u ? uint(total > 0u) : state[258];
+        const uint below = medianHistogram[lane] - count;
+        GroupMemoryBarrierWithGroupSync();
+        if (lane == 0u && p.reserved == 24u)
+            state[258] = valid;
+        if (valid != 0u && rank >= below && rank - below < count) {
+            state[256] = prefix | (lane << p.reserved);
+            state[257] = rank - below;
         }
         GroupMemoryBarrierWithGroupSync();
         state[lane] = 0u;

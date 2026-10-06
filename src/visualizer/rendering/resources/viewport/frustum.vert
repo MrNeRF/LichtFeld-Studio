@@ -25,7 +25,7 @@ layout(push_constant) uniform FrustumPush {
     // Valid-region UV for padded splat depth (consumed by shape_overlay.frag).
     vec4 uv_region;
     // Zero for linear depth; otherwise clip-z/clip-w projection coefficients.
-    vec4 depth_projection;
+    vec4 ndc_to_view_coeffs;
     mat4 view;
     vec4 viewport_panel;
     vec4 projection;

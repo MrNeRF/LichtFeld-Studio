@@ -302,9 +302,9 @@ namespace lfs::core {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
 #ifdef __CUDA_ARCH__
-                return x != x ? x : asinf(fminf(fmaxf(x, T(-1)), T(1))); // fmaxf drops NaN
+                return asinf(x);
 #else
-                return std::asin(clamp_value(x, T(-1), T(1)));
+                return std::asin(x);
 #endif
             }
         };
@@ -313,9 +313,9 @@ namespace lfs::core {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
 #ifdef __CUDA_ARCH__
-                return x != x ? x : acosf(fminf(fmaxf(x, T(-1)), T(1))); // fmaxf drops NaN
+                return acosf(x);
 #else
-                return std::acos(clamp_value(x, T(-1), T(1)));
+                return std::acos(x);
 #endif
             }
         };

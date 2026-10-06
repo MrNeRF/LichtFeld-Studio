@@ -7,11 +7,15 @@
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
 #include "core/parameters.hpp"
+#include "core/point_cloud.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_upload.hpp"
 #include "cuda_backend_test.hpp"
 #include "io/cache_image_loader.hpp"
+#include "io/exporter.hpp"
+#include "io/filesystem_utils.hpp"
+#include "licht_test_support.hpp"
 #include "training/kernels/mask_preprocess.hpp"
 #include "training/metrics/eval_mask.hpp"
 #include "training/metrics/metrics.hpp"
@@ -637,4 +641,62 @@ TEST(CameraTensorAssignment, MoveAssignmentRebindsExistingTensorViews) {
     target = std::move(source);
 
     EXPECT_EQ(target_storage.to_vector(), std::vector<float>(4, 0.0f));
+}
+
+// Catches folder masks that miss the dataset name variants or diverge from the camera's own mask processing.
+TEST_F(MetricsEvalMask, FolderMaskMatchesSidecarProcessingAndNameVariants) {
+    ensure_image_loader();
+    UniqueTempDir tmp("lfs_eval_mask_folder");
+    const auto image_path = tmp.path() / "gt.png";
+    const auto sidecar_path = tmp.path() / "sidecar.png";
+    const auto folder = tmp.path() / "eval_masks";
+    std::filesystem::create_directories(folder);
+    write_rgb_png(image_path, kBandH, kBandW);
+    write_gray_png(sidecar_path, {kBandBytes.begin(), kBandBytes.end()}, kBandH, kBandW);
+    write_gray_png(folder / "gt.mask.png", {kBandBytes.begin(), kBandBytes.end()}, kBandH, kBandW);
+
+    auto cam = make_camera(image_path, sidecar_path, kBandW, kBandH);
+    const auto found = lfs::io::MaskDirCache::for_folder(folder).find(cam->image_name());
+    ASSERT_EQ(found, folder / "gt.mask.png");
+    EXPECT_TRUE(lfs::io::MaskDirCache::for_folder(tmp.path() / "missing").find(cam->image_name()).empty());
+
+    const auto from_folder = mask_bytes(cam->load_mask_file(found, -1, 0, false, 0.5f, true, false));
+    const auto from_sidecar = mask_bytes(cam->load_and_get_mask(-1, 0, false, 0.5f, true, false));
+    EXPECT_EQ(from_folder, from_sidecar);
+    const auto inverted = mask_bytes(cam->load_mask_file(found, -1, 0, true, 0.5f, true, false));
+    ASSERT_EQ(inverted.size(), from_sidecar.size());
+    for (size_t i = 0; i < inverted.size(); ++i)
+        EXPECT_EQ(inverted[i], 1 - from_sidecar[i]) << i;
+}
+
+// Catches a points file read in the wrong frame or with points lost: positions saved as a point cloud PLY and as a
+// splat PLY must come back unchanged except for the shift by the training origin.
+TEST_F(MetricsEvalMask, PointsFileLoadsPositionsInTheTrainingFrame) {
+    constexpr size_t count = 64;
+    std::vector<float> positions;
+    positions.reserve(count * 3);
+    for (size_t i = 0; i < count; ++i)
+        positions.insert(positions.end(), {0.1f * static_cast<float>(i), std::sin(0.3f * static_cast<float>(i)),
+                                           2.0f - 0.05f * static_cast<float>(i)});
+    const lfs::test::licht::TemporaryDirectory temp("lfs-eval-points-file");
+    const auto cloud_path = temp.path / "cloud.ply";
+    const lfs::core::PointCloud cloud(lfs::core::Tensor::from_vector(positions, {count, 3}, lfs::core::Device::CPU),
+                                      lfs::core::Tensor::zeros({count, 3}, lfs::core::Device::CPU,
+                                                               lfs::core::DataType::UInt8));
+    ASSERT_TRUE(lfs::io::save_ply(cloud, {.output_path = cloud_path}).has_value());
+    const auto splat = lfs::test::licht::make_splat(count);
+    const auto splat_path = temp.path / "splat.ply";
+    ASSERT_TRUE(lfs::io::save_ply(*splat, {.output_path = splat_path}).has_value());
+
+    const std::array<float, 3> origin{0.25f, -1.5f, 3.0f};
+    for (const auto& [path, expected] : {std::pair{cloud_path, positions},
+                                         std::pair{splat_path, splat->means().cpu().to_vector()}}) {
+        const auto means = lfs::training::load_evaluation_points(path, origin);
+        ASSERT_TRUE(means.has_value()) << means.error().detail();
+        ASSERT_EQ(means->shape()[0], count);
+        const auto actual = means->cpu().to_vector();
+        ASSERT_EQ(actual.size(), expected.size());
+        for (size_t i = 0; i < actual.size(); ++i)
+            ASSERT_NEAR(actual[i], expected[i] - origin[i % 3], 1e-5f) << path << " value " << i;
+    }
 }

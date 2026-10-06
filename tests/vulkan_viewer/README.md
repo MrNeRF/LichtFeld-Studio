@@ -11,7 +11,7 @@ miss the next batch's median. Expected depths are explicit, independent of any
 other renderer. The first regression expects 6; the pre-fix shader returns
 FAR_DEPTH (1e10).
 
-The 24 cases exercise:
+The 32 cases exercise:
 
 - 1,025 sources across the production 1,024-source batch boundary;
 - transmittance above, below and exactly at the inclusive 0.5 threshold;
@@ -20,6 +20,7 @@ The 24 cases exercise:
 - a one-pixel-wide edge tile, with a contributing source loaded by a lane whose
   own output pixel is outside the image;
 - FP32 state continuation across compose dispatches and partial-pool reuse;
+- sparse exact depth at frustum samples, including continuation across dispatches;
 - unchanged color composition when exact depth is requested, output guards,
   and resetting the same buffers for an empty frame.
 

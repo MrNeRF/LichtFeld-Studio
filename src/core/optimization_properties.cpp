@@ -688,17 +688,26 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.eval_space")
             .all_strategies()
             .string_prop(&OptimizationParameters::eval_mask,
-                         "eval_mask", "Evaluation Mesh", d.eval_mask,
-                         "Absolute mesh path used to select evaluated pixels")
+                         "eval_mask", "Evaluation Mask", d.eval_mask,
+                         "Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range, points or a splat); training is not affected")
             .locale("training_params.eval_mask")
             .tooltip("training.tooltip.eval_mask")
             .flags(PROP_NEEDS_RESTART)
             .all_strategies()
             .bool_prop(&OptimizationParameters::eval_mask_invert,
                        "eval_mask_invert", "Invert Evaluation Mask", d.eval_mask_invert,
-                       "Evaluate pixels outside the mesh coverage")
+                       "Scores the pixels outside the evaluation mask instead")
             .locale("training_params.eval_mask_invert")
             .tooltip("training.tooltip.eval_mask_invert")
+            .flags(PROP_NEEDS_RESTART)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::eval_mask_opacity,
+                        "eval_mask_opacity", "Splat Mask Opacity", d.eval_mask_opacity, 0.01f, 1.0f,
+                        "Rendered opacity a pixel needs to count as covered by a splat mask; lower widens the mask past the outline, higher pulls it in")
+            .locale("training_params.eval_mask_opacity")
+            .tooltip("training.tooltip.eval_mask_opacity")
+            .precision(2)
+            .ui_step(0.05)
             .flags(PROP_NEEDS_RESTART)
 
             // Random initialization

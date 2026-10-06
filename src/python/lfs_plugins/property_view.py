@@ -68,6 +68,7 @@ NUMBER_PROPS = (
     "sparsify_steps",
     "init_rho",
     "ppisp_controller_lr",
+    "eval_mask_opacity",
 )
 
 BOOL_PROPS = (
@@ -220,6 +221,11 @@ DATASET_RUNS = (
         "eval_mask_invert",
         visibility_condition_id="dep_eval_mask",
     ),
+    _run(
+        "dataset_eval_mask_opacity",
+        "eval_mask_opacity",
+        visibility_condition_id="dep_eval_mask_splat",
+    ),
 )
 
 OPTIMIZATION_RUNS = (
@@ -312,7 +318,7 @@ APPEARANCE_RUNS = _basic_runs(
     _run("appearance_tuning", "ppisp_lr", "ppisp_reg_weight", "ppisp_warmup_steps",
          visibility_condition_id="dep_ppisp_params"),
 )
-_EVALUATION_RUN_IDS = {"dataset_eval", "dataset_eval_train", "dataset_eval_space", "dataset_eval_mask_invert"}
+_EVALUATION_RUN_IDS = {"dataset_eval", "dataset_eval_train", "dataset_eval_space", "dataset_eval_mask_invert", "dataset_eval_mask_opacity"}
 EVALUATION_RUNS = tuple(run for run in DATASET_RUNS if run.id in _EVALUATION_RUN_IDS)
 DATASET_RUNS = tuple(run for run in DATASET_RUNS if run.id not in _EVALUATION_RUN_IDS)
 
