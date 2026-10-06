@@ -606,6 +606,39 @@ TEST(ArgumentParserTest, ExposureCorrectionDefaultsOnAndCanBeDisabled) {
     EXPECT_EQ((*parsed)->optimization.exposure_correction_grid_start_iter, 1000);
 }
 
+TEST(ArgumentParserTest, McmcStrategyDisablesExposureCorrectionUnlessExplicitlyEnabled) {
+    const auto data_path = make_test_path("lfs_arg_parser_mcmc_exposure_data");
+    const auto output_path = make_test_path("lfs_arg_parser_mcmc_exposure_output");
+    const std::vector<std::string> base_args = {
+        "LichtFeld-Studio", "--headless", "--data-path", data_path,
+        "--output-path", output_path, "--strategy", "mcmc"};
+
+    auto parse = [](const std::vector<std::string>& strings) {
+        std::vector<const char*> argv;
+        argv.reserve(strings.size());
+        for (const auto& arg : strings)
+            argv.push_back(arg.c_str());
+        return lfs::core::args::parse_args_and_params(
+            static_cast<int>(argv.size()), argv.data());
+    };
+
+    auto defaults = parse(base_args);
+    ASSERT_TRUE(defaults.has_value()) << defaults.error();
+    EXPECT_FALSE((*defaults)->optimization.use_exposure_correction);
+
+    auto explicit_on_args = base_args;
+    explicit_on_args.emplace_back("--exposure-correction");
+    auto explicit_on = parse(explicit_on_args);
+    ASSERT_TRUE(explicit_on.has_value()) << explicit_on.error();
+    EXPECT_TRUE((*explicit_on)->optimization.use_exposure_correction);
+
+    auto explicit_off_args = base_args;
+    explicit_off_args.emplace_back("--no-exposure-correction");
+    auto explicit_off = parse(explicit_off_args);
+    ASSERT_TRUE(explicit_off.has_value()) << explicit_off.error();
+    EXPECT_FALSE((*explicit_off)->optimization.use_exposure_correction);
+}
+
 TEST(ArgumentParserTest, NoPpispExifExposureDisablesSeed) {
     const auto data_path = make_test_path("lfs_arg_parser_ppisp_exif_data");
     const auto output_path = make_test_path("lfs_arg_parser_ppisp_exif_output");

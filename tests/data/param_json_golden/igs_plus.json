@@ -118,7 +118,7 @@
   "use_depth_loss": false,
   "use_edge_map": true,
   "use_error_map": true,
-  "use_exposure_correction": true,
+  "use_exposure_correction": false,
   "use_normal_loss": false,
   "use_ppisp": false
 }

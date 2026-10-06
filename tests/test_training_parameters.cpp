@@ -176,9 +176,19 @@ namespace {
     TEST_F(TrainingParametersTest, ResolvesMcmcFactorySentinels) {
         const auto defaults = OptimizationParameters::defaults_for_strategy("mcmc");
 
+        EXPECT_FALSE(defaults.use_exposure_correction);
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.025f);
         EXPECT_EQ(resolved<int>(defaults, "max_cap"), 1'000'000);
         EXPECT_EQ(resolved<size_t>(defaults, "refine_every"), 100u);
+    }
+
+    TEST_F(TrainingParametersTest, ExposureCorrectionIsEnabledOnlyByMrnfDefaults) {
+        EXPECT_FALSE(OptimizationParameters::defaults_for_strategy("mcmc").use_exposure_correction);
+        EXPECT_FALSE(OptimizationParameters::defaults_for_strategy("igs+").use_exposure_correction);
+        for (const auto strategy : {"mrnf", "mnrf", "lfs"}) {
+            EXPECT_TRUE(OptimizationParameters::defaults_for_strategy(strategy).use_exposure_correction)
+                << strategy;
+        }
     }
 
     // The IGS+ block pins its distinct override set, catching IGS+ factory drift and resolution
@@ -325,10 +335,10 @@ namespace {
 
     TEST_F(TrainingParametersTest, ExposureCorrectionJsonRoundTripAndConflicts) {
         auto params = OptimizationParameters::mcmc_defaults();
-        EXPECT_TRUE(params.use_exposure_correction);
+        EXPECT_FALSE(params.use_exposure_correction);
         EXPECT_EQ(params.exposure_correction_grid_start_iter, 1000);
-        EXPECT_TRUE(params.bilateral_grid_active());
-        EXPECT_TRUE(params.ppisp_active());
+        EXPECT_FALSE(params.bilateral_grid_active());
+        EXPECT_FALSE(params.ppisp_active());
         EXPECT_FALSE(params.use_bilateral_grid);
         EXPECT_FALSE(params.use_ppisp);
         EXPECT_TRUE(params.validate().empty());
@@ -394,6 +404,12 @@ namespace {
         auto mrnf_json = OptimizationParameters::mrnf_defaults().to_json();
         mrnf_json.erase("max_cap");
         EXPECT_EQ(OptimizationParameters::from_json(mrnf_json).max_cap, 5'000'000);
+
+        auto mcmc_json = OptimizationParameters::mcmc_defaults().to_json();
+        mcmc_json.erase("use_exposure_correction");
+        EXPECT_FALSE(OptimizationParameters::from_json(mcmc_json).use_exposure_correction);
+        mcmc_json["use_exposure_correction"] = true;
+        EXPECT_TRUE(OptimizationParameters::from_json(mcmc_json).use_exposure_correction);
 
         auto igs_json = OptimizationParameters::igs_plus_defaults().to_json();
         igs_json.erase("tv_loss_weight");

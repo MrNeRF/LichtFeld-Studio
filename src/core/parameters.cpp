@@ -1171,6 +1171,7 @@ namespace lfs::core {
         OptimizationParameters OptimizationParameters::mrnf_defaults() {
             auto p = OptimizationParameters{};
             p.strategy = std::string(kStrategyMRNF);
+            p.use_exposure_correction = true;
             p.refine_every = 200;
             p.start_refine = 0;
             p.stop_refine = 28'500;

@@ -110,10 +110,13 @@ namespace {
         EXPECT_EQ(manager.getDatasetConfig().max_width, 800);
         EXPECT_EQ(manager.getDatasetConfig().images, "images_4");
         EXPECT_FALSE(manager.getDatasetConfig().loading_params.use_cpu_memory);
-        std::ofstream(path) << lfs::core::param::OptimizationParameters::mcmc_defaults().to_json().dump();
+        auto mcmc_config = lfs::core::param::OptimizationParameters::mcmc_defaults();
+        mcmc_config.use_exposure_correction = true;
+        std::ofstream(path) << mcmc_config.to_json().dump();
         ASSERT_TRUE(manager.importConfigFile(path));
         EXPECT_EQ(manager.getDatasetConfig().max_width, 800);
         EXPECT_EQ(manager.getActiveStrategy(), "mcmc");
+        EXPECT_TRUE(manager.getActiveParams().use_exposure_correction);
         std::filesystem::remove(path);
     }
 
@@ -210,6 +213,27 @@ namespace {
         EXPECT_EQ(lfs::core::param::OptimizationParameters::mcmc_defaults().strategy, "mcmc");
     }
 
+    TEST(ParameterManagerTest, StrategySwitchUsesExposureCorrectionPresetAndKeepsSlotEdits) {
+        lfs::vis::ParameterManager manager;
+        ASSERT_TRUE(manager.ensureLoaded());
+
+        EXPECT_EQ(manager.getActiveStrategy(), "mrnf");
+        EXPECT_TRUE(manager.getActiveParams().use_exposure_correction);
+
+        manager.setActiveStrategy("mcmc");
+        EXPECT_FALSE(manager.getActiveParams().use_exposure_correction);
+        manager.getActiveParams().use_exposure_correction = true;
+        manager.setActiveStrategy("mrnf");
+        EXPECT_TRUE(manager.getActiveParams().use_exposure_correction);
+
+        manager.getActiveParams().use_exposure_correction = false;
+        manager.setActiveStrategy("mcmc");
+        EXPECT_TRUE(manager.getActiveParams().use_exposure_correction);
+        manager.getActiveParams().use_exposure_correction = false;
+        manager.setActiveStrategy("mrnf");
+        EXPECT_FALSE(manager.getActiveParams().use_exposure_correction);
+    }
+
     TEST(ParameterManagerTest, SessionCopyTracksExplicitSourcesAndResetBaseline) {
         lfs::vis::ParameterManager manager;
         const auto load_result = manager.ensureLoaded();
@@ -273,6 +297,7 @@ namespace {
         checkpoint_params.optimization.iterations = 600;
         checkpoint_params.optimization.max_cap = 123456;
         checkpoint_params.optimization.save_steps = {500};
+        checkpoint_params.optimization.use_exposure_correction = true;
         checkpoint_params.dataset.data_path = "/tmp/checkpoint_dataset";
         checkpoint_params.dataset.output_path = "/tmp/checkpoint_output";
         checkpoint_params.dataset.images = "images_4";
@@ -293,6 +318,7 @@ namespace {
         EXPECT_EQ(active.iterations, 600u);
         EXPECT_EQ(active.max_cap, 123456);
         EXPECT_EQ(active.save_steps, std::vector<size_t>({500}));
+        EXPECT_TRUE(active.use_exposure_correction);
 
         const auto& igs_params = manager.getCurrentParams("igs+");
         EXPECT_EQ(igs_params.iterations, 600u);
@@ -312,6 +338,7 @@ namespace {
         const auto recreated = manager.createForDataset("/tmp/override_dataset", "/tmp/override_output");
         EXPECT_EQ(recreated.optimization.strategy, "igs+");
         EXPECT_EQ(recreated.optimization.iterations, 600u);
+        EXPECT_TRUE(recreated.optimization.use_exposure_correction);
         EXPECT_EQ(recreated.dataset.data_path, "/tmp/override_dataset");
         EXPECT_EQ(recreated.dataset.output_path, "/tmp/override_output");
         EXPECT_EQ(recreated.dataset.images, "images_4");
