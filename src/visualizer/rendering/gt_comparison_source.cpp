@@ -867,6 +867,7 @@ namespace lfs::vis {
                 error.requested_bytes(),
                 error.what()));
         } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): fail_tile records the failure and reports it to the viewport and log.
             fail_tile(std::format(
                 "RGB GT comparison 1:1 tile failed: {}", error.what()));
         }

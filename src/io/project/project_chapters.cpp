@@ -2397,6 +2397,33 @@ namespace lfs::io::project {
             return value;
         }
 
+        lfs::Result<std::int32_t> calibration_dimension(
+            const Json& object, const std::string_view key, const std::string_view prefix) {
+            const std::string field = std::format("{}.{}", prefix, key);
+            const auto found = object.find(std::string(key));
+            if (found == object.end()) {
+                return fail<std::int32_t>(
+                    lfs::ErrorCode::DataLoss, "The project chapter is missing a required field.",
+                    std::format("SCNG.{} is missing", field), "SCNG", field);
+            }
+            constexpr auto maximum = std::numeric_limits<std::int32_t>::max();
+            // Check the JSON type and its full-width value before narrowing. JSON
+            // integers may be unsigned, including values beyond INT64_MAX.
+            if (found->is_number_unsigned()) {
+                const auto value = found->get<Json::number_unsigned_t>();
+                if (value >= 1 && value <= static_cast<Json::number_unsigned_t>(maximum))
+                    return static_cast<std::int32_t>(value);
+            } else if (found->is_number_integer()) {
+                const auto value = found->get<Json::number_integer_t>();
+                if (value >= 1 && value <= maximum)
+                    return static_cast<std::int32_t>(value);
+            }
+            return fail<std::int32_t>(
+                lfs::ErrorCode::DataLoss, "A saved camera calibration dimension is invalid.",
+                std::format("SCNG.{} must be an integer in [1, {}]", field, maximum),
+                "SCNG", field);
+        }
+
         lfs::Result<CameraCalibrationRecord> parse_camera_calibration(
             const Json& value, const std::string_view field) {
             if (auto valid = require_object(value, "SCNG", field); !valid) {
@@ -2406,8 +2433,8 @@ namespace lfs::io::project {
             auto focal_y = required<float>(value, "focal_y", "SCNG", field);
             auto center_x = required<float>(value, "center_x", "SCNG", field);
             auto center_y = required<float>(value, "center_y", "SCNG", field);
-            auto width = required<std::int32_t>(value, "width", "SCNG", field);
-            auto height = required<std::int32_t>(value, "height", "SCNG", field);
+            auto width = calibration_dimension(value, "width", field);
+            auto height = calibration_dimension(value, "height", field);
             if (auto error = first_error(
                     focal_x, focal_y, center_x, center_y, width, height)) {
                 return std::move(*error);

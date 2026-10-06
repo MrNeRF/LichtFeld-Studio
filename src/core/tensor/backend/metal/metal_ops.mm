@@ -2571,7 +2571,15 @@ namespace lfs::core::internal {
             int32_t width, height;
             PpispParams settings;
         };
-        static_assert(sizeof(PpispApplyParams) == 192);
+        static_assert(std::is_standard_layout_v<PpispApplyParams>);
+        static_assert(sizeof(PpispApplyParams) == 200);
+        static_assert(offsetof(PpispApplyParams, input) == 0);
+        static_assert(offsetof(PpispApplyParams, output) == 8);
+        static_assert(offsetof(PpispApplyParams, width) == 16);
+        static_assert(offsetof(PpispApplyParams, height) == 20);
+        static_assert(offsetof(PpispApplyParams, settings) == 24);
+        static_assert(offsetof(PpispApplyParams, settings) + offsetof(PpispParams, x_offset) == 192);
+        static_assert(offsetof(PpispApplyParams, settings) + offsetof(PpispParams, full_width) == 196);
         const auto context = acquire_context();
         const PpispApplyParams params{
             .input = address_of(*context, input),

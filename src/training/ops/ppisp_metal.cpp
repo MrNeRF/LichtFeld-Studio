@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <type_traits>
 #include <format>
 #include <stdexcept>
 
@@ -20,6 +22,23 @@ namespace lfs::training {
             uint64_t exposure, vignetting, color, crf, rgb_in, rgb_out;
             int32_t height, width, y_offset, full_height, camera_index, frame_index, x_offset, full_width;
         };
+
+        static_assert(std::is_standard_layout_v<ForwardParams>);
+        static_assert(sizeof(ForwardParams) == 80);
+        static_assert(offsetof(ForwardParams, exposure) == 0);
+        static_assert(offsetof(ForwardParams, vignetting) == 8);
+        static_assert(offsetof(ForwardParams, color) == 16);
+        static_assert(offsetof(ForwardParams, crf) == 24);
+        static_assert(offsetof(ForwardParams, rgb_in) == 32);
+        static_assert(offsetof(ForwardParams, rgb_out) == 40);
+        static_assert(offsetof(ForwardParams, height) == 48);
+        static_assert(offsetof(ForwardParams, width) == 52);
+        static_assert(offsetof(ForwardParams, y_offset) == 56);
+        static_assert(offsetof(ForwardParams, full_height) == 60);
+        static_assert(offsetof(ForwardParams, camera_index) == 64);
+        static_assert(offsetof(ForwardParams, frame_index) == 68);
+        static_assert(offsetof(ForwardParams, x_offset) == 72);
+        static_assert(offsetof(ForwardParams, full_width) == 76);
 
         void forward(const PPISPInputs& p, In rgb, Out corrected, const PPISPRegion& r) {
             const int height = static_cast<int>(rgb.shape()[1]);

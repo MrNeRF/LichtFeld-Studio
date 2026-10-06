@@ -11,6 +11,8 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -916,9 +918,40 @@ namespace {
             EXPECT_EQ(parsed.error().code(), lfs::ErrorCode::DataLoss);
         };
 
-        auto partial = baseline;
-        partial["nodes"][0]["camera"]["undistortion"]["source"].erase("width");
-        expect_data_loss(std::move(partial));
+        for (const auto* calibration : {"source", "destination"}) {
+            for (const auto* dimension : {"width", "height"}) {
+                const auto expect_dimension_error = [&](Json candidate) {
+                    const auto parsed = SceneGraphChapter::parse(candidate.dump());
+                    ASSERT_FALSE(parsed);
+                    EXPECT_EQ(parsed.error().code(), lfs::ErrorCode::DataLoss);
+                    EXPECT_NE(lfs::format_for_developer(parsed.error()).find(
+                                  std::string(calibration) + "." + dimension),
+                              std::string::npos);
+                };
+                for (const auto& invalid : std::vector<Json>{
+                         nullptr, false, true, 1.5, 1.0, 0, -1,
+                         std::int64_t{2147483648LL}, std::uint64_t{4294967297ULL},
+                         std::numeric_limits<std::int64_t>::max(),
+                         std::numeric_limits<std::uint64_t>::max()}) {
+                    SCOPED_TRACE(std::string(calibration) + "." + dimension + "=" + invalid.dump());
+                    auto candidate = baseline;
+                    candidate["nodes"][0]["camera"]["undistortion"][calibration][dimension] = invalid;
+                    expect_dimension_error(std::move(candidate));
+                }
+                auto missing = baseline;
+                missing["nodes"][0]["camera"]["undistortion"][calibration].erase(dimension);
+                expect_dimension_error(std::move(missing));
+                for (const auto valid : {std::int32_t{1}, std::numeric_limits<std::int32_t>::max()}) {
+                    auto candidate = baseline;
+                    auto& camera_json = candidate["nodes"][0]["camera"];
+                    camera_json["undistortion"][calibration][dimension] = valid;
+                    if (std::string_view(calibration) == "source")
+                        camera_json[std::string("camera_") + dimension] = valid;
+                    const auto parsed = SceneGraphChapter::parse(candidate.dump());
+                    EXPECT_TRUE(parsed) << (parsed ? "" : lfs::format_for_developer(parsed.error()));
+                }
+            }
+        }
 
         auto inconsistent = baseline;
         inconsistent["nodes"][0]["camera"]["focal_x"] = 734.125f;
