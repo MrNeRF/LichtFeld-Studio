@@ -805,6 +805,9 @@ namespace lfs::vis {
         };
 
         struct GTComparisonPreviewRequest {
+            ViewId owner = kNoView;
+            uint64_t cache_epoch = 0;
+            uint64_t calibration_revision = 0;
             uint64_t generation = 0;
             int camera_uid = -1;
             GTComparisonMode mode = GTComparisonMode::RGB;
@@ -821,6 +824,7 @@ namespace lfs::vis {
         };
 
         struct GTComparisonFullSourceRequest {
+            ViewId owner = kNoView;
             detail::GTComparisonSourceKey source_key;
             uint64_t generation = 0;
             std::chrono::steady_clock::time_point queued_at{};
@@ -899,6 +903,7 @@ namespace lfs::vis {
                                               int camera_uid,
                                               bool undistorted);
         void invalidateGTComparisonImageCache(ViewRenderState& view);
+        void syncGTComparisonViewSettings(ViewRenderState& view, const RenderSettings& settings);
         void invalidateGTComparisonActualSizeTile(ViewRenderState& view);
         void invalidateGTComparisonActualSizeResources(ViewRenderState& view, bool preserve_ready_source = false);
         void setGTComparisonActualSizeError(ViewRenderState& view, std::string error);
@@ -910,6 +915,13 @@ namespace lfs::vis {
             std::shared_ptr<lfs::core::Tensor> image,
             std::string error,
             std::chrono::steady_clock::time_point now);
+        // Called under the image mutex: immutable decode validity never follows promotion.
+        [[nodiscard]] bool gtPreviewDecodeValid(const GTComparisonPreviewRequest& request) const;
+        [[nodiscard]] bool gtPrefetchFits(const GTComparisonPreviewRequest& request,
+                                          std::size_t bytes, bool completing = false) const;
+        [[nodiscard]] ViewId completeGTComparisonImage(
+            const GTComparisonWorkerRequest& request, std::shared_ptr<lfs::core::Tensor> image,
+            std::string error, bool stopped);
         void gtComparisonImageWorkerLoop(std::stop_token stop_token);
         void releaseSceneRenderResources();
         void setupEventHandlers();
@@ -978,6 +990,7 @@ namespace lfs::vis {
         std::uint64_t gt_camera_index_generation_ = 0;
         std::vector<std::shared_ptr<lfs::core::Camera>> gt_camera_index_cameras_;
         std::unordered_map<int, std::size_t> gt_camera_index_by_uid_;
+        ViewId gt_comparison_cuda_owner_ = kNoView;
         std::shared_ptr<lfs::core::Tensor> gt_comparison_cuda_image_;
         const lfs::core::Tensor* gt_comparison_cuda_source_ = nullptr;
         std::uint64_t gt_comparison_cuda_generation_ = 0;
@@ -994,6 +1007,8 @@ namespace lfs::vis {
         FrameDemandLedger frame_demand_ledger_;
         std::vector<ViewId> ledger_views_;
         struct GTComparisonImageCacheEntry {
+            uint64_t cache_epoch = 0;
+            uint64_t calibration_revision = 0;
             int camera_uid = -1;
             GTComparisonMode mode = GTComparisonMode::RGB;
             bool undistort_requested = false;
@@ -1008,6 +1023,7 @@ namespace lfs::vis {
             std::chrono::steady_clock::time_point last_used{};
         };
         struct GTComparisonFullSourceSlot {
+            ViewId owner = kNoView;
             GTComparisonImageStatus status = GTComparisonImageStatus::Loading;
             detail::GTComparisonSourceKey source_key;
             uint64_t generation = 0;
@@ -1031,6 +1047,8 @@ namespace lfs::vis {
         std::optional<GTComparisonWorkerRequest> active_gt_comparison_worker_request_;
         bool active_gt_comparison_image_is_prefetch_ = false;
         std::deque<GTComparisonPreviewRequest> prefetch_gt_comparison_image_requests_;
+        uint64_t gt_comparison_cache_epoch_ = 0;
+        std::optional<GTComparisonPreviewRequest> displayed_gt_comparison_request_;
         uint64_t gt_comparison_preview_request_generation_ = 0;
         uint64_t gt_comparison_full_source_generation_ = 0;
         std::optional<GTComparisonFullSourceSlot> gt_comparison_full_source_slot_;
@@ -1077,6 +1095,7 @@ namespace lfs::vis {
         friend class RenderingManagerActualSizeFailureTest_KeyedCooldownRetainsFallbackAndAllowsRelevantChanges_Test;
         friend class RenderingManagerActualSizeFailureTest_PinholeUploadFailureRetriesAndReusesCache_Test;
         friend class RenderingManagerGTComparisonGenerationTest_SplitLeftGenerationRemainsMonotonicAcrossInvalidations_Test;
+        friend class RenderingManagerGTComparisonReviewTest;
         friend class SceneManager;
     };
 

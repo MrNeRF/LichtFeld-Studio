@@ -1014,6 +1014,174 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getGTComparisonCropOrigin(), glm::ivec2(0, 0));
     }
 
+    // The worker is stopped at the queue/decode/publication boundary so these
+    // tests control completion order without filesystem timing or sleeps.
+    class RenderingManagerGTComparisonReviewTest : public ::testing::Test {
+    protected:
+        screen::ScreenService views;
+        RenderingManager manager{views};
+        ViewId owner = views.activeView();
+        ViewId other = views.screen().split(screen::AreaId{owner}, screen::SplitAxis::Columns, 0.5f).value;
+        using Request = RenderingManager::GTComparisonPreviewRequest;
+        using Full = RenderingManager::GTComparisonFullSourceRequest;
+        using Status = RenderingManager::GTComparisonImageStatus;
+
+        void SetUp() override {
+            manager.gt_comparison_image_worker_.request_stop();
+            manager.gt_comparison_image_cv_.notify_all();
+            manager.gt_comparison_image_worker_.join();
+            manager.retainVisibleViews({owner, other});
+            manager.editViewSettings(owner, [](auto& s) { s.split_view_mode = SplitViewMode::GTComparison; });
+        }
+        auto image(glm::ivec2 size = {32, 24}) {
+            return std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::empty(
+                {3, static_cast<std::size_t>(size.y), static_cast<std::size_t>(size.x)},
+                lfs::core::Device::CPU, lfs::core::DataType::UInt8));
+        }
+        Request request(int uid, glm::ivec2 size = {32, 24}) {
+            return {.owner = owner, .camera_uid = uid, .image_path = std::to_string(uid) + ".png", .image_size = size};
+        }
+        Request beginForeground(Request request) {
+            (void)manager.getOrQueueGTComparisonImage(request);
+            auto result = *manager.pending_gt_comparison_image_request_;
+            manager.pending_gt_comparison_image_request_.reset();
+            manager.active_gt_comparison_worker_request_ = result;
+            manager.active_gt_comparison_image_is_prefetch_ = false;
+            return result;
+        }
+        Request beginPrefetch(Request request) {
+            manager.queueGTComparisonImagePrefetch(request);
+            EXPECT_FALSE(manager.prefetch_gt_comparison_image_requests_.empty());
+            if (manager.prefetch_gt_comparison_image_requests_.empty())
+                return {};
+            auto result = manager.prefetch_gt_comparison_image_requests_.back();
+            manager.prefetch_gt_comparison_image_requests_.pop_back();
+            manager.active_gt_comparison_worker_request_ = result;
+            manager.active_gt_comparison_image_is_prefetch_ = true;
+            return result;
+        }
+        void ownership() {
+            auto& a = manager.viewState(owner);
+            a.gt_comparison_actual_size_state_.crop = {{11, 7}, {32, 24}};
+            const auto source = image();
+            manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+                .owner = owner,
+                .status = Status::Ready,
+                .source_key = {.camera_uid = 0},
+                .cpu_source = source};
+            manager.gt_comparison_cuda_owner_ = owner;
+            manager.gt_comparison_cuda_image_ = source;
+            manager.invalidateGTComparisonActualSizeResources(manager.viewState(other));
+            ASSERT_TRUE(manager.gt_comparison_full_source_slot_);
+            EXPECT_EQ(manager.gt_comparison_full_source_slot_->cpu_source, source);
+            EXPECT_EQ(manager.gt_comparison_cuda_image_, source);
+            EXPECT_EQ(a.gt_comparison_actual_size_state_.crop.origin, glm::ivec2(11, 7));
+            manager.invalidateGTComparisonActualSizeTile(manager.viewState(other));
+            EXPECT_EQ(manager.gt_comparison_cuda_image_, source);
+            manager.dropViewStates();
+            EXPECT_FALSE(manager.gt_comparison_full_source_slot_);
+            EXPECT_FALSE(manager.gt_comparison_cuda_image_);
+        }
+        void cameraSwitch() {
+            manager.setCurrentCameraId(0);
+            (void)manager.getOrQueueGTComparisonFullSource({.owner = owner, .source_key = {.camera_uid = 0, .image_path = "0.png"}});
+            const auto old = *manager.pending_gt_comparison_full_source_request_;
+            manager.pending_gt_comparison_full_source_request_.reset();
+            manager.active_gt_comparison_worker_request_ = old;
+            manager.setCurrentCameraId(1);
+            EXPECT_EQ(manager.viewState(owner).gt_comparison_camera_uid_, 1);
+            EXPECT_EQ(manager.viewState(other).gt_comparison_camera_uid_, -1);
+            (void)manager.getOrQueueGTComparisonFullSource({.owner = owner, .source_key = {.camera_uid = 1, .image_path = "1.png"}});
+            EXPECT_EQ(manager.completeGTComparisonImage(old, image(), {}, false), kNoView);
+            ASSERT_TRUE(manager.gt_comparison_full_source_slot_);
+            EXPECT_EQ(manager.gt_comparison_full_source_slot_->status, Status::Loading);
+            EXPECT_EQ(manager.gt_comparison_full_source_slot_->source_key.camera_uid, 1);
+            const auto current = *manager.pending_gt_comparison_full_source_request_;
+            manager.pending_gt_comparison_full_source_request_.reset();
+            manager.active_gt_comparison_worker_request_ = current;
+            const auto pixels = image();
+            EXPECT_EQ(manager.completeGTComparisonImage(current, pixels, {}, false), owner);
+            EXPECT_EQ(manager.gt_comparison_full_source_slot_->cpu_source, pixels);
+            EXPECT_EQ(manager.gt_comparison_full_source_slot_->source_key.camera_uid, 1);
+            auto first = beginForeground(request(0));
+            auto second = request(1);
+            (void)manager.getOrQueueGTComparisonImage(second);
+            EXPECT_EQ(manager.completeGTComparisonImage(first, image(), {}, false), kNoView);
+            EXPECT_TRUE(manager.gt_comparison_image_cache_.empty());
+        }
+        void budget() {
+            auto foreground = beginForeground(request(0, {8193, 4321}));
+            auto displayed = image(foreground.image_size);
+            EXPECT_EQ(manager.completeGTComparisonImage(foreground, displayed, {}, false), owner);
+            manager.queueGTComparisonImagePrefetch(request(1, {8193, 4321}));
+            EXPECT_TRUE(manager.prefetch_gt_comparison_image_requests_.empty());
+            auto speculative = beginPrefetch(request(1, {1024, 1024}));
+            manager.queueGTComparisonImagePrefetch(request(2, {2048, 2048}));
+            manager.queueGTComparisonImagePrefetch(request(3, {2048, 2048}));
+            EXPECT_EQ(manager.prefetch_gt_comparison_image_requests_.size(), 1u);
+            // Admission changes while decode is in flight: the newly displayed
+            // image alone exceeds the budget. Completion must not evict it.
+            auto replacement = request(4, {8193, 8193});
+            (void)manager.getOrQueueGTComparisonImage(replacement);
+            replacement = *manager.pending_gt_comparison_image_request_;
+            auto replacement_image = image(replacement.image_size);
+            manager.insertGTComparisonImageCacheEntry(replacement, replacement_image, {}, std::chrono::steady_clock::now());
+            EXPECT_EQ(manager.completeGTComparisonImage(speculative, image(speculative.image_size), {}, false), kNoView);
+            ASSERT_EQ(manager.gt_comparison_image_cache_.size(), 1u);
+            EXPECT_EQ(manager.gt_comparison_image_cache_.front().image, replacement_image);
+            EXPECT_FALSE(manager.active_gt_comparison_worker_request_);
+        }
+        void immutableEpoch(bool promote) {
+            auto decoded = beginPrefetch(request(1));
+            if (promote) {
+                (void)manager.getOrQueueGTComparisonImage(request(1));
+                EXPECT_FALSE(manager.active_gt_comparison_image_is_prefetch_);
+            }
+            manager.invalidateGTComparisonImageCache(manager.viewState(owner));
+            (void)manager.getOrQueueGTComparisonImage(request(1));
+            ASSERT_TRUE(manager.pending_gt_comparison_image_request_);
+            EXPECT_NE(decoded.cache_epoch, manager.pending_gt_comparison_image_request_->cache_epoch);
+            EXPECT_EQ(manager.completeGTComparisonImage(decoded, image(), {}, false), kNoView);
+            EXPECT_TRUE(manager.gt_comparison_image_cache_.empty());
+            EXPECT_TRUE(manager.pending_gt_comparison_image_request_);
+        }
+        void calibration() {
+            using namespace lfs::core;
+            auto camera = std::make_shared<Camera>(Tensor::eye(3, Device::CPU),
+                                                   Tensor::zeros({3}, Device::CPU), 24.0f, 23.0f, 16.0f, 12.0f,
+                                                   Tensor(), Tensor(), CameraModelType::PINHOLE, "0.png", "0.png", std::filesystem::path{}, 32, 24, 0);
+            auto r = request(0);
+            r.camera = camera;
+            auto old = beginForeground(r);
+            camera->adopt_undistortion({});
+            EXPECT_EQ(manager.completeGTComparisonImage(old, image(), {}, false), kNoView);
+            EXPECT_TRUE(manager.gt_comparison_image_cache_.empty());
+            auto next = beginForeground(r);
+            EXPECT_NE(old.calibration_revision, next.calibration_revision);
+            EXPECT_EQ(manager.completeGTComparisonImage(next, image(), {}, false), owner);
+        }
+        void prefetchOnlyAndPromotion() {
+            auto speculative = beginPrefetch(request(1));
+            EXPECT_EQ(manager.completeGTComparisonImage(speculative, image(), {}, false), kNoView);
+            ASSERT_EQ(manager.gt_comparison_image_cache_.size(), 1u);
+            auto promoted = beginPrefetch(request(2));
+            (void)manager.getOrQueueGTComparisonImage(request(2));
+            EXPECT_EQ(manager.completeGTComparisonImage(promoted, image(), {}, false), owner);
+            ASSERT_EQ(manager.gt_comparison_image_cache_.size(), 2u);
+            auto cancelled = beginPrefetch(request(3));
+            EXPECT_EQ(manager.completeGTComparisonImage(cancelled, {}, "cancelled", true), kNoView);
+            EXPECT_FALSE(manager.active_gt_comparison_worker_request_);
+        }
+    };
+
+    TEST_F(RenderingManagerGTComparisonReviewTest, UnrelatedViewResetPreservesOwnerAndTeardownReleases) { ownership(); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, SameSizedCameraSwitchRejectsPreviousFitAndNativeCompletion) { cameraSwitch(); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, EightKAdmissionReservationsAndCompletionProtectDisplayedImage) { budget(); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, ObsoletePrefetchCannotBePromotedAcrossInvalidation) { immutableEpoch(false); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, PromotedPrefetchRetainsItsDecodeEpoch) { immutableEpoch(true); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, CalibrationRevisionRejectsDecodedOldPixels) { calibration(); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, CacheOnlyCompletionHasNoRedrawConsumer) { prefetchOnlyAndPromotion(); }
+
     TEST(RenderingManagerActualSizeCacheTest,
          RetainsReadySourceAcrossTogglesAndClearsOnContextChanges) {
         lfs::vis::screen::ScreenService manager_views;
@@ -1030,6 +1198,7 @@ namespace lfs::vis {
             {3, 8, 12}, lfs::core::Device::CPU, lfs::core::DataType::UInt8));
         const auto seed_source = [&] {
             manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+                .owner = manager.activeViewId(),
                 .status = RenderingManager::GTComparisonImageStatus::Ready,
                 .source_key = key,
                 .generation = manager.gt_comparison_full_source_generation_,
@@ -1093,6 +1262,7 @@ namespace lfs::vis {
         manager.updateSettings(settings);
         const detail::GTComparisonSourceKey key{.camera_uid = 17, .image_path = "frame.png"};
         manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+            .owner = manager.activeViewId(),
             .status = RenderingManager::GTComparisonImageStatus::Failed,
             .source_key = key,
             .generation = manager.gt_comparison_full_source_generation_,
@@ -1134,6 +1304,7 @@ namespace lfs::vis {
         const auto source = std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::empty(
             {3, 8, 12}, lfs::core::Device::CPU, lfs::core::DataType::UInt8));
         manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+            .owner = manager.activeViewId(),
             .status = RenderingManager::GTComparisonImageStatus::Ready,
             .source_key = key,
             .generation = manager.gt_comparison_full_source_generation_,
@@ -1319,6 +1490,7 @@ namespace lfs::vis {
         const auto fallback = std::make_shared<Tensor>(
             Tensor::zeros({3, 6, 8}, Device::CPU, DataType::UInt8));
         manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+            .owner = manager.activeViewId(),
             .status = RenderingManager::GTComparisonImageStatus::Ready,
             .source_key = source_key,
             .generation = manager.gt_comparison_full_source_generation_,

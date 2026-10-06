@@ -225,6 +225,7 @@ namespace lfs::vis {
         view.framebuffer_viewport_rect_ = {.top_left = top_left, .size = size};
         // Same settings bookkeeping as the Vulkan manager: a settings change
         // re-renders the view, and the stale-view check compares against it.
+        syncGTComparisonViewSettings(view, context.settings);
         if (!view.rendered_settings || view.rendered_settings->view() != context.settings.view() ||
             view.rendered_settings->scene() != context.settings.scene()) {
             view.dirty_mask_.fetch_or(DirtyFlag::ALL);
@@ -370,7 +371,7 @@ namespace lfs::vis {
             .cursor_preview = view.viewport_overlay_service_.cursorPreview(),
             .gizmo = gizmo_state_,
             .hovered_camera_id = camera_interaction_service_.hoveredCameraId(),
-            .current_camera_id = camera_interaction_service_.currentCameraId(),
+            .current_camera_id = view.gt_comparison_camera_uid_ >= 0 ? view.gt_comparison_camera_uid_ : camera_interaction_service_.currentCameraId(),
             .hovered_gaussian_id = view.viewport_overlay_service_.hoveredGaussianId(),
             .selection_flash_intensity = view.animation_state_.selectionFlashIntensity(),
             .scene_jitter_pixels = temporal_setup.jitter_pixels,
@@ -696,7 +697,7 @@ namespace lfs::vis {
             GTComparisonImageLookup lookup;
             GTComparisonActualFrame actual_frame;
             const bool actual_requested = frame_settings.gt_comparison_actual_size &&
-                detail::isGTComparisonActualSizeAvailable(*camera, gt_mode);
+                                          detail::isGTComparisonActualSizeAvailable(*camera, gt_mode);
             if (actual_requested) {
                 actual_frame = prepareGTActualFrame(view, *camera, size, nullptr);
                 lookup.status = actual_frame.status;
@@ -707,16 +708,7 @@ namespace lfs::vis {
                     camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
                     camera->is_undistort_precomputed() &&
                     (rgb_reference || !camera->is_undistort_prepared());
-                lookup = getOrQueueGTComparisonImage({.camera_uid = camera->uid(),
-                                                      .mode = gt_mode,
-                                                      .image_path = reference_path,
-                                                      .preview_max_dimension = std::max(gt_size.x, gt_size.y),
-                                                      .image_size = gt_size,
-                                                      .undistort_requested = undistort,
-                                                      .undistort_params = undistort ? camera->undistort_params() : lfs::core::UndistortParams{},
-                                                      .depth_visualization_mode = frame_settings.depth_visualization_mode,
-                                                      .background_color = frame_settings.background_color,
-                                                      .camera = camera});
+                lookup = getOrQueueGTComparisonImage({.owner = view.id, .camera_uid = camera->uid(), .mode = gt_mode, .image_path = reference_path, .preview_max_dimension = std::max(gt_size.x, gt_size.y), .image_size = gt_size, .undistort_requested = undistort, .undistort_params = undistort ? camera->undistort_params() : lfs::core::UndistortParams{}, .depth_visualization_mode = frame_settings.depth_visualization_mode, .background_color = frame_settings.background_color, .camera = camera});
                 if (lookup.status == GTComparisonImageStatus::Loading)
                     markViewDirty(context.view, DirtyFlag::SPLIT_VIEW, FrameReason::SettingsChange);
             } else {
@@ -758,8 +750,7 @@ namespace lfs::vis {
                 lfs::core::PpispRegion region;
                 if (actual_frame.pixel_region) {
                     const auto& pixels = *actual_frame.pixel_region;
-                    region = {.x_offset = pixels.origin.x, .y_offset = pixels.origin.y,
-                              .full_width = pixels.full_extent.x, .full_height = pixels.full_extent.y};
+                    region = {.x_offset = pixels.origin.x, .y_offset = pixels.origin.y, .full_width = pixels.full_extent.x, .full_height = pixels.full_extent.y};
                 }
                 compare = applyViewportAppearanceCorrection(
                     std::move(compare), context.scene_manager, frame_settings, camera->uid(), region);

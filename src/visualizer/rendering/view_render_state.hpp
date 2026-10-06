@@ -116,6 +116,7 @@ namespace lfs::vis {
         bool vulkan_viewport_image_flip_y_ = false;
         glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
         std::optional<GTPresentedView> vulkan_gt_comparison_selection_view_;
+        int gt_comparison_camera_uid_ = -1;
         GTComparisonActualSizeState gt_comparison_actual_size_state_;
         std::optional<GTComparisonActualFrameSnapshot> gt_comparison_published_actual_frame_;
         std::uint64_t gt_async_depth_ticket_ = 0;

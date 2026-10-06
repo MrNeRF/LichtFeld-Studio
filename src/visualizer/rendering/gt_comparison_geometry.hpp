@@ -17,6 +17,7 @@ namespace lfs::vis::detail {
     struct GTComparisonSourceKey {
         int camera_uid = -1;
         std::filesystem::path image_path;
+        std::uint64_t calibration_revision = 0;
 
         friend bool operator==(const GTComparisonSourceKey&,
                                const GTComparisonSourceKey&) = default;

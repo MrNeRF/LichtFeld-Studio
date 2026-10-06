@@ -219,7 +219,7 @@ namespace lfs::vis {
             const VulkanSplitViewParams& params) {
             return {
                 .loss_visualization = params.loss_visualization,
-                    .exact_texel_sampling = params.exact_texel_sampling,
+                .exact_texel_sampling = params.exact_texel_sampling,
                 .left = cpuPanelDesc(params.left),
                 .right = cpuPanelDesc(params.right),
                 .split_position = params.split_position,
@@ -536,6 +536,7 @@ namespace lfs::vis {
         };
 
         release_inactive_split_outputs();
+        syncGTComparisonViewSettings(view_state, context.settings);
         if (!view_state.rendered_settings || view_state.rendered_settings->view() != context.settings.view() || view_state.rendered_settings->scene() != context.settings.scene()) {
             view_state.dirty_mask_.fetch_or(DirtyFlag::ALL);
             view_state.rendered_settings = context.settings;
@@ -1383,7 +1384,7 @@ namespace lfs::vis {
             .cursor_preview = view_state.viewport_overlay_service_.cursorPreview(),
             .gizmo = gizmo_state_,
             .hovered_camera_id = camera_interaction_service_.hoveredCameraId(),
-            .current_camera_id = camera_interaction_service_.currentCameraId(),
+            .current_camera_id = view_state.gt_comparison_camera_uid_ >= 0 ? view_state.gt_comparison_camera_uid_ : camera_interaction_service_.currentCameraId(),
             .hovered_gaussian_id = view_state.viewport_overlay_service_.hoveredGaussianId(),
             .selection_flash_intensity = view_state.animation_state_.selectionFlashIntensity(),
             .view_panels = {},
@@ -1955,18 +1956,7 @@ namespace lfs::vis {
                                 // that transient size on the shared camera; training uses image
                                 // dimensions as its raster target and may run concurrently.
                                 const auto lookup = getOrQueueGTComparisonImage(
-                                    {.camera_uid = camera->uid(),
-                                     .mode = gt_mode,
-                                     .image_path = camera->image_path(),
-                                     .preview_max_dimension = preview_max_dimension,
-                                     .image_size = preview_gt_size,
-                                     .undistort_requested = undistort_requested,
-                                     .undistort_params = undistort_requested
-                                                             ? camera->undistort_params()
-                                                             : lfs::core::UndistortParams{},
-                                     .depth_visualization_mode = frame_settings.depth_visualization_mode,
-                                     .background_color = frame_settings.background_color,
-                                     .camera = camera});
+                                    {.owner = view_state.id, .camera_uid = camera->uid(), .mode = gt_mode, .image_path = camera->image_path(), .preview_max_dimension = preview_max_dimension, .image_size = preview_gt_size, .undistort_requested = undistort_requested, .undistort_params = undistort_requested ? camera->undistort_params() : lfs::core::UndistortParams{}, .depth_visualization_mode = frame_settings.depth_visualization_mode, .background_color = frame_settings.background_color, .camera = camera});
                                 gt_image = lookup.image;
                                 if (lookup.status == GTComparisonImageStatus::Loading) {
                                     markDirty(DirtyFlag::SPLIT_VIEW, FrameReason::AsyncCompletion);
@@ -2007,19 +1997,7 @@ namespace lfs::vis {
                                                     lfs::core::CameraModelType::EQUIRECTANGULAR &&
                                                 neighbor->is_undistort_precomputed();
                                             queueGTComparisonImagePrefetch(
-                                                {.camera_uid = neighbor->uid(),
-                                                 .mode = gt_mode,
-                                                 .image_path = neighbor->image_path(),
-                                                 .preview_max_dimension =
-                                                     std::max(neighbor_size.x, neighbor_size.y),
-                                                 .image_size = neighbor_size,
-                                                 .undistort_requested = neighbor_undistort,
-                                                 .undistort_params = neighbor_undistort
-                                                                         ? neighbor->undistort_params()
-                                                                         : lfs::core::UndistortParams{},
-                                                 .depth_visualization_mode = frame_settings.depth_visualization_mode,
-                                                 .background_color = frame_settings.background_color,
-                                                 .camera = neighbor});
+                                                {.owner = view_state.id, .camera_uid = neighbor->uid(), .mode = gt_mode, .image_path = neighbor->image_path(), .preview_max_dimension = std::max(neighbor_size.x, neighbor_size.y), .image_size = neighbor_size, .undistort_requested = neighbor_undistort, .undistort_params = neighbor_undistort ? neighbor->undistort_params() : lfs::core::UndistortParams{}, .depth_visualization_mode = frame_settings.depth_visualization_mode, .background_color = frame_settings.background_color, .camera = neighbor});
                                             break;
                                         }
                                     };
@@ -2035,18 +2013,7 @@ namespace lfs::vis {
                             const bool undistort_requested =
                                 camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
                                 camera->is_undistort_precomputed() && !camera->is_undistort_prepared();
-                            const auto lookup = getOrQueueGTComparisonImage({.camera_uid = camera->uid(),
-                                                                             .mode = gt_mode,
-                                                                             .image_path = camera->depth_path(),
-                                                                             .preview_max_dimension = preview_max_dimension,
-                                                                             .image_size = preview_gt_size,
-                                                                             .undistort_requested = undistort_requested,
-                                                                             .undistort_params = undistort_requested
-                                                                                                     ? camera->undistort_params()
-                                                                                                     : lfs::core::UndistortParams{},
-                                                                             .depth_visualization_mode = frame_settings.depth_visualization_mode,
-                                                                             .background_color = frame_settings.background_color,
-                                                                             .camera = camera});
+                            const auto lookup = getOrQueueGTComparisonImage({.owner = view_state.id, .camera_uid = camera->uid(), .mode = gt_mode, .image_path = camera->depth_path(), .preview_max_dimension = preview_max_dimension, .image_size = preview_gt_size, .undistort_requested = undistort_requested, .undistort_params = undistort_requested ? camera->undistort_params() : lfs::core::UndistortParams{}, .depth_visualization_mode = frame_settings.depth_visualization_mode, .background_color = frame_settings.background_color, .camera = camera});
                             gt_image = lookup.image;
                             if (lookup.status == GTComparisonImageStatus::Loading) {
                                 markViewDirty(context.view, DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);
@@ -2068,16 +2035,7 @@ namespace lfs::vis {
                             const bool undistort_requested =
                                 camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
                                 camera->is_undistort_precomputed() && !camera->is_undistort_prepared();
-                            const auto lookup = getOrQueueGTComparisonImage({.camera_uid = camera->uid(),
-                                                                             .mode = gt_mode,
-                                                                             .image_path = camera->normal_path(),
-                                                                             .preview_max_dimension = preview_max_dimension,
-                                                                             .image_size = preview_gt_size,
-                                                                             .undistort_requested = undistort_requested,
-                                                                             .undistort_params = undistort_requested
-                                                                                                     ? camera->undistort_params()
-                                                                                                     : lfs::core::UndistortParams{},
-                                                                             .camera = camera});
+                            const auto lookup = getOrQueueGTComparisonImage({.owner = view_state.id, .camera_uid = camera->uid(), .mode = gt_mode, .image_path = camera->normal_path(), .preview_max_dimension = preview_max_dimension, .image_size = preview_gt_size, .undistort_requested = undistort_requested, .undistort_params = undistort_requested ? camera->undistort_params() : lfs::core::UndistortParams{}, .camera = camera});
                             gt_image = lookup.image;
                             if (lookup.status == GTComparisonImageStatus::Loading) {
                                 markViewDirty(context.view, DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);

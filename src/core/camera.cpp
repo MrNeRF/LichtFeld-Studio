@@ -259,6 +259,7 @@ namespace lfs::core {
           _undistort_precomputed(other._undistort_precomputed),
           _undistort_prepared(other._undistort_prepared),
           _undistort_params(other._undistort_params),
+          _calibration_revision(other.calibration_revision()),
           _stream(other._stream),
           _sfm_observations(std::move(other._sfm_observations)),
           _sfm_observation_source(std::move(other._sfm_observation_source)),
@@ -327,6 +328,7 @@ namespace lfs::core {
             _undistort_precomputed = other._undistort_precomputed;
             _undistort_prepared = other._undistort_prepared;
             _undistort_params = other._undistort_params;
+            ++_calibration_revision;
             _sfm_observations = std::move(other._sfm_observations);
             _sfm_observation_source = std::move(other._sfm_observation_source);
             _sfm_observation_node = other._sfm_observation_node;
@@ -373,7 +375,8 @@ namespace lfs::core {
           _FoVy(other._FoVy),
           _undistort_precomputed(other._undistort_precomputed),
           _undistort_prepared(other._undistort_prepared),
-          _undistort_params(other._undistort_params) {
+          _undistort_params(other._undistort_params),
+          _calibration_revision(other.calibration_revision()) {
         _world_view_transform = transform;
         _sfm_observations = other._sfm_observations;
         _sfm_observation_source = other._sfm_observation_source;
@@ -978,6 +981,7 @@ namespace lfs::core {
     void Camera::adopt_undistortion(const UndistortParams& params) noexcept {
         _undistort_params = params;
         _undistort_precomputed = true;
+        ++_calibration_revision;
     }
 
     void Camera::prepare_undistortion(float blank_pixels) {
@@ -997,6 +1001,7 @@ namespace lfs::core {
         _FoVx = focal2fov(_focal_x, _camera_width);
         _FoVy = focal2fov(_focal_y, _camera_height);
         _undistort_prepared = true;
+        ++_calibration_revision;
     }
 
     void Camera::restore_undistortion_state(
@@ -1045,6 +1050,7 @@ namespace lfs::core {
         _FoVx = focal2fov(_focal_x, _camera_width);
         _FoVy = focal2fov(_focal_y, _camera_height);
         _undistort_prepared = prepared;
+        ++_calibration_revision;
     }
 
     void Camera::translate(const Tensor& trans) {

@@ -464,8 +464,10 @@ namespace lfs::vis {
 
     void RenderingManager::dropViewStates() {
         std::lock_guard lock(views_mutex_);
-        for (auto& [id, view] : view_states_)
+        for (auto& [id, view] : view_states_) {
+            invalidateGTComparisonActualSizeResources(*view);
             retired_view_states_.push_back(std::move(view));
+        }
         view_states_.clear();
         depth_window_epochs_.clear();
         ++view_lifetime_epoch_;
@@ -486,6 +488,7 @@ namespace lfs::vis {
         for (auto it = view_states_.begin(); it != view_states_.end();) {
             if (now - it->second->last_visible > std::chrono::milliseconds(300)) {
                 depth_window_epochs_[it->first] = {it->second->depth_window_mode_epoch_, it->second->depth_window_projection_generation_};
+                invalidateGTComparisonActualSizeResources(*it->second);
                 retired_view_states_.push_back(std::move(it->second));
                 it = view_states_.erase(it);
             } else
@@ -700,13 +703,20 @@ namespace lfs::vis {
     void RenderingManager::setCurrentCameraId(const int cam_id) {
         const bool changed = camera_interaction_service_.currentCameraId() != cam_id;
         camera_interaction_service_.setCurrentCameraId(cam_id);
-        if (changed) {
+        if (changed)
             invalidateCameraMetricsRequests(true);
-            std::lock_guard lock(views_mutex_);
-            for (auto& [id, view] : view_states_)
+        std::lock_guard lock(views_mutex_);
+        for (auto& [id, view] : view_states_) {
+            const auto settings = view_source_.viewSettings(id);
+            if (!settings || !splitViewUsesGTComparison(settings->split_view_mode))
+                continue;
+            if (view->gt_comparison_camera_uid_ != cam_id) {
+                view->gt_comparison_camera_uid_ = cam_id;
                 invalidateGTComparisonActualSizeResources(*view);
+                clearPublishedGTComparisonActualFrame(*view);
+            }
+            markViewDirty(id, DirtyFlag::SPLIT_VIEW | DirtyFlag::PPISP, FrameReason::SettingsChange);
         }
-        markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::PPISP, FrameReason::SettingsChange);
     }
 
     bool RenderingManager::isGTComparisonActualSizeAvailable(
@@ -983,11 +993,11 @@ namespace lfs::vis {
             return;
         if (view.scene_reconstruction_request_logged_)
             LOG_INFO("Scene reconstruction request: {}/{} -> {}/{} (input_scale={:.4f})",
-                view.last_scene_reconstruction_backend_, view.last_scene_reconstruction_preset_,
-                settings.scene_upscaler, settings.scene_upscaler_preset, settings.scene_upscaler_scale);
+                     view.last_scene_reconstruction_backend_, view.last_scene_reconstruction_preset_,
+                     settings.scene_upscaler, settings.scene_upscaler_preset, settings.scene_upscaler_scale);
         else
             LOG_INFO("Scene reconstruction initial request: {}/{} (input_scale={:.4f})",
-                settings.scene_upscaler, settings.scene_upscaler_preset, settings.scene_upscaler_scale);
+                     settings.scene_upscaler, settings.scene_upscaler_preset, settings.scene_upscaler_scale);
         view.scene_reconstruction_request_logged_ = true;
         view.last_scene_reconstruction_backend_ = settings.scene_upscaler;
         view.last_scene_reconstruction_preset_ = settings.scene_upscaler_preset;
@@ -1009,8 +1019,8 @@ namespace lfs::vis {
         // the convergence sequence as CAMERA would.
         if (changed) {
             LOG_INFO("Scene reconstruction effective: {} -> {} (fallback={})",
-                sceneUpscalerBackendId(selection.requested), sceneUpscalerBackendId(selection.effective),
-                sceneUpscalerFallbackId(selection.fallback));
+                     sceneUpscalerBackendId(selection.requested), sceneUpscalerBackendId(selection.effective),
+                     sceneUpscalerFallbackId(selection.fallback));
             auto& generation = app_store().scene_upscaler_generation;
             generation.set(generation.get() + 1);
             markViewDirty(id, DirtyFlag::TEMPORAL, lfs::vis::FrameReason::SceneChange);

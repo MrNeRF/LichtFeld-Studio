@@ -131,7 +131,9 @@ namespace lfs::vis {
     bool RenderingManager::gtRequestMatches(
         const GTComparisonPreviewRequest& lhs,
         const GTComparisonPreviewRequest& rhs) {
-        return lhs.camera_uid == rhs.camera_uid &&
+        return lhs.cache_epoch == rhs.cache_epoch &&
+               lhs.calibration_revision == rhs.calibration_revision &&
+               lhs.camera_uid == rhs.camera_uid &&
                lhs.mode == rhs.mode &&
                lhs.image_path == rhs.image_path &&
                lhs.image_size == rhs.image_size &&
@@ -143,7 +145,9 @@ namespace lfs::vis {
     bool RenderingManager::gtCacheEntryMatches(
         const GTComparisonImageCacheEntry& entry,
         const GTComparisonPreviewRequest& request) {
-        return entry.camera_uid == request.camera_uid &&
+        return entry.cache_epoch == request.cache_epoch &&
+               entry.calibration_revision == request.calibration_revision &&
+               entry.camera_uid == request.camera_uid &&
                entry.mode == request.mode &&
                entry.image_path == request.image_path &&
                entry.image_size == request.image_size &&
@@ -169,6 +173,8 @@ namespace lfs::vis {
             gt_comparison_image_cache_bytes_ -=
                 entry->image && entry->image->is_valid() ? entry->image->bytes() : 0;
             *entry = {
+                .cache_epoch = request.cache_epoch,
+                .calibration_revision = request.calibration_revision,
                 .camera_uid = request.camera_uid,
                 .mode = request.mode,
                 .undistort_requested = request.undistort_requested,
@@ -181,7 +187,9 @@ namespace lfs::vis {
                 .failure_time = image_valid ? std::chrono::steady_clock::time_point{} : now,
                 .last_used = now};
         } else {
-            gt_comparison_image_cache_.push_back({.camera_uid = request.camera_uid,
+            gt_comparison_image_cache_.push_back({.cache_epoch = request.cache_epoch,
+                                                  .calibration_revision = request.calibration_revision,
+                                                  .camera_uid = request.camera_uid,
                                                   .mode = request.mode,
                                                   .undistort_requested = request.undistort_requested,
                                                   .image_path = request.image_path,
@@ -197,14 +205,19 @@ namespace lfs::vis {
 
         while (gt_comparison_image_cache_.size() > GT_COMPARISON_IMAGE_CACHE_MAX_ENTRIES ||
                gt_comparison_image_cache_bytes_ > GT_COMPARISON_IMAGE_CACHE_MAX_BYTES) {
-            const auto lru = std::min_element(
-                gt_comparison_image_cache_.begin(), gt_comparison_image_cache_.end(),
-                [](const auto& lhs, const auto& rhs) {
-                    return lhs.last_used < rhs.last_used;
-                });
-            if (lru == gt_comparison_image_cache_.end()) {
-                break;
+            auto lru = gt_comparison_image_cache_.end();
+            for (auto candidate = gt_comparison_image_cache_.begin();
+                 candidate != gt_comparison_image_cache_.end(); ++candidate) {
+                if (displayed_gt_comparison_request_ &&
+                    gtCacheEntryMatches(*candidate, *displayed_gt_comparison_request_))
+                    continue;
+                if (lru == gt_comparison_image_cache_.end() || candidate->last_used < lru->last_used)
+                    lru = candidate;
             }
+            // A foreground image can exceed the speculative budget by itself.
+            // It remains visible; speculative work is refused until it fits.
+            if (lru == gt_comparison_image_cache_.end())
+                break;
             gt_comparison_image_cache_bytes_ -=
                 lru->image && lru->image->is_valid() ? lru->image->bytes() : 0;
             gt_comparison_image_cache_.erase(lru);
@@ -222,6 +235,10 @@ namespace lfs::vis {
             .image_path = request.image_path};
         {
             std::lock_guard lock(gt_comparison_image_mutex_);
+            request.owner = request.owner == kNoView ? activeViewId() : request.owner;
+            request.cache_epoch = gt_comparison_cache_epoch_;
+            request.calibration_revision = request.camera ? request.camera->calibration_revision() : request.calibration_revision;
+            displayed_gt_comparison_request_ = request;
             auto cache_entry = std::find_if(
                 gt_comparison_image_cache_.begin(), gt_comparison_image_cache_.end(),
                 [&request](const auto& entry) {
@@ -257,6 +274,7 @@ namespace lfs::vis {
                  active->generation != gt_comparison_preview_request_generation_)) {
                 active_gt_comparison_image_is_prefetch_ = false;
                 active->generation = ++gt_comparison_preview_request_generation_;
+                active->owner = request.owner;
                 pending_gt_comparison_image_request_.reset();
             }
             const bool active_current =
@@ -274,7 +292,9 @@ namespace lfs::vis {
                         return gtRequestMatches(candidate, request);
                     });
                 if (prefetched != prefetch_gt_comparison_image_requests_.end()) {
+                    const auto owner = request.owner;
                     request = std::move(*prefetched);
+                    request.owner = owner;
                     prefetch_gt_comparison_image_requests_.erase(prefetched);
                 }
                 request.generation = ++gt_comparison_preview_request_generation_;
@@ -336,7 +356,9 @@ namespace lfs::vis {
         const auto now = std::chrono::steady_clock::now();
         {
             std::lock_guard lock(gt_comparison_image_mutex_);
+            request.owner = request.owner == kNoView ? activeViewId() : request.owner;
             if (gt_comparison_full_source_slot_ &&
+                gt_comparison_full_source_slot_->owner == request.owner &&
                 gt_comparison_full_source_slot_->source_key == request.source_key) {
                 auto& slot = *gt_comparison_full_source_slot_;
                 result.status = slot.status;
@@ -358,6 +380,7 @@ namespace lfs::vis {
             prefetch_gt_comparison_image_requests_.clear();
             released_source = std::move(gt_comparison_full_source_slot_);
             gt_comparison_full_source_slot_ = GTComparisonFullSourceSlot{
+                .owner = request.owner,
                 .status = GTComparisonImageStatus::Loading,
                 .source_key = request.source_key,
                 .generation = request.generation};
@@ -376,6 +399,9 @@ namespace lfs::vis {
         bool queued = false;
         {
             std::lock_guard lock(gt_comparison_image_mutex_);
+            request.owner = request.owner == kNoView ? activeViewId() : request.owner;
+            request.cache_epoch = gt_comparison_cache_epoch_;
+            request.calibration_revision = request.camera ? request.camera->calibration_revision() : request.calibration_revision;
             const bool in_cache = std::any_of(
                 gt_comparison_image_cache_.begin(), gt_comparison_image_cache_.end(),
                 [&request](const auto& entry) {
@@ -395,12 +421,10 @@ namespace lfs::vis {
                     [&request](const auto& candidate) {
                         return gtRequestMatches(candidate, request);
                     });
-            if (!in_cache && !already_queued) {
+            if (!in_cache && !already_queued &&
+                prefetch_gt_comparison_image_requests_.size() < GT_COMPARISON_IMAGE_PREFETCH_MAX_ENTRIES &&
+                gtPrefetchFits(request, gt_comparison_detail::previewBytes(request.image_size))) {
                 request.queued_at = std::chrono::steady_clock::now();
-                if (prefetch_gt_comparison_image_requests_.size() >=
-                    GT_COMPARISON_IMAGE_PREFETCH_MAX_ENTRIES) {
-                    prefetch_gt_comparison_image_requests_.pop_front();
-                }
                 prefetch_gt_comparison_image_requests_.push_back(std::move(request));
                 queued = true;
             }
@@ -421,6 +445,8 @@ namespace lfs::vis {
         std::optional<GTComparisonFullSourceSlot> released_full_source;
         {
             std::lock_guard lock(gt_comparison_image_mutex_);
+            ++gt_comparison_cache_epoch_;
+            displayed_gt_comparison_request_.reset();
             ++gt_comparison_preview_request_generation_;
             ++gt_comparison_full_source_generation_;
             gt_comparison_image_cache_.clear();
@@ -463,7 +489,8 @@ namespace lfs::vis {
         if (image->device() == lfs::core::Device::GPU) {
             return image;
         }
-        if (gt_comparison_cuda_image_ && gt_comparison_cuda_source_ == image.get() &&
+        if (gt_comparison_cuda_owner_ == view.id &&
+            gt_comparison_cuda_image_ && gt_comparison_cuda_source_ == image.get() &&
             gt_comparison_cuda_generation_ == view.split_left_image_generation_ &&
             gt_comparison_cuda_camera_uid_ == camera_uid && gt_comparison_cuda_size_ == size &&
             gt_comparison_cuda_undistorted_ == undistorted) {
@@ -474,6 +501,7 @@ namespace lfs::vis {
             LOG_WARN("{} produced a non-GPU tensor; falling back to the external image path", label);
             return {};
         }
+        gt_comparison_cuda_owner_ = view.id;
         gt_comparison_cuda_source_ = image.get();
         gt_comparison_cuda_generation_ = view.split_left_image_generation_;
         gt_comparison_cuda_camera_uid_ = camera_uid;
@@ -505,14 +533,34 @@ namespace lfs::vis {
             (view.split_left_image_generation_ + 1) | SPLIT_LEFT_GENERATION_BIT;
     }
 
+    void RenderingManager::syncGTComparisonViewSettings(ViewRenderState& view, const RenderSettings& settings) {
+        const bool rgb_comparison = splitViewUsesGTComparison(settings.split_view_mode) &&
+                                    settings.gt_comparison_mode == GTComparisonMode::RGB;
+        if (view.rendered_settings) {
+            const auto& previous = *view.rendered_settings;
+            if (previous.gt_comparison_actual_size != settings.gt_comparison_actual_size ||
+                (splitViewUsesGTComparison(previous.split_view_mode) && !rgb_comparison)) {
+                invalidateGTComparisonActualSizeResources(view, rgb_comparison);
+                clearPublishedGTComparisonActualFrame(view);
+            }
+        }
+        if (!splitViewUsesGTComparison(settings.split_view_mode))
+            view.gt_comparison_camera_uid_ = -1;
+        else if (view.gt_comparison_camera_uid_ < 0)
+            view.gt_comparison_camera_uid_ = camera_interaction_service_.currentCameraId();
+    }
+
     void RenderingManager::invalidateGTComparisonActualSizeTile(ViewRenderState& view) {
         view.gt_comparison_actual_size_state_.invalidateTile();
-        gt_comparison_cuda_image_.reset();
-        gt_comparison_cuda_source_ = nullptr;
-        gt_comparison_cuda_generation_ = 0;
-        gt_comparison_cuda_camera_uid_ = -1;
-        gt_comparison_cuda_size_ = {0, 0};
-        gt_comparison_cuda_undistorted_ = false;
+        if (gt_comparison_cuda_owner_ == view.id) {
+            gt_comparison_cuda_image_.reset();
+            gt_comparison_cuda_source_ = nullptr;
+            gt_comparison_cuda_generation_ = 0;
+            gt_comparison_cuda_camera_uid_ = -1;
+            gt_comparison_cuda_size_ = {0, 0};
+            gt_comparison_cuda_undistorted_ = false;
+            gt_comparison_cuda_owner_ = kNoView;
+        }
         view.split_left_source_ = nullptr;
         view.split_left_source_size_ = {0, 0};
         view.split_left_source_camera_uid_ = -1;
@@ -523,29 +571,31 @@ namespace lfs::vis {
         std::optional<GTComparisonFullSourceSlot> released_full_source;
         {
             std::lock_guard lock(gt_comparison_image_mutex_);
-            const bool keep_source = preserve_ready_source && gt_comparison_full_source_slot_ &&
+            const bool owns_source = gt_comparison_full_source_slot_ &&
+                                     gt_comparison_full_source_slot_->owner == view.id;
+            const bool keep_source = preserve_ready_source && owns_source &&
                                      gt_comparison_full_source_slot_->status == GTComparisonImageStatus::Ready &&
                                      gt_comparison_full_source_slot_->cpu_source &&
                                      gt_comparison_full_source_slot_->cpu_source->is_valid();
-            if (!keep_source) {
+            if (owns_source && !keep_source) {
                 ++gt_comparison_full_source_generation_;
                 released_full_source = std::exchange(gt_comparison_full_source_slot_, std::nullopt);
             }
-            pending_gt_comparison_full_source_request_.reset();
-            prefetch_gt_comparison_image_requests_.clear();
+            if (pending_gt_comparison_full_source_request_ &&
+                pending_gt_comparison_full_source_request_->owner == view.id)
+                pending_gt_comparison_full_source_request_.reset();
+            std::erase_if(prefetch_gt_comparison_image_requests_,
+                          [&](const auto& request) { return request.owner == view.id; });
+            if (!preserve_ready_source && displayed_gt_comparison_request_ &&
+                displayed_gt_comparison_request_->owner == view.id) {
+                ++gt_comparison_preview_request_generation_;
+                displayed_gt_comparison_request_.reset();
+                pending_gt_comparison_image_request_.reset();
+            }
         }
         setGTComparisonActualSizeError(view, {});
+        invalidateGTComparisonActualSizeTile(view);
         view.gt_comparison_actual_size_state_.reset();
-        gt_comparison_cuda_image_.reset();
-        gt_comparison_cuda_source_ = nullptr;
-        gt_comparison_cuda_generation_ = 0;
-        gt_comparison_cuda_camera_uid_ = -1;
-        gt_comparison_cuda_size_ = {0, 0};
-        gt_comparison_cuda_undistorted_ = false;
-        view.split_left_source_ = nullptr;
-        view.split_left_source_size_ = {0, 0};
-        view.split_left_source_camera_uid_ = -1;
-        view.split_left_source_undistorted_ = false;
     }
 
     void RenderingManager::retryGTComparisonActualSize() {
@@ -559,6 +609,7 @@ namespace lfs::vis {
         {
             std::lock_guard lock(gt_comparison_image_mutex_);
             if (gt_comparison_full_source_slot_ &&
+                gt_comparison_full_source_slot_->owner == view.id &&
                 gt_comparison_full_source_slot_->status == GTComparisonImageStatus::Failed) {
                 released_source = std::exchange(gt_comparison_full_source_slot_, std::nullopt);
             }
@@ -632,7 +683,8 @@ namespace lfs::vis {
         };
         const detail::GTComparisonSourceKey source_key{
             .camera_uid = camera.uid(),
-            .image_path = camera.image_path()};
+            .image_path = camera.image_path(),
+            .calibration_revision = camera.calibration_revision()};
 
         if (view.gt_comparison_actual_size_state_.source_key != source_key) {
             const auto requested_at = view.gt_comparison_actual_size_state_.requested_at;
@@ -686,7 +738,7 @@ namespace lfs::vis {
             }
         }
 
-        const auto lookup = getOrQueueGTComparisonFullSource({.source_key = source_key});
+        const auto lookup = getOrQueueGTComparisonFullSource({.owner = view.id, .source_key = source_key});
         frame.status = lookup.status;
         frame.error = lookup.error;
         auto& state = view.gt_comparison_actual_size_state_;
@@ -874,6 +926,99 @@ namespace lfs::vis {
         return frame;
     }
 
+    bool RenderingManager::gtPreviewDecodeValid(const GTComparisonPreviewRequest& request) const {
+        return request.cache_epoch == gt_comparison_cache_epoch_ &&
+               (!request.camera || request.calibration_revision == request.camera->calibration_revision());
+    }
+
+    bool RenderingManager::gtPrefetchFits(const GTComparisonPreviewRequest& request,
+                                          const std::size_t bytes, const bool completing) const {
+        std::size_t reserved = 0;
+        std::size_t entries = gt_comparison_image_cache_.size();
+        const auto reserve = [&](const std::size_t amount) {
+            if (!gt_comparison_detail::prefetchFits(reserved, gt_comparison_image_cache_bytes_,
+                                                    amount, GT_COMPARISON_IMAGE_CACHE_MAX_BYTES))
+                return false;
+            reserved += amount;
+            ++entries;
+            return true;
+        };
+        if (displayed_gt_comparison_request_ &&
+            std::none_of(gt_comparison_image_cache_.begin(), gt_comparison_image_cache_.end(),
+                         [&](const auto& entry) { return gtCacheEntryMatches(entry, *displayed_gt_comparison_request_); }) &&
+            !reserve(gt_comparison_detail::previewBytes(displayed_gt_comparison_request_->image_size)))
+            return false;
+        for (const auto& pending : prefetch_gt_comparison_image_requests_) {
+            if (gtPreviewDecodeValid(pending) && !reserve(gt_comparison_detail::previewBytes(pending.image_size)))
+                return false;
+        }
+        const auto* active = active_gt_comparison_worker_request_
+                                 ? std::get_if<GTComparisonPreviewRequest>(&*active_gt_comparison_worker_request_)
+                                 : nullptr;
+        if (active && active_gt_comparison_image_is_prefetch_ && gtPreviewDecodeValid(*active) &&
+            !(completing && gtRequestMatches(*active, request)) &&
+            !reserve(gt_comparison_detail::previewBytes(active->image_size)))
+            return false;
+        return entries < GT_COMPARISON_IMAGE_CACHE_MAX_ENTRIES &&
+               gt_comparison_detail::prefetchFits(gt_comparison_image_cache_bytes_, reserved,
+                                                  bytes, GT_COMPARISON_IMAGE_CACHE_MAX_BYTES);
+    }
+
+    ViewId RenderingManager::completeGTComparisonImage(
+        const GTComparisonWorkerRequest& request, std::shared_ptr<lfs::core::Tensor> image,
+        std::string error, const bool stopped) {
+        std::lock_guard lock(gt_comparison_image_mutex_);
+        ViewId consumer = kNoView;
+        if (const auto* full = std::get_if<GTComparisonFullSourceRequest>(&request)) {
+            const auto* active = active_gt_comparison_worker_request_
+                                     ? std::get_if<GTComparisonFullSourceRequest>(&*active_gt_comparison_worker_request_)
+                                     : nullptr;
+            const bool matches = active && active->owner == full->owner &&
+                                 active->source_key == full->source_key && active->generation == full->generation;
+            if (!stopped && matches && full->generation == gt_comparison_full_source_generation_ &&
+                gt_comparison_full_source_slot_ && gt_comparison_full_source_slot_->owner == full->owner &&
+                gt_comparison_full_source_slot_->source_key == full->source_key &&
+                gt_comparison_full_source_slot_->generation == full->generation) {
+                auto& slot = *gt_comparison_full_source_slot_;
+                slot.status = image && image->is_valid() ? GTComparisonImageStatus::Ready : GTComparisonImageStatus::Failed;
+                slot.cpu_source = std::move(image);
+                slot.error = std::move(error);
+                slot.failure_time = slot.status == GTComparisonImageStatus::Failed
+                                        ? std::chrono::steady_clock::now()
+                                        : std::chrono::steady_clock::time_point{};
+                consumer = full->owner;
+            }
+            if (matches) {
+                active_gt_comparison_worker_request_.reset();
+                active_gt_comparison_image_is_prefetch_ = false;
+            }
+        } else {
+            const auto& preview = std::get<GTComparisonPreviewRequest>(request);
+            const auto* active = active_gt_comparison_worker_request_
+                                     ? std::get_if<GTComparisonPreviewRequest>(&*active_gt_comparison_worker_request_)
+                                     : nullptr;
+            const bool matches = active && gtRequestMatches(*active, preview);
+            const bool prefetch = active_gt_comparison_image_is_prefetch_;
+            const bool current = matches && (prefetch || active->generation == gt_comparison_preview_request_generation_);
+            const auto bytes = image && image->is_valid() ? image->bytes() : 0;
+            if (!stopped && current && gtPreviewDecodeValid(preview) &&
+                (!prefetch || gtPrefetchFits(preview, bytes, true))) {
+                insertGTComparisonImageCacheEntry(preview, std::move(image), std::move(error), std::chrono::steady_clock::now());
+                if (displayed_gt_comparison_request_ && gtRequestMatches(*displayed_gt_comparison_request_, preview)) {
+                    consumer = displayed_gt_comparison_request_->owner;
+                    if (pending_gt_comparison_image_request_ && gtRequestMatches(*pending_gt_comparison_image_request_, preview))
+                        pending_gt_comparison_image_request_.reset();
+                }
+            }
+            // This releases the active reservation on success, rejection, cancellation and failure.
+            if (matches) {
+                active_gt_comparison_worker_request_.reset();
+                active_gt_comparison_image_is_prefetch_ = false;
+            }
+        }
+        return consumer;
+    }
+
     void RenderingManager::gtComparisonImageWorkerLoop(
         const std::stop_token stop_token) {
         while (true) {
@@ -944,18 +1089,39 @@ namespace lfs::vis {
                 try {
                     lfs::core::Tensor gt_tensor;
                     if (preview.mode == GTComparisonMode::RGB) {
-                        auto [pixels, width, height, channels] = lfs::core::load_image(
-                            preview.image_path, -1, preview.preview_max_dimension);
-                        const std::unique_ptr<unsigned char, decltype(&lfs::core::free_image)> owner(
-                            pixels, &lfs::core::free_image);
-                        if (pixels && width > 0 && height > 0 && channels > 0) {
-                            gt_tensor = lfs::core::Tensor::from_blob(
-                                            pixels,
-                                            {static_cast<size_t>(height), static_cast<size_t>(width),
-                                             static_cast<size_t>(channels)},
-                                            lfs::core::Device::CPU, lfs::core::DataType::UInt8)
-                                            .permute({2, 0, 1})
-                                            .clone();
+                        std::shared_ptr<lfs::core::Tensor> retained;
+                        {
+                            std::lock_guard lock(gt_comparison_image_mutex_);
+                            if (gt_comparison_full_source_slot_ &&
+                                gt_comparison_full_source_slot_->owner == preview.owner &&
+                                gt_comparison_full_source_slot_->status == GTComparisonImageStatus::Ready &&
+                                gt_comparison_full_source_slot_->source_key == detail::GTComparisonSourceKey{
+                                                                                   .camera_uid = preview.camera_uid,
+                                                                                   .image_path = preview.image_path,
+                                                                                   .calibration_revision = preview.calibration_revision})
+                                retained = gt_comparison_full_source_slot_->cpu_source;
+                        }
+                        if (retained) {
+                            const double scale = std::min(1.0, static_cast<double>(preview.preview_max_dimension) /
+                                                                   std::max(retained->size(1), retained->size(2)));
+                            auto resized = resizePreview(retained, {std::max(1, static_cast<int>(std::lround(retained->size(2) * scale))),
+                                                                    std::max(1, static_cast<int>(std::lround(retained->size(1) * scale)))});
+                            if (resized)
+                                gt_tensor = *resized;
+                        } else {
+                            auto [pixels, width, height, channels] = lfs::core::load_image(
+                                preview.image_path, -1, preview.preview_max_dimension);
+                            const std::unique_ptr<unsigned char, decltype(&lfs::core::free_image)> owner(
+                                pixels, &lfs::core::free_image);
+                            if (pixels && width > 0 && height > 0 && channels > 0) {
+                                gt_tensor = lfs::core::Tensor::from_blob(
+                                                pixels,
+                                                {static_cast<size_t>(height), static_cast<size_t>(width),
+                                                 static_cast<size_t>(channels)},
+                                                lfs::core::Device::CPU, lfs::core::DataType::UInt8)
+                                                .permute({2, 0, 1})
+                                                .clone();
+                            }
                         }
                     }
                     if (preview.mode == GTComparisonMode::RGB) {
@@ -1053,89 +1219,11 @@ namespace lfs::vis {
                 }
             }
 
-            bool applied = false;
-            {
-                std::lock_guard lock(gt_comparison_image_mutex_);
-                if (const auto* completed_full =
-                        std::get_if<GTComparisonFullSourceRequest>(&request)) {
-                    const auto* active_full =
-                        active_gt_comparison_worker_request_
-                            ? std::get_if<GTComparisonFullSourceRequest>(
-                                  &*active_gt_comparison_worker_request_)
-                            : nullptr;
-                    const bool active_matches =
-                        active_full &&
-                        active_full->source_key == completed_full->source_key &&
-                        active_full->generation == completed_full->generation;
-                    const bool current =
-                        active_matches &&
-                        completed_full->generation ==
-                            gt_comparison_full_source_generation_ &&
-                        gt_comparison_full_source_slot_ &&
-                        gt_comparison_full_source_slot_->source_key ==
-                            completed_full->source_key &&
-                        gt_comparison_full_source_slot_->generation ==
-                            completed_full->generation;
-                    if (!stop_token.stop_requested() && current) {
-                        auto& slot = *gt_comparison_full_source_slot_;
-                        slot.status =
-                            image && image->is_valid()
-                                ? GTComparisonImageStatus::Ready
-                                : GTComparisonImageStatus::Failed;
-                        slot.cpu_source = std::move(image);
-                        slot.error = std::move(error);
-                        slot.failure_time =
-                            slot.status == GTComparisonImageStatus::Failed
-                                ? std::chrono::steady_clock::now()
-                                : std::chrono::steady_clock::time_point{};
-                        applied = true;
-                    }
-                    if (active_matches) {
-                        active_gt_comparison_worker_request_.reset();
-                        active_gt_comparison_image_is_prefetch_ = false;
-                    }
-                } else {
-                    const auto& completed_preview =
-                        std::get<GTComparisonPreviewRequest>(request);
-                    auto* active_preview =
-                        active_gt_comparison_worker_request_
-                            ? std::get_if<GTComparisonPreviewRequest>(
-                                  &*active_gt_comparison_worker_request_)
-                            : nullptr;
-                    const bool active_matches =
-                        active_preview &&
-                        gtRequestMatches(*active_preview, completed_preview);
-                    const bool completed_as_prefetch =
-                        active_gt_comparison_image_is_prefetch_;
-                    const bool current =
-                        active_matches &&
-                        (completed_as_prefetch ||
-                         active_preview->generation ==
-                             gt_comparison_preview_request_generation_);
-                    if (!stop_token.stop_requested() && current) {
-                        insertGTComparisonImageCacheEntry(
-                            completed_preview,
-                            std::move(image),
-                            std::move(error),
-                            std::chrono::steady_clock::now());
-                        if (completed_as_prefetch &&
-                            pending_gt_comparison_image_request_ &&
-                            gtRequestMatches(
-                                *pending_gt_comparison_image_request_,
-                                completed_preview)) {
-                            pending_gt_comparison_image_request_.reset();
-                        }
-                        applied = true;
-                    }
-                    if (active_matches) {
-                        active_gt_comparison_worker_request_.reset();
-                        active_gt_comparison_image_is_prefetch_ = false;
-                    }
-                }
-            }
-
-            if (applied) {
-                markDirty(DirtyFlag::SPLIT_VIEW, FrameReason::AsyncCompletion);
+            const auto consumer = completeGTComparisonImage(request, std::move(image), std::move(error), stop_token.stop_requested());
+            if (consumer != kNoView) {
+                std::lock_guard lock(views_mutex_);
+                if (view_states_.contains(consumer))
+                    markViewDirty(consumer, DirtyFlag::SPLIT_VIEW, FrameReason::AsyncCompletion);
             }
         }
     }
