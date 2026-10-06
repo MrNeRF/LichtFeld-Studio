@@ -626,6 +626,8 @@ def test_strategy_applicability_filters_auto_rows_and_search(lf):
     auto_mrnf_only = known_mrnf_only - {"grow_until_iter"}
     for prop_id in known_mrnf_only:
         assert properties[prop_id]["strategies"] == ["mrnf"]
+    # all_strategies() omits the strategy restriction from group_info.
+    assert properties["gradient_loss_weight"].get("strategies", []) == []
 
     params = {
         "strategy": "mcmc",
@@ -648,7 +650,9 @@ def test_strategy_applicability_filters_auto_rows_and_search(lf):
     assert not ({record["id"] for record in binding._records()} & auto_mrnf_only)
     assert "min_opacity" in {record["id"] for record in binding._records()}
     query["value"] = "edge"
-    assert binding._records() == []
+    mcmc_edge_ids = [record["id"] for record in binding._records()]
+    assert mcmc_edge_ids == ["gradient_loss_weight"]
+    assert "use_edge_map" not in mcmc_edge_ids
 
     params["strategy"] = "mnrf"
     query["value"] = ""
@@ -657,7 +661,10 @@ def test_strategy_applicability_filters_auto_rows_and_search(lf):
     }
     assert "min_opacity" not in {record["id"] for record in binding._records()}
     query["value"] = "edge"
-    assert [record["id"] for record in binding._records()] == ["use_edge_map"]
+    assert [record["id"] for record in binding._records()] == [
+        "gradient_loss_weight",
+        "use_edge_map",
+    ]
 
     curated = property_view.SectionBinding(
         "curated_strategy_filter",

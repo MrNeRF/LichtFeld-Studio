@@ -37,7 +37,9 @@ class TestOptimizationParams:
         assert params.means_lr >= 0
 
         assert isinstance(params.shs_lr, float)
-        assert params.shs_lr >= 0
+        assert params.shs_lr >= 0 or (
+            params.strategy in {"mrnf", "mnrf", "lfs"} and params.shs_lr == -1.0
+        )
 
         assert isinstance(params.opacity_lr, float)
         assert params.opacity_lr >= 0
