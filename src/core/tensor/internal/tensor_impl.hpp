@@ -2061,6 +2061,7 @@ namespace lfs::core {
             return slice(std::span<const std::pair<int, int>>(ranges));
         }
         Tensor slice(size_t dim, size_t start, size_t end) const;
+        Tensor slice(size_t dim, size_t start, size_t end, size_t step) const;
 
         Tensor cat(const Tensor& other, int dim = 0) const;
 

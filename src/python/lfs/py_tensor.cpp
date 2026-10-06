@@ -774,11 +774,12 @@ namespace lfs::python {
                              .squeeze(static_cast<int>(current_dim));
             } else {
                 const auto info = parse_slice(nb::cast<nb::slice>(item), result.shape()[current_dim]);
-                if (info.step != 1) {
-                    throw std::runtime_error("Step != 1 not yet supported");
+                if (info.step < 0) {
+                    throw nb::value_error("negative slice steps are not supported by Tensor indexing");
                 }
                 result = result.slice(current_dim, static_cast<size_t>(info.start),
-                                      static_cast<size_t>(info.stop));
+                                      static_cast<size_t>(info.stop),
+                                      static_cast<size_t>(info.step));
                 ++current_dim;
             }
         }
