@@ -7,7 +7,7 @@ import pytest
 OPERATIONS = ["sum", "prod", "min", "max", "mean", "std", "var", "argmin", "argmax", "all", "any"]
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
 @pytest.mark.parametrize("shape", [(4,), (2, 3), (2, 2, 2)])
 @pytest.mark.parametrize("operation", OPERATIONS)
 def test_global_reduction_keepdim(lf, numpy, device, shape, operation):
@@ -25,7 +25,7 @@ def test_global_reduction_keepdim(lf, numpy, device, shape, operation):
     numpy.testing.assert_allclose(reduced.numpy(), expected.reshape(()), rtol=1e-5, atol=1e-6)
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
 @pytest.mark.parametrize("operation", OPERATIONS)
 def test_global_keepdim_on_noncontiguous_input(lf, numpy, device, operation):
     array = numpy.arange(6, dtype=numpy.float32).reshape(2, 3)
@@ -38,7 +38,7 @@ def test_global_keepdim_on_noncontiguous_input(lf, numpy, device, operation):
     numpy.testing.assert_allclose(result.numpy(), expected, rtol=1e-5, atol=1e-6)
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
 def test_scalar_global_keepdim_retains_rank_zero(lf, device):
     tensor = lf.Tensor.full((), 2, device=device)
     for operation in ("sum", "mean", "min", "max", "prod", "argmin", "argmax", "all", "any"):
