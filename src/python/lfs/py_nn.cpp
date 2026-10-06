@@ -6,6 +6,7 @@
 
 #include "core/nn/models/romav1.hpp"
 #include "core/nn/models/sam2.hpp"
+#include "core/nn/ops.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "preprocessing/preprocess.hpp"
@@ -358,6 +359,8 @@ namespace lfs::python {
                 model_.reset();
             }
 
+            [[nodiscard]] size_t weights_bytes() const { return model_ ? model_->weights_bytes() : 0; }
+
             [[nodiscard]] int resolution() const { return resolution_; }
             [[nodiscard]] bool is_loaded() const { return model_ != nullptr; }
 
@@ -381,6 +384,13 @@ namespace lfs::python {
     } // namespace
 
     void register_nn(nb::module_& m) {
+        m.def("softmax", [](const PyTensor& input, const std::optional<PyTensor>& mask) { return PyTensor(core::nn::softmax(input.tensor(), mask ? &mask->tensor() : nullptr)); }, nb::arg("input"), nb::arg("mask") = nb::none(), "Softmax over the last dimension with an optional broadcastable additive mask");
+        m.def("silu", [](const PyTensor& input) { return PyTensor(core::nn::silu(input.tensor())); }, nb::arg("input"), "SiLU activation: x * sigmoid(x)");
+        m.def("rms_norm", [](const PyTensor& input, const PyTensor& weight, float eps) { return PyTensor(core::nn::rms_norm(input.tensor(), weight.tensor(), eps)); }, nb::arg("input"), nb::arg("weight"), nb::arg("eps") = 1e-6f, "RMS normalization over the last dimension followed by channel weights");
+        m.def("residual_scale", [](const PyTensor& x, const PyTensor& hidden, const PyTensor& gamma) { return PyTensor(core::nn::residual_scale(x.tensor(), hidden.tensor(), gamma.tensor())); }, nb::arg("x"), nb::arg("hidden"), nb::arg("gamma"), "Compute x + hidden * gamma with gamma broadcast over the last dimension");
+        m.def("window_partition", [](const PyTensor& input, int window_size) { return PyTensor(core::nn::window_partition(input.tensor(), window_size)); }, nb::arg("input"), nb::arg("window_size"), "Partition [B,H,N,d] into [B*n_windows,H,window_size,d], zero-padding N");
+        m.def("window_unpartition", [](const PyTensor& windows, int window_size, int original_n) { return PyTensor(core::nn::window_unpartition(windows.tensor(), window_size, original_n)); }, nb::arg("windows"), nb::arg("window_size"), nb::arg("original_n"), "Restore [B,H,N,d] from 1D windows and crop padding to original_n");
+
         nb::class_<PySam2>(m, "Sam2", "SAM 2.1 image predictor")
             .def(nb::init<std::optional<std::filesystem::path>>(),
                  nb::arg("weights") = nb::none(),
@@ -418,6 +428,8 @@ namespace lfs::python {
                  "lichtfeld tensors (warp [R,R,4] of (x_a, y_a, x_b, y_b), certainty [R,R]).")
             .def("close", &PyRomaV1::close,
                  "Release the weights and their device memory. The next call reloads them.")
+            .def_prop_ro("weights_bytes", &PyRomaV1::weights_bytes,
+                         "Resident weight bytes, or zero before loading and after close.")
             .def_prop_ro("resolution", &PyRomaV1::resolution,
                          "Working resolution of the matcher (square, in pixels).")
             .def_prop_ro("is_loaded", &PyRomaV1::is_loaded,

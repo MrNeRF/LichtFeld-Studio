@@ -1,0 +1,124 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+#pragma once
+
+#include "core/tensor_completion.hpp"
+#include "core/tensor_upload.hpp"
+#include "visualizer/nodes/modifier_manager.hpp"
+
+#include <array>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+
+namespace lfs::vis {
+
+    struct ModifierObjectSnapshot {
+        core::Uuid uuid;
+        std::string name;
+        core::NodeType type = core::NodeType::SPLAT;
+        glm::mat4 world{1.0f};
+        std::shared_ptr<const core::SplatData> splats;
+        std::shared_ptr<const core::PointCloud> points;
+        std::shared_ptr<const core::MeshData> mesh;
+        ModifierStack stack;
+    };
+
+    struct ModifierEvaluationRequest {
+        std::uint64_t generation = 0;
+        std::uint64_t source_generation = 0;
+        float seconds = 0.0f;
+        float frames_per_second = 24.0f;
+        std::vector<ModifierObjectSnapshot> objects;
+        std::vector<lfs::nodes::EvaluationCamera> cameras;
+        std::unordered_map<std::string, nlohmann::json> trees;
+        std::vector<core::Uuid> targets;
+        std::shared_ptr<core::TensorCompletion> inputs_ready;
+        // Renderer storage for published splats; CUDA tensors must live there to be drawn.
+        core::SplatTensorAllocator splat_allocator;
+        std::chrono::steady_clock::time_point requested_at;
+        bool bake = false;
+        std::optional<NodePreviewState> preview;
+    };
+
+    struct ModifierHostResult {
+        core::Uuid uuid;
+        ModifierEvaluation evaluation;
+        std::shared_ptr<core::SplatData> splats;
+        std::shared_ptr<core::PointCloud> points;
+        std::shared_ptr<core::MeshData> mesh;
+        std::unordered_map<std::string, core::Tensor> previews;
+        bool enabled = false;
+        std::uint64_t output_key = 0;
+        std::optional<float> preview_min;
+        std::optional<float> preview_max;
+        std::string preview_key;
+    };
+
+    struct ModifierWorkerResult {
+        std::uint64_t generation = 0;
+        std::unordered_map<core::Uuid, ModifierHostResult> hosts;
+        std::shared_ptr<core::TensorFence> ready;
+        bool cancelled = false;
+        std::chrono::steady_clock::time_point requested_at;
+    };
+
+    // A single queue owner. Only immutable captures cross into the worker; only
+    // fence-complete results cross back. Live Scene and DOM are never accessed.
+    // Renderer-ready tensors last published for the attributes that were still the source object's
+    // own tensors (means, sh0, shN, scaling, rotation, opacity), so an edit that leaves an attribute
+    // untouched republishes it without a copy, pack or encode.
+    struct ModifierPublishedAttributes {
+        std::array<core::Tensor, 6> source;
+        std::array<core::Tensor, 6> published;
+        core::Tensor shN_bounds;
+    };
+
+    class ModifierEvaluationWorker {
+    public:
+        explicit ModifierEvaluationWorker(const lfs::nodes::NodeTypeRegistry& registry);
+        ~ModifierEvaluationWorker();
+        void invalidate(std::uint64_t generation);
+        void submit(ModifierEvaluationRequest request);
+        void retire(ModifierWorkerResult result);
+        [[nodiscard]] std::optional<ModifierWorkerResult> takeReady();
+        void wait(std::uint64_t generation);
+        [[nodiscard]] ModifierWorkerProgress progress() const;
+        [[nodiscard]] nlohmann::json performance(bool reset);
+        // Node times include their device work; each node then waits for the GPU.
+        void set_profiling(bool enabled) { profiling_.store(enabled, std::memory_order_relaxed); }
+
+    private:
+        void run(std::stop_token stop);
+        ModifierWorkerResult evaluate(const ModifierEvaluationRequest& request);
+
+        const lfs::nodes::NodeTypeRegistry& registry_;
+        // Declared before everything that holds worker tensors, so it is destroyed after them:
+        // destroying it releases its stream, and a later free must not name that stream.
+        std::unique_ptr<core::TensorWorkQueue> queue_;
+        mutable std::mutex mutex_;
+        std::condition_variable_any changed_;
+        std::optional<ModifierEvaluationRequest> pending_;
+        std::optional<ModifierWorkerResult> ready_;
+        std::vector<ModifierWorkerResult> retired_;
+        ModifierWorkerProgress progress_;
+        std::atomic<std::uint64_t> generation_{0};
+        std::atomic<bool> profiling_{false};
+        std::uint64_t finished_generation_ = 0;
+        std::uint64_t requests_ = 0;
+        std::uint64_t evaluations_ = 0;
+        std::uint64_t discarded_ = 0;
+        std::unordered_map<std::string, std::uint64_t> node_runs_;
+        std::unordered_map<std::string, lfs::nodes::EvalCache> caches_;
+        std::unordered_map<core::Uuid, lfs::nodes::Geometry> sources_;
+        std::unordered_map<core::Uuid, std::shared_ptr<const core::MeshData>> source_meshes_;
+        std::unordered_map<core::Uuid, ModifierHostResult> previous_hosts_;
+        std::uint64_t source_generation_ = 0;
+        std::unordered_map<core::Uuid, ModifierPublishedAttributes> published_;
+        lfs::nodes::GeometryDeviceCache source_devices_;
+        bool holding_freed_memory_ = false;
+        std::jthread thread_;
+    };
+
+} // namespace lfs::vis

@@ -98,7 +98,7 @@ TEST_F(PluginLocalizationTest, IsolatesOwnersAndRejectsCollisions) {
     EXPECT_STREQ(localization.get("plugins.first-plugin.action.run"), "First");
     EXPECT_STREQ(localization.get("plugins.second-plugin.action.run"), "Second");
 
-    EXPECT_EQ(localization.unregisterPluginCatalogs("first-plugin"), 1);
+    EXPECT_TRUE(localization.unregisterPluginCatalog(first));
     EXPECT_FALSE(localization.hasKey("plugins.first-plugin.action.run"));
     EXPECT_TRUE(localization.hasKey("plugins.second-plugin.action.run"));
 }
@@ -153,7 +153,6 @@ TEST_F(PluginLocalizationTest, NativeMutationsPublishGenerationButNoOpsDoNot) {
                   "example-plugin", "en", TranslationMap{{"panel.title", "Duplicate"}}),
               0);
     EXPECT_FALSE(localization.unregisterPluginCatalog(0));
-    EXPECT_EQ(localization.unregisterPluginCatalogs("missing-plugin"), 0);
     EXPECT_EQ(localization.getCurrentLanguageGeneration(), registered);
 
     ASSERT_TRUE(localization.unregisterPluginCatalog(english));
@@ -161,16 +160,6 @@ TEST_F(PluginLocalizationTest, NativeMutationsPublishGenerationButNoOpsDoNot) {
     EXPECT_GT(removed, registered);
     EXPECT_FALSE(localization.unregisterPluginCatalog(english));
     EXPECT_EQ(localization.getCurrentLanguageGeneration(), removed);
-
-    ASSERT_NE(localization.registerPluginCatalog(
-                  "example-plugin", "en", TranslationMap{{"panel.title", "Title"}}),
-              0);
-    ASSERT_NE(localization.registerPluginCatalog(
-                  "example-plugin", "it", TranslationMap{{"panel.title", "Titolo"}}),
-              0);
-    const auto before_bulk_remove = localization.getCurrentLanguageGeneration();
-    EXPECT_EQ(localization.unregisterPluginCatalogs("example-plugin"), 2);
-    EXPECT_GT(localization.getCurrentLanguageGeneration(), before_bulk_remove);
 }
 
 TEST_F(PluginLocalizationTest, ResetInvalidatesCatalogsWithoutReusingTokens) {

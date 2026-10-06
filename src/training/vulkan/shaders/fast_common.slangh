@@ -20,7 +20,7 @@ void specializeFast(inout FastPush p, uint bits) {
     p.shFormat = (bits >> 13) & 3;
     p.renderNormal = (bits >> 15) & 1;
     p.renderDepth = (bits >> 16) & 1;
-    p.mip = (bits >> 17) & 1;
+    p.mip = (p.mip & ~1u) | ((bits >> 17) & 1);
 }
 float3 shColor(FastPush p, uint row, uint basis) {
     return float3(shReadCell(p.sh, p.shBounds, p.shFormat, p.rest, p.count, row, basis * 3),

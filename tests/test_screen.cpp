@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <utility>
 
 namespace lfs::vis::screen {
 
@@ -480,7 +481,7 @@ namespace lfs::vis::screen {
     TEST_F(ScreenTest, LoadRejectsDuplicateSingleInstanceEditors) {
         auto json = Screen::makeDefault(registry).save();
         for (auto& area : json["areas"]) {
-            if (area["editor"] == editors::kProperties)
+            if (area["editor"].get<std::string>() == editors::kProperties)
                 area["editor"] = std::string(editors::kScene);
         }
         EXPECT_FALSE(Screen::load(json, registry));
@@ -701,22 +702,6 @@ namespace lfs::vis::screen {
         EXPECT_FALSE(viewSettingsFromJson(nlohmann::json{{"orthographic", 1}}, ViewSettings{}));
     }
 
-    TEST(ViewLabel, NamesAxisAlignedAndUserViews) {
-        View3DSpace view;
-        view.camera.camera.setAxisAlignedView(1, false);
-        view.settings.orthographic = true;
-        EXPECT_EQ(viewLabel(view), "Top Orthographic");
-        view.camera.camera.setAxisAlignedView(2, false);
-        view.settings.orthographic = false;
-        EXPECT_EQ(viewLabel(view), "Front Perspective");
-        view.camera.camera.setAxisAlignedView(0, true);
-        EXPECT_EQ(viewLabel(view), "Left Perspective");
-        view.camera.setViewMatrix(lfs::rendering::makeVisualizerLookAtRotation(glm::vec3(3.0f, 2.0f, 1.0f),
-                                                                               glm::vec3(0.0f)),
-                                  glm::vec3(3.0f, 2.0f, 1.0f));
-        EXPECT_EQ(viewLabel(view), "User Perspective");
-    }
-
     // ---- Gestures ---------------------------------------------------------
 
     class GestureTest : public ScreenTest {
@@ -868,8 +853,8 @@ namespace lfs::vis::screen {
 
     TEST_F(GestureTest, SplitIsRefusedWhenTheAreaIsTooSmall) {
         const AreaId scene = screen->findEditor(editors::kScene);
-        const auto small = Rect{0.0f, 0.0f, 400.0f, 180.0f};
-        const auto g = screen->solve(small, kMetrics);
+        const auto small_rect = Rect{0.0f, 0.0f, 400.0f, 180.0f};
+        const auto g = screen->solve(small_rect, kMetrics);
         const Rect r = rectOf(g, scene);
         ASSERT_GT(r.w, 0.0f);
         if (!gestures.press(g, r.x + 2.0f, r.y + 2.0f, false))
@@ -934,5 +919,25 @@ namespace lfs::vis::screen {
         source.editViewSettings(second.value, [](ViewSettings& s) { s.split_view_mode = SplitViewMode::PLYComparison; });
         EXPECT_EQ(source.viewSettings(first.value)->split_view_mode, SplitViewMode::Disabled);
         EXPECT_EQ(source.viewSettings(second.value)->split_view_mode, SplitViewMode::PLYComparison);
+    }
+
+    TEST(ViewSettingsOwnershipTest, ComparisonTransferRequestsBothViews) {
+        ScreenService source;
+        const auto first = source.screen().activeView();
+        const auto second = source.screen().split(first, SplitAxis::Columns, 0.5f);
+        ASSERT_TRUE(second.valid());
+        std::vector<ViewId> changed;
+        source.setViewSettingsChangedCallback([&](ViewId view) { changed.push_back(view); });
+        source.editViewSettings(first.value, [](ViewSettings& s) { s.split_view_mode = SplitViewMode::GTComparison; });
+        EXPECT_EQ(changed, std::vector<ViewId>{first.value});
+        changed.clear();
+        source.editViewSettings(second.value, [](ViewSettings& s) { s.split_view_mode = SplitViewMode::PLYComparison; });
+        EXPECT_EQ(changed, (std::vector<ViewId>{first.value, second.value}));
+        changed.clear();
+        source.editViewSettings(second.value, [](ViewSettings& s) { s.focal_length_mm = 55.0f; });
+        EXPECT_EQ(changed, std::vector<ViewId>{second.value});
+        changed.clear();
+        EXPECT_FALSE(source.editViewSettings(kNoView, [](ViewSettings&) {}));
+        EXPECT_TRUE(changed.empty());
     }
 } // namespace lfs::vis::screen

@@ -241,7 +241,5 @@ namespace lfs::io::video {
         std::string_view id) noexcept;
     [[nodiscard]] std::string_view videoReconstructionResolutionIssueId(
         VideoReconstructionResolutionIssue issue) noexcept;
-    [[nodiscard]] std::string_view videoReconstructionSelectionIssueId(
-        VideoReconstructionSelectionIssue issue) noexcept;
 
 } // namespace lfs::io::video

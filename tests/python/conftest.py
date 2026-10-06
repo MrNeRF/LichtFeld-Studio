@@ -13,7 +13,10 @@ import pytest
 
 # Find the build directory and add to path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-BUILD_DIR = Path(os.environ.get("LFS_TEST_BUILD_DIR", PROJECT_ROOT / "build"))
+# Use the developer environment's build unless a test build is selected explicitly.
+BUILD_DIR = Path(
+    os.environ.get("LFS_TEST_BUILD_DIR", os.environ.get("LFS_BUILD_DIR", PROJECT_ROOT / "build"))
+)
 SOURCE_MODULE_PATH = PROJECT_ROOT / "src" / "python"
 
 # Add the source Python modules first so tests exercise the working tree.
@@ -269,22 +272,12 @@ def small_tensor(lf, numpy):
 
 @pytest.fixture
 def gpu_available(lf):
-    """Check if GPU is available."""
+    """Probe the selected tensor backend, independently of PyTorch's CUDA support."""
     try:
-        import torch
-
-        return torch.cuda.is_available()
-    except ImportError:
-        # If torch not available, try creating a CUDA tensor
-        try:
-            import numpy as np
-
-            arr = np.array([1.0], dtype=np.float32)
-            t = lf.Tensor.from_numpy(arr)
-            t_cuda = t.cuda()
-            return t_cuda.is_cuda
-        except Exception:
-            return False
+        tensor = lf.Tensor.ones([1], device="gpu")
+        return tensor.backend in ("cuda", "vulkan", "metal") and tensor.cpu().item() == 1.0
+    except Exception:
+        return False
 
 
 @pytest.fixture(scope="session")

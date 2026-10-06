@@ -31,6 +31,7 @@
 #include "io/embedded_dataset.hpp"
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
+#include "rendering/scene_renderer_factory.hpp"
 #if LFS_BUILD_TRAINER
 #include "tcp/include/tcp_publisher.hpp"
 #include "tcp/include/tcp_responder.hpp"
@@ -54,7 +55,7 @@
 #include "preprocessing/preprocess.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
-#include "rendering/vksplat_viewport_renderer.hpp"
+#include "rendering/scene_renderer.hpp"
 #include "sequencer/timeline.hpp"
 #include "visualizer/gui/layout_state.hpp"
 #include "visualizer/gui/panels/python_scripts_panel.hpp"
@@ -62,6 +63,7 @@
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include "visualizer/input/input_bindings.hpp"
 #include "visualizer/preferences.hpp"
+#include "window/graphics_context.hpp"
 #include <cmath>
 #include <condition_variable>
 #if LFS_HAS_CUDA
@@ -279,6 +281,7 @@ namespace lfs::app {
             checkpoint_params.optimization.perf_bench = params.optimization.perf_bench;
             checkpoint_params.optimization.perf_bench_warmup = params.optimization.perf_bench_warmup;
             checkpoint_params.cli_iterations_set = params.cli_iterations_set;
+            checkpoint_params.cli_step_values_set = params.cli_step_values_set;
             checkpoint_params.no_download = params.no_download;
             checkpoint_params.cli_bg_color_set = params.cli_bg_color_set;
             if (params.cli_iterations_set)
@@ -530,6 +533,8 @@ namespace lfs::app {
                 cli_params.save_project_path;
             checkpoint_params.cli_iterations_set =
                 cli_params.cli_iterations_set;
+            checkpoint_params.cli_step_values_set =
+                cli_params.cli_step_values_set;
             checkpoint_params.cli_bg_color_set =
                 cli_params.cli_bg_color_set;
             checkpoint_params.overrides = cli_params.overrides;
@@ -1082,19 +1087,14 @@ namespace lfs::app {
         int runHeadlessRender(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
             const auto& cfg = *params->render_path;
 
-            vis::VulkanContext context;
-            if (!context.initHeadless()) {
+            auto graphics_context = vis::createGraphicsContext();
+            auto& context = *graphics_context;
+            if (!context.initializeHeadless()) {
                 LOG_ERROR("Off-screen renderer initialization failed: {}", context.lastError());
                 return 1;
             }
-            struct BackendLifetime {
-                ~BackendLifetime() {
-                    if (auto result = core::shutdown_gpu_backend(core::GpuBackend::Vulkan); !result)
-                        LOG_WARN("Failed to shut down tensor backend: {}", result.error().detail());
-                }
-            } backend_lifetime;
-            vis::VksplatViewportRenderer renderer;
-            const auto splat_allocator = context.tensorInterop().splat_allocator(true);
+            auto renderer = vis::createSceneRenderer(context);
+            const auto splat_allocator = context.splatTensorAllocator(true);
 
             // Pipeline creation does not read the scene. Overlap it with the load.
             auto loading = std::async(std::launch::async, [&]() -> std::expected<std::shared_ptr<core::SplatData>, std::string> {
@@ -1133,7 +1133,7 @@ namespace lfs::app {
                 }
                 return model;
             });
-            const auto pipelines = renderer.prepareDevice(context);
+            const auto pipelines = renderer->prepareDevice();
             auto loaded = loading.get();
             if (!pipelines) {
                 LOG_ERROR("Off-screen renderer initialization failed: {}", pipelines.error());
@@ -1187,13 +1187,13 @@ namespace lfs::app {
                 request.frame_view.focal_length_mm = cam_state.focal_length_mm;
                 // The loaded scene is immutable for the whole path. The live-training
                 // upload flag shares the training arena and disables the immutable HiGS chain.
-                auto rendered = renderer.render(context, *model, request, frame == 0,
-                                                target, false, true);
+                auto rendered = renderer->render(*model, request, frame == 0,
+                                                 target, false, true);
                 if (!rendered) {
                     LOG_ERROR("Failed to render frame {}: {}", frame, rendered.error());
                     return 1;
                 }
-                auto image = renderer.readOutputImage(context, target);
+                auto image = renderer->readOutputImage(target);
                 if (!image) {
                     LOG_ERROR("Failed to read frame {}: {}", frame, image.error());
                     return 1;
@@ -1262,6 +1262,7 @@ namespace lfs::app {
             // Training reaches Trainer::initialize, which names any missing families.
             if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Metal))
                 return true;
+#ifndef LFS_GRAPHICS_METAL
             if (viewer_only) {
                 if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan) &&
                     lfs::core::set_default_gpu_backend(lfs::core::GpuBackend::Vulkan).has_value()) {
@@ -1270,9 +1271,14 @@ namespace lfs::app {
                     return true;
                 }
             }
+#endif
             reportFatalStartupError(
                 "LichtFeld Studio - No usable GPU",
+#ifdef LFS_GRAPHICS_METAL
+                "This Metal-only build requires macOS 26 and a Metal 4 GPU. Vulkan fallback is not compiled into this application.",
+#else
                 "The selected Metal tensor backend requires macOS 26 and a Metal 4 GPU; only the viewer can fall back to Vulkan.",
+#endif
                 show_dialog);
             return false;
         }
@@ -1505,7 +1511,6 @@ namespace lfs::app {
                 return std::make_unique<lfs::io::video::VideoEncoder>();
             });
 
-            constexpr auto graphics_backend = lfs::vis::GraphicsBackend::Vulkan;
             mcp::McpHttpServer mcp_http({.enable_resources = true});
             const auto mcp_preferences = vis::loadMcpPreferences();
             const auto mcp_port_override = params->mcp_port;
@@ -1557,6 +1562,7 @@ namespace lfs::app {
                             case mcp::McpHttpErrorKind::BindFailed:
                                 return vis::RuntimeServiceErrorKind::BindFailed;
                             case mcp::McpHttpErrorKind::ListenerFailed:
+                            case mcp::McpHttpErrorKind::CredentialFailed:
                                 return vis::RuntimeServiceErrorKind::RuntimeFailure;
                             }
                             return vis::RuntimeServiceErrorKind::RuntimeFailure; }(),
@@ -1565,7 +1571,6 @@ namespace lfs::app {
                     };
                 },
                 .gut = params->optimization.gut,
-                .graphics_backend = graphics_backend,
                 .startup_project = startup_project,
             });
 

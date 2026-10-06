@@ -34,7 +34,7 @@ signal; that polling ends when the trainer leaves stopping.
 
 The initial RmlUi panel exposes General Parameters (strategy, backend, iterations,
 padlock and capacity), Camera & Rasterization (Undistort/Mip), Background
-(background improvements, mode, color/image), Exposure & Appearance (Exposure
+(mode, color/image), Exposure & Appearance (Exposure
 Correction), Masking & Segmentation, and Dataset immediately before Advanced.
 Dataset starts expanded; a saved collapse preference
 still takes precedence. It retains its own edit locks;

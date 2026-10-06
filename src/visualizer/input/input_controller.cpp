@@ -18,6 +18,7 @@
 #include "input/input_router.hpp"
 #include "input/input_types.hpp"
 #include "input/key_codes.hpp"
+#include "input/navigation_gestures.hpp"
 #include "input/sdl_coordinate_utils.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "io/loader.hpp"
@@ -38,6 +39,7 @@
 #include "tools/unified_tool_registry.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "visualizer/nodes/modifier_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
 #include <SDL3/SDL.h>
@@ -56,19 +58,7 @@ namespace lfs::vis {
         constexpr double kCameraContextMenuDragThreshold = 4.0;
         constexpr double kCameraFrustumClickThreshold = 5.0;
         constexpr int kDepthWindowModifiers = input::KEYMOD_SHIFT | input::KEYMOD_ALT;
-        // SDL reports trackpad scrolling in fractional lines of about 10 px
-        // (macOS's default line height, SDL's Wayland scaling).
-        constexpr float kTrackpadPixelsPerScrollLine = 10.0f;
-        // At the default trackpad zoom speed a pinch zooms about the square of
-        // the finger scale, and Ctrl+swipe zooms 2x per ~14 scroll lines.
-        constexpr float kPinchZoomExponent = 2.0f;
-        constexpr float kTrackpadZoomPerLine = 0.05f;
         namespace string_keys = lichtfeld::Strings;
-
-        // Trackpad speed levels are 1..100; 50 is 1x and every 25 levels doubles.
-        [[nodiscard]] float trackpadSpeedFactor(const float level) {
-            return std::exp2((level - 50.0f) / 25.0f);
-        }
 
         // Scroll-stepped adjustments follow the delta: whole wheel notches keep
         // their exact step while fractional trackpad deltas stay smooth.
@@ -505,7 +495,6 @@ namespace lfs::vis {
             SDL_DestroyCursor(hand_cursor_);
             hand_cursor_ = nullptr;
         }
-
         // Reset cursor to default before destruction
         if (window_ && current_cursor_ != CursorType::Default) {
             SDL_SetCursor(SDL_GetDefaultCursor());
@@ -526,7 +515,6 @@ namespace lfs::vis {
         // Create cursors
         resize_cursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
         hand_cursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER);
-
         refreshMovementKeyCache();
         bindings_.setOnBindingsChanged([this]() { refreshMovementKeyCache(); });
     }
@@ -653,6 +641,10 @@ namespace lfs::vis {
         op::operators().cancelModalOperator();
         op::clearDepthWindowHover();
         clearViewportDragState();
+        if (auto* const scene_manager = services().sceneOrNull())
+            scene_manager->modifierManager().cancelViewportMode();
+        node_paint_dragging_ = false;
+        node_paint_last_screen_.reset();
         if (current_cursor_ != CursorType::Default) {
             SDL_SetCursor(SDL_GetDefaultCursor());
             current_cursor_ = CursorType::Default;
@@ -683,7 +675,7 @@ namespace lfs::vis {
     }
 
     bool InputController::isMouseButtonPressed(int app_button) const {
-        SDL_MouseButtonFlags buttons = SDL_GetMouseState(nullptr, nullptr);
+        const SDL_MouseButtonFlags buttons = input::mouseButtons();
         switch (app_button) {
         case static_cast<int>(input::AppMouseButton::LEFT): return (buttons & SDL_BUTTON_LMASK) != 0;
         case static_cast<int>(input::AppMouseButton::RIGHT): return (buttons & SDL_BUTTON_RMASK) != 0;
@@ -705,7 +697,8 @@ namespace lfs::vis {
     }
 
     bool InputController::hasViewportCursorOverride() const {
-        return current_cursor_ == CursorType::Resize;
+        return current_cursor_ == CursorType::Resize ||
+               current_cursor_ == CursorType::Eyedropper;
     }
 
     std::optional<input::SelectionOp> InputController::selectionDragOperation() const {
@@ -730,6 +723,7 @@ namespace lfs::vis {
 
     // Core handlers
     void InputController::handleMouseButton(int button, int action, double x, double y) {
+        decayHeldDragMomentum();
         LOG_PERF("InputController::handleMouseButton button={} action={} pos=({},{}) drag_mode={}",
                  button, action, x, y, static_cast<int>(drag_mode_));
         auto* gui = services().guiOrNull();
@@ -799,6 +793,53 @@ namespace lfs::vis {
             // commit to the wrong panel.
             text_input_viewport_click_button_ = button;
             return;
+        }
+
+        // Commit the stroke even when the pointer leaves the viewport before
+        // release, so a drag always corresponds to exactly one undo entry.
+        if (is_left_button && action == input::ACTION_RELEASE && node_paint_dragging_) {
+            if (auto* const scene_manager = services().sceneOrNull())
+                scene_manager->modifierManager().endPaintStroke(false);
+            node_paint_dragging_ = false;
+            node_paint_last_screen_.reset();
+            return;
+        }
+
+        // Node graph viewport modes own the left button before normal selection
+        // tools. Both use SelectionService so screen/depth picking has one source
+        // of truth.
+        if (!over_gui && is_left_button && isInViewport(x, y)) {
+            if (auto* const scene_manager = services().sceneOrNull()) {
+                auto& modifiers = scene_manager->modifierManager();
+                auto* const selection = scene_manager->getSelectionService();
+                if (modifiers.colourPickActive()) {
+                    if (action == input::ACTION_PRESS && selection) {
+                        if (const auto picked = selection->pickAtScreen(
+                                static_cast<float>(x), static_cast<float>(y));
+                            picked) {
+                            (void)modifiers.applyPickedColour(
+                                picked->colour, (mods & input::KEYMOD_SHIFT) != 0);
+                        }
+                    }
+                    return;
+                }
+                if (modifiers.paintModeActive()) {
+                    if (action == input::ACTION_RELEASE) {
+                        if (node_paint_dragging_)
+                            modifiers.endPaintStroke(false);
+                        node_paint_dragging_ = false;
+                        node_paint_last_screen_.reset();
+                        return;
+                    }
+                    if (action == input::ACTION_PRESS && selection && modifiers.beginPaintStroke()) {
+                        node_paint_erasing_ = (mods & input::KEYMOD_ALT) != 0;
+                        node_paint_dragging_ = appendNodePaintSample(*scene_manager, x, y);
+                        if (!node_paint_dragging_)
+                            modifiers.endPaintStroke(true);
+                    }
+                    return;
+                }
+            }
         }
 
         const bool selection_pointer_blocked =
@@ -1394,6 +1435,7 @@ namespace lfs::vis {
         if (drag_view_ != kNoView && !dragViewport())
             clearViewportDragState();
         hover_pos_ = {x, y};
+        decayHeldDragMomentum();
         LOG_PERF("InputController::handleMouseMove pos=({},{}) drag_mode={}",
                  x, y, static_cast<int>(drag_mode_));
         auto* gui = services().guiOrNull();
@@ -1429,6 +1471,35 @@ namespace lfs::vis {
             over_gui = isPointerOverBlockingUi(x, y);
             over_gui_hover = isPointerOverUiHover(x, y);
         }
+
+        if (!over_gui && isInViewport(x, y)) {
+            if (auto* const scene_manager = services().sceneOrNull()) {
+                auto& modifiers = scene_manager->modifierManager();
+                if (modifiers.colourPickActive()) {
+                    if (gui && gui->pipetteCursor())
+                        SDL_SetCursor(gui->pipetteCursor());
+                    current_cursor_ = CursorType::Eyedropper;
+                    last_mouse_pos_ = current_pos;
+                    return;
+                }
+                if (modifiers.paintModeActive()) {
+                    current_cursor_ = CursorType::Paint;
+                    // Space samples a third of the brush apart on screen before picking: each pick
+                    // waits on the GPU.
+                    if (node_paint_dragging_ &&
+                        (!node_paint_last_screen_ ||
+                         glm::distance(*node_paint_last_screen_, glm::vec2(x, y)) >=
+                             modifiers.paintRadius() / 3.0f))
+                        (void)appendNodePaintSample(*scene_manager, x, y);
+                    last_mouse_pos_ = current_pos;
+                    return;
+                }
+            }
+        } else if (current_cursor_ == CursorType::Eyedropper ||
+                   current_cursor_ == CursorType::Paint) {
+            SDL_SetCursor(SDL_GetDefaultCursor());
+            current_cursor_ = CursorType::Default;
+        }
         const bool selection_pointer_blocked =
             op::operators().activeModalId() == op::to_string(op::BuiltinOp::SelectionStroke) &&
             (over_gui || (!input_router_ && !isInViewport(x, y)));
@@ -1448,7 +1519,7 @@ namespace lfs::vis {
         const int hover_modifiers = getModifierKeys();
         const bool depth_window_modifiers =
             (hover_modifiers & kDepthWindowModifiers) == kDepthWindowModifiers;
-        const bool no_mouse_buttons = SDL_GetMouseState(nullptr, nullptr) == 0;
+        const bool no_mouse_buttons = input::mouseButtons() == 0;
         if (no_mouse_buttons && !isNearSplitter(x, y) &&
             applyDepthWindowHoverCursor(x, y, depth_window_modifiers)) {
             hovered_camera_id_ = -1;
@@ -1671,6 +1742,15 @@ namespace lfs::vis {
         }
 
         const int mods = getModifierKeys();
+        if (!over_gui && isInViewport(mouse_x, mouse_y) &&
+            (mods & (input::KEYMOD_CTRL | input::KEYMOD_ALT)) != 0) {
+            if (auto* const scene_manager = services().sceneOrNull();
+                scene_manager && scene_manager->modifierManager().paintModeActive()) {
+                scene_manager->modifierManager().adjustPaintRadius(
+                    scrollStepScale(yoff, 1.1f, 0.9f));
+                return;
+            }
+        }
         const auto tool_mode = getCurrentToolMode();
         const input::Action scroll_action = bindings_.getActionForScroll(tool_mode, mods, held_keys_);
 
@@ -1690,9 +1770,7 @@ namespace lfs::vis {
         Swipe swipe = Swipe::None;
         const bool chord = !held_keys_.empty() &&
                            scroll_action != bindings_.getActionForScroll(tool_mode, mods);
-        const bool trackpad_swipe =
-            trackpad_.device == NavigationDevice::Trackpad ||
-            (trackpad_.device == NavigationDevice::Automatic && trackpad_touches_ >= 2);
+        const bool trackpad_swipe = input::trackpadSwipe(trackpad_, trackpad_touches_);
         if (trackpad_swipe && !chord) {
             if (mods == input::MODIFIER_NONE)
                 swipe = trackpad_.swipe_pans ? Swipe::Pan : Swipe::Orbit;
@@ -1744,7 +1822,7 @@ namespace lfs::vis {
             // Move like a middle/right drag. SDL deltas already follow the OS
             // natural-scrolling setting, so (-x, y) is where the content goes.
             const glm::vec2 drag = glm::vec2(static_cast<float>(-xoff), static_cast<float>(yoff)) *
-                                   kTrackpadPixelsPerScrollLine * trackpadSpeedFactor(trackpad_.swipe_speed) *
+                                   input::swipePixels(trackpad_.swipe_speed) *
                                    input::windowPixelScale(window_);
             // A concurrent mouse drag owns the camera's drag state.
             if (drag_mode_ != DragMode::None || glm::length(drag) < 0.01f)
@@ -1768,7 +1846,7 @@ namespace lfs::vis {
             target_viewport.camera.rotate_roll(delta);
         } else if (swipe == Swipe::Zoom) {
             zoomViewportBy(target_viewport,
-                           std::exp(delta * kTrackpadZoomPerLine * trackpadSpeedFactor(trackpad_.zoom_speed)));
+                           input::swipeZoomFactor(delta, trackpad_.zoom_speed));
         } else if (scroll_action == input::Action::CAMERA_ZOOM) {
             zoomViewport(target_viewport, delta);
         } else {
@@ -1801,7 +1879,7 @@ namespace lfs::vis {
         target_viewport.camera.finishGlide();
 
         zoomViewportBy(target_viewport,
-                       std::pow(scale, kPinchZoomExponent * trackpadSpeedFactor(trackpad_.zoom_speed)));
+                       input::pinchZoomFactor(scale, trackpad_.zoom_speed));
         onCameraMovementStart();
         publishCameraMove(&target_viewport);
     }
@@ -1863,7 +1941,7 @@ namespace lfs::vis {
     }
 
     void InputController::handleKey(const int physical_key, const int logical_key,
-                                    const int scancode, int action, int mods) {
+                                    const int scancode, int action, int mods, const bool owned_release, const bool gui_consumed) {
         // Track modifier keys (always, even if GUI has focus)
         if (physical_key == input::KEY_LEFT_CONTROL || physical_key == input::KEY_RIGHT_CONTROL) {
             key_ctrl_pressed_ = (action != input::ACTION_RELEASE);
@@ -1871,12 +1949,18 @@ namespace lfs::vis {
         if (physical_key == input::KEY_LEFT_ALT || physical_key == input::KEY_RIGHT_ALT) {
             key_alt_pressed_ = (action != input::ACTION_RELEASE);
         }
+        const bool wants_text_input = input_router_
+                                          ? input_router_->isTextInputActive()
+                                          : gui::guiFocusState().want_text_input;
         const bool is_modifier_key =
             physical_key == input::KEY_LEFT_SHIFT || physical_key == input::KEY_RIGHT_SHIFT ||
             physical_key == input::KEY_LEFT_CONTROL || physical_key == input::KEY_RIGHT_CONTROL ||
             physical_key == input::KEY_LEFT_ALT || physical_key == input::KEY_RIGHT_ALT ||
             physical_key == input::KEY_LEFT_SUPER || physical_key == input::KEY_RIGHT_SUPER;
-        if (!is_modifier_key && logical_key != input::KEY_UNKNOWN) {
+        if (wants_text_input && !bindings_.isCapturing()) {
+            // Text keys must not become viewport mouse/scroll chords either.
+            held_keys_.clear();
+        } else if (!is_modifier_key && logical_key != input::KEY_UNKNOWN) {
             if (action == input::ACTION_RELEASE) {
                 std::erase(held_keys_, logical_key);
             } else if (!std::ranges::contains(held_keys_, logical_key)) {
@@ -1885,6 +1969,29 @@ namespace lfs::vis {
         }
 
         auto* gui = services().guiOrNull();
+
+        if (action == input::ACTION_PRESS && !wants_text_input) {
+            if (auto* const scene_manager = services().sceneOrNull()) {
+                auto& modifiers = scene_manager->modifierManager();
+                if (logical_key == input::KEY_ESCAPE &&
+                    (modifiers.paintModeActive() || modifiers.colourPickActive())) {
+                    modifiers.cancelViewportMode();
+                    node_paint_dragging_ = false;
+                    node_paint_last_screen_.reset();
+                    SDL_SetCursor(SDL_GetDefaultCursor());
+                    current_cursor_ = CursorType::Default;
+                    return;
+                }
+                if (modifiers.paintModeActive() &&
+                    (logical_key == input::KEY_LEFT_BRACKET ||
+                     logical_key == input::KEY_RIGHT_BRACKET)) {
+                    modifiers.adjustPaintRadius(logical_key == input::KEY_RIGHT_BRACKET
+                                                    ? 1.1f
+                                                    : 0.9f);
+                    return;
+                }
+            }
+        }
 
         // Forward to binding capture before Python panels or modal operators consume keys.
         if (action == input::ACTION_PRESS && bindings_.isCapturing()) {
@@ -1909,9 +2016,19 @@ namespace lfs::vis {
         const bool is_mcp_runtime_action =
             bound_action == input::Action::TOGGLE_MCP_SERVER ||
             bound_action == input::Action::TOGGLE_MCP_BINDING;
-        if (lfs::python::has_keyboard_capture_request() && !is_mcp_runtime_action) {
+        if (lfs::python::has_keyboard_capture_request() && !is_mcp_runtime_action && !owned_release) {
             return;
         }
+
+        const bool project_save = logical_key == input::KEY_S && mods == input::KEYMOD_CTRL;
+        if (wants_text_input && !is_mcp_runtime_action && !owned_release) {
+            if (project_save && action == input::ACTION_PRESS)
+                cmd::ProjectSave{}.emit();
+            return;
+        }
+
+        if (gui_consumed && !is_mcp_runtime_action && !owned_release)
+            return;
 
         // Dispatch to modal operators first - if consumed, don't continue
         float mx_f, my_f;
@@ -1920,7 +2037,7 @@ namespace lfs::vis {
         const bool over_gui_hover = isPointerOverUiHover(mx, my);
         if (op::operators().activeModalId() !=
                 op::to_string(op::BuiltinOp::DepthWindowDrag) &&
-            SDL_GetMouseState(nullptr, nullptr) == 0 &&
+            input::mouseButtons() == 0 &&
             !isNearSplitter(mx, my) &&
             !applyDepthWindowHoverCursor(
                 mx, my, (mods & kDepthWindowModifiers) == kDepthWindowModifiers)) {
@@ -1959,9 +2076,6 @@ namespace lfs::vis {
             }
         }
 
-        const bool wants_text_input = input_router_
-                                          ? input_router_->isTextInputActive()
-                                          : gui::guiFocusState().want_text_input;
         const bool viewport_keyboard_focus = input_router_
                                                  ? input_router_->isViewportKeyboardFocused()
                                                  : false;
@@ -2016,6 +2130,11 @@ namespace lfs::vis {
             case input::Action::TOGGLE_MAXIMIZE_AREA:
                 if (gui)
                     (void)gui->screenHost().toggleMaximizedAt(static_cast<float>(mx), static_cast<float>(my));
+                return;
+
+            case input::Action::TOGGLE_NODE_EDITOR:
+                if (gui)
+                    (void)gui->screenHost().toggleEditor(screen::editors::kNodeEditor);
                 return;
 
             case input::Action::TOGGLE_SPLIT_VIEW:
@@ -2112,15 +2231,20 @@ namespace lfs::vis {
 
             case input::Action::CAMERA_NEXT_VIEW:
             case input::Action::CAMERA_PREV_VIEW: {
-                const auto* trainer = services().trainerOrNull();
-                if (trainer) {
-                    const int num_cams = static_cast<int>(trainer->getAllCamList().size());
-                    if (num_cams > 0) {
+                if (const auto* scene_manager = services().sceneOrNull()) {
+                    const auto& cameras = scene_manager->getScene().getAllCamerasCached();
+                    if (!cameras.empty()) {
+                        const auto* rendering = services().renderingOrNull();
+                        const int current_uid = rendering ? rendering->getCurrentCameraId() : last_camview_;
+                        const auto current = std::ranges::find_if(cameras, [current_uid](const auto& camera) {
+                            return camera->uid() == current_uid;
+                        });
+                        const int count = static_cast<int>(cameras.size());
                         const int delta = (bound_action == input::Action::CAMERA_NEXT_VIEW) ? 1 : -1;
-                        last_camview_ = (last_camview_ < 0)
-                                            ? (delta > 0 ? 0 : num_cams - 1)
-                                            : (last_camview_ + delta + num_cams) % num_cams;
-                        cmd::GoToCamView{.cam_id = last_camview_}.emit();
+                        const int index = current == cameras.end()
+                                              ? (delta > 0 ? 0 : count - 1)
+                                              : (static_cast<int>(std::distance(cameras.begin(), current)) + delta + count) % count;
+                        cmd::GoToCamView{.cam_id = cameras[index]->uid()}.emit();
                     }
                 }
                 return;
@@ -2383,13 +2507,27 @@ namespace lfs::vis {
         }
     }
 
+    void InputController::decayHeldDragMomentum() {
+        const auto now = std::chrono::steady_clock::now();
+        const float elapsed = std::chrono::duration<float>(now - drag_momentum_updated_at_).count();
+        drag_momentum_updated_at_ = now;
+        // Pausing a drag must still dissipate its velocity when the frame loop
+        // sleeps. Use elapsed time, not the animation timestep (which is clamped).
+        if (drag_mode_ == DragMode::Orbit && orbitCoastViewport())
+            orbitCoastViewport()->camera.decayOrbitMomentum(elapsed);
+        if (drag_mode_ == DragMode::Pan && panCoastViewport())
+            panCoastViewport()->camera.decayPanMomentum(elapsed);
+    }
+
     void InputController::update(float delta_time) {
         if (drag_view_ != kNoView && !dragViewport())
             clearViewportDragState();
+        decayHeldDragMomentum();
         maybeInitializeDepthViewRange();
 
         if (input_router_) {
-            const bool any_mouse_buttons_pressed = SDL_GetMouseState(nullptr, nullptr) != 0;
+            const bool any_mouse_buttons_pressed =
+                input::mouseButtons() != 0;
             input_router_->syncPressedMouseButtons(any_mouse_buttons_pressed);
         }
 
@@ -2502,11 +2640,9 @@ namespace lfs::vis {
 
         // Orbit ease-out: while dragging, let a held-still pause fade the stored
         // motion; once released, coast the remembered rotation to a smooth stop.
-        if (orbitCoastViewport()) {
+        if (orbitCoastViewport() && drag_mode_ != DragMode::Orbit) {
             auto& orbit_camera = orbitCoastViewport()->camera;
-            if (drag_mode_ == DragMode::Orbit) {
-                orbit_camera.decayOrbitMomentum(delta_time);
-            } else if (orbit_camera.hasOrbitMomentum()) {
+            if (orbit_camera.hasOrbitMomentum()) {
                 orbit_camera.updateOrbitCoast(delta_time);
                 onCameraMovementStart();
                 publishCameraMove(orbitCoastViewport());
@@ -2525,11 +2661,9 @@ namespace lfs::vis {
         // Pan ease-out: mirror the orbit coast for click-drag panning. While the
         // button is held a paused drag fades the stored motion; once released the
         // remembered translation coasts to a smooth stop.
-        if (panCoastViewport()) {
+        if (panCoastViewport() && drag_mode_ != DragMode::Pan) {
             auto& pan_camera = panCoastViewport()->camera;
-            if (drag_mode_ == DragMode::Pan) {
-                pan_camera.decayPanMomentum(delta_time);
-            } else if (pan_camera.hasPanMomentum()) {
+            if (pan_camera.hasPanMomentum()) {
                 pan_camera.updatePanCoast(delta_time);
                 onCameraMovementStart();
                 publishCameraMove(panCoastViewport());
@@ -2785,19 +2919,19 @@ namespace lfs::vis {
             cmd::ShowLoadFileConfirmation{
                 .paths = splat_files,
                 .is_dataset = false,
-                .replace = false}
+                .replace = false,
+                .user_batch = splat_files.size() > 1}
                 .emit();
             LOG_INFO(
                 "Requesting confirmation before loading {} dropped splat/mesh file(s)",
                 splat_files.size());
         } else {
-            for (const auto& splat : splat_files) {
-                auto event = cmd::LoadFile{};
-                event.path = splat;
-                event.is_dataset = false;
-                event.emit();
-                LOG_INFO("Loading {} via drag-and-drop: {}",
-                         lfs::core::path_to_utf8(splat.extension()), lfs::core::path_to_utf8(splat.filename()));
+            if (!splat_files.empty()) {
+                cmd::LoadFile{.path = splat_files.front(),
+                              .is_dataset = false,
+                              .paths = splat_files,
+                              .user_batch = splat_files.size() > 1}
+                    .emit();
             }
         }
 
@@ -2915,7 +3049,7 @@ namespace lfs::vis {
             .rotation = target_viewport.getRotationMatrix(),
             .translation = target_viewport.getTranslation()}
             .emit();
-        publishCameraMove(&target_viewport);
+        publishCameraMove(&target_viewport, true);
 
         auto* const rendering_manager = services().renderingOrNull();
 
@@ -2954,7 +3088,7 @@ namespace lfs::vis {
                     sm->selectNode(node->id);
                 }
                 if (auto* rendering_manager = services().renderingOrNull()) {
-                    rendering_manager->markDirty(DirtyFlag::SELECTION | DirtyFlag::OVERLAY);
+                    rendering_manager->markDirty(DirtyFlag::SELECTION | DirtyFlag::OVERLAY, lfs::vis::FrameReason::Selection);
                 }
                 return;
             }
@@ -3094,6 +3228,27 @@ namespace lfs::vis {
     // Helpers
     bool InputController::isInViewport(double x, double y) const {
         return views_.viewAt(static_cast<float>(x), static_cast<float>(y)).valid();
+    }
+
+    bool InputController::appendNodePaintSample(SceneManager& scene_manager, const double x, const double y) {
+        auto* const selection = scene_manager.getSelectionService();
+        if (!selection)
+            return false;
+        // A miss also counts, so empty space is not picked again on every move.
+        node_paint_last_screen_ = glm::vec2(x, y);
+        const auto picked = selection->pickAtScreen(static_cast<float>(x), static_cast<float>(y), -1,
+                                                    PickReads::Position);
+        if (!picked)
+            return false;
+        auto& modifiers = scene_manager.modifierManager();
+        const auto world_radius = selection->worldRadiusAtScreen(
+            static_cast<float>(x), static_cast<float>(y), picked->world_position, modifiers.paintRadius());
+        const PaintStrokeSample sample{
+            .position = picked->world_position,
+            .radius = world_radius.value_or(0.0f),
+            .value = node_paint_erasing_ ? 0.0f : 1.0f,
+        };
+        return modifiers.appendPaintSample(sample, true);
     }
 
     void InputController::activateViewAt(const double x, const double y) {
@@ -3508,7 +3663,7 @@ namespace lfs::vis {
     }
 
     void InputController::publishCameraMove(
-        Viewport* target_viewport) {
+        Viewport* target_viewport, const bool preserve_gt_comparison) {
         LOG_PERF("InputController::publishCameraMove drag_mode={}", static_cast<int>(drag_mode_));
         auto* const active_viewport = target_viewport ? target_viewport : &viewport();
         if (selection_tool_ && selection_tool_->isEnabled()) {
@@ -3517,7 +3672,8 @@ namespace lfs::vis {
 
         if (auto* const rendering = services().renderingOrNull()) {
             const auto view = views_.viewId(*active_viewport);
-            if (rendering->settingsForView(view).split_view_mode == SplitViewMode::GTComparison) {
+            if (!preserve_gt_comparison &&
+                rendering->settingsForView(view).split_view_mode == SplitViewMode::GTComparison) {
                 rendering->editViewSettings(view, [](ViewSettings& settings) {
                     settings.split_view_mode = SplitViewMode::Disabled;
                 });

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include "core/tensor.hpp"
 #include "core/tensor_vulkan_interop.hpp"
 
@@ -11,6 +13,7 @@
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
+#include <span>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -107,8 +110,8 @@ namespace lfs::vis {
     // channels. Visualizer presentation concern (namespace lfs::vis).
     class ViewportInteropService {
     public:
-        ViewportInteropService();
-        ~ViewportInteropService();
+        LFS_VIS_API ViewportInteropService();
+        LFS_VIS_API ~ViewportInteropService();
 
         ViewportInteropService(const ViewportInteropService&) = delete;
         ViewportInteropService& operator=(const ViewportInteropService&) = delete;
@@ -157,7 +160,8 @@ namespace lfs::vis {
             VkSemaphore semaphore = VK_NULL_HANDLE;
             std::uint64_t value = 0;
         };
-        [[nodiscard]] FrameCompletion frameCompletion() const;
+        void addFrameCompletions(std::span<const FrameCompletion> completions);
+        [[nodiscard]] std::span<const FrameCompletion> frameCompletions() const;
 
         // Drain upload stream, destroy all targets, release the stream. Optional
         // context overrides the prepare-cached pointer for teardown.
@@ -236,8 +240,7 @@ namespace lfs::vis {
         bool external_scene_image_flip_y_ = false;
         std::uint64_t external_scene_image_generation_ = 0;
 
-        VkSemaphore frame_completion_semaphore_ = VK_NULL_HANDLE;
-        std::uint64_t frame_completion_value_ = 0;
+        std::vector<FrameCompletion> frame_completions_;
 
         // Channels are heap-allocated so Channel can hold incomplete types.
         struct ChannelStorage;

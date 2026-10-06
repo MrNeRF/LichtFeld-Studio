@@ -149,6 +149,24 @@ body {
     white-space: nowrap;
 }
 
+.training-preparation-indicator {
+    display: inline-block;
+    width: 6dp;
+    height: 6dp;
+    flex-shrink: 0;
+    margin-right: 5dp;
+    border-radius: 3dp;
+}
+
+.training-status-badge.is-preparing .training-preparation-indicator {
+    animation: training-preparation-pulse 0.8s quadratic-in-out infinite alternate;
+}
+
+@keyframes training-preparation-pulse {
+    from { opacity: 1; }
+    to { opacity: 0.35; }
+}
+
 #training-search-container {
     display: flex;
     align-items: center;
@@ -166,9 +184,10 @@ body {
     overflow-x: hidden;
     overflow-y: auto;
     padding-bottom: 6dp;
+    padding-right: 4dp;
 }
 
-/* Keep the scroll position legible without taking meaningful panel width. */
+/* A narrow scrollbar in its own gutter: the padding keeps it clear of the controls at every UI scale. */
 .training-scroll-region scrollbarvertical {
     width: 4dp;
 }
@@ -279,22 +298,37 @@ body {
 .training-panel-block > .training-subsection:first-child > .section-header {
 }
 
-.steps-scale-lock-row > .steps-scale-lock-btn {
+/* The lock belongs to the iterations label, so the field keeps the width of every other number field. */
+.prop-label--with-action {
+    display: flex;
+    align-items: center;
+}
+
+.prop-label__text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.prop-label--with-action > .steps-scale-lock-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 22dp;
-    height: 20dp;
-    padding: 2dp;
+    width: 18dp;
+    height: 18dp;
+    margin-left: 4dp;
+    padding: 0;
     flex-shrink: 0;
     box-sizing: border-box;
     line-height: 0;
 }
 
-.steps-scale-lock-row > .steps-scale-lock-btn img {
+.prop-label--with-action > .steps-scale-lock-btn img {
     display: block;
-    width: 14dp;
-    height: 14dp;
+    width: 12dp;
+    height: 12dp;
 }
 
 .loss-graph-wrap {
@@ -316,7 +350,6 @@ body {
 }
 
 .loss-tick {
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     text-align: right;
     white-space: nowrap;

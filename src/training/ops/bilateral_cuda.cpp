@@ -88,6 +88,7 @@ namespace lfs::training {
             .scale_moments = scale_moments,
             .upload_slice = upload_slice,
             .download_slice = download_slice,
+            .in_place = true,
         };
     } // namespace
     const lfs::gpu_ops::BilateralOps& cuda_bilateral_ops() { return kCudaBilateralOps; }

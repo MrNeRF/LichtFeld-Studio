@@ -69,7 +69,6 @@ namespace lfs::io {
             }
 
             [[nodiscard]] lfs::Result<bool> remove(std::string_view path);
-            [[nodiscard]] bool exists() const;
             [[nodiscard]] std::optional<Json> get_json(std::string_view path) const;
             [[nodiscard]] lfs::Result<void> set_json(std::string_view path, Json value);
 
@@ -95,7 +94,6 @@ namespace lfs::io {
                 return owner_->get_from_element<T>(array_path_, uuid_, path);
             }
 
-            [[nodiscard]] bool exists() const;
             [[nodiscard]] std::optional<Json> get_json(std::string_view path) const;
 
         private:
@@ -163,13 +161,10 @@ namespace lfs::io {
                                                              std::string_view uuid) const;
         [[nodiscard]] lfs::Result<Element> array_upsert(std::string_view path, std::string_view uuid);
         [[nodiscard]] lfs::Result<bool> array_remove(std::string_view path, std::string_view uuid);
-        [[nodiscard]] lfs::Result<std::vector<std::string>>
-        array_uuids(std::string_view path) const;
 
         // One-pass enumeration of a UUID-addressed object array: each element's
-        // canonical uuid together with a copy of its JSON, in array order. Same
-        // validation and error taxonomy as array_uuids; a missing path yields an
-        // empty vector.
+        // canonical uuid together with a copy of its JSON, in array order.
+        // Missing paths yield an empty vector; UUIDs must be canonical and unique.
         [[nodiscard]] lfs::Result<std::vector<std::pair<std::string, Json>>>
         array_items(std::string_view path) const;
         [[nodiscard]] lfs::Result<std::vector<std::pair<std::string, const Json*>>>

@@ -52,15 +52,6 @@ namespace lfs::core {
         // Reserve capacity
         void reserve(size_t initial_count, int max_sh_degree);
 
-        // Add a new node from raw data, return its index
-        size_t add_node(
-            float cx, float cy, float cz,
-            float sx, float sy, float sz,
-            float qw_, float qx_, float qy_, float qz_,
-            float op,
-            float r_, float g_, float b_,
-            const float* sh1_ptr, const float* sh2_ptr, const float* sh3_ptr);
-
         // Merge two existing nodes and return the new node index
         size_t merge_nodes(size_t a, size_t b, float filter_size);
 

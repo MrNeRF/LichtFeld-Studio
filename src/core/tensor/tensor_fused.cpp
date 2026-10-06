@@ -597,6 +597,7 @@ namespace lfs::core::fused {
     }
 
     Expr fma(const Operand& a, const Operand& b, const Operand& c) { return Nodes::floating({&a, &b, &c}, ExprOp::Fma, "fma"); }
+    Expr precise_divide(const Operand& a, const Operand& b) { return Nodes::floating({&a, &b}, ExprOp::PreciseDiv, "precise_divide"); }
     Expr pow(const Operand& a, const Operand& b) { return Nodes::floating({&a, &b}, ExprOp::Pow, "pow"); }
     Expr atan2(const Operand& y, const Operand& x) { return Nodes::floating({&y, &x}, ExprOp::Atan2, "atan2"); }
 

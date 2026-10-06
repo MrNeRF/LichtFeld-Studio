@@ -3,11 +3,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_tensor.hpp"
+#include "core/checked_arithmetic.hpp"
 #include "core/gpu_backend_fwd.hpp"
+#include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
-#include "core/tensor_backend.hpp"
+#include "core/tensor_backend_vulkan.hpp"
 #include "core/tensor_completion.hpp"
 #include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_debug.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 #include "python/python_runtime.hpp"
 
 #include <cstring>
@@ -17,6 +21,23 @@
 #include <dlpack/dlpack.h>
 #include <nanobind/stl/optional.h>
 #include <sstream>
+
+namespace lfs::python {
+    struct NumpyFloat16 {
+        uint16_t bits;
+    };
+} // namespace lfs::python
+
+namespace nanobind {
+    template <>
+    struct ndarray_traits<lfs::python::NumpyFloat16> {
+        static constexpr bool is_complex = false;
+        static constexpr bool is_float = true;
+        static constexpr bool is_bool = false;
+        static constexpr bool is_int = false;
+        static constexpr bool is_signed = false;
+    };
+} // namespace nanobind
 
 namespace nb = nanobind;
 
@@ -157,34 +178,18 @@ namespace lfs::python {
 
     } // namespace
 
-    PyTensor::PyTensor(Tensor tensor, bool owns_data)
-        : tensor_(std::move(tensor)),
-          owns_data_(owns_data) {}
+    PyTensor::PyTensor(Tensor tensor, bool)
+        : tensor_(std::move(tensor)) {}
 
     PyTensor::~PyTensor() = default;
 
-    PyTensor PyTensor::view_of(core::Tensor& t, uint64_t generation) {
-        PyTensor pt(t, false);
-        pt.source_gen_ = generation;
-        return pt;
-    }
-
-    void PyTensor::validate() const {
-        if (source_gen_ != 0 && source_gen_ != context().scene_generation)
-            throw std::runtime_error("Tensor data invalidated - scene changed");
-    }
-
     PyTensor::PyTensor(const PyTensor& other)
         : tensor_(other.tensor_),
-          owns_data_(other.owns_data_),
-          source_gen_(other.source_gen_),
           dlpack_managed_(other.dlpack_managed_) {}
 
     PyTensor& PyTensor::operator=(const PyTensor& other) {
         if (this != &other) {
             tensor_ = other.tensor_;
-            owns_data_ = other.owns_data_;
-            source_gen_ = other.source_gen_;
             dlpack_managed_ = other.dlpack_managed_;
         }
         return *this;
@@ -192,15 +197,11 @@ namespace lfs::python {
 
     PyTensor::PyTensor(PyTensor&& other) noexcept
         : tensor_(std::move(other.tensor_)),
-          owns_data_(other.owns_data_),
-          source_gen_(other.source_gen_),
           dlpack_managed_(std::move(other.dlpack_managed_)) {}
 
     PyTensor& PyTensor::operator=(PyTensor&& other) noexcept {
         if (this != &other) {
             tensor_ = std::move(other.tensor_);
-            owns_data_ = other.owns_data_;
-            source_gen_ = other.source_gen_;
             dlpack_managed_ = std::move(other.dlpack_managed_);
         }
         return *this;
@@ -274,7 +275,6 @@ namespace lfs::python {
     }
 
     PyTensor PyTensor::cpu() const {
-        validate();
         if (tensor_.device() == Device::CPU) {
             return PyTensor(tensor_);
         }
@@ -308,7 +308,6 @@ namespace lfs::python {
     }
 
     float PyTensor::item() const {
-        validate();
         if (tensor_.numel() != 1) {
             throw std::runtime_error("item() requires a tensor with exactly 1 element");
         }
@@ -324,7 +323,6 @@ namespace lfs::python {
     }
 
     int64_t PyTensor::item_int() const {
-        validate();
         if (tensor_.numel() != 1) {
             throw std::runtime_error("item() requires a tensor with exactly 1 element");
         }
@@ -339,7 +337,6 @@ namespace lfs::python {
     }
 
     bool PyTensor::item_bool() const {
-        validate();
         if (tensor_.numel() != 1) {
             throw std::runtime_error("item() requires a tensor with exactly 1 element");
         }
@@ -350,7 +347,6 @@ namespace lfs::python {
     }
 
     nb::object PyTensor::numpy(bool copy) const {
-        validate();
         Tensor host = tensor_.device() == Device::GPU ? tensor_.cpu() : tensor_;
         Tensor cpu_tensor = host.is_contiguous() ? std::move(host) : host.contiguous();
 
@@ -363,6 +359,7 @@ namespace lfs::python {
         case DataType::Int64: elem_size = 8; break;
         case DataType::UInt8:
         case DataType::Bool: elem_size = 1; break;
+        case DataType::UInt32: elem_size = 4; break;
         }
 
         if (copy) {
@@ -396,6 +393,22 @@ namespace lfs::python {
                         buffer, dims.size(), shape_vec.data(), owner));
                 }
             }
+            case DataType::Float16: {
+                if (dims.size() == 1) {
+                    return nb::cast(nb::ndarray<nb::numpy, NumpyFloat16, nb::shape<-1>>(
+                        buffer, {dims[0]}, owner));
+                } else if (dims.size() == 2) {
+                    return nb::cast(nb::ndarray<nb::numpy, NumpyFloat16, nb::shape<-1, -1>>(
+                        buffer, {dims[0], dims[1]}, owner));
+                } else if (dims.size() == 3) {
+                    return nb::cast(nb::ndarray<nb::numpy, NumpyFloat16, nb::shape<-1, -1, -1>>(
+                        buffer, {dims[0], dims[1], dims[2]}, owner));
+                } else {
+                    std::vector<size_t> shape_vec(dims.begin(), dims.end());
+                    return nb::cast(nb::ndarray<nb::numpy, NumpyFloat16>(
+                        buffer, dims.size(), shape_vec.data(), owner));
+                }
+            }
             case DataType::Int32: {
                 if (dims.size() == 1) {
                     return nb::cast(nb::ndarray<nb::numpy, int32_t, nb::shape<-1>>(
@@ -422,8 +435,20 @@ namespace lfs::python {
                         buffer, dims.size(), shape_vec.data(), owner));
                 }
             }
-            case DataType::UInt8:
-            case DataType::Bool: {
+            case DataType::UInt32: {
+                if (dims.size() == 1) {
+                    return nb::cast(nb::ndarray<nb::numpy, uint32_t, nb::shape<-1>>(
+                        buffer, {dims[0]}, owner));
+                } else if (dims.size() == 2) {
+                    return nb::cast(nb::ndarray<nb::numpy, uint32_t, nb::shape<-1, -1>>(
+                        buffer, {dims[0], dims[1]}, owner));
+                } else {
+                    std::vector<size_t> shape_vec(dims.begin(), dims.end());
+                    return nb::cast(nb::ndarray<nb::numpy, uint32_t>(
+                        buffer, dims.size(), shape_vec.data(), owner));
+                }
+            }
+            case DataType::UInt8: {
                 if (dims.size() == 1) {
                     return nb::cast(nb::ndarray<nb::numpy, uint8_t, nb::shape<-1>>(
                         buffer, {dims[0]}, owner));
@@ -436,8 +461,20 @@ namespace lfs::python {
                         buffer, dims.size(), shape_vec.data(), owner));
                 }
             }
+            case DataType::Bool: {
+                if (dims.size() == 1) {
+                    return nb::cast(nb::ndarray<nb::numpy, bool, nb::shape<-1>>(
+                        buffer, {dims[0]}, owner));
+                } else if (dims.size() == 2) {
+                    return nb::cast(nb::ndarray<nb::numpy, bool, nb::shape<-1, -1>>(
+                        buffer, {dims[0], dims[1]}, owner));
+                } else {
+                    std::vector<size_t> shape_vec(dims.begin(), dims.end());
+                    return nb::cast(nb::ndarray<nb::numpy, bool>(
+                        buffer, dims.size(), shape_vec.data(), owner));
+                }
+            }
             default:
-                std::free(buffer);
                 throw std::runtime_error("Unsupported dtype for numpy conversion");
             }
         } else {
@@ -464,6 +501,22 @@ namespace lfs::python {
                         data, dims.size(), shape_vec.data(), owner));
                 }
             }
+            case DataType::Float16: {
+                if (dims.size() == 1) {
+                    return nb::cast(nb::ndarray<nb::numpy, NumpyFloat16, nb::shape<-1>>(
+                        data, {dims[0]}, owner));
+                } else if (dims.size() == 2) {
+                    return nb::cast(nb::ndarray<nb::numpy, NumpyFloat16, nb::shape<-1, -1>>(
+                        data, {dims[0], dims[1]}, owner));
+                } else if (dims.size() == 3) {
+                    return nb::cast(nb::ndarray<nb::numpy, NumpyFloat16, nb::shape<-1, -1, -1>>(
+                        data, {dims[0], dims[1], dims[2]}, owner));
+                } else {
+                    std::vector<size_t> shape_vec(dims.begin(), dims.end());
+                    return nb::cast(nb::ndarray<nb::numpy, NumpyFloat16>(
+                        data, dims.size(), shape_vec.data(), owner));
+                }
+            }
             case DataType::Int32: {
                 if (dims.size() == 1) {
                     return nb::cast(nb::ndarray<nb::numpy, int32_t, nb::shape<-1>>(
@@ -490,8 +543,20 @@ namespace lfs::python {
                         data, dims.size(), shape_vec.data(), owner));
                 }
             }
-            case DataType::UInt8:
-            case DataType::Bool: {
+            case DataType::UInt32: {
+                if (dims.size() == 1) {
+                    return nb::cast(nb::ndarray<nb::numpy, uint32_t, nb::shape<-1>>(
+                        data, {dims[0]}, owner));
+                } else if (dims.size() == 2) {
+                    return nb::cast(nb::ndarray<nb::numpy, uint32_t, nb::shape<-1, -1>>(
+                        data, {dims[0], dims[1]}, owner));
+                } else {
+                    std::vector<size_t> shape_vec(dims.begin(), dims.end());
+                    return nb::cast(nb::ndarray<nb::numpy, uint32_t>(
+                        data, dims.size(), shape_vec.data(), owner));
+                }
+            }
+            case DataType::UInt8: {
                 if (dims.size() == 1) {
                     return nb::cast(nb::ndarray<nb::numpy, uint8_t, nb::shape<-1>>(
                         data, {dims[0]}, owner));
@@ -504,6 +569,19 @@ namespace lfs::python {
                         data, dims.size(), shape_vec.data(), owner));
                 }
             }
+            case DataType::Bool: {
+                if (dims.size() == 1) {
+                    return nb::cast(nb::ndarray<nb::numpy, bool, nb::shape<-1>>(
+                        data, {dims[0]}, owner));
+                } else if (dims.size() == 2) {
+                    return nb::cast(nb::ndarray<nb::numpy, bool, nb::shape<-1, -1>>(
+                        data, {dims[0], dims[1]}, owner));
+                } else {
+                    std::vector<size_t> shape_vec(dims.begin(), dims.end());
+                    return nb::cast(nb::ndarray<nb::numpy, bool>(
+                        data, dims.size(), shape_vec.data(), owner));
+                }
+            }
             default:
                 throw std::runtime_error("Unsupported dtype for numpy conversion");
             }
@@ -511,7 +589,6 @@ namespace lfs::python {
     }
 
     nb::object PyTensor::tolist() const {
-        validate();
         Tensor host = tensor_.device() == Device::GPU ? tensor_.cpu() : tensor_;
         Tensor cpu_tensor = host.is_contiguous() ? std::move(host) : host.contiguous();
 
@@ -545,7 +622,6 @@ namespace lfs::python {
     }
 
     size_t PyTensor::count_nonzero() const {
-        validate();
         return tensor_.count_nonzero();
     }
 
@@ -781,11 +857,21 @@ namespace lfs::python {
             auto& mask_py = nb::cast<PyTensor&>(key);
             const auto& mask_t = mask_py.tensor();
             if (mask_t.dtype() == DataType::UInt8 || mask_t.dtype() == DataType::Bool) {
+                const Tensor logical_mask = [&] {
+                    if (mask_t.ndim() != 1 || tensor_.ndim() <= 1)
+                        return mask_t;
+                    LFS_ASSERT_MSG(mask_t.shape()[0] == tensor_.shape()[0],
+                                   "row mask length must match the first tensor dimension");
+                    // Match getitem: a rank-one mask selects entire rows.
+                    std::vector<size_t> mask_shape(tensor_.ndim(), 1);
+                    mask_shape[0] = mask_t.shape()[0];
+                    return mask_t.contiguous().reshape(TensorShape(mask_shape)).broadcast_to(tensor_.shape()).contiguous();
+                }();
                 if (is_scalar_value) {
-                    tensor_.masked_fill_(mask_t, scalar_value);
+                    tensor_.masked_fill_(logical_mask, scalar_value);
                 } else {
                     const auto& ct = static_cast<const Tensor&>(tensor_);
-                    auto proxy = ct[mask_t];
+                    auto proxy = ct[logical_mask];
                     proxy = val_tensor;
                 }
                 return;
@@ -1096,28 +1182,28 @@ namespace lfs::python {
         if (dim.has_value()) {
             return PyTensor(tensor_.sum(*dim, keepdim));
         }
-        return PyTensor(tensor_.sum());
+        return PyTensor(tensor_.sum(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::mean(std::optional<int> dim, bool keepdim) const {
         if (dim.has_value()) {
             return PyTensor(tensor_.mean(*dim, keepdim));
         }
-        return PyTensor(tensor_.mean());
+        return PyTensor(tensor_.mean(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::max(std::optional<int> dim, bool keepdim) const {
         if (dim.has_value()) {
             return PyTensor(tensor_.max(*dim, keepdim));
         }
-        return PyTensor(tensor_.max());
+        return PyTensor(tensor_.max(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::min(std::optional<int> dim, bool keepdim) const {
         if (dim.has_value()) {
             return PyTensor(tensor_.min(*dim, keepdim));
         }
-        return PyTensor(tensor_.min());
+        return PyTensor(tensor_.min(std::span<const int>{}, keepdim));
     }
 
     float PyTensor::sum_scalar() const {
@@ -1141,21 +1227,21 @@ namespace lfs::python {
         if (dim.has_value()) {
             return PyTensor(tensor_.prod(*dim, keepdim));
         }
-        return PyTensor(tensor_.prod());
+        return PyTensor(tensor_.prod(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::std(std::optional<int> dim, bool keepdim) const {
         if (dim.has_value()) {
             return PyTensor(tensor_.std(*dim, keepdim));
         }
-        return PyTensor(tensor_.std());
+        return PyTensor(tensor_.std(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::var(std::optional<int> dim, bool keepdim) const {
         if (dim.has_value()) {
             return PyTensor(tensor_.var(*dim, keepdim));
         }
-        return PyTensor(tensor_.var());
+        return PyTensor(tensor_.var(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::argmax(std::optional<int> dim, bool keepdim) const {
@@ -1163,7 +1249,7 @@ namespace lfs::python {
             std::vector<int> axes = {*dim};
             return PyTensor(tensor_.argmax(axes, keepdim));
         }
-        return PyTensor(tensor_.argmax());
+        return PyTensor(tensor_.argmax(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::argmin(std::optional<int> dim, bool keepdim) const {
@@ -1171,21 +1257,21 @@ namespace lfs::python {
             std::vector<int> axes = {*dim};
             return PyTensor(tensor_.argmin(axes, keepdim));
         }
-        return PyTensor(tensor_.argmin());
+        return PyTensor(tensor_.argmin(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::all(std::optional<int> dim, bool keepdim) const {
         if (dim.has_value()) {
             return PyTensor(tensor_.all(*dim, keepdim));
         }
-        return PyTensor(tensor_.all());
+        return PyTensor(tensor_.all(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::any(std::optional<int> dim, bool keepdim) const {
         if (dim.has_value()) {
             return PyTensor(tensor_.any(*dim, keepdim));
         }
-        return PyTensor(tensor_.any());
+        return PyTensor(tensor_.any(std::span<const int>{}, keepdim));
     }
 
     PyTensor PyTensor::norm(float p) const {
@@ -1266,32 +1352,38 @@ namespace lfs::python {
     }
 
     PyTensor PyTensor::repeat(const std::vector<int64_t>& repeats) const {
-        // Repeat by tiling - expand and then reshape
-        std::vector<size_t> result_shape;
         const auto& orig_shape = tensor_.shape().dims();
-
-        // Pad original shape if needed
-        size_t ndim = std::max(orig_shape.size(), repeats.size());
+        const size_t ndim = std::max(orig_shape.size(), repeats.size());
         std::vector<size_t> padded_orig(ndim, 1);
-        for (size_t i = 0; i < orig_shape.size(); ++i) {
-            padded_orig[ndim - orig_shape.size() + i] = orig_shape[i];
-        }
-
-        // Calculate result shape
-        for (size_t i = 0; i < ndim; ++i) {
-            size_t rep = (i < repeats.size()) ? static_cast<size_t>(repeats[i]) : 1;
-            result_shape.push_back(padded_orig[i] * rep);
-        }
-
-        // Tile using expand and reshape pattern
-        Tensor result = tensor_;
+        std::copy(orig_shape.begin(), orig_shape.end(), padded_orig.end() - orig_shape.size());
+        std::vector<size_t> result_shape = padded_orig;
         for (size_t i = 0; i < repeats.size(); ++i) {
-            if (repeats[i] > 1) {
+            LFS_ASSERT_MSG(repeats[i] >= 0, "repeat counts must be nonnegative");
+            result_shape[i] = lfs::core::checked_product(
+                padded_orig[i], static_cast<size_t>(repeats[i]), "repeat dimension");
+        }
+        if (std::ranges::find(result_shape, 0) != result_shape.end()) {
+            return PyTensor(Tensor::empty(TensorShape(result_shape), tensor_.device(), tensor_.dtype()));
+        }
+        size_t elements = 1;
+        for (const size_t size : result_shape) {
+            elements = lfs::core::checked_product(elements, size, "repeat elements");
+        }
+
+        Tensor result = tensor_.contiguous().reshape(TensorShape(padded_orig)).clone();
+        for (size_t i = 0; i < repeats.size(); ++i) {
+            int64_t copies = 1;
+            while (copies <= repeats[i] / 2) {
                 result = Tensor::cat({result, result}, static_cast<int>(i));
-                // Continue tiling for larger repeats
-                for (int64_t j = 2; j < repeats[i]; j *= 2) {
-                    result = Tensor::cat({result, result}, static_cast<int>(i));
-                }
+                copies *= 2;
+            }
+            // Append only the remaining copies, rather than rounding up to
+            // the next power of two. The prefix contains whole input tiles.
+            const int64_t remaining = repeats[i] - copies;
+            if (remaining > 0) {
+                const auto tail = result.slice(static_cast<int>(i), 0,
+                                               padded_orig[i] * static_cast<size_t>(remaining));
+                result = Tensor::cat({result, tail}, static_cast<int>(i));
             }
         }
         return PyTensor(result);
@@ -1783,7 +1875,147 @@ namespace lfs::python {
         return PyTensor(Tensor::where(condition.tensor_, x.tensor_, y.tensor_));
     }
 
+    PyTensor PyTensor::normal(const std::vector<int64_t>& shape, float mean, float std,
+                              const std::string& device, const std::string& dtype) {
+        return PyTensor(Tensor::normal(to_tensor_shape(shape), mean, std, parse_device(device), parse_dtype(dtype)));
+    }
+
+    PyTensor PyTensor::bernoulli(const std::vector<int64_t>& shape, float p,
+                                 const std::string& device, const std::string& dtype) {
+        return PyTensor(Tensor::bernoulli(to_tensor_shape(shape), p, parse_device(device), parse_dtype(dtype)));
+    }
+
+    PyTensor PyTensor::multinomial(const PyTensor& weights, int num_samples,
+                                   bool replacement, std::optional<uint64_t> seed) {
+        return PyTensor(Tensor::multinomial(weights.tensor_, num_samples, replacement, seed));
+    }
+
+    PyTensor PyTensor::diag(const PyTensor& diagonal) {
+        return PyTensor(Tensor::diag(diagonal.tensor_));
+    }
+
+    PyTensor PyTensor::cdist(const PyTensor& other, float p) const {
+        return PyTensor(tensor_.cdist(other.tensor_, p));
+    }
+
+    PyTensor PyTensor::normalize(int dim, float eps) const {
+        return PyTensor(tensor_.normalize(dim, eps));
+    }
+
+    PyTensor PyTensor::mod(const PyTensor& other) const {
+        return PyTensor(tensor_.mod(other.tensor_));
+    }
+
+    PyTensor& PyTensor::clamp_(float min_val, float max_val) {
+        tensor_.clamp_(min_val, max_val);
+        return *this;
+    }
+
+    PyTensor& PyTensor::clamp_min_(float min_val) {
+        tensor_.clamp_min_(min_val);
+        return *this;
+    }
+
+    PyTensor PyTensor::reduce(core::ReduceOp op, std::optional<int> dim, bool keepdim) const {
+        core::ReduceArgs args;
+        if (dim) {
+            args.axes = {*dim};
+        }
+        args.keepdim = keepdim;
+        return PyTensor(tensor_.reduce(op, args));
+    }
+
+    bool PyTensor::all_close(const PyTensor& other, float rtol, float atol) const {
+        return tensor_.all_close(other.tensor_, rtol, atol);
+    }
+
+    std::vector<PyTensor> PyTensor::nonzero_split() const {
+        std::vector<PyTensor> result;
+        for (auto& indices : tensor_.nonzero_split()) {
+            result.emplace_back(std::move(indices));
+        }
+        return result;
+    }
+
+    PyTensor PyTensor::linear(const PyTensor& weight, const std::optional<PyTensor>& bias) const {
+        return PyTensor(bias ? tensor_.linear(weight.tensor_, bias->tensor_) : tensor_.linear(weight.tensor_));
+    }
+
+    PyTensor PyTensor::conv1x1(const PyTensor& weight, const std::optional<PyTensor>& bias) const {
+        return PyTensor(bias ? tensor_.conv1x1(weight.tensor_, bias->tensor_) : tensor_.conv1x1(weight.tensor_));
+    }
+
+    PyTensor& PyTensor::where_into_(const PyTensor& condition, float value, const PyTensor& source) {
+        core::where_into(tensor_, condition.tensor_, value, source.tensor_);
+        return *this;
+    }
+
+    PyTensor PyTensor::gather_lazy(const PyTensor& indices) const {
+        return PyTensor(tensor_.gather_lazy(indices.tensor_).eval());
+    }
+
+    std::optional<size_t> PyTensor::reserved_allocation_bytes() const {
+        return core::reserved_allocation_bytes(tensor_);
+    }
+
+    nb::dict PyTensor::validate() const {
+        const auto result = core::debug::validate_tensor(tensor_);
+        nb::dict out;
+        out["is_valid"] = result.is_valid();
+        out["has_nan"] = result.has_nan;
+        out["has_inf"] = result.has_inf;
+        out["nan_count"] = result.nan_count;
+        out["inf_count"] = result.inf_count;
+        out["min_val"] = result.min_val;
+        out["max_val"] = result.max_val;
+        out["mean_val"] = result.mean_val;
+        return out;
+    }
+
+    nb::dict PyTensor::diff(const PyTensor& other, float tolerance) const {
+        const auto result = core::debug::diff_tensors(tensor_, other.tensor_, tolerance);
+        nb::dict out;
+        out["shapes_match"] = result.shapes_match;
+        out["dtypes_match"] = result.dtypes_match;
+        out["max_abs_diff"] = result.max_abs_diff;
+        out["mean_abs_diff"] = result.mean_abs_diff;
+        out["max_rel_diff"] = result.max_rel_diff;
+        out["num_different"] = result.num_different;
+        out["total_elements"] = result.total_elements;
+        return out;
+    }
+
+    nb::dict PyTensor::stats() const {
+        const auto result = core::debug::get_tensor_stats(tensor_);
+        nb::dict out;
+        out["min"] = result.min;
+        out["max"] = result.max;
+        out["mean"] = result.mean;
+        out["std"] = result.std;
+        out["numel"] = result.numel;
+        out["shape"] = shape();
+        out["dtype"] = dtype();
+        out["is_cuda"] = result.is_cuda;
+        out["backend"] = backend();
+        return out;
+    }
+
     void register_tensor(nb::module_& m) {
+        nb::enum_<core::ReduceOp>(m, "ReduceOp")
+            .value("SUM", core::ReduceOp::Sum)
+            .value("MEAN", core::ReduceOp::Mean)
+            .value("MAX", core::ReduceOp::Max)
+            .value("MIN", core::ReduceOp::Min)
+            .value("PROD", core::ReduceOp::Prod)
+            .value("ANY", core::ReduceOp::Any)
+            .value("ALL", core::ReduceOp::All)
+            .value("STD", core::ReduceOp::Std)
+            .value("VAR", core::ReduceOp::Var)
+            .value("ARGMAX", core::ReduceOp::Argmax)
+            .value("ARGMIN", core::ReduceOp::Argmin)
+            .value("COUNT_NONZERO", core::ReduceOp::CountNonzero)
+            .value("NORM", core::ReduceOp::Norm);
+
         nb::class_<PyTensor>(m, "Tensor")
             .def(nb::init<>())
 
@@ -2029,6 +2261,29 @@ namespace lfs::python {
             .def_static("cat", &PyTensor::cat, nb::arg("tensors"), nb::arg("dim") = 0, "Concatenate tensors")
             .def_static("stack", &PyTensor::stack, nb::arg("tensors"), nb::arg("dim") = 0, "Stack tensors")
             .def_static("where", &PyTensor::where, nb::arg("condition"), nb::arg("x"), nb::arg("y"), "Conditional select")
+
+            // Sampling and restored tensor operations
+            .def_static("normal", &PyTensor::normal, nb::arg("shape"), nb::arg("mean") = 0.0f, nb::arg("std") = 1.0f, nb::arg("device") = "cuda", nb::arg("dtype") = "float32", "Create Float32 normal random values with given mean and standard deviation")
+            .def_static("bernoulli", &PyTensor::bernoulli, nb::arg("shape"), nb::arg("p") = 0.5f, nb::arg("device") = "cuda", nb::arg("dtype") = "float32", "Create random zeros and ones with probability p of one")
+            .def_static("multinomial", &PyTensor::multinomial, nb::arg("weights"), nb::arg("num_samples"), nb::arg("replacement") = false, nb::arg("seed") = nb::none(), "Sample indices from 1D weights; an explicit seed leaves the global RNG unchanged")
+            .def_static("diag", &PyTensor::diag, nb::arg("diagonal"), "Create a square matrix from a 1D diagonal")
+            .def("cdist", &PyTensor::cdist, nb::arg("other"), nb::arg("p") = 2.0f, "Pairwise p-norm distances between rows")
+            .def("normalize", &PyTensor::normalize, nb::arg("dim") = -1, nb::arg("eps") = 1e-12f, "Standardize by mean and population std plus eps; dim=-1 reduces all elements")
+            .def("mod", &PyTensor::mod, nb::arg("other"), "Element-wise fmod with a tensor divisor (sign follows dividend)")
+            .def("clamp_", &PyTensor::clamp_, nb::arg("min"), nb::arg("max"), nb::rv_policy::reference, "In-place clamp values to range")
+            .def("clamp_min_", &PyTensor::clamp_min_, nb::arg("min"), nb::rv_policy::reference, "In-place clamp to a lower bound")
+            .def("reduce", &PyTensor::reduce, nb::arg("op"), nb::arg("dim") = nb::none(), nb::arg("keepdim") = false, "Reduce using ReduceOp; dim=None reduces all elements")
+            .def("all_close", &PyTensor::all_close, nb::arg("other"), nb::arg("rtol") = 1e-5f, nb::arg("atol") = 1e-8f, "Whether all values are close within absolute and relative tolerance")
+            .def("allclose", &PyTensor::all_close, nb::arg("other"), nb::arg("rtol") = 1e-5f, nb::arg("atol") = 1e-8f, "Alias for all_close")
+            .def("nonzero_split", &PyTensor::nonzero_split, "Nonzero indices as one tensor per dimension")
+            .def("linear", &PyTensor::linear, nb::arg("weight"), nb::arg("bias") = nb::none(), "Linear transform with optional bias; weight is [out_features, in_features]")
+            .def("conv1x1", &PyTensor::conv1x1, nb::arg("weight"), nb::arg("bias") = nb::none(), "NCHW 1x1 convolution with optional bias; weight is [out_channels, in_channels]")
+            .def("where_into_", &PyTensor::where_into_, nb::arg("condition"), nb::arg("value"), nb::arg("source"), nb::rv_policy::reference, "Write value where condition is true and source elsewhere into this tensor")
+            .def("gather_lazy", &PyTensor::gather_lazy, nb::arg("indices"), "Gather flat Int32 indices and return the evaluated tensor on the source backend")
+            .def_prop_ro("reserved_allocation_bytes", &PyTensor::reserved_allocation_bytes, "Reserved backing storage size in bytes, or None when unknown")
+            .def("validate", &PyTensor::validate, "Inspect NaN/Inf counts and finite min/max/mean; returns a dict")
+            .def("diff", &PyTensor::diff, nb::arg("other"), nb::arg("tolerance") = 1e-5f, "Compare shape, dtype and values; returns a dict of difference statistics")
+            .def("stats", &PyTensor::stats, "Return a dict of min/max/mean/population std and tensor metadata")
 
             // String representation
             .def("__repr__", &PyTensor::repr, "String representation")

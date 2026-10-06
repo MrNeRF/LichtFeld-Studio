@@ -29,13 +29,6 @@ namespace lfs::vis {
         stored_session_presentation_strategy_.clear();
     }
 
-    std::vector<std::shared_ptr<lfs::core::Camera>> TrainerManager::getAllCamList() const {
-        if (scene_) {
-            return scene_->getAllCameras();
-        }
-        return {};
-    }
-
     float TrainerManager::getElapsedSeconds() const {
         const auto state = getState();
         if (state == TrainingState::Running) {

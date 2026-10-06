@@ -136,13 +136,14 @@ namespace lfs::vis::terminal {
             .settermprop = nullptr,
             .bell = onBell,
             .resize = onResize,
-            .sb_pushline = onPushline,
+            .sb_pushline = nullptr,
             .sb_popline = onPopline,
             .sb_clear = nullptr,
-            .sb_pushline4 = nullptr,
+            .sb_pushline4 = onPushline,
         };
 
         vterm_screen_set_callbacks(screen_, &callbacks, this);
+        vterm_screen_callbacks_has_pushline4(screen_);
         vterm_screen_reset(screen_, 1);
     }
 
@@ -335,14 +336,6 @@ namespace lfs::vis::terminal {
             return;
         }
         scrollToBottom();
-    }
-
-    void TerminalWidget::sendCodepoint(uint32_t codepoint) {
-        char utf8[4];
-        const size_t len = encodeUtf8(codepoint, utf8);
-        if (len == 0)
-            return;
-        sendText(std::string_view(utf8, len));
     }
 
     void TerminalWidget::sendKey(TerminalKey key) {
@@ -599,13 +592,68 @@ namespace lfs::vis::terminal {
     }
 
     void TerminalWidget::clear() {
-        if (pty_.is_running()) {
-            if (pty_.write("\x0c", 1) < 0) {
-                LOG_ERROR("PTY clear failed");
-            }
-        } else {
+        if (!pty_.is_running()) {
             reset();
+            return;
         }
+        std::lock_guard lock(mutex_);
+        // Walk the current logical input back through wrapped rows (including
+        // scrollback). A fresh input() row has no prompt and stays independent.
+        const auto row = [&](int index) {
+            if (index < 0)
+                return scrollback_[static_cast<size_t>(-index - 1)];
+            ScrollbackLine line;
+            line.continuation = vterm_state_get_lineinfo(vterm_obtain_state(vt_), index)->continuation;
+            line.cells.resize(cols_);
+            for (int col = 0; col < cols_; ++col)
+                vterm_screen_get_cell(screen_, {index, col}, &line.cells[col]);
+            return line;
+        };
+        const auto row_text = [](const ScrollbackLine& line) {
+            std::string text;
+            for (const auto& cell : line.cells) {
+                if (cell.chars[0] == uint32_t(-1))
+                    continue;
+                text += cell.chars[0] ? cellText(cell) : " ";
+            }
+            return text;
+        };
+        const auto cursor = cursor_pos_;
+        int first = cursor.row;
+        const int oldest = -static_cast<int>(scrollback_.size());
+        while (first > oldest && (row(first).continuation || row_text(row(first)).starts_with("... ")))
+            --first;
+        std::string prompt;
+        int last = cursor.row;
+        if (row_text(row(first)).starts_with(">>> ")) {
+            while (last + 1 < rows_ && (row(last + 1).continuation || row_text(row(last + 1)).starts_with("... ")))
+                ++last;
+            for (int index = first; index <= last; ++index) {
+                auto text = row_text(row(index));
+                const bool wraps = index < last && row(index + 1).continuation;
+                if (!wraps)
+                    while (!text.empty() && text.back() == ' ')
+                        text.pop_back();
+                prompt += text;
+                if (index < last && !wraps)
+                    prompt += "\r\n";
+            }
+        }
+        constexpr char CLEAR_SCREEN[] = "\x1b[2J\x1b[H";
+        vterm_input_write(vt_, CLEAR_SCREEN, sizeof(CLEAR_SCREEN) - 1);
+        scrollback_.clear();
+        scroll_offset_ = 0;
+        if (!prompt.empty()) {
+            vterm_input_write(vt_, prompt.data(), prompt.size());
+            const int scrolled = std::max(0, last - first + 1 - rows_);
+            const std::string position = "\x1b[" + std::to_string(cursor.row - first - scrolled + 1) +
+                                         ";" + std::to_string(cursor.col + 1) + "H";
+            if (cursor_pos_.row != cursor.row - first - scrolled || cursor_pos_.col != cursor.col)
+                vterm_input_write(vt_, position.data(), position.size());
+        }
+        is_selecting_ = false;
+        selection_start_ = selection_end_ = {0, 0};
+        markDirty();
     }
 
     void TerminalWidget::write(const char* data, size_t len) {
@@ -673,9 +721,9 @@ namespace lfs::vis::terminal {
         return 0;
     }
 
-    int TerminalWidget::onPushline(int cols, const VTermScreenCell* cells, void* user) {
+    int TerminalWidget::onPushline(int cols, const VTermScreenCell* cells, bool continuation, void* user) {
         auto* self = static_cast<TerminalWidget*>(user);
-        self->scrollback_.push_front({std::vector<VTermScreenCell>(cells, cells + cols)});
+        self->scrollback_.push_front({std::vector<VTermScreenCell>(cells, cells + cols), continuation});
         while (self->scrollback_.size() > MAX_SCROLLBACK) {
             self->scrollback_.pop_back();
         }

@@ -21,9 +21,6 @@ namespace lfs::training::mrnf_strategy {
         float max_extent = 0.f;
     };
 
-    inline constexpr float kStarvEps = 0.0026f;
-    inline constexpr float kStarvGamma = 1.72f;
-    inline constexpr float kExploreStarvDose = 2.38f;
 } // namespace lfs::training::mrnf_strategy
 
 namespace lfs::gpu_ops {
@@ -33,11 +30,6 @@ namespace lfs::gpu_ops {
         float extent[3] = {};
         float median_size = 0.f;
         float max_extent = 0.f;
-    };
-
-    struct ScalarValidity {
-        float value = 0.f;
-        bool valid = false;
     };
 
     struct MrnfNoiseParams {
@@ -50,7 +42,6 @@ namespace lfs::gpu_ops {
     struct DecayParams {
         float opacity_decay = 0.f;
         float scale_decay = 0.f;
-        float far_decay_scale = 1.f;
         float train_t = 0.f;
     };
 
@@ -58,12 +49,6 @@ namespace lfs::gpu_ops {
         uint64_t seed = 0;
         size_t known_nnz = 0;
         bool compact_sparse = true;
-    };
-
-    struct ProjectParams {
-        HW image;
-        Intrinsics intrinsics;
-        float near_plane = 0.01f;
     };
 
     // Scratch stays the caller's GumbelTopKScratch.
@@ -74,42 +59,18 @@ namespace lfs::gpu_ops {
             const MrnfNoiseParams&);
 
         void (*decay)(
-            Out raw_opacity, Out log_scales, In frozen, In far_mask,
+            Out raw_opacity, Out log_scales, In frozen,
             const DecayParams&);
 
         Bounds (*percentile_bounds)(In means, float percentile);
-        ScalarValidity (*median_extent)(In raw_scales);
 
         void (*gumbel)(
             lfs::training::GumbelTopKScratch* scratch, In weights, Out indices,
             const GumbelParams&);
 
-        // Zeros the first two densification rows. An invalid ratio_max is absent.
-        void (*fold)(
-            Out visibility, Out weight_max, Out densification,
-            Out ratio_max, float ratio_power);
-
         // Folds densification row 1 into the max and clears only that row.
         void (*fold_error)(Out weight_max, Out densification);
 
-        void (*project_centers)(
-            In means, In view, Out means2d, Out radii, const ProjectParams&);
-
-        void (*gather_center_error)(
-            In means2d, In radii, In error, Out scores);
-
-        void (*far_mask)(
-            In means, Out mask, std::array<float, 3> center, float radius);
-
-        void (*mean_abs_error)(In predicted, In target, Out error);
-        void (*seed_weights)(In error, In alpha, Out weights);
-
-        void (*gather_seeds)(
-            In indices, In target, In alpha, In depth,
-            Out rgb, Out sampled_alpha, Out sampled_depth);
-
-        float (*sorted_median)(In values);
-        void (*starvation_weights)(Out weights, In visibility, float median);
         size_t (*compact_bool_indices)(In mask, Out indices, size_t count);
         void (*prune_bounds)(In means, In scale_max, Out mask, std::array<float, 3> center, float maximum, float log_maximum);
         void (*replace_parent_weights)(In opacity, In visibility, In active, In trainable, In edge, Out weights);

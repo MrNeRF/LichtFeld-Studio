@@ -46,6 +46,8 @@ namespace lfs::io {
             int max_num_cpu_threads = 0;
             bool enable_fallback = true;
             size_t decoder_pool_size = 8;
+            // Create every codec handle in the constructor instead of on the first decode and encode.
+            bool create_eagerly = false;
             // Experimental opt-in only; all production call sites leave this false.
             // RTX 4090 bicycle gate measured +35 MiB net and 3.5x dl_wait enabled.
             // A failed cudaFreeAsync stays budget-charged because the allocation
@@ -57,6 +59,9 @@ namespace lfs::io {
 
         explicit NvCodecImageLoader(const Options& options);
         ~NvCodecImageLoader();
+
+        /// Loaders alive in this process.
+        [[nodiscard]] static size_t live_count();
 
         // Disable copying
         NvCodecImageLoader(const NvCodecImageLoader&) = delete;
@@ -158,19 +163,6 @@ namespace lfs::io {
             const std::vector<std::pair<const uint8_t*, size_t>>& jpeg2k_spans,
             void* cuda_stream = nullptr,
             bool synchronize = true);
-
-        /**
-         * @brief Encode grayscale GPU tensor to JPEG bytes
-         *
-         * @param image Tensor in GPU memory, format: [H,W] float32 normalized [0-1]
-         * @param quality JPEG quality (1-100)
-         * @param cuda_stream Optional CUDA stream for async operations
-         * @return JPEG bytes
-         */
-        std::vector<uint8_t> encode_grayscale_to_jpeg(
-            const lfs::core::Tensor& image,
-            int quality = 100,
-            void* cuda_stream = nullptr);
 
         /**
          * @brief Batch encode raw RGB uint8 GPU data to JPEG bytes

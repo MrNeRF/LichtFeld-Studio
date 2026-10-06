@@ -20,12 +20,11 @@
 
 namespace lfs::training {
     namespace {
-
-        constexpr std::string_view kOriginalImagesFolder = "images";
-
         [[nodiscard]] bool camera_needs_normal_map(const lfs::core::Camera& cam) {
             return cam.has_image() && !cam.has_normal();
         }
+
+        constexpr std::string_view kOriginalImagesFolder = "images";
 
         [[nodiscard]] std::string training_images_folder(
             const lfs::core::param::TrainingParameters& params) {
@@ -161,20 +160,6 @@ namespace lfs::training {
         }
 
     } // namespace
-
-    bool normal_auto_generate_needed(
-        const bool use_normal_loss,
-        const bool normal_auto_generate,
-        const float normal_loss_weight,
-        const std::span<const std::shared_ptr<lfs::core::Camera>> cameras) {
-        if (!use_normal_loss || !normal_auto_generate || normal_loss_weight <= 0.0f)
-            return false;
-        for (const auto& cam : cameras) {
-            if (cam && camera_needs_normal_map(*cam))
-                return true;
-        }
-        return false;
-    }
 
     NormalAutoGenerateOutcome ensure_training_normal_maps(
         const lfs::core::param::TrainingParameters& params,

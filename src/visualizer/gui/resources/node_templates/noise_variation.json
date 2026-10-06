@@ -1,0 +1,271 @@
+{
+  "schema_version": 1,
+  "id": "noise_variation",
+  "name": "Noise colour variation",
+  "description": "Add scene-scale mottled colour variation driven by procedural noise.",
+  "category": "Colour",
+  "scene_kinds": [
+    "splat",
+    "mesh",
+    "points"
+  ],
+  "adjust": "Adjust Scale for patch size, Seed for a new pattern, and Strength for the blend.",
+  "tree": {
+    "schema_version": 1,
+    "uuid": "builtin.noise_variation",
+    "name": "Noise colour variation",
+    "tree_type": "lfs.geometry",
+    "nodes": [
+      {
+        "name": "Position",
+        "type_id": "lfs.position",
+        "location": [-720, -260],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {"frame": "Adjust these settings"},
+        "version": 1
+      },
+      {
+        "name": "Group Input",
+        "type_id": "lfs.group_input",
+        "location": [
+          -760,
+          0
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Group Output",
+        "type_id": "lfs.group_output",
+        "location": [
+          520,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "none"
+          }
+        },
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Noise",
+        "type_id": "lfs.noise_texture",
+        "location": [
+          -420,
+          -180
+        ],
+        "muted": false,
+        "input_values": {
+          "Scale": {
+            "type": "float",
+            "value": 1.4
+          },
+          "Detail": {
+            "type": "float",
+            "value": 2.5
+          },
+          "Roughness": {
+            "type": "float",
+            "value": 0.55
+          },
+          "Seed": {
+            "type": "float",
+            "value": 7
+          }
+        },
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Tint",
+        "type_id": "lfs.mix_colour",
+        "location": [
+          -120,
+          -120
+        ],
+        "muted": false,
+        "input_values": {
+          "A": {
+            "type": "vec4",
+            "value": [
+              0.12,
+              0.22,
+              0.04,
+              1
+            ]
+          },
+          "B": {
+            "type": "vec4",
+            "value": [
+              0.75,
+              0.27,
+              0.025,
+              1
+            ]
+          }
+        },
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Set Colour",
+        "type_id": "lfs.set_colour",
+        "location": [
+          180,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "geometry"
+          }
+        },
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Adjust these settings",
+        "type_id": "lfs.frame",
+        "location": [
+          -620,
+          -180
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "colour": "neutral",
+          "label": "Adjust these settings",
+          "note": "Adjust Scale for patch size, Seed for a new pattern, and Strength for the blend."
+        },
+        "ui": {},
+        "version": 1
+      }
+    ],
+    "links": [
+      {
+        "from_node": "Position",
+        "from_socket": "Position",
+        "to_node": "Noise",
+        "to_socket": "Vector"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Geometry",
+        "to_node": "Set Colour",
+        "to_socket": "Geometry"
+      },
+      {
+        "from_node": "Noise",
+        "from_socket": "Fac",
+        "to_node": "Tint",
+        "to_socket": "Factor"
+      },
+      {
+        "from_node": "Tint",
+        "from_socket": "Colour",
+        "to_node": "Set Colour",
+        "to_socket": "Colour"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Strength",
+        "to_node": "Set Colour",
+        "to_socket": "Selection"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Scale",
+        "to_node": "Noise",
+        "to_socket": "Scale"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Seed",
+        "to_node": "Noise",
+        "to_socket": "Seed"
+      },
+      {
+        "from_node": "Set Colour",
+        "from_socket": "Geometry",
+        "to_node": "Group Output",
+        "to_socket": "Geometry"
+      }
+    ],
+    "interface": {
+      "inputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        },
+        {
+          "identifier": "Scale",
+          "label": "Scale",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 1.4
+          },
+          "min": 0.01,
+          "max": 100,
+          "step": 0.1
+        },
+        {
+          "identifier": "Seed",
+          "label": "Seed",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 7
+          },
+          "min": 0,
+          "max": 1000,
+          "step": 1
+        },
+        {
+          "identifier": "Strength",
+          "label": "Strength",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 0.35
+          },
+          "min": 0,
+          "max": 1,
+          "step": 0.01
+        }
+      ],
+      "outputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        }
+      ]
+    }
+  }
+}

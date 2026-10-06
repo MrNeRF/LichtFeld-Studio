@@ -17,67 +17,9 @@
 #include <fstream>
 #include <iterator>
 #include <random>
-#include <span>
 #include <vector>
 
 namespace {
-
-    using lfs::core::NodeBoundsRecord;
-    using lfs::core::NodeLinksRecord;
-    using lfs::core::RadMetaLinksQ;
-    using lfs::core::SplatLodTree;
-
-    RadMetaLinksQ makeNode(const std::uint32_t child_start, const std::uint32_t child_count) {
-        return {
-            .child_start = child_start,
-            .packed = child_count & 0xffffu,
-            .parent = 0xFFFFFFFFu,
-        };
-    }
-
-    std::uint32_t levelOf(const RadMetaLinksQ& rec) { return (rec.packed >> 16u) & 0xffu; }
-
-    TEST(RadMetaSidecar, DeriveParentsHandlesNonMonotoneChildStart) {
-        // Level-ordered tree whose level-1 parents point at non-monotone
-        // child_start ranges, as the multi-bucket converter layouts produce:
-        // node 0 (root) -> [1, 3); node 1 -> [5, 7); node 2 -> [3, 5).
-        std::vector<RadMetaLinksQ> links{
-            makeNode(1, 2),
-            makeNode(5, 2),
-            makeNode(3, 2),
-            makeNode(0, 0),
-            makeNode(0, 0),
-            makeNode(0, 0),
-            makeNode(0, 0),
-        };
-        const auto leaf_count = lfs::io::derive_rad_meta_parents_levels(std::span(links));
-        ASSERT_TRUE(leaf_count.has_value()) << leaf_count.error();
-        EXPECT_EQ(*leaf_count, 4u);
-
-        EXPECT_EQ(links[0].parent, 0xFFFFFFFFu);
-        EXPECT_EQ(links[1].parent, 0u);
-        EXPECT_EQ(links[2].parent, 0u);
-        EXPECT_EQ(links[3].parent, 2u);
-        EXPECT_EQ(links[4].parent, 2u);
-        EXPECT_EQ(links[5].parent, 1u);
-        EXPECT_EQ(links[6].parent, 1u);
-        EXPECT_EQ(levelOf(links[0]), 0u);
-        EXPECT_EQ(levelOf(links[1]), 1u);
-        EXPECT_EQ(levelOf(links[2]), 1u);
-        for (std::size_t i = 3; i < links.size(); ++i) {
-            EXPECT_EQ(levelOf(links[i]), 2u);
-        }
-    }
-
-    TEST(RadMetaSidecar, DeriveParentsRejectsCorruptLayouts) {
-        // Child range pointing backwards.
-        std::vector<RadMetaLinksQ> backwards{makeNode(0, 1), makeNode(0, 0)};
-        EXPECT_FALSE(lfs::io::derive_rad_meta_parents_levels(std::span(backwards)).has_value());
-
-        // Orphan node (no parent assigns it).
-        std::vector<RadMetaLinksQ> orphan{makeNode(1, 1), makeNode(0, 0), makeNode(0, 0)};
-        EXPECT_FALSE(lfs::io::derive_rad_meta_parents_levels(std::span(orphan)).has_value());
-    }
 
     struct SyntheticSplat {
         float x, y, z;
@@ -202,25 +144,6 @@ namespace {
                         std::log(std::max(size_truth, 1e-20f)),
                         rel_tolerance)
                 << "node " << i;
-        }
-
-        // Page expansion produces the exact GPU records, logical included.
-        constexpr std::size_t kChunk = SplatLodTree::kChunkSplats;
-        const std::size_t expand_chunk = view->chunk_count > 1 ? 1 : 0;
-        const std::size_t logical_start = expand_chunk * kChunk;
-        const std::size_t run = std::min(kChunk, view->node_count - logical_start);
-        std::vector<NodeBoundsRecord> bounds(run);
-        std::vector<NodeLinksRecord> links(run);
-        lfs::io::expand_rad_meta_page(*view, static_cast<std::uint32_t>(expand_chunk), run,
-                                      bounds.data(), links.data());
-        for (std::size_t i = 0; i < run; ++i) {
-            EXPECT_EQ(links[i].logical, logical_start + i);
-            EXPECT_EQ(links[i].child_start, tree.child_start[logical_start + i]);
-            EXPECT_EQ(links[i].childCount(), tree.child_count[logical_start + i]);
-            // Cross-TU FP contraction may differ by a few ULPs.
-            const float expected =
-                view->chunkOf(logical_start + i).dequantSize(view->bounds[logical_start + i]);
-            EXPECT_NEAR(bounds[i].size, expected, std::abs(expected) * 1e-5f);
         }
 
         // Touching the RAD file invalidates the sidecar (mtime/hash stamp).

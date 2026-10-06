@@ -192,7 +192,7 @@ namespace lfs::vis::op {
         void refreshAfterHistoryPlayback(const DirtyMask flags = DirtyFlag::ALL) {
             invalidateUndoRedoPollState();
             if (auto* rm = services().renderingOrNull()) {
-                rm->markDirty(flags);
+                rm->markDirty(flags, lfs::vis::FrameReason::SceneChange);
             }
         }
 

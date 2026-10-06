@@ -16,6 +16,7 @@
 #include <span>
 #include <torch/torch.h>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 using namespace lfs::core;
@@ -28,7 +29,6 @@ namespace {
             internal::clear_lazy_ir_for_testing();
             internal::lazy_executor_clear_registry_for_testing();
             internal::lazy_executor_reset_diagnostics_for_testing();
-            internal::lazy_executor_set_debug_dump_override_for_testing(std::nullopt);
             internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
             internal::lazy_executor_set_size_heuristic_override_for_testing(false);
             internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
@@ -42,7 +42,6 @@ namespace {
             internal::clear_lazy_ir_for_testing();
             internal::lazy_executor_clear_registry_for_testing();
             internal::lazy_executor_reset_diagnostics_for_testing();
-            internal::lazy_executor_set_debug_dump_override_for_testing(std::nullopt);
             internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
             internal::lazy_executor_set_size_heuristic_override_for_testing(std::nullopt);
             internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
@@ -386,33 +385,6 @@ TEST(TensorLazyIrTest, OnModePlannerDiagnosticsTrackRootFallbackWhenPlanHasNoRoo
     EXPECT_EQ(diagnostics.cache_hits, 0u);
     EXPECT_EQ(diagnostics.cache_misses, 0u);
     EXPECT_EQ(diagnostics.root_fallbacks, 1u);
-}
-
-TEST(TensorLazyIrTest, OnModePlannerDebugDumpOverrideControlsFlag) {
-    LazyTestGuard guard;
-
-    internal::lazy_executor_set_debug_dump_override_for_testing(false);
-    EXPECT_FALSE(internal::lazy_executor_debug_dump_enabled_for_testing());
-
-    internal::lazy_executor_set_debug_dump_override_for_testing(true);
-    EXPECT_TRUE(internal::lazy_executor_debug_dump_enabled_for_testing());
-
-    internal::lazy_executor_set_debug_dump_override_for_testing(std::nullopt);
-    internal::lazy_executor_set_debug_dump_override_for_testing(false);
-    EXPECT_FALSE(internal::lazy_executor_debug_dump_enabled_for_testing());
-}
-
-TEST(TensorLazyIrTest, OnModePointwiseFusionOverrideControlsFlag) {
-    LazyTestGuard guard;
-
-    internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
-    EXPECT_FALSE(internal::lazy_executor_pointwise_fusion_enabled_for_testing());
-
-    internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
-    EXPECT_TRUE(internal::lazy_executor_pointwise_fusion_enabled_for_testing());
-
-    internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
-    EXPECT_TRUE(internal::lazy_executor_pointwise_fusion_enabled_for_testing());
 }
 
 TEST(TensorLazyIrTest, OnModePointwiseFusionReducesLaunchesWithParity) {
@@ -1140,6 +1112,27 @@ TEST(TensorLazyIrTest, OnModeCpuAffineFoldMatchesExpected) {
 
     const auto diagnostics = internal::lazy_executor_diagnostics_snapshot_for_testing();
     EXPECT_GT(diagnostics.fused_launches, 0u);
+}
+
+TEST(TensorLazyIrTest, FusedChainReadsOperandsWithoutDetachingTheirSnapshots) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    LazyTestGuard guard;
+    internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
+    internal::lazy_executor_reset_diagnostics_for_testing();
+
+    auto source = Tensor::full({1 << 16}, 3.0f, Device::CUDA, DataType::Float32);
+    auto other = Tensor::full({1 << 16}, 1.0f, Device::CUDA, DataType::Float32);
+    const auto source_cell = internal::lazy_executor_snapshot_operand(source);
+    const auto other_cell = internal::lazy_executor_snapshot_operand(other);
+
+    const auto result = source.sub(other).abs().mul(2.0f).to_vector();
+    ASSERT_EQ(result.size(), size_t{1} << 16);
+    EXPECT_EQ(result.front(), 4.0f);
+    EXPECT_GT(internal::lazy_executor_diagnostics_snapshot_for_testing().fused_launches, 0u);
+    EXPECT_EQ(std::as_const(*source_cell).data_ptr(), std::as_const(source).data_ptr());
+    EXPECT_EQ(std::as_const(*other_cell).data_ptr(), std::as_const(other).data_ptr());
 }
 
 TEST(TensorLazyIrTest, OnModeGpuAffineFoldIdentityIsCorrect) {

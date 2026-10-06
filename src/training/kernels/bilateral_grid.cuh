@@ -7,6 +7,9 @@
 
 namespace lfs::training::kernels {
 
+    // Slice forwards may write output over rgb, and slice backwards may write grad_rgb over grad_output: every
+    // pixel is read before it is written, and the grid gradient is taken before grad_rgb.
+
     // HWC layout kernels
 
     void launch_bilateral_grid_slice_forward(

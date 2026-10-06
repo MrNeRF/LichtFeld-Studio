@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/camera.hpp"
 #include "core/editor_context.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
@@ -9,11 +10,14 @@
 #include "core/user_paths.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
+#include "input/camera_animation_cadence.hpp"
 #include "input/frame_input_buffer.hpp"
 #include "input/input_controller.hpp"
 #include "input/input_router.hpp"
 #include "input/key_codes.hpp"
 #include "internal/viewport.hpp"
+#include "operator/operator_registry.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/gt_comparison_geometry.hpp"
@@ -24,11 +28,13 @@
 #include "tools/tool_base.hpp"
 #include "visualizer/visualizer.hpp"
 #include "visualizer_impl.hpp"
+#include <algorithm>
 
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <glm/gtc/constants.hpp>
 #include <gtest/gtest.h>
 #include <iterator>
@@ -36,6 +42,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -122,6 +129,138 @@ namespace lfs::vis {
         };
     } // namespace
 
+    TEST_F(InputControllerFocusTest, HeldOrbitRequestsFramesOnlyWhenTheCameraChanges) {
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_PRESS, 100.0, 100.0);
+        ASSERT_TRUE(controller.isCameraDragging());
+        EXPECT_TRUE(controller.isContinuousInputActive());
+        EXPECT_FALSE(controller.needsCameraAnimationFrame());
+
+        const auto before = viewport.camera.R;
+        controller.handleMouseMove(120.0, 110.0);
+        EXPECT_NE(viewport.camera.R, before);
+        ASSERT_TRUE(viewport.camera.hasOrbitMomentum());
+        EXPECT_FALSE(controller.needsCameraAnimationFrame());
+
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_RELEASE, 120.0, 110.0);
+        EXPECT_FALSE(controller.isCameraDragging());
+        EXPECT_TRUE(controller.needsCameraAnimationFrame());
+        for (int i = 0; i < 300; ++i)
+            controller.update(1.0f / 60.0f);
+        EXPECT_FALSE(controller.needsCameraAnimationFrame());
+    }
+
+    TEST_F(InputControllerFocusTest, HeldPanVelocityIsNotAnAnimationUntilRelease) {
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::RIGHT),
+                                     input::ACTION_PRESS, 100.0, 100.0);
+        ASSERT_TRUE(controller.isCameraDragging());
+        EXPECT_FALSE(controller.needsCameraAnimationFrame());
+        controller.handleMouseMove(125.0, 105.0);
+        ASSERT_TRUE(viewport.camera.hasPanMomentum());
+        EXPECT_FALSE(controller.needsCameraAnimationFrame());
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::RIGHT),
+                                     input::ACTION_RELEASE, 125.0, 105.0);
+        EXPECT_TRUE(controller.needsCameraAnimationFrame());
+    }
+
+    TEST_F(InputControllerFocusTest, HeldLookIsEventDrivenButKeyboardMovementAnimates) {
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
+        controller.initialize();
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        router.focusViewportKeyboard();
+        controller.setCameraNavigationMode(InputController::CameraNavigationMode::FPV);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_PRESS, 100.0, 100.0);
+        ASSERT_TRUE(controller.isCameraDragging());
+        controller.handleMouseMove(120.0, 110.0);
+        EXPECT_FALSE(controller.needsCameraAnimationFrame());
+        controller.handleKey(input::KEY_W, input::ACTION_PRESS, input::KEYMOD_NONE);
+        EXPECT_TRUE(controller.needsCameraAnimationFrame());
+    }
+
+    TEST_F(InputControllerFocusTest, PausedOrbitDecaysWithoutFrameTicks) {
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_PRESS, 100.0, 100.0);
+        controller.handleMouseMove(120.0, 110.0);
+        ASSERT_TRUE(viewport.camera.hasOrbitMomentum());
+        const auto paused_rotation = viewport.camera.R;
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_RELEASE, 120.0, 110.0);
+        EXPECT_FALSE(controller.needsCameraAnimationFrame());
+        EXPECT_EQ(viewport.camera.R, paused_rotation);
+    }
+
+    TEST(CameraAnimationCadenceTest, ContinuousTicksUseDisplayOpportunitiesWithoutACatchUpBurst) {
+        CameraAnimationCadence cadence;
+        const CameraAnimationCadence::Clock::time_point start{};
+        int frames = 0;
+        int last_visible_input = -1;
+        for (int input = 0; input < 1000; ++input) {
+            const auto now = start + std::chrono::milliseconds(input);
+            if (cadence.secondsUntilReady(now, 0.01) == 0.0) {
+                cadence.startFrame(now);
+                last_visible_input = input;
+                ++frames;
+            }
+        }
+        EXPECT_EQ(frames, 100);
+        EXPECT_EQ(last_visible_input, 990);
+        // No accumulated render debt after a slow frame or an idle period.
+        const auto later = start + std::chrono::seconds(2);
+        EXPECT_EQ(cadence.secondsUntilReady(later, 0.01), 0.0);
+        cadence.startFrame(later);
+        EXPECT_GT(cadence.secondsUntilReady(later, 0.01), 0.0);
+    }
+
+    TEST(CameraAnimationCadenceTest, FirstUpdateIsImmediateAndDisplayChangesAreRespected) {
+        CameraAnimationCadence cadence;
+        const CameraAnimationCadence::Clock::time_point start{};
+        EXPECT_EQ(cadence.secondsUntilReady(start, 1.0 / 60.0), 0.0);
+        cadence.startFrame(start);
+        const auto next = start + std::chrono::milliseconds(5);
+        EXPECT_GT(cadence.secondsUntilReady(next, 1.0 / 60.0), 0.0);
+        EXPECT_EQ(cadence.secondsUntilReady(next, 1.0 / 240.0), 0.0);
+    }
+
+    // Fails if a wake without input (a viewer-thread user event) counts as input, which would let
+    // demand-driven frames skip the display pacing, or if any kind of user input does not bypass it.
+    TEST(FrameInputBufferTest, OnlyUserInputBypassesDisplayPacing) {
+        FrameInputBuffer input;
+        input.had_event = true;
+        input.user_event = true;
+        EXPECT_FALSE(input.hasUserInput());
+
+        const std::vector<std::function<void(FrameInputBuffer&)>> inputs{
+            [](FrameInputBuffer& b) { b.mouse_moved = true; },
+            [](FrameInputBuffer& b) { b.window_event = true; },
+            [](FrameInputBuffer& b) { b.mouse_wheel = 1.0f; },
+            [](FrameInputBuffer& b) { b.mouse_wheel_x = -1.0f; },
+            [](FrameInputBuffer& b) { b.mouse_button_events.emplace_back(); },
+            [](FrameInputBuffer& b) { b.input_events.emplace_back(); },
+            [](FrameInputBuffer& b) { b.keys_pressed.push_back(SDL_SCANCODE_W); },
+        };
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            FrameInputBuffer buffer;
+            inputs[i](buffer);
+            EXPECT_TRUE(buffer.hasUserInput()) << "input kind " << i;
+        }
+    }
+
     TEST_F(InputControllerFocusTest, CameraViewHotkeysDoNotBypassGuiKeyboardCapture) {
         Viewport viewport(200, 200);
         lfs::vis::TestViewTargets controller_views{viewport};
@@ -141,6 +280,52 @@ namespace lfs::vis {
         controller.handleKey(input::KEY_RIGHT, input::ACTION_PRESS, input::KEYMOD_NONE);
 
         EXPECT_EQ(goto_cam_view_count, 0);
+    }
+
+    TEST_F(InputControllerFocusTest, CameraViewKeysUseSceneUidsWithoutTrainerAndPreserveComparison) {
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        router.focusViewportKeyboard();
+        SceneManager scene_manager;
+        screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
+        services().set(&scene_manager);
+        services().set(&rendering_manager);
+        auto& scene = scene_manager.getScene();
+        const auto group = scene.addCameraGroup("Cameras", scene.addGroup("Dataset"), 3);
+        for (const int uid : {4, 17, 42}) {
+            auto camera = std::make_shared<core::Camera>(
+                core::Tensor::eye(3, core::Device::CPU),
+                core::Tensor::zeros({3}, core::Device::CPU),
+                100.0f, 100.0f, 32.0f, 32.0f,
+                core::Tensor(), core::Tensor(), core::CameraModelType::PINHOLE,
+                std::to_string(uid), std::filesystem::path{}, std::filesystem::path{},
+                64, 64, uid);
+            scene.addCamera(std::to_string(uid), group, std::move(camera));
+        }
+        ASSERT_EQ(services().trainerOrNull(), nullptr);
+        core::events::cmd::ToggleGTComparison{}.emit();
+        ASSERT_TRUE(rendering_manager.isGTComparisonActive());
+        const auto press = [&](const int key, const int expected_uid) {
+            controller.handleKey(key, input::ACTION_PRESS, input::KEYMOD_NONE);
+            controller.handleKey(key, input::ACTION_RELEASE, input::KEYMOD_NONE);
+            controller.update(0.016f);
+            EXPECT_EQ(rendering_manager.getCurrentCameraId(), expected_uid);
+            EXPECT_TRUE(rendering_manager.isGTComparisonActive());
+        };
+        press(input::KEY_LEFT, 42);
+        press(input::KEY_RIGHT, 4);
+        press(input::KEY_RIGHT, 17);
+        press(input::KEY_LEFT, 4);
+        core::events::cmd::GoToCamView{.cam_id = 17}.emit();
+        press(input::KEY_RIGHT, 42);
+
+        controller.handleScroll(0.0, 1.0);
+        EXPECT_FALSE(rendering_manager.isGTComparisonActive());
     }
 
     TEST_F(InputControllerFocusTest, RebindingKeyCaptureBypassesPythonKeyboardCapture) {
@@ -323,6 +508,129 @@ namespace lfs::vis {
         EXPECT_EQ(remove_ply_count, 0);
         EXPECT_EQ(input::shortcutScopeForAction(input::Action::DELETE_NODE),
                   input::ShortcutScope::GlobalWhenNotTextEditing);
+    }
+
+    TEST_F(InputControllerFocusTest, EditorFocusProtectsKeysUntilBlur) {
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        SceneManager scene;
+        scene.getScene().addGroup("model");
+        scene.selectNode("model");
+        ToolContext context(nullptr, &scene, &controller_views, nullptr);
+        controller.setToolContext(&context);
+        lfs::event::ScopedHandler handlers;
+        int deletes = 0;
+        handlers.subscribe<core::events::cmd::RemovePLY>([&](const auto&) { ++deletes; });
+
+        router.focusViewportKeyboard();
+        router.beginMouseButton(input::ACTION_PRESS, 10, 10);
+        router.endMouseButton(input::ACTION_RELEASE);
+        gui::guiFocusState().want_text_input = true;
+        EXPECT_TRUE(router.isTextInputActive());
+        controller.handleKey(input::KEY_DELETE, input::ACTION_PRESS, 0);
+        EXPECT_EQ(deletes, 0);
+
+        gui::guiFocusState().want_text_input = true;
+        controller.handleKey(input::KEY_DELETE, input::ACTION_PRESS, 0);
+        EXPECT_EQ(deletes, 0);
+        gui::guiFocusState().reset();
+        router.focusViewportKeyboard();
+        controller.handleKey(input::KEY_DELETE, input::ACTION_PRESS, 0);
+        EXPECT_EQ(deletes, 1);
+        router.onWindowFocusLost();
+        EXPECT_FALSE(router.isTextInputActive());
+    }
+
+    TEST_F(InputControllerFocusTest, EditorLettersDoNotBecomeCameraScrollChords) {
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        const glm::mat3 original = viewport.camera.R;
+        gui::guiFocusState().want_text_input = true;
+        controller.handleKey(input::KEY_R, input::ACTION_PRESS, 0);
+        controller.handleScroll(0.0, 1.0);
+        for (int column = 0; column < 3; ++column)
+            EXPECT_LT(glm::distance(viewport.camera.R[column], original[column]), 1e-6f);
+        controller.handleKey(input::KEY_R, input::ACTION_RELEASE, 0);
+        gui::guiFocusState().reset();
+        controller.handleKey(input::KEY_R, input::ACTION_PRESS, 0);
+        controller.handleScroll(0.0, 1.0);
+        EXPECT_GT(glm::distance(viewport.camera.R[0], original[0]), 1e-3f);
+        controller.handleKey(input::KEY_R, input::ACTION_RELEASE, 0);
+    }
+
+    TEST_F(InputControllerFocusTest, EditorKeysNeverReachModalOperatorsEvenOverViewport) {
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        router.focusViewportKeyboard();
+        int received = 0;
+        constexpr auto id = "test.editor.key_isolation";
+        op::operators().registerCallbackOperator(
+            {.python_class_id = id, .label = "Key isolation"},
+            {.invoke = [](op::OperatorProperties&) { return op::OperatorResult::RUNNING_MODAL; },
+             .modal = [&](const op::ModalEvent&, op::OperatorProperties&) {
+                 ++received;
+                 return op::OperatorResult::RUNNING_MODAL; }});
+        ASSERT_EQ(op::operators().invoke(id).status, op::OperatorResult::RUNNING_MODAL);
+        gui::guiFocusState().want_text_input = true;
+        for (const auto key : {input::KEY_DELETE, input::KEY_BACKSPACE, input::KEY_Z,
+                               input::KEY_Y, input::KEY_A, input::KEY_C, input::KEY_X,
+                               input::KEY_V, input::KEY_HOME, input::KEY_END,
+                               input::KEY_G, input::KEY_R, input::KEY_W, input::KEY_D}) {
+            for (const auto mods : {0, input::KEYMOD_CTRL, input::KEYMOD_CTRL | input::KEYMOD_SHIFT}) {
+                controller.handleKey(key, input::ACTION_PRESS, mods);
+                controller.handleKey(key, input::ACTION_REPEAT, mods);
+                controller.handleKey(key, input::ACTION_RELEASE, mods);
+            }
+        }
+        EXPECT_EQ(received, 0);
+        gui::guiFocusState().reset();
+        controller.handleKey(input::KEY_G, input::ACTION_PRESS, 0);
+        EXPECT_EQ(received, 1);
+        op::operators().cancelModalOperator();
+        op::operators().unregisterOperator(id);
+    }
+
+    TEST_F(InputControllerFocusTest, OwnedModifierReleaseReachesModalAfterTextFocus) {
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        gui::RmlUIManager dispatcher;
+        std::vector<int> actions;
+        constexpr auto id = "test.input.press_owner";
+        op::operators().registerCallbackOperator(
+            {.python_class_id = id, .label = "Press owner"},
+            {.invoke = [](op::OperatorProperties&) { return op::OperatorResult::RUNNING_MODAL; },
+             .modal = [&](const op::ModalEvent& event, op::OperatorProperties&) {
+                 if (const auto* key = event.as<KeyEvent>())
+                     actions.push_back(key->action);
+                 return op::OperatorResult::RUNNING_MODAL; }});
+        ASSERT_EQ(op::operators().invoke(id).status, op::OperatorResult::RUNNING_MODAL);
+        SDL_Event down{};
+        down.type = SDL_EVENT_KEY_DOWN;
+        down.key.scancode = SDL_SCANCODE_LALT;
+        down.key.down = true;
+        ASSERT_FALSE(dispatcher.dispatchInputEvent(down).consumed);
+        controller.handleKey(input::KEY_LEFT_ALT, input::ACTION_PRESS, input::KEYMOD_ALT);
+        SDL_Event up = down;
+        up.type = SDL_EVENT_KEY_UP;
+        up.key.down = false;
+        const auto release = dispatcher.dispatchInputEvent(up);
+        ASSERT_TRUE(release.owned_release);
+        gui::guiFocusState().want_text_input = true;
+        controller.handleKey(input::KEY_LEFT_ALT, input::KEY_LEFT_ALT, SDL_SCANCODE_LALT,
+                             input::ACTION_RELEASE, 0, release.owned_release);
+        EXPECT_EQ(actions, (std::vector<int>{input::ACTION_PRESS, input::ACTION_RELEASE}));
+        op::operators().cancelModalOperator();
+        op::operators().unregisterOperator(id);
     }
 
     TEST_F(InputControllerFocusTest, DeleteNodeShortcutFiresWhenViewportFocused) {
@@ -1516,7 +1824,7 @@ namespace lfs::vis {
         std::ifstream persisted(profile_path);
         ASSERT_TRUE(persisted.is_open());
         const std::string contents((std::istreambuf_iterator<char>(persisted)), {});
-        EXPECT_NE(contents.find("\"version\": 32"), std::string::npos); // PROFILE_VERSION
+        EXPECT_NE(contents.find("\"version\": 33"), std::string::npos); // PROFILE_VERSION
         EXPECT_NE(contents.find("Gallery Primary Action"), std::string::npos);
         EXPECT_NE(contents.find("Copy Gallery Link"), std::string::npos);
         EXPECT_NE(contents.find("Refresh Assets"), std::string::npos);
@@ -1584,7 +1892,7 @@ namespace lfs::vis {
         const auto version_key = contents.find("\"version\":");
         ASSERT_NE(version_key, std::string::npos);
         EXPECT_EQ(contents.find("\"version\":", version_key + 1), std::string::npos);
-        EXPECT_NE(contents.find("\"version\": 32"), std::string::npos);
+        EXPECT_NE(contents.find("\"version\": 33"), std::string::npos);
         EXPECT_NE(contents.find("Toggle MCP Server"), std::string::npos);
         EXPECT_NE(contents.find("Window size"), std::string::npos);
         EXPECT_NE(contents.find("Window drag"), std::string::npos);
@@ -2196,6 +2504,31 @@ namespace lfs::vis {
         for (int col = 0; col < 3; ++col) {
             EXPECT_NEAR(glm::distance(viewport.camera.R[col], start_r[col]), 0.0f, 1e-6f);
         }
+    }
+
+    TEST_F(InputControllerFocusTest, DatasetCameraJumpPreservesComparison) {
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
+        SceneManager scene_manager;
+        screen::ScreenService rendering_views;
+        RenderingManager rendering_manager{rendering_views};
+        services().set(&scene_manager);
+        services().set(&rendering_manager);
+        ASSERT_EQ(rendering_views.activeView(), controller_views.viewId(viewport));
+        auto& scene = scene_manager.getScene();
+        const auto group = scene.addCameraGroup("Cameras", scene.addGroup("Dataset"), 1);
+        scene.addCamera("camera", group, std::make_shared<core::Camera>(core::Tensor::eye(3, core::Device::CPU), core::Tensor::zeros({3}, core::Device::CPU), 100.0f, 100.0f, 32.0f, 32.0f, core::Tensor(), core::Tensor(), core::CameraModelType::PINHOLE, "camera", std::filesystem::path{}, std::filesystem::path{}, 64, 64, 17));
+        const auto view = rendering_views.activeView();
+        rendering_manager.editViewSettings(view, [](ViewSettings& settings) {
+            settings.split_view_mode = SplitViewMode::GTComparison;
+        });
+        core::events::cmd::GoToCamView{.cam_id = 17}.emit();
+        controller.update(0.016f);
+        EXPECT_EQ(rendering_manager.getCurrentCameraId(), 17);
+        EXPECT_EQ(rendering_manager.settingsForView(view).split_view_mode, SplitViewMode::GTComparison);
+        core::events::cmd::ResetCamera{}.emit();
+        EXPECT_EQ(rendering_manager.settingsForView(view).split_view_mode, SplitViewMode::Disabled);
     }
 
 } // namespace lfs::vis

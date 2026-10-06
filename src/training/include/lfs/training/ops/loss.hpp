@@ -57,6 +57,11 @@ namespace lfs::gpu_ops {
         PhotoWorkspaceBytes (*workspace_bytes)(const PhotoSaved&);
         void (*shrink_to_required)(PhotoSaved&);
         void (*reset)(PhotoSaved&);
+
+        // Null when evaluate writes grad_raw. Otherwise the decoupled paths leave grad_raw empty, and this adds the
+        // raw-render gradient of the last evaluate into grad_image after the appearance backward, then releases it;
+        // an empty grad_image only releases it.
+        void (*add_raw_gradient)(PhotoSaved&, Out grad_image) = nullptr;
     };
 
 } // namespace lfs::gpu_ops

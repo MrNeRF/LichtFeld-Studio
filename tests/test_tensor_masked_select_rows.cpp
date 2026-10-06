@@ -344,8 +344,28 @@ TEST_F(MaskedSelectRowsTest, LogicalNotFiltersDeletedRows) {
     const auto deleted = Tensor::from_vector(
         std::vector<bool>{false, true, false, true}, {4}, Device::GPU);
 
-    const Tensor kept = rows[~deleted];
+    const Tensor kept = rows.index_select(0, ~deleted);
     EXPECT_EQ(kept.shape(), TensorShape({2, 2}));
     EXPECT_EQ(kept.cpu().to_vector(),
               (std::vector<float>{1.0f, 10.0f, 3.0f, 30.0f}));
+}
+
+TEST_F(MaskedSelectRowsTest, PointCloudFilter_CUDA) {
+    // Simulates the trim_distant_points use case
+    constexpr size_t N = 50000;
+
+    const auto means = Tensor::randn({N, 3}, Device::GPU);
+    const auto colors = Tensor::randn({N, 3}, Device::GPU);
+
+    // Create a mask keeping 95% of points
+    const auto keep_mask = Tensor::rand({N}, Device::GPU) < 0.95f;
+    const size_t expected = keep_mask.to(DataType::Int32).sum().item<int>();
+
+    const Tensor filtered_means = means.index_select(0, keep_mask);
+    const Tensor filtered_colors = colors.index_select(0, keep_mask);
+
+    EXPECT_EQ(filtered_means.size(0), expected);
+    EXPECT_EQ(filtered_means.size(1), 3);
+    EXPECT_EQ(filtered_colors.size(0), expected);
+    EXPECT_EQ(filtered_colors.size(1), 3);
 }

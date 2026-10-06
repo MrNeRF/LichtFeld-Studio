@@ -11,10 +11,36 @@
 #include <SDL3/SDL_video.h>
 #include <cassert>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace lfs::vis {
+
+    enum class FrameInputEventKind { KeyDown,
+                                     KeyUp,
+                                     Text,
+                                     TextEditing,
+                                     MouseButton };
+
+    struct InputEventDispatch {
+        bool consumed = false;
+    };
+
+    struct FrameInputEvent {
+        FrameInputEventKind kind = FrameInputEventKind::KeyDown;
+        SDL_Scancode scancode = SDL_SCANCODE_UNKNOWN;
+        SDL_Keymod modifiers = SDL_KMOD_NONE;
+        bool repeat = false;
+        std::string text{};
+        int editing_start = -1;
+        int editing_length = -1;
+        size_t mouse_button_index = 0;
+        // Shared by transient panel adapters during one global dispatch.
+        InputEventDispatch* dispatch = nullptr;
+    };
 
     struct FrameMouseButtonEvent {
         uint8_t button = 0;
@@ -43,16 +69,12 @@ namespace lfs::vis {
         bool mouse_released[3] = {};
         float mouse_wheel = 0;
         float mouse_wheel_x = 0;
+        float pinch_scale = 1.0f;
         std::vector<FrameMouseButtonEvent> mouse_button_events;
+        std::vector<FrameInputEvent> input_events;
+        // Aggregate key state for shortcuts; text consumers replay input_events only.
         std::vector<SDL_Scancode> keys_pressed;
-        std::vector<SDL_Scancode> keys_repeated;
-        std::vector<SDL_Scancode> keys_released;
-        std::vector<uint32_t> text_codepoints;
-        std::vector<std::string> text_inputs;
-        std::string text_editing;
-        int text_editing_start = -1;
-        int text_editing_length = -1;
-        bool has_text_editing = false;
+
         bool had_event = false;
         bool mouse_moved = false;
         bool window_event = false;
@@ -61,6 +83,11 @@ namespace lfs::vis {
         int window_w = 0;
         int window_h = 0;
         std::chrono::steady_clock::time_point poll_time{};
+
+        [[nodiscard]] bool hasUserInput() const {
+            return mouse_moved || window_event || mouse_wheel != 0.0f || mouse_wheel_x != 0.0f ||
+                   !mouse_button_events.empty() || !input_events.empty() || !keys_pressed.empty();
+        }
 
         void beginFrame() {
             ++serial;
@@ -75,16 +102,11 @@ namespace lfs::vis {
             }
             mouse_wheel = 0;
             mouse_wheel_x = 0;
+            pinch_scale = 1.0f;
             mouse_button_events.clear();
+            input_events.clear();
             keys_pressed.clear();
-            keys_repeated.clear();
-            keys_released.clear();
-            text_codepoints.clear();
-            text_inputs.clear();
-            text_editing.clear();
-            text_editing_start = -1;
-            text_editing_length = -1;
-            has_text_editing = false;
+
             had_event = false;
             mouse_moved = false;
             window_event = false;
@@ -102,6 +124,10 @@ namespace lfs::vis {
                 user_event = true;
 
             switch (event.type) {
+            case SDL_EVENT_PINCH_UPDATE:
+                if (std::isfinite(event.pinch.scale) && event.pinch.scale > 0.0f)
+                    pinch_scale *= event.pinch.scale;
+                break;
             case SDL_EVENT_MOUSE_MOTION:
                 mouse_moved = true;
                 break;
@@ -122,6 +148,8 @@ namespace lfs::vis {
                         .ctrl = (event_mods_ & SDL_KMOD_CTRL) != 0,
                         .gui_owned = released_owner,
                     });
+                    input_events.push_back({.kind = FrameInputEventKind::MouseButton,
+                                            .mouse_button_index = mouse_button_events.size() - 1});
                     if (down) {
                         // Mark this DOWN as awaiting the GUI verdict; window_manager.cpp supplies it
                         // before polling the next event. Every DOWN starts a new press lifecycle,
@@ -144,25 +172,24 @@ namespace lfs::vis {
                 break;
             case SDL_EVENT_KEY_DOWN:
                 event_mods_ = event.key.mod;
-                if (event.key.repeat)
-                    keys_repeated.push_back(event.key.scancode);
-                else
+                input_events.push_back({.kind = FrameInputEventKind::KeyDown, .scancode = event.key.scancode, .modifiers = event.key.mod, .repeat = event.key.repeat});
+                if (!event.key.repeat)
                     keys_pressed.push_back(event.key.scancode);
                 break;
             case SDL_EVENT_KEY_UP:
                 event_mods_ = event.key.mod;
-                keys_released.push_back(event.key.scancode);
+                input_events.push_back({.kind = FrameInputEventKind::KeyUp, .scancode = event.key.scancode, .modifiers = event.key.mod});
+
                 break;
             case SDL_EVENT_TEXT_INPUT:
                 if (event.text.text)
-                    text_inputs.emplace_back(event.text.text);
-                decodeUtf8(event.text.text, text_codepoints);
+                    input_events.push_back({.kind = FrameInputEventKind::Text, .text = event.text.text});
                 break;
             case SDL_EVENT_TEXT_EDITING:
-                text_editing = event.edit.text ? event.edit.text : "";
-                text_editing_start = event.edit.start;
-                text_editing_length = event.edit.length;
-                has_text_editing = true;
+                input_events.push_back({.kind = FrameInputEventKind::TextEditing,
+                                        .text = event.edit.text ? event.edit.text : "",
+                                        .editing_start = event.edit.start,
+                                        .editing_length = event.edit.length});
                 break;
             default:
                 break;
@@ -246,72 +273,6 @@ namespace lfs::vis {
                 return event.drop.windowID == target_window_id;
             default:
                 return true;
-            }
-        }
-
-        static bool isContinuationByte(const unsigned char c) {
-            return (c & 0xC0u) == 0x80u;
-        }
-
-        static void decodeUtf8(const char* text, std::vector<uint32_t>& out) {
-            if (!text)
-                return;
-            for (size_t i = 0; text[i] != '\0';) {
-                uint32_t cp = 0;
-                const auto c = static_cast<unsigned char>(text[i]);
-                if (c < 0x80) {
-                    cp = c;
-                    i += 1;
-                } else if ((c & 0xE0u) == 0xC0u) {
-                    if (!text[i + 1] ||
-                        !isContinuationByte(static_cast<unsigned char>(text[i + 1]))) {
-                        i += 1;
-                        continue;
-                    }
-                    cp = (c & 0x1F) << 6;
-                    cp |= static_cast<unsigned char>(text[i + 1]) & 0x3F;
-                    if (cp < 0x80) {
-                        i += 1;
-                        continue;
-                    }
-                    i += 2;
-                } else if ((c & 0xF0u) == 0xE0u) {
-                    if (!text[i + 1] || !text[i + 2] ||
-                        !isContinuationByte(static_cast<unsigned char>(text[i + 1])) ||
-                        !isContinuationByte(static_cast<unsigned char>(text[i + 2]))) {
-                        i += 1;
-                        continue;
-                    }
-                    cp = (c & 0x0F) << 12;
-                    cp |= (static_cast<unsigned char>(text[i + 1]) & 0x3F) << 6;
-                    cp |= static_cast<unsigned char>(text[i + 2]) & 0x3F;
-                    if (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF)) {
-                        i += 1;
-                        continue;
-                    }
-                    i += 3;
-                } else if ((c & 0xF8u) == 0xF0u) {
-                    if (!text[i + 1] || !text[i + 2] || !text[i + 3] ||
-                        !isContinuationByte(static_cast<unsigned char>(text[i + 1])) ||
-                        !isContinuationByte(static_cast<unsigned char>(text[i + 2])) ||
-                        !isContinuationByte(static_cast<unsigned char>(text[i + 3]))) {
-                        i += 1;
-                        continue;
-                    }
-                    cp = (c & 0x07) << 18;
-                    cp |= (static_cast<unsigned char>(text[i + 1]) & 0x3F) << 12;
-                    cp |= (static_cast<unsigned char>(text[i + 2]) & 0x3F) << 6;
-                    cp |= static_cast<unsigned char>(text[i + 3]) & 0x3F;
-                    if (cp < 0x10000 || cp > 0x10FFFF) {
-                        i += 1;
-                        continue;
-                    }
-                    i += 4;
-                } else {
-                    i += 1;
-                    continue;
-                }
-                out.push_back(cp);
             }
         }
 

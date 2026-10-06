@@ -237,9 +237,9 @@ namespace lfs::vis::op {
             if (changed) {
                 if (auto* const rendering = services().renderingOrNull()) {
                     if (previous_view != kNoView)
-                        rendering->markViewDirty(previous_view, DirtyFlag::OVERLAY);
+                        rendering->markViewDirty(previous_view, DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
                     if (state.view != kNoView)
-                        rendering->markViewDirty(state.view, DirtyFlag::OVERLAY);
+                        rendering->markViewDirty(state.view, DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
                 }
             }
         }

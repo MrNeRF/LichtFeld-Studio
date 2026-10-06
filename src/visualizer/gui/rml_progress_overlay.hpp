@@ -37,6 +37,7 @@ namespace lfs::vis::gui {
         enum class Action {
             None,
             DismissImport,
+            CancelImport,
             CancelVideoExport,
         };
 
@@ -63,7 +64,8 @@ namespace lfs::vis::gui {
     public:
         RmlProgressOverlay(RmlUIManager* rml_manager,
                            std::function<void()> dismiss_import,
-                           std::function<void()> cancel_video_export);
+                           std::function<void()> cancel_video_export,
+                           std::function<void()> cancel_import = {});
         ~RmlProgressOverlay();
 
         RmlProgressOverlay(const RmlProgressOverlay&) = delete;
@@ -73,7 +75,6 @@ namespace lfs::vis::gui {
         void render(int screen_w, int screen_h,
                     float screen_x, float screen_y,
                     float vp_x, float vp_y, float vp_w, float vp_h);
-        void releaseRendererResources();
         void reloadResources();
         void preload();
 
@@ -95,6 +96,7 @@ namespace lfs::vis::gui {
         RmlUIManager* rml_manager_ = nullptr;
         std::function<void()> dismiss_import_;
         std::function<void()> cancel_video_export_;
+        std::function<void()> cancel_import_;
 
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
@@ -127,7 +129,7 @@ namespace lfs::vis::gui {
         bool last_mouse_valid_ = false;
         int last_mouse_x_ = 0;
         int last_mouse_y_ = 0;
-        CachedVulkanContextRender direct_cache_;
+        CachedUiContextRender direct_cache_;
         bool render_needed_ = true;
     };
 

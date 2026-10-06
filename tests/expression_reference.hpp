@@ -22,7 +22,8 @@ namespace expression_test {
         case ExprOp::Add: return bits(x + y);
         case ExprOp::Sub: return bits(x - y);
         case ExprOp::Mul: return bits(x * y);
-        case ExprOp::Div: return bits(x / y);
+        case ExprOp::Div:
+        case ExprOp::PreciseDiv: return bits(x / y);
         case ExprOp::Mod: return bits(std::fmod(x, y));
         case ExprOp::Pow: return bits(std::pow(x, y));
         case ExprOp::Min:
@@ -67,8 +68,8 @@ namespace expression_test {
         case ExprOp::Sin: return bits(std::sin(x));
         case ExprOp::Cos: return bits(std::cos(x));
         case ExprOp::Tan: return bits(std::tan(x));
-        case ExprOp::Asin: return bits(std::asin(std::clamp(x, -1.0f, 1.0f)));
-        case ExprOp::Acos: return bits(std::acos(std::clamp(x, -1.0f, 1.0f)));
+        case ExprOp::Asin: return bits(std::asin(x));
+        case ExprOp::Acos: return bits(std::acos(x));
         case ExprOp::Atan: return bits(std::atan(x));
         case ExprOp::Sinh: return bits(std::sinh(x));
         case ExprOp::Cosh: return bits(std::cosh(x));

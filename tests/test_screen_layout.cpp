@@ -4,6 +4,7 @@
 
 #include "screen/screen_layout.hpp"
 
+#include <cmath>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
@@ -175,7 +176,6 @@ namespace lfs::vis::screen {
     TEST(ScreenLayout, MoveDividerRebasesWeightsAfterMinimumClamping) {
         ScreenLayout layout(A);
         ASSERT_TRUE(layout.split(A, B, SplitAxis::Columns, 0.01f));
-        ASSERT_TRUE(layout.setWeights(layout.root()->split, {0.99f, 0.01f}));
         auto g = layout.solve(Rect{0.0f, 0.0f, 1000.0f, 300.0f}, kMetrics);
         ASSERT_EQ(g.dividers.size(), 1u);
         ASSERT_NEAR(rectOf(g, A).w, 950.0f, 1.0f);

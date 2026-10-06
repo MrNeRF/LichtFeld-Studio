@@ -43,7 +43,7 @@ namespace lfs::io::args {
 
         // Registry ranges are UI-clamp semantics; CLI acceptance is intentionally wider.
         constexpr std::array OPTIMIZATION_CLI_BINDINGS{
-            OptimizationCliBinding{"--iter", "iterations", Integer},
+            OptimizationCliBinding{"--iter", "iterations", Integer, false, "; proportionally rescales the training timetable unless scaling is disabled; cannot be combined with --steps-scaler"},
             OptimizationCliBinding{"--strategy", "strategy", String, false, "; legacy aliases: mnrf, lfs"},
             OptimizationCliBinding{"--sh-degree", "sh_degree", Integer},
             OptimizationCliBinding{"--sh-degree-interval", "sh_degree_interval", Integer},
@@ -52,7 +52,7 @@ namespace lfs::io::args {
             OptimizationCliBinding{"--min-opacity", "min_opacity", Float},
             OptimizationCliBinding{"--cropbox-lr-scale", "cropbox_lr_scale", Float},
             OptimizationCliBinding{"--cropbox-loss-weight", "cropbox_loss_weight", Float},
-            OptimizationCliBinding{"--steps-scaler", "steps_scaler", Float},
+            OptimizationCliBinding{"--steps-scaler", "steps_scaler", Float, false, "; cannot be combined with --iter"},
             OptimizationCliBinding{"--no-error-map", "use_error_map", Bool, true},
             OptimizationCliBinding{"--densify-error-map", "densify_error_map", Enum, false,
                                    "; values: ssim, ssim_cs"},
@@ -60,9 +60,6 @@ namespace lfs::io::args {
             OptimizationCliBinding{"--screen-share-penalty", "screen_share_penalty", Float},
             OptimizationCliBinding{"--oversize-split-fraction", "oversize_split_fraction", Float},
             OptimizationCliBinding{"--no-edge-map", "use_edge_map", Bool, true},
-            OptimizationCliBinding{"--background-improvements", "background_improvements", Bool},
-            OptimizationCliBinding{"--no-background-improvements", "background_improvements", Bool, true},
-            OptimizationCliBinding{"--no-growth-ratio-rank", "growth_ratio_rank", Bool, true},
             OptimizationCliBinding{"--bg-mode", "bg_mode", Enum, false,
                                    "; values: solidcolor, modulation, image, random", "solid_color", "solidcolor"},
             OptimizationCliBinding{"--random", "random", Bool},
@@ -97,10 +94,12 @@ namespace lfs::io::args {
             OptimizationCliBinding{"--gut", "gut", Bool},
             OptimizationCliBinding{"--eval", "enable_eval", Bool},
             OptimizationCliBinding{"--eval-all", "eval_all", Bool},
-            OptimizationCliBinding{"--far-scene-min-fraction", "far_scene_min_fraction", Float},
-            OptimizationCliBinding{"--growth-ratio-pow", "growth_ratio_pow", Float},
-            OptimizationCliBinding{"--fill-pacing-iter", "fill_pacing_iter", Integer},
-            OptimizationCliBinding{"--far-seed-dose", "far_seed_dose", Integer},
+            OptimizationCliBinding{"--eval-space", "eval_space", Enum},
+            OptimizationCliBinding{"--eval-mask", "eval_mask", String, false,
+                                   ". Sources: mesh:<file> pixels covered by the mesh; bbox:x0,y0,z0,x1,y1,z1 pixels covered by the axis-aligned box with that minimum and maximum corner; cropbox pixels covered by the training model's crop box; masks:<folder> one mask image per input image, matched by file name, white pixels scored; depth:near,far solid rendered pixels whose depth lies between near and far; points or points:radius,close pixels around the initial point cloud, each point drawn as a disk of radius pixels (default 2) with gaps up to twice close pixels filled (default 3); points:<file> the same around the points of a splat or point cloud PLY; splat:<file> pixels a splat PLY covers when rendered with its positions, sizes, rotations and opacities, counting pixels whose rendered opacity reaches --eval-mask-opacity; none clears a mask stored in a resumed project. Meshes, boxes, point files and splats use the dataset's coordinates"},
+            OptimizationCliBinding{"--eval-mask-invert", "eval_mask_invert", Bool},
+            OptimizationCliBinding{"--eval-mask-opacity", "eval_mask_opacity", Float, false,
+                                   ". Applies to splat:<file> masks. A splat's edges fade out gradually, so the rendered opacity drops from 1 inside the subject to 0 outside over a few pixels; the cutoff picks where along that falloff the mask boundary lies. 0.5 includes a thin rim of background around the outline, 0.85 follows the outline of opaque subjects closely, and values near 1 start trimming the subject's edges"},
             OptimizationCliBinding{"--headless", "headless", Bool},
             OptimizationCliBinding{"--undistort", "undistort", Bool},
         };
@@ -130,6 +129,8 @@ namespace lfs::io::args {
                 break;
             case core::prop::PropType::String:
                 display = std::any_cast<std::string>(value);
+                if (display.empty())
+                    display = "none";
                 break;
             case core::prop::PropType::Enum: {
                 const int enum_value = std::any_cast<int>(value);
@@ -217,6 +218,82 @@ namespace {
         std::ranges::sort(steps);
         steps.erase(std::unique(steps.begin(), steps.end()), steps.end());
         return steps;
+    }
+
+    lfs::Result<std::string> parse_eval_mask(const std::string_view spec) {
+        constexpr std::string_view expected =
+            "Expected mesh:<file>, bbox:x0,y0,z0,x1,y1,z1, cropbox, masks:<folder>, depth:near,far, points:radius,close, "
+            "points:<file>, splat:<file> or none";
+        const auto invalid = [&](std::string message) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Core,
+                .user_message = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        };
+        if (spec == "none")
+            return std::string{};
+        if (lfs::core::param::is_eval_mask_cropbox(spec))
+            return std::string(spec);
+        if (const auto file = lfs::core::param::eval_mask_splat_file(spec)) {
+            const auto normalized = lfs::core::param::normalize_eval_mask(spec);
+            std::error_code error;
+            if (!std::filesystem::is_regular_file(
+                    lfs::core::utf8_to_path(std::string(*lfs::core::param::eval_mask_splat_file(normalized))), error))
+                return invalid(std::format("Evaluation splat file does not exist: {}", *file));
+            return normalized;
+        }
+        if (const auto file = lfs::core::param::eval_mask_points_file(spec)) {
+            const auto normalized = lfs::core::param::normalize_eval_mask(spec);
+            std::error_code error;
+            if (!std::filesystem::is_regular_file(
+                    lfs::core::utf8_to_path(std::string(*lfs::core::param::eval_mask_points_file(normalized))), error))
+                return invalid(std::format("Evaluation points file does not exist: {}", *file));
+            return normalized;
+        }
+        if (lfs::core::param::is_eval_mask_points(spec)) {
+            if (!lfs::core::param::parse_eval_mask_points(spec))
+                return invalid(std::format(
+                    "Invalid --eval-mask '{}'. Points need whole numbers radius,close with radius 0..32 and close 0..64",
+                    spec));
+            return lfs::core::param::normalize_eval_mask(spec);
+        }
+        if (lfs::core::param::is_eval_mask_depth(spec)) {
+            if (!lfs::core::param::parse_eval_mask_depth(spec))
+                return invalid(std::format(
+                    "Invalid --eval-mask '{}'. A depth range needs near,far with 0 <= near < far", spec));
+            return lfs::core::param::normalize_eval_mask(spec);
+        }
+        if (lfs::core::param::is_eval_mask_folder(spec)) {
+            const auto normalized = lfs::core::param::normalize_eval_mask(spec);
+            std::error_code error;
+            if (lfs::core::param::eval_mask_folder(spec).empty() ||
+                !std::filesystem::is_directory(
+                    lfs::core::utf8_to_path(std::string(lfs::core::param::eval_mask_folder(normalized))), error))
+                return invalid(std::format("Evaluation mask folder does not exist: {}", spec.substr(6)));
+            return normalized;
+        }
+        if (lfs::core::param::is_eval_mask_box(spec)) {
+            if (!lfs::core::param::parse_eval_mask_box(spec))
+                return invalid(std::format(
+                    "Invalid --eval-mask '{}'. A box needs six numbers x0,y0,z0,x1,y1,z1 with each minimum below its maximum",
+                    spec));
+            return lfs::core::param::normalize_eval_mask(spec);
+        }
+        const auto separator = spec.find(':');
+        const auto source = separator == std::string_view::npos
+                                ? spec
+                                : spec.substr(0, separator);
+        if (source != "mesh")
+            return invalid(std::format("Invalid --eval-mask source '{}'. {}", source, expected));
+        if (separator == std::string_view::npos || separator + 1 == spec.size())
+            return invalid(std::format("Invalid --eval-mask. {}", expected));
+        const auto path = lfs::core::param::normalize_eval_mask(spec.substr(separator + 1));
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(lfs::core::utf8_to_path(path), error))
+            return invalid(std::format("Evaluation mesh file does not exist: {}", path));
+        return path;
     }
 
     std::optional<lfs::core::param::BackgroundMode> parse_bg_mode(const std::string& mode) {
@@ -646,13 +723,6 @@ namespace {
             ::args::ValueFlag<float> screen_share_penalty(training_group, "screen_share_penalty", lfs::io::args::optimization_cli_help("--screen-share-penalty"), {"screen-share-penalty"});
             ::args::ValueFlag<float> oversize_split_fraction(training_group, "oversize_split_fraction", lfs::io::args::optimization_cli_help("--oversize-split-fraction"), {"oversize-split-fraction"});
             ::args::Flag no_edge_map(training_group, "no_edge_map", lfs::io::args::optimization_cli_help("--no-edge-map"), {"no-edge-map"});
-            ::args::Flag background_improvements(training_group, "background_improvements", lfs::io::args::optimization_cli_help("--background-improvements"), {"background-improvements"});
-            ::args::Flag no_background_improvements(training_group, "no_background_improvements", lfs::io::args::optimization_cli_help("--no-background-improvements"), {"no-background-improvements"});
-            ::args::Flag no_growth_ratio_rank(training_group, "no_growth_ratio_rank", lfs::io::args::optimization_cli_help("--no-growth-ratio-rank"), {"no-growth-ratio-rank"});
-            ::args::ValueFlag<float> far_scene_min_fraction(training_group, "fraction", lfs::io::args::optimization_cli_help("--far-scene-min-fraction"), {"far-scene-min-fraction"});
-            ::args::ValueFlag<float> growth_ratio_pow(training_group, "growth_ratio_pow", lfs::io::args::optimization_cli_help("--growth-ratio-pow"), {"growth-ratio-pow"});
-            ::args::ValueFlag<int> fill_pacing_iter(training_group, "fill_pacing_iter", lfs::io::args::optimization_cli_help("--fill-pacing-iter"), {"fill-pacing-iter"});
-            ::args::ValueFlag<int> far_seed_dose(training_group, "far_seed_dose", lfs::io::args::optimization_cli_help("--far-seed-dose"), {"far-seed-dose"});
             ::args::ValueFlag<std::string> bg_mode(training_group, "mode", lfs::io::args::optimization_cli_help("--bg-mode"), {"bg-mode"});
             ::args::ValueFlag<std::string> bg_color(training_group, "color", "solidcolor background color as #RRGGBB or (R,G,B) with 0-255 channels (default: #000000)", {"bg-color"});
             ::args::ValueFlag<std::string> bg_image_path(training_group, "path", "Background image path (required when --bg-mode image)", {"bg-image-path"});
@@ -756,6 +826,15 @@ namespace {
             ::args::Group output_group(parser, "OUTPUT OPTIONS:");
             ::args::Flag enable_eval(output_group, "eval", lfs::io::args::optimization_cli_help("--eval"), {"eval"});
             ::args::Flag eval_all(output_group, "eval_all", lfs::io::args::optimization_cli_help("--eval-all"), {"eval-all"});
+            ::args::MapFlag<std::string, lfs::core::param::EvalSpace> eval_space(
+                output_group, "eval_space", lfs::io::args::optimization_cli_help("--eval-space"),
+                {"eval-space"},
+                std::unordered_map<std::string, lfs::core::param::EvalSpace>{
+                    {"distorted", lfs::core::param::EvalSpace::Distorted},
+                    {"undistorted", lfs::core::param::EvalSpace::Undistorted}});
+            ::args::ValueFlag<std::string> eval_mask(output_group, "source", lfs::io::args::optimization_cli_help("--eval-mask"), {"eval-mask"});
+            ::args::Flag eval_mask_invert(output_group, "eval_mask_invert", lfs::io::args::optimization_cli_help("--eval-mask-invert"), {"eval-mask-invert"});
+            ::args::ValueFlag<float> eval_mask_opacity(output_group, "opacity", lfs::io::args::optimization_cli_help("--eval-mask-opacity"), {"eval-mask-opacity"});
             ::args::Flag no_download(output_group, "no_download", "Do not download optional model weights", {"no-download"});
             ::args::ValueFlagList<std::string> eval_steps(output_group, "eval_steps", "Evaluation iterations as a comma list, e.g. 1000,7000,30000 (replaces the default 7000,30000; the final iteration is always evaluated)", {"eval-steps"});
             ::args::Flag no_save_eval_images(output_group, "no_save_eval_images", "Disable saving of evaluation comparison images (GT vs rendered) during eval (default: enabled)", {"no-save-eval-images"});
@@ -836,6 +915,34 @@ namespace {
                 return std::make_tuple(ParseResult::Help, std::function<void()>{});
             } catch (const ::args::ParseError& e) {
                 return std::unexpected(std::format("Parse error: {}\n{}", e.what(), parser.Help()));
+            }
+
+            const auto cli_option_present = [&args](const std::initializer_list<std::string_view> names) {
+                for (size_t i = 1; i < args.size(); ++i) {
+                    const std::string_view arg = args[i];
+                    for (const std::string_view name : names) {
+                        if (arg == name) {
+                            return true;
+                        }
+                        if (name.starts_with("--") &&
+                            arg.size() > name.size() &&
+                            arg.starts_with(name) &&
+                            arg[name.size()] == '=') {
+                            return true;
+                        }
+                        const bool short_option_with_joined_value =
+                            name.size() == 2 && name[1] != '-' &&
+                            arg.size() > name.size() && arg.starts_with(name);
+                        if (short_option_with_joined_value) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            };
+
+            if (cli_option_present({"-i", "--iter"}) && cli_option_present({"--steps-scaler"})) {
+                return std::unexpected("--iter and --steps-scaler are mutually exclusive: --iter sets the iteration count exactly, --steps-scaler rescales the default schedule");
             }
 
             // Initialize logger (CLI args override environment variable)
@@ -1280,30 +1387,20 @@ namespace {
                 return std::unexpected("ERROR: --bg-image-path is required when --bg-mode image");
             }
 
-            const auto cli_option_present = [&args](const std::initializer_list<std::string_view> names) {
-                for (size_t i = 1; i < args.size(); ++i) {
-                    const std::string_view arg = args[i];
-                    for (const std::string_view name : names) {
-                        if (arg == name) {
-                            return true;
-                        }
-                        if (name.starts_with("--") &&
-                            arg.size() > name.size() &&
-                            arg.starts_with(name) &&
-                            arg[name.size()] == '=') {
-                            return true;
-                        }
-                    }
-                }
-                return false;
-            };
-
             std::optional<std::vector<size_t>> eval_steps_val;
             if (cli_option_present({"--eval-steps"})) {
                 auto steps = parse_eval_steps(::args::get(eval_steps));
                 if (!steps)
                     return std::unexpected(std::string(steps.error().detail()));
                 eval_steps_val = std::move(*steps);
+            }
+
+            std::optional<std::string> eval_mask_val;
+            if (cli_option_present({"--eval-mask"})) {
+                auto parsed = parse_eval_mask(::args::get(eval_mask));
+                if (!parsed)
+                    return std::unexpected(std::string(parsed.error().user_message()));
+                eval_mask_val = std::move(*parsed);
             }
 
             // Create lambda to apply command line overrides after JSON loading
@@ -1329,6 +1426,7 @@ namespace {
                                         morton_reorder_interval_val = cli_option_present({"--morton-reorder-interval"}) ? std::optional<int>(::args::get(morton_reorder_interval)) : std::optional<int>(),
                                         sh_degree_val = cli_option_present({"--sh-degree"}) ? std::optional<int>(::args::get(sh_degree)) : std::optional<int>(),
                                         min_opacity_val = cli_option_present({"--min-opacity"}) ? std::optional<float>(::args::get(min_opacity)) : std::optional<float>(),
+                                        eval_mask_opacity_val = cli_option_present({"--eval-mask-opacity"}) ? std::optional<float>(::args::get(eval_mask_opacity)) : std::optional<float>(),
                                         cropbox_lr_scale_val = cli_option_present({"--cropbox-lr-scale"}) ? std::optional<float>(::args::get(cropbox_lr_scale)) : std::optional<float>(),
                                         cropbox_loss_weight_val = cli_option_present({"--cropbox-loss-weight"}) ? std::optional<float>(::args::get(cropbox_loss_weight)) : std::optional<float>(),
                                         init_num_pts_val = cli_option_present({"--init-num-pts"}) ? std::optional<int>(::args::get(init_num_pts)) : std::optional<int>(),
@@ -1369,6 +1467,9 @@ namespace {
                                         ppisp_sidecar_path_val = cli_option_present({"--ppisp-sidecar"}) ? std::optional<std::string>(::args::get(ppisp_sidecar_path)) : std::optional<std::string>(),
                                         enable_eval_flag = bool(enable_eval),
                                         eval_all_flag = bool(eval_all),
+                                        eval_space_val = cli_option_present({"--eval-space"}) ? std::optional<lfs::core::param::EvalSpace>(::args::get(eval_space)) : std::optional<lfs::core::param::EvalSpace>(),
+                                        eval_mask_val = std::move(eval_mask_val),
+                                        eval_mask_invert_flag = bool(eval_mask_invert),
                                         no_download_flag = bool(no_download),
                                         headless_flag = bool(headless),
                                         auto_train_flag = bool(auto_train),
@@ -1408,13 +1509,6 @@ namespace {
                                                                           ? std::optional<float>(::args::get(oversize_split_fraction))
                                                                           : std::optional<float>(),
                                         no_edge_map_flag = bool(no_edge_map),
-                                        background_improvements_flag = bool(background_improvements),
-                                        no_background_improvements_flag = bool(no_background_improvements),
-                                        no_growth_ratio_rank_flag = bool(no_growth_ratio_rank),
-                                        far_scene_min_fraction_val = cli_option_present({"--far-scene-min-fraction"}) ? std::optional<float>(::args::get(far_scene_min_fraction)) : std::optional<float>(),
-                                        growth_ratio_pow_val = cli_option_present({"--growth-ratio-pow"}) ? std::optional<float>(::args::get(growth_ratio_pow)) : std::optional<float>(),
-                                        fill_pacing_iter_val = cli_option_present({"--fill-pacing-iter"}) ? std::optional<int>(::args::get(fill_pacing_iter)) : std::optional<int>(),
-                                        far_seed_dose_val = cli_option_present({"--far-seed-dose"}) ? std::optional<int>(::args::get(far_seed_dose)) : std::optional<int>(),
                                         eval_steps_val = std::move(eval_steps_val),
                                         freeze_lr_scale_val = cli_option_present({"--freeze-lr-scale"}) ? std::optional<float>(::args::get(freeze_lr_scale)) : std::optional<float>(),
                                         exclude_export_flag = bool(exclude_export),
@@ -1455,10 +1549,26 @@ namespace {
                         target = true;
                 };
 
+                if (iterations_val && opt.steps_scaler > 0.f) {
+                    opt.steps_scaler = static_cast<float>(*iterations_val) /
+                                       static_cast<float>(opt.iterations);
+                    opt.image_count_scaler = 1.f;
+                }
+
+                if (steps_scaler_val) {
+                    opt.steps_scaler = *steps_scaler_val;
+                    opt.image_count_scaler = 1.f;
+                }
+                opt.apply_step_scaling();
+
                 // Apply all overrides
                 setVal(iterations_val, opt.iterations);
                 params.cli_iterations_set =
                     iterations_val.has_value();
+                params.cli_step_values_set = iterations_val.has_value() ||
+                                             sh_degree_interval_val.has_value() ||
+                                             morton_reorder_interval_val.has_value() ||
+                                             (eval_steps_val && !eval_steps_val->empty());
                 note_opt("iterations", iterations_val.has_value());
                 setVal(resize_factor_val, ds.resize_factor);
                 note_ds("resize_factor", resize_factor_explicit);
@@ -1475,7 +1585,6 @@ namespace {
                 setFlag(tcp_connection_flag, svs.tcp_connection);
                 setVal(images_folder_val, ds.images);
                 setVal(test_every_val, ds.test_every);
-                setVal(steps_scaler_val, opt.steps_scaler);
                 setVal(sh_degree_interval_val, opt.sh_degree_interval);
                 if (morton_reorder_interval_val) {
                     opt.morton_reorder_interval = static_cast<size_t>(*morton_reorder_interval_val);
@@ -1529,6 +1638,12 @@ namespace {
                 setFlag(enable_eval_flag, opt.enable_eval);
                 setFlag(eval_all_flag, opt.eval_all);
                 setFlag(eval_all_flag, opt.enable_eval);
+                setVal(eval_space_val, opt.eval_space);
+                setVal(eval_mask_val, opt.eval_mask);
+                setVal(eval_mask_opacity_val, opt.eval_mask_opacity);
+                setFlag(eval_mask_invert_flag, opt.eval_mask_invert);
+                if (eval_mask_val && eval_mask_val->empty())
+                    opt.eval_mask_invert = false;
                 setFlag(no_download_flag, params.no_download);
                 setFlag(headless_flag, opt.headless);
                 setFlag(auto_train_flag, opt.auto_train);
@@ -1566,16 +1681,6 @@ namespace {
                 setVal(oversize_split_fraction_val, opt.oversize_split_fraction);
                 if (no_edge_map_flag)
                     opt.use_edge_map = false;
-                if (background_improvements_flag)
-                    opt.background_improvements = true;
-                if (no_background_improvements_flag)
-                    opt.background_improvements = false;
-                if (no_growth_ratio_rank_flag)
-                    opt.growth_ratio_rank = false;
-                setVal(far_scene_min_fraction_val, opt.far_scene_min_fraction);
-                setVal(growth_ratio_pow_val, opt.growth_ratio_pow);
-                setVal(fill_pacing_iter_val, opt.fill_pacing_iter);
-                setVal(far_seed_dose_val, opt.far_seed_dose);
                 if (eval_steps_val && !eval_steps_val->empty()) {
                     opt.eval_steps = *eval_steps_val;
                 }
@@ -1629,6 +1734,7 @@ namespace {
                 note_opt("max_cap", max_cap_val.has_value());
                 note_opt("steps_scaler", steps_scaler_val.has_value());
                 note_opt("sh_degree_interval", sh_degree_interval_val.has_value());
+                note_opt("morton_reorder_interval", morton_reorder_interval_val.has_value());
                 note_opt("sh_degree", sh_degree_val.has_value());
                 note_opt("min_opacity", min_opacity_val.has_value());
                 note_opt("cropbox_lr_scale", cropbox_lr_scale_val.has_value());
@@ -1653,6 +1759,10 @@ namespace {
                 note_opt("ppisp_sidecar_path", ppisp_sidecar_path_val.has_value());
                 note_opt("enable_eval", enable_eval_flag || eval_all_flag);
                 note_opt("eval_all", eval_all_flag);
+                note_opt("eval_space", eval_space_val.has_value());
+                note_opt("eval_mask", eval_mask_val.has_value());
+                note_opt("eval_mask_opacity", eval_mask_opacity_val.has_value());
+                note_opt("eval_mask_invert", eval_mask_invert_flag || (eval_mask_val && eval_mask_val->empty()));
                 note_opt("headless", headless_flag);
                 note_opt("auto_train", auto_train_flag);
                 note_opt("no_splash", no_splash_flag);
@@ -1674,12 +1784,6 @@ namespace {
                 note_opt("screen_share_penalty", screen_share_penalty_val.has_value());
                 note_opt("oversize_split_fraction", oversize_split_fraction_val.has_value());
                 note_opt("use_edge_map", no_edge_map_flag);
-                note_opt("background_improvements", background_improvements_flag || no_background_improvements_flag);
-                note_opt("growth_ratio_rank", no_growth_ratio_rank_flag);
-                note_opt("far_scene_min_fraction", far_scene_min_fraction_val.has_value());
-                note_opt("growth_ratio_pow", growth_ratio_pow_val.has_value());
-                note_opt("fill_pacing_iter", fill_pacing_iter_val.has_value());
-                note_opt("far_seed_dose", far_seed_dose_val.has_value());
                 note_opt("eval_steps", eval_steps_val && !eval_steps_val->empty());
                 note_opt("mask_mode", mask_mode_val.has_value());
                 note_opt("invert_masks", invert_masks_flag);
@@ -1734,11 +1838,6 @@ namespace {
         } catch (const std::exception& e) {
             return std::unexpected(std::format("Unexpected error during argument parsing: {}", e.what()));
         }
-    }
-
-    void apply_step_scaling(lfs::core::param::TrainingParameters& params) {
-        auto& opt = params.optimization;
-        opt.apply_step_scaling();
     }
 
     void apply_ppisp_defaults(lfs::core::param::TrainingParameters& params) {
@@ -1823,9 +1922,17 @@ lfs::io::args::parse_args_and_params(int argc, const char* const argv[]) {
     };
     if (flag_given("--eval-steps") && !params->optimization.enable_eval)
         return std::unexpected("--eval-steps needs --eval or --eval-all; without them no evaluation runs");
+    if (flag_given("--eval-space") && !params->optimization.undistort) {
+        return std::unexpected(
+            "--eval-space needs --undistort; without it both spaces are identical");
+    }
+    if ((flag_given("--eval-mask") || flag_given("--eval-mask-invert")) &&
+        !params->optimization.enable_eval)
+        return std::unexpected("--eval-mask and --eval-mask-invert need --eval or --eval-all; without them no evaluation runs");
+    if (flag_given("--eval-mask-invert") && !flag_given("--eval-mask"))
+        return std::unexpected("--eval-mask-invert needs --eval-mask");
     if (params->optimization.eval_all && flag_given("--test-every"))
         return std::unexpected("--test-every selects held-out images; --eval-all trains on every image and evaluates all of them");
-    apply_step_scaling(*params);
     apply_ppisp_defaults(*params);
 
     if (auto error = params->validate(); !error.empty())

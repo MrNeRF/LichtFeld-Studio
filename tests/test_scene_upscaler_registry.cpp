@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "visualizer/rendering/scene_upscaler_plugin.hpp"
 #include "visualizer/rendering/scene_upscaler_registry.hpp"
 
 #include <algorithm>
@@ -21,22 +22,11 @@ namespace lfs::vis {
         EXPECT_EQ(descriptors[2].backend, SceneUpscalerBackend::Temporal);
         EXPECT_EQ(descriptors[2].id, "temporal");
         EXPECT_EQ(descriptors[2].label_key, "preferences.scene_reconstruction_temporal");
-        const auto dlss_descriptor = std::ranges::find(
-            descriptors, std::string_view{"nvidia-dlss"}, &SceneUpscalerDescriptor::id);
-        if (dlss_descriptor != descriptors.end()) {
-            EXPECT_EQ(dlss_descriptor->backend, SceneUpscalerBackend::NvidiaDlss);
-            EXPECT_EQ(dlss_descriptor->label_key,
-                      "preferences.scene_reconstruction_nvidia_dlss");
-        }
-        EXPECT_EQ(sceneUpscalerBackendAvailable(SceneUpscalerBackend::NvidiaDlss),
-                  dlss_descriptor != descriptors.end());
         EXPECT_TRUE(sceneUpscalerBackendAvailable(SceneUpscalerBackend::Native));
         EXPECT_EQ(sceneUpscalerBackendFromId("native"), SceneUpscalerBackend::Native);
         EXPECT_EQ(sceneUpscalerBackendFromId("spatial"), SceneUpscalerBackend::Spatial);
         EXPECT_EQ(sceneUpscalerBackendFromId("temporal"), SceneUpscalerBackend::Temporal);
-        EXPECT_EQ(sceneUpscalerBackendFromId("nvidia-dlss"),
-                  SceneUpscalerBackend::NvidiaDlss);
-        EXPECT_FALSE(sceneUpscalerBackendFromId("dlss").has_value());
+        EXPECT_FALSE(sceneUpscalerBackendFromId("unknown-provider").has_value());
         EXPECT_FALSE(sceneUpscalerBackendFromId("").has_value());
     }
 
@@ -58,18 +48,16 @@ namespace lfs::vis {
         EXPECT_EQ(defaultSceneUpscalerPreset(SceneUpscalerBackend::Temporal).id, "quality");
         EXPECT_FLOAT_EQ(sceneUpscalerPreset(SceneUpscalerBackend::Temporal, "balanced")->input_scale,
                         0.67f);
+    }
 
-        const auto& dlss = sceneUpscalerDescriptor(SceneUpscalerBackend::NvidiaDlss);
-        ASSERT_EQ(dlss.presets.size(), 3u);
-        EXPECT_EQ(dlss.id, "nvidia-dlss");
-        EXPECT_EQ(defaultSceneUpscalerPreset(SceneUpscalerBackend::NvidiaDlss).id, "quality");
-        EXPECT_FLOAT_EQ(sceneUpscalerPreset(SceneUpscalerBackend::NvidiaDlss, "balanced")->input_scale,
-                        0.58f);
-
-        const auto remembered_dlss = resolveSceneUpscalerPresetUpdate(
-            SceneUpscalerBackend::NvidiaDlss, std::nullopt, "performance");
-        ASSERT_TRUE(remembered_dlss.has_value());
-        EXPECT_EQ(remembered_dlss->id, "performance");
+    TEST(SceneUpscalerRegistry, EveryPluginHasMatchingDescriptor) {
+        for (const auto* const plugin : sceneUpscalerPlugins()) {
+            const auto& info = plugin->info();
+            EXPECT_EQ(sceneUpscalerPlugin(info.backend), plugin);
+            EXPECT_EQ(sceneUpscalerDescriptor(info.backend).id, info.id);
+        }
+        EXPECT_EQ(sceneUpscalerPlugin(SceneUpscalerBackend::Native), nullptr);
+        EXPECT_EQ(sceneUpscalerPlugin(SceneUpscalerBackend::Temporal), nullptr);
     }
 
     TEST(SceneUpscalerRegistry, BackendOnlyUpdateRestoresRememberedPresetEvenWhenIdsOverlap) {
@@ -110,16 +98,30 @@ namespace lfs::vis {
         EXPECT_EQ(sceneUpscalerFallbackId(fallback.fallback), "runtime_unavailable");
         EXPECT_EQ(sceneUpscalerFallbackId(SceneUpscalerFallback::None), "none");
 
+        const auto unsupported_mode = resolveSceneUpscalerSelection(
+            SceneUpscalerBackend::Temporal, false, SceneUpscalerFallback::UnsupportedMode);
+        EXPECT_EQ(unsupported_mode.requested, SceneUpscalerBackend::Temporal);
+        EXPECT_EQ(unsupported_mode.effective, SceneUpscalerBackend::Native);
+        EXPECT_TRUE(unsupported_mode.fellBack());
+        EXPECT_EQ(unsupported_mode.fallback, SceneUpscalerFallback::UnsupportedMode);
+        EXPECT_EQ(sceneUpscalerFallbackId(unsupported_mode.fallback), "unsupported_mode");
+
         const auto temporal = resolveSceneUpscalerSelection(SceneUpscalerBackend::Temporal, true);
         EXPECT_EQ(temporal.requested, SceneUpscalerBackend::Temporal);
         EXPECT_EQ(temporal.effective, SceneUpscalerBackend::Temporal);
         EXPECT_FALSE(temporal.fellBack());
 
-        const auto dlss_fallback = resolveSceneUpscalerSelection(
-            SceneUpscalerBackend::NvidiaDlss, false);
-        EXPECT_EQ(dlss_fallback.requested, SceneUpscalerBackend::NvidiaDlss);
-        EXPECT_EQ(dlss_fallback.effective, SceneUpscalerBackend::Native);
-        EXPECT_TRUE(dlss_fallback.fellBack());
+        const auto external_fallback = resolveSceneUpscalerSelection(
+            static_cast<SceneUpscalerBackend>(10), false);
+        EXPECT_EQ(external_fallback.requested, static_cast<SceneUpscalerBackend>(10));
+        EXPECT_EQ(external_fallback.effective, SceneUpscalerBackend::Native);
+        EXPECT_TRUE(external_fallback.fellBack());
+
+        const auto second_provider_fallback = resolveSceneUpscalerSelection(
+            static_cast<SceneUpscalerBackend>(20), false);
+        EXPECT_EQ(second_provider_fallback.requested, static_cast<SceneUpscalerBackend>(20));
+        EXPECT_EQ(second_provider_fallback.effective, SceneUpscalerBackend::Native);
+        EXPECT_TRUE(second_provider_fallback.fellBack());
     }
 
 } // namespace lfs::vis

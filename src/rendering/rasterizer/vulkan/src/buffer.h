@@ -235,9 +235,10 @@ struct VulkanGSPipelineBuffers {
 
     // HiGS macro raster: half4 partials per (pool batch, render tile, pixel),
     // per-batch active-tile mask, and per-wave raster+compose indirect args.
-    Buffer<uint16_t> macro_partials;    // (pool_batches, 32, 256, 4) halfs
-    Buffer<uint32_t> macro_active_mask; // (total batches,)
-    Buffer<uint32_t> macro_wave_args;   // MacroWaveDispatch: raster + compose command per wave
+    Buffer<uint16_t> macro_partials;          // (pool_batches, 32, 256, 4) halfs
+    Buffer<uint32_t> exact_depth_sample_mask; // one bit per 4x4 output region
+    Buffer<uint32_t> macro_active_mask;       // one activity word per macro batch
+    Buffer<uint32_t> macro_wave_args;         // MacroWaveDispatch: raster + compose command per wave
 
     // tiles
     Buffer<int32_t> index_buffer_offset;       // N
@@ -300,6 +301,4 @@ struct VulkanGSPipelineBuffers {
     static void reorderSH(Buffer<T>& coeffs);
     template <typename T>
     static void undoReorderSH(Buffer<T>& coeffs, size_t num_splats);
-
-    static void assignScalesOpacs(Buffer<float>& scales_opacs, size_t n, const float* scales, const float* opacs);
 };

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/vulkan_ui_texture.hpp"
+#include "window/vulkan_graphics_context.hpp"
 
 #include "config.h"
 #include "core/error.hpp"
@@ -27,20 +28,39 @@
 #include <format>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace lfs::vis::gui {
+    void connectUiTextureGraphics(GraphicsContext* context) { setUiTextureContext(vulkanContextOrNull(context)); }
 
     namespace {
         VulkanContext* g_texture_context = nullptr;
-        // Process-wide, not per-VulkanUiTexture: image/view handles are recycled
+        // Destroyed textures whose GPU resources may still be in flight.
+        std::vector<UiTexture::Impl*> g_orphaned_impls;
+        std::size_t serviceOrphanedImpls(bool wait);
+        void orphanImpl(UiTexture::Impl* impl);
+        // Process-wide, not per-UiTexture: image/view handles are recycled
         // across instances, so a per-object generation is not a unique Rml cache key.
         std::atomic<std::uint64_t> g_external_src_incarnation{1};
+        std::mutex texture_images_mutex;
+        struct TextureImage {
+            std::weak_ptr<const lfs::core::Tensor> tensor;
+            VkDescriptorSet descriptor = VK_NULL_HANDLE;
+        };
+        std::unordered_map<const lfs::core::Tensor*, TextureImage> texture_images;
+
+        void registerTextureImage(const std::shared_ptr<lfs::core::Tensor>& tensor, VkDescriptorSet descriptor) {
+            std::lock_guard lock(texture_images_mutex);
+            std::erase_if(texture_images, [](const auto& entry) { return entry.second.tensor.expired(); });
+            texture_images[tensor.get()] = {tensor, descriptor};
+        }
 
         [[nodiscard]] const char* waitOutcomeLabel(const lfs::rendering::WaitOutcome outcome) noexcept {
             using lfs::rendering::WaitOutcome;
@@ -77,23 +97,10 @@ namespace lfs::vis::gui {
                 const int src_y = flip_y ? (height - 1 - y) : y;
                 const std::uint8_t* src = pixels + static_cast<std::size_t>(src_y) * row_in;
                 std::uint8_t* dst = rgba.data() + static_cast<std::size_t>(y) * row_out;
-                if (channels == 4) {
+                if (channels == 4)
                     std::memcpy(dst, src, row_out);
-                    continue;
-                }
-                if (channels == 1) {
-                    for (int x = 0; x < width; ++x, ++src, dst += 4) {
-                        dst[0] = dst[1] = dst[2] = src[0];
-                        dst[3] = 255;
-                    }
-                } else {
-                    for (int x = 0; x < width; ++x, src += channels, dst += 4) {
-                        dst[0] = src[0];
-                        dst[1] = src[1];
-                        dst[2] = src[2];
-                        dst[3] = 255;
-                    }
-                }
+                else
+                    expandToRgba8(src, dst, static_cast<std::size_t>(width), channels);
             }
             return rgba;
         }
@@ -127,7 +134,7 @@ namespace lfs::vis::gui {
 
     } // namespace
 
-    void setVulkanUiTextureContext(VulkanContext* const context) {
+    void setUiTextureContext(VulkanContext* const context) {
         if (context == nullptr) {
             if (g_texture_context != nullptr) {
                 if (!g_texture_context->waitForSubmittedFrames()) {
@@ -141,26 +148,26 @@ namespace lfs::vis::gui {
                         g_texture_context->lastError());
                 }
             }
-            if (const std::size_t remaining = VulkanUiTexture::serviceOrphanedImpls(true);
+            if (const std::size_t remaining = serviceOrphanedImpls(true);
                 remaining != 0) {
                 LOG_ERROR(
                     "Vulkan UI texture retaining {} quarantined impl(s) after context shutdown",
                     remaining);
                 // These objects deliberately retain GPU-live resources. Never
                 // revisit their context after it has been destroyed.
-                VulkanUiTexture::orphaned_impls_.clear();
+                g_orphaned_impls.clear();
             }
         }
         g_texture_context = context;
         if (context != nullptr)
-            VulkanUiTexture::serviceOrphanedImpls(false);
+            serviceOrphanedImpls(false);
     }
 
-    VulkanContext* getVulkanUiTextureContext() {
+    VulkanContext* getUiTextureContext() {
         return g_texture_context;
     }
 
-    struct VulkanUiTexture::Impl {
+    struct UiTexture::Impl {
 
         VkDevice device = VK_NULL_HANDLE;
         VulkanContext* context = nullptr;
@@ -197,6 +204,27 @@ namespace lfs::vis::gui {
             int width = 0;
             int height = 0;
         };
+        std::shared_ptr<lfs::core::Tensor> tensor_image;
+
+        void rememberPixels(std::span<const RgbaRegion> regions, VkFormat format) {
+            using namespace lfs::core;
+            const auto& first = regions.front();
+            const auto dtype = format == VK_FORMAT_R32G32B32A32_SFLOAT ? DataType::Float32 : DataType::UInt8;
+            const size_t pixel_bytes = dtype == DataType::Float32 ? 16 : 4;
+            if (!tensor_image || tensor_image->dtype() != dtype ||
+                tensor_image->size(0) != size_t(first.texture_height) || tensor_image->size(1) != size_t(first.texture_width))
+                tensor_image = std::make_shared<Tensor>(Tensor::zeros({size_t(first.texture_height), size_t(first.texture_width), 4}, Device::CPU, dtype));
+            if (tensor_image->device() != Device::CPU)
+                tensor_image = std::make_shared<Tensor>(tensor_image->to(Device::CPU));
+            auto* target = static_cast<std::byte*>(tensor_image->ptr<void>());
+            for (const auto& region : regions) {
+                for (int y = 0; y < region.height; ++y)
+                    std::memcpy(target + ((size_t(region.y + y) * region.texture_width + region.x) * pixel_bytes),
+                                region.pixels + size_t(y) * region.width * pixel_bytes,
+                                size_t(region.width) * pixel_bytes);
+            }
+            registerTextureImage(tensor_image, descriptor_set);
+        }
         // Bounded ring of in-flight uploads. Uploads to the same image serialize on the graphics
         // queue (no semaphores), so a depth > 1 only defers staging-buffer reclamation; it does not
         // race the GPU. The main thread blocks only when the ring is full.
@@ -650,9 +678,11 @@ namespace lfs::vis::gui {
             image_barriers.transitionImage(command_buffer, image, image_generation_, VK_IMAGE_ASPECT_COLOR_BIT, new_layout);
         }
 
-        [[nodiscard]] bool ensureImage(const int new_width, const int new_height) {
+        VkFormat image_format = VK_FORMAT_UNDEFINED;
+        [[nodiscard]] bool ensureImage(const int new_width, const int new_height,
+                                       VkFormat format = VK_FORMAT_R8G8B8A8_UNORM) {
 
-            if (image != VK_NULL_HANDLE && width == new_width && height == new_height) {
+            if (image != VK_NULL_HANDLE && width == new_width && height == new_height && image_format == format) {
                 return true;
             }
 
@@ -662,6 +692,7 @@ namespace lfs::vis::gui {
             }
             width = new_width;
             height = new_height;
+            image_format = format;
 
             VkImageCreateInfo image_info{};
             image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -671,7 +702,7 @@ namespace lfs::vis::gui {
             image_info.extent.depth = 1;
             image_info.mipLevels = 1;
             image_info.arrayLayers = 1;
-            image_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+            image_info.format = format;
             image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
             image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             image_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -698,7 +729,7 @@ namespace lfs::vis::gui {
             view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
             view_info.image = image;
             view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            view_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+            view_info.format = format;
             view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             view_info.subresourceRange.baseMipLevel = 0;
             view_info.subresourceRange.levelCount = 1;
@@ -793,7 +824,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool uploadVulkanTensorImpl(const lfs::core::Tensor& rgba) {
             if (!rgba.is_valid() || rgba.device() != lfs::core::Device::GPU)
                 return false;
-            VulkanContext* const ctx = getVulkanUiTextureContext();
+            VulkanContext* const ctx = getUiTextureContext();
             if (!ctx || !init(*ctx))
                 return false;
             auto& interop = ctx->tensorInterop();
@@ -863,10 +894,13 @@ namespace lfs::vis::gui {
             pending.keep_alive = std::move(storage->keep_alive);
             image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             pending_uploads.push_back(std::move(pending));
+            tensor_image = std::make_shared<lfs::core::Tensor>(std::move(snapshot));
+            registerTextureImage(tensor_image, descriptor_set);
             return true;
         }
 
-        [[nodiscard]] bool uploadRgbaRegions(const std::span<const RgbaRegion> regions) {
+        [[nodiscard]] bool uploadRgbaRegions(const std::span<const RgbaRegion> regions,
+                                             VkFormat format = VK_FORMAT_R8G8B8A8_UNORM) {
             if (regions.empty())
                 return false;
 
@@ -880,18 +914,18 @@ namespace lfs::vis::gui {
                     region.x + region.width > texture_width ||
                     region.y + region.height > texture_height ||
                     region.size != static_cast<std::size_t>(region.width) *
-                                       static_cast<std::size_t>(region.height) * 4u ||
+                                       static_cast<std::size_t>(region.height) * (format == VK_FORMAT_R32G32B32A32_SFLOAT ? 16u : 4u) ||
                     total_size > std::numeric_limits<std::size_t>::max() - region.size) {
                     return false;
                 }
                 total_size += region.size;
             }
-            VulkanContext* const ctx = getVulkanUiTextureContext();
+            VulkanContext* const ctx = getUiTextureContext();
             if (!ctx || !init(*ctx)) {
                 return false;
             }
 
-            if (!ensureImage(texture_width, texture_height)) {
+            if (!ensureImage(texture_width, texture_height, format)) {
                 return false;
             }
 
@@ -997,6 +1031,7 @@ namespace lfs::vis::gui {
             // The next upload (or destruction) reaps them.
             image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             pending_uploads.push_back(PendingUpload{fence, command_buffer, staging_buffer, staging_allocation});
+            rememberPixels(regions, format);
             return true;
         }
 
@@ -1028,7 +1063,7 @@ namespace lfs::vis::gui {
                                     0, 0, new_width, new_height);
         }
 
-        [[nodiscard]] bool uploadRegions(const std::span<const VulkanUiTexture::Region> regions) {
+        [[nodiscard]] bool uploadRegions(const std::span<const UiTexture::Region> regions) {
             if (regions.empty())
                 return false;
 
@@ -1036,7 +1071,7 @@ namespace lfs::vis::gui {
             rgba_regions.reserve(regions.size());
             std::vector<RgbaRegion> upload_regions;
             upload_regions.reserve(regions.size());
-            for (const VulkanUiTexture::Region& region : regions) {
+            for (const UiTexture::Region& region : regions) {
                 if (!region.pixels || region.width <= 0 || region.height <= 0 ||
                     region.channels <= 0 || region.channels > 4) {
                     return false;
@@ -1069,7 +1104,7 @@ namespace lfs::vis::gui {
                                         const int region_width,
                                         const int region_height,
                                         const int channels) {
-            const VulkanUiTexture::Region region{
+            const UiTexture::Region region{
                 .pixels = pixels,
                 .texture_width = texture_width,
                 .texture_height = texture_height,
@@ -1079,7 +1114,7 @@ namespace lfs::vis::gui {
                 .height = region_height,
                 .channels = channels,
             };
-            return uploadRegions(std::span<const VulkanUiTexture::Region>(&region, 1));
+            return uploadRegions(std::span<const UiTexture::Region>(&region, 1));
         }
 
         [[nodiscard]] bool upload(const std::uint8_t* pixels,
@@ -1124,39 +1159,39 @@ namespace lfs::vis::gui {
         }
     };
 
-    std::vector<VulkanUiTexture::Impl*> VulkanUiTexture::orphaned_impls_;
-
-    std::size_t VulkanUiTexture::serviceOrphanedImpls(const bool wait) {
-        if (g_texture_context == nullptr)
-            return orphaned_impls_.size();
-        auto write = orphaned_impls_.begin();
-        for (auto read = orphaned_impls_.begin(); read != orphaned_impls_.end(); ++read) {
-            if (*read && (*read)->reset(wait)) {
-                delete *read;
-                continue;
+    namespace {
+        std::size_t serviceOrphanedImpls(const bool wait) {
+            if (g_texture_context == nullptr)
+                return g_orphaned_impls.size();
+            auto write = g_orphaned_impls.begin();
+            for (auto read = g_orphaned_impls.begin(); read != g_orphaned_impls.end(); ++read) {
+                if (*read && (*read)->reset(wait)) {
+                    delete *read;
+                    continue;
+                }
+                if (write != read)
+                    *write = *read;
+                ++write;
             }
-            if (write != read)
-                *write = *read;
-            ++write;
+            g_orphaned_impls.erase(write, g_orphaned_impls.end());
+            return g_orphaned_impls.size();
         }
-        orphaned_impls_.erase(write, orphaned_impls_.end());
-        return orphaned_impls_.size();
-    }
 
-    void VulkanUiTexture::orphanImpl(Impl* const impl) {
-        if (impl)
-            orphaned_impls_.push_back(impl);
-    }
+        void orphanImpl(UiTexture::Impl* const impl) {
+            if (impl)
+                g_orphaned_impls.push_back(impl);
+        }
+    } // namespace
 
-    VulkanUiTexture::~VulkanUiTexture() {
+    UiTexture::~UiTexture() {
         reset();
         delete impl_;
     }
 
-    VulkanUiTexture::VulkanUiTexture(VulkanUiTexture&& other) noexcept
+    UiTexture::UiTexture(UiTexture&& other) noexcept
         : impl_(std::exchange(other.impl_, nullptr)) {}
 
-    VulkanUiTexture& VulkanUiTexture::operator=(VulkanUiTexture&& other) noexcept {
+    UiTexture& UiTexture::operator=(UiTexture&& other) noexcept {
         if (this != &other) {
             reset();
             delete impl_;
@@ -1165,10 +1200,10 @@ namespace lfs::vis::gui {
         return *this;
     }
 
-    bool VulkanUiTexture::upload(const std::uint8_t* const pixels,
-                                 const int width,
-                                 const int height,
-                                 const int channels) {
+    bool UiTexture::upload(const std::uint8_t* const pixels,
+                           const int width,
+                           const int height,
+                           const int channels) {
         serviceOrphanedImpls(false);
         if (!impl_) {
             impl_ = new Impl();
@@ -1176,14 +1211,14 @@ namespace lfs::vis::gui {
         return impl_->upload(pixels, width, height, channels);
     }
 
-    bool VulkanUiTexture::uploadRegion(const std::uint8_t* const pixels,
-                                       const int texture_width,
-                                       const int texture_height,
-                                       const int x,
-                                       const int y,
-                                       const int width,
-                                       const int height,
-                                       const int channels) {
+    bool UiTexture::uploadRegion(const std::uint8_t* const pixels,
+                                 const int texture_width,
+                                 const int texture_height,
+                                 const int x,
+                                 const int y,
+                                 const int width,
+                                 const int height,
+                                 const int channels) {
         serviceOrphanedImpls(false);
         if (!impl_) {
             impl_ = new Impl();
@@ -1191,7 +1226,7 @@ namespace lfs::vis::gui {
         return impl_->uploadRegion(pixels, texture_width, texture_height, x, y, width, height, channels);
     }
 
-    bool VulkanUiTexture::uploadRegions(const std::span<const Region> regions) {
+    bool UiTexture::uploadRegions(const std::span<const Region> regions) {
         serviceOrphanedImpls(false);
         if (!impl_) {
             impl_ = new Impl();
@@ -1199,10 +1234,10 @@ namespace lfs::vis::gui {
         return impl_->uploadRegions(regions);
     }
 
-    bool VulkanUiTexture::upload(const lfs::core::Tensor& image,
-                                 const int expected_width,
-                                 const int expected_height,
-                                 const bool flip_y) {
+    bool UiTexture::upload(const lfs::core::Tensor& image,
+                           const int expected_width,
+                           const int expected_height,
+                           const bool flip_y) {
         serviceOrphanedImpls(false);
         if (!impl_) {
             impl_ = new Impl();
@@ -1224,7 +1259,23 @@ namespace lfs::vis::gui {
                                  expected_height);
     }
 
-    std::uintptr_t VulkanUiTexture::textureId() const {
+    lfs::Result<void> UiTexture::uploadLinearRgba(const lfs::core::Tensor& image) {
+        const auto failure = [&](lfs::ErrorCode code, std::string detail) {
+            return lfs::Result<void>::failure(lfs::make_error({.code = code, .domain = lfs::ErrorDomain::Rendering, .detail = std::move(detail), .detection = LFS_SOURCE_SITE_CURRENT()}));
+        };
+        if (!image.is_valid() || image.ndim() != 3 || image.size(2) != 4 || image.dtype() != lfs::core::DataType::Float32)
+            return failure(lfs::ErrorCode::InvalidArgument, "Linear UI texture requires a Float32 [H,W,4] tensor");
+        serviceOrphanedImpls(false);
+        if (!impl_)
+            impl_ = new Impl();
+        const auto host = image.to(lfs::core::Device::CPU).contiguous();
+        const Impl::RgbaRegion region{.pixels = static_cast<const std::uint8_t*>(host.ptr<void>()), .size = host.bytes(), .texture_width = int(host.size(1)), .texture_height = int(host.size(0)), .width = int(host.size(1)), .height = int(host.size(0))};
+        if (!impl_->uploadRgbaRegions(std::span(&region, 1), VK_FORMAT_R32G32B32A32_SFLOAT))
+            return failure(lfs::ErrorCode::Unavailable, "Could not upload the linear tensor overlay to the reference renderer");
+        return {};
+    }
+
+    std::uintptr_t UiTexture::textureId() const {
         serviceOrphanedImpls(false);
         if (!impl_) {
             return 0;
@@ -1233,7 +1284,27 @@ namespace lfs::vis::gui {
         return reinterpret_cast<std::uintptr_t>(impl_->descriptor_set);
     }
 
-    std::string VulkanUiTexture::rmlSrcUrl(const int width, const int height) const {
+    std::shared_ptr<const lfs::core::Tensor> UiTexture::image() const {
+        return impl_ ? impl_->tensor_image : nullptr;
+    }
+
+    std::shared_ptr<const lfs::core::Tensor> uiTextureImage(std::uintptr_t id) {
+        std::lock_guard lock(texture_images_mutex);
+        for (const auto& [key, value] : texture_images) {
+            if (reinterpret_cast<std::uintptr_t>(value.descriptor) == id)
+                if (auto image = value.tensor.lock())
+                    return image;
+        }
+        return {};
+    }
+
+    VkDescriptorSet referenceUiTextureDescriptor(const lfs::core::Tensor& tensor) {
+        std::lock_guard lock(texture_images_mutex);
+        const auto found = texture_images.find(&tensor);
+        return found == texture_images.end() || found->second.tensor.expired() ? VK_NULL_HANDLE : found->second.descriptor;
+    }
+
+    std::string UiTexture::rmlSrcUrl(const int width, const int height) const {
         serviceOrphanedImpls(false);
         if (!impl_) {
             return {};
@@ -1243,7 +1314,7 @@ namespace lfs::vis::gui {
             impl_->image_view, impl_->sampler, width, height, impl_->src_incarnation_);
     }
 
-    bool VulkanUiTexture::valid() const {
+    bool UiTexture::valid() const {
         serviceOrphanedImpls(false);
         if (!impl_) {
             return false;
@@ -1255,7 +1326,7 @@ namespace lfs::vis::gui {
         return impl_->descriptor_set != VK_NULL_HANDLE;
     }
 
-    void VulkanUiTexture::reset() {
+    void UiTexture::reset() {
         serviceOrphanedImpls(false);
         if (!impl_)
             return;

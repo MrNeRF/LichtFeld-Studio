@@ -85,7 +85,8 @@
             <img class="input-device" src="../icon/device-laptop.png" data-class-hidden="input_device == 'mouse'"/>
         </div>
         <div id="mcp-chip" data-attr-title="mcp_tooltip" data-style-color="mcp_color" data-class-expanded="mcp_details_expanded">
-            <span>{{ mcp_summary }}</span>
+            <span id="mcp-summary">{{ mcp_summary }}</span>
+            <span id="mcp-compact">@tr:status_bar.mcp_name</span>
             <div id="mcp-popup" class="hidden" data-class-hidden="!mcp_details_expanded">
                 <div id="mcp-popup-header">
                     <div id="mcp-popup-title" data-style-color="mcp_color">{{ mcp_summary }}</div>
@@ -114,6 +115,21 @@
         <div id="fps-group" class="status-item">
             <span id="fps-value" data-style-color="fps_color">{{ fps_value }}</span>
             <span id="fps-label" class="dim">{{ fps_label }}</span>
+        </div>
+        <div id="renderer-backend-chip" class="backend-chip" data-attr-title="renderer_tooltip">
+            <span class="backend-label">{{ renderer_label }}</span>
+            <span class="backend-value">{{ renderer_value }}</span>
+        </div>
+        <div id="upscaler-backend-chip" class="backend-chip" data-attr-title="upscaler_tooltip">
+            <button id="upscaler-toggle" data-attrif-disabled="safe_mode" data-event-click="toggle_upscaler_menu()">
+                <span class="backend-label">{{ upscaler_label }}</span>
+                <span class="backend-value">{{ upscaler_value }}</span>
+            </button>
+            <div id="upscaler-popup" class="hidden" data-class-hidden="!upscaler_menu_expanded" data-rml="upscaler_menu"></div>
+        </div>
+        <div id="tensor-backend-chip" class="backend-chip" data-attr-title="tensor_tooltip">
+            <span class="backend-label">{{ tensor_label }}</span>
+            <span class="backend-value">{{ tensor_value }}</span>
         </div>
         <span id="git-commit" class="dim">{{ git_commit }}</span>
     </div>

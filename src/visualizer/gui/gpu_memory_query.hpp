@@ -19,7 +19,8 @@ namespace lfs::vis::gui {
         size_t total = 0;
         float gpu_utilization_percent = -1.f;
         bool gpu_utilization_valid = false;
-        bool process_estimated = false;
+        bool process_valid = false;
+        bool process_over_budget = false;
         bool device_estimated = false;
         std::string device_name;
         // Vulkan exposes a process budget, not whole-device usage. Keep the
@@ -43,9 +44,10 @@ namespace lfs::vis::gui {
     LFS_VIS_API GpuMemoryInfo selectGpuMemory(size_t compute_bytes, size_t graphics_bytes,
                                               size_t dxgi_bytes, size_t cuda_used,
                                               size_t cuda_total, size_t nvml_used,
-                                              size_t nvml_total);
+                                              size_t nvml_total, size_t dxgi_budget = 0,
+                                              bool dxgi_valid = false);
     LFS_VIS_API GpuMemoryInfo selectUnifiedGpuMemory(size_t process_used, size_t working_set,
-                                                     size_t gpu_allocated, size_t host_available);
+                                                     size_t gpu_in_use, size_t host_available);
     LFS_VIS_API std::string formatGpuGiB(size_t bytes);
     // Localization keys naming the source of the process and device readings.
     LFS_VIS_API const char* gpuProcessMemoryTooltipKey(const GpuMemoryInfo& info);

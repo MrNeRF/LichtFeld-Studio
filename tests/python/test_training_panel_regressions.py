@@ -208,13 +208,13 @@ def test_toolbar_uses_short_primary_labels(training_panel_module, monkeypatch, i
     assert model.bindings["label_toolbar_edit"][0]() == "common.edit"
 
 
-def test_toolbar_starting_status_is_not_unknown(training_panel_module, monkeypatch):
+def test_toolbar_shows_starting_badge(training_panel_module, monkeypatch):
     module = training_panel_module
     monkeypatch.setattr(module, "_training_session_state", lambda: {})
     monkeypatch.setattr(module.RuntimeState.trainer_state, "value", "starting")
     model = _ModelStub()
-    module.TrainingPanel()._bind_status(model, lambda: None)
-    assert "runtime.task_starting" in model.bindings["status_mode"][0]()
+    module.TrainingPanel()._bind_visibility(model, lambda: None, lambda: None)
+    assert model.bindings["show_ctrl_starting"][0]()
 
 
 def test_restore_failure_keeps_detail_below_error_badge(training_panel_module, monkeypatch):
@@ -225,7 +225,6 @@ def test_restore_failure_keeps_detail_below_error_badge(training_panel_module, m
     panel = module.TrainingPanel()
     panel._bind_status(model, lambda: None)
     panel._bind_visibility(model, lambda: None, lambda: None)
-    assert "status.error" in model.bindings["status_mode"][0]()
     assert "bad checkpoint" in model.bindings["error_message"][0]()
     assert model.bindings["show_ctrl_error"][0]()
     assert not model.bindings["show_ctrl_paused"][0]()
@@ -241,7 +240,7 @@ def test_restore_failure_keeps_detail_below_error_badge(training_panel_module, m
 @pytest.mark.parametrize("scale", [1.0, 1.5, 2.0])
 @pytest.mark.parametrize("state,actions", [
     ("ready", ("start", "clear")),
-    ("completed", ("switch_edit", "reset", "clear")),
+    ("completed", ("start_new", "switch_edit", "reset", "clear")),
     ("paused", ("resume", "save_project", "reset", "stop")),
 ])
 def test_toolbar_fit_uses_measured_width_and_can_restore_captions(training_panel_module, monkeypatch, scale, state, actions):
@@ -689,10 +688,9 @@ def test_saving_badge_tracks_transition_without_restarting_training(training_pan
     assert not model.bindings["show_ctrl_saving"][0]()
     saving["value"] = True
     assert panel._sync_saving_status()
-    assert set(dirty) == {"status_mode", "show_ctrl_stopping", "show_ctrl_saving"}
+    assert set(dirty) == {"show_ctrl_stopping", "show_ctrl_saving"}
     assert model.bindings["show_ctrl_saving"][0]()
     assert not model.bindings["show_ctrl_stopping"][0]()
-    assert "training.status_saving" in model.bindings["status_mode"][0]()
     dirty.clear()
     assert not panel._sync_saving_status()
     assert not dirty
@@ -990,6 +988,8 @@ class _ParamsStub:
         self.sh_degree_interval = 1000
         self.ppisp_controller_activation_step = 5678
         self.enable_eval = False
+        self.eval_mask = ""
+        self.eval_mask_invert = False
         self.save_steps = [7000]
         self.eval_steps = []
         self.bg_color = (0.0, 0.0, 0.0)
@@ -1137,19 +1137,11 @@ def test_backend_disabled_conditions_prevent_new_conflicts_but_allow_correction(
     def disabled(name):
         return model.bindings[name][0]()
 
-    assert disabled("gut_disabled") is False
     assert disabled("gut_depth_supervision_disabled") is False
     assert disabled("gut_normal_supervision_disabled") is True
     assert disabled("gut_mip_filter_disabled") is True
     assert "gut_undistort_disabled" not in model.bindings
 
-    params.gut = False
-    assert disabled("gut_disabled") is True
-    params.use_depth_loss = False
-    params.undistort = True
-    assert disabled("gut_disabled") is False
-    params.strategy = "igs+"
-    assert disabled("gut_disabled") is True
 
 
 def test_strategy_switch_resyncs_generated_rows_and_requests_panel_update(
@@ -1307,7 +1299,7 @@ def test_training_panel_progress_updates_bound_value(training_panel_module, monk
 
 def test_training_panel_uses_dirty_update_policy(training_panel_module):
     assert training_panel_module.TrainingPanel.update_policy == "dirty"
-    assert "update_interval_ms" not in training_panel_module.TrainingPanel.__dict__
+    assert training_panel_module.TrainingPanel.update_interval_ms is None
 
 
 def test_training_panel_store_update_requests_panel_update(training_panel_module):
@@ -1794,6 +1786,28 @@ def test_enabling_eval_clamps_existing_bad_test_every(training_panel_module, mon
     assert params.eval_steps == params.save_steps
 
 
+# Catches the panel replacing eval steps given with --eval-steps by the save steps.
+def test_enabling_eval_keeps_requested_eval_steps(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+    params = _ParamsStub()
+    params.eval_steps = [300, 4000]
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(
+            optimization_params=lambda: params,
+            dataset_params=lambda: _DatasetStub(),
+            get_render_settings=lambda: None,
+            get_scene=lambda: SimpleNamespace(active_camera_count=5),
+        ),
+    )
+
+    panel._set_bool_prop("enable_eval", True)
+
+    assert params.eval_steps == [300, 4000, 7000]
+
+
 def test_enabling_eval_rejects_single_camera_split(training_panel_module, monkeypatch):
     panel = training_panel_module.TrainingPanel()
     params = _ParamsStub()
@@ -1913,6 +1927,40 @@ def test_browse_background_image_uses_current_image_dialog(training_panel_module
     assert calls == [""]
     assert params.bg_image_path == selected_path
     assert panel._handle.dirty_all_count == 1
+
+
+# Catches a cleared path leaving inversion active or a browse action ignoring its start directory.
+def test_eval_mesh_browser_sets_path_and_clear_resets_invert(
+    training_panel_module, monkeypatch
+):
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+    params = _ParamsStub()
+    params.eval_mask = "/tmp/current/mask.obj"
+    params.eval_mask_invert = True
+    calls = []
+
+    def open_mesh_file_dialog(start_dir):
+        calls.append(start_dir)
+        return "/tmp/new/mask.ply"
+
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(
+            optimization_params=lambda: params,
+            ui=SimpleNamespace(open_mesh_file_dialog=open_mesh_file_dialog),
+        ),
+    )
+
+    panel._on_action(None, None, ["browse_eval_mask"])
+    assert calls == ["/tmp/current"]
+    assert params.eval_mask == "/tmp/new/mask.ply"
+
+    panel._on_action(None, None, ["clear_eval_mask"])
+    assert params.eval_mask == ""
+    assert params.eval_mask_invert is False
+    assert panel._handle.dirty_all_count == 2
 
 
 def test_training_panel_no_longer_uses_removed_image_dialog_alias():
@@ -2427,7 +2475,7 @@ def _stub_stored_session(training_panel_module, monkeypatch, **overrides):
     return state
 
 
-def test_completed_stored_session_shows_complete_mode_and_buttons(
+def test_completed_stored_session_shows_completed_badge_and_buttons(
     training_panel_module, monkeypatch
 ):
     _stub_stored_session(
@@ -2454,9 +2502,7 @@ def test_completed_stored_session_shows_complete_mode_and_buttons(
         assert model.bindings["show_ctrl_completed"][0]() is True
         assert model.bindings["show_ctrl_paused"][0]() is False
         assert model.bindings["show_ctrl_ready"][0]() is False
-        assert "status.complete" in model.bindings["status_mode"][0]()
         assert "30,000/30,000" in model.bindings["progress_text"][0]()
-        assert "session_at_iteration" not in model.bindings["status_mode"][0]()
     finally:
         runtime.has_trainer._fallback = False
         runtime.training_state._fallback = "idle"
@@ -2464,7 +2510,7 @@ def test_completed_stored_session_shows_complete_mode_and_buttons(
         runtime.total_iterations._fallback = 0
 
 
-def test_paused_stored_session_shows_paused_mode_and_resume(
+def test_paused_stored_session_shows_paused_badge_and_resume(
     training_panel_module, monkeypatch
 ):
     _stub_stored_session(
@@ -2491,9 +2537,7 @@ def test_paused_stored_session_shows_paused_mode_and_resume(
         assert model.bindings["show_ctrl_paused"][0]() is True
         assert model.bindings["show_ctrl_completed"][0]() is False
         assert model.bindings["show_ctrl_ready"][0]() is False
-        assert "status.paused" in model.bindings["status_mode"][0]()
         assert "7,000/30,000" in model.bindings["progress_text"][0]()
-        assert "session_at_iteration" not in model.bindings["status_mode"][0]()
     finally:
         runtime.has_trainer._fallback = False
         runtime.training_state._fallback = "idle"
@@ -2529,9 +2573,7 @@ def test_stopped_stored_session_keeps_stopped_mode_and_edit_controls(
         assert model.bindings["show_ctrl_stopped"][0]() is True
         assert model.bindings["show_ctrl_completed"][0]() is False
         assert model.bindings["show_ctrl_ready"][0]() is False
-        assert "status.stopped" in model.bindings["status_mode"][0]()
         assert "7,000/30,000" in model.bindings["progress_text"][0]()
-        assert "session_at_iteration" not in model.bindings["status_mode"][0]()
     finally:
         runtime.has_trainer._fallback = False
         runtime.training_state._fallback = "idle"

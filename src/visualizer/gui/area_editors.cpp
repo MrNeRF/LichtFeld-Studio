@@ -7,11 +7,19 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "gui/panels/python_console_panel.hpp"
+#include "gui/rmlui/elements/node_canvas_element.hpp"
+#include "gui/rmlui/rml_panel_host.hpp"
+#include "input/frame_input_buffer.hpp"
 #include "python/python_runtime.hpp"
+#include "scene/scene_manager.hpp"
 #include "screen/view3d_space.hpp"
+#include "visualizer/nodes/modifier_manager.hpp"
 
+#include <RmlUi/Core/ElementDocument.h>
 #include <algorithm>
+#include <chrono>
 #include <format>
+#include <utility>
 
 namespace lfs::vis::gui {
 
@@ -32,6 +40,7 @@ namespace lfs::vis::gui {
                 v = false;
             masked.mouse_wheel = 0.0f;
             masked.mouse_wheel_x = 0.0f;
+            masked.pinch_scale = 1.0f;
             masked.mouse_button_events.clear();
             return masked;
         }
@@ -129,6 +138,11 @@ namespace lfs::vis::gui {
                              .tooltip = tooltip,
                              .active = s.orthographic});
         }
+        items.push_back({.kind = HeaderItem::Kind::Toggle,
+                         .id = "toggle_node_editor",
+                         .icon = "layout-grid",
+                         .tooltip = LOC("node_editor.toggle"),
+                         .active = screen.findEditor(screen::editors::kNodeEditor).valid()});
     }
 
     std::vector<ContextMenuItem> View3DEditor::menu(const AreaFrame& area, const screen::Screen& screen,
@@ -214,8 +228,15 @@ namespace lfs::vis::gui {
         return items;
     }
 
-    void View3DEditor::headerAction(const AreaFrame& area, screen::Screen&, const std::string_view action,
+    void View3DEditor::headerAction(const AreaFrame& area, screen::Screen& screen, const std::string_view action,
                                     float, float) {
+        if (action == "toggle_node_editor") {
+            if (screen.findEditor(screen::editors::kNodeEditor).valid())
+                screen.closeEditor(screen::editors::kNodeEditor);
+            else
+                screen.openEditor(screen::editors::kNodeEditor);
+            return;
+        }
         if (command_)
             command_(area.id, action);
     }
@@ -379,6 +400,121 @@ namespace lfs::vis::gui {
         const auto& c = ctx.area.content;
         const PanelInputState input = panelInput(ctx.input);
         panels::DrawDockedPythonConsole(ctx.ui, c.x, c.y, c.w, c.h, &input);
+    }
+
+    // ---- Node editor -------------------------------------------------------
+
+    NodeEditor::NodeEditor(RmlUIManager& rml, SceneManager& scene_manager,
+                           GlobalContextMenu* context_menu)
+        : scene_manager_(&scene_manager),
+          context_menu_(context_menu),
+          host_(std::make_unique<RmlPanelHost>(&rml, "node_editor", "rmlui/node_editor.rml")) {
+        host_->setKeyboardHandler([this](const FrameInputEvent& event) {
+            if (!canvas_ || event.kind != FrameInputEventKind::KeyDown || event.repeat)
+                return false;
+            return canvas_->handleKey(event.scancode, (event.modifiers & SDL_KMOD_SHIFT) != 0,
+                                      (event.modifiers & SDL_KMOD_CTRL) != 0 ||
+                                          (event.modifiers & SDL_KMOD_GUI) != 0,
+                                      (event.modifiers & SDL_KMOD_ALT) != 0);
+        });
+    }
+
+    NodeEditor::~NodeEditor() = default;
+
+    void NodeEditor::bindCanvas() {
+        if (!host_->ensureDocumentLoaded())
+            return;
+        auto* next = dynamic_cast<NodeCanvasElement*>(host_->getDocument()->GetElementById("node-editor-canvas"));
+        if (canvas_ == next)
+            return;
+        canvas_ = next;
+        if (canvas_) {
+            canvas_->setContext(scene_manager_, context_menu_);
+            canvas_->setSidebarVisible(sidebar_visible_);
+            canvas_->setPreviewSelection(preview_selection_);
+        }
+    }
+
+    void NodeEditor::header(const AreaFrame&, const screen::Screen&,
+                            std::vector<HeaderItem>& items) const {
+        items.push_back({.kind = HeaderItem::Kind::Label,
+                         .id = "title",
+                         .label = LOC("editor.node_editor")});
+        items.push_back({.kind = HeaderItem::Kind::Button,
+                         .id = "add",
+                         .icon = "sequencer/plus",
+                         .tooltip = LOC("node_editor.add")});
+        if (canvas_ && canvas_->paintSelectionSelected())
+            items.push_back({.kind = HeaderItem::Kind::Toggle,
+                             .id = "paint",
+                             .icon = "brush",
+                             .tooltip = LOC("node_editor.paint"),
+                             .active = canvas_->paintModeActive()});
+        items.push_back({.kind = HeaderItem::Kind::Toggle, .id = "modifiers-visible", .label = LOC(canvas_ && canvas_->modifiersVisible() ? "node_editor.modifiers_on" : "node_editor.modifiers_off"), .active = canvas_ && canvas_->modifiersVisible()});
+        items.push_back({.kind = HeaderItem::Kind::Button, .id = "frame", .icon = "arrows-maximize", .tooltip = LOC("node_editor.frame")});
+        items.push_back({.kind = HeaderItem::Kind::Button, .id = "arrange", .icon = "layout-grid", .tooltip = LOC("node_editor.arrange")});
+        items.push_back({.kind = HeaderItem::Kind::Button, .id = "open", .icon = "archive", .tooltip = LOC("node_editor.open")});
+        items.push_back({.kind = HeaderItem::Kind::Button,
+                         .id = "save",
+                         .icon = "sequencer/export",
+                         .tooltip = LOC("node_editor.save")});
+        items.push_back({.kind = HeaderItem::Kind::Spacer});
+        if (canvas_)
+            items.push_back({.kind = HeaderItem::Kind::Label, .id = "status", .label = canvas_->statusText()});
+        items.push_back({.kind = HeaderItem::Kind::Toggle,
+                         .id = "preview_selection",
+                         .icon = "focus-selection",
+                         .tooltip = LOC("node_editor.preview_selection"),
+                         .active = canvas_ ? canvas_->previewSelection() : preview_selection_});
+        items.push_back({.kind = HeaderItem::Kind::Toggle,
+                         .id = "sidebar",
+                         .icon = "layout-columns-right",
+                         .tooltip = LOC("node_editor.toggle_sidebar"),
+                         .active = canvas_ ? canvas_->sidebarVisible() : sidebar_visible_});
+    }
+
+    void NodeEditor::headerAction(const AreaFrame&, screen::Screen&, const std::string_view action,
+                                  const float x, const float y) {
+        if (action == "preview_selection") {
+            preview_selection_ = !(canvas_ ? canvas_->previewSelection() : preview_selection_);
+            if (canvas_)
+                canvas_->setPreviewSelection(preview_selection_);
+        } else if (action == "paint") {
+            if (canvas_)
+                canvas_->togglePaintMode();
+        } else if (action == "sidebar") {
+            sidebar_visible_ = !(canvas_ ? canvas_->sidebarVisible() : sidebar_visible_);
+            if (canvas_)
+                canvas_->setSidebarVisible(sidebar_visible_);
+        } else if (canvas_) {
+            canvas_->headerAction(action, x, y);
+        }
+    }
+
+    void NodeEditor::draw(const AreaDrawContext& ctx) {
+        const auto start = std::chrono::steady_clock::now();
+        bindCanvas();
+        const auto& content = ctx.area.content;
+        if (canvas_ && area_id_ != ctx.area.id.value) {
+            area_id_ = ctx.area.id.value;
+            canvas_->invalidateView();
+            host_->markContentDirty();
+        }
+        if (canvas_) {
+            canvas_->setPanelScreenOffset(content.x, content.y);
+            canvas_->setPanelSize(content.w, content.h);
+        }
+        if (canvas_ && canvas_->needsModelUpdate())
+            host_->markContentDirty();
+        const PanelInputState input = panelInput(ctx.input);
+        host_->setInput(&input);
+        host_->drawDirect(content.x, content.y, content.w, content.h);
+        scene_manager_->modifierManager().recordCanvasFrame(
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+    }
+
+    bool NodeEditor::needsAnimationFrame() const {
+        return (canvas_ && canvas_->needsModelUpdate()) || (host_ && host_->needsAnimationFrame());
     }
 
     // ---- Panel editors -----------------------------------------------------

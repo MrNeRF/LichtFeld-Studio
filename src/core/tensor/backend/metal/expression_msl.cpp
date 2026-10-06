@@ -96,6 +96,50 @@ static uint lfs_int_divide(uint a, uint b, bool modulo) {
     return (modulo ? a_negative : a_negative != b_negative) ? 0u - result : result;
 }
 
+// Significand in [2^23, 2^24) of a nonzero finite magnitude, and its biased exponent, below one for subnormals.
+static uint lfs_normalize(uint magnitude, thread int& exponent) {
+    const uint field = magnitude >> 23;
+    const uint significand = field == 0u ? magnitude : (magnitude & 0x7fffffu) | 0x800000u;
+    const uint shift = clz(significand) - 8u;
+    exponent = int(max(field, 1u)) - int(shift);
+    return significand << shift;
+}
+
+// Correctly rounded x / y on raw bits, in integer arithmetic: Metal's float division, precise::divide included,
+// flushes subnormal operands and results to zero, and integers leave the compiler no math mode to apply.
+static uint lfs_precise_divide(uint x, uint y) {
+    const uint sign = (x ^ y) & 0x80000000u, ax = x & 0x7fffffffu, ay = y & 0x7fffffffu;
+    if (ax > 0x7f800000u || ay > 0x7f800000u || (ax == 0u && ay == 0u) || (ax == 0x7f800000u && ay == 0x7f800000u))
+        return 0x7fc00000u;
+    if (ax == 0x7f800000u || ay == 0u)
+        return sign | 0x7f800000u;
+    if (ax == 0u || ay == 0x7f800000u)
+        return sign;
+    int ex, ey;
+    const uint mx = lfs_normalize(ax, ex), my = lfs_normalize(ay, ey);
+    // mx / my lies in (1/2, 2), so the quotient has 26 or 27 bits: the significand, a guard bit and two more,
+    // with the remainder as the sticky bit.
+    const ulong numerator = ulong(mx) << 26;
+    uint quotient = uint(numerator / my);
+    bool sticky = numerator % my != 0ul;
+    int exponent = ex - ey + 127;
+    if (quotient < (1u << 26)) {
+        quotient <<= 1;
+        exponent -= 1;
+    }
+    // Subnormal results shift right by 1 - exponent; every bit shifted out joins the sticky bit.
+    if (exponent < 1) {
+        const uint shift = uint(min(1 - exponent, 31));
+        sticky = sticky || (quotient & ((1u << shift) - 1u)) != 0u;
+        quotient >>= shift;
+        exponent = 1;
+    }
+    // Round to nearest, ties to even. A carry out of the significand bumps the exponent.
+    const bool up = (quotient & 4u) != 0u && (sticky || (quotient & 11u) != 0u);
+    const uint magnitude = (uint(exponent - 1) << 23) + (quotient >> 3) + (up ? 1u : 0u);
+    return sign | min(magnitude, 0x7f800000u);
+}
+
 )";
 
         // Every value is a uint of raw bits declared at function scope, so
@@ -149,6 +193,7 @@ static uint lfs_int_divide(uint a, uint b, bool modulo) {
                 case ExprOp::Sub: return bits(x + " - " + y);
                 case ExprOp::Mul: return bits(x + " * " + y);
                 case ExprOp::Div: return bits(x + " / " + y);
+                case ExprOp::PreciseDiv: return define("lfs_precise_divide(" + v(a) + ", " + v(b) + ")");
                 case ExprOp::Mod: return bits("fmod(" + x + ", " + y + ")");
                 case ExprOp::Pow: return bits(y + " == 2.0f ? " + x + " * " + x + " : pow(" + x + ", " + y + ")");
                 case ExprOp::Min: return bits("lfs_minmax(" + x + ", " + y + ", false)");
@@ -189,11 +234,10 @@ static uint lfs_int_divide(uint a, uint b, bool modulo) {
                 case ExprOp::Tan: return bits("tan(" + x + ")");
                 case ExprOp::Asin:
                 case ExprOp::Acos: {
-                    // Clamp rounding overshoot, but keep NaN.
-                    const auto bounded = bits("(isnan(" + x + ") ? " + x + " : clamp(" + x + ", -1.0f, 1.0f))");
-                    const auto root = bits("sqrt(fmax(0.0f, 1.0f - " + f(bounded) + " * " + f(bounded) + "))");
-                    return op == ExprOp::Asin ? bits("atan2(" + f(bounded) + ", " + f(root) + ")")
-                                              : bits("atan2(" + f(root) + ", " + f(bounded) + ")");
+                    const auto root = bits("sqrt(fmax(0.0f, 1.0f - " + x + " * " + x + "))");
+                    const auto result = op == ExprOp::Asin ? bits("atan2(" + x + ", " + f(root) + ")")
+                                                           : bits("atan2(" + f(root) + ", " + x + ")");
+                    return define("((as_type<uint>(" + x + ") & 0x7fffffffu) > 0x3f800000u ? 0x7fc00000u : " + v(result) + ")");
                 }
                 case ExprOp::Atan: return bits("atan(" + x + ")");
                 case ExprOp::Sinh: return bits("sinh(" + x + ")");

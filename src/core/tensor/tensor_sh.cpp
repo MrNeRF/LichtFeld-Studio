@@ -152,10 +152,12 @@ namespace lfs::core {
                     sh_codec(tmp, destination, next, indices ? &ids : nullptr, nullptr, destination_bounds);
                     return;
                 }
-                if (p.destination_format == ShFormat::Q16 &&
-                    !(p.source_rest == p.destination_rest && !p.scatter &&
-                      ((p.source_format == ShFormat::Q16 && indices) ||
-                       (p.source_format == ShFormat::Float32 && !indices && p.source_offset == 0)))) {
+                const bool direct_q16 =
+                    !p.scatter && ((p.source_format == ShFormat::Canonical && !indices) ||
+                                   (p.source_rest == p.destination_rest &&
+                                    ((p.source_format == ShFormat::Q16 && indices) ||
+                                     (p.source_format == ShFormat::Float32 && !indices && p.source_offset == 0))));
+                if (p.destination_format == ShFormat::Q16 && !direct_q16) {
                     Tensor tmp = internal::allocate_zeros_like(source, {sh_swizzled_float_count(p.count, p.destination_rest)}, DataType::Float32);
                     auto next = p;
                     next.destination_format = ShFormat::Float32;
@@ -168,7 +170,7 @@ namespace lfs::core {
                 if (p.source_format == ShFormat::Q16 &&
                     (p.destination_rest != p.source_rest || p.destination_offset)) {
                     Tensor tmp = internal::allocate_zeros_like(source, {sh_swizzled_float_count(p.count, p.source_rest)}, DataType::Float32);
-                    sh_codec(src, tmp, {.source_format = ShFormat::Q16, .source_rows = p.source_rows, .destination_rows = p.count, .count = p.count, .source_rest = p.source_rest, .destination_rest = p.source_rest, .source_offset = p.source_offset}, indices ? &ids : nullptr, &bounds);
+                    sh_codec(src, tmp, {.source_format = ShFormat::Q16, .source_rows = p.source_rows, .destination_rows = p.count, .count = p.count, .source_rest = p.source_rest, .destination_rest = p.source_rest, .source_offset = p.source_offset, .match_cpu_rounding = p.match_cpu_rounding}, indices ? &ids : nullptr, &bounds);
                     auto next = p;
                     next.source_format = ShFormat::Float32;
                     next.source_rows = p.count;

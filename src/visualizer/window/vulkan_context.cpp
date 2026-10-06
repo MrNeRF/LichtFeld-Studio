@@ -6,7 +6,7 @@
 #include "core/vulkan_helpers.hpp"
 
 #include "core/crash_handler.hpp"
-#include "rendering/nvidia_dlss_plugin.hpp"
+#include "rendering/scene_upscaler_plugin.hpp"
 
 #include "core/cuda_error.hpp"
 #include "core/cuda_vulkan_interop.hpp"
@@ -17,7 +17,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/shareable_allocation_limit.hpp"
-#include "core/tensor_backend.hpp"
+#include "core/tensor_backend_vulkan.hpp"
 #include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "rendering/vulkan_wait.hpp"
@@ -648,7 +648,8 @@ namespace lfs::vis {
         // Optional vendor runtimes retain the Vulkan device passed at lazy
         // initialization. Shut them down after all GPU work is retired and
         // before the allocator/device they reference are destroyed.
-        NvidiaDlssPlugin::instance().shutdownRuntime();
+        for (auto* const plugin : sceneUpscalerPlugins())
+            plugin->shutdownRuntime();
 
         // #1488: surface leaked External* counts after idle, before device destroy.
         {
@@ -1980,16 +1981,6 @@ namespace lfs::vis {
         return retired;
     }
 
-    bool VulkanContext::getTimelineSemaphoreCounterValue(const VkSemaphore semaphore,
-                                                         std::uint64_t& out_value) const {
-        out_value = 0;
-        if (device_ == VK_NULL_HANDLE || semaphore == VK_NULL_HANDLE) {
-            return false;
-        }
-        const VkResult result = vkGetSemaphoreCounterValue(device_, semaphore, &out_value);
-        return result == VK_SUCCESS;
-    }
-
     bool VulkanContext::waitForRetiredFrameSubmitSerial(const std::uint64_t serial) {
         if (serial == 0 || device_ == VK_NULL_HANDLE) {
             return true;
@@ -2140,19 +2131,19 @@ namespace lfs::vis {
                 available_extension_count);
             available_extensions.resize(available_extension_count);
         }
-        const auto dlss_instance_extensions =
-            NvidiaDlssPlugin::instance().requiredInstanceExtensions();
-        const auto missing_dlss_instance_extension = std::ranges::find_if(
-            dlss_instance_extensions,
-            [&available_extensions](const std::string& name) {
-                return !extensionAvailable(available_extensions, name.c_str());
-            });
-        if (missing_dlss_instance_extension != dlss_instance_extensions.end()) {
-            NvidiaDlssPlugin::instance().markBootstrapFailed(std::format(
-                "required Vulkan instance extension '{}' is unavailable",
-                *missing_dlss_instance_extension));
-        } else {
-            for (const auto& name : dlss_instance_extensions)
+        for (auto* const plugin : sceneUpscalerPlugins()) {
+            const auto plugin_extensions = plugin->requiredInstanceExtensions();
+            const auto missing = std::ranges::find_if(
+                plugin_extensions,
+                [&available_extensions](const std::string& name) {
+                    return !extensionAvailable(available_extensions, name.c_str());
+                });
+            if (missing != plugin_extensions.end()) {
+                plugin->markBootstrapFailed(std::format(
+                    "required Vulkan instance extension '{}' is unavailable", *missing));
+                continue;
+            }
+            for (const auto& name : plugin_extensions)
                 appendUniqueExtension(extensions, name.c_str());
         }
 #if LFS_HAS_CUDA && (defined(_WIN32) || defined(__linux__))
@@ -2585,8 +2576,8 @@ namespace lfs::vis {
             transfer_queue_family_ = 0;
             has_dedicated_transfer_queue_ = false;
         }
-        // The tensor backend gets its own queue: the second queue of the compute
-        // family when it has one, else the second queue of the graphics family.
+        // Tensor programs need graphics and compute on the same timeline. Keep
+        // a separate queue, preferring a graphics-capable family for raster.
         std::optional<uint32_t> tensor_queue_family;
         uint32_t tensor_queue_index = 1;
         {
@@ -2594,7 +2585,7 @@ namespace lfs::vis {
             vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &family_count, nullptr);
             std::vector<VkQueueFamilyProperties> family_props(family_count);
             vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &family_count, family_props.data());
-            for (const uint32_t candidate : {compute_queue_family_, graphics_queue_family_}) {
+            for (const uint32_t candidate : {graphics_queue_family_, compute_queue_family_}) {
                 if (candidate < family_count && family_props[candidate].queueCount >= 2 &&
                     (family_props[candidate].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0) {
                     tensor_queue_family = candidate;
@@ -2646,19 +2637,19 @@ namespace lfs::vis {
         }
 
         std::vector<const char*> extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-        const auto dlss_device_extensions =
-            NvidiaDlssPlugin::instance().requiredDeviceExtensions(instance_, physical_device_);
-        const auto missing_dlss_device_extension = std::ranges::find_if(
-            dlss_device_extensions,
-            [&available_extensions](const std::string& name) {
-                return !extensionAvailable(available_extensions, name.c_str());
-            });
-        if (missing_dlss_device_extension != dlss_device_extensions.end()) {
-            NvidiaDlssPlugin::instance().markBootstrapFailed(std::format(
-                "required Vulkan device extension '{}' is unavailable",
-                *missing_dlss_device_extension));
-        } else {
-            for (const auto& name : dlss_device_extensions)
+        for (auto* const plugin : sceneUpscalerPlugins()) {
+            const auto plugin_extensions = plugin->requiredDeviceExtensions(instance_, physical_device_);
+            const auto missing = std::ranges::find_if(
+                plugin_extensions,
+                [&available_extensions](const std::string& name) {
+                    return !extensionAvailable(available_extensions, name.c_str());
+                });
+            if (missing != plugin_extensions.end()) {
+                plugin->markBootstrapFailed(std::format(
+                    "required Vulkan device extension '{}' is unavailable", *missing));
+                continue;
+            }
+            for (const auto& name : plugin_extensions)
                 appendUniqueExtension(extensions, name.c_str());
         }
 #if LFS_HAS_CUDA && (defined(_WIN32) || defined(__linux__))
@@ -2719,6 +2710,9 @@ namespace lfs::vis {
             extensionAvailable(available_extensions, VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
         if (enable_shader_atomic_float) {
             appendUniqueExtension(extensions, VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
+        }
+        if (extensionAvailable(available_extensions, VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME)) {
+            appendUniqueExtension(extensions, VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME);
         }
 #ifdef __APPLE__
         // Metal tensors import into the device without copies.
@@ -2923,8 +2917,7 @@ namespace lfs::vis {
         features11.storageBuffer16BitAccess = supported_features11.storageBuffer16BitAccess;
         features11.uniformAndStorageBuffer16BitAccess =
             supported_features11.uniformAndStorageBuffer16BitAccess;
-        features11.pNext = enabled_chain_head;
-        features12.pNext = &features11;
+        features12.pNext = enabled_chain_head;
 
         uint32_t queue_family_count = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &queue_family_count, nullptr);
@@ -3195,6 +3188,9 @@ namespace lfs::vis {
     }
 
     VkPresentModeKHR VulkanContext::choosePresentMode(const std::vector<VkPresentModeKHR>& modes) const {
+        // MAILBOX keeps navigation low-latency and avoids blocking the GUI tenant
+        // inside vkQueuePresent while it participates in shared-arena turn-taking.
+        // With no continuous frame demand, the ledger paces active animations.
         for (const auto mode : modes) {
             if (mode == VK_PRESENT_MODE_MAILBOX_KHR) {
                 return mode;
@@ -3626,8 +3622,8 @@ namespace lfs::vis {
         // exporter's handle. A stale handle must assert instead of being hidden
         // by the VUID-01742 suppression below.
         {
-            struct stat st_src {};
-            struct stat st_dup {};
+            struct stat st_src{};
+            struct stat st_dup{};
             const int st_src_rc = ::fstat(handle, &st_src);
             const int st_dup_rc = ::fstat(dup_fd, &st_dup);
             int kcmp_rc = 0;

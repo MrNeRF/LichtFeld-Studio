@@ -27,6 +27,7 @@
 #include "core/tensor_image.hpp"
 #include "cuda_backend_test.hpp"
 #include "io/dataset_scene_import.hpp"
+#include "io/formats/ply.hpp"
 #include "lfs/training/idle_arena_scratch.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/ops/fast_services.hpp"
@@ -420,6 +421,10 @@ namespace {
             table->evaluate(saved, corrected, path.raw ? raw : absent, target, path.mask ? mask : absent,
                             {.path = path.path, .ssim_weight = path.weight, .valid_padding = true},
                             loss, grad_corrected, grad_raw);
+            if (path.raw && table->add_raw_gradient != nullptr) {
+                grad_raw = Tensor::zeros(corrected.shape(), Device::GPU);
+                table->add_raw_gradient(saved, grad_raw);
+            }
             if (path.path != ops::PhotoPath::L1) {
                 keep(out.snapshot, backend, std::string("photometric.evaluate.") + path.name + ".ssim_map", saved.ssim_map, kReduce);
                 keep(out.snapshot, backend, std::string("photometric.evaluate.") + path.name + ".cs_map", saved.cs_map, kReduce);
@@ -474,6 +479,10 @@ namespace {
                     Tensor loss, grad, raw_gradient;
                     table->evaluate(saved, prediction, path.raw ? raw_image : absent, byte_target,
                                     path.mask ? soft : absent, {path.path, path.weight, true}, loss, grad, raw_gradient);
+                    if (path.raw && table->add_raw_gradient != nullptr) {
+                        raw_gradient = Tensor::zeros(prediction.shape(), Device::GPU);
+                        table->add_raw_gradient(saved, raw_gradient);
+                    }
                     const std::string prefix = std::format("photo.edge.{}.{}.{}.{}.{}", n, h, w, zero_mask, path.name);
                     keep(out.snapshot, backend, prefix + ".loss", loss, kReduce);
                     keep(out.snapshot, backend, prefix + ".gradient", grad, kReduce);
@@ -495,21 +504,14 @@ namespace {
         constexpr ops::AdamModifiers modifiers{
             .frozen_lr_scale = 0.25f,
             .cropbox_lr_scale = 0.5f,
-            .median_extent = 1.5f,
-            .r_min = 1.f,
-            .r_max = 300.f,
             .screen_share_limit = 0.3f,
             .screen_share_penalty = 0.05f,
         };
         constexpr ops::AdamHyper hyper{.beta1 = 0.9f, .beta2 = 0.999f, .eps = 1e-15f};
         const Tensor frozen = bool_mask(n, 5);
         const Tensor crop = bool_mask(n, 7);
-        const Tensor raw_scales = pattern({n, 3}, 2.f, 17);
-        const Tensor far = bool_mask(n, 3);
         const Tensor share = pattern({n}, 0.4f, 23).abs();
-        const ops::AdamMasks masks{frozen, crop, raw_scales, far, share};
-        table->validate_far_mask(far.ptr<bool>());
-        out.snapshot.exact_i("adam.validate_far_mask", 1);
+        const ops::AdamMasks masks{frozen, crop, share};
 
         struct Group {
             Tensor parameter, packed, bounds, gradient;
@@ -542,7 +544,6 @@ namespace {
                 .lr = 0.01f * static_cast<float>(i + 1),
                 .bc1_rcp = bc1(1),
                 .bc2_sqrt_rcp = bc2(1),
-                .apply_mean_step = i == 0,
                 .apply_screen_share = i == 2,
             });
         }
@@ -999,8 +1000,7 @@ namespace {
         keep(out.snapshot, backend, "mrnf.noise", means, kExact);
         auto raw = pattern_mrnf({n}, 1.5f, 9);
         auto log_scales = pattern_mrnf({n, 3}, 0.4f, 11);
-        const Tensor far = bool_mask(n, 3);
-        table->decay(raw, log_scales, frozen, far, {.opacity_decay = 0.02f, .scale_decay = 0.01f, .far_decay_scale = 0.25f, .train_t = 0.4f});
+        table->decay(raw, log_scales, frozen, {.opacity_decay = 0.02f, .scale_decay = 0.01f, .train_t = 0.4f});
         keep(out.snapshot, backend, "mrnf.decay.opacity", raw, kExact);
         keep(out.snapshot, backend, "mrnf.decay.scales", log_scales, kExact);
 
@@ -1012,11 +1012,6 @@ namespace {
         keep_f(out.snapshot, "mrnf.bounds.cz", bounds.center[2], kExact);
         keep_f(out.snapshot, "mrnf.bounds.median", bounds.median_size, kExact);
         keep_f(out.snapshot, "mrnf.bounds.max", bounds.max_extent, kExact);
-        auto extent_scales = pattern_mrnf({bounds_n, 3}, 0.8f, 4);
-        const ops::ScalarValidity extent = table->median_extent(extent_scales);
-        keep_f(out.snapshot, "mrnf.extent", extent.value, kExact);
-        out.snapshot.exact_i("mrnf.extent.valid", extent.valid ? 1 : 0);
-
         auto weights = pattern_mrnf({n}, 1.f, 8).abs();
         auto host = weights.cpu();
         for (size_t i = 0; i < n; i += 5) {
@@ -1030,62 +1025,12 @@ namespace {
         keep(out.snapshot, backend, "mrnf.gumbel", top, kExact);
 
         constexpr size_t fold_n = 64;
-        auto vis = pattern_mrnf({fold_n}, 1.f, 1).abs();
-        auto weight = pattern_mrnf({fold_n}, 0.2f, 2);
-        auto dens = pattern_mrnf({2, fold_n}, 0.5f, 3);
-        auto ratio = pattern_mrnf({fold_n}, 0.1f, 4);
-        table->fold(vis, weight, dens, ratio, 0.75f);
-        keep(out.snapshot, backend, "mrnf.fold.dens", dens, kExact);
         auto max_error = pattern_mrnf({fold_n}, 0.3f, 6);
         auto err = pattern_mrnf({2, fold_n}, 0.8f, 7);
         table->fold_error(max_error, err);
         keep(out.snapshot, backend, "mrnf.fold_error", err, kExact);
 
         auto project_means = pattern_mrnf({fold_n, 3}, 1.f, 12);
-        const auto w2c = Tensor::from_vector(
-            std::vector<float>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 2, 0, 0, 0, 1}, {4, 4}, Device::GPU);
-        auto means2d = Tensor::zeros({fold_n, 2}, Device::GPU);
-        auto radii = Tensor::zeros({fold_n}, Device::GPU);
-        const ops::ProjectParams project{.image = {.h = 8, .w = 12}, .intrinsics = {.fx = 20.f, .fy = 18.f, .cx = 6.f, .cy = 4.f}, .near_plane = 0.01f};
-        table->project_centers(project_means, w2c, means2d, radii, project);
-        keep(out.snapshot, backend, "mrnf.project.means2d", means2d, kReduce);
-        keep(out.snapshot, backend, "mrnf.project.radii", radii, kExact);
-        auto image_error = pattern_mrnf({8, 12}, 1.f, 15).abs();
-        auto scores = Tensor::zeros({fold_n}, Device::GPU);
-        table->gather_center_error(means2d, radii, image_error, scores);
-        keep(out.snapshot, backend, "mrnf.center_error", scores, kReduce);
-        auto far_mask = Tensor::zeros({fold_n}, Device::GPU, DataType::Bool);
-        table->far_mask(project_means, far_mask, {0.1f, -0.2f, 0.3f}, 1.5f);
-        keep(out.snapshot, backend, "mrnf.far", far_mask, kExact);
-
-        constexpr int height = 6;
-        constexpr int width = 8;
-        constexpr size_t hw = static_cast<size_t>(height * width);
-        auto predicted = pattern_mrnf({3, height, width}, 1.f, 1);
-        auto target = pattern_mrnf({3, height, width}, 0.7f, 2);
-        auto pixel_error = Tensor::zeros({height, width}, Device::GPU);
-        table->mean_abs_error(predicted, target, pixel_error);
-        keep(out.snapshot, backend, "mrnf.mae", pixel_error, kReduce);
-        auto alpha = pattern_mrnf({hw}, 0.5f, 3).abs().clamp(0.f, 1.f);
-        auto seed_weights = pixel_error.clone().reshape({hw});
-        table->seed_weights(seed_weights, alpha, seed_weights);
-        keep(out.snapshot, backend, "mrnf.seeds", seed_weights, kReduce);
-        const auto pixel_indices = i64_rows({1, 4, 7, 20, 40});
-        auto depth = pattern_mrnf({hw}, 2.f, 6).abs();
-        auto rgb = Tensor::zeros({5, 3}, Device::GPU);
-        auto out_alpha = Tensor::zeros({5}, Device::GPU);
-        auto out_depth = Tensor::zeros({5}, Device::GPU);
-        table->gather_seeds(pixel_indices, target, alpha, depth, rgb, out_alpha, out_depth);
-        keep(out.snapshot, backend, "mrnf.gather.rgb", rgb, kExact);
-        keep(out.snapshot, backend, "mrnf.gather.depth", out_depth, kExact);
-        auto median_values = pattern_mrnf({33}, 3.f, 9).abs();
-        const float median = table->sorted_median(median_values);
-        keep_f(out.snapshot, "mrnf.median", median, kExact);
-        auto starved = pattern_mrnf({33}, 1.f, 10).abs();
-        auto vis_starve = pattern_mrnf({33}, 2.f, 11).abs();
-        table->starvation_weights(starved, vis_starve, median);
-        keep(out.snapshot, backend, "mrnf.starvation", starved, kExact);
-
         auto prune = bool_mask(fold_n, 3);
         auto compact = Tensor::full({fold_n}, -1, Device::GPU, DataType::Int64);
         const size_t compacted = table->compact_bool_indices(prune, compact, fold_n);
@@ -2394,9 +2339,9 @@ namespace {
     }
 
     TEST(TrainingOpsFastParity, NonzeroImageGradientAndFusedAdamVulkan) {
-        ASSERT_NE(lfs::training::training_ops(GpuBackend::Vulkan).fast, nullptr);
         if (!lfs::core::gpu_backend_available(GpuBackend::CUDA) || !lfs::core::gpu_backend_available(GpuBackend::Vulkan))
             GTEST_SKIP() << "CUDA and Vulkan devices required";
+        ASSERT_NE(lfs::training::training_ops(GpuBackend::Vulkan).fast, nullptr);
         for (int degree : {0, 1, 2, 3})
             for (bool mip : {false, true})
                 for (bool old_momentum : {false, true}) {
@@ -2494,6 +2439,73 @@ namespace {
         for (const auto& field : result.snapshot.fields)
             for (const float value : field.values)
                 ASSERT_TRUE(std::isfinite(value)) << field.name;
+    }
+
+    // Master #2641: below black, a colour takes only the image gradients that
+    // brighten it, on every backend. Trained splats whose blue is below zero.
+    TEST(TrainingOpsFast, ColourBelowBlackTakesOnlyBrighteningGradients) {
+        const auto path = std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/clamped_colour_regression.ply.fixture";
+        ASSERT_TRUE(std::filesystem::is_regular_file(path));
+        int ran = 0;
+        for (const GpuBackend backend : {GpuBackend::CUDA, GpuBackend::Vulkan, GpuBackend::Metal}) {
+            const auto* table = lfs::training::training_ops(backend).fast;
+            if (table == nullptr || !lfs::core::gpu_backend_available(backend))
+                continue;
+            const lfs::test::DefaultGpuBackendForTesting scope(backend);
+            ASSERT_TRUE(scope.switched());
+            ++ran;
+            auto loaded = lfs::io::load_ply(path);
+            ASSERT_TRUE(loaded.has_value()) << lfs::format_for_developer(loaded.error());
+            auto model = std::move(loaded->value);
+            model.set_active_sh_degree(0);
+            ASSERT_EQ(model.size(), 32);
+            std::vector<float> rotation = {0.980588226f, 0.079929263f, -0.179047602f,
+                                           -0.0259451419f, 0.958005654f, 0.285573136f,
+                                           0.194354266f, -0.275384239f, 0.941482841f};
+            std::vector<float> translation = {-0.339415499f, -1.93373719f, 3.83564182f};
+            lfs::core::Camera camera(Tensor::from_vector(rotation, {3, 3}, Device::GPU),
+                                     Tensor::from_vector(translation, {3}, Device::GPU), 64.f, 64.f, 32.f, 32.f,
+                                     Tensor(), Tensor(), lfs::core::CameraModelType::PINHOLE, "regression", "",
+                                     std::filesystem::path{}, 64, 64, 0);
+            const auto original = model.sh0().cpu();
+            auto background = Tensor::zeros({3}, Device::GPU);
+
+            const auto blue_change = [&](const float image_gradient) {
+                model.sh0() = original.to(Device::GPU);
+                lfs::training::AdamOptimizer optimizer(model, {.lr = 0.01f, .beta1 = 0.9, .beta2 = 0.999, .eps = 0.1f});
+                optimizer.allocate_gradients();
+                optimizer.zero_grad(1);
+                ops::FastSaved saved{.backend = table->create()};
+                lfs::training::RenderOutput output;
+                const auto result = lfs::training::fast_render(*table, saved, camera, model, background,
+                                                               0, 0, 0, 0, false, {}, true, false, output);
+                EXPECT_EQ(result.code, ops::RasterResult::Code::Success) << result.message;
+                const auto shape = output.image.shape();
+                const size_t plane = shape[1] * shape[2];
+                std::vector<float> grad(3 * plane, 0.f);
+                std::fill(grad.begin() + 2 * plane, grad.end(), image_gradient);
+                auto adam = optimizer.prepare_fastgs_fused_adam(1, lfs::core::TensorExecutionTarget::current());
+                Tensor densification, error, edges, scores;
+                table->backward(saved,
+                                {Tensor::from_vector(grad, shape, Device::GPU), Tensor(), Tensor(), Tensor()},
+                                densification, error, edges, scores, adam, DensificationType::None);
+                table->release(saved);
+                const auto after = model.sh0().cpu();
+                float largest = 0.f;
+                for (size_t i = 0; i < 32; ++i) {
+                    const float change = after.ptr<float>()[i * 3 + 2] - original.ptr<float>()[i * 3 + 2];
+                    if (std::fabs(change) > std::fabs(largest))
+                        largest = change;
+                }
+                return largest;
+            };
+            const float darker = blue_change(1.f);
+            const float brighter = blue_change(-1.f);
+            EXPECT_NEAR(darker, 0.f, 1e-6f) << lfs::core::gpu_backend_name(backend);
+            EXPECT_GT(brighter, 1e-4f) << lfs::core::gpu_backend_name(backend);
+        }
+        if (ran == 0)
+            GTEST_SKIP() << "no Fast training backend available";
     }
 
     TEST(TrainingVulkanOps, EvaluationImageUploadPreservesBytes) {
@@ -2791,6 +2803,45 @@ namespace {
         }
         return losses;
     }
+
+    class LpipsPoolRegionContract : public ::testing::TestWithParam<GpuBackend> {};
+
+    // Pool reduce reads the mask weights at every scored pixel, so a region outside the features or
+    // a mask that does not cover it must fail before launching.
+    TEST_P(LpipsPoolRegionContract, RejectsRegionsOutsideTheFeaturesOrMask) {
+        const GpuBackend backend = GetParam();
+        const auto* table = lfs::training::training_ops(backend).lpips;
+        if (!table)
+            GTEST_SKIP() << backend_name(backend) << " has no LPIPS ops";
+        if (!lfs::core::gpu_backend_available(backend))
+            GTEST_SKIP() << backend_name(backend) << " device unavailable";
+        const lfs::test::DefaultGpuBackendForTesting session(backend);
+        ASSERT_TRUE(session.switched());
+        const auto x = pattern({1, 64, 4, 6}, 1.f, 1).to(DataType::Float16);
+        const auto y = pattern({1, 64, 4, 6}, 1.f, 2).to(DataType::Float16);
+        const auto w = pattern({1, 64, 1, 1}, 1.f, 3).to(DataType::Float16);
+        auto score = Tensor::zeros({1}, Device::GPU);
+        Tensor absent;
+        const auto mask = Tensor::ones({5, 8}, Device::GPU);
+        const auto half_mask = mask.to(DataType::Float16);
+        const auto run = [&](const ops::PoolReduceParams& p) { table->pool_reduce(x, y, w, score, absent, absent, p); };
+        EXPECT_NO_THROW(run({0, 4, 0, 6, 1.f, &mask, 8, 1, 2}));
+        EXPECT_NO_THROW(run({2, 2, 0, 6, 1.f, &mask, 8, 100, 100}));
+        EXPECT_THROW(run({0, 5, 0, 6, 1.f}), std::exception);
+        EXPECT_THROW(run({0, 4, 0, 7, 1.f}), std::exception);
+        EXPECT_THROW(run({-1, 4, 0, 6, 1.f}), std::exception);
+        EXPECT_THROW(run({0, 4, 0, 6, 1.f, &mask, 8, 2, 2}), std::exception);
+        EXPECT_THROW(run({0, 4, 0, 6, 1.f, &mask, 7, 1, 2}), std::exception);
+        EXPECT_THROW(run({0, 4, 0, 6, 1.f, &mask, 8, 1, -1}), std::exception);
+        EXPECT_THROW(run({0, 4, 0, 6, 1.f, &half_mask, 8, 1, 2}), std::exception);
+        EXPECT_THROW(run({2, 2, 0, 6, 1.f, &half_mask, 8, 1, 2}), std::exception);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Backends, LpipsPoolRegionContract,
+                             ::testing::Values(GpuBackend::CUDA, GpuBackend::Vulkan, GpuBackend::Metal),
+                             [](const ::testing::TestParamInfo<GpuBackend>& info) {
+                                 return std::string(backend_name(info.param));
+                             });
 
     class TrainingOpsLossCurveParity : public ::testing::TestWithParam<GpuBackend> {};
 

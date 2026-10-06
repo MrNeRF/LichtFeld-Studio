@@ -263,11 +263,6 @@ namespace lfs::core::internal {
         return 0;
     }
 
-    std::optional<LazyExprDebugInfo> tensor_lazy_expr_info(const Tensor& tensor) {
-        const uint64_t node_id = tensor_lazy_expr_id(tensor);
-        return lazy_ir_node_info(node_id);
-    }
-
     std::optional<LazyExprDebugInfo> lazy_ir_node_info(uint64_t node_id) {
         if (node_id == 0) {
             return std::nullopt;
@@ -379,21 +374,6 @@ namespace lfs::core::internal {
         register_node_locked(runtime, output.debug_id(), LazyOpKind::Binary, op_name, std::move(inputs), output);
     }
 
-    void lazy_ir_record_scalar_unary(const Tensor& input,
-                                     const Tensor& output,
-                                     std::string_view op_name) {
-        if (!lazy_ir_active()) {
-            return;
-        }
-        if (output.debug_id() == 0) {
-            return;
-        }
-        auto& runtime = lazy_ir_runtime();
-        std::lock_guard<std::mutex> lock(runtime.mutex);
-        std::vector<uint64_t> inputs = {ensure_leaf_node_locked(runtime, input)};
-        register_node_locked(runtime, output.debug_id(), LazyOpKind::ScalarUnary, op_name, std::move(inputs), output);
-    }
-
     void lazy_ir_record_permutation(const Tensor& input,
                                     const Tensor& indices,
                                     const Tensor& output,
@@ -425,14 +405,6 @@ namespace lfs::core::internal {
         std::lock_guard<std::mutex> lock(runtime.mutex);
         std::vector<uint64_t> inputs = {ensure_leaf_node_locked(runtime, input)};
         register_node_locked(runtime, output.debug_id(), LazyOpKind::Reduce, op_name, std::move(inputs), output);
-    }
-
-    uint64_t lazy_ir_record_deferred(const Tensor& output) {
-        return lazy_ir_record_deferred(output, "deferred_expr", {});
-    }
-
-    uint64_t lazy_ir_record_deferred(const Tensor& output, const std::string_view op_name) {
-        return lazy_ir_record_deferred(output, op_name, {});
     }
 
     uint64_t lazy_ir_record_deferred(const Tensor& output,

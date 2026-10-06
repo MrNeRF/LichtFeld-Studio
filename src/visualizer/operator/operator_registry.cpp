@@ -242,8 +242,7 @@ namespace lfs::vis::op {
             return false;
         }
 
-        const auto& ctx = python::context();
-        const uint64_t gen = ctx.scene_generation;
+        const uint64_t gen = python::get_scene_generation();
         const bool has_sel = scene_manager_ && scene_manager_->hasSelectedNode();
         const auto* cc = lfs::event::command_center();
         const bool training = cc ? cc->snapshot().is_running : false;
@@ -283,17 +282,6 @@ namespace lfs::vis::op {
 
         poll_cache_[id] = {result, gen, has_sel, training, deps};
         return result;
-    }
-
-    bool OperatorRegistry::poll(BuiltinOp op) const {
-        std::lock_guard lock(mutex_);
-        const auto idx = static_cast<size_t>(op);
-        assert(idx < builtins_.size());
-
-        if (!builtins_[idx].is_registered) {
-            return false;
-        }
-        return pollImpl(builtins_[idx]);
     }
 
     bool OperatorRegistry::poll(const std::string& class_id) const {

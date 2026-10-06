@@ -501,8 +501,4 @@ namespace lfs::vis {
                                                           : VK_NULL_HANDLE;
     }
 
-    bool VulkanSceneMotionPass::initialized() const {
-        return impl_ && impl_->pipeline != VK_NULL_HANDLE;
-    }
-
 } // namespace lfs::vis

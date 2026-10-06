@@ -1,47 +1,141 @@
 {
+  "menu.file.create_splat_from_photo": "Utwórz splat ze zdjęcia - Apple Reframe",
+  "node_editor.template_count_one": "{} szablon",
+  "node_editor.templates_title": "Szablony",
+  "node_editor.template_all": "Wszystkie",
+  "node_editor.template_adjust_short": "Dostosuj:",
+  "node_editor.template_add": "Dodaj",
+  "node_editor.template_add_modifier": "Dodaj modyfikator",
+  "node_editor.template_rename": "Zmień nazwę",
+  "node_editor.template_count": "Szablony: {}",
+  "node_editor.template_mine_empty": "Zapisz graf jako szablon, aby znaleźć go tutaj.",
+  "node_editor.template_no_results": "Brak pasujących szablonów. Spróbuj innego wyszukiwania.",
+  "node_template.category.cleanup": "Czyszczenie",
+  "node_template.category.colour": "Kolor",
+  "node_template.category.selection": "Zaznaczenie",
+  "node_template.category.geometry": "Geometria",
+  "node_template.category.animation": "Animacja",
+  "node_template.kind.splat": "Splaty",
+  "node_template.kind.mesh": "Siatka",
+  "node_template.kind.points": "Punkty",
+  "node_editor.preview_node": "Podgląd tego węzła (P)",
+  "node_editor.previewing": "Podgląd: {} · {}{} — Esc, aby zakończyć",
+  "node_editor.from_template": "Z szablonu…",
+  "node_editor.browse_templates": "Przeglądaj szablony…",
+  "node_editor.template_search": "Szukaj szablonów",
+  "node_editor.template_apply": "Zastosuj",
+  "node_editor.template_adjust": "Co dostosować",
+  "node_editor.my_templates": "Moje szablony",
+  "node_editor.suggested_templates": "Zacznij od działającego grafu",
+  "node_editor.save_as_template": "Zapisz jako szablon…",
+  "node_editor.template_save_hint": "Używaj tego grafu ponownie z panelu modyfikatorów.",
+  "node_editor.template_name": "Nazwa",
+  "node_editor.template_description": "Opis",
+  "node_editor.template_category": "Kategoria",
+  "node_editor.template_import": "Importuj…",
+  "node_editor.template_export": "Eksportuj…",
+  "node_editor.delete": "Usuń",
+  "node_template.colour_grade.name": "Korekcja koloru",
+  "node_template.colour_grade.description": "Dodaj kontrast, nasycenie i ciepło do całej sceny.",
+  "node_template.colour_grade.adjust": "Zacznij od Exposure, Contrast i Saturation; Temperature ociepla lub ochładza obraz.",
+  "node_template.autumn_grass.name": "Jesienna trawa",
+  "node_template.autumn_grass.description": "Wybierz zielenie w HSV i przesuń je ku ciepłym barwom jesieni.",
+  "node_template.autumn_grass.adjust": "Dostosuj Hue i Hue Range do liści lub trawy, a następnie Hue Shift.",
+  "node_template.colour_pop.name": "Akcent kolorystyczny",
+  "node_template.colour_pop.description": "Zachowaj żywy wybrany zakres barw, zmniejszając nasycenie pozostałych.",
+  "node_template.colour_pop.adjust": "Ustaw Key Colour na obiekt, a Tolerance i Softness dopasuj dla płynnego przejścia.",
+  "node_template.background_haze.name": "Usuń zamglenie tła",
+  "node_template.background_haze.description": "Usuń duże, słabo widoczne splaty tworzące mleczne tło.",
+  "node_template.background_haze.adjust": "Zwiększ Max Opacity lub zmniejsz Min Size, aby usunąć więcej; sprawdź wynik przed zastosowaniem.",
+  "node_template.remove_floaters.name": "Usuń unoszące się splaty",
+  "node_template.remove_floaters.description": "Usuń izolowane lub mało kryjące splaty z całej sceny.",
+  "node_template.remove_floaters.adjust": "Najpierw ustaw Min Opacity, potem Isolation Radius i Min Neighbours dla odłączonych drobin.",
+  "node_template.remove_clumps.name": "Usuń odłączone skupiska",
+  "node_template.remove_clumps.description": "Usuń małe, odłączone wyspy, zachowując większe powierzchnie.",
+  "node_template.remove_clumps.adjust": "Zwiększ Radius, aby łączyć pobliskie splaty, i Min Size, aby odrzucać większe wyspy.",
+  "node_template.scale_clamp.name": "Ograniczenie skali",
+  "node_template.scale_clamp.description": "Skróć igłowate splaty bez pogrubiania płaskich powierzchni.",
+  "node_template.scale_clamp.adjust": "Zmniejsz Max Aspect, aby skrócić więcej igłowatych splatów.",
+  "node_template.web_export.name": "Przygotowanie eksportu do sieci",
+  "node_template.web_export.description": "Zmniejsz szczegółowość SH i liczbę splatów, tworząc lekki zasób internetowy.",
+  "node_template.web_export.adjust": "Ustaw Keep Fraction według docelowego rozmiaru; Degree 0 zapewnia największą redukcję.",
+  "node_template.posterize.name": "Posteryzacja",
+  "node_template.posterize.description": "Ogranicz kolory do niewielkiej liczby graficznych pasm.",
+  "node_template.posterize.adjust": "Levels pozwala wybrać mocny efekt graficzny lub subtelniejsze stopniowanie.",
+  "node_template.noise_variation.name": "Wariacje koloru przez szum",
+  "node_template.noise_variation.description": "Dodaj plamiste zróżnicowanie barw za pomocą szumu proceduralnego.",
+  "node_template.noise_variation.adjust": "Scale reguluje wielkość plam, Seed zmienia wzór, a Strength ustala siłę mieszania.",
+  "node_template.sharpen_subject.name": "Wyostrz obiekt",
+  "node_template.sharpen_subject.description": "Wyostrz obszar elipsoidalny o miękkich krawędziach, zachowując pokrycie.",
+  "node_template.sharpen_subject.adjust": "Ustaw Centre i Radii wokół obiektu, a następnie dostosuj Amount i Falloff.",
+  "node_template.crop_showcase.name": "Kadr prezentacyjny",
+  "node_template.crop_showcase.description": "Zachowaj geometrię wewnątrz regulowanej elipsoidy, aby wyeksponować obiekt.",
+  "node_template.crop_showcase.adjust": "Ustaw Centre na obiekcie i zwiększaj Radii, aż obejmiesz go w całości.",
+  "node_template.edge_fade.name": "Miękkie krawędzie",
+  "node_template.edge_fade.description": "Zmniejszaj krycie ku krawędzi regulowanego obszaru wokół obiektu.",
+  "node_template.edge_fade.adjust": "Ustaw Centre i Radii wokół użytecznej części; Falloff określa szerokość zanikania.",
+  "node_template.height_fog.name": "Mgła zależna od wysokości",
+  "node_template.height_fog.description": "Mieszaj niską geometrię z jasnym kolorem mgły według kierunkowego pola wysokości.",
+  "node_template.height_fog.adjust": "Ustaw Origin przy ziemi, Up wzdłuż osi pionowej, a Fog Top nad wybraną warstwą.",
+  "node_template.camera_cleanup.name": "Czyszczenie według pokrycia kamer",
+  "node_template.camera_cleanup.description": "Usuń geometrię widoczną z mniejszej liczby kamer niż wybrany próg.",
+  "node_template.camera_cleanup.adjust": "Wczytaj kamery zbioru danych i obniż Minimum Views, jeśli znika za dużo potrzebnej geometrii.",
+  "node_template.animated_reveal.name": "Odsłanianie promieniowe",
+  "node_template.animated_reveal.description": "Odsłaniaj geometrię od regulowanego środka wraz z upływem czasu sekwencera.",
+  "node_template.animated_reveal.adjust": "Centre określa początek, Radius początkowy zasięg, a Speed przyrost na sekundę; przesuwaj czas w sekwencerze, aby zobaczyć efekt.",
+  "node_template.box_crop.name": "Przycięcie pudełkiem",
+  "node_template.box_crop.description": "Zachowaj geometrię wewnątrz regulowanego, obróconego pudełka.",
+  "node_template.box_crop.adjust": "Ustaw Centre i Size według żądanych granic; Rotation dopasuje pudełko do osi sceny.",
+  "node_editor.add_input": "Dodaj wejście",
+  "node_editor.add_output": "Dodaj wyjście",
+  "node_editor.paint": "Maluj",
+  "node_editor.paint_done": "Zakończ malowanie",
+  "node_editor.pick_colour": "Pobierz kolor",
+  "node_editor.colour_offset_hint": "Przeciągnij, aby zabarwić; kliknij dwukrotnie, aby przywrócić neutralny",
   "ui.vram_window_1m": "1 min",
-  "ui.vram_process_nvml_tooltip": "Pamięć GPU procesu zgłoszona przez sterownik NVIDIA.",
-  "ui.vram_process_estimate_tooltip": "Pamięć GPU procesu oszacowana jako górna granica na podstawie użycia urządzenia, ponieważ brak wartości procesu.",
+  "ui.vram_process_nvml_tooltip": "Pamięć GPU procesu zgłaszana przez system operacyjny lub sterownik GPU.",
+  "ui.vram_process_unavailable_tooltip": "Pamięć GPU procesu jest niedostępna. Użycie urządzenia obejmuje inne aplikacje.",
+  "ui.vram_over_budget": "przekroczony budżet",
   "ui.vram_device_nvml_tooltip": "Pamięć urządzenia zgłoszona przez sterownik NVIDIA.",
   "ui.vram_device_cuda_tooltip": "Pamięć widoczna dla CUDA; może nie obejmować zarezerwowanej pojemności fizycznej.",
   "ui.vram_process_metal_tooltip": "Pamięć GPU przydzielona przez ten proces za pośrednictwem Metal.",
   "ui.vram_device_unified_tooltip": "Pamięć zunifikowana, z której GPU nie może już korzystać w ramach limitu zestawu roboczego: alokacje GPU wszystkich aplikacji oraz pamięć systemowa zajmowana przez inne procesy.",
-  "ui.vram_device_capacity": "Device capacity",
+  "ui.vram_device_capacity": "Pojemność urządzenia",
   "ui.vram_window_5m": "5 min",
   "ui.vram_window_30m": "30 min",
-  "ui.vram_window_all": "All",
-  "ui.vram_axis_toggle": "Time / iteration",
-  "ui.vram_scale_fit": "Fit",
-  "ui.vram_scale_device": "Device",
-  "ui.vram_hover_iteration": "iter",
-  "ui.vram_hover_splats": "splats",
-  "ui.vram_hover_process": "process",
-  "ui.vram_hover_device": "Device",
-  "ui.vram_hover_base": "baseline",
-  "ui.vram_live": "Live",
-  "ui.vram_delta": "Delta",
-  "ui.vram_peak": "Peak",
-  "ui.vram_set_baseline": "Set baseline",
-  "ui.vram_export_csv": "Export CSV",
-  "ui.vram_opacity": "Opacity",
-  "ui.vram_peak_breakdown": "Peak breakdown",
-  "ui.vram_top_movers": "Top movers",
-  "ui.vram_filter_movers": "Filter movers",
-  "ui.vram_unattributed": "Unattributed",
-  "ui.vram_slack": "Slack",
-  "ui.vram_possible_leak": "Possible leak",
-  "ui.vram_over_attributed": "Over-attributed",
-  "ui.vram_model": "Model parameters",
-  "ui.vram_optimizer": "Optimizer and gradients",
-  "ui.vram_rasterizer": "Rasterizer",
-  "ui.vram_loss_step": "Loss and step buffers",
-  "ui.vram_densification": "Densification",
-  "ui.vram_image_io": "Image I/O and decode",
-  "ui.vram_viewer": "Viewer",
-  "ui.vram_allocator_slack": "Allocator slack",
-  "ui.vram_context": "CUDA context and driver",
-  "ui.vram_exported_to": "Exported to",
-  "ui.vram_per_splat": "bytes/splat",
+  "ui.vram_window_all": "Wszystko",
+  "ui.vram_axis_toggle": "Czas / iteracja",
+  "ui.vram_scale_fit": "Dopasuj",
+  "ui.vram_scale_device": "Urządzenie",
+  "ui.vram_hover_iteration": "iter.",
+  "ui.vram_hover_splats": "splaty",
+  "ui.vram_hover_process": "proces",
+  "ui.vram_hover_device": "Urządzenie",
+  "ui.vram_hover_base": "linia bazowa",
+  "ui.vram_live": "Bieżące",
+  "ui.vram_delta": "Różnica",
+  "ui.vram_peak": "Szczyt",
+  "ui.vram_set_baseline": "Ustaw linię bazową",
+  "ui.vram_export_csv": "Eksportuj CSV",
+  "ui.vram_opacity": "Nieprzezroczystość",
+  "ui.vram_peak_breakdown": "Rozkład szczytu",
+  "ui.vram_top_movers": "Największe zmiany",
+  "ui.vram_filter_movers": "Filtruj zmiany",
+  "ui.vram_unattributed": "Nieprzypisane",
+  "ui.vram_slack": "Zapas",
+  "ui.vram_possible_leak": "Możliwy wyciek",
+  "ui.vram_over_attributed": "Nadmiernie przypisane",
+  "ui.vram_model": "Parametry modelu",
+  "ui.vram_optimizer": "Optymalizator i gradienty",
+  "ui.vram_rasterizer": "Rasteryzator",
+  "ui.vram_loss_step": "Bufory straty i kroku",
+  "ui.vram_densification": "Zagęszczanie",
+  "ui.vram_image_io": "We/Wy obrazów i dekodowanie",
+  "ui.vram_viewer": "Przeglądarka",
+  "ui.vram_allocator_slack": "Zapas alokatora",
+  "ui.vram_context": "Kontekst CUDA i sterownik",
+  "ui.vram_exported_to": "Wyeksportowano do",
+  "ui.vram_per_splat": "bajty/splat",
   "ui.vram_per_megapixel": "MiB/MP",
   "projects.toolbar.sort": "Sortuj",
   "projects.sort.iteration": "Iteracja",
@@ -130,7 +224,7 @@
   "projects.gallery.format.sog_hint": "Najmniejszy rozmiar, szybkie ładowanie w sieci.",
   "projects.gallery.format.ssog_hint": "Strumieniowe ładowanie dużych scen.",
   "projects.gallery.format.spz_hint": "Przenośny, do innych narzędzi.",
-  "projects.gallery.state.connection_lost": "Paused (connection lost)",
+  "projects.gallery.state.connection_lost": "Wstrzymano (utracono połączenie)",
   "projects.gallery.error.portal_version": "This Galeria version does not support gallery sync",
   "projects.gallery.error.download_damaged": "Pobrany plik jest uszkodzony lub został zmieniony na Galerii.",
   "projects.gallery.error.download_size": "Pobrany plik jest niekompletny lub większy, niż zadeklarowano na Galerii.",
@@ -195,7 +289,7 @@
     "help": "Pomoc",
     "help.getting_started": "Wprowadzenie",
     "help.about": "O LichtFeld Studio",
-    "view.performance_hud": "Performance HUD",
+    "view.performance_hud": "HUD wydajności",
     "edit.preferences": "Preferencje...",
     "view.debug_info": "Informacje Debugowania..."
   },
@@ -385,8 +479,8 @@
     "section.initialization": "Inicjalizacja",
     "section.basic_params": "Parametry Treningu",
     "section.advanced_params": "Parametry zaawansowane",
-    "section.advanced_registry": "More Parameters",
-    "search.placeholder": "Search parameters...",
+    "section.advanced_registry": "Więcej parametrów",
+    "search.placeholder": "Szukaj parametrów...",
     "advanced.means_lr_end": "Position LR End:",
     "advanced.scaling_lr_end": "Scaling LR End:",
     "advanced.cropbox_lr_scale": "Rejected Splat LR Scale:",
@@ -404,16 +498,12 @@
     "advanced.screen_share_penalty": "Screen Share Penalty:",
     "advanced.oversize_split_fraction": "Oversize Split Fraction:",
     "advanced.use_edge_map": "Use Edge Map:",
-    "advanced.far_scene_min_fraction": "Far Scene Min Fraction:",
-    "advanced.growth_ratio_rank": "Growth Ratio Rank:",
-    "advanced.growth_ratio_pow": "Growth Ratio Pow:",
-    "advanced.fill_pacing_iter": "Fill Pacing Iter:",
-    "advanced.far_seed_dose": "Far Seed Dose:",
     "tooltip.means_lr_end": "Kontroluje, jak bardzo pozycje Gaussian mogą się jeszcze ruszać pod koniec treningu. Niższe wartości uspokajają geometrię; wyższe pozwalają pozycjom późno się adaptować, ale mogą powodować dryf lub niestabilność.",
     "tooltip.scaling_lr_end": "Kontroluje, jak bardzo rozmiary Gaussian mogą się jeszcze zmieniać pod koniec treningu. Niższe wartości stabilizują końcowe rozmiary splatów; wyższe pozwalają skali adaptować się później.",
     "tooltip.cropbox_lr_scale": "Kontroluje, jak bardzo splaty poza crop boxem nadal się uczą. Użyj niskich wartości, aby skupić trening na ROI; wyższych, jeśli zewnętrzny kontekst też ma się adaptować. Ma znaczenie tylko przy aktywnym crop boxie.",
     "tooltip.cropbox_loss_weight": "Kontroluje, jak bardzo piksele poza crop boxem wpływają na trening. Zmniejsz, aby skupić się na ROI; zwiększ, gdy otoczenie nadal powinno wpływać na wynik. Ma znaczenie tylko przy aktywnym crop boxie.",
-    "tooltip.normal_loss_space": "Normal prior space: auto, camera-opencv, camera-opengl, or world",
+    "tooltip.normal_loss_space": "Przestrzeń priora normalnych: auto, camera-opencv, camera-opengl lub world",
+    "tooltip.eval_space": "Określa, czy ocena używa oryginalnych zniekształconych obrazów, czy obrazów treningowych po korekcji zniekształceń.",
     "tooltip.growth_grad_threshold": "Ustala, jak silny musi być sygnał refinement, zanim splat może rosnąć. Niższe wartości pozwalają rosnąć większej liczbie obszarów; wyższe skupiają wzrost tylko na silniejszych widocznych błędach.",
     "tooltip.grow_fraction": "Kontroluje, ilu kwalifikujących się kandydatów rośnie w każdym kroku refinement. Zwiększ, gdy model potrzebuje szybciej pojemności; zmniejsz, gdy wzrost jest zbyt agresywny lub zaszumiony.",
     "tooltip.opacity_decay": "Stopniowo zmniejsza opacity podczas refinement, najmocniej na początku treningu. Zwiększ, aby czyścić słabe splaty; zmniejsz, jeśli użyteczne powierzchnie bledną.",
@@ -422,11 +512,6 @@
     "tooltip.bounds_percentile": "Kontroluje, jak granice sceny są szacowane z pozycji Gaussian. Niższe wartości ignorują więcej odstających punktów; wyższe obejmują większą część rozkładu punktów.",
     "tooltip.use_error_map": "Kieruje refinement do obszarów obrazu z widocznym błędem rekonstrukcji. Wyłącz, jeśli guidance z mapy błędu przesadnie reaguje na szum lub różnice appearance.",
     "tooltip.use_edge_map": "Przechyla refinement w stronę krawędzi obrazu. Użyj dla ostrzejszych sylwetek i granic detalu; wyłącz, jeśli zaszumione krawędzie lub artefakty tekstur dostają zbyt dużo pojemności.",
-    "tooltip.far_scene_min_fraction": "Kontroluje, kiedy aktywują się funkcje far-field. Zmniejsz, aby łatwiej włączać obsługę dalekiego tła; zwiększ, aby aktywowała się tylko, gdy wystarczająco dużo splatów jest naprawdę daleko.",
-    "tooltip.growth_ratio_rank": "Pomaga rzadko widocznym, ale błędnym obszarom konkurować z często widocznymi regionami. Użyj, gdy odległe lub rzadko widziane obszary pozostają niedorafinowane.",
-    "tooltip.growth_ratio_pow": "Kontroluje, jak mocno liczba widoczności wpływa na ranking wzrostu. Wyższe wartości silniej faworyzują niedowidziane błędne obszary; niższe zachowują się bliżej rankingu surowego błędu.",
-    "tooltip.fill_pacing_iter": "Rozkłada wzrost pojemności w czasie zamiast zapełniać model zbyt wcześnie. `0` pozwala wypełnić limit tak szybko, jak refinement pozwala.",
-    "tooltip.far_seed_dose": "Kontroluje dodatkowe seeding dla dalekich/tłowych regionów. Zwiększ, gdy odległe tła pozostają rzadkie; trzymaj nisko, jeśli far-field growth dodaje niepotrzebne splaty.",
     "dataset.path": "Ścieżka:",
     "dataset.images": "Obrazy:",
     "dataset.resize_factor": "Współczynnik skalowania:",
@@ -456,7 +541,7 @@
     "masking.threshold": "Próg:",
     "masking.penalty_weight": "Waga kary:",
     "masking.penalty_power": "Potęga:",
-    "step_scaling.locked": "Auto",
+    "step_scaling.locked": "Automatycznie",
     "step_scaling.unlocked": "Ręcznie",
     "tooltip.penalty_weight": "Waga kary nieprzezroczystości w obszarach tła",
     "tooltip.penalty_power": "Spadek kary: 1=liniowy, 2=kwadratowy, >2=łagodniejszy",
@@ -503,9 +588,9 @@
     "tooltip.save_step_input": "Numer iteracji (+/- do regulacji)",
     "tooltip.save_step_add": "Dodaj checkpoint przy tej iteracji",
     "tooltip.save_step_remove": "Usuń ten checkpoint",
-    "tooltip.opt.depth_loss_mode.ssi": "Auto-detect per image whether the prior is disparity-like or depth-like",
-    "tooltip.opt.depth_loss_mode.ssi_disparity": "Prior is disparity-like (larger = closer), e.g. Depth Anything or MiDaS output",
-    "tooltip.opt.depth_loss_mode.ssi_depth": "Prior is depth-like (larger = farther), e.g. metric depth models",
+    "tooltip.opt.depth_loss_mode.ssi": "Automatycznie wykrywa dla każdego obrazu, czy prior ma charakter dysparytetu, czy głębi",
+    "tooltip.opt.depth_loss_mode.ssi_disparity": "Prior ma charakter dysparytetu (większe = bliżej), np. wyjście Depth Anything lub MiDaS",
+    "tooltip.opt.depth_loss_mode.ssi_depth": "Prior ma charakter głębi (większe = dalej), np. modele głębi metrycznej",
     "error.strategy_gut_title": "Niekompatybilne ustawienia",
     "backend_conflict.message": "{backend} nie może być używany z {feature}. Zmień to ustawienie lub wybierz {fallback_backend}.",
     "conflict.btn_use_mcmc": "Użyj MCMC",
@@ -534,6 +619,8 @@
     "thresholds.min_opacity": "Min. nieprzezroczystość:",
     "thresholds.prune_opacity": "Przytnij nieprzezroczystość:",
     "value.none": "(brak)",
+    "value.crop_box": "Crop box",
+    "value.mask_folder": "Maski: {}",
     "value.default": "(domyślne)",
     "value.not_set": "(nie ustawiono)",
     "options.strategy.mcmc": "MCMC",
@@ -546,10 +633,12 @@
     "options.mask.alpha_consistent": "Spójne z alfa",
     "options.densify_error_map.ssim": "SSIM",
     "options.densify_error_map.ssim_cs": "SSIM Contrast-Structure",
-    "options.normal_loss_space.auto": "Auto",
-    "options.normal_loss_space.camera_opencv": "Camera (OpenCV)",
-    "options.normal_loss_space.camera_opengl": "Camera (OpenGL)",
-    "options.normal_loss_space.world": "World",
+    "options.normal_loss_space.auto": "Automatycznie",
+    "options.normal_loss_space.camera_opencv": "Kamera (OpenCV)",
+    "options.normal_loss_space.camera_opengl": "Kamera (OpenGL)",
+    "options.normal_loss_space.world": "Świat",
+    "options.eval_space.distorted": "Zniekształcone",
+    "options.eval_space.undistorted": "Po korekcji",
     "options.depth_loss.ssi": "SSI (automatyczne)",
     "options.depth_loss.ssi_disparity": "SSI (prior dysparytetu)",
     "options.depth_loss.ssi_depth": "SSI (prior głębi)",
@@ -570,6 +659,14 @@
       "bg_image_path": "Niestandardowy obraz tla dla treningu. Używaj, gdy scena ma byc optymalizowana wzgledem znanej background plate.",
       "bg_image_browse": "Przeglądaj obraz tła",
       "bg_image_clear": "Wyczyść wybrany obraz tła",
+      "eval_mask": "Wybiera piksele do ewaluacji: siatkę, prostopadłościan, crop box, folder masek, zakres głębi, punkty lub splat. Trening się nie zmienia.",
+      "eval_mask_invert": "Ocenia zamiast tego piksele poza maską ewaluacji.",
+      "eval_mask_opacity": "Renderowane krycie, którego piksel potrzebuje, aby należeć do maski splat. Niższe poszerza maskę poza obrys, wyższe ją zawęża.",
+      "eval_mask_browse": "Wybierz siatkę do oceny",
+      "eval_mask_clear": "Wyczyść maskę ewaluacji",
+      "eval_mask_cropbox": "Oceniaj tylko piksele objęte crop boxem modelu treningowego, ustawionym w chwili rozpoczęcia treningu.",
+      "eval_mask_folder": "Wybierz folder z jedną maską na obraz, dopasowaną po nazwie pliku; oceniane są białe piksele.",
+      "eval_mask_spec": "Wpisz źródło maski i naciśnij Enter: bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:[folder] lub bezwzględną ścieżkę siatki.",
       "dataset_path": "Katalog główny datasetu aktualnie używany do trenowania.",
       "dataset_images": "Katalog obrazów wewnątrz datasetu.",
       "dataset_output": "Ścieżka, gdzie zapisywane są checkpointy i wytrenowane artefakty. Użyj, aby sprawdzić, czy przebieg zapisze się w zamierzonym folderze projektu/wyjścia.",
@@ -603,8 +700,8 @@
           "alpha_consistent": "Wymuś spójność alfa z maską"
         },
         "densify_error_map": {
-          "ssim": "Full SSIM densify error, including brightness mismatches",
-          "ssim_cs": "Contrast and structure only; ignore brightness-only mismatches"
+          "ssim": "Pełny błąd zagęszczania SSIM, włącznie z różnicami jasności",
+          "ssim_cs": "Tylko kontrast i struktura; ignoruje różnice dotyczące wyłącznie jasności"
         },
         "bg_mode": {
           "color": "Uzywa wybranego stalego koloru tla. Najlepsze przy znanym, spojnym tle albo przewidywalnym treningu.",
@@ -633,7 +730,6 @@
       "strategy": "Glowna strategia treningu okreslajaca, jak Gaussians są dodawane, dopracowywane lub przycinane. Używaj MRNF jako domyslnej; MCMC lub IGS+ do porownan albo przypadkow specyficznych.",
       "iterations": "Planowana liczba krokow optymalizacji. W trybie Auto harmonogram uzywa okolo 100 iteracji na aktywny obraz treningowy, z minimum 30 000 iteracji. Zwiekasz dla zlozonych scen lub czystszej zbieznosci; zmniejszasz dla szybkich podgladow.",
       "max_gaussians": "Gorny limit rozmiaru modelu. Zwiekasz dla wiekszej szczegolowosci, jesli VRAM pozwala; zmniejszasz, aby ograniczyc pamięć, koszt treningu i rozmiar wyniku.",
-      "background_improvements": "Pakiet ulepszen MRNF dla dalekich obszarow i tla. Używaj dla scen zewnetrznych, nieba, odleglych budynkow lub tla, które wyglada rzadko, rozmyte albo niedouczone.",
       "sh_degree": "Kontroluje, ile koloru zaleznego od widoku moze reprezentowac kazdy Gaussian. Uzyj 3 dla najlepszej jakosci; nizszych wartosci dla szybszego treningu, mniejszego VRAM lub scen glownie dyfuzyjnych.",
       "mask_mode": "Kontroluje, jak maski wpływają na loss treningowy i opacity. Używaj z maskami obiekt/tlo, aby izolowac obiekt, ignorowac niechciane obszary albo wymuszac alpha.",
       "use_depth_loss": "Dodaje do geometrii wskazówki z map głębokości niezmienne względem skali i przesunięcia. Używaj, gdy wiarygodne depth priors mogą poprawić strukturę względną, kolejność głębokości lub położenie powierzchni.",
@@ -695,8 +791,8 @@
     "add_group": "Dodaj Grupę",
     "add_group_ellipsis": "Dodaj Grupę...",
     "new_group_name": "Nowa grupa",
-    "group_selected": "Group Selected",
-    "ungroup": "Ungroup",
+    "group_selected": "Grupuj zaznaczone",
+    "ungroup": "Rozgrupuj",
     "export": "Eksportuj...",
     "delete": "Usuń",
     "rename": "Zmień Nazwę",
@@ -781,7 +877,7 @@
   },
   "export": {
     "overwrite": "Zastąp",
-    "format.ply_standard": "PLY (Standard)",
+    "format.ply_standard": "PLY (standardowy)",
     "format.ssog": "SSOG (strumieniowanie PlayCanvas)",
     "format.sog_supersplat": "SOG (SuperSplat)",
     "format.spz_niantic": "SPZ (Niantic)",
@@ -823,7 +919,7 @@
     "browse": "Przeglądaj...",
     "apply": "Zastosuj",
     "reset": "Resetuj",
-    "auto": "Auto",
+    "auto": "Automatycznie",
     "undo": "Cofnij",
     "redo": "Ponów",
     "edit": "Edytuj",
@@ -876,12 +972,12 @@
     "zoom": "Zoom"
   },
   "preferences": {
-    "tensor_auto": "Automatyczny",
+    "tensor_auto": "Auto",
     "tensor_cuda": "CUDA",
     "tensor_vulkan": "Vulkan",
     "tensor_metal": "Metal",
     "tensor_backend": "Tensor backend",
-    "tensor_restart": "Changes apply after restarting LichtFeld Studio. Automatic picks CUDA where it is built, else Metal where the GPU supports it, else Vulkan. Vulkan and Metal support viewing and inference; training requires CUDA.",
+    "tensor_restart": "Steruje obliczeniami tensorowymi GPU niezależnie od renderera przeglądarki. Zmiany są stosowane po ponownym uruchomieniu LichtFeld Studio. Automatyczny wybiera CUDA, Metal lub Vulkan zależnie od kompilacji i GPU.",
     "tensor_device": "Vulkan device",
     "tensor_device_hint": "Leave empty for automatic selection, or enter a device index or UUID. CUDA rendering must use the CUDA device.",
     "tensor_validation": "Vulkan diagnostics",
@@ -935,7 +1031,6 @@
     "scene_reconstruction_off": "Wyłączona",
     "scene_reconstruction_spatial": "Przestrzenna",
     "scene_reconstruction_temporal": "Czasowa",
-    "scene_reconstruction_nvidia_dlss": "NVIDIA DLSS",
     "scene_reconstruction_preset": "Ustawienie jakości",
     "scene_reconstruction_quality": "Jakość",
     "scene_reconstruction_balanced": "Zrównoważone",
@@ -945,10 +1040,10 @@
     "key_bindings": "Przypisania klawiszy",
     "camera_navigation": "Nawigacja kamery",
     "navigation_mode": "Tryb nawigacji",
-    "zoom_speed": "Zoom speed",
-    "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
-    "navigation_speed": "Navigation speed",
-    "navigation_speed_tooltip": "Default speed for moving the camera with WASD.",
+    "zoom_speed": "Prędkość powiększania",
+    "zoom_speed_tooltip": "Domyślna prędkość przybliżania kamery kółkiem myszy.",
+    "navigation_speed": "Prędkość nawigacji",
+    "navigation_speed_tooltip": "Domyślna prędkość poruszania kamerą klawiszami WASD.",
     "pointing_device": "Urządzenie nawigacji",
     "pointing_device_tooltip": "Sterowanie myszą lub gładzikiem w widoku. Ikona na pasku stanu też przełącza.",
     "pointing_device_mouse": "Mysz (komputer)",
@@ -1003,7 +1098,10 @@
     "reset_all_settings_confirmation": "Przywrócić język, motyw, skalę interfejsu, rekonstrukcję sceny, preferencje wejścia, serwer MCP, układ i stan okna do wartości domyślnych? Zostanie to zastosowane natychmiast. Jeśli projekt .licht jest otwarty, jego zapisany układ zostanie zastąpiony przy następnym zapisie; zawartość projektu, zestawy danych, eksporty, wtyczki i pamięć podręczna nie zostaną zmienione.",
     "reset_all_settings_success": "Wszystkie preferencje, układ i stan okna zostały natychmiast zresetowane.",
     "window_manager_unavailable": "Menedżer okien jest niedostępny.",
-    "window_state_reset_failed": "Nie udało się przywrócić domyślnej geometrii okna."
+    "window_state_reset_failed": "Nie udało się przywrócić domyślnej geometrii okna.",
+    "viewer_backend": "Backend przeglądarki",
+    "viewer_backend_description": "Zmiana działa natychmiast. Auto preferuje Metal na zgodnych Macach, a na innych systemach Vulkan. Nieobsługiwane klatki używają Vulkan.",
+    "backend_unavailable": "Wybrany backend nie jest dostępny na tym urządzeniu. Ustawienia nie zostały zmienione."
   },
   "main_panel": {
     "console": "Konsola",
@@ -1197,6 +1295,7 @@
     "instructions": "Enter: zatwierdź wybór | Ctrl+C: kopiuj zawartość"
   },
   "training_panel": {
+    "preparing_training": "Przygotowywanie treningu…",
     "start_training": "Rozpocznij Trening",
     "resume_training": "Wznów Trening",
     "pause": "Pauza",
@@ -1219,7 +1318,7 @@
     "finished": "Ukończono",
     "save_steps": "Kroki Zapisu/Evaluacji",
     "new_step": "Nowy Krok",
-    "mrnf_params": "MRNF Parameters",
+    "mrnf_params": "Parametry MRNF",
     "loading_session": "Wczytywanie sesji treningowej (iteracja {n})…",
     "session_restore_failed": "Nie udało się wczytać sesji treningowej",
     "edit_mode_discards_session_title": "Opuścić sesję treningową?",
@@ -1232,7 +1331,7 @@
     "mip_filter": "Zmniejsz aliasing dla sub-pikselowych Gaussowskich",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
-    "ppisp_exposure": "Adjust exposure in EV stops",
+    "ppisp_exposure": "Dostosuj ekspozycję w stopniach EV",
     "ppisp_gamma": "Dostosuj krzywą gamma",
     "ppisp_gamma_channel": "Przesunięcie gamma na kanał",
     "ppisp_crf_toe": "Kompresja cieni (toe krzywej CRF)",
@@ -1277,7 +1376,7 @@
     "seq_loop_on": "Wyłącz odtwarzanie w pętli",
     "seq_add": "Dodaj klatkę kluczową w bieżącej pozycji",
     "seq_speed": "Prędkość odtwarzania (kliknij, aby zmienić)",
-    "seq_clip_duration": "Clip duration (click to edit, in seconds)",
+    "seq_clip_duration": "Długość klipu (kliknij, aby edytować, w sekundach)",
     "seq_snap": "Przyciągaj klatki kluczowe do siatki (Ctrl odwraca podczas przeciągania, prawy przycisk myszy dla opcji)",
     "seq_follow": "Widok główny podąża za głowicą odtwarzania (odtwarzanie i przesuwanie)",
     "seq_film_strip": "Pokaż taśmę filmową pod osią czasu",
@@ -1356,6 +1455,8 @@
     "cropbox_loss_weight": "Skaluj straty pikseli poza ROI aktywnego pola przycinania",
     "environment_mode": "Źródło tła: jednolity kolor lub HDRI",
     "environment_map_path": "Wybierz mapę środowiska HDRI",
+    "color_tonemapping": "Krzywa tonalna wyświetlanych kolorów splatów (Żaden = bez zmian)",
+    "color_exposure": "Skaluje jasność splatów przed krzywą tonalną; same splaty się nie zmieniają",
     "environment_exposure": "Ekspozycja HDRI w jednostkach EV",
     "environment_rotation": "Obróć HDRI wokół osi pionowej",
     "voxel_size": "Rozmiar komórki voxel dla zapytań przestrzennych",
@@ -1514,11 +1615,11 @@
     "include_provenance_hint": "Wyłączenie usuwa pola identyfikujące, ale minimalna identyfikacja kompilacji (wersja aplikacji + commit) jest zawsze osadzana",
     "spz_version": "WERSJA SPZ",
     "spz_version_v4": "v4",
-    "spz_version_v3": "v3 (legacy)",
+    "spz_version_v3": "v3 (starsza)",
     "export_merged": "Eksportuj Połączony...",
     "rad_export_mode": "RAD MODE",
-    "rad_streamable": "RAD (streamable)",
-    "rad_native": "RAD (non-streamable)",
+    "rad_streamable": "RAD (strumieniowany)",
+    "rad_native": "RAD (bez strumieniowania)",
     "rad_flip_y": "Odwróć oś Y",
     "colmap_writes_sparse": "Zapisuje cameras.{0}, images.{0} i points3D.{0}",
     "colmap_no_sparse": "Nie znaleziono folderu sparse COLMAP",
@@ -1649,7 +1750,7 @@
     "action.selection_replace": "Zaznaczenie: Zastąp",
     "action.selection_add": "Zaznaczenie: Dodaj",
     "action.selection_remove": "Zaznaczenie: Usuń",
-    "action.selection_intersect": "Selection: Intersect",
+    "action.selection_intersect": "Zaznaczenie: Przecięcie",
     "action.select_mode_centers": "Zaznaczenie: Środki",
     "action.select_mode_rectangle": "Zaznaczenie: Prostokąt",
     "action.select_mode_polygon": "Zaznaczenie: Wielokąt",
@@ -1687,7 +1788,7 @@
     "trigger.drag": " Przeciągnięcie",
     "trigger.scroll": "Przewijanie",
     "trigger.unknown": "Nieznane",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
+    "action.toggle_performance_hud": "Przełącz HUD wydajności",
     "action.view_axis_top": "Widok z góry",
     "action.view_axis_bottom": "Widok z dołu",
     "action.view_axis_front": "Widok z przodu",
@@ -1697,7 +1798,8 @@
     "action.view_toggle_perspective": "Przełącz perspektywę/rzut ortogonalny",
     "action.view_frame_all": "Wykadruj wszystko",
     "action.toggle_quad_view": "Przełącz cztery widoki",
-    "action.toggle_maximize_area": "Maksymalizuj obszar"
+    "action.toggle_maximize_area": "Maksymalizuj obszar",
+    "action.toggle_node_editor": "Przełącz edytor węzłów"
   },
   "debug_info": {
     "clear_history": "Wyczyść Historię",
@@ -1710,7 +1812,6 @@
     "strategy": "Strategia:",
     "iterations": "Iteracje:",
     "max_gaussians": "Maks. splatów Gaussa:",
-    "background_improvements": "Ulepszenia tła:",
     "sh_degree": "Stopień SH:",
     "steps_scaler": "Skalowanie kroków:",
     "bilateral_grid": "Siatka dwustronna:",
@@ -1754,6 +1855,13 @@
     "ppisp_sidecar_path": "Ścieżka pliku sidecar:",
     "enable_eval": "Włącz ewaluację:",
     "eval_all": "Oceniaj wszystkie obrazy:",
+    "eval_space": "Eval Space:",
+    "eval_mask": "Maska ewaluacji:",
+    "eval_mask_invert": "Odwróć maskę:",
+    "eval_mask_opacity": "Krycie maski splat:",
+    "eval_mask_use_cropbox": "Użyj crop boxa",
+    "eval_mask_folder": "Folder masek",
+    "eval_mask_spec": "Specyfikacja maski:",
     "opacity_penalty_weight": "  Waga kary nieprzezroczystości:",
     "opacity_penalty_power": "  Potęga kary nieprzezroczystości:",
     "mask_threshold": "  Próg maski:",
@@ -1797,7 +1905,7 @@
     "size_label": "ROZMIAR",
     "path_label": "ŚCIEŻKA",
     "copy_full_path": "Kopiuj pełną ścieżkę",
-    "info": "Info",
+    "info": "Informacje",
     "thumbnails": "Miniatury",
     "mask": "Maska",
     "channel_gray": "Szary",
@@ -1864,6 +1972,7 @@
     "stop": "Zatrzymaj",
     "running": "Uruchamianie...",
     "already_running": "Skrypt jest już uruchomiony.",
+    "system_exit": "W skrypcie edytora zgłoszono SystemExit",
     "python": "Python",
     "syntax": "Składnia",
     "outline": "Zarys",
@@ -2015,7 +2124,7 @@
     "sharpness_mode_desc_window": "Ocenia podzbiór klatek w każdym interwale i zapisuje najostrzejszą. Wybierz liczbę kandydatów w menu rozwijanym poniżej.",
     "sharpness_threshold_label": "Próg",
     "sharpness_coverage_label": "Kandydaci",
-    "candidates_auto": "Auto",
+    "candidates_auto": "Automatycznie",
     "candidates_fast": "3 - Szybki",
     "candidates_balanced": "5 - Zrównoważony",
     "candidates_quality": "10 - Jakość",
@@ -2034,7 +2143,7 @@
     "extracting": "Wyodrębnianie: %d / %d klatek"
   },
   "rendering_panel": {
-    "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
+    "fov_format": "Pole widzenia: {hfov:.1f}° H / {vfov:.1f}° V",
     "section_viewport": "Widok",
     "section_camera": "Kamera i projekcja",
     "section_selection": "Wybór i nakładki",
@@ -2098,9 +2207,9 @@
     "mcp_local_tooltip": "MCP nasłuchuje tylko na tym komputerze",
     "export_cancelled": "Anulowano eksport",
     "gt_compare": "Porównanie GT",
-    "camera": "Cam {}",
+    "camera": "Kam {}",
     "ground_truth": "Ground Truth",
-    "ground_truth_excluded": "Ground Truth (Excluded from Training)",
+    "ground_truth_excluded": "Ground Truth (wykluczony z treningu)",
     "rendered": "Wyrenderowane",
     "split_view": "Widok podzielony",
     "primary_view": "Widok główny",
@@ -2109,7 +2218,23 @@
     "gpu_budget": "Budżet GPU",
     "strategy_default": "Domyślny",
     "split": "Podział:",
-    "ui_fps": "UI FPS"
+    "mcp_name": "MCP",
+    "ui": "UI",
+    "view": "Widok",
+    "renderer_backend": "Renderer",
+    "tensor_backend": "Tensory",
+    "renderer_backend_tooltip": "Backend renderowania sceny.",
+    "tensor_backend_tooltip": "Backend obliczeń tensorowych.",
+    "backend_requested": "Żądany: {}",
+    "backend_no_frame": "Skonfigurowany renderer; brak klatki sceny.",
+    "backend_fallback": "Metal jest niedostępny dla tej klatki; używany jest Vulkan.",
+    "renderer_backend_short": "R",
+    "tensor_backend_short": "T",
+    "upscaler_backend_short": "U",
+    "upscaler_backend": "Upscaler",
+    "upscaler_pending": "Oczekiwanie na następną wyrenderowaną klatkę",
+    "upscaler_unsupported": "Nieobsługiwany w tym widoku; wyłączony",
+    "upscaler_unavailable": "Niedostępny; wyłączony"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "URL GitHub lub skrót:",
@@ -2440,12 +2565,12 @@
     "normal": "Normalne",
     "depth": "Głębia",
     "resolution": "Rozdzielczość",
-    "viewport": "Viewport",
+    "viewport": "Widok",
     "custom": "Niestandardowe",
     "alpha": "Alfa",
     "search_annotations": "Szukaj adnotacji...",
     "solid_color": "Jednolity kolor",
-    "equirectangular_hdri": "Equirectangular HDRI",
+    "equirectangular_hdri": "HDRI ekwiprostokątne",
     "off": "Wył.",
     "grid_plane_yz": "YZ (prawa)",
     "grid_plane_xz": "XZ (góra)",
@@ -2470,13 +2595,13 @@
     "restore_window": "Przywróć okno",
     "maximize_window": "Maksymalizuj okno",
     "rad_lod": "RAD LOD",
-    "status": "Status",
+    "status": "Stan",
     "selected": "Wybrane",
     "budget": "Budżet",
     "model": "Model",
     "tree": "Drzewo",
     "traversal": "Przejście",
-    "stop": "Stop",
+    "stop": "Zatrzymaj",
     "chunks": "Fragmenty",
     "cache": "Pamięć podręczna",
     "selector": "Selektor",
@@ -2508,33 +2633,33 @@
     "delta": "Różnica",
     "time": "Czas",
     "gpu": "GPU",
-    "perf_hud_title": "Performance",
-    "perf_this_process": "This process",
-    "perf_other_processes": "Other processes",
-    "perf_free": "Free",
-    "perf_cores": "cores",
-    "perf_process_cpu_note": "Process CPU, share of all cores",
-    "perf_tab_ledger": "Ledger",
-    "perf_ledger_closes": "Ledger closes",
-    "perf_ledger_gap": "Unattributed",
-    "perf_ledger_over": "Over-attributed, numbers unreliable",
-    "perf_ledger_attributed": "Attributed",
-    "perf_nested_disclosure": "Disclosure, not counted again",
-    "perf_no_owner": "No owner",
-    "perf_untracked": "Untracked",
-    "perf_retention": "Retention",
-    "perf_reclaimable": "Reclaimable",
-    "perf_required": "Required",
-    "perf_allocated": "Allocated",
-    "perf_slack": "Slack",
-    "perf_over_budget": "Over budget",
-    "perf_estimate_detected": "Estimate detected",
-    "perf_degenerate_pair": "Publisher reports required equal to allocated",
-    "perf_tracking_off": "Detailed memory tracking is off",
-    "perf_enable_tracking": "Enable",
-    "perf_expand": "Expand",
-    "perf_collapse": "Collapse",
-    "perf_hud_tooltip": "Show or hide the performance HUD",
+    "perf_hud_title": "Wydajność",
+    "perf_this_process": "Ten proces",
+    "perf_other_processes": "Inne procesy",
+    "perf_free": "Wolne",
+    "perf_cores": "rdzeni",
+    "perf_process_cpu_note": "CPU procesu, udział wszystkich rdzeni",
+    "perf_tab_ledger": "Rejestr",
+    "perf_ledger_closes": "Rejestr się zgadza",
+    "perf_ledger_gap": "Nieprzypisane",
+    "perf_ledger_over": "Nadmiernie przypisane, liczby niewiarygodne",
+    "perf_ledger_attributed": "Przypisane",
+    "perf_nested_disclosure": "Szczegół, nie liczony ponownie",
+    "perf_no_owner": "Brak właściciela",
+    "perf_untracked": "Nieśledzone",
+    "perf_retention": "Retencja",
+    "perf_reclaimable": "Do odzyskania",
+    "perf_required": "Wymagane",
+    "perf_allocated": "Przydzielone",
+    "perf_slack": "Zapas",
+    "perf_over_budget": "Ponad budżet",
+    "perf_estimate_detected": "Wykryto oszacowanie",
+    "perf_degenerate_pair": "Źródło zgłasza wymagane równe przydzielonemu",
+    "perf_tracking_off": "Szczegółowe śledzenie pamięci jest wyłączone",
+    "perf_enable_tracking": "Włącz",
+    "perf_expand": "Rozwiń",
+    "perf_collapse": "Zwiń",
+    "perf_hud_tooltip": "Pokaż lub ukryj HUD wydajności",
     "input_mouse_tooltip": "Nawigacja myszą: przeciąganie środkowym przyciskiem obraca, prawym przesuwa, kółko przybliża. Kliknij, aby zmienić",
     "input_trackpad_tooltip": "Nawigacja gładzikiem: przesunięcie dwoma palcami obraca, Shift+przesunięcie przesuwa, uszczypnięcie lub Ctrl+przesunięcie przybliża. Kliknij, aby zmienić",
     "input_automatic_tooltip": "Nawigacja automatyczna: gesty gładzika na gładziku, przybliżanie kółkiem na myszy. Kliknij, aby zmienić"
@@ -2565,13 +2690,13 @@
     "log_entry_word": "wpis",
     "log_entries_word": "wpisów",
     "logs_exported": "Wyeksportowano {} do {}.",
-    "config_load_failed": "Nie można wczytać '{}':\\n\\n{}",
-    "export_failed": "Eksportowanie nie powiodło się:\\n\\n{}",
+    "config_load_failed": "Nie można wczytać '{}':\n\n{}",
+    "export_failed": "Eksportowanie nie powiodło się:\n\n{}",
     "video_export_failed": "Eksportowanie wideo nie powiodło się:\n\n{}",
     "video_reconstruction_native_fallback": "Rekonstrukcja wideo {}/{} jest niedostępna; eksport używa Native.",
     "video_reconstruction_version_unsupported": "Ten projekt używa nieobsługiwanej wersji wyboru rekonstrukcji wideo. Scenę otwarto z rekonstrukcją Native; zapis zastąpi ten wybór.",
-    "conversion_failed": "Konwersja nie powiodła się:\\n\\n{}",
-    "checkpoint_save_failed": "Nie można zapisać punktu kontrolnego w iteracji {}:\\n\\n{}",
+    "conversion_failed": "Konwersja nie powiodła się:\n\n{}",
+    "checkpoint_save_failed": "Nie można zapisać punktu kontrolnego w iteracji {}:\n\n{}",
     "lod_enabled_no_tree": "Włączone, brak drzewa",
     "lod_disabled": "Brak RAD LOD",
     "lod_scale": "Skala LOD x{:.1f}",
@@ -2846,28 +2971,29 @@
   "projects.gallery.info.pulled": "Dodano do Twoich projektów.",
   "projects.gallery.info.reupload_encoding": "Ponowne wysyłanie: nie można porównać kodowania tego projektu",
   "projects.gallery.action.open_recovery": "Otwórz folder odzyskiwania",
-  "projects.gallery.toast.published": "Published ‹{title}›",
-  "projects.gallery.toast.pulled": "Added ‹{title}› to ‹{folder}›",
-  "projects.gallery.toast.removed": "Removed ‹{title}› from your gallery",
+  "projects.gallery.toast.published": "Opublikowano „{title}”",
+  "projects.gallery.toast.pulled": "Dodano „{title}” do „{folder}”",
+  "projects.gallery.toast.removed": "Usunięto „{title}” z Twojej galerii",
   "projects.gallery.quota.used": "Wykorzystano {used} GB z {quota} GB",
   "projects.gallery.quota.warning": "Ten plik może przekraczać wolne miejsce w galerii. Rozmiar przesyłania zależy od wybranego formatu.",
   "projects.gallery.quota.confirm": "Zapisany plik jest większy niż wolne miejsce w galerii. Wybrany format może zmniejszyć jego rozmiar. Kontynuować przygotowanie ‹{title}›?",
-  "projects.gallery.action.update_all": "Update all ({count})",
-  "projects.gallery.confirm.update_all": "Update these public scenes? Their published content will be replaced:\n{title}",
-  "projects.gallery.empty.published": "No published scenes yet — pick a project and press Publish",
-  "preferences.gallery.title": "Gallery",
-  "preferences.gallery.format": "Default upload format",
-  "preferences.gallery.ask_public": "Ask before making a scene public",
-  "preferences.gallery.cache": "Poster cache size (MiB)",
-  "preferences.gallery.invalid": "Enter a whole number: 1–4096 MiB for cache, or 1–1440 minutes for refresh.",
-  "gallery.transfer.batch": "Update all: {count} waiting",
-  "projects.action.add_folder": "Add folder",
-  "projects.action.folder_only": "This folder only",
-  "projects.action.include_subfolders": "Include subfolders",
-  "projects.dialog.scan_depth": "Scan depth",
-  "projects.dialog.scan_depth_message": "Should Projects include projects in subfolders?",
+  "projects.gallery.action.update_all": "Aktualizuj wszystko ({count})",
+  "projects.gallery.confirm.update_all": "Zaktualizować te publiczne sceny? Ich opublikowana zawartość zostanie zastąpiona:\n{title}",
+  "projects.gallery.empty.published": "Brak opublikowanych scen: wybierz projekt i naciśnij Opublikuj",
+  "preferences.gallery.title": "Galeria",
+  "preferences.gallery.format": "Domyślny format przesyłania",
+  "preferences.gallery.ask_public": "Pytaj przed upublicznieniem sceny",
+  "preferences.gallery.cache": "Rozmiar pamięci podręcznej plakatów (MiB)",
+  "preferences.gallery.invalid": "Wpisz liczbę całkowitą: od 1 do 4096 MiB dla pamięci podręcznej lub od 1 do 1440 minut dla odświeżania.",
+  "gallery.transfer.batch": "Aktualizuj wszystko: {count} oczekuje",
+  "projects.action.add_folder": "Dodaj folder",
+  "projects.action.folder_only": "Tylko ten folder",
+  "projects.action.include_subfolders": "Uwzględnij podfoldery",
+  "projects.dialog.scan_depth": "Głębokość skanowania",
+  "projects.dialog.scan_depth_message": "Czy Projects ma uwzględniać projekty w podfolderach?",
   "projects.action.add_existing": "Dodaj istniejący...",
   "projects.tooltip.add_existing": "Dodaj istniejący projekt .licht do katalogu",
+  "projects.tooltip.clean_missing": "Usuń z katalogu pokazane tutaj brakujące projekty. Żadne pliki nie są usuwane.",
   "projects.dialog.choose_existing": "Wybierz istniejący plik .licht",
   "projects.action.clear_search": "Wyczyść",
   "projects.status.no_search_results": "Brak pasujących projektów",
@@ -2935,6 +3061,7 @@
   "projects.gallery.eligibility.hdr": "Ta Galeria nie obsługuje HDR",
   "projects.gallery.eligibility.no_splats": "Brak widocznych splatów",
   "projects.gallery.eligibility.external_payloads": "Zewnętrzne dane splatów nie są osadzone w kopii do przeglądania",
+  "projects.gallery.eligibility.hdr_missing": "Nie znaleziono pliku tła HDR. Wybierz go ponownie i zapisz projekt.",
   "projects.gallery.eligibility.space": "Za mało wolnego miejsca w Galerii",
   "projects.gallery.eligibility.not_checked": "Możliwość publikacji jest sprawdzana podczas przygotowywania kopii",
   "projects.gallery.eligibility.copy": "Ten plik jest kopią innego projektu. Użyj opcji Zapisz projekt jako, aby opublikować go osobno.",
@@ -3089,20 +3216,20 @@
   "projects.contents.month.12": "gru",
   "projects.contents.refresh_failed": "Operacja została ukończona, ale nie można odświeżyć zawartości: {reason}",
   "project_cleanup": {
-    "title": "Clean project…",
-    "clean_here": "Clean this project",
-    "copy": "Save cleaned copy…",
-    "summary": "Older saves to remove: {saves}. Older checkpoints to remove: {checkpoints}. Estimated space saved: {size}.\n\nKeep the current models, edits, settings, embedded data, and current training resume point.\n\nCleaning this project permanently removes its older versions. A cleaned copy leaves the original untouched. Temporary disk space is needed.",
-    "wait": "Wait for the current project write to finish.",
-    "stop_training": "Stop training before cleaning the project.",
-    "save_first": "Save the current project before reviewing cleanup. Your current edits will be kept.",
-    "save_failed": "The project could not be saved. Cleanup has been stopped.",
-    "changed": "The project changed. Open Clean project again to review the current version.",
-    "new_destination": "Choose a new filename for the cleaned copy. Existing files are kept safe.",
-    "working": "Cleaning the project. Progress is shown in the task bar. You can cancel before cleanup finishes.",
-    "reading": "Reading the project…",
-    "done": "Cleanup complete. The file is {size} smaller.\n{path}",
-    "canceling": "Canceling cleanup… Please wait."
+    "title": "Wyczyść projekt…",
+    "clean_here": "Wyczyść ten projekt",
+    "copy": "Zapisz wyczyszczoną kopię…",
+    "summary": "Starsze zapisy do usunięcia: {saves}. Starsze checkpointy do usunięcia: {checkpoints}. Szacowana oszczędność miejsca: {size}.\n\nBieżące modele, zmiany, ustawienia, osadzone dane i bieżący punkt wznowienia treningu zostaną zachowane.\n\nCzyszczenie tego projektu trwale usuwa jego starsze wersje. Wyczyszczona kopia pozostawia oryginał bez zmian. Potrzebne jest tymczasowe miejsce na dysku.",
+    "wait": "Poczekaj na zakończenie bieżącego zapisu projektu.",
+    "stop_training": "Zatrzymaj trening przed czyszczeniem projektu.",
+    "save_first": "Zapisz bieżący projekt przed przeglądem czyszczenia. Bieżące zmiany zostaną zachowane.",
+    "save_failed": "Nie udało się zapisać projektu. Czyszczenie zostało zatrzymane.",
+    "changed": "Projekt się zmienił. Otwórz ponownie Wyczyść projekt, aby przejrzeć bieżącą wersję.",
+    "new_destination": "Wybierz nową nazwę pliku dla wyczyszczonej kopii. Istniejące pliki pozostaną nienaruszone.",
+    "working": "Czyszczenie projektu. Postęp jest widoczny na pasku zadań. Można anulować przed zakończeniem czyszczenia.",
+    "reading": "Odczytywanie projektu…",
+    "done": "Czyszczenie zakończone. Plik jest mniejszy o {size}.\n{path}",
+    "canceling": "Anulowanie czyszczenia… Proszę czekać."
   },
   "projects.gallery.review.unlinked_copy": "Bieżąca scena zostanie przesłana bez zmian. Na tym komputerze nic nie zostanie zapisane.",
   "projects.gallery.state.live_snapshot": "Opublikowano z bieżącej sceny",
@@ -3146,5 +3273,1822 @@
   "view3d.coordinate_axes": "Osie współrzędnych",
   "view3d.pivot_point": "Punkt obrotu",
   "view3d.camera_frustums": "Ostrosłupy kamer",
-  "ui.split_viewport": "Podziel widok"
+  "ui.split_viewport": "Podziel widok",
+  "runtime.import_batch_failed.one": "{} plik nie został wczytany",
+  "runtime.import_batch_failed.few": "{} pliki nie zostały wczytane",
+  "runtime.import_batch_failed.other": "{} plików nie zostało wczytanych",
+  "runtime.import_out_of_memory": "Za mało pamięci GPU",
+  "runtime.import_batch_kept": "Pozostałe pliki zostały wczytane i nadal są dostępne w scenie.",
+  "runtime.import_render_failed": "Nie udało się przygotować tego pliku do wyświetlenia",
+  "nodes.edit_stored_splats_blocked": "Zastosuj lub ukryj modyfikatory węzłów, aby edytować zapisane splaty",
+  "editor.node_editor": "Edytor węzłów",
+  "node_editor.toggle": "Przełącz edytor węzłów",
+  "node_editor.preview_selection": "Preview Selection",
+  "node_editor.toggle_sidebar": "Toggle sidebar",
+  "node_editor.edit_mode_notice": "Node modifiers are available in edit mode",
+  "node_editor.select_node_notice": "Select a splat, mesh or point cloud node",
+  "node_editor.add_modifier_notice": "Dodaj modyfikator węzłów, aby rozpocząć",
+  "node_editor.type_splat": "Splat",
+  "node_editor.type_point_cloud": "Point Cloud",
+  "node_editor.type_mesh": "Mesh",
+  "node_editor.type_unsupported": "Unsupported",
+  "node_editor.new_graph": "Nowy graf węzłów",
+  "node_editor.modifier_actions": "Działania modyfikatora",
+  "node_editor.target": "Target",
+  "node_editor.modifiers": "Modifiers",
+  "node_editor.add_modifier": "Add Modifier",
+  "node_editor.show_viewport": "Show in viewport",
+  "node_editor.move_up": "Move up",
+  "node_editor.move_down": "Move down",
+  "node_editor.apply": "Apply",
+  "node_editor.remove": "Remove",
+  "node_editor.status_errors": "errors",
+  "node_editor.status_ok": "OK",
+  "node_editor.status_disabled": "Disabled",
+  "node_editor.capture_selection": "Capture selection",
+  "node_editor.default_tree_name": "Graf węzłów",
+  "node_editor.add": "+ Dodaj",
+  "node_editor.modifiers_on": "Modyfikatory włączone",
+  "node_editor.modifiers_off": "Modyfikatory wyłączone",
+  "node_editor.frame": "Dopasuj",
+  "node_editor.open": "Otwórz…",
+  "node_editor.save": "Zapisz…",
+  "node_editor.selected_share": "{}% zaznaczono",
+  "node_editor.cached": "w pamięci podręcznej",
+  "node_editor.updating": "Aktualizowanie…",
+  "node_editor.updating_node": "Aktualizowanie… {}/{} {}",
+  "node_editor.error_count": "Błędy: {}",
+  "node_editor.unchanged": "Bez zmian",
+  "node_editor.splats": "splaty",
+  "node_editor.points": "punkty",
+  "node_editor.vertices": "wierzchołki",
+  "node_editor.result": "Wynik: {} {} · {}",
+  "node_editor.last_run": "Ostatnie wykonanie: {}",
+  "node_editor.node_on": "Włączony",
+  "node_editor.file_read_error": "Nie można odczytać grafu węzłów",
+  "node_editor.file_write_error": "Nie można zapisać grafu węzłów",
+  "node_editor.search_nodes": "Szukaj węzłów…",
+  "node_editor.settings_count_one": "{} ustawienie",
+  "node_editor.settings_count_other": "Ustawienia: {}",
+  "node_editor.arrange": "Uporządkuj",
+  "node_editor.arrange_shortcut": "Shift+L",
+  "node_editor.running": "Przetwarzanie…",
+  "node_editor.queued": "W kolejce",
+  "node_editor.no_results": "Brak pasujących węzłów",
+  "node_editor.optional_selection": "Opcjonalne: bez połączenia zaznaczone jest wszystko",
+  "node_editor.captured_count": "Przechwycono: {} zaznaczonych",
+  "nodes": {
+    "paint_selection": {
+      "label": "Malowane zaznaczenie",
+      "description": "Maluje aktywne zaznaczenie geometryczne bezpośrednio na powierzchniach sceny.",
+      "help": "Wybierz węzeł, włącz Maluj i przeciągnij po powierzchni; Alt/Option wymazuje.\nKlawisze [ i ] zmieniają rozmiar pędzla. Pociągnięcia pozostają ważne po zmianie liczby elementów.",
+      "inputs": {
+        "Softness": "Część promienia próbki użyta na łagodne przejście, 0–1. 0 daje ostrą krawędź; wartość domyślna to 0,5."
+      },
+      "input_labels": {
+        "Softness": "Miękkość"
+      },
+      "outputs": {
+        "Selection": "Siła zaznaczenia: 0 oznacza brak, 1 pełne zaznaczenie; wartości pośrednie tworzą łagodne przejścia."
+      },
+      "output_labels": {
+        "Selection": "Zaznaczenie"
+      },
+      "properties": {
+        "data": "Pociągnięcia na powierzchni zapisane jako próbki lokalne obiektu. Domyślnie puste.",
+        "invert": "Odwraca malowane zaznaczenie. Domyślnie wyłączone zachowuje pomalowane obszary; włączone wybiera resztę."
+      },
+      "property_labels": {
+        "data": "Pociągnięcia",
+        "invert": "Odwróć"
+      }
+    },
+    "boolean": {
+      "label": "Wartość logiczna",
+      "description": "Udostępnia jeden przełącznik do sterowania kilkoma połączonymi ustawieniami.",
+      "help": "Użyj go do wspólnego włączania opcji.\nPołącz Wartość z wejściem logicznym; domyślnie jest wyłączona.",
+      "inputs": {
+        "Value": "Włącza lub wyłącza wartość. Domyślnie wyłączone; włączone oznacza zaznaczenie wszystkiego."
+      },
+      "input_labels": {
+        "Value": "Wartość"
+      },
+      "outputs": {
+        "Value": "Zwraca włączone dla zaznaczonych elementów i wyłączone dla pozostałych."
+      },
+      "output_labels": {
+        "Value": "Wartość"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "boolean_math": {
+      "label": "Operacje logiczne",
+      "description": "Łączy zaznaczenia przez część wspólną, sumę lub odwrócenie.",
+      "help": "Użyj I dla części wspólnej albo Lub dla dowolnego zaznaczenia.\nOperacja Nie odwraca A i pomija B.",
+      "inputs": {
+        "A": "Pierwsza wartość logiczna. Domyślnie wyłączona; podłącz zaznaczenie, aby je połączyć.",
+        "B": "Druga wartość logiczna. Domyślnie wyłączona; operacja Nie jej nie używa."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Result": "Zwraca włączone dla zaznaczonych elementów i wyłączone dla pozostałych."
+      },
+      "output_labels": {
+        "Result": "Wynik"
+      },
+      "properties": {
+        "operation": "Wybiera sposób łączenia zaznaczeń. I zachowuje część wspólną; Nie odwraca tylko A."
+      },
+      "property_labels": {
+        "operation": "Operacja"
+      }
+    },
+    "box_selection": {
+      "label": "Zaznaczenie pudełkiem",
+      "description": "Zaznacza część sceny wewnątrz pudełka, opcjonalnie z miękkimi brzegami.",
+      "help": "Przesuń Środek i dopasuj Rozmiar do obiektu.\nZacznij od Zanikania 0, aby uzyskać ostrą granicę.",
+      "inputs": {
+        "Centre": "Środek X/Y/Z w lokalnych jednostkach sceny. (0, 0, 0) oznacza początek układu.",
+        "Size": "Pełna szerokość, wysokość i głębokość w jednostkach sceny, nieujemne. (1, 1, 1) daje sześcian jednostkowy.",
+        "Rotation": "Obrót X/Y/Z w stopniach. (0, 0, 0) pozostawia osie bez obrotu.",
+        "Falloff": "Szerokość miękkiej krawędzi poza bryłą w jednostkach sceny. 0 daje ostrą granicę."
+      },
+      "input_labels": {
+        "Centre": "Środek",
+        "Size": "Rozmiar",
+        "Rotation": "Obrót",
+        "Falloff": "Zanikanie"
+      },
+      "outputs": {
+        "Selection": "Siła zaznaczenia: 0 pomija element, 1 zaznacza go w pełni; wartości pośrednie zmiękczają krawędź."
+      },
+      "output_labels": {
+        "Selection": "Zaznaczenie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour": {
+      "label": "Kolor",
+      "description": "Udostępnia jeden kolor do współdzielenia przez połączone węzły.",
+      "help": "Wybierz kolor i podłącz do ustawień, które mają go współdzielić.\nDomyślny jest średni szary.",
+      "inputs": {
+        "Colour": "Składowe RGB: 0 to czerń, 1 to biel. Domyślne (0,5, 0,5, 0,5) daje szarość."
+      },
+      "input_labels": {
+        "Colour": "Kolor"
+      },
+      "outputs": {
+        "Colour": "Zwraca kolor RGB do dalszej edycji. Składowe mogą wykraczać poza 0–1."
+      },
+      "output_labels": {
+        "Colour": "Kolor"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_attribute": {
+      "label": "Atrybut koloru",
+      "description": "Odczytuje kolor bazowy każdego splatu lub punktu do edycji i zaznaczania według koloru.",
+      "help": "Połącz Kolor z Rozdziel kolor, aby sprawdzić kanały.\nOdczytujesz kolor bazowy, a nie odbicia zależne od widoku.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Colour": "Zwraca kolor RGB do dalszej edycji. Składowe mogą wykraczać poza 0–1."
+      },
+      "output_labels": {
+        "Colour": "Kolor"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_correct": {
+      "label": "Korekcja koloru",
+      "description": "Koryguje kolor: ekspozycję, poziomy, kontrast, nasycenie, odcień, balans bieli i tony trójzakresowe.",
+      "help": "Zacznij od Ekspozycji, potem ustaw Kontrast i Nasycenie.\nPodłącz Zaznaczenie, aby skorygować tylko część sceny.\nWyśrodkuj koła, aby cienie, półtony i światła były neutralne.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Exposure": "Jasność w stopniach ekspozycji. 0 bez zmian; +1 podwaja jasność, −1 zmniejsza ją o połowę.",
+        "Black Point": "Jasność wejściowa zamieniana na czerń. Domyślne 0 zachowuje czerń; wyższe wartości pogłębiają cienie.",
+        "White Point": "Jasność wejściowa zamieniana na biel. Domyślne 1 zachowuje biel; niższe wartości rozjaśniają obraz.",
+        "Midpoint": "Jasność wejściowa zamieniana na średnią szarość, 0,01–0,99. 0,5 jest neutralne; niższe rozjaśniają półtony.",
+        "Contrast": "Siła kontrastu. 0 daje jednolitą szarość, 1 bez zmian, wartości powyżej 1 zwiększają kontrast.",
+        "Saturation": "Siła koloru. 0 daje szarość, 1 bez zmian, wartości powyżej 1 wzmacniają kolory.",
+        "Hue Shift": "Przesunięcie odcienia w stopniach. 0 bez zmian; 180 daje kolor przeciwny na kole barw.",
+        "Temperature": "Balans chłodny/ciepły, −1–1. 0 neutralnie; wartości ujemne chłodzą, dodatnie ocieplają.",
+        "Tint": "Balans zieleni i magenty, −1–1. 0 neutralnie; ujemne dodają magentę, dodatnie zieleń.",
+        "Shadows": "Korekta RGB cieni, −1–1 na kanał. 0 neutralnie; wartości ujemne odejmują dany kolor.",
+        "Midtones": "Korekta RGB półtonów, −1–1 na kanał. 0 neutralnie; wartości dodatnie dodają dany kolor.",
+        "Highlights": "Korekta RGB świateł, −1–1 na kanał. 0 neutralnie; wartości dodatnie dodają dany kolor.",
+        "Gamma": "Krzywa jasności, powyżej 0. 1 bez zmian; powyżej 1 rozjaśnia, poniżej 1 przyciemnia."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Exposure": "Ekspozycja",
+        "Black Point": "Punkt czerni",
+        "White Point": "Punkt bieli",
+        "Midpoint": "Punkt środkowy",
+        "Contrast": "Kontrast",
+        "Saturation": "Nasycenie",
+        "Hue Shift": "Przesunięcie odcienia",
+        "Temperature": "Temperatura",
+        "Tint": "Zabarwienie",
+        "Shadows": "Cienie",
+        "Midtones": "Półtony",
+        "Highlights": "Światła",
+        "Gamma": "Gamma"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "auto_range": "Automatycznie dobiera czerń i biel. Domyślnie wyłączone, aby używać ręcznych punktów czerni i bieli."
+      },
+      "property_labels": {
+        "auto_range": "Zakres automatyczny"
+      }
+    },
+    "colour_key": {
+      "label": "Klucz koloru",
+      "description": "Zaznacza części sceny o kolorach zbliżonych do wybranego.",
+      "help": "Wybierz Kolor i zwiększaj Tolerancję, aż obejmiesz cel.\nDodaj trochę Miękkości, aby uniknąć ostrej krawędzi.",
+      "inputs": {
+        "Colour": "Poszukiwany kolor RGB, 0–1 na kanał. Domyślnie czarny; wybierz kolor obiektu.",
+        "Tolerance": "Dopuszczalna różnica RGB. 0 trafia tylko w dokładny kolor; domyślne 0,1 obejmuje małe różnice.",
+        "Softness": "Szerokość miękkiej granicy koloru. 0 daje ostrą granicę; większe wartości łagodzą przejście."
+      },
+      "input_labels": {
+        "Colour": "Kolor",
+        "Tolerance": "Tolerancja",
+        "Softness": "Miękkość"
+      },
+      "outputs": {
+        "Selection": "Siła zaznaczenia: 0 pomija element, 1 zaznacza go w pełni; wartości pośrednie zmiękczają krawędź."
+      },
+      "output_labels": {
+        "Selection": "Zaznaczenie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "combine_colour": {
+      "label": "Połącz kolor",
+      "description": "Tworzy kolor z oddzielnych wartości RGB lub HSV.",
+      "help": "Podłącz trzy wartości i wybierz RGB albo HSV.\nW HSV wejścia R, G i B oznaczają odcień, nasycenie i jasność.",
+      "inputs": {
+        "R": "Czerwień w RGB lub odcień w HSV, 0–1. Domyślne 0 nie dodaje czerwieni lub ustawia czerwony odcień.",
+        "G": "Zieleń w RGB lub nasycenie w HSV, 0–1. Domyślne 0 nie dodaje zieleni lub daje szarość.",
+        "B": "Niebieski w RGB lub jasność w HSV, 0–1. Domyślne 0 nie dodaje niebieskiego lub daje czerń."
+      },
+      "input_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "outputs": {
+        "Colour": "Zwraca kolor RGB do dalszej edycji. Składowe mogą wykraczać poza 0–1."
+      },
+      "output_labels": {
+        "Colour": "Kolor"
+      },
+      "properties": {
+        "mode": "Wybiera składowe RGB lub HSV. Domyślnie RGB: czerwony, zielony i niebieski."
+      },
+      "property_labels": {
+        "mode": "Tryb"
+      }
+    },
+    "combine_xyz": {
+      "label": "Połącz XYZ",
+      "description": "Tworzy pozycję lub kierunek z wartości X, Y i Z.",
+      "help": "Zmieniaj jedną współrzędną, zachowując pozostałe dwie.\nPołącz wynik z wejściem Wektor.",
+      "inputs": {
+        "X": "Składowa X w jednostkach następnej operacji. Domyślnie 0.",
+        "Y": "Składowa Y w jednostkach następnej operacji. Domyślnie 0.",
+        "Z": "Składowa Z w jednostkach następnej operacji. Domyślnie 0."
+      },
+      "input_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "outputs": {
+        "Vector": "Wynikowe składowe X/Y/Z w jednostkach operacji."
+      },
+      "output_labels": {
+        "Vector": "Wektor"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "compare": {
+      "label": "Porównaj",
+      "description": "Zaznacza części sceny przez porównanie dwóch wartości, na przykład wysokości i poziomu gruntu.",
+      "help": "Podłącz wysokość do A, poziom gruntu do B i wybierz Mniejsze niż.\nEpsilon dotyczy tylko Równe i Różne.",
+      "inputs": {
+        "A": "Pierwsza liczba w jednostkach operacji. Domyślnie 0.",
+        "B": "Druga liczba w jednostkach operacji. Domyślnie 0.",
+        "Epsilon": "Traktuje liczby jako równe w tej tolerancji, w jednostkach A/B. Domyślne 0,001; 0 wymaga dokładnej równości."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Epsilon": "Epsilon"
+      },
+      "outputs": {
+        "Result": "Zwraca włączone dla zaznaczonych elementów i wyłączone dla pozostałych."
+      },
+      "output_labels": {
+        "Result": "Wynik"
+      },
+      "properties": {
+        "operation": "Wybiera porównanie. Domyślnie Równe; Mniejsze i Większe porównują A z B."
+      },
+      "property_labels": {
+        "operation": "Operacja"
+      }
+    },
+    "decimate": {
+      "label": "Przerzedź",
+      "description": "Zmniejsza liczbę splatów, zachowując większe i bardziej nieprzezroczyste w zaznaczeniu.",
+      "help": "Zacznij od Zachowanej części 0,5, aby zostawić około połowy.\nNiezaznaczone splaty zostają; jednakowe wyniki mogą zachować więcej niż zakładano.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Elementy do przerzedzenia: co najmniej 0,5 oznacza zaznaczenie. Bez połączenia obejmuje wszystko.",
+        "Keep Fraction": "Część zaznaczonych elementów do zachowania, 0,001–1. 0,5 zachowuje połowę; 1 zachowuje wszystko."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Keep Fraction": "Zachowana część"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "delete_geometry": {
+      "label": "Usuń geometrię",
+      "description": "Usuwa ze sceny zaznaczone splaty, punkty lub wierzchołki siatki.",
+      "help": "Podłącz zaznaczenie przed podłączeniem Geometrii.\nBez połączenia Zaznaczenia usuniesz wszystko, również ściany dotykające usuniętych wierzchołków.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Elementy do usunięcia: co najmniej 0,5 oznacza zaznaczenie. Bez połączenia usuwa wszystko."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "ellipsoid_selection": {
+      "label": "Zaznaczenie elipsoidą",
+      "description": "Zaznacza kulisty lub wydłużony obszar sceny, opcjonalnie z miękkimi brzegami.",
+      "help": "Ustaw Środek i Promienie wokół celu.\nRówne promienie dają kulę; Zanikanie 0 daje ostrą granicę.",
+      "inputs": {
+        "Centre": "Środek X/Y/Z w lokalnych jednostkach sceny. (0, 0, 0) oznacza początek układu.",
+        "Radii": "Promienie X/Y/Z w jednostkach sceny, nieujemne. (1, 1, 1) daje sferę jednostkową.",
+        "Rotation": "Obrót X/Y/Z w stopniach. (0, 0, 0) pozostawia osie bez obrotu.",
+        "Falloff": "Szerokość miękkiej krawędzi jako część promieni. 0 daje ostrą granicę."
+      },
+      "input_labels": {
+        "Centre": "Środek",
+        "Radii": "Promienie",
+        "Rotation": "Obrót",
+        "Falloff": "Zanikanie"
+      },
+      "outputs": {
+        "Selection": "Siła zaznaczenia: 0 pomija element, 1 zaznacza go w pełni; wartości pośrednie zmiękczają krawędź."
+      },
+      "output_labels": {
+        "Selection": "Zaznaczenie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group": {
+      "label": "Grupa",
+      "description": "Oblicza wielokrotnego użytku graf węzłów.",
+      "help": "Wybierz graf na pasku bocznym. Wejścia i wyjścia odpowiadają jego interfejsowi.\nWszystkie instancje współdzielą ten sam graf.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "tree": "UUID używanego grafu."
+      },
+      "property_labels": {
+        "tree": "Graf"
+      }
+    },
+    "frame": {
+      "label": "Ramka",
+      "description": "Wizualnie grupuje powiązane węzły.",
+      "help": "Upuść węzły w ramce. Przesunięcie ramki przesuwa jej elementy.\nWęzły układu nie zmieniają wyniku obliczeń.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "label": "Nagłówek ramki.",
+        "colour": "Kolor motywu lub wartość RGB.",
+        "note": "Opcjonalny tekst pod nagłówkiem."
+      },
+      "property_labels": {
+        "label": "Etykieta",
+        "colour": "Kolor",
+        "note": "Notatka"
+      }
+    },
+    "reroute": {
+      "label": "Przekierowanie",
+      "description": "Przekierowuje łącze bez zmiany jego wartości.",
+      "help": "Połącz dowolny typ gniazda; przekierowanie przyjmuje typ źródłowy.\nWęzły układu nie zmieniają wyniku obliczeń.",
+      "inputs": {
+        "Input": "Wartość do przekazania."
+      },
+      "input_labels": {
+        "Input": "Wejście"
+      },
+      "outputs": {
+        "Output": "Niezmieniona wartość wejściowa."
+      },
+      "output_labels": {
+        "Output": "Wyjście"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "note": {
+      "label": "Notatka",
+      "description": "Dodaje do grafu edytowalną kartę tekstową.",
+      "help": "Kliknij kartę dwukrotnie lub edytuj tekst na pasku bocznym.\nWęzły układu nie zmieniają wyniku obliczeń.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "text": "Tekst wyświetlany na karcie.",
+        "width": "Szerokość karty; wysokość dopasowuje się do tekstu."
+      },
+      "property_labels": {
+        "text": "Tekst",
+        "width": "Szerokość"
+      }
+    },
+    "group_input": {
+      "label": "Wejście grupy",
+      "description": "Wprowadza geometrię obiektu gospodarza do grafu węzłów.",
+      "help": "Podłącz Geometrię do pierwszego węzła edycji.\nW stosie otrzymujesz wynik poprzedniego modyfikatora.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "Geometria obiektu docelowego lub wynik poprzedniego modyfikatora."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group_output": {
+      "label": "Wyjście grupy",
+      "description": "Zwraca końcową geometrię grafu węzłów do sceny.",
+      "help": "Podłącz ostatni węzeł edycji do Geometrii.\nTylko gałąź docierająca do tego węzła wpływa na wynik.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste."
+      },
+      "input_labels": {
+        "Geometry": "Geometria"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "hsv_range": {
+      "label": "Zakres HSV",
+      "description": "Zaznacza splaty według zakresu koloru, na przykład zieleń trawnika, z miękkimi brzegami.",
+      "help": "Wybierz odcień i poszerzaj Zakres odcienia, aż obejmiesz cały obiekt.\nPodnieś Min. nasycenie, aby pominąć szarości, i Min. jasność, aby pominąć cienie.\nWłącz Podgląd zaznaczenia, aby zobaczyć wynik w widoku.",
+      "inputs": {
+        "Hue": "Środek zakresu na kole barw, 0–1: 0 czerwony, 0,17 żółty, 0,33 zielony, 0,5 cyjan, 0,67 niebieski, 0,83 magenta.",
+        "Hue Range": "Zasięg po obu stronach Odcienia, 0–0,5 obrotu koła. 0,07 obejmuje jedną rodzinę kolorów.",
+        "Hue Softness": "Miękkie przejście poza zakresem odcienia, w obrotach koła. 0 daje ostrą granicę.",
+        "Saturation Min": "Najniższe nasycenie, 0–1. Domyślne 0 obejmuje szarości; zwiększ, aby je pominąć.",
+        "Saturation Max": "Najwyższe nasycenie, 0–1. Domyślne 1 obejmuje w pełni nasycone kolory.",
+        "Value Min": "Najniższa jasność, 0–1. Domyślne 0 obejmuje czerń; zwiększ, aby pominąć cienie.",
+        "Value Max": "Najwyższa jasność, 0–1. Domyślne 1 obejmuje biel; zmniejsz, aby pominąć światła.",
+        "Softness": "Szerokość miękkiej granicy koloru. 0 daje ostrą granicę; większe wartości łagodzą przejście."
+      },
+      "input_labels": {
+        "Hue": "Odcień",
+        "Hue Range": "Zakres odcienia",
+        "Hue Softness": "Miękkość odcienia",
+        "Saturation Min": "Minimum nasycenia",
+        "Saturation Max": "Maksimum nasycenia",
+        "Value Min": "Minimum jasności",
+        "Value Max": "Maksimum jasności",
+        "Softness": "Miękkość"
+      },
+      "outputs": {
+        "Selection": "Siła zaznaczenia: 0 pomija element, 1 zaznacza go w pełni; wartości pośrednie zmiękczają krawędź."
+      },
+      "output_labels": {
+        "Selection": "Zaznaczenie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "index": {
+      "label": "Indeks",
+      "description": "Podaje pozycję splatu, punktu lub wierzchołka w bieżącej liście, licząc od zera.",
+      "help": "Użyj Matematyki lub Porównaj, aby zaznaczać według numeru.\nUsuwanie lub łączenie geometrii może zmienić numery.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Index": "Numer elementu od 0. Usuwanie i łączenie geometrii zmienia numerację."
+      },
+      "output_labels": {
+        "Index": "Indeks"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "inside_mesh": {
+      "label": "Wewnątrz siatki",
+      "description": "Zaznacza część sceny zamkniętą w siatce odniesienia.",
+      "help": "Podłącz zamkniętą siatkę z Informacji o obiekcie do Siatki.\nOtwory i samoprzecięcia mogą utrudnić określenie wnętrza.",
+      "inputs": {
+        "Mesh": "Zamknięta siatka wyznaczająca wnętrze, np. z Informacji o obiekcie. Bez połączenia nic nie zaznacza."
+      },
+      "input_labels": {
+        "Mesh": "Siatka"
+      },
+      "outputs": {
+        "Selection": "Zwraca włączone dla zaznaczonych elementów i wyłączone dla pozostałych."
+      },
+      "output_labels": {
+        "Selection": "Zaznaczenie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "integer": {
+      "label": "Liczba całkowita",
+      "description": "Udostępnia jedną liczbę całkowitą dla połączonych ustawień.",
+      "help": "Podłącz Wartość do liczników lub ustawień całkowitych.\nZacznij od 0; przyciski zmieniają wartość o jeden.",
+      "inputs": {
+        "Value": "Liczba całkowita. Domyślne 0; wartości dodatnie i ujemne są dozwolone."
+      },
+      "input_labels": {
+        "Value": "Wartość"
+      },
+      "outputs": {
+        "Value": "Wynik liczbowy w jednostkach operacji. Podłącz do zgodnego wejścia liczbowego."
+      },
+      "output_labels": {
+        "Value": "Wartość"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "invert_colour": {
+      "label": "Odwróć kolor",
+      "description": "Odwraca kolory, rozjaśniając ciemne obszary i zamieniając barwy na przeciwne.",
+      "help": "Podłącz Zaznaczenie, aby odwrócić tylko część sceny.\nDwa zastosowania przywracają kolor bazowy, chyba że wcześniejsze przycięcie utraciło szczegóły.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "join_geometry": {
+      "label": "Połącz geometrię",
+      "description": "Łączy wiele wejść; splaty o różnych stopniach SH są dopełniane do najwyższego.",
+      "help": "Podłącz kilka wyjść Geometria do tego samego wejścia.\nPołącz tak gałęzie po Rozdziel geometrię.\nNakładające się kopie pozostają osobnymi splatami, punktami lub ścianami.",
+      "inputs": {
+        "Geometry": "Geometrie do połączenia. Przyjmuje wiele połączeń; bez połączenia wynik jest pusty."
+      },
+      "input_labels": {
+        "Geometry": "Geometria"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "map_range": {
+      "label": "Przekształć zakres",
+      "description": "Przelicza zakres wartości na inny, na przykład wysokość 0–2 m na przejście od 1 do 0.",
+      "help": "Ustaw Min. źródła i Maks. źródła na zakres początkowy.\nMin. celu 1 i Maks. celu 0 odwracają przejście.\nZostaw Ogranicz włączone, aby nie przekroczyć granic wyjścia.",
+      "inputs": {
+        "Value": "Liczba do przeliczenia w jednostkach źródłowych. Domyślne 0; podłącz np. wysokość z Pozycji.",
+        "From Min": "Dolny koniec zakresu źródłowego. Domyślne 0, w tych samych jednostkach co Wartość.",
+        "From Max": "Górny koniec zakresu źródłowego. Domyślne 1; musi różnić się od Minimum źródła.",
+        "To Min": "Wynik na dolnym końcu źródła. Domyślne 0; ustaw 1 i Maksimum celu 0, aby odwrócić przejście.",
+        "To Max": "Wynik na górnym końcu źródła. Domyślne 1; ustaw 0 i Minimum celu 1, aby odwrócić przejście."
+      },
+      "input_labels": {
+        "Value": "Wartość",
+        "From Min": "Minimum źródła",
+        "From Max": "Maksimum źródła",
+        "To Min": "Minimum celu",
+        "To Max": "Maksimum celu"
+      },
+      "outputs": {
+        "Result": "Wynik liczbowy w jednostkach operacji. Podłącz do zgodnego wejścia liczbowego."
+      },
+      "output_labels": {
+        "Result": "Wynik"
+      },
+      "properties": {
+        "clamp": "Ogranicza wynik do zakresu docelowego. Domyślnie włączone; wyłącz, aby dopuścić wartości poza zakresem."
+      },
+      "property_labels": {
+        "clamp": "Ogranicz"
+      }
+    },
+    "math": {
+      "label": "Matematyka",
+      "description": "Dodaje, mnoży, porównuje lub zaokrągla liczby — np. skaluje krycie według wysokości.",
+      "help": "Wybierz działanie i podłącz wartości do A i B.\nZacznij od Mnożenia, aby zmieniać siłę zaznaczenia.",
+      "inputs": {
+        "A": "Pierwsza liczba w jednostkach operacji. Domyślnie 0.",
+        "B": "Druga liczba w jednostkach operacji. Domyślnie 0."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Value": "Wynik liczbowy w jednostkach operacji. Podłącz do zgodnego wejścia liczbowego."
+      },
+      "output_labels": {
+        "Value": "Wartość"
+      },
+      "properties": {
+        "operation": "Wybiera działanie na liczbach. Domyślnie Dodawanie; Wartość bezwzględna używa tylko A."
+      },
+      "property_labels": {
+        "operation": "Operacja"
+      }
+    },
+    "mesh_to_points": {
+      "label": "Siatka na punkty",
+      "description": "Zamienia wierzchołki siatki w chmurę punktów, zachowując dostępne kolory wierzchołków.",
+      "help": "Podłącz siatkę z Informacji o obiekcie.\nOtrzymujesz punkt na wierzchołek, nie równomierne próbkowanie powierzchni.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste."
+      },
+      "input_labels": {
+        "Geometry": "Geometria"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "mesh_to_splats": {
+      "label": "Siatka na splaty",
+      "description": "Pokrywa powierzchnię siatki płaskimi, kolorowymi splatami.",
+      "help": "Domyślna gęstość daje około 20 000 splatów na kuli jednostkowej.\nZwiększ Gęstość dla szczegółów; Maks. liczba ogranicza sumę.\nKolory wierzchołków mają pierwszeństwo przed materiałami i teksturami.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Density": "Liczba splatów na jednostkę kwadratową powierzchni. Około 1592 daje 20 tys. na sferze jednostkowej; 0 daje zero.",
+        "Max Count": "Limit liczby splatów. Domyślne 2 000 000; 0 nie tworzy żadnych.",
+        "Opacity": "Nieprzezroczystość nowych splatów, 0–1. 0 przezroczyste, 1 nieprzezroczyste; domyślne 0,95."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Density": "Gęstość",
+        "Max Count": "Limit liczby",
+        "Opacity": "Nieprzezroczystość"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "seed": "Ziarno losowania, liczba całkowita. Domyślne 0 daje powtarzalny wynik."
+      },
+      "property_labels": {
+        "seed": "Ziarno"
+      }
+    },
+    "mix_colour": {
+      "label": "Mieszaj kolory",
+      "description": "Miesza dwa kolory lub łączy je wybranym działaniem.",
+      "help": "Podłącz kolory do A i B; Współczynnik 0,5 miesza po równo.\nZacznij od Mieszania przed próbą Mnożenia lub Dodawania.",
+      "inputs": {
+        "A": "Pierwszy kolor RGB, 0–1 na kanał. Domyślnie czarny.",
+        "B": "Drugi kolor RGB, 0–1 na kanał. Domyślnie czarny.",
+        "Factor": "Siła mieszania, 0–1. 0 zachowuje A, 1 stosuje pełne działanie; domyślne 0,5 daje połowę."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Factor": "Współczynnik"
+      },
+      "outputs": {
+        "Colour": "Zwraca kolor RGB do dalszej edycji. Składowe mogą wykraczać poza 0–1."
+      },
+      "output_labels": {
+        "Colour": "Kolor"
+      },
+      "properties": {
+        "mode": "Wybiera mieszanie, dodawanie, odejmowanie lub mnożenie kolorów przed zastosowaniem Współczynnika."
+      },
+      "property_labels": {
+        "mode": "Tryb"
+      }
+    },
+    "named_attribute": {
+      "label": "Nazwany atrybut",
+      "description": "Odczytuje zapisaną wartość po nazwie, aby sterować edycją.",
+      "help": "Wpisz dokładną nazwę atrybutu i wybierz jego typ.\nBrakujący atrybut nie może dostarczyć wartości.",
+      "inputs": {
+        "Name": "Dokładna nazwa atrybutu, z uwzględnieniem wielkości liter. Domyślnie pusta; wpisz zapisaną nazwę."
+      },
+      "input_labels": {
+        "Name": "Nazwa"
+      },
+      "outputs": {
+        "Attribute": "Wartości zapisanego atrybutu, z zachowaniem jego jednostek."
+      },
+      "output_labels": {
+        "Attribute": "Atrybut"
+      },
+      "properties": {
+        "type": "Rodzaj odczytywanej wartości. Domyślnie liczba zmiennoprzecinkowa."
+      },
+      "property_labels": {
+        "type": "Typ"
+      }
+    },
+    "neighbour_count": {
+      "label": "Liczba sąsiadów",
+      "description": "Liczy pobliskie splaty lub punkty, pomagając znaleźć rzadkie obszary sceny.",
+      "help": "Podłącz Liczbę do Porównaj, aby zaznaczyć małe wyniki.\nDla splatów zacznij od Promienia 3 i Względem rozmiaru.\nPunkt nigdy nie liczy siebie.",
+      "inputs": {
+        "Radius": "Promień wyszukiwania w jednostkach sceny lub wielokrotności rozmiaru splata. Domyślne 1; 0 nie liczy sąsiadów."
+      },
+      "input_labels": {
+        "Radius": "Promień"
+      },
+      "outputs": {
+        "Count": "Liczba pobliskich punktów, bez samego siebie. 0 oznacza element odosobniony."
+      },
+      "output_labels": {
+        "Count": "Liczba"
+      },
+      "properties": {
+        "relative_to_size": "Używa rozmiaru splata jako jednostki. Domyślnie wyłączone; punkty zawsze używają jednostek sceny."
+      },
+      "property_labels": {
+        "relative_to_size": "Względem rozmiaru"
+      }
+    },
+    "opacity": {
+      "label": "Nieprzezroczystość",
+      "description": "Odczytuje nieprzezroczystość splatów, aby znaleźć słabe lub pełne obszary.",
+      "help": "Podłącz Nieprzezroczystość do Porównaj, aby zaznaczyć słabe splaty.\n0 oznacza przezroczystość, a 1 pełne krycie.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Opacity": "Nieprzezroczystość każdego splata, 0–1: 0 przezroczysty, 1 nieprzezroczysty."
+      },
+      "output_labels": {
+        "Opacity": "Nieprzezroczystość"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "points_to_splats": {
+      "label": "Punkty na splaty",
+      "description": "Zamienia chmurę punktów w okrągłe, kolorowe splaty.",
+      "help": "Zostaw Promień 0, aby oszacować rozmiar z sąsiednich punktów.\nUstaw dodatni promień w jednostkach sceny, jeśli zostają dziury.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Radius": "Promień splata w jednostkach sceny. 0 szacuje połowę odstępu między sąsiadami; dodatnia wartość ustala promień.",
+        "Opacity": "Nieprzezroczystość nowych splatów, 0–1. 0 przezroczyste, 1 nieprzezroczyste; domyślne 0,9."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Radius": "Promień",
+        "Opacity": "Nieprzezroczystość"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "position": {
+      "label": "Pozycja",
+      "description": "Odczytuje położenie każdego splatu, punktu lub wierzchołka w obiekcie.",
+      "help": "Podłącz Pozycję do Rozdziel XYZ, aby zaznaczać według wysokości lub odległości wzdłuż osi.\nWspółrzędne są lokalne dla obiektu.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "Pozycja X/Y/Z każdego elementu w lokalnych jednostkach sceny."
+      },
+      "output_labels": {
+        "Position": "Pozycja"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "posterize": {
+      "label": "Posteryzacja",
+      "description": "Ogranicza kolory sceny do kilku jednolitych poziomów.",
+      "help": "Zacznij od Poziomów 4, aby uzyskać cztery poziomy na kanał.\nPodłącz Zaznaczenie, aby ograniczyć efekt.\nZaznaczone splaty tracą zmiany koloru zależne od widoku.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Levels": "Liczba poziomów na kanał koloru, 2–32. Domyślne 4; 2 daje tylko dolny i górny poziom."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Levels": "Poziomy"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "random_value": {
+      "label": "Wartość losowa",
+      "description": "Nadaje splatom lub punktom powtarzalne losowe wartości, aby urozmaicić edycję.",
+      "help": "Ustaw Min. i Maks. na potrzebny zakres.\nZmień Ziarno dla innego wzoru; zmiana kolejności geometrii też może go zmienić.",
+      "inputs": {
+        "Min": "Dolna granica losowanych wartości. Domyślne 0; musi być mniejsza od Maksimum.",
+        "Max": "Górna granica losowanych wartości. Domyślne 1; musi być większa od Minimum."
+      },
+      "input_labels": {
+        "Min": "Minimum",
+        "Max": "Maksimum"
+      },
+      "outputs": {
+        "Value": "Wynik liczbowy w jednostkach operacji. Podłącz do zgodnego wejścia liczbowego."
+      },
+      "output_labels": {
+        "Value": "Wartość"
+      },
+      "properties": {
+        "seed": "Ziarno losowania, liczba całkowita. Domyślne 0 daje powtarzalny wynik."
+      },
+      "property_labels": {
+        "seed": "Ziarno"
+      }
+    },
+    "recolour": {
+      "label": "Zmień kolor",
+      "description": "Zmienia kolor zaznaczonych splatów, opcjonalnie zachowując światło i cień.",
+      "help": "Wybierz Kolor i zacznij od Wagi 0,3 dla delikatnego zabarwienia.\nZostaw Zachowaj cieniowanie włączone, aby utrzymać szczegóły oświetlenia.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Colour": "Docelowy kolor RGB, 0–1 na kanał. Domyślnie niebieski; cieniowanie można zachować.",
+        "Weight": "Siła zmiany koloru, 0–1. 0 zachowuje oryginał, 1 stosuje pełny kolor; domyślne 1."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Colour": "Kolor",
+        "Weight": "Waga"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "keep_shading": "Zachowuje różnice jasności przy zmianie koloru. Domyślnie włączone.",
+        "fade_view_dependent": "Wygasza barwę zależną od kierunku patrzenia w edytowanym obszarze. Domyślnie włączone."
+      },
+      "property_labels": {
+        "keep_shading": "Zachowaj cieniowanie",
+        "fade_view_dependent": "Wygaszaj zależność od widoku"
+      }
+    },
+    "remove_floaters": {
+      "label": "Usuń luźne splaty",
+      "description": "Usuwa luźne splaty w pustej przestrzeni, jak plamki na niebie lub mgłę pod ziemią.",
+      "help": "Najpierw włącz Podgląd: pokazuje tylko to, co zostałoby usunięte.\nPromień izolacji 3 z Względem rozmiaru ocenia każdy splat w jego skali, chroniąc rzadkie tło.\nPodłącz Zaznaczenie, aby ograniczyć czyszczenie, na przykład do wysokości poniżej gruntu.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Elementy do sprawdzenia: co najmniej 0,5 oznacza zaznaczenie. Bez połączenia sprawdza wszystko.",
+        "Min Opacity": "Najniższa zachowana nieprzezroczystość, 0–1. Domyślne 0,02; 0 wyłącza ten test.",
+        "Max Size": "Najdłuższa zachowana oś splata w jednostkach sceny. Domyślne 0 wyłącza ten test.",
+        "Isolation Radius": "Zasięg sąsiadów: wielokrotność rozmiaru splata przy opcji Względem rozmiaru, inaczej jednostki sceny. 0 wyłącza test.",
+        "Min Neighbours": "Usuwa splaty z mniejszą liczbą sąsiadów w promieniu. 1 usuwa tylko całkiem odosobnione splaty."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Min Opacity": "Minimum nieprzezroczystości",
+        "Max Size": "Maksymalny rozmiar",
+        "Isolation Radius": "Promień izolacji",
+        "Min Neighbours": "Minimum sąsiadów"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "preview": "Pokazuje tylko splaty do usunięcia, bez zmian. Domyślnie wyłączone: pokazuje oczyszczony wynik.",
+        "relative_to_size": "Mierzy promień rozmiarem każdego splata. Domyślnie włączone, aby chronić rzadkie tło."
+      },
+      "property_labels": {
+        "preview": "Podgląd",
+        "relative_to_size": "Względem rozmiaru"
+      }
+    },
+    "scale": {
+      "label": "Skala",
+      "description": "Odczytuje rozmiar każdego splatu wzdłuż jego trzech lokalnych osi.",
+      "help": "Podłącz Skalę do Rozdziel XYZ, aby porównać rozmiary osi.\nWartości to jednostki sceny, nie mnożniki.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Scale": "Rozmiary trzech lokalnych osi każdego splata w jednostkach sceny."
+      },
+      "output_labels": {
+        "Scale": "Skala"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "scale_clamp": {
+      "label": "Ogranicz proporcje",
+      "description": "Skraca igłowe Gaussians, które tworzą smugi po oddaleniu od trasy rejestracji.",
+      "help": "Użyj, gdy poza trasą kamery pojawiają się cienkie smugi.\nZacznij od Maks. proporcji 16; mniejsze wartości skracają więcej igieł.\nPłaskie splaty powierzchni pozostają bez zmian, chyba że włączysz „Uwzględnij płaskie”.\nOsie o zerowym rozmiarze pozostają zapadnięte; limit proporcji dotyczy tylko pozostałych osi.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Max Aspect": "Maksymalny stosunek najdłuższej osi do środkowej. 16 to dobry początek; mniej skraca więcej igieł."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Max Aspect": "Maksymalna proporcja"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "include_flat": "Ogranicza też płaskość (oś najdłuższa do najkrótszej). Domyślnie wyłączone, bo powierzchnie tworzą płaskie splaty."
+      },
+      "property_labels": {
+        "include_flat": "Uwzględnij płaskie"
+      }
+    },
+    "separate_colour": {
+      "label": "Rozdziel kolor",
+      "description": "Rozdziela kolor na wartości RGB lub HSV, aby osobno je edytować lub porównywać.",
+      "help": "Wybierz HSV, aby wydzielić odcień, nasycenie lub jasność.\nW HSV wyjścia R, G i B podają te wartości w tej kolejności.",
+      "inputs": {
+        "Colour": "Kolor RGB do rozdzielenia, 0–1 na kanał. Domyślnie czarny."
+      },
+      "input_labels": {
+        "Colour": "Kolor"
+      },
+      "outputs": {
+        "R": "Czerwień w RGB lub odcień w HSV, 0–1 dla zwykłych kolorów.",
+        "G": "Zieleń w RGB lub nasycenie w HSV, 0–1 dla zwykłych kolorów.",
+        "B": "Niebieski w RGB lub jasność w HSV, 0–1 dla zwykłych kolorów."
+      },
+      "output_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "properties": {
+        "mode": "Wybiera składowe RGB lub HSV. Domyślnie RGB: czerwony, zielony i niebieski."
+      },
+      "property_labels": {
+        "mode": "Tryb"
+      }
+    },
+    "separate_geometry": {
+      "label": "Rozdziel geometrię",
+      "description": "Oddziela zaznaczenie od reszty, aby edytować je inaczej, a potem ponownie połączyć.",
+      "help": "Podłącz Zaznaczenie i edytuj oba wyjścia oddzielnie.\nPołącz gałęzie przez Połącz geometrię.\nMiękkie wagi stają się wyborem tak/nie przy progu 0,5.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Wartości co najmniej 0,5 trafiają do Zaznaczenia, niższe do Reszty. Bez połączenia zaznacza wszystko."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie"
+      },
+      "outputs": {
+        "Selection": "Geometria zaznaczonych elementów o wadze co najmniej 0,5.",
+        "Inverted": "Geometria pozostałych elementów o wadze poniżej 0,5."
+      },
+      "output_labels": {
+        "Selection": "Zaznaczenie",
+        "Inverted": "Reszta"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "separate_xyz": {
+      "label": "Rozdziel XYZ",
+      "description": "Rozdziela pozycję lub kierunek na wartości X, Y i Z.",
+      "help": "Podłącz Pozycję, a oś wysokości do Porównaj lub Przekształć zakres.\nSprawdź, która oś wskazuje górę w twojej scenie.",
+      "inputs": {
+        "Vector": "Wektor X/Y/Z do rozdzielenia. Domyślne (0, 0, 0); jednostki zależą od źródła."
+      },
+      "input_labels": {
+        "Vector": "Wektor"
+      },
+      "outputs": {
+        "X": "Składowa X, w jednostkach wejścia. 0 leży w płaszczyźnie YZ.",
+        "Y": "Składowa Y, w jednostkach wejścia. 0 leży w płaszczyźnie XZ.",
+        "Z": "Składowa Z, w jednostkach wejścia. 0 leży w płaszczyźnie XY."
+      },
+      "output_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_colour": {
+      "label": "Ustaw kolor",
+      "description": "Zastępuje kolor zaznaczonych splatów, punktów lub wierzchołków podanym kolorem.",
+      "help": "Wybierz Kolor lub podłącz kolory z innego węzła.\nZostaw Usuń zależność od widoku włączone dla jednolitej malowanej barwy.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Colour": "Składowe RGB: 0 to czerń, 1 to biel. Domyślne (0,5, 0,5, 0,5) daje szarość."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Colour": "Kolor"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "clear_view_dependent": "Usuwa kolor zależny od kierunku patrzenia. Domyślnie włączone dla płaskiego koloru; wyłącz, aby zachować odbicia."
+      },
+      "property_labels": {
+        "clear_view_dependent": "Usuń zależność od widoku"
+      }
+    },
+    "set_opacity": {
+      "label": "Ustaw nieprzezroczystość",
+      "description": "Zmienia widoczną przezroczystość zaznaczonych splatów.",
+      "help": "Zacznij od Nieprzezroczystości 0,5 dla półprzezroczystych splatów.\nUżyj Zaznaczenia do łagodnego mieszania z oryginalną nieprzezroczystością.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Opacity": "Nowa nieprzezroczystość, 0–1. 0 przezroczyste, 1 nieprzezroczyste; domyślne 1."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Opacity": "Nieprzezroczystość"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_position": {
+      "label": "Ustaw pozycję",
+      "description": "Przesuwa wybrane splaty, punkty lub wierzchołki do nowych pozycji, opcjonalnie z przesunięciem.",
+      "help": "Podłącz Pozycję do Pozycji i ustaw Przesunięcie dla ruchu względnego.\nBez tego połączenia pozycją domyślną jest początek układu.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Position": "Nowa pozycja X/Y/Z w jednostkach sceny. Domyślnie początek układu; podłącz Pozycję, aby zachować położenie.",
+        "Offset": "Przesunięcie X/Y/Z dodawane w jednostkach sceny. (0, 0, 0) niczego nie przesuwa."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Position": "Pozycja",
+        "Offset": "Przesunięcie"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_scale": {
+      "label": "Ustaw skalę",
+      "description": "Ustawia rozmiar zaznaczonych splatów wzdłuż ich trzech lokalnych osi.",
+      "help": "Podłącz Skalę przez Działania wektorowe, aby pomnożyć istniejące rozmiary.\nNiepodłączone wartości zastępują rozmiary w jednostkach sceny, nie mnożą ich.\nRozmiary zerowe lub ujemne zapadają oś. Dodatni rozmiar przywraca ją tylko przy pełnym zaznaczeniu; przy częściowym pozostaje zapadnięta.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Scale": "Nowe rozmiary osi w jednostkach sceny, nie mnożniki. Domyślne (1, 1, 1)."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Scale": "Skala"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_sh_degree": {
+      "label": "Ustaw stopień SH",
+      "description": "Ogranicza kolor splatu zależny od widoku; niższe stopnie znacznie zmniejszają pliki.",
+      "help": "Użyj Stopnia 0 dla jednolitego koloru i mniejszych eksportów.\nWyższy stopień daje miejsce na szczegóły, ale nie odzyskuje odrzuconego koloru.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Degree": "Stopień SH, 0–3. Domyślne 0 usuwa kolor zależny od kierunku patrzenia."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Degree": "Stopień"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "sharpen": {
+      "label": "Wyostrz",
+      "description": "Zmniejsza zaznaczone splaty, aby nadać miękkim szczegółom ostrość.",
+      "help": "Zacznij od Siły 0,25 i zostaw Zachowaj pokrycie włączone.\nWysokie wartości mogą odsłonić szczeliny między splatami.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Amount": "Część rozmiaru do odjęcia, 0–0,95. 0 bez zmian; domyślne 0,25 zmniejsza o 25%."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Amount": "Siła"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "keep_coverage": "Zwiększa nieprzezroczystość przy zmniejszaniu splatów, aby ograniczyć dziury. Domyślnie włączone."
+      },
+      "property_labels": {
+        "keep_coverage": "Zachowaj pokrycie"
+      }
+    },
+    "simplify": {
+      "label": "Uprość",
+      "description": "Łączy splaty, aby zmniejszyć ich liczbę i zachować ogólny wygląd sceny.",
+      "help": "Zacznij od Proporcji 0,5, celując w połowę splatów.\nMoże to trwać dłużej; niższe proporcje tracą drobne szczegóły.\nOsie o zerowej kowariancji pozostają zapadnięte; łączenie różnych pozycji lub orientacji może utworzyć rzeczywistą rozpiętość.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Ratio": "Część splatów do zachowania, 0,01–1. Domyślne 0,5 daje połowę; 1 zachowuje wszystko."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Ratio": "Udział"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "splats_to_points": {
+      "label": "Splaty na punkty",
+      "description": "Zamienia środki i kolory bazowe splatów w chmurę punktów.",
+      "help": "Użyj do eksportu środków lub obróbki sceny jako punktów.\nRozmiar, nieprzezroczystość i kolor zależny od widoku nie są zachowane.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste."
+      },
+      "input_labels": {
+        "Geometry": "Geometria"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "stored_selection": {
+      "label": "Zapisane zaznaczenie",
+      "description": "Ponownie wykorzystuje zaznaczenie przechwycone z widoku.",
+      "help": "Ukryj ten modyfikator ikoną oka, zaznacz splaty w widoku (pędzlem, lassem lub ramką), naciśnij Przechwyć zaznaczenie i pokaż go ponownie.\nPrzechwyć ponownie, jeśli coś przed tym węzłem zmieni liczbę splatów.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Selection": "Zwraca włączone dla zaznaczonych elementów i wyłączone dla pozostałych."
+      },
+      "output_labels": {
+        "Selection": "Zaznaczenie"
+      },
+      "properties": {
+        "data": "Przechwycone zaznaczenie. Puste do użycia Przechwyć zaznaczenie; zapisane osobno dla modyfikatora.",
+        "size": "Liczba przechwyconych elementów. 0 oznacza puste; po zmianie liczby elementów przechwyć ponownie.",
+        "invert": "Odwraca zapisane zaznaczenie. Domyślnie wyłączone; włącz, aby wybrać pozostałe elementy."
+      },
+      "property_labels": {
+        "data": "Dane",
+        "size": "Rozmiar",
+        "invert": "Odwróć"
+      }
+    },
+    "transform_geometry": {
+      "label": "Przekształć geometrię",
+      "description": "Przesuwa, obraca i skaluje całą geometrię razem.",
+      "help": "Zacznij od Translacji lub Skali 1, aby zachować rozmiar.\nObrót używa stopni wokół początku układu obiektu.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Translation": "Przesunięcie X/Y/Z w jednostkach sceny. (0, 0, 0) zachowuje położenie.",
+        "Rotation": "Obrót X/Y/Z w stopniach. (0, 0, 0) pozostawia osie bez obrotu.",
+        "Scale": "Mnożniki X/Y/Z. 1 zachowuje rozmiar, 0 zapada oś, wartości ujemne odbijają ją."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Translation": "Przesunięcie",
+        "Rotation": "Obrót",
+        "Scale": "Skala"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "value": {
+      "label": "Wartość",
+      "description": "Udostępnia jedną liczbę dla kilku połączonych ustawień.",
+      "help": "Podłącz Wartość do kilku wejść liczbowych, aby sterować nimi razem.\nZacznij od 0 i przeciągaj liczbę, aby ją zmieniać.",
+      "inputs": {
+        "Value": "Liczba w jednostkach następnej operacji. Domyślne 0; wartości ujemne i dodatnie są dozwolone."
+      },
+      "input_labels": {
+        "Value": "Wartość"
+      },
+      "outputs": {
+        "Value": "Wynik liczbowy w jednostkach operacji. Podłącz do zgodnego wejścia liczbowego."
+      },
+      "output_labels": {
+        "Value": "Wartość"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector": {
+      "label": "Wektor",
+      "description": "Udostępnia wspólne wartości X, Y i Z dla kilku węzłów.",
+      "help": "Użyj dla wspólnej pozycji, przesunięcia lub kierunku.\nWszystkie trzy współrzędne są domyślnie 0.",
+      "inputs": {
+        "Vector": "Wektor X/Y/Z do rozdzielenia. Domyślne (0, 0, 0); jednostki zależą od źródła."
+      },
+      "input_labels": {
+        "Vector": "Wektor"
+      },
+      "outputs": {
+        "Vector": "Wynikowe składowe X/Y/Z w jednostkach operacji."
+      },
+      "output_labels": {
+        "Vector": "Wektor"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector_math": {
+      "label": "Działania wektorowe",
+      "description": "Dodaje, odejmuje i mierzy pozycje oraz kierunki — np. odległość od punktu.",
+      "help": "Użyj Skali dla przesunięcia lub Odległości między dwiema pozycjami.\nDługość, Odległość i Iloczyn skalarny używają Wartości; pozostałe operacje używają Wektora.",
+      "inputs": {
+        "A": "Pierwszy wektor X/Y/Z. Domyślne (0, 0, 0); jednostki zależą od operacji.",
+        "B": "Drugi wektor X/Y/Z. Domyślne (0, 0, 0); jednostki zależą od operacji.",
+        "Scale": "Mnożnik wektora. 1 bez zmian, 0 zeruje wektor, −1 odwraca kierunek."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Scale": "Skala"
+      },
+      "outputs": {
+        "Vector": "Wynikowe składowe X/Y/Z w jednostkach operacji.",
+        "Value": "Wynik liczbowy w jednostkach operacji. Podłącz do zgodnego wejścia liczbowego."
+      },
+      "output_labels": {
+        "Vector": "Wektor",
+        "Value": "Wartość"
+      },
+      "properties": {
+        "operation": "Wybiera działanie. Długość, Odległość i Iloczyn skalarny zwracają Wartość; pozostałe zwracają Wektor."
+      },
+      "property_labels": {
+        "operation": "Operacja"
+      }
+    },
+    "object_info": {
+      "label": "Informacje o obiekcie",
+      "description": "Wprowadza geometrię innego obiektu do grafu jako odniesienie lub dodatkową część.",
+      "help": "Wybierz dokładną nazwę lub UUID obiektu odniesienia.\nUżyj przestrzeni Względnej, aby ustawić go względem modyfikowanego obiektu.\nUnikaj odniesień do obiektów zależnych od tego modyfikatora.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "Geometria wskazanego obiektu w wybranej przestrzeni, wraz z widocznymi modyfikatorami."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "object": "Dokładna nazwa lub UUID obiektu sceny. Domyślnie puste; wybierz obiekt źródłowy.",
+        "transform_space": "Oryginalna zachowuje lokalne współrzędne źródła; Względna przelicza je względem obiektu docelowego."
+      },
+      "property_labels": {
+        "object": "Obiekt",
+        "transform_space": "Przestrzeń przekształcenia"
+      }
+    },
+    "float_curve": {
+      "label": "Krzywa wartości",
+      "description": "Przekształca liczby za pomocą gładkiej edytowalnej krzywej.",
+      "help": "Przekształca liczby za pomocą gładkiej edytowalnej krzywej.\nPrzeciągaj, dodawaj lub usuwaj punkty kontrolne. Interpolacja Fritscha–Carlsona zapobiega przekroczeniom między punktami monotonicznymi.",
+      "inputs": {
+        "Value": "Liczba dla każdego elementu przekształcana przez krzywą."
+      },
+      "input_labels": {
+        "Value": "Wartość"
+      },
+      "outputs": {
+        "Value": "Liczba po przekształceniu krzywą."
+      },
+      "output_labels": {
+        "Value": "Wartość"
+      },
+      "properties": {
+        "points": "Uporządkowane punkty kontrolne jako pary X i Y.",
+        "clamp": "Ogranicza wejścia do zakresu pierwszego i ostatniego punktu kontrolnego."
+      },
+      "property_labels": {
+        "points": "Krzywa",
+        "clamp": "Ogranicz"
+      }
+    },
+    "rgb_curves": {
+      "label": "Krzywe RGB",
+      "description": "Przekształca kolory za pomocą krzywej łącznej i krzywych kanałów.",
+      "help": "Przekształca kolory za pomocą krzywej łącznej i krzywych kanałów.\nZaznaczenie × Współczynnik określa siłę mieszania. Nieliniowa korekta zmienia tylko kolor bazowy DC splatów, zachowując kierunkowe pasma SH. Obsługuje też punkty i siatki.",
+      "inputs": {
+        "Geometry": "Geometria do modyfikacji; podłącz wyjście geometrii.",
+        "Selection": "Waga mieszania dla elementu, 0–1; bez połączenia uwzględniane są wszystkie.",
+        "Factor": "Dodatkowa siła działania krzywej, 0–1."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Factor": "Współczynnik"
+      },
+      "outputs": {
+        "Geometry": "Geometria po modyfikacji."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "combined": "Krzywa stosowana najpierw do wszystkich kanałów koloru.",
+        "r": "Krzywa kanału czerwonego.",
+        "g": "Krzywa kanału zielonego.",
+        "b": "Krzywa kanału niebieskiego."
+      },
+      "property_labels": {
+        "combined": "Łączna",
+        "r": "Czerwony",
+        "g": "Zielony",
+        "b": "Niebieski"
+      }
+    },
+    "colour_ramp": {
+      "label": "Rampa kolorów",
+      "description": "Przypisuje liczbom kolory i przezroczystość.",
+      "help": "Przypisuje liczbom kolory i przezroczystość.\nRozmieść znaczniki w zakresie 0–1. Wybierz interpolację stałą, liniową lub wygładzoną.",
+      "inputs": {
+        "Fac": "Pozycja na rampie kolorów, zwykle od 0 do 1."
+      },
+      "input_labels": {
+        "Fac": "Współczynnik"
+      },
+      "outputs": {
+        "Colour": "Wygenerowany kolor RGB.",
+        "Alpha": "Przezroczystość z rampy, 0–1."
+      },
+      "output_labels": {
+        "Colour": "Kolor",
+        "Alpha": "Alfa"
+      },
+      "properties": {
+        "stops": "Uporządkowane znaczniki: pozycja, czerwony, zielony, niebieski i alfa.",
+        "interpolation": "Przejście między sąsiednimi znacznikami: stałe, liniowe lub wygładzone."
+      },
+      "property_labels": {
+        "stops": "Rampa",
+        "interpolation": "Interpolacja"
+      }
+    },
+    "gradient_texture": {
+      "label": "Tekstura gradientu",
+      "description": "Tworzy gradient ze współrzędnych przestrzennych.",
+      "help": "Tworzy gradient ze współrzędnych przestrzennych.\nUżyj Pozycji jako współrzędnych. Liniowy używa X, ukośny X i Y; sferyczny i promieniowy odnoszą się do początku układu.",
+      "inputs": {
+        "Vector": "Współrzędne X, Y i Z; bez połączenia używane są pozycje elementów."
+      },
+      "input_labels": {
+        "Vector": "Wektor"
+      },
+      "outputs": {
+        "Fac": "Wartość wygenerowanego gradientu; może wykraczać poza zakres 0–1."
+      },
+      "output_labels": {
+        "Fac": "Współczynnik"
+      },
+      "properties": {
+        "type": "Kształt gradientu: liniowy, kwadratowy, wygładzony, ukośny, sferyczny lub promieniowy."
+      },
+      "property_labels": {
+        "type": "Typ"
+      }
+    },
+    "distance": {
+      "label": "Odległość",
+      "description": "Mierzy odległość każdego elementu od punktu, prostej lub płaszczyzny.",
+      "help": "Mierzy odległość każdego elementu od punktu, prostej lub płaszczyzny.\nTryb płaszczyzny zwraca odległość ze znakiem; punkt i prosta zwracają wartości nieujemne.",
+      "inputs": {
+        "Vector": "Współrzędne X, Y i Z; bez połączenia używane są pozycje elementów.",
+        "Point": "Punkt celu lub punkt należący do prostej albo płaszczyzny.",
+        "Direction": "Kierunek prostej lub kierunek patrzenia kamery.",
+        "Normal": "Kierunek normalny do płaszczyzny celu."
+      },
+      "input_labels": {
+        "Vector": "Wektor",
+        "Point": "Punkt",
+        "Direction": "Kierunek",
+        "Normal": "Normalna"
+      },
+      "outputs": {
+        "Distance": "Odległość w jednostkach sceny; ze znakiem w trybie płaszczyzny."
+      },
+      "output_labels": {
+        "Distance": "Odległość"
+      },
+      "properties": {
+        "mode": "Mierzy do punktu, prostej lub płaszczyzny."
+      },
+      "property_labels": {
+        "mode": "Tryb"
+      }
+    },
+    "noise_texture": {
+      "label": "Tekstura szumu",
+      "description": "Generuje powtarzalny trójwymiarowy szum fraktalny.",
+      "help": "Generuje powtarzalny trójwymiarowy szum fraktalny.\nBez połączenia używane są pozycje. Szczegóły obsługują 0–15 oktaw z częściami ułamkowymi; Chropowatość reguluje ich amplitudy.",
+      "inputs": {
+        "Vector": "Współrzędne X, Y i Z; bez połączenia używane są pozycje elementów.",
+        "Scale": "Mnożnik rozmiaru lub współrzędnych; 1 zachowuje rozmiar pierwotny.",
+        "Detail": "Liczba oktaw od 0 do 15 z mieszaniem części ułamkowych.",
+        "Roughness": "Część amplitudy zachowywana w każdej kolejnej oktawie.",
+        "Distortion": "Siła odkształcenia współrzędnych.",
+        "Seed": "Ziarno pozwalające odtworzyć wzór szumu."
+      },
+      "input_labels": {
+        "Vector": "Wektor",
+        "Scale": "Skala",
+        "Detail": "Szczegóły",
+        "Roughness": "Chropowatość",
+        "Distortion": "Zniekształcenie",
+        "Seed": "Ziarno"
+      },
+      "outputs": {
+        "Fac": "Wartość próbkowania gradientu lub wygenerowanego szumu, 0–1.",
+        "Colour": "Wygenerowany kolor RGB."
+      },
+      "output_labels": {
+        "Fac": "Współczynnik",
+        "Colour": "Kolor"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "store_named_attribute": {
+      "label": "Zapisz nazwany atrybut",
+      "description": "Zapisuje wartości na elementach geometrii.",
+      "help": "Zapisuje wartości na elementach geometrii.\nOdczytaj później pod tą samą nazwą. Niezaznaczone elementy zachowują wartość lub 0. Atrybuty splatów i punktów przechodzą przez modyfikatory; atrybuty wierzchołków są tracone przy zastosowaniu.",
+      "inputs": {
+        "Geometry": "Geometria do modyfikacji; podłącz wyjście geometrii.",
+        "Selection": "Waga mieszania dla elementu, 0–1; bez połączenia uwzględniane są wszystkie.",
+        "Name": "Nazwa używana do późniejszego odczytu przez Nazwany atrybut.",
+        "Value": "Liczby, wektory lub kolory dla elementów do zapisania."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Name": "Nazwa",
+        "Value": "Wartość"
+      },
+      "outputs": {
+        "Geometry": "Geometria po modyfikacji."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "data_type": "Zapisuje wartość jako liczbę, wektor lub kolor."
+      },
+      "property_labels": {
+        "data_type": "Typ danych"
+      }
+    },
+    "remove_clumps": {
+      "label": "Usuń małe skupiska",
+      "description": "Usuwa małe spójne grupy splatów lub punktów.",
+      "help": "Promień mnoży lokalny odstęp każdego elementu (trzech najbliższych sąsiadów). Oba elementy muszą sięgać do siebie.\nUsuwane są tylko grupy poniżej minimalnego rozmiaru, z zachowaniem rzadkich powierzchni. Siatki nie są obsługiwane.",
+      "inputs": {
+        "Geometry": "Geometria do modyfikacji; podłącz wyjście geometrii.",
+        "Selection": "Elementy o wartości co najmniej 0,5 są zaznaczone.",
+        "Radius": "Promień jako wielokrotność lokalnego odstępu każdego elementu; oba końce muszą sięgać do siebie.",
+        "Min Size": "Grupy z mniejszą liczbą elementów kwalifikują się do usunięcia."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Radius": "Promień",
+        "Min Size": "Minimalny rozmiar"
+      },
+      "outputs": {
+        "Geometry": "Geometria po modyfikacji.",
+        "Selection": "Elementy grup poniżej minimalnego rozmiaru."
+      },
+      "output_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie"
+      },
+      "properties": {
+        "delete": "Usuwa kandydatów; wyłącz, aby użyć tylko wyjścia Zaznaczenie."
+      },
+      "property_labels": {
+        "delete": "Usuń"
+      }
+    },
+    "merge_by_distance": {
+      "label": "Scal według odległości",
+      "description": "Scala pobliskie elementy w zwartą geometrię.",
+      "help": "Scala pobliskie elementy w zwartą geometrię.\nScalane są tylko zaznaczone elementy. Punkty i wierzchołki są uśredniane, ściany przemapowywane, a zdegenerowane usuwane. Dla splatów pozostaje najbardziej nieprzezroczysty element grupy.",
+      "inputs": {
+        "Geometry": "Geometria do modyfikacji; podłącz wyjście geometrii.",
+        "Selection": "Elementy o wartości co najmniej 0,5 są zaznaczone.",
+        "Distance": "Maksymalna odległość łącząca elementy w grupę."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Distance": "Odległość"
+      },
+      "outputs": {
+        "Geometry": "Geometria po modyfikacji."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "geometry_proximity": {
+      "label": "Bliskość geometrii",
+      "description": "Znajduje najbliższy punkt, środek splata lub wierzchołek celu.",
+      "help": "Znajduje najbliższy punkt, środek splata lub wierzchołek celu.\nPodłącz geometrię celu w tym samym układzie współrzędnych. Mierzona jest odległość do elementów, nie do powierzchni między wierzchołkami.",
+      "inputs": {
+        "Target": "Geometria celu z punktami, splatami lub wierzchołkami; nie może być pusta."
+      },
+      "input_labels": {
+        "Target": "Cel"
+      },
+      "outputs": {
+        "Distance": "Odległość w jednostkach sceny; ze znakiem w trybie płaszczyzny.",
+        "Position": "Wyznaczona pozycja w układzie geometrii lub kamery."
+      },
+      "output_labels": {
+        "Distance": "Odległość",
+        "Position": "Pozycja"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "instance_on_points": {
+      "label": "Instancje na punktach",
+      "description": "Umieszcza przekształconą kopię splatów na każdej zaznaczonej kotwicy.",
+      "help": "Umieszcza przekształconą kopię splatów na każdej zaznaczonej kotwicy.\nKotwicami mogą być punkty, wierzchołki lub środki splatów; instancja musi zawierać splaty. Obroty Eulera w stopniach i skale przekształcają kształt oraz kolor SH razem. Limit: 50 milionów splatów.\nUjemne mnożniki określają rozmiar wartością bezwzględną i odbijają pozycje, orientację oraz kolor SH. Transformacja zapadająca oś pozostawia kolor SH bez zmian.",
+      "inputs": {
+        "Points": "Geometria, której elementy stanowią kotwice.",
+        "Instance": "Geometria splatów do powielenia; inne typy nie są obsługiwane.",
+        "Selection": "Elementy o wartości co najmniej 0,5 są zaznaczone.",
+        "Rotation": "Kąty Eulera wokół X, Y i Z w stopniach dla kotwicy; 0 zachowuje orientację.",
+        "Scale": "Skala przyjmuje liczbę lub trzy mnożniki: 1 zachowuje rozmiar, 0 zapada oś, a wartości ujemne ją odbijają."
+      },
+      "input_labels": {
+        "Points": "Punkty",
+        "Instance": "Instancja",
+        "Selection": "Zaznaczenie",
+        "Rotation": "Obrót",
+        "Scale": "Skala"
+      },
+      "outputs": {
+        "Geometry": "Geometria po modyfikacji."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "camera_info": {
+      "label": "Informacje o kamerze",
+      "description": "Odczytuje pozycję, orientację i obiektyw kamery zbioru danych.",
+      "help": "Odczytuje pozycję, orientację i obiektyw kamery zbioru danych.\nWybierz kamerę według indeksu lub nazwy obrazu. Wyjścia używają współrzędnych świata; scena musi zawierać kamery zbioru danych.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "Wyznaczona pozycja w układzie geometrii lub kamery.",
+        "Direction": "Kierunek prostej lub kierunek patrzenia kamery.",
+        "Up": "Wektor jednostkowy ku górnej krawędzi obrazu.",
+        "FOV": "Pionowy kąt widzenia w stopniach.",
+        "Image Size": "Szerokość i wysokość obrazu w pikselach; Z wynosi 0."
+      },
+      "output_labels": {
+        "Position": "Pozycja",
+        "Direction": "Kierunek",
+        "Up": "Góra",
+        "FOV": "Kąt widzenia",
+        "Image Size": "Rozmiar obrazu"
+      },
+      "properties": {
+        "camera": "Indeks kamery lub dokładna nazwa obrazu; 0 wybiera pierwszą kamerę."
+      },
+      "property_labels": {
+        "camera": "Kamera"
+      }
+    },
+    "camera_coverage": {
+      "label": "Pokrycie kamer",
+      "description": "Zlicza kamery, których pole widzenia zawiera dany element.",
+      "help": "Zlicza kamery, których pole widzenia zawiera dany element.\nPołącz Liczbę z Porównaj. Sprawdzane są granice obrazu i dodatnia głębokość, bez zasłaniania. Maksymalna odległość 0 wyłącza limit. Obsługuje splaty, punkty i wierzchołki; wymaga kamer zbioru danych.",
+      "inputs": {
+        "Max Distance": "Maksymalna odległość od kamery w jednostkach świata; 0 wyłącza limit."
+      },
+      "input_labels": {
+        "Max Distance": "Maksymalna odległość"
+      },
+      "outputs": {
+        "Count": "Liczba kamer zbioru danych, których obraz zawiera ten element.",
+        "Ratio": "Udział kamer zawierających element, 0–1."
+      },
+      "output_labels": {
+        "Count": "Liczba",
+        "Ratio": "Udział"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "view_distance": {
+      "label": "Odległość od kamery",
+      "description": "Mierzy odległość w świecie od kamery lub zapisanego widoku.",
+      "help": "Mierzy odległość w świecie od kamery lub zapisanego widoku.\nWybierz kamerę lub naciśnij Zapisz widok. Zapisana kamera nie podąża za późniejszym ruchem widoku. Obsługuje splaty, punkty i wierzchołki; wymaga kamer zbioru danych.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Distance": "Odległość od wybranej kamery w jednostkach świata."
+      },
+      "output_labels": {
+        "Distance": "Odległość"
+      },
+      "properties": {
+        "camera": "Indeks kamery lub dokładna nazwa obrazu; 0 wybiera pierwszą kamerę.",
+        "source": "Używa kamery zbioru danych lub ostatniego zapisanego widoku.",
+        "captured_transform": "Zapisana macierz kamera–świat; pusta przed pierwszym zapisem."
+      },
+      "property_labels": {
+        "camera": "Kamera",
+        "source": "Źródło",
+        "captured_transform": "Zapisana transformacja"
+      }
+    },
+    "scene_time": {
+      "label": "Czas sceny",
+      "description": "Zwraca czas głowicy odtwarzania sekwencera.",
+      "help": "Użyj sekund lub klatki, aby animować pola.\nPodczas odtwarzania ponownie obliczane są tylko grafy zależne od czasu.\nEksport wideo czeka na obliczenie geometrii każdej klatki.",
+      "inputs": {},
+      "properties": {},
+      "outputs": {
+        "Seconds": "Czas głowicy odtwarzania w sekundach.",
+        "Frame": "Czas głowicy pomnożony przez liczbę klatek na sekundę sekwencera."
+      },
+      "output_labels": {
+        "Seconds": "Sekundy",
+        "Frame": "Klatka"
+      }
+    }
+  },
+  "node_editor.how_to_use": "Jak używać",
+  "node_editor.learn_more": "Dowiedz się więcej",
+  "node_editor.modifiers_paused_while_training": "Modyfikatory są wstrzymane podczas trenowania",
+  "export_dialog.apply_modifiers": "Zastosuj modyfikatory",
+  "node_editor.capture_view": "Zapisz widok",
+  "node_editor.curve_hint": "Przeciągaj punkty; kliknij, aby dodać, kliknij dwukrotnie lub naciśnij Delete, aby usunąć.",
+  "node_editor.ramp_hint": "Przeciągaj znaczniki; kliknij, aby dodać, kliknij dwukrotnie lub Delete, aby usunąć. Zaznacz znacznik, aby zmienić RGBA.",
+  "node_editor.keyframe_hint": "Wstaw klatkę kluczową · Ctrl+kliknięcie lub I po najechaniu kursorem"
 }

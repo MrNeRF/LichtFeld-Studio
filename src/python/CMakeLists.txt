@@ -194,6 +194,7 @@ nanobind_add_module(
     lfs/py_keymap.cpp
     lfs/py_tensor.cpp
     lfs/py_nn.cpp
+    lfs/py_nodes.cpp
     lfs/py_splat_data.cpp
     lfs/py_scene.cpp
     lfs/py_scripts.cpp
@@ -286,7 +287,7 @@ target_link_libraries(lfs_py PRIVATE
     $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::curand>
     $<$<NOT:$<PLATFORM_ID:Darwin>>:SDL3::SDL3>
     ${CMAKE_DL_LIBS}
-    GPUOpen::VulkanMemoryAllocator
+    $<$<BOOL:${LFS_USE_VULKAN}>:GPUOpen::VulkanMemoryAllocator>
     $<IF:$<PLATFORM_ID:Windows>,RmlUi::RmlUi,lfs_rmlui>
 )
 if(APPLE)
@@ -373,6 +374,7 @@ endif()
 if(BUILD_PYTHON_STUBS)
     set(GENERATED_STUBS_DIR "${CMAKE_CURRENT_BINARY_DIR}/typings")
     set(COMMITTED_STUBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/stubs")
+    set(PYTHON_STUB_PATTERNS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/stubgen.pat")
     set(PYTHON_STUB_WORKFLOW_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/scripts/manage_stubs.py")
     set(GENERATED_STUBS_MARKER "${GENERATED_STUBS_DIR}/lichtfeld/py.typed")
     if(WIN32 AND LFS_GENERATOR_IS_MULTI_CONFIG)
@@ -426,7 +428,7 @@ import runpy
 sys.argv = ['stubgen', '-m', 'lichtfeld',
             '-M', r'${GENERATED_STUBS_DIR}/lichtfeld/py.typed',
             '-O', r'${GENERATED_STUBS_DIR}',
-            '-r']
+            '-r', '-P', '-p', r'${PYTHON_STUB_PATTERNS}']
 runpy.run_path(r'${NB_STUBGEN}', run_name='__main__')
 
 # Normalize CRLF -> LF and add space after comma in templates for consistency with linux
@@ -449,7 +451,7 @@ stub_marker.touch()
                 OUTPUT "${GENERATED_STUBS_MARKER}"
                 COMMAND "${Python_EXECUTABLE}" "${STUBGEN_WRAPPER}"
                 WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
-                DEPENDS lfs_py lfs_python_runtime "${NB_STUBGEN}"
+                DEPENDS lfs_py lfs_python_runtime "${NB_STUBGEN}" "${PYTHON_STUB_PATTERNS}" "${STUBGEN_WRAPPER}"
                 COMMENT "Generating Python stubs for lichtfeld (Windows)"
             )
             add_custom_target(lichtfeld_stub ALL DEPENDS "${GENERATED_STUBS_MARKER}")
@@ -457,6 +459,8 @@ stub_marker.touch()
     else()
         nanobind_add_stub(lichtfeld_stub
             MODULE lichtfeld
+            INCLUDE_PRIVATE
+            PATTERN_FILE "${PYTHON_STUB_PATTERNS}"
             OUTPUT_PATH ${GENERATED_STUBS_DIR}
             PYTHON_PATH ${CMAKE_CURRENT_BINARY_DIR}
             DEPENDS lfs_py
@@ -599,9 +603,14 @@ else()
         DESTINATION "${PYTHON_INSTALL_DIR}"
         FILES_MATCHING PATTERN "*.py"
     )
+    if(LFS_MACOS_PORTABLE_APP)
+        file(GLOB _lfs_python_helpers CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.py")
+        install(FILES ${_lfs_python_helpers} DESTINATION "${PYTHON_INSTALL_DIR}")
+    else()
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py"
         DESTINATION "${PYTHON_INSTALL_DIR}"
     )
+    endif()
 endif()
 
 # Stubs: use generated when available, otherwise committed from source tree
@@ -613,6 +622,13 @@ endif()
 
 if(BUILD_PORTABLE AND NOT LFS_MACOS_PORTABLE_APP)
     install(DIRECTORY "${STUBS_DIR}/" DESTINATION "${CMAKE_INSTALL_BINDIR}" OPTIONAL)
+elseif(LFS_MACOS_PORTABLE_APP)
+    # The app target does not necessarily build generated typings. Always ship
+    # the committed complete set, then overlay generated files if available.
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/stubs/" DESTINATION "${PYTHON_INSTALL_DIR}")
+    if(BUILD_PYTHON_STUBS)
+        install(DIRECTORY "${STUBS_DIR}/" DESTINATION "${PYTHON_INSTALL_DIR}" OPTIONAL)
+    endif()
 else()
     install(DIRECTORY "${STUBS_DIR}/" DESTINATION "${PYTHON_INSTALL_DIR}" OPTIONAL)
 endif()

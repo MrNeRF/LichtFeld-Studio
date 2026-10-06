@@ -233,8 +233,8 @@ namespace lfs::training::kernels {
     __global__ void bilateral_grid_slice_backward_rgbgrad_kernel(
         const float* __restrict__ grid,
         const float* __restrict__ rgb,
-        const float* __restrict__ grad_output,
-        float* __restrict__ grad_rgb,
+        const float* grad_output,
+        float* grad_rgb,
         const int L, const int H, const int W,
         const int h, const int w,
         const float* __restrict__ shared_offset) {
@@ -448,8 +448,8 @@ namespace lfs::training::kernels {
     __global__ void bilateral_grid_slice_backward_exposure_chroma_rgbgrad_kernel(
         const float* __restrict__ grid,
         const float* __restrict__ rgb,
-        const float* __restrict__ grad_output,
-        float* __restrict__ grad_rgb,
+        const float* grad_output,
+        float* grad_rgb,
         const int L, const int H, const int W,
         const int h, const int w,
         const float* __restrict__ shared_offset) {
@@ -668,15 +668,15 @@ namespace lfs::training::kernels {
         stream = resolve_stream(stream);
         const dim3 block(kBwdThreads, kBwdThreads);
         const dim3 pix_grid((w + kBwdThreads - 1) / kBwdThreads, (h + kBwdThreads - 1) / kBwdThreads);
-        bilateral_grid_slice_backward_rgbgrad_kernel<false>
-            <<<pix_grid, block, 0, stream>>>(
-                grid, rgb, grad_output, grad_rgb, L, H, W, h, w, shared_offset);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_rgbgrad");
         const dim3 tile_grid((w + kBwdTileX - 1) / kBwdTileX, (h + kBwdTileY - 1) / kBwdTileY);
         bilateral_grid_slice_gridgrad_kernel<false>
             <<<tile_grid, block, bwd_hist_smem_bytes(12, L), stream>>>(
                 rgb, grad_output, grad_grid, L, H, W, h, w);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward");
+        bilateral_grid_slice_backward_rgbgrad_kernel<false>
+            <<<pix_grid, block, 0, stream>>>(
+                grid, rgb, grad_output, grad_rgb, L, H, W, h, w, shared_offset);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_rgbgrad");
     }
 
     void launch_bilateral_grid_slice_backward_chw(
@@ -690,15 +690,15 @@ namespace lfs::training::kernels {
         stream = resolve_stream(stream);
         const dim3 block(kBwdThreads, kBwdThreads);
         const dim3 pix_grid((w + kBwdThreads - 1) / kBwdThreads, (h + kBwdThreads - 1) / kBwdThreads);
-        bilateral_grid_slice_backward_rgbgrad_kernel<true>
-            <<<pix_grid, block, 0, stream>>>(
-                grid, rgb, grad_output, grad_rgb, L, H, W, h, w, shared_offset);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_rgbgrad_chw");
         const dim3 tile_grid((w + kBwdTileX - 1) / kBwdTileX, (h + kBwdTileY - 1) / kBwdTileY);
         bilateral_grid_slice_gridgrad_kernel<true>
             <<<tile_grid, block, bwd_hist_smem_bytes(12, L), stream>>>(
                 rgb, grad_output, grad_grid, L, H, W, h, w);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_chw");
+        bilateral_grid_slice_backward_rgbgrad_kernel<true>
+            <<<pix_grid, block, 0, stream>>>(
+                grid, rgb, grad_output, grad_rgb, L, H, W, h, w, shared_offset);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_rgbgrad_chw");
     }
 
     void launch_bilateral_grid_slice_backward_exposure_chroma(
@@ -712,15 +712,15 @@ namespace lfs::training::kernels {
         stream = resolve_stream(stream);
         const dim3 block(kBwdThreads, kBwdThreads);
         const dim3 pix_grid((w + kBwdThreads - 1) / kBwdThreads, (h + kBwdThreads - 1) / kBwdThreads);
-        bilateral_grid_slice_backward_exposure_chroma_rgbgrad_kernel<false>
-            <<<pix_grid, block, 0, stream>>>(
-                grid, rgb, grad_output, grad_rgb, L, H, W, h, w, shared_offset);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_exposure_chroma_rgbgrad");
         const dim3 tile_grid((w + kBwdTileX - 1) / kBwdTileX, (h + kBwdTileY - 1) / kBwdTileY);
         bilateral_grid_slice_exposure_chroma_gridgrad_kernel<false>
             <<<tile_grid, block, bwd_hist_smem_bytes(9, L), stream>>>(
                 grid, rgb, grad_output, grad_grid, L, H, W, h, w, shared_offset);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_exposure_chroma");
+        bilateral_grid_slice_backward_exposure_chroma_rgbgrad_kernel<false>
+            <<<pix_grid, block, 0, stream>>>(
+                grid, rgb, grad_output, grad_rgb, L, H, W, h, w, shared_offset);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_exposure_chroma_rgbgrad");
     }
 
     void launch_bilateral_grid_slice_backward_exposure_chroma_chw(
@@ -734,15 +734,15 @@ namespace lfs::training::kernels {
         stream = resolve_stream(stream);
         const dim3 block(kBwdThreads, kBwdThreads);
         const dim3 pix_grid((w + kBwdThreads - 1) / kBwdThreads, (h + kBwdThreads - 1) / kBwdThreads);
-        bilateral_grid_slice_backward_exposure_chroma_rgbgrad_kernel<true>
-            <<<pix_grid, block, 0, stream>>>(
-                grid, rgb, grad_output, grad_rgb, L, H, W, h, w, shared_offset);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_exposure_chroma_rgbgrad_chw");
         const dim3 tile_grid((w + kBwdTileX - 1) / kBwdTileX, (h + kBwdTileY - 1) / kBwdTileY);
         bilateral_grid_slice_exposure_chroma_gridgrad_kernel<true>
             <<<tile_grid, block, bwd_hist_smem_bytes(9, L), stream>>>(
                 grid, rgb, grad_output, grad_grid, L, H, W, h, w, shared_offset);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_exposure_chroma_chw");
+        bilateral_grid_slice_backward_exposure_chroma_rgbgrad_kernel<true>
+            <<<pix_grid, block, 0, stream>>>(
+                grid, rgb, grad_output, grad_rgb, L, H, W, h, w, shared_offset);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_exposure_chroma_rgbgrad_chw");
     }
 
     __global__ void bilateral_grid_adam_update_kernel(

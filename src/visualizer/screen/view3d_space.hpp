@@ -4,17 +4,19 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_types.hpp"
 #include "screen/editor_type.hpp"
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 
 namespace lfs::vis::screen {
 
     // The state of one 3D viewport: its camera and display settings.
-    class View3DSpace final : public SpaceData {
+    class LFS_VIS_API View3DSpace final : public SpaceData {
     public:
         View3DSpace() = default;
 
@@ -38,10 +40,7 @@ namespace lfs::vis::screen {
                                          Right,
                                          Left };
 
-    [[nodiscard]] ViewAxis alignedViewAxis(const glm::mat3& rotation);
-
-    // Human-readable view name, e.g. "Top Orthographic" or "User Perspective".
-    [[nodiscard]] std::string viewLabel(const View3DSpace& view);
+    [[nodiscard]] LFS_VIS_API ViewAxis alignedViewAxis(const glm::mat3& rotation);
 
     // Switches projection, keeping the apparent size of what is at the pivot
     // when entering orthographic. `viewport_height` is in pixels.
@@ -57,10 +56,10 @@ namespace lfs::vis::screen {
     // Returns false for commands it does not know.
     bool applyViewCommand(View3DSpace& view, std::string_view command, float viewport_height);
 
-    [[nodiscard]] nlohmann::json viewSettingsToJson(const ViewSettings& settings);
+    [[nodiscard]] LFS_VIS_API nlohmann::json viewSettingsToJson(const ViewSettings& settings);
     // Fields missing from `json` keep their value from `base`; present fields
     // must be valid or the whole read fails.
-    [[nodiscard]] std::optional<ViewSettings> viewSettingsFromJson(const nlohmann::json& json,
-                                                                   const ViewSettings& base);
+    [[nodiscard]] LFS_VIS_API std::optional<ViewSettings> viewSettingsFromJson(const nlohmann::json& json,
+                                                                               const ViewSettings& base);
 
 } // namespace lfs::vis::screen

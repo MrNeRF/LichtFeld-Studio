@@ -19,20 +19,24 @@ The built-in registry exposes:
 | `native` | Off | `native` (1.0) | None |
 | `spatial` | Spatial | `quality` (0.75), `balanced` (0.67), `performance` (0.50) | None |
 | `temporal` | Temporal | `quality` (0.75), `balanced` (0.67), `performance` (0.50) | Depth, motion, jitter and per-view color/depth history |
-| `nvidia-dlss` | NVIDIA DLSS (optional) | `quality` (2/3), `balanced` (0.58), `performance` (0.50) | Depth, motion and jitter; history is owned by the NGX feature |
+| `metalfx_spatial` | Apple MetalFX Spatial (native Metal) | `quality` (2/3), `balanced` (1/1.7), `performance` (0.50) | None |
+| `metalfx_temporal` | Apple MetalFX Temporal (native Metal) | `quality` (2/3), `balanced` (1/1.7), `performance` (0.50) | Depth, motion and jitter; history is owned by the MetalFX feature |
+| `amd-fsr3` | AMD FSR 3.1 (optional) | `quality` (2/3), `balanced` (1/1.7), `performance` (0.50) | Depth, motion and jitter; history is owned by the FidelityFX feature |
 
 The renderer's existing `render_scale` remains the base scene scale. A selected
 backend's input multiplier is applied independently, so reconstruction does not
 rewrite the base control. Native presentation ignores the multiplier.
-For NVIDIA DLSS, the table records the catalog's bootstrap values only. Once
-NGX is initialized, its optimal-settings query selects the exact render extent
-for the current output size and preset; that result is cached until one of
-those inputs changes.
+For optional provider modules, the table records the catalog's bootstrap
+values only. Once the vendor runtime is initialized, its optimal-settings query
+selects the exact render extent for the current output size and preset; that
+result is cached until one of those inputs changes.
 
 The requested backend, effective backend, fallback state, and runtime readiness
 are distinct. The built-in spatial Vulkan pipeline is created lazily on first
 use. If creation fails, the frame is presented through the native path and the
 transition is logged; the saved request is not silently rewritten.
+Mode-ineligible temporal requests report `unsupported_mode`, while runtime
+failures continue to report `runtime_unavailable`.
 
 ## Spatial path
 
@@ -83,74 +87,198 @@ immutable compute-pipeline state remains available for a later Temporal
 selection, avoiding persistent history VRAM without paying full pipeline
 creation cost on every backend switch.
 
-## Optional NVIDIA DLSS plugin
+## Native Metal window presentation
 
-NVIDIA DLSS is isolated behind the versioned
-`scene_upscaler_plugin_api.h` C ABI. The main executable and
-`lfs_visualizer` do not link against the NVIDIA SDK. A build that enables DLSS
-produces `lfs_scene_upscaler_nvidia_dlss.dll` on Windows or
-`liblfs_scene_upscaler_nvidia_dlss.so` on Linux and places the NVIDIA runtime
-beside it under `scene_upscalers/nvidia`. The backend is registered only when
-that external plugin is present and its ABI and identifier validate.
+The native compositor produces a final RGBA8 tensor. `MetalGraphicsContext`
+presents it with a fullscreen-triangle render pass: the fragment shader reads
+the tensor buffer and writes to the `CAMetalLayer` drawable as a color attachment.
+The layer therefore keeps `framebufferOnly = YES`; tensor compute stays in buffers.
+Apple specifies that
+[framebuffer-only textures](https://developer.apple.com/documentation/metal/mtltexture/isframebufferonly)
+can only be render-pass attachments and cannot be bound as texture arguments to
+compute, blit, or render encoders. A compute-based final conversion would require
+[CAMetalLayer.framebufferOnly](https://developer.apple.com/documentation/quartzcore/cametallayer/framebufferonly)
+to be disabled. The render-pass presentation avoids that incompatible usage.
 
-The host opens the plugin during Vulkan bootstrap because NGX must declare its
-required Vulkan instance and device extensions before those objects are
-created. NGX runtime initialization, capability queries, per-view feature
-creation and full-resolution output allocations remain lazy and occur only
-after the user selects NVIDIA DLSS. Safe mode does not load optional
-scene-reconstruction plugins. Dynamic libraries are opened from exact
-application-relative plugin paths; arbitrary system search-path discovery is
-not used.
+Validate native window presentation with Metal API Validation and the displayed
+window. The internal window-capture API reads the composited tensor before the
+drawable conversion: a correct capture does not prove that screen presentation
+is correct. The incompatible framebuffer-only compute path can show a solid
+magenta window despite a correct internal capture.
 
-If the LichtFeld-owned plugin module is absent, the optional backend is omitted
-from the runtime catalog and Native remains selected. If the plugin is valid but
-the separately staged NVIDIA runtime is missing or unsupported, the request is
-retained, presentation falls back atomically to Native, and diagnostics report
-both the NGX failure and the effective Native fallback. The failure is latched
-instead of being retried every frame; selecting Native and then NVIDIA DLSS is
-the explicit retry action after correcting the installation.
+## Native Metal reconstruction
 
-DLSS consumes the same reviewed temporal frame contract as the built-in
-Temporal backend: unjittered current-to-previous pixel motion, the exact jitter
-applied to the rendered color image, scene/camera/backend reset reasons and
-independent main/left/right view identity. Switching between Temporal and DLSS
-changes the history key. A failed DLSS initialization or evaluation is latched
-to native presentation instead of being retried every frame; selecting Native
-before selecting DLSS again is the explicit retry action. Split output is
-transactional, so both panels resolve through DLSS or both remain native.
+Apple builds with Metal graphics expose `metalfx_spatial` and
+`metalfx_temporal` only when the system GPU supports the corresponding MetalFX
+scaler. Both support queries are cached once per process. These are
+framework-backed built-ins, not Vulkan provider modules.
+They do not require the FidelityFX SDK, CUDA, MoltenVK, or Vulkan headers.
+Vulkan graphics builds retain FSR through their existing provider ABI; they do
+not advertise MetalFX. Preferences and Python/MCP use the same registry and
+requested/effective/fallback contract for both graphics APIs.
 
-VkSplat publishes positive linear view depth, while NGX expects raster depth.
-An isolated compute pass therefore converts each valid render subregion to a
-non-inverted `R32_SFLOAT` Vulkan depth image (`near = 0`, `far = 1`) before
-evaluation. Color remains perceptually encoded LDR `RGBA8`; motion remains
-low-resolution `RG16F`, current-to-previous, top-left pixel motion without
-jitter. The exact applied projection jitter is supplied separately in render
-pixel units. Output extents below NGX's 32-by-32 minimum use a temporary native
-presentation and do not latch a backend failure, so resizing back restores the
-requested DLSS path without a manual retry.
+The existing `spatial` and `temporal` modes execute their common Slang kernels
+on Metal tensors. They retain the original presets and reconstruction math.
+Temporal reconstruction supports perspective and orthographic Gaussian views
+and PLY comparison, with independent main/left/right histories for each
+viewport owner. Calibrated/cropped panels derive motion from crop-local
+intrinsics. Ground-truth comparison, panorama, appearance correction, and
+point-cloud temporal requests report `unsupported_mode` and remain native.
+MetalFX Spatial also reconstructs regular Gaussian and point-cloud views and
+PLY panels. GT comparison keeps its existing full-resolution reference/display
+path; no MetalFX work is applied to the reference image.
 
-Ordinary developer builds leave the plugin disabled. Obtain an SDK checkout
-from the official [NVIDIA/DLSS repository](https://github.com/NVIDIA/DLSS),
-including its Git LFS objects, and enable the plugin explicitly:
+MetalFX uses RGBA16Float color/output textures, R32Float non-reversed raster
+depth, and RG32Float current-to-previous motion in top-left render pixels.
+The shared motion kernel uses unjittered camera matrices. Raster jitter is
+passed separately in render pixels; macOS 26 does not need the newer
+jittered-motion descriptor option. View-space depth is converted on the GPU.
+MetalFX writes opaque alpha, so output conversion restores scene coverage by
+bilinearly sampling the current color alpha at jitter-corrected coordinates.
+Coverage is not reconstructed by MetalFX's internal temporal history.
+
+Texture packing, view-depth conversion and output unpacking use a single-source
+Slang program dispatched through `GpuKernelModule`. It writes padded
+RGBA16F/R32F/RG32F byte layouts into reusable tensors; the native MetalFX code
+only creates scaler objects and blits buffers to textures and back through
+`MetalTensorReader::submitWrites`. The shared GPU timeline orders both kernel
+dispatches around scaler execution. Input snapshots, output storage and the
+feature are retained through command completion; resize and release do not
+wait on the CPU. Tensor consumers wait through the existing GPU timeline.
+Each feature retains its conversion buffers, motion tensor and a bounded pool
+of two Float32 RGBA outputs. Released outputs are reused; if callers retain both,
+an uncached output preserves those frames. Basic tensor Temporal keeps two
+independent depth buffers per view and copies into the idle buffer, so raster
+reuse cannot overwrite history. A feature is recreated when extents change. Camera cuts, scene/backend/preset
+changes, projection/crop changes and explicit resets invalidate only the
+corresponding temporal history. Ineligible modes release history. Encoding
+failures retain the last complete frame and then fall back to native; changing
+the backend or preset permits a retry. Asynchronous GPU write failures use the
+existing sticky tensor failure contract.
+
+This remains a viewport stage. The existing offline video preflight contract
+does not execute FSR or MetalFX in the export worker.
+
+GPU regression target: `metal_scene_upscaler_contracts`. It covers native
+producer/consumer ordering, alpha, independent panels/owners, crop calibration,
+jitter, reset reasons, resize, destruction with pending work, retained/recycled
+outputs, padded UInt8 rows with flipped coverage, reused depth and invalid inputs.
+The same target includes shared tracker/coordinator/registry contracts and
+basic Metal spatial/temporal checks. Existing `tensor_rasterizer_contracts`
+provide CPU-oracle and image-convergence coverage for the basic kernels.
+
+## Optional reconstruction providers
+
+All optional modules, including AMD FSR 3.1, use the same generic discovery and
+loading mechanism. Multiple providers can coexist in different subdirectories
+of `<executable-directory>/scene_upscalers/` or `<library-directory>/scene_upscalers/`.
+The executable-relative folder has priority when both roots contain the same
+subdirectory. Discovery runs once at startup; restart after changing installed
+modules. The application never searches arbitrary system library paths.
+
+Each provider folder contains its platform module and three text metadata files:
+
+- `provider-id.txt`: stable lowercase identifier, up to 128 letters, digits,
+  underscores or hyphens. Built-in IDs are reserved. The ID must match the ABI.
+- `provider-module.txt`: module stem without a path or extension, up to 128
+  ASCII letters, digits, underscores or hyphens. Platform prefixes and extensions
+  are applied by the host.
+- `provider-presets.txt`: three finite input scales in quality, balanced,
+  performance order, using decimal points; each must be greater than zero and
+  at most one. Runtime optimal-settings queries still determine exact extents.
+
+The UI reads the provider's `display_name` from the validated C ABI; it does not
+infer a name from the folder or translate an application-owned vendor label.
+Python and MCP catalog records expose the same `display_name`. Preferences
+retain the provider's stable string ID, independent of discovery order.
+Invalid metadata and duplicate IDs in different folders are excluded. Missing
+or incompatible modules are omitted from the available catalog. Safe mode reads
+metadata but does not execute provider modules. An unavailable requested backend
+presents Native and retains its remembered preference for reinstallation.
+
+AMD FSR 3.1 remains optional at build time. Its existing build/install rules now
+stage these metadata files beside its module in `scene_upscalers/amd/`; when it
+is not built and no compatible installed module exists, it is absent from the
+catalog. Existing module installations require the new metadata files.
+
+The host validates the complete versioned ABI and queries Vulkan extensions
+before device creation. Runtime initialization and feature allocation remain
+lazy. Depth, motion, jitter, reset reasons and independent view identities keep
+the shared contracts. Both split panels resolve successfully or both present
+Native; an evaluation failure latches the existing transactional fallback.
+
+Separately built providers carry their own installation instructions and
+licenses. Primary portable staging rejects extra provider directories before
+installation; use a clean staging prefix. FSR is the explicitly packaged
+optional provider. Locally installed modules belong to the user's installation.
+
+The focused loader tests compile real fixture modules and the production loader:
 
 ```sh
-git clone https://github.com/NVIDIA/DLSS external/nvidia-dlss-sdk
-cmake -S . -B build -DLFS_ENABLE_NVIDIA_DLSS=ON -DLFS_NVIDIA_DLSS_ROOT=/path/to/NVIDIA-DLSS-SDK
+cmake -S tests/scene_upscaler_loader -B build-loader-tests -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/path/to/gtest
+cmake --build build-loader-tests
+ctest --test-dir build-loader-tests --output-on-failure
 ```
 
-Both Debug and Release SDK runtimes are supported in ordinary opt-in developer
-builds. Portable configurations default `LFS_ENABLE_NVIDIA_DLSS=ON` and
-therefore require the SDK at `external/nvidia-dlss-sdk` unless
-`LFS_NVIDIA_DLSS_ROOT` is set explicitly. Pass `-DLFS_ENABLE_NVIDIA_DLSS=OFF`
-to build a portable package without the plugin.
-CMake never downloads the SDK or accepts its license for a developer build.
-Anyone redistributing a portable package must satisfy NVIDIA's SDK and runtime
-redistribution terms.
-The Windows nightly portable workflow is the controlled exception to local SDK
-discovery: it checks out a pinned `NVIDIA/DLSS` revision with Git LFS before
-configuration, then stages the external LichtFeld plugin and matching vendor
-runtime in the package. Missing portable SDK artifacts are fatal rather than
-silently producing a package without the advertised backend.
+A Vulkan SDK and GoogleTest are required. These tests do not evaluate GPU images.
+
+## Plugin host
+
+Every optional vendor backend goes through the same host code; only the plugin
+module is vendor specific. `rendering/scene_upscaler_plugin.cpp` lists each
+plugin's backend, ABI identifier, directory under `scene_upscalers/`, module
+stem and cache folder, and loads it through the C ABI described above.
+`VulkanScenePluginPipeline` records motion, plugin depth and evaluation for
+whichever plugin is selected, and the viewport, render manager and Vulkan
+bootstrap iterate the plugin list instead of naming vendors. Adding a backend
+means adding a plugin module, one row in that list and one registry descriptor.
+
+Vendor differences are declared by the plugin, not by the host:
+
+- `capabilities` advertises `DYNAMIC_VIEW_IDS` (one feature per independent
+  3D view) and `REQUIRES_PERSPECTIVE` (orthographic views stay native and
+  report `unsupported_mode`).
+- `optimal_settings` returns the exact render extent for an output size and
+  preset and, through the optional `jitter_phase_count` tail, the jitter
+  sequence length the vendor expects. The host wraps its Halton sequence and
+  sizes the static-scene settle burst to that length; 0 keeps the default.
+- Every evaluation carries the frame's near plane, far plane and vertical field
+  of view in an optional tail, for plugins that linearize depth themselves.
+
+The host always supplies jitter-free motion vectors
+(`motion_vectors_include_jitter = 0`) and the exact applied jitter, so plugins
+translate that one convention into their SDK's. When a frame is presented
+again without a newly published color/depth generation, the pipeline reuses the
+last resolved output instead of feeding the same sample into vendor history
+twice.
+
+## Optional AMD FSR 3.1 plugin
+
+The AMD FSR 3.1 plugin builds `lfs_scene_upscaler_amd_fsr3` under
+`scene_upscalers/amd` (`.dll`, `.so`, or `.dylib` on macOS, where it runs on
+MoltenVK). Only that module links the FidelityFX SDK. It consumes the same LDR
+`RGBA8` color, `R32_SFLOAT` raster depth and `RG16F` motion as external reconstruction plugins, uses a
+neutral pre-exposure and view-space scale, and disables the optional RCAS
+sharpening pass, which hardens splat edges. Reactive and transparency masks
+remain absent until the renderer can publish semantically correct material
+signals. Up to eight views may hold an FSR feature at once.
+
+Ordinary developer builds leave the plugin disabled. Use the
+[AMD FidelityFX SDK v1.1.4 release](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v1.1.4)
+and enable it explicitly:
+
+```sh
+git clone --branch v1.1.4 https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK external/fidelityfx-sdk
+cmake -S . -B build -DLFS_ENABLE_AMD_FSR3=ON -DLFS_AMD_FSR3_ROOT=external/fidelityfx-sdk
+```
+
+When prebuilt libraries are absent, `LFS_AMD_FSR3_BUILD_SDK=ON` builds the FSR
+upscaler and Vulkan backend from an isolated copy of the SDK. Windows uses the
+SDK's own project. Linux and macOS use `src/scene_upscalers/amd_fsr3/posix`,
+which drives the SDK shader compiler with vcpkg's glslang (built with its
+SPIR-V optimizer) and applies small SDK v1.1.4 compatibility patches. On macOS,
+build one architecture at a time. The SDK license is staged next to the plugin
+and installed with the package licenses.
 
 ## Persistence and safe mode
 

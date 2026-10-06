@@ -583,7 +583,7 @@ class TensorProperty(Property):
             actual = str(value.device)
             gpu_names = {"cuda", "gpu"}
             if expected in gpu_names:
-                if actual not in gpu_names:
+                if actual not in {"cuda", "gpu", "vulkan", "metal"}:
                     raise ValueError(
                         f"Expected device '{self.device}', got '{value.device}'"
                     )

@@ -19,7 +19,7 @@ def test_mask_cache_and_eight_bit_staging_contracts():
     mask_start = pipeline.index("} else if (batch[i].is_mask) {")
     mask_end = pipeline.index("} else {", mask_start + 1)
     mask_body = pipeline[mask_start:mask_end]
-    assert "pipeline JPEG2000 mask cache must contain eight-bit samples" in mask_body
+    assert "raw.dtype() == lfs::core::DataType::UInt8" in mask_body
     assert "reinterpret_cast<const uint16_t*>(raw.data_ptr())" not in mask_body
 
     encode_start = nvcodec.index("NvCodecImageLoader::encode_grayscale_to_jpeg2k")

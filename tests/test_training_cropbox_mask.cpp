@@ -467,3 +467,25 @@ TEST_F(TrainingCropBoxMask, EmptyMeansReturnNulloptWithoutMutation) {
     EXPECT_FALSE(remove_mask.has_value());
     EXPECT_EQ(means.to(lfs::core::Device::CPU).to_vector(), means_before);
 }
+
+// Catches using model_to_cropbox instead of its inverse or a swapped corner bit order.
+TEST_F(TrainingCropBoxMask, ModelCornersUndoTheCropBoxTransform) {
+    const glm::mat4 cropbox_to_model =
+        glm::translate(glm::mat4(1.0f), glm::vec3(5.0f, 0.0f, 0.0f)) *
+        glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    const lfs::training::TrainingCropBoxGeometry geometry{
+        .min = {-1.0f, -2.0f, -3.0f},
+        .max = {1.0f, 2.0f, 3.0f},
+        .world_to_cropbox = glm::inverse(cropbox_to_model),
+        .model_to_cropbox = glm::inverse(cropbox_to_model)};
+    const auto corners = lfs::training::training_cropbox_model_corners(geometry);
+    const std::array<std::array<float, 3>, 3> expected{{
+        {7.0f, -1.0f, -3.0f}, // corner 0: (-1, -2, -3) rotated to (2, -1), shifted by 5
+        {7.0f, 1.0f, -3.0f},  // corner 1: (1, -2, -3) -> (2, 1)
+        {3.0f, -1.0f, 3.0f},  // corner 6: (-1, 2, 3) -> (-2, -1)
+    }};
+    for (const auto& [index, point] : {std::pair{0, expected[0]}, std::pair{1, expected[1]}, std::pair{6, expected[2]}}) {
+        for (size_t axis = 0; axis < 3; ++axis)
+            EXPECT_NEAR(corners[index][axis], point[axis], 1e-5f) << "corner " << index << " axis " << axis;
+    }
+}

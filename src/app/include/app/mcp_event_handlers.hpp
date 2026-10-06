@@ -5,6 +5,7 @@
 
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
+#include "core/nodes/events.hpp"
 #include "core/path_utils.hpp"
 
 #include <algorithm>
@@ -24,7 +25,11 @@ namespace lfs::app {
         SubscriptionQueue,
     };
 
-    inline constexpr std::array<std::string_view, 21> kMcpRuntimeEventTypes = {
+    inline constexpr std::array<std::string_view, 25> kMcpRuntimeEventTypes = {
+        "nodes.evaluation.started",
+        "nodes.evaluation.progress",
+        "nodes.evaluation.completed",
+        "nodes.evaluation.failed",
         "editor.started",
         "editor.completed",
         "scene.loaded",
@@ -48,7 +53,11 @@ namespace lfs::app {
         "disk_space.save_failed",
     };
 
-    inline constexpr std::array<std::string_view, 27> kMcpSubscriptionEventTypes = {
+    inline constexpr std::array<std::string_view, 31> kMcpSubscriptionEventTypes = {
+        "nodes.evaluation.started",
+        "nodes.evaluation.progress",
+        "nodes.evaluation.completed",
+        "nodes.evaluation.failed",
         "editor.started",
         "editor.completed",
         "scene.loaded",
@@ -88,6 +97,8 @@ namespace lfs::app {
             return "ssog";
         case core::ExportFormat::SPZ:
             return "spz";
+        case core::ExportFormat::GLB:
+            return "glb";
         case core::ExportFormat::HTML_VIEWER:
             return "html";
         case core::ExportFormat::USD:
@@ -133,6 +144,10 @@ namespace lfs::app {
                                      const McpEventStreamKind kind,
                                      PublishFn&& publish) {
         auto publisher = std::make_shared<std::decay_t<PublishFn>>(std::forward<PublishFn>(publish));
+        handlers.subscribe<lfs::nodes::EvaluationEvent>([publisher](const auto& event) {
+            std::invoke(*publisher, "nodes.evaluation." + event.phase,
+                        nlohmann::json{{"job_id", "nodes.evaluate"}, {"generation", event.generation}, {"target", event.target}, {"node", event.node}, {"label", event.label}, {"completed", event.completed}, {"total", event.total}, {"ok", event.ok}});
+        });
         auto register_handler = [&handlers, publisher]<typename Event, typename Builder>(
                                     std::string_view type,
                                     Builder&& builder) {

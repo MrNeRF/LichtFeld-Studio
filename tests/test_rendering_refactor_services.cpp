@@ -32,8 +32,8 @@
 #include "visualizer/rendering/gt_comparison_geometry.hpp"
 #include "visualizer/rendering/render_pass.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
+#include "visualizer/rendering/rendering_manager_split_view.hpp"
 #include "visualizer/rendering/split_capture_compositor.hpp"
-#include "visualizer/rendering/split_view_composition.hpp"
 #include "visualizer/rendering/split_view_service.hpp"
 #include "visualizer/rendering/stale_frame_guard.hpp"
 #include "visualizer/rendering/viewport_artifact_service.hpp"
@@ -985,7 +985,6 @@ namespace lfs::vis {
         EXPECT_FLOAT_EQ(bounds.y, 10.0f);
         EXPECT_FLOAT_EQ(bounds.width, 50.0f);
         EXPECT_FLOAT_EQ(bounds.height, 40.0f);
-        EXPECT_TRUE(bounds.letterboxed);
 
         manager.invalidateGTComparisonActualSizeResources(manager.state());
         EXPECT_TRUE(manager.isGTComparisonActualSizeActive());
@@ -1084,6 +1083,7 @@ namespace lfs::vis {
          RetryAndCancellationPreserveOnlyCurrentWork) {
         lfs::vis::screen::ScreenService manager_views;
         RenderingManager manager{manager_views};
+        manager.retainVisibleViews({manager.activeViewId()});
         manager.gt_comparison_image_worker_.request_stop();
         manager.gt_comparison_image_cv_.notify_all();
         manager.gt_comparison_image_worker_.join();
@@ -1433,6 +1433,21 @@ namespace lfs::vis {
             .exact_texel_sampling = true};
         const auto output = composeSplitCaptureCpu(params, {12, 8});
         ASSERT_TRUE(output && output->is_valid());
+        const SplitViewCpuDesc shared_params{
+            .exact_texel_sampling = true,
+            .left = {.image = left},
+            .right = {.image = right, .flip_y = true},
+            .split_position = params.split_position,
+            .content_rect = params.content_rect,
+            .coordinate_extent = params.coordinate_extent,
+            .background = params.background};
+        const auto shared_output = composeSplitViewCpuImage(shared_params, {12, 8});
+        ASSERT_TRUE(shared_output && shared_output->is_valid());
+        ASSERT_EQ(shared_output->numel(), output->numel());
+        // Upstream captures publish upright HWC; the legacy test compositor is CHW.
+        const auto shared_chw = shared_output->permute({2, 0, 1}).contiguous();
+        for (std::size_t i = 0; i < output->numel(); ++i)
+            EXPECT_FLOAT_EQ(shared_chw.ptr<float>()[i], output->ptr<float>()[i]) << i;
         const float* data = output->ptr<float>();
         constexpr std::size_t output_pixels = 12 * 8;
         const auto at = [&](const int channel, const int x, const int y) {
@@ -1702,40 +1717,6 @@ namespace lfs::vis {
         const auto after_zoom = manager.getSettings();
         ASSERT_FALSE(after_zoom.orthographic);
         EXPECT_FLOAT_EQ(after_zoom.focal_length_mm, 35.0f);
-    }
-
-    TEST(SplitViewServiceTest, GtComparisonPlanPreservesGtTextureOrigin) {
-        Viewport viewport(640, 480);
-        RenderSettings settings;
-        settings.split_view_mode = SplitViewMode::GTComparison;
-        settings.split_position = 0.4f;
-
-        FrameContext ctx{
-            .viewport = viewport,
-            .settings = settings,
-            .render_size = {640, 480},
-            .current_camera_id = 7,
-        };
-
-        FrameResources res;
-        res.gt_context = GTComparisonContext{
-            .gt_image_handle = 11,
-            .camera_id = 7,
-            .dimensions = {320, 240},
-            .gpu_aligned_dims = {320, 256},
-            .render_texcoord_scale = {1.0f, 240.0f / 256.0f},
-            .gt_texcoord_scale = {1.0f, 1.0f},
-            .gt_texture_origin = lfs::rendering::TextureOrigin::TopLeft,
-        };
-        res.cached_gpu_frame = lfs::rendering::GpuFrame{
-            .color = {.id = 22, .size = {320, 240}},
-        };
-
-        const auto plan = buildSplitViewCompositionPlan(ctx, res);
-        ASSERT_TRUE(plan.has_value());
-        ASSERT_TRUE(plan->panels[0].panel.presentation.flip_y.has_value());
-        EXPECT_TRUE(*plan->panels[0].panel.presentation.flip_y);
-        EXPECT_FALSE(plan->panels[1].panel.presentation.flip_y.has_value());
     }
 
     TEST(SplitViewServiceTest, CurrentSceneTransformUsesIdentityForMultipleVisiblePointClouds) {
@@ -2079,10 +2060,6 @@ namespace lfs::vis {
             .viewport_pos = {0, 0},
         };
 
-        const auto plan = buildSplitViewCompositionPlan(ctx, FrameResources{});
-        ASSERT_TRUE(plan.has_value());
-        ASSERT_EQ(plan->panels.size(), 2u);
-
         const auto* const left_node = scene.getNodeById(left_id);
         const auto* const right_node = scene.getNodeById(right_id);
         ASSERT_NE(left_node, nullptr);
@@ -2090,28 +2067,7 @@ namespace lfs::vis {
         ASSERT_NE(left_node->model, nullptr);
         ASSERT_NE(right_node->model, nullptr);
 
-        EXPECT_EQ(plan->panels[0].panel.content.model, left_node->model.get());
-        EXPECT_EQ(plan->panels[1].panel.content.model, right_node->model.get());
-        EXPECT_EQ(
-            plan->panels[0].panel.content.model_transform,
-            scene_coords::nodeVisualizerWorldTransform(scene, left_id));
-        EXPECT_EQ(
-            plan->panels[1].panel.content.model_transform,
-            scene_coords::nodeVisualizerWorldTransform(scene, right_id));
-
-        for (size_t i = 0; i < plan->panels.size(); ++i) {
-            const auto& panel = plan->panels[i].panel;
-            ASSERT_TRUE(panel.content.gaussian_render.has_value());
-            EXPECT_EQ(panel.content.gaussian_render->frame_view.size, ctx.render_size);
-            EXPECT_FALSE(panel.presentation.normalize_x_to_panel);
-            EXPECT_EQ(panel.content.gaussian_render->scene.transform_indices, nullptr);
-            EXPECT_TRUE(panel.content.gaussian_render->scene.node_visibility_mask.empty());
-            EXPECT_TRUE(panel.content.gaussian_render->scene.node_active_sh_degrees.empty());
-            EXPECT_TRUE(panel.content.gaussian_render->filters.view_volume.has_value());
-            EXPECT_TRUE(panel.content.gaussian_render->overlay.markers.show_rings);
-            EXPECT_FALSE(panel.content.gaussian_render->overlay.cursor.enabled);
-            EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.transient_mask.mask, nullptr);
-            EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.focused_gaussian_id, -1);
+        for (size_t i = 0; i < 2; ++i) {
 
             auto scoped_state = scene_state;
             const auto& node = i == 0 ? *left_node : *right_node;
@@ -2126,7 +2082,7 @@ namespace lfs::vis {
             ASSERT_EQ(request.scene.model_transforms->size(), 2u);
             applyPlyComparisonNodeScope(
                 request.scene, request.filters, request.overlay, ctx, node, static_cast<int>(i));
-            const std::vector<glm::mat4> transforms{panel.content.model_transform};
+            const std::vector<glm::mat4> transforms{scene_coords::nodeVisualizerWorldTransform(scene, node.id)};
             request.scene.model_transforms = &transforms;
             EXPECT_EQ(request.scene.model_transforms->size(), 1u);
             EXPECT_EQ(request.scene.transform_indices, nullptr);
@@ -2135,7 +2091,7 @@ namespace lfs::vis {
             EXPECT_EQ(node.model->get_active_sh_degree(), static_cast<int>(i) + 1);
             EXPECT_EQ(scene_state.node_active_sh_degrees, (std::vector<int>{1, 2}));
             scopeSceneRenderStateToVisibleSplatNode(
-                scoped_state, scene, node, static_cast<int>(i), panel.content.model_transform);
+                scoped_state, scene, node, static_cast<int>(i), scene_coords::nodeVisualizerWorldTransform(scene, node.id));
             EXPECT_EQ(scoped_state.node_active_sh_degrees,
                       std::vector<int>{static_cast<int>(i) + 1});
         }
@@ -2241,44 +2197,40 @@ namespace lfs::vis {
                  .selection_mode = SelectionPreviewMode::Rings},
         };
 
-        const auto plan = buildSplitViewCompositionPlan(ctx, FrameResources{});
-        ASSERT_TRUE(plan.has_value());
-        ASSERT_EQ(plan->panels.size(), 2u);
-
         const auto* const trained = scene.getNodeById(trained_id);
         const auto* const bike = scene.getNodeById(bike_id);
         ASSERT_NE(trained, nullptr);
         ASSERT_NE(bike, nullptr);
-        EXPECT_EQ(plan->panels[0].panel.content.model, trained->model.get());
-        EXPECT_EQ(plan->panels[1].panel.content.model, bike->model.get());
 
-        const auto& left = plan->panels[0].panel.content;
-        const auto& right = plan->panels[1].panel.content;
-        ASSERT_TRUE(left.gaussian_render.has_value());
-        ASSERT_TRUE(right.gaussian_render.has_value());
+        auto left = buildViewportRenderRequest(ctx, ctx.render_size, &viewport);
+        auto right = buildViewportRenderRequest(ctx, ctx.render_size, &viewport);
+        left.scene = {};
+        right.scene = {};
+        applyPlyComparisonNodeScope(left.scene, left.filters, left.overlay, ctx, *trained, 0);
+        applyPlyComparisonNodeScope(right.scene, right.filters, right.overlay, ctx, *bike, 1);
 
-        ASSERT_TRUE(left.gaussian_render->filters.crop_region.has_value());
-        EXPECT_EQ(left.gaussian_render->filters.crop_region->parent_node_index, 0);
-        EXPECT_FALSE(right.gaussian_render->filters.crop_region.has_value());
+        ASSERT_TRUE(left.filters.crop_region.has_value());
+        EXPECT_EQ(left.filters.crop_region->parent_node_index, 0);
+        EXPECT_FALSE(right.filters.crop_region.has_value());
 
-        ASSERT_NE(left.gaussian_render->overlay.emphasis.mask, nullptr);
-        EXPECT_EQ(left.gaussian_render->overlay.emphasis.mask->numel(), 1u);
-        ASSERT_NE(right.gaussian_render->overlay.emphasis.mask, nullptr);
-        EXPECT_EQ(right.gaussian_render->overlay.emphasis.mask->numel(), 2u);
+        ASSERT_NE(left.overlay.emphasis.mask, nullptr);
+        EXPECT_EQ(left.overlay.emphasis.mask->numel(), 1u);
+        ASSERT_NE(right.overlay.emphasis.mask, nullptr);
+        EXPECT_EQ(right.overlay.emphasis.mask->numel(), 2u);
 
-        ASSERT_EQ(left.gaussian_render->overlay.emphasis.emphasized_node_mask.size(), 1u);
-        EXPECT_TRUE(left.gaussian_render->overlay.emphasis.emphasized_node_mask[0]);
-        ASSERT_EQ(right.gaussian_render->overlay.emphasis.emphasized_node_mask.size(), 1u);
-        EXPECT_FALSE(right.gaussian_render->overlay.emphasis.emphasized_node_mask[0]);
-        EXPECT_TRUE(left.gaussian_render->overlay.emphasis.dim_non_emphasized);
-        EXPECT_TRUE(right.gaussian_render->overlay.emphasis.dim_non_emphasized);
-        EXPECT_TRUE(left.gaussian_render->overlay.cursor.enabled);
-        ASSERT_NE(left.gaussian_render->overlay.emphasis.transient_mask.mask, nullptr);
-        EXPECT_EQ(left.gaussian_render->overlay.emphasis.transient_mask.mask->numel(), 1u);
-        ASSERT_NE(right.gaussian_render->overlay.emphasis.transient_mask.mask, nullptr);
-        EXPECT_EQ(right.gaussian_render->overlay.emphasis.transient_mask.mask->numel(), 2u);
-        EXPECT_EQ(left.gaussian_render->overlay.emphasis.focused_gaussian_id, 0);
-        EXPECT_EQ(right.gaussian_render->overlay.emphasis.focused_gaussian_id, -1);
+        ASSERT_EQ(left.overlay.emphasis.emphasized_node_mask.size(), 1u);
+        EXPECT_TRUE(left.overlay.emphasis.emphasized_node_mask[0]);
+        ASSERT_EQ(right.overlay.emphasis.emphasized_node_mask.size(), 1u);
+        EXPECT_FALSE(right.overlay.emphasis.emphasized_node_mask[0]);
+        EXPECT_TRUE(left.overlay.emphasis.dim_non_emphasized);
+        EXPECT_TRUE(right.overlay.emphasis.dim_non_emphasized);
+        EXPECT_TRUE(left.overlay.cursor.enabled);
+        ASSERT_NE(left.overlay.emphasis.transient_mask.mask, nullptr);
+        EXPECT_EQ(left.overlay.emphasis.transient_mask.mask->numel(), 1u);
+        ASSERT_NE(right.overlay.emphasis.transient_mask.mask, nullptr);
+        EXPECT_EQ(right.overlay.emphasis.transient_mask.mask->numel(), 2u);
+        EXPECT_EQ(left.overlay.emphasis.focused_gaussian_id, 0);
+        EXPECT_EQ(right.overlay.emphasis.focused_gaussian_id, -1);
 
         EXPECT_EQ(scene.getVisibleNodeIndex(trained_id), 0);
         EXPECT_EQ(scene.getVisibleNodeIndex(bike_id), 1);
@@ -2435,28 +2387,6 @@ namespace lfs::vis {
         EXPECT_EQ(metadata.transform_indices, nullptr);
         EXPECT_EQ(scene.peekCombinedModel(), prepared);
         EXPECT_FALSE(scene.combinedModelBuildPending());
-
-        Viewport viewport(640, 480);
-        RenderSettings settings;
-        settings.split_view_mode = SplitViewMode::PLYComparison;
-        const FrameContext ctx{
-            .viewport = viewport,
-            .scene_manager = &manager,
-            .model = prepared,
-            .scene_state = metadata,
-            .settings = settings,
-            .render_size = {640, 480},
-        };
-        const auto plan = buildSplitViewCompositionPlan(ctx, FrameResources{});
-        ASSERT_TRUE(plan.has_value());
-        EXPECT_EQ(plan->panels[0].panel.content.model, prepared);
-        EXPECT_EQ(plan->panels[1].panel.content.model, prepared);
-        ASSERT_TRUE(plan->panels[0].panel.content.gaussian_render.has_value());
-        ASSERT_EQ(plan->panels[0].panel.content.gaussian_render->scene.node_visibility_mask.size(), 2u);
-        EXPECT_TRUE(plan->panels[0].panel.content.gaussian_render->scene.node_visibility_mask[0]);
-        EXPECT_FALSE(plan->panels[0].panel.content.gaussian_render->scene.node_visibility_mask[1]);
-        EXPECT_FALSE(plan->panels[1].panel.content.gaussian_render->scene.node_visibility_mask[0]);
-        EXPECT_TRUE(plan->panels[1].panel.content.gaussian_render->scene.node_visibility_mask[1]);
 
         const auto left = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Left);
         EXPECT_FALSE(left.uses_owned_node_model);
@@ -3543,6 +3473,19 @@ namespace lfs::vis {
         EXPECT_EQ(service.handleTrainingRefresh(false, interval), 0u);
     }
 
+    TEST(ViewportFrameLifecycleServiceTest, RestRenderRestartsTheIdlePreviewBudget) {
+        ViewportFrameLifecycleService service;
+        constexpr float interval = 0.05f;
+        EXPECT_EQ(service.handleTrainingRefresh(true, interval), DirtyFlag::SPLATS);
+        // Motion deferred the requested preview until the camera came to rest.
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        service.restartTrainingRefresh();
+        EXPECT_EQ(service.handleTrainingRefresh(true, interval), 0u);
+        EXPECT_GT(service.secondsUntilTrainingRefresh(interval), 0.0);
+        // A pause still publishes the final training state immediately.
+        EXPECT_EQ(service.handleTrainingRefresh(false, interval), DirtyFlag::SPLATS);
+    }
+
     TEST(ViewportFrameLifecycleServiceTest, ResizeActiveDefersFullRefreshUntilDebounceCompletes) {
         ViewportFrameLifecycleService service;
 
@@ -3741,15 +3684,14 @@ namespace lfs::vis {
                                lfs::core::Device::CPU)
                                .gpu();
 
-        FrameResources resources;
-        resources.cached_metadata = CachedRenderMetadata{
+        const lfs::rendering::FrameMetadata metadata{
             .depth_panels =
-                {CachedRenderPanelMetadata{
+                {lfs::rendering::FramePanelMetadata{
                      .depth = std::make_shared<lfs::core::Tensor>(std::move(left_depth)),
                      .start_position = 0.0f,
                      .end_position = 0.5f,
                  },
-                 CachedRenderPanelMetadata{
+                 lfs::rendering::FramePanelMetadata{
                      .depth = std::make_shared<lfs::core::Tensor>(std::move(right_depth)),
                      .start_position = 0.5f,
                      .end_position = 1.0f,
@@ -3758,8 +3700,7 @@ namespace lfs::vis {
             .valid = true,
             .depth_is_ndc = false,
         };
-        resources.cached_result_size = {1024, 1};
-        artifacts.updateFromFrameResources(resources, false);
+        artifacts.updateFromImageOutput({}, metadata, {1024, 1}, false);
 
         EXPECT_FLOAT_EQ(
             artifacts.sampleLinearDepthAt(256, 0, {1024, 1}, SplitViewPanelId::Right),

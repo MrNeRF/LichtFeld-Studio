@@ -68,14 +68,6 @@ namespace lfs::training {
                         .selectors = {SelectionKind::All},
                         .args = {},
                         .description = "Request graceful stop."});
-
-        // Mutable fields
-        mutable_fields_.push_back({"means", CommandTarget::Model, "[N,3]", "Gaussian means", true});
-        mutable_fields_.push_back({"scaling", CommandTarget::Model, "[N,3]", "Log scaling", true});
-        mutable_fields_.push_back({"rotation", CommandTarget::Model, "[N,4]", "Quaternion rotation", true});
-        mutable_fields_.push_back({"opacity", CommandTarget::Model, "[N]", "Opacity logits", true});
-        mutable_fields_.push_back({"sh0", CommandTarget::Model, "[N,3]", "SH0 coefficients", true});
-        mutable_fields_.push_back({"shN", CommandTarget::Model, "[N,?]", "Higher-order SH coefficients", true});
     }
 
     void CommandCenter::bind_state_events() {
@@ -163,19 +155,6 @@ namespace lfs::training {
         for (const auto& op : ops_) {
             if (op.target == *target) {
                 filtered.push_back(op);
-            }
-        }
-        return filtered;
-    }
-
-    std::vector<MutableFieldInfo> CommandCenter::mutables(std::optional<CommandTarget> target) const {
-        if (!target) {
-            return mutable_fields_;
-        }
-        std::vector<MutableFieldInfo> filtered;
-        for (const auto& f : mutable_fields_) {
-            if (f.target == *target) {
-                filtered.push_back(f);
             }
         }
         return filtered;

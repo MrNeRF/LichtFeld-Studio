@@ -7,6 +7,7 @@
 #include "core/scene.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/timeline.hpp"
+#include "visualizer/nodes/modifier_error.hpp"
 #include <algorithm>
 #include <expected>
 #include <filesystem>
@@ -16,6 +17,7 @@
 #include <vector>
 
 namespace lfs::vis {
+    class ModifierManager;
 
     inline constexpr float MIN_PLAYBACK_SPEED = 0.1f;
     inline constexpr float MAX_PLAYBACK_SPEED = 4.0f;
@@ -77,6 +79,11 @@ namespace lfs::vis {
         [[nodiscard]] const sequencer::Timeline& timeline() const { return timeline_; }
         [[nodiscard]] uint64_t timelineRevision() const { return timeline_revision_; }
         [[nodiscard]] uint64_t selectionRevision() const { return selection_revision_; }
+        // Generic tracks use the same revision and project persistence as camera tracks.
+        void animationTracksChanged();
+        [[nodiscard]] float framesPerSecond() const { return frames_per_second_; }
+        [[nodiscard]] ModifierResult prepareExportFrame(ModifierManager& nodes,
+                                                        float seconds, float fps) const;
 
         void play();
         void pause();
@@ -170,6 +177,7 @@ namespace lfs::vis {
         LoopMode loop_mode_ = LoopMode::ONCE;
 
         float playhead_ = 0.0f;
+        float frames_per_second_ = DEFAULT_SEQUENCE_FPS;
         float playback_speed_ = 1.0f;
         bool reverse_direction_ = false;
 

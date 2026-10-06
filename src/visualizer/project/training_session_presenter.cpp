@@ -188,6 +188,7 @@ namespace lfs::vis {
     bool TrainerManager::requestSaveProject() { return false; }
     bool TrainerManager::waitForCompletion() { return true; }
     bool TrainerManager::hasLiveTrainingThread() const { return false; }
+    bool TrainerManager::isModelChanging() const { return isRunning(); }
     bool TrainerManager::isPausedAtCheckpointBaseline() const { return false; }
     void TrainerManager::applyRestoredCheckpointPresentation() {}
 

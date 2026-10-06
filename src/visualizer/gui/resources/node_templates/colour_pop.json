@@ -1,0 +1,248 @@
+{
+  "schema_version": 1,
+  "id": "colour_pop",
+  "name": "Colour pop",
+  "description": "Keep one colour range vivid while desaturating everything else.",
+  "category": "Colour",
+  "scene_kinds": [
+    "splat"
+  ],
+  "adjust": "Set Key Colour to the subject, then adjust Tolerance and Softness for a clean transition.",
+  "tree": {
+    "schema_version": 1,
+    "uuid": "builtin.colour_pop",
+    "name": "Colour pop",
+    "tree_type": "lfs.geometry",
+    "nodes": [
+      {
+        "name": "Group Input",
+        "type_id": "lfs.group_input",
+        "location": [
+          -760,
+          0
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Group Output",
+        "type_id": "lfs.group_output",
+        "location": [
+          520,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "none"
+          }
+        },
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Colour Key",
+        "type_id": "lfs.colour_key",
+        "location": [
+          -360,
+          -160
+        ],
+        "muted": false,
+        "input_values": {
+          "Colour": {
+            "type": "vec4",
+            "value": [
+              0.8,
+              0.2,
+              0.1,
+              1
+            ]
+          },
+          "Tolerance": {
+            "type": "float",
+            "value": 0.18
+          },
+          "Softness": {
+            "type": "float",
+            "value": 0.12
+          }
+        },
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Invert Selection",
+        "type_id": "lfs.math",
+        "location": [
+          -120,
+          -160
+        ],
+        "muted": false,
+        "input_values": {
+          "A": {
+            "type": "float",
+            "value": 1
+          }
+        },
+        "properties": {
+          "operation": "subtract"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Desaturate",
+        "type_id": "lfs.colour_correct",
+        "location": [
+          100,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "geometry"
+          },
+          "Saturation": {
+            "type": "float",
+            "value": 0
+          }
+        },
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Adjust these settings",
+        "type_id": "lfs.frame",
+        "location": [
+          -620,
+          -180
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "colour": "neutral",
+          "label": "Adjust these settings",
+          "note": "Set Key Colour to the subject, then adjust Tolerance and Softness for a clean transition."
+        },
+        "ui": {},
+        "version": 1
+      }
+    ],
+    "links": [
+      {
+        "from_node": "Group Input",
+        "from_socket": "Geometry",
+        "to_node": "Desaturate",
+        "to_socket": "Geometry"
+      },
+      {
+        "from_node": "Colour Key",
+        "from_socket": "Selection",
+        "to_node": "Invert Selection",
+        "to_socket": "B"
+      },
+      {
+        "from_node": "Invert Selection",
+        "from_socket": "Value",
+        "to_node": "Desaturate",
+        "to_socket": "Selection"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Key Colour",
+        "to_node": "Colour Key",
+        "to_socket": "Colour"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Tolerance",
+        "to_node": "Colour Key",
+        "to_socket": "Tolerance"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Softness",
+        "to_node": "Colour Key",
+        "to_socket": "Softness"
+      },
+      {
+        "from_node": "Desaturate",
+        "from_socket": "Geometry",
+        "to_node": "Group Output",
+        "to_socket": "Geometry"
+      }
+    ],
+    "interface": {
+      "inputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        },
+        {
+          "identifier": "Key Colour",
+          "label": "Key Colour",
+          "type": "lfs.colour",
+          "default": {
+            "type": "vec4",
+            "value": [
+              0.8,
+              0.2,
+              0.1,
+              1
+            ]
+          }
+        },
+        {
+          "identifier": "Tolerance",
+          "label": "Tolerance",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 0.18
+          },
+          "min": 0,
+          "max": 1,
+          "step": 0.01
+        },
+        {
+          "identifier": "Softness",
+          "label": "Softness",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 0.12
+          },
+          "min": 0,
+          "max": 1,
+          "step": 0.01
+        }
+      ],
+      "outputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        }
+      ]
+    }
+  }
+}

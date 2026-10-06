@@ -6,6 +6,7 @@
 
 #include "../../internal/tensor_impl.hpp"
 #include "core/assert.hpp"
+#include "core/error.hpp"
 #include "vk_context.hpp"
 #include "vk_memory.hpp"
 #include "vk_ops_common.hpp"
@@ -18,6 +19,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <span>
 
 namespace lfs::core::internal {
@@ -166,19 +168,28 @@ namespace lfs::core::internal {
         }
         LFS_ASSERT_MSG(weights.dtype == DataType::Float32 && output.dtype == DataType::Int64,
                        "Vulkan multinomial requires Float32 weights and Int64 samples");
+        const uint32_t categories = checked_u32(program.count, "Vulkan multinomial category count exceeds uint32");
+        const uint32_t samples = checked_u32(program.sample_count, "Vulkan multinomial sample count exceeds uint32");
+        const size_t sum_blocks = (program.count + kSumBlock - 1) / kSumBlock;
+        if (program.count > size_t{std::numeric_limits<uint32_t>::max()} - sum_blocks) {
+            throw lfs::Exception(lfs::make_error({
+                .code = lfs::ErrorCode::BoundsViolation,
+                .domain = lfs::ErrorDomain::Tensor,
+                .user_message = "Vulkan multinomial category count exceeds safe indexing range",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
         const auto context = acquire_vulkan_context();
         const WeightStatistics statistics = weight_statistics(*context, weights, program.count);
         LFS_ASSERT_MSG(statistics.invalid == 0,
                        "multinomial weights must be finite and non-negative");
         LFS_ASSERT_MSG(statistics.maximum > 0.0f,
                        "multinomial weights must have a positive finite sum");
-        const uint32_t categories = checked_u32(program.count, "Vulkan multinomial category count exceeds uint32");
-        const uint32_t samples = checked_u32(program.sample_count, "Vulkan multinomial sample count exceeds uint32");
         if (program.replacement) {
             // Running sums within blocks, the blocks' offsets, then a binary
             // search per draw. The weights are scaled so their maximum sits
             // near 2^0, which keeps the sums finite.
-            const uint32_t blocks = (categories + kSumBlock - 1) / kSumBlock;
+            const uint32_t blocks = static_cast<uint32_t>(sum_blocks);
             const StorageRef sums =
                 context->memory().allocate((program.count + blocks + 1) * sizeof(float), 16, {});
             const RandomPush push{

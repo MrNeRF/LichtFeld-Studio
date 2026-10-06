@@ -37,7 +37,6 @@ namespace lfs::diagnostics {
         [[nodiscard]] std::vector<VramTimelinePoint> points() const;
         [[nodiscard]] const std::deque<VramMarker>& markers() const noexcept { return markers_; }
         [[nodiscard]] std::string csv() const;
-        void clear();
 
     private:
         struct Bin {

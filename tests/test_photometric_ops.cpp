@@ -84,6 +84,22 @@ namespace {
         return run;
     }
 
+    // The decoupled paths leave grad_raw empty and add the raw-render gradient later.
+    Tensor added_raw_gradient(PhotoRun& run, const Tensor& raw) {
+        EXPECT_FALSE(run.grad_raw.is_valid());
+        auto gradient = Tensor::zeros(raw.shape(), Device::GPU);
+        lfs::training::cuda_photometric_ops().add_raw_gradient(run.saved, gradient);
+        return gradient;
+    }
+
+    template <typename Context>
+    Tensor kernel_raw_gradient(const Context& ctx, const Tensor& raw) {
+        auto gradient = Tensor::zeros(raw.shape(), Device::GPU);
+        lfs::training::kernels::accumulate_decoupled_raw_gradient(
+            lfs::training::kernels::decoupled_raw_gradient(ctx), gradient);
+        return gradient;
+    }
+
 } // namespace
 
 TEST(TrainingOpsCapability, VulkanConfigurationAvailabilityIsCheckedBeforeAllocation) {
@@ -236,10 +252,11 @@ TEST_F(PhotometricOpsBytes, FixedInputsMatchKernelBytes) {
         auto [loss, ctx] = lfs::training::kernels::decoupled_fused_l1_ssim_forward(
             corrected, raw, target, kWeight, workspace, true);
         const auto grads = lfs::training::kernels::decoupled_fused_l1_ssim_backward(ctx, workspace);
-        const PhotoRun ops = evaluate_path(lfs::gpu_ops::PhotoPath::Decoupled, kWeight, corrected, raw, target, {});
+        const Tensor raw_gradient = kernel_raw_gradient(ctx, raw);
+        PhotoRun ops = evaluate_path(lfs::gpu_ops::PhotoPath::Decoupled, kWeight, corrected, raw, target, {});
         expect_identical(ops.loss, loss);
         expect_identical(ops.grad_corrected, grads.grad_corrected);
-        expect_identical(ops.grad_raw, grads.grad_raw);
+        expect_identical(added_raw_gradient(ops, raw), raw_gradient);
     }
 
     {
@@ -257,11 +274,11 @@ TEST_F(PhotometricOpsBytes, FixedInputsMatchKernelBytes) {
         auto [loss, ctx] = lfs::training::kernels::masked_decoupled_fused_l1_ssim_forward(
             corrected, raw, target, mask, kWeight, workspace);
         const auto grads = lfs::training::kernels::masked_decoupled_fused_l1_ssim_backward(ctx, workspace);
-        const PhotoRun ops =
-            evaluate_path(lfs::gpu_ops::PhotoPath::MaskedDecoupled, kWeight, corrected, raw, target, mask);
+        const Tensor raw_gradient = kernel_raw_gradient(ctx, raw);
+        PhotoRun ops = evaluate_path(lfs::gpu_ops::PhotoPath::MaskedDecoupled, kWeight, corrected, raw, target, mask);
         expect_identical(ops.loss, loss);
         expect_identical(ops.grad_corrected, grads.grad_corrected);
-        expect_identical(ops.grad_raw, grads.grad_raw);
+        expect_identical(added_raw_gradient(ops, raw), raw_gradient);
     }
 }
 

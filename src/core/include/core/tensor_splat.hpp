@@ -11,4 +11,8 @@ namespace lfs::core {
     LFS_CORE_API void affine_splat_geometry(const splat_transform::LinearTransform& linear,
                                             const Tensor& scales, const Tensor& rotations,
                                             Tensor& output_scales, Tensor& output_rotations);
+    // Same covariance transform with one row-major Float32 [N,9] matrix per splat.
+    LFS_CORE_API void affine_splat_geometry(const Tensor& linear,
+                                            const Tensor& scales, const Tensor& rotations,
+                                            Tensor& output_scales, Tensor& output_rotations);
 } // namespace lfs::core

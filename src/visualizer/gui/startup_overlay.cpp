@@ -138,7 +138,7 @@ namespace lfs::vis::gui {
 
     void StartupOverlay::shutdown() {
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("startup_overlay");
         rml_context_ = nullptr;
@@ -154,7 +154,7 @@ namespace lfs::vis::gui {
             return;
 
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
 
         if (document_) {
             rml_context_->UnloadDocument(document_);
@@ -214,10 +214,12 @@ namespace lfs::vis::gui {
                 lfs::vis::saveLanguagePreference(language);
         }
         visible_ = false;
+        if (rml_manager_ && rml_context_)
+            rml_manager_->deactivateInput(rml_context_);
         input_ = nullptr;
         last_mouse_valid_ = false;
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
     }
 
     void StartupOverlay::setPluginLoadState(const bool started,
@@ -276,6 +278,8 @@ namespace lfs::vis::gui {
             case '<': out += "&lt;"; break;
             case '>': out += "&gt;"; break;
             case '"': out += "&quot;"; break;
+            case '{': out += "&#123;"; break;
+            case '}': out += "&#125;"; break;
             case '\'': out += "&apos;"; break;
             default: out += ch; break;
             }
@@ -520,25 +524,6 @@ namespace lfs::vis::gui {
         rml_theme::applyTheme(document_, base_rcss, rml_theme::loadBaseRCSS("rmlui/startup.theme.rcss"));
     }
 
-    bool StartupOverlay::hasInputActivity(const PanelInputState& input) const {
-        if (!last_mouse_valid_ ||
-            std::abs(input.mouse_x - last_mouse_x_) > 0.5f ||
-            std::abs(input.mouse_y - last_mouse_y_) > 0.5f) {
-            return true;
-        }
-        for (int i = 0; i < 3; ++i) {
-            if (input.mouse_clicked[i] || input.mouse_released[i])
-                return true;
-        }
-        return input.mouse_wheel != 0.0f ||
-               !input.keys_pressed.empty() ||
-               !input.keys_repeated.empty() ||
-               !input.keys_released.empty() ||
-               !input.text_codepoints.empty() ||
-               !input.text_inputs.empty() ||
-               input.has_text_editing;
-    }
-
     bool StartupOverlay::isLanguageSelectOpen() const {
         auto* lang_el = document_ ? document_->GetElementById("lang-select") : nullptr;
         auto* sel = dynamic_cast<Rml::ElementFormControlSelect*>(lang_el);
@@ -622,6 +607,8 @@ namespace lfs::vis::gui {
         float overlay_y, float overlay_w, float overlay_h) {
         assert(rml_context_);
         InputForwardResult result;
+        if (rml_manager_ && rml_manager_->routeInput(rml_context_, input, [this, overlay_x, overlay_y, overlay_w, overlay_h](const PanelInputState& event) { forwardInput(event, overlay_x, overlay_y, overlay_w, overlay_h); }, true))
+            return result;
         if (rml_manager_) {
             rml_manager_->trackContextFrame(rml_context_,
                                             static_cast<int>(overlay_x - input.screen_x),
@@ -681,32 +668,24 @@ namespace lfs::vis::gui {
             }
         }
 
-        if (!input.viewport_keyboard_focus &&
-            rml_input::hasFocusedKeyboardTarget(rml_context_->GetFocusElement())) {
-            const int focused_mods = sdlModsToRml(input.key_ctrl, input.key_shift,
-                                                  input.key_alt, input.key_super);
-            for (int sc : input.keys_pressed) {
-                if (sc == SDL_SCANCODE_ESCAPE && rml_input::cancelFocusedElement(*rml_context_)) {
-                    result.escape_consumed = true;
+        if (!input.viewport_keyboard_focus) {
+            for (const auto& event : input.input_events) {
+                const bool select_was_open = isLanguageSelectOpen();
+                if (event.kind == FrameInputEventKind::KeyDown && event.scancode == SDL_SCANCODE_ESCAPE &&
+                    rml_input::cancelFocusedElement(*rml_context_)) {
                     result.event_forwarded = true;
+                    if (event.dispatch)
+                        event.dispatch->consumed = true;
                     continue;
                 }
-
-                const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                if (rml_key != Rml::Input::KI_UNKNOWN) {
-                    rml_context_->ProcessKeyDown(rml_key, focused_mods);
-                    result.event_forwarded = true;
-                }
-            }
-
-            for (int sc : input.keys_released) {
-                if (result.escape_consumed && sc == SDL_SCANCODE_ESCAPE)
-                    continue;
-
-                const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                if (rml_key != Rml::Input::KI_UNKNOWN) {
-                    rml_context_->ProcessKeyUp(rml_key, focused_mods);
-                    result.event_forwarded = true;
+                result.event_forwarded |= rml_input::processKeyboardEvent(*rml_context_, event);
+                if (event.kind == FrameInputEventKind::KeyDown && !event.repeat &&
+                    !select_was_open && !isLanguageSelectOpen() && shown_frames_ > 2 &&
+                    isPluginLoadComplete() && !drag_hovering_ &&
+                    (event.scancode == SDL_SCANCODE_ESCAPE || event.scancode == SDL_SCANCODE_SPACE ||
+                     event.scancode == SDL_SCANCODE_RETURN || event.scancode == SDL_SCANCODE_KP_ENTER)) {
+                    dismiss();
+                    break;
                 }
             }
         }
@@ -714,6 +693,7 @@ namespace lfs::vis::gui {
         last_mouse_valid_ = true;
         last_mouse_x_ = input.mouse_x;
         last_mouse_y_ = input.mouse_y;
+        content_dirty_ |= result.event_forwarded;
         return result;
     }
 
@@ -772,7 +752,7 @@ namespace lfs::vis::gui {
             focus.want_capture_keyboard = true;
         }
 
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+        if (!rml_manager_ || !rml_manager_->getUiRenderer())
             return;
 
         const int ctx_w = static_cast<int>(window_width);
@@ -803,7 +783,7 @@ namespace lfs::vis::gui {
         if (size_changed) {
             width_ = ctx_w;
             height_ = ctx_h;
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
             rml_context_->SetDimensions(Rml::Vector2i(ctx_w, ctx_h));
             document_->SetProperty("width", std::format("{}px", ctx_w));
             document_->SetProperty("height", std::format("{}px", ctx_h));
@@ -828,20 +808,13 @@ namespace lfs::vis::gui {
             updated_this_frame = true;
         }
 
-        bool escape_consumed = false;
         bool rml_select_open = isLanguageSelectOpen();
         const bool rml_select_was_open = rml_select_open;
         bool input_event_forwarded = false;
-        const bool plugin_load_complete = isPluginLoadComplete();
-        if (input_ && hasInputActivity(*input_) &&
-            (plugin_load_complete || rml_select_open ||
-             isLanguageSelectHit(input_->mouse_x - window_x,
-                                 input_->mouse_y - window_y) ||
-             isLinkHit(input_->mouse_x - window_x,
-                       input_->mouse_y - window_y))) {
+        drag_hovering_ = drag_hovering;
+        if (input_) {
             const auto input_result = forwardInput(*input_, window_x, window_y,
                                                    window_width, window_height);
-            escape_consumed = input_result.escape_consumed;
             refresh_cache = refresh_cache || input_result.event_forwarded;
             input_event_forwarded = input_result.event_forwarded;
             rml_select_open = rml_select_open || isLanguageSelectOpen();
@@ -859,7 +832,6 @@ namespace lfs::vis::gui {
                 rml_context_->Update();
         }
 
-        const bool select_interaction_active = rml_select_open || isLanguageSelectOpen();
         ++shown_frames_;
 
         bool clicked_language_select = false;
@@ -876,18 +848,8 @@ namespace lfs::vis::gui {
         if (shown_frames_ > 2 && !drag_hovering && input_) {
             const bool mouse_clicked =
                 input_->mouse_clicked[0] || input_->mouse_clicked[1] || input_->mouse_clicked[2];
-            const bool key_action = (!escape_consumed && !select_interaction_active &&
-                                     hasKey(input_->keys_pressed, SDL_SCANCODE_ESCAPE)) ||
-                                    (!select_interaction_active &&
-                                     (hasKey(input_->keys_pressed, SDL_SCANCODE_SPACE) ||
-                                      hasKey(input_->keys_pressed, SDL_SCANCODE_RETURN) ||
-                                      hasKey(input_->keys_pressed, SDL_SCANCODE_KP_ENTER)));
-
-            if (key_action) {
-                LOG_DEBUG("StartupOverlay: dismissed by key action");
-                dismiss();
-            } else if (mouse_clicked && !rml_select_was_open && !clicked_language_select &&
-                       !clicked_language_dropdown && !clicked_link) {
+            if (mouse_clicked && !rml_select_was_open && !clicked_language_select &&
+                !clicked_language_dropdown && !clicked_link) {
                 LOG_DEBUG("StartupOverlay: dismissed by mouse click");
                 dismiss();
             }
@@ -901,7 +863,7 @@ namespace lfs::vis::gui {
         rml_manager_->trackContextFrame(rml_context_,
                                         static_cast<int>(offset_x),
                                         static_cast<int>(offset_y));
-        rml_manager_->queueCachedVulkanContext({
+        rml_manager_->queueCachedContext({
             .context = rml_context_,
             .cache = &direct_cache_,
             .cache_width = ctx_w,

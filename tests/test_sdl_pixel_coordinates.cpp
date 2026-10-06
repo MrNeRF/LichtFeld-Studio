@@ -38,6 +38,11 @@ SDL_Keymod SDLCALL SDL_GetModState() {
     return SDL_KMOD_SHIFT;
 }
 
+// The polling helpers prefer an injected MCP pointer; these tests use real state.
+std::optional<lfs::vis::input::InjectedPointerState> lfs::vis::input::injectedPointer() {
+    return std::nullopt;
+}
+
 namespace {
     struct ScaleCase {
         int pixel_width;

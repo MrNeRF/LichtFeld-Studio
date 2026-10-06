@@ -1,0 +1,9 @@
+<rml>
+<head>
+  <link type="text/rcss" href="components.rcss"/>
+  <link type="text/rcss" href="node_editor.rcss"/>
+</head>
+<body>
+  <node-canvas id="node-editor-canvas"/>
+</body>
+</rml>

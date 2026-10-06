@@ -21,6 +21,7 @@
 #include <glm/glm.hpp>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace lfs::app {
@@ -82,7 +83,7 @@ namespace lfs::app {
 
         void notify_screen_changed(vis::VisualizerImpl* impl) {
             if (auto* rendering = impl->getRenderingManager())
-                rendering->markDirty(vis::DirtyFlag::ALL);
+                rendering->markDirty(vis::DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
         }
 
         vis::ViewInfo view_info_from_space(const vis::screen::View3DSpace& space) {
@@ -416,7 +417,8 @@ namespace lfs::app {
                         return json{{"error", "eye, target and up must form a valid look-at"}};
                     space->camera.setViewMatrix(*rotation, eye);
                     space->camera.camera.setPivot(target);
-                    notify_screen_changed(impl);
+                    if (auto* rendering = impl->getRenderingManager())
+                        rendering->markCameraCut(id.value);
                     auto result = view_info_json(view_info_from_space(*space));
                     result["view"] = id.value;
                     return result;
@@ -485,8 +487,8 @@ namespace lfs::app {
                                 {"settings", vis::screen::viewSettingsToJson(space->settings)}};
                 });
             });
+        register_pointer_tool(registry, viewer);
     }
-
     void register_gui_screen_resources(ResourceRegistry& registry, vis::Visualizer* viewer) {
         auto* const impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
         if (!impl)

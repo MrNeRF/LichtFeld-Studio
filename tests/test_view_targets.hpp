@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "input/view_targets.hpp"
+#include <cstdint>
 
 namespace lfs::vis {
     class TestViewTargets final : public ViewTargets {

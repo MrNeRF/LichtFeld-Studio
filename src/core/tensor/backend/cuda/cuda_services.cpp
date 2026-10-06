@@ -64,7 +64,6 @@ namespace lfs::core {
 
     namespace {
         std::atomic<CudaMemoryPool*> g_cuda_memory_pool_instance{nullptr};
-        thread_local std::string g_pool_pending_label;
     } // namespace
 
     CudaMemoryPool* try_live_cuda_memory_pool() noexcept {
@@ -90,30 +89,16 @@ namespace lfs::core {
         return pool;
     }
 
-    TensorLabelScope::TensorLabelScope(std::string_view label)
-        : previous_(std::move(g_pool_pending_label)) {
-        if (!label.empty())
-            g_pool_pending_label.assign(label);
-    }
-
-    TensorLabelScope::~TensorLabelScope() {
-        g_pool_pending_label = std::move(previous_);
-    }
-
     CudaMemoryPool::LabelGuard::LabelGuard(std::string_view label)
-        : previous_(std::move(g_pool_pending_label)),
-          active_(!label.empty()) {
-        if (active_) {
-            g_pool_pending_label.assign(label);
-        }
-    }
+        : previous_(exchange_tensor_label(std::string(label))),
+          active_(!label.empty()) {}
 
     CudaMemoryPool::LabelGuard::~LabelGuard() {
-        g_pool_pending_label = std::move(previous_);
+        static_cast<void>(exchange_tensor_label(std::move(previous_)));
     }
 
     std::string_view CudaMemoryPool::current_label() noexcept {
-        return g_pool_pending_label;
+        return current_tensor_label();
     }
 
     namespace internal {
@@ -319,6 +304,13 @@ namespace lfs::core {
             const size_t threshold_bytes) {
             CudaMemoryPool::instance().trim_cached_memory_if_reserved_unused_exceeds(
                 threshold_bytes);
+        }
+
+        void hold_vulkan_interop_blocks(bool hold);
+
+        void CudaBackendOps::hold_freed_memory(const bool hold) {
+            CudaMemoryPool::instance().hold_freed_memory(hold);
+            hold_vulkan_interop_blocks(hold);
         }
 
         MemoryInfo CudaBackendOps::stats() {
@@ -696,6 +688,7 @@ namespace lfs::core::internal {
             ~CudaTensorVulkanInterop() override { shutdown(); }
 
             void shutdown() override {
+                hold_blocks(false);
                 if (stream_) {
                     LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(stream_), stream_, "tensor interop stream drain");
                     CudaMemoryPool::instance().release_stream(stream_);
@@ -766,18 +759,40 @@ namespace lfs::core::internal {
                 if (capacity == 0 || bytes > SIZE_MAX / capacity)
                     throw TensorError("Vulkan-visible tensor allocation size is invalid");
                 bytes *= capacity;
-                int device = 0;
-                LFS_CUDA_CHECK(cudaGetDevice(&device));
-                auto block = allocateExportableDeviceBlock(bytes, device, false, bytes);
-                if (!block) {
-                    if (is_shareable_allocation_limit_message(block.error()))
-                        throw ShareableAllocationLimitError(block.error());
-                    throw TensorError(block.error());
+                const auto stream = getCurrentCUDAStream();
+                auto imported = take_block(bytes);
+                if (imported) {
+                    // A new block starts zeroed. A kept one is cleared the same way; its earlier uses had
+                    // finished before it was kept.
+                    LFS_CUDA_CHECK(cudaMemsetAsync(imported->block->device_ptr, 0, imported->block->committed_bytes, stream));
+                } else {
+                    int device = 0;
+                    LFS_CUDA_CHECK(cudaGetDevice(&device));
+                    auto block = allocateExportableDeviceBlock(bytes, device, false, bytes);
+                    if (!block) {
+                        if (is_shareable_allocation_limit_message(block.error()))
+                            throw ShareableAllocationLimitError(block.error());
+                        throw TensorError(block.error());
+                    }
+                    std::lock_guard lock(mutex_);
+                    imported = import_locked(*block);
                 }
-                auto tensor = Tensor::from_external_owner((*block)->device_ptr, std::move(shape),
-                                                          Device::GPU, dtype, *block, capacity, getCurrentCUDAStream(), "vulkan_external_buffer");
+                void* const data = imported->block->device_ptr;
+                auto tensor = Tensor::from_external_owner(data, std::move(shape), Device::GPU, dtype,
+                                                          lease(std::move(imported)), capacity, stream, "vulkan_external_buffer");
                 (void)buffer(tensor);
                 return tensor;
+            }
+
+            // While node evaluation holds freed memory, the block of a released payload tensor stays mapped and
+            // imported for the next payload of about its size: mapping and importing a block again, and
+            // unmapping the old one, costs more than the evaluation that refills it.
+            void hold_blocks(const bool hold) {
+                std::vector<std::shared_ptr<CudaImportedBuffer>> released;
+                std::lock_guard lock(blocks_mutex_);
+                holding_blocks_ = hold;
+                if (!hold)
+                    released.swap(spare_blocks_);
             }
 
             std::optional<TensorVulkanBuffer> buffer(const Tensor& tensor) override {
@@ -801,42 +816,7 @@ namespace lfs::core::internal {
                 if (!block || offset > block->reserved_bytes || bytes > block->reserved_bytes - offset)
                     throw TensorError("Vulkan-visible tensor exceeds its exportable block");
                 std::lock_guard lock(mutex_);
-                auto imported = imports_[block.get()].lock();
-                if (!imported) {
-                    if (!target_.external_memory)
-                        throw TensorError("Consumer device does not support CUDA external memory");
-                    const auto cuda = gpu_backend_device_info(GpuBackend::CUDA);
-                    VkPhysicalDeviceIDProperties identity{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
-                    VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-                    properties.pNext = &identity;
-                    vkGetPhysicalDeviceProperties2(static_cast<VkPhysicalDevice>(target_.physical_device), &properties);
-                    if (!cuda || !std::equal(cuda->uuid.begin(), cuda->uuid.end(), identity.deviceUUID))
-                        throw TensorError("Vulkan consumer and CUDA storage must use the same physical device");
-                    imported = std::make_shared<CudaImportedBuffer>();
-                    imported->target = target_;
-                    imported->block = block;
-                    imported->sparse = block->chunks.size() != 1 || block->chunks.front().bytes < block->reserved_bytes;
-                    if (imported->sparse && (!target_.sparse_binding || !target_.sparse_queue))
-                        throw TensorError("Sparse binding is required for a growable CUDA block");
-                    VkExternalMemoryBufferCreateInfo external{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
-                    external.handleTypes = kVulkanExportMemoryHandleType;
-                    VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-                    info.pNext = &external;
-                    info.flags = imported->sparse ? VK_BUFFER_CREATE_SPARSE_BINDING_BIT : 0;
-                    info.size = block->reserved_bytes;
-                    info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-                    info.sharingMode = target_.queue_family_count > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
-                    if (target_.queue_family_count > 1) {
-                        info.queueFamilyIndexCount = target_.queue_family_count;
-                        info.pQueueFamilyIndices = target_.queue_families.data();
-                    }
-                    interop_vk_check(vkCreateBuffer(static_cast<VkDevice>(target_.device), &info, nullptr, &imported->buffer), "vkCreateBuffer(CUDA import)");
-                    imported->bind();
-                    imports_[block.get()] = imported;
-                } else {
-                    imported->bind();
-                }
+                const auto imported = import_locked(block);
                 const auto storage = storage_ref(tensor);
                 if (storage.meta) {
                     std::lock_guard storage_lock(storage.meta->vulkan_interop_mutex);
@@ -908,9 +888,102 @@ namespace lfs::core::internal {
                 timeline_import_ = import_cuda_timeline(static_cast<VkDevice>(target_.device), timeline_);
             }
 
+            // The Vulkan buffer over a block, imported once and bound to every committed chunk. mutex_ held.
+            std::shared_ptr<CudaImportedBuffer> import_locked(const std::shared_ptr<ExportableBlock>& block) {
+                auto imported = imports_[block.get()].lock();
+                if (imported) {
+                    imported->bind();
+                    return imported;
+                }
+                if (!target_.external_memory)
+                    throw TensorError("Consumer device does not support CUDA external memory");
+                const auto cuda = gpu_backend_device_info(GpuBackend::CUDA);
+                VkPhysicalDeviceIDProperties identity{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+                VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+                properties.pNext = &identity;
+                vkGetPhysicalDeviceProperties2(static_cast<VkPhysicalDevice>(target_.physical_device), &properties);
+                if (!cuda || !std::equal(cuda->uuid.begin(), cuda->uuid.end(), identity.deviceUUID))
+                    throw TensorError("Vulkan consumer and CUDA storage must use the same physical device");
+                imported = std::make_shared<CudaImportedBuffer>();
+                imported->target = target_;
+                imported->block = block;
+                imported->sparse = block->chunks.size() != 1 || block->chunks.front().bytes < block->reserved_bytes;
+                if (imported->sparse && (!target_.sparse_binding || !target_.sparse_queue))
+                    throw TensorError("Sparse binding is required for a growable CUDA block");
+                VkExternalMemoryBufferCreateInfo external{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
+                external.handleTypes = kVulkanExportMemoryHandleType;
+                VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+                info.pNext = &external;
+                info.flags = imported->sparse ? VK_BUFFER_CREATE_SPARSE_BINDING_BIT : 0;
+                info.size = block->reserved_bytes;
+                info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+                info.sharingMode = target_.queue_family_count > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
+                if (target_.queue_family_count > 1) {
+                    info.queueFamilyIndexCount = target_.queue_family_count;
+                    info.pQueueFamilyIndices = target_.queue_families.data();
+                }
+                interop_vk_check(vkCreateBuffer(static_cast<VkDevice>(target_.device), &info, nullptr, &imported->buffer), "vkCreateBuffer(CUDA import)");
+                imported->bind();
+                imports_[block.get()] = imported;
+                return imported;
+            }
+
+            // A tensor's hold on a block: releasing the tensor keeps the block, as an imported buffer, while
+            // freed memory is held.
+            std::shared_ptr<ExportableBlock> lease(std::shared_ptr<CudaImportedBuffer> imported) {
+                auto* const block = imported->block.get();
+                return std::shared_ptr<ExportableBlock>(
+                    block, [self = weak_from_this(), imported = std::move(imported)](ExportableBlock*) mutable {
+                        // The block's own teardown first waits for all device work; keeping it gives the same
+                        // guarantee to its next tensor.
+                        const auto interop = self.lock();
+                        if (interop && cudaDeviceSynchronize() == cudaSuccess)
+                            interop->keep_block(std::move(imported));
+                        else
+                            (void)cudaGetLastError();
+                    });
+            }
+
+            void keep_block(std::shared_ptr<CudaImportedBuffer> imported) {
+                std::shared_ptr<CudaImportedBuffer> dropped;
+                std::lock_guard lock(blocks_mutex_);
+                if (!holding_blocks_) {
+                    dropped = std::move(imported);
+                    return;
+                }
+                if (spare_blocks_.size() == kMaxSpareBlocks) {
+                    dropped = std::move(spare_blocks_.front());
+                    spare_blocks_.erase(spare_blocks_.begin());
+                }
+                spare_blocks_.push_back(std::move(imported));
+            }
+
+            // The smallest kept block within an eighth of the request that nothing uses any more, frames
+            // included: they hold the imported buffer until their reads finish.
+            std::shared_ptr<CudaImportedBuffer> take_block(const size_t bytes) {
+                std::lock_guard lock(blocks_mutex_);
+                auto best = spare_blocks_.end();
+                for (auto it = spare_blocks_.begin(); it != spare_blocks_.end(); ++it) {
+                    const size_t reserved = (*it)->block->reserved_bytes;
+                    if (it->use_count() == 1 && reserved >= bytes && reserved - bytes <= bytes / 8 &&
+                        (best == spare_blocks_.end() || reserved < (*best)->block->reserved_bytes))
+                        best = it;
+                }
+                if (best == spare_blocks_.end())
+                    return nullptr;
+                auto imported = std::move(*best);
+                spare_blocks_.erase(best);
+                return imported;
+            }
+
+            static constexpr size_t kMaxSpareBlocks = 16;
             VulkanInteropDevice target_;
             std::mutex mutex_;
             std::unordered_map<ExportableBlock*, std::weak_ptr<CudaImportedBuffer>> imports_;
+            std::mutex blocks_mutex_;
+            bool holding_blocks_ = false;
+            std::vector<std::shared_ptr<CudaImportedBuffer>> spare_blocks_;
             cudaStream_t stream_ = nullptr;
             VkSemaphore timeline_ = VK_NULL_HANDLE;
             uint64_t value_ = 0;
@@ -924,8 +997,33 @@ namespace lfs::core::internal {
         };
     } // namespace
 
+    namespace {
+        std::mutex interop_registry_mutex;
+        std::vector<std::weak_ptr<CudaTensorVulkanInterop>> interop_registry;
+        size_t interop_block_holds = 0;
+    } // namespace
+
+    void hold_vulkan_interop_blocks(const bool hold) {
+        std::vector<std::shared_ptr<CudaTensorVulkanInterop>> live;
+        {
+            std::lock_guard lock(interop_registry_mutex);
+            if (hold ? interop_block_holds++ != 0 : (interop_block_holds == 0 || --interop_block_holds != 0))
+                return;
+            std::erase_if(interop_registry, [](const auto& weak) { return weak.expired(); });
+            for (const auto& weak : interop_registry)
+                if (auto interop = weak.lock())
+                    live.push_back(std::move(interop));
+        }
+        for (const auto& interop : live)
+            interop->hold_blocks(hold);
+    }
+
     std::shared_ptr<TensorVulkanInteropBackend> make_cuda_vulkan_interop(VulkanInteropDevice target) {
-        return std::make_shared<CudaTensorVulkanInterop>(target);
+        auto interop = std::make_shared<CudaTensorVulkanInterop>(target);
+        std::lock_guard lock(interop_registry_mutex);
+        interop->hold_blocks(interop_block_holds != 0);
+        interop_registry.push_back(interop);
+        return interop;
     }
 } // namespace lfs::core::internal
 namespace lfs::core::cuda {
@@ -934,4 +1032,9 @@ namespace lfs::core::cuda {
         return std::shared_ptr<void>(owner, owner->imported);
     }
 } // namespace lfs::core::cuda
+#endif
+#ifndef LFS_TENSOR_VULKAN
+namespace lfs::core::internal {
+    void hold_vulkan_interop_blocks(bool) {}
+} // namespace lfs::core::internal
 #endif

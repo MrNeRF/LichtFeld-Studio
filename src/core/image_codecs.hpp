@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -43,20 +45,34 @@ namespace lfs::core::image_codecs {
         int max_width = 0;
     };
 
+    /// libjpeg scale denominator for a decode that is resampled to max_width afterwards: the largest
+    /// reduction that keeps at least max_width pixels along the longer side.
+    [[nodiscard]] constexpr unsigned jpeg_scale_denominator(const unsigned max_dimension, const unsigned max_width) {
+        for (const unsigned denominator : {8u, 4u, 2u}) {
+            if ((max_dimension + denominator - 1) / denominator >= max_width)
+                return denominator;
+        }
+        return 1;
+    }
+
     bool probe(const std::filesystem::path& path, Probe& result, std::string& error);
     bool decode(const std::filesystem::path& path, Image& result, std::string& error);
     bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target, Probe& result, std::string& error);
     bool decode_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error);
     bool decode_memory_to_buffer(const std::uint8_t* data, size_t size, DecodeTarget& target, Probe& result, std::string& error);
-    bool decode_jpeg_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error);
 
-    bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,
-                    int width, int height, int channels, int quality,
-                    const std::optional<std::string>& comment, std::string& error);
-    bool write_png(const std::filesystem::path& path, const void* data,
-                   int width, int height, int channels, int bit_depth,
-                   int compression_level, const std::optional<std::string>& comment,
-                   std::string& error);
+    // RGB uses 4:2:0 by default; full_chroma selects 4:4:4 for high-quality exports.
+    LFS_CORE_API bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,
+                                 int width, int height, int channels, int quality,
+                                 const std::optional<std::string>& comment, std::string& error);
+    LFS_CORE_API bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,
+                                 int width, int height, int channels, int quality,
+                                 const std::optional<std::string>& comment, std::string& error,
+                                 bool full_chroma);
+    LFS_CORE_API bool write_png(const std::filesystem::path& path, const void* data,
+                                int width, int height, int channels, int bit_depth,
+                                int compression_level, const std::optional<std::string>& comment,
+                                std::string& error);
     bool write_tiff(const std::filesystem::path& path, const std::uint8_t* data,
                     int width, int height, int channels, std::string& error);
 

@@ -217,7 +217,9 @@ namespace lfs::core::nn::kernels {
                                      const int channels, const int h, const int w,
                                      const int interior_y0, const int interior_y1,
                                      const int interior_x0, const int interior_x1,
-                                     const float inv_count) {
+                                     const float inv_count, const float* __restrict__ weights,
+                                     const int weights_width, const int weights_y0,
+                                     const int weights_x0) {
             __shared__ float partial[kReduceWarps][4][32];
             __shared__ float block_score[kReduceWarps];
             const int tid = static_cast<int>(threadIdx.x);
@@ -284,6 +286,17 @@ namespace lfs::core::nn::kernels {
             const float iy0 = rsqrtf(ty0 + 1.0e-10f);
             const float iy1 = rsqrtf(ty1 + 1.0e-10f);
 
+            const auto position_weight = [&](const bool scored, const int row) {
+                if (!scored)
+                    return 0.0f;
+                return weights == nullptr
+                           ? 1.0f
+                           : weights[static_cast<long long>(row + weights_y0) * weights_width + col +
+                                     weights_x0];
+            };
+            const float weight0 = position_weight(score0, row0);
+            const float weight1 = position_weight(score1, row0 + 1);
+
             float score = 0.0f;
             for (int c = c_begin; c < c_end; ++c) {
                 const long long base = c * plane + static_cast<long long>(row0) * w + col;
@@ -295,9 +308,9 @@ namespace lfs::core::nn::kernels {
                 const float d0 = x0 * ix0 - y0 * iy0;
                 const float d1 = x1 * ix1 - y1 * iy1;
                 if (score0)
-                    score += wv * d0 * d0;
+                    score += wv * weight0 * d0 * d0;
                 if (score1)
-                    score += wv * d1 * d1;
+                    score += wv * weight1 * d1 * d1;
             }
 #pragma unroll
             for (int offset = 16; offset > 0; offset >>= 1) {
@@ -338,7 +351,8 @@ namespace lfs::core::nn::kernels {
                            void* pooled_x, void* pooled_y, const int n, const int channels,
                            const int h, const int w, const int interior_y0, const int interior_y1,
                            const int interior_x0, const int interior_x1, const float inv_count,
-                           const cudaStream_t stream) {
+                           const float* weights, const int weights_width, const int weights_y0,
+                           const int weights_x0, const cudaStream_t stream) {
         if (n <= 0 || channels <= 0 || h <= 0 || w <= 0) {
             return;
         }
@@ -350,12 +364,13 @@ namespace lfs::core::nn::kernels {
         if (pooled_x != nullptr && pooled_y != nullptr) {
             lpips_pool_reduce_kernel<true><<<grid, kReduceThreads, 0, stream>>>(
                 xs, ys, lin, result, static_cast<__half*>(pooled_x), static_cast<__half*>(pooled_y),
-                channels, h, w, interior_y0, interior_y1, interior_x0, interior_x1, inv_count);
+                channels, h, w, interior_y0, interior_y1, interior_x0, interior_x1, inv_count,
+                weights, weights_width, weights_y0, weights_x0);
             LFS_CUDA_LAUNCH_CHECK(stream, "nn.lpips.pool_reduce");
         } else {
             lpips_pool_reduce_kernel<false><<<grid, kReduceThreads, 0, stream>>>(
                 xs, ys, lin, result, nullptr, nullptr, channels, h, w, interior_y0, interior_y1,
-                interior_x0, interior_x1, inv_count);
+                interior_x0, interior_x1, inv_count, weights, weights_width, weights_y0, weights_x0);
             LFS_CUDA_LAUNCH_CHECK(stream, "nn.lpips.pool_reduce");
         }
     }

@@ -70,7 +70,6 @@ namespace lfs::vis::gui {
         void enqueue(ToastRequest request);
         void render(int screen_w, int screen_h, float screen_x, float screen_y,
                     float vp_x, float vp_y, float vp_w, float vp_h);
-        void releaseRendererResources();
         void reloadResources();
 
         [[nodiscard]] bool hasPendingRenderWork() const;
@@ -99,7 +98,7 @@ namespace lfs::vis::gui {
         float last_right_px_ = -1.0f;
         float last_bottom_px_ = -1.0f;
         std::vector<std::uint8_t> last_alpha_;
-        CachedVulkanContextRender direct_cache_;
+        CachedUiContextRender direct_cache_;
         bool render_needed_ = true;
     };
 

@@ -5,6 +5,7 @@
 #include "viewport_artifact_service.hpp"
 #include "core/tensor.hpp"
 #include "rendering/rendering.hpp"
+#include "visualizer/app_store.hpp"
 #include <cmath>
 
 namespace lfs::vis {
@@ -39,10 +40,6 @@ namespace lfs::vis {
 
     ViewportArtifactService::~ViewportArtifactService() = default;
 
-    bool ViewportArtifactService::hasGpuFrame() const {
-        return gpu_frame_ && gpu_frame_->valid();
-    }
-
     std::shared_ptr<lfs::core::Tensor> ViewportArtifactService::getCapturedImageIfCurrent() const {
         if (captured_image_ && captured_artifact_generation_ == artifact_generation_) {
             return captured_image_;
@@ -61,9 +58,17 @@ namespace lfs::vis {
         }
     }
 
+    void ViewportArtifactService::setMetadata(const CachedRenderMetadata& metadata) {
+        const bool backend_changed = metadata_.viewer_backend != metadata.viewer_backend;
+        metadata_ = metadata;
+        // Wake the UI when published scene identity changes or a scene closes.
+        // Repeated frames using the same renderer stay silent.
+        if (backend_changed)
+            app_store().viewer_backend.set(metadata_.viewer_backend);
+    }
+
     void ViewportArtifactService::clearViewportOutput() {
-        metadata_ = {};
-        gpu_frame_.reset();
+        setMetadata({});
         rendered_size_ = {0, 0};
         lazy_capture_ = {};
         invalidateCapture();
@@ -73,22 +78,11 @@ namespace lfs::vis {
         invalidateCapture();
     }
 
-    void ViewportArtifactService::updateFromFrameResources(const FrameResources& resources,
-                                                           const bool viewport_output_updated) {
-        metadata_ = resources.cached_metadata;
-        gpu_frame_ = resources.cached_gpu_frame;
-        rendered_size_ = resources.cached_result_size;
-        if (viewport_output_updated) {
-            invalidateCapture();
-        }
-    }
-
     void ViewportArtifactService::updateFromImageOutput(std::shared_ptr<lfs::core::Tensor> image,
                                                         const lfs::rendering::FrameMetadata& metadata,
                                                         const glm::ivec2& rendered_size,
                                                         const bool viewport_output_updated) {
-        metadata_ = makeCachedRenderMetadata(metadata);
-        gpu_frame_.reset();
+        setMetadata(makeCachedRenderMetadata(metadata));
         rendered_size_ = rendered_size;
         lazy_capture_ = {};
         lazy_captured_image_.reset();
@@ -107,8 +101,7 @@ namespace lfs::vis {
     void ViewportArtifactService::setLazyCapture(LazyCaptureFn fn,
                                                  const lfs::rendering::FrameMetadata& metadata,
                                                  const glm::ivec2& rendered_size) {
-        metadata_ = makeCachedRenderMetadata(metadata);
-        gpu_frame_.reset();
+        setMetadata(makeCachedRenderMetadata(metadata));
         rendered_size_ = rendered_size;
         invalidateCapture();
         lazy_capture_ = std::move(fn);
@@ -118,8 +111,7 @@ namespace lfs::vis {
         LazyCaptureFn fn,
         const lfs::rendering::FrameMetadata& metadata,
         const glm::ivec2& rendered_size) {
-        metadata_ = makeCachedRenderMetadata(metadata);
-        gpu_frame_.reset();
+        setMetadata(makeCachedRenderMetadata(metadata));
         rendered_size_ = rendered_size;
         lazy_captured_image_.reset();
         lazy_captured_artifact_generation_ = 0;
@@ -156,17 +148,11 @@ namespace lfs::vis {
 
         float splat_depth = -1.0f;
 
-        const float active_near_plane =
-            (gpu_frame_ && gpu_frame_->valid()) ? gpu_frame_->near_plane
-                                                : (metadata_.valid ? metadata_.near_plane
-                                                                   : lfs::rendering::DEFAULT_NEAR_PLANE);
-        const float active_far_plane =
-            (gpu_frame_ && gpu_frame_->valid()) ? gpu_frame_->far_plane
-                                                : (metadata_.valid ? metadata_.far_plane
-                                                                   : lfs::rendering::DEFAULT_FAR_PLANE);
-        const bool active_orthographic =
-            (gpu_frame_ && gpu_frame_->valid()) ? gpu_frame_->orthographic
-                                                : metadata_.orthographic;
+        const float active_near_plane = metadata_.valid ? metadata_.near_plane
+                                                        : lfs::rendering::DEFAULT_NEAR_PLANE;
+        const float active_far_plane = metadata_.valid ? metadata_.far_plane
+                                                       : lfs::rendering::DEFAULT_FAR_PLANE;
+        const bool active_orthographic = metadata_.orthographic;
 
         if (metadata_.valid) {
             const lfs::core::Tensor* depth_ptr = nullptr;

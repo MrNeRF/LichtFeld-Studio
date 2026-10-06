@@ -1,0 +1,8 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+#pragma once
+
+namespace lfs::nodes {
+    inline constexpr char kBuiltinNodeTextBytes[] = {@LFS_NODE_TEXT_BYTES@ 0};
+    inline constexpr const char* kBuiltinNodeText = kBuiltinNodeTextBytes;
+}

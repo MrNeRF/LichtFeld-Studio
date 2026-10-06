@@ -62,8 +62,6 @@ void fast_lfs::rasterization::backward(
     const float2* shN_value_bounds,
     const uint shN_value_n_cells,
     const uint shN_value_bits,
-    const bool* mean_step_far_mask,
-    const int mean_step_far_mask_n,
     const float* edge_weight_map,
     float* edge_score_out,
     cudaStream_t stream) {
@@ -170,6 +168,7 @@ void fast_lfs::rasterization::backward(
                 cam_position,
                 raw_opacities,
                 primitive_work_indices,
+                per_primitive_buffers.color,
                 grad_mean2d_helper,
                 grad_conic_helper,
                 grad_depth_helper,
@@ -191,8 +190,6 @@ void fast_lfs::rasterization::backward(
                 clip_bottom,
                 sh_layout_slots,
                 fused_adam,
-                mean_step_far_mask,
-                mean_step_far_mask_n,
                 shN_value_bounds,
                 shN_value_n_cells,
                 shN_value_bits);

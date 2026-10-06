@@ -13,14 +13,14 @@ namespace lfs::core {
     /**
      * High-quality Lanczos resampling on GPU
      *
-     * @param input Input tensor in [H, W, C] format (uint8)
+     * @param input Input tensor in [H, W, C] format (uint8 or float32, 1 to 4 channels)
      * @param output_h Target height
      * @param output_w Target width
      * @param kernel_size Lanczos kernel size (typically 2 or 3)
      * @param cuda_stream CUDA stream for async execution
      * @return Resized tensor in [C, H, W] format (float32)
      */
-    Tensor lanczos_resize(
+    LFS_CUDA_API Tensor lanczos_resize(
         const Tensor& input,
         int output_h,
         int output_w,
@@ -37,7 +37,7 @@ namespace lfs::core {
      * @param cuda_stream CUDA stream for async execution
      * @return Resized tensor in [H, W] format (float32)
      */
-    Tensor lanczos_resize_grayscale(
+    LFS_CUDA_API Tensor lanczos_resize_grayscale(
         const Tensor& input,
         int output_h,
         int output_w,
@@ -54,7 +54,7 @@ namespace lfs::core {
      * @param cuda_stream CUDA stream for async execution
      * @return Resized tensor in [C, H, W] format (float32)
      */
-    Tensor lanczos_resize_float_chw(
+    LFS_CUDA_API Tensor lanczos_resize_float_chw(
         const Tensor& input,
         int output_h,
         int output_w,
@@ -64,9 +64,20 @@ namespace lfs::core {
     // Bilinear prior resampling excludes invalid neighbors and carries validity
     // with nearest sampling. Depth <= 0/nonfinite and normal norms < 0.5 are
     // invalid; outputs use zero sentinels and valid normals have unit length.
-    LFS_CORE_API Tensor resize_depth_prior(const Tensor& input, int output_h, int output_w,
+    // CUDA definitions live in lfs_core_cuda; portable definitions live in the core DLL.
+#if LFS_HAS_CUDA
+    LFS_CUDA_API
+#else
+    LFS_CORE_API
+#endif
+    Tensor resize_depth_prior(const Tensor& input, int output_h, int output_w,
                                            cudaStream_t cuda_stream = nullptr);
-    LFS_CORE_API Tensor resize_normal_prior(const Tensor& input, int output_h, int output_w,
+#if LFS_HAS_CUDA
+    LFS_CUDA_API
+#else
+    LFS_CORE_API
+#endif
+    Tensor resize_normal_prior(const Tensor& input, int output_h, int output_w,
                                             cudaStream_t cuda_stream = nullptr);
 
 } // namespace lfs::core

@@ -29,6 +29,7 @@ namespace Rml {
 } // namespace Rml
 
 namespace lfs::vis {
+    class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
     struct Theme;
     class RmlViewportInputRoutingTest;
 } // namespace lfs::vis
@@ -53,7 +54,7 @@ namespace lfs::vis::gui {
         }
     };
 
-    class RmlViewportOverlay {
+    class LFS_VIS_API RmlViewportOverlay {
     public:
         struct GTMetricsOverlayState {
             bool visible = false;
@@ -100,14 +101,14 @@ namespace lfs::vis::gui {
 
         using VramHudOverlayState = VramHudOverlay::State;
 
-        LFS_VIS_API RmlViewportOverlay();
-        LFS_VIS_API ~RmlViewportOverlay();
+        RmlViewportOverlay();
+        ~RmlViewportOverlay();
         RmlViewportOverlay(const RmlViewportOverlay&) = delete;
         RmlViewportOverlay& operator=(const RmlViewportOverlay&) = delete;
 
         void init(RmlUIManager* mgr);
-        LFS_VIS_API void shutdown();
-        LFS_VIS_API void setViewportBounds(glm::vec2 pos, glm::vec2 size, glm::vec2 screen_origin);
+        void shutdown();
+        void setViewportBounds(glm::vec2 pos, glm::vec2 size, glm::vec2 screen_origin);
         void setToolbarBounds(float x, float width, float inset);
         void setSplitDividerOverlay(SplitDividerOverlayState state);
         void setGTMetricsOverlay(GTMetricsOverlayState state);
@@ -120,8 +121,13 @@ namespace lfs::vis::gui {
         void renderFrostedGlass();
         // Shared production routing boundary: input is the original frame,
         // never a masked copy with sentinel coordinates or removed events.
-        LFS_VIS_API void processInput(const PanelInputState& input,
-                                      const ViewportOverlayInputBlockers& blockers = {});
+        void processInput(const PanelInputState& input,
+                          const ViewportOverlayInputBlockers& blockers = {},
+                          std::function<bool(float, float)> pointer_blocker = {});
+        void processInput(const PanelInputState& input, std::function<bool(float, float)> pointer_blocker) {
+            processInput(input, {}, std::move(pointer_blocker));
+        }
+
         bool wantsInput() const { return wants_input_; }
         [[nodiscard]] bool needsAnimationFrame() const {
             return render_needed_ || document_sync_dirty_ || animation_active_ || tooltip_.revealDue() ||
@@ -134,6 +140,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool blocksPointer(double screen_x, double screen_y) const;
 
     private:
+        friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
         struct ToolbarDragListener final : Rml::EventListener {
             RmlViewportOverlay* owner = nullptr;
             void ProcessEvent(Rml::Event& event) override;
@@ -162,8 +169,9 @@ namespace lfs::vis::gui {
         void applyGTMetricsOverlay();
         void applyLodStatsOverlay();
         void applyProjectDragOverlay();
+        void syncNodePreviewBanner();
         bool applyFrameTooltip();
-        void queueCachedVulkanContext(bool refresh_cache);
+        void queueCachedContext(bool refresh_cache);
         enum class RenderReason : std::uint32_t {
             Initial = 1u << 0,
             Reload = 1u << 1,
@@ -213,6 +221,7 @@ namespace lfs::vis::gui {
         bool toolbar_position_preference_dirty_ = true;
         std::string viewport_toolbar_position_ = "centered";
         std::string applied_viewport_toolbar_position_;
+        std::string applied_node_preview_banner_;
         float viewport_toolbar_free_y_ = 0.5f;
         float applied_toolbar_top_ = std::numeric_limits<float>::quiet_NaN();
         Rml::Element* toolbar_drag_handle_ = nullptr;
@@ -246,7 +255,7 @@ namespace lfs::vis::gui {
         int last_mouse_y_ = 0;
         int last_render_w_ = 0;
         int last_render_h_ = 0;
-        CachedVulkanContextRender direct_cache_;
+        CachedUiContextRender direct_cache_;
         SplitDividerOverlayState split_divider_overlay_;
         GTMetricsOverlayState gt_metrics_overlay_;
         LodStatsOverlayState lod_stats_overlay_;
@@ -255,8 +264,6 @@ namespace lfs::vis::gui {
         std::optional<lfs::vis::AppStore::CameraMetrics> camera_metrics_;
         lfs::core::reactive::SubscriptionToken gt_metrics_config_subscription_;
         lfs::core::reactive::SubscriptionToken camera_metrics_subscription_;
-        lfs::core::reactive::SubscriptionToken vram_hud_subscription_;
-        lfs::core::reactive::SubscriptionToken perf_hud_subscription_;
         std::vector<lfs::core::reactive::SubscriptionToken> document_sync_subscriptions_;
         std::unique_ptr<VramHudOverlay> vram_hud_;
         RmlTooltipController tooltip_;

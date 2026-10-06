@@ -408,6 +408,7 @@ namespace lfs::core {
 
                 if (device_ == Device::GPU && dtype_ == DataType::Float32) {
                     pin_operands({this});
+                    prepare_inputs_for_stream({this}, result.stream());
                     std::array<size_t, MAX_TENSOR_RANK> pad_before_descriptor{};
                     std::copy(pad_before.begin(), pad_before.end(),
                               pad_before_descriptor.begin());

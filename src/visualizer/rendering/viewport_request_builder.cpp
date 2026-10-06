@@ -3,15 +3,156 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "viewport_request_builder.hpp"
+#include "core/camera.hpp"
+#include "frustum_depth_coverage.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "rendering/model_renderability.hpp"
 #include "scene/scene_manager.hpp"
 #include "temporal_frame_tracker.hpp"
+#include <algorithm>
+#include <array>
 #include <type_traits>
 #include <vector>
 
 namespace lfs::vis {
 
     namespace {
+        [[nodiscard]] std::vector<uint32_t> frustumDepthSampleMask(
+            const FrameContext& ctx, const lfs::rendering::FrameView& view) {
+            // Offscreen/custom projections retain full exact depth.
+            if (!ctx.scene_manager || !ctx.viewport_region || view.orthographic || ctx.settings.equirectangular ||
+                ctx.viewport_region->width <= 0 || ctx.viewport_region->height <= 0 ||
+                view.subregion_full_size != glm::ivec2(0) || view.size.x <= 0 || view.size.y <= 0)
+                return {};
+            const auto& scene = ctx.scene_manager->getScene();
+            const auto& cameras = scene.getVisibleCamerasCached();
+            auto transforms = ctx.scene_state.camera_scene_transforms;
+            if (transforms.size() != cameras.size()) {
+                transforms = scene.getVisibleCameraSceneTransforms();
+                if (transforms.size() != cameras.size())
+                    transforms.assign(cameras.size(), glm::mat4(1));
+                for (auto& transform : transforms)
+                    transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
+            }
+            struct Cache {
+                const lfs::core::Scene* scene = nullptr;
+                uint64_t generation = 0, camera_generation = 0;
+                float scale = 0;
+                std::vector<std::weak_ptr<const lfs::core::Camera>> cameras;
+                std::vector<glm::mat4> transforms;
+                std::vector<std::array<glm::vec3, 5>> points;
+                bool full = false;
+            };
+            // Camera extrinsics may be on the GPU. Rebuild only when the scene
+            // or calibration changes, not every time the viewer camera moves.
+            static thread_local Cache cache;
+            const float scale = ctx.settings.camera_frustum_scale;
+            if (cache.scene != &scene || cache.generation != scene.renderGeneration() ||
+                cache.camera_generation != scene.cameraListGeneration() || cache.scale != scale ||
+                cache.cameras.size() != cameras.size() ||
+                !std::equal(cache.cameras.begin(), cache.cameras.end(), cameras.begin(),
+                            [](const auto& cached, const auto& camera) { return cached.lock() == camera; }) ||
+                cache.transforms != transforms) {
+                cache = {.scene = &scene, .generation = scene.renderGeneration(), .camera_generation = scene.cameraListGeneration(), .scale = scale, .cameras = {}, .transforms = transforms, .points = {}};
+                cache.cameras.assign(cameras.begin(), cameras.end());
+                for (size_t i = 0; i < cameras.size(); ++i) {
+                    if (!cameras[i] || scale <= 0)
+                        continue;
+                    const auto& camera = *cameras[i];
+                    if (camera.camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR) {
+                        cache.full = true;
+                        break;
+                    }
+                    if (camera.camera_width() <= 0 || camera.camera_height() <= 0 || camera.FoVy() <= 0)
+                        continue;
+                    auto r = camera.R();
+                    auto t = camera.T();
+                    if (!r.is_valid() || !t.is_valid() || r.numel() < 9 || t.numel() < 3 ||
+                        r.dtype() != lfs::core::DataType::Float32 || t.dtype() != lfs::core::DataType::Float32) {
+                        cache.full = true;
+                        break;
+                    }
+                    const auto host_r = r.cpu().contiguous();
+                    const auto host_t = t.cpu().contiguous();
+                    glm::mat4 world_to_camera(1);
+                    for (int row = 0; row < 3; ++row) {
+                        for (int col = 0; col < 3; ++col)
+                            world_to_camera[col][row] = host_r.ptr<float>()[row * 3 + col];
+                        world_to_camera[3][row] = host_t.ptr<float>()[row];
+                    }
+                    const auto model = transforms[i] * glm::inverse(world_to_camera) *
+                                       lfs::rendering::DATA_TO_VISUALIZER_CAMERA_AXES_4;
+                    const float h = std::tan(camera.FoVy() * 0.5f) * scale;
+                    const float w = h * float(camera.camera_width()) / camera.camera_height();
+                    std::array<glm::vec3, 5> points{
+                        glm::vec3(0),
+                        {-w, -h, -scale},
+                        {w, -h, -scale},
+                        {w, h, -scale},
+                        {-w, h, -scale}};
+                    for (auto& point : points)
+                        point = glm::vec3(model * glm::vec4(point, 1));
+                    cache.points.push_back(points);
+                }
+            }
+            if (cache.full)
+                return {};
+            // Visible line radius is 0.75 + 1.0 AA pixels; four render pixels
+            // also cover bilinear depth neighbours and projection rounding.
+            const float pixel_scale = std::max({1.0f, ctx.settings.render_scale,
+                                                view.size.x / ctx.viewport_region->width,
+                                                view.size.y / ctx.viewport_region->height});
+            FrustumDepthCoverage coverage(view.size, 4.0f * pixel_scale);
+            const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(view.size, view.focal_length_mm);
+            const auto project = [&](glm::vec3 p) {
+                return glm::vec2(view.size) * 0.5f + glm::vec2(p.x, -p.y) *
+                                                         glm::vec2(fx, fy) / -p.z;
+            };
+            constexpr int edges[][2] = {{0, 1}, {0, 2}, {0, 3}, {0, 4}, {1, 2}, {2, 3}, {3, 4}, {4, 1}};
+            constexpr float near_z = -1e-4f;
+            for (auto points : cache.points) {
+                if (glm::distance(points[0], view.translation) < scale * 0.1f)
+                    continue;
+                bool quad_visible = true;
+                std::array<glm::vec2, 4> projected;
+                for (size_t i = 0; i < points.size(); ++i) {
+                    auto& point = points[i];
+                    point = glm::transpose(view.rotation) * (point - view.translation);
+                    if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+                        return {}; // Invalid projection: retain the full-depth contract.
+                    if (i > 0) {
+                        quad_visible &= point.z < near_z;
+                        if (point.z < near_z) {
+                            const auto p = project(point);
+                            if (!std::isfinite(p.x) || !std::isfinite(p.y))
+                                return {};
+                            projected[i - 1] = p;
+                        }
+                    }
+                }
+                // Include the image plane even while its thumbnail is loading.
+                if (quad_visible)
+                    coverage.quad(projected);
+                for (const auto& edge : edges) {
+                    auto a = points[edge[0]], b = points[edge[1]];
+                    if (a.z >= near_z && b.z >= near_z)
+                        continue;
+                    if (a.z >= near_z) {
+                        a = glm::mix(a, b, (near_z - a.z) / (b.z - a.z));
+                        a.z = near_z;
+                    } else if (b.z >= near_z) {
+                        b = glm::mix(b, a, (near_z - b.z) / (a.z - b.z));
+                        b.z = near_z;
+                    }
+                    const auto pa = project(a), pb = project(b);
+                    if (!std::isfinite(pa.x) || !std::isfinite(pa.y) || !std::isfinite(pb.x) || !std::isfinite(pb.y))
+                        return {};
+                    coverage.line(pa, pb);
+                }
+            }
+            return coverage.take();
+        }
+
         [[nodiscard]] bool panelMatches(const std::optional<SplitViewPanelId> preview_panel,
                                         const std::optional<SplitViewPanelId> render_panel) {
             return !preview_panel || !render_panel || *preview_panel == *render_panel;
@@ -380,6 +521,9 @@ namespace lfs::vis {
                  .has_selection = selection_overlay_enabled && ctx.scene_state.has_selection},
             .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(ctx.settings),
             .depth_view = ctx.settings.depth_view,
+            .require_exact_depth = ctx.settings.show_camera_frustums ||
+                                   std::any_of(ctx.scene_state.meshes.begin(), ctx.scene_state.meshes.end(),
+                                               [](const auto& mesh) { return mesh.mesh != nullptr; }),
             .depth_view_min = ctx.settings.depth_view_min,
             .depth_view_max = ctx.settings.depth_view_max,
             .depth_visualization_mode = ctx.settings.depth_visualization_mode};
@@ -395,26 +539,13 @@ namespace lfs::vis {
         applyGaussianViewVolume(request.filters, ctx);
         request.frame_view.subregion_origin = subregion_origin;
         request.frame_view.subregion_full_size = subregion_full_size;
+        if (ctx.settings.show_camera_frustums && !ctx.training_active && !request.gut && !request.depth_view &&
+            ctx.settings.split_view_mode == SplitViewMode::Disabled &&
+            !render_panel && (!source_viewport || source_viewport == &ctx.viewport) &&
+            std::none_of(ctx.scene_state.meshes.begin(), ctx.scene_state.meshes.end(),
+                         [](const auto& mesh) { return mesh.mesh != nullptr; }))
+            request.exact_depth_sample_mask = frustumDepthSampleMask(ctx, request.frame_view);
         return request;
-    }
-
-    lfs::rendering::SplitViewGaussianPanelRenderState buildSplitViewGaussianPanelRenderState(
-        const FrameContext& ctx, const glm::ivec2 render_size,
-        const Viewport* const source_viewport,
-        const std::optional<SplitViewPanelId> render_panel) {
-        const auto request = buildViewportRenderRequest(ctx, render_size, source_viewport, render_panel);
-        return lfs::rendering::SplitViewGaussianPanelRenderState{
-            .frame_view = request.frame_view,
-            .scaling_modifier = request.scaling_modifier,
-            .antialiasing = request.antialiasing,
-            .mip_filter = request.mip_filter,
-            .sh_degree = request.sh_degree,
-            .raster_backend = request.raster_backend,
-            .gut = request.gut,
-            .equirectangular = request.equirectangular,
-            .scene = request.scene,
-            .filters = request.filters,
-            .overlay = request.overlay};
     }
 
     lfs::rendering::SplitViewPointCloudPanelRenderState buildSplitViewPointCloudPanelRenderState(
@@ -476,19 +607,6 @@ namespace lfs::vis {
 
         applyPointCloudCropVolume(request.filters, ctx);
         return request;
-    }
-
-    const core::SceneNode* plyComparisonNodeForPanel(
-        const core::Scene& scene,
-        const size_t split_view_offset,
-        const SplitViewPanelId panel) {
-        const auto visible_nodes = scene.getVisibleSplatNodeSlots();
-        const auto pair = plyComparisonPairForOffset(visible_nodes.size(), split_view_offset);
-        if (!pair) {
-            return nullptr;
-        }
-        const size_t index = panel == SplitViewPanelId::Right ? pair->second : pair->first;
-        return visible_nodes[index].node;
     }
 
     void applyPlyComparisonNodeScope(
@@ -639,6 +757,113 @@ namespace lfs::vis {
         state.selected_node_mask = {selected};
         state.has_selection = scene.hasSelection() && state.selection_mask &&
                               state.selection_mask->is_valid();
+    }
+
+    PointSceneRenderer::RenderRequest buildPointSceneRequest(const lfs::rendering::PointCloudRenderRequest& frame,
+                                                             const RenderSettings& settings) {
+        const auto& view = frame.frame_view;
+        const glm::mat4 view_matrix = view.getViewMatrix();
+        const glm::mat4 projection = lfs::rendering::createProjectionMatrix(
+            view.size, lfs::rendering::focalLengthToVFov(view.focal_length_mm), view.orthographic,
+            view.ortho_scale, view.near_plane, view.far_plane);
+        // The projection is OpenGL NDC (Y up); images have a top-left origin.
+        glm::mat4 clip_y_flip(1.0f);
+        clip_y_flip[1][1] = -1.0f;
+        PointSceneRenderer::RenderRequest request{};
+        request.model_transforms = frame.scene.model_transforms;
+        request.transform_indices = frame.scene.transform_indices.get();
+        request.node_visibility_mask = &frame.scene.node_visibility_mask;
+        request.selection_mask = frame.overlay.selection_mask.get();
+        request.preview_selection_mask = frame.overlay.transient_mask.mask;
+        request.selection_colors = &frame.overlay.selection_colors;
+        request.preview_selection_additive = frame.overlay.transient_mask.additive;
+        if (frame.filters.crop_box) {
+            request.crop = PointSceneRenderer::CropBox{.to_local = frame.filters.crop_box->transform,
+                                                       .min = frame.filters.crop_box->min,
+                                                       .max = frame.filters.crop_box->max,
+                                                       .inverse = frame.filters.crop_inverse,
+                                                       .desaturate = frame.filters.crop_desaturate};
+        } else if (frame.filters.crop_ellipsoid) {
+            request.crop_ellipsoid = PointSceneRenderer::CropEllipsoid{.to_local = frame.filters.crop_ellipsoid->transform,
+                                                                       .radii = frame.filters.crop_ellipsoid->radii,
+                                                                       .inverse = frame.filters.crop_inverse,
+                                                                       .desaturate = frame.filters.crop_desaturate};
+        }
+        request.view = view_matrix;
+        request.view_projection = clip_y_flip * projection * view_matrix;
+        request.size = view.size;
+        request.background_color = view.background_color;
+        request.transparent_background = frame.transparent_background;
+        request.orthographic = view.orthographic;
+        request.ortho_scale = view.ortho_scale;
+        request.focal_y = lfs::core::fov2focal(lfs::rendering::focalLengthToVFovRad(view.focal_length_mm), view.size.y);
+        request.voxel_size = frame.render.voxel_size;
+        request.scaling_modifier = frame.render.scaling_modifier;
+        request.depth_view = settings.depth_view;
+        request.depth_view_min = settings.depth_view_min;
+        request.depth_view_max = settings.depth_view_max;
+        request.depth_visualization_mode = settings.depth_visualization_mode;
+        return request;
+    }
+
+    ViewportMeshPassDesc buildViewportMeshes(const FrameContext& ctx, const RenderSettings& settings) {
+        ViewportMeshPassDesc frame;
+        const auto vp_data = ctx.makeViewportData();
+        frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
+        frame.camera_position = vp_data.translation;
+        const auto& meshes = ctx.scene_state.meshes;
+        const auto& selected_nodes = ctx.scene_state.selected_node_mask;
+        const bool any_selected = std::ranges::any_of(meshes, [](const auto& mesh) { return mesh.is_selected; }) ||
+                                  std::ranges::any_of(selected_nodes, [](const bool selected) { return selected; });
+        const bool dim_non_emphasized = settings.desaturate_unselected && any_selected;
+        const glm::vec3 headlight_dir = glm::length(vp_data.translation) > 1e-6f
+                                            ? glm::normalize(vp_data.translation)
+                                            : settings.mesh_light_dir;
+        frame.items.reserve(meshes.size());
+        for (const auto& mesh : meshes) {
+            if (!mesh.mesh)
+                continue;
+            frame.items.push_back({
+                .mesh = mesh.mesh,
+                .model = mesh.transform,
+                .light_dir = headlight_dir,
+                .light_intensity = settings.mesh_light_intensity,
+                .ambient = settings.mesh_ambient,
+                .backface_culling = settings.mesh_backface_culling,
+                .is_emphasized = mesh.is_selected,
+                .dim_non_emphasized = dim_non_emphasized,
+                .flash_intensity = ctx.selection_flash_intensity,
+                .wireframe_overlay = settings.mesh_wireframe,
+                .wireframe_color = settings.mesh_wireframe_color,
+                .wireframe_width = settings.mesh_wireframe_width,
+                .shadow_enabled = settings.mesh_shadow_enabled,
+                .shadow_map_resolution = settings.mesh_shadow_resolution,
+            });
+        }
+        return frame;
+    }
+
+    ViewportEnvironment buildViewportEnvironment(const FrameContext& ctx, const RenderSettings& settings,
+                                                 const bool enabled) {
+        const auto vp_data = ctx.makeViewportData();
+        const auto frame_view = ctx.makeFrameView();
+        ViewportEnvironment environment{
+            .enabled = enabled,
+            .map_path = settings.environment_map_path,
+            .camera_to_world = vp_data.rotation,
+            .viewport_size = glm::vec2(static_cast<float>(frame_view.size.x), static_cast<float>(frame_view.size.y)),
+            .exposure = settings.environment_exposure,
+            .rotation_radians = glm::radians(settings.environment_rotation_degrees),
+            .equirectangular_view = settings.equirectangular,
+        };
+        if (frame_view.intrinsics_override.has_value() && !frame_view.orthographic) {
+            const auto& intr = *frame_view.intrinsics_override;
+            environment.intrinsics = glm::vec4(intr.focal_x, intr.focal_y, intr.center_x, intr.center_y);
+        } else {
+            const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(frame_view.size, frame_view.focal_length_mm);
+            environment.intrinsics = glm::vec4(fx, fy, frame_view.size.x * 0.5f, frame_view.size.y * 0.5f);
+        }
+        return environment;
     }
 
 } // namespace lfs::vis

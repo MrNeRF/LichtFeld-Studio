@@ -33,7 +33,6 @@ class TestOptimizationParams:
                 "masking": "supported",
                 "segmentation": "supported",
                 "background_modes": "supported",
-                "background_improvements": "supported",
                 "exposure_correction": "supported",
                 "bilateral_grid": "supported",
                 "ppisp": "supported",
@@ -123,6 +122,25 @@ class TestOptimizationParams:
         assert isinstance(params.normal_auto_generate, bool)
         assert isinstance(params.random, bool)
         assert isinstance(params.enable_sparsity, bool)
+
+    def test_eval_mask_properties_are_editable_and_absolute(
+        self, lf, tmp_path, monkeypatch
+    ):
+        """Catches a missing binding or a relative path escaping into saved params."""
+        mesh = tmp_path / "mask.obj"
+        mesh.write_text("v 0 0 1\n", encoding="utf-8")
+        params = lf.optimization_params()
+        original_path = params.eval_mask
+        original_invert = params.eval_mask_invert
+        try:
+            monkeypatch.chdir(tmp_path)
+            params.eval_mask = "mask.obj"
+            params.eval_mask_invert = True
+            assert params.eval_mask == str(mesh.resolve())
+            assert params.eval_mask_invert is True
+        finally:
+            params.eval_mask = original_path
+            params.eval_mask_invert = original_invert
 
     def test_depth_loss_properties_are_editable(self, lf):
         """Depth loading/loss controls should be exposed through Python params."""

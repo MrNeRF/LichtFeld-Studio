@@ -291,8 +291,11 @@ void main(uniform Uniforms uniforms) {
         // the pixel state instead of presenting stale content.
         const bool compose_runs = wave_batches > 0u ||
                                   (uniforms.depth_wave == 0u && w == 0u);
-        const uint higs_grid_w = (uniforms.image_width + HIGS_TILE_WIDTH - 1u) / HIGS_TILE_WIDTH;
-        const uint higs_grid_h = (uniforms.image_height + HIGS_TILE_HEIGHT - 1u) / HIGS_TILE_HEIGHT;
+        const uint2 crop_remainder = (uniforms.mip_filter & 4u) != 0u
+            ? uint2(uniforms.render_origin_x % HIGS_TILE_WIDTH,
+                    uniforms.render_origin_y % HIGS_TILE_HEIGHT) : uint2(0u);
+        const uint higs_grid_w = (uniforms.image_width + crop_remainder.x + HIGS_TILE_WIDTH - 1u) / HIGS_TILE_WIDTH;
+        const uint higs_grid_h = (uniforms.image_height + crop_remainder.y + HIGS_TILE_HEIGHT - 1u) / HIGS_TILE_HEIGHT;
         const uint compose = LFS_VK_MACRO_WAVE_DISPATCH_COMPOSE_BASE_WORD_OFFSET +
                              w * LFS_VK_MACRO_WAVE_DISPATCH_WAVE_STRIDE_WORDS;
         out_wave_args[compose + LFS_VK_DISPATCH_X_WORD_OFFSET] = compose_runs ? higs_grid_w : 0u;
@@ -435,7 +438,7 @@ void main(uniform Uniforms uniforms) {
                        1u);
         write_dispatch(out_wave_dispatch,
                        record + LFS_VK_DEPTH_WAVE_RADIX_WORD_OFFSET,
-                       max((span + 512u * 8u - 1u) / (512u * 8u), 1u),
+                       max((span + RADIX_PARTITION_SIZE - 1u) / (RADIX_PARTITION_SIZE), 1u),
                        1u,
                        1u);
         write_dispatch(out_wave_dispatch,

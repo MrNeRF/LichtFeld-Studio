@@ -164,6 +164,7 @@ namespace lfs::vis::gui {
         void dispatchToolbarAction(const std::string& action, const std::string& value);
         Rml::Element* toolbarButtonAtPoint(float x, float y) const;
         bool projectTitleAtPoint(float x, float y) const;
+        void updateCompactLayout(int screen_w, float dp_ratio);
         void updateProjectTitleLayout(int screen_w, float dp_ratio);
         void updateTitlebarDragRegion(int bar_height_px);
         void clearTitlebarDragRegion();
@@ -236,10 +237,11 @@ namespace lfs::vis::gui {
         int last_mouse_y_ = 0;
         int last_hovered_label_ = -1;
         bool last_toolbar_hovered_ = false;
+        float last_dp_ratio_ = 0.0f;
         int last_ctx_w_ = 0;
         int last_ctx_h_ = 0;
         int last_document_h_ = 0;
-        CachedVulkanContextRender direct_cache_;
+        CachedUiContextRender direct_cache_;
 
         float bar_height_ = 30.0f;
     };

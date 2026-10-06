@@ -2,7 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "io/apple_reframe.hpp"
 #include "preferences.hpp"
+#include <algorithm>
+#include <cmath>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -27,6 +30,7 @@
 #include "py_mesh.hpp"
 #include "py_mesh2splat.hpp"
 #include "py_nn.hpp"
+#include "py_nodes.hpp"
 #include "py_operator.hpp"
 #include "py_packages.hpp"
 #include "py_params.hpp"
@@ -103,7 +107,7 @@
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
-#include "visualizer/window/vulkan_context.hpp"
+#include "visualizer/window/graphics_context.hpp"
 #include "visualizer/window/window_manager.hpp"
 
 #include <atomic>
@@ -178,12 +182,29 @@ namespace {
         return lfs::core::utf8_to_path(value);
     }
 
-    std::expected<void, std::string> post_clear_scene_to_viewer(lfs::vis::Visualizer& viewer) {
+    lfs::Result<void> post_clear_scene_to_viewer(lfs::vis::Visualizer& viewer) {
+        const auto clear = [&viewer]() -> lfs::Result<void> {
+            return lfs::from_legacy_expected<void>(
+                viewer.clearScene(),
+                lfs::LegacyErrorContext{
+                    .code = lfs::ErrorCode::FailedPrecondition,
+                    .domain = lfs::ErrorDomain::Rendering,
+                    .operation = "clearScene",
+                    .source = LFS_SOURCE_SITE_CURRENT(),
+                });
+        };
+        const auto shutdown_error = lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::Cancelled,
+            .domain = lfs::ErrorDomain::Python,
+            .severity = lfs::Severity::Warning,
+            .detail = "Viewer is shutting down",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        });
         if (viewer.isOnViewerThread()) {
             if (!viewer.acceptsPostedWork()) {
-                return std::unexpected("Viewer is shutting down");
+                return lfs::Result<void>::failure(shutdown_error);
             }
-            return viewer.clearScene();
+            return clear();
         }
 
         const lfs::core::TaskContext context{
@@ -193,32 +214,7 @@ namespace {
             .site = LFS_SOURCE_SITE_CURRENT(),
         };
 
-        lfs::Result<void> result = lfs::vis::post_guarded_and_wait<void>(
-            viewer, context,
-            [&viewer]() -> lfs::Result<void> {
-                return lfs::from_legacy_expected<void>(
-                    viewer.clearScene(),
-                    lfs::LegacyErrorContext{
-                        .code = lfs::ErrorCode::Internal,
-                        .domain = lfs::ErrorDomain::Rendering,
-                        .operation = "clearScene",
-                        .source = LFS_SOURCE_SITE_CURRENT(),
-                    });
-            },
-            lfs::make_error(lfs::ErrorInit{
-                .code = lfs::ErrorCode::Cancelled,
-                .domain = lfs::ErrorDomain::Python,
-                .severity = lfs::Severity::Warning,
-                .detail = "Viewer is shutting down",
-                .detection = LFS_SOURCE_SITE_CURRENT(),
-            }));
-
-        if (!result) {
-            const auto& error = result.error();
-            return std::unexpected(std::string(
-                error.user_message().empty() ? error.detail() : error.user_message()));
-        }
-        return {};
+        return lfs::vis::post_guarded_and_wait<void>(viewer, context, clear, shutdown_error);
     }
 
     lfs::Result<lfs::vis::ProjectOpenOutcome>
@@ -391,7 +387,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -456,14 +452,19 @@ namespace {
         return started;
     }
 
-    std::expected<void, std::string> clear_scene_from_python() {
+    lfs::Result<void> clear_scene_from_python() {
         if (auto* const viewer = lfs::python::get_visualizer()) {
             return post_clear_scene_to_viewer(*viewer);
         }
 
         auto* const scene_manager = lfs::python::get_scene_manager();
         if (!scene_manager) {
-            return std::unexpected("No scene manager available");
+            return lfs::Result<void>::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Unavailable,
+                .domain = lfs::ErrorDomain::Python,
+                .detail = "No scene manager available",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
         }
 
         if (scene_manager->clear()) {
@@ -474,11 +475,20 @@ namespace {
             trainer_manager &&
             scene_manager->getContentType() == lfs::vis::SceneManager::ContentType::Dataset &&
             !trainer_manager->canPerform(lfs::vis::TrainingAction::ClearScene)) {
-            return std::unexpected(
-                std::string(trainer_manager->getActionBlockedReason(lfs::vis::TrainingAction::ClearScene)));
+            return lfs::Result<void>::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::Python,
+                .detail = std::string(trainer_manager->getActionBlockedReason(lfs::vis::TrainingAction::ClearScene)),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
         }
 
-        return std::unexpected("Scene clear request was rejected");
+        return lfs::Result<void>::failure(lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::FailedPrecondition,
+            .domain = lfs::ErrorDomain::Python,
+            .detail = "Scene clear request was rejected",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        }));
     }
 
     CommandCenter* get_command_center_opt() {
@@ -894,6 +904,10 @@ namespace {
     }
 
 } // namespace
+
+lfs::Result<void> lfs::python::clear_application_scene() {
+    return clear_scene_from_python();
+}
 
 NB_MODULE(lichtfeld, m) {
     m.doc() = "LichtFeld Python control module for Gaussian splatting";
@@ -1924,9 +1938,7 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "clear_scene", []() {
             nb::gil_scoped_release release;
-            if (auto result = clear_scene_from_python(); !result) {
-                throw std::runtime_error(std::format("clear_scene failed: {}", result.error()));
-            }
+            lfs::python::unwrap(lfs::python::clear_application_scene());
         },
         "Remove all nodes from the scene");
     m.def(
@@ -1937,6 +1949,26 @@ NB_MODULE(lichtfeld, m) {
                 [] { lfs::core::events::cmd::SwitchToEditMode{}.emit(); });
         },
         "Switch from training to edit mode");
+
+    m.def(
+        "apple_reframe_available", [] {
+            nb::gil_scoped_release release;
+            return lfs::io::appleReframeAvailable();
+        },
+        "Whether Apple photo reconstruction is ready on this Mac");
+#if defined(LFS_HAS_APPLE_REFRAME)
+    m.def(
+        "create_splat_from_photo", [](const std::string& path) {
+            nb::gil_scoped_release release;
+            const auto photo = python_utf8_path(path);
+            if (!std::filesystem::is_regular_file(photo))
+                throw std::invalid_argument("Photo does not exist");
+            emit_project_cmd_marshaled("python.create_splat_from_photo", [photo] {
+                lfs::core::events::cmd::CreateSplatFromPhoto{.path = photo}.emit();
+            });
+        },
+        nb::arg("path"), "Create editable Gaussian splats from a photo with Apple Reframe");
+#endif
 
     m.def(
         "load_file",
@@ -1976,6 +2008,30 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("discard_changes") = false,
         nb::arg("replace") = false,
         "Load a file (PLY, checkpoint) or dataset into the scene.");
+
+    m.def(
+        "load_files",
+        [](const std::vector<std::string>& paths, bool stop_training,
+           bool discard_changes, bool replace, bool user_batch) {
+            if (paths.empty())
+                throw std::invalid_argument("No files were provided");
+            lfs::core::events::cmd::LoadFile command{
+                .path = python_utf8_path(paths.front()),
+                .is_dataset = false,
+                .stop_training = stop_training,
+                .discard_changes = discard_changes,
+                .replace = replace,
+                .user_batch = user_batch && paths.size() > 1};
+            for (const auto& path : paths)
+                command.paths.push_back(python_utf8_path(path));
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled("python.load_files",
+                                       [command = std::move(command)] { command.emit(); });
+        },
+        nb::arg("paths"), nb::arg("stop_training") = false,
+        nb::arg("discard_changes") = false, nb::arg("replace") = false,
+        nb::arg("_user_batch") = false,
+        "Import splat and mesh files as one ordered batch.");
 
     m.def(
         "load_config_file",
@@ -2162,11 +2218,11 @@ NB_MODULE(lichtfeld, m) {
         "export_scene",
         [](int format, const std::string& path, const std::vector<std::string>& node_names, int sh_degree,
            bool rad_flip_y, bool rad_streamable, int spz_version, bool include_provenance,
-           int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
+           bool apply_modifiers, int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
             if (format >= 9 && format <= 12)
                 throw std::runtime_error("Use prepare_gallery_scene() to prepare a gallery upload.");
             lfs::python::invoke_export(format, path, node_names, sh_degree, rad_flip_y, rad_streamable,
-                                       spz_version, include_provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
+                                       spz_version, include_provenance, apply_modifiers, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
         },
         nb::arg("format"), nb::arg("path"), nb::arg("node_names"), nb::arg("sh_degree"),
         nb::arg("rad_flip_y") = false,
@@ -2174,6 +2230,7 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("spz_version") = 4,
         nb::arg("include_provenance") = true,
         nb::kw_only(),
+        nb::arg("apply_modifiers") = true,
         nb::arg("lod_levels") = 4,
         nb::arg("lod_ratio") = 0.5f,
         nb::arg("chunk_count_k") = 512,
@@ -2184,6 +2241,7 @@ NB_MODULE(lichtfeld, m) {
         "For SSOG, path names a .ssog bundle or directory; lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k and kmeans_iterations control its LODs and chunks. "
         "spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. "
         "include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. "
+        "apply_modifiers (default true) exports the evaluated Node Editor result; false exports the stored payload. "
         "Ignored for COLMAP and SPZ v3.");
 
     m.def(
@@ -2195,8 +2253,11 @@ NB_MODULE(lichtfeld, m) {
                 throw std::runtime_error("No parameter manager available");
             }
             lfs::core::param::TrainingParameters params;
-            params.dataset = param_manager->getDatasetConfig();
-            params.optimization = param_manager->copyActiveParams();
+            if (auto* const trainer_manager = lfs::python::get_trainer_manager()) {
+                params = trainer_manager->getEditableTrainingParams(*param_manager);
+            } else {
+                params = param_manager->createForDataset({}, {});
+            }
             if (const auto result = lfs::core::param::save_training_parameters_to_json(params, output_path); !result) {
                 throw std::runtime_error("Failed to save config: " + result.error());
             }
@@ -2362,6 +2423,29 @@ NB_MODULE(lichtfeld, m) {
             for (std::size_t i = 0; i < names.size(); ++i)
                 unexplained[names[i].data()] = owners.unattributed_roots[i];
             result["unattributed_roots"] = unexplained;
+            nb::dict metal;
+            metal["valid"] = snapshot.process.metal_memory_valid;
+            metal["device_allocated_bytes"] = snapshot.process.metal_device_allocated_bytes;
+            metal["tensor_requested_bytes"] = snapshot.process.metal_tensor_requested_bytes;
+            metal["tensor_capacity_bytes"] = snapshot.process.metal_tensor_capacity_bytes;
+            metal["tensor_rounding_slack_bytes"] = snapshot.process.metal_tensor_rounding_slack_bytes;
+            metal["allocator_cached_bytes"] = snapshot.process.metal_allocator_cached_bytes;
+            metal["other_device_bytes"] = snapshot.process.metal_other_device_bytes;
+            metal["tensor_peak_capacity_bytes"] = snapshot.process.metal_tensor_peak_capacity_bytes;
+            metal["allocator_peak_reserved_bytes"] = snapshot.process.metal_allocator_peak_reserved_bytes;
+            nb::list rows;
+            for (const auto& row : snapshot.rows) {
+                if (!row.scope.starts_with("metal.") || row.live_bytes == 0)
+                    continue;
+                nb::dict item;
+                item["scope"] = row.scope;
+                item["label"] = row.label;
+                item["live_bytes"] = row.live_bytes;
+                item["peak_bytes"] = row.peak_bytes;
+                rows.append(std::move(item));
+            }
+            metal["rows"] = std::move(rows);
+            result["metal"] = std::move(metal);
             return result;
         },
         "Return a sampled process VRAM breakdown by owner category");
@@ -2942,18 +3026,29 @@ NB_MODULE(lichtfeld, m) {
             return wm ? wm->isFullscreen() : false;
         },
         "Check if the window is in fullscreen mode");
-    m.def(
-        "get_vulkan_capabilities", []() {
-            nb::dict capabilities;
-            const auto* const window = lfs::vis::services().windowOrNull();
-            const auto* const context = window != nullptr ? window->getVulkanContext() : nullptr;
-            capabilities["mesh_wireframe"] =
-                context != nullptr && context->hasFillModeNonSolid();
-            capabilities["wide_lines"] =
-                context != nullptr && context->hasWideLines();
-            return capabilities;
-        },
-        "Return Vulkan device capabilities used to gate rendering controls");
+    const auto get_graphics_capabilities = []() {
+        nb::dict capabilities;
+        const auto* const window = lfs::vis::services().windowOrNull();
+        const auto* const context = window != nullptr ? window->getGraphicsContext() : nullptr;
+        const auto caps = context != nullptr ? context->capabilities()
+                                             : lfs::vis::GraphicsCapabilities{};
+        capabilities["backend"] = caps.native_metal ? "metal" : "vulkan";
+        capabilities["mesh_rendering"] = caps.mesh_rendering;
+        capabilities["mesh_wireframe"] = caps.wireframe;
+        capabilities["wide_lines"] = caps.wide_lines;
+        capabilities["environment_map"] = caps.environment_map;
+        capabilities["split_view"] = caps.split_view;
+        capabilities["temporal_upscaling"] = caps.temporal_upscaling;
+        capabilities["mesh2splat"] = caps.mesh2splat;
+        capabilities["hdr_libplacebo"] = caps.hdr_libplacebo;
+        capabilities["external_memory_interop"] = caps.external_memory_interop;
+        capabilities["external_semaphore_interop"] = caps.external_semaphore_interop;
+        return capabilities;
+    };
+    m.def("get_graphics_capabilities", get_graphics_capabilities,
+          "Return graphics capabilities used to gate rendering controls");
+    m.def("get_vulkan_capabilities", get_graphics_capabilities,
+          "Deprecated alias for get_graphics_capabilities");
     m.def(
         "toggle_ui", []() { lfs::core::events::ui::ToggleUI{}.emit(); },
         "Toggle UI overlay visibility");
@@ -3191,6 +3286,9 @@ NB_MODULE(lichtfeld, m) {
 
     // Register Tensor class
     lfs::python::register_tensor(m);
+
+    auto nodes_module = m.def_submodule("nodes", "Geometry node trees and modifiers");
+    lfs::python::register_nodes(nodes_module);
 
     auto nn_module = m.def_submodule("nn", "Neural network inference");
     lfs::python::register_nn(nn_module);
@@ -3488,24 +3586,36 @@ NB_MODULE(lichtfeld, m) {
         },
         "Print the scene graph tree");
 
-    // Frame callback for animations
-    m.def(
-        "on_frame", [](nb::callable cb) {
-            const auto callback = make_safe_py_callback(nb::cast<nb::object>(cb));
-            lfs::python::set_frame_callback([callback](float dt) {
-                try {
-                    (*callback)(dt);
-                } catch (nb::python_error& e) {
-                    (void)lfs::python::contain_python_callback(e, lfs::python::PyCallbackPolicy::DisableAndReport);
-                    lfs::python::clear_frame_callback();
-                } catch (const std::exception& e) {
-                    (void)lfs::python::contain_cxx_callback(e.what(), lfs::python::PyCallbackPolicy::DisableAndReport);
-                    lfs::python::clear_frame_callback();
-                }
-            });
-            LOG_INFO("Frame callback registered");
+    // Frame callback for animations. Legacy registrations without an explicit
+    // duration expire after ten seconds and emit a single process-wide warning.
+    const auto register_frame_callback = [](nb::callable cb, nb::object duration_s) {
+        std::optional<double> duration;
+        if (!duration_s.is_none()) {
+            duration = nb::cast<double>(duration_s);
+            if (!std::isfinite(*duration) || *duration <= 0.0)
+                throw nb::value_error("duration_s must be a positive finite number");
+        }
+        const auto callback = make_safe_py_callback(nb::cast<nb::object>(cb));
+        lfs::python::set_frame_callback([callback](float dt) {
+            try {
+                (*callback)(dt);
+            } catch (nb::python_error& e) {
+                (void)lfs::python::contain_python_callback(e, lfs::python::PyCallbackPolicy::DisableAndReport);
+                lfs::python::clear_frame_callback();
+            } catch (const std::exception& e) {
+                (void)lfs::python::contain_cxx_callback(e.what(), lfs::python::PyCallbackPolicy::DisableAndReport);
+                lfs::python::clear_frame_callback();
+            }
         },
-        nb::arg("callback"), "Register a callback to be called each frame with delta time (seconds)");
+                                        duration);
+        LOG_INFO("Frame callback registered");
+    };
+    m.def("on_frame", register_frame_callback,
+          nb::arg("callback"), nb::arg("duration_s") = nb::none(),
+          "Register a frame callback with an optional positive lifetime in seconds (defaults to 10 seconds).");
+    m.def("set_frame_callback", register_frame_callback,
+          nb::arg("callback"), nb::arg("duration_s") = nb::none(),
+          "Register a frame callback with an optional positive lifetime in seconds (defaults to 10 seconds).");
 
     m.def(
         "stop_animation", []() {
@@ -3792,6 +3902,12 @@ Example:
         lfs::vis::op::OperatorRegistry::instance().invalidatePollCache(dep);
         lfs::vis::gui::PanelRegistry::instance().invalidate_poll_cache(dep);
     });
+
+    try {
+        nb::module_::import_("lfs_plugins.node_posterize");
+    } catch (const nb::python_error& error) {
+        LOG_WARN("Could not register the built-in Posterize node: {}", error.what());
+    }
 
     // Module metadata
     m.attr("__version__") = GIT_TAGGED_VERSION;

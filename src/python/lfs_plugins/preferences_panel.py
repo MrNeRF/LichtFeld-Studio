@@ -93,6 +93,7 @@ class PreferencesPanel(Panel):
         self._handle = None
         self._scene_upscaler_catalog = []
         self._scene_upscaler_presets = {}
+        self._scene_upscaler_display_names = {}
         self._keymap = KeymapBindingsSection()
         self._theme_catalog = []
         self._theme_families = []
@@ -115,6 +116,7 @@ class PreferencesPanel(Panel):
         self._file_associations = []
         self._mount_count = 0
         self._portal_state_binding = PanelStateBinding()
+        self._scene_state_binding = PanelStateBinding()
         self._scrub_fields = ScrubFieldController(
             self.SPEED_SCRUB_FIELD_DEFS,
             self._get_scrub_value,
@@ -181,6 +183,10 @@ class PreferencesPanel(Panel):
         model.bind_func(
             "tensor_metal_available",
             lambda: bool(lf.ui.get_tensor_backend_preferences()["metal_available"]),
+        )
+        model.bind_func(
+            "tensor_vulkan_available",
+            lambda: bool(lf.ui.get_tensor_backend_preferences()["vulkan_available"]),
         )
         model.bind("theme_family_idx", self._theme_family_index, self._set_theme_family_index)
         model.bind_func("theme_has_variants", self._theme_has_variants)
@@ -340,6 +346,12 @@ class PreferencesPanel(Panel):
                 "click", lambda _ev: self._on_close(None, None, None)
             )
         self._document = doc
+        self._scene_state_binding.close()
+        self._scene_state_binding.set_handle(self._handle).watch(
+            RuntimeState.render_settings_generation,
+            refresh=self._sync_scene_upscaler_preset_records,
+            dirty=("scene_upscaler_idx", "scene_upscaler_preset_idx", "scene_upscaler_has_preset"),
+        )
         self._portal_state_binding.close()
         self._portal_state_binding.watch(
             RuntimeState.account_state,
@@ -372,6 +384,7 @@ class PreferencesPanel(Panel):
             self._scrub_fields.mount(doc)
 
     def on_unmount(self, doc):
+        self._scene_state_binding.close()
         self._portal_state_binding.close()
         self._scrub_fields.unmount()
         self._keymap.on_unmount()
@@ -398,16 +411,34 @@ class PreferencesPanel(Panel):
         if self._section == "input" and "key_bindings" in self._expanded_sections:
             self._keymap.ensure_binding_rows()
 
+    def _reject_backend_preference(self, model_key, title_key):
+        if self._handle:
+            self._handle.dirty(model_key)
+        lf.ui.message_dialog(
+            lf.ui.tr(title_key), lf.ui.tr("preferences.backend_unavailable"), "error")
+
     def _set_tensor_preference(self, key, value):
         state = dict(lf.ui.get_tensor_backend_preferences())
+        if state.get(key) == value:
+            return
+        if key == "backend" and value in ("cuda", "metal", "vulkan") and not state[f"{value}_available"]:
+            self._reject_backend_preference("tensor_backend", "preferences.tensor_backend")
+            return
         state.pop("cuda_available", None)
         state.pop("metal_available", None)
+        state.pop("vulkan_available", None)
         if key == "vulkan_validation":
             value = int(value)
         elif key in ("force_fp32_half", "force_no_atomic_float"):
             value = bool(value)
         state[key] = value
-        lf.ui.set_tensor_backend_preferences(**state)
+        try:
+            lf.ui.set_tensor_backend_preferences(**state)
+        except ValueError:
+            if key != "backend":
+                raise
+            self._reject_backend_preference("tensor_backend", "preferences.tensor_backend")
+            return
         if self._handle:
             self._handle.dirty(f"tensor_{key}")
 
@@ -511,7 +542,7 @@ class PreferencesPanel(Panel):
         self._handle.update_record_list(
             "scene_upscalers",
             [
-                {"index": str(index), "label": lf.ui.tr(label_key)}
+                {"index": str(index), "label": self._scene_upscaler_display_names.get(_backend) or lf.ui.tr(label_key)}
                 for index, (_backend, label_key) in enumerate(self._scene_upscaler_catalog)
             ],
         )
@@ -689,18 +720,22 @@ class PreferencesPanel(Panel):
         records = lf.ui.get_scene_reconstruction_options()
         backends = []
         presets = {}
+        display_names = {}
         for record in records:
             backend_id = str(record["id"])
             label_key = str(record["label_key"])
+            display_name = str(record.get("display_name", ""))
             backend_presets = tuple(
                 (str(preset["id"]), str(preset["label_key"]))
                 for preset in record.get("presets", ())
             )
-            if backend_id and label_key and backend_presets:
+            if backend_id and (label_key or display_name) and backend_presets:
                 backends.append((backend_id, label_key))
                 presets[backend_id] = backend_presets
+                display_names[backend_id] = display_name
         self._scene_upscaler_catalog = backends
         self._scene_upscaler_presets = presets
+        self._scene_upscaler_display_names = display_names
 
     def _sync_scene_upscaler_preset_records(self):
         if not self._handle:

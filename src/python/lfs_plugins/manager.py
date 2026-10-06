@@ -664,6 +664,10 @@ class PluginManager:
                     "panels",
                     lambda: lf.ui.unregister_panels_for_module(f"{MODULE_PREFIX}.{name}"),
                 ),
+                (
+                    "nodes",
+                    lambda: lf.nodes.unregister_nodes_for_module(f"{MODULE_PREFIX}.{name}"),
+                ),
                 ("icons", lambda: lf.ui.free_plugin_icons(name)),
                 ("textures", lambda: lf.ui.free_plugin_textures(name)),
             )
@@ -829,6 +833,7 @@ class PluginManager:
             try:
                 import lichtfeld as lf
                 lf.ui.unregister_panels_for_module(module_prefix)
+                lf.nodes.unregister_nodes_for_module(module_prefix)
                 if hasattr(lf.ui, "clear_hooks_for_module"):
                     lf.ui.clear_hooks_for_module(module_prefix)
             except Exception:
@@ -908,6 +913,7 @@ class PluginManager:
             try:
                 import lichtfeld as lf
                 lf.ui.unregister_panels_for_module(module_prefix)
+                lf.nodes.unregister_nodes_for_module(module_prefix)
                 if hasattr(lf.ui, "clear_hooks_for_module"):
                     lf.ui.clear_hooks_for_module(module_prefix)
             except Exception:

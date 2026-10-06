@@ -19,14 +19,12 @@ namespace lfs::vis {
           eval_lpips(store_, Field::EvalLpips, "eval_lpips", std::optional<float>{}),
           scene_generation(store_, Field::SceneGeneration, "scene_generation", 0),
           selection_generation(store_, Field::SelectionGeneration, "selection_generation", 0),
-          fps(store_, Field::Fps, "fps", 0.0f),
           mode_text(store_, Field::ModeText, "mode_text", std::string{}),
           camera_metrics(store_, Field::CameraMetricsValue, "camera_metrics", std::optional<CameraMetrics>{}),
           gt_metrics_overlay_config(store_,
                                     Field::GTMetricsOverlayConfigValue,
                                     "gt_metrics_overlay_config",
                                     GTMetricsOverlayConfig{}),
-          vram_hud(store_, Field::VramHudValue, "vram_hud", VramHud{}),
           perf_hud(store_, Field::PerfHudValue, "perf_hud", PerfHud{}),
           active_tool(store_, Field::ActiveTool, "active_tool", std::string{}),
           active_submode(store_, Field::ActiveSubmode, "active_submode", std::string{}),
@@ -52,9 +50,11 @@ namespace lfs::vis {
           scripts_generation(store_, Field::ScriptsGeneration, "scripts_generation", 0),
           language_generation(store_, Field::LanguageGeneration, "language_generation", 0),
           render_settings_generation(store_, Field::RenderSettingsGeneration, "render_settings_generation", 0),
+          scene_upscaler_generation(store_, Field::SceneUpscalerGeneration, "scene_upscaler_generation", 0),
           viewport_toolbar_generation(store_, Field::ViewportToolbarGeneration, "viewport_toolbar_generation", 0),
           depth_window_draw_generation(store_, Field::DepthWindowDrawGeneration, "depth_window_draw_generation", 0),
-          depth_window_draw_commit(store_, Field::DepthWindowDrawCommitValue, "depth_window_draw_commit", AppStore::DepthWindowDrawCommit{}) {}
+          depth_window_draw_commit(store_, Field::DepthWindowDrawCommitValue, "depth_window_draw_commit", AppStore::DepthWindowDrawCommit{}),
+          viewer_backend(store_, Field::ViewerBackendValue, "viewer_backend", std::nullopt) {}
 
     AppStore& app_store() {
         // Subscription tokens can outlive static destruction across module boundaries.

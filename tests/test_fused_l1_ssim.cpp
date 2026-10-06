@@ -32,6 +32,20 @@ using namespace lfs::core;
 using namespace lfs::training::kernels;
 
 namespace {
+    // Corrected-image gradient plus the raw-render gradient, as the trainer adds them into the render gradient.
+    template <typename Context>
+    Tensor combined_gradient(const DecoupledGradients& grads, const Context& ctx) {
+        auto combined = grads.grad_corrected.clone();
+        accumulate_decoupled_raw_gradient(decoupled_raw_gradient(ctx), combined);
+        return combined;
+    }
+
+    template <typename Context>
+    Tensor raw_gradient(const DecoupledGradients& grads, const Context& ctx) {
+        auto raw = Tensor::zeros(grads.grad_corrected.shape(), Device::GPU);
+        accumulate_decoupled_raw_gradient(decoupled_raw_gradient(ctx), raw);
+        return raw;
+    }
 
     Tensor reference_ssim_gradient(const Tensor& image, const Tensor& target, const Tensor& map_gradient) {
         const auto x = image.cpu().contiguous().to_vector();
@@ -639,8 +653,7 @@ TEST_F(MaskedFusedL1SSIMTest, BatchUsesRepeatedMaskNormalization) {
             prediction, prediction, target, mask, ssim_weight, decoupled_workspace);
     const auto decoupled_gradients =
         masked_decoupled_fused_l1_ssim_backward(decoupled_ctx, decoupled_workspace);
-    const auto decoupled_gradient =
-        decoupled_gradients.grad_corrected + decoupled_gradients.grad_raw;
+    const auto decoupled_gradient = combined_gradient(decoupled_gradients, decoupled_ctx);
     EXPECT_NEAR(decoupled_loss.item<float>(), reference_loss, 2.0e-3f);
     const auto decoupled_difference = (decoupled_gradient - reference_gradient).abs();
     EXPECT_LT(decoupled_difference.max().item<float>(), 2.0e-3f);
@@ -885,7 +898,7 @@ TEST_F(FusedL1SSIMTest, DecoupledMatchesStandardWhenCorrectedEqualsRaw) {
     auto [decoupled_loss, decoupled_ctx] =
         decoupled_fused_l1_ssim_forward(corrected, raw, gt, ssim_weight, decoupled_workspace, true);
     auto decoupled_grads = decoupled_fused_l1_ssim_backward(decoupled_ctx, decoupled_workspace);
-    auto combined_grad = decoupled_grads.grad_corrected + decoupled_grads.grad_raw;
+    auto combined_grad = combined_gradient(decoupled_grads, decoupled_ctx);
 
     EXPECT_NEAR(decoupled_loss.item<float>(), standard_loss.item<float>(), 1e-4f);
 
@@ -939,8 +952,7 @@ TEST_F(FusedL1SSIMTest, ThinImagesMatchFiniteDifferenceForFusedAndDecoupled) {
             raw, raw, target, ssim_weight, decoupled_workspace, true);
         const auto decoupled_grads =
             decoupled_fused_l1_ssim_backward(decoupled_ctx, decoupled_workspace);
-        const auto decoupled_grad =
-            decoupled_grads.grad_corrected + decoupled_grads.grad_raw;
+        const auto decoupled_grad = combined_gradient(decoupled_grads, decoupled_ctx);
         const float decoupled_analytic =
             (decoupled_grad * direction).sum().item<float>();
         const auto [decoupled_plus, ignored_dec_plus_ctx] = decoupled_fused_l1_ssim_forward(
@@ -981,7 +993,7 @@ TEST_F(MaskedFusedL1SSIMTest, DecoupledMatchesStandardWhenCorrectedEqualsRaw) {
         masked_decoupled_fused_l1_ssim_forward(corrected, raw, gt, mask, ssim_weight, decoupled_workspace);
     auto decoupled_grads =
         masked_decoupled_fused_l1_ssim_backward(decoupled_ctx, decoupled_workspace);
-    auto combined_grad = decoupled_grads.grad_corrected + decoupled_grads.grad_raw;
+    auto combined_grad = combined_gradient(decoupled_grads, decoupled_ctx);
 
     EXPECT_NEAR(decoupled_loss.item<float>(), standard_loss.item<float>(), 1e-4f);
 
@@ -1008,7 +1020,7 @@ TEST_F(MaskedFusedL1SSIMTest, DecoupledAllZeroWeightReturnsZeroGradients) {
 
     EXPECT_LT(loss.item<float>(), 1.0e-5f);
     EXPECT_EQ(gradients.grad_corrected.abs().max().item<float>(), 0.0f);
-    EXPECT_EQ(gradients.grad_raw.abs().max().item<float>(), 0.0f);
+    EXPECT_EQ(raw_gradient(gradients, ctx).abs().max().item<float>(), 0.0f);
 }
 
 TEST_F(FusedL1SSIMTest, DecoupledRoutesContrastStructureGradientToRawBranch) {
@@ -1025,7 +1037,28 @@ TEST_F(FusedL1SSIMTest, DecoupledRoutesContrastStructureGradientToRawBranch) {
 
     EXPECT_GT(loss.item<float>(), 0.0f);
     EXPECT_LT(grads.grad_corrected.abs().max().item<float>(), 1e-4f);
-    EXPECT_GT(grads.grad_raw.abs().max().item<float>(), 1e-4f);
+    EXPECT_GT(raw_gradient(grads, ctx).abs().max().item<float>(), 1e-4f);
+}
+
+// Fails if the raw-render gradient overwrites the gradient it is added to instead of accumulating into it.
+TEST_F(FusedL1SSIMTest, DecoupledRawGradientAccumulatesIntoRenderGradient) {
+    const auto corrected = Tensor::rand({1, 3, 48, 64}, Device::CUDA);
+    const auto raw = Tensor::rand({1, 3, 48, 64}, Device::CUDA);
+    const auto gt = Tensor::rand({1, 3, 48, 64}, Device::CUDA);
+    const auto mask = Tensor::rand({48, 64}, Device::CUDA);
+
+    DecoupledFusedL1SSIMWorkspace workspace;
+    auto [loss, ctx] = decoupled_fused_l1_ssim_forward(corrected, raw, gt, 0.2f, workspace, true);
+    const auto grads = decoupled_fused_l1_ssim_backward(ctx, workspace);
+    EXPECT_EQ(combined_gradient(grads, ctx).cpu().to_vector(),
+              (grads.grad_corrected + raw_gradient(grads, ctx)).cpu().to_vector());
+
+    MaskedDecoupledFusedL1SSIMWorkspace masked_workspace;
+    auto [masked_loss, masked_ctx] =
+        masked_decoupled_fused_l1_ssim_forward(corrected, raw, gt, mask, 0.2f, masked_workspace);
+    const auto masked_grads = masked_decoupled_fused_l1_ssim_backward(masked_ctx, masked_workspace);
+    EXPECT_EQ(combined_gradient(masked_grads, masked_ctx).cpu().to_vector(),
+              (masked_grads.grad_corrected + raw_gradient(masked_grads, masked_ctx)).cpu().to_vector());
 }
 
 TEST_F(FusedL1SSIMTest, BackwardFillFollowsIndependentQueue) {

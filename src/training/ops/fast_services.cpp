@@ -44,6 +44,15 @@ namespace lfs::training {
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             });
         }
+        if (result.code == Code::CapacityOverflow || result.code == Code::Pending) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::CUDA,
+                .user_message = "FastGS instance capacity validation was not resolved before commit.",
+                .detail = detail,
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
         const bool exhausted = result.code == Code::ResourceExhausted;
         return lfs::make_error(lfs::ErrorInit{
             .code = exhausted ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::Internal,
@@ -69,7 +78,9 @@ namespace lfs::training {
         const core::Tensor& bg_image,
         const bool render_normal,
         const bool render_depth,
-        RenderOutput& output) {
+        RenderOutput& output,
+        const float dilation_scale,
+        const bool update_screen_share) {
         const int sh_degree = model.get_active_sh_degree();
         const int max_sh_degree = model.get_max_sh_degree();
         auto [fx, fy, cx, cy] = camera.get_intrinsics();
@@ -90,6 +101,7 @@ namespace lfs::training {
             .mip_filter = mip_filter,
             .render_normal = render_normal,
             .render_depth = render_depth,
+            .dilation_scale = dilation_scale,
         };
         const lfs::gpu_ops::SplatInputs splats{
             .means = model.means(),
@@ -108,7 +120,7 @@ namespace lfs::training {
         };
         const auto result = ops.forward(
             saved, splats, camera.world_view_transform(), camera.cam_position(),
-            bg_color, bg_image, params, rendered, model._max_screen_share);
+            bg_color, bg_image, params, rendered, update_screen_share ? model._max_screen_share : no_bounds);
         if (result.code == lfs::gpu_ops::RasterResult::Code::Success) {
             output.width = tile_width > 0 ? tile_width : camera.image_width();
             output.height = tile_height > 0 ? tile_height : camera.image_height();
@@ -124,10 +136,11 @@ namespace lfs::training {
         core::Tensor& bg_color,
         const bool mip_filter,
         const core::Tensor& bg_image,
-        const bool render_normal) {
+        const bool render_normal,
+        const float dilation_scale) {
         RenderOutput output;
         const auto result = fast_render(
-            ops, saved, camera, model, bg_color, 0, 0, 0, 0, mip_filter, bg_image, render_normal, true, output);
+            ops, saved, camera, model, bg_color, 0, 0, 0, 0, mip_filter, bg_image, render_normal, true, output, dilation_scale, /*update_screen_share=*/false);
         if (result.code != lfs::gpu_ops::RasterResult::Code::Success) {
             throw lfs::Exception(fast_raster_error(result));
         }

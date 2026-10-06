@@ -1,47 +1,141 @@
 {
-  "ui.vram_window_1m": "1 min",
-  "ui.vram_process_nvml_tooltip": "NVIDIA 驱动报告的进程 GPU 内存。",
-  "ui.vram_process_estimate_tooltip": "无法获取进程数据，因此根据设备用量估算的进程 GPU 内存上限。",
+  "menu.file.create_splat_from_photo": "从照片创建 Splat - Apple Reframe",
+  "node_editor.template_count_one": "{} 个模板",
+  "node_editor.templates_title": "模板",
+  "node_editor.template_all": "全部",
+  "node_editor.template_adjust_short": "调整：",
+  "node_editor.template_add": "添加",
+  "node_editor.template_add_modifier": "添加修改器",
+  "node_editor.template_rename": "重命名",
+  "node_editor.template_count": "{} 个模板",
+  "node_editor.template_mine_empty": "将图保存为模板后，即可在这里找到。",
+  "node_editor.template_no_results": "没有匹配的模板，请尝试其他搜索词。",
+  "node_template.category.cleanup": "清理",
+  "node_template.category.colour": "颜色",
+  "node_template.category.selection": "选择",
+  "node_template.category.geometry": "几何",
+  "node_template.category.animation": "动画",
+  "node_template.kind.splat": "高斯点",
+  "node_template.kind.mesh": "网格",
+  "node_template.kind.points": "点云",
+  "node_editor.preview_node": "预览此节点 (P)",
+  "node_editor.previewing": "正在预览：{} · {}{} — 按 Esc 退出",
+  "node_editor.from_template": "从模板创建…",
+  "node_editor.browse_templates": "浏览模板…",
+  "node_editor.template_search": "搜索模板",
+  "node_editor.template_apply": "应用",
+  "node_editor.template_adjust": "调整建议",
+  "node_editor.my_templates": "我的模板",
+  "node_editor.suggested_templates": "从可用的图开始",
+  "node_editor.save_as_template": "另存为模板…",
+  "node_editor.template_save_hint": "在修改器面板中重复使用此图。",
+  "node_editor.template_name": "名称",
+  "node_editor.template_description": "描述",
+  "node_editor.template_category": "分类",
+  "node_editor.template_import": "导入…",
+  "node_editor.template_export": "导出…",
+  "node_editor.delete": "删除",
+  "node_template.colour_grade.name": "色彩分级",
+  "node_template.colour_grade.description": "为整个场景增加对比度、饱和度和暖色调。",
+  "node_template.colour_grade.adjust": "先调整 Exposure、Contrast 和 Saturation，再用 Temperature 调整冷暖。",
+  "node_template.autumn_grass.name": "秋色草地",
+  "node_template.autumn_grass.description": "在 HSV 中选择绿色，并将其转为温暖的秋色。",
+  "node_template.autumn_grass.adjust": "调整 Hue 和 Hue Range，直到仅选中树叶或草地，再调整 Hue Shift。",
+  "node_template.colour_pop.name": "突出颜色",
+  "node_template.colour_pop.description": "保留一个颜色范围的鲜艳度，同时降低其他颜色的饱和度。",
+  "node_template.colour_pop.adjust": "将 Key Colour 设为主体颜色，再调整 Tolerance 和 Softness，使过渡自然。",
+  "node_template.background_haze.name": "去除背景雾霭",
+  "node_template.background_haze.description": "移除造成乳白色背景的巨大、低不透明度高斯点。",
+  "node_template.background_haze.adjust": "提高 Max Opacity 或降低 Min Size 可移除更多内容；应用前请检查效果。",
+  "node_template.remove_floaters.name": "移除漂浮点",
+  "node_template.remove_floaters.description": "移除整个场景中不透明度低或孤立的高斯点。",
+  "node_template.remove_floaters.adjust": "先调整 Min Opacity，再用 Isolation Radius 和 Min Neighbours 清理孤立小点。",
+  "node_template.remove_clumps.name": "移除漂浮团块",
+  "node_template.remove_clumps.description": "移除断开的小岛状团块，同时保留较大的表面。",
+  "node_template.remove_clumps.adjust": "提高 Radius 可连接邻近高斯点；提高 Min Size 可移除更大的孤立团块。",
+  "node_template.scale_clamp.name": "限制尺度",
+  "node_template.scale_clamp.description": "缩短针状高斯点，而不增厚扁平的表面高斯点。",
+  "node_template.scale_clamp.adjust": "降低 Max Aspect，可缩短更多针状高斯点。",
+  "node_template.web_export.name": "网页导出准备",
+  "node_template.web_export.description": "减少球谐细节和高斯点数量，生成轻量网页资源。",
+  "node_template.web_export.adjust": "根据目标大小设置 Keep Fraction；Degree 0 的缩减幅度最大。",
+  "node_template.posterize.name": "色调分离",
+  "node_template.posterize.description": "将颜色值减少为少量图形化色阶。",
+  "node_template.posterize.adjust": "用 Levels 在强烈的图形效果和柔和的阶梯式调色之间选择。",
+  "node_template.noise_variation.name": "噪声颜色变化",
+  "node_template.noise_variation.description": "通过程序噪声为场景添加斑驳的颜色变化。",
+  "node_template.noise_variation.adjust": "Scale 控制斑块大小，Seed 切换图案，Strength 控制混合强度。",
+  "node_template.sharpen_subject.name": "锐化主体",
+  "node_template.sharpen_subject.description": "锐化边缘柔和的椭球区域，同时保持视觉覆盖。",
+  "node_template.sharpen_subject.adjust": "将 Centre 和 Radii 调整到主体周围，再设置 Amount 和 Falloff。",
+  "node_template.crop_showcase.name": "展示裁剪",
+  "node_template.crop_showcase.description": "保留可调椭球内的几何体，突出展示主体。",
+  "node_template.crop_showcase.adjust": "将 Centre 置于主体中心，扩大 Radii，直到包含完整主体。",
+  "node_template.edge_fade.name": "柔化边缘",
+  "node_template.edge_fade.description": "向可调主体区域的边缘逐渐降低不透明度。",
+  "node_template.edge_fade.adjust": "用 Centre 和 Radii 圈定有效区域；Falloff 控制柔化边缘的宽度。",
+  "node_template.height_fog.name": "高度雾",
+  "node_template.height_fog.description": "根据有方向的高度场，将低处几何体混合为浅色雾。",
+  "node_template.height_fog.adjust": "将 Origin 放在地面附近，Up 设为场景上轴，Fog Top 设为所需雾层顶部。",
+  "node_template.camera_cleanup.name": "按相机覆盖清理",
+  "node_template.camera_cleanup.description": "移除可见相机数量低于指定阈值的几何体。",
+  "node_template.camera_cleanup.adjust": "加载数据集相机；若过多有效几何体消失，请降低 Minimum Views。",
+  "node_template.animated_reveal.name": "径向显现",
+  "node_template.animated_reveal.description": "随着序列时间推进，从可调中心开始显现几何体。",
+  "node_template.animated_reveal.adjust": "Centre 设置原点，Radius 设置初始范围，Speed 设置每秒扩展量；拖动序列时间即可预览。",
+  "node_template.box_crop.name": "方框裁剪",
+  "node_template.box_crop.description": "保留可调整方向的方框内部几何体。",
+  "node_template.box_crop.adjust": "用 Centre 和 Size 设置边界；场景未对齐坐标轴时可调整 Rotation。",
+  "node_editor.add_input": "添加输入",
+  "node_editor.add_output": "添加输出",
+  "node_editor.paint": "绘制",
+  "node_editor.paint_done": "结束绘制",
+  "node_editor.pick_colour": "拾取颜色",
+  "node_editor.colour_offset_hint": "拖动调整色调；双击重置为中性",
+  "ui.vram_window_1m": "1 分钟",
+  "ui.vram_process_nvml_tooltip": "操作系统或 GPU 驱动程序报告的进程 GPU 内存。",
+  "ui.vram_process_unavailable_tooltip": "无法获取进程 GPU 内存。设备使用量包括其他应用程序。",
+  "ui.vram_over_budget": "超出预算",
   "ui.vram_device_nvml_tooltip": "NVIDIA 驱动报告的设备内存。",
   "ui.vram_device_cuda_tooltip": "CUDA 可见内存；可能不包含预留的物理容量。",
   "ui.vram_process_metal_tooltip": "此进程通过 Metal 分配的 GPU 内存。",
   "ui.vram_device_unified_tooltip": "GPU 工作集上限中已无法再使用的统一内存：包括所有应用的 GPU 分配，以及其他进程占用的系统内存。",
-  "ui.vram_device_capacity": "Device capacity",
-  "ui.vram_window_5m": "5 min",
-  "ui.vram_window_30m": "30 min",
-  "ui.vram_window_all": "All",
-  "ui.vram_axis_toggle": "Time / iteration",
-  "ui.vram_scale_fit": "Fit",
-  "ui.vram_scale_device": "Device",
-  "ui.vram_hover_iteration": "iter",
-  "ui.vram_hover_splats": "splats",
-  "ui.vram_hover_process": "process",
-  "ui.vram_hover_device": "Device",
-  "ui.vram_hover_base": "baseline",
-  "ui.vram_live": "Live",
-  "ui.vram_delta": "Delta",
-  "ui.vram_peak": "Peak",
-  "ui.vram_set_baseline": "Set baseline",
-  "ui.vram_export_csv": "Export CSV",
-  "ui.vram_opacity": "Opacity",
-  "ui.vram_peak_breakdown": "Peak breakdown",
-  "ui.vram_top_movers": "Top movers",
-  "ui.vram_filter_movers": "Filter movers",
-  "ui.vram_unattributed": "Unattributed",
-  "ui.vram_slack": "Slack",
-  "ui.vram_possible_leak": "Possible leak",
-  "ui.vram_over_attributed": "Over-attributed",
-  "ui.vram_model": "Model parameters",
-  "ui.vram_optimizer": "Optimizer and gradients",
-  "ui.vram_rasterizer": "Rasterizer",
-  "ui.vram_loss_step": "Loss and step buffers",
-  "ui.vram_densification": "Densification",
-  "ui.vram_image_io": "Image I/O and decode",
-  "ui.vram_viewer": "Viewer",
-  "ui.vram_allocator_slack": "Allocator slack",
-  "ui.vram_context": "CUDA context and driver",
-  "ui.vram_exported_to": "Exported to",
-  "ui.vram_per_splat": "bytes/splat",
+  "ui.vram_device_capacity": "设备容量",
+  "ui.vram_window_5m": "5 分钟",
+  "ui.vram_window_30m": "30 分钟",
+  "ui.vram_window_all": "全部",
+  "ui.vram_axis_toggle": "时间 / 迭代",
+  "ui.vram_scale_fit": "适配",
+  "ui.vram_scale_device": "设备",
+  "ui.vram_hover_iteration": "迭代",
+  "ui.vram_hover_splats": "Splat",
+  "ui.vram_hover_process": "进程",
+  "ui.vram_hover_device": "设备",
+  "ui.vram_hover_base": "基线",
+  "ui.vram_live": "当前",
+  "ui.vram_delta": "差值",
+  "ui.vram_peak": "峰值",
+  "ui.vram_set_baseline": "设置基线",
+  "ui.vram_export_csv": "导出 CSV",
+  "ui.vram_opacity": "不透明度",
+  "ui.vram_peak_breakdown": "峰值明细",
+  "ui.vram_top_movers": "变化最大项",
+  "ui.vram_filter_movers": "筛选变化项",
+  "ui.vram_unattributed": "未归属",
+  "ui.vram_slack": "余量",
+  "ui.vram_possible_leak": "可能存在泄漏",
+  "ui.vram_over_attributed": "过度归属",
+  "ui.vram_model": "模型参数",
+  "ui.vram_optimizer": "优化器和梯度",
+  "ui.vram_rasterizer": "光栅化器",
+  "ui.vram_loss_step": "损失和步进缓冲区",
+  "ui.vram_densification": "密度化",
+  "ui.vram_image_io": "图像 I/O 和解码",
+  "ui.vram_viewer": "查看器",
+  "ui.vram_allocator_slack": "分配器余量",
+  "ui.vram_context": "CUDA 上下文和驱动程序",
+  "ui.vram_exported_to": "已导出到",
+  "ui.vram_per_splat": "字节/Splat",
   "ui.vram_per_megapixel": "MiB/MP",
   "projects.toolbar.sort": "排序",
   "projects.sort.iteration": "迭代次数",
@@ -130,7 +224,7 @@
   "projects.gallery.format.sog_hint": "体积最小，网页加载快。",
   "projects.gallery.format.ssog_hint": "流式加载大型场景。",
   "projects.gallery.format.spz_hint": "便于移植，适用于其他工具。",
-  "projects.gallery.state.connection_lost": "Paused (connection lost)",
+  "projects.gallery.state.connection_lost": "已暂停（连接丢失）",
   "projects.gallery.error.portal_version": "This portal version does not support gallery sync",
   "projects.gallery.error.download_damaged": "下载的文件已损坏或已在图库上被修改。",
   "projects.gallery.error.download_size": "下载的文件不完整或大于图库声明的大小。",
@@ -159,7 +253,7 @@
     "file.checkpoint_not_recognized": "所选文件未被识别为有效检查点：\n{path}",
     "file.import_dataset": "导入数据集",
     "file.import_ply": "导入PLY, SOG, SSOG, SPZ, GLB, RAD, USD",
-    "file.import_ssog": "Import SSOG…",
+    "file.import_ssog": "导入 SSOG…",
     "file.import_mesh": "导入网格",
     "file.import_checkpoint": "导入检查点",
     "file.import_config": "导入配置",
@@ -195,7 +289,7 @@
     "help": "帮助",
     "help.getting_started": "入门指南",
     "help.about": "关于LichtFeld Studio",
-    "view.performance_hud": "Performance HUD",
+    "view.performance_hud": "性能 HUD",
     "edit.preferences": "偏好设置...",
     "view.debug_info": "调试信息..."
   },
@@ -204,7 +298,7 @@
     "scene": "场景",
     "rendering": "渲染",
     "training": "训练",
-    "histogram": "Histogram",
+    "histogram": "直方图",
     "about": "关于LichtFeld Studio",
     "debug_info": "调试信息",
     "preferences": "偏好设置"
@@ -385,8 +479,8 @@
     "section.initialization": "初始化",
     "section.basic_params": "训练参数",
     "section.advanced_params": "高级参数",
-    "section.advanced_registry": "More Parameters",
-    "search.placeholder": "Search parameters...",
+    "section.advanced_registry": "更多参数",
+    "search.placeholder": "搜索参数...",
     "advanced.means_lr_end": "Position LR End:",
     "advanced.scaling_lr_end": "Scaling LR End:",
     "advanced.cropbox_lr_scale": "Rejected Splat LR Scale:",
@@ -404,16 +498,12 @@
     "advanced.screen_share_penalty": "Screen Share Penalty:",
     "advanced.oversize_split_fraction": "Oversize Split Fraction:",
     "advanced.use_edge_map": "Use Edge Map:",
-    "advanced.far_scene_min_fraction": "Far Scene Min Fraction:",
-    "advanced.growth_ratio_rank": "Growth Ratio Rank:",
-    "advanced.growth_ratio_pow": "Growth Ratio Pow:",
-    "advanced.fill_pacing_iter": "Fill Pacing Iter:",
-    "advanced.far_seed_dose": "Far Seed Dose:",
     "tooltip.means_lr_end": "控制训练后期 Gaussian 位置还能移动多少。较低值让几何更稳定；较高值允许位置后期继续适应，但可能导致漂移或不稳定。",
     "tooltip.scaling_lr_end": "控制训练后期 Gaussian 尺寸还能变化多少。较低值稳定最终 splat 尺寸；较高值允许 scale 后期继续适应。",
     "tooltip.cropbox_lr_scale": "控制 crop box 外的 splat 仍然学习多少。使用低值将训练聚焦在 ROI 内；如果外部上下文仍需适应则使用较高值。只有 active crop box 时才有意义。",
     "tooltip.cropbox_loss_weight": "控制 crop box 外图像像素对训练的影响程度。降低可聚焦 ROI；当周围场景仍应影响结果时提高。只有 active crop box 时才有意义。",
-    "tooltip.normal_loss_space": "Normal prior space: auto, camera-opencv, camera-opengl, or world",
+    "tooltip.normal_loss_space": "法线先验空间：auto、camera-opencv、camera-opengl 或 world",
+    "tooltip.eval_space": "选择评估使用原始畸变图像还是去畸变后的训练图像。",
     "tooltip.growth_grad_threshold": "设置 refinement 信号必须多强，splat 才能增长。较低值允许更多区域增长；较高值只将增长集中在更强的可见错误上。",
     "tooltip.grow_fraction": "控制每个 refinement 步骤中有多少合格候选会增长。模型需要更快增加容量时提高；增长过于激进或噪声过多时降低。",
     "tooltip.opacity_decay": "在 refinement 期间逐渐降低 opacity，训练早期作用最强。提高可帮助清理弱 splat；如果有用表面变淡则降低。",
@@ -422,11 +512,6 @@
     "tooltip.bounds_percentile": "控制如何从 Gaussian 位置估计场景边界。较低值忽略更多离群点；较高值包含更多点分布。",
     "tooltip.use_error_map": "将 refinement 引导到有可见重建错误的图像区域。如果 error-map guidance 对噪声或 appearance 差异反应过度，则关闭。",
     "tooltip.use_edge_map": "将 refinement 偏向图像边缘。用于更清晰的轮廓和细节边界；如果噪声边缘或纹理伪影获得太多容量则关闭。",
-    "tooltip.far_scene_min_fraction": "控制 far-field 功能何时激活。降低可更容易启用 far-field 处理；提高则只有足够多 splat 确实很远时才激活。",
-    "tooltip.growth_ratio_rank": "帮助很少可见但错误较高的区域与经常可见的区域竞争。远处或少见区域 refinement 不足时使用。",
-    "tooltip.growth_ratio_pow": "控制可见次数对增长排名的影响强度。较高值更偏向少见但有错误的区域；较低值更接近原始错误排名。",
-    "tooltip.fill_pacing_iter": "将容量增长分散到时间上，而不是过早填满模型。`0` 会让 cap 按 refinement 允许的速度尽快填满。",
-    "tooltip.far_seed_dose": "控制远处/背景区域的额外 seeding。远处背景仍稀疏时提高；如果 far-field growth 添加不必要的 splat，则保持较低。",
     "dataset.path": "路径:",
     "dataset.images": "图像:",
     "dataset.resize_factor": "缩放系数:",
@@ -534,6 +619,8 @@
     "thresholds.min_opacity": "最小不透明度:",
     "thresholds.prune_opacity": "不透明度修剪:",
     "value.none": "(无)",
+    "value.crop_box": "crop box",
+    "value.mask_folder": "遮罩: {}",
     "value.default": "(默认)",
     "value.not_set": "(未设置)",
     "options.strategy.mcmc": "MCMC",
@@ -546,13 +633,15 @@
     "options.mask.alpha_consistent": "与 Alpha 一致",
     "options.densify_error_map.ssim": "SSIM",
     "options.densify_error_map.ssim_cs": "SSIM Contrast-Structure",
-    "options.normal_loss_space.auto": "Auto",
-    "options.normal_loss_space.camera_opencv": "Camera (OpenCV)",
-    "options.normal_loss_space.camera_opengl": "Camera (OpenGL)",
-    "options.normal_loss_space.world": "World",
-    "options.depth_loss.ssi": "SSI (Auto)",
-    "options.depth_loss.ssi_disparity": "SSI (Disparity Prior)",
-    "options.depth_loss.ssi_depth": "SSI (Depth Prior)",
+    "options.normal_loss_space.auto": "自动",
+    "options.normal_loss_space.camera_opencv": "相机（OpenCV）",
+    "options.normal_loss_space.camera_opengl": "相机（OpenGL）",
+    "options.normal_loss_space.world": "世界",
+    "options.eval_space.distorted": "带畸变",
+    "options.eval_space.undistorted": "已去畸变",
+    "options.depth_loss.ssi": "SSI（自动）",
+    "options.depth_loss.ssi_disparity": "SSI（视差先验）",
+    "options.depth_loss.ssi_depth": "SSI（深度先验）",
     "options.bg.color": "颜色",
     "options.bg.modulation": "调制",
     "options.bg.image": "图像",
@@ -570,6 +659,14 @@
       "bg_image_path": "训练用自定义背景图。当场景应针对已知 background plate 优化时使用。",
       "bg_image_browse": "浏览背景图像",
       "bg_image_clear": "清除已选背景图像",
+      "eval_mask": "选择要评估的像素：网格、长方体、crop box、遮罩文件夹、深度范围、点或 splat。不影响训练。",
+      "eval_mask_invert": "改为评估评估遮罩之外的像素。",
+      "eval_mask_opacity": "像素被视为由 splat 遮罩覆盖所需的渲染不透明度。较低会使遮罩超出轮廓，较高会使其向内收缩。",
+      "eval_mask_browse": "浏览评估网格",
+      "eval_mask_clear": "清除评估遮罩",
+      "eval_mask_cropbox": "仅评估训练开始时所放置的训练模型 crop box 覆盖的像素。",
+      "eval_mask_folder": "选择一个每张图像对应一个遮罩的文件夹（按文件名匹配）；白色像素参与评估。",
+      "eval_mask_spec": "输入遮罩来源并按 Enter：bbox:x0,y0,z0,x1,y1,z1、depth:near,far、cropbox、masks:[文件夹] 或网格的绝对路径。",
       "dataset_path": "当前用于训练的数据集根目录。",
       "dataset_images": "数据集内的图像目录。",
       "dataset_output": "写入 checkpoint 和训练产物的路径。用于确认运行会保存到预期的项目/输出文件夹。",
@@ -603,8 +700,8 @@
           "alpha_consistent": "强制 alpha 与掩码一致"
         },
         "densify_error_map": {
-          "ssim": "Full SSIM densify error, including brightness mismatches",
-          "ssim_cs": "Contrast and structure only; ignore brightness-only mismatches"
+          "ssim": "完整的 SSIM 密度化误差，包括亮度不匹配",
+          "ssim_cs": "仅考虑对比度和结构；忽略仅亮度的不匹配"
         },
         "bg_mode": {
           "color": "使用选定的固定背景色。适合数据集有已知一致背景，或希望训练更可预测的情况。",
@@ -633,7 +730,6 @@
       "strategy": "主要训练策略，决定如何添加、细化或裁剪 Gaussians。默认使用 MRNF；在比较训练行为或处理特定策略问题时使用 MCMC 或 IGS+。",
       "iterations": "计划的优化步数。Auto 模式会按每张有效训练图像约 100 次迭代来安排，最低为 30,000 次迭代。复杂场景或需要更干净收敛时增加；快速预览时减少。",
       "max_gaussians": "模型大小上限。VRAM 允许时可提高以保留更多场景细节；降低可减少显存、训练成本和输出大小。",
-      "background_improvements": "面向远处区域和背景的 MRNF 增强包。适用于室外、天空、远处建筑，或显得稀疏、模糊、欠拟合的背景。",
       "sh_degree": "控制每个 Gaussian 能表示多少视角相关颜色。3 提供最高质量；较低值适合更快训练、更低 VRAM，或以漫反射为主的场景。",
       "mask_mode": "控制 mask 如何影响训练 loss 和 opacity。数据集有物体/背景 mask，并且需要隔离主体、忽略不需要区域或强制 alpha 行为时使用。",
       "use_depth_loss": "为几何学习加入尺度/偏移不变的深度图引导。适用于可靠的深度先验可改善相对结构、深度顺序或表面位置的情况。",
@@ -671,7 +767,7 @@
     "opt.sparsity": "稀疏化:",
     "opt.gut": "GUT:",
     "opt.undistort": "去畸变:",
-    "opt.mip_filter": "Mip Filter:",
+    "opt.mip_filter": "Mip滤波器:",
     "opt.bg_modulation": "背景调制:",
     "refinement.gradient_thr": "  梯度阈值:",
     "masking.invert_masks": "反转:",
@@ -695,8 +791,8 @@
     "add_group": "添加组",
     "add_group_ellipsis": "添加组...",
     "new_group_name": "新建组",
-    "group_selected": "Group Selected",
-    "ungroup": "Ungroup",
+    "group_selected": "将所选分组",
+    "ungroup": "取消分组",
     "export": "导出...",
     "delete": "删除",
     "rename": "重命名",
@@ -782,7 +878,7 @@
   "export": {
     "overwrite": "覆盖",
     "format.ply_standard": "PLY（标准）",
-    "format.ssog": "SSOG (PlayCanvas streamed)",
+    "format.ssog": "SSOG（PlayCanvas 流式传输）",
     "format.sog_supersplat": "SOG（SuperSplat）",
     "format.spz_niantic": "SPZ（Niantic）",
     "format.glb_gltf": "GLB (glTF)",
@@ -876,12 +972,12 @@
     "zoom": "缩放"
   },
   "preferences": {
-    "tensor_auto": "自动",
+    "tensor_auto": "Auto",
     "tensor_cuda": "CUDA",
     "tensor_vulkan": "Vulkan",
     "tensor_metal": "Metal",
     "tensor_backend": "Tensor backend",
-    "tensor_restart": "Changes apply after restarting LichtFeld Studio. Automatic picks CUDA where it is built, else Metal where the GPU supports it, else Vulkan. Vulkan and Metal support viewing and inference; training requires CUDA.",
+    "tensor_restart": "独立于查看器渲染器控制 GPU 张量计算。更改在重启 LichtFeld Studio 后生效。自动模式根据此构建和 GPU 选择 CUDA、Metal 或 Vulkan。",
     "tensor_device": "Vulkan device",
     "tensor_device_hint": "Leave empty for automatic selection, or enter a device index or UUID. CUDA rendering must use the CUDA device.",
     "tensor_validation": "Vulkan diagnostics",
@@ -935,7 +1031,6 @@
     "scene_reconstruction_off": "关闭",
     "scene_reconstruction_spatial": "空间",
     "scene_reconstruction_temporal": "时间",
-    "scene_reconstruction_nvidia_dlss": "NVIDIA DLSS",
     "scene_reconstruction_preset": "质量预设",
     "scene_reconstruction_quality": "质量",
     "scene_reconstruction_balanced": "均衡",
@@ -945,10 +1040,10 @@
     "key_bindings": "按键绑定",
     "camera_navigation": "相机导航",
     "navigation_mode": "导航模式",
-    "zoom_speed": "Zoom speed",
-    "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
-    "navigation_speed": "Navigation speed",
-    "navigation_speed_tooltip": "Default speed for moving the camera with WASD.",
+    "zoom_speed": "缩放速度",
+    "zoom_speed_tooltip": "使用鼠标滚轮缩放相机的默认速度。",
+    "navigation_speed": "导航速度",
+    "navigation_speed_tooltip": "使用 WASD 移动相机的默认速度。",
     "pointing_device": "导航设备",
     "pointing_device_tooltip": "视口的鼠标或触控板操作。也可以通过状态栏图标切换。",
     "pointing_device_mouse": "鼠标（台式机）",
@@ -1003,7 +1098,10 @@
     "reset_all_settings_confirmation": "将语言、主题、界面缩放、场景重建、输入偏好、MCP 服务器、布局和窗口状态恢复为默认值？将立即应用。如果当前打开了 .licht 项目，下次保存时将替换其已存储的布局；项目内容、数据集、导出、插件和缓存不会受到影响。",
     "reset_all_settings_success": "所有偏好、布局和窗口状态已立即重置。",
     "window_manager_unavailable": "窗口管理器不可用。",
-    "window_state_reset_failed": "无法将窗口恢复为默认位置和大小。"
+    "window_state_reset_failed": "无法将窗口恢复为默认位置和大小。",
+    "viewer_backend": "查看器后端",
+    "viewer_backend_description": "立即生效。Auto 在兼容的 Mac 上优先使用 Metal，在其他系统上使用 Vulkan。不支持的帧使用 Vulkan。",
+    "backend_unavailable": "所选后端在此设备上不可用。设置未更改。"
   },
   "main_panel": {
     "console": "控制台",
@@ -1134,7 +1232,7 @@
     "perspective": "透视",
     "orthographic": "正交",
     "sequencer": "序列器",
-    "histogram": "Histogram",
+    "histogram": "直方图",
     "depth_map": "深度图",
     "viewport_export": "视口导出",
     "depth_mode_disable": "禁用深度模式",
@@ -1197,6 +1295,7 @@
     "instructions": "Enter: 提交选择 | Ctrl+C: 复制内容"
   },
   "training_panel": {
+    "preparing_training": "正在准备训练…",
     "start_training": "开始训练",
     "resume_training": "继续训练",
     "pause": "暂停",
@@ -1232,7 +1331,7 @@
     "mip_filter": "减少亚像素高斯的锯齿",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
-    "ppisp_exposure": "Adjust exposure in EV stops",
+    "ppisp_exposure": "以 EV 档调整曝光",
     "ppisp_gamma": "调整伽马曲线",
     "ppisp_gamma_channel": "每通道伽马偏移",
     "ppisp_crf_toe": "阴影压缩（CRF曲线的脚趾）",
@@ -1356,6 +1455,8 @@
     "cropbox_loss_weight": "缩放活动裁剪框 ROI 外的像素损失",
     "environment_mode": "背景来源：纯色或 HDRI",
     "environment_map_path": "选择 HDRI 环境贴图",
+    "color_tonemapping": "显示的 Splat 颜色的色调曲线（无 = 不变）",
+    "color_exposure": "在色调曲线之前缩放 Splat 亮度；不会修改 Splat 本身",
     "environment_exposure": "HDRI 曝光（EV 档位）",
     "environment_rotation": "围绕垂直轴旋转 HDRI",
     "voxel_size": "用于空间查询的体素单元大小",
@@ -1496,16 +1597,16 @@
     "blocked_during_training": "请先停止训练，再加载新场景。"
   },
   "export_dialog": {
-    "folder_name": "Folder name",
-    "lod_levels": "LOD levels",
-    "lod_ratio": "LOD ratio",
-    "chunk_count_k": "Chunk gaussians (K)",
-    "chunk_extent": "Chunk extent",
-    "chunk_min_k": "Minimum chunk gaussians (K)",
-    "kmeans_iterations": "K-means iterations",
-    "invalid_folder_name": "Enter a single folder name without path separators.",
-    "ssog_bundle": "Bundle into a single .ssog file",
-    "ssog_overwrite": "SSOG data already exists in this folder. Overwrite it?",
+    "folder_name": "文件夹名称",
+    "lod_levels": "LOD 层级",
+    "lod_ratio": "LOD 比率",
+    "chunk_count_k": "每块高斯数 (K)",
+    "chunk_extent": "块范围",
+    "chunk_min_k": "每块最小高斯数 (K)",
+    "kmeans_iterations": "K-means 迭代次数",
+    "invalid_folder_name": "请输入单个不含路径分隔符的文件夹名称。",
+    "ssog_bundle": "打包为单个 .ssog 文件",
+    "ssog_overwrite": "此文件夹中已存在 SSOG 数据。要覆盖吗？",
     "format": "格式",
     "models": "模型",
     "no_models": "场景中无模型",
@@ -1517,8 +1618,8 @@
     "spz_version_v3": "v3 (旧版)",
     "export_merged": "导出合并的...",
     "rad_export_mode": "RAD MODE",
-    "rad_streamable": "RAD (streamable)",
-    "rad_native": "RAD (non-streamable)",
+    "rad_streamable": "RAD（可流式传输）",
+    "rad_native": "RAD（不可流式传输）",
     "rad_flip_y": "翻转Y轴",
     "colmap_writes_sparse": "写入 cameras.{0}、images.{0} 和 points3D.{0}",
     "colmap_no_sparse": "未找到 COLMAP sparse 文件夹",
@@ -1687,7 +1788,7 @@
     "trigger.drag": " 拖动",
     "trigger.scroll": "滚动",
     "trigger.unknown": "未知",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
+    "action.toggle_performance_hud": "切换性能 HUD",
     "action.view_axis_top": "顶视图",
     "action.view_axis_bottom": "底视图",
     "action.view_axis_front": "前视图",
@@ -1697,7 +1798,8 @@
     "action.view_toggle_perspective": "切换透视/正交",
     "action.view_frame_all": "框选全部",
     "action.toggle_quad_view": "切换四视图",
-    "action.toggle_maximize_area": "最大化区域"
+    "action.toggle_maximize_area": "最大化区域",
+    "action.toggle_node_editor": "切换节点编辑器"
   },
   "debug_info": {
     "clear_history": "清除历史",
@@ -1710,7 +1812,6 @@
     "strategy": "策略:",
     "iterations": "迭代次数:",
     "max_gaussians": "最大高斯数:",
-    "background_improvements": "背景改进:",
     "sh_degree": "SH 阶数:",
     "steps_scaler": "步数缩放器:",
     "bilateral_grid": "双边网格:",
@@ -1754,6 +1855,13 @@
     "ppisp_sidecar_path": "sidecar 路径:",
     "enable_eval": "启用评估:",
     "eval_all": "评估所有图像:",
+    "eval_space": "Eval Space:",
+    "eval_mask": "评估遮罩:",
+    "eval_mask_invert": "反转评估蒙版:",
+    "eval_mask_opacity": "Splat 遮罩不透明度:",
+    "eval_mask_use_cropbox": "使用 crop box",
+    "eval_mask_folder": "遮罩文件夹",
+    "eval_mask_spec": "遮罩规格:",
     "opacity_penalty_weight": "  不透明度惩罚权重:",
     "opacity_penalty_power": "  不透明度惩罚指数:",
     "mask_threshold": "  遮罩阈值:",
@@ -1864,6 +1972,7 @@
     "stop": "停止",
     "running": "运行中...",
     "already_running": "脚本已在运行。",
+    "system_exit": "编辑器脚本引发了 SystemExit",
     "python": "Python",
     "syntax": "语法",
     "outline": "大纲",
@@ -2034,7 +2143,7 @@
     "extracting": "正在提取: %d / %d 帧"
   },
   "rendering_panel": {
-    "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
+    "fov_format": "视场角：{hfov:.1f}° H / {vfov:.1f}° V",
     "section_viewport": "视口",
     "section_camera": "相机和投影",
     "section_selection": "选择和叠加层",
@@ -2109,7 +2218,23 @@
     "gpu_budget": "GPU 显存预算",
     "strategy_default": "默认",
     "split": "分割：",
-    "ui_fps": "UI FPS"
+    "mcp_name": "MCP",
+    "ui": "界面",
+    "view": "视图",
+    "renderer_backend": "渲染器",
+    "tensor_backend": "张量",
+    "renderer_backend_tooltip": "场景渲染后端。",
+    "tensor_backend_tooltip": "张量计算后端。",
+    "backend_requested": "请求：{}",
+    "backend_no_frame": "已配置的渲染器；尚无场景帧。",
+    "backend_fallback": "此帧无法使用 Metal，正在使用 Vulkan。",
+    "renderer_backend_short": "R",
+    "tensor_backend_short": "T",
+    "upscaler_backend_short": "U",
+    "upscaler_backend": "超分辨率",
+    "upscaler_pending": "等待下一渲染帧",
+    "upscaler_unsupported": "当前视图模式不支持，已关闭",
+    "upscaler_unavailable": "不可用，已关闭"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub URL 或简写：",
@@ -2508,33 +2633,33 @@
     "delta": "差值",
     "time": "时间",
     "gpu": "GPU",
-    "perf_hud_title": "Performance",
-    "perf_this_process": "This process",
-    "perf_other_processes": "Other processes",
-    "perf_free": "Free",
-    "perf_cores": "cores",
-    "perf_process_cpu_note": "Process CPU, share of all cores",
-    "perf_tab_ledger": "Ledger",
-    "perf_ledger_closes": "Ledger closes",
-    "perf_ledger_gap": "Unattributed",
-    "perf_ledger_over": "Over-attributed, numbers unreliable",
-    "perf_ledger_attributed": "Attributed",
-    "perf_nested_disclosure": "Disclosure, not counted again",
-    "perf_no_owner": "No owner",
-    "perf_untracked": "Untracked",
-    "perf_retention": "Retention",
-    "perf_reclaimable": "Reclaimable",
-    "perf_required": "Required",
-    "perf_allocated": "Allocated",
-    "perf_slack": "Slack",
-    "perf_over_budget": "Over budget",
-    "perf_estimate_detected": "Estimate detected",
-    "perf_degenerate_pair": "Publisher reports required equal to allocated",
-    "perf_tracking_off": "Detailed memory tracking is off",
-    "perf_enable_tracking": "Enable",
-    "perf_expand": "Expand",
-    "perf_collapse": "Collapse",
-    "perf_hud_tooltip": "Show or hide the performance HUD",
+    "perf_hud_title": "性能",
+    "perf_this_process": "此进程",
+    "perf_other_processes": "其他进程",
+    "perf_free": "空闲",
+    "perf_cores": "核心",
+    "perf_process_cpu_note": "进程 CPU，占所有核心的比例",
+    "perf_tab_ledger": "账目",
+    "perf_ledger_closes": "账目相符",
+    "perf_ledger_gap": "未归属",
+    "perf_ledger_over": "过度归属，数值不可靠",
+    "perf_ledger_attributed": "已归属",
+    "perf_nested_disclosure": "明细，不重复计数",
+    "perf_no_owner": "无所有者",
+    "perf_untracked": "未跟踪",
+    "perf_retention": "保留",
+    "perf_reclaimable": "可回收",
+    "perf_required": "需求",
+    "perf_allocated": "已分配",
+    "perf_slack": "余量",
+    "perf_over_budget": "超出预算",
+    "perf_estimate_detected": "检测到估计值",
+    "perf_degenerate_pair": "发布者报告的需求量等于已分配量",
+    "perf_tracking_off": "详细内存跟踪已关闭",
+    "perf_enable_tracking": "启用",
+    "perf_expand": "展开",
+    "perf_collapse": "折叠",
+    "perf_hud_tooltip": "显示或隐藏性能 HUD",
     "input_mouse_tooltip": "鼠标导航：中键拖动环绕，右键拖动平移，滚轮缩放。点击切换",
     "input_trackpad_tooltip": "触控板导航：双指滑动环绕，Shift+滑动平移，双指捏合或 Ctrl+滑动缩放。点击切换",
     "input_automatic_tooltip": "自动导航：触控板上使用触控板手势，鼠标上用滚轮缩放。点击切换"
@@ -2565,13 +2690,13 @@
     "log_entry_word": "日志",
     "log_entries_word": "日志",
     "logs_exported": "已将 {} 导出到 {}。",
-    "config_load_failed": "无法加载“{}”：\\n\\n{}",
-    "export_failed": "导出失败：\\n\\n{}",
+    "config_load_failed": "无法加载“{}”：\n\n{}",
+    "export_failed": "导出失败：\n\n{}",
     "video_export_failed": "视频导出失败：\n\n{}",
     "video_reconstruction_native_fallback": "视频重建 {}/{} 不可用；将使用 Native 导出。",
     "video_reconstruction_version_unsupported": "此项目使用了不受支持的视频重建选项版本。场景已使用 Native 重建打开；保存时将替换该选项。",
-    "conversion_failed": "转换失败：\\n\\n{}",
-    "checkpoint_save_failed": "无法在第 {} 次迭代保存检查点：\\n\\n{}",
+    "conversion_failed": "转换失败：\n\n{}",
+    "checkpoint_save_failed": "无法在第 {} 次迭代保存检查点：\n\n{}",
     "lod_enabled_no_tree": "已启用，无树",
     "lod_disabled": "无 RAD LOD",
     "lod_scale": "LOD 缩放 x{:.1f}",
@@ -2846,28 +2971,29 @@
   "projects.gallery.info.pulled": "已添加到你的项目。",
   "projects.gallery.info.reupload_encoding": "正在重新上传：无法比较此项目的编码",
   "projects.gallery.action.open_recovery": "打开恢复文件夹",
-  "projects.gallery.toast.published": "Published ‹{title}›",
-  "projects.gallery.toast.pulled": "Added ‹{title}› to ‹{folder}›",
-  "projects.gallery.toast.removed": "Removed ‹{title}› from your gallery",
+  "projects.gallery.toast.published": "已发布“{title}”",
+  "projects.gallery.toast.pulled": "已将“{title}”添加到“{folder}”",
+  "projects.gallery.toast.removed": "已从您的图库中移除“{title}”",
   "projects.gallery.quota.used": "已使用 {used} GB，共 {quota} GB",
   "projects.gallery.quota.warning": "图库剩余空间可能不足以容纳此文件。上传大小取决于所选格式。",
   "projects.gallery.quota.confirm": "已保存的文件大于图库剩余空间。所选格式可能会减小文件大小。继续准备 ‹{title}›？",
-  "projects.gallery.action.update_all": "Update all ({count})",
-  "projects.gallery.confirm.update_all": "Update these public scenes? Their published content will be replaced:\n{title}",
-  "projects.gallery.empty.published": "No published scenes yet — pick a project and press Publish",
-  "preferences.gallery.title": "Gallery",
-  "preferences.gallery.format": "Default upload format",
-  "preferences.gallery.ask_public": "Ask before making a scene public",
-  "preferences.gallery.cache": "Poster cache size (MiB)",
-  "preferences.gallery.invalid": "Enter a whole number: 1–4096 MiB for cache, or 1–1440 minutes for refresh.",
-  "gallery.transfer.batch": "Update all: {count} waiting",
-  "projects.action.add_folder": "Add folder",
-  "projects.action.folder_only": "This folder only",
-  "projects.action.include_subfolders": "Include subfolders",
-  "projects.dialog.scan_depth": "Scan depth",
-  "projects.dialog.scan_depth_message": "Should Projects include projects in subfolders?",
+  "projects.gallery.action.update_all": "全部更新 ({count})",
+  "projects.gallery.confirm.update_all": "更新这些公开场景？其已发布内容将被替换：\n{title}",
+  "projects.gallery.empty.published": "尚无已发布场景：选择一个项目并点击“发布”",
+  "preferences.gallery.title": "图库",
+  "preferences.gallery.format": "默认上传格式",
+  "preferences.gallery.ask_public": "将场景设为公开前询问",
+  "preferences.gallery.cache": "海报缓存大小 (MiB)",
+  "preferences.gallery.invalid": "请输入整数：缓存为 1～4096 MiB，刷新间隔为 1～1440 分钟。",
+  "gallery.transfer.batch": "全部更新：{count} 个等待中",
+  "projects.action.add_folder": "添加文件夹",
+  "projects.action.folder_only": "仅此文件夹",
+  "projects.action.include_subfolders": "包含子文件夹",
+  "projects.dialog.scan_depth": "扫描深度",
+  "projects.dialog.scan_depth_message": "是否让 Projects 包含子文件夹中的项目？",
   "projects.action.add_existing": "添加现有项目...",
   "projects.tooltip.add_existing": "将现有 .licht 项目添加到目录",
+  "projects.tooltip.clean_missing": "从目录中移除此处显示的缺失项目。不会删除任何文件。",
   "projects.dialog.choose_existing": "选择现有 .licht",
   "projects.action.clear_search": "清除",
   "projects.status.no_search_results": "没有匹配的项目",
@@ -2935,6 +3061,7 @@
   "projects.gallery.eligibility.hdr": "此图库不支持 HDR",
   "projects.gallery.eligibility.no_splats": "没有可见的高斯点",
   "projects.gallery.eligibility.external_payloads": "查看副本中未嵌入外部高斯点数据",
+  "projects.gallery.eligibility.hdr_missing": "未找到 HDR 背景文件。请重新选择并保存项目。",
   "projects.gallery.eligibility.space": "图库剩余空间不足",
   "projects.gallery.eligibility.not_checked": "准备查看副本时会检查发布条件",
   "projects.gallery.eligibility.copy": "此文件是另一个项目的副本。请使用“项目另存为”单独发布。",
@@ -3089,20 +3216,20 @@
   "projects.contents.month.12": "12月",
   "projects.contents.refresh_failed": "操作已完成，但无法刷新内容：{reason}",
   "project_cleanup": {
-    "title": "Clean project…",
-    "clean_here": "Clean this project",
-    "copy": "Save cleaned copy…",
-    "summary": "Older saves to remove: {saves}. Older checkpoints to remove: {checkpoints}. Estimated space saved: {size}.\n\nKeep the current models, edits, settings, embedded data, and current training resume point.\n\nCleaning this project permanently removes its older versions. A cleaned copy leaves the original untouched. Temporary disk space is needed.",
-    "wait": "Wait for the current project write to finish.",
-    "stop_training": "Stop training before cleaning the project.",
-    "save_first": "Save the current project before reviewing cleanup. Your current edits will be kept.",
-    "save_failed": "The project could not be saved. Cleanup has been stopped.",
-    "changed": "The project changed. Open Clean project again to review the current version.",
-    "new_destination": "Choose a new filename for the cleaned copy. Existing files are kept safe.",
-    "working": "Cleaning the project. Progress is shown in the task bar. You can cancel before cleanup finishes.",
-    "reading": "Reading the project…",
-    "done": "Cleanup complete. The file is {size} smaller.\n{path}",
-    "canceling": "Canceling cleanup… Please wait."
+    "title": "清理项目…",
+    "clean_here": "清理此项目",
+    "copy": "保存清理后的副本…",
+    "summary": "要移除的旧保存：{saves} 个。要移除的旧检查点：{checkpoints} 个。预计节省空间：{size}。\n\n保留当前模型、编辑、设置、嵌入数据和当前训练恢复点。\n\n清理此项目会永久移除其旧版本。清理后的副本不会影响原文件。需要临时磁盘空间。",
+    "wait": "请等待当前项目写入完成。",
+    "stop_training": "清理项目前请先停止训练。",
+    "save_first": "在查看清理内容前请先保存当前项目。您当前的编辑将被保留。",
+    "save_failed": "无法保存项目。清理已停止。",
+    "changed": "项目已更改。请重新打开“清理项目”以查看当前版本。",
+    "new_destination": "为清理后的副本选择一个新文件名。现有文件将保持不变。",
+    "working": "正在清理项目。进度显示在任务栏中。清理完成前可以取消。",
+    "reading": "正在读取项目…",
+    "done": "清理完成。文件减小了 {size}。\n{path}",
+    "canceling": "正在取消清理… 请稍候。"
   },
   "projects.gallery.review.unlinked_copy": "当前场景将按原样上传。此计算机上不会保存任何内容。",
   "projects.gallery.state.live_snapshot": "从当前场景发布",
@@ -3146,5 +3273,1822 @@
   "view3d.coordinate_axes": "坐标轴",
   "view3d.pivot_point": "轴心点",
   "view3d.camera_frustums": "相机视锥",
-  "ui.split_viewport": "拆分视口"
+  "ui.split_viewport": "拆分视口",
+  "runtime.import_batch_failed.one": "有 {} 个文件未能加载",
+  "runtime.import_batch_failed.few": "有 {} 个文件未能加载",
+  "runtime.import_batch_failed.other": "有 {} 个文件未能加载",
+  "runtime.import_out_of_memory": "GPU 显存不足",
+  "runtime.import_batch_kept": "其他文件已加载，仍可在场景中使用。",
+  "runtime.import_render_failed": "无法准备此文件以进行渲染",
+  "nodes.edit_stored_splats_blocked": "应用或隐藏节点修改器以编辑存储的溅点",
+  "editor.node_editor": "节点编辑器",
+  "node_editor.toggle": "切换节点编辑器",
+  "node_editor.preview_selection": "Preview Selection",
+  "node_editor.toggle_sidebar": "Toggle sidebar",
+  "node_editor.edit_mode_notice": "Node modifiers are available in edit mode",
+  "node_editor.select_node_notice": "Select a splat, mesh or point cloud node",
+  "node_editor.add_modifier_notice": "添加节点修改器以开始",
+  "node_editor.type_splat": "Splat",
+  "node_editor.type_point_cloud": "Point Cloud",
+  "node_editor.type_mesh": "Mesh",
+  "node_editor.type_unsupported": "Unsupported",
+  "node_editor.new_graph": "新建节点图",
+  "node_editor.modifier_actions": "修改器操作",
+  "node_editor.target": "Target",
+  "node_editor.modifiers": "Modifiers",
+  "node_editor.add_modifier": "Add Modifier",
+  "node_editor.show_viewport": "Show in viewport",
+  "node_editor.move_up": "Move up",
+  "node_editor.move_down": "Move down",
+  "node_editor.apply": "Apply",
+  "node_editor.remove": "Remove",
+  "node_editor.status_errors": "errors",
+  "node_editor.status_ok": "OK",
+  "node_editor.status_disabled": "Disabled",
+  "node_editor.capture_selection": "Capture selection",
+  "node_editor.default_tree_name": "节点图",
+  "node_editor.add": "+ 添加",
+  "node_editor.modifiers_on": "修改器已开启",
+  "node_editor.modifiers_off": "修改器已关闭",
+  "node_editor.frame": "显示全部",
+  "node_editor.open": "打开…",
+  "node_editor.save": "保存…",
+  "node_editor.selected_share": "已选中 {}%",
+  "node_editor.cached": "已缓存",
+  "node_editor.updating": "更新中…",
+  "node_editor.updating_node": "更新中… {}/{} {}",
+  "node_editor.error_count": "{} 个错误",
+  "node_editor.unchanged": "未更改",
+  "node_editor.splats": "高斯点",
+  "node_editor.points": "点",
+  "node_editor.vertices": "顶点",
+  "node_editor.result": "结果：{} {} · {}",
+  "node_editor.last_run": "上次运行：{}",
+  "node_editor.node_on": "开启",
+  "node_editor.file_read_error": "无法读取节点图",
+  "node_editor.file_write_error": "无法保存节点图",
+  "node_editor.search_nodes": "搜索节点…",
+  "node_editor.settings_count_one": "{} 项设置",
+  "node_editor.settings_count_other": "{} 项设置",
+  "node_editor.arrange": "排列",
+  "node_editor.arrange_shortcut": "Shift+L",
+  "node_editor.running": "运行中…",
+  "node_editor.queued": "排队中",
+  "node_editor.no_results": "没有匹配的节点",
+  "node_editor.optional_selection": "可选：未连接时选择全部",
+  "node_editor.captured_count": "已捕获：{} 个选中项",
+  "nodes": {
+    "paint_selection": {
+      "label": "绘制选择",
+      "description": "直接在场景表面绘制实时几何选择区域。",
+      "help": "选择节点并开启绘制，然后在表面拖动；按住 Alt/Option 拖动可擦除。\n使用 [ 和 ] 调整笔刷大小。元素数量改变后笔画仍然有效。",
+      "inputs": {
+        "Softness": "每个采样半径中用于边缘渐隐的比例，范围 0–1。0 为硬边，默认值为 0.5。"
+      },
+      "input_labels": {
+        "Softness": "柔和度"
+      },
+      "outputs": {
+        "Selection": "选择强度：0 为未选择，1 为完全选择；中间值形成柔和过渡。"
+      },
+      "output_labels": {
+        "Selection": "选择"
+      },
+      "properties": {
+        "data": "以宿主局部采样存储的表面笔画。默认为空。",
+        "invert": "反转绘制的选择。默认关闭时保留绘制区域；开启时选择其余区域。"
+      },
+      "property_labels": {
+        "data": "笔画",
+        "invert": "反转"
+      }
+    },
+    "boolean": {
+      "label": "布尔值",
+      "description": "提供一个开关，同时控制多个已连接的设置。",
+      "help": "用它一起开关多个选项。\n将值连接到布尔输入；默认关闭。",
+      "inputs": {
+        "Value": "共用开关。默认关闭表示假或未选中；开启表示真或选中。"
+      },
+      "input_labels": {
+        "Value": "数值"
+      },
+      "outputs": {
+        "Value": "选中元素为开，未选中为关。连接到选择或布尔输入。"
+      },
+      "output_labels": {
+        "Value": "数值"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "boolean_math": {
+      "label": "布尔运算",
+      "description": "通过交集、并集或反选组合你的选择。",
+      "help": "用“与”保留交集，用“或”包含任一选择。\n“非”反转 A 并忽略 B。",
+      "inputs": {
+        "A": "第一个开关值或选择。默认关闭；开启时包含该元素。",
+        "B": "第二个开关值或选择。默认关闭；开启时包含该元素。"
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Result": "选中元素为开，未选中为关。连接到选择或布尔输入。"
+      },
+      "output_labels": {
+        "Result": "结果"
+      },
+      "properties": {
+        "operation": "组合 A 与 B 的方式。默认“与”保留交集；“非”反转 A 并忽略 B。"
+      },
+      "property_labels": {
+        "operation": "运算"
+      }
+    },
+    "box_selection": {
+      "label": "方框选择",
+      "description": "选择场景中方框以内的部分，并可柔化边缘。",
+      "help": "移动中心并调整尺寸以包围目标。\n先将衰减设为 0，获得清晰边界。",
+      "inputs": {
+        "Centre": "中心的局部 X、Y、Z 坐标，单位为场景单位。默认 (0, 0, 0) 是对象原点。",
+        "Size": "完整宽、高、深，均为非负场景单位。默认 (1, 1, 1) 是单位方框。",
+        "Rotation": "绕 X、Y、Z 轴旋转的角度，单位为度。默认 (0, 0, 0) 不改变方向。",
+        "Falloff": "方框外侧的柔和边缘宽度，单位为场景单位。默认 0 产生清晰边界。"
+      },
+      "input_labels": {
+        "Centre": "中心",
+        "Size": "大小",
+        "Rotation": "旋转",
+        "Falloff": "衰减"
+      },
+      "outputs": {
+        "Selection": "选择强度：0 未选中，1 完全选中，中间值产生柔和过渡。"
+      },
+      "output_labels": {
+        "Selection": "选择"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour": {
+      "label": "颜色",
+      "description": "提供一种颜色，供相连的节点共同使用。",
+      "help": "选取颜色，再连接到需要共享颜色的设置。\n默认是中灰色。",
+      "inputs": {
+        "Colour": "RGB 颜色，每通道通常为 0–1：0 黑，1 白。默认 (0.5, 0.5, 0.5) 是中灰。"
+      },
+      "input_labels": {
+        "Colour": "颜色"
+      },
+      "outputs": {
+        "Colour": "输出 RGB 颜色。每通道 0 黑、1 白；某些运算可能超出此范围。"
+      },
+      "output_labels": {
+        "Colour": "颜色"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_attribute": {
+      "label": "颜色属性",
+      "description": "读取每个 splat 或点的基础颜色，用于改色或按颜色选择。",
+      "help": "连接到分离颜色以检查各通道。\n它读取基础颜色，而非随视角变化的反光。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Colour": "输出 RGB 颜色。每通道 0 黑、1 白；某些运算可能超出此范围。"
+      },
+      "output_labels": {
+        "Colour": "颜色"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_correct": {
+      "label": "颜色校正",
+      "description": "调整颜色：曝光、色阶、对比度、饱和度、色相、白平衡以及阴影/中间调/高光色调。",
+      "help": "先用曝光调整亮度，再调对比度与饱和度。\n连接选择以仅校正场景的一部分。\n将色轮归中可恢复中性的阴影、中间调和高光。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Exposure": "以档为单位的亮度：+1 加倍，−1 减半。默认 0 不改变亮度。",
+        "Black Point": "映射为黑色的输入亮度。默认 0 保留原黑色；提高会加深阴影。",
+        "White Point": "映射为白色的输入亮度。默认 1 保留原白色；降低会提亮高光。",
+        "Midpoint": "映射为中灰的输入亮度，0.01–0.99。0.5 中性；降低可提亮中间调。",
+        "Contrast": "明暗差异。1 保持不变，0 成为单一色调，大于 1 增强对比。",
+        "Saturation": "颜色强度。0 去除颜色，1 保持不变，大于 1 增强颜色。",
+        "Hue Shift": "色轮旋转角度，单位为度。0 保持颜色；180 将颜色变为互补色。",
+        "Temperature": "冷暖平衡，−1 至 1。负值偏冷，正值偏暖；0 中性。",
+        "Tint": "绿／洋红平衡，−1 至 1。负值增加洋红，正值增加绿色；0 中性。",
+        "Shadows": "暗部颜色偏移，每通道 −1 至 1。0 中性；负值减去该颜色。",
+        "Midtones": "中间亮度区域的颜色偏移，每通道 −1 至 1。0 中性；正值增加该颜色。",
+        "Highlights": "亮部颜色偏移，每通道 −1 至 1。0 中性；正值增加该颜色。",
+        "Gamma": "中间调亮度，必须大于 0。1 中性；大于 1 提亮，小于 1 压暗。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Exposure": "曝光",
+        "Black Point": "黑点",
+        "White Point": "白点",
+        "Midpoint": "中点",
+        "Contrast": "对比度",
+        "Saturation": "饱和度",
+        "Hue Shift": "色相偏移",
+        "Temperature": "色温",
+        "Tint": "色调",
+        "Shadows": "阴影",
+        "Midtones": "中间调",
+        "Highlights": "高光",
+        "Gamma": "Gamma"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "auto_range": "从场景测量黑点和白点。默认关闭，由你手动控制这两个值。"
+      },
+      "property_labels": {
+        "auto_range": "自动范围"
+      }
+    },
+    "colour_key": {
+      "label": "颜色键",
+      "description": "选出颜色与你指定颜色相近的场景部分。",
+      "help": "选取颜色，再增大容差直到覆盖目标。\n增加少量柔和度以避免硬边。",
+      "inputs": {
+        "Colour": "要匹配的 RGB 颜色，每通道通常为 0–1。默认黑色；在此选择目标色。",
+        "Tolerance": "允许与目标颜色相差的 RGB 距离。0 只匹配精确颜色；默认 0.1 允许少量变化。",
+        "Softness": "柔和过渡的宽度。默认 0 产生硬边；更大的值柔化选择。"
+      },
+      "input_labels": {
+        "Colour": "颜色",
+        "Tolerance": "容差",
+        "Softness": "柔和度"
+      },
+      "outputs": {
+        "Selection": "选择强度：0 未选中，1 完全选中，中间值产生柔和过渡。"
+      },
+      "output_labels": {
+        "Selection": "选择"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "combine_colour": {
+      "label": "合成颜色",
+      "description": "将独立的 RGB 或 HSV 数值合成为颜色。",
+      "help": "连接三个数值，并选择 RGB 或 HSV 模式。\nHSV 模式下，R、G、B 分别代表色相、饱和度和明度。",
+      "inputs": {
+        "R": "RGB 的红色或 HSV 的色相，通常为 0–1。默认 0 表示无红色，或 HSV 红色色相。",
+        "G": "RGB 的绿色或 HSV 的饱和度，通常为 0–1。默认 0 表示无绿色，或 HSV 灰色。",
+        "B": "RGB 的蓝色或 HSV 的明度，通常为 0–1。默认 0 表示无蓝色，或 HSV 黑色。"
+      },
+      "input_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "outputs": {
+        "Colour": "输出 RGB 颜色。每通道 0 黑、1 白；某些运算可能超出此范围。"
+      },
+      "output_labels": {
+        "Colour": "颜色"
+      },
+      "properties": {
+        "mode": "颜色解释方式。默认 RGB 使用红、绿、蓝；HSV 使用色相、饱和度、明度。"
+      },
+      "property_labels": {
+        "mode": "模式"
+      }
+    },
+    "combine_xyz": {
+      "label": "合成 XYZ",
+      "description": "将独立的 X、Y、Z 数值合成为位置或方向。",
+      "help": "用它修改一个坐标，同时保留另外两个。\n将结果连接到向量输入。",
+      "inputs": {
+        "X": "X 坐标，使用你所需的单位。默认 0 在该轴上不作贡献。",
+        "Y": "Y 坐标，使用你所需的单位。默认 0 在该轴上不作贡献。",
+        "Z": "Z 坐标，使用你所需的单位。默认 0 在该轴上不作贡献。"
+      },
+      "input_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "outputs": {
+        "Vector": "输出 X、Y、Z 数值，单位与你的运算一致。"
+      },
+      "output_labels": {
+        "Vector": "向量"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "compare": {
+      "label": "比较",
+      "description": "通过比较两个数值，例如高度和地面高度，选择场景的一部分。",
+      "help": "将高度连接到 A、地面高度连接到 B，再选“小于”。\n容差仅影响“等于”和“不等于”。",
+      "inputs": {
+        "A": "第一个数值，单位与你的运算一致。默认 0。",
+        "B": "第二个数值，单位与你的运算一致。默认 0。",
+        "Epsilon": "“等于”和“不等于”的容差，单位与 A、B 相同。0 表示精确比较；默认 0.001。"
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Epsilon": "Epsilon"
+      },
+      "outputs": {
+        "Result": "选中元素为开，未选中为关。连接到选择或布尔输入。"
+      },
+      "output_labels": {
+        "Result": "结果"
+      },
+      "properties": {
+        "operation": "比较方式。默认“等于”；选择“小于”或“大于”以选出 B 一侧的数值。"
+      },
+      "property_labels": {
+        "operation": "运算"
+      }
+    },
+    "decimate": {
+      "label": "按重要性精简",
+      "description": "保留选择中更大、更不透明的 splat，以减少总数。",
+      "help": "从保留比例 0.5 开始，保留约一半选中 splat。\n未选中的始终保留；重要性相同可能导致保留数量略多。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "要减少的 splat：选择权重至少 0.5。未连接表示所有 splat。",
+        "Keep Fraction": "保留选中 splat 的比例，0.001–1。0.5 保留约一半；1 全部保留。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Keep Fraction": "保留比例"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "delete_geometry": {
+      "label": "删除几何体",
+      "description": "从场景中移除选中的 splat、点或网格顶点。",
+      "help": "先连接选择，再连接几何体。\n选择未连接会删除全部；接触已删顶点的网格面也会删除。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "要移除的元素：权重至少 0.5。未连接表示删除全部，因此输出为空。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "ellipsoid_selection": {
+      "label": "椭球选择",
+      "description": "选择场景中球形或拉伸球形以内的部分，并可柔化边缘。",
+      "help": "设置中心和半径以包围目标。\n各半径相等时为球形；衰减 0 产生清晰边界。",
+      "inputs": {
+        "Centre": "中心的局部 X、Y、Z 坐标，单位为场景单位。默认 (0, 0, 0) 是对象原点。",
+        "Radii": "沿各轴的半径，均为非负场景单位。默认 (1, 1, 1) 形成单位球。",
+        "Rotation": "绕 X、Y、Z 轴旋转的角度，单位为度。默认 (0, 0, 0) 不改变方向。",
+        "Falloff": "椭球外侧的柔和边缘，相对于各半径。默认 0 产生清晰边界。"
+      },
+      "input_labels": {
+        "Centre": "中心",
+        "Radii": "半径组",
+        "Rotation": "旋转",
+        "Falloff": "衰减"
+      },
+      "outputs": {
+        "Selection": "选择强度：0 未选中，1 完全选中，中间值产生柔和过渡。"
+      },
+      "output_labels": {
+        "Selection": "选择"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group": {
+      "label": "组",
+      "description": "计算可复用的节点图。",
+      "help": "在侧边栏中选择图。输入和输出由该图的接口决定。\n所有实例共享同一张图。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "tree": "所引用图的 UUID。"
+      },
+      "property_labels": {
+        "tree": "图"
+      }
+    },
+    "frame": {
+      "label": "框架",
+      "description": "在视觉上组织相关节点。",
+      "help": "将节点拖入框架。移动框架时，其成员会一起移动。\n布局节点不会更改计算结果。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "label": "框架标题。",
+        "colour": "主题颜色预设或 RGB 值。",
+        "note": "标题下方的可选文字。"
+      },
+      "property_labels": {
+        "label": "标签",
+        "colour": "颜色",
+        "note": "备注"
+      }
+    },
+    "reroute": {
+      "label": "转接",
+      "description": "在不改变值的情况下改变连线走向。",
+      "help": "可连接任意插口类型；转接会采用上游类型。\n布局节点不会更改计算结果。",
+      "inputs": {
+        "Input": "要传递的值。"
+      },
+      "input_labels": {
+        "Input": "输入"
+      },
+      "outputs": {
+        "Output": "未更改的输入值。"
+      },
+      "output_labels": {
+        "Output": "输出"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "note": {
+      "label": "备注",
+      "description": "向图中添加可编辑的文本卡片。",
+      "help": "双击卡片，或在侧边栏中编辑文字。\n布局节点不会更改计算结果。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "text": "卡片上显示的文字。",
+        "width": "卡片宽度（画布单位）；高度随文字自动调整。"
+      },
+      "property_labels": {
+        "text": "文字",
+        "width": "宽度"
+      }
+    },
+    "group_input": {
+      "label": "组输入",
+      "description": "将宿主对象的几何体引入节点图。",
+      "help": "将几何体连接到第一个编辑节点。\n在修改器栈中，你会收到前一修改器的结果。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "宿主输入几何体或上一修改器的结果。连接到第一个编辑节点。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group_output": {
+      "label": "组输出",
+      "description": "将节点图的最终几何体返回场景。",
+      "help": "将最后一个编辑节点连接到几何体。\n只有通向此节点的分支会影响修改器结果。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。"
+      },
+      "input_labels": {
+        "Geometry": "几何体"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "hsv_range": {
+      "label": "HSV 范围",
+      "description": "按颜色范围选择 splat，例如草坪上的所有绿色，并保留柔和边缘。",
+      "help": "先选色相，再扩大色相范围直到整个对象都被选中。\n提高最低饱和度以忽略灰色，提高最低明度以忽略阴影。\n开启选择预览，在视口中查看结果。",
+      "inputs": {
+        "Hue": "色轮上的范围中心，0–1：0 红、0.17 黄、0.33 绿、0.5 青、0.67 蓝、0.83 洋红。",
+        "Hue Range": "色相两侧允许的距离，0–0.5 圈。0.07 可覆盖一组相近颜色。",
+        "Hue Softness": "色相范围外的渐隐宽度，以色轮圈数计。默认 0 产生清晰的色相边界。",
+        "Saturation Min": "包含的最低颜色强度，0–1。默认 0 包含灰色；提高可排除灰色。",
+        "Saturation Max": "包含的最高颜色强度，0–1。默认 1 包含完全饱和的颜色。",
+        "Value Min": "包含的最低亮度，0–1。默认 0 包含黑色；提高可排除阴影。",
+        "Value Max": "包含的最高亮度，0–1。默认 1 包含白色；降低可排除高光。",
+        "Softness": "柔和过渡的宽度。默认 0 产生硬边；更大的值柔化选择。"
+      },
+      "input_labels": {
+        "Hue": "色相",
+        "Hue Range": "色相范围",
+        "Hue Softness": "色相柔和度",
+        "Saturation Min": "最低饱和度",
+        "Saturation Max": "最高饱和度",
+        "Value Min": "最低明度",
+        "Value Max": "最高明度",
+        "Softness": "柔和度"
+      },
+      "outputs": {
+        "Selection": "选择强度：0 未选中，1 完全选中，中间值产生柔和过渡。"
+      },
+      "output_labels": {
+        "Selection": "选择"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "index": {
+      "label": "索引",
+      "description": "给出每个 splat、点或网格顶点在当前列表中的位置，从零开始。",
+      "help": "配合数学运算或比较来选择指定编号。\n删除或合并几何体会改变这些编号。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Index": "当前列表位置，从 0 开始。合并或删除几何体可能重新编号。"
+      },
+      "output_labels": {
+        "Index": "索引"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "inside_mesh": {
+      "label": "网格内部",
+      "description": "选择被参考网格包围的场景部分。",
+      "help": "将对象信息中的封闭网格连接到网格输入。\n孔洞或自相交会使内外判断不明确。",
+      "inputs": {
+        "Mesh": "定义内部的封闭参考网格。请连接对象信息；未连接时无法选中任何元素。"
+      },
+      "input_labels": {
+        "Mesh": "网格"
+      },
+      "outputs": {
+        "Selection": "选中元素为开，未选中为关。连接到选择或布尔输入。"
+      },
+      "output_labels": {
+        "Selection": "选择"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "integer": {
+      "label": "整数",
+      "description": "提供一个整数，供多个相连设置共同使用。",
+      "help": "将值连接到数量或整数设置。\n从 0 开始，用步进按钮每次调整一。",
+      "inputs": {
+        "Value": "共用整数。默认 0；允许负数和正数。"
+      },
+      "input_labels": {
+        "Value": "数值"
+      },
+      "outputs": {
+        "Value": "输出数值，单位与你的运算一致。连接到兼容的数值输入。"
+      },
+      "output_labels": {
+        "Value": "数值"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "invert_colour": {
+      "label": "反转颜色",
+      "description": "反转颜色，使暗部变亮，并将颜色变为互补色。",
+      "help": "连接选择以仅反转部分场景。\n应用两次可恢复基础颜色，除非此前裁剪已损失细节。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "join_geometry": {
+      "label": "合并几何体",
+      "description": "将多个输入合为一个；不同 SH 阶数的 splat 会补齐到最高阶。",
+      "help": "将多个几何体输出连接到同一个输入。\n用它重新合并分离几何体后的分支。\n重叠的副本仍是独立的 splat、点或网格面。",
+      "inputs": {
+        "Geometry": "要合并的几何体来源。此处可连接多条线；未连接时结果为空。"
+      },
+      "input_labels": {
+        "Geometry": "几何体"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "map_range": {
+      "label": "映射范围",
+      "description": "将一个数值范围转换为另一个，例如将 0–2 m 高度转为从 1 到 0 的渐变。",
+      "help": "设置源最小值与源最大值来确定原始范围。\n目标最小值 1、目标最大值 0 可产生反向渐变。\n保持限制开启，让结果不超出目标边界。",
+      "inputs": {
+        "Value": "要转换的数值，单位与源范围一致。默认 0；连接位置或其他数值。",
+        "From Min": "源范围下限，单位与数值输入相同。默认 0。",
+        "From Max": "源范围上限，单位与数值输入相同。默认 1；应与源最小值不同。",
+        "To Min": "源最小值对应的结果。默认 0；此处设 1、目标最大值设 0 可反向渐变。",
+        "To Max": "源最大值对应的结果。默认 1；此处设 0、目标最小值设 1 可反向渐变。"
+      },
+      "input_labels": {
+        "Value": "数值",
+        "From Min": "源最小值",
+        "From Max": "源最大值",
+        "To Min": "目标最小值",
+        "To Max": "目标最大值"
+      },
+      "outputs": {
+        "Result": "输出数值，单位与你的运算一致。连接到兼容的数值输入。"
+      },
+      "output_labels": {
+        "Result": "结果"
+      },
+      "properties": {
+        "clamp": "将结果限制在输出范围内。默认开启；关闭后允许超出两端。"
+      },
+      "property_labels": {
+        "clamp": "限制"
+      }
+    },
+    "math": {
+      "label": "数学运算",
+      "description": "对数值进行加、乘、比较或舍入 — 例如根据高度缩放不透明度。",
+      "help": "选择运算，再将数值连接到 A 与 B。\n先尝试乘法来缩放选择强度。",
+      "inputs": {
+        "A": "第一个数值，单位与你的运算一致。默认 0。",
+        "B": "第二个数值，单位与你的运算一致。默认 0。"
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Value": "输出数值，单位与你的运算一致。连接到兼容的数值输入。"
+      },
+      "output_labels": {
+        "Value": "数值"
+      },
+      "properties": {
+        "operation": "要进行的计算。默认为加法；绝对值等运算仅使用 A。"
+      },
+      "property_labels": {
+        "operation": "运算"
+      }
+    },
+    "mesh_to_points": {
+      "label": "网格转点",
+      "description": "将网格顶点转换为点云，并保留可用的顶点颜色。",
+      "help": "连接对象信息中的网格。\n每个顶点生成一个点，而非在表面均匀采样。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。"
+      },
+      "input_labels": {
+        "Geometry": "几何体"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "mesh_to_splats": {
+      "label": "网格转 splat",
+      "description": "用有色的扁平 splat 覆盖网格表面。",
+      "help": "默认密度会在单位球上生成约 20,000 个 splat。\n提高密度可增加细节；最大数量限制总数。\n顶点颜色优先于材质颜色和纹理。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Density": "每平方场景单位的 splat 数。默认约 1,592，在单位球上生成 20,000；0 不生成。",
+        "Max Count": "生成 splat 的数量上限，0–2,000,000。默认限制为 2,000,000；0 不生成。",
+        "Opacity": "splat 不透明度，0–1：0 透明，1 不透明。默认 0.95 接近不透明。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Density": "密度",
+        "Max Count": "最大数量",
+        "Opacity": "不透明度"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "seed": "可重复图案的整数种子。默认 0；改变它会得到另一种图案。"
+      },
+      "property_labels": {
+        "seed": "种子"
+      }
+    },
+    "mix_colour": {
+      "label": "混合颜色",
+      "description": "混合两种颜色，或按指定的颜色运算组合它们。",
+      "help": "将颜色连接到 A 和 B；系数 0.5 可等量混合。\n先用混合模式，再尝试乘法或加法。",
+      "inputs": {
+        "A": "第一个 RGB 颜色，每通道通常为 0–1。默认黑色。",
+        "B": "第二个 RGB 颜色，每通道通常为 0–1。默认黑色。",
+        "Factor": "混合强度，0–1。0 保留 A，1 完全应用所选运算；0.5 为半强度。"
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Factor": "系数"
+      },
+      "outputs": {
+        "Colour": "输出 RGB 颜色。每通道 0 黑、1 白；某些运算可能超出此范围。"
+      },
+      "output_labels": {
+        "Colour": "颜色"
+      },
+      "properties": {
+        "mode": "颜色组合方式。默认混合；加法、减法、乘法在系数混合前应用。"
+      },
+      "property_labels": {
+        "mode": "模式"
+      }
+    },
+    "named_attribute": {
+      "label": "命名属性",
+      "description": "按名称读取存储的数值，用于控制编辑。",
+      "help": "输入精确的属性名并选择类型。\n不存在的属性无法提供数值。",
+      "inputs": {
+        "Name": "存储属性的精确名称，区分大小写。默认空；使用输出前请填写名称。"
+      },
+      "input_labels": {
+        "Name": "名称"
+      },
+      "outputs": {
+        "Attribute": "从命名属性读取的值，使用其存储单位。"
+      },
+      "output_labels": {
+        "Attribute": "属性"
+      },
+      "properties": {
+        "type": "要读取的值类型。默认 Float，为每个元素读取一个小数。"
+      },
+      "property_labels": {
+        "type": "类型"
+      }
+    },
+    "neighbour_count": {
+      "label": "邻居数量",
+      "description": "统计附近 splat 或点的数量，帮助你找出场景中的稀疏区域。",
+      "help": "将数量连接到比较，选择邻居较少的部分。\n对 splat 可从半径 3 并开启相对尺寸开始。\n点自身不会计入。",
+      "inputs": {
+        "Radius": "邻居距离。默认 1，单位为场景单位，或开启相对尺寸后的大小倍数。0 不统计邻居。"
+      },
+      "input_labels": {
+        "Radius": "半径"
+      },
+      "outputs": {
+        "Count": "半径内的邻居数量，不包含点自身。0 表示孤立。"
+      },
+      "output_labels": {
+        "Count": "数量"
+      },
+      "properties": {
+        "relative_to_size": "用每个 splat 的尺寸作为半径单位。默认关闭使用场景单位；点始终使用场景单位。"
+      },
+      "property_labels": {
+        "relative_to_size": "相对尺寸"
+      }
+    },
+    "opacity": {
+      "label": "不透明度",
+      "description": "读取每个 splat 的不透明度，帮助找出微弱或实心区域。",
+      "help": "将不透明度连接到比较，以选择微弱的 splat。\n0 表示透明，1 表示不透明。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Opacity": "渲染前的不透明度：0 透明，1 不透明。"
+      },
+      "output_labels": {
+        "Opacity": "不透明度"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "points_to_splats": {
+      "label": "点转 splat",
+      "description": "将点云转换为有色的圆形 splat。",
+      "help": "保持半径为 0，根据附近点估计尺寸。\n若自动尺寸留下空隙，可指定以场景单位计的正半径。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Radius": "splat 半径，单位为场景单位。默认 0 估计为附近点间距的一半；正值设置统一尺寸。",
+        "Opacity": "splat 不透明度，0–1：0 透明，1 不透明。默认 0.9 保留少量透明度。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Radius": "半径",
+        "Opacity": "不透明度"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "position": {
+      "label": "位置",
+      "description": "读取每个 splat、点或网格顶点在对象中的位置。",
+      "help": "将位置连接到分离 XYZ，按高度或沿轴距离选择。\n坐标使用对象的局部空间。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "局部 X、Y、Z 位置，单位为场景单位。"
+      },
+      "output_labels": {
+        "Position": "位置"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "posterize": {
+      "label": "色调分层",
+      "description": "将场景颜色减少为少数平坦的色阶。",
+      "help": "从级数 4 开始，每个颜色通道得到四级。\n连接选择以限制效果范围。\n选中的 splat 会失去随视角变化的颜色。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Levels": "每个 RGB 通道的色阶数，2–32。2 仅保留低、高两级；默认 4。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Levels": "级数"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "random_value": {
+      "label": "随机值",
+      "description": "给每个 splat 或点分配可重复的随机值，为编辑增加变化。",
+      "help": "设置所需的最小值和最大值。\n改变种子可得到新图案；重新排序几何体也会改变图案。",
+      "inputs": {
+        "Min": "最小随机值，使用你所需的单位。默认 0；应小于最大值。",
+        "Max": "最大随机值，使用你所需的单位。默认 1；应大于最小值。"
+      },
+      "input_labels": {
+        "Min": "最小值",
+        "Max": "最大值"
+      },
+      "outputs": {
+        "Value": "输出数值，单位与你的运算一致。连接到兼容的数值输入。"
+      },
+      "output_labels": {
+        "Value": "数值"
+      },
+      "properties": {
+        "seed": "可重复图案的整数种子。默认 0；改变它会得到另一种图案。"
+      },
+      "property_labels": {
+        "seed": "种子"
+      }
+    },
+    "recolour": {
+      "label": "重新着色",
+      "description": "改变选中 splat 的颜色，并可保留原有明暗。",
+      "help": "选取颜色，从权重 0.3 开始获得轻微染色。\n保持保留明暗开启，以保留照明细节。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Colour": "目标 RGB 颜色，每通道通常为 0–1。默认蓝色；保留明暗可保持原照明层次。",
+        "Weight": "改色强度，0–1。0 保留原色，1 完全使用新色；默认 1。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Colour": "颜色",
+        "Weight": "权重"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "keep_shading": "改色时保留原有明暗。默认开启；关闭后应用平坦颜色。",
+        "fade_view_dependent": "改色时减少视角相关颜色。默认开启；关闭保留原有变化。"
+      },
+      "property_labels": {
+        "keep_shading": "保留明暗",
+        "fade_view_dependent": "减弱视角变化"
+      }
+    },
+    "remove_floaters": {
+      "label": "移除漂浮点",
+      "description": "删除空中游离的 splat，例如天空斑点或地面下方的雾状杂点。",
+      "help": "先开启预览：它只显示将被移除的部分。\n隔离半径 3 配合相对尺寸，按每个 splat 自身大小判断，以保留稀疏背景。\n连接选择来限制清理范围，例如只处理地面以下。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "执行移除检查的范围：权重至少 0.5。未连接会检查每个 splat。",
+        "Min Opacity": "移除低于此不透明度的 splat，0–1。0 关闭测试；默认 0.02 移除很微弱的 splat。",
+        "Max Size": "移除最长轴超过此场景尺寸的 splat。默认 0 关闭此测试。",
+        "Isolation Radius": "查找邻居的距离。开启相对尺寸时是每个 splat 尺寸的倍数，否则为场景单位。0 关闭测试。",
+        "Min Neighbours": "半径内邻居少于此数量的 splat 将被移除。1 只移除完全孤立的 splat。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Min Opacity": "最低不透明度",
+        "Max Size": "最大尺寸",
+        "Isolation Radius": "隔离半径",
+        "Min Neighbours": "最少邻居"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "preview": "仅显示将被移除的 splat，保持原样。默认关闭显示清理结果。",
+        "relative_to_size": "用每个 splat 的尺寸作为半径单位。默认开启保护稀疏区域；关闭则使用场景单位。"
+      },
+      "property_labels": {
+        "preview": "预览",
+        "relative_to_size": "相对尺寸"
+      }
+    },
+    "scale": {
+      "label": "尺寸",
+      "description": "读取每个 splat 沿三个局部轴的尺寸。",
+      "help": "将尺寸连接到分离 XYZ，以比较各轴大小。\n数值使用场景单位，不是尺寸倍数。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Scale": "每个 splat 沿三个局部轴的尺寸，单位为场景单位。"
+      },
+      "output_labels": {
+        "Scale": "尺寸"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "scale_clamp": {
+      "label": "限制轴比",
+      "description": "缩短远离拍摄路径时形成拖痕的针状 Gaussian。",
+      "help": "若相机路径以外出现细条纹，可使用此节点。\n从最大轴比 16 开始；值越小，缩短的针状 splat 越多。\n表面上的扁平 splat 保持不变，除非开启“包括扁平”。\n尺寸为零的轴保持塌缩；轴比限制仅作用于其余非零轴。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Max Aspect": "允许的最长轴与中间轴的最大比值。16 是合适起点；值越小，缩短的针状 splat 越多。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Max Aspect": "最大轴比"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "include_flat": "同时限制扁平度（最长轴与最短轴之比）。默认关闭，因为表面由扁平 splat 构成。"
+      },
+      "property_labels": {
+        "include_flat": "包括扁平"
+      }
+    },
+    "separate_colour": {
+      "label": "分离颜色",
+      "description": "将颜色分为 RGB 或 HSV 数值，以分别编辑或比较。",
+      "help": "选择 HSV 可分离色相、饱和度或明度。\nHSV 模式下，R、G、B 依次输出这三个数值。",
+      "inputs": {
+        "Colour": "要分离的颜色，每个 RGB 通道通常为 0–1。默认黑色，所有通道为 0。"
+      },
+      "input_labels": {
+        "Colour": "颜色"
+      },
+      "outputs": {
+        "R": "RGB 模式的红通道或 HSV 模式的色相。色相沿色轮从 0 到 1。",
+        "G": "RGB 模式的绿通道或 HSV 模式的饱和度。HSV 中 0 为灰色，1 为完全饱和。",
+        "B": "RGB 模式的蓝通道或 HSV 模式的明度。HSV 中 0 为黑色，1 为完整亮度。"
+      },
+      "output_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "properties": {
+        "mode": "颜色解释方式。默认 RGB 使用红、绿、蓝；HSV 使用色相、饱和度、明度。"
+      },
+      "property_labels": {
+        "mode": "模式"
+      }
+    },
+    "separate_geometry": {
+      "label": "分离几何体",
+      "description": "将选中部分与其余部分分开，让你分别编辑后再合并。",
+      "help": "连接选择，再分别编辑两个输出。\n用合并几何体重新连接分支。\n柔和的选择权重以 0.5 为界变为选中或未选中。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "权重至少 0.5 的进入选择输出，较低的进入反选输出；未连接表示全选。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择"
+      },
+      "outputs": {
+        "Selection": "选择权重至少 0.5 的几何体。可单独编辑此分支。",
+        "Inverted": "选择权重低于 0.5 的几何体，即选择范围之外的部分。"
+      },
+      "output_labels": {
+        "Selection": "选择",
+        "Inverted": "反选"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "separate_xyz": {
+      "label": "分离 XYZ",
+      "description": "将位置或方向分为 X、Y、Z 数值。",
+      "help": "连接位置，再将高度轴连接到比较或映射范围。\n先确认场景中哪个轴朝上。",
+      "inputs": {
+        "Vector": "X、Y、Z 数值，使用你所需的单位。默认 (0, 0, 0) 使每个轴都为零。"
+      },
+      "input_labels": {
+        "Vector": "向量"
+      },
+      "outputs": {
+        "X": "输入的 X 坐标，单位不变。0 位于另两轴构成的平面。",
+        "Y": "输入的 Y 坐标，单位不变。0 位于另两轴构成的平面。",
+        "Z": "输入的 Z 坐标，单位不变。0 位于另两轴构成的平面。"
+      },
+      "output_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_colour": {
+      "label": "设置颜色",
+      "description": "将选中的高斯点、点云或网格顶点颜色替换为指定颜色。",
+      "help": "选取颜色，或连接其他节点的颜色。\n保持清除视角变化开启，可获得平坦的涂色。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Colour": "RGB 颜色，每通道通常为 0–1：0 黑，1 白。默认 (0.5, 0.5, 0.5) 是中灰。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Colour": "颜色"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "clear_view_dependent": "移除选中 splat 的视角相关颜色。默认开启产生平坦颜色；关闭保留反光。"
+      },
+      "property_labels": {
+        "clear_view_dependent": "清除视角变化"
+      }
+    },
+    "set_opacity": {
+      "label": "设置不透明度",
+      "description": "改变选中 splat 的透明程度。",
+      "help": "从不透明度 0.5 开始，让选中 splat 半透明。\n使用选择权重与原始不透明度柔和混合。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Opacity": "新不透明度，0–1：0 透明，1 不透明。默认 1 使选中 splat 不透明。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Opacity": "不透明度"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_position": {
+      "label": "设置位置",
+      "description": "将选中的 splat、点或网格顶点移动到新位置，并可添加偏移。",
+      "help": "将位置输出连接到位置输入，再设置偏移以进行相对移动。\n若未连接，位置默认在原点。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Position": "新位置，以局部场景单位计。默认原点；连接位置可保留原有位置。",
+        "Offset": "沿 X、Y、Z 添加的局部移动，单位为场景单位。默认 (0, 0, 0) 不添加移动。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Position": "位置",
+        "Offset": "偏移"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_scale": {
+      "label": "设置尺寸",
+      "description": "设置选中 splat 沿三个局部轴的尺寸。",
+      "help": "让尺寸经过向量运算来缩放现有大小。\n未连接的数值直接替换场景单位下的尺寸，不是乘数。\n零或负尺寸会使轴塌缩。只有完全选中时，正尺寸才能恢复该轴；部分选中时仍保持塌缩。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Scale": "沿每个局部轴的新尺寸，单位为场景单位。默认 (1, 1, 1) 生成单位大小的圆形 splat。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Scale": "尺寸"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_sh_degree": {
+      "label": "设置 SH 阶数",
+      "description": "限制 splat 颜色随观察方向的变化；较低阶数可大幅减小文件。",
+      "help": "使用阶数 0 可获得平坦颜色并减小导出文件。\n提高阶数可容纳更多细节，但不能恢复已丢弃的颜色。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Degree": "SH 阶数，0–3。默认 0 移除视角相关颜色；更高值允许更多角度细节。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Degree": "阶数"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "sharpen": {
+      "label": "锐化",
+      "description": "缩小选中 splat，使模糊细节更清晰。",
+      "help": "从强度 0.25 开始，并保持保留覆盖开启。\n数值过高会显露 splat 之间的空隙。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Amount": "尺寸减少量，0–0.95。0 无效果；默认 0.25 将每轴缩小 25%。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Amount": "强度"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "keep_coverage": "缩小 splat 时提高不透明度以维持覆盖。默认开启；关闭后可能更透明。"
+      },
+      "property_labels": {
+        "keep_coverage": "保留覆盖"
+      }
+    },
+    "simplify": {
+      "label": "简化",
+      "description": "合并 splat 以减少数量，同时保持场景的整体外观。",
+      "help": "从比例 0.5 开始，目标是保留一半 splat。\n可能比其他节点耗时更长；更低比例会损失细节。\n协方差为零的轴保持塌缩；合并不同位置或朝向时可能产生实际的延展。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Ratio": "目标保留比例，0.01–1。默认 0.5 目标为一半；1 保留原始数量。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Ratio": "比例"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "splats_to_points": {
+      "label": "splat 转点",
+      "description": "将 splat 中心和基础颜色转换为点云。",
+      "help": "用于导出中心或将场景作为点处理。\n不保留 splat 尺寸、不透明度及视角相关颜色。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。"
+      },
+      "input_labels": {
+        "Geometry": "几何体"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "stored_selection": {
+      "label": "已存选择",
+      "description": "重复使用你在视口中捕获的选择。",
+      "help": "用眼睛图标隐藏此修改器，在视口中选择 splat（画笔、套索或方框），点击捕获选择，然后再次显示修改器。\n如果此节点之前的任何内容改变了 splat 数量，请重新捕获。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Selection": "选中元素为开，未选中为关。连接到选择或布尔输入。"
+      },
+      "output_labels": {
+        "Selection": "选择"
+      },
+      "properties": {
+        "data": "捕获的视口选择。点击捕获选择前为空；每个修改器分别存储。",
+        "size": "捕获选择时的元素数量。0 表示空；数量变化后请重新捕获。",
+        "invert": "反转已捕获选择。默认关闭保留选中元素；开启选择其余部分。"
+      },
+      "property_labels": {
+        "data": "数据",
+        "size": "大小",
+        "invert": "反转"
+      }
+    },
+    "transform_geometry": {
+      "label": "变换几何体",
+      "description": "一起移动、旋转和缩放整个几何体。",
+      "help": "先用平移移动，或用缩放 1 保持原尺寸。\n旋转以度为单位，围绕对象原点进行。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Translation": "沿 X、Y、Z 的移动，单位为场景单位。默认 (0, 0, 0) 不改变位置。",
+        "Rotation": "绕 X、Y、Z 轴旋转的角度，单位为度。默认 (0, 0, 0) 不改变方向。",
+        "Scale": "尺寸倍数。1 保持原尺寸，0 收缩到原点；负值产生镜像。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Translation": "平移",
+        "Rotation": "旋转",
+        "Scale": "尺寸"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "value": {
+      "label": "数值",
+      "description": "提供一个数值，供多个相连设置共同使用。",
+      "help": "将值连接到多个数值输入，以统一控制它们。\n从 0 开始，横向拖动数值来调整。",
+      "inputs": {
+        "Value": "共用数值。默认 0；允许负数和正数。"
+      },
+      "input_labels": {
+        "Value": "数值"
+      },
+      "outputs": {
+        "Value": "输出数值，单位与你的运算一致。连接到兼容的数值输入。"
+      },
+      "output_labels": {
+        "Value": "数值"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector": {
+      "label": "向量",
+      "description": "提供一组 X、Y、Z 数值，供多个节点共同使用。",
+      "help": "用于共享位置、偏移或方向。\n默认三个坐标均为 0。",
+      "inputs": {
+        "Vector": "X、Y、Z 数值，使用你所需的单位。默认 (0, 0, 0) 使每个轴都为零。"
+      },
+      "input_labels": {
+        "Vector": "向量"
+      },
+      "outputs": {
+        "Vector": "输出 X、Y、Z 数值，单位与你的运算一致。"
+      },
+      "output_labels": {
+        "Vector": "向量"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector_math": {
+      "label": "向量运算",
+      "description": "对位置和方向进行加、减和测量 — 例如计算与某点的距离。",
+      "help": "使用缩放调整偏移，或用距离比较两个位置。\n长度、距离和点积使用数值输出；其他运算使用向量输出。",
+      "inputs": {
+        "A": "第一个三分量数值，单位与你的运算一致。默认 (0, 0, 0)。",
+        "B": "第二个三分量数值，单位与你的运算一致。默认 (0, 0, 0)。",
+        "Scale": "缩放运算使用的倍数。1 保持 A，0 得到零，−1 反转方向。"
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Scale": "尺寸"
+      },
+      "outputs": {
+        "Vector": "输出 X、Y、Z 数值，单位与你的运算一致。",
+        "Value": "输出数值，单位与你的运算一致。连接到兼容的数值输入。"
+      },
+      "output_labels": {
+        "Vector": "向量",
+        "Value": "数值"
+      },
+      "properties": {
+        "operation": "向量计算。默认加法；长度、距离和点积输出数值，而非向量。"
+      },
+      "property_labels": {
+        "operation": "运算"
+      }
+    },
+    "object_info": {
+      "label": "对象信息",
+      "description": "将另一个场景对象的几何体引入图中，作为参考或额外部分。",
+      "help": "选择参考对象的精确名称或 UUID。\n使用相对空间，将它放到相对于被修改对象的位置。\n避免引用依赖当前修改器的对象。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "指定空间中的参考对象几何体，包括其可见修改器。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "object": "要读取的精确对象名称或 UUID。默认空；评估前请选择参考对象。",
+        "transform_space": "参考空间。原始保留局部坐标；相对变换到被修改对象的空间。"
+      },
+      "property_labels": {
+        "object": "对象",
+        "transform_space": "变换空间"
+      }
+    },
+    "float_curve": {
+      "label": "数值曲线",
+      "description": "通过可编辑的平滑曲线重新映射数值。",
+      "help": "通过可编辑的平滑曲线重新映射数值。\n拖动、添加或删除控制点来调整曲线。Fritsch–Carlson 插值可避免单调控制点之间出现过冲。",
+      "inputs": {
+        "Value": "通过曲线重新映射的逐元素数值。"
+      },
+      "input_labels": {
+        "Value": "数值"
+      },
+      "outputs": {
+        "Value": "经曲线重新映射的数值。"
+      },
+      "output_labels": {
+        "Value": "数值"
+      },
+      "properties": {
+        "points": "按顺序排列的曲线控制点，每项为 X、Y 数值对。",
+        "clamp": "将输入限制在首尾控制点的范围内。"
+      },
+      "property_labels": {
+        "points": "曲线",
+        "clamp": "限制"
+      }
+    },
+    "rgb_curves": {
+      "label": "RGB 曲线",
+      "description": "通过综合曲线及各颜色通道的曲线重新映射颜色。",
+      "help": "通过综合曲线及各颜色通道的曲线重新映射颜色。\n使用选择×系数混合结果。非线性调整仅改变高斯点的直流基础颜色，不改变随视角变化的球谐频带。也适用于点云和网格。",
+      "inputs": {
+        "Geometry": "需要编辑的几何体，请连接几何体输出。",
+        "Selection": "逐元素混合权重，范围 0–1；未连接时作用于全部元素。",
+        "Factor": "曲线效果的额外强度，范围 0–1。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Factor": "系数"
+      },
+      "outputs": {
+        "Geometry": "编辑后的几何体。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "combined": "首先应用于所有颜色通道的曲线。",
+        "r": "应用于红色通道的曲线。",
+        "g": "应用于绿色通道的曲线。",
+        "b": "应用于蓝色通道的曲线。"
+      },
+      "property_labels": {
+        "combined": "综合",
+        "r": "红色",
+        "g": "绿色",
+        "b": "蓝色"
+      }
+    },
+    "colour_ramp": {
+      "label": "颜色渐变",
+      "description": "将数值映射到颜色和透明度。",
+      "help": "将数值映射到颜色和透明度。\n在 0–1 范围内排列色标。可选恒定、线性或缓动插值。",
+      "inputs": {
+        "Fac": "颜色渐变中的位置，通常为 0–1。"
+      },
+      "input_labels": {
+        "Fac": "系数"
+      },
+      "outputs": {
+        "Colour": "生成的 RGB 颜色。",
+        "Alpha": "从渐变采样的透明度，范围 0–1。"
+      },
+      "output_labels": {
+        "Colour": "颜色",
+        "Alpha": "透明度"
+      },
+      "properties": {
+        "stops": "按顺序排列的色标：位置、红、绿、蓝、透明度。",
+        "interpolation": "相邻色标间的过渡方式：恒定、线性或缓动。"
+      },
+      "property_labels": {
+        "stops": "渐变",
+        "interpolation": "插值"
+      }
+    },
+    "gradient_texture": {
+      "label": "渐变纹理",
+      "description": "根据空间坐标生成渐变。",
+      "help": "根据空间坐标生成渐变。\n将位置用作坐标。线性使用 X，对角使用 X 和 Y；球形与径向以原点为基准。",
+      "inputs": {
+        "Vector": "X、Y、Z 坐标；未连接时使用元素位置。"
+      },
+      "input_labels": {
+        "Vector": "向量"
+      },
+      "outputs": {
+        "Fac": "生成的渐变值，可能超出 0–1 范围。"
+      },
+      "output_labels": {
+        "Fac": "系数"
+      },
+      "properties": {
+        "type": "渐变形状：线性、二次、缓动、对角、球形或径向。"
+      },
+      "property_labels": {
+        "type": "类型"
+      }
+    },
+    "distance": {
+      "label": "距离",
+      "description": "测量每个元素到点、直线或平面的距离。",
+      "help": "测量每个元素到点、直线或平面的距离。\n平面模式返回有符号距离；点和直线模式返回非负距离。",
+      "inputs": {
+        "Vector": "X、Y、Z 坐标；未连接时使用元素位置。",
+        "Point": "目标点，或直线、平面上的一点。",
+        "Direction": "直线方向或相机前向方向。",
+        "Normal": "目标平面的法线方向。"
+      },
+      "input_labels": {
+        "Vector": "向量",
+        "Point": "点",
+        "Direction": "方向",
+        "Normal": "法线"
+      },
+      "outputs": {
+        "Distance": "以场景单位表示的距离；平面模式下带符号。"
+      },
+      "output_labels": {
+        "Distance": "距离"
+      },
+      "properties": {
+        "mode": "测量到点、直线或平面的距离。"
+      },
+      "property_labels": {
+        "mode": "模式"
+      }
+    },
+    "noise_texture": {
+      "label": "噪声纹理",
+      "description": "生成可重复的三维分形噪声。",
+      "help": "生成可重复的三维分形噪声。\n未连接时使用位置。细节支持 0–15 个八度及小数混合，粗糙度控制各八度的振幅。",
+      "inputs": {
+        "Vector": "X、Y、Z 坐标；未连接时使用元素位置。",
+        "Scale": "大小或坐标的倍数；1 保持原始大小。",
+        "Detail": "0–15 个八度，小数部分平滑混合。",
+        "Roughness": "每个后续八度保留的振幅比例。",
+        "Distortion": "坐标扭曲强度。",
+        "Seed": "用于复现噪声图案的种子。"
+      },
+      "input_labels": {
+        "Vector": "向量",
+        "Scale": "缩放",
+        "Detail": "细节",
+        "Roughness": "粗糙度",
+        "Distortion": "扭曲",
+        "Seed": "种子"
+      },
+      "outputs": {
+        "Fac": "渐变采样值或生成的噪声值，范围 0–1。",
+        "Colour": "生成的 RGB 颜色。"
+      },
+      "output_labels": {
+        "Fac": "系数",
+        "Colour": "颜色"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "store_named_attribute": {
+      "label": "存储命名属性",
+      "description": "在几何体元素上存储数值。",
+      "help": "在几何体元素上存储数值。\n后续可用相同属性名读取。未选中的元素保留已有值或使用 0。高斯点与点云属性可传递给后续修改器，网格顶点属性会在应用修改器时丢弃。",
+      "inputs": {
+        "Geometry": "需要编辑的几何体，请连接几何体输出。",
+        "Selection": "逐元素混合权重，范围 0–1；未连接时作用于全部元素。",
+        "Name": "后续通过命名属性节点读取时使用的名称。",
+        "Value": "要存储的逐元素数值、向量或颜色。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Name": "名称",
+        "Value": "数值"
+      },
+      "outputs": {
+        "Geometry": "编辑后的几何体。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "data_type": "将值存储为数值、向量或颜色。"
+      },
+      "property_labels": {
+        "data_type": "数据类型"
+      }
+    },
+    "remove_clumps": {
+      "label": "移除小簇",
+      "description": "移除高斯点或点云中的小型连通簇。",
+      "help": "半径是每个元素自身局部间距（最近三个邻居）的倍数。只有双方都能到达对方时才连接。\n仅移除小于最小大小的连通簇，保留稀疏表面。不支持网格。",
+      "inputs": {
+        "Geometry": "需要编辑的几何体，请连接几何体输出。",
+        "Selection": "数值大于或等于 0.5 的元素被选中。",
+        "Radius": "连接半径，以每个元素自身局部间距的倍数表示；两个端点必须能互相到达。",
+        "Min Size": "元素数量低于此值的簇成为移除候选。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Radius": "半径",
+        "Min Size": "最小大小"
+      },
+      "outputs": {
+        "Geometry": "编辑后的几何体。",
+        "Selection": "属于小于最小大小的簇的元素。"
+      },
+      "output_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择"
+      },
+      "properties": {
+        "delete": "删除候选元素；关闭后可仅使用选择输出。"
+      },
+      "property_labels": {
+        "delete": "删除"
+      }
+    },
+    "merge_by_distance": {
+      "label": "按距离合并",
+      "description": "合并邻近元素，使几何体更紧凑。",
+      "help": "合并邻近元素，使几何体更紧凑。\n只有选中的元素会合并。点和顶点取平均，面索引重新映射并删除退化面。高斯点则保留每个连通簇中最不透明的成员。",
+      "inputs": {
+        "Geometry": "需要编辑的几何体，请连接几何体输出。",
+        "Selection": "数值大于或等于 0.5 的元素被选中。",
+        "Distance": "将元素连接到同一簇的最大距离。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Distance": "距离"
+      },
+      "outputs": {
+        "Geometry": "编辑后的几何体。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "geometry_proximity": {
+      "label": "几何邻近",
+      "description": "查找最近的目标点、高斯点中心或网格顶点。",
+      "help": "查找最近的目标点、高斯点中心或网格顶点。\n连接处于同一坐标系的目标几何体。测量到元素本身的距离，而不是网格顶点之间的表面。",
+      "inputs": {
+        "Target": "包含点、高斯点或网格顶点的目标几何体；不能为空。"
+      },
+      "input_labels": {
+        "Target": "目标"
+      },
+      "outputs": {
+        "Distance": "以场景单位表示的距离；平面模式下带符号。",
+        "Position": "在几何体或相机坐标系中得到的位置。"
+      },
+      "output_labels": {
+        "Distance": "距离",
+        "Position": "位置"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "instance_on_points": {
+      "label": "在点上实例化",
+      "description": "在每个选中的锚点上放置变换后的高斯点副本。",
+      "help": "在每个选中的锚点上放置变换后的高斯点副本。\n锚点可以是点云点、网格顶点或高斯点中心；实例仅支持高斯点。以度为单位的欧拉旋转和缩放值同时变换形状与球谐颜色。输出上限为 5000 万个高斯点。\n负倍数使用绝对值决定尺寸，并镜像位置、朝向和球谐颜色。塌缩变换保持球谐颜色不变。",
+      "inputs": {
+        "Points": "以其元素作为锚点的几何体。",
+        "Instance": "要复制的高斯点几何体；不支持其他类型。",
+        "Selection": "数值大于或等于 0.5 的元素被选中。",
+        "Rotation": "每个锚点绕 X、Y、Z 轴的欧拉角，以度为单位；0 保持朝向。",
+        "Scale": "缩放可使用一个数值或三个轴倍率：1 保持大小，0 将轴压平，负值镜像该轴。"
+      },
+      "input_labels": {
+        "Points": "点",
+        "Instance": "实例",
+        "Selection": "选择",
+        "Rotation": "旋转",
+        "Scale": "缩放"
+      },
+      "outputs": {
+        "Geometry": "编辑后的几何体。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "camera_info": {
+      "label": "相机信息",
+      "description": "读取数据集相机的位置、朝向和镜头信息。",
+      "help": "读取数据集相机的位置、朝向和镜头信息。\n按索引或图像名称选择相机。输出使用世界坐标；场景必须包含数据集相机。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "在几何体或相机坐标系中得到的位置。",
+        "Direction": "直线方向或相机前向方向。",
+        "Up": "指向图像上方的单位向量。",
+        "FOV": "垂直视场角，以度为单位。",
+        "Image Size": "图像宽度和高度，以像素为单位；Z 为 0。"
+      },
+      "output_labels": {
+        "Position": "位置",
+        "Direction": "方向",
+        "Up": "上方向",
+        "FOV": "视场角",
+        "Image Size": "图像尺寸"
+      },
+      "properties": {
+        "camera": "相机索引或准确的图像名称；0 选择第一台相机。"
+      },
+      "property_labels": {
+        "camera": "相机"
+      }
+    },
+    "camera_coverage": {
+      "label": "相机覆盖",
+      "description": "统计视锥体内包含每个元素的相机数量。",
+      "help": "统计视锥体内包含每个元素的相机数量。\n将数量连接到比较节点。检查图像边界和正深度，不检查遮挡。最大距离为 0 时不限制距离。适用于高斯点、点云和网格顶点；需要数据集相机。",
+      "inputs": {
+        "Max Distance": "以世界单位表示的最大相机距离；0 表示不限制。"
+      },
+      "input_labels": {
+        "Max Distance": "最大距离"
+      },
+      "outputs": {
+        "Count": "图像范围内包含此元素的数据集相机数量。",
+        "Ratio": "包含此元素的相机占全部相机的比例，范围 0–1。"
+      },
+      "output_labels": {
+        "Count": "数量",
+        "Ratio": "比例"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "view_distance": {
+      "label": "相机距离",
+      "description": "测量到相机或已捕获视图的世界空间距离。",
+      "help": "测量到相机或已捕获视图的世界空间距离。\n选择数据集相机，或点击捕获视图保存当前视口相机。捕获后不会跟随视口移动。适用于高斯点、点云和网格顶点；需要数据集相机。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Distance": "到所选相机的距离，以世界单位表示。"
+      },
+      "output_labels": {
+        "Distance": "距离"
+      },
+      "properties": {
+        "camera": "相机索引或准确的图像名称；0 选择第一台相机。",
+        "source": "使用数据集相机或最后捕获的视图。",
+        "captured_transform": "保存的相机到世界变换矩阵；首次捕获前为空。"
+      },
+      "property_labels": {
+        "camera": "相机",
+        "source": "来源",
+        "captured_transform": "捕获的变换"
+      }
+    },
+    "scene_time": {
+      "label": "场景时间",
+      "description": "输出序列编辑器播放头的时间。",
+      "help": "使用秒或帧为场添加动画。\n播放时只重新求值依赖时间的图。\n导出视频时会等待每一帧的几何求值完成。",
+      "inputs": {},
+      "properties": {},
+      "outputs": {
+        "Seconds": "播放头的时间，单位为秒。",
+        "Frame": "播放头时间乘以序列编辑器的帧率。"
+      },
+      "output_labels": {
+        "Seconds": "秒",
+        "Frame": "帧"
+      }
+    }
+  },
+  "node_editor.how_to_use": "使用方法",
+  "node_editor.learn_more": "了解更多",
+  "node_editor.modifiers_paused_while_training": "训练期间修改器已暂停",
+  "export_dialog.apply_modifiers": "应用修改器",
+  "node_editor.capture_view": "捕获视图",
+  "node_editor.curve_hint": "拖动控制点调整曲线。单击添加，双击或按 Delete 删除。",
+  "node_editor.ramp_hint": "拖动色标移动位置。单击添加，双击或按 Delete 删除。选择色标后可编辑 RGBA。",
+  "node_editor.keyframe_hint": "插入关键帧 · Ctrl+单击，或悬停时按 I"
 }

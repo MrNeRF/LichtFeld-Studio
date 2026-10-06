@@ -44,6 +44,7 @@ namespace lfs::gpu_ops {
         bool mip_filter = false;
         bool render_normal = false;
         bool render_depth = true;
+        float dilation_scale = 1.0f;
     };
 
     // One enabled group is one parameter updated exactly once.
@@ -87,7 +88,7 @@ namespace lfs::gpu_ops {
     struct BackwardAdam {
         std::array<BackwardAdamParam, 6> groups;
         Out scale_reg_loss, opacity_reg_loss;
-        In sparsity_sigmoid, sparsity_z, sparsity_u, far_mask;
+        In sparsity_sigmoid, sparsity_z, sparsity_u;
 
         float beta1 = 0.9f;
         float beta2 = 0.999f;
@@ -97,14 +98,12 @@ namespace lfs::gpu_ops {
         float opacity_reg_weight = 0.f;
         float sparsity_rho = 0.f;
         float sparsity_grad_loss = 0.f;
-        float median_extent = 0.f;
-        float r_min = 1.f;
-        float r_max = 300.f;
-        bool per_splat_mean_step = false;
     };
 
     struct RasterResult {
         enum class Code { Success,
+                          Pending,
+                          CapacityOverflow,
                           ResourceExhausted,
                           InstanceOverflow,
                           Failed };
@@ -139,6 +138,14 @@ namespace lfs::gpu_ops {
             bool run_gaussian_backward, size_t num_primitives);
         // Drops cached output tensors. The live forward frame stays owned by release.
         void (*release_caches)(FastSaved&) noexcept;
+
+        // Backends with a GPU-valid speculative forward may defer capacity
+        // validation until immediately before the step's persistent commit.
+        // A CapacityOverflow result means the attempted raster/backward was a
+        // device-side no-op and the same step must be replayed.
+        void (*set_deferred_count)(FastSaved&, bool) = nullptr;
+        RasterResult (*resolve_deferred_count)(FastSaved&, bool wait) = nullptr;
+        void (*set_instance_capacity_for_testing)(FastSaved&, uint32_t) = nullptr;
     };
 
 } // namespace lfs::gpu_ops

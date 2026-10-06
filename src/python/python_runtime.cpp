@@ -48,9 +48,6 @@ namespace lfs::python {
         HasPopupsCallback g_popup_has_callback = nullptr;
         EnsureInitializedCallback g_ensure_initialized_callback = nullptr;
 
-        // Exit popup state for window close callback (thread-safe)
-        std::atomic<bool> g_exit_popup_open{false};
-
         // Graphics-thread callback queue (set once during module init, before any reader threads)
         std::thread::id g_graphics_thread_id{};
         std::mutex g_graphics_callbacks_mutex;
@@ -106,6 +103,8 @@ namespace lfs::python {
         GetThumbnailTextureCallback g_get_thumbnail_texture_cb = nullptr;
 
         // Viewport overlay callbacks
+        GetUIListInstanceCallback g_uilist_instance_cb = nullptr;
+        WrapUIListLayoutCallback g_uilist_layout_cb = nullptr;
         HasViewportDrawHandlersCallback g_has_viewport_draw_handlers_cb = nullptr;
         InvokeViewportOverlayCallback g_invoke_viewport_overlay_cb = nullptr;
         SyncViewportOverlayDocumentCallback g_sync_viewport_overlay_document_cb = nullptr;
@@ -1133,22 +1132,6 @@ namespace lfs::python {
         }
     }
 
-    void draw_python_menu_items(MenuLocation location) {
-        if (!g_bridge.draw_menus)
-            return;
-#ifndef NDEBUG
-        assert(Py_IsInitialized() && "Python not initialized before draw_python_menu_items");
-#endif
-        if (!can_acquire_gil())
-            return;
-
-        if (g_bridge.prepare_ui)
-            g_bridge.prepare_ui();
-
-        const GilAcquire gil;
-        g_bridge.draw_menus(location);
-    }
-
     std::vector<MenuBarEntry> get_menu_bar_entries() {
         if (g_ensure_initialized_callback)
             g_ensure_initialized_callback();
@@ -1169,20 +1152,6 @@ namespace lfs::python {
             &result);
 
         return result;
-    }
-
-    void draw_menu_bar_entry(const std::string& idname) {
-        if (!g_bridge.draw_menu_bar_entry)
-            return;
-
-        if (!can_acquire_gil())
-            return;
-
-        if (g_bridge.prepare_ui)
-            g_bridge.prepare_ui();
-
-        const GilAcquire gil;
-        g_bridge.draw_menu_bar_entry(idname.c_str());
     }
 
     void collect_menu_content(const std::string& idname, MenuItemVisitor visitor, void* user_data) {
@@ -1276,6 +1245,7 @@ namespace lfs::python {
                        bool rad_streamable,
                        int spz_version,
                        bool include_provenance,
+                       bool apply_modifiers,
                        int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
         if (!g_export_callback)
             return;
@@ -1290,7 +1260,7 @@ namespace lfs::python {
                           rad_flip_y,
                           rad_streamable,
                           spz_version,
-                          include_provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
+                          include_provenance, apply_modifiers, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
     }
 
     void cancel_active_operator() {
@@ -1414,9 +1384,6 @@ namespace lfs::python {
     OverlayDrawContext get_overlay_draw_context() {
         return g_overlay_draw_context;
     }
-
-    bool is_exit_popup_open() { return g_exit_popup_open.load(); }
-    void set_exit_popup_open(bool open) { g_exit_popup_open.store(open); }
 
     void set_graphics_thread_id(std::thread::id id) { g_graphics_thread_id = id; }
 
@@ -1542,12 +1509,6 @@ namespace lfs::python {
         }
     }
 
-    void update_psnr(float psnr) {
-        if (g_signal_bridge_callbacks.psnr) {
-            g_signal_bridge_callbacks.psnr(psnr);
-        }
-    }
-
     void update_scene(bool has_scene, const char* path) {
         if (g_signal_bridge_callbacks.scene) {
             g_signal_bridge_callbacks.scene(has_scene, path);
@@ -1565,6 +1526,19 @@ namespace lfs::python {
         if (g_signal_bridge_callbacks.flush) {
             g_signal_bridge_callbacks.flush();
         }
+    }
+
+    void set_uilist_callbacks(GetUIListInstanceCallback get_instance, WrapUIListLayoutCallback wrap_layout) {
+        g_uilist_instance_cb = get_instance;
+        g_uilist_layout_cb = wrap_layout;
+    }
+
+    void* wrap_uilist_layout(void* layout) {
+        return g_uilist_layout_cb ? g_uilist_layout_cb(layout) : nullptr;
+    }
+
+    void* get_uilist_instance(const char* id) {
+        return g_uilist_instance_cb ? g_uilist_instance_cb(id) : nullptr;
     }
 
     void set_viewport_overlay_callbacks(HasViewportDrawHandlersCallback has_cb,

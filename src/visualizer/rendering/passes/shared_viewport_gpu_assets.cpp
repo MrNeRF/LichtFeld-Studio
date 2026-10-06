@@ -30,6 +30,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace lfs::vis {
@@ -266,6 +267,18 @@ namespace lfs::vis {
         }
         impl_->beginFrame(frame_slot);
         impl_->prepareMeshes(items);
+    }
+
+    void SharedViewportGpuAssets::discardImportMesh(const std::uint64_t mesh_id) {
+        if (!impl_)
+            return;
+        const auto it = impl_->mesh_cache.find(mesh_id);
+        if (it == impl_->mesh_cache.end())
+            return;
+        if (!impl_->context->waitForSubmittedFrames())
+            throw std::runtime_error("Could not retire failed mesh import");
+        impl_->destroyMesh(it->second);
+        impl_->mesh_cache.erase(it);
     }
 
     const SharedMeshDrawAsset* SharedViewportGpuAssets::findMesh(const std::uint64_t mesh_id) const {
@@ -1280,15 +1293,7 @@ namespace lfs::vis {
         if (path.empty()) {
             return false;
         }
-        std::filesystem::path resolved = path;
-        if (!resolved.is_absolute() && !std::filesystem::exists(resolved)) {
-            try {
-                resolved = lfs::vis::getAssetPath(lfs::core::path_to_utf8(path));
-            } catch (const std::exception& error) {
-                LOG_DEBUG("Environment resource lookup failed; trying the assets directory: {}", error.what());
-                resolved = lfs::core::getAssetsDir() / path;
-            }
-        }
+        const auto resolved = resolveEnvironmentMapPath(path);
         const std::string utf8 = lfs::core::path_to_utf8(resolved);
         auto [source_data, w, h, nch] = lfs::core::load_image_float(resolved);
         if (!source_data) {

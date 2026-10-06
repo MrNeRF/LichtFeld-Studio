@@ -232,7 +232,7 @@ def test_rendering_panel_reacts_to_native_scene_generation(rendering_panel_modul
     panel = module.RenderingPanel()
 
     assert module.RenderingPanel.update_policy == "dirty"
-    assert "update_interval_ms" not in module.RenderingPanel.__dict__
+    assert module.RenderingPanel.update_interval_ms is None
 
     panel.on_bind_model(_BindingContextStub(model))
     panel._subscribe_reactive_state()

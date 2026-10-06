@@ -204,6 +204,7 @@ namespace lfs::vis {
         [[nodiscard]] VkPhysicalDevice physicalDevice() const { return physical_device_; }
         [[nodiscard]] VkDevice device() const { return device_; }
         [[nodiscard]] VkQueue graphicsQueue() const { return graphics_queue_; }
+        [[nodiscard]] std::mutex& graphicsQueueMutex() { return graphics_queue_mutex_; }
         [[nodiscard]] uint32_t graphicsQueueFamily() const { return graphics_queue_family_; }
         [[nodiscard]] VmaAllocator allocator() const { return allocator_; }
         [[nodiscard]] std::size_t queryVmaUsedBytes(
@@ -221,6 +222,9 @@ namespace lfs::vis {
         [[nodiscard]] std::size_t currentFrameSlot() const { return frame_index_; }
         [[nodiscard]] bool externalMemoryInteropEnabled() const { return external_memory_interop_enabled_; }
         [[nodiscard]] bool externalSemaphoreInteropEnabled() const { return external_semaphore_interop_enabled_; }
+#ifdef __APPLE__
+        [[nodiscard]] bool metalObjectsInteropEnabled() const { return metal_objects_enabled_; }
+#endif
         [[nodiscard]] VulkanImageBarrierTracker& imageBarriers() { return image_barriers_; }
         [[nodiscard]] PFN_vkCmdPushDescriptorSetKHR vkCmdPushDescriptorSet() const { return vk_cmd_push_descriptor_set_; }
         [[nodiscard]] bool hasHostImageCopy() const { return has_host_image_copy_; }
@@ -315,10 +319,6 @@ namespace lfs::vis {
         // retired. Non-blocking (vkGetFenceStatus); serial-0 slots ignored.
         // device_ null returns frame_submit_serial_ (everything retired).
         [[nodiscard]] std::uint64_t retiredFrameSubmitSerial() const;
-        // Non-blocking host read of a timeline semaphore counter (vkGetSemaphoreCounterValue).
-        // Returns false if device/semaphore invalid or the Vulkan call fails.
-        [[nodiscard]] bool getTimelineSemaphoreCounterValue(VkSemaphore semaphore,
-                                                            std::uint64_t& out_value) const;
         // Host-wait until every graphics submit with serial <= |serial| has
         // retired. Returns immediately if serial == 0, no device, or already
         // retired. Waits only the in_flight_ fences whose frame_submit_serials_

@@ -8,7 +8,7 @@
 #include "core/tensor_backend.hpp"
 
 #include <algorithm>
-#include <array>
+#include <bit>
 #include <chrono>
 #include <format>
 #include <limits>
@@ -18,6 +18,7 @@
 #include <cuda_runtime.h>
 #include <nvml.h>
 #endif
+#include <vector>
 
 #ifdef _WIN32
 #include <dxgi1_4.h>
@@ -47,6 +48,7 @@ namespace lfs::vis::gui {
         struct DxgiMemoryState {
             IDXGIAdapter3* adapter3 = nullptr;
             bool init_done = false;
+            UINT node_index = 0;
 
             DxgiMemoryState(const DxgiMemoryState&) = delete;
             DxgiMemoryState& operator=(const DxgiMemoryState&) = delete;
@@ -77,19 +79,22 @@ namespace lfs::vis::gui {
                     return;
                 }
 
-                matchByVram(factory, cuda_device);
+                // Identical capacities do not identify an adapter. An unavailable
+                // process sample is preferable to reading another GPU's usage.
                 factory->Release();
             }
 
-            size_t getProcessMemory() {
+            bool getProcessMemory(size_t& used, size_t& budget) {
                 ensureInit();
                 if (!adapter3)
-                    return 0;
+                    return false;
                 DXGI_QUERY_VIDEO_MEMORY_INFO mem_info{};
-                if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(
-                        0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mem_info)))
-                    return static_cast<size_t>(mem_info.CurrentUsage);
-                return 0;
+                if (FAILED(adapter3->QueryVideoMemoryInfo(
+                        node_index, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mem_info)))
+                    return false;
+                used = static_cast<size_t>(mem_info.CurrentUsage);
+                budget = static_cast<size_t>(mem_info.Budget);
+                return true;
             }
 
         private:
@@ -112,7 +117,7 @@ namespace lfs::vis::gui {
 
                 for (UINT i = 0;; ++i) {
                     IDXGIAdapter* adapter = nullptr;
-                    if (factory->EnumAdapters(i, &adapter) == DXGI_ERROR_NOT_FOUND)
+                    if (FAILED(factory->EnumAdapters(i, &adapter)))
                         break;
                     DXGI_ADAPTER_DESC desc{};
                     if (SUCCEEDED(adapter->GetDesc(&desc)) &&
@@ -121,39 +126,12 @@ namespace lfs::vis::gui {
                         adapter->QueryInterface(__uuidof(IDXGIAdapter3),
                                                 reinterpret_cast<void**>(&adapter3));
                         adapter->Release();
-                        return true;
+                        node_index = node_mask ? std::countr_zero(node_mask) : 0;
+                        return adapter3 != nullptr;
                     }
                     adapter->Release();
                 }
                 return false;
-            }
-
-            // Fallback: match by dedicated VRAM size (unreliable with identical GPUs).
-            void matchByVram(IDXGIFactory1* factory, int cuda_device) {
-                cudaDeviceProp props{};
-                size_t cuda_total = 0;
-                if (cudaGetDeviceProperties(&props, cuda_device) == cudaSuccess)
-                    cuda_total = props.totalGlobalMem;
-
-                for (UINT i = 0;; ++i) {
-                    IDXGIAdapter* adapter = nullptr;
-                    if (factory->EnumAdapters(i, &adapter) == DXGI_ERROR_NOT_FOUND)
-                        break;
-                    DXGI_ADAPTER_DESC desc{};
-                    if (SUCCEEDED(adapter->GetDesc(&desc))) {
-                        auto dxgi_vram = static_cast<size_t>(desc.DedicatedVideoMemory);
-                        size_t diff = dxgi_vram > cuda_total ? dxgi_vram - cuda_total
-                                                             : cuda_total - dxgi_vram;
-                        constexpr size_t TOLERANCE = 512ULL * 1024 * 1024;
-                        if (cuda_total > 0 && diff < TOLERANCE) {
-                            adapter->QueryInterface(__uuidof(IDXGIAdapter3),
-                                                    reinterpret_cast<void**>(&adapter3));
-                            adapter->Release();
-                            return;
-                        }
-                    }
-                    adapter->Release();
-                }
             }
         };
 
@@ -252,11 +230,16 @@ namespace lfs::vis::gui {
                     return 0;
                 if (!fn)
                     return 0;
-                std::array<nvmlProcessInfo_t, 256> procs{};
+                std::vector<nvmlProcessInfo_t> procs(64);
                 auto count = static_cast<unsigned int>(procs.size());
-                if (fn(device, &count, procs.data()) != NVML_SUCCESS)
+                auto status = fn(device, &count, procs.data());
+                if (status == NVML_ERROR_INSUFFICIENT_SIZE) {
+                    procs.resize(count);
+                    status = fn(device, &count, procs.data());
+                }
+                if (status != NVML_SUCCESS)
                     return 0;
-                std::array<GpuProcessUsage, 256> usage{};
+                std::vector<GpuProcessUsage> usage(count);
                 for (unsigned int i = 0; i < count; ++i)
                     usage[i] = {procs[i].pid, procs[i].usedGpuMemory};
                 return parseGpuProcessBytes(pid, std::span(usage.data(), count));
@@ -292,7 +275,9 @@ namespace lfs::vis::gui {
 
 #ifdef __APPLE__
         struct AcceleratorStats {
-            size_t allocated = 0;
+            // Resident GPU memory of all clients. "Alloc system memory" also
+            // counts reserved address space and routinely exceeds the working set.
+            size_t in_use = 0;
             float utilization = -1.f;
         };
 
@@ -317,9 +302,9 @@ namespace lfs::vis::gui {
                                CFNumberGetValue(static_cast<CFNumberRef>(value), kCFNumberSInt64Type, &out);
                     };
                     int64_t utilization = 0;
-                    int64_t allocated = 0;
-                    if (read(CFSTR("Device Utilization %"), utilization) && read(CFSTR("Alloc system memory"), allocated))
-                        result = AcceleratorStats{.allocated = static_cast<size_t>(std::max<int64_t>(allocated, 0)),
+                    int64_t in_use = 0;
+                    if (read(CFSTR("Device Utilization %"), utilization) && read(CFSTR("In use system memory"), in_use))
+                        result = AcceleratorStats{.in_use = static_cast<size_t>(std::max<int64_t>(in_use, 0)),
                                                   .utilization = std::clamp(static_cast<float>(utilization), 0.f, 100.f)};
                 }
                 CFRelease(stats);
@@ -359,20 +344,27 @@ namespace lfs::vis::gui {
 
     GpuMemoryInfo selectGpuMemory(size_t compute_bytes, size_t graphics_bytes,
                                   size_t dxgi_bytes, size_t cuda_used, size_t cuda_total,
-                                  size_t nvml_used, size_t nvml_total) {
+                                  size_t nvml_used, size_t nvml_total,
+                                  size_t dxgi_budget, bool dxgi_valid) {
         GpuMemoryInfo info;
+        // Compute and graphics APIs both report the same PID's total allocation.
+        // Taking their sum would double-count CUDA/Vulkan interop memory.
         info.process_used = std::max(compute_bytes, graphics_bytes);
-        if (info.process_used == 0)
+        info.process_valid = info.process_used > 0;
+        if (!info.process_valid && (dxgi_valid || dxgi_bytes > 0)) {
             info.process_used = dxgi_bytes;
-        if (info.process_used == 0) {
-            info.process_used = cuda_used;
-            info.process_estimated = true;
+            info.process_valid = true;
         }
-        if (nvml_total > 0 && nvml_total >= nvml_used) {
-            info.total_used = nvml_used;
+        if (dxgi_valid || dxgi_bytes > 0) {
+            info.process_budget = dxgi_budget;
+            info.process_over_budget = (dxgi_valid || dxgi_budget > 0) && dxgi_bytes > dxgi_budget;
+        }
+        // cudaMemGetInfo is device-wide: it must never stand in for this PID.
+        if (nvml_total > 0) {
+            info.total_used = std::min(nvml_used, nvml_total);
             info.total = nvml_total;
-        } else if (cuda_total > 0 && cuda_total >= cuda_used) {
-            info.total_used = cuda_used;
+        } else if (cuda_total > 0) {
+            info.total_used = std::min(cuda_used, cuda_total);
             info.total = cuda_total;
             info.device_estimated = true;
         }
@@ -380,12 +372,13 @@ namespace lfs::vis::gui {
     }
 
     GpuMemoryInfo selectUnifiedGpuMemory(const size_t process_used, const size_t working_set,
-                                         const size_t gpu_allocated, const size_t host_available) {
+                                         const size_t gpu_in_use, const size_t host_available) {
         GpuMemoryInfo info;
         info.unified_memory = true;
+        info.process_valid = true;
         info.process_used = process_used;
         info.total = working_set;
-        const size_t gpu_free = working_set - std::min(gpu_allocated, working_set);
+        const size_t gpu_free = working_set - std::min(gpu_in_use, working_set);
         info.total_used = std::max(working_set - std::min(gpu_free, host_available), std::min(process_used, working_set));
         return info;
     }
@@ -398,7 +391,7 @@ namespace lfs::vis::gui {
     const char* gpuProcessMemoryTooltipKey(const GpuMemoryInfo& info) {
         if (info.unified_memory)
             return "ui.vram_process_metal_tooltip";
-        return info.process_estimated ? "ui.vram_process_estimate_tooltip" : "ui.vram_process_nvml_tooltip";
+        return info.process_valid ? "ui.vram_process_nvml_tooltip" : "ui.vram_process_unavailable_tooltip";
     }
 
     const char* gpuDeviceMemoryTooltipKey(const GpuMemoryInfo& info) {
@@ -416,7 +409,7 @@ namespace lfs::vis::gui {
             const auto host = lfs::core::host_metrics::memory();
             if (stats && host) {
                 auto info = selectUnifiedGpuMemory(device->process_memory_used_bytes,
-                                                   device->process_memory_budget_bytes, stats->allocated,
+                                                   device->process_memory_budget_bytes, stats->in_use,
                                                    host->available_bytes);
                 info.device_name = shortenGpuDeviceName(device->name);
                 info.gpu_utilization_percent = stats->utilization;
@@ -463,13 +456,16 @@ namespace lfs::vis::gui {
         size_t nvml_total = 0;
         nvmlState().getDeviceMemory(nvml_used, nvml_total);
         size_t dxgi_bytes = 0;
+        size_t dxgi_budget = 0;
+        bool dxgi_valid = false;
 #ifdef _WIN32
-        dxgi_bytes = dxgiState().getProcessMemory();
+        dxgi_valid = dxgiState().getProcessMemory(dxgi_bytes, dxgi_budget);
 #endif
         auto info = selectGpuMemory(nvmlState().getProcessMemory(nvmlState().fn_get_compute),
                                     nvmlState().getProcessMemory(nvmlState().fn_get_graphics),
                                     dxgi_bytes, cuda_valid ? memory.total_bytes - memory.free_bytes : 0,
-                                    cuda_valid ? memory.total_bytes : 0, nvml_used, nvml_total);
+                                    cuda_valid ? (device->total_memory_bytes ? std::min(memory.total_bytes, device->total_memory_bytes) : memory.total_bytes) : 0,
+                                    nvml_used, nvml_total, dxgi_budget, dxgi_valid);
         info.device_name = shortenGpuDeviceName(device->name);
         info.gpu_utilization_percent = nvmlState().getUtilization();
         info.gpu_utilization_valid = info.gpu_utilization_percent >= 0.f;

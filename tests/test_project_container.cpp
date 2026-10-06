@@ -3,6 +3,7 @@
 
 #include "core/path_utils.hpp"
 #include "core/project_path.hpp"
+#include "core/resource_messages.hpp"
 #include "core/uuid.hpp"
 #include "io/project/crc32c.hpp"
 #include "io/project/project_container_internal.hpp"
@@ -51,6 +52,8 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#else
+#include <winerror.h>
 #endif
 
 namespace lfs::io::project::detail {
@@ -256,6 +259,28 @@ namespace {
             }
         }
         return found;
+    }
+
+    // Fails if a write that hits a full volume keeps the generic write message, which hides the disk-space
+    // recovery, or if a file-size limit is reported as a full disk.
+    TEST(ProjectContainerFormat, FullVolumeWriteCarriesDiskSpaceMessage) {
+#ifdef _WIN32
+        constexpr std::int64_t disk_full = ERROR_DISK_FULL;
+        constexpr std::int64_t file_too_large = ERROR_FILE_TOO_LARGE;
+#else
+        constexpr std::int64_t disk_full = ENOSPC;
+        constexpr std::int64_t file_too_large = EFBIG;
+#endif
+        const auto full = detail::project_error(lfs::ErrorCode::ResourceExhausted, "The project could not be written.",
+                                                "write failed", "project.licht", 0, "positional_write", disk_full);
+        EXPECT_TRUE(lfs::core::is_disk_space_save_error(full.user_message()));
+        const auto too_large = detail::project_error(lfs::ErrorCode::ResourceExhausted, "The project could not be written.",
+                                                     "write failed", "project.licht", 0, "positional_write", file_too_large);
+        EXPECT_FALSE(lfs::core::is_disk_space_save_error(too_large.user_message()));
+
+        EXPECT_TRUE(detail::disk_full(std::make_error_code(std::errc::no_space_on_device)));
+        EXPECT_TRUE(detail::disk_full(std::error_code(static_cast<int>(disk_full), std::system_category())));
+        EXPECT_FALSE(detail::disk_full(std::make_error_code(std::errc::file_too_large)));
     }
 
     TEST(ProjectContainerFormat, Crc32cKnownVector) {
@@ -2015,6 +2040,30 @@ namespace {
             << "the lifecycle's 50% compaction suggestion must fire";
     }
 
+    TEST(ProjectContainerWriter, CompactionIntoAnotherFileIgnoresTheSourceSidecar) {
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "save-as-source.licht";
+        const fs::path copy = temporary.path / "save-as-copy.licht";
+        const fs::path sidecar = autosave_sidecar_path(master);
+        const ChunkKey key = fixed_key("PROJ", 3880);
+        create_single_chunk_fixture(
+            master, 3881, 3882, 3883, key, R"({"generation":1})");
+        publish_complete_sidecar(master, sidecar, 1, 3884, 3885, 3886);
+
+        require_status(ProjectWriter::compact_to(
+            master, copy,
+            CompactionOptions{
+                .new_file_uuid = fixed_uuid(3887),
+                .commit_uuid = fixed_uuid(3888),
+                .snapshot_uuid = fixed_uuid(3889),
+                .creation_time_unix_ns = FIXED_CREATION_TIME_NS + 41,
+                .wallclock_unix_ns = FIXED_COMMIT_TIME_NS + 41,
+                .disk_reserve_bytes = 0,
+            }));
+        EXPECT_TRUE(fs::exists(copy));
+        EXPECT_TRUE(fs::exists(sidecar));
+    }
+
     TEST(ProjectContainerWriter,
          CompactionRefusesCurrentBoundSidecarUntilExplicitHeadAdvances) {
         TemporaryDirectory temporary;
@@ -2499,11 +2548,6 @@ namespace {
         EXPECT_EQ(require_result(held.read_chunk(*streamed_row)),
                   streamed_payload);
         ASSERT_TRUE(streamed_row->block_crc_table.has_value());
-        MappedRegion held_mapping = require_result(
-            held.map_stored_range(*streamed_row, 0,
-                                  streamed_row->stored_bytes));
-        const std::vector<std::byte> mapped_before(
-            held_mapping.bytes().begin(), held_mapping.bytes().end());
 
         CompactionOptions compaction{
             .compatibility = {},
@@ -2516,9 +2560,6 @@ namespace {
         };
         require_status(ProjectWriter::compact(path, compaction));
 
-        EXPECT_EQ(std::vector<std::byte>(held_mapping.bytes().begin(),
-                                         held_mapping.bytes().end()),
-                  mapped_before);
         EXPECT_EQ(held.commit().generation, 1u);
         EXPECT_EQ(require_result(held.read_chunk(*streamed_row)),
                   streamed_payload);

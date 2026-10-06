@@ -176,10 +176,11 @@ def histogram_panel_module():
 
 def test_histogram_panel_uses_dirty_update_policy(histogram_panel_module):
     assert histogram_panel_module.HistogramPanel.update_policy == "dirty"
-    assert histogram_panel_module.HistogramPanel.update_interval_ms == 100
+    assert histogram_panel_module.HistogramPanel.update_interval_ms is None
 
 
-def test_histogram_mode_available_hides_when_paused(histogram_panel_module, monkeypatch):
+@pytest.mark.parametrize("trainer_state", ["idle", "preparing"])
+def test_histogram_mode_available_hides_when_paused(histogram_panel_module, monkeypatch, trainer_state):
     from lfs_plugins import histogram_support as support
 
     monkeypatch.setattr(
@@ -191,7 +192,7 @@ def test_histogram_mode_available_hides_when_paused(histogram_panel_module, monk
     monkeypatch.setattr(
         support,
         "RuntimeState",
-        SimpleNamespace(trainer_state=SimpleNamespace(value="idle")),
+        SimpleNamespace(trainer_state=SimpleNamespace(value=trainer_state)),
     )
 
     paused = SimpleNamespace(
@@ -208,7 +209,7 @@ def test_histogram_mode_available_hides_when_paused(histogram_panel_module, monk
     )
 
     assert histogram_panel_module.histogram_mode_available(paused) is False
-    assert histogram_panel_module.histogram_mode_available(reset) is True
+    assert histogram_panel_module.histogram_mode_available(reset) is (trainer_state == "idle")
 
 
 def test_histogram_panel_requests_update_from_reactive_store(histogram_panel_module, monkeypatch):

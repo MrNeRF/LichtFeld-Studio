@@ -8,7 +8,9 @@
 #include "core/path_utils.hpp"
 #include "core/tensor_serialization_sink.hpp"
 
+#include <array>
 #include <chrono>
+#include <cstring>
 #include <fstream>
 #include <ios>
 #include <limits>
@@ -120,7 +122,20 @@ namespace lfs::core {
             static_cast<uint16_t>(
                 descriptor.serialized_shape.rank()),
             descriptor.serialized_shape.elements()};
-        os.write(reinterpret_cast<const char*>(&header), sizeof(header));
+        // Preserve the v1 native header layout without serializing its
+        // indeterminate padding. Snapshot and synchronous writers must
+        // produce identical bytes for the same tensor metadata and payload.
+        std::array<std::byte, sizeof(TensorFileHeader)> encoded_header{};
+        const auto encode_field = [&](size_t offset, const auto& value) {
+            std::memcpy(encoded_header.data() + offset, &value, sizeof(value));
+        };
+        encode_field(offsetof(TensorFileHeader, magic), header.magic);
+        encode_field(offsetof(TensorFileHeader, version), header.version);
+        encode_field(offsetof(TensorFileHeader, dtype), header.dtype);
+        encode_field(offsetof(TensorFileHeader, device), header.device);
+        encode_field(offsetof(TensorFileHeader, rank), header.rank);
+        encode_field(offsetof(TensorFileHeader, numel), header.numel);
+        os.write(reinterpret_cast<const char*>(encoded_header.data()), encoded_header.size());
 
         for (const size_t dim :
              descriptor.serialized_shape.dims()) {
@@ -266,7 +281,7 @@ namespace lfs::core {
             const bool use_pinned) {
             auto* const timing = active_tensor_load_timing;
             const auto run_timed =
-                [timing](double serialization_detail::TensorLoadTiming::*member,
+                [timing](double serialization_detail::TensorLoadTiming::* member,
                          auto&& fn) {
                     if (timing == nullptr) {
                         fn();
@@ -299,14 +314,6 @@ namespace lfs::core {
             load_parsed_serialized_tensor(is, tensor, parsed, use_pinned);
         }
 
-        void read_serialized_tensor_pageable_if_large(std::istream& is,
-                                                      Tensor& tensor) {
-            const auto parsed = parse_serialized_tensor_header(is);
-            const bool use_pinned =
-                parsed.payload_bytes < kPageableSerializedHostTensorBytes;
-            load_parsed_serialized_tensor(is, tensor, parsed, use_pinned);
-        }
-
         void read_serialized_tensor_device_from_span_or_host(
             std::istream& is, Tensor& tensor, const cudaStream_t stream) {
             const auto parsed = parse_serialized_tensor_header(is);
@@ -322,7 +329,7 @@ namespace lfs::core {
                 }
                 auto* const timing = active_tensor_load_timing;
                 const auto run_timed =
-                    [timing](double TensorLoadTiming::*member, auto&& fn) {
+                    [timing](double TensorLoadTiming::* member, auto&& fn) {
                         if (timing == nullptr) {
                             fn();
                             return;

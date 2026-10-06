@@ -7,7 +7,7 @@
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor/backend/vulkan/vk_recorder.hpp"
-#include "core/tensor_backend.hpp"
+#include "core/tensor_backend_vulkan.hpp"
 #include "core/tensor_rad.hpp"
 #include "core/tensor_readback.hpp"
 #include "core/tensor_upload.hpp"
@@ -89,6 +89,43 @@ namespace {
             EXPECT_TRUE(completion.ready());
         }
         vkDestroySemaphore(device, semaphore, nullptr);
+    }
+
+    TEST_F(TensorVulkanBufferQuery, ExternalWaitSubmitsOlderRecorderBeforeAdvancingTimeline) {
+        GpuBackendScope backend(GpuBackend::Vulkan);
+        const auto context = internal::acquire_vulkan_context();
+        VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        type.initialValue = 1;
+        VkSemaphoreCreateInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        info.pNext = &type;
+        VkSemaphore semaphore = VK_NULL_HANDLE;
+        ASSERT_EQ(vkCreateSemaphore(context->device(), &info, nullptr, &semaphore), VK_SUCCESS);
+        {
+            TensorWorkQueue producer(GpuBackend::Vulkan);
+            TensorWorkQueue consumer(GpuBackend::Vulkan);
+            consumer.set_consumer_timeline(context->device(), {semaphore, 1, {}});
+            Tensor pending;
+            {
+                const TensorWorkQueue::Scope scope(producer);
+                pending = Tensor::full({4096}, 7.f, Device::GPU);
+            }
+            ASSERT_FALSE(producer.ready());
+            // The external wait gets a newer value on the same retirement
+            // timeline, even though it does not read the producer's storage.
+            consumer.wait_timeline(1);
+            const auto timeline = context->timeline();
+            const auto value = context->submitted_timeline();
+            VkSemaphoreWaitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+            wait.semaphoreCount = 1;
+            wait.pSemaphores = &timeline;
+            wait.pValues = &value;
+            ASSERT_EQ(vkWaitSemaphores(context->device(), &wait, 5'000'000'000), VK_SUCCESS);
+            EXPECT_TRUE(producer.ready());
+            producer.wait();
+            EXPECT_EQ(pending.cpu().to_vector(), std::vector<float>(4096, 7.f));
+        }
+        vkDestroySemaphore(context->device(), semaphore, nullptr);
     }
 
     TEST_F(TensorVulkanBufferQuery, PendingValueIsSignalledAfterSynchronize) {
@@ -508,6 +545,63 @@ namespace {
         EXPECT_EQ(view->offset, base->offset + 4 * sizeof(float));
         EXPECT_EQ(view->bytes, 4 * sizeof(float));
         EXPECT_LE(base->pending_timeline_value, point.value);
+    }
+
+    TEST_F(TensorVulkanBufferQuery, CudaBlocksAreKeptForReuseWhileFreedMemoryIsHeld) {
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA backend unavailable";
+        ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan));
+        auto candidate = lfs::core::HeadlessAdoptedDevice::try_create(true);
+        if (!candidate)
+            GTEST_SKIP() << "Vulkan external memory and semaphore exports unavailable";
+        adopted_.emplace(std::move(*candidate));
+        const auto handles = adopted_->handles();
+        ASSERT_TRUE(adopt_vulkan_device(handles));
+        TensorVulkanInterop interop(VulkanInteropDevice{
+            .physical_device = handles.physical_device,
+            .device = handles.device,
+            .queue_families = {handles.queue_family},
+            .queue_family_count = 1,
+            .external_memory = true,
+            .external_semaphore = true,
+            .metal_objects = handles.metal_objects});
+        GpuBackendScope scope(GpuBackend::CUDA);
+        (void)Tensor::zeros({1}, Device::GPU).cpu();
+        Tensor::hold_freed_memory();
+        constexpr size_t count = size_t{8} << 20;
+        void* first = nullptr;
+        void* first_buffer = nullptr;
+        std::shared_ptr<void> frame;
+        {
+            Tensor payload = interop.empty({count}, DataType::Float32, GpuBackend::CUDA);
+            payload.fill_(5.0f);
+            first = payload.data_ptr();
+            const auto buffer = interop.buffer(payload);
+            ASSERT_TRUE(buffer);
+            first_buffer = buffer->buffer;
+            frame = buffer->keep_alive;
+        }
+        {
+            // A frame still reads the released block, so a new payload gets other storage.
+            const Tensor next = interop.empty({count}, DataType::Float32, GpuBackend::CUDA);
+            EXPECT_NE(next.data_ptr(), first);
+        }
+        frame.reset();
+        std::weak_ptr<void> kept;
+        {
+            // Once nothing reads it, the block comes back with its Vulkan buffer and cleared like new storage.
+            const Tensor reused = interop.empty({count}, DataType::Float32, GpuBackend::CUDA);
+            EXPECT_EQ(reused.data_ptr(), first);
+            const auto buffer = interop.buffer(reused);
+            ASSERT_TRUE(buffer);
+            EXPECT_EQ(buffer->buffer, first_buffer);
+            EXPECT_EQ(reused.max().item<float>(), 0.0f);
+            kept = buffer->keep_alive;
+        }
+        EXPECT_FALSE(kept.expired());
+        // Releasing the hold frees the kept blocks.
+        Tensor::release_freed_memory();
+        EXPECT_TRUE(kept.expired());
     }
 
     class TensorWhereInto : public TensorVulkanBufferQuery,

@@ -4,6 +4,7 @@
 
 #include "rendering/temporal_frame_tracker.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace lfs::vis {
@@ -34,6 +35,8 @@ namespace lfs::vis {
         bool projectionChanged(const lfs::rendering::FrameView& lhs,
                                const lfs::rendering::FrameView& rhs) {
             if (lhs.orthographic != rhs.orthographic ||
+                lhs.subregion_origin != rhs.subregion_origin ||
+                lhs.subregion_full_size != rhs.subregion_full_size ||
                 different(lhs.focal_length_mm, rhs.focal_length_mm) ||
                 different(lhs.near_plane, rhs.near_plane) ||
                 different(lhs.far_plane, rhs.far_plane) ||
@@ -60,18 +63,35 @@ namespace lfs::vis {
         }
 
         std::optional<glm::mat4> projectionFromView(const lfs::rendering::FrameView& view) {
-            if (view.size.x <= 0 || view.size.y <= 0 || view.intrinsics_override.has_value() ||
+            if (view.size.x <= 0 || view.size.y <= 0 ||
                 !std::isfinite(view.near_plane) || !std::isfinite(view.far_plane) ||
                 view.near_plane <= 0.0f || view.far_plane <= view.near_plane) {
                 return std::nullopt;
             }
-            return lfs::rendering::createProjectionMatrixFromFocal(
-                view.size,
-                view.focal_length_mm,
-                view.orthographic,
-                view.ortho_scale,
-                view.near_plane,
-                view.far_plane);
+            auto projection = lfs::rendering::createProjectionMatrixFromFocal(
+                view.size, view.focal_length_mm, view.orthographic, view.ortho_scale,
+                view.near_plane, view.far_plane);
+            if (!view.intrinsics_override && view.subregion_full_size == glm::ivec2(0))
+                return projection;
+            const auto intrinsics = view.getCameraIntrinsics();
+            if (!std::isfinite(intrinsics.focal_x) || !std::isfinite(intrinsics.focal_y) ||
+                !std::isfinite(intrinsics.center_x) || !std::isfinite(intrinsics.center_y) ||
+                intrinsics.focal_x <= 0 || intrinsics.focal_y <= 0)
+                return std::nullopt;
+            // Match the rasterizer's crop-local calibration exactly. Motion
+            // addresses a panel texture, not the full viewport camera image.
+            const float cx = intrinsics.center_x - view.subregion_origin.x;
+            const float cy = intrinsics.center_y - view.subregion_origin.y;
+            projection[0][0] = 2.f * intrinsics.focal_x / view.size.x;
+            projection[1][1] = 2.f * intrinsics.focal_y / view.size.y;
+            if (view.orthographic) {
+                projection[3][0] = 2.f * cx / view.size.x - 1.f;
+                projection[3][1] = 1.f - 2.f * cy / view.size.y;
+            } else {
+                projection[2][0] = 1.f - 2.f * cx / view.size.x;
+                projection[2][1] = 2.f * cy / view.size.y - 1.f;
+            }
+            return projection;
         }
 
         std::optional<TemporalProjectionPair> makeTemporalViewProjectionPairWithJitters(
@@ -128,8 +148,16 @@ namespace lfs::vis {
 
     void TemporalConvergenceController::prepare(const bool enabled,
                                                 const bool restart,
-                                                const bool allow_settle) {
+                                                const bool allow_settle,
+                                                const std::uint32_t settle_sample_count,
+                                                const std::uint32_t jitter_phase_count) {
+        const std::uint32_t clamped_sample_count = std::max(settle_sample_count, 1u);
+        const bool sampling_contract_changed =
+            settle_sample_count_ != clamped_sample_count ||
+            jitter_phase_count_ != jitter_phase_count;
         enabled_ = enabled;
+        settle_sample_count_ = clamped_sample_count;
+        jitter_phase_count_ = jitter_phase_count;
         if (!enabled_) {
             sequence_ = 0;
             remaining_ = 0;
@@ -139,13 +167,18 @@ namespace lfs::vis {
             // become useful. Keep the continuous jitter sequence, but do not
             // enqueue follow-up renders that would only contend for the GPU.
             remaining_ = 0;
-        } else if (restart) {
-            remaining_ = SAMPLE_COUNT;
+        } else if (restart || sampling_contract_changed) {
+            remaining_ = settle_sample_count_;
         }
     }
 
     glm::vec2 TemporalConvergenceController::jitter() const {
-        return enabled_ ? temporalJitterPixels(sequence_) : glm::vec2(0.0f);
+        if (!enabled_)
+            return glm::vec2(0.0f);
+        const std::uint64_t sample = jitter_phase_count_ > 0
+                                         ? sequence_ % jitter_phase_count_
+                                         : sequence_;
+        return temporalJitterPixels(sample);
     }
 
     bool TemporalConvergenceController::completeSuccessfulFrame() {

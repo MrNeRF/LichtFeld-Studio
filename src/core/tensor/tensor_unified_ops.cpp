@@ -775,7 +775,7 @@ namespace lfs::core {
                             .count = result.numel(),
                             .first = low,
                             .second = high,
-                            .seed = RandomGenerator::instance().get_next_cuda_seed(),
+                            .seed = args.random_seed ? *args.random_seed : RandomGenerator::instance().get_next_cuda_seed(),
                         },
                         internal::ExecContext{stream});
                     // No sync - tensor operation
@@ -786,14 +786,14 @@ namespace lfs::core {
                             .count = result.numel(),
                             .low = static_cast<int>(low),
                             .high = static_cast<int>(high),
-                            .seed = RandomGenerator::instance().get_next_cuda_seed(),
+                            .seed = args.random_seed ? *args.random_seed : RandomGenerator::instance().get_next_cuda_seed(),
                         },
                         internal::ExecContext{stream});
                     // No sync - tensor operation
                 }
             } else {
-                auto& gen = *static_cast<std::mt19937_64*>(
-                    RandomGenerator::instance().get_generator(Device::CPU));
+                std::mt19937_64 local_generator(args.random_seed.value_or(0));
+                auto& gen = args.random_seed ? local_generator : *static_cast<std::mt19937_64*>(RandomGenerator::instance().get_generator(Device::CPU));
 
                 if (result.dtype_ == DataType::Float32) {
                     std::uniform_real_distribution<float> dist(low, high);
@@ -1031,7 +1031,7 @@ namespace lfs::core {
                     internal::RandomProgram{
                         .count = n,
                         .sample_count = num_samples,
-                        .seed = RandomGenerator::instance().get_next_cuda_seed(),
+                        .seed = args.random_seed ? *args.random_seed : RandomGenerator::instance().get_next_cuda_seed(),
                         .replacement = replacement,
                     },
                     internal::ExecContext{result.stream()});
@@ -1054,8 +1054,8 @@ namespace lfs::core {
                     cdf[i] = cdf[i - 1] + weights_data[i] / sum;
                 }
 
-                auto& gen = *static_cast<std::mt19937_64*>(
-                    RandomGenerator::instance().get_generator(Device::CPU));
+                std::mt19937_64 local_generator(args.random_seed.value_or(0));
+                auto& gen = args.random_seed ? local_generator : *static_cast<std::mt19937_64*>(RandomGenerator::instance().get_generator(Device::CPU));
                 std::uniform_real_distribution<double> dis(0.0, 1.0);
 
                 int64_t* samples = result.ptr<int64_t>();
@@ -1063,17 +1063,17 @@ namespace lfs::core {
                 if (replacement) {
                     for (size_t i = 0; i < num_samples; ++i) {
                         double u = dis(gen);
-                        auto it = std::lower_bound(cdf.begin(), cdf.end(), u);
-                        samples[i] = static_cast<int64_t>(std::distance(cdf.begin(), it));
+                        auto it = std::upper_bound(cdf.begin(), cdf.end(), u);
+                        samples[i] = static_cast<int64_t>(std::min(static_cast<size_t>(std::distance(cdf.begin(), it)), n - 1));
                     }
                 } else {
                     std::vector<std::pair<float, int64_t>> keys(n);
 
                     for (size_t i = 0; i < n; ++i) {
                         float u = dis(gen);
-                        u = std::clamp(u, 1e-10f, 1.0f - 1e-10f);
+                        u = std::clamp(u, 1e-10f, 0.9999999403953552f);
                         float gumbel = -std::log(-std::log(u));
-                        float log_weight = std::log(std::max(weights_data[i], 1e-10f));
+                        float log_weight = std::log(weights_data[i]);
                         keys[i] = {log_weight + gumbel, static_cast<int64_t>(i)};
                     }
 
@@ -1093,7 +1093,7 @@ namespace lfs::core {
                            "eye requires a rank-2 output shape");
             LFS_ASSERT_MSG(args.dtype == DataType::Float32,
                            "eye currently supports only Float32");
-            result = load(LoadOp::Const, {args.shape, args.device, args.dtype, args.use_pinned, 0.0f});
+            result = load(LoadOp::Const, {.shape = args.shape, .device = args.device, .dtype = args.dtype, .use_pinned = args.use_pinned, .args = 0.0f});
             if (!result.is_valid())
                 return result;
             if (result.numel() == 0)
@@ -1156,7 +1156,7 @@ namespace lfs::core {
         return result;
     }
 
-    Tensor Tensor::multinomial(const Tensor& weights, int num_samples, bool replacement) {
+    Tensor Tensor::multinomial(const Tensor& weights, int num_samples, bool replacement, std::optional<uint64_t> seed) {
         LFS_ASSERT_MSG(weights.is_valid() && weights.ndim() == 1,
                        "multinomial requires valid rank-1 weights");
         LFS_ASSERT_MSG(weights.dtype() == DataType::Float32,
@@ -1193,6 +1193,7 @@ namespace lfs::core {
 
         LoadArgs args;
         args.shape = TensorShape({static_cast<size_t>(num_samples)});
+        args.random_seed = seed;
         args.device = dense_weights.device();
         args.dtype = DataType::Int64; // Must be Int64 for MCMC compatibility (nonzero() returns Int64)
         // Pass dense_weights (not the possibly-strided original) so LoadOp and
@@ -2385,38 +2386,6 @@ namespace lfs::core {
         }
     }
 
-    std::pair<Tensor, Tensor> Tensor::_broadcasted(const Tensor& other, bool match_dtype) const {
-        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
-                       "broadcast requires valid tensors");
-        LFS_ASSERT_MSG(device_ == other.device(),
-                       "broadcast operands must be on the same device");
-        internal::require_same_gpu_backend(*this, other, "broadcast");
-
-        auto bcast_shape = this->broadcast_shape(other.shape());
-        LFS_ASSERT_MSG(broadcast::can_broadcast(shape_.dims(), other.shape().dims()),
-                       "broadcast shapes are incompatible");
-
-        // _broadcasted consumers expect dense expanded storage.
-        Tensor a_broadcast = (shape_ == bcast_shape)
-                                 ? this->clone()
-                                 : broadcast_to(bcast_shape).contiguous();
-        Tensor b_broadcast = (other.shape() == bcast_shape)
-                                 ? other.clone()
-                                 : other.broadcast_to(bcast_shape).contiguous();
-
-        if (match_dtype && dtype_ != other.dtype()) {
-            auto common_dtype = promote_types(dtype_, other.dtype());
-            if (a_broadcast.dtype() != common_dtype) {
-                a_broadcast = a_broadcast.to(common_dtype);
-            }
-            if (b_broadcast.dtype() != common_dtype) {
-                b_broadcast = b_broadcast.to(common_dtype);
-            }
-        }
-
-        return {std::move(a_broadcast), std::move(b_broadcast)};
-    }
-
     // ============= STATIC CAT OPERATION =============
 
     Tensor Tensor::cat(const std::vector<Tensor>& tensors, int dim) {
@@ -2590,6 +2559,8 @@ namespace lfs::core {
 
             // Copy additional tensors into the reserved space
             if (first_device == Device::GPU) {
+                for (size_t i = 1; i < tensors.size(); ++i)
+                    prepare_inputs_for_stream({&tensors[i]}, result.stream());
                 size_t offset = first_size * row_size * element_size;
                 LOG_DEBUG("  Starting CUDA memcpy for {} additional tensors, initial offset={} bytes",
                           tensors.size() - 1, offset);
@@ -2608,7 +2579,7 @@ namespace lfs::core {
                                 internal::storage_ref(result), offset),
                             .bytes = bytes,
                             .synchronous = true,
-                            .context = internal::ExecContext{nullptr},
+                            .context = internal::ExecContext{result.stream()},
                         });
                     offset += bytes;
                 }
@@ -2639,6 +2610,9 @@ namespace lfs::core {
 
         if (result.numel() == 0)
             return result;
+        if (first_device == Device::GPU)
+            for (const auto& tensor : tensors)
+                prepare_inputs_for_stream({&tensor}, result.stream());
 
         size_t element_size = dtype_size(first_dtype);
 
@@ -2656,7 +2630,7 @@ namespace lfs::core {
                                 internal::storage_ref(result), offset),
                             .bytes = bytes,
                             .synchronous = true,
-                            .context = internal::ExecContext{nullptr},
+                            .context = internal::ExecContext{result.stream()},
                         });
                     offset += bytes;
                 }
@@ -2866,8 +2840,8 @@ namespace lfs::core {
     Tensor Tensor::clamp(float min_val, float max_val) const {
         LFS_ASSERT_MSG(is_valid(),
                        "clamp requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,
-                       "clamp currently supports only Float32 and Int32");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Float16 || dtype_ == DataType::Int32,
+                       "clamp currently supports Float32, Float16 and Int32");
         LFS_ASSERT_MSG(!std::isnan(min_val) && !std::isnan(max_val) && min_val <= max_val,
                        "clamp bounds must not be NaN and must be ordered");
 
@@ -2896,7 +2870,8 @@ namespace lfs::core {
         auto result = internal::allocate_like(*this, shape_, dtype_);
 
         if (device_ == Device::GPU) {
-            if (dtype_ == DataType::Float32) {
+            if (dtype_ == DataType::Float32 || dtype_ == DataType::Float16) {
+                prepare_inputs_for_stream({this, &result}, result.stream());
                 internal::backend_ops_for(*this).clamp_fused(
                     internal::storage_ref(*this), internal::storage_ref(result),
                     internal::scalar_operand(min_val), internal::scalar_operand(max_val),
@@ -2916,6 +2891,15 @@ namespace lfs::core {
                     internal::ExecContext{result.stream()});
             }
         } else {
+            if (dtype_ == DataType::Float16) {
+                const auto* src = ptr<detail::tensor_half_t>();
+                auto* dst = result.ptr<detail::tensor_half_t>();
+                for (size_t i = 0; i < numel(); ++i) {
+                    const float value = detail::tensor_half_to_float(src[i]);
+                    dst[i] = detail::tensor_float_to_half(std::isnan(value) ? value : std::clamp(value, min_val, max_val));
+                }
+                return result;
+            }
             // CPU: simple loop
             if (dtype_ == DataType::Float32) {
                 const float* src = ptr<float>();

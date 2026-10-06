@@ -11,6 +11,8 @@
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/ElementText.h>
+#include <nanobind/eval.h>
+#include <nanobind/stl/tuple.h>
 
 #include <cstdlib>
 #include <gtest/gtest.h>
@@ -350,6 +352,86 @@ namespace {
         EXPECT_FALSE(layout_.button("Apply"));
         EXPECT_EQ(layout_.checkbox("Enabled", false), std::make_tuple(true, true));
         layout_.end_frame();
+    }
+
+    TEST_F(RmlImModeLayoutTest, RegisteredUIListDrawsRowsAndBindsSelection) {
+        prependBuiltPythonModulePath();
+        ASSERT_TRUE(lfs::python::ensure_initialized());
+        const lfs::python::GilAcquire gil;
+        nb::dict scope;
+        nb::exec(R"PY(
+import lichtfeld as lf
+from types import SimpleNamespace
+model = SimpleNamespace(items=[SimpleNamespace(name="First"), SimpleNamespace(name="Second")])
+selection = SimpleNamespace(index=0)
+calls = []
+instances = []
+class CustomRows:
+    list_id = "test.custom.rows"
+    fail = False
+    def __init__(self):
+        instances.append(self)
+    def draw_item(self, layout, data, item, icon, active_data, active_prop, index):
+        assert data is model
+        assert item is model.items[index]
+        assert icon == 0
+        assert active_data is selection
+        assert active_prop == "index"
+        calls.append(index)
+        with layout.row() as row:
+            row.label("Custom " + str(item.name))
+        if self.fail and index == 0:
+            raise RuntimeError("row failure")
+lf.register_uilist(CustomRows)
+)PY",
+                 scope);
+        const auto draw = [&] {
+            layout_.begin_frame(&document_);
+            const auto result = layout_.template_list("test.custom.rows", "main", scope["model"],
+                                                      "items", scope["selection"], "index", 2);
+            layout_.label("After list");
+            layout_.end_frame();
+            return result;
+        };
+        EXPECT_EQ(draw(), std::make_tuple(0, 2));
+        EXPECT_EQ(nb::len(nb::object(scope["calls"])), 2u);
+        auto* list = findByClass(root_, "im-template-list");
+        EXPECT_NE(list, nullptr);
+        if (list && list->GetNumChildren() == 2) {
+            auto* first = list->GetChild(0);
+            auto* second = list->GetChild(1);
+            EXPECT_NE(first->GetInnerRML().find("Custom First"), std::string::npos);
+            EXPECT_NE(second->GetInnerRML().find("Custom Second"), std::string::npos);
+            second->DispatchEvent("click", {});
+            EXPECT_TRUE(document_.HasAttribute("data-immediate-input-pending"));
+            EXPECT_EQ(draw(), std::make_tuple(1, 2));
+            EXPECT_EQ(list->GetChild(0), first);
+            EXPECT_EQ(list->GetChild(1), second);
+            EXPECT_TRUE(second->IsClassSet("active"));
+            EXPECT_FALSE(first->IsClassSet("active"));
+            EXPECT_EQ(nb::cast<int>(scope["selection"].attr("index")), 1);
+            EXPECT_EQ(nb::len(nb::object(scope["calls"])), 4u);
+            EXPECT_EQ(nb::len(nb::object(scope["instances"])), 1u);
+            nb::exec("CustomRows.fail = True", scope);
+            EXPECT_EQ(draw(), std::make_tuple(1, 2));
+            EXPECT_EQ(nb::len(nb::object(scope["calls"])), 6u);
+            EXPECT_NE(root_->GetInnerRML().find("After list"), std::string::npos);
+            nb::exec("CustomRows.fail = False; model.items[0].name = 7", scope);
+            EXPECT_EQ(draw(), std::make_tuple(1, 2));
+            EXPECT_EQ(nb::len(nb::object(scope["calls"])), 8u);
+            EXPECT_NE(list->GetChild(0)->GetInnerRML().find("Custom 7"), std::string::npos);
+            nb::exec("model.items.pop()", scope);
+            EXPECT_EQ(draw(), std::make_tuple(1, 1));
+            EXPECT_EQ(list->GetNumChildren(), 1);
+        }
+        nb::exec("lf.unregister_uilist(CustomRows.list_id)", scope);
+        const auto calls = nb::len(nb::object(scope["calls"]));
+        draw();
+        EXPECT_EQ(nb::len(nb::object(scope["calls"])), calls);
+        EXPECT_EQ(findByClass(root_, "im-template-list"), nullptr);
+        Rml::ElementList selects;
+        root_->GetElementsByTagName(selects, "select");
+        EXPECT_EQ(selects.size(), 1u);
     }
 
 } // namespace

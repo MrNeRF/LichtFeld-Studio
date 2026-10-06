@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "core/tensor_fwd.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -31,5 +32,7 @@ namespace lfs::training::kernels {
         const float* d_scalar,
         float skip_below = 0.0f,
         cudaStream_t stream = nullptr);
+
+    lfs::core::Tensor quantize_to_8bit_grid(const lfs::core::Tensor& image);
 
 } // namespace lfs::training::kernels

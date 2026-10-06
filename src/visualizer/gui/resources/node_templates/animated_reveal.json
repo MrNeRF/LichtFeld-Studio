@@ -1,0 +1,320 @@
+{
+  "schema_version": 1,
+  "id": "animated_reveal",
+  "name": "Radial reveal",
+  "description": "Reveal geometry from an adjustable centre as sequencer time advances.",
+  "category": "Animation",
+  "scene_kinds": [
+    "splat",
+    "mesh",
+    "points"
+  ],
+  "adjust": "Centre sets the origin, Radius the starting extent, and Speed the expansion per second; scrub the sequencer to preview.",
+  "tree": {
+    "schema_version": 1,
+    "uuid": "builtin.animated_reveal",
+    "name": "Radial reveal",
+    "tree_type": "lfs.geometry",
+    "nodes": [
+      {
+        "name": "Group Input",
+        "type_id": "lfs.group_input",
+        "location": [
+          -760,
+          0
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Group Output",
+        "type_id": "lfs.group_output",
+        "location": [
+          520,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "none"
+          }
+        },
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Position",
+        "type_id": "lfs.position",
+        "location": [
+          -480,
+          -180
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Distance",
+        "type_id": "lfs.distance",
+        "location": [
+          -260,
+          -180
+        ],
+        "muted": false,
+        "input_values": {
+          "Point": {
+            "type": "vec3",
+            "value": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Within Radius",
+        "type_id": "lfs.compare",
+        "location": [
+          -40,
+          -180
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 2
+          }
+        },
+        "properties": {
+          "operation": "less_than"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Reveal",
+        "type_id": "lfs.separate_geometry",
+        "location": [
+          200,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "geometry"
+          }
+        },
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Adjust these settings",
+        "type_id": "lfs.frame",
+        "location": [
+          -620,
+          -180
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "colour": "neutral",
+          "label": "Adjust these settings",
+          "note": "Centre sets the origin, Radius the starting extent, and Speed the expansion per second; scrub the sequencer to preview."
+        },
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Time",
+        "type_id": "lfs.scene_time",
+        "location": [
+          -600,
+          450
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": 450,
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Expansion",
+        "type_id": "lfs.math",
+        "location": [
+          -350,
+          450
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": 450,
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Animated radius",
+        "type_id": "lfs.math",
+        "location": [
+          -100,
+          450
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": 450,
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      }
+    ],
+    "links": [
+      {
+        "from_node": "Group Input",
+        "from_socket": "Geometry",
+        "to_node": "Reveal",
+        "to_socket": "Geometry"
+      },
+      {
+        "from_node": "Position",
+        "from_socket": "Position",
+        "to_node": "Distance",
+        "to_socket": "Vector"
+      },
+      {
+        "from_node": "Distance",
+        "from_socket": "Distance",
+        "to_node": "Within Radius",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "Within Radius",
+        "from_socket": "Result",
+        "to_node": "Reveal",
+        "to_socket": "Selection"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Centre",
+        "to_node": "Distance",
+        "to_socket": "Point"
+      },
+      {
+        "from_node": "Reveal",
+        "from_socket": "Selection",
+        "to_node": "Group Output",
+        "to_socket": "Geometry"
+      },
+      {
+        "from_node": "Time",
+        "from_socket": "Seconds",
+        "to_node": "Expansion",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Speed",
+        "to_node": "Expansion",
+        "to_socket": "B"
+      },
+      {
+        "from_node": "Expansion",
+        "from_socket": "Value",
+        "to_node": "Animated radius",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Radius",
+        "to_node": "Animated radius",
+        "to_socket": "B"
+      },
+      {
+        "from_node": "Animated radius",
+        "from_socket": "Value",
+        "to_node": "Within Radius",
+        "to_socket": "B"
+      }
+    ],
+    "interface": {
+      "inputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        },
+        {
+          "identifier": "Centre",
+          "label": "Centre",
+          "type": "lfs.vector",
+          "default": {
+            "type": "vec3",
+            "value": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "identifier": "Radius",
+          "label": "Radius",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 2
+          },
+          "min": 0,
+          "max": 1000,
+          "step": 0.1
+        },
+        {
+          "identifier": "Speed",
+          "label": "Speed",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 1
+          },
+          "min": 0,
+          "max": 100,
+          "step": 0.1
+        }
+      ],
+      "outputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -4,6 +4,7 @@
 
 #include "py_command.hpp"
 #include "core/logger.hpp"
+#include "py_viewer_dispatch.hpp"
 #include "visualizer/operation/undo_history.hpp"
 
 #include <nanobind/stl/string.h>
@@ -249,17 +250,33 @@ namespace lfs::python {
             "Push an undo step with undo/redo functions");
 
         undo.def(
-            "undo", []() { return vis::op::undoHistory().undo().success; }, "Undo last operation");
+            "undo",
+            []() {
+                return invoke_on_viewer(
+                    []() { return vis::op::undoHistory().undo().success; }, false);
+            },
+            "Undo last operation");
         undo.def(
-            "redo", []() { return vis::op::undoHistory().redo().success; }, "Redo last undone operation");
+            "redo",
+            []() {
+                return invoke_on_viewer(
+                    []() { return vis::op::undoHistory().redo().success; }, false);
+            },
+            "Redo last undone operation");
         undo.def(
             "jump",
             [history_result_to_dict](const std::string& stack, size_t count) {
                 if (stack == "undo") {
-                    return history_result_to_dict(vis::op::undoHistory().undoMultiple(count));
+                    const auto result = invoke_on_viewer(
+                        [count]() { return vis::op::undoHistory().undoMultiple(count); },
+                        vis::op::HistoryResult{});
+                    return history_result_to_dict(result);
                 }
                 if (stack == "redo") {
-                    return history_result_to_dict(vis::op::undoHistory().redoMultiple(count));
+                    const auto result = invoke_on_viewer(
+                        [count]() { return vis::op::undoHistory().redoMultiple(count); },
+                        vis::op::HistoryResult{});
+                    return history_result_to_dict(result);
                 }
                 throw std::runtime_error("stack must be 'undo' or 'redo'");
             },

@@ -7,6 +7,8 @@
 #include "core/path_utils.hpp"
 #include "hdr_libplacebo.hpp"
 #include "hdr_tonemap.hpp"
+#include "io/media/file_frame_sink.hpp"
+#include "media_probe_ffmpeg.hpp"
 #if LFS_HAS_CUDA
 #include "nvcodec_image_loader.hpp"
 #include "video/color_convert.cuh"
@@ -29,7 +31,6 @@ extern "C" {
 #if LFS_HAS_CUDA
 #include <cuda_runtime.h>
 #endif
-#include <stb_image_write.h>
 
 #include <nlohmann/json.hpp>
 
@@ -81,38 +82,19 @@ namespace lfs::io {
             return std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         }
 
-        [[nodiscard]] int findUsableHeaderVideoStream(const AVFormatContext* const context) {
-            if (!context)
-                return -1;
-
-            for (unsigned int i = 0; i < context->nb_streams; ++i) {
-                const AVStream* const stream = context->streams[i];
-                const AVCodecParameters* const parameters = stream ? stream->codecpar : nullptr;
-                if (parameters && parameters->codec_type == AVMEDIA_TYPE_VIDEO &&
-                    parameters->codec_id != AV_CODEC_ID_NONE && parameters->width > 0 &&
-                    parameters->height > 0) {
-                    return static_cast<int>(i);
-                }
-            }
-            return -1;
-        }
-
-        void discardNonVideoStreams(AVFormatContext* const context, const int video_stream_idx) {
-            if (!context)
-                return;
-
-            for (unsigned int i = 0; i < context->nb_streams; ++i)
-                context->streams[i]->discard = static_cast<int>(i) == video_stream_idx
-                                                   ? AVDISCARD_DEFAULT
-                                                   : AVDISCARD_ALL;
-        }
-
         [[nodiscard]] bool configureVideoToRgbColorimetry(
             SwsContext* context, const AVFrame* source,
             const AVColorSpace fallback_colorspace,
             const AVColorRange fallback_range) {
             if (!context || !source)
                 return false;
+            const auto* pixel_description = av_pix_fmt_desc_get(
+                static_cast<AVPixelFormat>(source->format));
+            // YUV matrices/ranges do not describe an RGB source. Applying them
+            // during RGB resize can change the colors even though no color-space
+            // conversion was requested.
+            if (pixel_description && (pixel_description->flags & AV_PIX_FMT_FLAG_RGB))
+                return true;
             const AVColorSpace colorspace = source->colorspace != AVCOL_SPC_UNSPECIFIED
                                                 ? source->colorspace
                                                 : fallback_colorspace;
@@ -368,19 +350,6 @@ namespace lfs::io {
             if (!timestamps_available)
                 return {false, "timestamps_unavailable"};
             return {true, "sparse_fps_keyframe_seek"};
-        }
-
-        bool write_image_file(const std::filesystem::path& path,
-                              int width,
-                              int height,
-                              const void* data,
-                              ImageFormat format,
-                              int jpg_quality) {
-            const std::string path_utf8 = lfs::core::path_to_utf8(path);
-            if (format == ImageFormat::JPG) {
-                return stbi_write_jpg(path_utf8.c_str(), width, height, 3, data, jpg_quality) != 0;
-            }
-            return stbi_write_png(path_utf8.c_str(), width, height, 3, data, width * 3) != 0;
         }
 
         void write_jpeg_to_file(const std::filesystem::path& path, const std::vector<uint8_t>& data) {
@@ -800,9 +769,28 @@ namespace lfs::io {
 
     class VideoFrameExtractor::Impl {
     public:
-        bool extract(const Params& params, std::string& error) {
+        bool extract(const Params& params, std::string& error, media::FrameSink* provided_sink = nullptr) {
             outcome_ = ExtractionOutcome::Failed;
             error.clear();
+            const bool custom_sink = provided_sink != nullptr;
+            media::FileFrameSink file_sink({params.output_dir, params.filename_pattern,
+                                            params.format == ImageFormat::PNG ? media::FrameFileFormat::PNG : media::FrameFileFormat::JPEG,
+                                            params.jpg_quality});
+            auto& sink = provided_sink ? *provided_sink : static_cast<media::FrameSink&>(file_sink);
+            bool sink_started = false;
+            size_t accepted_frames = 0;
+            const auto check_sink = [](const media::SinkResult& result) {
+                if (!result && result.error().code() == ErrorCode::Cancelled)
+                    throw ExtractionCancelled{};
+                if (!result)
+                    throw std::runtime_error("Frame sink failed: " + std::string(result.error().detail()));
+            };
+            const auto abort_sink = [&](media::SinkOutcome outcome) {
+                if (sink_started) {
+                    sink.abort({outcome, accepted_frames, error});
+                    sink_started = false;
+                }
+            };
             const auto extraction_started = std::chrono::steady_clock::now();
             AVFormatContext* fmt_ctx = nullptr;
             AVCodecContext* codec_ctx = nullptr;
@@ -854,37 +842,16 @@ namespace lfs::io {
                     return false;
                 }
 
-                // Frame extraction is video-only. Prefer the complete stream
-                // description already stored in container headers, avoiding a
-                // global probe of audio tracks which this workflow never uses.
-                int video_stream_idx = findUsableHeaderVideoStream(fmt_ctx);
+                const auto probe = media::detail::probeVideoStream(fmt_ctx);
+                const int video_stream_idx = probe.stream_index;
                 if (video_stream_idx < 0) {
-                    // Preserve compatibility with containers that need packet
-                    // probing to expose their video dimensions or codec.
-                    if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
-                        error = "Failed to find stream info";
-                        avformat_close_input(&fmt_ctx);
-                        return false;
-                    }
-                    video_stream_idx = findUsableHeaderVideoStream(fmt_ctx);
-                }
-
-                if (video_stream_idx == -1) {
-                    error = "No video stream found";
+                    error = probe.ffmpeg_error < 0 ? "Failed to find stream info" : "No video stream found";
                     avformat_close_input(&fmt_ctx);
                     return false;
                 }
-
-                discardNonVideoStreams(fmt_ctx, video_stream_idx);
-
                 AVStream* video_stream = fmt_ctx->streams[video_stream_idx];
-                // Metadata may live in HEVC packets instead of the container
-                // header (notably PQ/HLG signalling). Probe only after every
-                // non-video stream is discarded, then rewind so decoding and
-                // frame selection remain deterministic.
-                if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
+                if (!probe.metadata_complete)
                     LOG_WARN("Could not complete video-only stream metadata probe; some source metadata may be unavailable");
-                }
                 av_seek_frame(fmt_ctx, video_stream_idx, 0, AVSEEK_FLAG_BACKWARD);
                 const AVCodecID codec_id = video_stream->codecpar->codec_id;
                 int dv_profile = 0;
@@ -934,7 +901,7 @@ namespace lfs::io {
                 const AVCodec* codec = nullptr;
 #if LFS_HAS_CUDA
                 const char* hw_decoder_name = dv_profile > 0 ? nullptr : get_hw_decoder_name(codec_id);
-                if (hw_decoder_name) {
+                if (!custom_sink && hw_decoder_name) {
                     codec = avcodec_find_decoder_by_name(hw_decoder_name);
                     if (codec) {
                         if (av_hwdevice_ctx_create(&hw_device_ctx, AV_HWDEVICE_TYPE_CUDA, nullptr,
@@ -952,7 +919,7 @@ namespace lfs::io {
                 }
 #endif
 #if defined(__APPLE__)
-                if (dv_profile == 0 && !codec) {
+                if (!custom_sink && dv_profile == 0 && !codec) {
                     const AVCodec* const software_codec = avcodec_find_decoder(codec_id);
                     if (software_codec) {
                         for (int i = 0;; ++i) {
@@ -1138,8 +1105,6 @@ namespace lfs::io {
                     throw std::invalid_argument(error);
                 }
 
-                std::filesystem::create_directories(params.output_dir);
-
                 int64_t total_frames = video_stream->nb_frames;
                 if (total_frames <= 0 || video_duration <= 0.0) {
                     const long double estimated_frames =
@@ -1189,6 +1154,19 @@ namespace lfs::io {
                     window_est_frames = static_cast<int>(std::round(video_fps / target_fps));
                 window_est_frames = std::max(1, window_est_frames);
 
+                media::SinkSession session;
+                if (custom_sink)
+                    session.source = media::detail::describeContext(fmt_ctx);
+                session.source.stream_info_probed = probe.metadata_complete;
+                const bool swap_dimensions = params.rotation == 90 || params.rotation == 270;
+                session.output = {swap_dimensions ? out_height : out_width,
+                                  swap_dimensions ? out_width : out_height,
+                                  static_cast<size_t>(swap_dimensions ? out_height : out_width) * 3,
+                                  media::FramePixelFormat::RGB8};
+                session.applied_rotation = params.rotation;
+                sink_started = true;
+                check_sink(sink.begin(session));
+
                 // Seek to start time if needed
                 if (start_time > 0.1) {
                     const int64_t timestamp =
@@ -1224,7 +1202,7 @@ namespace lfs::io {
 
 #if LFS_HAS_CUDA
                 const bool use_gpu_jpeg =
-                    params.format == ImageFormat::JPG && NvCodecImageLoader::is_available();
+                    !custom_sink && params.format == ImageFormat::JPG && NvCodecImageLoader::is_available();
 #else
                 constexpr bool use_gpu_jpeg = false;
 #endif
@@ -1418,6 +1396,26 @@ namespace lfs::io {
                 int keyframe_seek_count = 0;
                 double current_frame_time = 0.0;
                 int current_src_frame = 0;
+                media::FrameInfo current_info;
+                const auto frame_info = [&](const AVFrame* decoded, double seconds) {
+                    media::FrameInfo info;
+                    const int64_t ticks = decoded->best_effort_timestamp != AV_NOPTS_VALUE ? decoded->best_effort_timestamp : decoded->pts;
+                    if (ticks != AV_NOPTS_VALUE) {
+                        info.source_timestamp = media::Timestamp{ticks, {video_stream->time_base.num, video_stream->time_base.den}};
+                        info.timestamp_origin = decoded->best_effort_timestamp != AV_NOPTS_VALUE ? media::TimestampOrigin::BestEffort : media::TimestampOrigin::Presentation;
+                    }
+                    info.decode_index = static_cast<uint64_t>(decoded_frame_count - 1);
+                    info.relative_seconds = seconds;
+                    info.legacy_source_frame = std::max(1, static_cast<int>(std::llround(seconds * video_fps)) + 1);
+                    return info;
+                };
+                const auto emit_rgb = [&](int width, int height, const void* pixels, media::FrameInfo info, double score) {
+                    info.delivery_index = accepted_frames;
+                    info.sharpness_score = score;
+                    const size_t stride = static_cast<size_t>(width) * 3;
+                    check_sink(sink.write({{width, height, stride, media::FramePixelFormat::RGB8}, info, std::span<const uint8_t>(static_cast<const uint8_t*>(pixels), stride * height)}));
+                    ++accepted_frames;
+                };
                 std::vector<void*> batch_gpu_ptrs;
                 std::vector<std::filesystem::path> batch_filenames;
                 struct BatchFrameMeta {
@@ -1433,6 +1431,7 @@ namespace lfs::io {
                 struct CandidateFrame {
                     std::vector<uint8_t> rgb;
                     std::filesystem::path filename;
+                    media::FrameInfo info;
                     double score = 0.0;
                     double timestamp = 0.0;
                     int source_frame = 0;
@@ -1494,7 +1493,8 @@ namespace lfs::io {
                             write_jpeg_to_file(batch_filenames[i], encoded[i]);
                             jpeg_write_seconds += elapsedSeconds(jpeg_write_started);
                             ++written_count;
-                            if (params.generate_metadata && i < batch_meta.size()) {
+                            ++accepted_frames;
+                            if (!custom_sink && params.generate_metadata && i < batch_meta.size()) {
                                 saved_frames.push_back({lfs::core::path_to_utf8(batch_filenames[i].filename()),
                                                         batch_meta[i].timestamp,
                                                         batch_meta[i].source_frame,
@@ -1514,6 +1514,8 @@ namespace lfs::io {
                 };
 
                 auto generate_filename = [&](int frame_num) {
+                    if (custom_sink)
+                        return std::filesystem::path{};
                     std::string ext = params.format == ImageFormat::PNG ? ".png" : ".jpg";
                     return params.output_dir / (formatFrameFilenameStem(params.filename_pattern, frame_num) + ext);
                 };
@@ -1525,7 +1527,7 @@ namespace lfs::io {
 
                 auto reserve_output_filename = [&](const std::filesystem::path& filename,
                                                    const int source_frame) {
-                    if (emitted_filenames.insert(filename).second)
+                    if (custom_sink || emitted_filenames.insert(filename).second)
                         return true;
                     LOG_WARN("Skipping duplicate source frame {} output: {}",
                              source_frame, lfs::core::path_to_utf8(filename));
@@ -1605,19 +1607,11 @@ namespace lfs::io {
                         }
                         write_data = rot_buf.data();
                     }
-                    if (!write_image_file(fname, write_w, write_h,
-                                          write_data, params.format,
-                                          params.jpg_quality)) {
-                        LOG_WARN("Failed to write sharpest window frame: {}",
-                                 lfs::core::path_to_utf8(fname));
-                    } else {
-                        ++written_count;
-                        if (params.generate_metadata) {
-                            saved_frames.push_back({lfs::core::path_to_utf8(fname.filename()),
-                                                    best->timestamp,
-                                                    best->source_frame,
-                                                    best->score});
-                        }
+                    emit_rgb(write_w, write_h, write_data, best->info, best->score);
+                    ++written_count;
+                    if (!custom_sink && params.generate_metadata) {
+                        saved_frames.push_back({lfs::core::path_to_utf8(fname.filename()), best->timestamp,
+                                                best->source_frame, best->score});
                     }
                     finish_selected_frame();
                     window_candidates.clear();
@@ -1670,6 +1664,7 @@ namespace lfs::io {
                                 CandidateFrame cf;
                                 cf.rgb.assign(cpu_contiguous_buffer,
                                               cpu_contiguous_buffer + frame_size);
+                                cf.info = current_info;
                                 cf.score = frame_score;
                                 cf.timestamp = current_frame_time;
                                 cf.source_frame = current_src_frame;
@@ -1760,6 +1755,7 @@ namespace lfs::io {
                                 CandidateFrame cf;
                                 cf.rgb.assign(cpu_contiguous_buffer,
                                               cpu_contiguous_buffer + frame_size);
+                                cf.info = current_info;
                                 cf.score = frame_score;
                                 cf.timestamp = current_frame_time;
                                 cf.source_frame = current_src_frame;
@@ -1839,18 +1835,15 @@ namespace lfs::io {
                             }
                         } else
 #endif
-                            if (write_image_file(filename, hw_rot_w, hw_rot_h,
-                                                 cpu_contiguous_buffer, params.format,
-                                                 params.jpg_quality)) {
+                        {
+                            emit_rgb(hw_rot_w, hw_rot_h, cpu_contiguous_buffer, current_info, frame_score);
                             ++written_count;
-                            if (params.generate_metadata) {
+                            if (!custom_sink && params.generate_metadata) {
                                 saved_frames.push_back({lfs::core::path_to_utf8(filename.filename()),
                                                         current_frame_time,
                                                         current_src_frame,
                                                         frame_score});
                             }
-                        } else {
-                            LOG_WARN("Failed to write extracted frame: {}", lfs::core::path_to_utf8(filename));
                         }
                     }
 
@@ -1880,6 +1873,7 @@ namespace lfs::io {
                             CandidateFrame cf;
                             cf.rgb.assign(cpu_contiguous_buffer,
                                           cpu_contiguous_buffer + frame_size);
+                            cf.info = current_info;
                             cf.score = frame_score;
                             cf.timestamp = current_frame_time;
                             cf.source_frame = current_src_frame;
@@ -1962,18 +1956,15 @@ namespace lfs::io {
                         }
                     } else
 #endif
-                        if (write_image_file(filename, sw_rot_w, sw_rot_h,
-                                             cpu_contiguous_buffer, params.format,
-                                             params.jpg_quality)) {
+                    {
+                        emit_rgb(sw_rot_w, sw_rot_h, cpu_contiguous_buffer, current_info, frame_score);
                         ++written_count;
-                        if (params.generate_metadata) {
+                        if (!custom_sink && params.generate_metadata) {
                             saved_frames.push_back({lfs::core::path_to_utf8(filename.filename()),
                                                     current_frame_time,
                                                     current_src_frame,
                                                     frame_score});
                         }
-                    } else {
-                        LOG_WARN("Failed to write extracted frame: {}", lfs::core::path_to_utf8(filename));
                     }
 
                     finish_selected_frame();
@@ -1987,6 +1978,7 @@ namespace lfs::io {
                     }
                 }
                 bool has_retained_frame = false;
+                media::FrameInfo retained_info;
                 double retained_frame_time = 0.0;
                 double retained_frame_duration = 0.0;
                 const auto retain_frame =
@@ -2001,12 +1993,14 @@ namespace lfs::io {
                             throw std::runtime_error(error);
                         }
                         has_retained_frame = true;
+                        retained_info = frame_info(retained_source, frame_time);
                         retained_frame_time = frame_time;
                         retained_frame_duration = frame_duration;
                     };
 
                 const auto process_selected_frame = [&](AVFrame* const selected_frame,
                                                         const double frame_time) {
+                    current_info = selected_frame == sparse_previous_frame ? retained_info : frame_info(selected_frame, frame_time);
                     current_frame_time = frame_time;
                     current_src_frame = source_frame_for_time(frame_time);
                     if (using_hw_decode &&
@@ -2038,6 +2032,7 @@ namespace lfs::io {
                         retain_frame(decoded_frame, frame_time, frame_duration);
                     }
 
+                    current_info = frame_info(decoded_frame, frame_time);
                     current_frame_time = frame_time;
                     current_src_frame = source_frame_for_time(frame_time);
                     if (params.sharpness.enabled && params.sharpness.window_mode) {
@@ -2233,7 +2228,7 @@ namespace lfs::io {
                 // Flush remaining window candidates at end of video
                 flush_window();
 
-                if (params.generate_metadata && !saved_frames.empty()) {
+                if (!custom_sink && params.generate_metadata && !saved_frames.empty()) {
                     try {
                         nlohmann::json root;
                         root["schema_version"] = 2;
@@ -2434,6 +2429,8 @@ namespace lfs::io {
                              cuda_upload_seconds, jpeg_encode_seconds, jpeg_write_seconds);
                 }
 
+                check_sink(sink.complete({media::SinkOutcome::Completed, accepted_frames, {}}));
+                sink_started = false;
                 cleanup();
 
                 outcome_ = ExtractionOutcome::Completed;
@@ -2443,10 +2440,31 @@ namespace lfs::io {
                 cleanup();
                 outcome_ = ExtractionOutcome::Cancelled;
                 error = e.what();
+                abort_sink(media::SinkOutcome::Cancelled);
+                return false;
+            } catch (const std::filesystem::filesystem_error& e) {
+                cleanup();
+                // MSVC's what() can contain ACP-encoded paths and localized text.
+                // Build this public error from native paths instead of returning
+                // bytes that are invalid UTF-8 to the GUI or JSON consumers.
+                error = "Filesystem operation failed [" + std::string(e.code().category().name()) +
+                        ":" + std::to_string(e.code().value()) + "]";
+                if (!e.path1().empty())
+                    error += " " + lfs::core::path_to_utf8(e.path1());
+                if (!e.path2().empty())
+                    error += " -> " + lfs::core::path_to_utf8(e.path2());
+                abort_sink(media::SinkOutcome::Failed);
                 return false;
             } catch (const std::exception& e) {
                 cleanup();
                 error = e.what();
+                abort_sink(media::SinkOutcome::Failed);
+                return false;
+            } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): User-supplied sink/progress callbacks may throw non-standard exceptions; release decoder resources and terminate the sink lifecycle.
+                cleanup();
+                error = "Unknown extraction failure";
+                abort_sink(media::SinkOutcome::Failed);
                 return false;
             }
         }
@@ -2462,6 +2480,10 @@ namespace lfs::io {
 
     bool VideoFrameExtractor::extract(const Params& params, std::string& error) {
         return impl_->extract(params, error);
+    }
+
+    bool VideoFrameExtractor::extractToSink(const Params& params, media::FrameSink& sink, std::string& error) {
+        return impl_->extract(params, error, &sink);
     }
 
     ExtractionOutcome VideoFrameExtractor::lastOutcome() const {

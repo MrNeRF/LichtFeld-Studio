@@ -10,6 +10,7 @@
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <set>
+#include <utility>
 
 namespace lfs::vis::screen {
 
@@ -514,6 +515,13 @@ namespace lfs::vis::screen {
             .label_key = "editor.console",
             .icon = "editor-console",
             .placement = {.anchor = EditorPlacement::Anchor::ActiveView, .side = Side::Right, .fraction = 0.4f},
+        });
+        registry.add(EditorType{
+            .id = std::string(editors::kNodeEditor),
+            .label = "Node Editor",
+            .label_key = "editor.node_editor",
+            .icon = "layout-grid",
+            .placement = {.anchor = EditorPlacement::Anchor::ActiveView, .side = Side::Bottom, .fraction = 0.38f},
         });
     }
 

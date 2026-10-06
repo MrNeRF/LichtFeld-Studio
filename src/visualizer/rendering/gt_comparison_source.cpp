@@ -10,6 +10,7 @@
 #include "core/memory_pressure.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_image.hpp"
 #include "display_tensors.hpp"
 #include "gt_comparison_cache_utils.hpp"
 #include "rendering/image_layout.hpp"
@@ -567,7 +568,7 @@ namespace lfs::vis {
         setGTComparisonActualSizeError(view, {});
         state.requested_at = std::chrono::steady_clock::now();
         state.lookup_timed = false;
-        markDirty(DirtyFlag::SPLIT_VIEW);
+        markDirty(DirtyFlag::SPLIT_VIEW, FrameReason::AsyncCompletion);
     }
 
     void RenderingManager::publishGTComparisonActualFrame(ViewRenderState& view,
@@ -1133,7 +1134,7 @@ namespace lfs::vis {
             }
 
             if (applied) {
-                markDirty(DirtyFlag::SPLIT_VIEW);
+                markDirty(DirtyFlag::SPLIT_VIEW, FrameReason::AsyncCompletion);
             }
         }
     }

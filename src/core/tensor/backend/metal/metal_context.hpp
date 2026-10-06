@@ -79,6 +79,8 @@ namespace lfs::core::internal::metal {
         // Threads to run, or threadgroups when group_size is set.
         MTLSize grid;
         MTLSize group_size{};
+        // GPU address of three uint32 threadgroup counts; replaces grid.
+        uint64_t indirect = 0;
     };
 
     template <class Params>
@@ -119,6 +121,8 @@ namespace lfs::core::internal::metal {
         // reaches `value`. The host does not wait. Returns the serial of an
         // empty batch that completes once the wait is over.
         uint64_t queue_wait(id<MTLSharedEvent> event, uint64_t value);
+        // Completion-handler safe: no allocation, recording lock or callback.
+        void record_external_write_failure() noexcept;
         // Writes a GPU timestamp after all earlier work; returns its batch serial.
         uint64_t write_timestamp(id<MTL4CounterHeap> heap, NSUInteger index);
         void wait(uint64_t serial);
@@ -168,6 +172,7 @@ namespace lfs::core::internal::metal {
         struct Block {
             id<MTLBuffer> buffer;
             uint64_t address = 0;
+            size_t requested = 0;
             size_t capacity = 0;
             uint64_t guard = 0;
             std::unique_ptr<StorageMeta> meta;
@@ -188,6 +193,7 @@ namespace lfs::core::internal::metal {
         struct Failure {
             std::mutex mutex;
             std::string message;
+            std::atomic_bool external_write_failed{false};
         };
 
         struct PipelineKey {
@@ -211,6 +217,7 @@ namespace lfs::core::internal::metal {
         size_t acquire_frame_locked();
         void commit_locked();
         void wait_signaled(uint64_t serial);
+        void check_external_write_failure() const;
         void check_failures() const;
         void check_fault();
         void consume_fault_locked(size_t slot);
@@ -259,6 +266,10 @@ namespace lfs::core::internal::metal {
         std::map<size_t, std::vector<Block>> free_;
         size_t cached_bytes_ = 0;
         size_t cache_limit_ = 0;
+        size_t live_requested_bytes_ = 0;
+        size_t live_capacity_bytes_ = 0;
+        size_t peak_live_capacity_bytes_ = 0;
+        size_t peak_reserved_bytes_ = 0;
     };
 
     std::shared_ptr<Context> acquire_context();

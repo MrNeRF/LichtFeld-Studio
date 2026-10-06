@@ -175,7 +175,7 @@ namespace lfs::python {
      * @brief Set a callback to be called each frame. Used for animations.
      * @param callback Function(delta_time) called each frame.
      */
-    void set_frame_callback(std::function<void(float)> callback);
+    void set_frame_callback(std::function<void(float)> callback, std::optional<double> duration_s = std::nullopt);
 
     /**
      * @brief Clear the frame callback.
@@ -238,13 +238,6 @@ namespace lfs::python {
      * @return Result with JSON result or error.
      */
     CapabilityResult invoke_capability(const std::string& name, const std::string& args_json);
-
-    /**
-     * @brief Check if a capability is registered.
-     * @param name Capability name.
-     * @return true if the capability exists.
-     */
-    bool has_capability(const std::string& name);
 
     /**
      * @brief List all registered capabilities.

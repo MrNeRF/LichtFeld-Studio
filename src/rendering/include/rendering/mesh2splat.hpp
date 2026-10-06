@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/error.hpp"
+#include "core/gpu_backend_fwd.hpp"
 #include "core/mesh2splat.hpp"
 #include "core/splat_data.hpp"
 
@@ -20,5 +22,13 @@ namespace lfs::rendering {
     mesh_to_splat(const core::MeshData& mesh,
                   const core::Mesh2SplatOptions& options = {},
                   core::Mesh2SplatProgressCallback progress = nullptr);
+
+    // The converter as a tensor program on `backend`, which must support raster
+    // draws. mesh_to_splat uses it in builds without the Vulkan converter.
+    [[nodiscard]] lfs::Result<std::unique_ptr<core::SplatData>>
+    mesh_to_splat_tensor(const core::MeshData& mesh,
+                         const core::Mesh2SplatOptions& options,
+                         core::GpuBackend backend,
+                         core::Mesh2SplatProgressCallback progress = nullptr);
 
 } // namespace lfs::rendering

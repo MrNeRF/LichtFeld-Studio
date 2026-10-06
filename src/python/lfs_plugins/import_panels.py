@@ -216,8 +216,6 @@ class NewProjectPanel(_ImportDialogPanel):
         model.bind_func("source_is_dataset", lambda: self._source_kind == "dataset")
         model.bind_func("embed_dataset_visible", lambda: self._source_kind == "dataset")
         model.bind_func("advanced_expanded", lambda: self._advanced_expanded)
-        model.bind_func("name_valid", self._name_is_valid)
-        model.bind_func("target_exists", self._target_exists)
         model.bind_func("can_create", self._can_create)
         model.bind_func("location_preview", self._location_preview)
         model.bind_func("create_hint", self._create_hint)
@@ -350,7 +348,6 @@ class NewProjectPanel(_ImportDialogPanel):
             "init_path",
             "ppisp_sidecar_path",
             "can_create",
-            "target_exists",
             "location_preview",
             "create_hint",
             "min_track_length_str",
@@ -482,7 +479,7 @@ class NewProjectPanel(_ImportDialogPanel):
             self._schedule_source_probe_update()
         else:
             self._refresh_target_cache()
-        self._dirty_model("name", "name_valid", "target_exists", "can_create", "location_preview", "create_hint")
+        self._dirty_model("name", "can_create", "location_preview", "create_hint")
 
     def _schedule_source_probe_update(self) -> None:
         self._source_probe_update_generation += 1

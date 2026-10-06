@@ -15,6 +15,7 @@
 #include "scene/scene_render_state.hpp"
 #include "scene/selection_state.hpp"
 #include "selection/selection_service.hpp"
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <functional>
@@ -27,6 +28,7 @@
 namespace lfs::vis {
 
     class AppearanceTensorModel;
+    class ModifierManager;
 
     namespace op {
         class SceneSnapshot;
@@ -87,13 +89,16 @@ namespace lfs::vis {
         void setPlyPath(std::string name, const std::filesystem::path& path);
         void setPlyPath(const core::Uuid& uuid, const std::filesystem::path& path);
         void clearPlyPath(core::NodeId id);
-        void clearPlyPath(std::string name);
         void clearPlyPath(const core::Uuid& uuid);
         void setDatasetPath(const std::filesystem::path& path);
 
         // Scene access
         core::Scene& getScene() { return scene_; }
         const core::Scene& getScene() const { return scene_; }
+        ModifierManager& modifierManager() { return *modifier_manager_; }
+        const ModifierManager& modifierManager() const { return *modifier_manager_; }
+        void setModifierSelectionPreview(const core::Uuid& node_uuid,
+                                         std::optional<core::Tensor> selection);
 
         // Service accessors (via service locator)
         TrainerManager* getTrainerManager() { return services().trainerOrNull(); }
@@ -107,20 +112,20 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<lfs::io::LoadResult, std::string> stageSplatFile(
             const std::filesystem::path& path,
             lfs::io::ProgressCallback progress = {},
-            lfs::io::CancelCallback cancel_requested = {}, bool preserve_raw = false);
+            lfs::io::CancelCallback cancel_requested = {}, bool preserve_raw = false, std::string* user_error = nullptr);
         [[nodiscard]] std::string attachLoadedSplatFile(const std::filesystem::path& path,
                                                         const std::string& name_hint,
                                                         bool is_visible,
                                                         lfs::io::LoadResult load_result,
                                                         bool replace_scene,
-                                                        bool defer_import_license = false);
+                                                        bool defer_import_license = false, core::Uuid* imported_uuid = nullptr, uint32_t* import_selection_generation = nullptr, bool internal_import = false);
         [[nodiscard]] std::string attachLoadedSplatNode(const std::filesystem::path& path,
                                                         const std::string& name_hint,
                                                         bool is_visible,
                                                         lfs::io::LoadResult load_result,
                                                         bool preserve_raw = false,
                                                         core::NodeId parent = core::NULL_NODE,
-                                                        bool defer_import_license = false);
+                                                        bool defer_import_license = false, core::Uuid* imported_uuid = nullptr, uint32_t* import_selection_generation = nullptr);
         void setImportLicenseCallback(std::function<void(const std::optional<std::vector<uint8_t>>&)> callback) {
             import_license_callback_ = std::move(callback);
         }
@@ -128,7 +133,9 @@ namespace lfs::vis {
         std::string addGeneratedSplatNode(std::unique_ptr<core::SplatData> model,
                                           const std::string& source_name,
                                           const std::string& desired_name,
-                                          bool select_new_node = true);
+                                          bool select_new_node = true,
+                                          const std::string& history_label = "Add Simplified Splat",
+                                          std::optional<glm::mat4> initial_transform = std::nullopt);
         size_t consolidateNodeModels();
 
         [[nodiscard]] std::expected<void, std::string> canRemoveNode(core::NodeId id) const;
@@ -143,12 +150,13 @@ namespace lfs::vis {
         void setPLYVisibility(std::string name, bool visible);
         [[nodiscard]] std::expected<void, std::string> removeNodeWithResult(core::NodeId id, bool keep_children = false);
         void removeNode(core::NodeId id, bool keep_children = false);
+        [[nodiscard]] bool discardFailedImport(const core::Uuid& uuid);
         void setNodeVisibility(core::NodeId id, bool visible);
         void setNodeVisibilityTransient(core::NodeId id, bool visible);
 
         // Node selection
         void selectNode(const std::string& name);
-        void selectNode(core::NodeId id);
+        void selectNode(core::NodeId id, uint32_t* import_selection_generation = nullptr);
         void selectNodes(const std::vector<std::string>& names);
         void selectNodesById(const std::vector<core::NodeId>& ids);
         void addToSelection(const std::string& name);
@@ -180,7 +188,6 @@ namespace lfs::vis {
         // Full transform for selected node (includes rotation and scale)
         void setSelectedNodeTransform(const glm::mat4& transform);
         glm::mat4 getSelectedNodeTransform() const; // Returns local transform
-        [[nodiscard]] glm::mat4 getSelectedNodeVisualizerWorldTransform() const;
 
         // Multi-selection support
         [[nodiscard]] glm::vec3 getSelectionCenter() const;
@@ -189,15 +196,11 @@ namespace lfs::vis {
 
         // Cropbox operations for selected node
         core::NodeId getSelectedNodeCropBoxId() const;
-        core::CropBoxData* getSelectedNodeCropBox();
-        const core::CropBoxData* getSelectedNodeCropBox() const;
         core::NodeId getActiveSelectionCropBoxId() const;
         void syncCropBoxToRenderSettings();
 
         // Ellipsoid operations for selected node
         core::NodeId getSelectedNodeEllipsoidId() const;
-        core::EllipsoidData* getSelectedNodeEllipsoid();
-        const core::EllipsoidData* getSelectedNodeEllipsoid() const;
         core::NodeId getActiveSelectionEllipsoidId() const;
 
         std::expected<void, std::string> loadDataset(const std::filesystem::path& path,
@@ -218,7 +221,7 @@ namespace lfs::vis {
 
         void loadCheckpointForTraining(const std::filesystem::path& path,
                                        const lfs::core::param::TrainingParameters& params);
-        [[nodiscard]] bool clear();
+        [[nodiscard]] bool clear(bool internal_import = false);
         void switchToEditMode(); // Keep trained model, discard dataset
 
         // For rendering - gets appropriate model
@@ -253,7 +256,7 @@ namespace lfs::vis {
         std::string addGroupNode(const std::string& name, core::NodeId parent_id);
         std::string addPlySequenceNode(const std::string& name, const std::string& parent_name = "", size_t frame_count = 0);
 
-        // Allocator that backs splat tensors with Vulkan-external interop storage (the
+        // Allocator that backs splat tensors with renderer-visible storage (the
         // form the rasterizer can bind zero-copy). Returns an empty allocator when interop
         // is unavailable. The PLY-sequence streaming player uses this on the main thread to
         // upload background-decoded frames into render-ready storage.
@@ -311,13 +314,12 @@ namespace lfs::vis {
         void setAppearanceModel(std::unique_ptr<AppearanceTensorModel> model);
         void clearAppearanceModel();
         [[nodiscard]] const AppearanceTensorModel* getAppearanceTensorModel() const { return appearance_tensor_model_.get(); }
-        [[nodiscard]] bool hasAppearanceController() const;
         [[nodiscard]] bool hasAppearanceModel() const { return appearance_tensor_model_ != nullptr; }
 
         // Drop the GUI's borrowed scene-image tensor and drain the GPU so no
         // in-flight Vulkan work references model tensors that are about to be
         // freed. Must run before releasing splat models, especially when their
-        // tensors are backed by Vulkan-external storage.
+        // tensors are backed by renderer-visible storage.
         void drainGpuForTensorRelease();
 
     private:
@@ -327,6 +329,8 @@ namespace lfs::vis {
             RecordPreserveIds,
             Skip,
         };
+
+        std::unique_ptr<ModifierManager> modifier_manager_;
 
         struct GaussianDeletionSlice {
             std::string node_name;
@@ -342,7 +346,7 @@ namespace lfs::vis {
             std::vector<std::string> removed_node_names;
         };
 
-        [[nodiscard]] bool resetToEmptyState(bool trainer_already_cleared = false);
+        [[nodiscard]] bool resetToEmptyState(bool trainer_already_cleared = false, bool internal_import = false);
         enum class TrainingRemovalImpact {
             None,
             TrainingModel,
@@ -358,7 +362,7 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<void, std::string> removeNodeImpl(core::NodeId id,
                                                                       bool keep_children,
                                                                       HistoryMode history_mode,
-                                                                      TrainingRemovalImpact impact);
+                                                                      TrainingRemovalImpact impact, bool internal_import = false);
         void setupEventHandlers();
         [[nodiscard]] lfs::Status prepareDatasetTrainer(
             const lfs::core::param::TrainingParameters& params);
@@ -384,6 +388,7 @@ namespace lfs::vis {
         void scheduleConsolidatedCompaction();
         [[nodiscard]] std::expected<GaussianDeletionPlan, std::string> buildSelectedGaussianDeletionPlan();
         [[nodiscard]] std::expected<void, std::string> applySelectedGaussianDeletionPlan(const GaussianDeletionPlan& plan);
+        [[nodiscard]] bool hasEvaluatedSplatEditConflict() const;
 
         core::Scene scene_;
         // Lock ordering: state_mutex_ before selection_.mutex() when both needed
@@ -457,6 +462,11 @@ namespace lfs::vis {
         mutable const lfs::core::SplatData* cached_render_model_ = nullptr;
         mutable ContentType cached_render_content_type_ = ContentType::Empty;
         mutable bool cached_render_metadata_only_ = false;
+        mutable std::mutex modifier_preview_mutex_;
+        core::Uuid modifier_preview_node_;
+        std::optional<core::Tensor> modifier_preview_selection_;
+        std::uint64_t modifier_preview_generation_ = 0;
+        mutable std::uint64_t cached_render_modifier_preview_generation_ = 0;
     };
 
 } // namespace lfs::vis

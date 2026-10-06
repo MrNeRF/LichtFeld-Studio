@@ -4,24 +4,6 @@
 
 from typing import TYPE_CHECKING
 
-from .types import Menu, Operator, Panel
-from .capabilities import Capability, CapabilityRegistry, CapabilitySchema
-from .context import CapabilityBroker, PluginContext, SceneContext, ViewContext
-from .errors import (
-    PluginDependencyError,
-    PluginError,
-    PluginLoadCancelled,
-    PluginLoadError,
-    PluginNotFoundError,
-    PluginVersionError,
-    RegistryError,
-    RegistryOfflineError,
-    VersionNotFoundError,
-)
-from .plugin import PluginInfo, PluginInstance, PluginState
-from .scrub_fields import ScrubFieldController, ScrubFieldSpec
-from .utils import cleanup_torch_model, get_gpu_memory, log_gpu_memory
-
 # Install the process-wide Python -> native logger bridge before any lazy
 # plugin module creates a child logger.
 try:
@@ -35,15 +17,9 @@ if TYPE_CHECKING:
     from .panels import PluginMarketplacePanel as PluginMarketplacePanel
 
 
-def _load_builtin_panel_api():
-    from .panels import PluginMarketplacePanel, register_builtin_panels as _register_builtin_panels
-
-    return PluginMarketplacePanel, _register_builtin_panels
-
-
 def register_builtin_panels():
     try:
-        _, builtin_register = _load_builtin_panel_api()
+        from .panels import register_builtin_panels as builtin_register
     except ModuleNotFoundError as exc:
         if exc.name != "lichtfeld":
             raise
@@ -52,6 +28,33 @@ def register_builtin_panels():
 
 
 _LAZY_EXPORTS = {
+    "Menu": ("types", "Menu"),
+    "Operator": ("types", "Operator"),
+    "Panel": ("types", "Panel"),
+    "Capability": ("capabilities", "Capability"),
+    "CapabilityRegistry": ("capabilities", "CapabilityRegistry"),
+    "CapabilitySchema": ("capabilities", "CapabilitySchema"),
+    "CapabilityBroker": ("context", "CapabilityBroker"),
+    "PluginContext": ("context", "PluginContext"),
+    "SceneContext": ("context", "SceneContext"),
+    "ViewContext": ("context", "ViewContext"),
+    "PluginDependencyError": ("errors", "PluginDependencyError"),
+    "PluginError": ("errors", "PluginError"),
+    "PluginLoadCancelled": ("errors", "PluginLoadCancelled"),
+    "PluginLoadError": ("errors", "PluginLoadError"),
+    "PluginNotFoundError": ("errors", "PluginNotFoundError"),
+    "PluginVersionError": ("errors", "PluginVersionError"),
+    "RegistryError": ("errors", "RegistryError"),
+    "RegistryOfflineError": ("errors", "RegistryOfflineError"),
+    "VersionNotFoundError": ("errors", "VersionNotFoundError"),
+    "PluginInfo": ("plugin", "PluginInfo"),
+    "PluginInstance": ("plugin", "PluginInstance"),
+    "PluginState": ("plugin", "PluginState"),
+    "ScrubFieldController": ("scrub_fields", "ScrubFieldController"),
+    "ScrubFieldSpec": ("scrub_fields", "ScrubFieldSpec"),
+    "cleanup_torch_model": ("utils", "cleanup_torch_model"),
+    "get_gpu_memory": ("utils", "get_gpu_memory"),
+    "log_gpu_memory": ("utils", "log_gpu_memory"),
     "PluginManager": ("manager", "PluginManager"),
     "PluginMarketplaceCatalog": ("marketplace", "PluginMarketplaceCatalog"),
     "MarketplacePluginEntry": ("marketplace", "MarketplacePluginEntry"),
@@ -67,8 +70,9 @@ _LAZY_MODULES = {"manager", "marketplace", "registry", "settings", "templates", 
 
 def __getattr__(name):
     if name == "PluginMarketplacePanel":
-        panel_cls, _ = _load_builtin_panel_api()
-        return panel_cls
+        from .plugin_marketplace_panel import PluginMarketplacePanel
+
+        return PluginMarketplacePanel
 
     if name in _LAZY_EXPORTS:
         from importlib import import_module

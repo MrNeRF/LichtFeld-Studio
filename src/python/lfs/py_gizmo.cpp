@@ -118,7 +118,7 @@ namespace lfs::python {
             auto* viewer = gm ? gm->getViewer() : nullptr;
             auto* rm = viewer ? viewer->getRenderingManager() : nullptr;
             if (rm) {
-                rm->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::MESH | vis::DirtyFlag::OVERLAY);
+                rm->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::MESH | vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
             }
         }
 
@@ -127,13 +127,26 @@ namespace lfs::python {
         }
     } // namespace
 
+    void PyGizmoContext::set_camera_state(const glm::mat4& view, const glm::mat4& proj,
+                                          const glm::vec2& viewport_pos, const glm::vec2& viewport_size,
+                                          const glm::vec3& camera_pos, const glm::vec3& camera_fwd) {
+        viewport_context_.emplace();
+        viewport_context_->set_camera_state(view, proj, viewport_pos, viewport_size, camera_pos, camera_fwd);
+    }
+
     bool PyGizmoContext::has_selection() const { return false; }
 
     std::tuple<float, float, float> PyGizmoContext::selection_center() const { return {0.0f, 0.0f, 0.0f}; }
 
-    std::tuple<float, float, float> PyGizmoContext::camera_position() const { return {0.0f, 0.0f, DEFAULT_CAMERA_Z}; }
+    std::tuple<float, float, float> PyGizmoContext::camera_position() const {
+        return viewport_context_ ? viewport_context_->camera_position()
+                                 : std::make_tuple(0.0f, 0.0f, DEFAULT_CAMERA_Z);
+    }
 
-    std::tuple<float, float, float> PyGizmoContext::camera_forward() const { return {0.0f, 0.0f, -1.0f}; }
+    std::tuple<float, float, float> PyGizmoContext::camera_forward() const {
+        return viewport_context_ ? viewport_context_->camera_forward()
+                                 : std::make_tuple(0.0f, 0.0f, -1.0f);
+    }
 
     std::tuple<float, float> PyGizmoContext::selection_center_screen() const {
         if (const auto screen = world_to_screen(selection_center()))
@@ -142,6 +155,8 @@ namespace lfs::python {
     }
 
     std::optional<std::tuple<float, float>> PyGizmoContext::world_to_screen(std::tuple<float, float, float> pos) const {
+        if (viewport_context_)
+            return viewport_context_->world_to_screen(pos);
         const auto [wx, wy, wz] = pos;
 
         // Match the documented visualizer-world convention with a default camera
@@ -156,6 +171,8 @@ namespace lfs::python {
     }
 
     std::optional<std::tuple<float, float, float>> PyGizmoContext::screen_to_world_ray(std::tuple<float, float> pos) const {
+        if (viewport_context_)
+            return viewport_context_->screen_to_world_ray(pos);
         const auto [sx, sy] = pos;
         const float dx = (sx - DEFAULT_VIEWPORT_WIDTH / 2.0f) / (DEFAULT_VIEWPORT_WIDTH / 2.0f);
         const float dy = -(sy - DEFAULT_VIEWPORT_HEIGHT / 2.0f) / (DEFAULT_VIEWPORT_HEIGHT / 2.0f);
@@ -287,6 +304,7 @@ namespace lfs::python {
     }
 
     void PyGizmoRegistry::draw_all(PyGizmoContext& ctx) {
+        nb::gil_scoped_acquire gil;
         std::vector<PyGizmoInfo> gizmos_copy;
         {
             std::lock_guard lock(mutex_);
@@ -295,14 +313,21 @@ namespace lfs::python {
                 gizmos_copy.push_back(gizmo);
         }
 
-        nb::gil_scoped_acquire gil;
         for (auto& gizmo : gizmos_copy) {
             if (!gizmo.has_draw)
                 continue;
 
-            auto* inst = ensure_instance(gizmo);
-            if (!inst)
-                continue;
+            if (!gizmo.gizmo_instance.is_valid() || gizmo.gizmo_instance.is_none()) {
+                // Constructors may register or unregister gizmos. Run Python outside
+                // the lock, then retain the instance only for the same registration.
+                if (!ensure_instance(gizmo))
+                    continue;
+                std::lock_guard lock(mutex_);
+                auto it = gizmos_.find(gizmo.id);
+                if (it == gizmos_.end() || !it->second.gizmo_class.is(gizmo.gizmo_class))
+                    continue;
+                it->second.gizmo_instance = gizmo.gizmo_instance;
+            }
 
             if (gizmo.has_poll) {
                 try {
@@ -315,7 +340,7 @@ namespace lfs::python {
             }
 
             try {
-                gizmo.gizmo_instance.attr("draw")(ctx);
+                gizmo.gizmo_instance.attr("draw")(nb::cast(ctx, nb::rv_policy::reference));
             } catch (const std::exception& e) {
                 LOG_ERROR("Gizmo '{}' draw: {}", gizmo.id, e.what());
             }

@@ -271,10 +271,6 @@ lfs::rendering::vulkan::BufferBarrierPlanner& VulkanGSPipeline::barrierPlanner()
     return barrier_planner_;
 }
 
-const lfs::rendering::vulkan::BufferBarrierPlanner& VulkanGSPipeline::barrierPlanner() const noexcept {
-    return barrier_planner_;
-}
-
 void VulkanGSPipeline::planTransfer(
     std::span<const lfs::rendering::vulkan::DeclaredAccess> accesses) {
     if (!commandBatchInProgress) {
@@ -400,6 +396,7 @@ void VulkanGSPipeline::assignBufferLabels(VulkanGSPipelineBuffers& buffers) {
     _(visible_dispatch)
     _(macro_partials)
     _(macro_active_mask)
+    _(exact_depth_sample_mask)
     _(macro_wave_args)
     _(index_buffer_offset)
     _(sorting_keys_1)
@@ -532,6 +529,7 @@ void VulkanGSPipeline::cleanupBuffers(VulkanGSPipelineBuffers& buffers) {
     _(visible_dispatch)
     _(macro_partials)
     _(macro_active_mask)
+    _(exact_depth_sample_mask)
     _(macro_wave_args)
     _(index_buffer_offset)
     _(sorting_keys_1)
@@ -1764,121 +1762,6 @@ VkPipelineStageFlags2 toStageMask(VulkanGSPipeline::BarrierMask barrierMask) {
     if (barrierMask == VulkanGSPipeline::CONDITIONAL_RENDERING_READ)
         result |= VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT;
     return result;
-}
-
-void VulkanGSPipeline::bufferMemoryBarrier(
-    const std::vector<std::pair<_VulkanBuffer, VulkanGSPipeline::BarrierMask>>& buffers,
-    VulkanGSPipeline::BarrierMask dstMask) {
-    if (!commandBatchInProgress) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "bufferMemoryBarrier requires an active command batch (batch_active={}, buffer_count={}, dst_mask={}, command_buffer={:#x})",
-                commandBatchInProgress,
-                buffers.size(),
-                static_cast<int>(dstMask),
-                lfs::rendering::vkHandleValue(command_buffer)),
-            LFS_SOURCE_SITE_CURRENT());
-    }
-
-    const VkPipelineStageFlags2 dstStageMask = toStageMask(dstMask);
-    const VkAccessFlags2 dstAccessMask = toAccessMask(dstMask);
-
-    std::vector<VkBufferMemoryBarrier2> barriers;
-    barriers.reserve(buffers.size());
-    for (auto& [buffer, srcMask] : buffers) {
-        if (buffer.buffer == VK_NULL_HANDLE) {
-            continue;
-        }
-        // Epic #1496 §3.4: legacy barrier invalidates planner state for named buffers.
-        barrier_planner_.invalidate(buffer.buffer);
-        validateBufferRange(buffer, 0, buffer.size, "bufferMemoryBarrier");
-        VkBufferMemoryBarrier2 barrier = {};
-        barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        barrier.pNext = nullptr;
-        barrier.srcStageMask = toStageMask(srcMask);
-        barrier.srcAccessMask = toAccessMask(srcMask);
-        barrier.dstStageMask = dstStageMask;
-        barrier.dstAccessMask = dstAccessMask;
-        barrier.srcQueueFamilyIndex = queue_family_index;
-        barrier.dstQueueFamilyIndex = queue_family_index;
-        barrier.buffer = buffer.buffer;
-        barrier.offset = buffer.offset;
-        barrier.size = buffer.size;
-        barriers.push_back(barrier);
-    }
-    if (barriers.empty())
-        return;
-
-    if (vulkan_dispatch_.cmd_pipeline_barrier2 == nullptr) {
-        throwRendererContractViolation(
-            "bufferMemoryBarrier requires VulkanDispatch::cmd_pipeline_barrier2",
-            LFS_SOURCE_SITE_CURRENT());
-    }
-
-    const uint32_t barrier_count = static_cast<uint32_t>(barriers.size());
-    VkDependencyInfo dependency = {};
-    dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    dependency.bufferMemoryBarrierCount = barrier_count;
-    dependency.pBufferMemoryBarriers = barriers.data();
-
-    vulkan_dispatch_.cmd_pipeline_barrier2(command_buffer, &dependency);
-}
-
-void VulkanGSPipeline::bufferMemoryBarrier(const std::vector<BufferBarrier>& requested_barriers) {
-    if (!commandBatchInProgress) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "bufferMemoryBarrier requires an active command batch (batch_active={}, buffer_count={}, command_buffer={:#x})",
-                commandBatchInProgress,
-                requested_barriers.size(),
-                lfs::rendering::vkHandleValue(command_buffer)),
-            LFS_SOURCE_SITE_CURRENT());
-    }
-
-    std::vector<VkBufferMemoryBarrier2> barriers;
-    barriers.reserve(requested_barriers.size());
-    for (const auto& requested : requested_barriers) {
-        const auto& buffer = requested.buffer;
-        if (buffer.buffer == VK_NULL_HANDLE)
-            continue;
-        // Epic #1496 §3.4: legacy barrier invalidates planner state for named buffers.
-        barrier_planner_.invalidate(buffer.buffer);
-        validateBufferRange(buffer, 0, buffer.size, "bufferMemoryBarrier");
-        barriers.push_back(VkBufferMemoryBarrier2{
-            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-            .pNext = nullptr,
-            .srcStageMask = toStageMask(requested.src_mask),
-            .srcAccessMask = toAccessMask(requested.src_mask),
-            .dstStageMask = toStageMask(requested.dst_mask),
-            .dstAccessMask = toAccessMask(requested.dst_mask),
-            .srcQueueFamilyIndex = queue_family_index,
-            .dstQueueFamilyIndex = queue_family_index,
-            .buffer = buffer.buffer,
-            .offset = buffer.offset,
-            .size = buffer.size,
-        });
-    }
-    if (barriers.empty())
-        return;
-
-    if (vulkan_dispatch_.cmd_pipeline_barrier2 == nullptr) {
-        throwRendererContractViolation(
-            "bufferMemoryBarrier requires VulkanDispatch::cmd_pipeline_barrier2",
-            LFS_SOURCE_SITE_CURRENT());
-    }
-
-    const VkDependencyInfo dependency{
-        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .pNext = nullptr,
-        .dependencyFlags = 0,
-        .memoryBarrierCount = 0,
-        .pMemoryBarriers = nullptr,
-        .bufferMemoryBarrierCount = static_cast<std::uint32_t>(barriers.size()),
-        .pBufferMemoryBarriers = barriers.data(),
-        .imageMemoryBarrierCount = 0,
-        .pImageMemoryBarriers = nullptr,
-    };
-    vulkan_dispatch_.cmd_pipeline_barrier2(command_buffer, &dependency);
 }
 
 // Compute pipeline

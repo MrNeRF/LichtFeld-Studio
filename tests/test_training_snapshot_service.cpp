@@ -7,6 +7,8 @@
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_execution.hpp"
+#include "core/tensor_serialization.hpp"
 #include "core/uuid.hpp"
 #include "cuda_backend_test.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
@@ -20,6 +22,11 @@
 #include "training_snapshot_test_helpers.hpp"
 
 #include <gtest/gtest.h>
+
+#if defined(__APPLE__)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -36,6 +43,7 @@
 #include <ranges>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -210,6 +218,29 @@ namespace {
         std::optional<std::string> previous_;
     };
 
+    TEST(TrainingSnapshotSerializationTest, WritesDeterministicHeaderAndReadsLegacyPadding) {
+        using namespace lfs::core;
+        const auto tensor = Tensor::from_vector({1.f, 2.f, 3.f}, {3}, Device::CPU);
+        std::ostringstream stream(std::ios::binary | std::ios::out);
+        stream << tensor;
+        auto bytes = stream.str();
+        ASSERT_GE(bytes.size(), sizeof(TensorFileHeader));
+        constexpr size_t padding_begin = offsetof(TensorFileHeader, rank) + sizeof(uint16_t);
+        constexpr size_t padding_end = offsetof(TensorFileHeader, numel);
+        for (size_t i = padding_begin; i < padding_end; ++i) {
+            EXPECT_EQ(uint8_t(bytes[i]), 0u);
+            bytes[i] = char(0xa5); // Historical v1 writers stored arbitrary padding.
+        }
+        std::istringstream legacy(bytes, std::ios::binary | std::ios::in);
+        Tensor restored;
+        legacy >> restored;
+        EXPECT_EQ(restored.shape(), tensor.shape());
+        EXPECT_EQ(restored.to_vector(), tensor.to_vector());
+        std::ostringstream reencoded(std::ios::binary | std::ios::out);
+        reencoded << restored;
+        EXPECT_EQ(reencoded.str(), stream.str());
+    }
+
     TEST(TrainingSnapshotServiceConfigTest,
          RejectsPinnedRingLargerThan512MiB) {
         EXPECT_THROW(
@@ -222,7 +253,19 @@ namespace {
             std::invalid_argument);
     }
 
+#if LFS_HAS_CUDA
     class TrainingSnapshotServiceTest : public lfs::test::CudaBackendTest {};
+#else
+    // Exercise the selected backend on portable trainer builds too. The
+    // byte-exact and post-resume mutation checks are backend-independent.
+    class TrainingSnapshotServiceTest : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend()))
+                GTEST_SKIP() << "Selected GPU backend unavailable";
+        }
+    };
+#endif
 
     TEST_F(TrainingSnapshotServiceTest,
            ExplicitSavesUseRelaxedHostMemoryGate) {
@@ -334,6 +377,61 @@ namespace {
                   std::string::npos);
     }
 
+#if defined(__APPLE__)
+    TEST_F(TrainingSnapshotServiceTest, MeasuresResidentCpuStateDuringCapture) {
+        constexpr std::size_t resident_bytes = 32 * MIB;
+        constexpr std::size_t count = 512;
+        auto params = make_snapshot_test_params(count);
+        auto model = make_snapshot_test_splat(count);
+        lfs::training::MCMC strategy(*model);
+        strategy.initialize(params.optimization);
+        struct ResidentPages {
+            void* data = MAP_FAILED;
+            ~ResidentPages() {
+                if (data != MAP_FAILED)
+                    munmap(data, resident_bytes);
+            }
+        } pages;
+        lfs::training::TrainingSnapshotService service({
+            .ring_slots = 2,
+            .band_bytes = 64 * 1024,
+            .calibration_bytes = 64,
+            .calibration_iterations = 4,
+        });
+        const lfs::training::TrainingSnapshotCaptureRequest request{
+            .iteration = 500,
+            // Checks the resident-memory measurement, not the gate: independent of the runner's free memory.
+            .relaxed_host_memory_gate = true,
+            .strategy = strategy,
+            .params = params,
+            .capture_additional_cpu_state = [&](const lfs::core::Uuid&)
+                -> lfs::Result<lfs::training::TrainingSnapshotCpuStateMetrics> {
+                // Separate VM pages cannot reuse resident allocator storage.
+                // Touch every page after prepare's baseline, and retain it
+                // through the final sample. Allow ample unrelated RSS noise.
+                pages.data = mmap(nullptr, resident_bytes, PROT_READ | PROT_WRITE,
+                                  MAP_PRIVATE | MAP_ANON, -1, 0);
+                if (pages.data == MAP_FAILED)
+                    throw std::runtime_error("Could not allocate RSS regression pages");
+                auto* bytes = static_cast<volatile std::byte*>(pages.data);
+                const auto page_size = static_cast<std::size_t>(sysconf(_SC_PAGESIZE));
+                for (std::size_t i = 0; i < resident_bytes; i += page_size)
+                    bytes[i] = std::byte{0x5a};
+                return lfs::training::TrainingSnapshotCpuStateMetrics{};
+            },
+        };
+        ASSERT_TRUE(service.initialize(request));
+        auto prepared = service.prepare(request);
+        ASSERT_TRUE(prepared.has_value()) << lfs::format_for_developer(prepared.error());
+        auto pending = service.capture(std::move(*prepared), request);
+        ASSERT_TRUE(pending.has_value()) << lfs::format_for_developer(pending.error());
+        auto captured = pending->wait();
+        ASSERT_TRUE(captured.has_value()) << lfs::format_for_developer(captured.error());
+        EXPECT_GE(captured->metrics.host_rss_delta_bytes, resident_bytes / 2);
+        EXPECT_TRUE(captured->metrics.consistency_proven);
+    }
+#endif
+
     TEST_F(TrainingSnapshotServiceTest,
            CapturesByteExactLfkpAndOwnsPostResumeBytes) {
         const ScopedEnvironmentVariable pinned_host_memory(
@@ -370,7 +468,7 @@ namespace {
             lfs::core::TensorShape(
                 {expected_bounds, std::size_t{4}}));
         source_moments->joint_bounds.fill_(3.5f);
-        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        lfs::core::TensorExecutionTarget::current().wait();
 
         const auto original_means =
             model->means().cpu().to_vector();
@@ -457,7 +555,7 @@ namespace {
         // pageable checkpoint bytes.
         model->means().fill_(42.0f);
         source_moments->joint_bounds.fill_(7.5f);
-        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        lfs::core::TensorExecutionTarget::current().wait();
 
         auto captured = pending->wait();
         ASSERT_TRUE(captured.has_value())
@@ -578,6 +676,161 @@ namespace {
     }
 
     TEST_F(TrainingSnapshotServiceTest,
+           RecyclesRetiredMetalStagingWithoutRevivingWeakOwners) {
+        const ScopedEnvironmentVariable available_memory(
+            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
+            std::to_string(64ull * 1024 * MIB));
+        auto params = make_snapshot_test_params(129);
+        auto model = make_snapshot_test_splat(129);
+        lfs::training::MCMC strategy(*model);
+        strategy.initialize(params.optimization);
+        auto service = std::make_unique<lfs::training::TrainingSnapshotService>(
+            lfs::training::TrainingSnapshotServiceConfig{
+                .ring_slots = 3,
+                .band_bytes = 4096,
+                .calibration_bytes = 64,
+                .calibration_iterations = 4,
+            });
+        lfs::training::TrainingSnapshotCaptureRequest request{
+            .iteration = 100,
+            .strategy = strategy,
+            .params = params};
+        ASSERT_TRUE(service->initialize(request));
+        std::string reference_bytes;
+        auto capture = [&](const int iteration, const float value)
+            -> std::optional<lfs::training::CapturedTrainingSnapshot> {
+            request.iteration = iteration;
+            model->means().fill_(value);
+            lfs::core::TensorExecutionTarget::current().wait();
+            std::ostringstream reference(std::ios::binary | std::ios::out);
+            if (!lfs::training::serialize_checkpoint(reference, iteration, strategy, params,
+                                                     nullptr, nullptr, nullptr, nullptr)) {
+                ADD_FAILURE() << "Reference serialization failed";
+                return std::nullopt;
+            }
+            reference_bytes = reference.str();
+            auto prepared = service->prepare(request);
+            if (!prepared) {
+                ADD_FAILURE() << lfs::format_for_developer(prepared.error());
+                return std::nullopt;
+            }
+            auto pending = service->capture(std::move(*prepared), request);
+            if (!pending) {
+                ADD_FAILURE() << lfs::format_for_developer(pending.error());
+                return std::nullopt;
+            }
+            auto captured = pending->wait();
+            if (!captured) {
+                ADD_FAILURE() << lfs::format_for_developer(captured.error());
+                return std::nullopt;
+            }
+            EXPECT_TRUE(captured->metrics.consistency_proven);
+            EXPECT_EQ(captured->checkpoint_bytes->size(), reference_bytes.size());
+            EXPECT_EQ(std::memcmp(captured->checkpoint_bytes->data(),
+                                  reference_bytes.data(), reference_bytes.size()),
+                      0);
+            return std::move(*captured);
+        };
+        auto first = capture(100, 1.25f);
+        ASSERT_TRUE(first);
+        const auto* retired_address = first->checkpoint_bytes->data();
+        std::weak_ptr<const lfs::training::TrainingSnapshotBytes> retired = first->checkpoint_bytes;
+        first.reset();
+        const auto cleanup_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        while (!retired.expired() && std::chrono::steady_clock::now() < cleanup_deadline)
+            std::this_thread::yield();
+        ASSERT_TRUE(retired.expired());
+        auto second = capture(101, 2.25f);
+        ASSERT_TRUE(second);
+        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Metal)
+            EXPECT_EQ(second->checkpoint_bytes->data(), retired_address);
+        EXPECT_FALSE(retired.lock());
+        const auto second_reference = reference_bytes;
+        // A live immutable reader must prevent reuse, even at the same size.
+        auto third = capture(102, 3.25f);
+        ASSERT_TRUE(third);
+        EXPECT_NE(third->checkpoint_bytes->data(), second->checkpoint_bytes->data());
+        EXPECT_EQ(std::memcmp(second->checkpoint_bytes->data(),
+                              second_reference.data(), second_reference.size()),
+                  0);
+        service.reset();
+        EXPECT_EQ(std::memcmp(third->checkpoint_bytes->data(),
+                              reference_bytes.data(), reference_bytes.size()),
+                  0);
+    }
+
+    TEST_F(TrainingSnapshotServiceTest,
+           RepeatedCapturesReuseOddRingAndKeepIndependentBytes) {
+        lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(true);
+        struct QuantGuard {
+            ~QuantGuard() {
+                lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+            }
+        } quant_guard;
+        const ScopedEnvironmentVariable available_memory(
+            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
+            std::to_string(64ull * 1024 * MIB));
+        constexpr std::size_t count = 4099;
+        auto params = make_snapshot_test_params(count, 3);
+        auto model = make_snapshot_test_splat(count, 3);
+        ASSERT_TRUE(lfs::training::sh_value::apply_shN_value_quant(*model));
+        lfs::training::MCMC strategy(*model);
+        strategy.initialize(params.optimization);
+        auto* moments = strategy.get_optimizer().get_state_mutable(lfs::training::ParamType::Means);
+        ASSERT_NE(moments, nullptr);
+        ASSERT_TRUE(moments->is_joint());
+        // A non-power-of-two ring and bands crossing tensor/header/SH block
+        // boundaries exercise independent worker completion and slot reuse.
+        lfs::training::TrainingSnapshotService service({
+            .ring_slots = 3,
+            .band_bytes = 4096,
+            .calibration_bytes = 64,
+            .calibration_iterations = 4,
+        });
+        lfs::training::TrainingSnapshotCaptureRequest request{
+            .iteration = 100,
+            .strategy = strategy,
+            .params = params,
+        };
+        ASSERT_TRUE(service.initialize(request));
+        std::vector<lfs::training::CapturedTrainingSnapshot> retained;
+        std::vector<std::string> references;
+        for (int generation = 0; generation < 5; ++generation) {
+            request.iteration = 100 + generation;
+            model->means().fill_(float(generation) + .25f);
+            moments->joint_bounds.fill_(float(generation) + .5f);
+            lfs::core::TensorExecutionTarget::current().wait();
+            std::ostringstream reference(std::ios::binary | std::ios::out);
+            ASSERT_TRUE(lfs::training::serialize_checkpoint(
+                reference, request.iteration, strategy, params,
+                nullptr, nullptr, nullptr, nullptr));
+            references.push_back(reference.str());
+            auto prepared = service.prepare(request);
+            ASSERT_TRUE(prepared.has_value()) << lfs::format_for_developer(prepared.error());
+            auto pending = service.capture(std::move(*prepared), request);
+            ASSERT_TRUE(pending.has_value()) << lfs::format_for_developer(pending.error());
+            // These writes happen after the optimizer pause, before the host
+            // workers necessarily finished draining all retained ring slots.
+            model->means().fill_(-42.f);
+            moments->joint_bounds.fill_(-7.5f);
+            lfs::core::TensorExecutionTarget::current().wait();
+            auto captured = pending->wait();
+            ASSERT_TRUE(captured.has_value()) << lfs::format_for_developer(captured.error());
+            EXPECT_TRUE(captured->metrics.consistency_proven);
+            EXPECT_EQ(captured->iteration, request.iteration);
+            retained.push_back(std::move(*captured));
+            for (std::size_t i = 0; i < retained.size(); ++i) {
+                ASSERT_EQ(retained[i].checkpoint_bytes->size(), references[i].size());
+                EXPECT_EQ(std::memcmp(retained[i].checkpoint_bytes->data(),
+                                      references[i].data(), references[i].size()),
+                          0);
+                if (i)
+                    EXPECT_NE(retained[i].snapshot_uuid, retained[i - 1].snapshot_uuid);
+            }
+        }
+    }
+
+    TEST_F(TrainingSnapshotServiceTest,
            Q16Sh3ChunkedCaptureMatchesHostSerializeBitIdentical) {
         lfs::training::sh_value::
             set_sh_value_quant_enabled_for_testing(true);
@@ -619,7 +872,7 @@ namespace {
             shN_moments->joint_bounds.is_valid()) {
             shN_moments->joint_bounds.fill_(-1.25f);
         }
-        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        lfs::core::TensorExecutionTarget::current().wait();
 
         std::ostringstream reference_stream(
             std::ios::binary | std::ios::out);
@@ -649,6 +902,8 @@ namespace {
             request{
                 .iteration = SAVED_ITERATION,
                 .snapshot_uuid = assigned_snapshot_uuid,
+                // Checks the captured bytes, not the gate: independent of the runner's free memory.
+                .relaxed_host_memory_gate = true,
                 .strategy = strategy,
                 .params = params,
             };

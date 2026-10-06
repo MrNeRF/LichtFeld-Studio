@@ -3,7 +3,7 @@
 #pragma once
 #include "core/environment.hpp"
 #include "core/gpu_device_info.hpp"
-#include "core/tensor_backend.hpp"
+#include "core/tensor_backend_vulkan.hpp"
 #include "core/vulkan_device_selection.hpp"
 #include "core/vulkan_helpers.hpp"
 #include <cstdio>

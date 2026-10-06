@@ -3,11 +3,12 @@ static const uint LFS_PUSH_CONSTANT_SIZE = 88;
 
 // Least-significant-digit radix sort over 4-bit digits for lines longer than
 // the shared-memory bitonic capacity. Every phase is deterministic: block
-// histograms, an exclusive digit-major scan per line, and a stable scatter
-// whose in-block ranks come from a prefix over packed per-thread digit counts.
-// 0 extract keys and positions, 1 block histograms, 2 per-line scan,
-// 3 scatter (source A to B or B to A by pass parity), 4 gather values by
-// position into the key buffer, 5 write values and int64 indices.
+// histograms, an inclusive digit-major scan per line (the tensor cumsum), and a
+// stable scatter whose in-block ranks come from a prefix over packed per-thread
+// digit counts.
+// 0 extract keys and positions, 1 block histograms, 3 scatter (source A to B or
+// B to A by pass parity), 4 gather values by position into the key buffer,
+// 5 write values and int64 indices.
 [SpecializationConstant]
 const uint kPhase = 0;
 // 0 float values mapped to order-preserving keys, 1 raw int32 indices (used to
@@ -133,36 +134,6 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
         }
         return;
     }
-    if (kPhase == 2)
-    {
-        const uint entries = kDigits * parameters.blocksPerLine;
-        for (uint line = groupId.x; line < parameters.lines; line += numWorkgroups.x)
-        {
-            const uint64_t base = uint64_t(line) * entries;
-            uint carry = 0;
-            for (uint chunk = 0; chunk < entries; chunk += LFS_LOCAL_SIZE_X)
-            {
-                const uint entry = chunk + thread;
-                const bool live = entry < entries;
-                const uint count = live ? histogram[base + entry] : 0u;
-                sharedScan[thread] = count;
-                GroupMemoryBarrierWithGroupSync();
-                for (uint offset = 1; offset < LFS_LOCAL_SIZE_X; offset <<= 1)
-                {
-                    const uint partial = thread >= offset ? sharedScan[thread - offset] : 0u;
-                    GroupMemoryBarrierWithGroupSync();
-                    sharedScan[thread] += partial;
-                    GroupMemoryBarrierWithGroupSync();
-                }
-                if (live)
-                    histogram[base + entry] = carry + sharedScan[thread] - count;
-                carry += sharedScan[LFS_LOCAL_SIZE_X - 1];
-                GroupMemoryBarrierWithGroupSync();
-            }
-        }
-        return;
-    }
-
     const bool sourceIsA = parameters.parity == 0u;
     for (uint block = groupId.x; block < parameters.lines * parameters.blocksPerLine; block += numWorkgroups.x)
     {
@@ -227,6 +198,9 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
         }
         const uint4 exclusiveLow = sharedLow[thread] - low;
         const uint4 exclusiveHigh = sharedHigh[thread] - high;
+        // The histogram scan is inclusive: this block's own digit counts come off it.
+        const uint4 totalLow = sharedLow[LFS_LOCAL_SIZE_X - 1];
+        const uint4 totalHigh = sharedHigh[LFS_LOCAL_SIZE_X - 1];
         uint4 seenLow = uint4(0, 0, 0, 0);
         uint4 seenHigh = uint4(0, 0, 0, 0);
         for (uint slot = 0; slot < kElementsPerThread; ++slot)
@@ -238,8 +212,8 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
             addPacked(seenLow, seenHigh, digits[slot], 1u);
             const uint64_t destination =
                 lineOffset +
-                histogram[(uint64_t(line) * kDigits + digits[slot]) * parameters.blocksPerLine + localBlock] +
-                rank;
+                histogram[(uint64_t(line) * kDigits + digits[slot]) * parameters.blocksPerLine + localBlock] -
+                readPacked(totalLow, totalHigh, digits[slot]) + rank;
             if (sourceIsA)
             {
                 keysB[destination] = keys[slot];

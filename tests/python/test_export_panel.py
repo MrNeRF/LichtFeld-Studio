@@ -185,7 +185,7 @@ def test_export_panel_builds_format_and_model_records(export_panel_module):
     ]
     assert panel._has_models is True
     assert panel.update_policy == "dirty"
-    assert module.ExportPanel.update_interval_ms == 100
+    assert module.ExportPanel.update_interval_ms is None
 
 
 def test_export_panel_seeds_selection_from_scene_nodes(export_panel_module):
@@ -497,6 +497,21 @@ def test_ssog_directory_and_options(export_panel_module, tmp_path, monkeypatch):
     assert {key: calls[0][1][key] for key in settings} == settings
     assert not state.confirm_calls
     assert panel._cached_export_state["format"] == "SSOG"
+
+
+def test_apply_modifiers_defaults_on_and_forwards_toggle(export_panel_module, monkeypatch):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._selected_nodes = {"Tree"}
+    state.nodes = [_make_node(module.lf.scene.NodeType.SPLAT, "Tree", 128)]
+    calls = []
+    monkeypatch.setattr(module.lf, "export_scene", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    panel._do_export()
+    assert calls[-1][1]["apply_modifiers"] is True
+    panel._on_toggle_apply_modifiers(None, None, None)
+    panel._do_export()
+    assert calls[-1][1]["apply_modifiers"] is False
 
 
 @pytest.mark.parametrize("reply,expected_exports", [("Overwrite", 1), ("Cancel", 0)])

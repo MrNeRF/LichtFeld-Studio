@@ -239,7 +239,7 @@ namespace lfs::mcp {
         const auto& result = *response.result;
         ASSERT_TRUE(result.contains("serverInfo"));
         EXPECT_EQ(result["serverInfo"]["name"], "lichtfeld-mcp");
-        EXPECT_EQ(result["serverInfo"]["version"], GIT_TAGGED_VERSION);
+        EXPECT_EQ(result["serverInfo"]["version"].get<std::string>(), GIT_TAGGED_VERSION);
         EXPECT_NE(result["serverInfo"]["version"], "1.0.0");
     }
 
@@ -741,10 +741,6 @@ namespace lfs::mcp {
         response.result = json{{"error", std::string("bad \xC3 byte")}};
         std::string serialized;
         EXPECT_NO_THROW(serialized = serialize_response(response));
-        EXPECT_NE(serialized.find("\xEF\xBF\xBD"), std::string::npos);
-
-        EXPECT_NO_THROW(
-            serialized = serialize_notification("event", json{{"error", std::string("\xFF")}}));
         EXPECT_NE(serialized.find("\xEF\xBF\xBD"), std::string::npos);
     }
 

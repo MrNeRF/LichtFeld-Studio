@@ -1,5 +1,4 @@
 {
-  "background_improvements": false,
   "bg_color": [
     0.0,
     0.0,
@@ -21,21 +20,22 @@
   "enable_save_eval_images": true,
   "enable_sparsity": false,
   "eval_all": false,
+  "eval_mask": "",
+  "eval_mask_invert": false,
+  "eval_mask_opacity": 0.8500000238418579,
+  "eval_space": "distorted",
   "eval_steps": [
     7000,
     30000
   ],
   "exposure_correction_grid_start_iter": 1000,
-  "far_scene_min_fraction": 0.009999999776482582,
-  "far_seed_dose": 0,
-  "fill_pacing_iter": 0,
   "grow_fraction": 0.07000000029802322,
   "grow_until_iter": 15000,
   "growth_grad_threshold": 0.003000000026077032,
-  "growth_ratio_pow": 0.75,
-  "growth_ratio_rank": false,
   "gut": false,
   "headless": false,
+  "image_count_scaler": 1.0,
+  "image_count_scaler_total": 1.0,
   "init_extent": 3.0,
   "init_num_pts": 100000,
   "init_opacity": 0.5,

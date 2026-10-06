@@ -289,9 +289,9 @@ namespace lfs::core {
             const bool gray = mode == Resample::LanczosGray;
             const uint32_t layout = mode == Resample::LanczosRGB ? 0u : gray ? 1u
                                                                              : 2u;
-            if ((mode == Resample::LanczosRGB && (input.ndim() != 3 || input.size(2) != 3)) ||
+            if ((mode == Resample::LanczosRGB && (input.ndim() != 3 || (input.size(2) != 3 && input.size(2) != 4))) ||
                 (gray && input.ndim() != 2) ||
-                (mode == Resample::LanczosFloatCHW && (input.ndim() != 3 || input.size(0) != 3 || input.dtype() != DataType::Float32)) ||
+                (mode == Resample::LanczosFloatCHW && (input.ndim() != 3 || (input.size(0) != 3 && input.size(0) != 4) || input.dtype() != DataType::Float32)) ||
                 (input.dtype() != DataType::UInt8 && input.dtype() != DataType::Float32) ||
                 height <= 0 || width <= 0 || kernel_size <= 0)
                 throw std::invalid_argument("Lanczos resize received an unsupported shape, dtype, or dimension");
@@ -303,8 +303,9 @@ namespace lfs::core {
             const uint32_t stride_y = lanczos_stride(input_h, height, kernel_size);
             const Tensor coef_x = lanczos_coefficients(input_w, width, kernel_size, stride_x);
             const Tensor coef_y = lanczos_coefficients(input_h, height, kernel_size, stride_y);
+            const size_t channels = gray ? 1 : input.size(layout == 2 ? 0 : 2);
             Tensor output = Tensor::empty(gray ? TensorShape{size_t(height), size_t(width)}
-                                               : TensorShape{3, size_t(height), size_t(width)},
+                                               : TensorShape{channels, size_t(height), size_t(width)},
                                           Device::GPU, DataType::Float32);
             Parameters p{};
             p.source = address(input);
@@ -319,6 +320,7 @@ namespace lfs::core {
             p.stride_x = stride_x;
             p.stride_y = stride_y;
             p.layout = layout;
+            p.channels = static_cast<uint32_t>(channels);
             p.bytes = input.dtype() == DataType::UInt8 ? 1u : 0u;
             const std::array reads{storage_ref(input), storage_ref(coef_x), storage_ref(coef_y)};
             const std::array writes{storage_ref(output)};

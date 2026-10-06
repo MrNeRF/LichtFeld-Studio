@@ -17,6 +17,10 @@
     color: @{success};
 }
 
+.training-preparation-indicator {
+    background-color: @{success};
+}
+
 .training-status-badge.is-paused {
     color: @{warning};
 }

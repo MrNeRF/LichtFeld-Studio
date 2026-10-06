@@ -1,0 +1,221 @@
+{
+  "schema_version": 1,
+  "id": "crop_showcase",
+  "name": "Crop showcase",
+  "description": "Keep geometry inside an adjustable ellipsoid for an object-centred presentation.",
+  "category": "Selection",
+  "scene_kinds": [
+    "splat",
+    "mesh",
+    "points"
+  ],
+  "adjust": "Position Centre on the subject and expand Radii until the intended object is complete.",
+  "tree": {
+    "schema_version": 1,
+    "uuid": "builtin.crop_showcase",
+    "name": "Crop showcase",
+    "tree_type": "lfs.geometry",
+    "nodes": [
+      {
+        "name": "Group Input",
+        "type_id": "lfs.group_input",
+        "location": [
+          -760,
+          0
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Group Output",
+        "type_id": "lfs.group_output",
+        "location": [
+          520,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "none"
+          }
+        },
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Crop Region",
+        "type_id": "lfs.ellipsoid_selection",
+        "location": [
+          -280,
+          -160
+        ],
+        "muted": false,
+        "input_values": {
+          "Centre": {
+            "type": "vec3",
+            "value": [
+              0,
+              0,
+              0
+            ]
+          },
+          "Radii": {
+            "type": "vec3",
+            "value": [
+              2,
+              2,
+              2
+            ]
+          },
+          "Falloff": {
+            "type": "float",
+            "value": 0
+          }
+        },
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Keep Inside",
+        "type_id": "lfs.separate_geometry",
+        "location": [
+          80,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "geometry"
+          }
+        },
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Adjust these settings",
+        "type_id": "lfs.frame",
+        "location": [
+          -620,
+          -180
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "colour": "neutral",
+          "label": "Adjust these settings",
+          "note": "Position Centre on the subject and expand Radii until the intended object is complete."
+        },
+        "ui": {},
+        "version": 1
+      }
+    ],
+    "links": [
+      {
+        "from_node": "Group Input",
+        "from_socket": "Geometry",
+        "to_node": "Keep Inside",
+        "to_socket": "Geometry"
+      },
+      {
+        "from_node": "Crop Region",
+        "from_socket": "Selection",
+        "to_node": "Keep Inside",
+        "to_socket": "Selection"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Centre",
+        "to_node": "Crop Region",
+        "to_socket": "Centre"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Radii",
+        "to_node": "Crop Region",
+        "to_socket": "Radii"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Falloff",
+        "to_node": "Crop Region",
+        "to_socket": "Falloff"
+      },
+      {
+    "from_node": "Keep Inside",
+    "from_socket": "Selection",
+        "to_node": "Group Output",
+        "to_socket": "Geometry"
+      }
+    ],
+    "interface": {
+      "inputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        },
+        {
+      "identifier": "Centre",
+      "label": "Centre",
+      "type": "lfs.vector",
+          "default": {
+            "type": "vec3",
+            "value": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        {
+      "identifier": "Radii",
+      "label": "Radii",
+      "type": "lfs.vector",
+          "default": {
+            "type": "vec3",
+            "value": [
+              2,
+              2,
+              2
+            ]
+          }
+        },
+        {
+          "identifier": "Falloff",
+          "label": "Falloff",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 0
+          },
+          "min": 0,
+          "max": 10,
+          "step": 0.05
+        }
+      ],
+      "outputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        }
+      ]
+    }
+  }
+}

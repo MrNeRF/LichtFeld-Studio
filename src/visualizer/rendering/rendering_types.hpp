@@ -21,7 +21,6 @@
 
 namespace lfs::vis {
 
-    constexpr int GPU_ALIGNMENT = 16;
     inline constexpr std::size_t DEFAULT_LOD_MAX_SPLATS = 2'500'000;
     inline constexpr float DEFAULT_LOD_PIXEL_SCALE_LIMIT = 0.0001f;
     inline constexpr float DEFAULT_LOD_RENDER_SCALE = 1.0f;
@@ -146,6 +145,17 @@ namespace lfs::vis {
         return std::nullopt;
     }
 
+    // Select a validation pair containing the provisional node without changing
+    // the stored comparison offset. Keep the displayed left model when possible.
+    [[nodiscard]] inline size_t plyComparisonImportOffset(size_t count, size_t offset, size_t provisional) {
+        const auto displayed = plyComparisonPairForOffset(count, offset);
+        if (!displayed || provisional >= count || displayed->first == provisional || displayed->second == provisional)
+            return offset;
+        const size_t left = std::min(displayed->first, provisional);
+        const size_t right = std::max(displayed->first, provisional);
+        return left * (2 * count - left - 1) / 2 + right - left - 1;
+    }
+
     [[nodiscard]] inline bool splitViewUsesGTComparison(const SplitViewMode mode) {
         return mode == SplitViewMode::GTComparison;
     }
@@ -185,24 +195,6 @@ namespace lfs::vis {
             1,
             total_width - 1);
     }
-
-    [[nodiscard]] inline std::array<SplitViewPanelLayout, 2> makeSplitViewPanelLayouts(
-        const int total_width,
-        const float split_position) {
-        const int divider_x = splitViewDividerPixel(total_width, split_position);
-        return {{
-            {.panel = SplitViewPanelId::Left,
-             .x = 0,
-             .width = divider_x,
-             .start_position = 0.0f,
-             .end_position = split_position},
-            {.panel = SplitViewPanelId::Right,
-             .x = divider_x,
-             .width = std::max(total_width - divider_x, 0),
-             .start_position = split_position,
-             .end_position = 1.0f},
-        }};
-    };
 
     struct PlyComparisonPanelLayout {
         SplitViewPanelLayout panel;

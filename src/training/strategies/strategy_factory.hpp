@@ -12,7 +12,6 @@
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
-#include <vector>
 
 namespace lfs::training {
 
@@ -23,14 +22,8 @@ namespace lfs::training {
 
         static StrategyFactory& instance();
 
-        bool register_creator(const std::string& name, Creator creator);
-        bool unregister(const std::string& name);
-
         [[nodiscard]] std::expected<std::unique_ptr<IStrategy>, std::string>
         create(const std::string& name, core::SplatData& model) const;
-
-        [[nodiscard]] bool has(const std::string& name) const;
-        [[nodiscard]] std::vector<std::string> list() const;
 
     private:
         StrategyFactory();

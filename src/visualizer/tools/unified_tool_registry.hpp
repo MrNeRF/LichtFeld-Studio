@@ -18,12 +18,9 @@ namespace lfs::vis {
         static UnifiedToolRegistry& instance();
 
         void registerTool(ToolDescriptor desc);
-        void unregisterTool(const std::string& id);
-        void unregisterAllPython();
 
         [[nodiscard]] std::vector<const ToolDescriptor*> getAllTools() const;
 
-        [[nodiscard]] bool poll(const std::string& id) const;
         void invoke(const std::string& id);
 
         void setActiveTool(const std::string& id);
@@ -41,7 +38,6 @@ namespace lfs::vis {
 
         mutable std::mutex mutex_;
         std::unordered_map<std::string, ToolDescriptor> tools_;
-        std::vector<std::string> group_order_;
         std::string active_tool_id_;
         std::string active_submode_id_;
     };

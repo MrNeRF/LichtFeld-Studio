@@ -15,6 +15,7 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <bit>
 #include <cassert>
 #include <cerrno>
 #include <charconv>
@@ -27,6 +28,7 @@
 #include <mutex>
 #include <semaphore>
 #include <sstream>
+#include <tuple>
 #include <vector>
 
 #ifdef _WIN32
@@ -45,6 +47,49 @@
 namespace lfs::io {
 
     namespace {
+        std::uint64_t undistort_cache_hash(
+            const LoadParams& load_params, const bool use_16bit_color,
+            const std::uint64_t domain) {
+            constexpr std::uint64_t offset = 14695981039346656037ULL;
+            constexpr std::uint64_t prime = 1099511628211ULL;
+            std::uint64_t hash = offset;
+            const auto mix = [&](const std::uint64_t value) {
+                for (int byte = 0; byte < 8; ++byte) {
+                    hash ^= (value >> (byte * 8)) & 0xffULL;
+                    hash *= prime;
+                }
+            };
+            const auto mix_float = [&](const float value) {
+                mix(std::bit_cast<std::uint32_t>(value));
+            };
+            mix(4);
+            mix(domain);
+            mix(static_cast<std::uint64_t>(load_params.resize_factor));
+            mix(static_cast<std::uint64_t>(load_params.max_width));
+            mix(load_params.output_uint8 ? 8 : 16);
+            mix(use_16bit_color ? 1 : 0);
+            const auto& params = *load_params.undistort;
+            const auto grid = lfs::core::compute_undistort_grid(
+                params, load_params.resize_factor, load_params.max_width);
+            mix(static_cast<std::uint64_t>(params.src_width));
+            mix(static_cast<std::uint64_t>(params.src_height));
+            mix(static_cast<std::uint64_t>(grid.width));
+            mix(static_cast<std::uint64_t>(grid.height));
+            mix(static_cast<std::uint64_t>(params.model_type));
+            mix(static_cast<std::uint64_t>(params.num_distortion));
+            mix_float(params.src_fx);
+            mix_float(params.src_fy);
+            mix_float(params.src_cx);
+            mix_float(params.src_cy);
+            mix_float(params.dst_fx * grid.scale_x);
+            mix_float(params.dst_fy * grid.scale_y);
+            mix_float(params.dst_cx * grid.scale_x);
+            mix_float(params.dst_cy * grid.scale_y);
+            for (int i = 0; i < params.num_distortion; ++i)
+                mix_float(params.distortion[i]);
+            return hash;
+        }
+
         constexpr double HOST_FREE_RAM_EVICTION_RATIO = 0.10;
         constexpr double HOST_FREE_RAM_RELIEF_HYSTERESIS_RATIO = 0.05;
         constexpr std::chrono::milliseconds HOST_MEMORY_CHECK_INTERVAL{500};
@@ -357,6 +402,7 @@ namespace lfs::io {
         request.loader_generation = loader_generation_.load(std::memory_order_relaxed);
         request.path = path;
         request.params = params;
+        request.undistort = params.undistort;
         {
             std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
             if (!running_.load(std::memory_order_acquire)) {
@@ -374,45 +420,10 @@ namespace lfs::io {
         (void)prefetch_queue_.push(std::move(request));
     }
 
-    void PipelinedImageLoader::canonicalize(const std::vector<ImageRequest>& requests) {
-        constexpr size_t CHUNK_SIZE = 32;
-        for (size_t offset = 0; offset < requests.size(); offset += CHUNK_SIZE) {
-            const size_t count = std::min(CHUNK_SIZE, requests.size() - offset);
-            std::vector<ImageRequest> chunk;
-            chunk.reserve(count);
-            chunk.insert(chunk.end(), requests.begin() + static_cast<std::ptrdiff_t>(offset),
-                         requests.begin() + static_cast<std::ptrdiff_t>(offset + count));
-            prefetch(chunk);
-
-            for (size_t i = 0; i < count; ++i) {
-                auto completion = get_completion();
-                if (!completion) {
-                    throw std::runtime_error(legacy_message_from(completion.error()));
-                }
-                if (!completion->outcome) {
-                    throw std::runtime_error(legacy_message_from(completion->outcome.error()));
-                }
-                // Destroying the completion here releases decoded GPU payloads;
-                // only the final encoded run-cache/spill representation remains.
-            }
-        }
-    }
-
     ReadyImage PipelinedImageLoader::get() {
         auto completion = get_completion();
         if (!completion) {
             throw std::runtime_error(legacy_message_from(completion.error()));
-        }
-        if (!completion->outcome) {
-            throw std::runtime_error(legacy_message_from(completion->outcome.error()));
-        }
-        return std::move(*completion->outcome);
-    }
-
-    std::optional<ReadyImage> PipelinedImageLoader::try_get() {
-        auto completion = try_get_completion();
-        if (!completion) {
-            return std::nullopt;
         }
         if (!completion->outcome) {
             throw std::runtime_error(legacy_message_from(completion->outcome.error()));
@@ -468,14 +479,6 @@ namespace lfs::io {
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             });
         }
-    }
-
-    std::optional<LoaderCompletion> PipelinedImageLoader::try_get_completion() {
-        const auto sequence_id = output_queue_.try_pop();
-        if (!sequence_id) {
-            return std::nullopt;
-        }
-        return take_completion(*sequence_id);
     }
 
     std::optional<LoaderCompletion> PipelinedImageLoader::try_get_completion_for(
@@ -655,10 +658,89 @@ namespace lfs::io {
         };
     }
 
-    std::string PipelinedImageLoader::make_cache_key(const std::filesystem::path& path, const LoadParams& params) const {
-        auto key = lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
+    lfs::core::Tensor PipelinedImageLoader::load_rgb_decoded_ahead(
+        const std::filesystem::path& path, const LoadParams& params, const bool sixteen_bit) const {
+        if (auto ahead = take_decoded_ahead(path, sixteen_bit ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8)) {
+            if (!ahead->data || ahead->channels != 3)
+                throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
+            return sixteen_bit
+                       ? upload_rgb_image(static_cast<const std::uint16_t*>(ahead->data.get()), ahead->width, ahead->height, ahead->channels, params)
+                       : upload_rgb_image(static_cast<const unsigned char*>(ahead->data.get()), ahead->width, ahead->height, ahead->channels, params);
+        }
+        return load_rgb_image_cpu_decoded(path, params, sixteen_bit);
+    }
+
+    void PipelinedImageLoader::decode_ahead(const std::filesystem::path& path, const LoadParams& params) {
+        const auto kind = host_decode_kind(path, params);
+        std::lock_guard lock(decode_ahead_mutex_);
+        decode_ahead_.reset();
+        if (!kind)
+            return;
+        decode_ahead_.emplace(DecodeAhead{
+            .path = path,
+            .kind = *kind,
+            .pixels = std::async(std::launch::async, [path, kind = *kind] { return decode_on_host(path, kind); })});
+    }
+
+    std::optional<PipelinedImageLoader::HostDecodeKind> PipelinedImageLoader::host_decode_kind(
+        const std::filesystem::path& path, const LoadParams& params) {
+        if (config_.backend == lfs::core::GpuBackend::CUDA) {
+            if (!config_.use_16bit_color && !load_params_need_processing(params))
+                return std::nullopt;
+            std::ifstream file(path, std::ios::binary);
+            unsigned char signature[2]{};
+            file.read(reinterpret_cast<char*>(signature), sizeof(signature));
+            if ((file.gcount() == 2 && signature[0] == 0xff && signature[1] == 0xd8) ||
+                load_cached_jpeg_blob(make_cache_key(path, params)))
+                return std::nullopt;
+        }
         if (params.undistort)
-            key += "_ud";
+            return HostDecodeKind::Float32;
+        return config_.use_16bit_color ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8;
+    }
+
+    PipelinedImageLoader::HostPixels PipelinedImageLoader::decode_on_host(
+        const std::filesystem::path& path, const HostDecodeKind kind) {
+        switch (kind) {
+        case HostDecodeKind::Float32: {
+            auto [data, width, height, channels] = lfs::core::load_image_float(path);
+            return {{data, [](void* pixels) { lfs::core::free_image_float(static_cast<float*>(pixels)); }},
+                    width,
+                    height,
+                    channels};
+        }
+        case HostDecodeKind::UInt16: {
+            auto [data, width, height, channels] = lfs::core::load_image_u16(path, 1, 0);
+            return {{data, &lfs::core::free_image}, width, height, channels};
+        }
+        case HostDecodeKind::UInt8:
+            break;
+        }
+        auto [data, width, height, channels] = lfs::core::load_image(path, 1, 0);
+        return {{data, &lfs::core::free_image}, width, height, channels};
+    }
+
+    std::optional<PipelinedImageLoader::HostPixels> PipelinedImageLoader::take_decoded_ahead(
+        const std::filesystem::path& path, const HostDecodeKind kind) const {
+        std::optional<DecodeAhead> ahead;
+        {
+            std::lock_guard lock(decode_ahead_mutex_);
+            if (!decode_ahead_ || decode_ahead_->path != path || decode_ahead_->kind != kind)
+                return std::nullopt;
+            ahead = std::move(decode_ahead_);
+            decode_ahead_.reset();
+        }
+        return ahead->pixels.get();
+    }
+
+    std::string PipelinedImageLoader::make_cache_key(const std::filesystem::path& path, const LoadParams& params) const {
+        if (params.undistort) {
+            std::ostringstream key;
+            key << lfs::core::path_to_utf8(path) << ":udr4_" << std::hex
+                << undistort_cache_hash(params, config_.use_16bit_color, 0x726762ULL);
+            return key.str();
+        }
+        auto key = lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
         if (config_.use_16bit_color)
             key += "_16b";
         return key;
@@ -667,11 +749,15 @@ namespace lfs::io {
     std::string PipelinedImageLoader::make_mask_cache_key(
         const std::filesystem::path& path,
         const LoadParams& params) const {
+        if (params.undistort) {
+            std::ostringstream key;
+            key << lfs::core::path_to_utf8(path) << ":udm4_" << std::hex
+                << undistort_cache_hash(params, config_.use_16bit_color, 0x6d61736bULL);
+            return key.str();
+        }
         auto key = lfs::core::path_to_utf8(path) +
                    ":mask_rf" + std::to_string(params.resize_factor) +
                    "_mw" + std::to_string(params.max_width);
-        if (params.undistort)
-            key += "_ud";
         return key;
     }
 
@@ -705,6 +791,8 @@ namespace lfs::io {
         const PrefetchedImage& item,
         const int src_w,
         const int src_h) const {
+        if (item.undistort)
+            return {src_w, src_h};
         if (!item.is_mask && item.aux_target_width > 0 && item.aux_target_height > 0)
             return {item.aux_target_width, item.aux_target_height};
         int target_w = src_w;
@@ -783,10 +871,6 @@ namespace lfs::io {
                 jpeg_cache_bytes_ += size;
             }
         }
-    }
-
-    void PipelinedImageLoader::put_in_jpeg_cache(const std::string& cache_key, std::vector<uint8_t>&& data) {
-        put_in_jpeg_cache(cache_key, std::make_shared<std::vector<uint8_t>>(std::move(data)));
     }
 
     void PipelinedImageLoader::invalidate_cache_entry(const std::string& cache_key) {
@@ -1276,7 +1360,7 @@ namespace lfs::io {
             << ":th" << item.aux_target_height;
         if (item.undistort) {
             const auto& u = *item.undistort;
-            key << ":ud"
+            key << ":ud4"
                 << ":src" << u.src_width << "x" << u.src_height
                 << ":dst" << u.dst_width << "x" << u.dst_height
                 << ":model" << static_cast<int>(u.model_type)

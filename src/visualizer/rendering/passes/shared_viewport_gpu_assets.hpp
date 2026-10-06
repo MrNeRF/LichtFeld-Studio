@@ -17,8 +17,10 @@
 namespace lfs::vis {
 
     class VulkanContext;
-    struct VulkanMeshDrawItem;
-    struct VulkanEnvironmentParams;
+    struct ViewportMeshDrawItem;
+    struct ViewportEnvironment;
+    using VulkanMeshDrawItem = ViewportMeshDrawItem;
+    using VulkanEnvironmentParams = ViewportEnvironment;
 
     // Shared mesh/material and environment resources. Per-view descriptors,
     // light buffers, shadow maps, and pipelines remain on the individual passes.
@@ -67,6 +69,8 @@ namespace lfs::vis {
         // (MeshData::id, generation). Eviction waits only when stale entries
         // exist — never a per-frame global wait.
         void prepareMeshes(const std::vector<VulkanMeshDrawItem>& items, std::size_t frame_slot);
+
+        void discardImportMesh(std::uint64_t mesh_id);
 
         // Immutable metadata for record-time binding. Valid until the next
         // prepareMeshes eviction of this id (not evicted while used this epoch).

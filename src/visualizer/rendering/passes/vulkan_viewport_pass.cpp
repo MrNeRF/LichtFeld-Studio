@@ -6,9 +6,13 @@
 
 #include "config.h"
 #include "core/logger.hpp"
+#include "core/tensor_vignette.hpp"
 #include "diagnostics/vram_profiler.hpp"
-#include "rendering/nvidia_dlss_plugin.hpp"
+#include "gui/ui_texture.hpp"
+#include "gui/vulkan_ui_texture.hpp"
 #include "rendering/output_image_pool.hpp"
+#include "rendering/scene_upscaler_plugin.hpp"
+#include "rendering/viewport_geometry.hpp"
 #include "rendering/vulkan_wait.hpp"
 #include "shared_viewport_gpu_assets.hpp"
 #include "viewport_pass_graph.hpp"
@@ -33,7 +37,6 @@
 #include "viewport/shape_overlay.vert.spv.h"
 #include "viewport/textured_overlay.frag.spv.h"
 #include "viewport/textured_overlay.vert.spv.h"
-#include "viewport/vignette.frag.spv.h"
 
 #include <algorithm>
 #include <array>
@@ -46,6 +49,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace lfs::vis {
@@ -74,18 +78,6 @@ namespace lfs::vis {
         struct Vertex {
             glm::vec2 position;
             glm::vec2 uv;
-        };
-
-        struct FramebufferRect {
-            std::int32_t x = 0;
-            std::int32_t y = 0;
-            std::uint32_t width = 0;
-            std::uint32_t height = 0;
-        };
-
-        struct VignettePush {
-            glm::vec4 viewport_intensity_radius{0.0f};
-            glm::vec4 softness_padding{0.0f};
         };
 
         struct GridUniform {
@@ -123,6 +115,7 @@ namespace lfs::vis {
             glm::vec4 depth_params{0.0f, 0.0f, 0.0f, 0.0f};
             // xy = uv_scale, zw = uv_clamp_max for padded splat depth.
             glm::vec4 uv_region{1.0f, 1.0f, 1.0f, 1.0f};
+            glm::vec4 ndc_to_view_coeffs{0.0f};
         };
 
         struct ShapeOverlayPush {
@@ -133,18 +126,20 @@ namespace lfs::vis {
             glm::vec4 params{0.0f, 0.0f, 0.0f, 0.0f};
             // xy = uv_scale, zw = uv_clamp_max for padded splat depth.
             glm::vec4 uv_region{1.0f, 1.0f, 1.0f, 1.0f};
+            glm::vec4 ndc_to_view_coeffs{0.0f};
         };
 
         struct FrustumPush {
             glm::vec4 viewport_rect{0.0f, 0.0f, 0.0f, 0.0f};
             glm::vec4 params{0.0f, 0.0f, 0.0f, 0.0f};
             glm::vec4 uv_region{1.0f, 1.0f, 1.0f, 1.0f};
+            glm::vec4 ndc_to_view_coeffs{0.0f};
             glm::mat4 view{1.0f};
             glm::vec4 viewport_panel{0.0f, 0.0f, 0.0f, 0.0f};
             glm::vec4 projection{0.0f, 0.0f, 0.0f, 0.0f};
         };
-        // 144 bytes exceeds the 128-byte Vulkan minimum for maxPushConstantsSize.
-        // Acceptable only because CUDA requires NVIDIA hardware (reports 256).
+        // 160 bytes exceeds the 128-byte Vulkan minimum for maxPushConstantsSize.
+        // createPipeline checks the actual physical-device limit before creating the layout.
         static_assert(sizeof(FrustumPush) <= 256);
 
         constexpr std::uint32_t kFrustumVertexCount = 48;
@@ -159,22 +154,8 @@ namespace lfs::vis {
             const glm::vec2& viewport_pos,
             const glm::vec2& viewport_size,
             const VkExtent2D extent) {
-            const float sx = params.framebuffer_scale.x > 0.0f ? params.framebuffer_scale.x : 1.0f;
-            const float sy = params.framebuffer_scale.y > 0.0f ? params.framebuffer_scale.y : 1.0f;
-            const int x0 = std::clamp(static_cast<int>(std::lround(viewport_pos.x * sx)),
-                                      0, static_cast<int>(extent.width));
-            const int y0 = std::clamp(static_cast<int>(std::lround(viewport_pos.y * sy)),
-                                      0, static_cast<int>(extent.height));
-            const int x1 = std::clamp(static_cast<int>(std::lround((viewport_pos.x + viewport_size.x) * sx)),
-                                      0, static_cast<int>(extent.width));
-            const int y1 = std::clamp(static_cast<int>(std::lround((viewport_pos.y + viewport_size.y) * sy)),
-                                      0, static_cast<int>(extent.height));
-            return {
-                .x = x0,
-                .y = y0,
-                .width = static_cast<std::uint32_t>(std::max(x1 - x0, 0)),
-                .height = static_cast<std::uint32_t>(std::max(y1 - y0, 0)),
-            };
+            return scaledFramebufferRect(viewport_pos, viewport_size, params.framebuffer_scale,
+                                         glm::ivec2(static_cast<int>(extent.width), static_cast<int>(extent.height)));
         }
 
         [[nodiscard]] FramebufferRect toFramebufferRect(
@@ -246,10 +227,12 @@ namespace lfs::vis {
         VulkanSplitViewPass split_view_pass;
         VulkanSceneTemporalPipeline temporal_pipeline;
         bool temporal_pipeline_initialized = false;
-        VulkanSceneDlssPipeline dlss_pipeline;
-        bool dlss_pipeline_initialized = false;
-        bool dlss_resources_active = false;
-        bool dlss_failure_latched = false;
+        VulkanScenePluginPipeline plugin_pipeline;
+        bool plugin_pipeline_initialized = false;
+        bool plugin_resources_active = false;
+        // Backend whose runtime or request contract failed; stays latched until the
+        // user selects another backend.
+        std::optional<SceneUpscalerBackend> plugin_failure_backend;
 
         VkDescriptorSetLayout grid_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool grid_descriptor_pool = VK_NULL_HANDLE;
@@ -273,9 +256,9 @@ namespace lfs::vis {
         SceneUpscalerSelection scene_upscaler_selection{};
         std::optional<SceneUpscalerSelection> logged_scene_upscaler_selection;
         std::string temporal_failure;
-        std::string dlss_failure;
-        VkPipelineLayout vignette_pipeline_layout = VK_NULL_HANDLE;
-        VkPipeline vignette_pipeline = VK_NULL_HANDLE;
+        std::string plugin_failure;
+        gui::UiTexture vignette_texture;
+        std::optional<std::tuple<uint32_t, uint32_t, float, float, float>> vignette_key;
         VkPipelineLayout grid_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline grid_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout overlay_pipeline_layout = VK_NULL_HANDLE;
@@ -482,7 +465,7 @@ namespace lfs::vis {
             addGraphPass(
                 "vignette", P::Effect,
                 [this](const VulkanViewportPassParams& p) {
-                    return p.vignette_enabled && vignette_pipeline != VK_NULL_HANDLE;
+                    return p.vignette_enabled && scene_pipeline != VK_NULL_HANDLE;
                 },
                 [this, rect_of](const ViewportRecordContext& c, const VulkanViewportPassParams& p) {
                     recordVignettePass(c.cmd, rect_of(c), p);
@@ -1361,6 +1344,17 @@ namespace lfs::vis {
                                           VkPipeline& pipeline,
                                           VkDescriptorSetLayout extra_descriptor_layout = VK_NULL_HANDLE,
                                           bool depth_test = false) {
+            if (push_constant) {
+                VkPhysicalDeviceProperties properties{};
+                vkGetPhysicalDeviceProperties(context->physicalDevice(), &properties);
+                if (push_constant->offset + push_constant->size > properties.limits.maxPushConstantsSize) {
+                    LOG_ERROR("Viewport {} push constants require {} bytes, but the device supports {}",
+                              label, push_constant->offset + push_constant->size,
+                              properties.limits.maxPushConstantsSize);
+                    return false;
+                }
+            }
+
             VkShaderModule vertex_module = lfs::vis::createShaderModule(device, vertex_spv, "Viewport");
             VkShaderModule fragment_module = lfs::vis::createShaderModule(device, fragment_spv, "Viewport");
             if (vertex_module == VK_NULL_HANDLE || fragment_module == VK_NULL_HANDLE) {
@@ -1599,10 +1593,6 @@ namespace lfs::vis {
             grid_push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             grid_push.offset = 0;
             grid_push.size = sizeof(GridPush);
-            VkPushConstantRange vignette_push{};
-            vignette_push.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-            vignette_push.offset = 0;
-            vignette_push.size = sizeof(VignettePush);
             VkPushConstantRange pivot_push{};
             pivot_push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             pivot_push.offset = 0;
@@ -1628,9 +1618,6 @@ namespace lfs::vis {
             return createPipeline(kScreenQuadVertSpv, kSceneFragSpv, "scene",
                                   scene_descriptor_layout, &scene_push, true, PipelineVertexLayout::ScreenQuad,
                                   scene_pipeline_layout, scene_pipeline) &&
-                   createPipeline(kScreenQuadVertSpv, kVignetteFragSpv, "vignette",
-                                  VK_NULL_HANDLE, &vignette_push, true, PipelineVertexLayout::ScreenQuad,
-                                  vignette_pipeline_layout, vignette_pipeline) &&
                    createPipeline(kGridVertSpv, kGridFragSpv, "grid",
                                   grid_descriptor_layout, &grid_push, true, PipelineVertexLayout::PositionOnly,
                                   grid_pipeline_layout, grid_pipeline, VK_NULL_HANDLE, /*depth_test=*/true) &&
@@ -1865,64 +1852,18 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] static GridUniform makeGridUniform(const VulkanViewportGridOverlay& grid) {
-            const glm::mat4 view_inv = glm::inverse(grid.view);
-            const glm::vec3 cam_pos = glm::vec3(view_inv[3]);
-            const glm::vec3 cam_right = glm::vec3(view_inv[0]);
-            const glm::vec3 cam_up = glm::vec3(view_inv[1]);
-            const glm::vec3 cam_forward = -glm::vec3(view_inv[2]);
-
-            glm::vec3 near_origin{0.0f};
-            glm::vec3 near_x{0.0f};
-            glm::vec3 near_y{0.0f};
-            glm::vec3 far_origin{0.0f};
-            glm::vec3 far_x{0.0f};
-            glm::vec3 far_y{0.0f};
-            if (grid.orthographic) {
-                const float half_width = 1.0f / grid.projection[0][0];
-                const float half_height = 1.0f / std::abs(grid.projection[1][1]);
-                const glm::vec3 right_offset = cam_right * half_width;
-                const glm::vec3 up_offset = cam_up * half_height;
-                constexpr float kRayNear = -1000.0f;
-                constexpr float kRayFar = 1000.0f;
-
-                const glm::vec3 near_center = cam_pos + cam_forward * kRayNear;
-                near_origin = near_center - right_offset - up_offset;
-                near_x = right_offset * 2.0f;
-                near_y = up_offset * 2.0f;
-
-                const glm::vec3 far_center = cam_pos + cam_forward * kRayFar;
-                far_origin = far_center - right_offset - up_offset;
-                far_x = right_offset * 2.0f;
-                far_y = up_offset * 2.0f;
-            } else {
-                const float fov_y = 2.0f * std::atan(1.0f / std::abs(grid.projection[1][1]));
-                const float aspect = std::abs(grid.projection[1][1] / grid.projection[0][0]);
-                const float half_height = std::tan(fov_y * 0.5f);
-                const float half_width = half_height * aspect;
-                const glm::vec3 far_center = cam_pos + cam_forward;
-                const glm::vec3 right_offset = cam_right * half_width;
-                const glm::vec3 up_offset = cam_up * half_height;
-                const glm::vec3 far_bl = far_center - right_offset - up_offset;
-                const glm::vec3 far_br = far_center + right_offset - up_offset;
-                const glm::vec3 far_tl = far_center - right_offset + up_offset;
-
-                near_origin = cam_pos;
-                far_origin = far_bl;
-                far_x = far_br - far_bl;
-                far_y = far_tl - far_bl;
-            }
-
+            const auto corners = gridFrustumCorners(grid.view, grid.projection, grid.orthographic);
             GridUniform uniform{};
             uniform.view_projection = grid.view_projection;
             uniform.view_position_plane = glm::vec4(grid.view_position,
                                                     static_cast<float>(std::clamp(grid.plane, 0, 2)));
             uniform.opacity_padding = glm::vec4(std::clamp(grid.opacity, 0.0f, 1.0f), 0.0f, 0.0f, 0.0f);
-            uniform.near_origin = glm::vec4(near_origin, 0.0f);
-            uniform.near_x = glm::vec4(near_x, 0.0f);
-            uniform.near_y = glm::vec4(near_y, 0.0f);
-            uniform.far_origin = glm::vec4(far_origin, 0.0f);
-            uniform.far_x = glm::vec4(far_x, 0.0f);
-            uniform.far_y = glm::vec4(far_y, 0.0f);
+            uniform.near_origin = glm::vec4(corners.near_origin, 0.0f);
+            uniform.near_x = glm::vec4(corners.near_x, 0.0f);
+            uniform.near_y = glm::vec4(corners.near_y, 0.0f);
+            uniform.far_origin = glm::vec4(corners.far_origin, 0.0f);
+            uniform.far_x = glm::vec4(corners.far_x, 0.0f);
+            uniform.far_y = glm::vec4(corners.far_y, 0.0f);
             return uniform;
         }
 
@@ -2056,10 +1997,21 @@ namespace lfs::vis {
             scene_image_uploader.upload(params, frame.scene_descriptor_set);
         }
 
+        [[nodiscard]] SceneUpscalerFallback sceneUpscalerFallback(
+            const VulkanViewportPassParams& params,
+            const bool runtime_failure = false) const noexcept {
+            return params.scene_upscaler_mode_unsupported && !runtime_failure
+                       ? SceneUpscalerFallback::UnsupportedMode
+                       : SceneUpscalerFallback::RuntimeUnavailable;
+        }
+
         void updateSceneUpscalerSelection(const SceneUpscalerBackend requested,
                                           const bool runtime_available,
-                                          const bool log_fallback_transition = true) {
-            scene_upscaler_selection = resolveSceneUpscalerSelection(requested, runtime_available);
+                                          const bool log_fallback_transition = true,
+                                          const SceneUpscalerFallback fallback =
+                                              SceneUpscalerFallback::RuntimeUnavailable) {
+            scene_upscaler_selection = resolveSceneUpscalerSelection(
+                requested, runtime_available, fallback);
             auto& profiler = lfs::diagnostics::VramProfiler::instance();
             profiler.setGauge("viewer.upscaler.requested",
                               static_cast<double>(scene_upscaler_selection.requested));
@@ -2097,18 +2049,22 @@ namespace lfs::vis {
             temporal_failure.clear();
         }
 
-        void reportDlssFailure(std::string reason) {
-            const auto plugin_diagnostic = NvidiaDlssPlugin::instance().diagnostic();
-            if (!plugin_diagnostic.empty())
-                reason += std::format(": {}", plugin_diagnostic);
-            if (dlss_failure == reason)
-                return;
-            dlss_failure = std::move(reason);
-            LOG_WARN("NVIDIA DLSS reconstruction unavailable: {}", dlss_failure);
+        [[nodiscard]] bool pluginFailureLatched(const SceneUpscalerBackend backend) const noexcept {
+            return plugin_failure_backend == backend;
         }
 
-        void clearDlssFailure() {
-            dlss_failure.clear();
+        void reportPluginFailure(const SceneUpscalerBackend backend, std::string reason) {
+            plugin_failure_backend = backend;
+            auto* const plugin = sceneUpscalerPlugin(backend);
+            if (plugin == nullptr)
+                return;
+            const auto plugin_diagnostic = plugin->diagnostic();
+            if (!plugin_diagnostic.empty())
+                reason += std::format(": {}", plugin_diagnostic);
+            if (plugin_failure == reason)
+                return;
+            plugin_failure = std::move(reason);
+            LOG_WARN("{} reconstruction unavailable: {}", plugin->info().name, plugin_failure);
         }
 
         [[nodiscard]] static std::string_view temporalStatusName(
@@ -2134,32 +2090,32 @@ namespace lfs::vis {
             return "unknown";
         }
 
-        [[nodiscard]] static std::string_view dlssStatusName(
-            const VulkanSceneDlssPipelineStatus status) {
+        [[nodiscard]] static std::string_view pluginStatusName(
+            const VulkanScenePluginPipelineStatus status) {
             switch (status) {
-            case VulkanSceneDlssPipelineStatus::Inactive:
+            case VulkanScenePluginPipelineStatus::Inactive:
                 return "inactive";
-            case VulkanSceneDlssPipelineStatus::Resolved:
+            case VulkanScenePluginPipelineStatus::Resolved:
                 return "resolved";
-            case VulkanSceneDlssPipelineStatus::InvalidRequest:
+            case VulkanScenePluginPipelineStatus::InvalidRequest:
                 return "invalid-request";
-            case VulkanSceneDlssPipelineStatus::RuntimeUnavailable:
+            case VulkanScenePluginPipelineStatus::RuntimeUnavailable:
                 return "runtime-unavailable";
-            case VulkanSceneDlssPipelineStatus::MotionUnavailable:
+            case VulkanScenePluginPipelineStatus::MotionUnavailable:
                 return "motion-unavailable";
-            case VulkanSceneDlssPipelineStatus::MotionFailure:
+            case VulkanScenePluginPipelineStatus::MotionFailure:
                 return "motion-failure";
-            case VulkanSceneDlssPipelineStatus::DepthUnavailable:
+            case VulkanScenePluginPipelineStatus::DepthUnavailable:
                 return "depth-unavailable";
-            case VulkanSceneDlssPipelineStatus::DepthFailure:
+            case VulkanScenePluginPipelineStatus::DepthFailure:
                 return "depth-failure";
-            case VulkanSceneDlssPipelineStatus::OutputFailure:
+            case VulkanScenePluginPipelineStatus::OutputFailure:
                 return "output-failure";
-            case VulkanSceneDlssPipelineStatus::FeatureFailure:
+            case VulkanScenePluginPipelineStatus::FeatureFailure:
                 return "feature-failure";
-            case VulkanSceneDlssPipelineStatus::EvaluateFailure:
+            case VulkanScenePluginPipelineStatus::EvaluateFailure:
                 return "evaluate-failure";
-            case VulkanSceneDlssPipelineStatus::CommitFailure:
+            case VulkanScenePluginPipelineStatus::CommitFailure:
                 return "commit-failure";
             }
             return "unknown";
@@ -2176,18 +2132,17 @@ namespace lfs::vis {
                 return params.temporal.has_value() &&
                        validVulkanSceneTemporalPipelineRequest(*params.temporal);
             }
-            if (params.scene_upscaler != SceneUpscalerBackend::NvidiaDlss ||
-                dlss_failure_latched) {
+            if (sceneUpscalerPlugin(params.scene_upscaler) == nullptr ||
+                pluginFailureLatched(params.scene_upscaler))
                 return false;
-            }
             if (params.split_view.enabled) {
-                return params.split_dlss[0].has_value() &&
-                       params.split_dlss[1].has_value() &&
-                       validVulkanSceneDlssPipelineRequest(*params.split_dlss[0]) &&
-                       validVulkanSceneDlssPipelineRequest(*params.split_dlss[1]);
+                return params.split_plugin[0].has_value() &&
+                       params.split_plugin[1].has_value() &&
+                       validVulkanScenePluginPipelineRequest(*params.split_plugin[0]) &&
+                       validVulkanScenePluginPipelineRequest(*params.split_plugin[1]);
             }
-            return params.dlss.has_value() &&
-                   validVulkanSceneDlssPipelineRequest(*params.dlss);
+            return params.plugin.has_value() &&
+                   validVulkanScenePluginPipelineRequest(*params.plugin);
         }
 
         void releaseTemporalHistory() {
@@ -2204,17 +2159,17 @@ namespace lfs::vis {
             temporal_pipeline.releaseHistory();
         }
 
-        void releaseDlssResources() {
-            if (!dlss_pipeline_initialized || !dlss_resources_active)
+        void releasePluginResources() {
+            if (!plugin_resources_active)
                 return;
             if (context != nullptr && !context->waitForSubmittedFrames()) {
-                dlss_pipeline.resetAll(TemporalResetReason::HistoryDisabled);
-                LOG_WARN("NVIDIA DLSS resources could not be released after leaving DLSS: {}",
+                plugin_pipeline.resetAll(TemporalResetReason::HistoryDisabled);
+                LOG_WARN("Scene reconstruction plugin resources could not be released: {}",
                          context->lastError());
                 return;
             }
-            dlss_pipeline.releaseResources();
-            dlss_resources_active = false;
+            plugin_pipeline.releaseResources();
+            plugin_resources_active = false;
         }
 
         [[nodiscard]] bool recordPreRenderWork(const VkCommandBuffer command_buffer,
@@ -2222,94 +2177,100 @@ namespace lfs::vis {
             if (!hasPreRenderWork(params)) {
                 if (params.scene_upscaler == SceneUpscalerBackend::Temporal) {
                     temporal_pipeline.resetAll(TemporalResetReason::InvalidInput);
-                } else if (params.scene_upscaler == SceneUpscalerBackend::NvidiaDlss) {
-                    const bool invalid_request = !dlss_failure_latched &&
-                                                 (params.dlss.has_value() ||
-                                                  params.split_dlss[0].has_value() ||
-                                                  params.split_dlss[1].has_value());
+                } else if (sceneUpscalerPlugin(params.scene_upscaler) != nullptr) {
+                    const bool latched = pluginFailureLatched(params.scene_upscaler);
+                    const bool invalid_request = !latched &&
+                                                 (params.plugin.has_value() ||
+                                                  params.split_plugin[0].has_value() ||
+                                                  params.split_plugin[1].has_value());
                     if (invalid_request) {
-                        dlss_pipeline.resetAll(TemporalResetReason::InvalidInput);
-                        dlss_failure_latched = true;
-                        reportDlssFailure("request contract is invalid");
+                        plugin_pipeline.resetAll(TemporalResetReason::InvalidInput);
+                        reportPluginFailure(params.scene_upscaler, "request contract is invalid");
                     }
                     updateSceneUpscalerSelection(
-                        params.scene_upscaler, false, invalid_request);
+                        params.scene_upscaler,
+                        false,
+                        invalid_request,
+                        sceneUpscalerFallback(params, invalid_request || latched));
                     return false;
                 } else {
                     releaseTemporalHistory();
                 }
-                updateSceneUpscalerSelection(params.scene_upscaler, false);
+                updateSceneUpscalerSelection(
+                    params.scene_upscaler,
+                    false,
+                    true,
+                    sceneUpscalerFallback(params));
                 return false;
             }
 
-            if (params.scene_upscaler == SceneUpscalerBackend::NvidiaDlss) {
-                if (!dlss_pipeline_initialized)
-                    dlss_pipeline_initialized = dlss_pipeline.init(*context);
-                if (!dlss_pipeline_initialized) {
-                    dlss_failure_latched = true;
-                    reportDlssFailure("pipeline initialization failed");
-                    updateSceneUpscalerSelection(params.scene_upscaler, false);
+            if (auto* const plugin = sceneUpscalerPlugin(params.scene_upscaler)) {
+                const auto backend = params.scene_upscaler;
+                if (!plugin_pipeline_initialized || plugin_pipeline.plugin() != plugin) {
+                    plugin_pipeline.shutdown();
+                    plugin_pipeline_initialized = plugin_pipeline.init(*context, *plugin);
+                }
+                if (!plugin_pipeline_initialized) {
+                    reportPluginFailure(backend, "pipeline initialization failed");
+                    updateSceneUpscalerSelection(backend, false);
                     return false;
                 }
 
-                dlss_resources_active = true;
+                plugin_resources_active = true;
                 auto& frame = resourcesForFrame(params.frame_slot);
                 if (params.split_view.enabled) {
-                    const auto left = dlss_pipeline.record(command_buffer, *params.split_dlss[0]);
-                    const auto right = dlss_pipeline.record(command_buffer, *params.split_dlss[1]);
+                    const auto left = plugin_pipeline.record(command_buffer, *params.split_plugin[0]);
+                    const auto right = plugin_pipeline.record(command_buffer, *params.split_plugin[1]);
                     if (!left.resolved() || !right.resolved()) {
-                        dlss_pipeline.reset(TemporalViewId::SplitLeft,
-                                            TemporalResetReason::ResolveFailure);
-                        dlss_pipeline.reset(TemporalViewId::SplitRight,
-                                            TemporalResetReason::ResolveFailure);
-                        dlss_failure_latched = true;
-                        reportDlssFailure(std::format(
-                            "split pipeline status left={} right={}",
-                            dlssStatusName(left.status),
-                            dlssStatusName(right.status)));
-                        updateSceneUpscalerSelection(params.scene_upscaler, false);
+                        plugin_pipeline.reset(TemporalViewId::SplitLeft,
+                                              TemporalResetReason::ResolveFailure);
+                        plugin_pipeline.reset(TemporalViewId::SplitRight,
+                                              TemporalResetReason::ResolveFailure);
+                        reportPluginFailure(backend,
+                                            std::format("split pipeline status left={} right={}",
+                                                        pluginStatusName(left.status),
+                                                        pluginStatusName(right.status)));
+                        updateSceneUpscalerSelection(backend, false);
                         return false;
                     }
                     frame.effective_split_view = params.split_view;
                     frame.effective_split_view.left.external_image_view = left.output_view;
-                    frame.effective_split_view.left.external_image_layout = VK_IMAGE_LAYOUT_GENERAL;
+                    frame.effective_split_view.left.external_image_layout = left.output_layout;
                     frame.effective_split_view.left.external_image_generation = left.sequence;
                     frame.effective_split_view.left.uv_scale = {1.0f, 1.0f};
                     frame.effective_split_view.left.uv_clamp_max = {1.0f, 1.0f};
                     frame.effective_split_view.left.spatial_filter = false;
                     frame.effective_split_view.right.external_image_view = right.output_view;
-                    frame.effective_split_view.right.external_image_layout = VK_IMAGE_LAYOUT_GENERAL;
+                    frame.effective_split_view.right.external_image_layout = right.output_layout;
                     frame.effective_split_view.right.external_image_generation = right.sequence;
                     frame.effective_split_view.right.uv_scale = {1.0f, 1.0f};
                     frame.effective_split_view.right.uv_clamp_max = {1.0f, 1.0f};
                     frame.effective_split_view.right.spatial_filter = false;
                     split_view_pass.prepare(frame.effective_split_view, params.frame_slot);
                     frame.temporal_split_presentation = true;
-                    clearDlssFailure();
-                    updateSceneUpscalerSelection(params.scene_upscaler, true);
+                    plugin_failure.clear();
+                    updateSceneUpscalerSelection(backend, true);
                     return true;
                 }
 
-                const auto result = dlss_pipeline.record(command_buffer, *params.dlss);
+                const auto result = plugin_pipeline.record(command_buffer, *params.plugin);
                 if (!result.resolved()) {
-                    dlss_failure_latched = true;
-                    reportDlssFailure(
-                        std::format("pipeline status {}", dlssStatusName(result.status)));
-                    updateSceneUpscalerSelection(params.scene_upscaler, false);
+                    reportPluginFailure(
+                        backend, std::format("pipeline status {}", pluginStatusName(result.status)));
+                    updateSceneUpscalerSelection(backend, false);
                     return false;
                 }
                 if (!scene_image_uploader.bindPresentationView(frame.scene_descriptor_set,
                                                                result.output_view,
-                                                               VK_IMAGE_LAYOUT_GENERAL)) {
-                    dlss_pipeline.reset(result.view, TemporalResetReason::ResolveFailure);
-                    dlss_failure_latched = true;
-                    reportDlssFailure("presentation descriptor bind failed");
-                    updateSceneUpscalerSelection(params.scene_upscaler, false);
+                                                               result.output_layout)) {
+                    plugin_pipeline.reset(result.view, TemporalResetReason::ResolveFailure);
+                    reportPluginFailure(backend, "presentation descriptor bind failed");
+                    updateSceneUpscalerSelection(backend, false);
                     return false;
                 }
                 frame.temporal_presentation = true;
-                clearDlssFailure();
-                updateSceneUpscalerSelection(params.scene_upscaler, true);
+                plugin_failure.clear();
+                updateSceneUpscalerSelection(backend, true);
                 return true;
             }
 
@@ -2381,12 +2342,14 @@ namespace lfs::vis {
         void prepare(const VulkanViewportPassParams& params) {
             if (params.scene_upscaler != SceneUpscalerBackend::Temporal)
                 releaseTemporalHistory();
-            if (params.scene_upscaler != SceneUpscalerBackend::NvidiaDlss)
-                releaseDlssResources();
+            if (plugin_pipeline.plugin() != sceneUpscalerPlugin(params.scene_upscaler))
+                releasePluginResources();
+            if (plugin_failure_backend && *plugin_failure_backend != params.scene_upscaler) {
+                plugin_failure_backend.reset();
+                plugin_failure.clear();
+            }
             if (params.scene_upscaler == SceneUpscalerBackend::Native) {
                 scene_spatial_pipeline_failed = false;
-                dlss_failure_latched = false;
-                clearDlssFailure();
             } else if (params.scene_upscaler == SceneUpscalerBackend::Spatial) {
                 static_cast<void>(ensureSpatialScenePipeline());
             }
@@ -2450,29 +2413,35 @@ namespace lfs::vis {
                 // frame (at startup and for one frame after a backend transition). Keep the
                 // effective native fallback observable without reporting expected warm-up as
                 // an unavailable backend. Invalid requests and pipeline failures remain noisy.
-                updateSceneUpscalerSelection(params.scene_upscaler, false, invalid_request);
+                updateSceneUpscalerSelection(
+                    params.scene_upscaler,
+                    false,
+                    invalid_request,
+                    sceneUpscalerFallback(params, invalid_request));
                 return;
             }
-            if (params.scene_upscaler == SceneUpscalerBackend::NvidiaDlss &&
+            if (sceneUpscalerPlugin(params.scene_upscaler) != nullptr &&
                 !hasPreRenderWork(params)) {
-                const bool invalid_request = !dlss_failure_latched &&
-                                             (params.split_view.enabled
-                                                  ? ((params.split_dlss[0] &&
-                                                      !validVulkanSceneDlssPipelineRequest(*params.split_dlss[0])) ||
-                                                     (params.split_dlss[1] &&
-                                                      !validVulkanSceneDlssPipelineRequest(*params.split_dlss[1])))
-                                                  : (params.dlss &&
-                                                     !validVulkanSceneDlssPipelineRequest(*params.dlss)));
+                const bool latched = pluginFailureLatched(params.scene_upscaler);
+                const auto invalid = [](const auto& request) {
+                    return request && !validVulkanScenePluginPipelineRequest(*request);
+                };
+                const bool invalid_request =
+                    !latched && (params.split_view.enabled
+                                     ? invalid(params.split_plugin[0]) || invalid(params.split_plugin[1])
+                                     : invalid(params.plugin));
                 if (invalid_request) {
-                    dlss_pipeline.resetAll(TemporalResetReason::InvalidInput);
-                    dlss_failure_latched = true;
-                    reportDlssFailure("request contract is invalid");
+                    plugin_pipeline.resetAll(TemporalResetReason::InvalidInput);
+                    reportPluginFailure(params.scene_upscaler, "request contract is invalid");
                 }
-                // A valid DLSS selection can precede the first paired color/depth frame.
+                // A valid plugin selection can precede the first paired color/depth frame.
                 // Keep the expected warm-up fallback quiet; malformed requests and runtime
-                // failures are latched until the user explicitly selects Native and retries.
+                // failures stay latched until the user selects another backend.
                 updateSceneUpscalerSelection(
-                    params.scene_upscaler, false, invalid_request);
+                    params.scene_upscaler,
+                    false,
+                    invalid_request,
+                    sceneUpscalerFallback(params, invalid_request || latched));
                 return;
             }
             const auto runtime_available = [&]() -> std::optional<bool> {
@@ -2484,8 +2453,11 @@ namespace lfs::vis {
                                ? split_view_pass.available()
                                : scene_spatial_pipeline != VK_NULL_HANDLE;
                 case SceneUpscalerBackend::Temporal:
-                case SceneUpscalerBackend::NvidiaDlss:
                     return std::nullopt;
+                default:
+                    if (sceneUpscalerPlugin(params.scene_upscaler) != nullptr)
+                        return std::nullopt;
+                    return false;
                 }
                 return false;
             }();
@@ -2833,11 +2805,11 @@ namespace lfs::vis {
             }
             std::uint32_t first_vertex = 0;
             for (const auto& overlay : overlays) {
-                if (overlay.texture_id == 0 || first_vertex + 6u > resource.count) {
+                if (!overlay.image || first_vertex + 6u > resource.count) {
                     first_vertex += 6u;
                     continue;
                 }
-                const VkDescriptorSet descriptor_set = descriptorSetFromId(overlay.texture_id);
+                const VkDescriptorSet descriptor_set = gui::referenceUiTextureDescriptor(*overlay.image);
                 if (descriptor_set == VK_NULL_HANDLE) {
                     first_vertex += 6u;
                     continue;
@@ -2847,6 +2819,7 @@ namespace lfs::vis {
                 push.effects = overlay.effects;
                 push.viewport_rect = ctx.viewport_rect_push;
                 push.depth_params = depth_params;
+                push.ndc_to_view_coeffs = params.depth_blit.ndc_to_view_coeffs;
                 push.uv_region = glm::vec4(params.depth_blit.uv_scale,
                                            params.depth_blit.uv_clamp_max);
                 vkCmdBindDescriptorSets(command_buffer,
@@ -2893,7 +2866,8 @@ namespace lfs::vis {
                 .viewport_rect = ctx.viewport_rect_push,
                 .params = ctx.world_depth_params_push,
                 .uv_region = glm::vec4(params.depth_blit.uv_scale,
-                                       params.depth_blit.uv_clamp_max)};
+                                       params.depth_blit.uv_clamp_max),
+                .ndc_to_view_coeffs = params.depth_blit.ndc_to_view_coeffs};
             recordShapeOverlays(ctx.cmd, frame.shape_overlay, frame, world_shape_overlay_push);
         }
 
@@ -2948,6 +2922,7 @@ namespace lfs::vis {
                                         projection_mode);
                 push.uv_region = glm::vec4(params.depth_blit.uv_scale,
                                            params.depth_blit.uv_clamp_max);
+                push.ndc_to_view_coeffs = params.depth_blit.ndc_to_view_coeffs;
                 push.view = batch.view;
                 push.viewport_panel = glm::vec4(batch.viewport_pos, batch.viewport_size);
                 push.projection = glm::vec4(batch.render_size, batch.focal_x, batch.focal_y);
@@ -2995,26 +2970,27 @@ namespace lfs::vis {
 
         void recordVignettePass(VkCommandBuffer command_buffer, const FramebufferRect& rect,
                                 const VulkanViewportPassParams& params) {
-            LFS_VK_DEBUG_ASSERT(
-                params.vignette_enabled && vignette_pipeline != VK_NULL_HANDLE,
-                "Viewport vignette pass must be enabled and have a valid pipeline (frame_slot={}, enabled={}, pipeline={:#x}, intensity={}, radius={}, softness={})",
-                params.frame_slot,
-                params.vignette_enabled,
-                vkHandleValue(vignette_pipeline),
-                params.vignette_intensity,
-                params.vignette_radius,
-                params.vignette_softness);
-            VignettePush push{};
-            push.viewport_intensity_radius = {
-                static_cast<float>(rect.width),
-                static_cast<float>(rect.height),
-                params.vignette_intensity,
-                params.vignette_radius,
-            };
-            push.softness_padding = {params.vignette_softness, 0.0f, 0.0f, 0.0f};
-            vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vignette_pipeline);
+            const auto key = std::tuple{rect.width, rect.height, params.vignette_intensity,
+                                        params.vignette_radius, params.vignette_softness};
+            if (vignette_key != key) {
+                auto image = lfs::core::vignette_image(rect.width, rect.height, params.vignette_intensity,
+                                                       params.vignette_radius, params.vignette_softness);
+                if (!image)
+                    throw lfs::Exception(std::move(image).error());
+                auto uploaded = vignette_texture.uploadLinearRgba(*image);
+                if (!uploaded)
+                    throw lfs::Exception(std::move(uploaded).error());
+                vignette_key = key;
+            }
+            // The effect is already evaluated by the tensor program. The legacy
+            // reference only samples/blends its cached, full-precision image.
+            const auto descriptor = descriptorSetFromId(vignette_texture.textureId());
+            const ScenePush push{};
+            vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scene_pipeline);
+            vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scene_pipeline_layout,
+                                    0, 1, &descriptor, 0, nullptr);
             vkCmdPushConstants(command_buffer,
-                               vignette_pipeline_layout,
+                               scene_pipeline_layout,
                                VK_SHADER_STAGE_FRAGMENT_BIT,
                                0,
                                sizeof(push),
@@ -3110,7 +3086,7 @@ namespace lfs::vis {
                     }
                 }
                 temporal_pipeline.shutdown();
-                dlss_pipeline.shutdown();
+                plugin_pipeline.shutdown();
                 scene_image_uploader.shutdown();
                 mesh_pass.shutdown();
                 environment_pass.shutdown();
@@ -3120,8 +3096,8 @@ namespace lfs::vis {
                     vkDestroyPipeline(device, scene_pipeline, nullptr);
                 if (scene_spatial_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, scene_spatial_pipeline, nullptr);
-                if (vignette_pipeline != VK_NULL_HANDLE)
-                    vkDestroyPipeline(device, vignette_pipeline, nullptr);
+                vignette_texture.reset();
+                vignette_key.reset();
                 if (grid_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, grid_pipeline, nullptr);
                 if (overlay_pipeline != VK_NULL_HANDLE)
@@ -3138,8 +3114,6 @@ namespace lfs::vis {
                     vkDestroyPipelineLayout(device, scene_pipeline_layout, nullptr);
                 if (scene_spatial_pipeline_layout != VK_NULL_HANDLE)
                     vkDestroyPipelineLayout(device, scene_spatial_pipeline_layout, nullptr);
-                if (vignette_pipeline_layout != VK_NULL_HANDLE)
-                    vkDestroyPipelineLayout(device, vignette_pipeline_layout, nullptr);
                 if (grid_pipeline_layout != VK_NULL_HANDLE)
                     vkDestroyPipelineLayout(device, grid_pipeline_layout, nullptr);
                 if (overlay_pipeline_layout != VK_NULL_HANDLE)
@@ -3215,6 +3189,41 @@ namespace lfs::vis {
             impl_ = std::make_unique<Impl>();
         }
         return impl_->init(context);
+    }
+
+    void VulkanViewportPass::discardImportMesh(uint64_t mesh_id) {
+        if (impl_)
+            impl_->mesh_pass.discardImport(mesh_id);
+    }
+
+    void VulkanViewportPass::prepareImport(VulkanContext& context, const VulkanViewportPassParams& params,
+                                           VulkanViewportPass* resident_mesh_resources) {
+        std::string error;
+        GraphicsImportErrorScope capture(error);
+        if (!init(context) || (resident_mesh_resources && !resident_mesh_resources->init(context)))
+            throw std::runtime_error(error.empty() ? "Could not prepare the viewport" : error);
+        if (!context.waitForSubmittedFrames())
+            throw std::runtime_error("Could not finish the previous viewport work");
+        {
+            const auto slot = params.frame_slot;
+            const VulkanMeshPassParams mesh_params{
+                .view_projection = params.mesh_view_projection,
+                .camera_position = params.mesh_camera_position,
+                .items = params.mesh_items,
+                .frame_slot = slot,
+                .draw_group_count = std::max<size_t>(1, params.mesh_panels.size())};
+            // Preparation does not write per-draw presentation uniforms. Reuse the
+            // resident geometry, material textures and shadows without copying
+            // them into the temporary pass. Missing uploads are retained there.
+            auto& mesh_owner = resident_mesh_resources ? *resident_mesh_resources : *this;
+            mesh_owner.impl_->mesh_pass.prepare(context, mesh_params);
+            impl_->environment_pass.prepare(params.environment, slot);
+            impl_->depth_blit_pass.prepare(params.depth_blit, slot);
+            impl_->split_view_pass.prepare(params.split_view, slot);
+            if (!error.empty())
+                throw std::runtime_error(error);
+            LOG_DEBUG("Prepared import viewport resources: meshes={}, frame_slot={}", params.mesh_items.size(), slot);
+        }
     }
 
     void VulkanViewportPass::prepare(VulkanContext& context, const VulkanViewportPassParams& params) {

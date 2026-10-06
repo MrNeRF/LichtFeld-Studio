@@ -87,9 +87,6 @@ namespace lfs::core {
                 return;
             }
 
-            const Tensor cpu_indices = indices.device() == Device::CPU
-                                           ? indices.contiguous()
-                                           : indices.cpu().contiguous();
             const auto assert_value = [&](const int64_t value, const size_t position) {
                 LFS_ASSERT_MSG(value >= std::numeric_limits<int>::min() &&
                                    value <= std::numeric_limits<int>::max(),
@@ -104,6 +101,23 @@ namespace lfs::core {
                                            operation, value, position, upper_bound));
             };
 
+            if (indices.device() == Device::GPU) {
+                const auto minimum = indices.min();
+                const auto maximum = indices.max();
+                const auto read_index = [&](const Tensor& scalar) -> int64_t {
+                    return indices.dtype() == DataType::Int64 ? scalar.item<int64_t>() : scalar.item<int>();
+                };
+                const int64_t lowest = read_index(minimum), highest = read_index(maximum);
+                LFS_ASSERT_MSG(lowest >= std::numeric_limits<int>::min() && highest <= std::numeric_limits<int>::max(),
+                               std::string(operation) + ": indices cannot be represented by the Int32 kernel");
+                if (check_bounds) {
+                    const int64_t lower_bound = allow_negative ? -static_cast<int64_t>(upper_bound) : 0;
+                    LFS_ASSERT_MSG(lowest >= lower_bound && highest < static_cast<int64_t>(upper_bound),
+                                   std::string(operation) + ": indices are out of bounds");
+                }
+                return;
+            }
+            const Tensor cpu_indices = indices.contiguous();
             if (cpu_indices.dtype() == DataType::Int64) {
                 const auto* values = cpu_indices.ptr<int64_t>();
                 for (size_t i = 0; i < cpu_indices.numel(); ++i) {
@@ -775,9 +789,9 @@ namespace lfs::core {
 
         pin_operands({&flat, &indices_int32});
         result = internal::allocate_like(*this, indices.shape(), dtype_);
-        const float* src = flat.ptr<float>();
+        const float* src = std::as_const(flat).ptr<float>();
         float* dst = result.ptr<float>();
-        const int* idx = indices_int32.ptr<int>();
+        const int* idx = std::as_const(indices_int32).ptr<int>();
         size_t total = flat.numel();
 
         // IMPORTANT: Use sequential execution to avoid TBB threading issues with CUDA
@@ -2056,30 +2070,52 @@ namespace lfs::core {
     }
 
     // Element Access
-    float& Tensor::at(std::initializer_list<size_t> indices) {
-        LFS_ASSERT_MSG(is_valid(),
-                       "mutable at() requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
-                       "mutable at() requires Float32");
-        LFS_ASSERT_MSG(indices.size() == shape_.rank(),
-                       "mutable at() index rank mismatch");
-        LFS_ASSERT_MSG(device_ == Device::CPU,
-                       "mutable at() cannot return a host reference to CUDA memory");
-
-        std::vector<size_t> idx_vec(indices);
-
-        size_t linear_idx = 0;
-        // Use actual strides_ member, not shape_.strides() which assumes contiguous layout
-        // This is critical for non-contiguous tensors (e.g., sliced views)
-
-        for (size_t i = 0; i < idx_vec.size(); ++i) {
-            LFS_ASSERT_MSG(idx_vec[i] < shape_[i],
-                           std::format("at() index {} is out of bounds for dimension {} of size {}",
-                                       idx_vec[i], i, shape_[i]));
-            linear_idx += idx_vec[i] * strides_[i];
+    TensorElementProxy Tensor::at(std::initializer_list<size_t> indices) {
+        LFS_ASSERT_MSG(is_valid() && dtype_ == DataType::Float32,
+                       "mutable at() requires a valid Float32 tensor");
+        LFS_ASSERT_MSG(indices.size() == ndim(), "mutable at() index rank mismatch");
+        Tensor element = *this;
+        size_t dim = 0;
+        for (const size_t index : indices) {
+            LFS_ASSERT_MSG(index < shape_[dim], "mutable at() index is out of bounds");
+            element = element.slice(static_cast<int>(dim), index, index + 1);
+            ++dim;
         }
+        return TensorElementProxy(element.squeeze());
+    }
 
-        return ptr<float>()[linear_idx];
+    TensorElementProxy::TensorElementProxy(Tensor element) : element_(std::move(element)) {}
+
+    TensorElementProxy::operator float() const { return element_.item<float>(); }
+
+    TensorElementProxy& TensorElementProxy::operator=(const float value) {
+        element_.fill_(value);
+        return *this;
+    }
+
+    TensorElementProxy& TensorElementProxy::operator=(const TensorElementProxy& other) {
+        element_.copy_(other.element_);
+        return *this;
+    }
+
+    TensorElementProxy& TensorElementProxy::operator+=(const float value) {
+        element_.add_(value);
+        return *this;
+    }
+
+    TensorElementProxy& TensorElementProxy::operator-=(const float value) {
+        element_.sub_(value);
+        return *this;
+    }
+
+    TensorElementProxy& TensorElementProxy::operator*=(const float value) {
+        element_.mul_(value);
+        return *this;
+    }
+
+    TensorElementProxy& TensorElementProxy::operator/=(const float value) {
+        element_.div_(value);
+        return *this;
     }
 
     float Tensor::at(std::initializer_list<size_t> indices) const {
@@ -2157,16 +2193,6 @@ namespace lfs::core {
                                [](bool b) { return b ? 1 : 0; });
 
         return from_vector_impl(bytes, shape, device, DataType::Bool);
-    }
-
-    void Tensor::set_bool(std::initializer_list<size_t> indices, bool value) {
-
-        preserve_lazy_snapshots_before_write();
-        set_bool(std::span<const size_t>(indices.begin(), indices.size()), value);
-    }
-
-    bool Tensor::get_bool(std::initializer_list<size_t> indices) const {
-        return get_bool(std::span<const size_t>(indices.begin(), indices.size()));
     }
 
     // Location: After the existing get_bool/set_bool implementations (around line 800+)

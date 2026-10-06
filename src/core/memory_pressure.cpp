@@ -203,9 +203,6 @@ namespace lfs::core {
         std::atomic<size_t> last_target_free{0};
         std::chrono::steady_clock::time_point last_recover_check{};
 
-        mutable std::mutex status_mutex;
-        std::string last_status;
-
         std::mutex probe_mutex;
         std::atomic<bool> probe_armed{false};
         std::function<bool(MemoryDomain, size_t)> alloc_probe;
@@ -520,11 +517,6 @@ namespace lfs::core {
             LOG_ERROR("{}", summary);
         }
 
-        {
-            std::lock_guard<std::mutex> lock(impl_->status_mutex);
-            impl_->last_status = summary;
-        }
-
         // Formatting/emitting after relief keeps the raw OOM path allocation-free.
         events::state::VramPressure{
             .domain = to_string(failure.domain),
@@ -627,11 +619,6 @@ namespace lfs::core {
         return impl_->episode_counter.load();
     }
 
-    std::string MemoryPressureCoordinator::last_status() const {
-        std::lock_guard<std::mutex> lock(impl_->status_mutex);
-        return impl_->last_status;
-    }
-
     void MemoryPressureCoordinator::set_allocation_probe(std::function<bool(MemoryDomain, size_t)> probe) {
         std::lock_guard<std::mutex> lock(impl_->probe_mutex);
         impl_->probe_armed.store(static_cast<bool>(probe), std::memory_order_release);
@@ -670,10 +657,6 @@ namespace lfs::core {
         impl_->pressure_active.store(false);
         impl_->last_target_free.store(0);
         impl_->last_recover_check = {};
-        {
-            std::lock_guard<std::mutex> lock(impl_->status_mutex);
-            impl_->last_status.clear();
-        }
     }
 
 } // namespace lfs::core

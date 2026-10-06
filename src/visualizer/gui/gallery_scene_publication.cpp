@@ -331,24 +331,30 @@ namespace lfs::vis::gui {
             throw std::runtime_error("gallery_project_not_supported: " + std::string(settings.error().user_message()));
         if (settings->environment_mode == EnvironmentBackgroundMode::Equirectangular) {
             const auto ref = document->view().dom().get<std::string>("render_settings.environment_reference_uuid");
+            const auto builtin = document->view().dom().get<std::string>("render_settings.environment_builtin");
             const auto references = document->references().records();
-            bool found = false;
             if (ref && references) {
                 for (const auto& reference : *references) {
                     if (reference.uuid.to_string() != *ref || reference.kind != "environment_map")
                         continue;
-                    if (!document->find_dataset_source(reference.uuid))
-                        break;
-                    auto path = document->materialize_embedded_asset(reference.uuid, "lfsenv");
-                    if (!path)
-                        throw std::runtime_error(std::string(path.error().user_message()));
-                    publication.environment_source = *path;
-                    found = true;
+                    if (document->find_dataset_source(reference.uuid)) {
+                        auto path = document->materialize_embedded_asset(reference.uuid, "lfsenv");
+                        if (!path)
+                            throw std::runtime_error(std::string(path.error().user_message()));
+                        publication.environment_source = *path;
+                    } else if (const auto path = pj::resolve_path_reference(document->references(),
+                                                                            source.source_path.parent_path(),
+                                                                            reference.uuid);
+                               path && std::filesystem::is_regular_file(*path)) {
+                        publication.environment_source = *path;
+                    }
                     break;
                 }
+            } else if (builtin) {
+                publication.environment_source = *builtin;
             }
-            if (!found)
-                throw std::runtime_error("gallery_project_payload_unavailable: The HDR background is external or missing. Open the project to publish it.");
+            if (publication.environment_source.empty())
+                throw std::runtime_error("gallery_project_hdr_unavailable: The HDR background file is missing.");
         }
         verifyGalleryProjectCommit(source.source_path, commit_uuid);
     }
@@ -617,6 +623,7 @@ namespace lfs::vis::gui {
         chapter(pj::FOURCC_VIEW, document.view());
         chapter(pj::FOURCC_EDTR, document.editor());
         chapter(pj::FOURCC_SEQR, document.sequencer());
+        chapter(pj::FOURCC_NODE, document.nodes());
         chapter(pj::FOURCC_METR, document.metrics());
         for (const auto& [id, file] : embedded_files) {
             const auto bytes = std::filesystem::file_size(file);

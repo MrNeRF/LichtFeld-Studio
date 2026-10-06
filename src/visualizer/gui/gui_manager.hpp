@@ -21,6 +21,7 @@
 #include "gui/rml_progress_overlay.hpp"
 #include "gui/rml_shell_frame.hpp"
 #include "gui/rml_status_bar.hpp"
+#include "gui/rml_template_browser.hpp"
 #include "gui/rml_toast_overlay.hpp"
 #include "gui/rml_viewport_overlay.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -32,8 +33,8 @@
 #include "gui/startup_overlay.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/utils/drag_drop_native.hpp"
-#include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/render_target_id.hpp"
+#include "rendering/viewport_reference_renderer.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 
@@ -51,13 +52,15 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <vulkan/vulkan.h>
 
 struct SDL_Cursor;
 
 namespace lfs::vis {
+    class WindowInputDispatchTest;
     class VisualizerImpl;
+    class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
     class WindowManager;
+    class GraphicsImportErrorScope;
     class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
     class VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
     class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
@@ -99,6 +102,10 @@ namespace lfs::vis {
 
         class LFS_VIS_API GuiManager {
         public:
+            void beginImportRenderCheck();
+            void endImportRenderCheck();
+            std::optional<std::string> pollImportRenderCheck(const core::Uuid& provisional_node);
+            void discardImportMesh(uint64_t mesh_id);
             GuiManager(VisualizerImpl* viewer);
             ~GuiManager();
 
@@ -107,7 +114,7 @@ namespace lfs::vis {
             void shutdown();
             // Drop viewport-pass GPU objects (descriptor sets that sample external
             // scene image views) while the Vulkan context is still alive.
-            void shutdownVulkanViewportPass();
+            void shutdownViewportCompositors();
             [[nodiscard]] bool render();
             void updateInteractiveTransitions();
             [[nodiscard]] bool isInteractiveTransitionSettling() const;
@@ -119,12 +126,25 @@ namespace lfs::vis {
             // Called after a bounded main-thread upload batch. The next frame
             // is requested immediately while decoded thumbnails remain ready.
             void notifyCameraThumbnailBatchReady();
+            void setRmlResizeDeferring(bool defer) { rmlui_manager_.setResizeDeferring(defer); }
+            void prepareInput();
+            void prepareLayout();
+            RmlUIManager::InputDispatchResult dispatchInputEvent(const SDL_Event& event) {
+                if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST)
+                    screen_host_.cancelInput();
+                if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_ESCAPE && screen_host_.gestureActive()) {
+                    screen_host_.cancelInput();
+                    return {.consumed = true};
+                }
+                return rmlui_manager_.dispatchInputEvent(event);
+            }
             void ensureCjkFontsLoaded() { rmlui_manager_.ensureCjkFontsLoaded(); }
 
             // Sub-manager access
             [[nodiscard]] AsyncTaskManager& asyncTasks() { return async_tasks_; }
             [[nodiscard]] const AsyncTaskManager& asyncTasks() const { return async_tasks_; }
             void enqueueModal(lfs::core::ModalRequest request);
+            void openTemplateBrowser(core::Uuid target, std::string save_tree = {});
             [[nodiscard]] RmlModalOverlay* modalOverlay() { return rml_modal_overlay_.get(); }
             [[nodiscard]] const RmlModalOverlay* modalOverlay() const {
                 return rml_modal_overlay_.get();
@@ -140,8 +160,6 @@ namespace lfs::vis {
 
             // State queries
             bool needsAnimationFrame(bool include_export_progress = true) const;
-            [[nodiscard]] std::string describeAnimationDemand() const;
-            [[nodiscard]] bool needsImmediateAnimationFrame() const;
             // Min finite scheduled GUI animation/update delay (seconds). Used by the
             // idle wait path so CSS transitions / timers wake on time without spinning.
             [[nodiscard]] std::optional<double> secondsUntilNextAnimationFrame(
@@ -184,7 +202,6 @@ namespace lfs::vis {
                 return window_states_;
             }
             [[nodiscard]] std::string scenePanelActiveTab() const;
-            [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
             void setScenePanelActiveTab(std::string_view tab);
             [[nodiscard]] bool selectAllSceneNodesIfFocused();
             [[nodiscard]] bool toggleSceneSelectionVisibilityIfFocused();
@@ -196,7 +213,6 @@ namespace lfs::vis {
                 const lfs::core::Scene& scene) const;
             void applySceneTreeChrome(const SceneTreeSessionChrome& chrome);
             void resetSceneTreeChrome();
-            [[nodiscard]] float tabStripScroll() const;
             void setTabStripScroll(float value);
 
             void requestExitConfirmation(
@@ -212,6 +228,7 @@ namespace lfs::vis {
             bool isModalWindowOpen() const;
             [[nodiscard]] bool isHardwareSelectionRingActive() const;
             [[nodiscard]] bool selectionCursorNeedsRender(float mouse_x, float mouse_y) const;
+            [[nodiscard]] SDL_Cursor* pipetteCursor() const noexcept { return pipette_cursor_; }
             [[nodiscard]] bool passiveMouseMoveNeedsRender(float mouse_x, float mouse_y) const;
             [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
@@ -224,7 +241,6 @@ namespace lfs::vis {
             // Rebuild static @tr: RML content after a runtime language switch.
             // The reload is deferred until no RML interaction is active.
             void requestLocalizationUiRefresh();
-            void captureKey(int physical_key, int logical_key, int mods);
             void captureMouseButton(int button, int mods, double x, double y, std::optional<int> chord_key = std::nullopt);
             void captureMouseButtonRelease(int button);
             void captureMouseMove(double x, double y);
@@ -245,6 +261,10 @@ namespace lfs::vis {
             void renderViewportDecorations();
 
         private:
+            std::string import_render_error_;
+            std::unique_ptr<GraphicsImportErrorScope> import_error_capture_;
+            friend class lfs::vis::WindowInputDispatchTest;
+            friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
             friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
@@ -268,8 +288,8 @@ namespace lfs::vis {
             [[nodiscard]] ViewportLayout activeViewportLayout(const ScreenState& screen) const;
             void syncEditorFlags();
             void applyScreenCursor(screen::GestureCursor cursor);
-            [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(ViewId id, VkExtent2D extent,
-                                                                             std::size_t frame_slot) const;
+            [[nodiscard]] ViewportFrameDesc buildViewportFrameDesc(
+                ViewId id, glm::uvec2 extent, std::size_t frame_slot) const;
 
             void setupEventHandlers();
             void applyDefaultStyle();
@@ -332,9 +352,8 @@ namespace lfs::vis {
             bool consumeCameraThumbnailRefresh();
 
             [[nodiscard]] bool isVramHudOverlayVisible() const;
-            [[nodiscard]] bool isVramHudPublishDue(std::chrono::steady_clock::time_point now) const;
             [[nodiscard]] PanelAnimationVisibility panelAnimationVisibility() const;
-            [[nodiscard]] bool drainVulkanFramesForInteractiveTransition(
+            [[nodiscard]] bool drainGraphicsFramesForInteractiveTransition(
                 lfs::vis::WindowManager& window_manager,
                 const char* transition_name);
             void applyInteractiveTransitionCooldown(
@@ -377,6 +396,7 @@ namespace lfs::vis {
 
             // Owned components
             std::unique_ptr<RmlModalOverlay> rml_modal_overlay_;
+            std::unique_ptr<RmlTemplateBrowser> rml_template_browser_;
             std::unique_ptr<RmlProgressOverlay> rml_progress_overlay_;
             std::unique_ptr<RmlToastOverlay> rml_toast_overlay_;
             std::unique_ptr<lfs::gui::IVideoExtractorWidget> video_widget_;
@@ -386,10 +406,10 @@ namespace lfs::vis {
             bool show_main_panel_ = true;
             bool show_vram_hud_ = false;
             bool perf_hud_expanded_ = true;
-            bool vram_hud_visible_published_ = false;
             bool perf_hud_visible_published_ = false;
-            std::chrono::steady_clock::time_point next_vram_hud_publish_{};
             PerfSampler perf_sampler_;
+            std::chrono::steady_clock::time_point last_hud_sample_{};
+            bool last_hud_expanded_ = false;
             std::chrono::steady_clock::time_point ui_toggle_next_allowed_at_{};
             bool ui_toggle_pending_ = false;
             bool ui_visibility_resize_active_ = false;
@@ -466,8 +486,8 @@ namespace lfs::vis {
 
             // RmlUI integration
             RmlUIManager rmlui_manager_;
-            std::shared_ptr<lfs::vis::SharedViewportGpuAssets> viewport_gpu_assets_;
-            std::unordered_map<ViewId, std::unique_ptr<lfs::vis::VulkanViewportPass>> vulkan_viewport_passes_;
+            std::shared_ptr<lfs::vis::ViewportReferenceResources> viewport_compositor_resources_;
+            std::unordered_map<ViewId, std::unique_ptr<lfs::vis::ViewportReferenceRenderer>> viewport_compositors_;
             std::unordered_map<ViewId, RenderTargetId> viewport_pass_targets_;
             std::unordered_map<ViewId, std::vector<LineRendererCommand>> view_overlay_commands_;
             bool vulkan_gui_ = false;
@@ -506,8 +526,6 @@ namespace lfs::vis {
             uint64_t last_ui_layout_panel_visibility_revision_ = 0;
             std::optional<bool> console_flag_seen_;
             std::optional<bool> sequencer_flag_seen_;
-            mutable std::chrono::steady_clock::time_point last_animation_demand_description_at_{};
-            mutable std::string animation_demand_description_cache_;
             bool dock_resize_interaction_active_ = false;
             std::uint64_t last_pre_scene_panel_sync_generation_ = 0;
 

@@ -7,6 +7,7 @@
 #include "core/events.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
+#include <deque>
 #include <expected>
 #include <filesystem>
 #include <string>
@@ -30,10 +31,12 @@ namespace lfs::vis {
         void setParameters(const lfs::core::param::TrainingParameters& params) { params_ = params; }
         const lfs::core::param::TrainingParameters& getParameters() const { return params_; }
 
+        void processPendingImports();
+        bool hasPendingImports() const { return !pending_imports_.empty(); }
+        void cancelPendingImports() { pending_imports_.clear(); }
+
         // Loading operations
         std::expected<void, std::string> loadPLY(const std::filesystem::path& path);
-        std::expected<void, std::string> loadSOG(const std::filesystem::path& path);
-        std::expected<void, std::string> loadSplatFile(const std::filesystem::path& path);
         std::expected<void, std::string> loadSplatFiles(
             const std::vector<std::filesystem::path>& paths);
         std::expected<void, std::string> loadDataset(const std::filesystem::path& path);
@@ -59,6 +62,7 @@ namespace lfs::vis {
         bool isPLYFile(const std::filesystem::path& path) const;
         bool isCheckpointFile(const std::filesystem::path& path) const;
 
+        std::deque<lfs::core::events::cmd::LoadFile> pending_imports_;
         SceneManager* scene_manager_;
         VisualizerImpl* viewer_ = nullptr;
         lfs::core::param::TrainingParameters params_;

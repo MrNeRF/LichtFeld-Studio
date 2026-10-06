@@ -13,6 +13,8 @@
 namespace lfs::vis::gui {
 
     void RmlTextInputHandler::OnActivate(Rml::TextInputContext* input_context) {
+        if (accepts_activation_ && !accepts_activation_())
+            return;
         input_context_ = input_context;
         resetState();
     }

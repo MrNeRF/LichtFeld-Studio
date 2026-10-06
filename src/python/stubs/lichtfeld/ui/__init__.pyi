@@ -1916,6 +1916,9 @@ def save_project_file_dialog(default_name: str = 'project.licht', start_dir: str
     Choose a destination for a new LichtFeld project. Returns empty string if cancelled.
     """
 
+def open_image_file_dialog(start_dir: str = '') -> str:
+    """Select a still photo; returns empty if cancelled"""
+
 def open_ply_file_dialog(start_dir: str = '') -> str:
     """
     Open a file dialog to select a splat file (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz). Returns empty string if cancelled.
@@ -2146,6 +2149,11 @@ def on_project_switch_confirmation(callback: object) -> None:
 def on_show_load_file_confirmation(callback: object) -> None:
     """
     Register callback for a load-file wipe confirmation (receives paths: list[str], is_dataset: bool, replace: bool)
+    """
+
+def on_show_load_file_confirmation_with_batch(callback: object) -> None:
+    """
+    Register a load-file confirmation callback with batch provenance (receives paths: list[str], is_dataset: bool, replace: bool, user_batch: bool). Replaces the callback registered through either load-file confirmation API.
     """
 
 def on_stop_training_confirmation(callback: object) -> None:
@@ -2958,7 +2966,14 @@ def is_point_cloud_forced() -> bool:
     """Check if point cloud mode is forced (pre-training mode)"""
 
 def get_fps() -> float:
-    """Get current FPS"""
+    """
+    Get viewport renders in the trailing second (cached and deferred results excluded)
+    """
+
+def get_ui_fps() -> float:
+    """
+    Get successful GUI presents in the trailing second (idle-clear frame excluded)
+    """
 
 def get_content_type() -> str:
     """Get content type (empty, splat_files, dataset)"""

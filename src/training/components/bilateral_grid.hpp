@@ -52,25 +52,27 @@ namespace lfs::training {
 
         /// Forward pass: apply color correction
         lfs::core::Tensor apply(const lfs::core::Tensor& rgb, int image_idx);
+        /// Forward pass that overwrites the contiguous rgb with its corrected colors.
+        void apply_in_place(lfs::core::Tensor& rgb, int image_idx);
 
         /// Backward pass: accumulate gradients (call optimizer_step after all backward calls)
         lfs::core::Tensor backward(const lfs::core::Tensor& rgb,
                                    const lfs::core::Tensor& grad_output,
                                    int image_idx);
+        /// Backward pass that overwrites the contiguous grad with the gradient with respect to rgb.
+        void backward_in_place(const lfs::core::Tensor& rgb, lfs::core::Tensor& grad, int image_idx);
 
         /// Compute TV loss for regularization (returns GPU tensor for async accumulation)
         lfs::core::Tensor tv_loss_gpu();
         lfs::core::Tensor tv_loss_gpu(int image_idx);
 
         /// Accumulate TV loss gradients into the current image slice (+=).
-        void tv_backward(float tv_weight);
         void tv_backward(float tv_weight, int image_idx);
 
         /// Adam + projection + scheduler for the image trained this iteration.
         void step_image(int image_idx, float tv_weight);
 
         /// Apply Adam with all accumulated gradients
-        void optimizer_step();
         void optimizer_step(int image_idx);
 
         /// Clear gradients for next iteration
@@ -113,6 +115,11 @@ namespace lfs::training {
         void adopt_checkpoint_state(BilateralGrid& loaded);
 
     private:
+        void apply_into(const lfs::core::Tensor& rgb, lfs::core::Tensor& output, int image_idx);
+        void backward_into(const lfs::core::Tensor& rgb,
+                           const lfs::core::Tensor& grad_output,
+                           lfs::core::Tensor& grad_rgb,
+                           int image_idx);
         void compute_bias_corrections(float& bc1_rcp, float& bc2_sqrt_rcp) const {
             const double bc1 = 1.0 - std::pow(config_.beta1, step_ + 1);
             const double bc2 = 1.0 - std::pow(config_.beta2, step_ + 1);
@@ -122,11 +129,11 @@ namespace lfs::training {
 
         void rebuild_identity_mean();
         void rebuild_projection_state();
+        void set_projection_state(const lfs::core::Tensor& mean);
         [[nodiscard]] size_t slice_elements() const;
         void allocate_resident_slots();
         // Device slot holding image_idx, uploading its grid and Adam moments on a miss.
         [[nodiscard]] int resident_slot(int image_idx);
-        [[nodiscard]] float* device_slice(lfs::core::Tensor& resident, int slot) const;
         void write_back(int slot) const;
         // Makes the host tensors current (waits for pending write-backs).
         void flush_resident() const;

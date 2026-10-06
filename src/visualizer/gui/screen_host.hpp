@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "gui/area_editors.hpp"
 #include "gui/gui_input.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
@@ -12,6 +13,7 @@
 #include "screen/screen_service.hpp"
 
 #include <RmlUi/Core/DataModelHandle.h>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -25,6 +27,10 @@ namespace Rml {
     class ElementDocument;
     class Element;
 } // namespace Rml
+
+namespace lfs::vis {
+    class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
+} // namespace lfs::vis
 
 namespace lfs::vis::gui {
 
@@ -62,12 +68,14 @@ namespace lfs::vis::gui {
     // Hosts the screen in the window's work area: lays the areas out, draws
     // their headers, frames and gesture previews, runs the area gestures and
     // lets each area's editor draw its content.
-    class ScreenHost {
+    class LFS_VIS_API ScreenHost {
     public:
         struct Services {
             screen::ScreenService* screens = nullptr;
             RmlUIManager* rml = nullptr;
+            SceneManager* scene_manager = nullptr;
             GlobalContextMenu* context_menu = nullptr;
+            std::function<bool(float, float)> pointer_available;
             // The screen's structure changed (areas, editors, active view).
             std::function<void()> screen_changed;
             // Runs a view command such as "view.frame_all" on a 3D view.
@@ -81,6 +89,7 @@ namespace lfs::vis::gui {
         void init(Services services);
         void shutdown();
         void reloadResources();
+        NodeCanvasElement* nodeCanvas() { return node_editor_ ? node_editor_->canvas() : nullptr; }
 
         // Lays the screen out inside `work` (window pixels) for this frame.
         void layout(const screen::Rect& work, float ui_scale);
@@ -102,7 +111,6 @@ namespace lfs::vis::gui {
         [[nodiscard]] const AreaFrame* area(screen::AreaId id) const;
         [[nodiscard]] screen::Rect currentAreaRect(screen::AreaId id);
         [[nodiscard]] screen::AreaId areaAt(float x, float y) const;
-        [[nodiscard]] screen::AreaId viewAt(float x, float y) const;
         [[nodiscard]] std::optional<screen::Rect> viewContent(screen::AreaId id) const;
         [[nodiscard]] const screen::LayoutGeometry& geometry() const { return geometry_; }
 
@@ -113,9 +121,14 @@ namespace lfs::vis::gui {
         // hovering there still reaches the viewport.
         [[nodiscard]] bool blocksPress(float x, float y) const;
         [[nodiscard]] bool cornerGestureAt(float x, float y) const;
+        [[nodiscard]] bool resizeGestureAt(float x, float y) const;
         [[nodiscard]] bool gestureActive() const { return gestures_.active(); }
+        void cancelInput() {
+            gestures_.cancel();
+            live_capture_area_ = {};
+            overlay_dirty_ = true;
+        }
         [[nodiscard]] bool needsAnimationFrame() const;
-        [[nodiscard]] std::string animationDemandDescription() const;
         [[nodiscard]] screen::GestureCursor cursor() const { return cursor_; }
 
         // Panel editors whose visibility follows a flag of their own instead
@@ -129,6 +142,7 @@ namespace lfs::vis::gui {
         // Area commands shared by headers, menus, shortcuts and scripts.
         bool toggleMaximized(screen::AreaId id);
         bool toggleMaximizedAt(float x, float y);
+        bool toggleEditor(std::string_view editor);
         screen::AreaId splitArea(screen::AreaId id, screen::SplitAxis axis);
         bool closeArea(screen::AreaId id);
         bool setEditor(screen::AreaId id, std::string_view editor);
@@ -136,6 +150,8 @@ namespace lfs::vis::gui {
         void openAreaMenu(screen::AreaId id, float x, float y);
 
     private:
+        friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
+
         AreaEditor& editorFor(std::string_view editor);
         void syncPanelEditors();
         void rebuildChrome();
@@ -165,6 +181,7 @@ namespace lfs::vis::gui {
         PropertiesEditor properties_;
         ScenePanelEditor scene_;
         ConsoleEditor console_;
+        std::unique_ptr<NodeEditor> node_editor_;
         PanelEditor panel_;
 
         // Panel editors shown last frame, to tell whether the panel's enabled
@@ -180,7 +197,7 @@ namespace lfs::vis::gui {
         Rml::DataModelHandle chrome_model_;
         RmlTooltipController chrome_tooltip_;
         std::vector<ChromeArea> chrome_areas_;
-        CachedVulkanContextRender chrome_cache_;
+        CachedUiContextRender chrome_cache_;
         bool chrome_dirty_ = true;
         bool chrome_pointer_inside_ = false;
         struct PendingAction {
@@ -196,7 +213,7 @@ namespace lfs::vis::gui {
         // Overlay (gesture previews and the active-view outline, drawn on top).
         Rml::Context* overlay_context_ = nullptr;
         Rml::ElementDocument* overlay_document_ = nullptr;
-        CachedVulkanContextRender overlay_cache_;
+        CachedUiContextRender overlay_cache_;
         bool overlay_dirty_ = true;
         bool overlay_visible_ = false;
 

@@ -41,7 +41,7 @@ namespace lfs::python {
 
         void notify_screen_changed(vis::VisualizerImpl* impl) {
             if (auto* rendering = impl->getRenderingManager())
-                rendering->markDirty(vis::DirtyFlag::ALL);
+                rendering->markDirty(vis::DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
         }
 
         vis::screen::AreaId area_id(const int id) {
@@ -434,8 +434,8 @@ namespace lfs::python {
                     },
                     nlohmann::json::object())));
                 if (out.contains("translation")) {
-                    out["translation"] = nb::tuple(out["translation"]);
-                    out["pivot"] = nb::tuple(out["pivot"]);
+                    out["translation"] = nb::tuple(nb::borrow<nb::object>(out["translation"]));
+                    out["pivot"] = nb::tuple(nb::borrow<nb::object>(out["pivot"]));
                 }
                 return out;
             },

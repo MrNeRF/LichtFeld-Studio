@@ -7,6 +7,28 @@ from numpy.typing import NDArray
 import lichtfeld
 
 
+def softmax(input: lichtfeld.Tensor, mask: lichtfeld.Tensor | None = None) -> lichtfeld.Tensor:
+    """
+    Softmax over the last dimension with an optional broadcastable additive mask
+    """
+
+def silu(input: lichtfeld.Tensor) -> lichtfeld.Tensor:
+    """SiLU activation: x * sigmoid(x)"""
+
+def rms_norm(input: lichtfeld.Tensor, weight: lichtfeld.Tensor, eps: float = 9.999999974752427e-07) -> lichtfeld.Tensor:
+    """RMS normalization over the last dimension followed by channel weights"""
+
+def residual_scale(x: lichtfeld.Tensor, hidden: lichtfeld.Tensor, gamma: lichtfeld.Tensor) -> lichtfeld.Tensor:
+    """
+    Compute x + hidden * gamma with gamma broadcast over the last dimension
+    """
+
+def window_partition(input: lichtfeld.Tensor, window_size: int) -> lichtfeld.Tensor:
+    """Partition [B,H,N,d] into [B*n_windows,H,window_size,d], zero-padding N"""
+
+def window_unpartition(windows: lichtfeld.Tensor, window_size: int, original_n: int) -> lichtfeld.Tensor:
+    """Restore [B,H,N,d] from 1D windows and crop padding to original_n"""
+
 class Sam2:
     """SAM 2.1 image predictor"""
 
@@ -53,6 +75,10 @@ class RomaV1:
         """
         Release the weights and their device memory. The next call reloads them.
         """
+
+    @property
+    def weights_bytes(self) -> int:
+        """Resident weight bytes, or zero before loading and after close."""
 
     @property
     def resolution(self) -> int:

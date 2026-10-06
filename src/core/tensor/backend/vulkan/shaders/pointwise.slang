@@ -3,6 +3,7 @@ static const uint LFS_PUSH_CONSTANT_SIZE = 48;
 #include "half_bits.slangh"
 #include "byte_word.slangh"
 #include "integer_math.slangh"
+#include "hyperbolic_math.slangh"
 #include "power_math.slangh"
 
 [SpecializationConstant]
@@ -115,15 +116,17 @@ float accurateLog1p(float value)
 
 float accurateAsin(float value)
 {
-    // Clamp rounding overshoot, but keep NaN (clamp would drop it).
-    const float bounded = isnan(value) ? value : clamp(value, -1.0f, 1.0f);
+    if (isnan(value) || abs(value) > 1.0f)
+        return asfloat(0x7fc00000u);
+    const float bounded = value;
     return atan2(bounded, sqrt(max(0.0f, 1.0f - bounded * bounded)));
 }
 
 float accurateAcos(float value)
 {
-    // Clamp rounding overshoot, but keep NaN (clamp would drop it).
-    const float bounded = isnan(value) ? value : clamp(value, -1.0f, 1.0f);
+    if (isnan(value) || abs(value) > 1.0f)
+        return asfloat(0x7fc00000u);
+    const float bounded = value;
     return atan2(sqrt(max(0.0f, 1.0f - bounded * bounded)), bounded);
 }
 
@@ -170,7 +173,7 @@ float floatUnary(float value, float scalar, bool scalarOnRight)
     if (kOp == 15) return 1.0f / (1.0f + exp(-value));
     if (kOp == 16) return isnan(value) ? value : ieeeMaximum(value, 0.0f);
     if (kOp == 17) return value * value;
-    if (kOp == 18) return tanh(value);
+    if (kOp == 18) return accurateTanh(value);
     if (kOp == 19) return rsqrt(value);
     if (kOp == 20) return float((value > 0.0f) - (value < 0.0f));
     if (kOp == 21) return 1.0f / value;
@@ -187,13 +190,13 @@ float floatUnary(float value, float scalar, bool scalarOnRight)
     if (kOp == 45) return accurateAsin(value);
     if (kOp == 46) return accurateAcos(value);
     if (kOp == 47) return atan(value);
-    if (kOp == 48) return sinh(value);
+    if (kOp == 48) return accurateSinh(value);
     if (kOp == 49) return cosh(value);
     if (kOp == 50)
     {
         const float inner = sqrt(2.0f / 3.14159265358979323846f) *
                             (value + 0.044715f * value * value * value);
-        return 0.5f * value * (1.0f + tanh(inner));
+        return 0.5f * value * (1.0f + accurateTanh(inner));
     }
     if (kOp == 51) return value / (1.0f + exp(-value));
     if (kOp == 52) return trunc(value);
@@ -225,7 +228,7 @@ float applyChainOp(float value, ChainOp op, uint index)
     if (op.kind == 15) return 1.0f / (1.0f + exp(-value));
     if (op.kind == 16) return isnan(value) ? value : ieeeMaximum(value, 0.0f);
     if (op.kind == 17) return value * value;
-    if (op.kind == 18) return tanh(value);
+    if (op.kind == 18) return accurateTanh(value);
     if (op.kind == 19) return rsqrt(value);
     if (op.kind == 20) return float((value > 0.0f) - (value < 0.0f));
     if (op.kind == 21) return 1.0f / value;
@@ -374,12 +377,12 @@ void evaluateScalar(uint index, uniform Parameters parameters)
     }
     if (kArity == 5)
     {
-        if (kInputDType == kFloat32)
+        if (kInputDType == kFloat32 || kInputDType == kFloat16)
         {
-            const float value = ((Ptr<float, Access.Read>)parameters.lhsAddress)[index];
+            const float value = loadFloat(parameters.lhsAddress, index);
             const float maximum = asfloat(uint(parameters.scalarInt64));
-            ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[index] =
-                isnan(value) ? value : min(max(value, parameters.scalarFloat), maximum);
+            const float result = isnan(value) ? value : min(max(value, parameters.scalarFloat), maximum);
+            storeFloat(parameters.outputAddress, index, result);
         }
         else
         {

@@ -1,3 +1,42 @@
+#generic-tracks {
+    max-height: 132dp;
+    overflow-y: auto;
+    overflow-x: visible;
+    flex-shrink: 0;
+    margin: 0;
+}
+.animation-track {
+    position: relative;
+    height: 42dp;
+    line-height: 18dp;
+    border-radius: 4dp;
+}
+.animation-track-label {
+    position: absolute;
+    left: 4dp;
+    top: 0;
+    max-width: 220dp;
+    height: 18dp;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    opacity: 0.75;
+    pointer-events: none;
+}
+.animation-key {
+    position: absolute;
+    top: 20dp;
+    width: 18dp;
+    height: 20dp;
+    line-height: 20dp;
+    margin-left: -9dp;
+    padding: 0;
+    border-width: 0;
+    decorator: none;
+    color: #e2b967;
+    font-size: 14dp;
+    text-align: center;
+}
 body {
     font-family: Inter;
     display: flex;
@@ -207,7 +246,6 @@ body {
 
 #resolution-info,
 #resolution-input {
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     color: #cdd6f4;
 }
@@ -263,7 +301,6 @@ body {
     box-sizing: border-box;
     border-width: 1dp;
     border-radius: 6dp;
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     cursor: ew-resize;
     transition: border-color 0.12s quadratic-out, background-color 0.12s quadratic-out;
@@ -288,7 +325,6 @@ body {
     z-index: 1;
     width: 100%;
     text-align: right;
-    font-family: "JetBrains Mono";
     font-size: 12dp;
 }
 
@@ -387,7 +423,6 @@ body {
 #sequence-fps-input {
     width: 100%;
     text-align: right;
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     color: #cdd6f4;
 }
@@ -711,7 +746,6 @@ body {
 
 #duration,
 #duration-input {
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     color: #cdd6f4;
 }

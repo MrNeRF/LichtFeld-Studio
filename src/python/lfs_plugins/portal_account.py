@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterator, Mapping, Optional
 
+from .private_directory import mkdir_private
 from .http import urlopen
 from .credential_storage import CredentialStorage
 from .portal_security import redact, remember_secrets
@@ -240,7 +241,7 @@ def _retry_after_seconds(headers: object) -> Optional[float]:
 
 @contextmanager
 def _locked_sidecar(path: Path, *, blocking: bool = True) -> Iterator[None]:
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    mkdir_private(path.parent, parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
         if os.name == "nt":
@@ -622,6 +623,15 @@ class PortalAccountService:
             thread.join(remaining)
 
     def _device_flow_worker(self) -> None:
+        try:
+            self._run_device_flow()
+        except (OSError, PortalAccountError):
+            # Storage can fail after the portal has authorized the device.
+            # Always leave the linking state, preserving an existing session.
+            _log.warning("Portal authorization could not be completed")
+            self._finish_device_flow("sign_in_unavailable")
+
+    def _run_device_flow(self) -> None:
         previous_credentials = self._current_credentials()
         try:
             start = self._request_json(

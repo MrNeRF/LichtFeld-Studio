@@ -13,6 +13,9 @@
 #include "vk_cuda_bridge.hpp"
 #endif
 #include "vk_memory.hpp"
+#ifdef __APPLE__
+#include <vulkan/vulkan_metal.h>
+#endif
 #include "vk_pipelines.hpp"
 #include "vk_recorder.hpp"
 
@@ -398,6 +401,14 @@ namespace lfs::core::internal {
         }
         VkSemaphoreCreateInfo semaphore_info{
             VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+#ifdef __APPLE__
+        VkExportMetalObjectCreateInfoEXT metal_export{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
+        metal_export.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_SHARED_EVENT_BIT_EXT;
+        if (caps_.metal_objects) {
+            metal_export.pNext = type_info.pNext;
+            type_info.pNext = &metal_export;
+        }
+#endif
         semaphore_info.pNext = &type_info;
         vk_check(this,
                  vkCreateSemaphore(device_, &semaphore_info, nullptr, &timeline_),
@@ -438,6 +449,10 @@ namespace lfs::core::internal {
         device_ = adopted.device;
         queue_ = adopted.queue;
         queue_family_ = adopted.queue_family;
+        if (adopted.consumer_queue_mutex) {
+            consumer_queue_ = adopted.consumer_queue;
+            consumer_queue_mutex_ = adopted.consumer_queue_mutex;
+        }
         if (adopted.sharing_queue_family_count > adopted.sharing_queue_families.size())
             throw std::invalid_argument("Too many Vulkan tensor sharing queue families");
         sharing_queue_families_ = {queue_family_};
@@ -480,6 +495,9 @@ namespace lfs::core::internal {
         caps_.direct_host_uploads = false;
         caps_.external_memory = adopted.external_memory;
         caps_.external_semaphore = adopted.external_semaphore;
+#ifdef __APPLE__
+        caps_.metal_objects = adopted.metal_objects;
+#endif
     }
 
     VulkanContext::~VulkanContext() {
@@ -616,7 +634,8 @@ namespace lfs::core::internal {
             if (!fallback) {
                 fallback = index;
             }
-            if ((queues[index].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0) {
+            // Tensor programs share one timeline for compute and raster work.
+            if ((queues[index].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0) {
                 queue_family_ = index;
                 return;
             }
@@ -707,6 +726,11 @@ namespace lfs::core::internal {
         features13.subgroupSizeControl = caps_.subgroup_size_control ? VK_TRUE : VK_FALSE;
 
         std::vector<const char*> enabled_extensions;
+#ifdef __APPLE__
+        caps_.metal_objects = extensions_available.contains(VK_EXT_METAL_OBJECTS_EXTENSION_NAME);
+        if (caps_.metal_objects)
+            enabled_extensions.push_back(VK_EXT_METAL_OBJECTS_EXTENSION_NAME);
+#endif
         if (caps_.memory_budget) {
             enabled_extensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
         }
@@ -967,6 +991,13 @@ namespace lfs::core::internal {
         vk_check(this, vkQueueSubmit2(queue_, 1, &submit_info, VK_NULL_HANDLE),
                  "vkQueueSubmit2");
         publish_submitted_locked(signal_value);
+    }
+
+    void VulkanContext::wait_consumer_queue_idle_locked() {
+        if (consumer_queue_ == VK_NULL_HANDLE)
+            return;
+        std::lock_guard lock(*consumer_queue_mutex_);
+        vk_check(this, vkQueueWaitIdle(consumer_queue_), "vkQueueWaitIdle(consumer queue)");
     }
 
     void VulkanContext::submit_external_wait(VkSemaphore semaphore, uint64_t value, uint64_t signal_value) {

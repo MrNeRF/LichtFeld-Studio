@@ -5,16 +5,24 @@
 // operands, C pow, unsigned and half dtypes, saturating casts and fault
 // reporting. Each case runs on the CPU and on every available GPU backend.
 
+#include "core/error.hpp"
+#include "core/nn/ops.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_upload.hpp"
 
 #include <gtest/gtest.h>
 
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <format>
+#include <iostream>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -28,6 +36,29 @@ namespace {
 
     constexpr float kInf = std::numeric_limits<float>::infinity();
     constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
+
+    TEST(TensorProcessConfigurationDeathTest, BackendAndExecutionOptionsSurviveReexec) {
+        const auto configuration = [] {
+            const auto options = lfs::core::tensor_backend_options();
+            return std::format("tensor-config: {} {} {} {}\n",
+                               lfs::core::gpu_backend_name(lfs::core::configured_gpu_backend()),
+                               options.vulkan_validation, options.force_fp32_half,
+                               options.force_no_atomic_float);
+        };
+        // The matcher is evaluated by the parent. Recompute the configuration
+        // inside the re-executed child so a lost selector cannot pass silently
+        // on machines where the harness's default CUDA backend is also built.
+        const auto expected = configuration();
+        const auto style = GTEST_FLAG_GET(death_test_style);
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(
+            {
+                std::cerr << configuration() << std::flush;
+                std::_Exit(0);
+            },
+            testing::ExitedWithCode(0), expected);
+        GTEST_FLAG_SET(death_test_style, style);
+    }
 
     struct Target {
         const char* name;
@@ -78,6 +109,60 @@ namespace {
         }
     }
 
+    TEST_P(TensorBackendSemantics, SoftmaxNonfiniteRows) {
+        const std::vector<float> rows{
+            0.f, kInf, kInf, 0.f, kInf, kInf,
+            0.f, -kInf, -kInf, 0.f, -kInf, -kInf,
+            0.f, kNan, kNan, 0.f, -kInf, kNan, kNan, kNan};
+        const std::vector<float> expected{
+            kNan, kNan, kNan, kNan, kNan, kNan,
+            1.f, 0.f, 0.f, 1.f, 0.f, 0.f,
+            kNan, kNan, kNan, kNan, kNan, kNan, kNan, kNan};
+        for (const auto dtype : {DataType::Float32, DataType::Float16}) {
+            SCOPED_TRACE(static_cast<int>(dtype));
+            const auto values = make<float>(DataType::Float32, {10, 2}, rows).to(dtype);
+            expect_floats(host<float>(lfs::core::nn::softmax(values).to(DataType::Float32)), expected);
+            const auto zeros = make<float>(DataType::Float32, {10, 2}, std::vector<float>(20, 0.f)).to(dtype);
+            expect_floats(host<float>(lfs::core::nn::softmax(zeros, &values).to(DataType::Float32)), expected);
+            const auto mask = make<float>(DataType::Float32, {1, 2}, {-kInf, -kInf}).to(dtype);
+            expect_floats(host<float>(lfs::core::nn::softmax(zeros, &mask).to(DataType::Float32)),
+                          std::vector<float>(20, 0.f));
+        }
+    }
+
+    TEST_P(TensorBackendSemantics, MultinomialRejectsUnsafeCountsBeforeDispatch) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "GPU indexing limits do not apply to CPU sampling";
+        const auto weights = Tensor::ones({1}, device());
+        const auto output = Tensor::empty({1}, device(), DataType::Int64);
+        const bool cuda = *GetParam().backend == GpuBackend::CUDA;
+        const size_t maximum = std::numeric_limits<uint32_t>::max();
+        // The last safe count solves count + ceil(count / 1024) <= UINT32_MAX.
+        const size_t last_safe = (maximum / 1025) * 1024 + (maximum % 1025) - 1;
+        for (const bool replacement : {false, true}) {
+            for (const size_t count : {cuda ? size_t{std::numeric_limits<int>::max()} + 1 : last_safe + 1,
+                                       size_t{4294000000}, maximum}) {
+                SCOPED_TRACE(count);
+                try {
+                    lfs::core::internal::backend_ops_for(weights).multinomial(
+                        lfs::core::internal::storage_ref(weights), lfs::core::internal::storage_ref(output),
+                        {.count = count, .sample_count = 1, .replacement = replacement}, {});
+                    FAIL() << "Unsafe count reached dispatch";
+                } catch (const lfs::Exception& error) {
+                    EXPECT_EQ(error.error().code(), lfs::ErrorCode::BoundsViolation);
+                    EXPECT_EQ(error.error().domain(), lfs::ErrorDomain::Tensor);
+                }
+            }
+        }
+        if (cuda) {
+            EXPECT_THROW(lfs::core::internal::backend_ops_for(weights).multinomial(
+                             lfs::core::internal::storage_ref(weights), lfs::core::internal::storage_ref(output),
+                             {.count = 1, .sample_count = size_t{std::numeric_limits<int>::max()} + 1, .replacement = true}, {}),
+                         lfs::Exception);
+        }
+        EXPECT_EQ(Tensor::multinomial(weights, 1, true).to_vector_int64(), std::vector<int64_t>{0});
+    }
+
     TEST_P(TensorBackendSemantics, ScalarNonzeroHasOneEmptyRow) {
         const Tensor found = make<float>(DataType::Float32, {}, {2.5f}).nonzero();
         EXPECT_EQ(found.shape(), TensorShape({1, 0}));
@@ -90,6 +175,26 @@ namespace {
         const Tensor batched = make<float>(DataType::Float32, {1, 2, 0}, {}).bmm(make<float>(DataType::Float32, {1, 0, 3}, {}));
         EXPECT_EQ(batched.shape(), TensorShape({1, 2, 3}));
         EXPECT_EQ(host<float>(batched), std::vector<float>(6, 0.f));
+    }
+
+    // Fails if a batch beyond one launch's z dimension (65535 on CUDA and typical Vulkan devices) is rejected or
+    // its tail batches are computed with the wrong operands.
+    TEST_P(TensorBackendSemantics, BatchedMatmulHandlesBatchesBeyondOneLaunch) {
+        constexpr size_t batch = 70001, m = 3, k = 3, n = 2;
+        std::vector<float> a(batch * m * k), b(batch * k * n);
+        for (size_t i = 0; i < a.size(); ++i)
+            a[i] = static_cast<float>(i % 13) - 6.0f;
+        for (size_t i = 0; i < b.size(); ++i)
+            b[i] = static_cast<float>(i % 7) * 0.5f;
+        std::vector<float> want(batch * m * n, 0.0f);
+        for (size_t p = 0; p < batch; ++p)
+            for (size_t r = 0; r < m; ++r)
+                for (size_t c = 0; c < n; ++c)
+                    for (size_t j = 0; j < k; ++j)
+                        want[(p * m + r) * n + c] += a[(p * m + r) * k + j] * b[(p * k + j) * n + c];
+        const Tensor product = make<float>(DataType::Float32, {batch, m, k}, a).bmm(make<float>(DataType::Float32, {batch, k, n}, b));
+        EXPECT_EQ(product.shape(), TensorShape({batch, m, n}));
+        expect_floats(host<float>(product), want);
     }
 
     TEST_P(TensorBackendSemantics, FloatPowFollowsC) {
@@ -191,6 +296,24 @@ namespace {
         });
         // The fault is consumed: unrelated work runs clean.
         EXPECT_FLOAT_EQ(make<float>(DataType::Float32, {3}, {1.f, 1.f, 1.f}).sum_scalar(), 3.f);
+    }
+
+    TEST_P(TensorBackendSemantics, InBatchUploadOrdersAfterPendingReaders) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Uploads target a GPU backend";
+        Tensor destination = Tensor::full({4099}, 3.0f, Device::GPU, DataType::Float32);
+        // A pending reader keeps the destination busy, so the bytes go through
+        // staging and a queued copy that must run after this read.
+        Tensor previous = Tensor::zeros({4099}, Device::GPU, DataType::Float32);
+        previous.copy_from(destination);
+        std::vector<float> values(4099, 7.0f);
+        lfs::core::TensorUpload upload;
+        upload.enqueue_in_batch(destination, std::as_bytes(std::span(values)));
+        values.assign(values.size(), 0.0f);
+        upload.wait();
+        EXPECT_TRUE(upload.poll());
+        EXPECT_EQ(destination.cpu().to_vector(), std::vector<float>(4099, 7.0f));
+        EXPECT_EQ(previous.cpu().to_vector(), std::vector<float>(4099, 3.0f));
     }
 
     INSTANTIATE_TEST_SUITE_P(Backends, TensorBackendSemantics,

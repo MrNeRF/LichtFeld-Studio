@@ -42,6 +42,7 @@ namespace lfs::rendering {
         struct RasterImageResult {
             Tensor image;
             Tensor depth;
+            std::optional<ViewerBackend> viewer_backend;
             bool valid = false;
             bool flip_y = false;
             float far_plane = DEFAULT_FAR_PLANE;
@@ -258,6 +259,7 @@ namespace lfs::rendering {
         [[nodiscard]] FrameMetadata makePointCloudFrameMetadata(
             const RasterImageResult& result) {
             return FrameMetadata{
+                .viewer_backend = result.viewer_backend,
                 .depth_panels = {FramePanelMetadata{
                     .depth = result.depth.is_valid() ? std::make_shared<Tensor>(result.depth) : nullptr,
                     .start_position = 0.0f,
@@ -406,7 +408,7 @@ namespace lfs::rendering {
                 request.viewport_pos.y + projected->y * scale_y);
         }
 
-        Result<RasterImageResult> renderSoftwarePointCloud(
+        Result<RasterImageResult> renderTensorPointCloud(
             const Tensor& positions_source,
             const Tensor& colors_source,
             const PointCloudRenderRequest& request,
@@ -532,8 +534,9 @@ namespace lfs::rendering {
             const int height = request.frame_view.size.y;
             const auto optional_tensor = [](const Tensor& tensor) { return tensor.is_valid() ? &tensor : nullptr; };
 
+            const auto point_backend = lfs::core::gpu_backend_of(positions_cuda);
             // Vulkan and Metal splat through the tensor backend's rasterizer.
-            if (lfs::core::gpu_backend_of(positions_cuda) != lfs::core::GpuBackend::CUDA) {
+            if (point_backend != lfs::core::GpuBackend::CUDA) {
                 lfs::core::PointRaster raster{
                     .width = width,
                     .height = height,
@@ -571,6 +574,7 @@ namespace lfs::rendering {
                 return RasterImageResult{
                     .image = std::move(image_tensor),
                     .depth = std::move(depth_tensor),
+                    .viewer_backend = point_backend == lfs::core::GpuBackend::Metal ? ViewerBackend::Metal : ViewerBackend::Vulkan,
                     .valid = true,
                     .far_plane = request.frame_view.far_plane,
                     .orthographic = request.frame_view.orthographic};
@@ -650,6 +654,7 @@ namespace lfs::rendering {
             return RasterImageResult{
                 .image = std::move(image_tensor),
                 .depth = std::move(depth_tensor),
+                .viewer_backend = ViewerBackend::Cuda,
                 .valid = true,
                 .far_plane = request.frame_view.far_plane,
                 .orthographic = request.frame_view.orthographic};
@@ -841,7 +846,7 @@ namespace lfs::rendering {
                 return std::unexpected(std::format("Failed to derive point colors from SH data: {}", e.what()));
             }
 
-            auto result = renderSoftwarePointCloud(
+            auto result = renderTensorPointCloud(
                 splat_data.get_means(),
                 colors,
                 request,
@@ -858,7 +863,7 @@ namespace lfs::rendering {
         Result<PointCloudImageResult> renderPointCloudImage(
             const lfs::core::PointCloud& point_cloud,
             const PointCloudRenderRequest& request) override {
-            auto result = renderSoftwarePointCloud(point_cloud.means, point_cloud.colors, request, nullptr);
+            auto result = renderTensorPointCloud(point_cloud.means, point_cloud.colors, request, nullptr);
             if (!result) {
                 return std::unexpected(result.error());
             }

@@ -116,6 +116,16 @@ float3x3 quat_to_rotmat(float4 q) {
 }
 
 
+// A projected UT ellipse approximates a GUT footprint; it is not a
+// conservative bound for the 3D ray alpha test at oblique, thin ellipsoids.
+[ForceInline]
+bool gut_rectilinear_bounds(uint camera_model, uint profile, uint lod_flags) {
+    const uint model = base_camera_model(camera_model);
+    return is_gut_projection_mode(camera_model) && profile == 0u &&
+           (lod_flags & 4u) == 0u &&
+           (model == uint(CameraModel::PINHOLE) || model == uint(CameraModel::ORTHO));
+}
+
 struct Camera : IDifferentiable
 {
     float3x4 world_view_transform;
@@ -1181,8 +1191,9 @@ struct Uniforms {
     float rasterization_scale;
 }
 
-// mip_filter packs MIP filtering (bit 0), exact depth replay (bit 1), and
-// full-frame binning for banded exports (bit 2).
+// mip_filter packs MIP filtering (bit 0), exact depth replay (bit 1),
+// full-frame binning for banded exports (bit 2), and accurate transparent
+// partial alpha in the Mac test reference only (bit 4), and a depth sample mask (bit 3).
 #ifndef LFS_BANDED_EXPORT_RENDER
 #define LFS_BANDED_EXPORT_RENDER 0
 #endif

@@ -7,8 +7,10 @@
 #include <cstdint>
 
 namespace lfs::core::internal {
+    // Radius-wide cells bound an exact query to the current cell and its 26
+    // neighbours without scanning the eightfold volume of 2*radius cells.
     LFS_POINT_HD inline int cell(const float value, const float radius) {
-        return static_cast<int>(fminf(268435456.0f, fmaxf(-268435456.0f, floorf(roundedDiv(value, radius) * 0.5f))));
+        return static_cast<int>(fminf(268435456.0f, fmaxf(-268435456.0f, floorf(roundedDiv(value, radius)))));
     }
 
     LFS_POINT_HD inline uint32_t hash_cell(const int x, const int y, const int z, const uint32_t mask) {
@@ -37,21 +39,31 @@ namespace lfs::core::internal {
 
     LFS_POINT_HD inline bool pointHasNeighbor(const float* points, const uint8_t* references,
                                               const int32_t* heads, const int32_t* next, size_t i,
-                                              uint32_t bucket_mask, float radius) {
+                                              uint32_t bucket_mask, float radius, bool exclude_self) {
         const float* p = points + i * 3;
         if (!finite_point(p)) {
             return false;
         }
-        if (references[i]) {
+        if (references[i] && !exclude_self) {
             return true;
         }
         const int x = cell(p[0], radius), y = cell(p[1], radius), z = cell(p[2], radius);
+        // Most neighbours share the query cell. Check it before adjacent
+        // buckets, which may contain long lists of more distant candidates.
+        const auto center = hash_cell(x, y, z, bucket_mask);
+        for (int32_t j = heads[center]; j >= 0; j = next[j])
+            if ((!exclude_self || static_cast<size_t>(j) != i) &&
+                within(p, points + static_cast<size_t>(j) * 3, radius))
+                return true;
         for (int dz = -1; dz <= 1; ++dz) {
             for (int dy = -1; dy <= 1; ++dy) {
                 for (int dx = -1; dx <= 1; ++dx) {
+                    if (dx == 0 && dy == 0 && dz == 0)
+                        continue;
                     const auto bucket = hash_cell(x + dx, y + dy, z + dz, bucket_mask);
                     for (int32_t j = heads[bucket]; j >= 0; j = next[j]) {
-                        if (within(p, points + static_cast<size_t>(j) * 3, radius)) {
+                        if ((!exclude_self || static_cast<size_t>(j) != i) &&
+                            within(p, points + static_cast<size_t>(j) * 3, radius)) {
                             return true;
                         }
                     }
@@ -59,5 +71,146 @@ namespace lfs::core::internal {
             }
         }
         return false;
+    }
+    LFS_POINT_HD inline int32_t pointNeighborCount(const float* points, const int32_t* heads,
+                                                   const int32_t* next, size_t i, uint32_t bucket_mask,
+                                                   float radius, int32_t max_count) {
+        const float* p = points + i * 3;
+        if (!finite_point(p))
+            return 0;
+        const int x = cell(p[0], radius);
+        const int y = cell(p[1], radius);
+        const int z = cell(p[2], radius);
+        int32_t count = 0;
+        for (int slot = 0; slot < 27; ++slot) {
+            const int neighbor = slot == 0 ? 13 : (slot <= 13 ? slot - 1 : slot);
+            const int dx = neighbor % 3 - 1;
+            const int dy = neighbor / 3 % 3 - 1;
+            const int dz = neighbor / 9 - 1;
+            const auto bucket = hash_cell(x + dx, y + dy, z + dz, bucket_mask);
+            for (int32_t j = heads[bucket]; j >= 0; j = next[j]) {
+                const float* q = points + static_cast<size_t>(j) * 3;
+                // Hash collisions must not count the same reference twice.
+                if (static_cast<size_t>(j) != i && cell(q[0], radius) == x + dx &&
+                    cell(q[1], radius) == y + dy && cell(q[2], radius) == z + dz && within(p, q, radius)) {
+                    if (++count == max_count)
+                        return count;
+                }
+            }
+        }
+        return count;
+    }
+    template <class T>
+    LFS_POINT_HD inline T pointNeighborMin(const float* points, const T* values, const int32_t* heads,
+                                           const int32_t* next, size_t i, uint32_t bucket_mask,
+                                           float radius, const float* radii = nullptr) {
+        const float* p = points + i * 3;
+        T result = values[i];
+        if (!finite_point(p) || (radii && !(radii[i] > radius * 0.5f)))
+            return result;
+        const int cx = cell(p[0], radius), cy = cell(p[1], radius), cz = cell(p[2], radius);
+        for (int dz = -1; dz <= 1; ++dz) {
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int tx = cx + dx, ty = cy + dy, tz = cz + dz;
+                    for (int32_t j = heads[hash_cell(tx, ty, tz, bucket_mask)]; j >= 0; j = next[j]) {
+                        const float* q = points + static_cast<size_t>(j) * 3;
+                        if (cell(q[0], radius) == tx && cell(q[1], radius) == ty && cell(q[2], radius) == tz &&
+                            within(p, q, radii ? fminf(radius, fminf(radii[i], radii[j])) : radius) && values[j] < result)
+                            result = values[j];
+                    }
+                }
+            }
+        }
+        return result;
+    }
+    // Calls visit(j) for every point j within radius of point i, including i itself.
+    template <class Visit>
+    LFS_POINT_HD inline void forEachRadiusNeighbor(const float* points, const int32_t* heads, const int32_t* next,
+                                                   const size_t i, const uint32_t bucket_mask, const float radius,
+                                                   Visit&& visit) {
+        const float* p = points + i * 3;
+        if (!finite_point(p))
+            return;
+        const int cx = cell(p[0], radius), cy = cell(p[1], radius), cz = cell(p[2], radius);
+        for (int dz = -1; dz <= 1; ++dz) {
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int tx = cx + dx, ty = cy + dy, tz = cz + dz;
+                    for (int32_t j = heads[hash_cell(tx, ty, tz, bucket_mask)]; j >= 0; j = next[j]) {
+                        const float* q = points + static_cast<size_t>(j) * 3;
+                        if (cell(q[0], radius) == tx && cell(q[1], radius) == ty && cell(q[2], radius) == tz &&
+                            within(p, q, radius))
+                            visit(j);
+                    }
+                }
+            }
+        }
+    }
+
+    // Union-find over a forest whose parents never exceed their children, so every root is the smallest index
+    // in its tree. Path halving only writes smaller ancestors, so concurrent finds stay valid.
+    LFS_POINT_HD inline int32_t componentRoot(int32_t* parent, const int32_t node) {
+        int32_t current = parent[node];
+        if (current != node) {
+            int32_t ancestor = 0, previous = node;
+            while (current > (ancestor = parent[current])) {
+                parent[previous] = ancestor;
+                previous = current;
+                current = ancestor;
+            }
+        }
+        return current;
+    }
+
+    // The root without path halving, for the final labels: halving there could overwrite a label another
+    // thread already finished with an older ancestor.
+    LFS_POINT_HD inline int32_t finalComponentRoot(const int32_t* parent, int32_t node) {
+        for (int32_t ancestor = parent[node]; ancestor != node; ancestor = parent[node])
+            node = ancestor;
+        return node;
+    }
+
+    LFS_POINT_HD inline float pointNeighborSpacing(const float* points, const int32_t* heads,
+                                                   const int32_t* next, size_t i, uint32_t bucket_mask,
+                                                   float radius) {
+        const float* p = points + i * 3;
+        if (!finite_point(p))
+            return 0;
+        const int cx = cell(p[0], radius), cy = cell(p[1], radius), cz = cell(p[2], radius);
+        float best[3] = {INFINITY, INFINITY, INFINITY};
+        int found = 0;
+        for (int extent = 1; extent <= 2; ++extent) {
+            for (int z = -extent; z <= extent; ++z) {
+                for (int y = -extent; y <= extent; ++y) {
+                    for (int x = -extent; x <= extent; ++x) {
+                        if (extent == 2 && x >= -1 && x <= 1 && y >= -1 && y <= 1 && z >= -1 && z <= 1)
+                            continue;
+                        const int tx = cx + x, ty = cy + y, tz = cz + z;
+                        // Hash insertion order is unspecified on the GPU. Inspect
+                        // the whole cell so nearest neighbours do not depend on it.
+                        for (int j = heads[hash_cell(tx, ty, tz, bucket_mask)]; j >= 0; j = next[j]) {
+                            const float* q = points + static_cast<size_t>(j) * 3;
+                            if (static_cast<size_t>(j) == i || cell(q[0], radius) != tx || cell(q[1], radius) != ty || cell(q[2], radius) != tz)
+                                continue;
+                            const float dx = p[0] - q[0], dy = p[1] - q[1], dz = p[2] - q[2];
+                            const float distance = roundedAdd(roundedAdd(roundedMul(dx, dx), roundedMul(dy, dy)), roundedMul(dz, dz));
+                            if (distance < best[2]) {
+                                best[2] = fmaxf(best[1], distance);
+                                best[1] = fmaxf(best[0], fminf(best[1], distance));
+                                best[0] = fminf(best[0], distance);
+                            }
+                            found = found < 3 ? found + 1 : found;
+                        }
+                    }
+                }
+            }
+            if (found == 3)
+                break;
+        }
+        float sum = 0;
+        for (int k = 0; k < found; ++k)
+            sum += sqrtf(best[k]);
+        return found ? sum / found : radius * 4;
     }
 } // namespace lfs::core::internal

@@ -31,7 +31,7 @@ namespace lfs::python {
             return any_to_python(meta->getter(ref), meta->type);
         }
 
-        void setattr(const std::string& name, nb::object value) {
+        bool setattr(const std::string& name, nb::object value, bool skip_unchanged = false) {
             auto meta = core::prop::PropertyRegistry::instance().get_property(group_id_, name);
             if (!meta) {
                 throw nb::attribute_error(("Unknown property: " + name).c_str());
@@ -43,6 +43,17 @@ namespace lfs::python {
             auto ref = core::prop::PropertyObjectRef::cpp(obj_);
             const std::any old_val = meta->getter(ref);
             const std::any new_val = python_to_any(value, meta->type);
+            if (skip_unchanged) {
+                // Compare after type conversion so float/vector binding echoes
+                // cannot publish an edit, while invalid writes still fail.
+                const auto previous = any_to_python(old_val, meta->type);
+                const auto requested = any_to_python(new_val, meta->type);
+                const int equal = PyObject_RichCompareBool(previous.ptr(), requested.ptr(), Py_EQ);
+                if (equal < 0)
+                    throw nb::python_error();
+                if (equal)
+                    return false;
+            }
             meta->setter(ref, new_val);
 
             if (meta->on_update) {
@@ -50,6 +61,7 @@ namespace lfs::python {
             }
 
             core::prop::PropertyRegistry::instance().notify(group_id_, name, old_val, new_val);
+            return true;
         }
 
         nb::list dir() const {

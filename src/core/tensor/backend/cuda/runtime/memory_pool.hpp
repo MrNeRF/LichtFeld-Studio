@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cuda_runtime.h>
 #include <iomanip>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -452,6 +453,32 @@ namespace lfs::core {
             }
         }
 
+        // Work that frees and reallocates large buffers between synchronizations would otherwise hand
+        // them back to the system at every synchronization and map them again. While held, the driver
+        // pool keeps freed memory; the last release trims back to the normal threshold.
+        void hold_freed_memory(const bool hold) {
+#if CUDART_VERSION >= 12080
+            std::lock_guard lock(hold_mutex_);
+            if (hold ? freed_memory_holds_++ != 0 : (freed_memory_holds_ == 0 || --freed_memory_holds_ != 0))
+                return;
+            int device = 0;
+            cudaMemPool_t pool = nullptr;
+            if (cudaGetDevice(&device) != cudaSuccess || cudaDeviceGetDefaultMemPool(&pool, device) != cudaSuccess) {
+                (void)cudaGetLastError();
+                return;
+            }
+            uint64_t threshold = hold ? std::numeric_limits<uint64_t>::max() : kReleaseThreshold;
+            ensure_cuda_success(cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReleaseThreshold, &threshold),
+                                "cudaMemPoolSetAttribute(release threshold)", {}, LFS_SOURCE_SITE_CURRENT(),
+                                CudaFailureDisposition::LogOnly);
+            if (!hold)
+                ensure_cuda_success(cudaMemPoolTrimTo(pool, kReleaseThreshold), "cudaMemPoolTrimTo(released hold)", {},
+                                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+#else
+            (void)hold;
+#endif
+        }
+
         void configure() {
 #if CUDART_VERSION >= 12080
             const auto pre_call_state = sample_cuda_pre_call_state();
@@ -479,7 +506,7 @@ namespace lfs::core {
             // pool-resident) while letting the driver reclaim memory beyond peak
             // densification spikes. UINT64_MAX hoards indefinitely and inflates
             // cuda.pool.overhead at higher gaussian counts.
-            uint64_t threshold = std::uint64_t(64) << 20;
+            uint64_t threshold = kReleaseThreshold;
             const cudaError_t attribute_status =
                 cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReleaseThreshold, &threshold);
             if (attribute_status != cudaSuccess) {
@@ -729,10 +756,10 @@ namespace lfs::core {
         // the edges — no host sync, no deferred retention.
         void free_routed(void* ptr, const AllocationInfo& info) {
             for (cudaStream_t extra : info.extra_streams) {
-                // nullptr is the legacy default stream: a non-blocking home does not
-                // order against it, so it is bridged like any other user. Bridging a
-                // destroyed capture stream can SIGSEGV inside the driver — callers
-                // should rehome first, but free must stay best-effort.
+                // The legacy stream is bridged too: a non-blocking home stream has
+                // no implicit ordering against it. Bridging a destroyed capture
+                // stream can SIGSEGV inside the driver; callers should rehome
+                // first, but free must stay best-effort.
                 if (extra == info.home_stream || is_stream_retired(extra))
                     continue;
                 bridgeStreams(extra, info.home_stream);
@@ -877,6 +904,10 @@ namespace lfs::core {
         mutable std::mutex map_mutex_;
         std::shared_mutex stream_routing_mutex_;
         std::atomic<size_t> direct_alloc_count_{0};
+        // 64 MiB headroom; see configure().
+        static constexpr uint64_t kReleaseThreshold = std::uint64_t(64) << 20;
+        std::mutex hold_mutex_;
+        size_t freed_memory_holds_ = 0;
         bool slab_enabled_{false};
         std::atomic<bool> shutdown_{false};
         std::atomic<bool> suspend_deallocations_{false};

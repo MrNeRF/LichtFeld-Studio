@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -24,7 +25,6 @@ namespace lfs::io {
     // Memory info
     std::size_t get_total_physical_memory();
     std::size_t get_available_physical_memory();
-    double get_memory_usage_ratio();
 
     // Constants
     inline constexpr std::size_t BYTES_PER_GB = 1024ULL * 1024 * 1024;
@@ -43,6 +43,22 @@ namespace lfs::io {
         bool output_uint8 = false;
         bool skip_blob_cache = false;
     };
+
+    // CPU decode at native resolution, then the same GPU Lanczos downscale the nvImageCodec
+    // path uses. Returns [3, H, W] in the requested dtype; decode_16bit keeps 16-bit samples
+    // until the GPU conversion.
+    LFS_IO_API lfs::core::Tensor load_rgb_image_cpu_decoded(
+        const std::filesystem::path& path, const LoadParams& params, bool decode_16bit = false);
+    // The upload and resize half of load_rgb_image_cpu_decoded, for RGB pixels already decoded on the host by
+    // lfs::core::load_image (8-bit) or lfs::core::load_image_u16 (16-bit).
+    LFS_IO_API lfs::core::Tensor upload_rgb_image(const unsigned char* data, int width, int height, int channels,
+                                                  const LoadParams& params);
+    LFS_IO_API lfs::core::Tensor upload_rgb_image(const std::uint16_t* data, int width, int height, int channels,
+                                                  const LoadParams& params);
+    // Same for RGBA sources; returns float32 [4, H, W] with alpha in [0, 1].
+    LFS_IO_API lfs::core::Tensor load_rgba_image_cpu_decoded(
+        const std::filesystem::path& path, int resize_factor, int max_width, void* cuda_stream = nullptr,
+        bool decode_16bit = false);
 
     struct CachedImageData {
         std::shared_ptr<lfs::core::Tensor> tensor;

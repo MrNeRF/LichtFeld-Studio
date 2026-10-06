@@ -76,7 +76,6 @@ namespace lfs::vis {
 
         // Utility
         [[nodiscard]] static std::string_view stateName(TrainingState state);
-        [[nodiscard]] static std::string_view actionName(TrainingAction action);
 
     private:
         [[nodiscard]] bool isValidTransition(TrainingState from, TrainingState to) const;

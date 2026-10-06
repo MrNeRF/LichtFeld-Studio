@@ -66,6 +66,7 @@ namespace lfs::training {
             .random_background = random_background,
             .canny = canny,
             .normalize_scalar = normalize_scalar,
+            .quantize_to_8bit_grid = kernels::quantize_to_8bit_grid,
         };
     } // namespace
 

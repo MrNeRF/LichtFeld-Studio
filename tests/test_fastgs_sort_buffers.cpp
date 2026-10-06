@@ -9,6 +9,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "fast_raster_test_helpers.hpp"
 #include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
 
@@ -202,8 +203,15 @@ TEST_F(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     }
 
-    std::size_t free_before = 0, total = 0;
-    ASSERT_EQ(cudaMemGetInfo(&free_before, &total), cudaSuccess);
+    // Device-wide free memory moves with every other process on the GPU; prefer this process's own usage.
+    const auto device_bytes_in_use = [] {
+        if (const auto own = lfs::diagnostics::process_device_memory_bytes())
+            return *own;
+        std::size_t free = 0, total = 0;
+        EXPECT_EQ(cudaMemGetInfo(&free, &total), cudaSuccess);
+        return total - free;
+    };
+    const std::size_t used_before = device_bytes_in_use();
 
     constexpr int kThreads = 4;
     constexpr int kForwardsPerThread = 3;
@@ -248,16 +256,15 @@ TEST_F(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {
     cleanup_arena();
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
-    std::size_t free_after = 0;
-    ASSERT_EQ(cudaMemGetInfo(&free_after, &total), cudaSuccess);
+    const std::size_t used_after = device_bytes_in_use();
 
     // Each worker builds arena sort storage plus image TLS. If either leaks,
-    // free drops by multiple MiB * kThreads.
+    // usage grows by multiple MiB * kThreads.
     constexpr std::size_t kSlack = 32ull << 20; // 32 MiB driver/fragmentation slack
-    EXPECT_GE(free_after + kSlack, free_before)
+    EXPECT_LE(used_after, used_before + kSlack)
         << "FastGS sort/raster storage leaked across spawn-render-join "
-        << "free_before=" << free_before << " free_after=" << free_after
+        << "used_before=" << used_before << " used_after=" << used_after
         << " delta_MiB="
-        << (static_cast<long long>(free_before) - static_cast<long long>(free_after)) /
+        << (static_cast<long long>(used_after) - static_cast<long long>(used_before)) /
                (1024 * 1024);
 }

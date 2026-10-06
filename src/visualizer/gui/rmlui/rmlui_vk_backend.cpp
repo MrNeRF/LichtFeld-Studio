@@ -8,10 +8,11 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "gui/rmlui/rml_image_file.hpp"
 #include "gui/rmlui/vulkan/rmlui_shaders_spv.hpp"
-#include "internal/resource_paths.hpp"
 #include "io/project_container.hpp"
 #include "python/python_runtime.hpp"
+#include "window/vulkan_graphics_context.hpp"
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/FileInterface.h>
 #include <RmlUi/Core/Log.h>
@@ -27,7 +28,6 @@
 #include <format>
 #include <limits>
 #include <optional>
-#include <stb_image.h>
 #include <string.h>
 #include <string>
 #include <string_view>
@@ -307,6 +307,61 @@ RenderInterface_VK::RenderInterface_VK() : m_is_transform_enabled{false},
     m_rml_transform = Rml::Matrix4f::Identity();
 }
 
+bool RenderInterface_VK::initialize(lfs::vis::GraphicsContext& graphics) {
+    m_graphics_context = &graphics;
+    auto* const vulkan = lfs::vis::vulkanContextOrNull(&graphics);
+    if (!vulkan)
+        return false;
+    ExternalContext context{};
+    context.instance = vulkan->instance();
+    context.physical_device = vulkan->physicalDevice();
+    context.device = vulkan->device();
+    context.pipeline_cache = vulkan->pipelineCache();
+    context.graphics_queue = vulkan->graphicsQueue();
+    context.graphics_queue_family = vulkan->graphicsQueueFamily();
+    context.color_format = vulkan->swapchainFormat();
+    context.depth_stencil_format = vulkan->depthStencilFormat();
+    context.extent = vulkan->framebufferExtent();
+    context.host_image_copy = vulkan->hasHostImageCopy();
+    return InitializeExternal(context);
+}
+
+bool RenderInterface_VK::beginFrame(const lfs::vis::GraphicsFrame& frame) {
+    const auto* native_frame = lfs::vis::vulkanFrameOrNull(m_graphics_context, frame);
+    if (!native_frame)
+        return false;
+    const auto& native = *native_frame;
+    if (native.command_buffer == VK_NULL_HANDLE ||
+        native.swapchain_image_view == VK_NULL_HANDLE ||
+        native.depth_stencil_image_view == VK_NULL_HANDLE)
+        return false;
+    BeginExternalFrame(native.command_buffer, native.extent, native.swapchain_image,
+                       native.swapchain_image_view, native.depth_stencil_image_view,
+                       native.frame_slot);
+    return true;
+}
+
+bool RenderInterface_VK::renderFrostedGlass(
+    const std::span<const lfs::vis::gui::UiFrostedGlassRegion> regions) {
+    static_assert(sizeof(lfs::vis::gui::UiFrostedGlassRegion) == sizeof(FrostedGlassRegion));
+    return RenderFrostedGlass({reinterpret_cast<const FrostedGlassRegion*>(regions.data()),
+                               regions.size()});
+}
+
+Rml::TextureHandle RenderInterface_VK::saveLayerRegionAsTexture(
+    const lfs::vis::gui::UiPixelRect region,
+    const Rml::TextureHandle reuse_texture) {
+    return SaveLayerRegionAsTexture(
+        VkRect2D{{region.x, region.y}, {region.width, region.height}}, reuse_texture);
+}
+
+lfs::vis::gui::UiRendererMemoryStatistics
+RenderInterface_VK::memoryStatistics() const {
+    const auto stats = QueryVmaStatistics();
+    return {static_cast<std::size_t>(stats.block_bytes),
+            static_cast<std::size_t>(stats.allocation_bytes)};
+}
+
 RenderInterface_VK::~RenderInterface_VK() {
     StopPreviewWorkerPool();
 }
@@ -385,12 +440,21 @@ Rml::CompiledGeometryHandle RenderInterface_VK::CompileGeometry(Rml::Span<const 
 
     bool status = m_memory_pool.Alloc_VertexBuffer((uint32_t)vertices.size(), sizeof(Rml::Vertex), reinterpret_cast<void**>(&pCopyDataToBuffer),
                                                    &p_geometry_handle->m_p_vertex, &p_geometry_handle->m_p_vertex_allocation);
+    if (!status) {
+        delete p_geometry_handle;
+        return 0;
+    }
     RMLUI_VK_ASSERTMSG(status, "failed to AllocVertexBuffer");
 
     memcpy(pCopyDataToBuffer, pData, sizeof(Rml::Vertex) * vertices.size());
 
     status = m_memory_pool.Alloc_IndexBuffer((uint32_t)indices.size(), sizeof(int), reinterpret_cast<void**>(&pCopyDataToBuffer),
                                              &p_geometry_handle->m_p_index, &p_geometry_handle->m_p_index_allocation);
+    if (!status) {
+        m_memory_pool.Free_Allocation(p_geometry_handle->m_p_vertex_allocation);
+        delete p_geometry_handle;
+        return 0;
+    }
     RMLUI_VK_ASSERTMSG(status, "failed to AllocIndexBuffer");
 
     memcpy(pCopyDataToBuffer, indices.data(), sizeof(int) * indices.size());
@@ -452,6 +516,8 @@ void RenderInterface_VK::RenderGeometry(Rml::CompiledGeometryHandle geometry, Rm
     // per-draw transform data alive until the owning frame slot's fence has completed.
     bool status = m_memory_pool.Alloc_GeneralBuffer(sizeof(m_user_data_for_vertex_shader), reinterpret_cast<void**>(&p_data),
                                                     &shader_buffer, &shader_allocation);
+    if (!status)
+        return;
     RMLUI_VK_ASSERTMSG(status, "failed to allocate VkDescriptorBufferInfo for uniform data to shaders");
     m_transient_shader_allocations_by_frame[ActiveResourceSlot()].push_back(shader_allocation);
 
@@ -985,105 +1051,10 @@ Rml::TextureHandle RenderInterface_VK::LoadTexture(Rml::Vector2i& texture_dimens
         return reinterpret_cast<Rml::TextureHandle>(texture);
     }
 
-    auto load_with_stbi = [&](const std::string& path) -> Rml::TextureHandle {
-        int width = 0;
-        int height = 0;
-        int channels = 0;
-        unsigned char* data = stbi_load(path.c_str(), &width, &height, &channels, 4);
-        if (!data)
-            return 0;
-
-        texture_dimensions.x = width;
-        texture_dimensions.y = height;
-
-        // Probe the file's native channel count. Single-channel images are masks:
-        // stbi expands them to (gray, gray, gray, 255) which renders as fully-opaque
-        // gray over the underlying image — useless as an overlay. The mask branch
-        // below instead drives the alpha from the gray value so an image-color CSS
-        // tint paints only the foreground.
-        int probe_w = 0, probe_h = 0, probe_channels = 0;
-        const bool is_single_channel =
-            stbi_info(path.c_str(), &probe_w, &probe_h, &probe_channels) &&
-            probe_channels == 1;
-
-        const int pixel_count = width * height;
-        if (is_single_channel) {
-            // Mask: the gray value becomes the alpha. RGB is set to the same value so
-            // the texture is premultiplied (matching the non-mask branch below and the
-            // backend's premultiplied-alpha blend), which keeps alpha==0 pixels fully
-            // transparent instead of adding their color over the image.
-            for (int i = 0; i < pixel_count; ++i) {
-                unsigned char* p = data + i * 4;
-                const unsigned char gray = p[0];
-                p[0] = gray;
-                p[1] = gray;
-                p[2] = gray;
-                p[3] = gray;
-            }
-        } else {
-            for (int i = 0; i < pixel_count; ++i) {
-                unsigned char* p = data + i * 4;
-                const unsigned int alpha = p[3];
-                p[0] = static_cast<unsigned char>((p[0] * alpha + 127) / 255);
-                p[1] = static_cast<unsigned char>((p[1] * alpha + 127) / 255);
-                p[2] = static_cast<unsigned char>((p[2] * alpha + 127) / 255);
-            }
-        }
-
-        const size_t image_size = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
-        const Rml::TextureHandle handle = CreateTexture({data, image_size}, texture_dimensions, path);
-        stbi_image_free(data);
-        return handle;
-    };
-
-    if (const Rml::TextureHandle handle = load_with_stbi(source); handle)
-        return handle;
-
-    auto load_asset_fallback = [&](std::string asset_name) -> Rml::TextureHandle {
-        while (asset_name.rfind("../", 0) == 0)
-            asset_name.erase(0, 3);
-        while (asset_name.rfind("./", 0) == 0)
-            asset_name.erase(0, 2);
-        if (asset_name.empty())
-            return 0;
-
-        try {
-            const auto path = lfs::vis::getAssetPath(asset_name);
-            if (std::filesystem::exists(path))
-                return load_with_stbi(lfs::core::path_to_utf8(path));
-        } catch (...) {
-        }
-        return 0;
-    };
-
-    if (const Rml::TextureHandle handle = load_asset_fallback(source); handle)
-        return handle;
-
-    const std::string_view source_view(source);
-    constexpr std::string_view rmlui_icon_segment = "rmlui/icon/";
-    if (const auto pos = source_view.find(rmlui_icon_segment); pos != std::string_view::npos) {
-        if (const Rml::TextureHandle handle =
-                load_asset_fallback("icon/" + std::string(source_view.substr(pos + rmlui_icon_segment.size())));
-            handle)
-            return handle;
+    if (auto image = lfs::vis::gui::loadRmlImageFile(source)) {
+        texture_dimensions = {image->width, image->height};
+        return CreateTexture({image->rgba.data(), image->rgba.size()}, texture_dimensions, image->path);
     }
-    constexpr std::string_view icon_segment = "/icon/";
-    if (const auto pos = source_view.find(icon_segment); pos != std::string_view::npos) {
-        if (const Rml::TextureHandle handle =
-                load_asset_fallback("icon/" + std::string(source_view.substr(pos + icon_segment.size())));
-            handle)
-            return handle;
-    }
-
-#ifndef _WIN32
-    if (!source.empty() && source[0] != '/' && source.find("://") == Rml::String::npos) {
-        const std::string absolute_source = "/" + source;
-        if (std::filesystem::exists(absolute_source)) {
-            if (const Rml::TextureHandle handle = load_with_stbi(absolute_source); handle)
-                return handle;
-        }
-    }
-#endif
 
     Rml::FileInterface* file_interface = Rml::GetFileInterface();
     Rml::FileHandle file_handle = file_interface->Open(source);
@@ -1268,9 +1239,11 @@ RenderInterface_VK::async_preview_result_t RenderInterface_VK::DecodePreviewText
         if (embedded_project_preview) {
             auto reader = lfs::io::project::ProjectReader::open(path);
             if (!reader) {
-                LOG_WARN("Failed to inspect embedded project preview '{}': {}",
-                         lfs::core::path_to_utf8(path),
-                         lfs::format_for_developer(reader.error()));
+                // A catalog entry can outlive its file until the catalog marks it missing.
+                if (reader.error().code() != lfs::ErrorCode::NotFound)
+                    LOG_WARN("Failed to inspect embedded project preview '{}': {}",
+                             lfs::core::path_to_utf8(path),
+                             lfs::format_for_developer(reader.error()));
                 return result;
             }
             auto preview = reader->read_preview();
@@ -3434,6 +3407,13 @@ bool RenderInterface_VK::MemoryPool::Alloc_GeneralBuffer(VkDeviceSize size, void
     info.alignment = m_device_min_uniform_alignment;
 
     auto status = vmaVirtualAllocate(m_p_block, &info, p_alloc, &offset_memory);
+
+    if (status != VK_SUCCESS) {
+        Rml::Log::Message(Rml::Log::LT_ERROR, "UI geometry pool exhausted allocating %llu bytes", static_cast<unsigned long long>(size));
+        *p_data = nullptr;
+        *p_alloc = nullptr;
+        return false;
+    }
 
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaVirtualAllocate");
 

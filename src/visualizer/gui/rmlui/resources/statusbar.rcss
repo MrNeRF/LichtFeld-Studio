@@ -12,11 +12,13 @@ body {
     padding: 0;
     margin: 0;
     background-color: transparent;
+    pointer-events: none;
     white-space: nowrap;
     overflow: hidden;
 }
 
 #status-row {
+    pointer-events: auto;
     position: absolute;
     left: 0;
     right: 0;
@@ -65,6 +67,7 @@ body {
 }
 
 #mcp-popup {
+    pointer-events: auto;
     position: absolute;
     right: 0;
     bottom: 20dp;
@@ -399,6 +402,8 @@ body {
 
 #fps-value {
     margin-left: 16dp;
+    min-width: 128dp;
+    text-align: right;
 }
 
 #fps-label {
@@ -513,15 +518,73 @@ body.fit-9 #status-message-section {
     overflow: hidden;
 }
 
+body.fit-9 #status-left,
+body.fit-9 #input-device-toggle {
+    display: none;
+}
+
 body.fit-9 #status-right {
-    flex-shrink: 1;
+    flex: 1 1 0px;
+    margin-left: 4dp;
     min-width: 0;
-    overflow: hidden;
 }
 
 body.fit-9 #gpu-mem {
-    flex-shrink: 1;
+    flex: 1 1 0px;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
 }
+
+.backend-chip {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 5dp;
+    align-self: center;
+    height: 18dp;
+    margin-left: 8dp;
+    padding: 0 6dp;
+    border-width: 1dp;
+    border-radius: 4dp;
+    box-sizing: border-box;
+    flex-shrink: 0;
+}
+
+.backend-label {
+    font-size: 10dp;
+}
+
+.backend-value {
+    font-size: 11dp;
+    font-weight: bold;
+}
+
+body.fit-8 .backend-chip {
+    margin-left: 4dp;
+    padding: 0 4dp;
+}
+
+/* Metric values keep a minimum width so changing digits do not move their neighbours. */
+#loss-value { min-width: 44dp; }
+#gaussians-value { min-width: 80dp; }
+#step-value { min-width: 100dp; }
+#time-value, #eta-value { min-width: 60dp; }
+
+#mcp-compact { display: none; }
+body.fit-8 #mcp-summary { display: none; }
+body.fit-8 #mcp-compact { display: block; }
+body.fit-8 #mcp-chip { margin-right: 4dp; padding: 0 3dp; }
+body.fit-8 #fps-value { margin-left: 6dp; min-width: 110dp; }
+
+#upscaler-toggle { display: flex; align-items: center; gap: 5dp; padding: 0; border-width: 0; cursor: pointer; }
+#upscaler-popup {
+    pointer-events: auto; position: absolute; right: 0; bottom: 20dp;
+    width: 240dp; max-height: 300dp; overflow-y: auto;
+    padding: 6dp; border-width: 1dp; border-radius: 4dp; box-sizing: border-box;
+}
+.upscaler-choice { display: block; width: 100%; padding: 5dp 8dp; text-align: left; border-width: 0; cursor: pointer; }
+.upscaler-presets-label { padding: 6dp 8dp 3dp; font-size: 10dp; }
+
+body.fit-8 #upscaler-backend-chip .backend-value { display: none; }
+body.fit-9 #fps-value { margin-left: 4dp; min-width: 100dp; }

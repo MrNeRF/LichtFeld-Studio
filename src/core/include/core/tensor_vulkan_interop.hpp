@@ -54,6 +54,10 @@ namespace lfs::core {
         [[nodiscard]] std::function<Tensor(TensorShape, size_t, DataType, std::string_view)>
         splat_allocator(bool preserve_float_shN = false);
         void drain(GpuBackend backend);
+        // Runs `release` while no tensor work is in flight on the device.
+        // MoltenVK keeps all device memory resident for every queue, so memory
+        // freed while any queue has unfinished work faults.
+        void run_while_idle(GpuBackend backend, const std::function<void()>& release);
         [[nodiscard]] std::shared_ptr<void> execution_scope(GpuBackend backend);
         [[nodiscard]] Tensor empty(TensorShape shape, DataType dtype,
                                    GpuBackend backend, size_t capacity = 0);
@@ -68,6 +72,14 @@ namespace lfs::core {
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };
+
+    // How the Vulkan renderer receives splats a backend produced: drawn from that storage as is, moved
+    // into renderer storage first, or copied so readers of the displayed storage never hold up the
+    // producer's next use of it.
+    enum class SplatPublication : uint8_t { Shared,
+                                            RendererStorage,
+                                            Copied };
+    [[nodiscard]] LFS_CORE_API SplatPublication splat_publication(GpuBackend backend);
 
     // All operands are contiguous GPU tensors on one backend; output and source
     // have the same shape and Float32 or Float16 dtype. The mask has one Bool per element.

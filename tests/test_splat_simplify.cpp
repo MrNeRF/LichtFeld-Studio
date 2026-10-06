@@ -212,7 +212,8 @@ namespace {
         return reference_moment_match(input, std::vector<int>{i, j});
     }
 
-    [[nodiscard]] std::unique_ptr<SplatData> make_test_splat(const RefInput& input, const int max_sh_degree = 1) {
+    [[nodiscard]] std::unique_ptr<SplatData> make_test_splat(const RefInput& input, const int max_sh_degree = 1,
+                                                             const Device device = Device::GPU) {
         const size_t count = input.count();
         const int shn_coeffs = max_sh_degree > 0 ? (max_sh_degree + 1) * (max_sh_degree + 1) - 1 : 0;
 
@@ -239,14 +240,14 @@ namespace {
 
         auto result = std::make_unique<SplatData>(
             max_sh_degree,
-            Tensor::from_vector(means, {count, size_t{3}}, Device::GPU).to(DataType::Float32),
-            Tensor::from_vector(sh0, {count, size_t{1}, size_t{3}}, Device::GPU).to(DataType::Float32),
+            Tensor::from_vector(means, {count, size_t{3}}, device).to(DataType::Float32),
+            Tensor::from_vector(sh0, {count, size_t{1}, size_t{3}}, device).to(DataType::Float32),
             shn_coeffs > 0
-                ? Tensor::from_vector(shN, {count, static_cast<size_t>(shn_coeffs), size_t{3}}, Device::GPU).to(DataType::Float32)
+                ? Tensor::from_vector(shN, {count, static_cast<size_t>(shn_coeffs), size_t{3}}, device).to(DataType::Float32)
                 : Tensor{},
-            Tensor::from_vector(scaling, {count, size_t{3}}, Device::GPU).to(DataType::Float32),
-            Tensor::from_vector(rotation, {count, size_t{4}}, Device::GPU).to(DataType::Float32),
-            Tensor::from_vector(opacity, {count, size_t{1}}, Device::GPU).to(DataType::Float32),
+            Tensor::from_vector(scaling, {count, size_t{3}}, device).to(DataType::Float32),
+            Tensor::from_vector(rotation, {count, size_t{4}}, device).to(DataType::Float32),
+            Tensor::from_vector(opacity, {count, size_t{1}}, device).to(DataType::Float32),
             1.0f);
         result->set_active_sh_degree(max_sh_degree);
         result->set_max_sh_degree(max_sh_degree);
@@ -1234,4 +1235,88 @@ TEST(SplatSimplify, Q16DeletedMaskPreservesCanonicalSH) {
     EXPECT_EQ(out, kN - 3);
     EXPECT_LT(max_abs, 0.05f);
     EXPECT_GT(max_mag, 0.01f);
+}
+
+namespace {
+    [[nodiscard]] RefInput random_cloud(const size_t count, const unsigned seed) {
+        std::mt19937 rng(seed);
+        std::uniform_real_distribution<double> position(-1.0, 1.0), scale(std::log(0.005), std::log(0.05)),
+            quaternion(-1.0, 1.0), logit(-2.0, 4.0), colour(-1.0, 1.0);
+        RefInput input;
+        input.app_dim = 12;
+        for (size_t i = 0; i < count; ++i) {
+            for (int axis = 0; axis < 3; ++axis) {
+                input.means.push_back(position(rng));
+                input.scaling_raw.push_back(scale(rng));
+            }
+            for (int k = 0; k < 4; ++k)
+                input.rotation_raw.push_back(quaternion(rng));
+            input.opacity_raw.push_back(logit(rng));
+            for (int k = 0; k < input.app_dim; ++k)
+                input.appearance.push_back(colour(rng));
+        }
+        return input;
+    }
+} // namespace
+
+TEST(SplatSimplify, DevicePassesMatchTheCpuPasses) {
+    const auto input = random_cloud(20000, 7);
+    const auto gpu = make_test_splat(input, 1, Device::GPU);
+    const auto cpu = make_test_splat(input, 1, Device::CPU);
+    SplatSimplifyOptions options;
+    options.ratio = 0.5;
+    const auto device_result = lfs::core::simplify_splats(*gpu, options, {});
+    const auto cpu_result = lfs::core::simplify_splats(*cpu, options, {});
+    ASSERT_TRUE(device_result) << device_result.error();
+    ASSERT_TRUE(cpu_result) << cpu_result.error();
+    const auto& a = **device_result;
+    const auto& b = **cpu_result;
+    EXPECT_EQ(a.means_raw().device(), Device::GPU);
+    EXPECT_EQ(b.means_raw().device(), Device::CPU);
+    // One pass reaches this target, so both group the same rows and differ only by rounding.
+    ASSERT_EQ(a.size(), b.size());
+    const auto means_a = a.means_raw().cpu().to_vector(), means_b = b.means_raw().cpu().to_vector();
+    for (size_t i = 0; i < means_a.size(); ++i)
+        ASSERT_NEAR(means_a[i], means_b[i], 1e-5f) << "mean " << i;
+    // Alpha, not its logit: near alpha 1 one rounding step in alpha moves the logit by 1e-4.
+    const auto opacity_a = a.opacity_raw().sigmoid().cpu().to_vector(), opacity_b = b.opacity_raw().sigmoid().cpu().to_vector();
+    for (size_t i = 0; i < opacity_a.size(); ++i)
+        ASSERT_NEAR(opacity_a[i], opacity_b[i], 1e-6f) << "opacity " << i;
+    for (size_t row = 0; row < a.size(); row += 97) {
+        expect_mat3_near(covariance_from_output_row(a, row), covariance_from_output_row(b, row), 1e-7);
+        const auto appearance_a = appearance_row(a, row), appearance_b = appearance_row(b, row);
+        for (size_t k = 0; k < appearance_a.size(); ++k)
+            EXPECT_NEAR(appearance_a[k], appearance_b[k], 1e-5f);
+    }
+}
+
+TEST(SplatSimplify, DevicePassesReachTheTargetOverSeveralPasses) {
+    const auto input = random_cloud(30000, 11);
+    const auto gpu = make_test_splat(input, 1, Device::GPU);
+    const auto cpu = make_test_splat(input, 1, Device::CPU);
+    SplatSimplifyOptions options;
+    options.ratio = 0.05;
+    const auto device_result = lfs::core::simplify_splats(*gpu, options, {});
+    const auto cpu_result = lfs::core::simplify_splats(*cpu, options, {});
+    ASSERT_TRUE(device_result) << device_result.error();
+    ASSERT_TRUE(cpu_result) << cpu_result.error();
+    EXPECT_EQ((*device_result)->size(), (*cpu_result)->size());
+    // Later passes may group differently where rounding moves a merged mean across a voxel border; the
+    // merged scene keeps its centre either way.
+    const auto centre = [](const SplatData& splat) {
+        return splat.means_raw().cpu().mean(0).to_vector();
+    };
+    const auto a = centre(**device_result), b = centre(**cpu_result);
+    for (int axis = 0; axis < 3; ++axis)
+        EXPECT_NEAR(a[axis], b[axis], 2e-3f);
+}
+
+TEST(SplatSimplify, DevicePassesStopWhenCancelled) {
+    const auto gpu = make_test_splat(random_cloud(5000, 3), 1, Device::GPU);
+    SplatSimplifyOptions options;
+    options.ratio = 0.1;
+    int calls = 0;
+    const auto result = lfs::core::simplify_splats(*gpu, options, [&](float, const std::string&) { return ++calls < 3; });
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error(), "Cancelled");
 }

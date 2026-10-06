@@ -6,11 +6,12 @@
 
 #include "core/export.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
+#include "rendering/viewport_draw_types.hpp"
 #include "shared_viewport_gpu_assets.hpp"
 #include "vulkan_depth_blit_pass.hpp"
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
-#include "vulkan_scene_dlss_pipeline.hpp"
+#include "vulkan_scene_plugin_pipeline.hpp"
 #include "vulkan_scene_temporal_pipeline.hpp"
 #include "vulkan_split_view_pass.hpp"
 
@@ -30,85 +31,15 @@ namespace lfs::core {
 namespace lfs::vis {
     class VulkanContext;
 
-    struct VulkanViewportOverlayVertex {
-        glm::vec2 position{0.0f};
-        glm::vec4 color{1.0f};
-    };
-
-    struct VulkanViewportShapeOverlayVertex {
-        glm::vec2 position{0.0f};
-        glm::vec2 screen_position{0.0f};
-        glm::vec2 p0{0.0f};
-        glm::vec2 p1{0.0f};
-        glm::vec4 color{1.0f};
-        glm::vec4 params{0.0f};
-        // Linear view-space depth (positive forward). 0 means "always in front"
-        // — used by UI overlays (gizmos, pivot) so they don't fade behind splats.
-        float view_depth = 0.0f;
-    };
-
-    struct VulkanViewportPivotOverlay {
-        glm::vec2 center_ndc{0.0f};
-        glm::vec2 size_ndc{0.0f};
-        glm::vec3 color{0.26f, 0.59f, 0.98f};
-        float opacity = 1.0f;
-    };
-
-    struct VulkanViewportTexturedOverlayVertex {
-        glm::vec2 position{0.0f};
-        glm::vec2 uv{0.0f};
-        // Linear view-space depth (positive forward). 0 = "always in front", skips
-        // the splat-depth occlusion test.
-        float view_depth = 0.0f;
-    };
-
-    struct VulkanViewportTexturedOverlay {
-        std::uintptr_t texture_id = 0;
-        glm::vec4 tint_opacity{1.0f, 1.0f, 1.0f, 0.8f};
-        glm::vec4 effects{0.0f};
-        std::array<VulkanViewportTexturedOverlayVertex, 6> vertices{};
-    };
-
-    struct VulkanViewportGridOverlay {
-        glm::vec2 viewport_pos{0.0f, 0.0f};
-        glm::vec2 viewport_size{0.0f, 0.0f};
-        glm::ivec2 render_size{0, 0};
-        glm::mat4 view{1.0f};
-        glm::mat4 projection{1.0f};
-        glm::mat4 view_projection{1.0f};
-        glm::vec3 view_position{0.0f, 0.0f, 0.0f};
-        int plane = 2;
-        float opacity = 1.0f;
-        bool orthographic = false;
-    };
-
-    // Layout must match frustum.vert's std430 FrustumInstance.
-    struct VulkanViewportFrustumInstance {
-        glm::mat4 model{1.0f};
-        glm::vec4 color{1.0f};
-    };
-
-    // One instanced draw range for a viewport panel.
-    struct VulkanViewportFrustumBatch {
-        glm::mat4 view{1.0f};
-        glm::vec2 viewport_pos{0.0f, 0.0f};
-        glm::vec2 viewport_size{0.0f, 0.0f};
-        glm::vec2 render_size{0.0f, 0.0f};
-        float focal_x = 0.0f;
-        float focal_y = 0.0f;
-        bool orthographic = false;
-        bool equirectangular = false;
-        std::uint32_t first_instance = 0;
-        std::uint32_t instance_count = 0;
-    };
-
-    struct VulkanViewportFrustumOverlayData {
-        std::uint64_t generation = 0;
-        std::vector<VulkanViewportOverlayVertex> overlay_triangles;
-        std::vector<VulkanViewportTexturedOverlay> textured_overlays;
-        std::vector<VulkanViewportFrustumInstance> frustum_instances;
-        std::vector<VulkanViewportFrustumBatch> frustum_batches;
-    };
+    using VulkanViewportOverlayVertex = ViewportOverlayVertex;
+    using VulkanViewportShapeOverlayVertex = ViewportShapeOverlayVertex;
+    using VulkanViewportPivotOverlay = ViewportPivotOverlay;
+    using VulkanViewportTexturedOverlayVertex = ViewportTexturedOverlayVertex;
+    using VulkanViewportTexturedOverlay = ViewportTexturedOverlay;
+    using VulkanViewportGridOverlay = ViewportGridOverlay;
+    using VulkanViewportFrustumInstance = ViewportFrustumInstance;
+    using VulkanViewportFrustumBatch = ViewportFrustumBatch;
+    using VulkanViewportFrustumOverlayData = ViewportFrustumOverlayData;
 
     struct VulkanViewportPassParams {
         std::size_t frame_slot = 0;
@@ -131,10 +62,11 @@ namespace lfs::vis {
         // incompletely prepared image during the deferral window.
         bool preserve_scene_image_binding = false;
         SceneUpscalerBackend scene_upscaler = SceneUpscalerBackend::Native;
+        bool scene_upscaler_mode_unsupported = false;
         std::optional<VulkanSceneTemporalPipelineRequest> temporal;
         std::array<std::optional<VulkanSceneTemporalPipelineRequest>, 2> split_temporal;
-        std::optional<VulkanSceneDlssPipelineRequest> dlss;
-        std::array<std::optional<VulkanSceneDlssPipelineRequest>, 2> split_dlss;
+        std::optional<VulkanScenePluginPipelineRequest> plugin;
+        std::array<std::optional<VulkanScenePluginPipelineRequest>, 2> split_plugin;
 
         bool grid_enabled = false;
         glm::mat4 grid_view{1.0f};
@@ -201,10 +133,15 @@ namespace lfs::vis {
         [[nodiscard]] bool hasPreRenderWork(const VulkanViewportPassParams& params) const;
         [[nodiscard]] bool recordPreRenderWork(VkCommandBuffer command_buffer,
                                                const VulkanViewportPassParams& params);
+        // Validation borrows the live mesh cache synchronously; only presentation
+        // resources belong to the temporary pass. New uploads stay in the live cache.
+        void prepareImport(VulkanContext& context, const VulkanViewportPassParams& params,
+                           VulkanViewportPass* resident_mesh_resources = nullptr);
         void record(VkCommandBuffer command_buffer,
                     VkExtent2D framebuffer_extent,
                     const VulkanViewportPassParams& params);
         [[nodiscard]] SceneUpscalerSelection sceneUpscalerSelection() const;
+        void discardImportMesh(uint64_t mesh_id);
         void shutdown();
 
     private:

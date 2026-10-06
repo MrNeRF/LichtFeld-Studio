@@ -25,11 +25,13 @@
 #include "io/video/video_export_options.hpp"
 #include "rendering/render_constants.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "scene/scene_manager.hpp"
 #include "screen/screen.hpp"
 #include "screen/view3d_space.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
+#include "visualizer/nodes/modifier_manager.hpp"
 #include "visualizer_impl.hpp"
 
 #include <algorithm>
@@ -1534,6 +1536,8 @@ namespace lfs::vis::project {
                 chapters.sequencer.validate();
             !valid)
             return std::move(valid).error();
+        if (auto valid = chapters.nodes.validate(); !valid)
+            return std::move(valid).error();
         if (auto valid = chapters.metrics.validate();
             !valid)
             return std::move(valid).error();
@@ -2833,6 +2837,13 @@ namespace lfs::vis::project {
                 trainer_manager
                     ->captureProjectMetrics();
         }
+        if (const auto* scene_manager = viewer.getSceneManager()) {
+            auto dom = lfs::io::JsonChapterDom::parse(
+                scene_manager->modifierManager().toJson(true).dump(2));
+            if (!dom)
+                return std::move(dom).error();
+            result.nodes = lfs::io::project::NodesSessionChapter(std::move(*dom));
+        }
 
         auto prepared =
             prepareGuiSessionRestore(result);
@@ -3064,7 +3075,7 @@ namespace lfs::vis::project {
             }
             if (auto* rendering =
                     viewer.getRenderingManager())
-                rendering->markDirty(DirtyFlag::ALL);
+                rendering->markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
 
             LegacyLayoutState layout{.show_sequencer = gui_manager->isSequencerVisible()};
             if (!has_screen) {
@@ -3537,7 +3548,7 @@ namespace lfs::vis::project {
                         ->getSequencerUIState()
                         .show_camera_path);
             }
-            rendering->markDirty(DirtyFlag::ALL);
+            rendering->markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
         }
 
         std::optional<ToolType> builtin_tool_type(
@@ -3587,7 +3598,7 @@ namespace lfs::vis::project {
                 viewer.getEditorContext()
                     .armToolRestoreGuard();
                 gui_manager->setSequencerVisible(sequencer_visible);
-                rendering->markDirty(DirtyFlag::ALL);
+                rendering->markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
             };
 
             const auto tools =
@@ -4018,6 +4029,20 @@ namespace lfs::vis::project {
         apply_sequencer(
             viewer, *sequencer,
             prepared.ply_sequence_directory);
+        if (auto* scene_manager = viewer.getSceneManager()) {
+            const auto bytes = prepared.chapters.nodes.to_bytes();
+            try {
+                const auto json = Json::parse(
+                    reinterpret_cast<const char*>(bytes.data()),
+                    reinterpret_cast<const char*>(bytes.data()) + bytes.size());
+                if (const auto restored = scene_manager->modifierManager().restoreJson(json);
+                    !restored) {
+                    LOG_WARN("Could not restore NODE chapter: {}", restored.error().message);
+                }
+            } catch (const nlohmann::json::exception& error) {
+                LOG_WARN("Could not parse NODE chapter: {}", error.what());
+            }
+        }
         if (auto* trainer =
                 viewer.getTrainerManager()) {
             trainer->restoreProjectMetrics(
@@ -4025,7 +4050,7 @@ namespace lfs::vis::project {
         }
         if (auto* rendering =
                 viewer.getRenderingManager()) {
-            rendering->markDirty(DirtyFlag::ALL);
+            rendering->markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
         }
     }
 

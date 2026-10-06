@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -231,6 +232,30 @@ namespace {
         EXPECT_EQ(snap.process.cuda_slab_reserved_bytes, kReservedBytes);
     }
 
+    TEST_F(VramProfilerMetricsTest, MetalAccountingPersistsWithoutDetailedTracing) {
+        auto& p = VramProfiler::instance();
+        p.setEnabled(false);
+        int allocation = 0;
+        p.recordAllocation(&allocation, 4096, VramAllocationMethod::Metal, "tensor.storage");
+        p.relabelAllocation(&allocation, "splat.positions");
+        p.updateMetalMemory(16384, 3072, 4096, 2048, 8192, 12288);
+
+        auto snap = p.snapshot();
+        EXPECT_EQ(snap.accounted_metal_live_bytes, 4096u);
+        EXPECT_TRUE(snap.process.metal_memory_valid);
+        EXPECT_EQ(snap.process.metal_tensor_rounding_slack_bytes, 1024u);
+        EXPECT_EQ(snap.process.metal_other_device_bytes, 10240u);
+        EXPECT_EQ(snap.process.metal_allocator_peak_reserved_bytes, 12288u);
+        EXPECT_TRUE(std::ranges::any_of(snap.rows, [](const auto& row) {
+            return row.scope == "metal.tensor" && row.label == "splat.positions" &&
+                   row.live_bytes == 4096;
+        }));
+
+        p.recordDeallocation(&allocation);
+        snap = p.snapshot();
+        EXPECT_EQ(snap.accounted_metal_live_bytes, 0u);
+    }
+
     TEST_F(VramProfilerMetricsTest, LiveBytesDoesNotAccumulateAcrossIterations) {
         // Regression: when allocations live under a deeply-nested scope path
         // ("Training execution/train.step/..."), beginIteration() previously
@@ -300,3 +325,17 @@ namespace {
     }
 
 } // namespace
+
+TEST_F(VramProfilerMetricsTest, UnavailableProcessSampleDoesNotBecomeDeviceUsage) {
+    auto& p = VramProfiler::instance();
+    p.updateProcessMemory(0, 500, 1000, "test GPU");
+    auto snapshot = p.snapshot();
+    EXPECT_FALSE(snapshot.process.process_memory_valid);
+    EXPECT_EQ(snapshot.process.process_used, 0u);
+    EXPECT_EQ(snapshot.process.total_used, 500u);
+    p.updateProcessMemory(200, 1700, 1000, "test GPU");
+    snapshot = p.snapshot();
+    EXPECT_TRUE(snapshot.process.process_memory_valid);
+    EXPECT_EQ(snapshot.process.process_used, 200u);
+    EXPECT_EQ(snapshot.process.total_used, 1000u);
+}

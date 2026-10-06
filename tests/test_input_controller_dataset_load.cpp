@@ -171,6 +171,27 @@ namespace lfs::vis {
         EXPECT_EQ(lfs::core::utf8_to_path(settings.environment_map_path), hdr_path);
     }
 
+    TEST_F(InputControllerDatasetLoadTest, MixedFileDropEmitsOneOrderedBatch) {
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        std::vector<core::events::cmd::LoadFile> commands;
+        core::events::cmd::LoadFile::when([&](const auto& command) { commands.push_back(command); });
+        const std::vector<std::string> paths{
+            "third.ply", "first.sog", "second.spz", "mesh.obj",
+            "fourth.ply", "fifth.sog", "sixth.spz", "last.ply"};
+        for (size_t count = 2; count <= paths.size(); ++count) {
+            commands.clear();
+            controller.handleFileDrop({paths.begin(), paths.begin() + count});
+            ASSERT_EQ(commands.size(), 1u);
+            ASSERT_EQ(commands[0].paths.size(), count);
+            EXPECT_TRUE(commands[0].user_batch);
+            EXPECT_EQ(commands[0].path, core::utf8_to_path(paths.front()));
+            for (size_t index = 0; index < count; ++index)
+                EXPECT_EQ(commands[0].paths[index], core::utf8_to_path(paths[index]));
+        }
+    }
+
     TEST_F(InputControllerDatasetLoadTest, SingleDroppedPlyStillUsesSplatLoader) {
         Viewport viewport(200, 200);
         lfs::vis::TestViewTargets controller_views{viewport};
@@ -191,6 +212,7 @@ namespace lfs::vis {
         ASSERT_TRUE(load_file.has_value());
         EXPECT_EQ(load_file->path, drop_path);
         EXPECT_FALSE(load_file->is_dataset);
+        EXPECT_FALSE(load_file->user_batch);
         EXPECT_FALSE(video_extractor_requested);
     }
 

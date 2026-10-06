@@ -164,6 +164,7 @@ namespace lfs::vis::input {
         VIEW_FRAME_ALL,
         TOGGLE_QUAD_VIEW,
         TOGGLE_MAXIMIZE_AREA,
+        TOGGLE_NODE_EDITOR,
 
     };
 
@@ -349,7 +350,6 @@ namespace lfs::vis::input {
         // Capture mode for rebinding (called from Python)
         void startCapture(ToolMode mode, Action action);
         void cancelCapture();
-        void captureKey(int key, int mods);
         void captureKey(int physical_key, int logical_key, int mods);
         void captureMouseButton(int button, int mods, std::optional<int> chord_key = std::nullopt);
         void captureMouseButton(int button, int mods, double x, double y, std::optional<int> chord_key = std::nullopt);

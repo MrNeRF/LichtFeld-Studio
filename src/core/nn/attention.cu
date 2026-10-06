@@ -444,7 +444,7 @@ namespace lfs::core::nn::kernels {
                 }
             }
             __syncthreads();
-            const float inv = red_sum[0] > 0.0f ? 1.0f / red_sum[0] : 0.0f;
+            const float inv = red_sum[0] == 0.0f ? 0.0f : 1.0f / red_sum[0];
 
             for (int c = tid; c < cols; c += nthreads) {
                 float v = device::ld_strided(x, base + c, is_half);

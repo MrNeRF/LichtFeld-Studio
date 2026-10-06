@@ -192,7 +192,6 @@ namespace lfs::python {
             add("masking", capabilities.masking);
             add("segmentation", capabilities.segmentation);
             add("background_modes", capabilities.background_modes);
-            add("background_improvements", capabilities.background_improvements);
             add("exposure_correction", capabilities.exposure_correction);
             add("bilateral_grid", capabilities.bilateral_grid);
             add("ppisp", capabilities.ppisp);
@@ -590,7 +589,7 @@ namespace lfs::python {
         const auto* tm = get_trainer_manager();
         if (!tm)
             return false;
-        return tm->getState() == lfs::vis::TrainingState::Ready && tm->getCurrentIteration() == 0;
+        return tm->hasTrainer() && tm->isDatasetEditable();
     }
 
     core::param::DatasetConfig& PyDatasetConfig::params() {
@@ -837,6 +836,10 @@ namespace lfs::python {
             .value("SEGMENT_AND_IGNORE", MaskMode::SegmentAndIgnore)
             .value("ALPHA_CONSISTENT", MaskMode::AlphaConsistent);
 
+        nb::enum_<EvalSpace>(m, "EvalSpace")
+            .value("DISTORTED", EvalSpace::Distorted)
+            .value("UNDISTORTED", EvalSpace::Undistorted);
+
         nb::enum_<DensifyErrorMap>(m, "DensifyErrorMap")
             .value("SSIM", DensifyErrorMap::Ssim)
             .value("SSIM_CS", DensifyErrorMap::SsimCs);
@@ -1003,35 +1006,23 @@ namespace lfs::python {
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_all = v; }); },
                 "Train on every image and evaluate all of them; no image is held out")
             .def_prop_rw(
-                "background_improvements",
-                [](PyOptimizationParams& self) { return self.params().background_improvements; },
-                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.background_improvements = v; }); },
-                "Improve distant background reconstruction (MRNF): far-field seeding and splits, decay relief, growth cap, per-splat position steps, visibility-ratio growth ranking, paced capacity fill")
+                "eval_mask",
+                [](PyOptimizationParams& self) { return self.params().eval_mask; },
+                [](PyOptimizationParams&, const std::string& v) {
+                    modify_params([value = lfs::core::param::normalize_eval_mask(v)](
+                                      auto& p) { p.eval_mask = value; });
+                },
+                "Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range, points or a splat); training is not affected")
             .def_prop_rw(
-                "far_scene_min_fraction",
-                [](PyOptimizationParams& self) { return self.params().far_scene_min_fraction; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.far_scene_min_fraction = v; }); },
-                "Minimum deep-far splat fraction that activates far-field features (0 = always on)")
+                "eval_mask_invert",
+                [](PyOptimizationParams& self) { return self.params().eval_mask_invert; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_mask_invert = v; }); },
+                "Scores the pixels outside the evaluation mask instead")
             .def_prop_rw(
-                "growth_ratio_rank",
-                [](PyOptimizationParams& self) { return self.params().growth_ratio_rank; },
-                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.growth_ratio_rank = v; }); },
-                "Rank MRNF growth by visibility-normalized error (err/vis^p) instead of raw window error")
-            .def_prop_rw(
-                "growth_ratio_pow",
-                [](PyOptimizationParams& self) { return self.params().growth_ratio_pow; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.growth_ratio_pow = v; }); },
-                "Visibility exponent p for the err/vis^p growth rank")
-            .def_prop_rw(
-                "fill_pacing_iter",
-                [](PyOptimizationParams& self) { return self.params().fill_pacing_iter; },
-                [](PyOptimizationParams&, size_t v) { modify_params([v](auto& p) { p.fill_pacing_iter = v; }); },
-                "Pace MRNF cap fill until this iteration (0 = fill as fast as possible)")
-            .def_prop_rw(
-                "far_seed_dose",
-                [](PyOptimizationParams& self) { return self.params().far_seed_dose; },
-                [](PyOptimizationParams&, size_t v) { modify_params([v](auto& p) { p.far_seed_dose = v; }); },
-                "Far-field seeds injected per refine window (0 = starvation-scaled default)")
+                "eval_mask_opacity",
+                [](PyOptimizationParams& self) { return self.params().eval_mask_opacity; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.eval_mask_opacity = v; }); },
+                "Rendered opacity a pixel needs to count as covered by a splat mask; lower widens the mask past the outline, higher pulls it in")
             .def_prop_rw(
                 "densify_error_map",
                 [](PyOptimizationParams& self) { return self.params().densify_error_map; },
@@ -1290,7 +1281,17 @@ namespace lfs::python {
                 "undistort",
                 [](PyOptimizationParams& self) { return self.params().undistort; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.undistort = v; }); },
-                "Undistort images on-the-fly before training")
+                "Remove lens distortion before training: each image and its mask, depth and "
+                "normal map are resampled once from full resolution into a distortion-free "
+                "pinhole camera, which training then uses. Alternative to --gut for distorted "
+                "or non-pinhole cameras")
+            .def_prop_rw(
+                "eval_space",
+                [](PyOptimizationParams& self) { return self.params().eval_space; },
+                [](PyOptimizationParams&, EvalSpace v) { modify_params([v](auto& p) { p.eval_space = v; }); },
+                "Reference images for evaluation with --undistort: distorted = the original "
+                "images, with the render warped into the original lens; undistorted = the "
+                "undistorted training images")
             .def_prop_ro(
                 "save_steps",
                 [](PyOptimizationParams& self) -> std::vector<size_t> {

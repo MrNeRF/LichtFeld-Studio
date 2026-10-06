@@ -10,7 +10,13 @@
 #define TILE_HEIGHT 16
 #define TILE_WIDTH  16
 
-#define RASTER_BATCH_SIZE           1024
+// Only the explicit test reference profile reduces staging for MoltenVK.
+// Production values are independent of the host platform.
+#ifdef LFS_VULKAN_MACOS_REFERENCE
+#define RASTER_BATCH_SIZE 256
+#else
+#define RASTER_BATCH_SIZE 1024
+#endif
 #define RASTER_DENSE_TILE_THRESHOLD RASTER_BATCH_SIZE
 
 // HiGS macro-tile inference pipeline (viewer forward only).
@@ -23,6 +29,8 @@
 #define HIGS_TILE_WIDTH              8
 #define HIGS_TILE_HEIGHT             8
 #define HIGS_TILE_SIZE               (HIGS_TILE_WIDTH * HIGS_TILE_HEIGHT)
+// One coverage bit per 4x4 output region.
+#define HIGS_DEPTH_SAMPLE_TILE_SIZE 4
 // Macro-tile extent in legacy 16px-tile units (projection rects use that grid).
 #define HIGS_MACRO_T16_W ((HIGS_MACRO_TILE_WIDTH_TILES * HIGS_TILE_WIDTH) / TILE_WIDTH)
 #define HIGS_MACRO_T16_H ((HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT) / TILE_HEIGHT)
@@ -67,3 +75,10 @@ typedef int32_t sortingKey_t;
 
 #define _CEIL_DIV(x, m)   (((x) + (m) - 1) / (m))
 #define _CEIL_ROUND(x, m) (_CEIL_DIV(x, m) * (m))
+
+#ifdef LFS_VULKAN_MACOS_REFERENCE
+#define RADIX_WORKGROUP_SIZE 256u
+#else
+#define RADIX_WORKGROUP_SIZE 512u
+#endif
+#define RADIX_PARTITION_SIZE (RADIX_WORKGROUP_SIZE * 8u)

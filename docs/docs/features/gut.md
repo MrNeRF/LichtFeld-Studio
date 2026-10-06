@@ -32,7 +32,7 @@ MRNF preserves coarse coverage while adding detail:
 - During growth, `oversize_split_fraction` prioritizes over-limit Gaussians within the existing growth budget. Zero disables that priority.
 - Once growth has ended and refinement has begun, refinement clips oversized scales and `screen_share_penalty` applies a soft scale penalty on Adam steps. Zero penalty disables the soft penalty independently of clipping and splitting.
 
-The handoff follows the configured growth schedule, including fill pacing when enabled. Measurements keep their maximum across training views until the next refinement and stop with the refinement window. These controls encourage smaller splats; they do not impose an immediate hard image-area bound or a total intersection-memory limit.
+The handoff follows the configured growth schedule. Measurements keep their maximum across training views until the next refinement and stop with the refinement window. These controls encourage smaller splats; they do not impose an immediate hard image-area bound or a total intersection-memory limit.
 
 FastGS retains its angular size statistic, so equal numeric limits need not select the same Gaussians across renderers. Switching renderers clears the measurement window to avoid mixing those units.
 

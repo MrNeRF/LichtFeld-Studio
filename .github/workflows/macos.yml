@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   build-macos:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 180
     env:
       VCPKG_ROOT: ${{ github.workspace }}/../vcpkg
@@ -38,15 +38,36 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          brew install autoconf autoconf-archive automake libtool vulkan-loader molten-vk
+          brew install autoconf autoconf-archive automake libtool vulkan-loader molten-vk ffmpeg
           cmake --version
           ninja --version
 
-      - name: Check Metal device
+      - name: Require macOS 26 and detect Metal capabilities
+        id: metal
         run: |
-          device=$(osascript -l JavaScript -e 'ObjC.import("Metal"); var d = $.MTLCreateSystemDefaultDevice(); d ? ObjC.unwrap(d.name) : "NO_METAL_DEVICE";')
-          echo "Metal device: $device"
-          test "$device" != NO_METAL_DEVICE
+          sw_vers
+          xcodebuild -version
+          swift -e '
+            import Metal
+            guard #available(macOS 26.0, *) else {
+              fatalError("Native viewer builds require macOS 26 or newer")
+            }
+            guard let device = MTLCreateSystemDefaultDevice() else {
+              fatalError("The Vulkan test backend requires a Metal device")
+            }
+            print("Metal device: \(device.name)")
+            print("metal4=\(device.supportsFamily(.metal4))")
+          ' | tee "$RUNNER_TEMP/metal-capabilities.txt"
+          grep '^metal4=' "$RUNNER_TEMP/metal-capabilities.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Compile Metal training kernels
+        # The Metal backend compiles its kernels at runtime and needs a Metal 4 GPU, which this
+        # runner lacks; compile the training kernels here with the backend's options.
+        run: |
+          xcrun -sdk macosx metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+          sed -n '/set(LFS_TRAINING_METAL_KERNELS/,/)/p' src/training/CMakeLists.txt | grep -o 'kernels/metal/[a-z_0-9]*\.metal' |
+            while read -r file; do cat "src/training/$file"; done > "$RUNNER_TEMP/training.metal"
+          xcrun -sdk macosx metal -std=metal4.0 -fmetal-math-mode=fast -c "$RUNNER_TEMP/training.metal" -o "$RUNNER_TEMP/training.air"
 
       - name: Restore vcpkg binary cache
         uses: actions/cache@v6
@@ -65,7 +86,9 @@ jobs:
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
       - name: Configure
-        run: cmake --preset macos-release -DBUILD_TESTS=ON
+        # Hosted runners cannot run the Metal tensor backend, so CI tests the hybrid
+        # build (Vulkan graphics, Metal and Vulkan tensors) instead of the Metal-only default.
+        run: cmake --preset macos-release -DLFS_GRAPHICS_BACKEND=Vulkan -DLFS_TENSOR_METAL=ON -DLFS_TENSOR_VULKAN=ON -DBUILD_TESTS=ON -DLFS_METAL_TEST_REQUIRE_DEVICE=ON -DLFS_TEST_METAL_VULKAN_INTEROP=ON -DLFS_BUILD_VULKAN_DEPTH_TESTS=ON
 
       - name: Remove vcpkg build intermediates
         run: |
@@ -74,10 +97,111 @@ jobs:
           df -h .
 
       - name: Build application and tests
+        id: build
         run: cmake --build --preset macos-release
 
+      # Independent checks still run after another test fails; failures remain fatal.
+      - name: Verify macOS deployment baseline
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import re
+          import subprocess
+          root = Path("build-macos-release")
+          app = root / "LichtFeld-Studio"
+          assert app.is_file(), "Missing application executable"
+          libraries = sorted(root.glob("liblfs*.dylib"))
+          assert libraries, "Missing application libraries"
+          for binary in [app, *libraries]:
+              load_commands = subprocess.check_output(["otool", "-l", str(binary)], text=True)
+              versions = re.findall(r"^\s*minos (\d+)\.(\d+)(?:\.(\d+))?\s*$", load_commands, re.M)
+              assert versions, f"Missing deployment version: {binary}"
+              for major, minor, patch in versions:
+                  version = (int(major), int(minor), int(patch or 0))
+                  assert version == (26, 0, 0), f"Expected macOS 26.0 deployment target: {binary}: {version}"
+              print(f"{binary.name}: macOS deployment baseline verified")
+          PYTHON
+
+      - name: Check native Finder drag-and-drop event bridge (no GPU)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          cmake --build build-macos-release --target mac_native_drag_drop_contracts --parallel 4
+          ctest --test-dir build-macos-release -R '^MacNativeDragDropContracts$' --no-tests=error --output-on-failure
+
+      - name: Run offline media regression tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          cmake -S tests/media -B build-media-fixtures
+          ctest --test-dir build-media-fixtures --output-on-failure --no-tests=error
+          cmake -S tests/media/extractor -B build-media-extractor -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$PWD/build-macos-release/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=arm64-osx -DVCPKG_MANIFEST_INSTALL=OFF
+          cmake --build build-media-extractor --parallel 2
+          ctest --test-dir build-media-extractor --output-on-failure --no-tests=error
+
       - name: Run GPU and VideoToolbox tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
           test -f "$icd"
           VK_DRIVER_FILES="$icd" ctest --test-dir build-macos-release -R '^lichtfeld_tests$' --no-tests=error --verbose
+
+      - name: Check Vulkan HiGS depth independently of Metal tensors
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
+          test -f "$icd"
+          VK_DRIVER_FILES="$icd" ctest --test-dir build-macos-release \
+            -R '^VulkanDepthContracts$' --no-tests=error --output-on-failure
+
+      - name: Run CPU application and viewer contracts
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          cmake --build build-macos-release --target lichtfeld_visualizer_tests --parallel 4
+          SDL_VIDEODRIVER=dummy ctest --test-dir build-macos-release -LE gpu \
+            -E '^(lichtfeld_tests|VulkanDepthContracts)$' \
+            --no-tests=error --output-on-failure
+
+      - name: Run shared Vulkan viewer contracts
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
+          test -f "$icd"
+          VK_DRIVER_FILES="$icd" ctest --test-dir build-macos-release -L viewer-shared \
+            --no-tests=error --output-on-failure
+
+      - name: Run native viewer contracts with Metal validation
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.metal.outputs.metal4 == 'true' }}
+        run: |
+          icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
+          test -f "$icd"
+          VK_DRIVER_FILES="$icd" MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1 \
+            ctest --test-dir build-macos-release -L viewer --no-tests=error --output-on-failure
+
+      - name: Check native Metal versus Vulkan benchmark
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.metal.outputs.metal4 == 'true' }}
+        run: |
+          icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
+          test -f "$icd"
+          VK_DRIVER_FILES="$icd" ctest --test-dir build-macos-release \
+            -R '^MacViewer(BackendBenchmarkSmoke|Parity_.*)$' --no-tests=error --output-on-failure
+
+      - name: Report native GPU coverage unavailable
+        if: ${{ !cancelled() && steps.metal.outcome == 'success' && steps.metal.outputs.metal4 != 'true' }}
+        run: |
+          echo '::notice::This runner exposes no Metal 4 device. Native GPU contracts and parity benchmarks were not executed; compilation and CPU/Vulkan checks do not qualify native Metal behavior.'
+          echo 'Native Metal GPU validation: **not executed** (no Metal 4 device). A physical Metal 4 Mac run is required.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-test-diagnostics
+          path: |
+            build-macos-release/Testing/Temporary/
+            build-macos-release/tests/metal_viewer/mac-viewer-benchmark-smoke.json
+            build-macos-release/tests/metal_viewer/mac-viewer-parity-*.json
+          if-no-files-found: ignore

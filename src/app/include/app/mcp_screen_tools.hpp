@@ -16,5 +16,6 @@ namespace lfs::app {
 
     void register_gui_screen_tools(lfs::mcp::ToolRegistry& registry, lfs::vis::Visualizer* viewer);
     void register_gui_screen_resources(lfs::mcp::ResourceRegistry& registry, lfs::vis::Visualizer* viewer);
+    void register_pointer_tool(lfs::mcp::ToolRegistry& registry, lfs::vis::Visualizer* viewer);
 
 } // namespace lfs::app

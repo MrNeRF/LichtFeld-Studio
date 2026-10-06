@@ -58,6 +58,23 @@ namespace lfs::vis {
         std::string error;
     };
 
+    struct ViewportGaussianPick {
+        core::Uuid node;
+        std::size_t effective_index = 0;
+        std::optional<std::size_t> stored_index;
+        glm::vec3 world_position{0.0f};
+        glm::vec3 colour{0.0f};
+        bool colour_from_stored_payload = false;
+    };
+
+    // Painting only needs the position; skipping the colour saves a GPU readback per pick.
+    enum class PickReads : std::uint8_t { Position,
+                                          PositionAndColour };
+
+    struct ViewportPickError {
+        std::string message;
+    };
+
     struct SelectionFilterState {
         bool crop_filter = false;
         bool depth_filter = false;
@@ -148,6 +165,12 @@ namespace lfs::vis {
         [[nodiscard]] SelectionResult selectByColorAt(float x, float y, SelectionMode mode,
                                                       SelectionFilterState filters = {},
                                                       int camera_index = -1);
+        [[nodiscard]] std::expected<ViewportGaussianPick, ViewportPickError>
+        pickAtScreen(float x, float y, int camera_index = -1,
+                     PickReads reads = PickReads::PositionAndColour);
+        [[nodiscard]] std::expected<float, ViewportPickError>
+        worldRadiusAtScreen(float x, float y, const glm::vec3& world_position,
+                            float screen_radius) const;
         [[nodiscard]] SelectionResult selectBoxVolume(SelectionMode mode,
                                                       SelectionCommitOptions options = {});
         [[nodiscard]] SelectionResult selectSphereVolume(SelectionMode mode,
@@ -166,7 +189,6 @@ namespace lfs::vis {
         void cancelStroke();
 
         [[nodiscard]] bool isStrokeActive() const { return stroke_active_; }
-        [[nodiscard]] size_t getTotalGaussianCount() const;
         [[nodiscard]] bool hasScreenPositions() const;
         [[nodiscard]] std::shared_ptr<core::Tensor> getScreenPositions() const;
 
@@ -205,7 +227,6 @@ namespace lfs::vis {
             return interactive_selection_.preview_brush_point_count;
         }
         void setTestingScreenPositions(std::shared_ptr<core::Tensor> screen_positions);
-        void setTestingScreenPositionsForCamera(int camera_index, std::shared_ptr<core::Tensor> screen_positions);
         void setTestingViewport(ViewportInfo viewport);
         void setTestingContainmentIntrinsics(std::optional<rendering::CameraIntrinsics> intrinsics);
         void setTestingHoveredGaussianId(std::optional<int> hovered_gaussian_id);
@@ -390,7 +411,6 @@ namespace lfs::vis {
             int camera_index, const SelectionProjectionContext& projection_context) const;
         [[nodiscard]] std::shared_ptr<core::Tensor> renderScreenPositionsForProjectionContext(
             const SelectionProjectionContext& projection_context) const;
-        [[nodiscard]] bool hasTestingScreenPositionsForCamera(int camera_index) const;
         [[nodiscard]] bool commandCameraValidationRequired(int camera_index) const;
         void clearInteractivePreviewState();
         bool allowPassiveHoverPreview(glm::vec2 cursor_pos);
@@ -416,7 +436,6 @@ namespace lfs::vis {
         size_t selection_output_buffer_index_ = 0;
         uint64_t interactive_selection_generation_ = 0;
         std::shared_ptr<core::Tensor> testing_screen_positions_;
-        std::unordered_map<int, std::shared_ptr<core::Tensor>> testing_camera_screen_positions_;
         std::optional<ViewportInfo> testing_viewport_;
         std::optional<rendering::CameraIntrinsics> testing_containment_intrinsics_;
         std::optional<int> testing_hovered_gaussian_id_;

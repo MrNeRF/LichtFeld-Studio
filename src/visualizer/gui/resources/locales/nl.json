@@ -1,46 +1,140 @@
 {
+  "menu.file.create_splat_from_photo": "Splat maken van foto - Apple Reframe",
+  "node_editor.template_count_one": "{} sjabloon",
+  "node_editor.templates_title": "Sjablonen",
+  "node_editor.template_all": "Alle",
+  "node_editor.template_adjust_short": "Aanpassen:",
+  "node_editor.template_add": "Toevoegen",
+  "node_editor.template_add_modifier": "Modifier toevoegen",
+  "node_editor.template_rename": "Hernoemen",
+  "node_editor.template_count": "{} sjablonen",
+  "node_editor.template_mine_empty": "Sla een graaf op als sjabloon om deze hier terug te vinden.",
+  "node_editor.template_no_results": "Geen passende sjablonen. Probeer een andere zoekterm.",
+  "node_template.category.cleanup": "Opschonen",
+  "node_template.category.colour": "Kleur",
+  "node_template.category.selection": "Selectie",
+  "node_template.category.geometry": "Geometrie",
+  "node_template.category.animation": "Animatie",
+  "node_template.kind.splat": "Splats",
+  "node_template.kind.mesh": "Mesh",
+  "node_template.kind.points": "Punten",
+  "node_editor.preview_node": "Voorbeeld van deze node (P)",
+  "node_editor.previewing": "Voorbeeld: {} · {}{} — Esc om te sluiten",
+  "node_editor.from_template": "Van sjabloon…",
+  "node_editor.browse_templates": "Sjablonen bekijken…",
+  "node_editor.template_search": "Sjablonen zoeken",
+  "node_editor.template_apply": "Toepassen",
+  "node_editor.template_adjust": "Wat aanpassen",
+  "node_editor.my_templates": "Mijn sjablonen",
+  "node_editor.suggested_templates": "Begin met een werkende graaf",
+  "node_editor.save_as_template": "Opslaan als sjabloon…",
+  "node_editor.template_save_hint": "Hergebruik deze graaf vanuit het modifierpaneel.",
+  "node_editor.template_name": "Naam",
+  "node_editor.template_description": "Beschrijving",
+  "node_editor.template_category": "Categorie",
+  "node_editor.template_import": "Importeren…",
+  "node_editor.template_export": "Exporteren…",
+  "node_editor.delete": "Verwijderen",
+  "node_template.colour_grade.name": "Kleurcorrectie",
+  "node_template.colour_grade.description": "Voeg contrast, verzadiging en warmte toe aan de hele opname.",
+  "node_template.colour_grade.adjust": "Begin met Exposure, Contrast en Saturation; Temperature maakt het resultaat warmer of koeler.",
+  "node_template.autumn_grass.name": "Herfstgras",
+  "node_template.autumn_grass.description": "Selecteer groentinten in HSV en verschuif ze naar warme herfstkleuren.",
+  "node_template.autumn_grass.adjust": "Stel Hue en Hue Range in op bladeren of gras en pas daarna Hue Shift aan.",
+  "node_template.colour_pop.name": "Kleuraccent",
+  "node_template.colour_pop.description": "Houd één kleurbereik levendig en maak alle andere kleuren minder verzadigd.",
+  "node_template.colour_pop.adjust": "Kies Key Colour op het onderwerp en stel Tolerance en Softness in voor een nette overgang.",
+  "node_template.background_haze.name": "Achtergrondwaas verwijderen",
+  "node_template.background_haze.description": "Verwijder grote, zwak zichtbare splats die een melkachtige achtergrond vormen.",
+  "node_template.background_haze.adjust": "Verhoog Max Opacity of verlaag Min Size om meer te verwijderen; controleer voor het toepassen.",
+  "node_template.remove_floaters.name": "Zwevende splats verwijderen",
+  "node_template.remove_floaters.description": "Verwijder geïsoleerde of weinig dekkende splats uit de opname.",
+  "node_template.remove_floaters.adjust": "Stel eerst Min Opacity in, daarna Isolation Radius en Min Neighbours voor losse vlekjes.",
+  "node_template.remove_clumps.name": "Zwevende clusters verwijderen",
+  "node_template.remove_clumps.description": "Verwijder kleine losse eilandjes en behoud grotere oppervlakken.",
+  "node_template.remove_clumps.adjust": "Verhoog Radius om nabije splats te verbinden en Min Size om grotere eilandjes te verwijderen.",
+  "node_template.scale_clamp.name": "Schaal begrenzen",
+  "node_template.scale_clamp.description": "Verkort naaldvormige splats zonder platte oppervlakken dikker te maken.",
+  "node_template.scale_clamp.adjust": "Verlaag Max Aspect om meer naaldvormige splats te verkorten.",
+  "node_template.web_export.name": "Webexport voorbereiden",
+  "node_template.web_export.description": "Verminder SH-details en het aantal splats voor een licht webbestand.",
+  "node_template.web_export.adjust": "Kies Keep Fraction voor de gewenste grootte; Degree 0 geeft de grootste reductie.",
+  "node_template.posterize.name": "Posteriseren",
+  "node_template.posterize.description": "Beperk kleuren tot een klein aantal grafische banden.",
+  "node_template.posterize.adjust": "Levels bepaalt of het effect krachtig grafisch of subtiel getrapt wordt.",
+  "node_template.noise_variation.name": "Kleurvariatie met ruis",
+  "node_template.noise_variation.description": "Voeg gevlekte kleurvariatie toe met procedurele ruis.",
+  "node_template.noise_variation.adjust": "Scale bepaalt de vlekgrootte, Seed wijzigt het patroon en Strength regelt de menging.",
+  "node_template.sharpen_subject.name": "Onderwerp verscherpen",
+  "node_template.sharpen_subject.description": "Verscherp een ellipsoïdegebied met zachte randen zonder dekking te verliezen.",
+  "node_template.sharpen_subject.adjust": "Plaats Centre en Radii om het onderwerp en stel daarna Amount en Falloff in.",
+  "node_template.crop_showcase.name": "Presentatie-uitsnede",
+  "node_template.crop_showcase.description": "Behoud geometrie in een instelbare ellipsoïde om het object centraal te tonen.",
+  "node_template.crop_showcase.adjust": "Plaats Centre op het onderwerp en vergroot Radii totdat het object volledig is.",
+  "node_template.edge_fade.name": "Zachte randvervaging",
+  "node_template.edge_fade.description": "Laat de dekking afnemen naar de rand van een instelbaar onderwerpgebied.",
+  "node_template.edge_fade.adjust": "Plaats Centre en Radii rond het bruikbare deel; Falloff bepaalt de breedte van de zachte rand.",
+  "node_template.height_fog.name": "Hoogtemist",
+  "node_template.height_fog.description": "Meng lage geometrie naar een lichte mistkleur met een gericht hoogteveld.",
+  "node_template.height_fog.adjust": "Plaats Origin bij de grond, Up langs de verticale as en Fog Top boven de gewenste laag.",
+  "node_template.camera_cleanup.name": "Opschonen op cameradekking",
+  "node_template.camera_cleanup.description": "Verwijder geometrie die door minder dan het gekozen aantal camera’s wordt gezien.",
+  "node_template.camera_cleanup.adjust": "Laad de datasetcamera’s en verlaag Minimum Views als te veel nuttige geometrie verdwijnt.",
+  "node_template.animated_reveal.name": "Radiaal onthullen",
+  "node_template.animated_reveal.description": "Onthul geometrie vanuit een instelbaar middelpunt terwijl de sequencertijd verloopt.",
+  "node_template.animated_reveal.adjust": "Centre bepaalt de oorsprong, Radius de begingrootte en Speed de groei per seconde; verschuif de sequencertijd voor een voorbeeld.",
+  "node_template.box_crop.name": "Blokuitsnede",
+  "node_template.box_crop.description": "Behoud geometrie binnen een instelbaar georiënteerd blok.",
+  "node_template.box_crop.adjust": "Stel Centre en Size in op de gewenste grenzen; gebruik Rotation bij een gedraaide scène.",
+  "node_editor.add_input": "Invoer toevoegen",
+  "node_editor.add_output": "Uitvoer toevoegen",
+  "node_editor.paint": "Schilderen",
+  "node_editor.paint_done": "Schilderen voltooien",
+  "node_editor.pick_colour": "Kleur kiezen",
+  "node_editor.colour_offset_hint": "Sleep voor een tint; dubbelklik om neutraal te herstellen",
   "ui.vram_window_1m": "1 min",
-  "ui.vram_process_nvml_tooltip": "GPU-geheugen van het proces volgens het NVIDIA-stuurprogramma.",
-  "ui.vram_process_estimate_tooltip": "GPU-geheugen van het proces, geschat als bovengrens op basis van apparaatgebruik omdat een proceswaarde ontbreekt.",
+  "ui.vram_process_nvml_tooltip": "GPU-geheugen van het proces volgens het besturingssysteem of GPU-stuurprogramma.",
+  "ui.vram_process_unavailable_tooltip": "GPU-geheugen van het proces is niet beschikbaar. Het apparaatgebruik omvat andere toepassingen.",
+  "ui.vram_over_budget": "boven budget",
   "ui.vram_device_nvml_tooltip": "Apparaatgeheugen volgens het NVIDIA-stuurprogramma.",
   "ui.vram_device_cuda_tooltip": "Geheugen dat CUDA ziet; gereserveerde fysieke capaciteit kan ontbreken.",
   "ui.vram_process_metal_tooltip": "GPU-geheugen dat dit proces via Metal heeft toegewezen.",
   "ui.vram_device_unified_tooltip": "Gedeeld geheugen dat de GPU niet meer kan gebruiken, van zijn working-set-limiet: de GPU-toewijzingen van alle apps plus het systeemgeheugen dat andere processen bezetten.",
-  "ui.vram_device_capacity": "Device capacity",
+  "ui.vram_device_capacity": "Apparaatcapaciteit",
   "ui.vram_window_5m": "5 min",
   "ui.vram_window_30m": "30 min",
-  "ui.vram_window_all": "All",
-  "ui.vram_axis_toggle": "Time / iteration",
-  "ui.vram_scale_fit": "Fit",
-  "ui.vram_scale_device": "Device",
-  "ui.vram_hover_iteration": "iter",
+  "ui.vram_window_all": "Alles",
+  "ui.vram_axis_toggle": "Tijd / iteratie",
+  "ui.vram_scale_fit": "Passend",
+  "ui.vram_scale_device": "Apparaat",
+  "ui.vram_hover_iteration": "iter.",
   "ui.vram_hover_splats": "splats",
-  "ui.vram_hover_process": "process",
-  "ui.vram_hover_device": "Device",
-  "ui.vram_hover_base": "baseline",
-  "ui.vram_live": "Live",
+  "ui.vram_hover_process": "proces",
+  "ui.vram_hover_device": "Apparaat",
+  "ui.vram_hover_base": "basislijn",
+  "ui.vram_live": "Actueel",
   "ui.vram_delta": "Delta",
-  "ui.vram_peak": "Peak",
-  "ui.vram_set_baseline": "Set baseline",
-  "ui.vram_export_csv": "Export CSV",
-  "ui.vram_opacity": "Opacity",
-  "ui.vram_peak_breakdown": "Peak breakdown",
-  "ui.vram_top_movers": "Top movers",
-  "ui.vram_filter_movers": "Filter movers",
-  "ui.vram_unattributed": "Unattributed",
-  "ui.vram_slack": "Slack",
-  "ui.vram_possible_leak": "Possible leak",
-  "ui.vram_over_attributed": "Over-attributed",
-  "ui.vram_model": "Model parameters",
-  "ui.vram_optimizer": "Optimizer and gradients",
+  "ui.vram_peak": "Piek",
+  "ui.vram_set_baseline": "Basislijn instellen",
+  "ui.vram_export_csv": "CSV exporteren",
+  "ui.vram_opacity": "Opaciteit",
+  "ui.vram_peak_breakdown": "Uitsplitsing van de piek",
+  "ui.vram_top_movers": "Grootste veranderingen",
+  "ui.vram_filter_movers": "Veranderingen filteren",
+  "ui.vram_unattributed": "Niet toegeschreven",
+  "ui.vram_slack": "Speling",
+  "ui.vram_possible_leak": "Mogelijk lek",
+  "ui.vram_over_attributed": "Te veel toegeschreven",
+  "ui.vram_model": "Modelparameters",
+  "ui.vram_optimizer": "Optimizer en gradiënten",
   "ui.vram_rasterizer": "Rasterizer",
-  "ui.vram_loss_step": "Loss and step buffers",
-  "ui.vram_densification": "Densification",
-  "ui.vram_image_io": "Image I/O and decode",
+  "ui.vram_loss_step": "Loss- en stapbuffers",
+  "ui.vram_densification": "Verdichting",
+  "ui.vram_image_io": "Afbeeldings-I/O en decodering",
   "ui.vram_viewer": "Viewer",
-  "ui.vram_allocator_slack": "Allocator slack",
-  "ui.vram_context": "CUDA context and driver",
-  "ui.vram_exported_to": "Exported to",
+  "ui.vram_allocator_slack": "Allocator-speling",
+  "ui.vram_context": "CUDA-context en stuurprogramma",
+  "ui.vram_exported_to": "Geëxporteerd naar",
   "ui.vram_per_splat": "bytes/splat",
   "ui.vram_per_megapixel": "MiB/MP",
   "projects.toolbar.sort": "Sorteren",
@@ -130,7 +224,7 @@
   "projects.gallery.format.sog_hint": "Kleinste formaat, snel laden op het web.",
   "projects.gallery.format.ssog_hint": "Streamt grote scènes.",
   "projects.gallery.format.spz_hint": "Uitwisselbaar met andere tools.",
-  "projects.gallery.state.connection_lost": "Paused (connection lost)",
+  "projects.gallery.state.connection_lost": "Gepauzeerd (verbinding verbroken)",
   "projects.gallery.error.portal_version": "This portal version does not support gallery sync",
   "projects.gallery.error.download_damaged": "Het gedownloade bestand is beschadigd of is in de Galerij gewijzigd.",
   "projects.gallery.error.download_size": "Het gedownloade bestand is onvolledig of groter dan door de Galerij aangegeven.",
@@ -195,9 +289,9 @@
     "help": "Help",
     "help.getting_started": "Aan de Slag",
     "help.about": "Over LichtFeld Studio",
-    "view.performance_hud": "Performance HUD",
+    "view.performance_hud": "Prestatie-HUD",
     "edit.preferences": "Voorkeuren...",
-    "view.debug_info": "Debug Info..."
+    "view.debug_info": "Debug-info..."
   },
   "window": {
     "export": "Exporteren",
@@ -214,10 +308,10 @@
     "description": "Leer hoe je datasets voorbereidt en aan de slag gaat met LichtFeld Studio:",
     "wiki_section": "WIKI & FAQ",
     "video_overview": "Alles wat LichtFeld Studio vandaag kan doen",
-    "video_automotive": "3dgs for automotive marketing",
+    "video_automotive": "3DGS voor automarketing",
     "video_intro": "Training op 360 Equirectangulaire Afbeeldingen",
-    "video_reality_scan": "Reality Scan Dataset",
-    "video_colmap": "COLMAP Tutorial",
+    "video_reality_scan": "Reality Scan-dataset",
+    "video_colmap": "COLMAP-tutorial",
     "video_masks": "Maskers Tutorial"
   },
   "about": {
@@ -226,7 +320,7 @@
     "build_info": "BUILD INFORMATIE",
     "build_info.version": "Versie",
     "build_info.commit": "Commit",
-    "build_info.build_type": "Build Type",
+    "build_info.build_type": "Buildtype",
     "build_info.platform": "Platform",
     "links": "LINKS",
     "repository": "Repository:",
@@ -385,8 +479,8 @@
     "section.initialization": "Initialisatie",
     "section.basic_params": "Trainingsparameters",
     "section.advanced_params": "Geavanceerde parameters",
-    "section.advanced_registry": "More Parameters",
-    "search.placeholder": "Search parameters...",
+    "section.advanced_registry": "Meer parameters",
+    "search.placeholder": "Parameters zoeken...",
     "advanced.means_lr_end": "Position LR End:",
     "advanced.scaling_lr_end": "Scaling LR End:",
     "advanced.cropbox_lr_scale": "Rejected Splat LR Scale:",
@@ -404,16 +498,12 @@
     "advanced.screen_share_penalty": "Screen Share Penalty:",
     "advanced.oversize_split_fraction": "Oversize Split Fraction:",
     "advanced.use_edge_map": "Use Edge Map:",
-    "advanced.far_scene_min_fraction": "Far Scene Min Fraction:",
-    "advanced.growth_ratio_rank": "Growth Ratio Rank:",
-    "advanced.growth_ratio_pow": "Growth Ratio Pow:",
-    "advanced.fill_pacing_iter": "Fill Pacing Iter:",
-    "advanced.far_seed_dose": "Far Seed Dose:",
     "tooltip.means_lr_end": "Bepaalt hoeveel Gaussian-posities aan het einde van training nog mogen bewegen. Lagere waarden laten geometrie tot rust komen; hogere waarden laten posities laat blijven aanpassen, maar kunnen drift of instabiliteit veroorzaken.",
     "tooltip.scaling_lr_end": "Bepaalt hoeveel Gaussian-groottes aan het einde van training nog mogen veranderen. Lagere waarden stabiliseren uiteindelijke splat-groottes; hogere waarden laten schaal laat blijven aanpassen.",
     "tooltip.cropbox_lr_scale": "Bepaalt hoeveel splats buiten de crop box nog leren. Gebruik lage waarden om training op de ROI te focussen; hogere waarden als externe context nog moet aanpassen. Alleen relevant met een actieve crop box.",
     "tooltip.cropbox_loss_weight": "Bepaalt hoeveel beeldpixels buiten de crop box training beïnvloeden. Verlaag om op de ROI te focussen; verhoog wanneer de omgeving het resultaat nog moet beïnvloeden. Alleen relevant met een actieve crop box.",
-    "tooltip.normal_loss_space": "Normal prior space: auto, camera-opencv, camera-opengl, or world",
+    "tooltip.normal_loss_space": "Ruimte van de normal-prior: auto, camera-opencv, camera-opengl of world",
+    "tooltip.eval_space": "Bepaalt of de evaluatie de originele vervormde afbeeldingen of de gecorrigeerde trainingsafbeeldingen gebruikt.",
     "tooltip.growth_grad_threshold": "Stelt in hoe sterk een refinement-signaal moet zijn voordat een splat mag groeien. Lagere waarden laten meer gebieden groeien; hogere waarden focussen groei alleen op sterkere zichtbare fouten.",
     "tooltip.grow_fraction": "Bepaalt hoeveel geschikte kandidaten per refinement-stap groeien. Verhoog wanneer het model sneller capaciteit nodig heeft; verlaag wanneer groei te agressief of ruisachtig is.",
     "tooltip.opacity_decay": "Vermindert opacity geleidelijk tijdens refinement, het sterkst vroeg in training. Verhoog om zwakke splats op te ruimen; verlaag als nuttige oppervlakken vervagen.",
@@ -422,11 +512,6 @@
     "tooltip.bounds_percentile": "Bepaalt hoe scènegrenzen uit Gaussian-posities worden geschat. Lagere waarden negeren meer uitschieters; hogere waarden nemen meer van de puntverdeling mee.",
     "tooltip.use_error_map": "Stuurt refinement naar beeldgebieden met zichtbare reconstructiefout. Zet uit als error-map guidance overdreven reageert op ruis of appearance-verschil.",
     "tooltip.use_edge_map": "Stuurt refinement meer naar beeldranden. Gebruik voor scherpere silhouetten en detailgrenzen; zet uit als ruisachtige randen of textuurartefacten te veel capaciteit krijgen.",
-    "tooltip.far_scene_min_fraction": "Bepaalt wanneer far-field-functies activeren. Verlaag om far-field-handling makkelijker te activeren; verhoog zodat het alleen activeert wanneer genoeg splats echt ver weg zijn.",
-    "tooltip.growth_ratio_rank": "Helpt zelden zichtbare maar foutgevoelige gebieden concurreren met vaak zichtbare gebieden. Gebruik wanneer verre of weinig geziene gebieden onderverfijnd blijven.",
-    "tooltip.growth_ratio_pow": "Bepaalt hoe sterk zichtbaarheidstelling de groeirangschikking beïnvloedt. Hogere waarden bevoordelen minder geziene foutgebieden sterker; lagere waarden lijken meer op ruwe fout-rangschikking.",
-    "tooltip.fill_pacing_iter": "Spreidt capaciteitgroei over tijd in plaats van het model te vroeg te vullen. `0` laat de cap zo snel vullen als refinement toestaat.",
-    "tooltip.far_seed_dose": "Bepaalt extra seeding voor verre/achtergrondgebieden. Verhoog wanneer verre achtergronden schaars blijven; houd laag als far-field-groei onnodige splats toevoegt.",
     "dataset.path": "Pad:",
     "dataset.images": "Afbeeldingen:",
     "dataset.resize_factor": "Schaalfactor:",
@@ -456,7 +541,7 @@
     "masking.threshold": "Drempel:",
     "masking.penalty_weight": "Strafgew.:",
     "masking.penalty_power": "Strafexp.:",
-    "step_scaling.locked": "Auto",
+    "step_scaling.locked": "Automatisch",
     "step_scaling.unlocked": "Handmatig",
     "tooltip.penalty_weight": "Gewicht voor dekking straf in achtergrond gebieden",
     "tooltip.penalty_power": "Straf afname: 1=lineair, 2=kwadratisch, >2=zachter",
@@ -503,9 +588,9 @@
     "tooltip.save_step_input": "Iteratienummer (+/- om aan te passen)",
     "tooltip.save_step_add": "Checkpoint toevoegen bij deze iteratie",
     "tooltip.save_step_remove": "Dit checkpoint verwijderen",
-    "tooltip.opt.depth_loss_mode.ssi": "Auto-detect per image whether the prior is disparity-like or depth-like",
-    "tooltip.opt.depth_loss_mode.ssi_disparity": "Prior is disparity-like (larger = closer), e.g. Depth Anything or MiDaS output",
-    "tooltip.opt.depth_loss_mode.ssi_depth": "Prior is depth-like (larger = farther), e.g. metric depth models",
+    "tooltip.opt.depth_loss_mode.ssi": "Detecteert per afbeelding automatisch of de prior dispariteits- of diepteachtig is",
+    "tooltip.opt.depth_loss_mode.ssi_disparity": "Prior is dispariteitsachtig (groter = dichterbij), bijv. uitvoer van Depth Anything of MiDaS",
+    "tooltip.opt.depth_loss_mode.ssi_depth": "Prior is diepteachtig (groter = verder weg), bijv. metrische dieptemodellen",
     "error.strategy_gut_title": "Incompatibele instellingen",
     "backend_conflict.message": "{backend} kan niet samen met {feature} worden gebruikt. Wijzig deze instelling of selecteer {fallback_backend}.",
     "conflict.btn_use_mcmc": "MCMC gebruiken",
@@ -527,29 +612,33 @@
     "losses.scale_reg": "Schaalreg.:",
     "losses.tv_loss_weight": "TV-verliesgewicht:",
     "init.init_opacity": "Initiële opaciteit:",
-    "init.init_scaling": "Init Scaling:",
-    "init.random_init": "Random Init:",
-    "init.num_points": "  Num Points:",
-    "init.extent": "  Extent:",
+    "init.init_scaling": "Initiële schaal:",
+    "init.random_init": "Willekeurige init:",
+    "init.num_points": "  Aantal punten:",
+    "init.extent": "  Omvang:",
     "thresholds.min_opacity": "Min. opaciteit:",
     "thresholds.prune_opacity": "Opaciteit snoeien:",
     "value.none": "(geen)",
+    "value.crop_box": "Crop box",
+    "value.mask_folder": "Maskers: {}",
     "value.default": "(standaard)",
     "value.not_set": "(niet ingesteld)",
     "options.strategy.mcmc": "MCMC",
     "options.strategy.mrnf": "MRNF",
     "options.strategy.igs_plus": "IGS+",
     "options.mask.none": "Geen",
-    "options.mask.segment": "Segment",
+    "options.mask.segment": "Segmenteren",
     "options.mask.ignore": "Negeren",
     "options.mask.segment_and_ignore": "Segmenteren + Negeren",
     "options.mask.alpha_consistent": "Alpha-consistent",
     "options.densify_error_map.ssim": "SSIM",
     "options.densify_error_map.ssim_cs": "SSIM Contrast-Structure",
-    "options.normal_loss_space.auto": "Auto",
+    "options.normal_loss_space.auto": "Automatisch",
     "options.normal_loss_space.camera_opencv": "Camera (OpenCV)",
     "options.normal_loss_space.camera_opengl": "Camera (OpenGL)",
-    "options.normal_loss_space.world": "World",
+    "options.normal_loss_space.world": "Wereld",
+    "options.eval_space.distorted": "Vervormd",
+    "options.eval_space.undistorted": "Gecorrigeerd",
     "options.depth_loss.ssi": "SSI (automatisch)",
     "options.depth_loss.ssi_disparity": "SSI (dispariteitsprior)",
     "options.depth_loss.ssi_depth": "SSI (diepteprior)",
@@ -570,6 +659,14 @@
       "bg_image_path": "Een aangepaste achtergrondafbeelding voor training. Gebruik wanneer de scene moet worden geoptimaliseerd tegen een bekende background plate.",
       "bg_image_browse": "Bladeren naar een achtergrondafbeelding",
       "bg_image_clear": "Geselecteerde achtergrondafbeelding wissen",
+      "eval_mask": "Kiest de pixels die worden geëvalueerd: een mesh, een box, de crop box, een maskermap, een dieptebereik, punten of een splat. De training verandert niet.",
+      "eval_mask_invert": "Evalueert in plaats daarvan de pixels buiten het evaluatiemasker.",
+      "eval_mask_opacity": "Gerenderde dekking die een pixel nodig heeft om door een splat-masker gedekt te zijn. Lager verbreedt het masker voorbij de omtrek, hoger trekt het naar binnen.",
+      "eval_mask_browse": "Bladeren naar een evaluatiemesh",
+      "eval_mask_clear": "Evaluatiemasker wissen",
+      "eval_mask_cropbox": "Alleen pixels evalueren die worden gedekt door de crop box van het trainingsmodel, zoals geplaatst bij de start van de training.",
+      "eval_mask_folder": "Kies een map met één masker per afbeelding, gekoppeld op bestandsnaam; witte pixels worden geëvalueerd.",
+      "eval_mask_spec": "Typ een maskerbron en druk op Enter: bbox:x0,y0,z0,x1,y1,z1, depth:near,far, cropbox, masks:[map] of een absoluut mesh-pad.",
       "dataset_path": "De dataset-root die momenteel voor training wordt gebruikt.",
       "dataset_images": "De afbeeldingsmap binnen de dataset.",
       "dataset_output": "Pad waar checkpoints en getrainde artefacten worden geschreven. Gebruik dit om te controleren of de run naar de bedoelde project-/outputmap opslaat.",
@@ -603,8 +700,8 @@
           "alpha_consistent": "Alpha-consistentie met masker afdwingen"
         },
         "densify_error_map": {
-          "ssim": "Full SSIM densify error, including brightness mismatches",
-          "ssim_cs": "Contrast and structure only; ignore brightness-only mismatches"
+          "ssim": "Volledige SSIM-verdichtingsfout, inclusief helderheidsverschillen",
+          "ssim_cs": "Alleen contrast en structuur; negeert verschillen die alleen in helderheid zitten"
         },
         "bg_mode": {
           "color": "Gebruikt de geselecteerde vaste achtergrondkleur. Het beste bij een bekende, consistente achtergrond of voorspelbare training.",
@@ -633,7 +730,6 @@
       "strategy": "De hoofdstrategie voor training die bepaalt hoe Gaussians worden toegevoegd, verfijnd of gesnoeid. Gebruik MRNF als standaard; gebruik MCMC of IGS+ om trainingsgedrag te vergelijken of strategiespecifieke gevallen op te lossen.",
       "iterations": "Het geplande aantal optimalisatiestappen. In Auto-modus gebruikt het schema ongeveer 100 iteraties per actieve trainingsafbeelding, met een minimum van 30.000 iteraties. Gebruik meer voor complexe scenes of schonere convergentie; minder voor snelle previews.",
       "max_gaussians": "De bovengrens voor modelgrootte. Verhoog voor meer scènedetail als VRAM dat toelaat; verlaag om geheugen, trainingskosten en uitvoergrootte te beperken.",
-      "background_improvements": "Een MRNF-verbeterpakket voor verre gebieden en achtergronden. Gebruik het voor buitenscenes, luchten, verre gebouwen of achtergronden die dun, wazig of ondergetraind lijken.",
       "sh_degree": "Bepaalt hoeveel kijkrichting-afhankelijke kleur elke Gaussian kan weergeven. Gebruik 3 voor beste kwaliteit; lagere waarden voor snellere training, minder VRAM of vooral diffuse scenes.",
       "mask_mode": "Bepaalt hoe maskers trainingsloss en opacity beïnvloeden. Gebruik dit met object-/achtergrondmaskers om het onderwerp te isoleren, ongewenste gebieden te negeren of alpha-gedrag af te dwingen.",
       "use_depth_loss": "Voegt schaal- en verschuivingsinvariante dieptekaartbegeleiding toe aan het leren van geometrie. Gebruik dit wanneer betrouwbare dieptepriors relatieve structuur, dieptevolgorde of oppervlakplaatsing kunnen verbeteren.",
@@ -695,8 +791,8 @@
     "add_group": "Groep Toevoegen",
     "add_group_ellipsis": "Groep Toevoegen...",
     "new_group_name": "Nieuwe groep",
-    "group_selected": "Group Selected",
-    "ungroup": "Ungroup",
+    "group_selected": "Selectie groeperen",
+    "ungroup": "Groep opheffen",
     "export": "Exporteren...",
     "delete": "Verwijderen",
     "rename": "Hernoemen",
@@ -788,7 +884,7 @@
     "format.glb_gltf": "GLB (glTF)",
     "format.usd_openusd": "USD (OpenUSD)",
     "format.usdz_nurec": "USDZ (NuRec)",
-    "format.html_viewer": "HTML Viewer",
+    "format.html_viewer": "HTML-viewer",
     "format.rad_random_access": "RAD (SparkJS)",
     "format.colmap_sparse": "COLMAP Sparse",
     "all": "Alle",
@@ -819,11 +915,11 @@
     "add": "Toevoegen",
     "remove": "Verwijderen",
     "delete": "Verwijderen",
-    "filter": "Filter…",
+    "filter": "Filteren…",
     "browse": "Bladeren...",
     "apply": "Toepassen",
     "reset": "Resetten",
-    "auto": "Auto",
+    "auto": "Automatisch",
     "undo": "Ongedaan maken",
     "redo": "Opnieuw uitvoeren",
     "edit": "Bewerken",
@@ -876,12 +972,12 @@
     "zoom": "Zoom"
   },
   "preferences": {
-    "tensor_auto": "Automatisch",
+    "tensor_auto": "Auto",
     "tensor_cuda": "CUDA",
     "tensor_vulkan": "Vulkan",
     "tensor_metal": "Metal",
     "tensor_backend": "Tensor backend",
-    "tensor_restart": "Changes apply after restarting LichtFeld Studio. Automatic picks CUDA where it is built, else Metal where the GPU supports it, else Vulkan. Vulkan and Metal support viewing and inference; training requires CUDA.",
+    "tensor_restart": "Regelt GPU-tensorberekeningen onafhankelijk van de viewer-renderer. Wijzigingen worden toegepast na het herstarten van LichtFeld Studio. Automatisch kiest CUDA, Metal of Vulkan op basis van deze build en de GPU.",
     "tensor_device": "Vulkan device",
     "tensor_device_hint": "Leave empty for automatic selection, or enter a device index or UUID. CUDA rendering must use the CUDA device.",
     "tensor_validation": "Vulkan diagnostics",
@@ -935,7 +1031,6 @@
     "scene_reconstruction_off": "Uit",
     "scene_reconstruction_spatial": "Ruimtelijk",
     "scene_reconstruction_temporal": "Temporeel",
-    "scene_reconstruction_nvidia_dlss": "NVIDIA DLSS",
     "scene_reconstruction_preset": "Kwaliteitsvoorinstelling",
     "scene_reconstruction_quality": "Kwaliteit",
     "scene_reconstruction_balanced": "Gebalanceerd",
@@ -945,10 +1040,10 @@
     "key_bindings": "Toetsbindingen",
     "camera_navigation": "Cameranavigatie",
     "navigation_mode": "Navigatiemodus",
-    "zoom_speed": "Zoom speed",
-    "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
-    "navigation_speed": "Navigation speed",
-    "navigation_speed_tooltip": "Default speed for moving the camera with WASD.",
+    "zoom_speed": "Zoomsnelheid",
+    "zoom_speed_tooltip": "Standaardsnelheid voor het zoomen van de camera met het muiswiel.",
+    "navigation_speed": "Navigatiesnelheid",
+    "navigation_speed_tooltip": "Standaardsnelheid voor het bewegen van de camera met WASD.",
     "pointing_device": "Navigatieapparaat",
     "pointing_device_tooltip": "Muis- of trackpadbediening voor de viewport. Het pictogram in de statusbalk wisselt ook.",
     "pointing_device_mouse": "Muis (desktop)",
@@ -1003,7 +1098,10 @@
     "reset_all_settings_confirmation": "Taal, thema, UI-schaal, scènereconstructie, invoervoorkeuren, MCP-server, indeling en vensterstatus naar de standaardwaarden herstellen? Dit wordt onmiddellijk toegepast. Als een .licht-project open is, wordt de opgeslagen indeling bij de volgende opslag vervangen; projectinhoud, datasets, exports, plugins en cache blijven ongewijzigd.",
     "reset_all_settings_success": "Alle voorkeuren, de indeling en de vensterstatus zijn onmiddellijk gereset.",
     "window_manager_unavailable": "Vensterbeheer is niet beschikbaar.",
-    "window_state_reset_failed": "De standaardvenstergeometrie kon niet worden hersteld."
+    "window_state_reset_failed": "De standaardvenstergeometrie kon niet worden hersteld.",
+    "viewer_backend": "Viewer-backend",
+    "viewer_backend_description": "Wordt direct toegepast. Auto geeft de voorkeur aan Metal op compatibele Macs en elders aan Vulkan. Niet-ondersteunde frames gebruiken Vulkan.",
+    "backend_unavailable": "De geselecteerde backend is niet beschikbaar op dit apparaat. Uw instellingen zijn niet gewijzigd."
   },
   "main_panel": {
     "console": "Console",
@@ -1197,6 +1295,7 @@
     "instructions": "Enter: selectie bevestigen | Ctrl+C: inhoud kopiëren"
   },
   "training_panel": {
+    "preparing_training": "Training voorbereiden…",
     "start_training": "Training starten",
     "resume_training": "Hervat Training",
     "pause": "Pauzeren",
@@ -1219,7 +1318,7 @@
     "finished": "Voltooid",
     "save_steps": "Bewaar/Eval Stappen",
     "new_step": "Nieuwe Stap",
-    "mrnf_params": "MRNF Parameters",
+    "mrnf_params": "MRNF-parameters",
     "loading_session": "Trainingssessie laden (iteratie {n})…",
     "session_restore_failed": "De trainingssessie kon niet worden geladen",
     "edit_mode_discards_session_title": "Trainingssessie verlaten?",
@@ -1356,6 +1455,8 @@
     "cropbox_loss_weight": "Schaal pixelverliezen buiten de ROI van het actieve bijsnijvak",
     "environment_mode": "Achtergrondbron: effen kleur of HDRI",
     "environment_map_path": "Kies een HDRI-omgevingskaart",
+    "color_tonemapping": "Toncurve voor de weergegeven splatkleuren (Geen = ongewijzigd)",
+    "color_exposure": "Schaalt de helderheid van splats vóór de toncurve; de splats zelf veranderen niet",
     "environment_exposure": "HDRI-belichting in EV-stops",
     "environment_rotation": "Roteer HDRI rond de verticale as",
     "voxel_size": "Voxel-celgrootte voor ruimtelijke queries",
@@ -1447,7 +1548,7 @@
     "sparse_dir": "Sparse:      ",
     "masks_dir": "Maskers:     ",
     "init_file": "Init file (optioneel, vervangt points3D):",
-    "ppisp_sidecar": "PPISP Sidecar:",
+    "ppisp_sidecar": "PPISP-sidecar:",
     "centralize_dataset": "Dataset centreren",
     "centralize_off": "Uit",
     "centralize_by_pointcloud": "Op puntenwolk",
@@ -1514,11 +1615,11 @@
     "include_provenance_hint": "Uitschakelen verwijdert identificerende velden, maar een minimale build-identificatie (app-versie + build-commit) wordt altijd ingesloten",
     "spz_version": "SPZ-VERSIE",
     "spz_version_v4": "v4",
-    "spz_version_v3": "v3 (legacy)",
+    "spz_version_v3": "v3 (verouderd)",
     "export_merged": "Exporteer Samengevoegd...",
     "rad_export_mode": "RAD MODE",
-    "rad_streamable": "RAD (streamable)",
-    "rad_native": "RAD (non-streamable)",
+    "rad_streamable": "RAD (streambaar)",
+    "rad_native": "RAD (niet streambaar)",
     "rad_flip_y": "Y-as omkeren",
     "colmap_writes_sparse": "Schrijft cameras.{0}, images.{0} en points3D.{0}",
     "colmap_no_sparse": "Geen COLMAP sparse-map gevonden",
@@ -1687,7 +1788,7 @@
     "trigger.drag": " Slepen",
     "trigger.scroll": "Scrollen",
     "trigger.unknown": "Onbekend",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
+    "action.toggle_performance_hud": "Prestatie-HUD omschakelen",
     "action.view_axis_top": "Bovenaanzicht",
     "action.view_axis_bottom": "Onderaanzicht",
     "action.view_axis_front": "Vooraanzicht",
@@ -1697,7 +1798,8 @@
     "action.view_toggle_perspective": "Perspectief/orthografisch wisselen",
     "action.view_frame_all": "Alles inkaderen",
     "action.toggle_quad_view": "Vier weergaven wisselen",
-    "action.toggle_maximize_area": "Gebied maximaliseren"
+    "action.toggle_maximize_area": "Gebied maximaliseren",
+    "action.toggle_node_editor": "Node-editor wisselen"
   },
   "debug_info": {
     "clear_history": "Geschiedenis Wissen",
@@ -1710,7 +1812,6 @@
     "strategy": "Strategie:",
     "iterations": "Iteraties:",
     "max_gaussians": "Max. Gaussische splats:",
-    "background_improvements": "BG-verbeteringen:",
     "sh_degree": "SH-graad:",
     "steps_scaler": "Stappenschaal:",
     "bilateral_grid": "Bilateraal raster:",
@@ -1754,6 +1855,13 @@
     "ppisp_sidecar_path": "Sidecar-pad:",
     "enable_eval": "Evaluatie inschakelen:",
     "eval_all": "Alle afbeeldingen evalueren:",
+    "eval_space": "Eval Space:",
+    "eval_mask": "Evaluatiemasker:",
+    "eval_mask_invert": "Masker omkeren:",
+    "eval_mask_opacity": "Splat-maskerdekking:",
+    "eval_mask_use_cropbox": "Crop box gebruiken",
+    "eval_mask_folder": "Maskermap",
+    "eval_mask_spec": "Maskerspecificatie:",
     "opacity_penalty_weight": "  Gewicht opaciteitsstraf:",
     "opacity_penalty_power": "  Macht opaciteitsstraf:",
     "mask_threshold": "  Maskerdrempel:",
@@ -1826,7 +1934,7 @@
     "camera": "Camera: %s",
     "lens": "Lens: %s",
     "focal_length": "Brandpuntsafstand: %s",
-    "focal_35mm": "35mm Equiv: %s",
+    "focal_35mm": "35mm-equivalent: %s",
     "exposure": "Belichting: %s",
     "aperture": "Diafragma: %s",
     "date": "Datum: %s",
@@ -1864,6 +1972,7 @@
     "stop": "Stoppen",
     "running": "Wordt uitgevoerd...",
     "already_running": "Er wordt al een script uitgevoerd.",
+    "system_exit": "SystemExit opgeworpen in editorscript",
     "python": "Python",
     "syntax": "Syntaxis",
     "outline": "Overzicht",
@@ -2015,7 +2124,7 @@
     "sharpness_mode_desc_window": "Evalueert een subset van frames in elk interval en bewaart de scherpste. Kies het aantal kandidaten in het dropdownmenu hieronder.",
     "sharpness_threshold_label": "Drempelwaarde",
     "sharpness_coverage_label": "Kandidaten",
-    "candidates_auto": "Auto",
+    "candidates_auto": "Automatisch",
     "candidates_fast": "3 - Snel",
     "candidates_balanced": "5 - Evenwichtig",
     "candidates_quality": "10 - Kwaliteit",
@@ -2034,7 +2143,7 @@
     "extracting": "Extraheren: %d / %d frames"
   },
   "rendering_panel": {
-    "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
+    "fov_format": "Gezichtsveld: {hfov:.1f}° H / {vfov:.1f}° V",
     "section_viewport": "Viewport",
     "section_camera": "Camera en projectie",
     "section_selection": "Selectie en overlays",
@@ -2100,7 +2209,7 @@
     "gt_compare": "GT-vergelijking",
     "camera": "Cam {}",
     "ground_truth": "Ground Truth",
-    "ground_truth_excluded": "Ground Truth (Excluded from Training)",
+    "ground_truth_excluded": "Ground Truth (uitgesloten van training)",
     "rendered": "Gerenderd",
     "split_view": "Gesplitste weergave",
     "primary_view": "Primaire weergave",
@@ -2109,7 +2218,23 @@
     "gpu_budget": "GPU-budget",
     "strategy_default": "Standaard",
     "split": "Splitsing:",
-    "ui_fps": "UI FPS"
+    "mcp_name": "MCP",
+    "ui": "UI",
+    "view": "Beeld",
+    "renderer_backend": "Renderer",
+    "tensor_backend": "Tensoren",
+    "renderer_backend_tooltip": "Backend voor scènerendering.",
+    "tensor_backend_tooltip": "Backend voor tensorberekeningen.",
+    "backend_requested": "Gevraagd: {}",
+    "backend_no_frame": "Ingestelde renderer; nog geen scèneframe.",
+    "backend_fallback": "Metal is niet beschikbaar voor dit frame; Vulkan wordt gebruikt.",
+    "renderer_backend_short": "R",
+    "tensor_backend_short": "T",
+    "upscaler_backend_short": "U",
+    "upscaler_backend": "Upscaler",
+    "upscaler_pending": "Wachten op het volgende gerenderde frame",
+    "upscaler_unsupported": "Niet ondersteund in deze weergave; uit",
+    "upscaler_unavailable": "Niet beschikbaar; uit"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub-URL of verkorte vorm:",
@@ -2290,8 +2415,8 @@
     "median": "Mediaan",
     "p95": "P95",
     "peak_bin": "Piekbin",
-    "bin_count": "{count} bins",
-    "bins": "Bins",
+    "bin_count": "{count} klassen",
+    "bins": "Klassen",
     "compare_x_bins": "X-bins",
     "compare_y_bins": "Y-bins",
     "marked": "Gemarkeerd",
@@ -2306,7 +2431,7 @@
     "summary": "Verdeling van {metric} over {count} Gaussische splats",
     "bin_tooltip": "Bin {index}: {left} tot {right} | {count} Gaussische splats",
     "compare_with": "Vergelijken met",
-    "compare_bin_count": "{x_count} x {y_count} bins",
+    "compare_bin_count": "{x_count} x {y_count} klassen",
     "compare": {
       "off": "Uit",
       "summary": "{x_metric} tegenover {y_metric} over {count} Gaussische splats",
@@ -2476,13 +2601,13 @@
     "model": "Model",
     "tree": "Boom",
     "traversal": "Doorloop",
-    "stop": "Stop",
-    "chunks": "Chunks",
+    "stop": "Stoppen",
+    "chunks": "Blokken",
     "cache": "Cache",
     "selector": "Selector",
     "pixel": "Pixel",
     "render": "Renderen",
-    "foveation": "Foveation",
+    "foveation": "Foveatie",
     "source": "Bron",
     "breakdown_process_vram": "Verdeling van proces-VRAM",
     "vram_tab_overview": "Overzicht",
@@ -2508,33 +2633,33 @@
     "delta": "Delta",
     "time": "Tijd",
     "gpu": "GPU",
-    "perf_hud_title": "Performance",
-    "perf_this_process": "This process",
-    "perf_other_processes": "Other processes",
-    "perf_free": "Free",
-    "perf_cores": "cores",
-    "perf_process_cpu_note": "Process CPU, share of all cores",
-    "perf_tab_ledger": "Ledger",
-    "perf_ledger_closes": "Ledger closes",
-    "perf_ledger_gap": "Unattributed",
-    "perf_ledger_over": "Over-attributed, numbers unreliable",
-    "perf_ledger_attributed": "Attributed",
-    "perf_nested_disclosure": "Disclosure, not counted again",
-    "perf_no_owner": "No owner",
-    "perf_untracked": "Untracked",
-    "perf_retention": "Retention",
-    "perf_reclaimable": "Reclaimable",
-    "perf_required": "Required",
-    "perf_allocated": "Allocated",
-    "perf_slack": "Slack",
-    "perf_over_budget": "Over budget",
-    "perf_estimate_detected": "Estimate detected",
-    "perf_degenerate_pair": "Publisher reports required equal to allocated",
-    "perf_tracking_off": "Detailed memory tracking is off",
-    "perf_enable_tracking": "Enable",
-    "perf_expand": "Expand",
-    "perf_collapse": "Collapse",
-    "perf_hud_tooltip": "Show or hide the performance HUD",
+    "perf_hud_title": "Prestaties",
+    "perf_this_process": "Dit proces",
+    "perf_other_processes": "Andere processen",
+    "perf_free": "Vrij",
+    "perf_cores": "kernen",
+    "perf_process_cpu_note": "Proces-CPU, aandeel van alle kernen",
+    "perf_tab_ledger": "Grootboek",
+    "perf_ledger_closes": "Grootboek klopt",
+    "perf_ledger_gap": "Niet toegeschreven",
+    "perf_ledger_over": "Te veel toegeschreven, cijfers onbetrouwbaar",
+    "perf_ledger_attributed": "Toegeschreven",
+    "perf_nested_disclosure": "Uitsplitsing, niet opnieuw geteld",
+    "perf_no_owner": "Geen eigenaar",
+    "perf_untracked": "Niet gevolgd",
+    "perf_retention": "Retentie",
+    "perf_reclaimable": "Vrij te maken",
+    "perf_required": "Vereist",
+    "perf_allocated": "Toegewezen",
+    "perf_slack": "Speling",
+    "perf_over_budget": "Boven budget",
+    "perf_estimate_detected": "Schatting gedetecteerd",
+    "perf_degenerate_pair": "Bron meldt vereist gelijk aan toegewezen",
+    "perf_tracking_off": "Gedetailleerde geheugentracking staat uit",
+    "perf_enable_tracking": "Inschakelen",
+    "perf_expand": "Uitklappen",
+    "perf_collapse": "Inklappen",
+    "perf_hud_tooltip": "Prestatie-HUD tonen of verbergen",
     "input_mouse_tooltip": "Muisnavigatie: slepen met middelste knop draait rond, slepen met rechterknop verschuift, scrollwiel zoomt. Klik om te wisselen",
     "input_trackpad_tooltip": "Trackpadnavigatie: vegen met twee vingers draait rond, Shift+vegen verschuift, knijpen of Ctrl+vegen zoomt. Klik om te wisselen",
     "input_automatic_tooltip": "Automatische navigatie: trackpadgebaren op het trackpad, zoomen met het scrollwiel op de muis. Klik om te wisselen"
@@ -2565,13 +2690,13 @@
     "log_entry_word": "logvermelding",
     "log_entries_word": "logvermeldingen",
     "logs_exported": "{} geëxporteerd naar {}.",
-    "config_load_failed": "Kan '{}' niet laden:\\n\\n{}",
-    "export_failed": "Exporteren mislukt:\\n\\n{}",
+    "config_load_failed": "Kan '{}' niet laden:\n\n{}",
+    "export_failed": "Exporteren mislukt:\n\n{}",
     "video_export_failed": "Video exporteren mislukt:\n\n{}",
     "video_reconstruction_native_fallback": "Videoreconstructie {}/{} is niet beschikbaar; de export gebruikt Native.",
     "video_reconstruction_version_unsupported": "Dit project gebruikt een niet-ondersteunde versie van de videoreconstructieselectie. De scène is geopend met Native-reconstructie; bij het opslaan wordt die selectie vervangen.",
-    "conversion_failed": "Conversie mislukt:\\n\\n{}",
-    "checkpoint_save_failed": "Kan checkpoint bij iteratie {} niet opslaan:\\n\\n{}",
+    "conversion_failed": "Conversie mislukt:\n\n{}",
+    "checkpoint_save_failed": "Kan checkpoint bij iteratie {} niet opslaan:\n\n{}",
     "lod_enabled_no_tree": "Ingeschakeld, geen boom",
     "lod_disabled": "Geen RAD LOD",
     "lod_scale": "LOD-schaal x{:.1f}",
@@ -2846,28 +2971,29 @@
   "projects.gallery.info.pulled": "Toegevoegd aan je projecten.",
   "projects.gallery.info.reupload_encoding": "Opnieuw uploaden: de codering van dit project kan niet worden vergeleken",
   "projects.gallery.action.open_recovery": "Herstelmap openen",
-  "projects.gallery.toast.published": "Published ‹{title}›",
-  "projects.gallery.toast.pulled": "Added ‹{title}› to ‹{folder}›",
-  "projects.gallery.toast.removed": "Removed ‹{title}› from your gallery",
+  "projects.gallery.toast.published": "‘{title}’ gepubliceerd",
+  "projects.gallery.toast.pulled": "‘{title}’ toegevoegd aan ‘{folder}’",
+  "projects.gallery.toast.removed": "‘{title}’ uit je galerij verwijderd",
   "projects.gallery.quota.used": "{used} GB van {quota} GB gebruikt",
   "projects.gallery.quota.warning": "Dit bestand past mogelijk niet in je galerij. De uploadgrootte hangt af van het gekozen formaat.",
   "projects.gallery.quota.confirm": "Het opgeslagen bestand is groter dan de vrije ruimte in je galerij. Het gekozen formaat kan het kleiner maken. Doorgaan met het voorbereiden van ‹{title}›?",
-  "projects.gallery.action.update_all": "Update all ({count})",
-  "projects.gallery.confirm.update_all": "Update these public scenes? Their published content will be replaced:\n{title}",
-  "projects.gallery.empty.published": "No published scenes yet — pick a project and press Publish",
-  "preferences.gallery.title": "Gallery",
-  "preferences.gallery.format": "Default upload format",
-  "preferences.gallery.ask_public": "Ask before making a scene public",
-  "preferences.gallery.cache": "Poster cache size (MiB)",
-  "preferences.gallery.invalid": "Enter a whole number: 1–4096 MiB for cache, or 1–1440 minutes for refresh.",
-  "gallery.transfer.batch": "Update all: {count} waiting",
-  "projects.action.add_folder": "Add folder",
-  "projects.action.folder_only": "This folder only",
-  "projects.action.include_subfolders": "Include subfolders",
-  "projects.dialog.scan_depth": "Scan depth",
-  "projects.dialog.scan_depth_message": "Should Projects include projects in subfolders?",
+  "projects.gallery.action.update_all": "Alles bijwerken ({count})",
+  "projects.gallery.confirm.update_all": "Deze openbare scènes bijwerken? De gepubliceerde inhoud wordt vervangen:\n{title}",
+  "projects.gallery.empty.published": "Nog geen gepubliceerde scènes: kies een project en klik op Publiceren",
+  "preferences.gallery.title": "Galerij",
+  "preferences.gallery.format": "Standaard uploadformaat",
+  "preferences.gallery.ask_public": "Vragen voordat een scène openbaar wordt gemaakt",
+  "preferences.gallery.cache": "Postercachegrootte (MiB)",
+  "preferences.gallery.invalid": "Voer een geheel getal in: 1 tot 4096 MiB voor de cache of 1 tot 1440 minuten voor vernieuwen.",
+  "gallery.transfer.batch": "Alles bijwerken: {count} wachtend",
+  "projects.action.add_folder": "Map toevoegen",
+  "projects.action.folder_only": "Alleen deze map",
+  "projects.action.include_subfolders": "Submappen opnemen",
+  "projects.dialog.scan_depth": "Scandiepte",
+  "projects.dialog.scan_depth_message": "Moet Projects ook projecten in submappen opnemen?",
   "projects.action.add_existing": "Bestaande toevoegen...",
   "projects.tooltip.add_existing": "Een bestaand .licht-project aan de catalogus toevoegen",
+  "projects.tooltip.clean_missing": "De hier getoonde ontbrekende projecten uit de catalogus verwijderen. Er worden geen bestanden verwijderd.",
   "projects.dialog.choose_existing": "Bestaande .licht kiezen",
   "projects.action.clear_search": "Wissen",
   "projects.status.no_search_results": "Geen overeenkomende projecten",
@@ -2935,6 +3061,7 @@
   "projects.gallery.eligibility.hdr": "Deze Galerie ondersteunt HDR niet",
   "projects.gallery.eligibility.no_splats": "Geen zichtbare splats",
   "projects.gallery.eligibility.external_payloads": "Externe splatgegevens zijn niet ingesloten in de weergavekopie",
+  "projects.gallery.eligibility.hdr_missing": "HDR-achtergrondbestand niet gevonden. Kies het opnieuw en sla het project op.",
   "projects.gallery.eligibility.space": "Onvoldoende vrije ruimte in de Galerie",
   "projects.gallery.eligibility.not_checked": "Geschiktheid wordt gecontroleerd bij het voorbereiden van de weergavekopie",
   "projects.gallery.eligibility.copy": "Dit bestand is een kopie van een ander project. Gebruik Project opslaan als om het apart te publiceren.",
@@ -3089,20 +3216,20 @@
   "projects.contents.month.12": "dec",
   "projects.contents.refresh_failed": "De bewerking is voltooid, maar de inhoud kon niet worden vernieuwd: {reason}",
   "project_cleanup": {
-    "title": "Clean project…",
-    "clean_here": "Clean this project",
-    "copy": "Save cleaned copy…",
-    "summary": "Older saves to remove: {saves}. Older checkpoints to remove: {checkpoints}. Estimated space saved: {size}.\n\nKeep the current models, edits, settings, embedded data, and current training resume point.\n\nCleaning this project permanently removes its older versions. A cleaned copy leaves the original untouched. Temporary disk space is needed.",
-    "wait": "Wait for the current project write to finish.",
-    "stop_training": "Stop training before cleaning the project.",
-    "save_first": "Save the current project before reviewing cleanup. Your current edits will be kept.",
-    "save_failed": "The project could not be saved. Cleanup has been stopped.",
-    "changed": "The project changed. Open Clean project again to review the current version.",
-    "new_destination": "Choose a new filename for the cleaned copy. Existing files are kept safe.",
-    "working": "Cleaning the project. Progress is shown in the task bar. You can cancel before cleanup finishes.",
-    "reading": "Reading the project…",
-    "done": "Cleanup complete. The file is {size} smaller.\n{path}",
-    "canceling": "Canceling cleanup… Please wait."
+    "title": "Project opschonen…",
+    "clean_here": "Dit project opschonen",
+    "copy": "Opgeschoonde kopie opslaan…",
+    "summary": "Oudere opslagen te verwijderen: {saves}. Oudere checkpoints te verwijderen: {checkpoints}. Geschatte ruimtebesparing: {size}.\n\nDe huidige modellen, bewerkingen, instellingen, ingesloten gegevens en het huidige hervatpunt van de training blijven behouden.\n\nDit project opschonen verwijdert de oudere versies permanent. Een opgeschoonde kopie laat het origineel ongemoeid. Er is tijdelijke schijfruimte nodig.",
+    "wait": "Wacht tot het huidige wegschrijven van het project is voltooid.",
+    "stop_training": "Stop de training voordat je het project opschoont.",
+    "save_first": "Sla het huidige project op voordat je het opschonen bekijkt. Je huidige bewerkingen blijven behouden.",
+    "save_failed": "Het project kon niet worden opgeslagen. Het opschonen is gestopt.",
+    "changed": "Het project is gewijzigd. Open Project opschonen opnieuw om de huidige versie te bekijken.",
+    "new_destination": "Kies een nieuwe bestandsnaam voor de opgeschoonde kopie. Bestaande bestanden blijven behouden.",
+    "working": "Het project wordt opgeschoond. De voortgang staat in de taakbalk. Je kunt annuleren voordat het opschonen klaar is.",
+    "reading": "Project wordt gelezen…",
+    "done": "Opschonen voltooid. Het bestand is {size} kleiner.\n{path}",
+    "canceling": "Opschonen wordt geannuleerd… Even geduld."
   },
   "projects.gallery.review.unlinked_copy": "De huidige scène wordt ongewijzigd geüpload. Er wordt niets opgeslagen op deze computer.",
   "projects.gallery.state.live_snapshot": "Gepubliceerd vanuit de huidige scène",
@@ -3146,5 +3273,1822 @@
   "view3d.coordinate_axes": "Coördinaatassen",
   "view3d.pivot_point": "Draaipunt",
   "view3d.camera_frustums": "Camerafrustums",
-  "ui.split_viewport": "Weergave splitsen"
+  "ui.split_viewport": "Weergave splitsen",
+  "runtime.import_batch_failed.one": "{} bestand is niet geladen",
+  "runtime.import_batch_failed.few": "{} bestanden zijn niet geladen",
+  "runtime.import_batch_failed.other": "{} bestanden zijn niet geladen",
+  "runtime.import_out_of_memory": "Onvoldoende GPU-geheugen",
+  "runtime.import_batch_kept": "De overige bestanden zijn geladen en blijven beschikbaar in de scène.",
+  "runtime.import_render_failed": "Dit bestand kon niet worden voorbereid voor weergave",
+  "nodes.edit_stored_splats_blocked": "Pas de knooppuntmodifiers toe of verberg ze om de opgeslagen splats te bewerken",
+  "editor.node_editor": "Node-editor",
+  "node_editor.toggle": "Node-editor wisselen",
+  "node_editor.preview_selection": "Preview Selection",
+  "node_editor.toggle_sidebar": "Toggle sidebar",
+  "node_editor.edit_mode_notice": "Node modifiers are available in edit mode",
+  "node_editor.select_node_notice": "Select a splat, mesh or point cloud node",
+  "node_editor.add_modifier_notice": "Voeg een node-modifier toe om te beginnen",
+  "node_editor.type_splat": "Splat",
+  "node_editor.type_point_cloud": "Point Cloud",
+  "node_editor.type_mesh": "Mesh",
+  "node_editor.type_unsupported": "Unsupported",
+  "node_editor.new_graph": "Nieuwe node-graaf",
+  "node_editor.modifier_actions": "Modifieracties",
+  "node_editor.target": "Target",
+  "node_editor.modifiers": "Modifiers",
+  "node_editor.add_modifier": "Add Modifier",
+  "node_editor.show_viewport": "Show in viewport",
+  "node_editor.move_up": "Move up",
+  "node_editor.move_down": "Move down",
+  "node_editor.apply": "Apply",
+  "node_editor.remove": "Remove",
+  "node_editor.status_errors": "errors",
+  "node_editor.status_ok": "OK",
+  "node_editor.status_disabled": "Disabled",
+  "node_editor.capture_selection": "Capture selection",
+  "node_editor.default_tree_name": "Node-graaf",
+  "node_editor.add": "+ Toevoegen",
+  "node_editor.modifiers_on": "Modifiers aan",
+  "node_editor.modifiers_off": "Modifiers uit",
+  "node_editor.frame": "Alles in beeld",
+  "node_editor.open": "Openen…",
+  "node_editor.save": "Opslaan…",
+  "node_editor.selected_share": "{}% geselecteerd",
+  "node_editor.cached": "gecachet",
+  "node_editor.updating": "Bijwerken…",
+  "node_editor.updating_node": "Bijwerken… {}/{} {}",
+  "node_editor.error_count": "{} fouten",
+  "node_editor.unchanged": "Ongewijzigd",
+  "node_editor.splats": "splats",
+  "node_editor.points": "punten",
+  "node_editor.vertices": "hoekpunten",
+  "node_editor.result": "Resultaat: {} {} · {}",
+  "node_editor.last_run": "Laatste uitvoering: {}",
+  "node_editor.node_on": "Aan",
+  "node_editor.file_read_error": "Kan de nodegrafiek niet lezen",
+  "node_editor.file_write_error": "Kan de nodegrafiek niet opslaan",
+  "node_editor.search_nodes": "Nodes zoeken…",
+  "node_editor.settings_count_one": "{} instelling",
+  "node_editor.settings_count_other": "{} instellingen",
+  "node_editor.arrange": "Ordenen",
+  "node_editor.arrange_shortcut": "Shift+L",
+  "node_editor.running": "Bezig…",
+  "node_editor.queued": "In wachtrij",
+  "node_editor.no_results": "Geen overeenkomende nodes",
+  "node_editor.optional_selection": "Optioneel: zonder verbinding wordt alles geselecteerd",
+  "node_editor.captured_count": "Vastgelegd: {} geselecteerd",
+  "nodes": {
+    "paint_selection": {
+      "label": "Selectie schilderen",
+      "description": "Schildert een levende geometrische selectie rechtstreeks op oppervlakken in de scène.",
+      "help": "Selecteer de node, zet Schilderen aan en sleep over een oppervlak; Alt/Option wist.\nGebruik [ en ] om het penseel te vergroten of verkleinen. Streken blijven geldig als het elementaantal verandert.",
+      "inputs": {
+        "Softness": "Deel van de straal van elk monster voor de zachte rand, 0–1. 0 geeft een harde rand; 0,5 is standaard."
+      },
+      "input_labels": {
+        "Softness": "Zachtheid"
+      },
+      "outputs": {
+        "Selection": "Selectiesterkte: 0 is niet geselecteerd, 1 volledig; tussenwaarden geven zachte overgangen."
+      },
+      "output_labels": {
+        "Selection": "Selectie"
+      },
+      "properties": {
+        "data": "Oppervlaktestreken opgeslagen als host-lokale monsters. Standaard leeg.",
+        "invert": "Keer de geschilderde selectie om. Standaard uit behoudt geschilderde gebieden; aan kiest de rest."
+      },
+      "property_labels": {
+        "data": "Streken",
+        "invert": "Omkeren"
+      }
+    },
+    "boolean": {
+      "label": "Booleaans",
+      "description": "Geeft je één aan-uitknop voor meerdere verbonden instellingen.",
+      "help": "Schakel hiermee meerdere opties tegelijk.\nVerbind Waarde met een booleaanse ingang; standaard staat hij uit.",
+      "inputs": {
+        "Value": "Gedeelde aan-uitwaarde. Standaard uit betekent onwaar of niet geselecteerd; aan betekent waar of geselecteerd."
+      },
+      "input_labels": {
+        "Value": "Waarde"
+      },
+      "outputs": {
+        "Value": "Aan voor geselecteerde elementen, uit voor de rest. Verbind met Selectie of een booleaanse ingang."
+      },
+      "output_labels": {
+        "Value": "Waarde"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "boolean_math": {
+      "label": "Booleaanse logica",
+      "description": "Combineert selecties tot hun overlap, samenvoeging of omgekeerde.",
+      "help": "Gebruik En voor de overlap en Of om beide selecties mee te nemen.\nNiet keert A om en negeert B.",
+      "inputs": {
+        "A": "Eerste aan-uitwaarde of selectie. Standaard uit; aan neemt het element mee.",
+        "B": "Tweede aan-uitwaarde of selectie. Standaard uit; aan neemt het element mee."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Result": "Aan voor geselecteerde elementen, uit voor de rest. Verbind met Selectie of een booleaanse ingang."
+      },
+      "output_labels": {
+        "Result": "Resultaat"
+      },
+      "properties": {
+        "operation": "Combinatie van A en B. Standaard En behoudt de overlap; Niet keert A om en negeert B."
+      },
+      "property_labels": {
+        "operation": "Bewerking"
+      }
+    },
+    "box_selection": {
+      "label": "Kaderselectie",
+      "description": "Selecteert het deel van je scène binnen een kader, met optioneel zachte randen.",
+      "help": "Verplaats Centrum en pas Grootte aan rond je doel.\nBegin met Afname 0 voor een scherpe grens.",
+      "inputs": {
+        "Centre": "Centrum langs X, Y en Z in lokale scène-eenheden. Standaard (0, 0, 0) is de oorsprong van het object.",
+        "Size": "Volledige breedte, hoogte en diepte in scène-eenheden, niet negatief. Standaard (1, 1, 1) is een eenheidskader.",
+        "Rotation": "Rotatie rond X, Y en Z in graden. Standaard (0, 0, 0) laat de richting onveranderd.",
+        "Falloff": "Zachte rand buiten het kader in scène-eenheden. Standaard 0 geeft een scherpe grens."
+      },
+      "input_labels": {
+        "Centre": "Centrum",
+        "Size": "Grootte",
+        "Rotation": "Rotatie",
+        "Falloff": "Afname"
+      },
+      "outputs": {
+        "Selection": "Selectiesterkte: 0 niet geselecteerd, 1 volledig geselecteerd; tussenwaarden geven zachte overgangen."
+      },
+      "output_labels": {
+        "Selection": "Selectie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour": {
+      "label": "Kleur",
+      "description": "Geeft je één kleur om tussen verbonden knopen te delen.",
+      "help": "Kies een kleur en verbind deze met de gewenste instellingen.\nDe standaardkleur is middengrijs.",
+      "inputs": {
+        "Colour": "RGB-kleur, meestal 0–1 per kanaal: 0 zwart, 1 wit. Standaard (0,5, 0,5, 0,5) is middengrijs."
+      },
+      "input_labels": {
+        "Colour": "Kleur"
+      },
+      "outputs": {
+        "Colour": "RGB-resultaat: 0 zwart en 1 wit per kanaal. Sommige berekeningen kunnen dit bereik overschrijden."
+      },
+      "output_labels": {
+        "Colour": "Kleur"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_attribute": {
+      "label": "Kleurattribuut",
+      "description": "Leest de basiskleur van elke splat of elk punt voor bewerking en kleurselectie.",
+      "help": "Verbind Kleur met Kleur splitsen om afzonderlijke kanalen te bekijken.\nDit leest de basiskleur, niet kijkafhankelijke reflecties.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Colour": "RGB-resultaat: 0 zwart en 1 wit per kanaal. Sommige berekeningen kunnen dit bereik overschrijden."
+      },
+      "output_labels": {
+        "Colour": "Kleur"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_correct": {
+      "label": "Kleurcorrectie",
+      "description": "Beoordeelt kleur: belichting, niveaus, contrast, verzadiging, tint, witbalans en driewegtonen.",
+      "help": "Begin met Belichting en pas daarna Contrast en Verzadiging aan.\nVerbind een Selectie om slechts een deel te corrigeren.\nCentreer de kleurwielen voor neutrale schaduwen, middentonen en hooglichten.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Exposure": "Helderheid in stops: +1 verdubbelt licht, −1 halveert het. Standaard 0 laat helderheid onveranderd.",
+        "Black Point": "Invoerhelderheid die zwart wordt. Standaard 0 behoudt zwart; verhogen verdiept schaduwen.",
+        "White Point": "Invoerhelderheid die wit wordt. Standaard 1 behoudt wit; verlagen verheldert hooglichten.",
+        "Midpoint": "Invoerhelderheid die middengrijs wordt, 0,01–0,99. 0,5 is neutraal; verlagen verheldert middentonen.",
+        "Contrast": "Verschil tussen licht en donker. 1 onveranderd, 0 vlakke toon; boven 1 neemt contrast toe.",
+        "Saturation": "Kleursterkte. 0 verwijdert kleur, 1 behoudt kleur; boven 1 worden kleuren sterker.",
+        "Hue Shift": "Kleurwielrotatie in graden. 0 behoudt kleuren; 180 geeft elke kleur zijn tegenkleur.",
+        "Temperature": "Warm/koud-balans, −1 tot 1. Negatief koelt, positief verwarmt; 0 is neutraal.",
+        "Tint": "Groen/magenta-balans, −1 tot 1. Negatief voegt magenta toe, positief groen; 0 is neutraal.",
+        "Shadows": "Kleurverschuiving in donkere delen, −1 tot 1 per kanaal. 0 neutraal; negatief verwijdert die kleur.",
+        "Midtones": "Kleurverschuiving in middentonen, −1 tot 1 per kanaal. 0 neutraal; positief voegt die kleur toe.",
+        "Highlights": "Kleurverschuiving in lichte delen, −1 tot 1 per kanaal. 0 neutraal; positief voegt die kleur toe.",
+        "Gamma": "Middentoonhelderheid, groter dan 0. 1 neutraal; boven 1 lichter, onder 1 donkerder."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Exposure": "Belichting",
+        "Black Point": "Zwartpunt",
+        "White Point": "Witpunt",
+        "Midpoint": "Middenpunt",
+        "Contrast": "Contrast",
+        "Saturation": "Verzadiging",
+        "Hue Shift": "Tintverschuiving",
+        "Temperature": "Temperatuur",
+        "Tint": "Kleurzweem",
+        "Shadows": "Schaduwen",
+        "Midtones": "Middentonen",
+        "Highlights": "Hooglichten",
+        "Gamma": "Gamma"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "auto_range": "Meet zwart- en witpunt uit de scène. Standaard uit, zodat je beide zelf instelt."
+      },
+      "property_labels": {
+        "auto_range": "Automatisch bereik"
+      }
+    },
+    "colour_key": {
+      "label": "Kleursleutel",
+      "description": "Selecteert delen van je scène waarvan de kleur lijkt op jouw gekozen kleur.",
+      "help": "Kies Kleur en verhoog Tolerantie tot je doel is meegenomen.\nVoeg wat Zachtheid toe om een harde rand te vermijden.",
+      "inputs": {
+        "Colour": "Te zoeken RGB-kleur, meestal 0–1 per kanaal. Standaard zwart; kies hier je doelkleur.",
+        "Tolerance": "Toegestane RGB-afstand tot Kleur. 0 vereist exact die kleur; standaard 0,1 staat kleine verschillen toe.",
+        "Softness": "Breedte van de zachte overgang. Standaard 0 geeft harde randen; hogere waarden verzachten de selectie."
+      },
+      "input_labels": {
+        "Colour": "Kleur",
+        "Tolerance": "Tolerantie",
+        "Softness": "Zachtheid"
+      },
+      "outputs": {
+        "Selection": "Selectiesterkte: 0 niet geselecteerd, 1 volledig geselecteerd; tussenwaarden geven zachte overgangen."
+      },
+      "output_labels": {
+        "Selection": "Selectie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "combine_colour": {
+      "label": "Kleur samenstellen",
+      "description": "Stelt een kleur samen uit afzonderlijke RGB- of HSV-waarden.",
+      "help": "Verbind drie waarden en kies RGB of HSV.\nIn HSV betekenen R, G en B tint, verzadiging en helderheid.",
+      "inputs": {
+        "R": "Rood in RGB of tint in HSV, meestal 0–1. Standaard 0 geeft geen rood, of een rode tint in HSV.",
+        "G": "Groen in RGB of verzadiging in HSV, meestal 0–1. Standaard 0 geeft geen groen, of grijs in HSV.",
+        "B": "Blauw in RGB of helderheid in HSV, meestal 0–1. Standaard 0 geeft geen blauw, of zwart in HSV."
+      },
+      "input_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "outputs": {
+        "Colour": "RGB-resultaat: 0 zwart en 1 wit per kanaal. Sommige berekeningen kunnen dit bereik overschrijden."
+      },
+      "output_labels": {
+        "Colour": "Kleur"
+      },
+      "properties": {
+        "mode": "Kleurinterpretatie. Standaard RGB gebruikt rood, groen en blauw; HSV gebruikt tint, verzadiging en helderheid."
+      },
+      "property_labels": {
+        "mode": "Modus"
+      }
+    },
+    "combine_xyz": {
+      "label": "XYZ samenstellen",
+      "description": "Stelt een positie of richting samen uit X-, Y- en Z-waarden.",
+      "help": "Wijzig hiermee één coördinaat terwijl je de andere twee behoudt.\nVerbind het resultaat met een Vector-ingang.",
+      "inputs": {
+        "X": "X-coördinaat in je gewenste eenheden. Standaard 0 draagt niets bij langs deze as.",
+        "Y": "Y-coördinaat in je gewenste eenheden. Standaard 0 draagt niets bij langs deze as.",
+        "Z": "Z-coördinaat in je gewenste eenheden. Standaard 0 draagt niets bij langs deze as."
+      },
+      "input_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "outputs": {
+        "Vector": "Resulterende X-, Y- en Z-waarden in de eenheden van je berekening."
+      },
+      "output_labels": {
+        "Vector": "Vector"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "compare": {
+      "label": "Vergelijken",
+      "description": "Selecteert delen van je scène door twee waarden te vergelijken, zoals hoogte en grondniveau.",
+      "help": "Verbind hoogte met A en het grondniveau met B; kies Kleiner dan.\nEpsilon werkt alleen bij Gelijk en Ongelijk.",
+      "inputs": {
+        "A": "Eerste getal in de eenheden van je berekening. Standaard 0.",
+        "B": "Tweede getal in de eenheden van je berekening. Standaard 0.",
+        "Epsilon": "Tolerantie voor Gelijk en Ongelijk, in dezelfde eenheden als A en B. 0 is exact; standaard 0,001."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Epsilon": "Epsilon"
+      },
+      "outputs": {
+        "Result": "Aan voor geselecteerde elementen, uit voor de rest. Verbind met Selectie of een booleaanse ingang."
+      },
+      "output_labels": {
+        "Result": "Resultaat"
+      },
+      "properties": {
+        "operation": "Vergelijking. Standaard Gelijk; Kleiner dan of Groter dan selecteert een kant van B."
+      },
+      "property_labels": {
+        "operation": "Bewerking"
+      }
+    },
+    "decimate": {
+      "label": "Uitdunnen",
+      "description": "Vermindert splats door grotere, minder transparante splats in je selectie te behouden.",
+      "help": "Begin met Behouden aandeel 0,5 om ongeveer de helft te bewaren.\nNiet-geselecteerde splats blijven; gelijke scores kunnen meer splats behouden.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Te verminderen splats: gewichten vanaf 0,5. Zonder verbinding worden alle splats meegenomen.",
+        "Keep Fraction": "Te behouden aandeel geselecteerde splats, 0,001–1. 0,5 behoudt ongeveer de helft, 1 alles."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Keep Fraction": "Behouden aandeel"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "delete_geometry": {
+      "label": "Geometrie verwijderen",
+      "description": "Verwijdert geselecteerde splats, punten of meshhoekpunten uit je scène.",
+      "help": "Verbind een selectie voordat je Geometrie aansluit.\nZonder Selectie-verbinding verdwijnt alles, ook vlakken aan verwijderde hoekpunten.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Wat je verwijdert: gewichten vanaf 0,5. Zonder verbinding verdwijnt alles en is de uitvoer leeg."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "ellipsoid_selection": {
+      "label": "Ellipsoïdeselectie",
+      "description": "Selecteert een bolvormig of uitgerekt deel van je scène, met optioneel zachte randen.",
+      "help": "Stel Centrum en Stralen in rond je doel.\nGelijke stralen geven een bol; Afname 0 geeft een scherpe grens.",
+      "inputs": {
+        "Centre": "Centrum langs X, Y en Z in lokale scène-eenheden. Standaard (0, 0, 0) is de oorsprong van het object.",
+        "Radii": "Straal langs elke as in scène-eenheden, niet negatief. Standaard (1, 1, 1) geeft een eenheidsbol.",
+        "Rotation": "Rotatie rond X, Y en Z in graden. Standaard (0, 0, 0) laat de richting onveranderd.",
+        "Falloff": "Zachte rand buiten de ellipsoïde, relatief aan de stralen. Standaard 0 geeft een scherpe grens."
+      },
+      "input_labels": {
+        "Centre": "Centrum",
+        "Radii": "Stralen",
+        "Rotation": "Rotatie",
+        "Falloff": "Afname"
+      },
+      "outputs": {
+        "Selection": "Selectiesterkte: 0 niet geselecteerd, 1 volledig geselecteerd; tussenwaarden geven zachte overgangen."
+      },
+      "output_labels": {
+        "Selection": "Selectie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group": {
+      "label": "Groep",
+      "description": "Evalueert een herbruikbare nodegraph.",
+      "help": "Kies een graph in de zijbalk. In- en uitgangen volgen de interface van die graph.\nAlle instanties delen dezelfde graph.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "tree": "UUID van de gebruikte graph."
+      },
+      "property_labels": {
+        "tree": "Graph"
+      }
+    },
+    "frame": {
+      "label": "Kader",
+      "description": "Groepeert verwante nodes visueel.",
+      "help": "Plaats nodes in het kader. Als je het kader verplaatst, bewegen de leden mee.\nLay-outnodes veranderen het resultaat niet.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "label": "Koptekst van het kader.",
+        "colour": "Themakleur of RGB-waarde.",
+        "note": "Optionele tekst onder de koptekst."
+      },
+      "property_labels": {
+        "label": "Label",
+        "colour": "Kleur",
+        "note": "Notitie"
+      }
+    },
+    "reroute": {
+      "label": "Omleiding",
+      "description": "Leidt een verbinding om zonder de waarde te wijzigen.",
+      "help": "Verbind elk sockettype; de omleiding neemt het bovenliggende type over.\nLay-outnodes veranderen het resultaat niet.",
+      "inputs": {
+        "Input": "Door te geven waarde."
+      },
+      "input_labels": {
+        "Input": "Ingang"
+      },
+      "outputs": {
+        "Output": "Ongewijzigde ingangswaarde."
+      },
+      "output_labels": {
+        "Output": "Uitgang"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "note": {
+      "label": "Notitie",
+      "description": "Voegt een bewerkbare tekstkaart toe aan de graph.",
+      "help": "Dubbelklik op de kaart of bewerk de tekst in de zijbalk.\nLay-outnodes veranderen het resultaat niet.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "text": "Tekst op de kaart.",
+        "width": "Kaartbreedte in canvaseenheden; de hoogte past zich aan de tekst aan."
+      },
+      "property_labels": {
+        "text": "Tekst",
+        "width": "Breedte"
+      }
+    },
+    "group_input": {
+      "label": "Groepsingang",
+      "description": "Brengt de geometrie van het gastobject in je knoopgrafiek.",
+      "help": "Verbind Geometrie met de eerste bewerkingsknoop.\nIn een stapel ontvang je het resultaat van de vorige modifier.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "Inkomende gastgeometrie of resultaat van de vorige modifier. Verbind met je eerste bewerkingsknoop."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group_output": {
+      "label": "Groepsuitgang",
+      "description": "Stuurt de uiteindelijke geometrie van je knoopgrafiek terug naar de scène.",
+      "help": "Verbind de laatste bewerkingsknoop met Geometrie.\nAlleen de tak die deze knoop bereikt draagt bij aan het resultaat.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "hsv_range": {
+      "label": "HSV-bereik",
+      "description": "Selecteert splats op kleurbereik, bijvoorbeeld het groen van een gazon, met zachte randen.",
+      "help": "Kies de tint en vergroot Tintbereik tot het hele object is meegenomen.\nVerhoog Verzadiging min om grijs te negeren en Waarde min om schaduw te negeren.\nZet Selectievoorbeeld aan om het resultaat in het kijkvenster te zien.",
+      "inputs": {
+        "Hue": "Midden op het kleurwiel, 0–1: 0 rood, 0,17 geel, 0,33 groen, 0,5 cyaan, 0,67 blauw, 0,83 magenta.",
+        "Hue Range": "Afstand aan beide kanten van Tint, 0–0,5 van het wiel. 0,07 neemt één kleurfamilie mee.",
+        "Hue Softness": "Vervaging buiten het tintbereik in kleurwielomwentelingen. Standaard 0 geeft een scherpe tintgrens.",
+        "Saturation Min": "Laagste opgenomen kleursterkte, 0–1. Standaard 0 omvat grijs; verhoog om grijs uit te sluiten.",
+        "Saturation Max": "Hoogste opgenomen kleursterkte, 0–1. Standaard 1 omvat volledig verzadigde kleuren.",
+        "Value Min": "Laagste opgenomen helderheid, 0–1. Standaard 0 omvat zwart; verhoog om schaduwen uit te sluiten.",
+        "Value Max": "Hoogste opgenomen helderheid, 0–1. Standaard 1 omvat wit; verlaag om hooglichten uit te sluiten.",
+        "Softness": "Breedte van de zachte overgang. Standaard 0 geeft harde randen; hogere waarden verzachten de selectie."
+      },
+      "input_labels": {
+        "Hue": "Tint",
+        "Hue Range": "Tintbereik",
+        "Hue Softness": "Tintzachtheid",
+        "Saturation Min": "Verzadiging min",
+        "Saturation Max": "Verzadiging max",
+        "Value Min": "Waarde min",
+        "Value Max": "Waarde max",
+        "Softness": "Zachtheid"
+      },
+      "outputs": {
+        "Selection": "Selectiesterkte: 0 niet geselecteerd, 1 volledig geselecteerd; tussenwaarden geven zachte overgangen."
+      },
+      "output_labels": {
+        "Selection": "Selectie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "index": {
+      "label": "Index",
+      "description": "Geeft de lijstpositie van elke splat, elk punt of meshhoekpunt, beginnend bij nul.",
+      "help": "Gebruik Rekenen of Vergelijken om op nummer te selecteren.\nVerwijderen of samenvoegen kan deze nummers veranderen.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Index": "Huidige lijstpositie vanaf 0. Samenvoegen of verwijderen kan elementen opnieuw nummeren."
+      },
+      "output_labels": {
+        "Index": "Index"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "inside_mesh": {
+      "label": "Binnen mesh",
+      "description": "Selecteert het deel van je scène dat binnen een referentiemesh ligt.",
+      "help": "Verbind een gesloten mesh uit Objectinformatie met Mesh.\nGaten en zelfdoorsnijdingen kunnen de binnenkant onduidelijk maken.",
+      "inputs": {
+        "Mesh": "Gesloten referentiemesh voor de binnenkant. Verbind Objectinformatie; zonder verbinding wordt niets geselecteerd."
+      },
+      "input_labels": {
+        "Mesh": "Mesh"
+      },
+      "outputs": {
+        "Selection": "Aan voor geselecteerde elementen, uit voor de rest. Verbind met Selectie of een booleaanse ingang."
+      },
+      "output_labels": {
+        "Selection": "Selectie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "integer": {
+      "label": "Geheel getal",
+      "description": "Geeft je één geheel getal voor meerdere verbonden instellingen.",
+      "help": "Verbind Waarde met aantallen of instellingen voor gehele getallen.\nBegin bij 0; de stapknoppen wijzigen steeds met één.",
+      "inputs": {
+        "Value": "Gedeeld geheel getal. Standaard 0; negatieve en positieve getallen zijn toegestaan."
+      },
+      "input_labels": {
+        "Value": "Waarde"
+      },
+      "outputs": {
+        "Value": "Resulterend getal in je berekeningseenheden. Verbind met een geschikte numerieke ingang."
+      },
+      "output_labels": {
+        "Value": "Waarde"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "invert_colour": {
+      "label": "Kleur omkeren",
+      "description": "Keert kleuren om, zodat donker licht wordt en kleuren hun tegenkleur krijgen.",
+      "help": "Verbind een Selectie om slechts een deel om te keren.\nTweemaal toepassen herstelt de basiskleur, tenzij eerder afkappen details heeft verloren.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "join_geometry": {
+      "label": "Geometrie samenvoegen",
+      "description": "Voegt ingangen samen; splats met verschillende SH-graden worden tot de hoogste aangevuld.",
+      "help": "Verbind meerdere Geometrie-uitgangen met dezelfde ingang.\nVoeg hiermee takken na Geometrie splitsen weer samen.\nOverlappende kopieën blijven afzonderlijke splats, punten of meshvlakken.",
+      "inputs": {
+        "Geometry": "Samen te voegen geometriebronnen. Meerdere verbindingen zijn mogelijk; zonder verbinding is het resultaat leeg."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "map_range": {
+      "label": "Bereik omzetten",
+      "description": "Zet een waardebereik om in een ander, bijvoorbeeld hoogte 0–2 m in een verloop van 1 naar 0.",
+      "help": "Stel Bron min en Bron max in op je oorspronkelijke bereik.\nDoel min 1 en Doel max 0 geven een omgekeerd verloop.\nLaat Begrenzen aan om binnen de uitvoergrenzen te blijven.",
+      "inputs": {
+        "Value": "Om te zetten getal in de broneenheden. Standaard 0; verbind Positie of een andere waarde.",
+        "From Min": "Ondergrens van het bronbereik in de eenheden van Waarde. Standaard 0.",
+        "From Max": "Bovengrens van het bronbereik in de eenheden van Waarde. Standaard 1; houd deze anders dan Bron min.",
+        "To Min": "Resultaat bij Bron min. Standaard 0; 1 hier en 0 bij Doel max keren een verloop om.",
+        "To Max": "Resultaat bij Bron max. Standaard 1; 0 hier en 1 bij Doel min keren een verloop om."
+      },
+      "input_labels": {
+        "Value": "Waarde",
+        "From Min": "Bron min",
+        "From Max": "Bron max",
+        "To Min": "Doel min",
+        "To Max": "Doel max"
+      },
+      "outputs": {
+        "Result": "Resulterend getal in je berekeningseenheden. Verbind met een geschikte numerieke ingang."
+      },
+      "output_labels": {
+        "Result": "Resultaat"
+      },
+      "properties": {
+        "clamp": "Houd resultaten binnen het doelbereik. Standaard aan; uit staat waarden buiten beide grenzen toe."
+      },
+      "property_labels": {
+        "clamp": "Begrenzen"
+      }
+    },
+    "math": {
+      "label": "Rekenen",
+      "description": "Telt op, vermenigvuldigt, vergelijkt of rondt getallen af — bijvoorbeeld dekking schalen met hoogte.",
+      "help": "Kies een bewerking en verbind waarden met A en B.\nBegin met Vermenigvuldigen om de sterkte van een selectie te schalen.",
+      "inputs": {
+        "A": "Eerste getal in de eenheden van je berekening. Standaard 0.",
+        "B": "Tweede getal in de eenheden van je berekening. Standaard 0."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Value": "Resulterend getal in je berekeningseenheden. Verbind met een geschikte numerieke ingang."
+      },
+      "output_labels": {
+        "Value": "Waarde"
+      },
+      "properties": {
+        "operation": "Uit te voeren berekening. Standaard Optellen; bewerkingen zoals Absoluut gebruiken alleen A."
+      },
+      "property_labels": {
+        "operation": "Bewerking"
+      }
+    },
+    "mesh_to_points": {
+      "label": "Mesh naar punten",
+      "description": "Zet meshhoekpunten om in een puntenwolk en behoudt beschikbare hoekpuntkleuren.",
+      "help": "Verbind een mesh uit Objectinformatie.\nJe krijgt één punt per hoekpunt, geen gelijkmatig bemonsterd oppervlak.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "mesh_to_splats": {
+      "label": "Mesh naar splats",
+      "description": "Bedekt een meshoppervlak met gekleurde, platte splats.",
+      "help": "De standaarddichtheid geeft circa 20.000 splats op een eenheidsbol.\nVerhoog Dichtheid voor detail; Max. aantal begrenst het totaal.\nHoekpuntkleuren gaan vóór materiaalkleuren en texturen.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Density": "Splats per vierkante scène-eenheid. Standaard circa 1.592 geeft 20.000 op een eenheidsbol; 0 maakt geen splats.",
+        "Max Count": "Maximaal aantal nieuwe splats, 0–2.000.000. Standaard begrensd tot 2.000.000; 0 maakt niets.",
+        "Opacity": "Splatdekking, 0–1: 0 transparant, 1 dekkend. Standaard 0,95 is bijna dekkend."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Density": "Dichtheid",
+        "Max Count": "Max. aantal",
+        "Opacity": "Dekking"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "seed": "Gehele startwaarde voor een herhaalbaar patroon. Standaard 0; veranderen geeft een ander patroon."
+      },
+      "property_labels": {
+        "seed": "Startwaarde"
+      }
+    },
+    "mix_colour": {
+      "label": "Kleuren mengen",
+      "description": "Mengt twee kleuren of combineert ze met een gekozen kleurbewerking.",
+      "help": "Verbind kleuren met A en B; Factor 0,5 geeft een gelijke menging.\nBegin met Mengen voordat je Vermenigvuldigen of Optellen probeert.",
+      "inputs": {
+        "A": "Eerste RGB-kleur, meestal 0–1 per kanaal. Standaard zwart.",
+        "B": "Tweede RGB-kleur, meestal 0–1 per kanaal. Standaard zwart.",
+        "Factor": "Mengsterkte, 0–1. 0 behoudt A, 1 past de hele bewerking toe; 0,5 geeft halve sterkte."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Factor": "Factor"
+      },
+      "outputs": {
+        "Colour": "RGB-resultaat: 0 zwart en 1 wit per kanaal. Sommige berekeningen kunnen dit bereik overschrijden."
+      },
+      "output_labels": {
+        "Colour": "Kleur"
+      },
+      "properties": {
+        "mode": "Kleurcombinatie. Standaard Mengen; Optellen, Aftrekken en Vermenigvuldigen komen vóór Factor."
+      },
+      "property_labels": {
+        "mode": "Modus"
+      }
+    },
+    "named_attribute": {
+      "label": "Benoemd attribuut",
+      "description": "Leest een opgeslagen waarde op naam om je bewerkingen te sturen.",
+      "help": "Voer de exacte attribuutnaam in en kies het type.\nEen ontbrekend attribuut kan geen waarden leveren.",
+      "inputs": {
+        "Name": "Exacte opgeslagen attribuutnaam, hoofdlettergevoelig. Standaard leeg; vul vóór gebruik een naam in."
+      },
+      "input_labels": {
+        "Name": "Naam"
+      },
+      "outputs": {
+        "Attribute": "Waarden uit het benoemde attribuut in de opgeslagen eenheden."
+      },
+      "output_labels": {
+        "Attribute": "Attribuut"
+      },
+      "properties": {
+        "type": "Te lezen waardetype. Standaard Float leest één decimale waarde per element."
+      },
+      "property_labels": {
+        "type": "Type"
+      }
+    },
+    "neighbour_count": {
+      "label": "Aantal buren",
+      "description": "Telt nabije splats of punten zodat je dunbezette delen van je scène vindt.",
+      "help": "Verbind Aantal met Vergelijken om lage aantallen te selecteren.\nBegin voor splats met Straal 3 en Relatief aan grootte.\nEen punt telt zichzelf nooit mee.",
+      "inputs": {
+        "Radius": "Buurafstand. Standaard 1 scène-eenheid, of grootteveelvoud bij Relatief aan grootte. 0 telt niets."
+      },
+      "input_labels": {
+        "Radius": "Straal"
+      },
+      "outputs": {
+        "Count": "Aantal buren binnen Straal, zonder het punt zelf. 0 betekent geïsoleerd."
+      },
+      "output_labels": {
+        "Count": "Aantal"
+      },
+      "properties": {
+        "relative_to_size": "Gebruik splatgrootte als straaleenheid. Standaard uit gebruikt scène-eenheden; punten gebruiken die altijd."
+      },
+      "property_labels": {
+        "relative_to_size": "Relatief aan grootte"
+      }
+    },
+    "opacity": {
+      "label": "Dekking",
+      "description": "Leest de dekking van elke splat om zwakke of dichte gebieden te vinden.",
+      "help": "Verbind Dekking met Vergelijken om zwakke splats te selecteren.\n0 is transparant en 1 volledig dekkend.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Opacity": "Dekking vóór weergave: 0 transparant, 1 dekkend."
+      },
+      "output_labels": {
+        "Opacity": "Dekking"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "points_to_splats": {
+      "label": "Punten naar splats",
+      "description": "Zet een puntenwolk om in gekleurde, ronde splats.",
+      "help": "Laat Straal op 0 om de grootte uit nabije punten te schatten.\nKies een positieve straal in scène-eenheden als er gaten blijven.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Radius": "Splatstraal in scène-eenheden. Standaard 0 schat de halve buurafstand; positief stelt één grootte in.",
+        "Opacity": "Splatdekking, 0–1: 0 transparant, 1 dekkend. Standaard 0,9 blijft iets transparant."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Radius": "Straal",
+        "Opacity": "Dekking"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "position": {
+      "label": "Positie",
+      "description": "Leest waar elke splat, elk punt of meshhoekpunt zich in je object bevindt.",
+      "help": "Verbind Positie met XYZ splitsen om op hoogte of afstand langs een as te selecteren.\nDe coördinaten zijn lokaal voor het object.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "Lokale X-, Y- en Z-positie in scène-eenheden."
+      },
+      "output_labels": {
+        "Position": "Positie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "posterize": {
+      "label": "Posteriseren",
+      "description": "Vermindert de kleuren van je scène tot enkele vlakke stappen.",
+      "help": "Begin met Niveaus 4 voor vier stappen per kleurkanaal.\nVerbind een Selectie om het effect te beperken.\nGeselecteerde splats verliezen kijkafhankelijke kleurvariatie.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Levels": "Kleurstappen per RGB-kanaal, 2–32. 2 geeft alleen lage en hoge waarden; standaard 4."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Levels": "Niveaus"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "random_value": {
+      "label": "Willekeurige waarde",
+      "description": "Geeft elke splat of elk punt een herhaalbare willekeurige waarde voor gevarieerde bewerkingen.",
+      "help": "Stel Min en Max in op het gewenste bereik.\nVerander Startwaarde voor een ander patroon; herschikken van geometrie kan het ook veranderen.",
+      "inputs": {
+        "Min": "Laagste willekeurige waarde in je eenheden. Standaard 0; houd deze lager dan Max.",
+        "Max": "Hoogste willekeurige waarde in je eenheden. Standaard 1; houd deze hoger dan Min."
+      },
+      "input_labels": {
+        "Min": "Min",
+        "Max": "Max"
+      },
+      "outputs": {
+        "Value": "Resulterend getal in je berekeningseenheden. Verbind met een geschikte numerieke ingang."
+      },
+      "output_labels": {
+        "Value": "Waarde"
+      },
+      "properties": {
+        "seed": "Gehele startwaarde voor een herhaalbaar patroon. Standaard 0; veranderen geeft een ander patroon."
+      },
+      "property_labels": {
+        "seed": "Startwaarde"
+      }
+    },
+    "recolour": {
+      "label": "Herkleuren",
+      "description": "Verandert de kleur van geselecteerde splats en behoudt desgewenst licht en schaduw.",
+      "help": "Kies Kleur en begin met Gewicht 0,3 voor een zachte tint.\nLaat Schaduw behouden aan om lichtdetails te bewaren.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Colour": "RGB-doelkleur, meestal 0–1 per kanaal. Standaard blauw. Schaduw behouden bewaart licht en schaduw.",
+        "Weight": "Herkleursterkte, 0–1. 0 behoudt het origineel, 1 past de nieuwe kleur volledig toe; standaard 1."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Colour": "Kleur",
+        "Weight": "Gewicht"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "keep_shading": "Bewaar licht en schaduw bij herkleuring. Standaard aan; uit geeft vlakke kleur.",
+        "fade_view_dependent": "Verminder kijkafhankelijke kleur bij herkleuring. Standaard aan; uit behoudt de oorspronkelijke variatie."
+      },
+      "property_labels": {
+        "keep_shading": "Schaduw behouden",
+        "fade_view_dependent": "Kijkafhankelijkheid vervagen"
+      }
+    },
+    "remove_floaters": {
+      "label": "Losse splats verwijderen",
+      "description": "Verwijdert losse splats in lege ruimte, zoals stippen in de lucht of nevel onder de grond.",
+      "help": "Zet eerst Voorbeeld aan: dit toont alleen wat zou verdwijnen.\nIsolatiestraal 3 met Relatief aan grootte beoordeelt elke splat op eigen schaal en spaart de ijle achtergrond.\nVerbind een Selectie om de schoonmaak te beperken, bijvoorbeeld tot onder de grond.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je verwijdering test: gewichten vanaf 0,5. Zonder verbinding test je elke splat.",
+        "Min Opacity": "Verwijder onder deze dekking, 0–1. 0 schakelt de test uit; standaard 0,02 verwijdert zeer zwakke splats.",
+        "Max Size": "Verwijder splats met een langste as boven deze scène-eenheden. Standaard 0 schakelt de test uit.",
+        "Isolation Radius": "Zoekafstand voor buren: grootteveelvoud bij Relatief aan grootte, anders scène-eenheden. 0 schakelt de test uit.",
+        "Min Neighbours": "Verwijder splats met minder buren binnen de straal. 1 verwijdert alleen volledig geïsoleerde splats."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Min Opacity": "Min. dekking",
+        "Max Size": "Max. grootte",
+        "Isolation Radius": "Isolatiestraal",
+        "Min Neighbours": "Min. buren"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "preview": "Toon alleen de te verwijderen splats, ongewijzigd. Standaard uit toont het opgeschoonde resultaat.",
+        "relative_to_size": "Gebruik splatgrootte als straaleenheid. Standaard aan spaart ijle gebieden; uit gebruikt scène-eenheden."
+      },
+      "property_labels": {
+        "preview": "Voorbeeld",
+        "relative_to_size": "Relatief aan grootte"
+      }
+    },
+    "scale": {
+      "label": "Schaal",
+      "description": "Leest de grootte van elke splat langs zijn drie lokale assen.",
+      "help": "Verbind Schaal met XYZ splitsen om asgroottes te vergelijken.\nDe waarden zijn scène-eenheden, geen vermenigvuldigingsfactoren.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Scale": "Grootte langs de drie lokale splatassen in scène-eenheden."
+      },
+      "output_labels": {
+        "Scale": "Schaal"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "scale_clamp": {
+      "label": "Asverhouding begrenzen",
+      "description": "Verkort naaldvormige Gaussians die strepen tonen wanneer je het opnamepad verlaat.",
+      "help": "Gebruik dit wanneer dunne strepen buiten het camerapad verschijnen.\nBegin met Max. asverhouding 16; lagere waarden verkorten meer naalden.\nPlatte splats op oppervlakken blijven intact tenzij ‘Plat meenemen’ aanstaat.\nAssen met grootte nul blijven ingeklapt; de verhoudingslimiet geldt alleen voor de overige assen.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Max Aspect": "Hoogste verhouding tussen langste en middelste splatas. 16 is een goed begin; lager verkort meer naalden."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Max Aspect": "Max. asverhouding"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "include_flat": "Begrens ook platheid (langste tegenover kortste as). Standaard uit, omdat oppervlakken uit platte splats bestaan."
+      },
+      "property_labels": {
+        "include_flat": "Plat meenemen"
+      }
+    },
+    "separate_colour": {
+      "label": "Kleur splitsen",
+      "description": "Splitst een kleur in RGB- of HSV-waarden om elk deel apart te bewerken of vergelijken.",
+      "help": "Kies HSV om tint, verzadiging of helderheid te isoleren.\nIn HSV leveren R, G en B deze waarden in die volgorde.",
+      "inputs": {
+        "Colour": "Te splitsen kleur, meestal 0–1 per RGB-kanaal. Standaard zwart, alle kanalen op 0."
+      },
+      "input_labels": {
+        "Colour": "Kleur"
+      },
+      "outputs": {
+        "R": "Rood in RGB of tint in HSV. Tint loopt van 0 tot 1 rond het kleurwiel.",
+        "G": "Groen in RGB of verzadiging in HSV. In HSV is 0 grijs en 1 volledig verzadigd.",
+        "B": "Blauw in RGB of helderheid in HSV. In HSV is 0 zwart en 1 volledige helderheid."
+      },
+      "output_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "properties": {
+        "mode": "Kleurinterpretatie. Standaard RGB gebruikt rood, groen en blauw; HSV gebruikt tint, verzadiging en helderheid."
+      },
+      "property_labels": {
+        "mode": "Modus"
+      }
+    },
+    "separate_geometry": {
+      "label": "Geometrie splitsen",
+      "description": "Splitst de selectie van de rest zodat je beide apart kunt bewerken en weer samenvoegen.",
+      "help": "Verbind een Selectie en bewerk de twee uitgangen afzonderlijk.\nGebruik Geometrie samenvoegen om de takken te herenigen.\nZachte gewichten worden bij 0,5 gesplitst in ja of nee.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Gewichten vanaf 0,5 gaan naar Selectie; lagere naar Omgekeerd. Zonder verbinding is alles geselecteerd."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie"
+      },
+      "outputs": {
+        "Selection": "Geometrie met een selectiegewicht van minstens 0,5. Bewerk deze tak afzonderlijk.",
+        "Inverted": "Geometrie met een selectiegewicht onder 0,5. Dit is het deel buiten je selectie."
+      },
+      "output_labels": {
+        "Selection": "Selectie",
+        "Inverted": "Omgekeerd"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "separate_xyz": {
+      "label": "XYZ splitsen",
+      "description": "Splitst een positie of richting in X-, Y- en Z-waarden.",
+      "help": "Verbind Positie en stuur de hoogte-as naar Vergelijken of Bereik omzetten.\nControleer welke as in je scène omhoog wijst.",
+      "inputs": {
+        "Vector": "X-, Y- en Z-waarden in je eenheden. Standaard (0, 0, 0) geeft nul op elke as."
+      },
+      "input_labels": {
+        "Vector": "Vector"
+      },
+      "outputs": {
+        "X": "X-coördinaat van de invoer, in dezelfde eenheden. 0 ligt op het vlak van de andere twee assen.",
+        "Y": "Y-coördinaat van de invoer, in dezelfde eenheden. 0 ligt op het vlak van de andere twee assen.",
+        "Z": "Z-coördinaat van de invoer, in dezelfde eenheden. 0 ligt op het vlak van de andere twee assen."
+      },
+      "output_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_colour": {
+      "label": "Kleur instellen",
+      "description": "Vervangt de kleur van geselecteerde splats, punten of meshpunten door de opgegeven kleur.",
+      "help": "Kies Kleur of verbind kleuren van een andere knoop.\nLaat Kijkafhankelijkheid wissen aan voor een vlak geschilderde kleur.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Colour": "RGB-kleur, meestal 0–1 per kanaal: 0 zwart, 1 wit. Standaard (0,5, 0,5, 0,5) is middengrijs."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Colour": "Kleur"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "clear_view_dependent": "Verwijder kijkafhankelijke kleur van geselecteerde splats. Standaard aan geeft vlakke kleur; uit behoudt reflecties."
+      },
+      "property_labels": {
+        "clear_view_dependent": "Kijkafhankelijkheid wissen"
+      }
+    },
+    "set_opacity": {
+      "label": "Dekking instellen",
+      "description": "Verandert hoe transparant geselecteerde splats eruitzien.",
+      "help": "Begin met Dekking 0,5 voor doorschijnende splats.\nGebruik Selectie voor een zachte menging met hun oorspronkelijke dekking.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Opacity": "Nieuwe dekking, 0–1: 0 transparant, 1 dekkend. Standaard 1 maakt geselecteerde splats dekkend."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Opacity": "Dekking"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_position": {
+      "label": "Positie instellen",
+      "description": "Verplaatst geselecteerde splats, punten of meshhoekpunten naar nieuwe posities, met optionele verschuiving.",
+      "help": "Verbind Positie met Positie en stel Verschuiving in voor relatieve beweging.\nZonder die verbinding staat Positie standaard op de oorsprong.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Position": "Nieuwe lokale positie in scène-eenheden. Standaard oorsprong; verbind Positie om posities te behouden.",
+        "Offset": "Extra X-, Y- en Z-beweging in lokale scène-eenheden. Standaard (0, 0, 0) voegt geen beweging toe."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Position": "Positie",
+        "Offset": "Verschuiving"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_scale": {
+      "label": "Schaal instellen",
+      "description": "Stelt de grootte van geselecteerde splats langs hun drie lokale assen in.",
+      "help": "Verbind Schaal via Vectorrekenen om bestaande groottes te vermenigvuldigen.\nZonder verbinding vervangen waarden de grootte in scène-eenheden; het zijn geen factoren.\nEen grootte van nul of lager klapt een as in. Een positieve grootte herstelt deze alleen bij volledige selectie; bij gedeeltelijke selectie blijft de as ingeklapt.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Scale": "Nieuwe grootte per lokale as in scène-eenheden. Standaard (1, 1, 1) geeft ronde splats met eenheidsgrootte."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Scale": "Schaal"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_sh_degree": {
+      "label": "SH-graad instellen",
+      "description": "Beperkt kijkafhankelijke splatkleur; lagere graden maken bestanden veel kleiner.",
+      "help": "Gebruik Graad 0 voor vlakke kleur en kleinere exports.\nEen hogere graad biedt ruimte voor detail maar herstelt weggegooide kleur niet.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Degree": "SH-graad, 0–3. Standaard 0 verwijdert kijkafhankelijke kleur; hogere waarden laten meer hoekdetail toe."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Degree": "Graad"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "sharpen": {
+      "label": "Verscherpen",
+      "description": "Verkleint geselecteerde splats om zachte details scherper te maken.",
+      "help": "Begin met Sterkte 0,25 en laat Bedekking behouden aan.\nHoge waarden kunnen gaten tussen splats zichtbaar maken.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Amount": "Groottereductie, 0–0,95. 0 doet niets; standaard 0,25 verkleint elke as met 25%."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Amount": "Sterkte"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "keep_coverage": "Verhoog dekking bij verkleinen om bedekking te bewaren. Standaard aan; uit kan transparanter worden."
+      },
+      "property_labels": {
+        "keep_coverage": "Bedekking behouden"
+      }
+    },
+    "simplify": {
+      "label": "Vereenvoudigen",
+      "description": "Combineert splats om hun aantal te verlagen en het totaalbeeld te behouden.",
+      "help": "Begin met Verhouding 0,5 om naar de helft van de splats te streven.\nDit kan langer duren; lagere verhoudingen verliezen fijne details.\nAssen met covariantie nul blijven ingeklapt; samenvoegen van verschillende posities of oriëntaties kan echte omvang creëren.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Ratio": "Gewenst splataandeel, 0,01–1. Standaard 0,5 streeft naar de helft; 1 behoudt het oorspronkelijke aantal."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Ratio": "Verhouding"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "splats_to_points": {
+      "label": "Splats naar punten",
+      "description": "Zet splatmiddens en basiskleuren om in een puntenwolk.",
+      "help": "Gebruik dit om middens te exporteren of je scène als punten te bewerken.\nGrootte, dekking en kijkafhankelijke kleur blijven niet behouden.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "stored_selection": {
+      "label": "Opgeslagen selectie",
+      "description": "Hergebruikt een selectie die je in het kijkvenster vastlegt.",
+      "help": "Verberg deze modifier met het oogpictogram, selecteer splats in het kijkvenster (penseel, lasso of vak), druk op Selectie vastleggen en toon hem weer.\nLeg opnieuw vast als iets vóór deze node het aantal splats verandert.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Selection": "Aan voor geselecteerde elementen, uit voor de rest. Verbind met Selectie of een booleaanse ingang."
+      },
+      "output_labels": {
+        "Selection": "Selectie"
+      },
+      "properties": {
+        "data": "Vastgelegde kijkvensterselectie. Leeg tot Selectie vastleggen; apart opgeslagen per modifier.",
+        "size": "Elementaantal bij het vastleggen. 0 betekent leeg; leg opnieuw vast als het aantal verandert.",
+        "invert": "Keer de vastgelegde selectie om. Standaard uit behoudt geselecteerde elementen; aan kiest de rest."
+      },
+      "property_labels": {
+        "data": "Gegevens",
+        "size": "Grootte",
+        "invert": "Omkeren"
+      }
+    },
+    "transform_geometry": {
+      "label": "Geometrie transformeren",
+      "description": "Verplaatst, draait en schaalt de hele geometrie tegelijk.",
+      "help": "Begin met Verplaatsing of Schaal 1 om de grootte te behouden.\nRotatie gebruikt graden rond de oorsprong van het object.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Translation": "X-, Y- en Z-beweging in scène-eenheden. Standaard (0, 0, 0) laat posities onveranderd.",
+        "Rotation": "Rotatie rond X, Y en Z in graden. Standaard (0, 0, 0) laat de richting onveranderd.",
+        "Scale": "Groottefactor. 1 behoudt grootte, 0 vouwt samen tot de oorsprong; negatieve waarden spiegelen."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Translation": "Verplaatsing",
+        "Rotation": "Rotatie",
+        "Scale": "Schaal"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "value": {
+      "label": "Waarde",
+      "description": "Geeft je één getal voor meerdere verbonden instellingen.",
+      "help": "Verbind Waarde met meerdere numerieke ingangen om ze samen te regelen.\nBegin bij 0 en versleep het getal om het aan te passen.",
+      "inputs": {
+        "Value": "Gedeeld getal. Standaard 0; negatieve en positieve getallen zijn toegestaan."
+      },
+      "input_labels": {
+        "Value": "Waarde"
+      },
+      "outputs": {
+        "Value": "Resulterend getal in je berekeningseenheden. Verbind met een geschikte numerieke ingang."
+      },
+      "output_labels": {
+        "Value": "Waarde"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector": {
+      "label": "Vector",
+      "description": "Geeft je gedeelde X-, Y- en Z-waarden voor meerdere knopen.",
+      "help": "Gebruik dit voor een gezamenlijke positie, verschuiving of richting.\nAlle drie de coördinaten zijn standaard 0.",
+      "inputs": {
+        "Vector": "X-, Y- en Z-waarden in je eenheden. Standaard (0, 0, 0) geeft nul op elke as."
+      },
+      "input_labels": {
+        "Vector": "Vector"
+      },
+      "outputs": {
+        "Vector": "Resulterende X-, Y- en Z-waarden in de eenheden van je berekening."
+      },
+      "output_labels": {
+        "Vector": "Vector"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector_math": {
+      "label": "Vectorrekenen",
+      "description": "Telt posities en richtingen op, trekt ze af en meet ze — bijvoorbeeld afstand tot een punt.",
+      "help": "Gebruik Schaal voor een verschuiving of Afstand tussen twee posities.\nLengte, Afstand en Inproduct gebruiken Waarde; de andere bewerkingen gebruiken Vector.",
+      "inputs": {
+        "A": "Eerste driedelige waarde in je berekeningseenheden. Standaard (0, 0, 0).",
+        "B": "Tweede driedelige waarde in je berekeningseenheden. Standaard (0, 0, 0).",
+        "Scale": "Factor voor Schaal. 1 laat A onveranderd, 0 geeft nul en −1 keert de richting om."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Scale": "Schaal"
+      },
+      "outputs": {
+        "Vector": "Resulterende X-, Y- en Z-waarden in de eenheden van je berekening.",
+        "Value": "Resulterend getal in je berekeningseenheden. Verbind met een geschikte numerieke ingang."
+      },
+      "output_labels": {
+        "Vector": "Vector",
+        "Value": "Waarde"
+      },
+      "properties": {
+        "operation": "Vectorberekening. Standaard Optellen; Lengte, Afstand en Inproduct geven Waarde in plaats van Vector."
+      },
+      "property_labels": {
+        "operation": "Bewerking"
+      }
+    },
+    "object_info": {
+      "label": "Objectinformatie",
+      "description": "Brengt geometrie van een ander scèneobject als referentie of extra deel in je grafiek.",
+      "help": "Kies de exacte naam of UUID van het referentieobject.\nGebruik Relatief om het ten opzichte van het gewijzigde object te plaatsen.\nVermijd referenties naar objecten die van deze modifier afhangen.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "Referentiegeometrie in de gekozen ruimte, inclusief zichtbare modifiers."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "object": "Exacte objectnaam of UUID. Standaard leeg; kies een referentie vóór de berekening.",
+        "transform_space": "Referentieruimte. Origineel behoudt lokale coördinaten; Relatief rekent om naar de ruimte van het gewijzigde object."
+      },
+      "property_labels": {
+        "object": "Object",
+        "transform_space": "Transformatieruimte"
+      }
+    },
+    "float_curve": {
+      "label": "Waardecurve",
+      "description": "Zet getallen om met een vloeiende, bewerkbare curve.",
+      "help": "Zet getallen om met een vloeiende, bewerkbare curve.\nVersleep, voeg toe of verwijder controlepunten. Fritsch–Carlson-interpolatie voorkomt overschrijding tussen monotone punten.",
+      "inputs": {
+        "Value": "Getal per element dat met de curve wordt omgezet."
+      },
+      "input_labels": {
+        "Value": "Waarde"
+      },
+      "outputs": {
+        "Value": "Getal na omzetting met de curve."
+      },
+      "output_labels": {
+        "Value": "Waarde"
+      },
+      "properties": {
+        "points": "Geordende controlepunten als X- en Y-paren.",
+        "clamp": "Begrens invoer tussen het eerste en laatste controlepunt."
+      },
+      "property_labels": {
+        "points": "Curve",
+        "clamp": "Begrenzen"
+      }
+    },
+    "rgb_curves": {
+      "label": "RGB-curven",
+      "description": "Zet kleuren om met een gecombineerde curve en curven per kanaal.",
+      "help": "Zet kleuren om met een gecombineerde curve en curven per kanaal.\nSelectie × Factor mengt het resultaat. De niet-lineaire correctie wijzigt alleen de DC-basiskleur van splats, niet de kijkafhankelijke SH-banden. Werkt ook op punten en meshes.",
+      "inputs": {
+        "Geometry": "Te bewerken geometrie; verbind een geometrie-uitgang.",
+        "Selection": "Menggewicht per element, 0–1; zonder verbinding gelden alle elementen.",
+        "Factor": "Extra sterkte van de curve, 0–1."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Factor": "Factor"
+      },
+      "outputs": {
+        "Geometry": "Geometrie na de bewerking."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "combined": "Curve die eerst op alle kleurkanalen wordt toegepast.",
+        "r": "Curve voor het rode kanaal.",
+        "g": "Curve voor het groene kanaal.",
+        "b": "Curve voor het blauwe kanaal."
+      },
+      "property_labels": {
+        "combined": "Gecombineerd",
+        "r": "Rood",
+        "g": "Groen",
+        "b": "Blauw"
+      }
+    },
+    "colour_ramp": {
+      "label": "Kleurverloop",
+      "description": "Koppelt getallen aan kleuren en transparantie.",
+      "help": "Koppelt getallen aan kleuren en transparantie.\nPlaats kleurstops tussen 0 en 1. Kies constante, lineaire of verzachte interpolatie.",
+      "inputs": {
+        "Fac": "Positie in het kleurverloop, gewoonlijk van 0 tot 1."
+      },
+      "input_labels": {
+        "Fac": "Factor"
+      },
+      "outputs": {
+        "Colour": "Gegenereerde RGB-kleur.",
+        "Alpha": "Transparantie uit het kleurverloop, 0–1."
+      },
+      "output_labels": {
+        "Colour": "Kleur",
+        "Alpha": "Alfa"
+      },
+      "properties": {
+        "stops": "Geordende stops: positie, rood, groen, blauw en alfa.",
+        "interpolation": "Overgang tussen nabije stops: constant, lineair of verzacht."
+      },
+      "property_labels": {
+        "stops": "Verloop",
+        "interpolation": "Interpolatie"
+      }
+    },
+    "gradient_texture": {
+      "label": "Verlooptextuur",
+      "description": "Maakt een verloop uit ruimtelijke coördinaten.",
+      "help": "Maakt een verloop uit ruimtelijke coördinaten.\nGebruik Positie als coördinaten. Lineair gebruikt X, diagonaal X en Y; bolvormig en radiaal verwijzen naar de oorsprong.",
+      "inputs": {
+        "Vector": "X-, Y- en Z-coördinaten; zonder verbinding worden elementposities gebruikt."
+      },
+      "input_labels": {
+        "Vector": "Vector"
+      },
+      "outputs": {
+        "Fac": "Gegenereerde verloopwaarde; kan buiten 0–1 vallen."
+      },
+      "output_labels": {
+        "Fac": "Factor"
+      },
+      "properties": {
+        "type": "Verloopvorm: lineair, kwadratisch, verzacht, diagonaal, bolvormig of radiaal."
+      },
+      "property_labels": {
+        "type": "Type"
+      }
+    },
+    "distance": {
+      "label": "Afstand",
+      "description": "Meet de afstand van elk element tot een punt, lijn of vlak.",
+      "help": "Meet de afstand van elk element tot een punt, lijn of vlak.\nVlakmodus geeft een afstand met teken; punt en lijn geven niet-negatieve afstanden.",
+      "inputs": {
+        "Vector": "X-, Y- en Z-coördinaten; zonder verbinding worden elementposities gebruikt.",
+        "Point": "Doelpunt of een punt op de lijn of het vlak.",
+        "Direction": "Richting van de lijn of kijkrichting van de camera.",
+        "Normal": "Normaalrichting van het doelvlak."
+      },
+      "input_labels": {
+        "Vector": "Vector",
+        "Point": "Punt",
+        "Direction": "Richting",
+        "Normal": "Normaal"
+      },
+      "outputs": {
+        "Distance": "Afstand in scène-eenheden; met teken in vlakmodus."
+      },
+      "output_labels": {
+        "Distance": "Afstand"
+      },
+      "properties": {
+        "mode": "Meet tot een punt, lijn of vlak."
+      },
+      "property_labels": {
+        "mode": "Modus"
+      }
+    },
+    "noise_texture": {
+      "label": "Ruistextuur",
+      "description": "Maakt reproduceerbare driedimensionale fractale ruis.",
+      "help": "Maakt reproduceerbare driedimensionale fractale ruis.\nZonder verbinding worden posities gebruikt. Detail ondersteunt 0–15 octaven met fracties; Ruwheid regelt hun amplitudes.",
+      "inputs": {
+        "Vector": "X-, Y- en Z-coördinaten; zonder verbinding worden elementposities gebruikt.",
+        "Scale": "Vermenigvuldiger voor grootte of coördinaten; 1 behoudt de oorspronkelijke grootte.",
+        "Detail": "Aantal octaven van 0 tot 15, met fractioneel mengen.",
+        "Roughness": "Deel van de amplitude dat elke volgende octaaf behoudt.",
+        "Distortion": "Sterkte van de coördinatenvervorming.",
+        "Seed": "Startwaarde om het ruispatroon te reproduceren."
+      },
+      "input_labels": {
+        "Vector": "Vector",
+        "Scale": "Schaal",
+        "Detail": "Detail",
+        "Roughness": "Ruwheid",
+        "Distortion": "Vervorming",
+        "Seed": "Startwaarde"
+      },
+      "outputs": {
+        "Fac": "Bemonsteringswaarde van het verloop of gemaakte ruis, 0–1.",
+        "Colour": "Gegenereerde RGB-kleur."
+      },
+      "output_labels": {
+        "Fac": "Factor",
+        "Colour": "Kleur"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "store_named_attribute": {
+      "label": "Attribuut met naam opslaan",
+      "description": "Slaat waarden op de elementen van de geometrie op.",
+      "help": "Slaat waarden op de elementen van de geometrie op.\nLees later met dezelfde attribuutnaam. Niet-geselecteerde elementen houden hun waarde of 0. Splat- en puntattributen blijven in volgende modifiers beschikbaar; meshknooppuntattributen verdwijnen bij toepassen.",
+      "inputs": {
+        "Geometry": "Te bewerken geometrie; verbind een geometrie-uitgang.",
+        "Selection": "Menggewicht per element, 0–1; zonder verbinding gelden alle elementen.",
+        "Name": "Naam voor later uitlezen met Attribuut met naam.",
+        "Value": "Op te slaan getallen, vectoren of kleuren per element."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Name": "Naam",
+        "Value": "Waarde"
+      },
+      "outputs": {
+        "Geometry": "Geometrie na de bewerking."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "data_type": "Sla de waarde op als getal, vector of kleur."
+      },
+      "property_labels": {
+        "data_type": "Gegevenstype"
+      }
+    },
+    "remove_clumps": {
+      "label": "Kleine groepen verwijderen",
+      "description": "Verwijdert kleine verbonden groepen splats of punten.",
+      "help": "De straal vermenigvuldigt de lokale afstand per element (drie naaste buren). Beide elementen moeten elkaar bereiken.\nAlleen groepen onder de minimumgrootte verdwijnen; dun bezette oppervlakken blijven behouden. Meshes worden niet ondersteund.",
+      "inputs": {
+        "Geometry": "Te bewerken geometrie; verbind een geometrie-uitgang.",
+        "Selection": "Elementen met een waarde van minstens 0,5 worden geselecteerd.",
+        "Radius": "Straal als veelvoud van de lokale afstand per element; beide eindpunten moeten elkaar bereiken.",
+        "Min Size": "Groepen met minder elementen komen in aanmerking voor verwijdering."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Radius": "Straal",
+        "Min Size": "Minimumgrootte"
+      },
+      "outputs": {
+        "Geometry": "Geometrie na de bewerking.",
+        "Selection": "Elementen in groepen onder de minimumgrootte."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie"
+      },
+      "properties": {
+        "delete": "Verwijder kandidaten; schakel uit om alleen de selectie-uitgang te gebruiken."
+      },
+      "property_labels": {
+        "delete": "Verwijderen"
+      }
+    },
+    "merge_by_distance": {
+      "label": "Samenvoegen op afstand",
+      "description": "Voegt nabije elementen samen tot compacte geometrie.",
+      "help": "Voegt nabije elementen samen tot compacte geometrie.\nAlleen geselecteerde elementen worden samengevoegd. Punten en knooppunten worden gemiddeld, vlakken opnieuw gekoppeld en ontaarde vlakken verwijderd. Van splats blijft het meest ondoorzichtige lid per groep behouden.",
+      "inputs": {
+        "Geometry": "Te bewerken geometrie; verbind een geometrie-uitgang.",
+        "Selection": "Elementen met een waarde van minstens 0,5 worden geselecteerd.",
+        "Distance": "Maximale afstand die elementen binnen een groep verbindt."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Distance": "Afstand"
+      },
+      "outputs": {
+        "Geometry": "Geometrie na de bewerking."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "geometry_proximity": {
+      "label": "Geometrische nabijheid",
+      "description": "Vindt het dichtstbijzijnde doelpunt, splatcentrum of meshknooppunt.",
+      "help": "Vindt het dichtstbijzijnde doelpunt, splatcentrum of meshknooppunt.\nVerbind doelgeometrie in hetzelfde coördinatenstelsel. Meet tot elementen, niet tot het oppervlak tussen meshknooppunten.",
+      "inputs": {
+        "Target": "Doelgeometrie met punten, splats of knooppunten; mag niet leeg zijn."
+      },
+      "input_labels": {
+        "Target": "Doel"
+      },
+      "outputs": {
+        "Distance": "Afstand in scène-eenheden; met teken in vlakmodus.",
+        "Position": "Gevonden positie in de coördinaten van geometrie of camera."
+      },
+      "output_labels": {
+        "Distance": "Afstand",
+        "Position": "Positie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "instance_on_points": {
+      "label": "Instanties op punten",
+      "description": "Plaatst een getransformeerde splatkopie op elk geselecteerd anker.",
+      "help": "Plaatst een getransformeerde splatkopie op elk geselecteerd anker.\nAnkers mogen punten, meshknooppunten of splatcentra zijn; de instantie moet splats bevatten. Euler-rotaties in graden en schalen transformeren vorm en SH-kleur samen. Limiet: 50 miljoen splats.\nNegatieve factoren gebruiken hun absolute waarde voor de grootte en spiegelen posities, oriëntatie en SH-kleur. Een ingeklapte transformatie laat SH-kleur ongewijzigd.",
+      "inputs": {
+        "Points": "Geometrie waarvan de elementen als ankers dienen.",
+        "Instance": "Te kopiëren splatgeometrie; andere typen zijn niet toegestaan.",
+        "Selection": "Elementen met een waarde van minstens 0,5 worden geselecteerd.",
+        "Rotation": "Euler-hoeken rond X, Y en Z in graden per anker; 0 behoudt de oriëntatie.",
+        "Scale": "Eén getal of drie asfactoren: 1 behoudt de grootte, 0 maakt een as vlak en negatieve waarden spiegelen."
+      },
+      "input_labels": {
+        "Points": "Punten",
+        "Instance": "Instantie",
+        "Selection": "Selectie",
+        "Rotation": "Rotatie",
+        "Scale": "Schaal"
+      },
+      "outputs": {
+        "Geometry": "Geometrie na de bewerking."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "camera_info": {
+      "label": "Camera-informatie",
+      "description": "Leest positie, oriëntatie en lensgegevens van een datasetcamera.",
+      "help": "Leest positie, oriëntatie en lensgegevens van een datasetcamera.\nKies op index of afbeeldingsnaam. Uitgangen gebruiken wereldcoördinaten; de scène moet datasetcamera’s bevatten.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "Gevonden positie in de coördinaten van geometrie of camera.",
+        "Direction": "Richting van de lijn of kijkrichting van de camera.",
+        "Up": "Eenheidsvector naar de bovenrand van het beeld.",
+        "FOV": "Verticale beeldhoek in graden.",
+        "Image Size": "Beeldbreedte en -hoogte in pixels; Z is 0."
+      },
+      "output_labels": {
+        "Position": "Positie",
+        "Direction": "Richting",
+        "Up": "Omhoog",
+        "FOV": "Beeldhoek",
+        "Image Size": "Beeldformaat"
+      },
+      "properties": {
+        "camera": "Camera-index of exacte afbeeldingsnaam; 0 kiest de eerste camera."
+      },
+      "property_labels": {
+        "camera": "Camera"
+      }
+    },
+    "camera_coverage": {
+      "label": "Cameradekking",
+      "description": "Telt camera’s waarvan het zichtvolume elk element bevat.",
+      "help": "Telt camera’s waarvan het zichtvolume elk element bevat.\nVerbind Aantal met Vergelijken. Controleert beeldgrenzen en positieve diepte, niet afscherming. Maximale afstand 0 schakelt de grens uit. Werkt op splats, punten en meshknooppunten; datasetcamera’s zijn vereist.",
+      "inputs": {
+        "Max Distance": "Maximale camera-afstand in wereldeenheden; 0 schakelt de grens uit."
+      },
+      "input_labels": {
+        "Max Distance": "Maximale afstand"
+      },
+      "outputs": {
+        "Count": "Aantal datasetcamera’s waarvan de beeldgrenzen dit element bevatten.",
+        "Ratio": "Aandeel camera’s dat het element bevat, 0–1."
+      },
+      "output_labels": {
+        "Count": "Aantal",
+        "Ratio": "Aandeel"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "view_distance": {
+      "label": "Camera-afstand",
+      "description": "Meet de wereldafstand tot een camera of vastgelegde weergave.",
+      "help": "Meet de wereldafstand tot een camera of vastgelegde weergave.\nKies een camera of druk op Weergave vastleggen. De vastgelegde camera volgt latere bewegingen niet. Werkt op splats, punten en meshknooppunten; datasetcamera’s zijn vereist.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Distance": "Afstand tot de gekozen camera in wereldeenheden."
+      },
+      "output_labels": {
+        "Distance": "Afstand"
+      },
+      "properties": {
+        "camera": "Camera-index of exacte afbeeldingsnaam; 0 kiest de eerste camera.",
+        "source": "Gebruik een datasetcamera of de laatst vastgelegde weergave.",
+        "captured_transform": "Opgeslagen camera-naar-wereldmatrix; leeg tot de eerste vastlegging."
+      },
+      "property_labels": {
+        "camera": "Camera",
+        "source": "Bron",
+        "captured_transform": "Vastgelegde transformatie"
+      }
+    },
+    "scene_time": {
+      "label": "Scènetijd",
+      "description": "Geeft de tijd van de afspeelkop van de sequencer.",
+      "help": "Gebruik Seconden of Frame om velden te animeren.\nAlleen tijdafhankelijke grafen worden tijdens het afspelen opnieuw berekend.\nVideo-export wacht voor elk frame op de berekende geometrie.",
+      "inputs": {},
+      "properties": {},
+      "outputs": {
+        "Seconds": "Tijd van de afspeelkop in seconden.",
+        "Frame": "Tijd van de afspeelkop vermenigvuldigd met de beeldsnelheid van de sequencer."
+      },
+      "output_labels": {
+        "Seconds": "Seconden",
+        "Frame": "Frame"
+      }
+    }
+  },
+  "node_editor.how_to_use": "Zo gebruik je dit",
+  "node_editor.learn_more": "Meer informatie",
+  "node_editor.modifiers_paused_while_training": "Modifiers zijn gepauzeerd tijdens het trainen",
+  "export_dialog.apply_modifiers": "Modifiers toepassen",
+  "node_editor.capture_view": "Weergave vastleggen",
+  "node_editor.curve_hint": "Versleep punten; klik om toe te voegen, dubbelklik of Delete om te verwijderen.",
+  "node_editor.ramp_hint": "Versleep kleurstops; klik om toe te voegen, dubbelklik of Delete om te verwijderen. Selecteer een stop om RGBA te wijzigen.",
+  "node_editor.keyframe_hint": "Sleutelframe invoegen · Ctrl+klik of I onder de muisaanwijzer"
 }

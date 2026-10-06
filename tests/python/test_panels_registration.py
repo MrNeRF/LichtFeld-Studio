@@ -149,6 +149,7 @@ def _install_recording_lf(monkeypatch):
         "VIEW_FRAME_ALL",
         "TOGGLE_QUAD_VIEW",
         "TOGGLE_MAXIMIZE_AREA",
+        "TOGGLE_NODE_EDITOR",
     )
     tool_mode = IntEnum("ToolMode", {name: i for i, name in enumerate(tool_mode_names)})
     action_enum = IntEnum("Action", {name: i for i, name in enumerate(action_names)})
@@ -261,7 +262,7 @@ def _install_recording_lf(monkeypatch):
     )
     lf_stub.get_current_view = lambda: SimpleNamespace(width=1920, height=1080)
     lf_stub.get_selected_node_name = lambda: ""
-    lf_stub.get_vulkan_capabilities = lambda: {}
+    lf_stub.get_graphics_capabilities = lambda: {}
     def log_error(*args, **kwargs):
         # Support both printf-style and preformatted single-string calls.
         if len(args) == 1:
@@ -411,7 +412,7 @@ def test_lazy_panel_metadata_matches_real_classes(panels_module):
     assert module.register_builtin_panels() is True
     fields = (
         "id", "label", "space", "order", "template", "height_mode", "size",
-        "options", "update_policy", "update_interval_ms", "style",
+        "options", "update_policy", "update_interval_ms", "style", "parent",
     )
     registered = {
         cls.__name__: cls
@@ -422,8 +423,13 @@ def test_lazy_panel_metadata_matches_real_classes(panels_module):
     for spec_name, spec in module.PANEL_SPECS.items():
         real = getattr(import_module(spec.module_name), spec.class_name)
         lazy = registered[spec.class_name]
-        assert [getattr(lazy, field) for field in fields] == [
-            getattr(real, field) for field in fields
+        # Child panels inherit their parent's space and must not define one.
+        if spec.parent:
+            assert "space" not in lazy.__dict__
+            assert "space" not in real.__dict__
+        checked = [field for field in fields if not (field == "space" and spec.parent)]
+        assert [getattr(lazy, field, None) for field in checked] == [
+            getattr(real, field, None) for field in checked
         ], spec_name
 
 

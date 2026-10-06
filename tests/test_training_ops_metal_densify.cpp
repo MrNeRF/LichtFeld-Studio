@@ -232,25 +232,23 @@ namespace {
         raw[2] = -std::numeric_limits<float>::infinity();
         const auto log_scales = values(3 * n, 0.4f, 11);
         const auto frozen = every(n, 4);
-        const auto far = every(n, 3);
-        const ops::DecayParams params{.opacity_decay = 0.02f, .scale_decay = 0.01f, .far_decay_scale = 0.25f, .train_t = 0.4f};
+        const ops::DecayParams params{.opacity_decay = 0.02f, .scale_decay = 0.01f, .train_t = 0.4f};
         auto raw_gpu = gpu(raw);
         auto scales_gpu = gpu_rows(log_scales, 3);
-        mrnf().decay(raw_gpu, scales_gpu, gpu_bool(frozen), gpu_bool(far), params);
+        mrnf().decay(raw_gpu, scales_gpu, gpu_bool(frozen), params);
 
         auto expected_raw = raw;
         auto expected_scales = log_scales;
         for (size_t i = 0; i < n; ++i) {
             if (frozen[i])
                 continue;
-            const float scale = far[i] ? params.far_decay_scale : 1.f;
             const float t = 1.0f - params.train_t;
-            float p = sigmoid(raw[i]) - params.opacity_decay * scale * t;
+            float p = sigmoid(raw[i]) - params.opacity_decay * t;
             p = std::clamp(p, 1e-12f, std::nextafter(1.0f, 0.0f));
             expected_raw[i] = std::log(p / (1.0f - p));
             for (int d = 0; d < 3; ++d)
                 expected_scales[i * 3 + d] =
-                    std::log(std::max(std::exp(log_scales[i * 3 + d]) * (1.0f - params.scale_decay * scale * t), 1e-12f));
+                    std::log(std::max(std::exp(log_scales[i * 3 + d]) * (1.0f - params.scale_decay * t), 1e-12f));
         }
         expect_close(host_f(raw_gpu), expected_raw, "mrnf.decay.opacity");
         expect_close(host_f(scales_gpu), expected_scales, "mrnf.decay.scales");
@@ -281,36 +279,6 @@ namespace {
         std::sort(extents, extents + 3);
         EXPECT_EQ(bounds.median_size, extents[1] * 2.0f);
         EXPECT_EQ(bounds.max_extent, extents[2]);
-    }
-
-    TEST_P(PortableDensifyOps, MrnfMedianExtentAndSortedMedian) {
-        constexpr size_t n = 1537;
-        auto scales = values(3 * n, 0.8f, 4);
-        for (size_t i = 0; i < 3 * n; i += 11)
-            scales[i] = -200.f; // exp underflows to 0: not positive
-        const auto extent = mrnf().median_extent(gpu_rows(scales, 3));
-        std::vector<float> positive;
-        for (size_t i = 0; i < n; ++i) {
-            const float g = std::exp((scales[i * 3] + scales[i * 3 + 1] + scales[i * 3 + 2]) * (1.0f / 3.0f));
-            if (std::isfinite(g) && g > 0.f)
-                positive.push_back(g);
-        }
-        const auto sorted = radix_sorted(positive);
-        ASSERT_FALSE(sorted.empty());
-        EXPECT_TRUE(extent.valid);
-        EXPECT_NEAR(extent.value, sorted[sorted.size() / 2], 1e-6f * sorted[sorted.size() / 2] + 1e-7f);
-
-        const auto empty = mrnf().median_extent(gpu_rows(std::vector<float>(9, -200.f), 3));
-        EXPECT_FALSE(empty.valid);
-        EXPECT_EQ(empty.value, 0.f);
-
-        auto median_values = values(4099, 3.f, 9);
-        median_values[3] = -0.0f;
-        median_values[4] = 0.0f;
-        EXPECT_EQ(mrnf().sorted_median(gpu(median_values)), radix_sorted(median_values)[median_values.size() / 2]);
-        // CUB orders -0 before +0.
-        EXPECT_EQ(std::bit_cast<uint32_t>(mrnf().sorted_median(gpu({0.0f, -0.0f, -1.f}))), 0x80000000u);
-        EXPECT_EQ(std::bit_cast<uint32_t>(mrnf().sorted_median(gpu({0.0f, -0.0f, -1.f, 1.f}))), 0u);
     }
 
     // Stable descending order of CUDA's Gumbel keys.
@@ -387,24 +355,9 @@ namespace {
         const auto vis = values(n, 1.f, 1, 1.f);
         const auto weight = values(n, 0.2f, 2);
         const auto dens = values(2 * n, 0.5f, 3, 0.5f);
-        const auto ratio = values(n, 0.1f, 4);
-        auto vis_gpu = gpu(vis);
-        auto weight_gpu = gpu(weight);
-        auto dens_gpu = gpu_rows(dens, n);
-        auto ratio_gpu = gpu(ratio);
-        mrnf().fold(vis_gpu, weight_gpu, dens_gpu, ratio_gpu, 0.75f);
-        std::vector<float> expected_vis(n), expected_weight(n), expected_ratio(n);
-        for (size_t i = 0; i < n; ++i) {
-            const float v = dens[i], e = dens[n + i];
-            expected_vis[i] = vis[i] + v;
-            expected_weight[i] = std::max(weight[i], e);
-            expected_ratio[i] = std::max(ratio[i], v >= 0.05f ? e / std::pow(v, 0.75f) : 0.f);
-        }
-        expect_same(host_f(vis_gpu), expected_vis, "mrnf.fold.visibility");
-        expect_same(host_f(weight_gpu), expected_weight, "mrnf.fold.weight");
-        expect_close(host_f(ratio_gpu), expected_ratio, "mrnf.fold.ratio");
-        expect_same(host_f(dens_gpu), std::vector<float>(2 * n, 0.f), "mrnf.fold.rows");
-
+        std::vector<float> expected_weight(n);
+        for (size_t i = 0; i < n; ++i)
+            expected_weight[i] = std::max(weight[i], dens[n + i]);
         auto err_gpu = gpu_rows(dens, n);
         auto max_gpu = gpu(weight);
         mrnf().fold_error(max_gpu, err_gpu);
@@ -413,29 +366,15 @@ namespace {
         expect_same(host_f(err_gpu), expected_rows, "mrnf.fold_error.rows");
         expect_same(host_f(max_gpu), expected_weight, "mrnf.fold_error.max");
 
-        // fold without a ratio tensor.
-        auto vis2 = gpu(vis);
-        auto weight2 = gpu(weight);
-        auto dens2 = gpu_rows(dens, n);
-        Tensor absent;
-        mrnf().fold(vis2, weight2, dens2, absent, 0.f);
-        expect_same(host_f(vis2), expected_vis, "mrnf.fold.no_ratio");
-
         const auto means = values(3 * n, 1.f, 12);
-        const std::array<float, 3> center{0.1f, -0.2f, 0.3f};
-        auto far_gpu = Tensor::zeros({n}, Device::GPU, DataType::Bool);
-        mrnf().far_mask(gpu_rows(means, 3), far_gpu, center, 1.5f);
         const auto scale_max = values(n, 0.5f, 4);
         const auto seed_mask = every(n, 3);
         auto prune_gpu = gpu_bool(seed_mask);
         auto nan_means = means;
         nan_means[3] = std::numeric_limits<float>::quiet_NaN();
         mrnf().prune_bounds(gpu_rows(nan_means, 3), gpu(scale_max), prune_gpu, {0.f, 0.f, 0.f}, 0.9f, 0.3f);
-        const auto far = host_u8(far_gpu);
         const auto prune = host_u8(prune_gpu);
         for (size_t i = 0; i < n; ++i) {
-            const float dx = means[i * 3] - center[0], dy = means[i * 3 + 1] - center[1], dz = means[i * 3 + 2] - center[2];
-            EXPECT_EQ(far[i], (dx * dx + dy * dy + dz * dz) > 1.5f * 1.5f ? 1 : 0) << i;
             const float ax = std::abs(nan_means[i * 3]), ay = std::abs(nan_means[i * 3 + 1]),
                         az = std::abs(nan_means[i * 3 + 2]);
             const bool distance = !std::isnan(ax) && !std::isnan(ay) && !std::isnan(az) &&
@@ -444,106 +383,7 @@ namespace {
         }
     }
 
-    TEST_P(PortableDensifyOps, MrnfProjectionAndSeeds) {
-        constexpr size_t n = 64;
-        const auto means = values(3 * n, 1.f, 12);
-        const std::vector<float> view{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 2, 0, 0, 0, 1};
-        auto means2d_gpu = Tensor::zeros({n, 2}, Device::GPU);
-        auto radii_gpu = Tensor::zeros({n}, Device::GPU);
-        const ops::ProjectParams project{.image = {.h = 8, .w = 12}, .intrinsics = {.fx = 20.f, .fy = 18.f, .cx = 6.f, .cy = 4.f}};
-        mrnf().project_centers(gpu_rows(means, 3), Tensor::from_vector(view, {4, 4}, Device::GPU), means2d_gpu,
-                               radii_gpu, project);
-        std::vector<float> expected_means2d(2 * n), expected_radii(n);
-        for (size_t i = 0; i < n; ++i) {
-            const float x = means[i * 3], y = means[i * 3 + 1], z = means[i * 3 + 2] + 2.f;
-            if (!(z > 0.01f))
-                continue;
-            const float px = 20.f * (x / z) + 6.f, py = 18.f * (y / z) + 4.f;
-            expected_means2d[i * 2] = px;
-            expected_means2d[i * 2 + 1] = py;
-            expected_radii[i] = px >= 0.f && py >= 0.f && px < 12.f && py < 8.f ? 1.f : 0.f;
-        }
-        const auto means2d = host_f(means2d_gpu);
-        expect_close(means2d, expected_means2d, "mrnf.project.means2d");
-        const auto radii = host_f(radii_gpu);
-        expect_same(radii, expected_radii, "mrnf.project.radii");
-
-        const auto error = values(8 * 12, 1.f, 15, 1.f);
-        auto scores_gpu = Tensor::zeros({n}, Device::GPU);
-        mrnf().gather_center_error(means2d_gpu, radii_gpu, gpu_rows(error, 12), scores_gpu);
-        std::vector<float> expected_scores(n);
-        for (size_t i = 0; i < n; ++i) {
-            if (radii[i] <= 0.f)
-                continue;
-            const int x = std::clamp(static_cast<int>(std::floor(means2d[i * 2])), 0, 11);
-            const int y = std::clamp(static_cast<int>(std::floor(means2d[i * 2 + 1])), 0, 7);
-            expected_scores[i] = error[static_cast<size_t>(y) * 12 + static_cast<size_t>(x)];
-        }
-        expect_same(host_f(scores_gpu), expected_scores, "mrnf.center_error");
-
-        constexpr size_t h = 6, w = 8, hw = h * w;
-        const auto predicted = values(3 * hw, 1.f, 1);
-        const auto target = values(3 * hw, 0.7f, 2);
-        auto error_gpu = Tensor::zeros({h, w}, Device::GPU);
-        mrnf().mean_abs_error(Tensor::from_vector(predicted, {3, h, w}, Device::GPU),
-                              Tensor::from_vector(target, {3, h, w}, Device::GPU), error_gpu);
-        std::vector<float> expected_error(hw);
-        for (size_t i = 0; i < hw; ++i) {
-            float sum = 0.f;
-            for (size_t c = 0; c < 3; ++c)
-                sum += std::abs(predicted[c * hw + i] - target[c * hw + i]);
-            expected_error[i] = sum / 3.f;
-        }
-        expect_close(host_f(error_gpu), expected_error, "mrnf.mae");
-
-        const auto alpha = values(hw, 0.5f, 3, 0.5f);
-        auto weights_gpu = error_gpu.clone().reshape({static_cast<int>(hw)});
-        mrnf().seed_weights(weights_gpu, gpu(alpha), weights_gpu);
-        std::vector<float> expected_weights(hw);
-        for (size_t i = 0; i < hw; ++i)
-            expected_weights[i] = expected_error[i] * (1.f - alpha[i]);
-        expect_close(host_f(weights_gpu), expected_weights, "mrnf.seed_weights");
-
-        const std::vector<int64_t> pixels{1, 4, 7, 20, 47, -3, 900};
-        const auto depth = values(hw, 2.f, 6, 2.f);
-        auto rgb_gpu = Tensor::zeros({pixels.size(), 3}, Device::GPU);
-        auto alpha_gpu = Tensor::zeros({pixels.size()}, Device::GPU);
-        auto depth_gpu = Tensor::zeros({pixels.size()}, Device::GPU);
-        const auto target_chw = Tensor::from_vector(target, {3, h, w}, Device::GPU);
-        mrnf().gather_seeds(gpu_i64(pixels), target_chw, gpu(alpha), gpu(depth), rgb_gpu, alpha_gpu, depth_gpu);
-        std::vector<float> expected_rgb, expected_alpha, expected_depth;
-        for (const int64_t p : pixels) {
-            const size_t pix = p >= 0 && static_cast<size_t>(p) < hw ? static_cast<size_t>(p) : 0;
-            for (size_t c = 0; c < 3; ++c)
-                expected_rgb.push_back(target[c * hw + pix]);
-            expected_alpha.push_back(alpha[pix]);
-            expected_depth.push_back(depth[pix]);
-        }
-        expect_same(host_f(rgb_gpu), expected_rgb, "mrnf.gather.rgb");
-        expect_same(host_f(alpha_gpu), expected_alpha, "mrnf.gather.alpha");
-        expect_same(host_f(depth_gpu), expected_depth, "mrnf.gather.depth");
-        mrnf().gather_seeds(gpu_i64(pixels), target_chw, gpu(alpha), Tensor(), rgb_gpu, alpha_gpu, depth_gpu);
-        expect_same(host_f(depth_gpu), std::vector<float>(pixels.size(), 0.f), "mrnf.gather.no_depth");
-    }
-
     TEST_P(PortableDensifyOps, MrnfWeightsAndCompaction) {
-        constexpr size_t n = 33;
-        auto weights = values(n, 1.f, 10, 1.f);
-        auto vis = values(n, 2.f, 11, 1.f);
-        vis[5] = 0.f;
-        const float median = 1.3f;
-        auto weights_gpu = gpu(weights);
-        mrnf().starvation_weights(weights_gpu, gpu(vis), median);
-        for (size_t i = 0; i < n; ++i) {
-            if (vis[i] == 0.f) {
-                weights[i] = 0.f;
-                continue;
-            }
-            const float starved = std::clamp(1.0f - vis[i] / std::max(median, 1.19209290e-07f), 0.0f, 1.0f);
-            weights[i] *= lfs::training::mrnf_strategy::kStarvEps + std::pow(starved, lfs::training::mrnf_strategy::kStarvGamma);
-        }
-        expect_close(host_f(weights_gpu), weights, "mrnf.starvation");
-
         constexpr size_t m = 64;
         const auto opacity = values(m, 1.f, 3, 0.5f);
         auto visibility = values(m, 1.f, 7);
@@ -600,7 +440,10 @@ namespace {
             expected_child_opacity;
         for (const int64_t id : ids) {
             const size_t s = static_cast<size_t>(id);
-            const float w = rotations[s * 4], x = rotations[s * 4 + 1], y = rotations[s * 4 + 2], z = rotations[s * 4 + 3];
+            const float* q = &rotations[s * 4];
+            // Placement normalizes the quaternion like projection (master #2655).
+            const float inverse_norm = std::min(1.0f / std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]), 1e12f);
+            const float w = q[0] * inverse_norm, x = q[1] * inverse_norm, y = q[2] * inverse_norm, z = q[3] * inverse_norm;
             const float r[9] = {1.0f - 2.0f * (y * y + z * z), 2.0f * (x * y - w * z), 2.0f * (x * z + w * y),
                                 2.0f * (x * y + w * z), 1.0f - 2.0f * (x * x + z * z), 2.0f * (y * z - w * x),
                                 2.0f * (x * z - w * y), 2.0f * (y * z + w * x), 1.0f - 2.0f * (x * x + y * y)};

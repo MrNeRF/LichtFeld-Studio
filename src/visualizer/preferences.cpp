@@ -655,14 +655,29 @@ namespace lfs::vis {
         if (state.backend == core::GpuBackend::Metal)
             backend = "metal";
 #endif
-        impl_->values["tensor_backend"] = {
+        const nlohmann::json values = {
             {"backend", backend},
             {"vulkan_device", state.options.vulkan_device},
             {"vulkan_validation", std::clamp(state.options.vulkan_validation, 0, 2)},
             {"force_fp32_half", state.options.force_fp32_half},
             {"force_no_atomic_float", state.options.force_no_atomic_float},
         };
+        if (impl_->values.contains("tensor_backend") && impl_->values["tensor_backend"] == values)
+            return;
+        impl_->values["tensor_backend"] = values;
         impl_->saveLocked();
+    }
+
+    TensorPreferenceState UserPreferences::sanitizeTensorBackend() {
+        auto state = tensorBackend();
+        if (state.backend && std::find(core::kCompiledGpuBackends.begin(),
+                                       core::kCompiledGpuBackends.end(), *state.backend) ==
+                                 core::kCompiledGpuBackends.end()) {
+            LOG_WARN("Saved tensor backend {} is not compiled in this build; ignoring the preference for this run and selecting automatically",
+                     core::gpu_backend_name(*state.backend));
+            state.backend.reset();
+        }
+        return state;
     }
 
     TensorPreferenceState UserPreferences::tensorBackend() {

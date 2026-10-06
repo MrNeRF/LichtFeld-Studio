@@ -584,7 +584,7 @@ namespace lfs::gui {
         }
 
         if (!preview_texture_)
-            preview_texture_ = std::make_unique<lfs::vis::gui::VulkanUiTexture>();
+            preview_texture_ = std::make_unique<lfs::vis::gui::UiTexture>();
         if (preview_texture_->upload(upload_data, width, height, channels)) {
             preview_texture_width_ = width;
             preview_texture_height_ = height;

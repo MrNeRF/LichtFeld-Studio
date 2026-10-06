@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "gui/vulkan_ui_texture.hpp"
+#include "gui/ui_texture.hpp"
 #include "sequencer/keyframe.hpp"
 #include <array>
 #include <core/export.hpp>
@@ -96,7 +96,7 @@ namespace lfs::vis::gui {
 
     private:
         struct Slot {
-            VulkanUiTexture texture;
+            UiTexture texture;
             float time = -1.0f;
             uint32_t frame_used = 0;
             uint32_t generation = 0;

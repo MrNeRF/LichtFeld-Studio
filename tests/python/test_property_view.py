@@ -378,6 +378,15 @@ EXPECTED_NUMBER_ROWS = {
         0.1,
         False,
     ),
+    "eval_mask_opacity": (
+        "training_params.eval_mask_opacity",
+        "training.tooltip.eval_mask_opacity",
+        2,
+        0.05,
+        0.01,
+        1.0,
+        False,
+    ),
 }
 
 
@@ -443,9 +452,9 @@ EXPECTED_CHECKBOX_ROWS = {
         "training_params.eval_all",
         "training.tooltip.eval_all",
     ),
-    "background_improvements": (
-        "training_params.background_improvements",
-        "training.tooltip.background_improvements",
+    "eval_mask_invert": (
+        "training_params.eval_mask_invert",
+        "training.tooltip.eval_mask_invert",
     ),
 }
 
@@ -482,6 +491,14 @@ EXPECTED_SELECT_ROWS = {
             (3, "training.options.normal_loss_space.world"),
         ),
     ),
+    "eval_space": (
+        "training_params.eval_space",
+        "training.tooltip.eval_space",
+        (
+            (0, "training.options.eval_space.distorted"),
+            (1, "training.options.eval_space.undistorted"),
+        ),
+    ),
 }
 
 EXPECTED_ADVANCED_IDS = (
@@ -503,11 +520,6 @@ EXPECTED_ADVANCED_IDS = (
     "screen_share_penalty",
     "oversize_split_fraction",
     "use_edge_map",
-    "far_scene_min_fraction",
-    "growth_ratio_rank",
-    "growth_ratio_pow",
-    "fill_pacing_iter",
-    "far_seed_dose",
 )
 
 
@@ -538,13 +550,13 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 62
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 62
+    assert len(property_view.MIGRATED_PROP_IDS) == 64
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 64
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 85  # Backend alone has a bespoke selector.
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 82  # Backend alone has a bespoke selector.
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 
@@ -552,10 +564,6 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
 def test_auto_advanced_roster_and_exclusions_follow_declaration_order(lf):
     group_info = lf.ui.property_group_info("optimization")
     assert property_view.auto_advanced_prop_ids(group_info) == EXPECTED_ADVANCED_IDS
-    assert "background_improvements" not in EXPECTED_ADVANCED_IDS
-    assert "background_improvements" in {
-        prop_id for run in property_view.BASIC_RUNS for prop_id in run.prop_ids
-    }
 
     properties = {meta["id"]: meta for meta in group_info["properties"]}
     for prop_id in EXPECTED_ADVANCED_IDS:
@@ -572,6 +580,7 @@ def test_auto_advanced_roster_and_exclusions_follow_declaration_order(lf):
         "headless",
         "prune_ratio",
         "steps_scaler",
+        "eval_mask",
     }
 
     future_group = {
@@ -603,14 +612,8 @@ def test_strategy_applicability_filters_auto_rows_and_search(lf):
         "bounds_percentile",
         "use_error_map",
         "use_edge_map",
-        "background_improvements",
-        "far_scene_min_fraction",
-        "growth_ratio_rank",
-        "growth_ratio_pow",
-        "fill_pacing_iter",
-        "far_seed_dose",
     }
-    auto_mrnf_only = known_mrnf_only - {"grow_until_iter", "background_improvements"}
+    auto_mrnf_only = known_mrnf_only - {"grow_until_iter"}
     for prop_id in known_mrnf_only:
         assert properties[prop_id]["strategies"] == ["mrnf"]
 
@@ -756,7 +759,6 @@ def test_checkbox_and_select_rows_match_registry_declarations(lf):
             "use_bilateral_grid",
             "random",
             "undistort",
-            "background_improvements",
         }:
             assert params.prop_info(prop_id)["needs_restart"] is True
 
@@ -1185,10 +1187,14 @@ def test_training_rml_mounts_every_run_with_writable_records():
     assert 'data-event-change="pv_change(row.id, ev.value)"' in rml
     assert 'data-event-blur="pv_blur(row.id, row.text)"' in rml
     assert 'data-event-escapecancel="pv_escape(row.id)"' in rml
+    assert (
+        'data-for="row : pv_dataset_eval_space_rows" data-if="dep_undistort"'
+        in rml
+    )
     assert re.search(r'(?<!data-attr-)data-tooltip="row\.tooltip_key"', rml) is None
 
     assert 'data-if="row.id == \'iterations\'"' in rml
-    assert 'data-class-steps-scale-lock-row="row.id == \'iterations\'"' in rml
+    assert 'class="prop-label prop-label--with-action" data-if="row.id == \'iterations\'"' in rml
     assert "steps_scaler" not in rml
     assert 'data-value="pv_search_query"' in rml
     assert 'data-event-click="pv_search_clear"' in rml

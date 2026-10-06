@@ -78,12 +78,12 @@ namespace lfs::training::kernels {
                                               const VignettingChannelParams* __restrict__ vignetting_params,
                                               const ColorPPISPParams* __restrict__ color_params,
                                               const CRFPPISPChannelParams* __restrict__ crf_params,
-                                              const float* __restrict__ rgb_in, const float* __restrict__ grad_rgb_out,
+                                              const float* __restrict__ rgb_in, const float* grad_rgb_out,
                                               float* __restrict__ grad_exposure_params,
                                               VignettingChannelParams* __restrict__ grad_vignetting_params,
                                               ColorPPISPParams* __restrict__ grad_color_params,
                                               CRFPPISPChannelParams* __restrict__ grad_crf_params,
-                                              float* __restrict__ grad_rgb_in, int camera_idx, int frame_idx) {
+                                              float* grad_rgb_in, int camera_idx, int frame_idx) {
         int idx = blockIdx.x * blockDim.x + threadIdx.x;
         int num_pixels = height * width;
 

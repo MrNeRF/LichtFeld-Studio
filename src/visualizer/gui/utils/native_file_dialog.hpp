@@ -33,6 +33,7 @@ namespace lfs::vis::gui {
     LFS_VIS_API void warmupNativeFileDialogBackend();
 
     LFS_VIS_API std::filesystem::path OpenImageFileDialog(const std::filesystem::path& defaultPath = {});
+    LFS_VIS_API std::filesystem::path OpenReframePhotoFileDialog(const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path OpenEnvironmentMapFileDialog(const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path OpenFileDialog(const std::filesystem::path& defaultPath = {},
                                                      const std::string& dialogTitle = {});

@@ -42,9 +42,9 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
             else if (p == 1.0f)
                 distance += abs(difference);
             else if (p == 0.0f)
-                distance += difference != 0.0f ? 1.0f : 0.0f;
+                distance += a[aBase + d] != b[bBase + d] ? 1.0f : 0.0f;
             else if (isinf(p))
-                distance = max(distance, abs(difference));
+                distance = isnan(distance) || isnan(difference) ? distance + difference : max(distance, abs(difference));
             else
                 distance += pow(abs(difference), p);
         }

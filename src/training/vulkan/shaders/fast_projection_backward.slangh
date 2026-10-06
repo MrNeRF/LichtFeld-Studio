@@ -115,6 +115,12 @@ void projectionBackward(BackPush back, uint primitive_idx) {
         [unroll] for (uint j = 0; j < 3; ++j)
             w2c[j] = ((Ptr<float4, Access.Read>)p.view)[j];
         float3 gc = screen3(back, work_idx, 6);
+        // The blend clamps colour at zero. Below it, keep only the image
+        // gradients that brighten the splat; the forward never saw the rest.
+        const Projected shaded = projectedAt(p, work_idx);
+        if (shaded.red < 0 && gc.x >= 0) gc.x = 0;
+        if (shaded.green < 0 && gc.y >= 0) gc.y = 0;
+        if (shaded.blue < 0 && gc.z >= 0) gc.z = 0;
         float3 dL_dmean3d_from_color = shPositionGradient(p, primitive_idx, gc);
         store3(back.dcGradient, primitive_idx, 0.28209479177387814f * gc);
         float basis[16];
@@ -199,7 +205,7 @@ void projectionBackward(BackPush back, uint primitive_idx) {
             jw_r2.x * cov3d.m13 + jw_r2.y * cov3d.m23 + jw_r2.z * cov3d.m33);
 
         // 2d covariance gradient (use same dilation as forward pass)
-        const float kernel_size = p.mip != 0 ? 0.1f : 0.3f;
+        const float kernel_size = (p.mip & 1u) != 0 ? 0.1f : 0.3f;
         const float raw_a = dot(jwc_r1, jw_r1);
         const float raw_b = dot(jwc_r1, jw_r2);
         const float raw_c = dot(jwc_r2, jw_r2);
@@ -219,7 +225,7 @@ void projectionBackward(BackPush back, uint primitive_idx) {
         const float original_opacity = 1.0f / (1.0f + exp(-loadFloat(p.opacities, primitive_idx)));
         const float grad_compensated_opacity = screen(back, work_idx, 5);
         float opacity_compensation = 1.0f;
-        if (p.mip != 0) {
+        if ((p.mip & 1u) != 0) {
             const float det_raw = raw_a * raw_c - raw_b * raw_b;
             if (det_raw > 1e-6f && determinant > 1e-6f) {
                 opacity_compensation = sqrt(det_raw * determinant_rcp);

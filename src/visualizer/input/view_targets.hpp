@@ -7,6 +7,7 @@
 #include "internal/viewport.hpp"
 #include "rendering/view_source.hpp"
 
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <string_view>
 

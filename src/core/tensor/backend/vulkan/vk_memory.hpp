@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -17,6 +18,9 @@
 #include <vector>
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
+#ifdef __APPLE__
+#include <vulkan/vulkan_metal.h>
+#endif
 
 namespace lfs::core {
     class MemoryInfo;
@@ -41,7 +45,7 @@ namespace lfs::core::internal {
         // write it through its device address and read_readback waits for the
         // producer and copies from the mapping, so the staging ring and its
         // mutex stay out of the path. The block comes back zeroed.
-        [[nodiscard]] StorageRef allocate_readback(size_t bytes);
+        [[nodiscard]] LFS_CORE_API StorageRef allocate_readback(size_t bytes);
         void read_readback(StorageRef storage, void* destination, size_t bytes);
         LFS_CORE_API void deallocate(StorageRef storage) noexcept;
         LFS_CORE_API void copy_host_to_device(const CopyRequest& request);
@@ -64,6 +68,9 @@ namespace lfs::core::internal {
         [[nodiscard]] LFS_CORE_API static VkDeviceSize offset_for(StorageRef storage);
 
         void trim();
+        // Nested holds keep freed buffers of the direct range for reuse instead
+        // of returning them to the driver; the last release destroys them.
+        void hold_freed(bool hold);
         [[nodiscard]] LFS_CORE_API MemoryInfo stats() const;
         [[nodiscard]] LFS_CORE_API size_t cached_bytes() const noexcept;
         [[nodiscard]] uint64_t live_object_count() const noexcept;
@@ -101,7 +108,13 @@ namespace lfs::core::internal {
 
         VulkanContext& context_;
         VkExportMemoryAllocateInfo export_alloc_info_{};
+#ifdef __APPLE__
+        VkExportMetalObjectCreateInfoEXT metal_export_info_{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
+#endif
         VmaPool device_pool_ = VK_NULL_HANDLE;
+#ifdef __APPLE__
+        VmaPool host_pool_ = VK_NULL_HANDLE;
+#endif
         bool exports_memory_ = false;
         mutable std::mutex allocations_mutex_;
         std::unordered_map<uint64_t, std::unique_ptr<AllocationRecord>> allocations_;
@@ -112,6 +125,8 @@ namespace lfs::core::internal {
         std::unordered_map<VkDeviceSize,
                            std::vector<std::unique_ptr<AllocationRecord>>>
             readback_free_lists_;
+        std::multimap<VkDeviceSize, std::unique_ptr<AllocationRecord>> held_;
+        uint32_t freed_memory_holds_ = 0;
         mutable std::mutex staging_mutex_;
         VkBuffer staging_buffer_ = VK_NULL_HANDLE;
         VmaAllocation staging_allocation_ = VK_NULL_HANDLE;

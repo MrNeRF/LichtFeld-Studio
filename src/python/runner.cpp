@@ -612,13 +612,6 @@ _add_dll_dirs()
                 LOG_ERROR("lfs_plugins.register_builtin_panels not found");
             }
 
-#ifdef LFS_DEV_PYTHON_SOURCE_DIR
-            if (builtin_panels_registered) {
-                start_dev_python_watcher(lfs_plugins);
-            } else {
-                LOG_INFO("Python dev hot reload watcher skipped because builtin panels were not registered");
-            }
-#endif
             Py_DECREF(lfs_plugins);
 
             if (builtin_panels_registered) {
@@ -921,6 +914,20 @@ _add_dll_dirs()
                     const GilAcquire gil;
                     std::lock_guard lock(g_plugin_init_mutex);
                     bridge_ready = ensure_python_bridge_ready_locked();
+#ifdef LFS_DEV_PYTHON_SOURCE_DIR
+                    if (bridge_ready && g_builtin_ui_ready.load(std::memory_order_acquire)) {
+                        PyObject* const lfs_plugins = PyImport_ImportModule("lfs_plugins");
+                        if (lfs_plugins) {
+                            start_dev_python_watcher(lfs_plugins);
+                            Py_DECREF(lfs_plugins);
+                        } else {
+                            PyErr_Print();
+                            LOG_WARN("Python dev hot reload: failed to import lfs_plugins");
+                        }
+                    } else {
+                        LOG_INFO("Python dev hot reload watcher skipped because builtin panels were not registered");
+                    }
+#endif
                     already_loaded = are_plugins_loaded();
                     if (bridge_ready && !already_loaded)
                         to_load = discover_enabled_plugins_locked();
@@ -2119,19 +2126,38 @@ def _lfs_format_code(code):
     // Frame callback for animations
     static std::function<void(float)> g_frame_callback;
     static std::mutex g_frame_mutex;
+    static std::chrono::steady_clock::time_point g_frame_callback_deadline{};
+    static bool g_frame_callback_warn_on_expiry = false;
+    static bool g_frame_callback_deprecation_logged = false;
 
-    void set_frame_callback(std::function<void(float)> callback) {
+    void set_frame_callback(std::function<void(float)> callback, const std::optional<double> duration_s) {
         std::lock_guard lock(g_frame_mutex);
         g_frame_callback = std::move(callback);
+        g_frame_callback_warn_on_expiry = !duration_s.has_value();
+        const auto duration = std::chrono::duration<double>(duration_s.value_or(10.0));
+        g_frame_callback_deadline = std::chrono::steady_clock::now() +
+                                    std::chrono::duration_cast<std::chrono::steady_clock::duration>(duration);
     }
 
     void clear_frame_callback() {
         std::lock_guard lock(g_frame_mutex);
         g_frame_callback = nullptr;
+        g_frame_callback_deadline = {};
+        g_frame_callback_warn_on_expiry = false;
     }
 
     bool has_frame_callback() {
         std::lock_guard lock(g_frame_mutex);
+        if (g_frame_callback && g_frame_callback_deadline != std::chrono::steady_clock::time_point{} &&
+            std::chrono::steady_clock::now() >= g_frame_callback_deadline) {
+            g_frame_callback = nullptr;
+            g_frame_callback_deadline = {};
+            if (g_frame_callback_warn_on_expiry && !g_frame_callback_deprecation_logged) {
+                g_frame_callback_deprecation_logged = true;
+                LOG_WARN("Python frame callback expired after 10 seconds; pass duration_s to set_frame_callback");
+            }
+            g_frame_callback_warn_on_expiry = false;
+        }
         return g_frame_callback != nullptr;
     }
 
@@ -2268,40 +2294,6 @@ def _lfs_format_code(code):
         Py_DECREF(json_module);
         Py_DECREF(registry);
         Py_DECREF(lfs_plugins);
-        return result;
-    }
-
-    bool has_capability(const std::string& name) {
-        (void)ensure_initialized();
-        if (!ensure_plugins_loaded())
-            return false;
-        const GilAcquire gil;
-        bool result = false;
-
-        PyObject* lfs_plugins = PyImport_ImportModule("lfs_plugins");
-        if (lfs_plugins) {
-            PyObject* registry_class = PyObject_GetAttrString(lfs_plugins, "CapabilityRegistry");
-            if (registry_class) {
-                PyObject* instance_method = PyObject_GetAttrString(registry_class, "instance");
-                PyObject* registry = PyObject_CallNoArgs(instance_method);
-                if (registry) {
-                    PyObject* has_method = PyObject_GetAttrString(registry, "has");
-                    PyObject* py_name = PyUnicode_FromString(name.c_str());
-                    PyObject* py_result = PyObject_CallOneArg(has_method, py_name);
-                    if (py_result) {
-                        result = PyObject_IsTrue(py_result);
-                        Py_DECREF(py_result);
-                    }
-                    Py_DECREF(py_name);
-                    Py_DECREF(has_method);
-                    Py_DECREF(registry);
-                }
-                Py_DECREF(instance_method);
-                Py_DECREF(registry_class);
-            }
-            Py_DECREF(lfs_plugins);
-        }
-
         return result;
     }
 

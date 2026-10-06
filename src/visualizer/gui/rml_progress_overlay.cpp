@@ -9,6 +9,7 @@
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_input.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
+#include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_pointer_dispatch.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
@@ -63,6 +64,10 @@ namespace lfs::vis::gui {
             result.progress = result.success ? 1.0f : clampProgress(import_state.progress);
 
             if (import_state.active) {
+                if (import_state.cancellable) {
+                    result.action = ProgressOverlayPresentation::Action::CancelImport;
+                    result.action_label = LOC(Common::CANCEL);
+                }
                 if (import_state.dataset_type == "project") {
                     result.title = LOC(Progress::OPENING_PROJECT);
                 } else {
@@ -130,10 +135,12 @@ namespace lfs::vis::gui {
 
     RmlProgressOverlay::RmlProgressOverlay(RmlUIManager* rml_manager,
                                            std::function<void()> dismiss_import,
-                                           std::function<void()> cancel_video_export)
+                                           std::function<void()> cancel_video_export,
+                                           std::function<void()> cancel_import)
         : rml_manager_(rml_manager),
           dismiss_import_(std::move(dismiss_import)),
           cancel_video_export_(std::move(cancel_video_export)),
+          cancel_import_(std::move(cancel_import)),
           listener_(std::make_unique<OverlayEventListener>()) {
         assert(rml_manager_);
         listener_->overlay = this;
@@ -141,7 +148,7 @@ namespace lfs::vis::gui {
 
     RmlProgressOverlay::~RmlProgressOverlay() {
         if (rml_manager_ && rml_manager_->isInitialized())
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         if (rml_context_ && rml_manager_ && rml_manager_->isInitialized())
             rml_manager_->destroyContext("progress_overlay");
     }
@@ -268,6 +275,8 @@ namespace lfs::vis::gui {
             dismiss_import_();
         else if (action == ProgressOverlayPresentation::Action::CancelVideoExport && cancel_video_export_)
             cancel_video_export_();
+        else if (action == ProgressOverlayPresentation::Action::CancelImport && cancel_import_)
+            cancel_import_();
         render_needed_ = true;
     }
 
@@ -284,9 +293,13 @@ namespace lfs::vis::gui {
 
     void RmlProgressOverlay::processInput(const PanelInputState& input, const bool blocked) {
         if (blocked || !isVisible() || !rml_context_ || !elements_cached_) {
+            if (rml_manager_ && rml_context_)
+                rml_manager_->deactivateInput(rml_context_);
             cancelPointerInput();
             return;
         }
+        if (rml_manager_ && rml_manager_->routeInput(rml_context_, input, [this](const PanelInputState& event) { processInput(event, false); }, true))
+            return;
         if (rml_manager_)
             rml_manager_->trackContextFrame(rml_context_, 0, 0);
 
@@ -333,20 +346,8 @@ namespace lfs::vis::gui {
             render_needed_ = true;
         }
 
-        for (const int scancode : input.keys_pressed) {
-            const auto key = sdlScancodeToRml(static_cast<SDL_Scancode>(scancode));
-            if (key != Rml::Input::KI_UNKNOWN) {
-                rml_context_->ProcessKeyDown(key, mods);
-                render_needed_ = true;
-            }
-        }
-        for (const int scancode : input.keys_released) {
-            const auto key = sdlScancodeToRml(static_cast<SDL_Scancode>(scancode));
-            if (key != Rml::Input::KI_UNKNOWN) {
-                rml_context_->ProcessKeyUp(key, mods);
-                render_needed_ = true;
-            }
-        }
+        for (const auto& event : input.input_events)
+            render_needed_ |= rml_input::processKeyboardEvent(*rml_context_, event, rml_manager_ ? rml_manager_->getTextInputHandler() : nullptr);
     }
 
     void RmlProgressOverlay::render(int screen_w, int screen_h,
@@ -364,7 +365,7 @@ namespace lfs::vis::gui {
                 return;
         }
         if (!document_ || !elements_cached_ || !rml_manager_ ||
-            !rml_manager_->getVulkanRenderInterface())
+            !rml_manager_->getUiRenderer())
             return;
         if (screen_w <= 0 || screen_h <= 0)
             return;
@@ -435,7 +436,7 @@ namespace lfs::vis::gui {
 
         const bool refresh_cache = needs_update || direct_cache_.texture == 0;
         render_needed_ = false;
-        rml_manager_->queueCachedVulkanContext({
+        rml_manager_->queueCachedContext({
             .context = rml_context_,
             .cache = &direct_cache_,
             .cache_width = width_,
@@ -482,7 +483,7 @@ namespace lfs::vis::gui {
         dialog_position_valid_ = false;
         last_mouse_valid_ = false;
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         render_needed_ = true;
 
         try {
@@ -504,11 +505,6 @@ namespace lfs::vis::gui {
     void RmlProgressOverlay::preload() {
         initContext();
         syncTheme();
-    }
-
-    void RmlProgressOverlay::releaseRendererResources() {
-        if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
     }
 
 } // namespace lfs::vis::gui

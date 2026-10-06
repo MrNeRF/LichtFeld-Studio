@@ -170,7 +170,7 @@ namespace lfs::vis::gui {
 
     RmlPanelHost::~RmlPanelHost() {
         if (manager_ && manager_->isInitialized()) {
-            manager_->releaseCachedVulkanContext(direct_cache_);
+            manager_->releaseCachedContext(direct_cache_);
             manager_->destroyContext(context_name_);
         }
         rml_context_ = nullptr;
@@ -179,7 +179,7 @@ namespace lfs::vis::gui {
 
     void RmlPanelHost::releaseRendererResources() {
         if (manager_ && manager_->isInitialized())
-            manager_->releaseCachedVulkanContext(direct_cache_);
+            manager_->releaseCachedContext(direct_cache_);
         direct_cache_dirty_ = true;
     }
 
@@ -306,7 +306,7 @@ namespace lfs::vis::gui {
         content_dirty_ = true;
         direct_cache_dirty_ = true;
         if (manager_ && manager_->isInitialized())
-            manager_->releaseCachedVulkanContext(direct_cache_);
+            manager_->releaseCachedContext(direct_cache_);
         last_forwarded_mx_ = -1;
         last_forwarded_my_ = -1;
         last_forwarded_mods_ = 0;
@@ -344,7 +344,7 @@ namespace lfs::vis::gui {
                 LOG_ERROR("RmlUI: failed to load {}", rml_path_);
             }
         } catch (const std::exception& e) {
-            LOG_ERROR("RmlUI: resource not found: {}", e.what());
+            LOG_ERROR("RmlUI: failed to load {}: {}", rml_path_, e.what());
         }
         return document_ != nullptr;
     }
@@ -460,7 +460,7 @@ namespace lfs::vis::gui {
             pw != last_layout_w_ || ph != last_layout_h_ ||
             renderPadding() != last_layout_padding_;
         const bool need_layout =
-            theme_dirty || size_dirty || content_dirty_ || render_needed_ || animation_active_;
+            theme_dirty || size_dirty || content_dirty_ || render_needed_ || animation_active_ || scheduledUpdateDue();
         if (!need_layout)
             return;
 
@@ -491,7 +491,7 @@ namespace lfs::vis::gui {
             applyPanelSpaceClass();
             last_layout_padding_ = padding;
         }
-        if (!dims_changed && !content_dirty_ && !render_needed_ && !animation_active_)
+        if (!dims_changed && !content_dirty_ && !render_needed_ && !animation_active_ && !scheduledUpdateDue())
             return false;
         rml_context_->Update();
         last_layout_w_ = pw;
@@ -500,7 +500,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlPanelHost::renderIfDirty(int pw, int ph, float& display_h) {
-        if (!manager_ || !manager_->getVulkanRenderInterface())
+        if (!manager_ || !manager_->getUiRenderer())
             return;
 
         const bool theme_dirty = syncThemeProperties();
@@ -512,7 +512,7 @@ namespace lfs::vis::gui {
             (clip_y_min_ >= 0.0f && clip_y_max_ > clip_y_min_);
 
         const bool dirty = render_needed_ || content_dirty_ || theme_dirty ||
-                           size_dirty || animation_active_;
+                           size_dirty || animation_active_ || scheduledUpdateDue();
         if (!dirty)
             return;
         direct_cache_dirty_ = true;
@@ -611,6 +611,12 @@ namespace lfs::vis::gui {
 
         const double next_delay = rml_context_->GetNextUpdateDelay();
         next_update_delay_ = next_delay;
+        next_update_at_.reset();
+        if (std::isfinite(next_delay) && next_delay > 0.0) {
+            next_update_at_ = std::chrono::steady_clock::now() +
+                              std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                  std::chrono::duration<double>(next_delay));
+        }
         animation_active_ = (next_delay == 0.0);
         last_fbo_w_ = pw;
         last_fbo_h_ = ph;
@@ -648,8 +654,10 @@ namespace lfs::vis::gui {
     }
 
     std::optional<double> RmlPanelHost::nextScheduledUpdateDelay() const {
-        if (std::isfinite(next_update_delay_) && next_update_delay_ > 0.0)
-            return next_update_delay_;
+        if (next_update_at_)
+            return std::max(0.0, std::chrono::duration<double>(
+                                     *next_update_at_ - std::chrono::steady_clock::now())
+                                     .count());
         return std::nullopt;
     }
 
@@ -696,7 +704,7 @@ namespace lfs::vis::gui {
         renderIfDirty(w, h, display_h);
         trackFrame(pos_x, pos_y);
 
-        if (!manager_ || !manager_->getVulkanRenderInterface())
+        if (!manager_ || !manager_->getUiRenderer())
             return;
 
         const float screen_origin_x = input_ ? input_->screen_x : 0.0f;
@@ -707,15 +715,15 @@ namespace lfs::vis::gui {
         const float clip_y2 = pos_y + display_h;
         if (clip_x2 <= clip_x1 || clip_y2 <= clip_y1)
             return;
-        manager_->queueVulkanContext(rml_context_,
-                                     pos_x - screen_origin_x,
-                                     pos_y - screen_origin_y,
-                                     foreground_,
-                                     true,
-                                     clip_x1 - screen_origin_x,
-                                     clip_y1 - screen_origin_y,
-                                     clip_x2 - screen_origin_x,
-                                     clip_y2 - screen_origin_y);
+        manager_->queueContext(rml_context_,
+                               pos_x - screen_origin_x,
+                               pos_y - screen_origin_y,
+                               foreground_,
+                               true,
+                               clip_x1 - screen_origin_x,
+                               clip_y1 - screen_origin_y,
+                               clip_x2 - screen_origin_x,
+                               clip_y2 - screen_origin_y);
     }
 
     void RmlPanelHost::resolveDirectRenderHeight(float requested_h, int& ph, float& display_h) const {
@@ -792,7 +800,8 @@ namespace lfs::vis::gui {
             return false;
         if (!document_ || !rml_context_ || last_fbo_w_ <= 0 || last_fbo_h_ <= 0)
             return false;
-        if (render_needed_ || content_dirty_ || animation_active_ || tooltip_.revealDue())
+        forwardInput(x, y);
+        if (render_needed_ || content_dirty_ || animation_active_ || scheduledUpdateDue() || tooltip_.revealDue())
             return false;
         if (!has_theme_signature_ || rml_theme::currentThemeSignature() != last_theme_signature_)
             return false;
@@ -1040,7 +1049,7 @@ namespace lfs::vis::gui {
 
     void RmlPanelHost::compositeDirectToScreen(const float x, const float y,
                                                const float w, const float h) {
-        if (!input_ || !manager_ || !manager_->getVulkanRenderInterface() ||
+        if (!input_ || !manager_ || !manager_->getUiRenderer() ||
             w <= 0.0f || h <= 0.0f)
             return;
 
@@ -1065,15 +1074,15 @@ namespace lfs::vis::gui {
         const float screen_clip_x2 = clip_x2 - input_->screen_x;
         const float screen_clip_y2 = clip_y2 - input_->screen_y;
         if (animation_active_) {
-            manager_->queueVulkanContext(rml_context_,
-                                         screen_x,
-                                         screen_y,
-                                         foreground_,
-                                         true,
-                                         screen_clip_x1,
-                                         screen_clip_y1,
-                                         screen_clip_x2,
-                                         screen_clip_y2);
+            manager_->queueContext(rml_context_,
+                                   screen_x,
+                                   screen_y,
+                                   foreground_,
+                                   true,
+                                   screen_clip_x1,
+                                   screen_clip_y1,
+                                   screen_clip_x2,
+                                   screen_clip_y2);
             direct_cache_dirty_ = true;
         } else {
             const float draw_w =
@@ -1084,7 +1093,7 @@ namespace lfs::vis::gui {
                 last_fbo_h_ > 0
                     ? static_cast<float>(last_fbo_h_ + 2 * last_fbo_padding_)
                     : h;
-            manager_->queueCachedVulkanContext({
+            manager_->queueCachedContext({
                 .context = rml_context_,
                 .cache = &direct_cache_,
                 .cache_width = last_fbo_w_ + 2 * last_fbo_padding_,
@@ -1132,9 +1141,16 @@ namespace lfs::vis::gui {
     bool RmlPanelHost::forwardInput(float panel_x, float panel_y) {
         assert(rml_context_);
 
-        if (!input_ || !manager_ || !manager_->getVulkanRenderInterface())
+        if (!input_ || !manager_ || !manager_->getUiRenderer())
             return false;
 
+        if (manager_->routeInput(rml_context_, *input_, [this, panel_x, panel_y](const PanelInputState& event) {
+                const auto* saved = input_;
+                input_ = &event;
+                render_needed_ |= forwardInput(panel_x, panel_y);
+                input_ = saved;
+            }))
+            return false;
         bool had_input = false;
         const auto& input = *input_;
         auto* const text_input_handler = manager_ ? manager_->getTextInputHandler() : nullptr;
@@ -1148,46 +1164,35 @@ namespace lfs::vis::gui {
 
             has_text_focus_ = want_text;
         };
-        const auto flush_pending_text_input = [&]() {
-            if (!has_text_focus_)
+        const auto replay_keyboard_event = [&](const FrameInputEvent& event) {
+            if (!rml_input::hasFocusedKeyboardTarget(rml_context_->GetFocusElement()))
                 return;
-
-            auto* const focused = rml_context_->GetFocusElement();
-            const bool focused_editable = rml_input::isTextEditableElement(focused);
-
-            if (focused_editable && text_input_handler && input.has_text_editing) {
-                had_input |= text_input_handler->handleTextEditing(
-                    input.text_editing, input.text_editing_start, input.text_editing_length);
-            }
-
-            bool forward_text_codepoints = input.text_inputs.empty();
-            for (const auto& text_input : input.text_inputs) {
+            if (keyboard_handler_ && keyboard_handler_(event)) {
+                if (event.dispatch)
+                    event.dispatch->consumed = true;
                 had_input = true;
-                if (focused_editable && text_input_handler &&
-                    text_input_handler->handleTextInput(text_input)) {
-                    continue;
-                }
-                if (focused && rml_input::isCustomTextInputElement(focused)) {
-                    rml_context_->ProcessTextInput(text_input);
-                } else {
-                    forward_text_codepoints = true;
+                return;
+            }
+            const bool composing = text_input_handler && text_input_handler->isComposing();
+            if (event.kind == FrameInputEventKind::KeyDown &&
+                event.scancode == SDL_SCANCODE_ESCAPE &&
+                rml_input::shouldCancelOnEscape(rml_context_->GetFocusElement(), composing)) {
+                had_input |= rml_input::cancelFocusedElement(*rml_context_);
+            } else {
+                had_input |= rml_input::processKeyboardEvent(*rml_context_, event, text_input_handler);
+                if (!composing && event.kind == FrameInputEventKind::KeyDown &&
+                    (event.scancode == SDL_SCANCODE_RETURN || event.scancode == SDL_SCANCODE_KP_ENTER) &&
+                    rml_input::isSingleLineTextInput(rml_context_->GetFocusElement())) {
+                    rml_context_->GetFocusElement()->Blur();
                 }
             }
-
-            if (forward_text_codepoints) {
-                if (!input.text_codepoints.empty())
-                    had_input = true;
-                for (const uint32_t cp : input.text_codepoints)
-                    rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
-            }
+            sync_text_focus();
         };
         const auto blur_focused_element = [&]() -> bool {
             auto* const focused = rml_context_->GetFocusElement();
             if (!focused)
                 return false;
 
-            if (rml_input::wantsTextInput(focused))
-                flush_pending_text_input();
             focused->Blur();
             sync_text_focus();
             return true;
@@ -1316,33 +1321,39 @@ namespace lfs::vis::gui {
         // SDL can deliver multiple button transitions before the next frame.
         // Replay each transition at its recorded position so a fast double click
         // is not collapsed onto the final cursor position.
-        const auto replay_button_events = [&]() {
-            bool replayed = false;
-            for (const auto& event : input.mouse_button_events) {
-                if (event.button >= 3)
-                    continue;
-
-                const float event_x = event.x - panel_x + last_fbo_padding_;
-                const float event_y = event.y - panel_y + last_fbo_padding_;
-                const bool event_hovered = hitTestPanelShape(
-                    event_x, event_y, logical_w, logical_h);
-                if (!event_hovered && !mouse_captured_[event.button])
-                    continue;
-
-                rml_context_->ProcessMouseMove(static_cast<int>(event_x),
-                                               static_cast<int>(event_y), mods);
-                if (event.down)
-                    deliver_button_down(event.button);
-                else
-                    deliver_button_up(event.button);
-                had_input = true;
-                replayed = true;
+        bool replayed_button_events = !input.mouse_button_events.empty();
+        const auto replay_button_event = [&](const FrameMouseButtonEvent& event) {
+            if (event.button >= 3)
+                return;
+            const float event_x = event.x - panel_x + last_fbo_padding_;
+            const float event_y = event.y - panel_y + last_fbo_padding_;
+            const bool event_hovered =
+                !manager_->activeOverlayOccludesContext(rml_context_, event.x, event.y) &&
+                (clip_y_min_ < 0 || clip_y_max_ <= clip_y_min_ ||
+                 (event.y >= clip_y_min_ && event.y <= clip_y_max_)) &&
+                hitTestPanelShape(event_x, event_y, logical_w, logical_h);
+            if (!event_hovered) {
+                if (event.down && event.button == 0)
+                    had_input |= blur_focused_element();
+                if (!mouse_captured_[event.button])
+                    return;
             }
-            return replayed;
+            rml_context_->ProcessMouseMove(static_cast<int>(event_x), static_cast<int>(event_y), mods);
+            if (event.down)
+                deliver_button_down(event.button);
+            else
+                deliver_button_up(event.button);
+            sync_text_focus();
+            had_input = true;
         };
-
-        const bool replayed_button_events =
-            !manual_dropdown_option_route && replay_button_events();
+        rml_input::replayInputEvents(input.input_events, input.mouse_button_events, [&](const FrameMouseButtonEvent& event) {
+                                        if (!manual_dropdown_option_route)
+                                            replay_button_event(event); }, replay_keyboard_event);
+        // Synthetic pointer-only callers can still supply canonical button events.
+        if (input.input_events.empty() && !manual_dropdown_option_route) {
+            for (const auto& event : input.mouse_button_events)
+                replay_button_event(event);
+        }
 
         if (manual_dropdown_option_route) {
             if (input.mouse_clicked[0]) {
@@ -1351,7 +1362,7 @@ namespace lfs::vis::gui {
             }
             if (input.mouse_clicked[1])
                 had_input = true;
-            if (input.mouse_wheel != 0.0f) {
+            if (input.mouse_wheel != 0.0f || input.mouse_wheel_x != 0.0f) {
                 if (manual_dropdown_box) {
                     const float max_scroll = std::max(
                         0.0f,
@@ -1368,7 +1379,7 @@ namespace lfs::vis::gui {
                 deliver_button_down(0);
             if (!replayed_button_events && input.mouse_clicked[1])
                 deliver_button_down(1);
-            if (input.mouse_wheel != 0.0f) {
+            if (input.mouse_wheel != 0.0f || input.mouse_wheel_x != 0.0f) {
                 rml_context_->ProcessMouseWheel(
                     Rml::Vector2f(-input.mouse_wheel_x, -input.mouse_wheel), mods);
                 // Re-resolve hover against the new scroll offset so row text
@@ -1376,11 +1387,21 @@ namespace lfs::vis::gui {
                 rml_context_->ProcessMouseMove(rml_mx, rml_my, mods);
                 had_input = true;
             }
+            if (input.pinch_scale != 1.0f) {
+                if (auto* target = rml_context_->GetHoverElement()) {
+                    Rml::Dictionary parameters;
+                    parameters["scale"] = input.pinch_scale;
+                    parameters["mouse_x"] = local_x;
+                    parameters["mouse_y"] = local_y;
+                    target->DispatchEvent("pinch", parameters);
+                    had_input = true;
+                }
+            }
             if (input.mouse_clicked[0])
                 sync_text_focus();
             if (input.mouse_clicked[0])
                 beginLiveInspectorResize(mouse_y);
-        } else if (input.mouse_clicked[0]) {
+        } else if (!replayed_button_events && input.mouse_clicked[0]) {
             had_input |= blur_focused_element();
         }
 
@@ -1411,7 +1432,9 @@ namespace lfs::vis::gui {
 
         updateResizeCursorOverride(hovered);
 
-        if (hovered) {
+        // Dragging over a titled element must not trigger a tooltip layout pass.
+        // Restart the hover delay only after all buttons have been released.
+        if (hovered && !input.mouse_down[0] && !input.mouse_down[1] && !input.mouse_down[2]) {
             if (auto* const hover = rml_context_->GetHoverElement())
                 tooltip_.setHover(resolveRmlTooltip(hover), hover);
             else
@@ -1420,78 +1443,8 @@ namespace lfs::vis::gui {
             tooltip_.setHover({}, nullptr);
         }
 
-        if (input.viewport_keyboard_focus)
+        if (input.viewport_keyboard_focus && !replayed_button_events)
             had_input |= blur_focused_element();
-
-        bool forward_keys =
-            rml_input::hasFocusedKeyboardTarget(rml_context_->GetFocusElement()) &&
-            !input.viewport_keyboard_focus;
-        bool commit_requested = false;
-        bool escape_requested = false;
-        const bool composing = text_input_handler && text_input_handler->isComposing();
-        auto isNumpadTextKey = [](int sc) {
-            return (sc >= SDL_SCANCODE_KP_1 && sc <= SDL_SCANCODE_KP_0) ||
-                   sc == SDL_SCANCODE_KP_PERIOD;
-        };
-
-        if (forward_keys) {
-            const auto process_key_down = [&](const int sc) {
-                if (sc == SDL_SCANCODE_ESCAPE &&
-                    rml_input::shouldCancelOnEscape(rml_context_->GetFocusElement(), composing)) {
-                    escape_requested = true;
-                    had_input = true;
-                    return;
-                }
-                const bool is_submit_key =
-                    (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER);
-                if (composing && (is_submit_key || sc == SDL_SCANCODE_ESCAPE))
-                    return;
-                if (has_text_focus_ && isNumpadTextKey(sc))
-                    return;
-                auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                if (rml_key != Rml::Input::KI_UNKNOWN) {
-                    if (text_input_handler && text_input_handler->handleKeyDown(rml_key, mods)) {
-                        had_input = true;
-                        return;
-                    }
-                    rml_context_->ProcessKeyDown(rml_key, mods);
-                    had_input = true;
-                }
-                if (is_submit_key)
-                    commit_requested = true;
-            };
-
-            for (int sc : input.keys_pressed)
-                process_key_down(sc);
-            for (int sc : input.keys_repeated)
-                process_key_down(sc);
-            for (int sc : input.keys_released) {
-                if (escape_requested && sc == SDL_SCANCODE_ESCAPE)
-                    continue;
-                if (composing && (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER ||
-                                  sc == SDL_SCANCODE_ESCAPE))
-                    continue;
-                if (has_text_focus_ && isNumpadTextKey(sc))
-                    continue;
-                auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                if (rml_key != Rml::Input::KI_UNKNOWN) {
-                    rml_context_->ProcessKeyUp(rml_key, mods);
-                    had_input = true;
-                }
-            }
-        }
-
-        if (!composing && escape_requested) {
-            if (rml_input::cancelFocusedElement(*rml_context_)) {
-                sync_text_focus();
-                had_input = true;
-            }
-        }
-
-        if (!composing && commit_requested &&
-            rml_input::isSingleLineTextInput(rml_context_->GetFocusElement())) {
-            blur_focused_element();
-        }
 
         sync_text_focus();
 
@@ -1502,7 +1455,6 @@ namespace lfs::vis::gui {
 
         if (has_text_focus_) {
             s_frame_wants_text_input = true;
-            flush_pending_text_input();
         }
 
         return had_input;

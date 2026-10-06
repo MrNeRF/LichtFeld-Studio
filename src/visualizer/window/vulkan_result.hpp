@@ -6,6 +6,7 @@
 
 #include "core/assert.hpp"
 #include "core/logger.hpp"
+#include "graphics_import_error_scope.hpp"
 #include "rendering/vulkan_result.hpp"
 
 #include <format>
@@ -44,21 +45,17 @@ namespace lfs::vis {
         const std::string_view context,
         const std::string_view file,
         const int line) {
+        std::string message;
         if (context.empty()) {
-            return std::format("{} failed: {} ({}) ({}:{})",
-                               expression,
-                               vkResultToString(result),
-                               static_cast<int>(result),
-                               file,
-                               line);
+            message = std::format("{} failed: {} ({}) ({}:{})",
+                                  expression, vkResultToString(result), static_cast<int>(result), file, line);
+        } else {
+            message = std::format("{} failed: {} ({}) — {} ({}:{})",
+                                  expression, vkResultToString(result), static_cast<int>(result), context, file, line);
         }
-        return std::format("{} failed: {} ({}) — {} ({}:{})",
-                           expression,
-                           vkResultToString(result),
-                           static_cast<int>(result),
-                           context,
-                           file,
-                           line);
+        // Some allocation paths log this diagnostic directly and return false.
+        GraphicsImportErrorScope::record(message);
+        return message;
     }
 
     [[nodiscard]] inline std::string formatVkCheckFailure(
@@ -71,6 +68,7 @@ namespace lfs::vis {
     }
 
     [[nodiscard]] inline bool logVkFailure(std::string message) {
+        GraphicsImportErrorScope::record(message);
         LOG_ERROR("Vulkan: {}", message);
         return false;
     }

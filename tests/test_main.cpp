@@ -34,7 +34,10 @@ int main(int argc, char** argv) {
     lfs::core::TensorBackendOptions options;
     auto backend = lfs::core::GpuBackend::CUDA;
     std::string trace_path;
-    int remaining = 1;
+    // Keep our flags in argv: InitGoogleTest snapshots it for threadsafe
+    // death-test re-execution. Stripping them makes the child lose its backend
+    // and options (and select the default CUDA even in a non-CUDA build).
+    // GoogleTest leaves non-GoogleTest flags alone.
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
         if (arg.starts_with("--tensor-backend=")) {
@@ -62,12 +65,8 @@ int main(int argc, char** argv) {
             options.force_no_atomic_float = true;
         } else if (arg.starts_with("--tensor-facade-trace=")) {
             trace_path = arg.substr(22);
-        } else {
-            argv[remaining++] = argv[i];
         }
     }
-    argc = remaining;
-    argv[argc] = nullptr;
     if (!lfs::core::set_tensor_backend_options(options) || !lfs::core::set_default_gpu_backend(backend))
         return 2;
     ::testing::InitGoogleTest(&argc, argv);

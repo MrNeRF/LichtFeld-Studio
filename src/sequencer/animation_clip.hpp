@@ -22,6 +22,7 @@ namespace lfs::sequencer {
 
         TrackId addTrack(ValueType type, const std::string& target_path);
         void removeTrack(TrackId id);
+        bool renameTrack(TrackId id, const std::string& target_path);
 
         [[nodiscard]] AnimationTrack* getTrack(TrackId id);
         [[nodiscard]] const AnimationTrack* getTrack(TrackId id) const;

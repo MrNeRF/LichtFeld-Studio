@@ -5,3 +5,6 @@ set(VCPKG_LIBRARY_LINKAGE static)
 set(VCPKG_CMAKE_SYSTEM_NAME Darwin)
 set(VCPKG_OSX_ARCHITECTURES arm64)
 set(VCPKG_BUILD_TYPE release)
+
+# Keep dependency binaries on the same macOS baseline as the native viewer.
+set(VCPKG_OSX_DEPLOYMENT_TARGET 26.0)

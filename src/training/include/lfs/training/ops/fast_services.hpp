@@ -28,7 +28,9 @@ namespace lfs::training {
         const lfs::core::Tensor& bg_image,
         bool render_normal,
         bool render_depth,
-        RenderOutput& output);
+        RenderOutput& output,
+        float dilation_scale = 1.0f,
+        bool update_screen_share = true);
 
     // Forward, then release the frame. The returned image aliases the saved cache.
     RenderOutput fast_infer(
@@ -39,6 +41,7 @@ namespace lfs::training {
         lfs::core::Tensor& bg_color,
         bool mip_filter,
         const lfs::core::Tensor& bg_image = {},
-        bool render_normal = false);
+        bool render_normal = false,
+        float dilation_scale = 1.0f);
 
 } // namespace lfs::training

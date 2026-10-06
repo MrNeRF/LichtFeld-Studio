@@ -67,7 +67,7 @@ namespace lfs::vis::gui {
         LayoutSignature last_layout_signature_;
         bool has_layout_signature_ = false;
         bool render_needed_ = true;
-        CachedVulkanContextRender direct_cache_;
+        CachedUiContextRender direct_cache_;
     };
 
 } // namespace lfs::vis::gui

@@ -434,23 +434,23 @@ namespace lfs::training {
         std::size_t raster_live = 0;
         peak_rows_.clear();
         for (const auto& row : snap.rows) {
-            if (row.live_bytes == 0 && row.peak_bytes == 0) {
+            if (row.live_bytes == 0) {
                 continue;
             }
             if (row.label == "arena.capacity" ||
                 row.label.find("arena.capacity") != std::string::npos) {
-                arena_cap = std::max(arena_cap, std::max(row.live_bytes, row.peak_bytes));
+                arena_cap = std::max(arena_cap, row.live_bytes);
             }
             if (row.label.find("per_primitive_buffers") != std::string::npos ||
                 row.label.find("per_tile_buffers") != std::string::npos ||
                 row.label.find("sorted_indices") != std::string::npos ||
                 row.label.find("sort_workspace_arena") != std::string::npos) {
-                raster_live += std::max(row.live_bytes, row.peak_bytes);
+                raster_live += row.live_bytes;
             }
             diagnostics::PeakSubsystemLine line;
             line.name = row.scope.empty() ? row.label : (row.scope + "." + row.label);
             line.owner = "vram_profiler";
-            line.bytes = std::max(row.live_bytes, row.peak_bytes);
+            line.bytes = row.live_bytes;
             line.state = diagnostics::AttributionState::Nested;
             peak_rows_.push_back(std::move(line));
         }
@@ -460,11 +460,12 @@ namespace lfs::training {
             peak_fastgs_raster_live_ = std::max(peak_fastgs_raster_live_, raster_live);
         }
 
-        // Keep the largest rows for the JSON ledger (top 12 by bytes).
+        // Keep enough live rows to make the peak actionable without turning
+        // the benchmark report into a full profiler dump.
         std::sort(peak_rows_.begin(), peak_rows_.end(),
                   [](const auto& a, const auto& b) { return a.bytes > b.bytes; });
-        if (peak_rows_.size() > 12) {
-            peak_rows_.resize(12);
+        if (peak_rows_.size() > 24) {
+            peak_rows_.resize(24);
         }
     }
 

@@ -7,6 +7,7 @@
 #include "zep/regress.h"
 #include "zep/syntax.h"
 #include "zep/tab_window.h"
+#include <algorithm>
 
 namespace Zep {
     CommandContext::CommandContext(const std::string& commandIn, ZepMode& md, EditorMode editorMode)
@@ -223,6 +224,21 @@ namespace Zep {
         case EditorMode::None:
             break;
         }
+    }
+
+    void ZepMode::SetSelection(const GlyphIterator& anchor, const GlyphIterator& cursor) {
+        if (!m_pCurrentWindow)
+            return;
+        m_visualBegin = anchor;
+        GetCurrentWindow()->SetBufferCursor(cursor);
+        if (anchor == cursor) {
+            SwitchMode(DefaultMode());
+            ClearSelection();
+        } else {
+            SwitchMode(EditorMode::Visual);
+            UpdateVisualSelection();
+        }
+        GetEditor().RequestRefresh();
     }
 
     std::string ZepMode::ConvertInputToMapString(uint32_t key, uint32_t modifierKeys) {
@@ -1031,6 +1047,15 @@ namespace Zep {
             context.op = CommandOperation::Insert;
             context.commandResult.modeSwitch = EditorMode::Insert;
             context.commandResult.flags = ZSetFlags(context.commandResult.flags, CommandResultFlags::BeginUndoGroup, shouldGroupInserts);
+            if (m_currentMode == EditorMode::Visual && DefaultMode() == EditorMode::Insert) {
+                const auto range = GetInclusiveVisualRange();
+                context.beginRange = range.first;
+                context.endRange = range.second.Peek(1);
+                context.op = CommandOperation::Replace;
+                context.replaceRangeMode = ReplaceRangeMode::Replace;
+                context.cursorAfterOverride = range.first.PeekByteOffset(1);
+                context.commandResult.flags |= CommandResultFlags::BeginUndoGroup;
+            }
         } else if (mappedCommand == id_InsertTab) {
             context.beginRange = context.bufferCursor;
             if (buffer.HasFileFlags(FileFlags::InsertTabs)) {
@@ -1042,6 +1067,23 @@ namespace Zep {
             context.op = CommandOperation::Insert;
             context.commandResult.modeSwitch = EditorMode::Insert;
             context.commandResult.flags = ZSetFlags(context.commandResult.flags, CommandResultFlags::BeginUndoGroup, shouldGroupInserts);
+            if (m_currentMode == EditorMode::Visual && DefaultMode() == EditorMode::Insert) {
+                const auto range = GetInclusiveVisualRange();
+                context.beginRange = buffer.GetLinePos(range.first, LineLocation::LineBegin);
+                context.endRange = buffer.GetLinePos(range.second, LineLocation::BeyondLineEnd);
+                const auto indent = context.tempReg.text;
+                const auto selected = buffer.GetBufferText(context.beginRange, context.endRange);
+                context.tempReg.text = indent;
+                for (size_t i = 0; i < selected.size(); ++i) {
+                    context.tempReg.text += selected[i];
+                    if (selected[i] == '\n' && i + 1 < selected.size())
+                        context.tempReg.text += indent;
+                }
+                context.op = CommandOperation::Replace;
+                context.replaceRangeMode = ReplaceRangeMode::Replace;
+                context.cursorAfterOverride = context.beginRange.PeekByteOffset(long(context.tempReg.text.size()));
+                context.commandResult.flags |= CommandResultFlags::BeginUndoGroup;
+            }
         } else if (mappedCommand == id_OpenLineAbove) {
             context.beginRange = context.buffer.GetLinePos(context.bufferCursor, LineLocation::LineBegin);
             context.tempReg.text = "\n";
@@ -1428,7 +1470,8 @@ namespace Zep {
             }
         } else if (mappedCommand == id_Save) {
             GetEditor().SaveBuffer(GetCurrentWindow()->GetBuffer());
-        } else if (m_currentMode == EditorMode::Insert) {
+        } else if (m_currentMode == EditorMode::Insert ||
+                   (DefaultMode() == EditorMode::Insert && m_currentMode == EditorMode::Visual)) {
             auto& text = context.keymap.commandWithoutGroups;
 
             // Detect attempted insertion of a 'special', such as <C-u> which may not have been mapped
@@ -1440,6 +1483,16 @@ namespace Zep {
             context.tempReg.text = text;
             context.pRegister = &context.tempReg;
             context.op = CommandOperation::Insert;
+            if (m_currentMode == EditorMode::Visual) {
+                const auto range = GetInclusiveVisualRange();
+                if (!range.Valid())
+                    return false;
+                context.beginRange = range.first;
+                context.endRange = range.second.Peek(1);
+                context.op = CommandOperation::Replace;
+                context.replaceRangeMode = ReplaceRangeMode::Replace;
+                context.cursorAfterOverride = range.first.PeekByteOffset(long(text.size()));
+            }
             context.commandResult.modeSwitch = EditorMode::Insert;
             context.commandResult.flags |= CommandResultFlags::HandledCount;
 

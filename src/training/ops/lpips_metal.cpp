@@ -106,6 +106,8 @@ namespace lfs::training {
             int32_t n, channels, h, w;
             int32_t y0, y1, x0, x1;
             float inverse_count;
+            uint64_t weights;
+            int32_t weights_width, weights_y0, weights_x0;
         };
 
         // score accumulates; pooled outputs are written only when both are bound.
@@ -125,11 +127,15 @@ namespace lfs::training {
                 require(is_half(pooled_y) && pooled_y.numel() == pooled,
                         "pool reduce needs a float16 [N, C, H/2, W/2] pool", pooled_y);
             }
+            if (auto error = gpu_ops::pool_reduce_region_error(x, p); !error.empty())
+                throw std::invalid_argument(std::move(error));
             const PoolParams params{mk::address(x), mk::address(y), mk::address(weight), mk::address(score),
                                     pool ? mk::address(pooled_x) : 0, pool ? mk::address(pooled_y) : 0,
                                     static_cast<int32_t>(n), static_cast<int32_t>(c), static_cast<int32_t>(h),
-                                    static_cast<int32_t>(w), p.y0, p.y1, p.x0, p.x1, p.inverse_count};
-            mk::launch_items("lpips_pool_reduce", params, {&x, &y, &weight, &score, &pooled_x, &pooled_y},
+                                    static_cast<int32_t>(w), p.y0, p.y1, p.x0, p.x1, p.inverse_count,
+                                    p.weights ? mk::address(*p.weights) : 0, p.weights_width, p.weights_y0, p.weights_x0};
+            const Tensor no_weights;
+            mk::launch_items("lpips_pool_reduce", params, {&x, &y, &weight, &score, &pooled_x, &pooled_y, p.weights ? p.weights : &no_weights},
                              n * ((h + 1) / 2) * w);
         }
     } // namespace

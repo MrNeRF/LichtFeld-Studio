@@ -32,6 +32,19 @@ import utils;
 #define LFS_HIGS_LEAN_STAGING 0
 #endif
 
+#ifndef LFS_HIGS_PRECISE_ALPHA
+#define LFS_HIGS_PRECISE_ALPHA 0
+#endif
+
+#if LFS_HIGS_PRECISE_ALPHA
+// Half T near one loses weak coverage on subtraction. Store its complement
+// with a negative marker above T=0.75; keep ordinary T near saturation. The
+// 2^-14 bias avoids negative zero and makes an empty partial decode exactly.
+half encode_partial_transmittance(float t) {
+    return half(t > 0.75f ? -(1.0f - t) - 0.00006103515625f : t);
+}
+#endif
+
 #define RASTER_THREAD_COUNT 320u
 #define MINI_BATCHES (RASTER_BATCH_SIZE / SUBGROUP_SIZE)
 static const uint PIXELS_PER_THREAD = HIGS_TILE_SIZE / SUBGROUP_SIZE;
@@ -165,7 +178,8 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
     // only rasterize the macro tiles in this output band.
     const uint macro_y = macro_tile_y * HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT;
     if (full_frame_binning(uniforms) &&
-        (macro_y < render_origin.y || macro_y >= render_origin.y + uniforms.image_height)) {
+        (macro_y + HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT <= render_origin.y ||
+         macro_y >= render_origin.y + uniforms.image_height)) {
         if (thread_rank == 0u)
             macro_batch_active_mask[macro_batch_idx] = 0u;
         return;
@@ -263,8 +277,10 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             any |= shared_tile_masks[mini_batch * HIGS_MACRO_TILE_SIZE_TILES + thread_rank];
         const uint tile_x = macro_tile_x * HIGS_MACRO_TILE_WIDTH_TILES + (thread_rank % HIGS_MACRO_TILE_WIDTH_TILES);
         const uint tile_y = macro_tile_y * HIGS_MACRO_TILE_HEIGHT_TILES + (thread_rank / HIGS_MACRO_TILE_WIDTH_TILES);
-        const bool tile_in_image = tile_x * HIGS_TILE_WIDTH - render_origin.x < uniforms.image_width &&
-                                   tile_y * HIGS_TILE_HEIGHT - render_origin.y < uniforms.image_height;
+        const bool tile_in_image = tile_x * HIGS_TILE_WIDTH < render_origin.x + uniforms.image_width &&
+                                   (tile_x + 1u) * HIGS_TILE_WIDTH > render_origin.x &&
+                                   tile_y * HIGS_TILE_HEIGHT < render_origin.y + uniforms.image_height &&
+                                   (tile_y + 1u) * HIGS_TILE_HEIGHT > render_origin.y;
         if (any != 0u && tile_in_image) {
             uint q;
             InterlockedAdd(shared_tile_queue_count, 1u, q);
@@ -441,7 +457,11 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             const uint pixel_linear = lane_id + p * SUBGROUP_SIZE;
             const uint partial_idx =
                 (pool_batch_idx * HIGS_MACRO_TILE_SIZE_TILES + local_tile_idx) * HIGS_TILE_SIZE + pixel_linear;
+#if LFS_HIGS_PRECISE_ALPHA
+            macro_batch_pixel_state[partial_idx] = half4(half3(pixel_state[p].rgb), encode_partial_transmittance(pixel_state[p].a));
+#else
             macro_batch_pixel_state[partial_idx] = half4(pixel_state[p]);
+#endif
         }
 
       #else // !LFS_HIGS_FP32: half2-packed blend core

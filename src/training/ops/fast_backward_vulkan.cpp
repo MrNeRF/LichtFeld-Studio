@@ -148,8 +148,8 @@ namespace lfs::training::vulkan {
             // CUDA has no update for unsupported fused widths.
             if (slot == 5 ? g.joint_bits != 8 : (g.joint_bits != 8 && g.joint_bits != 16))
                 continue;
-            const AdamMasks masks{g.frozen_mask, g.crop_damping_mask, s.inputs[1], adam.far_mask, g.screen_share};
-            const AdamModifiers modifiers{g.frozen_lr_scale, g.cropbox_lr_scale, adam.median_extent, adam.r_min, adam.r_max,
+            const AdamMasks masks{g.frozen_mask, g.crop_damping_mask, g.screen_share};
+            const AdamModifiers modifiers{g.frozen_lr_scale, g.cropbox_lr_scale,
                                           g.screen_share_limit, g.screen_share_penalty};
             if (slot == 5) {
                 if (p.active_bases > 1)
@@ -158,7 +158,7 @@ namespace lfs::training::vulkan {
             } else {
                 LFS_ASSERT_MSG(g.primitives == int(p.count) && g.attributes == int(widths[slot]) && g.elements == int(p.count * widths[slot]), "Fast Adam row binding size mismatch");
                 const JointStep step{g.parameter, g.packed_moments, g.joint_bounds, gradients[slot], g.primitives, g.attributes, g.joint_bits,
-                                     g.step_size, 1.f, g.bc2_sqrt_rcp, slot == 0 && adam.per_splat_mean_step, g.screen_share.is_valid()};
+                                     g.step_size, 1.f, g.bc2_sqrt_rcp, g.screen_share.is_valid()};
                 vulkan_fused_adam_rows(step, masks, hyper, modifiers);
             }
         }
@@ -200,7 +200,7 @@ namespace lfs::training {
                                        {.full_image = {16, 16}, .intrinsics = {16, 16, 8, 8}}, {image, alpha, depth, normal}, share);
             auto gradient = Tensor::zeros({3, 16, 16}, core::Device::GPU);
             const BackwardAdamParam disabled{absent, absent, absent, absent, absent, absent, absent};
-            const BackwardAdam adam{{disabled, disabled, disabled, disabled, disabled, disabled}, absent, absent, absent, absent, absent, absent};
+            const BackwardAdam adam{{disabled, disabled, disabled, disabled, disabled, disabled}, absent, absent, absent, absent, absent};
             vulkan::fast_backward(saved, {gradient, absent, absent, absent}, absent, absent, absent, absent, adam, DensificationType::None);
         }
         void record_vram(const FastSaved& saved, In image, In alpha, bool backward, size_t primitives) {

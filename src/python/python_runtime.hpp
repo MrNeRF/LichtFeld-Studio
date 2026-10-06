@@ -153,13 +153,6 @@ namespace lfs::python {
         int order;
     };
 
-    // Menu callbacks (C-style function pointers)
-    using DrawMenuItemsCallback = void (*)(MenuLocation);
-    using HasMenuItemsCallback = bool (*)(MenuLocation);
-
-    // UI context preparation callback type
-    using PrepareUIContextCallback = void (*)();
-
     // Safe Python error extraction - avoids nanobind::python_error::what() crash on Windows
     LFS_PYTHON_RUNTIME_API std::string extract_python_error();
 
@@ -183,12 +176,8 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void invoke_python_cleanup();
     LFS_PYTHON_RUNTIME_API void shutdown_python_ui_resources();
 
-    // Menu interface for C++ code
-    LFS_PYTHON_RUNTIME_API void draw_python_menu_items(MenuLocation location);
-
     // Menu bar entry interface for C++ UI code (Python-driven menu bar)
     LFS_PYTHON_RUNTIME_API std::vector<MenuBarEntry> get_menu_bar_entries();
-    LFS_PYTHON_RUNTIME_API void draw_menu_bar_entry(const std::string& idname);
 
     struct MenuItemInfo {
         int type;
@@ -231,6 +220,7 @@ namespace lfs::python {
                                     bool rad_streamable,
                                     int spz_version,
                                     bool include_provenance,
+                                    bool apply_modifiers,
                                     int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations);
     LFS_PYTHON_RUNTIME_API void set_export_callback(ExportCallback cb);
     LFS_PYTHON_RUNTIME_API void invoke_export(int format, const std::string& path,
@@ -239,6 +229,7 @@ namespace lfs::python {
                                               bool rad_streamable = true,
                                               int spz_version = 4,
                                               bool include_provenance = true,
+                                              bool apply_modifiers = true,
                                               int lod_levels = 4, float lod_ratio = 0.5f, int chunk_count_k = 512,
                                               float chunk_extent = 16.0f, int chunk_min_k = 8, int kmeans_iterations = 10);
 
@@ -305,18 +296,10 @@ namespace lfs::python {
     // Menu bar entry visitor callback
     using MenuBarEntryVisitor = void (*)(const char* idname, const char* label, int order, void* user_data);
 
-    // Menu bar entry callbacks
-    using GetMenuBarEntriesCallback = void (*)(MenuBarEntryVisitor, void* user_data);
-    using DrawMenuBarEntryCallback = void (*)(const char* idname);
-
     struct PyBridge {
-        // Menus
-        void (*draw_menus)(MenuLocation) = nullptr;
-        bool (*has_menus)(MenuLocation) = nullptr;
 
         // Menu bar entries (Python-driven top-level menus)
         void (*get_menu_bar_entries)(MenuBarEntryVisitor, void*) = nullptr;
-        void (*draw_menu_bar_entry)(const char*) = nullptr;
         void (*collect_menu_content)(const char*, MenuItemVisitor, void*) = nullptr;
         void (*execute_menu_callback)(const char*, int) = nullptr;
 
@@ -753,10 +736,6 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API bool has_pending_graphics_callbacks();
     LFS_PYTHON_RUNTIME_API void flush_graphics_callbacks();
 
-    // Exit popup state - thread-safe flag for window close callback
-    LFS_PYTHON_RUNTIME_API bool is_exit_popup_open();
-    LFS_PYTHON_RUNTIME_API void set_exit_popup_open(bool open);
-
     // Keyboard capture for Python popup windows
     LFS_PYTHON_RUNTIME_API void request_keyboard_capture(const std::string& owner_id);
     LFS_PYTHON_RUNTIME_API void release_keyboard_capture(const std::string& owner_id);
@@ -772,7 +751,6 @@ namespace lfs::python {
     using TrainingProgressCallback = void (*)(int iteration, float loss, std::size_t num_gaussians);
     using TrainingStateCallback = void (*)(bool is_training, const char* state);
     using TrainerLoadedCallback = void (*)(bool has_trainer, int max_iterations, int initial_iteration);
-    using PsnrCallback = void (*)(float psnr);
     using SceneCallback = void (*)(bool has_scene, const char* path);
     using SelectionCallback = void (*)(bool has_selection, int count);
 
@@ -781,7 +759,6 @@ namespace lfs::python {
         TrainingProgressCallback training_progress = nullptr;
         TrainingStateCallback training_state = nullptr;
         TrainerLoadedCallback trainer_loaded = nullptr;
-        PsnrCallback psnr = nullptr;
         SceneCallback scene = nullptr;
         SelectionCallback selection = nullptr;
     };
@@ -791,10 +768,18 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void update_training_progress(int iteration, float loss, std::size_t num_gaussians);
     LFS_PYTHON_RUNTIME_API void update_training_state(bool is_training, const char* state);
     LFS_PYTHON_RUNTIME_API void update_trainer_loaded(bool has_trainer, int max_iterations, int initial_iteration = 0);
-    LFS_PYTHON_RUNTIME_API void update_psnr(float psnr);
     LFS_PYTHON_RUNTIME_API void update_scene(bool has_scene, const char* path);
     LFS_PYTHON_RUNTIME_API void update_selection(bool has_selection, int count);
     LFS_PYTHON_RUNTIME_API void flush_signals();
+
+    // UIList lookup crosses the extension/native layout boundary. Caller holds
+    // the GIL; the returned Python instance is a new reference, or nullptr.
+    using GetUIListInstanceCallback = void* (*)(const char* id);
+    using WrapUIListLayoutCallback = void* (*)(void* layout);
+    LFS_PYTHON_RUNTIME_API void set_uilist_callbacks(GetUIListInstanceCallback get_instance,
+                                                     WrapUIListLayoutCallback wrap_layout);
+    LFS_PYTHON_RUNTIME_API void* get_uilist_instance(const char* id);
+    LFS_PYTHON_RUNTIME_API void* wrap_uilist_layout(void* layout);
 
     // Viewport draw overlay - bridge from visualizer to Python draw handlers
     // view_matrix/proj_matrix: column-major 4x4, others: float arrays

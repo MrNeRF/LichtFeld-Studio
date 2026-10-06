@@ -5,7 +5,7 @@
 </head>
 
 <body template="docked-panel" data-model="asset_manager">
-  <div id="asset-text-measure"><span id="asset-measure-prose">M</span><span id="asset-measure-mono">M</span></div>
+  <div id="asset-text-measure"><span id="asset-measure-prose">M</span><span id="asset-measure-value">M</span></div>
   <div id="asset-floating-header" class="hidden" data-class-hidden="!is_floating">
     <span id="asset-floating-title">{{panel_label}}</span>
     <div class="asset-panel-actions">
@@ -64,6 +64,11 @@
           <button class="asset-button asset-button--text asset-update-all" data-if="gallery_update_all_visible"
                   data-event-click="gallery_update_all" data-attr-title="gallery_update_all_label">
             <span class="asset-button-text">{{gallery_update_all_label}}</span>
+          </button>
+          <button class="asset-button asset-button--icon asset-clean-missing" data-if="can_clean_missing"
+                  data-event-click="clean_missing" data-tooltip="projects.tooltip.clean_missing"
+                  aria-label="{{clean_missing_label}}">
+            <img src="../icon/broom.png"/>
           </button>
           <button class="asset-button asset-button--icon asset-toolbar-view" data-event-click="open_view_menu"
                   data-tooltip="common.more" aria-label="{{view_menu_label}}">
@@ -135,12 +140,14 @@
             </div>
             <div class="asset-gallery-notice" data-if="has_catalog_notice">{{catalog_notice}}</div>
             <div class="asset-gallery-notice" data-if="gallery_has_notice">{{gallery_notice}} <button class="btn btn--secondary asset-button--toolbar24" data-if="gallery_needs_connection" data-event-click="gallery_refresh">{{gallery_connection_action_label}}</button></div>
+            <div class="asset-gallery-notice" data-if="gallery_has_undo"><button class="btn btn--secondary asset-button--toolbar24" data-if="gallery_has_undo" data-event-click="gallery_undo">@tr:projects.gallery.action.undo</button></div>
+            <div class="asset-gallery-notice" data-if="gallery_has_recovery"><button class="btn btn--secondary asset-button--toolbar24" data-if="gallery_has_recovery" data-event-click="gallery_open_recovery">{{g_action_open_recovery}}</button></div>
             <div class="asset-gallery-notice" data-if="gallery_needs_recovery"><button class="btn btn--secondary asset-button--toolbar24" data-event-click="transfer_open_recovery('journal')">{{g_action_open_recovery}}</button></div>
             <div class="gallery-empty" data-if="no_folders">{{no_folders_label}}</div>
             <div class="gallery-empty" data-if="empty_folder">{{empty_folder_label}}</div>
             <div class="gallery-empty" data-if="gallery_empty">@tr:projects.gallery.empty.published</div>
           </div>
-          <div class="asset-catalog-loading" data-if="catalog_loading" role="status">
+          <div class="asset-catalog-loading is-indeterminate" data-if="catalog_loading" role="status">
             <span class="asset-loading-label">@tr:status.loading</span>
             <div class="asset-loading-track"><span class="asset-loading-fill"></span></div>
           </div>

@@ -48,6 +48,14 @@ namespace lfs::vis {
         glm::mat4 ellipsoid_transform{1};
         bool ellipsoid_affects_render = true;
         int ellipsoid_parent_node_index = -1;
+        bool node_box_active = false;
+        glm::mat4 node_box_transform{1};
+        glm::mat4 node_box_falloff_transform{1};
+        bool node_box_has_falloff = false;
+        bool node_ellipsoid_active = false;
+        glm::mat4 node_ellipsoid_transform{1};
+        glm::mat4 node_ellipsoid_falloff_transform{1};
+        bool node_ellipsoid_has_falloff = false;
     };
 
     struct FrameViewPanel {
@@ -155,6 +163,7 @@ namespace lfs::vis {
     };
 
     struct CachedRenderMetadata {
+        std::optional<lfs::rendering::ViewerBackend> viewer_backend;
         std::array<CachedRenderPanelMetadata, 2> depth_panels{};
         size_t depth_panel_count = 0;
         bool valid = false;
@@ -170,6 +179,7 @@ namespace lfs::vis {
 
     [[nodiscard]] inline CachedRenderMetadata makeCachedRenderMetadata(const lfs::rendering::FrameMetadata& result) {
         CachedRenderMetadata metadata{
+            .viewer_backend = result.viewer_backend,
             .depth_panel_count = result.depth_panel_count,
             .valid = result.valid,
             .depth_is_ndc = result.depth_is_ndc,
@@ -188,9 +198,6 @@ namespace lfs::vis {
     }
 
     struct FrameResources {
-        CachedRenderMetadata cached_metadata;
-        std::optional<lfs::rendering::GpuFrame> cached_gpu_frame;
-        glm::ivec2 cached_result_size{0};
         bool splats_presented = false;
         bool split_view_executed = false;
         bool splat_pre_rendered = false;

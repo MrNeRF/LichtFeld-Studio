@@ -19,9 +19,9 @@
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/rml_menu_bar.hpp"
+#include "gui/ui_texture.hpp"
 #include "gui/utils/file_association.hpp"
 #include "gui/utils/native_file_dialog.hpp"
-#include "gui/vulkan_ui_texture.hpp"
 #include "input/input_controller.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
@@ -219,7 +219,7 @@ namespace lfs::python {
                                                : normalized;
 
                 if (!texture_) {
-                    texture_ = std::make_unique<lfs::vis::gui::VulkanUiTexture>();
+                    texture_ = std::make_unique<lfs::vis::gui::UiTexture>();
                 }
 
                 if (!texture_->upload(upload_tensor, w, h) || !texture_->valid())
@@ -242,7 +242,7 @@ namespace lfs::python {
                 width_ = height_ = 0;
             }
 
-            std::unique_ptr<lfs::vis::gui::VulkanUiTexture> release_texture() {
+            std::unique_ptr<lfs::vis::gui::UiTexture> release_texture() {
                 width_ = height_ = 0;
                 return std::move(texture_);
             }
@@ -274,7 +274,7 @@ namespace lfs::python {
         private:
             const uint64_t registry_id_ =
                 g_next_dynamic_texture_id.fetch_add(1, std::memory_order_relaxed);
-            std::unique_ptr<lfs::vis::gui::VulkanUiTexture> texture_;
+            std::unique_ptr<lfs::vis::gui::UiTexture> texture_;
             std::string plugin_name_;
             int width_ = 0;
             int height_ = 0;
@@ -296,6 +296,38 @@ namespace lfs::python {
             g_project_switch_confirmation_callback;
         nb::object
             g_show_load_file_confirmation_callback;
+        lfs::event::HandlerId g_show_load_file_confirmation_handler_id = 0;
+        bool g_show_load_file_confirmation_with_batch = false;
+
+        void register_load_file_confirmation(nb::object callback, bool with_batch) {
+            using lfs::core::events::cmd::ShowLoadFileConfirmation;
+            if (g_show_load_file_confirmation_handler_id != 0) {
+                lfs::event::EventBridge::instance().unsubscribe(
+                    typeid(ShowLoadFileConfirmation), g_show_load_file_confirmation_handler_id);
+                g_show_load_file_confirmation_handler_id = 0;
+            }
+            g_show_load_file_confirmation_callback = std::move(callback);
+            g_show_load_file_confirmation_with_batch = with_batch;
+            if (!g_show_load_file_confirmation_callback || g_show_load_file_confirmation_callback.is_none())
+                return;
+            g_show_load_file_confirmation_handler_id = ShowLoadFileConfirmation::when([](const auto& event) {
+                nb::gil_scoped_acquire guard;
+                if (!g_show_load_file_confirmation_callback || g_show_load_file_confirmation_callback.is_none())
+                    return;
+                try {
+                    nb::list paths;
+                    for (const auto& path : event.paths)
+                        paths.append(lfs::core::path_to_utf8(path));
+                    if (g_show_load_file_confirmation_with_batch)
+                        g_show_load_file_confirmation_callback(paths, event.is_dataset, event.replace, event.user_batch);
+                    else
+                        g_show_load_file_confirmation_callback(paths, event.is_dataset, event.replace);
+                } catch (const std::exception& error) {
+                    LOG_ERROR("Load-file confirmation callback error: {}", error.what());
+                }
+            });
+        }
+
         nb::object
             g_stop_training_confirmation_callback;
         nb::object g_open_camera_preview_callback;
@@ -565,7 +597,7 @@ namespace lfs::python {
 
         void free_plugin_textures(const std::string& plugin_name) {
             const bool graphics_thread = lfs::python::on_graphics_thread();
-            std::vector<lfs::vis::gui::VulkanUiTexture*> deferred;
+            std::vector<lfs::vis::gui::UiTexture*> deferred;
             {
                 std::lock_guard lock(g_dynamic_textures_mutex);
                 auto it = g_plugin_textures.find(plugin_name);
@@ -3324,6 +3356,10 @@ namespace lfs::python {
             nb::arg("default_name") = "project.licht", nb::arg("start_dir") = "",
             "Choose a destination for a new LichtFeld project. Returns empty string if cancelled.");
 
+        m.def("open_image_file_dialog", [](const std::string& start_dir) {
+            const auto path = lfs::vis::gui::OpenReframePhotoFileDialog(lfs::core::utf8_to_path(start_dir));
+            return path.empty() ? std::string{} : lfs::core::path_to_utf8(path); }, nb::arg("start_dir") = "", "Select a still photo; returns empty if cancelled");
+
         m.def(
             "open_ply_file_dialog",
             [](const std::string& start_dir) -> std::string {
@@ -3874,43 +3910,18 @@ namespace lfs::python {
 
         m.def(
             "on_show_load_file_confirmation",
-            [](nb::object callback) {
-                g_show_load_file_confirmation_callback =
-                    callback;
-                lfs::core::events::cmd::
-                    ShowLoadFileConfirmation::
-                        when([](const auto& event) {
-                            if (g_show_load_file_confirmation_callback &&
-                                !g_show_load_file_confirmation_callback
-                                     .is_none()) {
-                                nb::gil_scoped_acquire
-                                    guard;
-                                try {
-                                    nb::list paths;
-                                    for (const auto& path :
-                                         event.paths) {
-                                        paths.append(
-                                            lfs::core::
-                                                path_to_utf8(
-                                                    path));
-                                    }
-                                    g_show_load_file_confirmation_callback(
-                                        paths,
-                                        event.is_dataset,
-                                        event.replace);
-                                } catch (
-                                    const std::
-                                        exception& error) {
-                                    LOG_ERROR(
-                                        "Load-file confirmation callback error: {}",
-                                        error.what());
-                                }
-                            }
-                        });
-            },
+            [](nb::object callback) { register_load_file_confirmation(std::move(callback), false); },
             nb::arg("callback"),
             "Register callback for a load-file wipe confirmation "
             "(receives paths: list[str], is_dataset: bool, replace: bool)");
+
+        m.def(
+            "on_show_load_file_confirmation_with_batch",
+            [](nb::object callback) { register_load_file_confirmation(std::move(callback), true); },
+            nb::arg("callback"),
+            "Register a load-file confirmation callback with batch provenance "
+            "(receives paths: list[str], is_dataset: bool, replace: bool, user_batch: bool). "
+            "Replaces the callback registered through either load-file confirmation API.");
 
         m.def(
             "on_stop_training_confirmation",
@@ -3969,7 +3980,6 @@ namespace lfs::python {
         m.def(
             "set_exit_popup_open",
             [](bool open) {
-                set_exit_popup_open(open);
                 if (auto* gui = get_gui_manager()) {
                     gui->noteExitPopupMirror(open);
                 }
@@ -4540,7 +4550,7 @@ namespace lfs::python {
                     lfs::vis::op::operators().dispatchModalEvent(event);
                 }
                 if (auto* const rm = lfs::vis::services().renderingOrNull()) {
-                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY);
+                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
                 }
             },
             nb::arg("enabled"),
@@ -4561,7 +4571,7 @@ namespace lfs::python {
                     lfs::vis::op::operators().dispatchModalEvent(event);
                 }
                 if (auto* const rm = lfs::vis::services().renderingOrNull()) {
-                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY);
+                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
                 }
             },
             nb::arg("enabled"),
@@ -5478,6 +5488,7 @@ namespace lfs::python {
                     nb::dict backend;
                     backend["id"] = std::string(descriptor.id);
                     backend["label_key"] = std::string(descriptor.label_key);
+                    backend["display_name"] = descriptor.display_name;
                     nb::list presets;
                     for (const auto& preset : descriptor.presets) {
                         nb::dict item;
@@ -5545,6 +5556,11 @@ namespace lfs::python {
             result["force_no_atomic_float"] = state.options.force_no_atomic_float;
             result["cuda_available"] = static_cast<bool>(LFS_HAS_CUDA);
             result["metal_available"] = core::gpu_backend_available(core::GpuBackend::Metal);
+#ifdef LFS_TENSOR_VULKAN
+            result["vulkan_available"] = true;
+#else
+            result["vulkan_available"] = false;
+#endif
             return result; }, "Get saved tensor backend preferences; changes apply after restart");
 
         m.def("set_tensor_backend_preferences", [](const std::string& backend, const std::string& device, int validation, bool fp32_half, bool no_atomic_float) {
@@ -5556,6 +5572,10 @@ namespace lfs::python {
                   }
                   if (backend == "metal" && !core::gpu_backend_available(core::GpuBackend::Metal))
                       throw nb::value_error("Metal needs macOS 26 and a Metal 4 GPU");
+#ifndef LFS_TENSOR_VULKAN
+                  if (backend == "vulkan")
+                      throw nb::value_error("Vulkan is not compiled into this Metal-only build");
+#endif
                   if (validation < 0 || validation > 2)
                       throw nb::value_error("Validation must be 0, 1, or 2");
                   const vis::TensorPreferenceState state{
@@ -5566,7 +5586,16 @@ namespace lfs::python {
                       .options = {.vulkan_device = device, .vulkan_validation = validation,
                                   .force_fp32_half = fp32_half, .force_no_atomic_float = no_atomic_float},
                   };
-                  vis::UserPreferences::instance().setTensorBackend(state); }, nb::arg("backend") = "auto", nb::arg("vulkan_device") = "", nb::arg("vulkan_validation") = 0, nb::arg("force_fp32_half") = false, nb::arg("force_no_atomic_float") = false, "Save tensor backend preferences for the next application start");
+                  const auto previous = vis::UserPreferences::instance().tensorBackend();
+                  vis::UserPreferences::instance().setTensorBackend(state);
+                  if (previous.backend != state.backend ||
+                      previous.options.vulkan_device != state.options.vulkan_device ||
+                      previous.options.vulkan_validation != state.options.vulkan_validation ||
+                      previous.options.force_fp32_half != state.options.force_fp32_half ||
+                      previous.options.force_no_atomic_float != state.options.force_no_atomic_float) {
+                      LOG_INFO("Tensor GPU backend preferences saved: requested={}; changes apply after restart; current={}",
+                               backend, core::gpu_backend_name(core::configured_gpu_backend()));
+                  } }, nb::arg("backend") = "auto", nb::arg("vulkan_device") = "", nb::arg("vulkan_validation") = 0, nb::arg("force_fp32_half") = false, nb::arg("force_no_atomic_float") = false, "Save tensor backend preferences for the next application start");
 
         m.def(
             "get_mcp_preferences",
@@ -5877,17 +5906,11 @@ namespace lfs::python {
         PyBridge bridge;
         bridge.begin_ui_frame = []() { begin_keyboard_ui_frame(); };
         bridge.prepare_ui = []() {};
-        bridge.draw_menus = [](MenuLocation loc) { PyMenuRegistry::instance().draw_menu_items(loc); };
-        bridge.has_menus = [](MenuLocation loc) { return PyMenuRegistry::instance().has_items(loc); };
         bridge.get_menu_bar_entries = [](MenuBarEntryVisitor visitor, void* ctx) {
             auto entries = PyMenuRegistry::instance().get_menu_bar_entries();
             for (auto* entry : entries) {
                 visitor(entry->idname.c_str(), entry->label.c_str(), entry->order, ctx);
             }
-        };
-        bridge.draw_menu_bar_entry = [](const char* idname) {
-            if (idname)
-                PyMenuRegistry::instance().draw_menu_bar_entry(idname);
         };
         bridge.collect_menu_content = [](const char* idname, MenuItemVisitor visitor, void* ctx) {
             if (!idname)
@@ -5942,8 +5965,7 @@ namespace lfs::python {
             }
             g_project_switch_confirmation_callback =
                 nb::object();
-            g_show_load_file_confirmation_callback =
-                nb::object();
+            register_load_file_confirmation(nb::object(), false);
             g_stop_training_confirmation_callback =
                 nb::object();
             g_open_camera_preview_callback = nb::object();
@@ -6157,7 +6179,14 @@ namespace lfs::python {
                 }
                 return rm->getAverageFPS();
             },
-            "Get current FPS");
+            "Get viewport renders in the trailing second (cached and deferred results excluded)");
+
+        m.def(
+            "get_ui_fps", []() -> float {
+                auto* rm = get_rendering_manager();
+                return rm ? rm->getPresentedAverageFPS() : 0.0f;
+            },
+            "Get successful GUI presents in the trailing second (idle-clear frame excluded)");
 
         m.def(
             "get_content_type", []() -> const char* {

@@ -13,6 +13,7 @@ import lichtfeld as lf
 
 from .rml_keys import KI_ESCAPE
 from .asset_index import display_name
+from .panels import panel_class
 from .training_confirm import _project_has_path
 from .types import Panel
 
@@ -85,12 +86,6 @@ def should_show_startup_recent() -> bool:
     return True
 
 
-def try_show_startup_recent() -> bool:
-    """Enable the panel when the blank-session + MRU policy allows it."""
-    if not should_show_startup_recent():
-        return False
-    lf.ui.set_panel_enabled("lfs.startup_recent", True)
-    return True
 
 
 def build_project_rows(paths, *, max_rows: int = _MAX_ROWS, checks=None) -> list[dict]:
@@ -124,6 +119,7 @@ def build_project_rows(paths, *, max_rows: int = _MAX_ROWS, checks=None) -> list
     return rows
 
 
+@panel_class("startup_recent")
 class StartupRecentPanel(Panel):
     """Floating chooser for the five most recent projects at startup."""
 

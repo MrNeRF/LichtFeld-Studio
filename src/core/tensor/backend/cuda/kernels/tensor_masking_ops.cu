@@ -199,6 +199,32 @@ namespace lfs::core::tensor_ops {
         r[idx] = cond[c_idx] ? x[x_idx] : y[y_idx];
     }
 
+    // Operands of a 2D where after merging dimensions: 0 full [M,N], 1 row [1,N], 2 column [M,1],
+    // 3 scalar. Avoids the per-element rank loop of the generic kernel.
+    template <typename T>
+    __global__ void where_2d_kernel(const unsigned char* __restrict__ cond, const T* __restrict__ x,
+                                    const T* __restrict__ y, T* __restrict__ r, const size_t M, const size_t N,
+                                    const int cond_kind, const int x_kind, const int y_kind) {
+        const size_t total = M * N;
+        for (size_t i = blockIdx.x * static_cast<size_t>(blockDim.x) + threadIdx.x; i < total;
+             i += static_cast<size_t>(gridDim.x) * blockDim.x) {
+            const size_t row = i / N;
+            const size_t col = i - row * N;
+            const auto at = [&](const int kind) { return kind == 0 ? i : kind == 1 ? col
+                                                                     : kind == 2   ? row
+                                                                                   : size_t{0}; };
+            r[i] = cond[at(cond_kind)] ? x[at(x_kind)] : y[at(y_kind)];
+        }
+    }
+
+    template <typename T>
+    __global__ void where_same_shape_kernel(const unsigned char* __restrict__ cond, const T* __restrict__ x,
+                                            const T* __restrict__ y, T* __restrict__ r, const size_t n) {
+        for (size_t i = blockIdx.x * static_cast<size_t>(blockDim.x) + threadIdx.x; i < n;
+             i += static_cast<size_t>(gridDim.x) * blockDim.x)
+            r[i] = cond[i] ? x[i] : y[i];
+    }
+
     void launch_where(const unsigned char* cond, const void* x, const void* y, void* r, size_t element_bytes,
                       const size_t* cond_shape, const size_t* x_shape,
                       const size_t* y_shape, const size_t* r_shape,
@@ -208,14 +234,79 @@ namespace lfs::core::tensor_ops {
         LFS_ASSERT_MSG(cond_rank <= MAX_TENSOR_RANK && x_rank <= MAX_TENSOR_RANK &&
                            y_rank <= MAX_TENSOR_RANK && r_rank <= MAX_TENSOR_RANK,
                        "where rank exceeds MAX_TENSOR_RANK");
+        if (total == 0)
+            return;
+
+        // Merge neighbouring dimensions that every operand broadcasts the same way.
+        const size_t* inputs[3] = {cond_shape, x_shape, y_shape};
+        const size_t ranks[3] = {cond_rank, x_rank, y_rank};
+        size_t merged[3][MAX_TENSOR_RANK];
+        size_t merged_out[MAX_TENSOR_RANK];
+        size_t merged_rank = 0;
+        int previous_flags = -1;
+        for (size_t d = 0; d < r_rank; ++d) {
+            if (r_shape[d] == 1)
+                continue;
+            size_t dims[3];
+            int flags = 0;
+            for (int o = 0; o < 3; ++o) {
+                dims[o] = d + ranks[o] >= r_rank ? inputs[o][d + ranks[o] - r_rank] : 1;
+                flags |= (dims[o] == 1 ? 1 : 0) << o;
+            }
+            if (flags == previous_flags) {
+                for (int o = 0; o < 3; ++o)
+                    merged[o][merged_rank - 1] *= dims[o];
+                merged_out[merged_rank - 1] *= r_shape[d];
+            } else {
+                for (int o = 0; o < 3; ++o)
+                    merged[o][merged_rank] = dims[o];
+                merged_out[merged_rank] = r_shape[d];
+                ++merged_rank;
+                previous_flags = flags;
+            }
+        }
+
+        constexpr int block_size = 256;
+        const auto flat_grid = static_cast<unsigned>(std::min<size_t>((total + block_size - 1) / block_size, size_t{1} << 20));
+        if (merged_rank <= 2) {
+            const size_t M = merged_rank == 2 ? merged_out[0] : 1;
+            const size_t N = merged_rank == 0 ? 1 : merged_out[merged_rank - 1];
+            int kinds[3];
+            for (int o = 0; o < 3; ++o) {
+                const bool row_full = merged_rank == 2 && merged[o][0] != 1;
+                const bool col_full = merged_rank > 0 && merged[o][merged_rank - 1] != 1;
+                kinds[o] = merged_rank < 2 ? (col_full ? 0 : 3)
+                                           : (row_full && col_full ? 0 : col_full ? 1
+                                                                     : row_full   ? 2
+                                                                                  : 3);
+            }
+            const auto launch_flat = [&]<typename T>() {
+                if (kinds[0] == 0 && kinds[1] == 0 && kinds[2] == 0) {
+                    where_same_shape_kernel<<<flat_grid, block_size, 0, stream>>>(
+                        cond, static_cast<const T*>(x), static_cast<const T*>(y), static_cast<T*>(r), total);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.where_same_shape");
+                } else {
+                    where_2d_kernel<<<flat_grid, block_size, 0, stream>>>(
+                        cond, static_cast<const T*>(x), static_cast<const T*>(y), static_cast<T*>(r), M, N,
+                        kinds[0], kinds[1], kinds[2]);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.where_2d");
+                }
+            };
+            switch (element_bytes) {
+            case 1: launch_flat.template operator()<uint8_t>(); return;
+            case 2: launch_flat.template operator()<uint16_t>(); return;
+            case 4: launch_flat.template operator()<uint32_t>(); return;
+            case 8: launch_flat.template operator()<uint64_t>(); return;
+            default: LFS_ASSERT_MSG(false, "where requires a supported element size");
+            }
+        }
+
         TernaryBroadcastShapes shapes;
         std::copy(cond_shape, cond_shape + cond_rank, shapes.values);
         std::copy(x_shape, x_shape + x_rank, shapes.values + MAX_TENSOR_RANK);
         std::copy(y_shape, y_shape + y_rank, shapes.values + 2 * MAX_TENSOR_RANK);
         std::copy(r_shape, r_shape + r_rank, shapes.values + 3 * MAX_TENSOR_RANK);
 
-        if (total == 0)
-            return;
         const size_t blocks = (total + 255) / 256;
         const dim3 grid(std::min(blocks, size_t{65535}), (blocks + 65534) / 65535);
         const auto launch = [&]<typename T>() {
@@ -786,84 +877,6 @@ namespace lfs::core::tensor_ops {
                                                              ops::index_clamp_op(data_size));
         thrust::scatter(thrust::cuda::par.on(stream), vals_ptr, vals_ptr + idx_size,
                         transform_idx, data_ptr);
-    }
-
-    // ============= Multi-Tensor Gather (Zip Gather) =============
-    // Gather from multiple tensors simultaneously using the same indices
-    // Uses zip_iterator to fuse multiple gathers into single memory transaction
-
-    void launch_zip_gather_2(const float* input1, const float* input2,
-                             const int* indices,
-                             float* output1, float* output2,
-                             size_t input_size, size_t index_size,
-                             size_t stride1, size_t stride2,
-                             cudaStream_t stream) {
-        if (input_size == 0 || index_size == 0)
-            return;
-
-        auto in1_ptr = thrust::device_pointer_cast(input1);
-        auto in2_ptr = thrust::device_pointer_cast(input2);
-        auto idx_ptr = thrust::device_pointer_cast(indices);
-        auto out1_ptr = thrust::device_pointer_cast(output1);
-        auto out2_ptr = thrust::device_pointer_cast(output2);
-
-        // Clamp indices to valid range
-        auto clamped_idx = thrust::make_transform_iterator(idx_ptr,
-                                                           ops::index_clamp_op(input_size));
-
-        auto input1_idx = thrust::make_transform_iterator(clamped_idx, ops::index_stride_op(stride1));
-        auto input2_idx = thrust::make_transform_iterator(clamped_idx, ops::index_stride_op(stride2));
-        auto gathered1 = thrust::make_permutation_iterator(in1_ptr, input1_idx);
-        auto gathered2 = thrust::make_permutation_iterator(in2_ptr, input2_idx);
-        auto gathered = thrust::make_zip_iterator(thrust::make_tuple(gathered1, gathered2));
-
-        // Create zip iterator for outputs
-        auto zipped_output = thrust::make_zip_iterator(
-            thrust::make_tuple(out1_ptr, out2_ptr));
-
-        // Single gather operation copies both tensors!
-        thrust::copy(thrust::cuda::par_nosync.on(stream),
-                     gathered, gathered + index_size,
-                     zipped_output);
-    }
-
-    void launch_zip_gather_3(const float* input1, const float* input2, const float* input3,
-                             const int* indices,
-                             float* output1, float* output2, float* output3,
-                             size_t input_size, size_t index_size,
-                             size_t stride1, size_t stride2, size_t stride3,
-                             cudaStream_t stream) {
-        if (input_size == 0 || index_size == 0)
-            return;
-
-        auto in1_ptr = thrust::device_pointer_cast(input1);
-        auto in2_ptr = thrust::device_pointer_cast(input2);
-        auto in3_ptr = thrust::device_pointer_cast(input3);
-        auto idx_ptr = thrust::device_pointer_cast(indices);
-        auto out1_ptr = thrust::device_pointer_cast(output1);
-        auto out2_ptr = thrust::device_pointer_cast(output2);
-        auto out3_ptr = thrust::device_pointer_cast(output3);
-
-        // Clamp indices
-        auto clamped_idx = thrust::make_transform_iterator(idx_ptr,
-                                                           ops::index_clamp_op(input_size));
-
-        auto input1_idx = thrust::make_transform_iterator(clamped_idx, ops::index_stride_op(stride1));
-        auto input2_idx = thrust::make_transform_iterator(clamped_idx, ops::index_stride_op(stride2));
-        auto input3_idx = thrust::make_transform_iterator(clamped_idx, ops::index_stride_op(stride3));
-        auto gathered1 = thrust::make_permutation_iterator(in1_ptr, input1_idx);
-        auto gathered2 = thrust::make_permutation_iterator(in2_ptr, input2_idx);
-        auto gathered3 = thrust::make_permutation_iterator(in3_ptr, input3_idx);
-        auto gathered = thrust::make_zip_iterator(thrust::make_tuple(gathered1, gathered2, gathered3));
-
-        // Zip three output sequences
-        auto zipped_output = thrust::make_zip_iterator(
-            thrust::make_tuple(out1_ptr, out2_ptr, out3_ptr));
-
-        // Single gather for all three tensors!
-        thrust::copy(thrust::cuda::par_nosync.on(stream),
-                     gathered, gathered + index_size,
-                     zipped_output);
     }
 
     // ============= Explicit Instantiations for Fused Gather =============

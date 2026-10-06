@@ -4,11 +4,62 @@ set(_contents "${CMAKE_INSTALL_PREFIX}/@_lfs_macos_contents@")
 set(_exe "${_contents}/MacOS/LichtFeld-Studio")
 set(_icd "${_contents}/share/vulkan/icd.d/MoltenVK_icd.json")
 set(_moltenvk "${_contents}/lib/libMoltenVK.dylib")
-foreach(_required IN ITEMS "${_exe}" "${_icd}" "${_moltenvk}")
+# These are the bundle's executable/driver contracts. Data resources are
+# verified as complete inventories below, rather than by representative files.
+foreach(_required IN ITEMS "${_exe}" "${_icd}" "${_moltenvk}" "${_contents}/Info.plist")
     if(NOT EXISTS "${_required}")
         message(FATAL_ERROR "Incomplete portable macOS app: ${_required} is missing")
     endif()
 endforeach()
+
+if("@LFS_ENABLE_APPLE_REFRAME@")
+    set(_reframe_helper "${_contents}/MacOS/lfs-reframe")
+    if(NOT EXISTS "${_reframe_helper}")
+        message(FATAL_ERROR "Enabled Apple Reframe bundle is missing its helper")
+    endif()
+endif()
+
+# CMake's actual installation manifest also covers generated files, helper
+# executables and dependency libraries that are not in a source resource tree.
+foreach(_installed IN LISTS CMAKE_INSTALL_MANIFEST_FILES)
+    if(NOT EXISTS "${_installed}")
+        message(FATAL_ERROR "Missing installed file: ${_installed}")
+    endif()
+endforeach()
+
+include("@CMAKE_SOURCE_DIR@/cmake/VerifyInstalledTree.cmake")
+set(_resources "${_contents}/share/LichtFeld-Studio")
+lfs_verify_installed_tree("@CMAKE_SOURCE_DIR@/src/visualizer/gui/assets"
+    "${_resources}/assets" "*" "[.](md|icns)$")
+lfs_verify_installed_tree("@CMAKE_SOURCE_DIR@/src/visualizer/gui/assets"
+    "${_contents}/Resources" "*.icns" "")
+lfs_verify_installed_tree("@CMAKE_SOURCE_DIR@/src/visualizer/gui/rmlui/resources"
+    "${_resources}/assets/rmlui" "*" "")
+lfs_verify_installed_tree("@CMAKE_SOURCE_DIR@/src/visualizer/gui/resources"
+    "${_resources}" "*" "")
+lfs_verify_installed_tree("@CMAKE_SOURCE_DIR@/src/python/lfs_plugins"
+    "${_contents}/lib/python/lfs_plugins" "*.py" "(^|/)__pycache__(/|$)")
+lfs_verify_installed_tree("@CMAKE_SOURCE_DIR@/src/python/stubs"
+    "${_contents}/lib/python" "*" "(^|/)__pycache__(/|$)")
+# All top-level Python helpers are installed beside the extension.
+file(GLOB _helpers "@CMAKE_SOURCE_DIR@/src/python/*.py")
+foreach(_helper IN LISTS _helpers)
+    get_filename_component(_name "${_helper}" NAME)
+    if(NOT EXISTS "${_contents}/lib/python/${_name}")
+        message(FATAL_ERROR "Missing bundled Python helper: ${_name}")
+    endif()
+endforeach()
+lfs_verify_installed_tree("@_lfs_portable_python_stdlib@"
+    "${_contents}/lib/python3.12" "*"
+    "(^|/)(__pycache__|test|tests|idle_test|tkinter|turtledemo|idlelib|lib2to3|ensurepip|unittest|lib-dynload)(/|$)|[.]pyc$")
+lfs_verify_installed_tree("@_lfs_portable_python_stdlib@/lib-dynload"
+    "${_contents}/lib/python3.12/lib-dynload" "*" "")
+lfs_verify_installed_tree("@_LFS_VULKAN_RASTERIZER_SPV_DIR@"
+    "${_resources}/shaders/vulkan_rasterizer" "*.spv" "")
+file(GLOB _python_modules "${_contents}/lib/python/lichtfeld*.so")
+if(NOT _python_modules)
+    message(FATAL_ERROR "Missing bundled lichtfeld Python extension")
+endif()
 
 file(GLOB_RECURSE _candidates LIST_DIRECTORIES FALSE
     "${_contents}/MacOS/*" "${_contents}/lib/*")
@@ -80,4 +131,8 @@ execute_process(COMMAND /usr/bin/codesign --force --sign - "${_app}"
     COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND /usr/bin/codesign --verify --deep --strict "${_app}"
     COMMAND_ERROR_IS_FATAL ANY)
+if("@LFS_ENABLE_APPLE_REFRAME@")
+    execute_process(COMMAND /usr/bin/codesign --verify --strict "${_reframe_helper}"
+        COMMAND_ERROR_IS_FATAL ANY)
+endif()
 message(STATUS "Verified and ad-hoc signed portable macOS app: ${_app}")

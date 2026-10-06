@@ -78,6 +78,7 @@ namespace lfs::vis {
         None = 0,
         Tensor,
         VulkanImage,
+        MetalFx, // history owned internally by a native MetalFX scaler
     };
 
     struct SceneHistoryContract {

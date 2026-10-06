@@ -10,6 +10,7 @@
 #include "core/memory_pressure.hpp"
 #include "core/number_format.hpp"
 #include "core/services.hpp"
+#include "core/tensor_backend.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/gpu_memory_query.hpp"
 #include "gui/gui_input.hpp"
@@ -23,11 +24,14 @@
 #include "gui/ui_context.hpp"
 #include "input/input_controller.hpp"
 #include "internal/resource_paths.hpp"
+#include "ipc/view_context.hpp"
 #include "preferences.hpp"
 #include "python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/scene_upscaler_registry.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
+#include <RmlUi/Core/StringUtilities.h>
 #if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
 #endif
@@ -501,6 +505,36 @@ namespace lfs::vis::gui {
         ctor.Bind("show_status_message", &model_.show_status_message);
         ctor.Bind("status_message_text", &model_.status_message_text);
         ctor.Bind("status_message_color", &model_.status_message_color);
+        ctor.Bind("renderer_label", &model_.renderer_label);
+        ctor.Bind("renderer_value", &model_.renderer_value);
+        ctor.Bind("renderer_tooltip", &model_.renderer_tooltip);
+        ctor.Bind("upscaler_label", &model_.upscaler_label);
+        ctor.Bind("upscaler_value", &model_.upscaler_value);
+        ctor.Bind("upscaler_tooltip", &model_.upscaler_tooltip);
+        ctor.Bind("upscaler_menu", &model_.upscaler_menu);
+        ctor.Bind("upscaler_menu_expanded", &model_.upscaler_menu_expanded);
+        ctor.BindEventCallback("toggle_upscaler_menu", [this](Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList&) {
+            event.StopPropagation();
+            if (model_.safe_mode)
+                return;
+            setModelBool("mcp_details_expanded", model_.mcp_details_expanded, false);
+            setModelBool("upscaler_menu_expanded", model_.upscaler_menu_expanded, !model_.upscaler_menu_expanded);
+            resetTooltip();
+            markModelDirty();
+        });
+        ctor.BindEventCallback("choose_upscaler", [this](Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList& args) {
+            event.StopPropagation();
+            if (args.size() == 1)
+                selectUpscaler(args[0].Get<Rml::String>());
+        });
+        ctor.BindEventCallback("choose_upscaler_preset", [this](Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList& args) {
+            event.StopPropagation();
+            if (args.size() == 2)
+                selectUpscaler(args[0].Get<Rml::String>(), args[1].Get<Rml::String>());
+        });
+        ctor.Bind("tensor_label", &model_.tensor_label);
+        ctor.Bind("tensor_value", &model_.tensor_value);
+        ctor.Bind("tensor_tooltip", &model_.tensor_tooltip);
         model_handle_ = ctor.GetModelHandle();
 
         try {
@@ -541,6 +575,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlStatusBar::shutdown() {
+        resetTooltip();
         if (document_registered_)
             lfs::python::unregister_rml_document("status_bar");
         document_registered_ = false;
@@ -556,7 +591,7 @@ namespace lfs::vis::gui {
         subscriptions_.clear();
         model_handle_ = {};
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("status_bar");
         rml_context_ = nullptr;
@@ -579,11 +614,12 @@ namespace lfs::vis::gui {
     }
 
     void RmlStatusBar::reloadResources() {
+        resetTooltip();
         if (!rml_context_)
             return;
 
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
 
         if (document_) {
             if (document_registered_)
@@ -641,9 +677,8 @@ namespace lfs::vis::gui {
             }));
         };
 
-        // Step, loss and splat count change with every training step and FPS with
-        // every frame. The periodic refresh reads them, so they never force a
-        // redraw of their own.
+        // Published training progress wakes the GUI; read its latest values on
+        // that frame. FPS is measurement only and never publishes store changes.
         bind(store.total_iterations);
         bind(store.max_gaussians);
         bind(store.training_running);
@@ -654,10 +689,10 @@ namespace lfs::vis::gui {
         bind(store.eval_lpips);
         bind(store.scene_generation);
         bind(store.selection_generation);
-        subscriptions_.push_back(store.fps.subscribe([this](const float& fps) {
-            reactive_fps_available_ = true;
-            reactive_fps_value_ = fps;
-        }));
+        bind(store.viewer_backend);
+        bind(store.render_settings_generation);
+        bind(store.scene_upscaler_generation);
+        bind(store.language_generation);
         bind(store.mode_text);
         subscriptions_.push_back(store.perf_hud.subscribe([this](const lfs::vis::AppStore::PerfHud& state) {
             setModelBool("gpu_panel_active", model_.gpu_panel_active, state.visible);
@@ -672,23 +707,30 @@ namespace lfs::vis::gui {
 
     bool RmlStatusBar::animationFrameDue(
         const std::chrono::steady_clock::time_point now) const {
-        return animation_active_ &&
-               (next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
-                now >= next_refresh_at_);
+        const auto tooltip_deadline = tooltip_.revealDeadline();
+        return (tooltip_deadline && now >= *tooltip_deadline) ||
+               (animation_active_ &&
+                (next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
+                 now >= next_refresh_at_));
     }
 
     std::optional<double> RmlStatusBar::secondsUntilAnimationFrame(
         const std::chrono::steady_clock::time_point now) const {
+        std::optional<double> delay;
+        if (const auto deadline = tooltip_.revealDeadline())
+            delay = std::max(0.0, std::chrono::duration<double>(*deadline - now).count());
         if (!animation_active_)
-            return std::nullopt;
-        if (next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
-            now >= next_refresh_at_)
-            return 0.0;
-        return std::chrono::duration<double>(next_refresh_at_ - now).count();
+            return delay;
+        const double animation_delay =
+            next_refresh_at_ == std::chrono::steady_clock::time_point{} || now >= next_refresh_at_
+                ? 0.0
+                : std::chrono::duration<double>(next_refresh_at_ - now).count();
+        return delay ? std::min(*delay, animation_delay) : animation_delay;
     }
 
     void RmlStatusBar::postStatusMessage(std::string text, const ErrorNoticeLevel level) {
         status_message_.post(std::move(text), level);
+        external_model_dirty_.store(true, std::memory_order_release);
     }
 
     bool RmlStatusBar::updateTheme() {
@@ -833,6 +875,7 @@ namespace lfs::vis::gui {
 
         if (!mcp_toggle_listener_) {
             mcp_toggle_listener_ = new CallbackListener([this] {
+                setModelBool("upscaler_menu_expanded", model_.upscaler_menu_expanded, false);
                 model_.mcp_details_expanded = !model_.mcp_details_expanded;
                 model_handle_.DirtyVariable("mcp_details_expanded");
                 markModelDirty();
@@ -1190,16 +1233,11 @@ namespace lfs::vis::gui {
         }
     }
 
-    bool RmlStatusBar::updateContent(const PanelDrawContext& ctx, const bool force_refresh) {
+    bool RmlStatusBar::updateContent(const PanelDrawContext& ctx) {
         if (!document_)
             return false;
 
         const auto now = std::chrono::steady_clock::now();
-        if (!force_refresh && next_refresh_at_ != std::chrono::steady_clock::time_point{} &&
-            now < next_refresh_at_) {
-            return false;
-        }
-
         model_dirty_ = false;
 
         const auto& p = lfs::vis::theme().palette;
@@ -1311,7 +1349,10 @@ namespace lfs::vis::gui {
         std::string mode_rml;
         std::string mode_color;
 
-        if (content_type == SceneManager::ContentType::Empty) {
+        if (viewer && viewer->isTrainingStartPending()) {
+            mode_rml = LOC("training_panel.preparing_training");
+            mode_color = colorToRml(p.info);
+        } else if (content_type == SceneManager::ContentType::Empty) {
             mode_rml = LOC("mode.empty");
             mode_color = colorToRml(p.text_dim);
         } else if (content_type == SceneManager::ContentType::SplatFiles) {
@@ -1365,7 +1406,7 @@ namespace lfs::vis::gui {
                 break;
             }
             case TrainingState::Starting:
-                mode_rml = LOC("runtime.task_starting_ellipsis") + suffix;
+                mode_rml = LOC("training_panel.preparing_training");
                 mode_color = colorToRml(p.warning);
                 break;
             case TrainingState::Finished:
@@ -1639,9 +1680,13 @@ namespace lfs::vis::gui {
         setModelBool("gpu_panel_active", model_.gpu_panel_active,
                      lfs::vis::app_store().perf_hud.get().visible);
         setModelString("lfs_mem_text", model_.lfs_mem_text,
-                       std::format("LFS {}{} GiB", mem.process_estimated ? "≤" : "",
-                                   formatGpuGiB(mem.process_used)));
-        setModelString("lfs_mem_color", model_.lfs_mem_color, colorToRml(p.info));
+                       mem.process_valid
+                           ? std::format("LFS {} GiB{}", formatGpuGiB(mem.process_used),
+                                         mem.process_over_budget
+                                             ? std::format(" ({})", LOC("ui.vram_over_budget"))
+                                             : "")
+                           : "LFS —");
+        setModelString("lfs_mem_color", model_.lfs_mem_color, colorToRml(mem.process_over_budget ? p.error : p.info));
         setModelBool("show_lfs_memory", model_.show_lfs_memory, !mem.uses_process_budget);
         setModelBool("show_gpu_model", model_.show_gpu_model, !mem.device_name.empty());
         setModelString("gpu_model_text", model_.gpu_model_text, mem.device_name);
@@ -1660,22 +1705,24 @@ namespace lfs::vis::gui {
                 element->SetAttribute("title", LOC(gpuDeviceMemoryTooltipKey(mem)));
         }
 
-        // FPS: prefer scene-render rate when scene frames are in the measurement
-        // window; when only GUI frames are presented, show that rate as ui-fps
-        // so a GUI-only spin is not invisible. True idle (no samples) stays a dim 0.
-        const float scene_fps = reactive_fps_available_ ? reactive_fps_value_
-                                                        : (rm ? rm->getAverageFPS() : 0.0f);
-        const float presented_fps = rm ? rm->getPresentedAverageFPS() : 0.0f;
-        const bool ui_only_fps = scene_fps <= 0.0f && presented_fps > 0.0f;
-        const float fps = std::round(ui_only_fps ? presented_fps : scene_fps);
-        ThemeColor fps_col = ui_only_fps || fps <= 0.0f
-                                 ? p.text_dim
-                                 : (fps >= 30.0f ? p.success : (fps >= 15.0f ? p.warning : p.error));
-        setModelString("fps_value", model_.fps_value, std::format("{:.0f}", fps));
-        setModelString("fps_color", model_.fps_color, colorToRml(fps_col));
+        const auto rates = rm ? rm->guiFrameRates() : FrameRates{};
+        const float scene_fps = rates.view;
+        const float presented_fps = rates.ui;
+        setModelString("fps_value", model_.fps_value,
+                       std::format("{} {:.0f} · {} {:.0f}", LOC("status_bar.ui"), presented_fps,
+                                   LOC("status_bar.view"), scene_fps));
+        setModelString("fps_color", model_.fps_color, colorToRml(p.text_dim));
         setModelString("fps_label", model_.fps_label,
-                       ui_only_fps ? std::format(" {}", LOC("status_bar.ui_fps"))
-                                   : std::format(" {}", LOC(lichtfeld::Strings::Status::FPS)));
+                       std::format(" {}", LOC(lichtfeld::Strings::Status::FPS)));
+        const auto* backend_manager = ctx.ui && ctx.ui->viewer ? ctx.ui->viewer->getRenderingManager() : nullptr;
+        if (backend_manager)
+            updateBackendContent(backend_manager->activeViewerBackend());
+        else
+            updateBackendContent();
+        if (backend_manager)
+            updateUpscalerContent(backend_manager->getSettings(), backend_manager->sceneUpscalerRuntimeSelection());
+        else
+            updateUpscalerContent(RenderSettings{}, {});
         setModelString("git_commit", model_.git_commit, GIT_COMMIT_HASH_SHORT);
 
         section_signature_ =
@@ -1705,6 +1752,184 @@ namespace lfs::vis::gui {
         return model_dirty_;
     }
 
+    void RmlStatusBar::updateBackendContent() {
+        updateBackendContent(lfs::vis::app_store().viewer_backend.get());
+    }
+
+    void RmlStatusBar::updateBackendContent(const std::optional<rendering::ViewerBackend> published_backend) {
+        // Published identity belongs to the active view. Do not infer it from
+        // tensor preferences or reuse another view's output for an empty view.
+        constexpr auto configured = rendering::desktopViewerBackend();
+        const auto tensor_backend = core::configured_gpu_backend();
+        const BackendStatusStamp stamp{published_backend, static_cast<int>(configured),
+                                       static_cast<int>(tensor_backend),
+                                       lfs::vis::app_store().language_generation.get()};
+        if (backend_status_stamp_ == stamp)
+            return;
+        backend_status_stamp_ = stamp;
+        const auto active_renderer = std::string(rendering::viewerBackendDisplayName(published_backend.value_or(configured)));
+        setModelString("renderer_label", model_.renderer_label, LOC("status_bar.renderer_backend_short"));
+        setModelString("renderer_value", model_.renderer_value, active_renderer);
+        auto renderer_tooltip = std::string(LOC("status_bar.renderer_backend")) + ": " +
+                                LOC("status_bar.renderer_backend_tooltip");
+        if (!published_backend)
+            renderer_tooltip += std::string("\n") + LOC("status_bar.backend_no_frame");
+        setModelString("renderer_tooltip", model_.renderer_tooltip, std::move(renderer_tooltip));
+        setModelString("tensor_label", model_.tensor_label, LOC("status_bar.tensor_backend_short"));
+        setModelString("tensor_value", model_.tensor_value,
+                       core::gpu_backend_name(tensor_backend));
+        setModelString("tensor_tooltip", model_.tensor_tooltip,
+                       std::string(LOC("status_bar.tensor_backend")) + ": " + LOC("status_bar.tensor_backend_tooltip"));
+    }
+
+    void RmlStatusBar::selectUpscaler(const std::string& backend_id, const std::optional<std::string>& preset_id) {
+        if (model_.safe_mode)
+            return;
+        const auto backend = sceneUpscalerBackendFromId(backend_id);
+        if (!backend || !sceneUpscalerBackendAvailable(*backend) ||
+            (preset_id && !sceneUpscalerPreset(*backend, *preset_id)))
+            return;
+        auto settings = get_render_settings();
+        if (!settings)
+            return;
+        settings->scene_upscaler = backend_id;
+        if (preset_id)
+            settings->scene_upscaler_preset = *preset_id;
+        // Same atomic, preference-persisting update used by Preferences/Python.
+        update_render_settings(*settings, {.scene_upscaler_explicit = true,
+                                           .scene_upscaler_preset_explicit = preset_id.has_value()});
+        setModelBool("upscaler_menu_expanded", model_.upscaler_menu_expanded, false);
+        markModelDirty();
+    }
+
+    void RmlStatusBar::updateUpscalerContent(const RenderSettings& settings, SceneUpscalerSelection selection) {
+        const auto requested = sceneUpscalerBackendFromId(settings.scene_upscaler).value_or(SceneUpscalerBackend::Native);
+        const bool pending = selection.requested != requested;
+        const auto name = [](const SceneUpscalerDescriptor& descriptor) {
+            return descriptor.display_name.empty() ? std::string(LOC(descriptor.label_key)) : descriptor.display_name;
+        };
+        setModelString("upscaler_label", model_.upscaler_label, LOC("status_bar.upscaler_backend_short"));
+        setModelString("upscaler_value", model_.upscaler_value,
+                       name(sceneUpscalerDescriptor(pending ? SceneUpscalerBackend::Native : selection.effective)));
+        std::string tooltip = std::string(LOC("status_bar.upscaler_backend")) + ": " +
+                              name(sceneUpscalerDescriptor(requested));
+        if (const auto preset = sceneUpscalerPreset(requested, settings.scene_upscaler_preset); preset && requested != SceneUpscalerBackend::Native)
+            tooltip += " / " + std::string(LOC(preset->label_key));
+        if (pending)
+            tooltip += "\n" + std::string(LOC("status_bar.upscaler_pending"));
+        else if (selection.fellBack())
+            tooltip += "\n" + std::string(LOC(selection.fallback == SceneUpscalerFallback::UnsupportedMode
+                                                  ? "status_bar.upscaler_unsupported"
+                                                  : "status_bar.upscaler_unavailable"));
+        setModelString("upscaler_tooltip", model_.upscaler_tooltip, std::move(tooltip));
+        std::string menu;
+        for (const auto& descriptor : sceneUpscalerDescriptors()) {
+            menu += "<button class='upscaler-choice" + std::string(descriptor.backend == requested ? " selected" : "") +
+                    "' data-event-click=\"choose_upscaler('" + std::string(descriptor.id) + "')\">" +
+                    Rml::StringUtilities::EncodeRml(name(descriptor)) + "</button>";
+        }
+        const auto presets = sceneUpscalerDescriptor(requested).presets;
+        if (presets.size() > 1 && sceneUpscalerBackendAvailable(requested)) {
+            menu += "<div class='upscaler-presets-label'>" + Rml::StringUtilities::EncodeRml(LOC("preferences.scene_reconstruction_preset")) + "</div>";
+            for (const auto& preset : presets)
+                menu += "<button class='upscaler-choice" + std::string(preset.id == settings.scene_upscaler_preset ? " selected" : "") +
+                        "' data-event-click=\"choose_upscaler_preset('" + std::string(sceneUpscalerBackendId(requested)) + "','" +
+                        std::string(preset.id) + "')\">" + Rml::StringUtilities::EncodeRml(LOC(preset.label_key)) + "</button>";
+        }
+        setModelString("upscaler_menu", model_.upscaler_menu, std::move(menu));
+    }
+
+    void RmlStatusBar::resetTooltip() {
+        tooltip_ = {};
+        tooltip_target_ = nullptr;
+        tooltip_text_.clear();
+        tooltip_overlay_height_ = 0.0f;
+        pointer_inside_ = false;
+        updateTooltipScheduling();
+    }
+
+    void RmlStatusBar::updateTooltipScheduling() {
+        if (!rml_manager_ || !rml_context_)
+            return;
+        rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.hasActiveState());
+        rml_manager_->setContextTooltipRevealDeadline(rml_context_, tooltip_.revealDeadline());
+    }
+
+    void RmlStatusBar::updateHoverTooltip() {
+        auto* target = pointer_inside_ ? rml_context_->GetHoverElement() : nullptr;
+        // Use the owner of the description as the target: moving between a
+        // badge's letter and value must not restart the reveal delay.
+        while (target && target->GetAttribute<Rml::String>("title", "").empty() &&
+               target->GetAttribute<Rml::String>("data-tooltip", "").empty())
+            target = target->GetParentNode();
+        const auto text = resolveRmlTooltip(target);
+        if (target != tooltip_target_ || text != tooltip_text_) {
+            tooltip_target_ = target;
+            tooltip_text_ = text;
+            tooltip_.setHover(text, target);
+            markModelDirty();
+        }
+        updateTooltipScheduling();
+    }
+
+    bool RmlStatusBar::applyHoverTooltip(const int doc_w, const int bar_h,
+                                         const int maximum_overlay_height,
+                                         const bool force_position) {
+        if (!rml_context_ || !document_)
+            return false;
+        const float dp_ratio = rml_context_->GetDensityIndependentPixelRatio();
+        const float maximum = static_cast<float>(std::max(0, maximum_overlay_height));
+        bool changed = false;
+        const auto resize_context = [&] {
+            const int height = bar_h + static_cast<int>(std::ceil(overlayHeight()));
+            const bool resized = rml_context_->GetDimensions() != Rml::Vector2i(doc_w, height);
+            if (resized) {
+                rml_context_->SetDimensions({doc_w, height});
+                document_->SetProperty("height", std::format("{}px", height));
+                rml_context_->Update();
+                changed = true;
+            }
+            if (pointer_inside_) {
+                rml_context_->ProcessMouseMove(last_mouse_x_,
+                                               last_mouse_bar_y_ + static_cast<int>(std::ceil(overlayHeight())),
+                                               last_mouse_modifiers_);
+                updateHoverTooltip();
+            }
+            return resized;
+        };
+
+        if (tooltip_.revealDue() && tooltip_overlay_height_ == 0.0f)
+            tooltip_overlay_height_ = std::min(150.0f * dp_ratio, maximum);
+        bool reposition = resize_context() || force_position;
+        auto* const body = document_->GetElementById("body");
+        const auto apply = [&] {
+            const auto dimensions = rml_context_->GetDimensions();
+            // Anchor row tooltips above the row, so their border never
+            // overlaps the badge itself. Popup controls keep their own position.
+            return tooltip_.apply(body, last_mouse_x_,
+                                  std::min(last_mouse_bar_y_, 0) + static_cast<int>(std::ceil(overlayHeight())),
+                                  dimensions.x, dimensions.y, reposition);
+        };
+        if (apply()) {
+            changed = true;
+            rml_context_->Update();
+        }
+        float measured_height = 0.0f;
+        if (auto* const element = document_->GetElementById("frame-tooltip");
+            element && element->IsVisible())
+            measured_height = std::min(std::ceil(element->GetOffsetHeight() + 20.0f * dp_ratio), maximum);
+        if (tooltip_overlay_height_ != measured_height) {
+            tooltip_overlay_height_ = measured_height;
+            reposition = resize_context();
+            if (apply()) {
+                changed = true;
+                rml_context_->Update();
+            }
+        }
+        updateTooltipScheduling();
+        return changed;
+    }
+
     void RmlStatusBar::processInput(const PanelInputState& input, const float bar_x, const float bar_y,
                                     const float bar_w, const float bar_h) {
         if (!rml_context_ || !document_)
@@ -1714,9 +1939,22 @@ namespace lfs::vis::gui {
         trackContextFrame(bar_x - input.screen_x,
                           bar_y - overlay_height - input.screen_y);
         const float local_x = input.mouse_x - bar_x;
-        const float local_y = input.mouse_y - (bar_y - overlay_height);
-        const bool is_inside = local_x >= 0.0f && local_x < bar_w &&
-                               local_y >= 0.0f && local_y < bar_h + overlay_height;
+        const float bar_local_y = input.mouse_y - bar_y;
+        const float local_y = bar_local_y + overlay_height;
+        const bool is_inside =
+            (local_x >= 0.0f && local_x < bar_w && bar_local_y >= 0.0f && bar_local_y < bar_h) ||
+            isOverlayPoint(local_x, bar_local_y, bar_w);
+        pointer_inside_ = is_inside;
+        last_mouse_x_ = static_cast<int>(local_x);
+        last_mouse_bar_y_ = static_cast<int>(bar_local_y);
+        last_mouse_modifiers_ = sdlModsToRml(input.key_ctrl, input.key_shift,
+                                             input.key_alt, input.key_super);
+        if (!is_inside) {
+            if (input.mouse_clicked[0] || input.mouse_clicked[1])
+                setModelBool("upscaler_menu_expanded", model_.upscaler_menu_expanded, false);
+            rml_context_->ProcessMouseLeave();
+            updateHoverTooltip();
+        }
         if (!is_inside && !input.mouse_released[0] && !input.mouse_released[1] &&
             !save_step_interaction_.dragging) {
             clearSaveStepHover();
@@ -1724,11 +1962,11 @@ namespace lfs::vis::gui {
         }
 
         handleSaveStepInteraction(input, local_x, local_y);
-
-        const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
-                                      input.key_alt, input.key_super);
-        rml_context_->ProcessMouseMove(static_cast<int>(local_x), static_cast<int>(local_y), mods);
-
+        const int mods = last_mouse_modifiers_;
+        if (is_inside) {
+            rml_context_->ProcessMouseMove(static_cast<int>(local_x), static_cast<int>(local_y), mods);
+            updateHoverTooltip();
+        }
         if (is_inside && input.mouse_clicked[0])
             rml_context_->ProcessMouseButtonDown(0, mods);
         if (input.mouse_released[0])
@@ -1740,24 +1978,24 @@ namespace lfs::vis::gui {
     }
 
     float RmlStatusBar::overlayHeight() const {
-        if (!model_.mcp_details_expanded)
-            return 0.0f;
-        const float dp_ratio = rml_context_
-                                   ? rml_context_->GetDensityIndependentPixelRatio()
-                                   : 1.0f;
-        const float fallback_height = 150.0f * dp_ratio;
-        if (!document_)
-            return fallback_height;
-
-        auto* const popup = document_->GetElementById("mcp-popup");
-        if (!popup || !popup->IsVisible())
-            return fallback_height;
-
-        // The popup sits 20dp above the status row. Keep the first-frame fallback,
-        // but grow the render/input surface when localized text, an error, or
-        // multiple network endpoints make the actual popup taller.
-        const float measured_height = popup->GetOffsetHeight() + 20.0f * dp_ratio;
-        return std::max(fallback_height, measured_height);
+        float popup_height = 0.0f;
+        if (model_.mcp_details_expanded) {
+            const float dp_ratio = rml_context_
+                                       ? rml_context_->GetDensityIndependentPixelRatio()
+                                       : 1.0f;
+            popup_height = 150.0f * dp_ratio;
+            if (auto* const popup = document_ ? document_->GetElementById("mcp-popup") : nullptr;
+                popup && popup->IsVisible())
+                popup_height = std::max(popup_height, popup->GetOffsetHeight() + 20.0f * dp_ratio);
+        }
+        if (model_.upscaler_menu_expanded) {
+            const float ratio = rml_context_ ? rml_context_->GetDensityIndependentPixelRatio() : 1.f;
+            popup_height = std::max(popup_height, 240.f * ratio);
+            if (auto* popup = document_ ? document_->GetElementById("upscaler-popup") : nullptr; popup && popup->IsVisible())
+                popup_height = std::max(popup_height, popup->GetOffsetHeight() + 20.f * ratio);
+        }
+        // Only reserve the measured tooltip surface; it never captures input.
+        return std::max(popup_height, tooltip_overlay_height_);
     }
 
     bool RmlStatusBar::isOverlayPoint(const float local_x, const float local_y,
@@ -1765,7 +2003,7 @@ namespace lfs::vis::gui {
         (void)bar_w;
         if (overlayHeight() <= 0.0f || !document_)
             return false;
-        auto* const popup = document_->GetElementById("mcp-popup");
+        auto* const popup = document_->GetElementById(model_.upscaler_menu_expanded ? "upscaler-popup" : "mcp-popup");
         if (!popup || !popup->IsVisible())
             return false;
         const auto offset = popup->GetAbsoluteOffset(Rml::BoxArea::Border);
@@ -1780,8 +2018,8 @@ namespace lfs::vis::gui {
         if (!rml_manager_ || !rml_context_)
             return;
         std::optional<RmlRect> popup_rect;
-        if (model_.mcp_details_expanded && document_) {
-            if (auto* const popup = document_->GetElementById("mcp-popup");
+        if ((model_.mcp_details_expanded || model_.upscaler_menu_expanded) && document_) {
+            if (auto* const popup = document_->GetElementById(model_.upscaler_menu_expanded ? "upscaler-popup" : "mcp-popup");
                 popup && popup->IsVisible()) {
                 const auto offset = popup->GetAbsoluteOffset(Rml::BoxArea::Border);
                 popup_rect = RmlRect{
@@ -1798,17 +2036,17 @@ namespace lfs::vis::gui {
                                         popup_rect);
     }
 
-    void RmlStatusBar::queueCachedVulkanContext(const float x, const float y,
-                                                const float w_px, const float h_px,
-                                                const int screen_w, const int screen_h,
-                                                const int render_w, const int render_h,
-                                                const bool refresh_cache) {
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+    void RmlStatusBar::queueCachedContext(const float x, const float y,
+                                          const float w_px, const float h_px,
+                                          const int screen_w, const int screen_h,
+                                          const int render_w, const int render_h,
+                                          const bool refresh_cache) {
+        if (!rml_manager_ || !rml_manager_->getUiRenderer())
             return;
 
         const auto blit_rect = toFramebufferBlitRect(rml_manager_->getWindow(),
                                                      x, y, w_px, h_px, screen_w, screen_h);
-        rml_manager_->queueCachedVulkanContext({
+        rml_manager_->queueCachedContext({
             .context = rml_context_,
             .cache = &direct_cache_,
             .cache_width = render_w,
@@ -1827,45 +2065,6 @@ namespace lfs::vis::gui {
                 .y2 = blit_rect.y + blit_rect.h,
             },
         });
-    }
-
-    void RmlStatusBar::renderCached(const PanelDrawContext& ctx, const float x, const float y,
-                                    const float w_px, const float h_px,
-                                    const int screen_w, const int screen_h) {
-        if (!rml_context_ || !document_)
-            return;
-        if (w_px <= 0.0f || h_px <= 0.0f || screen_w <= 0 || screen_h <= 0)
-            return;
-
-        const float overlay_height = overlayHeight();
-        const int render_w = static_cast<int>(w_px);
-        const int render_h = static_cast<int>(h_px + overlay_height);
-        const float dp_ratio = rml_context_->GetDensityIndependentPixelRatio();
-        const bool dp_changed = dp_ratio != last_dp_ratio_;
-        const bool theme_current =
-            has_theme_signature_ && rml_theme::currentThemeSignature() == last_theme_signature_;
-        const auto now = std::chrono::steady_clock::now();
-        const auto runtime_revision = lfs::vis::runtimeServiceRevision();
-        if (runtime_revision != last_runtime_service_revision_) {
-            last_runtime_service_revision_ = runtime_revision;
-            model_dirty_ = true;
-        }
-        const bool refresh_due =
-            next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
-            now >= next_refresh_at_;
-        const bool can_reuse = theme_current && !dp_changed && !model_dirty_ && !refresh_due &&
-                               render_w == last_render_w_ &&
-                               render_h == last_render_h_;
-        if (!can_reuse) {
-            render(ctx, x, y, w_px, h_px, screen_w, screen_h);
-            return;
-        }
-
-        trackRenderedContextFrame(x, y, overlay_height);
-
-        queueCachedVulkanContext(x, y - overlay_height, w_px, h_px + overlay_height,
-                                 screen_w, screen_h,
-                                 render_w, render_h, direct_cache_.texture == 0);
     }
 
     void RmlStatusBar::render(const PanelDrawContext& ctx, const float x, const float y,
@@ -1888,12 +2087,19 @@ namespace lfs::vis::gui {
             return;
         }
 
-        const float overlay_height = overlayHeight();
+        const auto* backend_manager = ctx.ui && ctx.ui->viewer ? ctx.ui->viewer->getRenderingManager() : nullptr;
+        if (backend_manager)
+            updateBackendContent(backend_manager->activeViewerBackend());
+        else
+            updateBackendContent();
+        float overlay_height = overlayHeight();
         const int render_w = static_cast<int>(w_px);
-        const int render_h = static_cast<int>(h_px + overlay_height);
+        int render_h = static_cast<int>(std::ceil(h_px + overlay_height));
         const bool size_changed = (render_w != last_render_w_ || render_h != last_render_h_);
         const float dp_ratio = rml_context_->GetDensityIndependentPixelRatio();
         const bool dp_changed = dp_ratio != last_dp_ratio_;
+        if (external_model_dirty_.exchange(false, std::memory_order_acq_rel))
+            markModelDirty();
         const bool had_pending_model_dirty = model_dirty_;
         const bool theme_changed = updateTheme();
         const auto now = std::chrono::steady_clock::now();
@@ -1901,12 +2107,12 @@ namespace lfs::vis::gui {
             size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
             next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
             now >= next_refresh_at_;
-        const bool content_changed = updateContent(ctx, refresh_due);
+        const bool content_changed = refresh_due && updateContent(ctx);
         const bool section_signature_changed = section_signature_ != last_section_signature_;
         const bool needs_render = size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
-                                  content_changed ||
+                                  content_changed || tooltip_.revealDue() ||
                                   (animation_active_ && refresh_due);
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface()) {
+        if (!rml_manager_ || !rml_manager_->getUiRenderer()) {
             rml_animation_active_ = false;
             animation_active_ = model_animation_active_;
             return;
@@ -1920,6 +2126,12 @@ namespace lfs::vis::gui {
             }
             rml_context_->Update();
             fitToAvailableWidth(size_changed || dp_changed || theme_changed || section_signature_changed);
+            (void)applyHoverTooltip(render_w, static_cast<int>(h_px),
+                                    static_cast<int>(y), size_changed || dp_changed || theme_changed);
+            overlay_height = overlayHeight();
+            render_h = rml_context_->GetDimensions().y;
+            last_document_h_ = render_h;
+            rml_context_->Update();
 
             rml_animation_active_ = rml_context_->GetNextUpdateDelay() == 0;
             animation_active_ = model_animation_active_ || rml_animation_active_;
@@ -1929,13 +2141,14 @@ namespace lfs::vis::gui {
             last_section_signature_ = section_signature_;
             last_render_w_ = render_w;
             last_render_h_ = render_h;
+            model_dirty_ = false;
         }
 
         trackRenderedContextFrame(x, y, overlay_height);
 
-        queueCachedVulkanContext(x, y - overlay_height, w_px, h_px + overlay_height,
-                                 screen_w, screen_h,
-                                 render_w, render_h, true);
+        queueCachedContext(x, y - overlay_height, w_px, h_px + overlay_height,
+                           screen_w, screen_h,
+                           render_w, render_h, needs_render || direct_cache_.texture == 0);
     }
 
 } // namespace lfs::vis::gui

@@ -5,7 +5,9 @@
 #pragma once
 
 #include "gui/line_renderer.hpp"
+#include "py_viewport.hpp"
 
+#include <cstdint>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -58,20 +60,11 @@ namespace lfs::python {
 
     class PyGizmoContext {
     public:
-        struct DrawCommand {
-            enum Type { LINE_2D,
-                        CIRCLE_2D,
-                        RECT_2D,
-                        FILLED_RECT_2D,
-                        FILLED_CIRCLE_2D,
-                        LINE_3D };
-            Type type;
-            float x1, y1, z1;
-            float x2, y2, z2;
-            float r, g, b, a;
-            float thickness;
-            float radius;
-        };
+        using DrawCommand = PyViewportDrawContext::DrawCommand;
+
+        void set_camera_state(const glm::mat4& view, const glm::mat4& proj,
+                              const glm::vec2& viewport_pos, const glm::vec2& viewport_size,
+                              const glm::vec3& camera_pos, const glm::vec3& camera_fwd);
 
         [[nodiscard]] bool has_selection() const;
         [[nodiscard]] std::tuple<float, float, float> selection_center() const;
@@ -93,12 +86,12 @@ namespace lfs::python {
                                    std::tuple<float, float, float, float> color);
         void draw_line_3d(std::tuple<float, float, float> start, std::tuple<float, float, float> end,
                           std::tuple<float, float, float, float> color, float thickness = 1.0f);
-
         [[nodiscard]] const std::vector<DrawCommand>& get_draw_commands() const { return draw_commands_; }
         void clear_draw_commands() { draw_commands_.clear(); }
 
     private:
         mutable std::vector<DrawCommand> draw_commands_;
+        std::optional<PyViewportDrawContext> viewport_context_;
     };
 
     struct PyGizmoInfo {

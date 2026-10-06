@@ -907,13 +907,15 @@ TEST_F(PythonIOTest, LoadTransformsPerFrameIntrinsics) {
                            {"fl_y", 45.0},
                            {"cx", 32.0},
                            {"cy", 24.0},
-                           {"camera_model", "OPENCV"},
+                           {"camera_model", "FULL_OPENCV"},
                            {"k1", 0.01},
                            {"k2", -0.02},
                            {"k3", 0.003},
                            {"p1", 0.0001},
                            {"p2", -0.0002},
                            {"k4", 0.001},
+                           {"k5", -0.0002},
+                           {"k6", 0.00003},
                            {"b1", 0.0003},
                            {"b2", -0.0004},
                            {"transform_matrix", identity_matrix},
@@ -926,13 +928,15 @@ TEST_F(PythonIOTest, LoadTransformsPerFrameIntrinsics) {
                            {"fl_y", 88.0},
                            {"cx", 64.0},
                            {"cy", 48.0},
-                           {"camera_model", "OPENCV"},
+                           {"camera_model", "FULL_OPENCV"},
                            {"k1", 0.05},
                            {"k2", -0.04},
                            {"k3", 0.006},
                            {"p1", 0.0005},
                            {"p2", -0.0006},
                            {"k4", 0.002},
+                           {"k5", -0.0004},
+                           {"k6", 0.00005},
                            {"b1", 0.0007},
                            {"b2", -0.0008},
                            {"transform_matrix", identity_matrix},
@@ -953,7 +957,7 @@ TEST_F(PythonIOTest, LoadTransformsPerFrameIntrinsics) {
     EXPECT_FLOAT_EQ(cameras[0]._center_x, 32.0f);
     EXPECT_FLOAT_EQ(cameras[0]._center_y, 24.0f);
     EXPECT_EQ(cameras[0]._camera_model_type, CameraModelType::PINHOLE);
-    ASSERT_EQ(cameras[0]._radial_distortion.numel(), 3u);
+    ASSERT_EQ(cameras[0]._radial_distortion.numel(), 6u);
     ASSERT_EQ(cameras[0]._tangential_distortion.numel(), 2u);
     {
         const auto* radial = cameras[0]._radial_distortion.ptr<float>();
@@ -961,6 +965,9 @@ TEST_F(PythonIOTest, LoadTransformsPerFrameIntrinsics) {
         EXPECT_FLOAT_EQ(radial[0], 0.01f);
         EXPECT_FLOAT_EQ(radial[1], -0.02f);
         EXPECT_FLOAT_EQ(radial[2], 0.003f);
+        EXPECT_FLOAT_EQ(radial[3], 0.001f);
+        EXPECT_FLOAT_EQ(radial[4], -0.0002f);
+        EXPECT_FLOAT_EQ(radial[5], 0.00003f);
         EXPECT_FLOAT_EQ(tangential[0], 0.0001f);
         EXPECT_FLOAT_EQ(tangential[1], -0.0002f);
     }
@@ -972,7 +979,7 @@ TEST_F(PythonIOTest, LoadTransformsPerFrameIntrinsics) {
     EXPECT_FLOAT_EQ(cameras[1]._center_x, 64.0f);
     EXPECT_FLOAT_EQ(cameras[1]._center_y, 48.0f);
     EXPECT_EQ(cameras[1]._camera_model_type, CameraModelType::PINHOLE);
-    ASSERT_EQ(cameras[1]._radial_distortion.numel(), 3u);
+    ASSERT_EQ(cameras[1]._radial_distortion.numel(), 6u);
     ASSERT_EQ(cameras[1]._tangential_distortion.numel(), 2u);
     {
         const auto* radial = cameras[1]._radial_distortion.ptr<float>();
@@ -980,6 +987,9 @@ TEST_F(PythonIOTest, LoadTransformsPerFrameIntrinsics) {
         EXPECT_FLOAT_EQ(radial[0], 0.05f);
         EXPECT_FLOAT_EQ(radial[1], -0.04f);
         EXPECT_FLOAT_EQ(radial[2], 0.006f);
+        EXPECT_FLOAT_EQ(radial[3], 0.002f);
+        EXPECT_FLOAT_EQ(radial[4], -0.0004f);
+        EXPECT_FLOAT_EQ(radial[5], 0.00005f);
         EXPECT_FLOAT_EQ(tangential[0], 0.0005f);
         EXPECT_FLOAT_EQ(tangential[1], -0.0006f);
     }
@@ -987,6 +997,42 @@ TEST_F(PythonIOTest, LoadTransformsPerFrameIntrinsics) {
     // Distinct per-frame values prove resolution is not root-only.
     EXPECT_NE(cameras[0]._focal_x, cameras[1]._focal_x);
     EXPECT_NE(cameras[0]._width, cameras[1]._width);
+}
+
+// Higher radial terms only have the rational meaning under FULL_OPENCV; other models keep loading
+// with the terms ignored (and reported), as before rational support existed.
+TEST_F(PythonIOTest, LoadTransformsIgnoresRationalTermsWithoutFullOpenCVModel) {
+    const fs::path dataset_dir = temp_dir / "invalid_rational_model";
+    write_png(dataset_dir / "frame.png", 64, 48);
+    const nlohmann::json transforms = {
+        {"w", 64},
+        {"h", 48},
+        {"fl_x", 50.0},
+        {"fl_y", 50.0},
+        {"cx", 32.0},
+        {"cy", 24.0},
+        {"camera_model", "OPENCV"},
+        {"k1", 0.01},
+        {"k4", 0.001},
+        {"frames", nlohmann::json::array({
+                       {
+                           {"file_path", "frame.png"},
+                           {"transform_matrix", {
+                                                    {1.0, 0.0, 0.0, 0.0},
+                                                    {0.0, 1.0, 0.0, 0.0},
+                                                    {0.0, 0.0, 1.0, 0.0},
+                                                    {0.0, 0.0, 0.0, 1.0},
+                                                }},
+                       },
+                   })},
+    };
+    write_text_file(dataset_dir / "transforms.json", transforms.dump());
+
+    const auto [cameras, center, splits] =
+        read_transforms_cameras_and_images(dataset_dir / "transforms.json", {});
+    ASSERT_EQ(cameras.size(), 1u);
+    ASSERT_EQ(cameras[0]._radial_distortion.numel(), 3u);
+    EXPECT_FLOAT_EQ(cameras[0]._radial_distortion.cpu().to_vector()[0], 0.01f);
 }
 
 TEST_F(PythonIOTest, LoadTransformsRootIntrinsicsFrameOverride) {

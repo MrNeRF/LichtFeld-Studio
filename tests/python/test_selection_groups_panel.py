@@ -150,7 +150,7 @@ def test_selection_groups_builds_record_list(selection_groups_module):
 
 def test_selection_groups_uses_dirty_update_policy(selection_groups_module):
     assert selection_groups_module.SelectionGroupsPanel.update_policy == "dirty"
-    assert "update_interval_ms" not in selection_groups_module.SelectionGroupsPanel.__dict__
+    assert selection_groups_module.SelectionGroupsPanel.update_interval_ms is None
 
 
 def test_selection_groups_stays_closed_after_layout_reset(selection_groups_module):

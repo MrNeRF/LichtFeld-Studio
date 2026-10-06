@@ -108,3 +108,20 @@ body,
 #gpu-icon {
     image-color: @{text_dim};
 }
+
+.backend-chip {
+    color: @{text};
+    background-color: @{alpha(surface_bright,0.30)};
+    border-color: @{alpha(text_dim,0.35)};
+}
+
+.backend-label {
+    color: @{text_dim};
+}
+
+#upscaler-toggle { color: @{text}; background-color: #00000000; }
+#upscaler-popup { color: @{text}; background-color: @{surface}; border-color: @{border}; }
+.upscaler-choice { color: @{text}; background-color: #00000000; }
+.upscaler-choice:hover { background-color: @{surface_bright}; }
+.upscaler-choice.selected { color: @{primary}; background-color: @{surface_bright}; }
+.upscaler-presets-label { color: @{text_dim}; }

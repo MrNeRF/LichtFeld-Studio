@@ -394,7 +394,8 @@ class TestTensorPropertyGPU:
         settings.gpu_data = t
 
         assert settings.gpu_data is not None
-        assert str(settings.gpu_data.device) == "cuda"
+        assert settings.gpu_data is t
+        assert settings.gpu_data.device == t.backend
 
 
 class TestTensorPropertyGetAllProperties:

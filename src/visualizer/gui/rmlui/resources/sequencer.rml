@@ -145,6 +145,7 @@
                 </div>
             </div>
         </div>
+        <div id="generic-tracks"></div>
         <div id="easing-stripe">
             <div id="easing-segments"></div>
             <div id="easing-curves"></div>

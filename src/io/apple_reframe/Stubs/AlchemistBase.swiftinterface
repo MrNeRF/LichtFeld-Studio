@@ -1,0 +1,31 @@
+// swift-interface-format-version: 1.0
+// swift-compiler-version: Apple Swift version 6.3
+// swift-module-flags: -enable-library-evolution -module-name AlchemistBase
+import Foundation
+import CoreVideo
+public protocol Cancellable {
+ var isCancelled: Swift.Bool { get }
+ func cancel()
+ func checkCancellation() throws
+}
+public class ALCBasePipeline {
+ public init()
+ public func createAndLoadJointPredictor(_ url: Foundation.URL) throws
+ public func createAndLoadFoVPredictor(_ url: Foundation.URL) throws
+ public var isJointPredictorLoaded: Swift.Bool { get }
+ public var isFoVPredictorLoaded: Swift.Bool { get }
+ public func generateSplats(_ input: CoreVideo.CVPixelBuffer, focalLengthPx: Swift.Float?, canceller: any AlchemistBase.Cancellable, onProgressUpdate: (Swift.Double) -> Swift.Void) throws -> (AlchemistBase.IOPixelBuffers, AlchemistBase.AuxiliaryOutput)
+}
+public struct IOPixelBuffers {
+ public var positions: CoreVideo.CVPixelBuffer { get }
+ public var rotations: CoreVideo.CVPixelBuffer { get }
+ public var scales: CoreVideo.CVPixelBuffer { get }
+ public var colors: CoreVideo.CVPixelBuffer { get }
+ public var alphas: CoreVideo.CVPixelBuffer { get }
+ public var depths: CoreVideo.CVPixelBuffer { get }
+}
+public struct AuxiliaryOutput {
+ public var outputFocalLengthPx: Swift.Float { get }
+ public var outputUnprojectionFocalLengthPx: Swift.SIMD2<Swift.Float> { get }
+}
+public func loadImage(from: Foundation.URL) throws -> CoreVideo.CVPixelBuffer

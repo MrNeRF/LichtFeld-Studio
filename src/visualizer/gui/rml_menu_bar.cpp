@@ -35,6 +35,7 @@
 #include <format>
 #include <glm/glm.hpp>
 #include <string_view>
+#include <utility>
 
 namespace lfs::vis::gui {
 
@@ -489,7 +490,7 @@ namespace lfs::vis::gui {
         snap_buttons_.clear();
         open_menu_idname_.clear();
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("menu_bar");
         rml_context_ = nullptr;
@@ -569,7 +570,7 @@ namespace lfs::vis::gui {
         last_ctx_h_ = 0;
         last_document_h_ = 0;
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
 
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/menubar.rml");
@@ -685,6 +686,16 @@ namespace lfs::vis::gui {
         if (!menu_items_ || !document_)
             return;
 
+        if (rml_manager_->routeInput(rml_context_, input, [this](const PanelInputState& event) { processInput(event); }, isOpen()))
+            return;
+        for (const auto& event : input.input_events) {
+            if (event.kind == FrameInputEventKind::KeyDown && event.scancode == SDL_SCANCODE_ESCAPE && isOpen()) {
+                closeDropdown();
+                if (event.dispatch)
+                    event.dispatch->consumed = true;
+                return;
+            }
+        }
         wants_input_ = false;
         if (rml_manager_)
             rml_manager_->trackContextFrame(rml_context_, 0, 0);
@@ -848,6 +859,7 @@ namespace lfs::vis::gui {
     void RmlMenuBar::openDropdown(int index) {
         assert(index >= 0 && index < static_cast<int>(current_idnames_.size()));
 
+        rml_manager_->activateInput(rml_context_, [this](const PanelInputState& event) { processInput(event); });
         open_menu_index_ = index;
         open_submenu_index_ = -1;
         open_child_submenu_index_ = -1;
@@ -882,6 +894,7 @@ namespace lfs::vis::gui {
 
     void RmlMenuBar::closeDropdown() {
         open_menu_index_ = -1;
+        rml_manager_->deactivateInput(rml_context_, true);
         open_submenu_index_ = -1;
         open_child_submenu_index_ = -1;
         open_menu_idname_.clear();
@@ -1201,8 +1214,10 @@ namespace lfs::vis::gui {
             return nullptr;
         };
 
-        if (auto* button = find_button(menu_toolbar_))
-            return button;
+        if (toolbar_fits_) {
+            if (auto* button = find_button(menu_toolbar_))
+                return button;
+        }
         return find_button(menu_window_controls_);
     }
 
@@ -1215,6 +1230,16 @@ namespace lfs::vis::gui {
         const auto size = project_title_el_->GetBox().GetSize(Rml::BoxArea::Border);
         return x >= offset.x && x < offset.x + size.x &&
                y >= offset.y && y < offset.y + size.y;
+    }
+
+    void RmlMenuBar::updateCompactLayout(const int screen_w, const float dp_ratio) {
+        if (auto* body = document_->GetElementById("body")) {
+            const bool compact = screen_w < 760.0f * dp_ratio;
+            if (body->IsClassSet("compact") != compact) {
+                body->SetClass("compact", compact);
+                render_needed_ = true;
+            }
+        }
     }
 
     void RmlMenuBar::updateProjectTitleLayout(const int screen_w, const float dp_ratio) {
@@ -1308,7 +1333,8 @@ namespace lfs::vis::gui {
         std::vector<lfs::vis::WindowManager::HitTestRect> excluded_rects;
         excluded_rects.reserve(3);
         append_element(excluded_rects, menu_items_);
-        append_element(excluded_rects, menu_toolbar_);
+        if (toolbar_fits_)
+            append_element(excluded_rects, menu_toolbar_);
         append_element(excluded_rects, menu_window_controls_);
         wm->setTitlebarDragRegion(bar_height_px, std::move(excluded_rects));
     }
@@ -1421,7 +1447,7 @@ namespace lfs::vis::gui {
     void RmlMenuBar::draw(int screen_w, int screen_h) {
         if (!rml_context_ || !document_)
             return;
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+        if (!rml_manager_ || !rml_manager_->getUiRenderer())
             return;
         const bool theme_changed = updateTheme();
         rebuildToolbarButtons();
@@ -1453,6 +1479,10 @@ namespace lfs::vis::gui {
 
         const float dp_ratio = rml_manager_->getDpRatio();
         const int bar_h = static_cast<int>(bar_height_ * dp_ratio);
+        updateCompactLayout(screen_w, dp_ratio);
+        if (dp_ratio != last_dp_ratio_)
+            render_needed_ = true;
+        last_dp_ratio_ = dp_ratio;
 
         // Portal status and transfer progress can change the right cluster's width.
         // Lay it out before reserving space for the viewport toolbar.
@@ -1535,7 +1565,7 @@ namespace lfs::vis::gui {
         }
         updateTitlebarDragRegion(bar_h);
 
-        rml_manager_->queueCachedVulkanContext({
+        rml_manager_->queueCachedContext({
             .context = rml_context_,
             .cache = &direct_cache_,
             .cache_width = ctx_w,

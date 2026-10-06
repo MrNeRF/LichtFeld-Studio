@@ -75,7 +75,7 @@ PACK_STRUCT(struct VulkanGSRendererUniforms {
     uint32_t shN_layout_slots;
     uint32_t lod_enabled;
     uint32_t lod_count;
-    uint32_t mip_filter;
+    uint32_t mip_filter; // bit 0 AA, bit 1 exact depth, bit 2 band origin, bit 3 Mac reference transparent alpha
     uint32_t render_origin_x;
     uint32_t render_origin_y;
     uint32_t camera_width;
@@ -323,7 +323,8 @@ public:
                                 const _VulkanBuffer& selection_colors,
                                 const _VulkanBuffer& overlay_params,
                                 bool overlays_active,
-                                bool predicate_waves = true);
+                                bool predicate_waves = true,
+                                std::span<const uint32_t> exact_depth_sample_mask = {});
     [[nodiscard]] bool supportsFloat16Storage() const { return supports_float16_storage_; }
     [[nodiscard]] bool supportsConditionalRendering() const {
         return supports_conditional_rendering_;
@@ -501,8 +502,12 @@ protected:
     _ComputePipelinePair pipeline_macro_raster_fp32 = _ComputePipelinePair(8);
     _ComputePipelinePair pipeline_macro_raster_overlays = _ComputePipelinePair(14);
     _ComputePipelinePair pipeline_macro_raster_overlays_fp32 = _ComputePipelinePair(14);
-    _ComputePipelinePair pipeline_macro_compose = _ComputePipelinePair(12);
-    _ComputePipelinePair pipeline_macro_compose_overlays = _ComputePipelinePair(18);
+#if defined(LFS_VULKAN_MACOS_REFERENCE)
+    _ComputePipelinePair pipeline_macro_raster_fp32_precise_alpha = _ComputePipelinePair(8);
+    _ComputePipelinePair pipeline_macro_raster_overlays_fp32_precise_alpha = _ComputePipelinePair(14);
+#endif
+    _ComputePipelinePair pipeline_macro_compose = _ComputePipelinePair(13);
+    _ComputePipelinePair pipeline_macro_compose_overlays = _ComputePipelinePair(19);
     bool supports_float16_storage_ = false;
     bool supports_conditional_rendering_ = false;
     PFN_vkCmdBeginConditionalRenderingEXT vk_cmd_begin_conditional_rendering_ = nullptr;

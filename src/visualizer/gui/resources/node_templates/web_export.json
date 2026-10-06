@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "id": "web_export",
+  "name": "Web export prep",
+  "description": "Reduce spherical-harmonic detail and decimate for a lightweight web asset.",
+  "category": "Geometry",
+  "scene_kinds": [
+    "splat"
+  ],
+  "adjust": "Set Keep Fraction for the size target; Degree 0 gives the largest reduction.",
+  "tree": {
+    "schema_version": 1,
+    "uuid": "builtin.web_export",
+    "name": "Web export prep",
+    "tree_type": "lfs.geometry",
+    "nodes": [
+      {
+        "name": "Group Input",
+        "type_id": "lfs.group_input",
+        "location": [
+          -760,
+          0
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Group Output",
+        "type_id": "lfs.group_output",
+        "location": [
+          520,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "none"
+          }
+        },
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Set SH Degree",
+        "type_id": "lfs.set_sh_degree",
+        "location": [
+          -120,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "geometry"
+          },
+          "Degree": {
+            "type": "int",
+            "value": 0
+          }
+        },
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Decimate",
+        "type_id": "lfs.decimate",
+        "location": [
+          160,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "geometry"
+          },
+          "Keep Fraction": {
+            "type": "float",
+            "value": 0.5
+          }
+        },
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Adjust these settings",
+        "type_id": "lfs.frame",
+        "location": [
+          -620,
+          -180
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "colour": "neutral",
+          "label": "Adjust these settings",
+          "note": "Set Keep Fraction for the size target; Degree 0 gives the largest reduction."
+        },
+        "ui": {},
+        "version": 1
+      }
+    ],
+    "links": [
+      {
+        "from_node": "Group Input",
+        "from_socket": "Geometry",
+        "to_node": "Set SH Degree",
+        "to_socket": "Geometry"
+      },
+      {
+        "from_node": "Set SH Degree",
+        "from_socket": "Geometry",
+        "to_node": "Decimate",
+        "to_socket": "Geometry"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Degree",
+        "to_node": "Set SH Degree",
+        "to_socket": "Degree"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Keep Fraction",
+        "to_node": "Decimate",
+        "to_socket": "Keep Fraction"
+      },
+      {
+        "from_node": "Decimate",
+        "from_socket": "Geometry",
+        "to_node": "Group Output",
+        "to_socket": "Geometry"
+      }
+    ],
+    "interface": {
+      "inputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        },
+        {
+          "identifier": "Degree",
+          "label": "Degree",
+          "type": "lfs.int",
+          "default": {
+            "type": "int",
+            "value": 0
+          },
+          "min": 0,
+          "max": 3,
+          "step": 1
+        },
+        {
+          "identifier": "Keep Fraction",
+          "label": "Keep Fraction",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 0.5
+          },
+          "min": 0.01,
+          "max": 1,
+          "step": 0.01
+        }
+      ],
+      "outputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        }
+      ]
+    }
+  }
+}

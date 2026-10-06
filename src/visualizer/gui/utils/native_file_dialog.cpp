@@ -607,6 +607,12 @@ namespace lfs::vis::gui {
         (void)ensureDialogBackendInitialized();
     }
 
+    std::filesystem::path OpenReframePhotoFileDialog(const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeOpenFileRequest({makeFilter("Photos", {".jpg", ".jpeg", ".png", ".heic", ".heif", ".tif", ".tiff", ".bmp"})}, defaultPath), result);
+        return result;
+    }
+
     std::filesystem::path OpenImageFileDialog(const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
         runDialog(makeOpenFileRequest(imageFilters(), defaultPath), result);

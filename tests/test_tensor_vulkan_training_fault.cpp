@@ -147,8 +147,8 @@ namespace {
                     group->step_size = 0.01f;
                 }
                 const gpu_ops::BackwardAdamParam disabled{absent, absent, absent, absent, absent, absent, absent};
-                const gpu_ops::BackwardAdam aa{{ga, disabled, disabled, disabled, disabled, disabled}, absent, absent, absent, absent, absent, absent};
-                const gpu_ops::BackwardAdam ab{{gb, disabled, disabled, disabled, disabled, disabled}, absent, absent, absent, absent, absent, absent};
+                const gpu_ops::BackwardAdam aa{{ga, disabled, disabled, disabled, disabled, disabled}, absent, absent, absent, absent, absent};
+                const gpu_ops::BackwardAdam ab{{gb, disabled, disabled, disabled, disabled, disabled}, absent, absent, absent, absent, absent};
                 table.backward(reference, {gradient, absent, absent, absent}, absent, absent, absent, absent, aa, DensificationType::None);
                 table.backward(indirect, {gradient, absent, absent, absent}, absent, absent, absent, absent, ab, DensificationType::None);
                 check("updated means", mb, ma);
@@ -207,7 +207,6 @@ namespace {
                 options.max_cap = count;
                 options.start_refine = options.stop_refine = options.refine_every = 1000;
                 options.morton_reorder_interval = 0;
-                options.background_improvements = false;
                 options.use_edge_map = false;
                 strategy->initialize(options);
                 gpu_ops::FastSaved saved{.backend = table.create()};
@@ -249,7 +248,6 @@ namespace {
                     if (state.indirect && !empty)
                         EXPECT_GT(state.scratch[8].numel(), 256u);
                     if (result.has_work) {
-                        strategy->post_render(iteration, output);
                         const auto adam = optimizer.prepare_fastgs_fused_adam(iteration);
                         table.backward(saved, {gradient, absent, absent, absent}, absent, absent, absent, absent, adam, DensificationType::None);
                         optimizer.commit_fastgs_fused_adam(iteration);
@@ -333,7 +331,6 @@ namespace {
                 options.max_cap = count;
                 options.start_refine = options.stop_refine = options.refine_every = 1000;
                 options.morton_reorder_interval = 0;
-                options.background_improvements = false;
                 options.use_edge_map = false;
                 strategy->initialize(options);
                 gpu_ops::GsplatSaved saved{.backend = table.create()};
@@ -384,7 +381,6 @@ namespace {
                     if (state.indirect && !empty)
                         EXPECT_GT(state.keys_a.numel(), 256u);
                     if (result.has_work) {
-                        strategy->post_render(iteration, output);
                         table.backward(saved, gradient, absent, training::gsplat_gradients(optimizer), absent, absent, absent, absent, absent);
                         strategy->step(iteration);
                     }

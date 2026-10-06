@@ -3,26 +3,39 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/alloc_counter.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
+#include "core/event_bridge/scoped_handler.hpp"
+#include "core/events.hpp"
 #include "core/scene.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_sh.hpp"
 #include "core/uuid.hpp"
 #include "io/formats/ply.hpp"
 #include "io/splat_chapter.hpp"
+#include <cstring>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <string>
 #include <thread>
 #include <utility>
@@ -723,4 +736,340 @@ TEST(SceneSingleNodeAliasTest, ClearAndSwapDropTheAlias) {
     ASSERT_NE(scene.getCombinedModel(), nullptr);
     scene.clear();
     EXPECT_EQ(scene.peekCombinedModel(), nullptr) << "the alias outlived the cleared node's model";
+}
+
+namespace {
+    void checkFrozenMaster(const std::string& name, const Tensor& tensor, const size_t element_size) {
+        const auto cpu = tensor.cpu();
+        const auto* data = static_cast<const unsigned char*>(cpu.data_ptr());
+        const size_t bytes = cpu.numel() * element_size;
+        uint64_t hash = 14695981039346656037ull;
+        for (size_t i = 0; i < bytes; ++i)
+            hash = (hash ^ data[i]) * 1099511628211ull;
+        const auto checksums = std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/q16_master_checksums.txt";
+        const char* directory = std::getenv("LFS_Q16_MASTER_FIXTURES");
+        if (std::getenv("LFS_Q16_FREEZE")) {
+            ASSERT_NE(directory, nullptr);
+            std::filesystem::create_directories(directory);
+            std::ofstream output(std::filesystem::path(directory) / (name + ".bin"), std::ios::binary);
+            output.write(reinterpret_cast<const char*>(data), bytes);
+            ASSERT_TRUE(output.good());
+            std::ofstream manifest(checksums, std::ios::app);
+            manifest << name << ' ' << bytes << ' ' << hash << '\n';
+            return;
+        }
+        std::ifstream manifest(checksums);
+        ASSERT_TRUE(manifest.good()) << checksums;
+        std::string label;
+        size_t expected_bytes;
+        uint64_t expected_hash;
+        bool found = false;
+        while (manifest >> label >> expected_bytes >> expected_hash) {
+            if (label != name)
+                continue;
+            found = true;
+            EXPECT_EQ(bytes, expected_bytes) << name;
+            EXPECT_EQ(hash, expected_hash) << name;
+            break;
+        }
+        ASSERT_TRUE(found) << name;
+        // Local qualification uses the actual frozen bytes, not a decoder built
+        // with this branch. The committed checksums retain that regression gate.
+        if (directory) {
+            std::ifstream input(std::filesystem::path(directory) / (name + ".bin"), std::ios::binary);
+            ASSERT_TRUE(input.good()) << name;
+            std::vector<unsigned char> expected(bytes);
+            input.read(reinterpret_cast<char*>(expected.data()), bytes);
+            ASSERT_EQ(input.gcount(), bytes);
+            EXPECT_EQ(std::memcmp(data, expected.data(), bytes), 0) << name;
+        }
+    }
+} // namespace
+
+TEST(SceneCombinedEncode, CpuDecodeMatchesFrozenMasterForEveryCode) {
+    std::vector<std::pair<float, float>> bounds;
+    const std::vector<float> grid{-100.f, -1.f, -0.1f, 0.f, 0.1f, 0.9f, 1.f, 100.f};
+    for (const auto lo : grid)
+        for (const auto hi : grid)
+            if (lo <= hi)
+                bounds.emplace_back(lo, hi);
+    std::mt19937 random(2615);
+    for (size_t i = 0; i < 64; ++i) {
+        const float lo = static_cast<int32_t>(random()) / 65536.f;
+        const float hi = static_cast<int32_t>(random()) / 65536.f;
+        bounds.emplace_back(std::min(lo, hi), std::max(lo, hi));
+    }
+    constexpr size_t count = 65536;
+    SplatData model(1, Tensor::zeros({count, 3}, Device::CUDA),
+                    Tensor::zeros({count, 1, 3}, Device::CUDA), Tensor::zeros({count, 3, 3}, Device::CUDA),
+                    Tensor::zeros({count, 3}, Device::CUDA), Tensor::ones({count, 4}, Device::CUDA),
+                    Tensor::zeros({count, 1}, Device::CUDA), 1.f);
+    ASSERT_TRUE(model.apply_shN_value_quant());
+    auto codes = model.shN_raw().cpu();
+    for (size_t row = 0; row < count; ++row)
+        for (size_t c = 0; c < 9; ++c)
+            static_cast<uint16_t*>(codes.data_ptr())[(row / 32) * 9 * 32 + c * 32 + row % 32] = row;
+    model.shN_raw() = codes.cuda();
+    for (size_t i = 0; i < bounds.size(); ++i) {
+        auto limits = model.shN_value_bounds().cpu();
+        for (size_t j = 0; j < limits.numel(); j += 2) {
+            limits.ptr<float>()[j] = bounds[i].first;
+            limits.ptr<float>()[j + 1] = bounds[i].second;
+        }
+        model.shN_value_bounds() = limits.cuda();
+        checkFrozenMaster("decode_" + std::to_string(i), model.shN_canonical_cpu(), sizeof(float));
+        // Exercise the same GPU range decoder used by bands against the frozen
+        // production host bytes, independently of the branch's CPU decoder.
+        auto decoded = Tensor::empty_exact({lfs::core::sh_swizzled_float_count(count, 3)});
+        lfs::core::sh_codec(model.shN_raw(), decoded,
+                            {.source_format = lfs::core::ShFormat::Q16,
+                             .source_rows = count,
+                             .destination_rows = count,
+                             .count = count,
+                             .source_rest = 3,
+                             .destination_rest = 3,
+                             .match_cpu_rounding = true},
+                            nullptr, &model.shN_value_bounds());
+        SplatData expanded(1, model.means_raw(), model.sh0_raw(), std::move(decoded),
+                           model.scaling_raw(), model.rotation_raw(), model.opacity_raw(), 1.f,
+                           SplatData::ShNLayout::Swizzled);
+        checkFrozenMaster("decode_" + std::to_string(i), expanded.shN_canonical_cpu(), sizeof(float));
+    }
+}
+
+TEST(SceneCombinedEncode, QuantizedBandsMatchMasterEncodedBytesAndBounds) {
+    const auto allocator = [](lfs::core::TensorShape shape, size_t, lfs::core::DataType dtype, std::string_view) {
+        // Master leaves unused swizzle-tail cells unwritten. Give both paths
+        // identical initial bytes so the comparison includes that padding too.
+        auto result = Tensor::empty(std::move(shape), Device::CUDA, dtype);
+        result.zero_();
+        return result;
+    };
+    const auto bytes_equal = [](const Tensor& actual, const Tensor& expected, size_t element_size, const char* label) {
+        SCOPED_TRACE(label);
+        ASSERT_EQ(actual.dtype(), expected.dtype());
+        ASSERT_EQ(actual.numel(), expected.numel());
+        const auto a = actual.cpu();
+        const auto b = expected.cpu();
+        const auto* left = static_cast<const unsigned char*>(a.data_ptr());
+        const auto* right = static_cast<const unsigned char*>(b.data_ptr());
+        size_t first = 0;
+        while (first < a.numel() * element_size && left[first] == right[first])
+            ++first;
+        EXPECT_EQ(first, a.numel() * element_size) << "first differing byte " << first;
+    };
+    cudaStream_t build_stream{};
+    ASSERT_EQ(cudaStreamCreateWithFlags(&build_stream, cudaStreamNonBlocking), cudaSuccess);
+    cudaStream_t producers[2]{};
+    for (auto& stream : producers)
+        ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+    for (const size_t total : {65535u, 65536u, 65537u, 131079u, 327693u}) {
+        SCOPED_TRACE(total);
+        for (const bool include_hidden : {false, true}) {
+            SCOPED_TRACE(include_hidden);
+            for (int source_mode = 0; source_mode < 4; ++source_mode) {
+                SCOPED_TRACE(source_mode); // float, q16, mixed, and the contraction regression
+                Scene scene;
+                for (int degree = 0; degree <= 3; ++degree) {
+                    const size_t prefix = source_mode == 3 ? 255 : 515;
+                    const size_t count = degree == 0 ? prefix : degree == 3 ? total - prefix - 516 - (include_hidden ? 517 : 0)
+                                                                            : 515 + degree;
+                    const size_t rest = (degree + 1) * (degree + 1) - 1;
+                    std::vector<float> coefficients(count * rest * 3);
+                    for (size_t i = 0; i < coefficients.size(); ++i)
+                        coefficients[i] = float(int(i % 199) - 99) / 17.0f;
+                    lfs::core::CUDAStreamGuard producer_guard(producers[degree % 2]);
+                    auto model = std::make_unique<SplatData>(
+                        degree, Tensor::full({count, 3}, float(degree), Device::CUDA),
+                        Tensor::zeros({count, 1, 3}, Device::CUDA),
+                        Tensor::from_vector(coefficients, {count, rest, 3}, Device::CUDA),
+                        Tensor::zeros({count, 3}, Device::CUDA), Tensor::ones({count, 4}, Device::CUDA),
+                        Tensor::zeros({count, 1}, Device::CUDA), 1.0f);
+                    if (rest && (source_mode == 1 || (source_mode >= 2 && degree % 2)))
+                        ASSERT_TRUE(model->apply_shN_value_quant());
+                    if (source_mode == 3 && degree == 1) {
+                        auto codes = model->shN_raw().cpu();
+                        std::fill_n(static_cast<uint16_t*>(codes.data_ptr()), codes.numel(), uint16_t{173});
+                        model->shN_raw() = codes.cuda();
+                        auto bounds = model->shN_value_bounds().cpu();
+                        for (size_t i = 0; i < bounds.numel(); i += 2) {
+                            bounds.ptr<float>()[i] = 0.1f;
+                            bounds.ptr<float>()[i + 1] = 0.9f;
+                        }
+                        model->shN_value_bounds() = bounds.cuda();
+                    }
+                    const auto id = scene.addSplat(std::to_string(degree), std::move(model));
+                    scene.setNodeTransform(id, glm::translate(glm::mat4(1.0f), glm::vec3(degree, degree * 2, -degree)));
+                    if (degree == 2)
+                        scene.setNodeVisibility(id, false);
+                }
+                {
+                    lfs::core::CUDAStreamGuard build_guard(build_stream);
+                    const auto captured = scene.captureCombinedModelBuild(include_hidden);
+                    auto actual = Scene::buildCombinedModelCache(captured.inputs, captured.full_selection_count,
+                                                                 allocator, captured.generation, include_hidden);
+                    // Master decodes each source into one full float aggregate, then
+                    // encodes that aggregate once. No allocator selects that exact path.
+                    auto reference = Scene::buildCombinedModelCache(captured.inputs, captured.full_selection_count,
+                                                                    {}, captured.generation, include_hidden);
+                    ASSERT_FALSE(reference.model->shN_value_quantized());
+                    reference.model->set_tensor_allocator(allocator);
+                    ASSERT_TRUE(reference.model->apply_shN_value_quant());
+                    ASSERT_TRUE(actual.model->shN_value_quantized());
+                    ASSERT_EQ(actual.model->size(), total);
+                    const auto label = "combined_" + std::to_string(total) + "_" + std::to_string(include_hidden) + "_" + std::to_string(source_mode);
+                    checkFrozenMaster(label + "_codes", actual.model->shN_raw(), sizeof(uint16_t));
+                    checkFrozenMaster(label + "_bounds", actual.model->shN_value_bounds(), sizeof(float));
+                    bytes_equal(actual.model->shN_raw(), reference.model->shN_raw(), sizeof(uint16_t), "encoded cells");
+                    bytes_equal(actual.model->shN_value_bounds(), reference.model->shN_value_bounds(), sizeof(float), "bounds");
+                    if (source_mode == 3) {
+                        const auto bounds = actual.model->shN_value_bounds().cpu();
+                        EXPECT_EQ(std::bit_cast<uint32_t>(bounds.ptr<float>()[1]), 0x3dd12005u);
+                    }
+                    bytes_equal(actual.model->means_raw(), reference.model->means_raw(), sizeof(float), "means");
+                    bytes_equal(*actual.transform_indices, *reference.transform_indices, sizeof(int), "transforms");
+                    ASSERT_EQ(bool(actual.visible_selection_indices), bool(reference.visible_selection_indices));
+                    if (actual.visible_selection_indices)
+                        bytes_equal(*actual.visible_selection_indices, *reference.visible_selection_indices, sizeof(int), "selection");
+                    EXPECT_EQ(scene.getNode("2")->visible, false);
+                    EXPECT_EQ(scene.getNode("3")->local_transform.get()[3], glm::vec4(3, 6, -3, 1));
+                }
+            }
+        }
+    }
+    for (auto stream : producers)
+        EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+    EXPECT_EQ(cudaStreamDestroy(build_stream), cudaSuccess);
+}
+
+TEST(SceneCombinedImport, FailedBuildReportsOnceAndAllowsExplicitRetry) {
+    Scene scene;
+    scene.setImportValidation(true);
+    scene.addSplat("first", make_two_splat_model(0.0f));
+    scene.addSplat("second", make_two_splat_model(1.0f));
+    std::atomic<bool> fail{true};
+    scene.setCombinedModelAllocator([&](lfs::core::TensorShape shape, size_t, lfs::core::DataType dtype, std::string_view) -> Tensor {
+        if (fail.load())
+            throw std::runtime_error("allocation failed");
+        return Tensor::empty(std::move(shape), Device::CUDA, dtype);
+    });
+    int failures = 0;
+    std::atomic<int> ready{0};
+    lfs::event::ScopedHandler handler;
+    handler.subscribe<lfs::core::events::state::CombinedModelBuildReady>([&](const auto& event) {
+        if (event.scene == &scene)
+            ++ready;
+    });
+    handler.subscribe<lfs::core::events::state::CombinedModelBuildFailed>([&](const auto&) { ++failures; });
+    scene.requestCombinedModelBuild(true);
+    while (scene.combinedModelBuildPending()) {
+        (void)scene.combinedModelBuildError();
+        std::this_thread::yield();
+    }
+    EXPECT_EQ(failures, 1);
+    EXPECT_EQ(ready.load(), 1);
+    EXPECT_NE(scene.combinedModelBuildError(), "");
+    EXPECT_EQ(scene.getCombinedModel(), nullptr);
+    EXPECT_EQ(scene.getCombinedModel(), nullptr);
+    EXPECT_EQ(failures, 1);
+    fail.store(false);
+    scene.requestCombinedModelBuild(true);
+    while (scene.combinedModelBuildPending()) {
+        (void)scene.combinedModelBuildError();
+        std::this_thread::yield();
+    }
+    EXPECT_EQ(scene.combinedModelBuildError(), "");
+    EXPECT_GE(ready.load(), 2);
+    ASSERT_NE(scene.getCombinedModel(), nullptr);
+    EXPECT_EQ(scene.getCombinedModel()->size(), 4);
+
+    fail.store(true);
+    scene.invalidateCache();
+    scene.requestCombinedModelBuild(true);
+    while (scene.combinedModelBuildPending()) {
+        (void)scene.combinedModelBuildError();
+        std::this_thread::yield();
+    }
+    ASSERT_EQ(failures, 2);
+    ASSERT_EQ(scene.getCombinedModel(), nullptr);
+    fail.store(false);
+    scene.setNodeTransform("first", glm::translate(glm::mat4(1.0f), glm::vec3(1, 2, 3)));
+    EXPECT_EQ(scene.combinedModelBuildError(), "");
+    EXPECT_GE(ready.load(), 2);
+    ASSERT_NE(scene.getCombinedModel(), nullptr);
+    EXPECT_EQ(scene.getCombinedModel()->size(), 4);
+    EXPECT_EQ(failures, 2);
+}
+
+TEST(SceneCombinedImport, OrdinaryBuildFailuresKeepAutomaticRetry) {
+    Scene scene;
+    scene.addSplat("first", make_two_splat_model(0.0f));
+    scene.addSplat("second", make_two_splat_model(1.0f));
+    bool fail = true;
+    scene.setCombinedModelAllocator([&](lfs::core::TensorShape shape, size_t, lfs::core::DataType dtype, std::string_view) -> Tensor {
+        if (fail)
+            throw std::runtime_error("allocation failed");
+        return Tensor::empty(std::move(shape), Device::CUDA, dtype);
+    });
+    scene.requestCombinedModelBuild(true);
+    while (scene.combinedModelBuildPending()) {
+        (void)scene.combinedModelBuildError();
+        std::this_thread::yield();
+    }
+    EXPECT_TRUE(scene.combinedModelBuildError().empty());
+    fail = false;
+    ASSERT_NE(scene.getCombinedModel(), nullptr);
+    EXPECT_EQ(scene.getCombinedModel()->size(), 4u);
+}
+
+TEST(SceneCombinedEncode, QuantizedStorageCoversReservedModelCapacity) {
+    using lfs::core::DataType;
+    using lfs::core::TensorShape;
+    for (const size_t total : {1025u, 196615u}) {
+        SCOPED_TRACE(total); // small aggregate and multi-band aggregate
+        Scene scene;
+        for (int i = 0; i < 2; ++i) {
+            const size_t count = i == 0 ? 257 : total - 257;
+            std::vector<float> sh(count * 15 * 3);
+            for (size_t cell = 0; cell < sh.size(); ++cell)
+                sh[cell] = float(int(cell % 127) - 63) / 13.f;
+            auto model = std::make_unique<SplatData>(
+                3, Tensor::zeros({count, 3}, Device::CUDA),
+                Tensor::zeros({count, 1, 3}, Device::CUDA),
+                Tensor::from_vector(sh, {count, 15, 3}, Device::CUDA),
+                Tensor::zeros({count, 3}, Device::CUDA),
+                Tensor::ones({count, 4}, Device::CUDA),
+                Tensor::zeros({count, 1}, Device::CUDA), 1.f);
+            if (i == 0)
+                ASSERT_TRUE(model->apply_shN_value_quant());
+            scene.addSplat(std::to_string(i), std::move(model));
+        }
+        const auto allocate = [](TensorShape shape, size_t capacity, DataType dtype, std::string_view) {
+            return Tensor::zeros_direct(std::move(shape), capacity, Device::CUDA, dtype);
+        };
+        const auto over_reserve = [&](TensorShape shape, size_t capacity, DataType dtype, std::string_view name) {
+            if (name == "SplatData.means")
+                capacity += 65537;
+            return allocate(std::move(shape), capacity, dtype, name);
+        };
+        const auto snapshot = scene.captureCombinedModelBuild();
+        const auto reference = Scene::buildCombinedModelCache(snapshot.inputs, total, allocate);
+        Scene::CombinedModelBuild actual;
+        ASSERT_NO_THROW(actual = Scene::buildCombinedModelCache(snapshot.inputs, total, over_reserve));
+        ASSERT_NE(actual.model, nullptr);
+        ASSERT_TRUE(actual.model->shN_value_quantized());
+        EXPECT_EQ(actual.model->size(), total);
+        const size_t capacity = actual.model->means_raw().capacity();
+        ASSERT_GE(capacity, total + 65537);
+        EXPECT_GE(actual.model->shN_raw().capacity(), lfs::core::sh_value_quant::sh_value_u16_count(capacity, 15));
+        EXPECT_GE(actual.model->shN_value_bounds().capacity(), lfs::core::sh_value_quant::n_bounds_for_prims(capacity) * 2);
+        EXPECT_EQ(actual.model->shN_raw().numel(), lfs::core::sh_value_quant::sh_value_u16_count(total, 15));
+        EXPECT_EQ(actual.model->shN_value_bounds().numel(), lfs::core::sh_value_quant::n_bounds_for_prims(total) * 2);
+        const auto codes = actual.model->shN_raw().cpu();
+        const auto expected_codes = reference.model->shN_raw().cpu();
+        EXPECT_EQ(std::memcmp(codes.data_ptr(), expected_codes.data_ptr(), codes.numel() * sizeof(uint16_t)), 0);
+        const auto bounds = actual.model->shN_value_bounds().cpu();
+        const auto expected_bounds = reference.model->shN_value_bounds().cpu();
+        EXPECT_EQ(std::memcmp(bounds.data_ptr(), expected_bounds.data_ptr(), bounds.numel() * sizeof(float)), 0);
+    }
 }

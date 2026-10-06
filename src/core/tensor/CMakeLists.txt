@@ -21,6 +21,7 @@ set(LFS_TENSOR_CUDA_SOURCES
     backend/cuda/kernels/tensor_nn_ops.cu
     backend/cuda/kernels/tensor_fused_pointwise.cu
     backend/cuda/kernels/tensor_spatial.cu
+    backend/cuda/kernels/simplify_merge.cu
     backend/cuda/kernels/tensor_histogram.cu
     backend/cuda/kernels/tensor_ppisp.cu
     backend/cuda/kernels/tensor_environment.cu

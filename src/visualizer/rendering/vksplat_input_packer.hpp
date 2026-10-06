@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/splat_data.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -12,6 +13,14 @@
 #include <string>
 
 namespace lfs::vis::vksplat {
+    // The caller owns one copy per retired render slot and marks changed inputs.
+    [[nodiscard]] LFS_VIS_API lfs::core::Tensor prepareDeletedMask(
+        lfs::core::TensorVulkanInterop& interop,
+        const lfs::core::Tensor& input,
+        lfs::core::GpuBackend backend,
+        bool upload_requested,
+        lfs::core::Tensor& slot_copy);
+
     struct LFS_VIS_API RawDeviceInputLayout {
         std::size_t num_splats = 0;
         std::size_t xyz_bytes = 0;

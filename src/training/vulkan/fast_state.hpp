@@ -22,7 +22,7 @@ namespace lfs::training::vulkan {
     };
     inline uint32_t specialization(const FastPush& p, uint32_t stage) {
         return stage | (p.active_bases << 4) | (p.rest << 9) | (p.sh_format << 13) |
-               (p.render_normal << 15) | (p.render_depth << 16) | (p.mip << 17);
+               (p.render_normal << 15) | (p.render_depth << 16) | ((p.mip & 1u) << 17);
     }
     static_assert(sizeof(FastPush) == 320);
     static_assert(offsetof(FastPush, count) == 216);

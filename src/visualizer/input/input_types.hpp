@@ -41,10 +41,6 @@ namespace lfs::vis {
     };
 
     // Callback types
-    using MouseButtonCallback = std::function<void(const MouseButtonEvent&)>;
-    using MouseMoveCallback = std::function<void(const MouseMoveEvent&)>;
-    using MouseScrollCallback = std::function<void(const MouseScrollEvent&)>;
-    using KeyCallback = std::function<void(const KeyEvent&)>;
     using FileDropCallback = std::function<void(const FileDropEvent&)>;
 
 } // namespace lfs::vis

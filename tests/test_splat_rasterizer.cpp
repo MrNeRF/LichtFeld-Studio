@@ -1,0 +1,271 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+// Every blend variant and the present pass load and run on each tensor
+// backend, and source-sorted frames reproduce the full-sort image exactly.
+#include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
+#include "splat_rasterizer.hpp"
+#include "splat_selection_query.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstring>
+#include <gtest/gtest.h>
+#include <random>
+#include <span>
+#include <vector>
+
+namespace {
+    using lfs::core::DataType;
+    using lfs::core::Device;
+    using lfs::core::GpuBackend;
+    using lfs::core::GpuBackendScope;
+    using lfs::core::Tensor;
+    using lfs::rendering::SplatPresentParameters;
+    using lfs::rendering::SplatRasterizer;
+    using lfs::rendering::SplatRasterMode;
+    using lfs::rendering::SplatRasterParameters;
+    using lfs::rendering::SplatSelectionInputs;
+    using lfs::rendering::SplatSelectionParameters;
+    using lfs::rendering::SplatSelectionQuery;
+
+    constexpr uint32_t kWidth = 160, kHeight = 96;
+
+    struct Splat {
+        std::array<float, 4> mean_depth, conic_opacity, color;
+        std::array<uint32_t, 4> bounds;
+    };
+    static_assert(sizeof(Splat) == 64);
+
+    Tensor upload(const void* data, size_t bytes) {
+        return Tensor::from_blob(const_cast<void*>(data), {bytes}, Device::CPU, DataType::UInt8).to(Device::GPU);
+    }
+    template <class T>
+    std::vector<T> download(const Tensor& tensor, size_t count) {
+        auto host = tensor.to(Device::CPU);
+        std::vector<T> result(count);
+        std::memcpy(result.data(), host.data_ptr(), count * sizeof(T));
+        return result;
+    }
+
+    // Opaque-ish Gaussians, enough of them for source sorting.
+    std::vector<Splat> make_splats(uint32_t count) {
+        std::mt19937 rng(7);
+        std::uniform_real_distribution<float> x(0, kWidth), y(0, kHeight), depth(1, 20), tint(.1f, .9f);
+        std::vector<Splat> splats(count);
+        for (auto& s : splats) {
+            const float cx = x(rng), cy = y(rng), d = depth(rng);
+            s.mean_depth = {cx, cy, d, 12};
+            s.conic_opacity = {.04f, 0, .04f, .7f};
+            s.color = {tint(rng), tint(rng), tint(rng), d * d};
+            const auto lo = [](float v) { return uint32_t(std::max(0.f, v - 12)); };
+            s.bounds = {lo(cx), lo(cy), uint32_t(cx + 12), uint32_t(cy + 12)};
+        }
+        return splats;
+    }
+
+    SplatRasterParameters make_parameters(uint32_t count, SplatRasterMode mode, uint32_t flags) {
+        SplatRasterParameters r;
+        r.count = count;
+        r.width = kWidth;
+        r.height = kHeight;
+        r.columns = (kWidth + 15) / 16;
+        r.tiles = r.columns * ((kHeight + 15) / 16);
+        r.capacity = 1'000'000;
+        r.mode = uint32_t(mode);
+        r.flags = flags;
+        r.background = {.1f, .2f, .3f, (flags & 16384u) ? 0.f : 1.f};
+        r.intrinsics = {100, 100, kWidth / 2.f, kHeight / 2.f};
+        r.clip = {.01f, 1000, 1, .3f};
+        r.camera = {kWidth, kHeight, 0, 0};
+        return r;
+    }
+
+    class SplatRasterizing : public testing::TestWithParam<GpuBackend> {};
+
+    TEST_P(SplatRasterizing, EveryVariantRunsAndPresents) {
+        if (!lfs::core::gpu_backend_available(GetParam()) || GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        const auto splats = make_splats(600);
+        const auto projected = upload(splats.data(), splats.size() * sizeof(Splat));
+        // Zero 3DGUT geometry: culled by the blend's support tests, still compiled and dispatched.
+        const auto gut = Tensor::zeros({splats.size() * 64}, Device::GPU, DataType::UInt8);
+        struct Variant {
+            SplatRasterMode mode;
+            uint32_t flags;
+        };
+        for (const auto [mode, flags] : {Variant{SplatRasterMode::Gaussian, 128}, Variant{SplatRasterMode::Gaussian, 128 | 4096},
+                                         Variant{SplatRasterMode::Gaussian, 4096}, Variant{SplatRasterMode::Gaussian, 128 | 2048},
+                                         Variant{SplatRasterMode::Gaussian, 128 | 16384}, Variant{SplatRasterMode::Points, 4096},
+                                         Variant{SplatRasterMode::Discs, 4096}, Variant{SplatRasterMode::Gut, 128 | 4096},
+                                         Variant{SplatRasterMode::Gut, 4096}}) {
+            SplatRasterizer rasterizer(GetParam());
+            ASSERT_TRUE(rasterizer.reserve(uint32_t(splats.size()), kWidth, kHeight, 1'000'000));
+            auto rasterized = rasterizer.rasterize(projected, mode == SplatRasterMode::Gut ? &gut : nullptr, uint32_t(splats.size()), mode,
+                                                   make_parameters(uint32_t(splats.size()), mode, flags));
+            ASSERT_TRUE(rasterized) << rasterized.error().detail() << " mode=" << uint32_t(mode) << " flags=" << flags;
+            SplatPresentParameters present;
+            present.transparent = (flags & 16384u) ? 1u : 0u;
+            present.background = {.1f, .2f, .3f, 1};
+            auto shown = rasterizer.present(present);
+            ASSERT_TRUE(shown) << shown.error().detail();
+            EXPECT_EQ(download<uint32_t>(rasterizer.status(), 6)[2], 0u) << "mode=" << uint32_t(mode) << " flags=" << flags;
+            if (mode == SplatRasterMode::Gaussian && !present.transparent) {
+                const auto pixels = download<uint8_t>(rasterizer.rgba(), size_t(kWidth) * kHeight * 4);
+                size_t opaque = 0;
+                for (size_t i = 3; i < pixels.size(); i += 4)
+                    opaque += pixels[i] == 255;
+                EXPECT_EQ(opaque, size_t(kWidth) * kHeight) << "flags=" << flags;
+            }
+        }
+    }
+
+    // Overlay inputs (selection mask, colors, per-splat flags) bind and run.
+    TEST_P(SplatRasterizing, OverlayBlendRunsWithSelection) {
+        if (!lfs::core::gpu_backend_available(GetParam()) || GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        const auto splats = make_splats(600);
+        const auto count = uint32_t(splats.size());
+        const auto projected = upload(splats.data(), splats.size() * sizeof(Splat));
+        const std::vector<float> parameters(207 * 4, 0.f);
+        const auto parameter_tensor = upload(parameters.data(), parameters.size() * 4);
+        const auto flags = Tensor::zeros({count}, Device::GPU, DataType::UInt32);
+        std::vector<uint8_t> mask(count);
+        for (size_t i = 0; i < mask.size(); i += 3)
+            mask[i] = 1;
+        const auto selection = upload(mask.data(), mask.size());
+        const std::array<float, 4 * 8> colors{};
+        SplatRasterizer rasterizer(GetParam());
+        ASSERT_TRUE(rasterizer.reserve(count, kWidth, kHeight, 1'000'000));
+        auto raster = make_parameters(count, SplatRasterMode::Gaussian, 1 | 128 | 4096);
+        raster.mask_limits = {count, 0, 0, 0};
+        const lfs::rendering::SplatRasterOverlay overlay{&parameter_tensor, &flags, &selection, nullptr, std::as_bytes(std::span(colors))};
+        auto rasterized = rasterizer.rasterize(projected, nullptr, count, SplatRasterMode::Gaussian, raster, &overlay);
+        ASSERT_TRUE(rasterized) << rasterized.error().detail();
+        EXPECT_EQ(download<uint32_t>(rasterizer.status(), 6)[2], 0u);
+        // Overlay flags without inputs are rejected rather than read as null.
+        EXPECT_FALSE(rasterizer.rasterize(projected, nullptr, count, SplatRasterMode::Gaussian, raster));
+    }
+
+    TEST_P(SplatRasterizing, RectangleAndPolygonSelectionMatchKnownCenters) {
+        if (!lfs::core::gpu_backend_available(GetParam()))
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        const std::array<float, 15> means{0, 0, 2, -.6f, -.6f, 2, 1.2f, 0, 2, 0, .9f, 2, 0, 0, 2};
+        const std::array<uint8_t, 5> deleted{0, 0, 0, 0, 1};
+        const auto means_gpu = upload(means.data(), sizeof(means));
+        const auto deleted_gpu = upload(deleted.data(), sizeof(deleted));
+        const SplatSelectionInputs base{.means = &means_gpu, .deleted = &deleted_gpu};
+        SplatSelectionParameters parameters;
+        parameters.intrinsics = {50, 50, 50.5f, 50.5f};
+        parameters.image = {100, 100, 0, 0};
+        parameters.scene = {0, 0, 0, uint32_t(deleted.size())};
+        parameters.source[0] = uint32_t(deleted.size());
+        auto output = Tensor::zeros({deleted.size()}, Device::GPU, DataType::UInt8);
+        SplatSelectionQuery query(GetParam());
+        const std::vector<uint8_t> expected{1, 1, 0, 0, 0};
+
+        const std::array<float, 4> rectangle{30, 30, 60, 60};
+        parameters.source = {uint32_t(deleted.size()), 1, 1, 0};
+        auto inputs = base;
+        inputs.primitives = std::as_bytes(std::span(rectangle));
+        auto selected = query.query(inputs, parameters, output);
+        ASSERT_TRUE(selected) << selected.error().detail();
+        EXPECT_EQ(download<uint8_t>(output, deleted.size()), expected);
+
+        const std::array<float, 6> polygon{25, 25, 70, 25, 45, 65};
+        parameters.source = {uint32_t(deleted.size()), 2, 0, 3};
+        parameters.aabb = {20, 20, 60, 50};
+        inputs.primitives = {};
+        inputs.polygon_vertices = std::as_bytes(std::span(polygon));
+        selected = query.query(inputs, parameters, output);
+        ASSERT_TRUE(selected) << selected.error().detail();
+        EXPECT_EQ(download<uint8_t>(output, deleted.size()), expected);
+    }
+
+    // A completed dense frame of the same source count switches to source
+    // sorting; the image must not change.
+    TEST_P(SplatRasterizing, SourceSortedFrameMatchesFirstFrame) {
+        if (!lfs::core::gpu_backend_available(GetParam()) || GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        const auto splats = make_splats(6000);
+        const auto count = uint32_t(splats.size());
+        const auto projected = upload(splats.data(), splats.size() * sizeof(Splat));
+        SplatRasterizer rasterizer(GetParam());
+        ASSERT_TRUE(rasterizer.reserve(count, kWidth, kHeight, 1'000'000));
+        const auto parameters = make_parameters(count, SplatRasterMode::Gaussian, 128 | 4096);
+        std::vector<std::vector<uint16_t>> frames;
+        for (int frame = 0; frame < 3; ++frame) {
+            auto color = rasterizer.color();
+            color.zero_();
+            auto rasterized = rasterizer.rasterize(projected, nullptr, count, SplatRasterMode::Gaussian, parameters);
+            ASSERT_TRUE(rasterized) << rasterized.error().detail();
+            frames.push_back(download<uint16_t>(rasterizer.color(), size_t(kWidth) * kHeight * 4));
+        }
+        EXPECT_EQ(frames[0], frames[2]);
+    }
+
+    // A tile deeper than the parallel threshold switches the next frames to
+    // depth batches: prefix, chunk blends and composition. Same image.
+    TEST_P(SplatRasterizing, DepthBatchesMatchSerialBlend) {
+        if (!lfs::core::gpu_backend_available(GetParam()) || GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        std::mt19937 rng(11);
+        std::uniform_real_distribution<float> offset(0, 16), depth(1, 50), tint(.1f, .9f);
+        std::vector<Splat> splats(40000);
+        for (auto& s : splats) {
+            const float cx = offset(rng), cy = offset(rng), d = depth(rng);
+            s.mean_depth = {cx, cy, d, 4};
+            s.conic_opacity = {.5f, 0, .5f, .05f}; // faint, so all chunks contribute
+            s.color = {tint(rng), tint(rng), tint(rng), d * d};
+            s.bounds = {0, 0, 16, 16};
+        }
+        const auto count = uint32_t(splats.size());
+        const auto projected = upload(splats.data(), splats.size() * sizeof(Splat));
+        SplatRasterizer rasterizer(GetParam());
+        ASSERT_TRUE(rasterizer.reserve(count, kWidth, kHeight, 1'000'000));
+        const auto parameters = make_parameters(count, SplatRasterMode::Gaussian, 128 | 4096);
+        std::vector<std::vector<uint16_t>> frames;
+        for (int frame = 0; frame < 3; ++frame) {
+            // Every frame must write every pixel itself.
+            auto color = rasterizer.color();
+            color.zero_();
+            auto rasterized = rasterizer.rasterize(projected, nullptr, count, SplatRasterMode::Gaussian, parameters);
+            ASSERT_TRUE(rasterized) << rasterized.error().detail();
+            frames.push_back(download<uint16_t>(rasterizer.color(), size_t(kWidth) * kHeight * 4));
+        }
+        const auto to_float = [](uint16_t bits) {
+            const uint32_t sign = uint32_t(bits >> 15) << 31, exponent = (bits >> 10) & 31, mantissa = bits & 1023;
+            uint32_t value = sign;
+            if (exponent == 31)
+                value |= 0x7f800000u | (mantissa << 13);
+            else if (exponent)
+                value |= ((exponent + 112) << 23) | (mantissa << 13);
+            else if (mantissa) { // subnormal
+                int e = -1;
+                uint32_t m = mantissa;
+                do {
+                    ++e;
+                    m <<= 1;
+                } while (!(m & 1024));
+                value |= ((112 - e) << 23) | ((m & 1023) << 13);
+            }
+            float result;
+            std::memcpy(&result, &value, 4);
+            return result;
+        };
+        float worst = 0;
+        for (size_t i = 0; i < frames[0].size(); ++i)
+            worst = std::max(worst, std::fabs(to_float(frames[0][i]) - to_float(frames[2][i])));
+        EXPECT_LE(worst, 1.f / 255) << "serial and depth-batch blends differ";
+        EXPECT_NE(frames[0], std::vector<uint16_t>(frames[0].size(), 0));
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Backends, SplatRasterizing, testing::ValuesIn(lfs::core::kCompiledGpuBackends),
+                             [](const auto& info) { return std::string(lfs::core::gpu_backend_name(info.param)); });
+} // namespace

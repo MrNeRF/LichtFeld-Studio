@@ -123,6 +123,7 @@ TEST(RomaV1Test, FullModelParityIsOptIn) {
 
     auto model = RomaV1::load(weights, Device::GPU, std::nullopt, kResolution);
     ASSERT_TRUE(model.has_value()) << std::string(model.error().detail());
+    EXPECT_GT(model->weights_bytes(), 0u);
     auto upload = [&](const std::vector<float>& data) {
         return Tensor::from_vector(data, TensorShape(std::vector<std::size_t>{side, side, 3}),
                                    Device::GPU)
@@ -206,6 +207,7 @@ TEST(RomaV1Test, MatchIsBitwiseRepeatable) {
     }
     auto model = RomaV1::load(weights, Device::GPU, std::nullopt, kResolution);
     ASSERT_TRUE(model.has_value()) << std::string(model.error().detail());
+    EXPECT_GT(model->weights_bytes(), 0u);
     const auto crop = reference_image();
     ASSERT_FALSE(crop.empty());
     const auto side = static_cast<std::size_t>(std::llround(std::sqrt(crop.size() / 3.0)));

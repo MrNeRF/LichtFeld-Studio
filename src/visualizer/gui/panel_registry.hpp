@@ -219,6 +219,8 @@ namespace lfs::vis::gui {
     struct PanelInfo {
         std::shared_ptr<IPanel> panel;
         std::string label;
+        // The label as registered or set; a localization key is shown translated in the current language.
+        std::string label_source;
         std::string id;
         std::string parent_id;
         PanelSpace space = PanelSpace::Floating;
@@ -383,8 +385,7 @@ namespace lfs::vis::gui {
         bool has_panels(PanelSpace space) const;
 
         std::vector<PanelSummary> get_panels_for_space(PanelSpace space);
-        std::vector<PanelSummary> get_panel_summaries_for_space(
-            PanelSpace space, const PanelDrawContext& ctx, bool check_poll);
+        std::vector<PanelDetails> get_all_panels();
         std::vector<std::string> get_panel_names(PanelSpace space) const;
         std::optional<PanelDetails> get_panel(const std::string& id);
         std::shared_ptr<IPanel> get_panel_instance(const std::string& id) const;
@@ -416,19 +417,15 @@ namespace lfs::vis::gui {
         void preload_panel(const std::string& id);
         bool apply_floating_resize_cursor() const;
         void rescale_floating_panels(float previous_scale, float new_scale);
-        bool needsAnimationFrame() const;
         PanelAnimationDemand animationDemandForVisiblePanels(
             PanelAnimationVisibility visibility) const;
         bool needsAnimationFrameForVisiblePanels(PanelAnimationVisibility visibility) const;
-        [[nodiscard]] std::string describeAnimationDemand(
-            PanelAnimationVisibility visibility) const;
-        [[nodiscard]] bool needsImmediateAnimationFrameForVisiblePanels(
-            PanelAnimationVisibility visibility) const;
         // Min finite scheduled delay across visible panels (same visibility rules as
         // needsAnimationFrameForVisiblePanels). nullopt if none are scheduled.
         std::optional<double> nextScheduledAnimationDelayForVisiblePanels(
             PanelAnimationVisibility visibility) const;
         bool set_panel_label(const std::string& id, const std::string& new_label);
+        void refresh_localized_labels();
         bool set_panel_order(const std::string& id, int new_order);
         bool set_panel_space(const std::string& id, PanelSpace new_space);
         bool set_panel_parent(const std::string& id, const std::string& parent_id);
@@ -474,6 +471,7 @@ namespace lfs::vis::gui {
         uint64_t next_float_stack_order_ = 1;
         uint64_t registration_revision_ = 0;
         uint64_t visibility_revision_ = 0;
+        uint64_t localized_label_generation_ = 0;
         int8_t floating_cursor_dir_x_ = 0;
         int8_t floating_cursor_dir_y_ = 0;
     };

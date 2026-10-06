@@ -9,13 +9,14 @@
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include "io/loader.hpp"
+#include "py_error.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/core/training_manager.hpp"
 #include "visualizer/core/training_state.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/operation/undo_entry.hpp"
 #include "visualizer/operation/undo_history.hpp"
-#include "visualizer/rendering/vulkan_external_tensor.hpp"
+#include "visualizer/rendering/graphics_external_tensor.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include <algorithm>
 #include <nanobind/ndarray.h>
@@ -649,6 +650,11 @@ namespace lfs::python {
     }
 
     void PyScene::clear() {
+        if (get_visualizer()) {
+            nb::gil_scoped_release release;
+            unwrap(clear_application_scene());
+            return;
+        }
         if (auto* const scene_manager = get_scene_manager()) {
             if (scene_manager->clear()) {
                 return;

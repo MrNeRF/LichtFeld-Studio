@@ -10,6 +10,7 @@
 #include "io/nvcodec_image_loader.hpp"
 #include "kernels/densification_kernels.hpp"
 #include "kernels/image_kernels.hpp"
+#include "metrics/eval_mask.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -190,8 +191,82 @@ TEST_F(ImageKernelsTest, LanczosRgbAndGrayscaleUseBoundedCoefficientBuffers) {
     EXPECT_TRUE(grayscale_output.isfinite().all().item<bool>());
 }
 
+// Catches an interleaved kernel that strides the input by a fixed 3 channels: for
+// 1, 2 and 4 channels it would read neighbouring pixels instead of its own plane.
+TEST_F(ImageKernelsTest, LanczosInterleavedChannelsMatchPerPlaneGrayscale) {
+    constexpr int SOURCE_WIDTH = 19;
+    constexpr int SOURCE_HEIGHT = 13;
+    constexpr int OUTPUT_WIDTH = 7;
+    constexpr int OUTPUT_HEIGHT = 5;
+    for (int channels = 1; channels <= 4; ++channels) {
+        SCOPED_TRACE(channels);
+        std::vector<float> source(static_cast<size_t>(SOURCE_WIDTH) * SOURCE_HEIGHT * channels);
+        for (size_t index = 0; index < source.size(); ++index)
+            source[index] = static_cast<float>((index * 37 + channels * 11) % 997) / 996.0f;
+        const auto hwc = Tensor::from_blob(
+                             source.data(), TensorShape({SOURCE_HEIGHT, SOURCE_WIDTH, static_cast<size_t>(channels)}),
+                             Device::CPU, DataType::Float32)
+                             .to(Device::CUDA);
+
+        const auto interleaved = lanczos_resize(hwc, OUTPUT_HEIGHT, OUTPUT_WIDTH, 2, nullptr);
+        ASSERT_TRUE(interleaved.is_valid());
+        ASSERT_EQ(interleaved.shape(), TensorShape({static_cast<size_t>(channels), OUTPUT_HEIGHT, OUTPUT_WIDTH}));
+        const auto got = interleaved.cpu().to_vector();
+
+        for (int channel = 0; channel < channels; ++channel) {
+            std::vector<float> plane_values(static_cast<size_t>(SOURCE_WIDTH) * SOURCE_HEIGHT);
+            for (size_t pixel = 0; pixel < plane_values.size(); ++pixel)
+                plane_values[pixel] = source[pixel * channels + channel];
+            const auto plane = Tensor::from_blob(plane_values.data(), TensorShape({SOURCE_HEIGHT, SOURCE_WIDTH}),
+                                                 Device::CPU, DataType::Float32)
+                                   .to(Device::CUDA);
+            const auto expected = lanczos_resize_grayscale(plane, OUTPUT_HEIGHT, OUTPUT_WIDTH, 2, nullptr).cpu().to_vector();
+            const size_t offset = static_cast<size_t>(channel) * OUTPUT_WIDTH * OUTPUT_HEIGHT;
+            for (size_t index = 0; index < expected.size(); ++index)
+                EXPECT_NEAR(got[offset + index], expected[index], 1e-6f) << "channel=" << channel << " index=" << index;
+        }
+    }
+}
+
 TEST_F(ImageKernelsTest, LanczosRejectsNonPositiveOutputExtentBeforeAllocation) {
     const auto input = Tensor::zeros({2, 2, 3}, Device::GPU, DataType::UInt8);
     EXPECT_FALSE(lanczos_resize(input, 0, 2, 2, nullptr).is_valid());
     EXPECT_FALSE(lanczos_resize(input, 2, -1, 2, nullptr).is_valid());
+}
+
+// Fails if the target keeps the colour stored under transparent pixels (the render shows the background there),
+// if the per-pixel background is ignored, or if uint8 targets are not normalised.
+TEST_F(ImageKernelsTest, CompositeOverBackgroundShowsBackgroundWhereTransparent) {
+    const std::vector<float> rgb{0.2f, 0.9f, 0.5f, 0.4f, 0.1f, 0.3f, 0.7f, 0.6f, 0.8f, 0.0f, 1.0f, 0.25f};
+    const std::vector<float> alpha{1.0f, 0.0f, 0.5f, 0.25f};
+    const std::vector<float> color{0.1f, 0.2f, 0.3f};
+    std::vector<float> backdrop(12);
+    for (size_t i = 0; i < backdrop.size(); ++i)
+        backdrop[i] = 0.05f * static_cast<float>(i);
+    const auto rgb_gpu = Tensor::from_vector(rgb, {3, 2, 2}, Device::CUDA);
+    const auto alpha_gpu = Tensor::from_vector(alpha, {2, 2}, Device::CUDA);
+
+    const auto solid = lfs::training::composite_over_background(rgb_gpu, alpha_gpu, Tensor::from_vector(color, {3}, Device::CUDA))
+                           .cpu()
+                           .to_vector();
+    const auto image = lfs::training::composite_over_background(rgb_gpu, alpha_gpu, Tensor::from_vector(backdrop, {3, 2, 2}, Device::CUDA))
+                           .cpu()
+                           .to_vector();
+    for (size_t c = 0; c < 3; ++c)
+        for (size_t p = 0; p < 4; ++p) {
+            const size_t i = c * 4 + p;
+            EXPECT_NEAR(solid[i], rgb[i] * alpha[p] + color[c] * (1.0f - alpha[p]), 1e-6f) << i;
+            EXPECT_NEAR(image[i], rgb[i] * alpha[p] + backdrop[i] * (1.0f - alpha[p]), 1e-6f) << i;
+        }
+
+    std::vector<uint8_t> bytes(rgb.size());
+    for (size_t i = 0; i < rgb.size(); ++i)
+        bytes[i] = static_cast<uint8_t>(std::lround(rgb[i] * 255.0f));
+    auto bytes_gpu = Tensor::empty({3, 2, 2}, Device::CUDA, DataType::UInt8);
+    ASSERT_EQ(cudaMemcpy(bytes_gpu.ptr<uint8_t>(), bytes.data(), bytes.size(), cudaMemcpyHostToDevice), cudaSuccess);
+    const auto from_bytes = lfs::training::composite_over_background(bytes_gpu, alpha_gpu, Tensor::from_vector(color, {3}, Device::CUDA))
+                                .cpu()
+                                .to_vector();
+    for (size_t i = 0; i < from_bytes.size(); ++i)
+        EXPECT_NEAR(from_bytes[i], bytes[i] / 255.0f * alpha[i % 4] + color[i / 4] * (1.0f - alpha[i % 4]), 1e-6f) << i;
 }

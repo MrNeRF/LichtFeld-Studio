@@ -41,7 +41,7 @@ namespace lfs::core::nn::kernels {
 
     // sm_80+ tensor-core path for the 3x3 implicit conv on tap-major
     // ([9][C_out][C_in]) fp16 weights built by conv3x3_weight_taps from OIHW.
-    bool conv3x3_mma_available();
+    LFS_CORE_API bool conv3x3_mma_available();
     LFS_CORE_API void conv3x3_weight_taps(const void* weight, void* weight_taps, int cout, int cin,
                                           cudaStream_t stream);
     void conv2d_implicit_3x3_mma(const void* input, const void* weight_taps, const void* bias,
@@ -58,10 +58,13 @@ namespace lfs::core::nn::kernels {
     // LPIPS block tail: channel-normalised, lin-weighted squared distance of two
     // fp16 NCHW feature maps accumulated into *result (caller zeroes it), with
     // an optional fused 2x2 stride-2 max pool of both maps into pooled_x/y.
+    // Optional per-position weights (row stride weights_width) are addressed at
+    // (row + weights_y0, col + weights_x0).
     LFS_CORE_API void lpips_pool_reduce(const void* x, const void* y, const void* lin_weight, float* result,
                                         void* pooled_x, void* pooled_y, int n, int channels, int h, int w,
                                         int interior_y0, int interior_y1, int interior_x0, int interior_x1,
-                                        float inv_count, cudaStream_t stream);
+                                        float inv_count, const float* weights, int weights_width,
+                                        int weights_y0, int weights_x0, cudaStream_t stream);
 
     void layer_norm(const void* x, const void* weight, const void* bias, void* y,
                     int rows, int cols, float eps, DataType dtype, cudaStream_t stream);

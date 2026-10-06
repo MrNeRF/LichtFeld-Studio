@@ -134,8 +134,8 @@ import lichtfeld as lf
 | `template` | `str \| os.PathLike[str]` | `""` | Retained RML template. Use an absolute path for plugin-local files |
 | `style` | `str` | `""` | Inline RCSS appended to the retained document |
 | `height_mode` | `lf.ui.PanelHeightMode` | `lf.ui.PanelHeightMode.FILL` | `FILL` or `CONTENT` for retained panels |
-| `update_policy` | `str` | `"interval"` | Set to `"dirty"` or `"reactive"` for retained panels that update from explicit model/store invalidation |
-| `update_interval_ms` | `int` | `100` | Fallback cadence for retained/hybrid `on_update()` work. Prefer `update_policy = "dirty"` for data-driven panels |
+| `update_policy` | `str` | `"dirty"` | Use `"interval"` only for panels that need periodic updates; normal data panels update from explicit invalidation |
+| `update_interval_ms` | `int \| None` | `None` | Required when `update_policy = "interval"`; sets its refresh interval in milliseconds |
 
 | Method | Returns | Description |
 |---|---|---|
@@ -1212,7 +1212,15 @@ guarantee.
 
 | Method                                                                            | Returns        | Description           |
 |-----------------------------------------------------------------------------------|----------------|-----------------------|
-| `template_list(list_type_id, list_id, data, prop_id, active_data, active_prop, rows=5)` | `(int, int)` | Live on `RmlUILayout`. Compatibility `UILayout` raises `TypeError` outside draw hooks and warns/returns inert values in draw hooks. |
+| `template_list(list_type_id, list_id, data, prop_id, active_data, active_prop, rows=5)` | `(int, int)` | Live on `RmlUILayout`; returns `(active_index, item_count)` and writes row selection to `active_data.active_prop`. Compatibility `UILayout` raises `TypeError` outside draw hooks and warns/returns inert values in draw hooks. |
+
+Register a custom list class with `lf.register_uilist(MyList)`. Its `list_id` (or class
+name when omitted) is the `list_type_id` passed to `template_list`. The instance
+receives `draw_item(layout, data, item, icon, active_data, active_prop, index)` once
+per item per draw. `layout` is a live `RmlUILayout` scoped to that row, `icon` is
+currently `0`, and the active-selection arguments are the same object and property
+passed to `template_list`. Instances persist until unregistered or replaced.
+Unregistered types use the ordinary list control.
 
 ### Layout Composition
 
@@ -1572,6 +1580,8 @@ lf.export_scene(
     rad_streamable: bool = True,
     spz_version: int = 4,    # SPZ only: 4 (zstd) or 3 (legacy gzip)
     include_provenance: bool = True,  # False writes a minimal build stamp; ignored for COLMAP and SPZ v3
+    *,
+    apply_modifiers: bool = True,  # False exports stored scene payloads
 )
 lf.save_config_file(path: str)
 ```
@@ -1680,7 +1690,8 @@ lf.undo.stack() -> dict
 | `lf.ui.get_transform_space()`               | `int`            | Transform space enum index |
 | `lf.ui.set_transform_space(space)`          | `None`           | Set transform space index  |
 | `lf.ui.get_pivot_mode()` / `set_pivot_mode(mode)` | `int`      | Pivot mode enum index      |
-| `lf.ui.get_fps()`                           | `float`          | Current FPS                |
+| `lf.ui.get_fps()`                           | `float`          | Fresh view renders in the trailing second; cached/deferred results excluded |
+| `lf.ui.get_ui_fps()`                        | `float`          | Successful UI presents in the trailing second; idle-clear frame excluded |
 | `lf.ui.get_git_commit()`                    | `str`            | Git commit hash            |
 | `lf.ui.is_key_pressed(key, repeat=False)`    | `bool`           | SDL-backed rising edge for the current UI frame; UI thread only, no repeat events |
 | `lf.ui.is_key_down(key)`                     | `bool`           | Current SDL keyboard level |
@@ -1769,6 +1780,20 @@ The tables below list the most-used tensor APIs. For the full bound surface, see
 | `t.stack(tensors, dim=0)`                   | `Tensor` | Stack                    |
 | `t.where(condition, x, y)`                  | `Tensor` | Conditional select       |
 
+**Sampling and diagonal construction:**
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `t.normal(shape, mean=0.0, std=1.0, device='cuda', dtype='float32')` | `Tensor` | Normal samples; currently Float32 only |
+| `t.bernoulli(shape, p=0.5, device='cuda', dtype='float32')` | `Tensor` | Zeros and ones, probability `p` of one |
+| `t.multinomial(weights, num_samples, replacement=False, seed=None)` | `Tensor` | Int64 indices sampled from 1D weights on their device; an explicit seed does not change the global RNG |
+| `t.diag(diagonal)` | `Tensor` | Square matrix from a 1D tensor |
+
+Creation uses the existing device convention: `'cpu'` selects CPU, while `'gpu'`
+and the compatibility spelling `'cuda'` use the process's selected GPU backend.
+Operations on existing tensors preserve their backend. Supported shapes and
+dtypes follow the C++ tensor contracts; invalid inputs raise Python exceptions.
+
 **Properties:**
 
 | Property         | Type    | Description              |
@@ -1814,6 +1839,54 @@ The tables below list the most-used tensor APIs. For the full bound surface, see
 | `.zeros_like()`, `.ones_like()` etc.| `Tensor` | Like-constructors        |
 | `.from_dlpack()` / `.__dlpack__()`  | `Tensor` | DLPack interop           |
 
+**Additional tensor methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `.cdist(other, p=2.0)` | `Tensor` | Pairwise distances between rows; supports `p=0`, positive finite `p`, and infinity |
+| `.normalize(dim=-1, eps=1e-12)` | `Tensor` | Float32 standardization `(x - mean) / (population_std + eps)`; `dim=-1` means all elements, otherwise reduces the specified dimension |
+| `.mod(other)` | `Tensor` | Element-wise fmod with a tensor divisor; negative results follow the dividend's sign |
+| `.clamp(min, max)` / `.clamp_(min, max)` | `Tensor` | Out-of-place / in-place clamp, including Float16 |
+| `.clamp_min_(min)` | `Tensor` | In-place lower bound, including Float16 |
+| `.reduce(op, dim=None, keepdim=False)` | `Tensor` | Reduction selected by `lf.ReduceOp`; `None` reduces all dimensions |
+| `.all_close(other, rtol=1e-5, atol=1e-8)` / `.allclose(...)` | `bool` | Compare Float32 values with relative and absolute tolerances; NaNs do not compare equal |
+| `.nonzero_split()` | `list[Tensor]` | One Int64 index tensor per dimension |
+| `.linear(weight, bias=None)` | `Tensor` | Float32 `x @ weight.T` with optional bias; weights `[out_features, in_features]` |
+| `.conv1x1(weight, bias=None)` | `Tensor` | Float32 NCHW convolution; weights `[out_channels, in_channels]` |
+| `.where_into_(condition, value, source)` | `Tensor` | Write the scalar `value` where condition is true, otherwise `source`, into this tensor; overlapping source views are supported |
+| `.gather_lazy(indices)` | `Tensor` | Gather flat Int32 indices on the same device; returns an evaluated tensor, not a lazy Python expression |
+| `.reserved_allocation_bytes` | `int or None` | Read-only backing allocation size, including reserved capacity; `None` means unknown |
+| `.validate()` | `dict` | `is_valid`, `has_nan`, `has_inf`, `nan_count`, `inf_count`, and finite `min_val`, `max_val`, `mean_val` |
+| `.diff(other, tolerance=1e-5)` | `dict` | `shapes_match`, `dtypes_match`, `max_abs_diff`, `mean_abs_diff`, `max_rel_diff`, `num_different`, `total_elements`; the count uses absolute tolerance |
+| `.stats()` | `dict` | Finite-value `min`, `max`, `mean`, population `std`, plus `numel`, `shape`, `dtype`, `is_cuda`, `backend` |
+
+In-place methods return the same Python tensor, so calls can be chained. Element
+writes use existing indexing, for example `x[1, 2] = 3.0`, including tensor views.
+Inspection computes reductions on the tensor backend and reads back scalar
+results. For shape or dtype mismatches, inspect the flags returned by `diff`
+before interpreting its numeric fields.
+
+`lf.ReduceOp` contains `SUM`, `MEAN`, `MAX`, `MIN`, `PROD`, `ANY`, `ALL`, `STD`,
+`VAR`, `ARGMAX`, `ARGMIN`, `COUNT_NONZERO`, and `NORM`. Logical reductions use Bool
+inputs; `STD` and `VAR` use the sample correction. As in C++, `COUNT_NONZERO` and
+`NORM` are enum members but are rejected by `reduce`: call `.count_nonzero()` and
+`.norm()` instead. Other dtype restrictions also follow the C++ operation.
+
+**Neural operations (`lf.nn`):**
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `softmax(input, mask=None)` | `Tensor` | Softmax over the last dimension; optional broadcastable additive mask |
+| `silu(input)` | `Tensor` | `input * sigmoid(input)` |
+| `rms_norm(input, weight, eps=1e-6)` | `Tensor` | Normalize by `sqrt(mean(input**2) + eps)` on the last dimension, then apply channel weights |
+| `residual_scale(x, hidden, gamma)` | `Tensor` | `x + hidden * gamma`, broadcasting gamma over the last dimension |
+| `window_partition(input, window_size)` | `Tensor` | 1D sequence windows: `[B,H,N,d]` to `[B*n_windows,H,window_size,d]`, padding N with zeros |
+| `window_unpartition(windows, window_size, original_n)` | `Tensor` | Restore `[B,H,N,d]` and remove sequence padding |
+| `RomaV1.weights_bytes` | `int` | Read-only resident weight bytes; zero before loading and after `close()`, without triggering a download |
+
+The functional neural operations run on CPU or the input tensor's GPU backend.
+Window operations preserve Float16, including padding.
+
 **Operators:** `+`, `-`, `*`, `/`, `**`, `==`, `!=`, `<`, `>`, `<=`, `>=`, `[]` (indexing/slicing)
 
 ### Application
@@ -1823,7 +1896,8 @@ The tables below list the most-used tensor APIs. For the full bound surface, see
 | `lf.request_exit()`  | Exit with confirmation   |
 | `lf.force_exit()`    | Immediate exit           |
 | `lf.run(path)`       | Execute Python script    |
-| `lf.on_frame(cb)`    | Per-frame callback       |
+| `lf.on_frame(cb, duration_s=None)` | Per-frame callback; expires after 10 seconds with a one-time warning when no duration is supplied |
+| `lf.set_frame_callback(cb, duration_s=None)` | Alias for the bounded per-frame callback API |
 | `lf.stop_animation()`| Clear frame callback     |
 | `lf.mat4(rows)`      | Create 4x4 matrix        |
 | `lf.help()`          | Show help                |

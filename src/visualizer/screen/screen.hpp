@@ -4,9 +4,11 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "screen/editor_type.hpp"
 #include "screen/screen_layout.hpp"
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <nlohmann/json_fwd.hpp>
@@ -33,7 +35,7 @@ namespace lfs::vis::screen {
     // Mutations are all-or-nothing and keep two rules: at least one area is
     // a 3D viewport, and an editor that is not multi-instance is shown by at
     // most one area.
-    class Screen {
+    class LFS_VIS_API Screen {
     public:
         explicit Screen(const EditorTypeRegistry& registry);
         Screen(const Screen& other);
@@ -125,6 +127,6 @@ namespace lfs::vis::screen {
 
     // The editor types every build has: the 3D viewport, the scene tree, the
     // properties and the Python console.
-    void registerBuiltinEditorTypes(EditorTypeRegistry& registry);
+    LFS_VIS_API void registerBuiltinEditorTypes(EditorTypeRegistry& registry);
 
 } // namespace lfs::vis::screen

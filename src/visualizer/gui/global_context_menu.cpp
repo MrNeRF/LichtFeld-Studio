@@ -3,11 +3,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/global_context_menu.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "gui/context_menu_placement.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_input.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
+#include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "internal/resource_paths.hpp"
@@ -17,9 +19,11 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/Input.h>
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <format>
 
 namespace lfs::vis::gui {
@@ -35,7 +39,7 @@ namespace lfs::vis::gui {
         items_.clear();
         pending_items_.clear();
         if (mgr_ && mgr_->isInitialized())
-            mgr_->releaseCachedVulkanContext(direct_cache_);
+            mgr_->releaseCachedContext(direct_cache_);
         if (ctx_ && mgr_)
             mgr_->destroyContext("global_context_menu");
     }
@@ -65,6 +69,9 @@ namespace lfs::vis::gui {
         }
         ctor.RegisterArray<std::vector<ContextMenuItem>>();
         ctor.Bind("items", &items_);
+        ctor.Bind("searchable", &searchable_);
+        search_label_ = LOC("scene.search");
+        ctor.Bind("search_label", &search_label_);
         menu_model_ = ctor.GetModelHandle();
 
         try {
@@ -86,6 +93,8 @@ namespace lfs::vis::gui {
 
             el_backdrop_->AddEventListener(Rml::EventId::Click, &listener_);
             el_ctx_menu_->AddEventListener(Rml::EventId::Click, &listener_);
+            if (auto* search = doc_->GetElementById("ctx-search"))
+                search->AddEventListener("input", &listener_);
         } catch (const std::exception& e) {
             LOG_ERROR("GlobalContextMenu: resource not found: {}", e.what());
         }
@@ -120,7 +129,7 @@ namespace lfs::vis::gui {
         render_needed_ = true;
         last_mouse_valid_ = false;
         if (mgr_)
-            mgr_->releaseCachedVulkanContext(direct_cache_);
+            mgr_->releaseCachedContext(direct_cache_);
 
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/global_context_menu.rml");
@@ -141,6 +150,8 @@ namespace lfs::vis::gui {
 
             el_backdrop_->AddEventListener(Rml::EventId::Click, &listener_);
             el_ctx_menu_->AddEventListener(Rml::EventId::Click, &listener_);
+            if (auto* search = doc_->GetElementById("ctx-search"))
+                search->AddEventListener("input", &listener_);
         } catch (const std::exception& e) {
             LOG_ERROR("GlobalContextMenu: resource not found during reload: {}", e.what());
             return;
@@ -173,13 +184,31 @@ namespace lfs::vis::gui {
         return true;
     }
 
-    void GlobalContextMenu::request(std::vector<ContextMenuItem> items, float screen_x, float screen_y,
-                                    ActionCallback callback) {
+    void GlobalContextMenu::request(std::vector<ContextMenuItem> items, float screen_x,
+                                    float screen_y, ActionCallback callback,
+                                    const bool searchable) {
         pending_items_ = std::move(items);
+        searchable_ = searchable;
         callback_ = std::move(callback);
         pending_x_ = screen_x;
         pending_y_ = screen_y;
         pending_open_ = true;
+        initContext();
+        if (ctx_ && el_ctx_menu_ && el_backdrop_) {
+            all_items_ = pending_items_;
+            items_ = all_items_;
+            menu_model_.DirtyVariable("items");
+            menu_model_.DirtyVariable("searchable");
+            if (auto* search = dynamic_cast<Rml::ElementFormControlInput*>(
+                    doc_->GetElementById("ctx-search")))
+                search->SetValue("");
+            el_ctx_menu_->SetClass("visible", true);
+            el_backdrop_->SetProperty("display", "block");
+            open_ = true;
+            ctx_->Update();
+            mgr_->activateInput(ctx_, [this](const PanelInputState& event) { processInput(event); });
+            focusFirstItem();
+        }
         focus_first_item_ = true;
         render_needed_ = true;
         last_mouse_valid_ = false;
@@ -198,6 +227,8 @@ namespace lfs::vis::gui {
             return;
 
         open_ = false;
+        pending_open_ = false;
+        mgr_->deactivateInput(ctx_);
         focus_first_item_ = false;
         callback_ = {};
         el_ctx_menu_->SetClass("visible", false);
@@ -224,6 +255,8 @@ namespace lfs::vis::gui {
         if (mgr_)
             mgr_->trackContextFrame(ctx_, 0, 0);
 
+        if (mgr_ && ctx_ && mgr_->routeInput(ctx_, input, [this](const PanelInputState& event) { processInput(event); }, true))
+            return;
         const float mx = input.mouse_x - input.screen_x;
         const float my = input.mouse_y - input.screen_y;
 
@@ -264,23 +297,12 @@ namespace lfs::vis::gui {
         focus.want_capture_mouse = true;
         focus.want_capture_keyboard = true;
 
-        for (const int sc : input.keys_pressed) {
-            if (sc == SDL_SCANCODE_ESCAPE) {
+        for (const auto& event : input.input_events) {
+            if (event.kind == FrameInputEventKind::KeyDown && event.scancode == SDL_SCANCODE_ESCAPE) {
                 hide();
                 return;
             }
-            const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-            if (rml_key != Rml::Input::KI_UNKNOWN) {
-                ctx_->ProcessKeyDown(rml_key, mods);
-                render_needed_ = true;
-            }
-        }
-        for (const int sc : input.keys_released) {
-            const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-            if (rml_key != Rml::Input::KI_UNKNOWN) {
-                ctx_->ProcessKeyUp(rml_key, mods);
-                render_needed_ = true;
-            }
+            render_needed_ |= rml_input::processKeyboardEvent(*ctx_, event);
         }
 
         if (input.mouse_clicked[0] || input.mouse_clicked[1])
@@ -332,7 +354,7 @@ namespace lfs::vis::gui {
         if (w <= 0 || h <= 0)
             return;
 
-        if (!mgr_ || !mgr_->getVulkanRenderInterface())
+        if (!mgr_ || !mgr_->getUiRenderer())
             return;
 
         const float dp = std::max(mgr_->getDpRatio(), 1.0f);
@@ -386,7 +408,7 @@ namespace lfs::vis::gui {
         }
 
         render_needed_ = false;
-        mgr_->queueCachedVulkanContext({
+        mgr_->queueCachedContext({
             .context = ctx_,
             .cache = &direct_cache_,
             .cache_width = w,
@@ -401,14 +423,14 @@ namespace lfs::vis::gui {
         });
     }
 
-    void GlobalContextMenu::releaseRendererResources() {
-        if (mgr_)
-            mgr_->releaseCachedVulkanContext(direct_cache_);
-    }
-
     void GlobalContextMenu::EventListener::ProcessEvent(Rml::Event& event) {
         assert(owner);
         auto* target = event.GetTargetElement();
+        if (target && target->GetId() == "ctx-search") {
+            if (const auto* input = dynamic_cast<Rml::ElementFormControlInput*>(target))
+                owner->filterItems(input->GetValue());
+            return;
+        }
         while (target && target != owner->el_ctx_menu_ && target->GetId() != "backdrop" &&
                !target->HasAttribute("data-ctx-action"))
             target = target->GetParentNode();
@@ -432,6 +454,44 @@ namespace lfs::vis::gui {
                 owner->result_ = action;
             }
         }
+    }
+
+    void GlobalContextMenu::filterItems(const std::string_view query) {
+        const auto lowercase = [](std::string value) {
+            std::ranges::transform(value, value.begin(), [](const unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
+            return value;
+        };
+        const std::string needle = lowercase(std::string(query));
+        if (needle.empty()) {
+            items_ = all_items_;
+        } else {
+            items_.clear();
+            const ContextMenuItem* category = nullptr;
+            bool category_added = false;
+            for (const auto& item : all_items_) {
+                if (item.is_label) {
+                    category = &item;
+                    category_added = false;
+                    continue;
+                }
+                const bool matches_label = lowercase(item.label).contains(needle);
+                const bool matches_category =
+                    category && lowercase(category->label).contains(needle);
+                if (!matches_label && !matches_category)
+                    continue;
+                if (category && !category_added) {
+                    items_.push_back(*category);
+                    category_added = true;
+                }
+                items_.push_back(item);
+            }
+        }
+        menu_model_.DirtyVariable("items");
+        if (ctx_)
+            ctx_->Update();
+        render_needed_ = true;
     }
 
 } // namespace lfs::vis::gui

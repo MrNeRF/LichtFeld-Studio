@@ -30,6 +30,10 @@ namespace lfs::core::internal::vk {
         return static_cast<uint32_t>(value);
     }
 
+    // Scans radix.slang's digit-major block histograms ([lines, entries] uint32) into inclusive per-line
+    // offsets; the scatter phase takes each block's own counts back off.
+    void scan_radix_histogram(StorageRef histogram, size_t lines, size_t entries);
+
     // Kernels iterate grid-stride over NumWorkgroups, so a count above the
     // device's group limit (65535 on lavapipe) is covered by fewer groups.
     inline uint32_t dispatch_groups(const VulkanContext& context, const size_t work) {

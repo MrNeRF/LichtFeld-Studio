@@ -10,13 +10,15 @@
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene/scene_render_state.hpp"
+#include "scene_renderer_factory.hpp"
 #include "split_view_service.hpp"
 #if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
 #endif
 #include "core/training_manager.hpp"
+#include "scene_renderer.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
-#include "vksplat_viewport_renderer.hpp"
+#include "window/graphics_context.hpp"
 #include <algorithm>
 #include <cmath>
 #include <format>
@@ -33,8 +35,8 @@ namespace lfs::vis {
             (std::size_t{4} << 30) - (std::size_t{64} << 20);
         constexpr float kMaxValidDepth = 1e9f;
         constexpr int kMinPreviewSubdivisionHeight = 512;
-        constexpr int kPreviewTileHeightAlignment = HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT;
-        static_assert(kPreviewTileHeightAlignment % TILE_HEIGHT == 0);
+        // Capture strips preserve the shared 32-pixel macro-tile boundaries.
+        constexpr int kPreviewTileHeightAlignment = 32;
         static_assert(kMinPreviewSubdivisionHeight % kPreviewTileHeightAlignment == 0);
 
         [[nodiscard]] bool isTileInstanceOverflow(const std::string_view error) {
@@ -127,8 +129,7 @@ namespace lfs::vis {
             0.0f,
             0.0f,
             static_cast<float>(viewport_width),
-            static_cast<float>(viewport_height),
-            false};
+            static_cast<float>(viewport_height)};
 
         if (viewState(view).gt_comparison_published_actual_frame_) {
             const auto& published = *viewState(view).gt_comparison_published_actual_frame_;
@@ -146,10 +147,6 @@ namespace lfs::vis {
                 bounds.y = logical_rect.y;
                 bounds.width = logical_rect.z;
                 bounds.height = logical_rect.w;
-                bounds.letterboxed =
-                    physical_rect.x != 0 || physical_rect.y != 0 ||
-                    physical_rect.z != published.framebuffer_extent.x ||
-                    physical_rect.w != published.framebuffer_extent.y;
             }
             return bounds;
         }
@@ -188,7 +185,6 @@ namespace lfs::vis {
                 bounds.x = static_cast<float>(std::max((viewport_width - content_width) / 2, 0));
                 bounds.y = 0.0f;
             }
-            bounds.letterboxed = true;
         }
         return bounds;
     }
@@ -309,34 +305,7 @@ namespace lfs::vis {
             return this->state().viewport_artifact_service_.resolveLazyCapture();
         }
 
-        if (auto image = getViewportImageIfAvailable()) {
-            return image;
-        }
-
-        if (!engine_ || !this->state().viewport_artifact_service_.hasGpuFrame()) {
-            return {};
-        }
-
-        std::optional<std::shared_lock<std::shared_mutex>> render_lock;
-#if LFS_BUILD_TRAINER
-        if (const auto* tm =
-                this->state().viewport_interaction_context_.scene_manager
-                    ? this->state().viewport_interaction_context_.scene_manager->getTrainerManager()
-                    : nullptr) {
-            if (const auto* trainer = tm->getTrainer()) {
-                render_lock.emplace(trainer->getRenderMutex());
-            }
-        }
-#endif
-
-        auto readback_result = engine_->readbackGpuFrameColor(*this->state().viewport_artifact_service_.gpuFrame());
-        if (!readback_result) {
-            LOG_ERROR("Failed to capture viewport image from GPU frame: {}", readback_result.error());
-            return {};
-        }
-
-        this->state().viewport_artifact_service_.storeCapturedImage(*readback_result);
-        return this->state().viewport_artifact_service_.getCapturedImageIfCurrent();
+        return getViewportImageIfAvailable();
     }
 
     int RenderingManager::pickCameraFrustum(ViewId view, const glm::vec2& mouse_pos) {
@@ -351,7 +320,7 @@ namespace lfs::vis {
 
         if (hover_changed) {
             LOG_DEBUG("Camera hover changed: {} -> {}", previous_hovered_camera, hovered_camera);
-            markDirty(DirtyFlag::OVERLAY);
+            markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
         }
 
         return hovered_camera;
@@ -489,6 +458,9 @@ namespace lfs::vis {
         if (width <= 0 || height <= 0) {
             return std::unexpected("invalid preview depth render dimensions");
         }
+        if (!last_graphics_context_) {
+            return std::unexpected("no Vulkan context is available");
+        }
         if (!hasRenderableGaussians(&model)) {
             return std::unexpected("no renderable Gaussian model is available");
         }
@@ -502,14 +474,14 @@ namespace lfs::vis {
         // The macro-tile (HiGS) chain only yields per-macro-tile median depth;
         // force the legacy per-pixel chain for the depth-capture render so the
         // readback matches the image resolution.
-        if (!vksplat_viewport_renderer_) {
-            vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+        if (!scene_renderer_) {
+            scene_renderer_ = createSceneRenderer(*last_graphics_context_);
         }
-        vksplat_viewport_renderer_->setDepthCaptureMode(true, expected_depth);
+        scene_renderer_->setDepthCaptureMode(true, expected_depth);
         struct DepthCaptureModeGuard {
-            VksplatViewportRenderer* renderer;
+            SceneRenderer* renderer;
             ~DepthCaptureModeGuard() { renderer->setDepthCaptureMode(false); }
-        } depth_capture_guard{vksplat_viewport_renderer_.get()};
+        } depth_capture_guard{scene_renderer_.get()};
 
         auto rendered = renderPreviewImageToPreviewSlotWithState(
             settings,
@@ -575,14 +547,12 @@ namespace lfs::vis {
         // image and depth are read from the same render: the Preview output slot
         // and the pixel_depth scratch it just wrote (still resident — the Preview
         // path uses private scratch, which render() does not release).
-        auto image = vksplat_viewport_renderer_->readOutputImage(
-            *last_vulkan_context_, preview_render_target_);
+        auto image = scene_renderer_->readOutputImage(preview_render_target_);
         if (!image) {
             LOG_ERROR("Gaussian preview rgbd image readback failed: {}", image.error());
             return result;
         }
-        auto depth = vksplat_viewport_renderer_->readPreviewDepth(
-            *last_vulkan_context_, preview_render_target_);
+        auto depth = scene_renderer_->readPreviewDepth(preview_render_target_);
         if (!depth) {
             LOG_ERROR("Gaussian preview depth readback failed: {}", depth.error());
             return result;
@@ -780,53 +750,6 @@ namespace lfs::vis {
             PreviewImageReadback::FloatRgb);
     }
 
-    std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgb8(const lfs::core::SplatData& model,
-                                                                                SceneRenderState scene_state,
-                                                                                const glm::mat3& rotation,
-                                                                                const glm::vec3& position,
-                                                                                const float focal_length_mm,
-                                                                                const int width,
-                                                                                const int height,
-                                                                                std::optional<glm::vec3> background_color_override,
-                                                                                std::optional<bool> orthographic_override,
-                                                                                std::optional<float> ortho_scale_override) {
-        if (width <= 0 || height <= 0) {
-            return {};
-        }
-        if (previewRenderNeedsTiling(width, height)) {
-            return renderPreviewImageTiledWithState(
-                nullptr,
-                model,
-                std::move(scene_state),
-                rotation,
-                position,
-                focal_length_mm,
-                width,
-                height,
-                false,
-                background_color_override,
-                orthographic_override,
-                ortho_scale_override,
-                PreviewImageReadback::UInt8Rgb);
-        }
-
-        return renderPreviewImageWithState(
-            nullptr,
-            model,
-            std::move(scene_state),
-            rotation,
-            position,
-            focal_length_mm,
-            width,
-            height,
-            false,
-            std::nullopt,
-            orthographic_override,
-            ortho_scale_override,
-            background_color_override,
-            PreviewImageReadback::UInt8Rgb);
-    }
-
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgba8(const lfs::core::SplatData& model,
                                                                                  SceneRenderState scene_state,
                                                                                  const glm::mat3& rotation,
@@ -874,9 +797,9 @@ namespace lfs::vis {
     }
 
     void RenderingManager::releasePreviewImageResources() {
-        if (vksplat_viewport_renderer_) {
-            if (vksplat_viewport_renderer_->hasRenderTarget(preview_render_target_) &&
-                vksplat_viewport_renderer_->releaseRenderTarget(preview_render_target_)) {
+        if (scene_renderer_) {
+            if (scene_renderer_->hasRenderTarget(preview_render_target_) &&
+                scene_renderer_->releaseRenderTarget(preview_render_target_)) {
                 render_targets_.release(preview_render_target_);
                 preview_render_target_ = render_targets_.allocate();
             }
@@ -911,8 +834,8 @@ namespace lfs::vis {
                                          request.orthographic_override,
                                          request.ortho_scale_override,
                                          request.reference_height);
-        if (last_vulkan_context_ &&
-            last_vulkan_context_->rendererTerminalState() != RendererTerminalState::Running) {
+        if (last_graphics_context_ &&
+            last_graphics_context_->terminalState() != RendererTerminalState::Running) {
             return std::unexpected("renderer is unavailable after a GPU failure; restart LichtFeld Studio");
         }
         releasePreviewImageResources();
@@ -1014,16 +937,13 @@ namespace lfs::vis {
             std::unexpected("unsupported preview image readback format");
         if (readback_config.dtype == lfs::core::DataType::UInt8 &&
             readback_config.channels == 4) {
-            image = vksplat_viewport_renderer_->readOutputImageRgba8(
-                *last_vulkan_context_,
+            image = scene_renderer_->readOutputImageRgba8(
                 preview_render_target_);
         } else if (readback_config.dtype == lfs::core::DataType::UInt8) {
-            image = vksplat_viewport_renderer_->readOutputImageRgb8(
-                *last_vulkan_context_,
+            image = scene_renderer_->readOutputImageRgb8(
                 preview_render_target_);
         } else {
-            image = vksplat_viewport_renderer_->readOutputImage(
-                *last_vulkan_context_,
+            image = scene_renderer_->readOutputImage(
                 preview_render_target_);
         }
         if (!image) {
@@ -1056,10 +976,10 @@ namespace lfs::vis {
         if (width <= 0 || height <= 0) {
             return std::unexpected("invalid preview render dimensions");
         }
-        if (!last_vulkan_context_) {
+        if (!last_graphics_context_) {
             return std::unexpected("no Vulkan context is available");
         }
-        if (last_vulkan_context_->rendererTerminalState() != RendererTerminalState::Running) {
+        if (last_graphics_context_->terminalState() != RendererTerminalState::Running) {
             return std::unexpected("renderer is unavailable after a GPU failure; restart LichtFeld Studio");
         }
         if (!hasRenderableGaussians(&model)) {
@@ -1126,14 +1046,13 @@ namespace lfs::vis {
                 lfs::rendering::gaussianRasterBackendId(request.raster_backend)));
         }
 
-        if (!vksplat_viewport_renderer_) {
-            vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+        if (!scene_renderer_) {
+            scene_renderer_ = createSceneRenderer(*last_graphics_context_);
         }
 
         // Preview/export uses the renderer's exact two-batch count gate; one
         // render is complete for this view and can be read back immediately.
-        auto render_result = vksplat_viewport_renderer_->render(
-            *last_vulkan_context_,
+        auto render_result = scene_renderer_->render(
             model,
             request,
             false,
@@ -1234,7 +1153,7 @@ namespace lfs::vis {
                               tile_height,
                               rendered.error());
                     if (outstanding_export_ticket) {
-                        (void)vksplat_viewport_renderer_->waitReadbackTicket(*outstanding_export_ticket);
+                        (void)scene_renderer_->waitReadbackTicket(*outstanding_export_ticket);
                     }
                     return {};
                 }
@@ -1247,7 +1166,7 @@ namespace lfs::vis {
             }
             // After render of band N: wait prior band's copy (if any), then submit band N.
             if (outstanding_export_ticket) {
-                auto waited = vksplat_viewport_renderer_->waitReadbackTicket(*outstanding_export_ticket);
+                auto waited = scene_renderer_->waitReadbackTicket(*outstanding_export_ticket);
                 if (!waited) {
                     LOG_TRACE("Gaussian preview tiled prior-band readback failed at tile y={}: {}",
                               tile_y,
@@ -1256,8 +1175,7 @@ namespace lfs::vis {
                 }
                 outstanding_export_ticket.reset();
             }
-            auto ticket = vksplat_viewport_renderer_->submitReadOutputImageIntoCpuHwcTicket(
-                *last_vulkan_context_,
+            auto ticket = scene_renderer_->submitReadOutputImageIntoCpuHwcTicket(
                 preview_render_target_,
                 output,
                 0,
@@ -1273,7 +1191,7 @@ namespace lfs::vis {
             tile_y += tile_height;
         }
         if (outstanding_export_ticket) {
-            auto waited = vksplat_viewport_renderer_->waitReadbackTicket(*outstanding_export_ticket);
+            auto waited = scene_renderer_->waitReadbackTicket(*outstanding_export_ticket);
             if (!waited) {
                 LOG_TRACE("Gaussian preview tiled final-band readback failed: {}", waited.error());
                 return {};
@@ -1293,7 +1211,7 @@ namespace lfs::vis {
             return cached_depth;
         }
 
-        if (!vksplat_viewport_renderer_ || !last_vulkan_context_) {
+        if (!scene_renderer_ || !last_graphics_context_) {
             return -1.0f;
         }
 
@@ -1301,15 +1219,14 @@ namespace lfs::vis {
 
         glm::ivec2 source_size = viewState(view).frame_lifecycle_service_.lastViewportSize();
 
-        const auto depth = vksplat_viewport_renderer_->sampleDepthAtPixel(
-            *last_vulkan_context_,
-            VksplatViewportRenderer::DepthSampleRequest{
+        const auto depth = scene_renderer_->sampleDepthAtPixel(
+            SceneRenderer::DepthSampleRequest{
                 .pixel = {x, y},
                 .source_size = source_size,
                 .target = target,
             });
         if (!depth) {
-            LOG_TRACE("VkSplat depth sample failed: {}", depth.error());
+            LOG_TRACE("Scene depth sample failed: {}", depth.error());
             return -1.0f;
         }
         return *depth;
@@ -1384,8 +1301,7 @@ namespace lfs::vis {
             return -1.0f;
         }
 
-        auto depth = vksplat_viewport_renderer_->readPreviewDepth(
-            *last_vulkan_context_,
+        auto depth = scene_renderer_->readPreviewDepth(
             preview_render_target_);
         if (!depth) {
             LOG_TRACE("Expected-depth pixel readback failed: {}", depth.error());

@@ -28,6 +28,5 @@ namespace lfs::io {
 
     /// Human-readable label for HDR format
     [[nodiscard]] const char* hdrFormatLabel(HdrFormat fmt);
-    [[nodiscard]] const char* hdrFormatType(HdrFormat fmt);
 
 } // namespace lfs::io

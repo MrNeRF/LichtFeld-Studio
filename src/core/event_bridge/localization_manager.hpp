@@ -44,19 +44,16 @@ namespace lfs::event {
             return language_generation_.load(std::memory_order_acquire);
         }
         std::string getCurrentLanguageName() const;
-        bool reload();
 
         void setOverride(const std::string& key, const std::string& value);
         void clearOverride(const std::string& key);
         void clearAllOverrides();
-        bool hasOverride(const std::string& key) const;
 
         PluginCatalogToken registerPluginCatalog(std::string_view owner_id,
                                                  std::string_view language_code,
                                                  const TranslationMap& entries,
                                                  std::string* error = nullptr);
         bool unregisterPluginCatalog(PluginCatalogToken token);
-        std::size_t unregisterPluginCatalogs(std::string_view owner_id);
 
     private:
         LocalizationManager() = default;
@@ -85,7 +82,6 @@ namespace lfs::event {
         };
 
         struct PluginCatalogRecord {
-            std::string owner_id;
             std::string language_code;
             std::vector<std::string> keys;
         };

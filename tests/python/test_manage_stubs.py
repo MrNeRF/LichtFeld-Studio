@@ -84,3 +84,41 @@ def test_check_stubs_prunes_stale_generated_submodules(tmp_path):
 
     assert manage_stubs.check_stubs(generated, committed) == 0
     assert not (generated / "lichtfeld" / "pipeline" / "undo.pyi").exists()
+
+
+def test_compiler_template_spacing_matches_without_rewriting_committed_stubs(tmp_path):
+    manage = _load_manage_stubs()
+    generated = tmp_path / "generated"
+    committed = tmp_path / "committed"
+    for root in (generated, committed):
+        (root / "lichtfeld").mkdir(parents=True)
+    clang = 'def collapse(arg: "ns::Outer<ns::Inner<int>>") -> "ns::Outer<ns::Inner<int>>": ...\n'
+    gcc = clang.replace(">>", "> >")
+    destination = committed / "lichtfeld" / "__init__.pyi"
+    destination.write_text(gcc, encoding="utf-8")
+    (generated / "lichtfeld" / "__init__.pyi").write_text(clang, encoding="utf-8")
+    assert manage.check_stubs(generated, committed) == 0
+    assert manage.sync_stubs(generated, committed) == 0
+    assert destination.read_text(encoding="utf-8") == gcc
+
+
+def test_template_normalization_preserves_real_api_changes_and_non_annotations(tmp_path):
+    manage = _load_manage_stubs()
+    generated = tmp_path / "generated"
+    committed = tmp_path / "committed"
+    for root in (generated, committed):
+        (root / "lichtfeld").mkdir(parents=True)
+    baseline = ('def collapse(arg: "ns::Outer<ns::Inner<int> >", '
+                'default="ns::Outer<ns::Inner<int> >") -> None:\n'
+                '    """ns::Outer<ns::Inner<int> >"""\n'
+                '    ...\n')
+    (committed / "lichtfeld" / "__init__.pyi").write_text(baseline, encoding="utf-8")
+    for changed in (
+        baseline.replace("Inner<int>", "Inner<float>", 1),
+        baseline.replace('default="ns::Outer<ns::Inner<int> >"',
+                         'default="ns::Outer<ns::Inner<int>>"'),
+        baseline.replace('"""ns::Outer<ns::Inner<int> >"""',
+                         '"""ns::Outer<ns::Inner<int>>"""'),
+    ):
+        (generated / "lichtfeld" / "__init__.pyi").write_text(changed, encoding="utf-8")
+        assert manage.check_stubs(generated, committed) == 1

@@ -33,25 +33,26 @@ void main(uint3 groupId:SV_GroupID,uint lane:SV_GroupIndex,uniform Parameters p)
     }
     if (operation == 10) {
         Ptr<uint, Access.ReadWrite> state = (Ptr<uint, Access.ReadWrite>)p.b;
-        if (lane == 0u) {
-            if (p.reserved == 24u) {
-                uint total = 0;
-                for (uint bin = 0; bin < 256u; ++bin) total += state[bin];
-                state[257] = total / 2u;
-                state[258] = total > 0u ? 1u : 0u;
-            }
-            uint rank = state[257];
-            if (state[258] != 0u) {
-                for (uint bin = 0; bin < 256u; ++bin) {
-                    uint count = state[bin];
-                    if (rank < count) {
-                        state[256] |= bin << p.reserved;
-                        state[257] = rank;
-                        break;
-                    }
-                    rank -= count;
-                }
-            }
+        const uint count = state[lane];
+        medianHistogram[lane] = count;
+        GroupMemoryBarrierWithGroupSync();
+        for (uint offset = 1u; offset < 256u; offset <<= 1u) {
+            const uint add = lane >= offset ? medianHistogram[lane - offset] : 0u;
+            GroupMemoryBarrierWithGroupSync();
+            medianHistogram[lane] += add;
+            GroupMemoryBarrierWithGroupSync();
+        }
+        const uint total = medianHistogram[255];
+        const uint rank = p.reserved == 24u ? total / 2u : state[257];
+        const uint prefix = p.reserved == 24u ? 0u : state[256];
+        const uint valid = p.reserved == 24u ? uint(total > 0u) : state[258];
+        const uint below = medianHistogram[lane] - count;
+        GroupMemoryBarrierWithGroupSync();
+        if (lane == 0u && p.reserved == 24u)
+            state[258] = valid;
+        if (valid != 0u && rank >= below && rank - below < count) {
+            state[256] = prefix | (lane << p.reserved);
+            state[257] = rank - below;
         }
         GroupMemoryBarrierWithGroupSync();
         state[lane] = 0u;
@@ -81,7 +82,9 @@ void main(uint3 groupId:SV_GroupID,uint lane:SV_GroupIndex,uniform Parameters p)
         float3 pos=float3(means[src*3],means[src*3+1],means[src*3+2]);
         float4 q=float4(rotations[src*4],rotations[src*4+1],rotations[src*4+2],rotations[src*4+3]);
         float3 s=float3(scales[src*3],scales[src*3+1],scales[src*3+2]);
-        float w=q.x,x=q.y,y=q.z,z=q.w;
+        // Trained quaternions drift from unit norm; projection normalizes them.
+        float inverseNorm=min(rsqrt(dot(q,q)),1e12f);
+        float w=q.x*inverseNorm,x=q.y*inverseNorm,y=q.z*inverseNorm,z=q.w*inverseNorm;
         float3 cols[3]={float3(1-2*(y*y+z*z),2*(x*y+w*z),2*(x*z-w*y)),
                         float3(2*(x*y-w*z),1-2*(x*x+z*z),2*(y*z+w*x)),
                         float3(2*(x*z+w*y),2*(y*z-w*x),1-2*(x*x+y*y))};

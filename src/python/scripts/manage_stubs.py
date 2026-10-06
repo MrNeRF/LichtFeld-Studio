@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import re
 from pathlib import Path
 import shutil
 import sys
@@ -89,7 +90,34 @@ def prune_generated_stubs(root: Path) -> None:
 
 
 def read_normalized(path: Path) -> bytes:
-    return path.read_bytes().replace(b"\r\n", b"\n")
+    content = path.read_bytes().replace(b"\r\n", b"\n")
+    if path.suffix != ".pyi":
+        return content
+
+    # Clang and GCC spell nested C++ template closings as >>> and > > >.
+    # Normalize only quoted C++ type annotations, never defaults or docstrings.
+    tree = ast.parse(content.decode("utf-8"))
+    offsets = [0]
+    for line in content.splitlines(keepends=True):
+        offsets.append(offsets[-1] + len(line))
+    spans = set()
+    for node in ast.walk(tree):
+        annotation = None
+        if isinstance(node, (ast.arg, ast.AnnAssign)):
+            annotation = node.annotation
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            annotation = node.returns
+        if annotation is None:
+            continue
+        for value in ast.walk(annotation):
+            if (isinstance(value, ast.Constant) and isinstance(value.value, str)
+                    and "::" in value.value and "<" in value.value):
+                spans.add((offsets[value.lineno - 1] + value.col_offset,
+                           offsets[value.end_lineno - 1] + value.end_col_offset))
+    for start, end in sorted(spans, reverse=True):
+        normalized = re.sub(rb">[ \t]+(?=>)", b">", content[start:end])
+        content = content[:start] + normalized + content[end:]
+    return content
 
 
 def remove_empty_dirs(root: Path) -> None:

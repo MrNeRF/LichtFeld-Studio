@@ -18,14 +18,20 @@
 #include <string>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace lfs::core {
 
     LFS_CORE_API std::tuple<int, int, int>
     get_image_info(std::filesystem::path p);
+    // Target size for the resize_factor/max_width rules shared by every image loader.
+    LFS_CORE_API std::pair<int, int>
+    resized_image_dimensions(int source_width, int source_height, int resize_factor, int max_width);
     LFS_CORE_API std::tuple<unsigned char*, int, int, int>
     load_image_with_alpha(std::filesystem::path p, int res_div = -1, int max_width = 0);
+    LFS_CORE_API std::tuple<uint16_t*, int, int, int>
+    load_image_with_alpha_u16(std::filesystem::path p, int res_div = -1, int max_width = 0);
     // Decodes an encoded image held in memory to RGB; res_div and max_width
     // resize as in load_image.
     LFS_CORE_API std::tuple<unsigned char*, int, int, int>
@@ -94,10 +100,7 @@ namespace lfs::core {
     // Converts a decoded normal-map prior (n in [-1,1]) between the OpenGL
     // camera convention (y up, z toward the viewer) and the OpenCV one used by
     // the rasterizer (y down, z forward) by flipping y and z in place.
-    LFS_CORE_API void flip_normal_prior_yz_hwc(float* data, size_t pixel_count);
     LFS_CORE_API void flip_normal_prior_yz_chw(float* data, size_t pixel_count);
-    LFS_CORE_API void transform_normal_prior_world_to_camera_hwc(
-        float* data, size_t pixel_count, const std::array<float, 9>& w2c);
     LFS_CORE_API void transform_normal_prior_world_to_camera_chw(
         float* data, size_t pixel_count, const std::array<float, 9>& w2c);
 
@@ -132,7 +135,6 @@ namespace lfs::core::image_io {
         static BatchImageSaver& instance();
         static BatchImageSaver* try_instance();
         static void wait_all_if_initialized();
-        static size_t pending_count_if_initialized();
 
         // Delete copy/move constructors
         BatchImageSaver(const BatchImageSaver&) = delete;
@@ -156,9 +158,6 @@ namespace lfs::core::image_io {
 
         // Flush all pending saves and stop threads (called automatically on destruction)
         void shutdown();
-
-        // Get number of pending saves
-        size_t pending_count() const;
 
         // Enable/disable batch saving (useful for debugging)
         void set_enabled(bool enabled) { enabled_ = enabled; }

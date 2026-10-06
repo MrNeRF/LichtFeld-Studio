@@ -199,12 +199,8 @@ namespace lfs::diagnostics {
                 }
             }
             for (const std::string_view name : {
-                     "refine_weight_max", "refine_ratio_max", "vis_count", "free_mask",
-                     "refine_counts_device", "edge.precomputed_scores", "edge.score_sum",
-                     "edge.view_scores", "explore.score_sum", "explore.error_hw",
-                     "explore.view_scores", "explore.means2d", "explore.radii",
-                     "explore.far_field_mask", "explore.cached_image", "explore.cached_target",
-                     "explore.cached_alpha", "explore.cached_depth"}) {
+                     "refine_weight_max", "free_mask", "refine_counts_device",
+                     "edge.precomputed_scores", "edge.score_sum", "edge.view_scores"}) {
                 const auto key = "vram.audit.mrnf." + std::string(name) + ".allocated_bytes";
                 add(out, VramOwner::Densification, capped(gauge(s, key), remaining));
             }
@@ -266,7 +262,7 @@ namespace lfs::diagnostics {
         for (const auto& row : s.rows) {
             if (!row.scope.starts_with("vulkan.external") || row.live_bytes == 0 ||
                 row.scope.starts_with("vulkan.external.imported") ||
-                row.scope.starts_with("vulkan.external_tensor") ||
+                row.scope.starts_with("vulkan.external_tensor.alias") ||
                 row.scope == "vulkan.external.semaphore")
                 continue;
             add(out, VramOwner::Viewer, row.live_bytes, &row);

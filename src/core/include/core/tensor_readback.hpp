@@ -91,6 +91,11 @@ namespace lfs::core {
         void wait(std::size_t slot) const;
         void release(std::size_t slot);
         [[nodiscard]] std::span<std::byte> slot_bytes(std::size_t slot);
+        // Readback policy for the final CPU destination. Shared-memory copies
+        // benefit from reusing retired host pages rather than zeroing a new
+        // allocation. Reuse requires release of every reader and a complete
+        // overwrite before publishing the next destination.
+        [[nodiscard]] bool prefers_recycled_host_staging() const noexcept;
 
     private:
         struct Impl;

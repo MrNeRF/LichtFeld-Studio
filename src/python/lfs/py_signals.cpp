@@ -92,16 +92,6 @@ namespace lfs::python {
             });
         }
 
-        void do_psnr(float psnr) {
-            if (!g_initialized) {
-                return;
-            }
-
-            nb::gil_scoped_acquire gil;
-
-            set_signal_value("psnr", psnr);
-        }
-
         void do_scene(bool has_scene, const char* path) {
             if (!g_initialized) {
                 return;
@@ -185,7 +175,6 @@ namespace lfs::python {
                 callbacks.training_progress = do_training_progress;
                 callbacks.training_state = do_training_state;
                 callbacks.trainer_loaded = do_trainer_loaded;
-                callbacks.psnr = do_psnr;
                 callbacks.scene = do_scene;
                 callbacks.selection = do_selection;
                 set_signal_bridge_callbacks(callbacks);

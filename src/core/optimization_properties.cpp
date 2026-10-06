@@ -576,53 +576,6 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.use_edge_map")
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
-            .all_strategies()
-            .bool_prop(&OptimizationParameters::background_improvements,
-                       "background_improvements", "Background Improvements", d.background_improvements,
-                       "Improve distant background reconstruction (MRNF): far-field seeding and splits, decay relief, growth cap, per-splat position steps, visibility-ratio growth ranking, paced capacity fill")
-            .locale("training_params.background_improvements")
-            .tooltip("training.tooltip.background_improvements")
-            .flags(PROP_NEEDS_RESTART)
-            .strategies({"mrnf"})
-            .float_prop(&OptimizationParameters::far_scene_min_fraction,
-                        "far_scene_min_fraction", "Far Scene Min Fraction", d.far_scene_min_fraction, 0.0f, 1.0f,
-                        "Minimum deep-far splat fraction that activates far-field features (0 = always on)")
-            .locale("training.advanced.far_scene_min_fraction")
-            .tooltip("training.tooltip.far_scene_min_fraction")
-            .precision(3)
-            .ui_step(0.01)
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
-            .bool_prop(&OptimizationParameters::growth_ratio_rank,
-                       "growth_ratio_rank", "Growth Ratio Rank", d.growth_ratio_rank,
-                       "Rank MRNF growth by visibility-normalized error (err/vis^p) instead of raw window error")
-            .locale("training.advanced.growth_ratio_rank")
-            .tooltip("training.tooltip.growth_ratio_rank")
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
-            .float_prop(&OptimizationParameters::growth_ratio_pow,
-                        "growth_ratio_pow", "Growth Ratio Pow", d.growth_ratio_pow, 0.0f, 1.0f,
-                        "Visibility exponent p for the err/vis^p growth rank")
-            .locale("training.advanced.growth_ratio_pow")
-            .tooltip("training.tooltip.growth_ratio_pow")
-            .precision(2)
-            .ui_step(0.05)
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
-            .size_prop(&OptimizationParameters::fill_pacing_iter,
-                       "fill_pacing_iter", "Fill Pacing Iter", d.fill_pacing_iter, 0, 100000,
-                       "Pace MRNF cap fill until this iteration (0 = fill as fast as possible)")
-            .locale("training.advanced.fill_pacing_iter")
-            .tooltip("training.tooltip.fill_pacing_iter")
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
-            .size_prop(&OptimizationParameters::far_seed_dose,
-                       "far_seed_dose", "Far Seed Dose", d.far_seed_dose, 0, 100000,
-                       "Far-field seeds injected per refine window (0 = starvation-scaled default)")
-            .locale("training.advanced.far_seed_dose")
-            .tooltip("training.tooltip.far_seed_dose")
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
 
             // Flags
             .all_strategies()
@@ -723,6 +676,39 @@ namespace lfs::core::param {
                        "Train on every image and evaluate all of them; no image is held out")
             .locale("training_params.eval_all")
             .tooltip("training.tooltip.eval_all")
+            .all_strategies()
+            .enum_prop(&OptimizationParameters::eval_space,
+                       "eval_space", "Eval Space", d.eval_space,
+                       {{"Distorted", EvalSpace::Distorted, "training.options.eval_space.distorted", "distorted"},
+                        {"Undistorted", EvalSpace::Undistorted, "training.options.eval_space.undistorted", "undistorted"}},
+                       "Reference images for evaluation with --undistort: distorted = the original "
+                       "images, with the render warped into the original lens; undistorted = the "
+                       "undistorted training images")
+            .locale("training_params.eval_space")
+            .tooltip("training.tooltip.eval_space")
+            .all_strategies()
+            .string_prop(&OptimizationParameters::eval_mask,
+                         "eval_mask", "Evaluation Mask", d.eval_mask,
+                         "Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range, points or a splat); training is not affected")
+            .locale("training_params.eval_mask")
+            .tooltip("training.tooltip.eval_mask")
+            .flags(PROP_NEEDS_RESTART)
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::eval_mask_invert,
+                       "eval_mask_invert", "Invert Evaluation Mask", d.eval_mask_invert,
+                       "Scores the pixels outside the evaluation mask instead")
+            .locale("training_params.eval_mask_invert")
+            .tooltip("training.tooltip.eval_mask_invert")
+            .flags(PROP_NEEDS_RESTART)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::eval_mask_opacity,
+                        "eval_mask_opacity", "Splat Mask Opacity", d.eval_mask_opacity, 0.01f, 1.0f,
+                        "Rendered opacity a pixel needs to count as covered by a splat mask; lower widens the mask past the outline, higher pulls it in")
+            .locale("training_params.eval_mask_opacity")
+            .tooltip("training.tooltip.eval_mask_opacity")
+            .precision(2)
+            .ui_step(0.05)
+            .flags(PROP_NEEDS_RESTART)
 
             // Random initialization
             .all_strategies()
@@ -794,7 +780,10 @@ namespace lfs::core::param {
             .all_strategies()
             .bool_prop(&OptimizationParameters::undistort,
                        "undistort", "Undistort", d.undistort,
-                       "Undistort images on-the-fly before training")
+                       "Remove lens distortion before training: each image and its mask, depth and "
+                       "normal map are resampled once from full resolution into a distortion-free "
+                       "pinhole camera, which training then uses. Alternative to --gut for distorted "
+                       "or non-pinhole cameras")
             .locale("training_params.undistort")
             .tooltip("training.tooltip.undistort")
             .flags(PROP_NEEDS_RESTART)

@@ -4,7 +4,7 @@
 
 #include "rendering/scene_upscaler_registry.hpp"
 
-#include "rendering/nvidia_dlss_plugin.hpp"
+#include "rendering/scene_upscaler_plugin.hpp"
 
 #include <algorithm>
 #include <array>
@@ -52,24 +52,12 @@ namespace lfs::vis {
                 .input_scale = 0.50f,
             },
         };
-        constexpr std::array NVIDIA_DLSS_PRESETS{
-            SceneUpscalerPreset{
-                .id = "quality",
-                .label_key = "preferences.scene_reconstruction_quality",
-                .input_scale = 2.0f / 3.0f,
-            },
-            SceneUpscalerPreset{
-                .id = "balanced",
-                .label_key = "preferences.scene_reconstruction_balanced",
-                .input_scale = 0.58f,
-            },
-            SceneUpscalerPreset{
-                .id = "performance",
-                .label_key = "preferences.scene_reconstruction_performance",
-                .input_scale = 0.50f,
-            },
+        constexpr std::array METALFX_PRESETS{
+            SceneUpscalerPreset{"quality", "preferences.scene_reconstruction_quality", 2.0f / 3.0f},
+            SceneUpscalerPreset{"balanced", "preferences.scene_reconstruction_balanced", 1.0f / 1.7f},
+            SceneUpscalerPreset{"performance", "preferences.scene_reconstruction_performance", 0.5f},
         };
-        constexpr std::array DESCRIPTORS{
+        const std::array DESCRIPTORS{
             SceneUpscalerDescriptor{
                 .backend = SceneUpscalerBackend::Native,
                 .id = "native",
@@ -89,52 +77,63 @@ namespace lfs::vis {
                 .presets = TEMPORAL_PRESETS,
             },
             SceneUpscalerDescriptor{
-                .backend = SceneUpscalerBackend::NvidiaDlss,
-                .id = "nvidia-dlss",
-                .label_key = "preferences.scene_reconstruction_nvidia_dlss",
-                .presets = NVIDIA_DLSS_PRESETS,
+                .backend = SceneUpscalerBackend::MetalFxSpatial,
+                .id = "metalfx_spatial",
+                .presets = METALFX_PRESETS,
+                .display_name = "Apple MetalFX Spatial",
+            },
+            SceneUpscalerDescriptor{
+                .backend = SceneUpscalerBackend::MetalFxTemporal,
+                .id = "metalfx_temporal",
+                .presets = METALFX_PRESETS,
+                .display_name = "Apple MetalFX Temporal",
             },
         };
 
-        [[nodiscard]] constexpr std::size_t descriptorCountExcludingNvidiaDlss() {
-            std::size_t count = 0;
-            for (const auto& descriptor : DESCRIPTORS) {
-                if (descriptor.backend != SceneUpscalerBackend::NvidiaDlss)
-                    ++count;
-            }
-            return count;
-        }
-
-        [[nodiscard]] constexpr auto makeDescriptorsWithoutNvidiaDlss() {
-            std::array<SceneUpscalerDescriptor, descriptorCountExcludingNvidiaDlss()> filtered{};
-            std::size_t count = 0;
-            for (const auto& descriptor : DESCRIPTORS) {
-                if (descriptor.backend != SceneUpscalerBackend::NvidiaDlss)
-                    filtered[count++] = descriptor;
-            }
-            return filtered;
-        }
-
-        constexpr auto DESCRIPTORS_WITHOUT_NVIDIA_DLSS = makeDescriptorsWithoutNvidiaDlss();
     } // namespace
 
-    std::span<const SceneUpscalerDescriptor> sceneUpscalerDescriptors() {
-        if (nvidiaDlssPluginAvailable())
-            return DESCRIPTORS;
-        return DESCRIPTORS_WITHOUT_NVIDIA_DLSS;
+    std::vector<SceneUpscalerDescriptor> sceneUpscalerDescriptors() {
+        std::vector<SceneUpscalerDescriptor> available;
+        for (const auto& descriptor : DESCRIPTORS) {
+            if (isMetalFxBackend(descriptor.backend) && !metalFxBackendAvailable(descriptor.backend))
+                continue;
+            auto* const plugin = sceneUpscalerPlugin(descriptor.backend);
+            if (plugin == nullptr || plugin->available())
+                available.push_back(descriptor);
+        }
+        for (auto* const plugin : sceneUpscalerPlugins()) {
+            if (plugin->available())
+                available.push_back(sceneUpscalerDescriptor(plugin->info().backend));
+        }
+        return available;
     }
 
-    const SceneUpscalerDescriptor& sceneUpscalerDescriptor(const SceneUpscalerBackend backend) {
+    SceneUpscalerDescriptor sceneUpscalerDescriptor(const SceneUpscalerBackend backend) {
         const auto found =
             std::ranges::find(DESCRIPTORS, backend, &SceneUpscalerDescriptor::backend);
-        return found != DESCRIPTORS.end() ? *found : DESCRIPTORS.front();
+        if (found != DESCRIPTORS.end())
+            return *found;
+        if (auto* const plugin = sceneUpscalerPlugin(backend)) {
+            return {
+                .backend = backend,
+                .id = plugin->info().id,
+                .label_key = "",
+                .presets = plugin->info().presets,
+                .display_name = plugin->displayName(),
+            };
+        }
+        return DESCRIPTORS.front();
     }
 
     std::optional<SceneUpscalerBackend> sceneUpscalerBackendFromId(const std::string_view id) {
         const auto found = std::ranges::find(DESCRIPTORS, id, &SceneUpscalerDescriptor::id);
-        if (found == DESCRIPTORS.end())
-            return std::nullopt;
-        return found->backend;
+        if (found != DESCRIPTORS.end())
+            return found->backend;
+        for (const auto* const plugin : sceneUpscalerPlugins()) {
+            if (plugin->info().id == id)
+                return plugin->info().backend;
+        }
+        return std::nullopt;
     }
 
     bool sceneUpscalerBackendAvailable(const SceneUpscalerBackend backend) {
@@ -179,7 +178,8 @@ namespace lfs::vis {
 
     SceneUpscalerSelection resolveSceneUpscalerSelection(
         const SceneUpscalerBackend requested,
-        const bool runtime_available) {
+        const bool runtime_available,
+        const SceneUpscalerFallback fallback) {
         if (requested == SceneUpscalerBackend::Native || runtime_available) {
             return {
                 .requested = requested,
@@ -190,7 +190,7 @@ namespace lfs::vis {
         return {
             .requested = requested,
             .effective = SceneUpscalerBackend::Native,
-            .fallback = SceneUpscalerFallback::RuntimeUnavailable,
+            .fallback = fallback,
         };
     }
 
@@ -200,8 +200,16 @@ namespace lfs::vis {
             return "none";
         case SceneUpscalerFallback::RuntimeUnavailable:
             return "runtime_unavailable";
+        case SceneUpscalerFallback::UnsupportedMode:
+            return "unsupported_mode";
         }
         return "unknown";
     }
 
 } // namespace lfs::vis
+
+#if !defined(LFS_TENSOR_METAL) || defined(LFS_GRAPHICS_VULKAN)
+namespace lfs::vis {
+    bool metalFxBackendAvailable(SceneUpscalerBackend) { return false; }
+}
+#endif

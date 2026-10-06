@@ -8,13 +8,17 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
-#include "core/tensor_backend.hpp"
+#include "graphics_context.hpp"
 #include "gui/gui_manager.hpp"
 #include "input/input_controller.hpp"
 #include "input/sdl_coordinate_utils.hpp"
 #include "input/sdl_key_mapping.hpp"
-#include "vulkan_context.hpp"
+#ifdef __APPLE__
+#include "preferences.hpp"
+#endif
+#ifndef LFS_GRAPHICS_METAL
 #include "vulkan_loader_probe.hpp"
+#endif
 #include "window_state_utils.hpp"
 #include <SDL3/SDL.h>
 #if defined(__linux__)
@@ -29,6 +33,7 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace lfs::vis {
@@ -50,14 +55,14 @@ namespace lfs::vis {
         constexpr unsigned kResizeTop = 1u << 2;
         constexpr unsigned kResizeBottom = 1u << 3;
 
-        bool screenCornerGestureAtWindowPoint(SDL_Window* const window, const int x, const int y) {
+        bool screenGestureAtWindowPoint(SDL_Window* const window, const int x, const int y) {
             if (!window)
                 return false;
             auto* const gui = services().guiOrNull();
             if (!gui)
                 return false;
             const auto position = glm::vec2(x, y) * input::windowPixelScale(window);
-            return gui->screenHost().cornerGestureAt(position.x, position.y);
+            return gui->screenHost().resizeGestureAt(position.x, position.y);
         }
 
         std::vector<WindowRectangle> availableDisplayRectangles() {
@@ -189,6 +194,7 @@ namespace lfs::vis {
             switch (event.type) {
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             case SDL_EVENT_WINDOW_FOCUS_LOST:
+            case SDL_EVENT_WINDOW_FOCUS_GAINED:
             case SDL_EVENT_WINDOW_RESIZED:
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
             case SDL_EVENT_WINDOW_MINIMIZED:
@@ -210,6 +216,8 @@ namespace lfs::vis {
                 return event.key.windowID == target_window_id;
             case SDL_EVENT_TEXT_INPUT:
                 return event.text.windowID == target_window_id;
+            case SDL_EVENT_TEXT_EDITING:
+                return event.edit.windowID == target_window_id;
             case SDL_EVENT_DROP_FILE:
             case SDL_EVENT_DROP_COMPLETE:
                 return event.drop.windowID == target_window_id;
@@ -250,10 +258,10 @@ namespace lfs::vis {
             return haystack && needle && std::strstr(haystack, needle) != nullptr;
         }
 
-        glm::ivec2 globalMousePosition() {
+        glm::ivec2 globalMousePosition(SDL_Window* window) {
             float global_x = 0.0f;
             float global_y = 0.0f;
-            SDL_GetGlobalMouseState(&global_x, &global_y);
+            input::globalMouseState(window, &global_x, &global_y);
             return {
                 static_cast<int>(std::lround(global_x)),
                 static_cast<int>(std::lround(global_y)),
@@ -288,7 +296,7 @@ namespace lfs::vis {
             if (!getX11WindowHandle(window, display, xwindow))
                 return false;
 
-            const glm::ivec2 global_mouse = globalMousePosition();
+            const glm::ivec2 global_mouse = globalMousePosition(window);
 
             const Atom moveresize = XInternAtom(display, "_NET_WM_MOVERESIZE", False);
             if (moveresize == None)
@@ -369,7 +377,7 @@ namespace lfs::vis {
 
             // Area corner gestures share the outermost pixels with borderless
             // window resize hit testing. Deliver those presses to the app.
-            if (screenCornerGestureAtWindowPoint(window, area->x, area->y))
+            if (screenGestureAtWindowPoint(window, area->x, area->y))
                 return SDL_HITTEST_NORMAL;
 
             const bool left = area->x >= 0 && area->x < kResizeBorder;
@@ -523,14 +531,10 @@ namespace lfs::vis {
 #endif
     } // namespace
 
-    void* WindowManager::callback_handler_ = nullptr;
-
     WindowManager::WindowManager(const std::string& title, const int width, const int height,
                                  const int monitor_x, const int monitor_y,
-                                 const int monitor_width, const int monitor_height,
-                                 const GraphicsBackend graphics_backend)
-        : graphics_backend_(graphics_backend),
-          title_(title),
+                                 const int monitor_width, const int monitor_height)
+        : title_(title),
           window_size_(width, height),
           framebuffer_size_(width, height),
           monitor_pos_(monitor_x, monitor_y),
@@ -538,13 +542,15 @@ namespace lfs::vis {
     }
 
     WindowManager::~WindowManager() {
+        SDL_RemoveEventWatch(watchEvent, this);
 #if defined(__linux__)
         if (g_x11_error_owner == this) {
             g_x11_error_owner = nullptr;
         }
 #endif
-        releaseTensorBackendDevice();
-        vulkan_context_.reset();
+        if (graphics_context_)
+            graphics_context_->disconnectTensorBackend();
+        graphics_context_.reset();
         if (window_) {
             SDL_DestroyWindow(window_);
         }
@@ -686,7 +692,9 @@ namespace lfs::vis {
     }
 
     bool WindowManager::init() {
+#ifndef LFS_GRAPHICS_METAL
         configureValidationLayerSearchPath();
+#endif
 
         if (shouldPreferX11OnGnome()) {
             SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11,wayland");
@@ -705,6 +713,17 @@ namespace lfs::vis {
             LOG_INFO("SDL video driver: {}", video_driver);
         }
 
+#ifdef __APPLE__
+        LOG_INFO("Scene renderer={} tensor={}",
+                 lfs::rendering::viewerBackendName(lfs::rendering::desktopViewerBackend()),
+                 lfs::core::gpu_backend_name(lfs::core::configured_gpu_backend()));
+#ifdef LFS_GRAPHICS_METAL
+        LOG_INFO("Desktop compositor uses tensor programs with native Metal presentation");
+#else
+        LOG_INFO("Desktop compositor uses Vulkan for presentation, UI and editor overlays, including with the Metal viewer");
+#endif
+#endif
+#ifndef LFS_GRAPHICS_METAL
         const auto vulkan_info = probeVulkanLoader();
         if (vulkan_info.enabled) {
             if (vulkan_info.loader_available) {
@@ -713,12 +732,20 @@ namespace lfs::vis {
                 LOG_WARN("Vulkan viewer dependency is enabled, but the loader probe failed: {}", vulkan_info.error);
             }
         }
+#endif
 
         window_ = SDL_CreateWindow(
             title_.c_str(),
             window_size_.x,
             window_size_.y,
-            SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN |
+            (
+#ifdef LFS_GRAPHICS_METAL
+                SDL_WINDOW_METAL
+#else
+                SDL_WINDOW_VULKAN
+#endif
+                ) |
+                SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN |
                 SDL_WINDOW_BORDERLESS);
 
         if (!window_) {
@@ -781,26 +808,33 @@ namespace lfs::vis {
         SDL_GetWindowSizeInPixels(window_, &fb_w, &fb_h);
         framebuffer_size_ = glm::ivec2(fb_w, fb_h);
 
-        vulkan_context_ = std::make_unique<VulkanContext>();
-        if (!vulkan_context_->init(window_, framebuffer_size_.x, framebuffer_size_.y)) {
-            std::cerr << "Failed to initialize Vulkan context: " << vulkan_context_->lastError() << std::endl;
-            vulkan_context_.reset();
+        graphics_context_ = createGraphicsContext();
+        if (!graphics_context_->initialize(window_, framebuffer_size_.x, framebuffer_size_.y)) {
+            std::cerr << "Failed to initialize graphics context: " << graphics_context_->lastError() << std::endl;
+            graphics_context_.reset();
             SDL_DestroyWindow(window_);
             window_ = nullptr;
             SDL_Quit();
             return false;
         }
-        adoptTensorBackendDevice();
-        if (!vulkan_context_->presentBootstrapFrame(0.11f, 0.11f, 0.14f, 1.0f)) {
-            std::cerr << "Failed to present Vulkan bootstrap frame: " << vulkan_context_->lastError() << std::endl;
-            releaseTensorBackendDevice();
-            vulkan_context_.reset();
+        graphics_context_->connectTensorBackend();
+        if (!graphics_context_->presentBootstrapFrame(0.11f, 0.11f, 0.14f, 1.0f)) {
+            std::cerr << "Failed to present graphics bootstrap frame: " << graphics_context_->lastError() << std::endl;
+            graphics_context_->disconnectTensorBackend();
+            graphics_context_.reset();
             SDL_DestroyWindow(window_);
             window_ = nullptr;
             SDL_Quit();
             return false;
         }
-        LOG_INFO("Vulkan window context initialized");
+        SDL_AddEventWatch(watchEvent, this);
+        // Directives inside macro arguments are undefined behaviour (MSVC C2059).
+#ifdef LFS_GRAPHICS_METAL
+        constexpr std::string_view graphics_backend = "Metal";
+#else
+        constexpr std::string_view graphics_backend = "Vulkan";
+#endif
+        LOG_INFO("{} window context initialized", graphics_backend);
         return true;
     }
 
@@ -853,16 +887,16 @@ namespace lfs::vis {
 
         window_size_ = next_window_size;
         framebuffer_size_ = next_framebuffer_size;
-        if (vulkan_context_ && framebuffer_size_changed) {
+        if (graphics_context_ && framebuffer_size_changed) {
             const ResizeIntent effective_intent =
                 intent == ResizeIntent::Interactive && (is_fullscreen_ || isMaximized())
                     ? ResizeIntent::Exact
                     : intent;
-            const auto vulkan_resize_intent =
+            const auto graphics_resize_intent =
                 effective_intent == ResizeIntent::Interactive
-                    ? VulkanContext::ResizeIntent::Interactive
-                    : VulkanContext::ResizeIntent::Exact;
-            vulkan_context_->notifyFramebufferResized(fbW, fbH, vulkan_resize_intent);
+                    ? GraphicsResizeIntent::Interactive
+                    : GraphicsResizeIntent::Exact;
+            graphics_context_->notifyFramebufferResized(fbW, fbH, graphics_resize_intent);
         }
         if (size_changed) {
             lfs::core::events::ui::WindowResized{.width = fbW, .height = fbH}.emit();
@@ -877,16 +911,65 @@ namespace lfs::vis {
         return std::chrono::steady_clock::now() - last_window_size_change_time_ <= max_age;
     }
 
-    void WindowManager::pollEvents() {
-        frame_input_.beginFrame();
-        const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
+    bool WindowManager::watchEvent(void* userdata, SDL_Event* event) {
+        // Native events are translated on the SDL thread. Focus must be applied
+        // before SDL translates the next key into text; worker events stay queued.
+        if (!SDL_IsMainThread())
+            return true;
+        auto& self = *static_cast<WindowManager*>(userdata);
+        if (!self.pumping_events_ || self.watching_event_)
+            return true;
+        self.watching_event_ = true;
+        self.drainQueuedEvents();
+        self.dispatched_events_.emplace_back(event->type, event->common.timestamp);
+        self.dispatchQueuedEvent(*event);
+        self.watching_event_ = false;
+        return true;
+    }
+
+    void WindowManager::dispatchQueuedEvent(const SDL_Event& event) {
+        const SDL_WindowID id = window_ ? SDL_GetWindowID(window_) : 0;
+        if (!input::prepareInjectedPointerEvent(event))
+            return;
+        if (auto* gui = services().guiOrNull())
+            gui->prepareInput();
+        if (!shouldSuppressGuiRoutingForResize(event, id))
+            frame_input_.processEvent(event, id);
+        processEvent(event);
+        if (auto* gui = services().guiOrNull())
+            gui->prepareInput();
+    }
+
+    void WindowManager::dispatchPolledEvent(const SDL_Event& event) {
+        const auto token = std::pair(event.type, event.common.timestamp);
+        const auto it = std::find(dispatched_events_.begin(), dispatched_events_.end(), token);
+        if (it != dispatched_events_.end())
+            dispatched_events_.erase(it);
+        else
+            dispatchQueuedEvent(event);
+    }
+
+    bool WindowManager::drainQueuedEvents() {
+        bool drained = false;
         SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            const bool suppress_gui_route = shouldSuppressGuiRoutingForResize(event, main_window_id);
-            if (!suppress_gui_route)
-                frame_input_.processEvent(event, main_window_id);
-            processEvent(event);
+        while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_EVENT_FIRST, SDL_EVENT_LAST) > 0) {
+            drained = true;
+            dispatchPolledEvent(event);
         }
+        return drained;
+    }
+
+    void WindowManager::pollEvents() {
+        input::finishInjectedPointerFrame();
+        frame_input_.beginFrame();
+        SDL_Event event;
+        // Drain previously queued events before pumping new native events.
+        drainQueuedEvents();
+        pumping_events_ = true;
+        while (SDL_PollEvent(&event))
+            dispatchPolledEvent(event);
+        pumping_events_ = false;
+        dispatched_events_.clear();
         if (isManualResizeActive())
             updateManualResize();
         finishTitlebarDragIfReleased();
@@ -895,33 +978,33 @@ namespace lfs::vis {
         flushPendingTitlebarDoubleClick();
     }
 
-    void WindowManager::waitEvents(double timeout_seconds) {
+    void WindowManager::waitEvents(std::optional<double> timeout_seconds) {
+        input::finishInjectedPointerFrame();
         frame_input_.beginFrame();
-        const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
         SDL_Event event;
-        if (vulkan_context_ &&
-            vulkan_context_->hasPendingSwapchainResize()) {
-            const double resize_wait = vulkan_context_->secondsUntilPendingSwapchainResizeReady();
-            timeout_seconds = std::min(timeout_seconds,
-                                       resize_wait > 0.0
-                                           ? std::max(kPendingResizeMinWaitSeconds, resize_wait)
-                                           : 0.0);
+        if (graphics_context_ &&
+            graphics_context_->hasPendingResize()) {
+            const double resize_wait = graphics_context_->secondsUntilPendingResizeReady();
+            const double resize_deadline = resize_wait > 0.0
+                                               ? std::max(kPendingResizeMinWaitSeconds, resize_wait)
+                                               : 0.0;
+            timeout_seconds = timeout_seconds ? std::min(*timeout_seconds, resize_deadline)
+                                              : std::optional<double>{resize_deadline};
         }
         if (isManualResizeActive())
-            timeout_seconds = std::min(timeout_seconds, 1.0 / 60.0);
-        const int timeout_ms = static_cast<int>(timeout_seconds * 1000.0);
+            timeout_seconds = timeout_seconds ? std::min(*timeout_seconds, 1.0 / 60.0)
+                                              : std::optional<double>{1.0 / 60.0};
+        const int timeout_ms = drainQueuedEvents() ? 0
+                               : timeout_seconds   ? static_cast<int>(std::ceil(*timeout_seconds * 1000.0))
+                                                   : -1;
+        pumping_events_ = true;
         if (SDL_WaitEventTimeout(&event, timeout_ms)) {
-            bool suppress_gui_route = shouldSuppressGuiRoutingForResize(event, main_window_id);
-            if (!suppress_gui_route)
-                frame_input_.processEvent(event, main_window_id);
-            processEvent(event);
-            while (SDL_PollEvent(&event)) {
-                suppress_gui_route = shouldSuppressGuiRoutingForResize(event, main_window_id);
-                if (!suppress_gui_route)
-                    frame_input_.processEvent(event, main_window_id);
-                processEvent(event);
-            }
+            do {
+                dispatchPolledEvent(event);
+            } while (SDL_PollEvent(&event));
         }
+        pumping_events_ = false;
+        dispatched_events_.clear();
         if (isManualResizeActive())
             updateManualResize();
         finishTitlebarDragIfReleased();
@@ -946,7 +1029,9 @@ namespace lfs::vis {
         // Wake SDL_WaitEventTimeout so queued viewer-thread work is serviced promptly.
         SDL_Event event{};
         event.type = SDL_EVENT_USER;
-        SDL_PushEvent(&event);
+        // Watches run under SDL's watcher mutex. A worker may hold the Python
+        // lock while waking us, so enqueue wakeups without invoking watches.
+        SDL_PeepEvents(&event, 1, SDL_ADDEVENT, 0, 0);
     }
 
     bool WindowManager::shouldSuppressGuiRoutingForResize(const SDL_Event& event,
@@ -976,13 +1061,24 @@ namespace lfs::vis {
 
         const int mouse_x = static_cast<int>(std::round(event.button.x));
         const int mouse_y = static_cast<int>(std::round(event.button.y));
-        if (screenCornerGestureAtWindowPoint(window_, mouse_x, mouse_y))
+        if (screenGestureAtWindowPoint(window_, mouse_x, mouse_y))
             return false;
         return resizeEdgeAt(mouse_x, mouse_y) != ResizeEdge::NoEdge;
     }
 
     void WindowManager::processEvent(const SDL_Event& event) {
         const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
+
+        if (std::getenv("LFS_TRACE_INPUT") && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN))
+            LOG_INFO("INPUT arrival type={} key={} text={} active={}", event.type,
+                     event.type == SDL_EVENT_KEY_DOWN ? int(event.key.scancode) : 0,
+                     event.type == SDL_EVENT_TEXT_INPUT ? event.text.text : "", SDL_TextInputActive(window_));
+
+        gui::RmlUIManager::InputDispatchResult dispatched;
+        if (eventTargetsWindow(event, main_window_id) && !shouldSuppressGuiRoutingForResize(event, main_window_id)) {
+            if (auto* gui = services().guiOrNull())
+                dispatched = gui->dispatchInputEvent(event);
+        }
 
         switch (event.type) {
         case SDL_EVENT_QUIT:
@@ -1098,7 +1194,7 @@ namespace lfs::vis {
                 if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                     const ResizeEdge resize_edge = resizeEdgeAt(mouse_x, mouse_y);
                     if (resize_edge != ResizeEdge::NoEdge) {
-                        if (!screenCornerGestureAtWindowPoint(window_, mouse_x, mouse_y)) {
+                        if (!screenGestureAtWindowPoint(window_, mouse_x, mouse_y)) {
                             if constexpr (kUseManualBorderlessResize) {
                                 beginManualResize(resize_edge);
                                 break;
@@ -1200,7 +1296,7 @@ namespace lfs::vis {
                                    : input::ACTION_RELEASE;
             const int mods = input::sdlModsToAppMods(event.key.mod);
             input_controller_->handleKey(
-                physical_key, logical_key, static_cast<int>(event.key.scancode), action, mods);
+                physical_key, logical_key, static_cast<int>(event.key.scancode), action, mods, dispatched.owned_release, dispatched.consumed);
             break;
         }
 
@@ -1432,7 +1528,7 @@ namespace lfs::vis {
 
         float mouse_x = 0.0f;
         float mouse_y = 0.0f;
-        SDL_GetMouseState(&mouse_x, &mouse_y);
+        input::mouseStateInWindowCoordinates(window_, &mouse_x, &mouse_y);
         setResizeCursorForEdge(resizeEdgeAt(static_cast<int>(std::round(mouse_x)),
                                             static_cast<int>(std::round(mouse_y))));
     }
@@ -1455,7 +1551,7 @@ namespace lfs::vis {
             return;
 
         manual_resize_edge_ = edge;
-        manual_resize_start_global_ = globalMousePosition();
+        manual_resize_start_global_ = globalMousePosition(window_);
         SDL_GetWindowPosition(window_, &manual_resize_start_pos_.x, &manual_resize_start_pos_.y);
         SDL_GetWindowSize(window_, &manual_resize_start_size_.x, &manual_resize_start_size_.y);
         saveBorderlessRestoreGeometry();
@@ -1470,7 +1566,7 @@ namespace lfs::vis {
         const auto has_edge = [this](const ResizeEdge flag) {
             return (static_cast<unsigned>(manual_resize_edge_) & static_cast<unsigned>(flag)) != 0;
         };
-        const glm::ivec2 current_global = globalMousePosition();
+        const glm::ivec2 current_global = globalMousePosition(window_);
         const glm::ivec2 delta = current_global - manual_resize_start_global_;
 
         int next_x = manual_resize_start_pos_.x;
@@ -1555,6 +1651,7 @@ namespace lfs::vis {
         frame_input_.mouse_released[2] = false;
         frame_input_.mouse_wheel = 0.0f;
         frame_input_.mouse_wheel_x = 0.0f;
+        frame_input_.pinch_scale = 1.0f;
         frame_input_.mouse_button_events.clear();
         frame_input_.mouse_moved = false;
     }
@@ -1563,7 +1660,7 @@ namespace lfs::vis {
         if (!window_ || is_fullscreen_)
             return;
 
-        titlebar_drag_start_global_ = globalMousePosition();
+        titlebar_drag_start_global_ = globalMousePosition(window_);
         titlebar_drag_start_local_ = glm::ivec2(local_x, local_y);
         titlebar_drag_started_maximized_ = isMaximized();
 
@@ -1614,7 +1711,7 @@ namespace lfs::vis {
         if (!titlebar_drag_active_ && !isManualResizeActive())
             return;
 
-        const SDL_MouseButtonFlags buttons = SDL_GetGlobalMouseState(nullptr, nullptr);
+        const SDL_MouseButtonFlags buttons = input::globalMouseState(window_, nullptr, nullptr);
         if ((buttons & SDL_BUTTON_LMASK) != 0)
             return;
 
@@ -1782,7 +1879,7 @@ namespace lfs::vis {
         if (!window_ || !isMaximized())
             return;
 
-        const glm::ivec2 current_global = globalMousePosition();
+        const glm::ivec2 current_global = globalMousePosition(window_);
 
         const float anchor_ratio_x = window_size_.x > 0
                                          ? std::clamp(static_cast<float>(titlebar_drag_start_local_.x) /
@@ -1828,7 +1925,7 @@ namespace lfs::vis {
         if (!window_)
             return;
 
-        const glm::ivec2 current_global = globalMousePosition();
+        const glm::ivec2 current_global = globalMousePosition(window_);
 
         SDL_SetWindowPosition(window_,
                               current_global.x - titlebar_drag_window_offset_.x,
@@ -1840,7 +1937,7 @@ namespace lfs::vis {
         if (!window_ || !titlebar_drag_active_)
             return false;
 
-        const glm::ivec2 current_global = globalMousePosition();
+        const glm::ivec2 current_global = globalMousePosition(window_);
 
         constexpr int kPointerDragThresholdPx = 4;
         const glm::ivec2 pointer_delta = glm::abs(current_global - titlebar_drag_start_global_);
@@ -1852,7 +1949,7 @@ namespace lfs::vis {
         if (!window_)
             return false;
 
-        const glm::ivec2 global_mouse = globalMousePosition();
+        const glm::ivec2 global_mouse = globalMousePosition(window_);
         const SDL_Point global_point{global_mouse.x, global_mouse.y};
 
         SDL_DisplayID display_id = SDL_GetDisplayForPoint(&global_point);
@@ -1883,51 +1980,6 @@ namespace lfs::vis {
 
         pending_titlebar_double_click_ = false;
         toggleMaximized();
-    }
-
-    void WindowManager::adoptTensorBackendDevice() {
-        if (!lfs::core::tensor_backend_shares_vulkan_device())
-            return;
-        const auto& device = vulkan_context_->tensorBackendDevice();
-        if (!device.complete) {
-            LOG_INFO("Tensor Vulkan backend keeps its own device: the window device has no spare compute queue or lacks a required feature");
-            return;
-        }
-        const lfs::core::VulkanDeviceHandles handles{
-            .instance = vulkan_context_->instance(),
-            .physical_device = vulkan_context_->physicalDevice(),
-            .device = vulkan_context_->device(),
-            .queue = device.queue,
-            .queue_family = device.queue_family,
-            .sharing_queue_families = {vulkan_context_->graphicsQueueFamily(), vulkan_context_->computeQueueFamily(), device.queue_family},
-            .sharing_queue_family_count = 3,
-            .shader_atomic_float = device.shader_atomic_float,
-            .memory_budget = false,
-            .shader_float64 = device.shader_float64,
-            .shader_float16 = device.shader_float16,
-            .vulkan_memory_model = device.vulkan_memory_model,
-            .vulkan_memory_model_device_scope = device.vulkan_memory_model_device_scope,
-            .cooperative_matrix = device.cooperative_matrix,
-            .external_memory = vulkan_context_->externalMemoryInteropEnabled(),
-            .external_semaphore = vulkan_context_->externalSemaphoreInteropEnabled(),
-        };
-        if (const auto status = lfs::core::adopt_vulkan_device(handles); !status) {
-            LOG_WARN("Tensor Vulkan backend keeps its own device: {}", lfs::format_for_developer(status.error()));
-            return;
-        }
-        tensor_backend_adopted_ = true;
-        LOG_INFO("Tensor Vulkan backend runs on the window device (queue family {})", device.queue_family);
-    }
-
-    void WindowManager::releaseTensorBackendDevice() {
-        if (!tensor_backend_adopted_) {
-            return;
-        }
-        tensor_backend_adopted_ = false;
-        if (const auto status = lfs::core::shutdown_gpu_backend(lfs::core::GpuBackend::Vulkan); !status) {
-            LOG_WARN("Tensor Vulkan backend shutdown failed before the window device is destroyed: {}",
-                     lfs::format_for_developer(status.error()));
-        }
     }
 
 } // namespace lfs::vis

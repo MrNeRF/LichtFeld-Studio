@@ -8,7 +8,7 @@
 #include "gui/string_keys.hpp"
 #include "io/loader.hpp"
 #include "rendering/coordinate_conventions.hpp"
-#include "rendering/vulkan_external_tensor.hpp"
+#include "rendering/graphics_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
 #include <optional>
 #include <shared_mutex>
@@ -103,7 +103,6 @@ namespace lfs::vis::gui {
                 continue;
             snapshot.meshes.push_back(VideoExportMeshSnapshot{
                 .mesh = cloneMeshData(*vm.mesh),
-                .node_id = vm.node_id,
                 .transform = vm.transform,
                 .is_selected = vm.is_selected,
             });
@@ -160,17 +159,6 @@ namespace lfs::vis::gui {
         }
 
         return snapshot;
-    }
-
-    void refreshVideoExportMeshTransforms(
-        VideoExportSceneSnapshot& snapshot,
-        const lfs::core::Scene& scene) {
-        for (auto& mesh : snapshot.meshes) {
-            if (mesh.node_id == lfs::core::NULL_NODE || !scene.getNodeById(mesh.node_id))
-                continue;
-            mesh.transform = rendering::dataWorldTransformToVisualizerWorld(
-                scene.getWorldTransform(mesh.node_id));
-        }
     }
 
     std::expected<lfs::io::video::VideoExportOptions, std::string> validateVideoExportOptions(

@@ -1,0 +1,208 @@
+#node-editor-canvas {
+    background-color: @{background};
+    color: @{text};
+}
+#node-editor-breadcrumb {
+    background-color: @{alpha(surface,0.94)};
+    color: @{text_dim};
+    box-shadow: 0 2dp 5dp @{alpha(background,0.35)};
+}
+#node-editor-breadcrumb button {
+    background-color: transparent;
+    color: @{text};
+}
+#node-editor-breadcrumb button:hover {
+    color: @{primary};
+}
+.node-box {
+    background-color: @{surface};
+    border-color: @{border};
+    box-shadow: 0 2dp 5dp @{alpha(background,0.35)};
+}
+.node-box.selected {
+    border-color: @{primary};
+    box-shadow: 0 0 0 1dp @{alpha(primary,0.5)};
+}
+.node-box.failed {
+    border-color: @{error};
+    box-shadow: 0 0 0 1dp @{alpha(error,0.5)};
+}
+.node-box.node-frame {
+    background-color: transparent;
+    border-color: transparent;
+    box-shadow: none;
+}
+.frame-note {
+    color: @{text_dim};
+}
+.node-box.node-reroute {
+    background-color: transparent;
+    box-shadow: none;
+}
+.interface-type {
+    background-color: @{alpha(text,0.07)};
+    color: @{text_dim};
+}
+.interface-row button img {
+    image-color: @{text};
+}
+.node-box.node-note {
+    background-color: @{alpha(warning,0.14)};
+    border-color: @{alpha(warning,0.22)};
+    box-shadow: 0 2dp 5dp @{alpha(background,0.22)};
+}
+.node-title, .socket-row, .socket-input {
+    color: @{text};
+}
+.node-category-icon {
+    image-color: @{text};
+}
+.target-type, .node-description, .node-eval-time, #node-canvas-notice {
+    color: @{text_dim};
+}
+.node-help-text, .node-field-help, .node-add-preview-help {
+    color: @{text_dim};
+}
+.node-help-toggle, .node-learn-more {
+    background-color: transparent;
+    color: @{text};
+}
+.node-help-toggle:hover, .node-learn-more:hover {
+    color: @{primary};
+}
+#node-add-preview {
+    background-color: @{surface};
+    border-color: @{border};
+    color: @{text};
+}
+#node-editor-sidebar {
+    background-color: @{surface};
+    border-left-color: @{border};
+}
+.sidebar-section {
+    border-bottom-color: @{border};
+}
+.sidebar-heading, .target-name, .selected-node-name {
+    color: @{text};
+}
+.modifier-row {
+    background-color: transparent;
+    border-color: transparent;
+}
+.modifier-row.active {
+    background-color: @{alpha(primary,0.10)};
+    border-color: @{alpha(primary,0.30)};
+}
+.modifier-row:hover {
+    background-color: @{alpha(primary,0.07)};
+}
+.modifier-status {
+    background-color: @{success};
+}
+.modifier-status.failed {
+    background-color: @{error};
+}
+.modifier-status.disabled {
+    background-color: @{text_dim};
+}
+.modifier-eye, .modifier-menu {
+    color: @{text_dim};
+}
+.modifier-eye img {
+    image-color: @{text_dim};
+}
+.modifier-eye:hover img {
+    image-color: @{text};
+}
+.modifier-eye:hover, .modifier-menu:hover {
+    background-color: @{surface_bright};
+    color: @{text};
+}
+.modifier-eye.disabled {
+    opacity: 0.45;
+}
+#node-editor-canvas .node-scrub {
+    background-color: @{surface_bright};
+    border-color: @{alpha(border,0.65)};
+    decorator: none;
+}
+.node-step {
+    background-color: transparent;
+    color: @{text_dim};
+    decorator: none;
+}
+.node-step:hover, .node-step:active {
+    background-color: @{alpha(primary,0.2)};
+    color: @{text};
+}
+#node-editor-canvas .node-scrub:hover, #node-editor-canvas .node-scrub.is-dragging, #node-editor-canvas .node-scrub.is-editing {
+    border-color: @{primary};
+}
+#node-editor-canvas .scrub-field-fill {
+    background-color: @{alpha(primary,0.10)};
+    decorator: none;
+}
+#node-editor-canvas .scrub-field-display, #node-editor-canvas .scrub-field-label, #node-editor-canvas .scrub-field-input {
+    color: @{text};
+}
+.node-error {
+    background-color: @{alpha(error,0.12)};
+    color: @{error};
+}
+.node-colour-popup {
+    background-color: @{surface};
+    border-color: @{border};
+    box-shadow: @{layered_shadow.3};
+}
+.node-footer, .socket-optional, .node-settings, .node-add-heading, #node-add-empty {
+    color: @{text_dim};
+}
+.node-box.failed .node-footer {
+    color: @{error};
+}
+.node-progress {
+    background-color: @{primary};
+}
+.node-box.is-evaluating {
+    border-color: @{primary};
+}
+.node-box.queued {
+    border-color: @{alpha(primary,0.45)};
+}
+#node-add-menu, .node-add-category {
+    background-color: @{surface};
+    border-color: @{border};
+    box-shadow: @{layered_shadow.3};
+}
+#node-add-menu .node-add-item, #node-add-menu .node-add-heading {
+    background-color: transparent;
+    color: @{text};
+}
+#node-add-menu .node-add-item:hover, #node-add-menu .node-add-item.first-hit,
+#node-add-menu .node-add-heading:hover, #node-add-menu .node-add-heading.open {
+    background-color: @{alpha(primary,0.15)};
+}
+.settings-arrow {
+    border-left-color: @{text_dim};
+    border-top-color: transparent;
+    border-right-color: transparent;
+    border-bottom-color: transparent;
+}
+.node-title-tool.active {
+    background-color: @{alpha(primary,0.45)};
+    border-radius: 4dp;
+}
+.node-title-tool.active {
+    background-color: @{alpha(info,0.18)};
+    color: @{info};
+}
+.node-empty-templates > span, .node-empty-templates > div small {
+    color: @{text_dim};
+}
+.node-empty-templates > div button {
+    background-color: @{surface_bright};
+    color: @{text};
+}
+.node-empty-templates > div button:hover {
+    background-color: @{alpha(primary,0.14)};
+}

@@ -1,0 +1,306 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "builtin_common.hpp"
+
+#include "core/tensor_fused.hpp"
+
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <string_view>
+#include <vector>
+
+namespace lfs::nodes::builtin {
+    namespace {
+        core::fused::Kernel make_blend_kernel(const size_t rank) {
+            namespace f = core::fused;
+            f::Builder builder(rank);
+            const auto old_value = builder.input(DataType::Float32, rank).load();
+            const auto new_value = builder.input(DataType::Float32, rank).load();
+            const auto weight = builder.input(DataType::Float32, rank).load();
+            const auto mixed = old_value * (1.0f - weight) + new_value * weight;
+            builder.output(f::where(weight == 0.0f, old_value, f::where(weight == 1.0f, new_value, mixed)),
+                           DataType::Float32);
+            return f::Kernel(builder);
+        }
+
+        // One pass over the payload instead of a kernel and a payload-sized
+        // intermediate per operator; the fused kernel broadcasts the weight.
+        std::optional<core::Tensor> fused_blend(const core::Tensor& old_value, const core::Tensor& new_value,
+                                                const core::Tensor& weight) {
+            constexpr size_t max_rank = 4;
+            const std::array inputs{&old_value, &new_value, &weight};
+            size_t rank = 0;
+            for (const auto* input : inputs) {
+                if (input->device() != core::Device::GPU || input->dtype() != DataType::Float32)
+                    return std::nullopt;
+                rank = std::max(rank, input->ndim());
+            }
+            if (rank == 0 || rank > max_rank)
+                return std::nullopt;
+            std::vector<size_t> domain(rank, 1);
+            for (const auto* input : inputs)
+                for (size_t i = 0; i < input->ndim(); ++i) {
+                    auto& extent = domain[rank - input->ndim() + i];
+                    const size_t size = input->size(i);
+                    if (size != 1 && extent != 1 && size != extent)
+                        return std::nullopt;
+                    extent = size == 1 ? extent : size;
+                }
+            uint64_t count = 1;
+            for (const auto extent : domain)
+                count *= extent;
+            if (count == 0 || count > uint64_t(INT32_MAX))
+                return std::nullopt;
+            std::vector<core::Tensor> aligned;
+            for (const auto* input : inputs) {
+                uint64_t reach = 0;
+                for (size_t i = 0; i < input->ndim(); ++i)
+                    reach += uint64_t(input->stride(i)) * (input->size(i) - 1);
+                if (reach > uint64_t(INT32_MAX))
+                    return std::nullopt;
+                auto value = *input;
+                while (value.ndim() < rank)
+                    value = value.unsqueeze(0);
+                aligned.push_back(std::move(value));
+            }
+            static const std::array kernels{make_blend_kernel(1), make_blend_kernel(2), make_blend_kernel(3),
+                                            make_blend_kernel(4)};
+            return kernels[rank - 1](domain, aligned)[0];
+        }
+    } // namespace
+
+    std::string property_string(const NodeContext& context, std::string_view name, std::string fallback) {
+        const auto found = context.properties().find(std::string(name));
+        if (found != context.properties().end() && found->is_string())
+            return found->get<std::string>();
+        return fallback;
+    }
+
+    float property_float(const NodeContext& context, std::string_view name, float fallback) {
+        const auto found = context.properties().find(std::string(name));
+        if (found != context.properties().end() && found->is_number())
+            return found->get<float>();
+        return fallback;
+    }
+
+    int property_int(const NodeContext& context, std::string_view name, int fallback) {
+        return static_cast<int>(property_float(context, name, static_cast<float>(fallback)));
+    }
+
+    bool property_bool(const NodeContext& context, std::string_view name, bool fallback) {
+        const auto found = context.properties().find(std::string(name));
+        if (found != context.properties().end() && found->is_boolean())
+            return found->get<bool>();
+        return fallback;
+    }
+
+    float input_float(const NodeContext& context, std::string_view name, float fallback) {
+        if (const auto* value = context.input(name).get_if<float>())
+            return *value;
+        if (const auto* value = context.input(name).get_if<std::int64_t>())
+            return static_cast<float>(*value);
+        return fallback;
+    }
+
+    int input_int(const NodeContext& context, std::string_view name, int fallback) {
+        return static_cast<int>(input_float(context, name, static_cast<float>(fallback)));
+    }
+
+    Geometry geometry_input(const NodeContext& context, std::string_view name) {
+        if (const auto* value = context.input(name).get_if<Geometry>())
+            return *value;
+        return {};
+    }
+
+    core::Tensor selection(const NodeContext& context, std::string_view socket, const FieldContext& domain,
+                           bool structural) {
+        core::Tensor value = context.evaluate_field(socket, domain, FLOAT_SOCKET);
+        if (structural) {
+            auto mask = value.ge(0.5f);
+            if (socket == "Selection")
+                context.record_selection(domain, mask);
+            return mask;
+        }
+        if (socket == "Selection")
+            context.record_selection(domain, value.ge(0.5f));
+        // NaN (e.g. a negative base raised to a fraction) means unselected, not a NaN blend.
+        const auto clamped = value.clamp(0.0f, 1.0f);
+        return clamped.where(clamped.isnan().logical_not(), core::Tensor::zeros_like(clamped));
+    }
+
+    core::Tensor blend(const core::Tensor& old_value, const core::Tensor& new_value, core::Tensor weight) {
+        while (weight.ndim() < old_value.ndim())
+            weight = weight.unsqueeze(-1);
+        if (auto fused = fused_blend(old_value, new_value, weight))
+            return std::move(*fused);
+        const auto mixed = old_value * (weight.neg() + 1.0f) + new_value * weight;
+        return core::Tensor::where(weight.eq(0), old_value,
+                                   core::Tensor::where(weight.eq(1), new_value, mixed));
+    }
+
+    template <typename Component>
+    AttributeMap filter_attributes(const Component& component, const core::Tensor& keep) {
+        AttributeMap result;
+        for (const auto& [name, value] : component.attributes)
+            result.emplace(name, value.index_select(0, keep).contiguous());
+        return result;
+    }
+
+    SplatsComponent filter_splats(const SplatsComponent& source, const core::Tensor& mask) {
+        const Tensor keep =
+            mask.dtype() == DataType::Bool ? mask.nonzero().reshape({-1}).to(DataType::Int32) : mask;
+        return {source.means.index_select(0, keep).contiguous(),
+                source.sh0.index_select(0, keep).contiguous(),
+                source.shN.index_select(0, keep).contiguous(),
+                source.scaling.index_select(0, keep).contiguous(),
+                source.rotation.index_select(0, keep).contiguous(),
+                source.opacity.index_select(0, keep).contiguous(),
+                source.sh_degree,
+                source.scene_scale,
+                filter_attributes(source, keep)};
+    }
+
+    PointsComponent filter_points(const PointsComponent& source, const core::Tensor& mask) {
+        const Tensor keep =
+            mask.dtype() == DataType::Bool ? mask.nonzero().reshape({-1}).to(DataType::Int32) : mask;
+        return {source.positions.index_select(0, keep).contiguous(),
+                source.colors.index_select(0, keep).contiguous(), filter_attributes(source, keep)};
+    }
+
+    std::shared_ptr<core::MeshData> copy_mesh(const core::MeshData& source, core::Tensor vertices,
+                                              core::Tensor indices) {
+        auto mesh = std::make_shared<core::MeshData>();
+        mesh->vertices = std::move(vertices);
+        mesh->indices = std::move(indices);
+        mesh->normals = source.normals;
+        mesh->tangents = source.tangents;
+        mesh->texcoords = source.texcoords;
+        mesh->colors = source.colors;
+        mesh->materials = source.materials;
+        mesh->submeshes = source.submeshes;
+        mesh->texture_images = source.texture_images;
+        return mesh;
+    }
+
+    glm::vec3 input_vector(const NodeContext& context, std::string_view name) {
+        if (const auto* value = context.input(name).get_if<glm::vec3>())
+            return *value;
+        if (const auto* value = context.input(name).get_if<glm::vec4>())
+            return glm::vec3(*value);
+        return glm::vec3(0);
+    }
+
+    Tensor vector_tensor(glm::vec3 value, Device device) {
+        return Tensor::from_vector({value.x, value.y, value.z}, {1, 3}, Device::CPU).to(device);
+    }
+
+    Tensor matrix_tensor(const glm::mat3& value, Device device) {
+        // GLM columns become rows: row-vector tensor multiplication uses A transposed.
+        std::vector<float> rows;
+        for (int column = 0; column < 3; ++column)
+            for (int row = 0; row < 3; ++row)
+                rows.push_back(value[column][row]);
+        return Tensor::from_vector(rows, {3, 3}, Device::CPU).to(device);
+    }
+
+    Tensor safe_divide(const Tensor& a, const Tensor& b) {
+        return Tensor::where(b.eq(0), Tensor::zeros_like(a), a / b);
+    }
+
+    Tensor channel(const Tensor& value, int axis) {
+        return value.slice(1, axis, axis + 1).squeeze(1);
+    }
+
+    Field operation(std::string_view type, std::vector<Field> inputs,
+                    std::function<Tensor(const std::vector<Tensor>&)> evaluate) {
+        const bool dependent = std::ranges::any_of(inputs, &Field::context_dependent);
+        return Field(
+            std::string(type),
+            [inputs = std::move(inputs), evaluate = std::move(evaluate)](const FieldContext& context,
+                                                                         FieldMemo& memo) {
+                std::vector<Tensor> values;
+                values.reserve(inputs.size());
+                for (const auto& input : inputs)
+                    values.push_back(input.evaluate(context, memo));
+                return evaluate(values);
+            },
+            dependent);
+    }
+
+    Tensor rgb_to_hsv(const Tensor& rgb) {
+        const auto displayed = rgb.clamp(0, 1);
+        const auto maximum = displayed.max(1);
+        const auto delta = maximum - displayed.min(1);
+        const auto r = channel(displayed, 0);
+        const auto g = channel(displayed, 1);
+        const auto b = channel(displayed, 2);
+        const auto red = safe_divide(g - b, delta);
+        const auto green = safe_divide(b - r, delta) + 2;
+        const auto blue = safe_divide(r - g, delta) + 4;
+        auto hue = Tensor::where(maximum.eq(r), red, Tensor::where(maximum.eq(g), green, blue)) / 6;
+        hue = hue - hue.floor();
+        hue = Tensor::where(delta.eq(0), Tensor::zeros_like(hue), hue);
+        return Tensor::stack({hue, safe_divide(delta, maximum), maximum}, 1);
+    }
+
+    Tensor hsv_to_rgb(const Tensor& hsv) {
+        const auto h = channel(hsv, 0);
+        const auto s = channel(hsv, 1).clamp(0, 1);
+        const auto v = channel(hsv, 2);
+        const auto ramp = [&](float offset) {
+            const auto phase = h + offset;
+            return ((phase - phase.floor()) * 6 - 3).abs().sub(1).clamp(0, 1);
+        };
+        const auto red = v * (s.neg() + 1 + s * ramp(0));
+        const auto green = v * (s.neg() + 1 + s * ramp(2.0f / 3));
+        const auto blue = v * (s.neg() + 1 + s * ramp(1.0f / 3));
+        return Tensor::stack({red, green, blue}, 1);
+    }
+
+    SocketDecl in(std::string id, std::string type, Value value, bool field, bool multi) {
+        return {id, id, std::move(type), std::move(value), {}, {}, {}, field, multi, false};
+    }
+
+    SocketDecl out(std::string id, std::string type) {
+        auto socket = in(id, std::move(type), {}, false, false);
+        socket.hide_value = true;
+        return socket;
+    }
+
+    PropertyDecl prop(std::string id, PropertyKind kind, nlohmann::json value,
+                      std::vector<std::string> items) {
+        return {id, id, kind, std::move(value), std::move(items), {}, {}};
+    }
+
+    std::vector<SocketDecl> geometry_inputs(std::vector<SocketDecl> extra) {
+        extra.insert(extra.begin(), in("Geometry", std::string(GEOMETRY_SOCKET)));
+        return extra;
+    }
+
+    NodeTypeInfo type(std::string id, std::string category,
+                      std::vector<SocketDecl> inputs, std::vector<SocketDecl> outputs,
+                      std::function<void(NodeContext&)> evaluate, std::vector<PropertyDecl> properties) {
+        NodeTypeInfo result;
+        result.id = std::move(id);
+        result.category = std::move(category);
+        result.inputs = std::move(inputs);
+        result.outputs = std::move(outputs);
+        result.properties = std::move(properties);
+        result.evaluate = std::move(evaluate);
+        return result;
+    }
+
+    void register_type(NodeTypeRegistry& registry, NodeTypeInfo info) {
+        // Geometry nodes that only edit attributes.
+        static constexpr std::array<std::string_view, 16> keeps_elements{
+            "lfs.group_input", "lfs.group_output", "lfs.reroute", "lfs.transform_geometry", "lfs.set_position", "lfs.set_colour",
+            "lfs.set_opacity", "lfs.set_scale", "lfs.set_sh_degree", "lfs.sharpen",
+            "lfs.scale_clamp", "lfs.colour_correct", "lfs.recolour", "lfs.invert_colour", "lfs.rgb_curves",
+            "lfs.store_named_attribute"};
+        info.keeps_elements = std::ranges::find(keeps_elements, info.id) != keeps_elements.end();
+        set_builtin_node_text(info);
+        registry.register_type(std::move(info));
+    }
+
+} // namespace lfs::nodes::builtin

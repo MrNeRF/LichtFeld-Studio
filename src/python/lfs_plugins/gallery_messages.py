@@ -29,6 +29,7 @@ def localize_message(message):
     if text.startswith("gallery_project_"):
         key = {"gallery_project_no_splats": "eligibility.no_splats",
                "gallery_project_payload_unavailable": "eligibility.external_payloads",
+               "gallery_project_hdr_unavailable": "eligibility.hdr_missing",
                "gallery_project_not_supported": "eligibility.format",
                "gallery_project_commit_mismatch": "error.project_changed"}.get(text.split(":", 1)[0])
         return tr(key) if key else text

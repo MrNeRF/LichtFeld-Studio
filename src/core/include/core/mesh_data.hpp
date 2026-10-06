@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace lfs::core {
@@ -103,6 +104,14 @@ namespace lfs::core {
         // freshly allocated mesh for a destroyed one that happened to land on the same
         // heap address. generation() only tracks in-place edits of one mesh.
         uint64_t id() const { return id_; }
+
+        // Read-only payload capture: retain identity/generation while copying
+        // metadata and sharing immutable tensor storage, like SplatData snapshots.
+        std::shared_ptr<const MeshData> readOnlySnapshot() const {
+            auto snapshot = std::make_shared<MeshData>(to(vertices.device()));
+            snapshot->id_ = id_;
+            return snapshot;
+        }
 
         MeshData to(Device device) const {
             MeshData m;

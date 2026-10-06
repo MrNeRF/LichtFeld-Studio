@@ -7,6 +7,8 @@
 #include "core/export.hpp"
 #include "core/scene.hpp"
 #include "render_pass.hpp"
+#include "scene_renderer.hpp"
+#include "viewport_draw_types.hpp"
 
 namespace lfs::vis {
 
@@ -25,11 +27,6 @@ namespace lfs::vis {
         glm::ivec2 subregion_origin,
         glm::ivec2 subregion_full_size);
 
-    [[nodiscard]] LFS_VIS_API lfs::rendering::SplitViewGaussianPanelRenderState buildSplitViewGaussianPanelRenderState(
-        const FrameContext& ctx, glm::ivec2 render_size,
-        const Viewport* source_viewport = nullptr,
-        std::optional<SplitViewPanelId> render_panel = std::nullopt);
-
     [[nodiscard]] LFS_VIS_API lfs::rendering::SplitViewPointCloudPanelRenderState buildSplitViewPointCloudPanelRenderState(
         const FrameContext& ctx, glm::ivec2 render_size,
         const Viewport* source_viewport = nullptr);
@@ -37,12 +34,22 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API lfs::rendering::PointCloudRenderRequest buildPointCloudRenderRequest(
         const FrameContext& ctx, glm::ivec2 render_size, const std::vector<glm::mat4>& model_transforms);
 
+    // Point renderer request for `frame`: camera, filters, selection and depth
+    // view. The caller supplies the points, revisions and deleted mask; the
+    // request keeps pointers into `frame`.
+    [[nodiscard]] LFS_VIS_API PointSceneRenderer::RenderRequest buildPointSceneRequest(
+        const lfs::rendering::PointCloudRenderRequest& frame, const RenderSettings& settings);
+
+    // Scene meshes for this frame's camera, lit by a headlight.
+    [[nodiscard]] LFS_VIS_API ViewportMeshPassDesc buildViewportMeshes(
+        const FrameContext& ctx, const RenderSettings& settings);
+
+    // Environment background for this frame's camera; `enabled` decides whether it draws.
+    [[nodiscard]] LFS_VIS_API ViewportEnvironment buildViewportEnvironment(
+        const FrameContext& ctx, const RenderSettings& settings, bool enabled);
+
     // Visible splat node shown in a PLY-comparison panel, or null when the
     // scene has fewer than two visible splat slots.
-    [[nodiscard]] LFS_VIS_API const core::SceneNode* plyComparisonNodeForPanel(
-        const core::Scene& scene,
-        size_t split_view_offset,
-        SplitViewPanelId panel);
 
     // Scope scene/crop/ellipsoid/selection overlay state to one visible splat node so
     // a per-node comparison render can use identity transform indices.

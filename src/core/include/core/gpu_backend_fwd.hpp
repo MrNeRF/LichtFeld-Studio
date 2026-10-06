@@ -18,13 +18,27 @@ namespace lfs::core {
         Metal = 2,
     };
 
-    // Metal exists only on Apple platforms, so other builds keep two backends.
-#ifdef __APPLE__
-    inline constexpr std::array kGpuBackends{GpuBackend::CUDA, GpuBackend::Vulkan, GpuBackend::Metal};
-#else
-    inline constexpr std::array kGpuBackends{GpuBackend::CUDA, GpuBackend::Vulkan};
-#endif
+    // Dense enum-index table used by fixed per-backend state. Keep its shape
+    // stable even when a backend is not compiled.
+    inline constexpr std::array kGpuBackends{
+        GpuBackend::CUDA, GpuBackend::Vulkan, GpuBackend::Metal};
     inline constexpr size_t kGpuBackendCount = kGpuBackends.size();
+
+    // Availability/candidate enumeration excludes backends not compiled into
+    // this build. The Vulkan enum remains ABI-stable without being advertised.
+#if LFS_HAS_CUDA && defined(LFS_TENSOR_VULKAN)
+    inline constexpr std::array kCompiledGpuBackends{GpuBackend::CUDA, GpuBackend::Vulkan};
+#elif LFS_HAS_CUDA
+    inline constexpr std::array kCompiledGpuBackends{GpuBackend::CUDA};
+#elif defined(LFS_TENSOR_VULKAN) && defined(LFS_TENSOR_METAL)
+    inline constexpr std::array kCompiledGpuBackends{GpuBackend::Vulkan, GpuBackend::Metal};
+#elif defined(LFS_TENSOR_VULKAN)
+    inline constexpr std::array kCompiledGpuBackends{GpuBackend::Vulkan};
+#elif defined(LFS_TENSOR_METAL)
+    inline constexpr std::array kCompiledGpuBackends{GpuBackend::Metal};
+#else
+    inline constexpr std::array<GpuBackend, 0> kCompiledGpuBackends{};
+#endif
 
     LFS_CORE_API const char* gpu_backend_name(GpuBackend backend);
     LFS_CORE_API std::optional<GpuBackend> gpu_backend_of(const Tensor& tensor);

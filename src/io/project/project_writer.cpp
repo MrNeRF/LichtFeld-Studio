@@ -272,6 +272,43 @@ namespace lfs::io::project {
             return out;
         }
 
+        std::vector<std::byte>
+        byte_plane_f32_record(const std::span<const std::byte> interleaved,
+                              const std::size_t offset,
+                              const std::size_t size) {
+            const std::size_t n_words = interleaved.size() / 4;
+            std::vector<std::byte> out(size);
+            const auto* src =
+                reinterpret_cast<const std::uint8_t*>(interleaved.data());
+            auto* dst = reinterpret_cast<std::uint8_t*>(out.data());
+            const auto copy_range = [&](const std::size_t begin,
+                                        const std::size_t end) {
+                std::size_t output = begin;
+                while (output < end) {
+                    const std::size_t shuffled_index = offset + output;
+                    const std::size_t plane = shuffled_index / n_words;
+                    const std::size_t word = shuffled_index % n_words;
+                    const std::size_t count =
+                        std::min(end - output, n_words - word);
+                    for (std::size_t index = 0; index < count; ++index)
+                        dst[output + index] =
+                            src[(word + index) * 4 + plane];
+                    output += count;
+                }
+            };
+            constexpr std::size_t WORKERS_PER_RECORD = 4;
+            std::vector<std::jthread> workers;
+            workers.reserve(WORKERS_PER_RECORD);
+            for (std::size_t worker = 0; worker < WORKERS_PER_RECORD; ++worker) {
+                const std::size_t begin = size * worker / WORKERS_PER_RECORD;
+                const std::size_t end =
+                    size * (worker + 1) / WORKERS_PER_RECORD;
+                workers.emplace_back([=, &copy_range] { copy_range(begin, end); });
+            }
+            workers.clear();
+            return out;
+        }
+
         lfs::Result<std::vector<std::byte>>
         compress_zstd(const std::span<const std::byte> input,
                       const std::filesystem::path& path,
@@ -380,7 +417,22 @@ namespace lfs::io::project {
             return compressed;
         }
 
-        lfs::Result<std::vector<std::byte>> frame_zstd(
+        struct FramedPayload {
+            std::vector<std::byte> header;
+            std::vector<std::vector<std::byte>> records;
+            std::size_t stored_bytes = 0;
+
+            [[nodiscard]] std::vector<std::span<const std::byte>> parts() const {
+                std::vector<std::span<const std::byte>> result;
+                result.reserve(records.size() + 1);
+                result.emplace_back(header);
+                for (const auto& record : records)
+                    result.emplace_back(record);
+                return result;
+            }
+        };
+
+        lfs::Result<FramedPayload> frame_zstd(
             const std::span<const std::byte> input,
             const std::filesystem::path& path, const std::string_view field,
             const int compression_level = ZSTD_FIXED_LEVEL) {
@@ -486,14 +538,13 @@ namespace lfs::io::project {
                     return std::move(checked).error();
                 total = *checked;
             }
-            std::vector<std::byte> framed(total);
-            const auto bytes = std::span<std::byte>(framed);
+            std::vector<std::byte> header(
+                detail::FRAMED_HEADER_BYTES + record_count * detail::FRAMED_RECORD_BYTES);
+            const auto bytes = std::span<std::byte>(header);
             put_bytes(bytes, 0, detail::FRAMED_MAGIC);
             put_u16(bytes, 8, detail::FRAMED_VERSION);
             put_u16(bytes, 10, 0);
             put_u32(bytes, 12, static_cast<std::uint32_t>(record_count));
-            std::size_t cursor = detail::FRAMED_HEADER_BYTES +
-                                 record_count * detail::FRAMED_RECORD_BYTES;
             for (std::size_t index = 0; index < record_count; ++index) {
                 const std::size_t source_offset = index * detail::FRAMED_RECORD_TARGET_BYTES;
                 const std::size_t uncompressed = std::min(
@@ -502,9 +553,6 @@ namespace lfs::io::project {
                                                  index * detail::FRAMED_RECORD_BYTES;
                 put_u64(bytes, table_offset, records[index].size());
                 put_u64(bytes, table_offset + 8, uncompressed);
-                std::copy(records[index].begin(), records[index].end(),
-                          framed.begin() + static_cast<std::ptrdiff_t>(cursor));
-                cursor += records[index].size();
             }
             const auto assembled_at = std::chrono::steady_clock::now();
             const auto milliseconds = [](const auto begin, const auto end) {
@@ -515,8 +563,12 @@ namespace lfs::io::project {
                 field, input.size(), record_count, compression_level,
                 milliseconds(started, compressed_at),
                 milliseconds(compressed_at, assembled_at),
-                milliseconds(started, assembled_at), framed.size());
-            return framed;
+                milliseconds(started, assembled_at), total);
+            return FramedPayload{
+                .header = std::move(header),
+                .records = std::move(records),
+                .stored_bytes = total,
+            };
         }
 
         std::array<std::byte, SUPERBLOCK_BYTES>
@@ -798,35 +850,44 @@ namespace lfs::io::project {
         };
 
         PayloadCrcs calculate_payload_crcs(
-            const std::span<const std::byte> stored,
-            const bool with_blocks) {
+            const std::span<const std::span<const std::byte>> parts,
+            const std::uint64_t stored_bytes, const bool with_blocks) {
             PayloadCrcs result;
-            if (stored.empty()) {
+            if (stored_bytes == 0) {
                 return result;
             }
             if (with_blocks) {
                 const std::uint64_t count =
-                    stored.size() / BLOCK_CRC_BYTES +
-                    (stored.size() % BLOCK_CRC_BYTES != 0 ? 1 : 0);
+                    stored_bytes / BLOCK_CRC_BYTES +
+                    (stored_bytes % BLOCK_CRC_BYTES != 0 ? 1 : 0);
                 result.blocks.reserve(static_cast<std::size_t>(count));
             }
-            std::size_t offset = 0;
-            while (offset < stored.size()) {
-                const std::size_t bytes = static_cast<std::size_t>(
-                    std::min<std::uint64_t>(stored.size() - offset,
-                                            BLOCK_CRC_BYTES));
-                if (with_blocks) {
-                    const auto block_crc =
-                        crc32c(0, stored.data() + offset, bytes);
-                    result.blocks.push_back(block_crc);
-                    result.stored = crc32c_combine(
-                        result.stored, block_crc, bytes);
-                } else {
-                    result.stored = crc32c(
-                        result.stored, stored.data() + offset, bytes);
+            std::uint32_t block_crc = 0;
+            std::uint64_t block_bytes = 0;
+            std::uint64_t visited = 0;
+            for (const auto part : parts) {
+                result.stored = crc32c(result.stored, part.data(), part.size());
+                visited += part.size();
+                if (!with_blocks)
+                    continue;
+                auto remaining = part;
+                while (!remaining.empty()) {
+                    const auto room = static_cast<std::size_t>(BLOCK_CRC_BYTES - block_bytes);
+                    const auto step = std::min(room, remaining.size());
+                    block_crc = crc32c(block_crc, remaining.data(), step);
+                    block_bytes += step;
+                    remaining = remaining.subspan(step);
+                    if (block_bytes == BLOCK_CRC_BYTES) {
+                        result.blocks.push_back(block_crc);
+                        block_crc = 0;
+                        block_bytes = 0;
+                    }
                 }
-                offset += bytes;
             }
+            assert(visited == stored_bytes);
+            static_cast<void>(visited);
+            if (with_blocks && block_bytes != 0)
+                result.blocks.push_back(block_crc);
             return result;
         }
 
@@ -1162,8 +1223,385 @@ namespace lfs::io::project {
         }
 
         [[nodiscard]] lfs::Result<ChunkInfo>
+        place_framed_chunk(const ChunkKey& key,
+                           const std::span<const std::byte> input,
+                           const ChunkWriteOptions& options,
+                           const bool byte_shuffle,
+                           const std::string_view field,
+                           const int compression_level) {
+            const auto started = std::chrono::steady_clock::now();
+            const std::size_t record_count =
+                detail::framed_record_count(input.size());
+            if (record_count == 0) {
+                return writer_error(lfs::ErrorCode::InvalidArgument, active_path,
+                                    "The framed project payload is empty.",
+                                    "framed payloads require at least one record",
+                                    field);
+            }
+
+            const std::uint64_t framed_header_bytes =
+                detail::FRAMED_HEADER_BYTES +
+                record_count * detail::FRAMED_RECORD_BYTES;
+            std::uint64_t maximum_stored_bytes = framed_header_bytes;
+            for (std::size_t index = 0; index < record_count; ++index) {
+                const std::size_t offset =
+                    index * detail::FRAMED_RECORD_TARGET_BYTES;
+                const std::size_t size = std::min(
+                    detail::FRAMED_RECORD_TARGET_BYTES, input.size() - offset);
+                auto total = detail::checked_add(
+                    maximum_stored_bytes, ZSTD_compressBound(size), active_path,
+                    maximum_stored_bytes, field);
+                if (!total)
+                    return std::move(total).error();
+                maximum_stored_bytes = *total;
+            }
+
+            auto header_offset =
+                align_up(cursor, CHUNK_ALIGNMENT, active_path,
+                         "chunk.header_offset");
+            if (!header_offset)
+                return std::move(header_offset).error();
+            auto table_offset = detail::checked_add(
+                *header_offset, CHUNK_HEADER_BYTES, active_path, *header_offset,
+                "chunk.table_offset");
+            if (!table_offset)
+                return std::move(table_offset).error();
+
+            const bool maximum_has_blocks =
+                options.block_crcs ||
+                maximum_stored_bytes >= BLOCK_CRC_REQUIRED_AT;
+            const std::uint64_t maximum_block_count =
+                maximum_has_blocks
+                    ? (maximum_stored_bytes + BLOCK_CRC_BYTES - 1) /
+                          BLOCK_CRC_BYTES
+                    : 0;
+            auto maximum_entry_bytes = detail::checked_multiply(
+                maximum_block_count, sizeof(std::uint32_t), active_path,
+                *table_offset, "block_table.entries");
+            if (!maximum_entry_bytes)
+                return std::move(maximum_entry_bytes).error();
+            auto maximum_table_bytes = detail::checked_add(
+                maximum_has_blocks ? BLOCK_CRC_HEADER_BYTES : 0,
+                *maximum_entry_bytes, active_path, *table_offset,
+                "block_table.bytes");
+            if (!maximum_table_bytes)
+                return std::move(maximum_table_bytes).error();
+            auto maximum_after_metadata = detail::checked_add(
+                *table_offset, *maximum_table_bytes, active_path, *table_offset,
+                "chunk.payload_pre_alignment");
+            if (!maximum_after_metadata)
+                return std::move(maximum_after_metadata).error();
+            const std::uint64_t alignment =
+                options.tensor_payload ? TENSOR_PAYLOAD_ALIGNMENT
+                                       : CHUNK_ALIGNMENT;
+            auto provisional_payload_offset = align_up(
+                *maximum_after_metadata, alignment, active_path,
+                "chunk.payload_offset");
+            if (!provisional_payload_offset)
+                return std::move(provisional_payload_offset).error();
+            if (auto zero =
+                    write_zeros(*file, cursor, *provisional_payload_offset);
+                !zero) {
+                return std::move(zero).error();
+            }
+
+            std::vector<std::uint64_t> record_sizes(record_count);
+            std::vector<std::uint32_t> block_crcs(
+                static_cast<std::size_t>(maximum_block_count));
+            std::uint32_t records_crc = 0;
+            std::uint64_t records_bytes = 0;
+            constexpr std::size_t RECORDS_PER_BATCH = 4;
+
+            for (std::size_t first = 0; first < record_count;
+                 first += RECORDS_PER_BATCH) {
+                const std::size_t batch_count =
+                    std::min(RECORDS_PER_BATCH, record_count - first);
+                std::vector<std::vector<std::byte>> compressed(batch_count);
+                std::atomic<std::size_t> next{0};
+                std::mutex error_mutex;
+                std::optional<lfs::Error> first_error;
+                const auto publish_error = [&](lfs::Error error) {
+                    std::scoped_lock lock(error_mutex);
+                    if (!first_error)
+                        first_error = std::move(error);
+                };
+                std::vector<std::jthread> workers;
+                try {
+                    workers.reserve(batch_count);
+                    for (std::size_t worker = 0; worker < batch_count; ++worker) {
+                        workers.emplace_back([&] {
+                            try {
+                                while (true) {
+                                    const std::size_t local = next.fetch_add(
+                                        1, std::memory_order_relaxed);
+                                    if (local >= batch_count)
+                                        return;
+                                    const std::size_t index = first + local;
+                                    const std::size_t offset =
+                                        index * detail::FRAMED_RECORD_TARGET_BYTES;
+                                    const std::size_t size = std::min(
+                                        detail::FRAMED_RECORD_TARGET_BYTES,
+                                        input.size() - offset);
+                                    lfs::Result<std::vector<std::byte>> result =
+                                        [&]() {
+                                            if (!byte_shuffle) {
+                                                return compress_zstd(
+                                                    input.subspan(offset, size),
+                                                    active_path, field,
+                                                    compression_level);
+                                            }
+                                            auto shuffled = byte_plane_f32_record(
+                                                input, offset, size);
+                                            return compress_zstd(
+                                                shuffled, active_path, field,
+                                                compression_level);
+                                        }();
+                                    if (!result) {
+                                        publish_error(std::move(result).error());
+                                        return;
+                                    }
+                                    compressed[local] = std::move(*result);
+                                }
+                            } catch (const std::bad_alloc&) {
+                                // LFS-CENSUS-OK(empty-catch): worker exceptions are converted to the Result error channel.
+                                publish_error(writer_error(
+                                    lfs::ErrorCode::ResourceExhausted,
+                                    active_path,
+                                    "There is not enough memory to compress this project payload.",
+                                    "bounded framed compression worker allocation failed",
+                                    field));
+                            } catch (const std::exception& exception) {
+                                // LFS-CENSUS-OK(empty-catch): worker exceptions are converted to the Result error channel.
+                                publish_error(writer_error(
+                                    lfs::ErrorCode::Internal, active_path,
+                                    "The project payload could not be compressed.",
+                                    exception.what(), field));
+                            } catch (...) {
+                                // LFS-CENSUS-OK(empty-catch): worker exceptions are converted to the Result error channel.
+                                publish_error(writer_error(
+                                    lfs::ErrorCode::Internal, active_path,
+                                    "The project payload could not be compressed.",
+                                    "unknown worker exception", field));
+                            }
+                        });
+                    }
+                } catch (const std::exception& exception) {
+                    // LFS-CENSUS-OK(empty-catch): construction failures are converted to the Result error channel.
+                    publish_error(writer_error(
+                        lfs::ErrorCode::Internal, active_path,
+                        "The project payload could not be compressed.",
+                        exception.what(), field));
+                } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): construction failures are converted to the Result error channel.
+                    publish_error(writer_error(
+                        lfs::ErrorCode::Internal, active_path,
+                        "The project payload could not be compressed.",
+                        "unknown worker construction exception", field));
+                }
+                workers.clear();
+                if (first_error)
+                    return std::move(*first_error);
+
+                for (std::size_t local = 0; local < batch_count; ++local) {
+                    const std::size_t index = first + local;
+                    const auto bytes = std::span<const std::byte>(compressed[local]);
+                    record_sizes[index] = bytes.size();
+                    if (auto write = file->write_exact(
+                            *provisional_payload_offset + framed_header_bytes +
+                                records_bytes,
+                            bytes);
+                        !write) {
+                        return std::move(write).error();
+                    }
+                    records_crc =
+                        crc32c(records_crc, bytes.data(), bytes.size());
+                    std::uint64_t consumed = 0;
+                    while (maximum_has_blocks && consumed < bytes.size()) {
+                        const std::uint64_t stream_offset =
+                            framed_header_bytes + records_bytes + consumed;
+                        const std::size_t block_index =
+                            static_cast<std::size_t>(stream_offset /
+                                                     BLOCK_CRC_BYTES);
+                        const std::size_t within_block =
+                            static_cast<std::size_t>(stream_offset %
+                                                     BLOCK_CRC_BYTES);
+                        const std::size_t step = std::min<std::uint64_t>(
+                            bytes.size() - consumed,
+                            BLOCK_CRC_BYTES - within_block);
+                        block_crcs[block_index] = crc32c(
+                            block_crcs[block_index], bytes.data() + consumed,
+                            step);
+                        consumed += step;
+                    }
+                    records_bytes += bytes.size();
+                }
+            }
+            const auto compressed_at = std::chrono::steady_clock::now();
+
+            std::vector<std::byte> framed_header(
+                static_cast<std::size_t>(framed_header_bytes));
+            const auto header_bytes = std::span<std::byte>(framed_header);
+            put_bytes(header_bytes, 0, detail::FRAMED_MAGIC);
+            put_u16(header_bytes, 8, detail::FRAMED_VERSION);
+            put_u16(header_bytes, 10, 0);
+            put_u32(header_bytes, 12,
+                    static_cast<std::uint32_t>(record_count));
+            for (std::size_t index = 0; index < record_count; ++index) {
+                const std::size_t source_offset =
+                    index * detail::FRAMED_RECORD_TARGET_BYTES;
+                const std::size_t uncompressed = std::min(
+                    detail::FRAMED_RECORD_TARGET_BYTES,
+                    input.size() - source_offset);
+                const std::size_t record_offset =
+                    detail::FRAMED_HEADER_BYTES +
+                    index * detail::FRAMED_RECORD_BYTES;
+                put_u64(header_bytes, record_offset, record_sizes[index]);
+                put_u64(header_bytes, record_offset + 8, uncompressed);
+            }
+            if (auto write = file->write_exact(*provisional_payload_offset,
+                                                framed_header);
+                !write) {
+                return std::move(write).error();
+            }
+
+            const std::uint64_t stored_bytes =
+                framed_header_bytes + records_bytes;
+            const bool with_blocks =
+                options.block_crcs || stored_bytes >= BLOCK_CRC_REQUIRED_AT;
+            const std::uint64_t block_count =
+                with_blocks
+                    ? (stored_bytes + BLOCK_CRC_BYTES - 1) / BLOCK_CRC_BYTES
+                    : 0;
+            auto entry_bytes = detail::checked_multiply(
+                block_count, sizeof(std::uint32_t), active_path, *table_offset,
+                "block_table.entries");
+            if (!entry_bytes)
+                return std::move(entry_bytes).error();
+            auto table_bytes = detail::checked_add(
+                with_blocks ? BLOCK_CRC_HEADER_BYTES : 0, *entry_bytes,
+                active_path, *table_offset, "block_table.bytes");
+            if (!table_bytes)
+                return std::move(table_bytes).error();
+            auto after_metadata = detail::checked_add(
+                *table_offset, *table_bytes, active_path, *table_offset,
+                "chunk.payload_pre_alignment");
+            if (!after_metadata)
+                return std::move(after_metadata).error();
+            auto payload_offset = align_up(*after_metadata, alignment,
+                                           active_path,
+                                           "chunk.payload_offset");
+            if (!payload_offset)
+                return std::move(payload_offset).error();
+            assert(*payload_offset <= *provisional_payload_offset);
+            if (*payload_offset != *provisional_payload_offset) {
+                constexpr std::size_t MOVE_BUFFER_BYTES = 8 * 1024 * 1024;
+                std::vector<std::byte> buffer(MOVE_BUFFER_BYTES);
+                std::uint64_t moved = 0;
+                while (moved < stored_bytes) {
+                    const std::size_t count = static_cast<std::size_t>(
+                        std::min<std::uint64_t>(stored_bytes - moved,
+                                                buffer.size()));
+                    auto part = std::span<std::byte>(buffer.data(), count);
+                    if (auto read = file->read_exact(
+                            *provisional_payload_offset + moved, part);
+                        !read) {
+                        return std::move(read).error();
+                    }
+                    if (auto write = file->write_exact(*payload_offset + moved,
+                                                       part);
+                        !write) {
+                        return std::move(write).error();
+                    }
+                    moved += count;
+                }
+            }
+            auto payload_end = detail::checked_add(
+                *payload_offset, stored_bytes, active_path, *payload_offset,
+                "chunk.payload_end");
+            if (!payload_end)
+                return std::move(payload_end).error();
+
+            const std::uint32_t framed_header_crc = crc32c(
+                0, framed_header.data(), framed_header.size());
+            const std::uint32_t stored_crc = crc32c_combine(
+                framed_header_crc, records_crc, records_bytes);
+            std::vector<std::uint32_t> entries;
+            if (with_blocks) {
+                block_crcs.resize(static_cast<std::size_t>(block_count));
+                const std::uint64_t first_block_record_bytes =
+                    std::min<std::uint64_t>(records_bytes,
+                                            BLOCK_CRC_BYTES -
+                                                framed_header_bytes);
+                block_crcs[0] = crc32c_combine(
+                    framed_header_crc, block_crcs[0],
+                    first_block_record_bytes);
+                entries = std::move(block_crcs);
+            }
+
+            ChunkInfo row{
+                .key = key,
+                .chunk_version = options.chunk_version,
+                .row_kind = RowKind::Live,
+                .compression = options.compression,
+                .flags = (options.tensor_payload ? TENSOR_PAYLOAD : 0u) |
+                         (with_blocks ? HAS_BLOCK_CRCS : 0u),
+                .header_offset = *header_offset,
+                .payload_offset = *payload_offset,
+                .stored_bytes = stored_bytes,
+                .uncompressed_bytes = input.size(),
+                .source_generation = generation,
+                .payload_crc32c = stored_crc,
+                .header_crc32c = 0,
+                .block_crc_table = std::nullopt,
+            };
+            if (with_blocks) {
+                row.block_crc_table = BlockCrcTable{
+                    .offset = *table_offset,
+                    .payload_offset = *payload_offset,
+                    .stored_bytes = stored_bytes,
+                    .block_size = static_cast<std::uint32_t>(BLOCK_CRC_BYTES),
+                    .entries = std::move(entries),
+                    .entries_crc32c = 0,
+                    .header_crc32c = 0,
+                };
+                row.block_crc_table->entries_crc32c =
+                    crc_entries(row.block_crc_table->entries);
+                const auto table_header =
+                    encode_block_crc_header(*row.block_crc_table);
+                row.block_crc_table->header_crc32c =
+                    crc32c(0, table_header.data(), 60);
+                if (auto table = write_block_table(row); !table)
+                    return std::move(table).error();
+            }
+            const auto chunk_header = encode_chunk_header(row);
+            row.header_crc32c = crc32c(0, chunk_header.data(), 60);
+            if (auto write = file->write_exact(*header_offset,
+                                                byte_span(chunk_header));
+                !write) {
+                return std::move(write).error();
+            }
+
+            const auto finished = std::chrono::steady_clock::now();
+            const auto milliseconds = [](const auto begin, const auto end) {
+                return std::chrono::duration<double, std::milli>(end - begin)
+                    .count();
+            };
+            LOG_DEBUG(
+                "Project payload save stages: field={} input_bytes={} records={} level={} compress_write={:.3f} ms finalize={:.3f} ms total={:.3f} ms stored_bytes={} batch_records={}",
+                field, input.size(), record_count, compression_level,
+                milliseconds(started, compressed_at),
+                milliseconds(compressed_at, finished),
+                milliseconds(started, finished), stored_bytes,
+                RECORDS_PER_BATCH);
+            cursor = *payload_end;
+            mutation_started = true;
+            return row;
+        }
+
+        [[nodiscard]] lfs::Result<ChunkInfo>
         place_stored_chunk(const ChunkKey& key,
-                           const std::span<const std::byte> stored,
+                           const std::span<const std::span<const std::byte>> stored_parts,
+                           const std::uint64_t stored_bytes,
                            const std::uint64_t uncompressed_bytes,
                            const ChunkWriteOptions& options,
                            const bool preserve_stored_crc = false,
@@ -1184,13 +1622,13 @@ namespace lfs::io::project {
 
             const bool with_blocks =
                 options.block_crcs ||
-                stored.size() >= BLOCK_CRC_REQUIRED_AT;
+                stored_bytes >= BLOCK_CRC_REQUIRED_AT;
             const auto payload_crcs =
-                calculate_payload_crcs(stored, with_blocks);
+                calculate_payload_crcs(stored_parts, stored_bytes, with_blocks);
             std::vector<std::uint32_t> entries;
             std::uint64_t table_bytes = 0;
             if (with_blocks) {
-                if (stored.empty()) {
+                if (stored_bytes == 0) {
                     return writer_error(
                         lfs::ErrorCode::InvalidArgument, destination_path,
                         "An empty project chunk cannot have a block CRC table.",
@@ -1229,7 +1667,7 @@ namespace lfs::io::project {
                 return std::move(payload_offset).error();
             }
             auto payload_end = detail::checked_add(
-                *payload_offset, stored.size(), active_path, *payload_offset,
+                *payload_offset, stored_bytes, active_path, *payload_offset,
                 "chunk.payload_end");
             if (!payload_end) {
                 return std::move(payload_end).error();
@@ -1243,9 +1681,14 @@ namespace lfs::io::project {
                 !zero) {
                 return std::move(zero).error();
             }
-            if (auto write = file->write_exact(*payload_offset, stored); !write) {
-                return std::move(write).error();
+            std::uint64_t relative_offset = 0;
+            for (const auto part : stored_parts) {
+                if (auto write = file->write_exact(*payload_offset + relative_offset, part); !write) {
+                    return std::move(write).error();
+                }
+                relative_offset += part.size();
             }
+            assert(relative_offset == stored_bytes);
 
             const std::uint32_t stored_crc = payload_crcs.stored;
             if (preserve_stored_crc && stored_crc != expected_stored_crc) {
@@ -1266,7 +1709,7 @@ namespace lfs::io::project {
                          (with_blocks ? HAS_BLOCK_CRCS : 0u),
                 .header_offset = *header_offset,
                 .payload_offset = *payload_offset,
-                .stored_bytes = stored.size(),
+                .stored_bytes = stored_bytes,
                 .uncompressed_bytes = uncompressed_bytes,
                 .source_generation = generation,
                 .payload_crc32c = stored_crc,
@@ -1277,7 +1720,7 @@ namespace lfs::io::project {
                 row.block_crc_table = BlockCrcTable{
                     .offset = *table_offset,
                     .payload_offset = *payload_offset,
-                    .stored_bytes = stored.size(),
+                    .stored_bytes = stored_bytes,
                     .block_size =
                         static_cast<std::uint32_t>(BLOCK_CRC_BYTES),
                     .entries = std::move(entries),
@@ -1307,11 +1750,23 @@ namespace lfs::io::project {
             };
             LOG_DEBUG(
                 "Project chunk write stages: chunk={} stored_bytes={} block_crc={:.3f} ms disk_write={:.3f} ms total={:.3f} ms",
-                key.fourcc.to_string(), stored.size(), milliseconds(started, crc_at),
+                key.fourcc.to_string(), stored_bytes, milliseconds(started, crc_at),
                 milliseconds(crc_at, written_at), milliseconds(started, written_at));
             cursor = *payload_end;
             mutation_started = true;
             return row;
+        }
+
+        [[nodiscard]] lfs::Result<ChunkInfo>
+        place_stored_chunk(const ChunkKey& key,
+                           const std::span<const std::byte> stored,
+                           const std::uint64_t uncompressed_bytes,
+                           const ChunkWriteOptions& options,
+                           const bool preserve_stored_crc = false,
+                           const std::uint32_t expected_stored_crc = 0) {
+            const std::array parts{stored};
+            return place_stored_chunk(key, parts, stored.size(), uncompressed_bytes,
+                                      options, preserve_stored_crc, expected_stored_crc);
         }
 
         [[nodiscard]] lfs::Result<ChunkInfo>
@@ -2086,14 +2541,20 @@ namespace lfs::io::project {
                 "chunk_key"));
         }
 
-        std::vector<std::byte> compressed;
         std::span<const std::byte> stored = payload;
+        std::optional<FramedPayload> framed;
         ChunkWriteOptions placed_options = options;
+        std::optional<lfs::Result<ChunkInfo>> direct_placed;
         if (options.compression == Compression::ByteShuffleZstdFramed) {
             // Deterministic fallback: non-multiple-of-4 payloads cannot be
             // f32-word plane-shuffled; emit framed Zstd instead (no knob).
             if (payload.size() % 4 != 0) {
                 placed_options.compression = Compression::ZstdFramed;
+            } else if (payload.size() >=
+                       detail::FRAMED_RECORD_TARGET_BYTES) {
+                direct_placed.emplace(impl_->place_framed_chunk(
+                    key, payload, placed_options, true,
+                    "chunk.byteshuffle_zstd_framed", ZSTD_PAYLOAD_LEVEL));
             } else {
                 const std::vector<std::byte> planes = byte_plane_f32_words(payload);
                 auto result = frame_zstd(planes, impl_->active_path,
@@ -2102,18 +2563,24 @@ namespace lfs::io::project {
                 if (!result) {
                     return status_failure(std::move(result).error());
                 }
-                compressed = std::move(*result);
-                stored = compressed;
+                framed = std::move(*result);
             }
         }
-        if (placed_options.compression == Compression::ZstdFramed) {
-            auto result = frame_zstd(payload, impl_->active_path, "chunk.zstd_framed",
-                                     ZSTD_PAYLOAD_LEVEL);
-            if (!result) {
-                return status_failure(std::move(result).error());
+        if (placed_options.compression == Compression::ZstdFramed && !framed &&
+            !direct_placed) {
+            if (payload.size() >= detail::FRAMED_RECORD_TARGET_BYTES) {
+                direct_placed.emplace(impl_->place_framed_chunk(
+                    key, payload, placed_options, false, "chunk.zstd_framed",
+                    ZSTD_PAYLOAD_LEVEL));
+            } else {
+                auto result = frame_zstd(payload, impl_->active_path,
+                                         "chunk.zstd_framed",
+                                         ZSTD_PAYLOAD_LEVEL);
+                if (!result) {
+                    return status_failure(std::move(result).error());
+                }
+                framed = std::move(*result);
             }
-            compressed = std::move(*result);
-            stored = compressed;
         } else if (placed_options.compression != Compression::Stored &&
                    placed_options.compression != Compression::ZstdFramed &&
                    placed_options.compression != Compression::ByteShuffleZstdFramed) {
@@ -2124,8 +2591,15 @@ namespace lfs::io::project {
                 "chunk.compression"));
         }
 
-        auto placed = impl_->place_stored_chunk(key, stored, payload.size(),
-                                                placed_options);
+        lfs::Result<ChunkInfo> placed = [&]() -> lfs::Result<ChunkInfo> {
+            if (direct_placed)
+                return std::move(*direct_placed);
+            if (!framed)
+                return impl_->place_stored_chunk(key, stored, payload.size(), placed_options);
+            const auto parts = framed->parts();
+            return impl_->place_stored_chunk(key, parts, framed->stored_bytes,
+                                             payload.size(), placed_options);
+        }();
         if (!placed) {
             impl_->poisoned = true;
             return status_failure(std::move(placed).error());
@@ -3285,9 +3759,13 @@ namespace lfs::io::project {
                 "the caller requested cancellation before copying payloads",
                 "compaction.cancel"));
         }
-        auto bound_autosaves =
-            detail::valid_bound_autosaves_locked(
-                path, *source_result);
+        // Only an in-place compaction replaces the head a current autosave
+        // binds to. Compacting into another file (Save As) leaves the source
+        // and its autosave untouched.
+        lfs::Result<std::vector<detail::ValidBoundAutosave>> bound_autosaves =
+            std::vector<detail::ValidBoundAutosave>{};
+        if (source_path == destination_path)
+            bound_autosaves = detail::valid_bound_autosaves_locked(path, *source_result);
         if (!bound_autosaves) {
             return status_failure(
                 std::move(bound_autosaves).error());

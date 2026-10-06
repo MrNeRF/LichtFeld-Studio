@@ -42,7 +42,8 @@ namespace lfs::io::project {
             const bool is_content = kind == FOURCC_SCNG || kind == FOURCC_REFS ||
                                     kind == FOURCC_DSRC || kind == FOURCC_SPLT ||
                                     kind == FOURCC_CKPT || kind == FOURCC_SELM;
-            if (!is_content && kind != FOURCC_VIEW && kind != FOURCC_SEQR) {
+            if (!is_content && kind != FOURCC_VIEW && kind != FOURCC_SEQR &&
+                kind != FOURCC_NODE) {
                 continue;
             }
             Evidence bytes{};
@@ -514,6 +515,7 @@ namespace lfs::io::project {
         bool needs_full_read(const ChunkInfo& row) noexcept {
             return (row.flags & TENSOR_PAYLOAD) != 0 ||
                    row.key.fourcc == FOURCC_CKPT ||
+                   row.key.fourcc == FOURCC_SFMO ||
                    row.key.fourcc == FOURCC_DSRC ||
                    row.key.fourcc == FOURCC_SPLT ||
                    row.key.fourcc == FOURCC_PCLD ||

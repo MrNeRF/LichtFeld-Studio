@@ -10,6 +10,8 @@ if(LFS_HAS_CUDA)
     add_subdirectory(tensor)
 endif()
 
+# The application-level default is established before project()/vcpkg. Keep
+# this declaration for standalone core configurations without overriding it.
 option(LFS_TENSOR_VULKAN "Build the Vulkan tensor backend" ON)
 if(LFS_TENSOR_VULKAN)
     include(tensor/backend/vulkan/CMakeLists.txt)
@@ -58,6 +60,7 @@ set(TENSOR_SOURCES
         tensor/backend/facade_trace.cpp
         tensor/backend/cuda/cuda_ops_pointwise.cpp
         tensor/backend/cuda/cuda_ops_expression.cpp
+        tensor/backend/cuda/cuda_program.cpp
         tensor/backend/cuda/cuda_ops_reduce.cpp
         tensor/backend/cuda/cuda_ops_scan_sort.cpp
         tensor/backend/cuda/cuda_ops_matrix_nn.cpp
@@ -75,8 +78,9 @@ set(TENSOR_SOURCES
         tensor/backend/cuda/cuda_ops_index_mask.cpp
         tensor/backend/cuda/cuda_ops_movement.cpp
         tensor/backend/cuda/cuda_services.cpp
-        tensor/backend/vulkan/vma_implementation.cpp
         tensor/tensor.cpp
+        tensor/tensor_label.cpp
+        tensor/tensor_trace.cpp
         tensor/tensor_method_bodies.cpp
         tensor/tensor_serialization.cpp
         tensor/tensor_factory.cpp
@@ -90,6 +94,9 @@ set(TENSOR_SOURCES
         tensor/tensor_masking_ops.cpp
         tensor/tensor_advanced_ops.cpp
         tensor/tensor_spatial.cpp
+        tensor/tensor_simplify.cpp
+        tensor/tensor_proximity.cpp
+        tensor/tensor_procedural.cpp
         tensor/tensor_projection.cpp
         tensor/tensor_point_region.cpp
         tensor/tensor_histogram.cpp
@@ -134,6 +141,8 @@ endif()
 
 if(LFS_TENSOR_VULKAN)
     list(APPEND TENSOR_SOURCES
+        tensor/backend/vulkan/vma_implementation.cpp
+        tensor/backend/vulkan/vk_program.cpp
         tensor/backend/vulkan/vk_context.cpp
         tensor/backend/vulkan/vk_memory.cpp
         tensor/backend/vulkan/vk_recorder.cpp
@@ -168,7 +177,7 @@ endif()
 
 # The GPU export driver, shared by the Vulkan and Metal backends. Its host edge
 # refinement uses the same independent double rounding as decimation.
-if(LFS_TENSOR_VULKAN OR APPLE)
+if(LFS_TENSOR_VULKAN OR LFS_TENSOR_METAL)
     list(APPEND TENSOR_SOURCES tensor/backend/export_pipeline.cpp)
     set_source_files_properties(tensor/backend/export_pipeline.cpp PROPERTIES
         COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-ffp-contract=off>")
@@ -176,7 +185,7 @@ endif()
 
 # Metal tensor backend: the kernel sources are embedded and compiled at
 # runtime, so the build needs no Metal toolchain.
-if(APPLE)
+if(LFS_TENSOR_METAL)
     set(_lfs_metal_kernels_cpp ${CMAKE_CURRENT_BINARY_DIR}/lfs_metal_kernels.cpp)
     set(_lfs_metal_sources tensor/backend/metal/kernels.metal tensor/backend/metal/export.metal
                            tensor/backend/metal/nn.metal tensor/backend/metal/raster.metal
@@ -198,6 +207,9 @@ if(APPLE)
         tensor/backend/metal/metal_ops.mm
         tensor/backend/metal/metal_shared_image.mm
         tensor/backend/metal/metal_module.mm
+        tensor/backend/metal/metal_program.mm
+        tensor/backend/metal/metal_tensor_reader.mm
+        tensor/backend/metal/metal_work_queue.mm
         ${_lfs_metal_kernels_cpp}
     )
     if(LFS_TENSOR_VULKAN)
@@ -217,7 +229,6 @@ set(CORE_SOURCES
         cuda_error.cpp
         cuda_error_typed.cpp
         device_fault.cpp
-        validated_index_token.cpp
         error.cpp
         error_bus.cpp
         exif.cpp
@@ -241,6 +252,7 @@ set(CORE_SOURCES
         cuda_version.cpp
         image_io.cpp
         image_codecs.cpp
+        image_exr.cpp
         mapped_file.cpp
         optimization_properties.cpp
         parameters.cpp
@@ -261,8 +273,25 @@ set(CORE_SOURCES
         sh_value_quant.cpp
         shareable_allocation_limit.cpp
         tensor_debug.cpp
-        training_snapshot.cpp
         mesh_data.cpp
+        nodes/types.cpp
+        nodes/registry.cpp
+        nodes/tree.cpp
+        nodes/evaluator.cpp
+        nodes/device.cpp
+        nodes/builtin.cpp
+        nodes/builtin_text.cpp
+        nodes/builtin_common.cpp
+        nodes/builtin_input.cpp
+        nodes/builtin_utilities.cpp
+        nodes/builtin_selection.cpp
+        nodes/builtin_geometry.cpp
+        nodes/builtin_splat.cpp
+        nodes/builtin_cleanup.cpp
+        nodes/builtin_conversion.cpp
+        nodes/builtin_colour.cpp
+        nodes/builtin_texture.cpp
+        nodes/builtin_instances.cpp
         system_info.cpp
         user_paths.cpp
         legacy_settings_migration.cpp
@@ -282,6 +311,9 @@ if(NOT LFS_HAS_CUDA)
 endif()
 
 add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES} shared_image_ops.cpp)
+include(${CMAKE_SOURCE_DIR}/cmake/GpuPrograms.cmake)
+target_sources(lfs_core PRIVATE tensor/tensor_vignette.cpp)
+lfs_add_gpu_program(lfs_core vignette_program SOURCE tensor/programs/vignette.slang COMPUTE vignette)
 if(LFS_HAS_CUDA)
     target_sources(lfs_core PRIVATE cuda/shared_image_cuda.cpp)
 endif()
@@ -289,10 +321,10 @@ endif()
 if(LFS_TENSOR_VULKAN)
     add_dependencies(lfs_core lfs_tensor_vulkan_shaders)
     target_sources(lfs_core PRIVATE ${LFS_TENSOR_SHADER_TABLE} tensor/backend/vulkan/vk_shared_image_ops.cpp)
-    target_compile_definitions(lfs_core PRIVATE LFS_TENSOR_VULKAN=1)
+    target_compile_definitions(lfs_core PUBLIC LFS_TENSOR_VULKAN=1)
 endif()
-if(APPLE)
-    target_compile_definitions(lfs_core PRIVATE LFS_TENSOR_METAL=1)
+if(LFS_TENSOR_METAL)
+    target_compile_definitions(lfs_core PUBLIC LFS_TENSOR_METAL=1)
     target_compile_options(lfs_core PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
     target_link_libraries(lfs_core PRIVATE "-framework Metal" "-framework Foundation")
 endif()
@@ -301,6 +333,19 @@ add_dependencies(lfs_core lfs_core_abi_stamp)
 target_include_directories(lfs_core BEFORE PRIVATE "${LFS_CORE_ABI_INCLUDE_DIR}")
 
 target_compile_definitions(lfs_core PRIVATE LFS_CORE_EXPORTS LFS_TENSOR_PRIVATE_ACCESS)
+
+# Keep headless descriptors and the English UI catalogue identical, including
+# before the localisation manager is initialised.
+set(_node_locale "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales/en.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_node_locale}")
+file(READ "${_node_locale}" _node_locale_json)
+string(JSON _node_text GET "${_node_locale_json}" nodes)
+# MSVC caps a string literal at 64 KiB, in pieces of 16 KiB, so the text is embedded as bytes.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/builtin_text.json" "${_node_text}")
+file(READ "${CMAKE_CURRENT_BINARY_DIR}/builtin_text.json" _node_text_hex HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," LFS_NODE_TEXT_BYTES "${_node_text_hex}")
+configure_file(nodes/builtin_text.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/builtin_text.hpp" @ONLY)
+target_include_directories(lfs_core PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 
 target_include_directories(lfs_core
     PUBLIC
@@ -370,8 +415,8 @@ target_link_libraries(lfs_core
         $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>
         $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::curand>
         spdlog::spdlog
-        Vulkan::Vulkan
-        GPUOpen::VulkanMemoryAllocator
+        $<$<BOOL:${LFS_TENSOR_VULKAN}>:Vulkan::Vulkan>
+        $<$<BOOL:${LFS_TENSOR_VULKAN}>:GPUOpen::VulkanMemoryAllocator>
     PRIVATE
         $<$<BOOL:${LFS_HAS_CUDA}>:lfs_core_cuda>
         $<$<BOOL:${LFS_HAS_CUDA}>:lfs_shared_image_cuda>
@@ -381,7 +426,7 @@ target_link_libraries(lfs_core
         PNG::PNG
         TIFF::TIFF
         WebP::webp
-        unofficial::tinyexr::tinyexr
+        OpenEXR::OpenEXRCore
         OpenMeshCore
 )
 # OpenMP for tensor multi-threaded operations
@@ -420,9 +465,12 @@ if(MSVC)
     )
     target_link_options(lfs_core PRIVATE /ignore:4217)
 else()
+    # Release binaries and compiler-cache entries must not depend on the build
+    # host's CPU. Keep the explicit AVX2/FMA baseline below instead of enabling
+    # every instruction detected by -march=native on a hosted runner.
     target_compile_options(lfs_core PRIVATE
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer -DDEBUG>
-        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG -march=native>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
         $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-O0 -g --extended-lambda --expt-relaxed-constexpr>
         $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr>
     )

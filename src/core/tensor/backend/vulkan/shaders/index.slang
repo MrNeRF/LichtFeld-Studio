@@ -6,7 +6,9 @@ static const uint LFS_PUSH_CONSTANT_SIZE = 160;
 // 2 index_select, 3 scatter assign, 4 scatter add, 5 index_put (flat clamped),
 // 6 index_fill (scatter a constant), 7 deterministic scatter over runs of
 // indices sorted by target (keys and positions from radix.slang),
-// 8 checked Int64-to-Int32 index conversion.
+// 8 checked Int64-to-Int32 index conversion, 9 record the last index position
+// of every target (position + 1, atomic max into keys), 10 scatter assign that
+// only that position writes.
 [SpecializationConstant]
 const uint kMode = 0;
 // Element codes follow DataType: 0 Float32, 1 Float16, 2 Int32, 3 Int64, 4 UInt8, 5 Bool.
@@ -442,6 +444,33 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
             }
             else
                 addByte(parameters.inputAddress, destinationIndex, loadByte(parameters.valueAddress, tid));
+        }
+        else if (kMode == 9)
+        {
+            const int target = indices[tid];
+            if (target < 0 || target >= int(parameters.dimSize))
+            {
+                recordFault(parameters.faultAddress, target, parameters.dimSize, parameters.opId);
+                continue;
+            }
+            uint previous;
+            InterlockedMax(((Ptr<uint, Access.ReadWrite>)parameters.keysAddress)[target], tid + 1u, previous);
+        }
+        else if (kMode == 10)
+        {
+            const uint segment = parameters.indexSize * parameters.inner;
+            const uint outerIndex = tid / segment;
+            const uint position = (tid / parameters.inner) % parameters.indexSize;
+            const uint innerIndex = tid % parameters.inner;
+            const int target = indices[position];
+            // Out-of-range targets were reported by mode 9.
+            if (target < 0 || target >= int(parameters.dimSize) ||
+                ((Ptr<uint, Access.Read>)parameters.keysAddress)[target] != position + 1u)
+                continue;
+            const uint64_t destinationIndex =
+                uint64_t(outerIndex) * parameters.dimSize * parameters.inner +
+                uint64_t(target) * parameters.inner + innerIndex;
+            copyElement(parameters.valueAddress, tid, parameters.inputAddress, destinationIndex);
         }
         else if (kMode == 7)
         {

@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rmlui/elements/scene_graph_element.hpp"
-#include "gui/camera_thumbnail_policy.hpp"
 #include "gui/rmlui/elements/scene_graph_drop_target.hpp"
 #include "gui/scene_tree_session.hpp"
 
@@ -488,29 +487,6 @@ namespace lfs::vis::gui {
         panel_screen_y_ = y;
     }
 
-    std::unordered_set<int> SceneGraphElement::visibleCameraUids() const {
-        std::unordered_set<int> result;
-        if (last_visible_start_ == kUnsetVisibleRange ||
-            last_visible_end_ == kUnsetVisibleRange) {
-            return result;
-        }
-        const auto visible_range = cameraThumbnailVisibleRowRange(
-            last_visible_start_, last_visible_end_, flat_rows_.size());
-        if (!visible_range)
-            return result;
-        const auto [start, end] = *visible_range;
-        result.reserve(end - start);
-        for (size_t i = start; i < end; ++i) {
-            const auto snapshot_it = node_snapshots_.find(flat_rows_[i].id);
-            if (snapshot_it != node_snapshots_.end() &&
-                snapshot_it->second.type == core::NodeType::CAMERA &&
-                snapshot_it->second.camera_uid >= 0) {
-                result.insert(snapshot_it->second.camera_uid);
-            }
-        }
-        return result;
-    }
-
     void SceneGraphElement::setModelsCollapsed(const bool /*collapsed*/) {
         // The redundant Models header was removed. Keep accepting legacy session
         // state, but never let an old collapsed flag hide the root rows.
@@ -820,7 +796,6 @@ namespace lfs::vis::gui {
         drop_valid_ = false;
         pending_reveal_node_id_ = core::NULL_NODE;
         scene_has_nodes_ = false;
-        root_count_ = 0;
         model_count_ = 0;
         last_training_model_node_name_.clear();
         last_training_model_gaussian_count_ = std::numeric_limits<size_t>::max();
@@ -916,7 +891,6 @@ namespace lfs::vis::gui {
             snapshot.locked = static_cast<bool>(node->locked);
             snapshot.has_children = !node->children.empty();
             snapshot.training_enabled = node->training_enabled;
-            snapshot.camera_uid = node->camera_uid;
             snapshot.has_mask = node->type == core::NodeType::CAMERA &&
                                 (!node->mask_path.empty() ||
                                  (node->camera && node->camera->has_in_memory_mask()));
@@ -1105,7 +1079,6 @@ namespace lfs::vis::gui {
 
         node_snapshots_ = std::move(snapshots);
         root_ids_ = std::move(root_ids);
-        root_count_ = root_ids_.size();
         model_count_ = std::ranges::count_if(node_snapshots_, [](const auto& item) {
             const auto type = item.second.type;
             return type == core::NodeType::SPLAT || type == core::NodeType::POINTCLOUD ||
@@ -2749,17 +2722,6 @@ namespace lfs::vis::gui {
             }
         };
         gui->enqueueModal(std::move(request));
-    }
-
-    void SceneGraphElement::deleteSelectedNodes() {
-        auto* scene_manager = services().sceneOrNull();
-        if (!scene_manager)
-            return;
-
-        if (selected_ids_.empty())
-            return;
-        const std::vector<core::NodeId> ids(selected_ids_.begin(), selected_ids_.end());
-        requestDeleteNodes(ids);
     }
 
     void SceneGraphElement::toggleChildrenTraining(const core::NodeId group_id, const bool enabled) {

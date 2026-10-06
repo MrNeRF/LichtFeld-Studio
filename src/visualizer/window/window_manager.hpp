@@ -22,7 +22,7 @@ union SDL_Event;
 namespace lfs::vis {
 
     class InputController;
-    class VulkanContext;
+    class GraphicsContext;
 
     class LFS_VIS_API WindowManager {
     public:
@@ -48,8 +48,7 @@ namespace lfs::vis {
 
         WindowManager(const std::string& title, int width, int height,
                       int monitor_x = 0, int monitor_y = 0,
-                      int monitor_width = 0, int monitor_height = 0,
-                      GraphicsBackend graphics_backend = GraphicsBackend::Vulkan);
+                      int monitor_width = 0, int monitor_height = 0);
         ~WindowManager();
 
         WindowManager(const WindowManager&) = delete;
@@ -65,7 +64,7 @@ namespace lfs::vis {
         void updateWindowSize(const char* reason = "manual",
                               ResizeIntent intent = ResizeIntent::Exact);
         void pollEvents();
-        void waitEvents(double timeout_seconds);
+        void waitEvents(std::optional<double> timeout_seconds = std::nullopt);
         bool shouldClose() const;
         void requestClose() { should_close_ = true; }
         void cancelClose();
@@ -74,7 +73,7 @@ namespace lfs::vis {
         [[nodiscard]] unsigned manualResizeEdgeMask() const;
 
         SDL_Window* getWindow() const { return window_; }
-        VulkanContext* getVulkanContext() const { return vulkan_context_.get(); }
+        GraphicsContext* getGraphicsContext() const { return graphics_context_.get(); }
         glm::ivec2 getWindowSize() const { return window_size_; }
         glm::ivec2 getFramebufferSize() const { return framebuffer_size_; }
         [[nodiscard]] bool hasRecentWindowSizeChange(std::chrono::steady_clock::duration max_age) const;
@@ -88,17 +87,21 @@ namespace lfs::vis {
         [[nodiscard]] bool usesWayland() const { return is_wayland_; }
         [[nodiscard]] bool usesEventDrivenTitlebarDrag() const { return native_titlebar_move_available_; }
         void setFullscreen(bool fullscreen);
-        GraphicsBackend graphicsBackend() const { return graphics_backend_; }
-        bool isVulkan() const { return true; }
-
-        void setCallbackHandler(void* handler) { callback_handler_ = handler; }
         void setInputController(InputController* ic);
         [[nodiscard]] InputController* inputController() { return input_controller_; }
         [[nodiscard]] const FrameInputBuffer& frameInput() const { return frame_input_; }
         [[nodiscard]] const input::InputRouter& inputRouter() const { return input_router_; }
 
     private:
+        friend class WindowInputDispatchTest;
         void processEvent(const ::SDL_Event& event);
+        void dispatchQueuedEvent(const ::SDL_Event& event);
+        void dispatchPolledEvent(const ::SDL_Event& event);
+        bool drainQueuedEvents();
+        static bool watchEvent(void* userdata, ::SDL_Event* event);
+        bool pumping_events_ = false;
+        bool watching_event_ = false;
+        std::vector<std::pair<Uint32, Uint64>> dispatched_events_;
         [[nodiscard]] bool shouldSuppressGuiRoutingForResize(const ::SDL_Event& event,
                                                              unsigned int main_window_id) const;
 
@@ -111,9 +114,7 @@ namespace lfs::vis {
         };
 
         SDL_Window* window_ = nullptr;
-        std::unique_ptr<VulkanContext> vulkan_context_;
-        bool tensor_backend_adopted_ = false;
-        GraphicsBackend graphics_backend_ = GraphicsBackend::Vulkan;
+        std::unique_ptr<GraphicsContext> graphics_context_;
         std::string title_;
         glm::ivec2 window_size_;
         glm::ivec2 framebuffer_size_;
@@ -145,7 +146,6 @@ namespace lfs::vis {
         std::optional<PersistentWindowState> initial_window_state_;
         bool should_close_ = false;
 
-        static void* callback_handler_;
         InputController* input_controller_ = nullptr;
         input::InputRouter input_router_;
         FrameInputBuffer frame_input_;
@@ -175,8 +175,6 @@ namespace lfs::vis {
         [[nodiscard]] bool titlebarDragMovedEnough() const;
         [[nodiscard]] bool isTitlebarDragAtDisplayTop() const;
         void flushPendingTitlebarDoubleClick();
-        void adoptTensorBackendDevice();
-        void releaseTensorBackendDevice();
     };
 
 } // namespace lfs::vis

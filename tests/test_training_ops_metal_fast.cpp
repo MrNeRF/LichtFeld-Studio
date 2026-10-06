@@ -528,8 +528,7 @@ namespace {
     // and regularizer tensors (absent unless a test sets them).
     struct AdamState {
         std::array<Tensor, 6> moments, bounds;
-        Tensor none, frozen, crop, screen_share, scale_loss, opacity_loss, sparsity_sigmoid, sparsity_z, sparsity_u,
-            far_mask;
+        Tensor none, frozen, crop, screen_share, scale_loss, opacity_loss, sparsity_sigmoid, sparsity_z, sparsity_u;
         float frozen_lr_scale = 0.0f, cropbox_lr_scale = 1.0f, screen_share_limit = 0.0f, screen_share_penalty = 0.0f;
     };
 
@@ -578,7 +577,6 @@ namespace {
                 .sparsity_sigmoid = state.sparsity_sigmoid,
                 .sparsity_z = state.sparsity_z,
                 .sparsity_u = state.sparsity_u,
-                .far_mask = state.far_mask,
                 .beta1 = setup.beta1,
                 .beta2 = setup.beta2,
                 .eps = setup.eps};
@@ -719,6 +717,109 @@ namespace {
         EXPECT_EQ(codes_before, download_bytes(g.shN));
     }
 
+    TEST_P(PortableFastRaster, CapacityOverflowIsNoOpAndReplayMatchesLargeCapacity) {
+        const auto& table = fast_ops();
+        if (table.set_deferred_count == nullptr || table.resolve_deferred_count == nullptr ||
+            table.set_instance_capacity_for_testing == nullptr)
+            GTEST_SKIP() << "backend has no deferred FastGS count path";
+
+        Scene s = make_scene(24, 1, 48, 40, 73u, -2.3f, -1.6f);
+        const LossWeights w = random_weights(s.width, s.height, 17u, false);
+        const Tensor grad_image = plane(w.image, 3, s.height, s.width);
+        const size_t n = static_cast<size_t>(s.count);
+        const size_t pixels = static_cast<size_t>(s.width) * s.height;
+        std::vector<float> map(pixels, 0.5f);
+        const Tensor error_map = upload(map, {static_cast<size_t>(s.height), static_cast<size_t>(s.width)});
+        const Tensor edge_map = upload(map, {static_cast<size_t>(s.height), static_cast<size_t>(s.width)});
+        Tensor none;
+
+        auto run_backward = [&](Frame& frame, Gpu& g, AdamState& state, Tensor& densification,
+                                Tensor& edge_scores) {
+            ops::BackwardAdam adam = make_adam(g, state, s.count, {});
+            state.scale_loss = Tensor::zeros({1}, Device::GPU);
+            state.opacity_loss = Tensor::zeros({1}, Device::GPU);
+            adam.scale_reg_loss = state.scale_loss;
+            adam.opacity_reg_loss = state.opacity_loss;
+            adam.scale_reg_weight = 0.2f;
+            adam.opacity_reg_weight = 0.3f;
+            table.backward(frame.saved, {.image = grad_image, .alpha = none, .depth = none, .normal = none},
+                           densification, error_map, edge_map, edge_scores, adam, DensificationType::MRNF);
+        };
+
+        Gpu replay_gpu = upload_scene(s, ops::ShStorage::Float32);
+        const HostParams original = read_params(replay_gpu);
+        Frame replay;
+        replay.saved.backend = table.create();
+        table.set_instance_capacity_for_testing(replay.saved, 1);
+        table.set_deferred_count(replay.saved, true);
+        forward(replay, s, replay_gpu, {});
+        ASSERT_EQ(replay.result.code, ops::RasterResult::Code::Success) << replay.result.message;
+        AdamState replay_state;
+        Tensor replay_densification = Tensor::zeros({2, n}, Device::GPU);
+        Tensor replay_edges = Tensor::zeros({n}, Device::GPU);
+        run_backward(replay, replay_gpu, replay_state, replay_densification, replay_edges);
+        const ops::RasterResult overflow = table.resolve_deferred_count(replay.saved, true);
+        ASSERT_EQ(overflow.code, ops::RasterResult::Code::CapacityOverflow) << overflow.message;
+
+        const HostParams after_overflow = read_params(replay_gpu);
+        EXPECT_EQ(original.means, after_overflow.means);
+        EXPECT_EQ(original.scales, after_overflow.scales);
+        EXPECT_EQ(original.rotations, after_overflow.rotations);
+        EXPECT_EQ(original.opacities, after_overflow.opacities);
+        EXPECT_EQ(original.sh0, after_overflow.sh0);
+        EXPECT_EQ(original.shN, after_overflow.shN);
+        EXPECT_EQ(download(replay_densification), std::vector<float>(2 * n, 0.0f));
+        EXPECT_EQ(download(replay_edges), std::vector<float>(n, 0.0f));
+        EXPECT_EQ(download(replay_state.scale_loss), std::vector<float>(1, 0.0f));
+        EXPECT_EQ(download(replay_state.opacity_loss), std::vector<float>(1, 0.0f));
+        for (size_t i = 0; i < replay_state.moments.size(); ++i) {
+            if (replay_state.moments[i].is_valid())
+                EXPECT_EQ(download_bytes(replay_state.moments[i]),
+                          std::vector<uint8_t>(replay_state.moments[i].bytes(), 0));
+        }
+
+        constexpr uint32_t large_capacity = 1u << 20;
+        table.set_instance_capacity_for_testing(replay.saved, large_capacity);
+        table.set_deferred_count(replay.saved, true);
+        forward(replay, s, replay_gpu, {});
+        ASSERT_EQ(replay.result.code, ops::RasterResult::Code::Success) << replay.result.message;
+        run_backward(replay, replay_gpu, replay_state, replay_densification, replay_edges);
+        const ops::RasterResult replay_result = table.resolve_deferred_count(replay.saved, true);
+        ASSERT_EQ(replay_result.code, ops::RasterResult::Code::Success) << replay_result.message;
+
+        Gpu baseline_gpu = upload_scene(s, ops::ShStorage::Float32);
+        Frame baseline;
+        baseline.saved.backend = table.create();
+        table.set_instance_capacity_for_testing(baseline.saved, large_capacity);
+        table.set_deferred_count(baseline.saved, true);
+        forward(baseline, s, baseline_gpu, {});
+        ASSERT_EQ(baseline.result.code, ops::RasterResult::Code::Success) << baseline.result.message;
+        AdamState baseline_state;
+        Tensor baseline_densification = Tensor::zeros({2, n}, Device::GPU);
+        Tensor baseline_edges = Tensor::zeros({n}, Device::GPU);
+        run_backward(baseline, baseline_gpu, baseline_state, baseline_densification, baseline_edges);
+        const ops::RasterResult baseline_result = table.resolve_deferred_count(baseline.saved, true);
+        ASSERT_EQ(baseline_result.code, ops::RasterResult::Code::Success) << baseline_result.message;
+
+        const HostParams replay_params = read_params(replay_gpu);
+        const HostParams baseline_params = read_params(baseline_gpu);
+        auto expect_same = [](const std::vector<float>& a, const std::vector<float>& b, const char* name) {
+            ASSERT_EQ(a.size(), b.size()) << name;
+            for (size_t i = 0; i < a.size(); ++i)
+                EXPECT_NEAR(a[i], b[i], 1e-6f) << name << " at " << i;
+        };
+        expect_same(replay_params.means, baseline_params.means, "means");
+        expect_same(replay_params.scales, baseline_params.scales, "scales");
+        expect_same(replay_params.rotations, baseline_params.rotations, "rotations");
+        expect_same(replay_params.opacities, baseline_params.opacities, "opacities");
+        expect_same(replay_params.sh0, baseline_params.sh0, "sh0");
+        expect_same(replay_params.shN, baseline_params.shN, "shN");
+        expect_same(download(replay_densification), download(baseline_densification), "densification");
+        expect_same(download(replay_edges), download(baseline_edges), "edge scores");
+        expect_same(download(replay_state.scale_loss), download(baseline_state.scale_loss), "scale loss");
+        expect_same(download(replay_state.opacity_loss), download(baseline_state.opacity_loss), "opacity loss");
+    }
+
     // Reference gradient of every parameter by central differences.
     struct ReferenceGrads {
         std::vector<double> means, scales, rotations, opacities, sh0, rest, mean2d;
@@ -734,7 +835,7 @@ namespace {
         }
         const Rendered frozen = render(s, base, v, nullptr);
         const auto lists = frozen.lists;
-        auto derivative = [&](std::vector<double> Params::*member, const size_t index) {
+        auto derivative = [&](std::vector<double> Params::* member, const size_t index) {
             constexpr double h = 1e-5;
             Params p = base;
             (p.*member)[index] += h;
@@ -743,7 +844,7 @@ namespace {
             const double down = loss(render(s, p, v, &lists), w);
             return (up - down) / (2 * h);
         };
-        auto all = [&](std::vector<double> Params::*member, const size_t size) {
+        auto all = [&](std::vector<double> Params::* member, const size_t size) {
             std::vector<double> out(size);
             for (size_t i = 0; i < size; ++i)
                 out[i] = derivative(member, i);
@@ -986,7 +1087,7 @@ namespace {
 
     double sigmoid(const double x) { return 1.0 / (1.0 + std::exp(-x)); }
 
-    // Masks, regularizers, sparsity, the per-splat mean step and the
+    // Masks, regularizers, sparsity and the
     // screen-share hinge on top of the render gradient, under the unit step.
     TEST_P(PortableFastRaster, FusedAdamTermsMatchReference) {
         Scene s = make_scene(24, 1, 48, 40, 61u, -2.3f, -1.6f);
@@ -997,24 +1098,22 @@ namespace {
         const View view = make_view(s, false);
         const ReferenceGrads render = reference_grads(s, view, w, false);
 
-        std::vector<uint8_t> frozen(n, 0), crop(n, 0), far(n, 0);
+        std::vector<uint8_t> frozen(n, 0), crop(n, 0);
         std::vector<float> sparsity(n), z(n), u(n);
         std::mt19937 rng(3u);
         std::uniform_real_distribution<float> uniform(0.0f, 1.0f);
         for (size_t i = 0; i < n; ++i) {
             frozen[i] = i % 7 == 3;
             crop[i] = i % 5 == 1;
-            far[i] = i % 3 == 0;
             sparsity[i] = uniform(rng);
             z[i] = uniform(rng);
             u[i] = uniform(rng) - 0.5f;
         }
         constexpr float scale_w = 0.3f, flatten_w = 0.2f, opacity_w = 0.4f, rho = 0.7f, grad_loss = 0.5f;
-        constexpr float median = 0.1f, r_min = 1.0f, r_max = 300.0f, limit = 0.01f, penalty = 0.5f;
+        constexpr float limit = 0.01f, penalty = 0.5f;
         AdamState state;
         state.frozen = upload_mask(frozen);
         state.crop = upload_mask(crop);
-        state.far_mask = upload_mask(far);
         state.frozen_lr_scale = 0.0f;
         state.cropbox_lr_scale = 0.5f;
         state.scale_loss = Tensor::zeros({1}, Device::GPU);
@@ -1036,10 +1135,6 @@ namespace {
         adam.opacity_reg_weight = opacity_w;
         adam.sparsity_rho = rho;
         adam.sparsity_grad_loss = grad_loss;
-        adam.per_splat_mean_step = true;
-        adam.median_extent = median;
-        adam.r_min = r_min;
-        adam.r_max = r_max;
         const Tensor grad_image = plane(w.image, 3, s.height, s.width);
         Tensor none;
         fast_ops().backward(frame.saved, {.image = grad_image, .alpha = none, .depth = none, .normal = none}, none,
@@ -1052,8 +1147,6 @@ namespace {
         for (size_t i = 0; i < n; ++i) {
             const double row = frozen[i] ? 0.0 : (crop[i] ? 0.5 : 1.0);
             const double* sc = &base.scales[3 * i];
-            const double ratio =
-                far[i] ? std::clamp(std::exp((sc[0] + sc[1] + sc[2]) / 3.0) / median, double{r_min}, double{r_max}) : 1.0;
             const int axis = (sc[0] <= sc[1] && sc[0] <= sc[2]) ? 0 : (sc[1] <= sc[2] ? 1 : 2);
             const Splat splat = project(s, base, view, static_cast<int>(i), true);
             double expected_share = 0.0;
@@ -1067,7 +1160,7 @@ namespace {
             EXPECT_NEAR(share[i], expected_share, 1e-5) << "screen share " << i;
             const double hinge = share[i] > limit ? penalty * std::log2(share[i] / limit) : 0.0;
             for (int k = 0; k < 3; ++k) {
-                means[3 * i + k] = row * ratio * render.means[3 * i + k];
+                means[3 * i + k] = row * render.means[3 * i + k];
                 double grad = render.scales[3 * i + k] + scale_w * std::exp(sc[k]) / (3.0 * n) + hinge;
                 if (k == axis)
                     grad += 3.0 * flatten_w * std::exp(sc[k]) / (3.0 * n);
@@ -1130,7 +1223,7 @@ namespace {
         const float inf = std::numeric_limits<float>::infinity();
         struct Case {
             const char* name;
-            std::vector<float> Scene::*field;
+            std::vector<float> Scene::* field;
             int width;
             float value;
         };

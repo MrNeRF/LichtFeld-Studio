@@ -1,10 +1,13 @@
 static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 32;
+// Each invocation owns this many consecutive elements of a tile.
+static const uint kItems = 16;
+static const uint kTile = LFS_LOCAL_SIZE_X * kItems;
 
 // Element codes follow DataType: 0 Float32, 2 Int32.
 [SpecializationConstant]
 const uint kDType = 0;
-// 0 short lines, 1 single-block lines, 2 independent blocks, 3 scanned block offsets.
+// 0 short lines, 1 single-tile lines, 2 tile totals, 3 tiles scanned after the scanned totals of earlier tiles.
 [SpecializationConstant]
 const uint kMode = 0;
 
@@ -20,12 +23,50 @@ struct Parameters
 
 groupshared float sharedFloat[LFS_LOCAL_SIZE_X];
 groupshared int sharedInt[LFS_LOCAL_SIZE_X];
+// A tile staged between coalesced global access (element i * LFS_LOCAL_SIZE_X + thread) and each invocation's
+// own run (element thread * kItems + i); one pad word per 32 keeps both patterns free of bank conflicts.
+groupshared uint sharedTile[kTile + kTile / 32];
+
+uint tileSlot(uint element)
+{
+    return element + element / 32;
+}
 
 uint64_t lineBase(uint line, Parameters parameters)
 {
     const uint outerIndex = line / parameters.inner;
     const uint innerIndex = line - outerIndex * parameters.inner;
     return uint64_t(outerIndex) * parameters.dim * parameters.inner + innerIndex;
+}
+
+// Inclusive scan of one value per invocation across the workgroup; returns the exclusive prefix and leaves the
+// workgroup total in the last slot.
+float workgroupExclusiveFloat(uint thread, float value)
+{
+    sharedFloat[thread] = value;
+    GroupMemoryBarrierWithGroupSync();
+    for (uint offset = 1; offset < LFS_LOCAL_SIZE_X; offset <<= 1)
+    {
+        const float partial = thread >= offset ? sharedFloat[thread - offset] : 0.0f;
+        GroupMemoryBarrierWithGroupSync();
+        sharedFloat[thread] += partial;
+        GroupMemoryBarrierWithGroupSync();
+    }
+    return thread > 0 ? sharedFloat[thread - 1] : 0.0f;
+}
+
+int workgroupExclusiveInt(uint thread, int value)
+{
+    sharedInt[thread] = value;
+    GroupMemoryBarrierWithGroupSync();
+    for (uint offset = 1; offset < LFS_LOCAL_SIZE_X; offset <<= 1)
+    {
+        const int partial = thread >= offset ? sharedInt[thread - offset] : 0;
+        GroupMemoryBarrierWithGroupSync();
+        sharedInt[thread] += partial;
+        GroupMemoryBarrierWithGroupSync();
+    }
+    return thread > 0 ? sharedInt[thread - 1] : 0;
 }
 
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)]
@@ -63,62 +104,94 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
         return;
     }
 
-    const uint blocks = (parameters.dim + LFS_LOCAL_SIZE_X - 1) / LFS_LOCAL_SIZE_X;
-    if (kMode == 3)
-    {
-        const uint64_t count = uint64_t(parameters.lines) * parameters.dim;
-        const uint stride = numWorkgroups.x * LFS_LOCAL_SIZE_X;
-        for (uint64_t index = dispatchThreadId.x; index < count; index += stride)
-        {
-            const uint element = uint(index / parameters.inner) % parameters.dim;
-            if (element < LFS_LOCAL_SIZE_X) continue;
-            const uint64_t line = index / (uint64_t(parameters.dim) * parameters.inner) * parameters.inner
-                                  + index % parameters.inner;
-            const uint64_t preceding = line * blocks + element / LFS_LOCAL_SIZE_X - 1;
-            if (kDType == 0)
-                floats[index] += ((Ptr<float, Access.Read>)parameters.totalsAddress)[preceding];
-            else
-                ints[index] += ((Ptr<int, Access.Read>)parameters.totalsAddress)[preceding];
-        }
-        return;
-    }
-    const uint64_t tasks = uint64_t(parameters.lines) * (kMode == 2 ? blocks : 1u);
+    // One workgroup per tile of a line: each invocation scans its own run, the workgroup scans the run totals,
+    // and every element adds the totals before it (and, in mode 3, those of the earlier tiles).
+    const uint tiles = (parameters.dim + kTile - 1) / kTile;
+    const uint64_t tasks = uint64_t(parameters.lines) * (kMode == 1 ? 1u : tiles);
     for (uint64_t task = groupId.x; task < tasks; task += numWorkgroups.x)
     {
-        const uint line = kMode == 2 ? uint(task / blocks) : uint(task);
-        const uint element = (kMode == 2 ? uint(task % blocks) * LFS_LOCAL_SIZE_X : 0u) + thread;
-        const bool live = element < parameters.dim;
-        const uint64_t index = lineBase(line, parameters) + uint64_t(element) * parameters.inner;
-        if (kDType == 0)
-            sharedFloat[thread] = live ? floats[index] : 0.0f;
-        else
-            sharedInt[thread] = live ? ints[index] : 0;
-        GroupMemoryBarrierWithGroupSync();
-        for (uint offset = 1; offset < LFS_LOCAL_SIZE_X; offset <<= 1)
+        const uint line = kMode == 1 ? uint(task) : uint(task / tiles);
+        const uint tile = kMode == 1 ? 0u : uint(task % tiles);
+        const uint64_t base = lineBase(line, parameters);
+        const uint tileStart = tile * kTile;
+        const uint tileCount = min(kTile, parameters.dim - tileStart);
+        for (uint item = 0; item < kItems; ++item)
         {
-            float partialFloat = 0.0f;
-            int partialInt = 0;
-            if (thread >= offset)
+            const uint element = item * LFS_LOCAL_SIZE_X + thread;
+            uint bits = 0u;
+            if (element < tileCount)
             {
-                if (kDType == 0) partialFloat = sharedFloat[thread - offset];
-                else partialInt = sharedInt[thread - offset];
+                const uint64_t index = base + uint64_t(tileStart + element) * parameters.inner;
+                bits = kDType == 0 ? asuint(floats[index]) : asuint(ints[index]);
             }
-            GroupMemoryBarrierWithGroupSync();
-            if (kDType == 0) sharedFloat[thread] += partialFloat;
-            else sharedInt[thread] += partialInt;
-            GroupMemoryBarrierWithGroupSync();
+            sharedTile[tileSlot(element)] = bits;
         }
-        if (live)
+        GroupMemoryBarrierWithGroupSync();
+        if (kDType == 0)
         {
-            if (kDType == 0) floats[index] = sharedFloat[thread];
-            else ints[index] = sharedInt[thread];
-        }
-        if (kMode == 2 && thread == LFS_LOCAL_SIZE_X - 1)
-        {
-            if (kDType == 0)
-                ((Ptr<float, Access.ReadWrite>)parameters.totalsAddress)[task] = sharedFloat[thread];
+            float run[kItems];
+            float running = 0.0f;
+            for (uint item = 0; item < kItems; ++item)
+            {
+                running += asfloat(sharedTile[tileSlot(thread * kItems + item)]);
+                run[item] = running;
+            }
+            const float before = workgroupExclusiveFloat(thread, running);
+            if (kMode == 2)
+            {
+                if (thread == LFS_LOCAL_SIZE_X - 1)
+                    ((Ptr<float, Access.ReadWrite>)parameters.totalsAddress)[task] = sharedFloat[thread];
+            }
             else
-                ((Ptr<int, Access.ReadWrite>)parameters.totalsAddress)[task] = sharedInt[thread];
+            {
+                const float earlier = kMode == 3 && tile > 0
+                                          ? ((Ptr<float, Access.Read>)parameters.totalsAddress)[task - 1]
+                                          : 0.0f;
+                const float offset = earlier + before;
+                for (uint item = 0; item < kItems; ++item)
+                    sharedTile[tileSlot(thread * kItems + item)] = asuint(run[item] + offset);
+            }
+        }
+        else
+        {
+            int run[kItems];
+            int running = 0;
+            for (uint item = 0; item < kItems; ++item)
+            {
+                running += asint(sharedTile[tileSlot(thread * kItems + item)]);
+                run[item] = running;
+            }
+            const int before = workgroupExclusiveInt(thread, running);
+            if (kMode == 2)
+            {
+                if (thread == LFS_LOCAL_SIZE_X - 1)
+                    ((Ptr<int, Access.ReadWrite>)parameters.totalsAddress)[task] = sharedInt[thread];
+            }
+            else
+            {
+                const int earlier = kMode == 3 && tile > 0
+                                        ? ((Ptr<int, Access.Read>)parameters.totalsAddress)[task - 1]
+                                        : 0;
+                const int offset = earlier + before;
+                for (uint item = 0; item < kItems; ++item)
+                    sharedTile[tileSlot(thread * kItems + item)] = asuint(run[item] + offset);
+            }
+        }
+        if (kMode != 2)
+        {
+            GroupMemoryBarrierWithGroupSync();
+            for (uint item = 0; item < kItems; ++item)
+            {
+                const uint element = item * LFS_LOCAL_SIZE_X + thread;
+                if (element >= tileCount)
+                    continue;
+                const uint64_t index = base + uint64_t(tileStart + element) * parameters.inner;
+                const uint bits = sharedTile[tileSlot(element)];
+                if (kDType == 0)
+                    floats[index] = asfloat(bits);
+                else
+                    ints[index] = asint(bits);
+            }
         }
         GroupMemoryBarrierWithGroupSync();
     }

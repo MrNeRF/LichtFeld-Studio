@@ -373,8 +373,9 @@ namespace {
     }
 
     INSTANTIATE_TEST_SUITE_P(Backends, ExportEnvCompositeTest,
-                             ::testing::ValuesIn(lfs::core::kGpuBackends),
+                             ::testing::ValuesIn(lfs::core::kCompiledGpuBackends),
                              [](const ::testing::TestParamInfo<lfs::core::GpuBackend>& info) {
-                                 return info.param == lfs::core::GpuBackend::CUDA ? "CUDA" : "Vulkan";
+                                 return info.param == lfs::core::GpuBackend::CUDA ? "CUDA" : info.param == lfs::core::GpuBackend::Vulkan ? "Vulkan"
+                                                                                                                                         : "Metal";
                              });
 } // namespace

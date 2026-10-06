@@ -11,13 +11,11 @@ import platform
 import shutil
 import subprocess
 import tempfile
-from typing import Protocol
 
 
-class CredentialBackend(Protocol):
-    def read(self) -> bytes | None: ...
-    def write(self, value: bytes) -> None: ...
-    def delete(self) -> None: ...
+from .private_directory import mkdir_private
+
+
 
 
 class FileBackend:
@@ -37,7 +35,7 @@ class FileBackend:
             return None
 
     def write(self, value):
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        mkdir_private(self.path.parent, parents=True, exist_ok=True)
         temporary = None
         try:
             with tempfile.NamedTemporaryFile(dir=self.path.parent, delete=False) as output:

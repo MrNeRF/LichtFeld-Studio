@@ -5,10 +5,10 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "gui/ui_texture.hpp"
 #include "io/video_frame_extractor.hpp"
 #include "io/video_player.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
-#include "visualizer/gui/vulkan_ui_texture.hpp"
 
 #include <RmlUi/Core/EventListener.h>
 #include <array>
@@ -188,7 +188,7 @@ namespace lfs::gui {
         ExtractionStatusMessage status_message_ = ExtractionStatusMessage::None;
 
         std::unique_ptr<io::VideoPlayer> player_;
-        std::unique_ptr<lfs::vis::gui::VulkanUiTexture> preview_texture_;
+        std::unique_ptr<lfs::vis::gui::UiTexture> preview_texture_;
         int preview_texture_width_ = 0;
         int preview_texture_height_ = 0;
         bool texture_needs_update_ = true;

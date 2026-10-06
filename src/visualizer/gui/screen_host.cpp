@@ -22,6 +22,7 @@
 #include <cassert>
 #include <cmath>
 #include <format>
+#include <utility>
 
 namespace lfs::vis::gui {
 
@@ -81,6 +82,9 @@ namespace lfs::vis::gui {
                     services_.view_command(id, action);
                 chrome_dirty_ = true;
             });
+        assert(services_.scene_manager);
+        node_editor_ = std::make_unique<NodeEditor>(*services_.rml, *services_.scene_manager,
+                                                    services_.context_menu);
         installPanelEditorTypes(services_.screens->editorTypes());
 
         chrome_context_ = services_.rml->createContext("screen_chrome", 800, 600);
@@ -153,10 +157,11 @@ namespace lfs::vis::gui {
     }
 
     void ScreenHost::shutdown() {
+        node_editor_.reset();
         chrome_tooltip_.setHover({}, nullptr);
         if (services_.rml) {
-            services_.rml->releaseCachedVulkanContext(chrome_cache_);
-            services_.rml->releaseCachedVulkanContext(overlay_cache_);
+            services_.rml->releaseCachedContext(chrome_cache_);
+            services_.rml->releaseCachedContext(overlay_cache_);
             if (chrome_context_)
                 services_.rml->destroyContext("screen_chrome");
             if (overlay_context_)
@@ -175,8 +180,8 @@ namespace lfs::vis::gui {
         if (!chrome_context_ || !overlay_context_)
             return;
         if (services_.rml) {
-            services_.rml->releaseCachedVulkanContext(chrome_cache_);
-            services_.rml->releaseCachedVulkanContext(overlay_cache_);
+            services_.rml->releaseCachedContext(chrome_cache_);
+            services_.rml->releaseCachedContext(overlay_cache_);
         }
         if (chrome_document_) {
             chrome_context_->UnloadDocument(chrome_document_);
@@ -241,6 +246,8 @@ namespace lfs::vis::gui {
             return scene_;
         if (editor == screen::editors::kConsole)
             return console_;
+        if (editor == screen::editors::kNodeEditor)
+            return *node_editor_;
         return panel_;
     }
 
@@ -315,14 +322,6 @@ namespace lfs::vis::gui {
         return {};
     }
 
-    screen::AreaId ScreenHost::viewAt(const float x, const float y) const {
-        for (const auto& f : frames_) {
-            if (f.editor == screen::editors::kView3D && f.content.contains(x, y))
-                return f.id;
-        }
-        return {};
-    }
-
     std::optional<screen::Rect> ScreenHost::viewContent(const screen::AreaId id) const {
         const auto* f = area(id);
         if (!f || f->editor != screen::editors::kView3D)
@@ -353,6 +352,11 @@ namespace lfs::vis::gui {
     bool ScreenHost::cornerGestureAt(const float x, const float y) const {
         return screen_host_detail::cornerGestureZone(geometry_, geometry_.maximized.valid(),
                                                      gestures_.metrics().corner_size, x, y);
+    }
+
+    bool ScreenHost::resizeGestureAt(const float x, const float y) const {
+        return gestures_.active() || cornerGestureAt(x, y) ||
+               (!geometry_.maximized.valid() && geometry_.dividerAt(x, y, gestures_.metrics().divider_slop));
     }
 
     bool ScreenHost::isEditorVisible(const std::string_view editor) const {
@@ -396,6 +400,18 @@ namespace lfs::vis::gui {
         return done;
     }
 
+    bool ScreenHost::toggleEditor(const std::string_view editor) {
+        bool shown = false;
+        mutate([&](screen::Screen& screen) {
+            if (screen.findEditor(editor).valid()) {
+                screen.closeEditor(editor);
+            } else {
+                shown = screen.openEditor(editor).valid();
+            }
+        });
+        return shown;
+    }
+
     void ScreenHost::openEditorMenu(const screen::AreaId id, const float x, const float y) {
         if (!services_.context_menu)
             return;
@@ -408,7 +424,8 @@ namespace lfs::vis::gui {
         bool panels_started = false;
         for (const auto& type : services_.screens->editorTypes().list()) {
             const bool builtin = type.id == screen::editors::kView3D || type.id == screen::editors::kScene ||
-                                 type.id == screen::editors::kProperties || type.id == screen::editors::kConsole;
+                                 type.id == screen::editors::kProperties || type.id == screen::editors::kConsole ||
+                                 type.id == screen::editors::kNodeEditor;
             items.push_back({.label = localizedLabel(type),
                              .action = "editor:" + type.id,
                              .separator_before = !builtin && !panels_started,
@@ -502,6 +519,13 @@ namespace lfs::vis::gui {
     }
 
     void ScreenHost::processInput(const PanelInputState& input, const bool pointer_free) {
+        if (services_.rml && chrome_context_ &&
+            services_.rml->routeInput(chrome_context_, input, [this, pointer_free](const PanelInputState& event) {
+                processInput(event, services_.pointer_available
+                                        ? services_.pointer_available(event.mouse_x, event.mouse_y)
+                                        : pointer_free);
+            }))
+            return;
         const float x = input.mouse_x;
         const float y = input.mouse_y;
         const bool moved = x != last_mouse_x_ || y != last_mouse_y_;
@@ -671,8 +695,7 @@ namespace lfs::vis::gui {
             services_.screens->screenEpoch() != laid_out_epoch_)
             layout(work_, ui_scale_);
 
-        const bool keyboard_activity = !input.keys_pressed.empty() || !input.keys_released.empty() ||
-                                       !input.text_inputs.empty() || !input.text_codepoints.empty();
+        const bool keyboard_activity = !input.keys_pressed.empty() || !input.input_events.empty();
 
         rebuildChrome();
         if (chrome_context_ && chrome_document_ && services_.rml && !work_.empty()) {
@@ -696,7 +719,7 @@ namespace lfs::vis::gui {
             services_.rml->setContextNeedsPassiveMouseMoveFrames(chrome_context_, chrome_tooltip_.hasActiveState());
             services_.rml->setContextTooltipRevealDeadline(chrome_context_, chrome_tooltip_.revealDeadline());
             services_.rml->trackContextFrame(chrome_context_, static_cast<int>(work_.x), static_cast<int>(work_.y));
-            services_.rml->queueCachedVulkanContext({
+            services_.rml->queueCachedContext({
                 .context = chrome_context_,
                 .cache = &chrome_cache_,
                 .cache_width = w,
@@ -743,6 +766,7 @@ namespace lfs::vis::gui {
                     v = false;
                 area_input.mouse_wheel = 0.0f;
                 area_input.mouse_wheel_x = 0.0f;
+                area_input.pinch_scale = 1.0f;
                 area_input.mouse_button_events.clear();
             }
             editor.draw({.area = frame, .ui = ui, .draw = draw, .input = area_input, .live = live});
@@ -843,7 +867,7 @@ namespace lfs::vis::gui {
             overlay_context_->Update();
             overlay_dirty_ = false;
         }
-        services_.rml->queueCachedVulkanContext({
+        services_.rml->queueCachedContext({
             .context = overlay_context_,
             .cache = &overlay_cache_,
             .cache_width = w,
@@ -954,13 +978,6 @@ namespace lfs::vis::gui {
     bool ScreenHost::needsAnimationFrame() const {
         return chrome_dirty_ || overlay_dirty_ || gestures_.active() || !pending_actions_.empty() ||
                chrome_tooltip_.needsFrame();
-    }
-
-    std::string ScreenHost::animationDemandDescription() const {
-        if (!needsAnimationFrame())
-            return {};
-        return std::format("screen(chrome_dirty={},overlay_dirty={},gesture={},actions={})", chrome_dirty_,
-                           overlay_dirty_, gestures_.active(), pending_actions_.size());
     }
 
 } // namespace lfs::vis::gui

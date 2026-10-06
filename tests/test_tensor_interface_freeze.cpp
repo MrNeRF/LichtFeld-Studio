@@ -190,8 +190,6 @@ namespace {
     [[maybe_unused]] constexpr auto kMoreFactoryOverloads = std::tuple{
         static_cast<T (*)(void*, S, Device, DataType, std::shared_ptr<void>)>(&T::from_external_owner),
         static_cast<T (*)(void*, S, Device, DataType, std::shared_ptr<void>, size_t)>(&T::from_external_owner),
-        static_cast<T (*)(void*, S, Device, DataType, std::shared_ptr<void>, size_t, cudaStream_t)>(
-            &T::from_external_owner),
         static_cast<T (*)(void*, S, Device, DataType, std::shared_ptr<void>, size_t, cudaStream_t, std::string)>(
             &T::from_external_owner),
         static_cast<T (*)(const T&, const T&, const T&)>(&T::where),
@@ -238,19 +236,13 @@ namespace {
         static_cast<const void* (T::*)() const>(&T::data_ptr),
         static_cast<void* (T::*)()>(&T::storage_ptr),
         static_cast<const void* (T::*)() const>(&T::storage_ptr),
-        static_cast<void (*)()>(&T::log_storage_memory),
-        static_cast<void (*)(std::string_view)>(&T::log_storage_memory),
-        static_cast<void (T::*)(std::initializer_list<size_t>, bool)>(&T::set_bool),
         static_cast<void (T::*)(std::span<const size_t>, bool)>(&T::set_bool),
-        static_cast<bool (T::*)(std::initializer_list<size_t>) const>(&T::get_bool),
         static_cast<bool (T::*)(std::span<const size_t>) const>(&T::get_bool),
         static_cast<T& (T::*)(float)>(&T::fill_),
         static_cast<T& (T::*)(float, cudaStream_t)>(&T::fill_),
-        static_cast<T& (T::*)(S)>(&T::assert_shape),
-        static_cast<T& (T::*)(S, const std::string&)>(&T::assert_shape),
         static_cast<void (T::*)() const>(&T::print_formatted),
         static_cast<void (T::*)(const std::string&, size_t) const>(&T::print_formatted),
-        static_cast<float& (T::*)(std::initializer_list<size_t>)>(&T::at),
+        static_cast<TensorElementProxy (T::*)(std::initializer_list<size_t>)>(&T::at),
         static_cast<float (T::*)(std::initializer_list<size_t>) const>(&T::at)};
 
     [[maybe_unused]] constexpr auto kNnOverloads = std::tuple{
@@ -342,11 +334,11 @@ namespace {
     LFS_FREEZE(T::stack, T (*)(const std::vector<T>&, int));
     LFS_FREEZE(T::rand, T (*)(S, Device, DataType));
     LFS_FREEZE(T::randn, T (*)(S, Device, DataType));
-    LFS_FREEZE(T::uniform, T (*)(S, float, float, Device, DataType));
+    LFS_FREEZE(T::uniform, T (*)(S, float, float, Device, DataType, std::optional<uint64_t>));
     LFS_FREEZE(T::normal, T (*)(S, float, float, Device, DataType));
     LFS_FREEZE(T::randint, T (*)(S, int, int, Device, DataType));
     LFS_FREEZE(T::bernoulli, T (*)(S, float, Device, DataType));
-    LFS_FREEZE(T::multinomial, T (*)(const T&, int, bool));
+    LFS_FREEZE(T::multinomial, T (*)(const T&, int, bool, std::optional<uint64_t>));
     LFS_FREEZE(T::rand_like, T (*)(const T&));
     LFS_FREEZE(T::randn_like, T (*)(const T&));
     LFS_FREEZE(T::manual_seed, void (*)(uint64_t));
@@ -367,9 +359,7 @@ namespace {
     LFS_FREEZE(T::broadcast_to, T (T::*)(const S&) const);
     LFS_FREEZE(T::can_broadcast_to, bool (T::*)(const S&) const);
     LFS_FREEZE(T::broadcast_shape, S (T::*)(const S&) const);
-    LFS_FREEZE(T::try_reshape, std::optional<T> (T::*)(S) const);
     LFS_FREEZE(T::view_as, T (T::*)(DataType) const);
-    LFS_FREEZE(T::split_batch, std::vector<T> (*)(const T&, size_t));
     LFS_FREEZE(T::sign, T (T::*)() const);
     LFS_FREEZE(T::reciprocal, T (T::*)() const);
     LFS_FREEZE(T::exp2, T (T::*)() const);
@@ -417,7 +407,6 @@ namespace {
     LFS_FREEZE(T::min_with_indices, std::pair<T, T> (T::*)(int, bool) const);
     LFS_FREEZE(T::max_with_indices, std::pair<T, T> (T::*)(int, bool) const);
     LFS_FREEZE(T::sort, std::pair<T, T> (T::*)(int, bool) const);
-    LFS_FREEZE(T::any_scalar, bool (T::*)() const);
     LFS_FREEZE(T::mm, T (T::*)(const T&) const);
     LFS_FREEZE(T::bmm, T (T::*)(const T&) const);
     LFS_FREEZE(T::matmul, T (T::*)(const T&) const);
@@ -485,8 +474,6 @@ namespace {
     LFS_FREEZE(T::strides, const RankedDims& (T::*)() const);
     LFS_FREEZE(T::stride, size_t (T::*)(size_t) const);
     LFS_FREEZE(T::has_zero_stride, bool (T::*)() const);
-    LFS_FREEZE(T::assert_device, T& (T::*)(Device));
-    LFS_FREEZE(T::assert_dtype, T& (T::*)(DataType));
     LFS_FREEZE(T::assert_finite, T& (T::*)());
     LFS_FREEZE(T::all_close, bool (T::*)(const T&, float, float) const);
     LFS_FREEZE(T::str, std::string (T::*)() const);
@@ -545,8 +532,6 @@ namespace {
     LFS_FREEZE(PinnedMemoryAllocator::set_cache_limit_for_testing, void (PinnedMemoryAllocator::*)(size_t));
     LFS_FREEZE(PinnedMemoryAllocator::cache_limit_bytes, size_t (PinnedMemoryAllocator::*)() const);
     LFS_FREEZE(MemoryInfo::cuda, MemoryInfo (*)());
-    LFS_FREEZE(MemoryInfo::cpu, MemoryInfo (*)());
-    LFS_FREEZE(MemoryInfo::log, void (MemoryInfo::*)() const);
     LFS_FREEZE(save_tensor, void (*)(const T&, const std::string&));
     LFS_FREEZE(load_tensor, T (*)(const std::string&));
     LFS_FREEZE(TensorSerializationDescriptor::payload_bytes, std::uint64_t (TensorSerializationDescriptor::*)() const);
@@ -581,13 +566,6 @@ namespace {
     LFS_FREEZE(RP::item_int, int (RP::*)() const);
     LFS_FREEZE(RP::item_int64, int64_t (RP::*)() const);
     LFS_FREEZE(RP::operator Tensor, T (RP::*)() const);
-    LFS_FREEZE(RP::pow, T (RP::*)(float) const);
-    LFS_FREEZE(RP::sqrt, T (RP::*)() const);
-    LFS_FREEZE(RP::abs, T (RP::*)() const);
-    LFS_FREEZE(RP::neg, T (RP::*)() const);
-    LFS_FREEZE(RP::sum, T (RP::*)() const);
-    LFS_FREEZE(RP::mean, T (RP::*)() const);
-    LFS_FREEZE(RP::square, T (RP::*)() const);
     LFS_FREEZE(MP::operator Tensor, T (MP::*)() const);
     LFS_FREEZE(TI::operator Tensor, T (TI::*)() const);
 #undef LFS_FREEZE
@@ -616,7 +594,6 @@ namespace {
         X::from_blob(data, shape, device, dtype, stream);
         X::from_external_owner(data, shape, device, dtype, owner);
         X::from_external_owner(data, shape, device, dtype, owner, 9);
-        X::from_external_owner(data, shape, device, dtype, owner, 9, stream);
         X::from_external_owner(data, shape, device, dtype, owner, 9, stream, std::string{});
         X::zeros_like(ct);
         X::ones_like(ct);
@@ -664,8 +641,6 @@ namespace {
         ct.can_broadcast_to(shape);
         ct.broadcast_shape(shape);
         t.reserve(8);
-        ct.try_reshape(shape);
-        X::split_batch(ct, 4);
     };
 
     template <typename Dims, typename Shape>
@@ -796,7 +771,7 @@ namespace {
         t.div_(1.0f);
         ct + ct;
         ct - ct;
-        ct* ct;
+        ct * ct;
         ct / ct;
         ct % ct;
         ct == ct;
@@ -805,7 +780,7 @@ namespace {
         ct <= ct;
         ct > ct;
         ct >= ct;
-        ct&& ct;
+        ct && ct;
         ct || ct;
         ct | ct;
     };
@@ -862,7 +837,6 @@ namespace {
         ct.min_with_indices(0, true);
         ct.max_with_indices(0, true);
         ct.sort(0, false);
-        ct.any_scalar();
     };
 
     template <typename X>
@@ -881,8 +855,8 @@ namespace {
         t[ct];
         t[tensors];
         ct[ct];
-        t.set_bool({0}, true);
-        ct.get_bool({0});
+        t.set_bool(std::array<size_t, 1>{0}, true);
+        ct.get_bool(std::array<size_t, 1>{0});
         ct.masked_select(ct);
         t.masked_fill_(ct, 1.0f);
         ct.masked_fill(ct, 1.0f);
@@ -1030,8 +1004,6 @@ namespace {
         X::shutdown_memory_pool();
         X::set_memory_pool_iteration(0);
         X::storage_memory_summary();
-        X::log_storage_memory();
-        X::log_storage_memory(std::string_view{});
         PinnedMemoryAllocator::instance();
         PinnedMemoryAllocator::instance().allocate(1);
         PinnedMemoryAllocator::instance().deallocate(pointer, stream);
@@ -1049,7 +1021,6 @@ namespace {
         PinnedMemoryAllocator::instance().set_cache_limit_for_testing(1);
         PinnedMemoryAllocator::instance().cache_limit_bytes();
         MemoryInfo::cuda();
-        MemoryInfo::cpu();
     };
 
     template <typename X>
@@ -1070,10 +1041,6 @@ namespace {
         ct.exportable_control();
         ct.exportable_region();
         ct.exportable_bound_generation();
-        t.assert_shape(S{});
-        t.assert_shape(S{}, text);
-        t.assert_device(Device::CPU);
-        t.assert_dtype(DataType::Float32);
         t.assert_finite();
         ct.has_nan();
         ct.has_inf();
@@ -1117,7 +1084,6 @@ namespace {
         debug::TensorOpTracer::instance().clear_history();
         debug::TensorOpTracer::instance().get_history();
         debug::OpTraceGuard("", ct, SourceSite{"", 0, ""}).set_output(S{});
-        MemoryInfo{}.log();
     };
 
     template <typename E>
@@ -1153,17 +1119,15 @@ namespace {
         TensorLeaf(t).stream_hint();
         TensorLeaf(t).snapshot();
         TensorLeaf(t).map(operation);
-        ct.template apply([](const X& value) { return value; });
+        ct.template apply([](const X & value) { return value; });
         t.template inplace([](X&) {});
-        ct.template timed("", [](const X& value) { return value; });
+        ct.template timed("", [](const X & value) { return value; });
     };
 
     using LeafExpr = TensorLeaf;
     using UnaryExpression = UnaryExpr<LeafExpr, ops::abs_op>;
     using NestedUnaryExpression = UnaryExpr<UnaryExpression, ops::neg_op>;
     using BinaryExpression = BinaryExpr<LeafExpr, LeafExpr, ops::add_op>;
-    using ScalarOperation = ops::scalar_right_op<ops::add_op, float>;
-    using ScalarExpression = ScalarUnaryExpr<LeafExpr, ScalarOperation>;
     using PermutationExpression = PermutationExpr<LeafExpr, LeafExpr>;
     using GatherUnaryExpression = UnaryExpr<PermutationExpression, ops::abs_op>;
 
@@ -1177,8 +1141,6 @@ namespace {
             &NestedUnaryExpression::derived),
         static_cast<BinaryExpression& (BinaryExpression::*)()>(&BinaryExpression::derived),
         static_cast<const BinaryExpression& (BinaryExpression::*)() const>(&BinaryExpression::derived),
-        static_cast<ScalarExpression& (ScalarExpression::*)()>(&ScalarExpression::derived),
-        static_cast<const ScalarExpression& (ScalarExpression::*)() const>(&ScalarExpression::derived),
         static_cast<PermutationExpression& (PermutationExpression::*)()>(&PermutationExpression::derived),
         static_cast<const PermutationExpression& (PermutationExpression::*)() const>(
             &PermutationExpression::derived)};
@@ -1187,7 +1149,6 @@ namespace {
     concept ConcreteExprSurface = requires(const LeafExpr& leaf, const UnaryExpression& unary,
                                            const NestedUnaryExpression& nested,
                                            const BinaryExpression& binary,
-                                           const ScalarExpression& scalar,
                                            const PermutationExpression& permutation,
                                            const GatherUnaryExpression& gather_unary,
                                            ops::neg_op operation) {
@@ -1219,13 +1180,6 @@ namespace {
         binary.device_impl();
         binary.dtype_impl();
         binary.stream_hint_impl();
-        scalar.eval_impl();
-        scalar.snapshot_impl();
-        scalar.map(operation);
-        scalar.shape_impl();
-        scalar.device_impl();
-        scalar.dtype_impl();
-        scalar.stream_hint_impl();
         permutation.eval_impl();
         permutation.snapshot_impl();
         permutation.map(operation);
@@ -1258,20 +1212,13 @@ namespace {
         row = 1.0f;
         const_row - const_row;
         const_row + const_row;
-        const_row* const_row;
+        const_row * const_row;
         const_row / const_row;
         const_row - 1.0f;
         const_row + 1.0f;
         const_row * 1.0f;
         const_row / 1.0f;
         -const_row;
-        const_row.pow(2.0f);
-        const_row.sqrt();
-        const_row.abs();
-        const_row.neg();
-        const_row.sum();
-        const_row.mean();
-        const_row.square();
         masked = 1.0f;
         masked = ct;
         static_cast<X>(masked);
@@ -1299,7 +1246,6 @@ namespace {
     static_assert(ExprBaseSurface<UnaryExpression>);
     static_assert(ExprBaseSurface<NestedUnaryExpression>);
     static_assert(ExprBaseSurface<BinaryExpression>);
-    static_assert(ExprBaseSurface<ScalarExpression>);
     static_assert(ExprBaseSurface<PermutationExpression>);
     static_assert(ExprBaseSurface<GatherUnaryExpression>);
     static_assert(ConcreteExprSurface<T>);

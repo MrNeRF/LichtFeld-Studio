@@ -22,7 +22,7 @@ except Exception:
         return fallback
 
 
-_TOOLBAR_HIDDEN_STATES = ("starting", "running", "paused", "stopping", "completed", "finished", "stopped")
+_TOOLBAR_HIDDEN_STATES = ("preparing", "starting", "running", "paused", "stopping", "completed", "finished", "stopped")
 _RML_PATH_SAFE_CHARS = "/:._-~"
 _OVERLAY_DOC_KEY_ATTR = "data-viewport-toolbar-doc-key"
 
@@ -1203,10 +1203,6 @@ class _UtilityToolbarController:
         ("camera-fpv", "fpv", "toolbar.fly_camera", "Fly Camera"),
         ("drone", "drone", "toolbar.drone_camera", "Drone Camera"),
     )
-    _PRIMARY_ACTIONS = {
-        "home": "CAMERA_RESET_HOME",
-        "focus_selection": "CAMERA_FOCUS_SELECTION",
-    }
 
     def __init__(self, viewport_export_visible=None):
         self._viewport_export_visible = viewport_export_visible

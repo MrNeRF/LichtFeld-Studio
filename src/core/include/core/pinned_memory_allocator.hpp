@@ -101,7 +101,6 @@ namespace lfs::core {
          * This eliminates the cudaHostAlloc penalty (e.g., 23.8ms for 4K) on
          * first use, matching LibTorch's pre-warmed pool performance.
          *
-         * Call once during application startup.
          */
         void prewarm();
 

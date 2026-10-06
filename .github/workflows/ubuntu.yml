@@ -88,7 +88,7 @@ jobs:
             zip tar pkg-config python3 python3-dev python3-venv libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev \
             libwayland-dev libxkbcommon-dev libegl-dev libdecor-0-dev libibus-1.0-dev libdbus-1-dev \
             libsystemd-dev libgtk-3-dev \
-            nasm autoconf autoconf-archive automake libtool
+            nasm autoconf autoconf-archive automake libtool ffmpeg
 
           update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100 \
                               --slave /usr/bin/g++ g++ /usr/bin/g++-14
@@ -141,6 +141,7 @@ jobs:
         run: |
           cmake -B build -S . -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DLFS_HIDDEN_SYMBOLS=${{ matrix.build_type == 'Debug' && 'ON' || 'OFF' }} \
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
             -DBUILD_FORMAT_TESTS=ON \
             -DBUILD_TEMPORAL_CPU_TESTS=${{ matrix.build_type == 'Release' && 'ON' || 'OFF' }} \
@@ -167,6 +168,24 @@ jobs:
           cmake --build build --target lichtfeld_format_tests -j $(nproc)
           ctest --test-dir build --output-on-failure -R '^lichtfeld_format_tests$'
 
+      - name: Run offline media regression tests
+        if: matrix.build_type == 'Release'
+        run: |
+          cmake -S tests/media -B build-media-fixtures
+          ctest --test-dir build-media-fixtures --output-on-failure --no-tests=error
+          cmake -S tests/media/extractor -B build-media-extractor -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$PWD/build/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_MANIFEST_INSTALL=OFF
+          cmake --build build-media-extractor --parallel 2
+          ctest --test-dir build-media-extractor --output-on-failure --no-tests=error
+
+      - name: Run viewer backend policy contracts
+        run: |
+          cmake --build build --target viewer_backend_contracts -j $(nproc)
+          ctest --test-dir build --output-on-failure --no-tests=error -R '^ViewerBackendSelectionContracts$'
+
       - name: Run scene reconstruction CPU tests
         if: matrix.build_type == 'Release'
         run: |
@@ -178,6 +197,16 @@ jobs:
         run: |
           uv run --python 3.12 --no-project --with numpy --with pillow --with pytest python -m pytest -q tests/python/test_scene_reconstruction_benchmark.py
 
+      - name: Build and run EXR image codec tests
+        run: |
+          cmake --build build --target lichtfeld_image_codec_tests -j $(nproc)
+          ctest --test-dir build --output-on-failure -R '^lichtfeld_image_codec_tests$'
+
+      - name: Build and run frame-demand CPU tests
+        run: |
+          cmake --build build --target lichtfeld_frame_tests -j $(nproc)
+          ctest --test-dir build --output-on-failure -R '^lichtfeld_frame_tests$'
+
       - name: Install Python test dependencies
         run: |
           build/vcpkg_installed/x64-linux/tools/python3/python3.12 -m ensurepip --user
@@ -188,14 +217,67 @@ jobs:
           CUDA_VISIBLE_DEVICES: ''
           NVIDIA_VISIBLE_DEVICES: void
           DISPLAY: ''
-          LFS_TEST_BUILD_DIR: ${{ github.workspace }}/build
         # The runner has no NVIDIA driver; the toolkit's stub libcuda lets the extension load without a GPU.
         run: |
           grep -m1 'model name' /proc/cpuinfo || true
+          # github.workspace is the host path; Python runs in the job container.
+          export LFS_TEST_BUILD_DIR="$PWD/build"
           mkdir -p "$RUNNER_TEMP/cuda-driver-stub"
           ln -sf /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/cuda-driver-stub/libcuda.so.1"
           LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
             build/vcpkg_installed/x64-linux/tools/python3/python3.12 -X faulthandler -m pytest tests/python -m 'not gpu and not slow and not integration' -q
+
+  idle-e2e:
+    name: GPU idle E2E (optional)
+    # Opt-in upstream check: skipping is expected without LFS_GPU_RUNNER=true.
+    # Requires a self-hosted Linux GPU runner, a configured build tree and
+    # LFS_RENDER_IDLE_MANIFEST. Fork pushes must not schedule this job.
+    if: github.repository == 'MrNeRF/LichtFeld-Studio' && vars.LFS_GPU_RUNNER == 'true'
+    runs-on: [self-hosted, linux, gpu]
+    timeout-minutes: 30
+    env:
+      DISPLAY: :92
+      LFS_MCP_PORT: 45692
+      LFS_RENDER_IDLE_MANIFEST: ${{ vars.LFS_RENDER_IDLE_MANIFEST }}
+      LFS_EXECUTABLE: ${{ github.workspace }}/build/LichtFeld-Studio
+      LFS_TEST_BUILD_DIR: ${{ github.workspace }}/build
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+        with:
+          clean: false
+      - name: Build the GUI executable
+        run: cmake --build build --target LichtFeld-Studio -j6
+      - name: Run CUDA node and spatial tests
+        run: |
+          cmake --build build --target lichtfeld_tests lfs_py -j6
+          build/tests/lichtfeld_tests --tensor-backend=cuda --gtest_filter='Nodes*:*Nodes*:McpNode*:*Spatial*'
+          build/vcpkg_installed/x64-linux/tools/python3/python3.12 -m pytest \
+            tests/python/test_nodes.py -q
+      - name: Start Xvfb when needed
+        run: |
+          if ! xdpyinfo -display :92 >/dev/null 2>&1; then
+            Xvfb :92 -screen 0 1920x1080x24 -nolisten tcp &
+            echo $! > "$RUNNER_TEMP/render-on-demand-xvfb.pid"
+            for _ in $(seq 1 50); do
+              xdpyinfo -display :92 >/dev/null 2>&1 && break
+              sleep 0.2
+            done
+          fi
+      - name: Run render-on-demand GPU idle test
+        env:
+          LFS_RENDER_IDLE_SHOTS: ${{ runner.temp }}/render-on-demand-shots
+        run: |
+          test -n "$LFS_RENDER_IDLE_MANIFEST"
+          build/vcpkg_installed/x64-linux/tools/python3/python3.12 -m pytest \
+            tests/python/test_render_on_demand_idle.py -m 'gpu and integration' -q
+      - name: Stop Xvfb started by this job
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/render-on-demand-xvfb.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/render-on-demand-xvfb.pid")" || true
+            rm -f "$RUNNER_TEMP/render-on-demand-xvfb.pid"
+          fi
 
   # .clang-tidy is for local/IDE use only here; CI needs compile_commands.json in a later phase.
   error-debt-gate:
@@ -205,6 +287,9 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v7
+
+      - name: Test the gate scripts
+        run: python3 -m unittest discover -s tools -p 'test_*.py'
 
       - name: Generate error-debt census
         run: python3 tools/error_debt_census.py > error-debt-census.json

@@ -352,7 +352,11 @@ namespace {
         ASSERT_TRUE(project_uuid);
         auto document = lfs::io::project::ProjectDocument::create(*project_uuid, 100);
         ASSERT_TRUE(document) << lfs::format_for_developer(document.error());
-        auto captured = document->capture_georeference(*loaded);
+        auto captured = document->edit_project().set_georeference(lfs::io::project::ProjectGeoreference{
+            .crs = loaded->georeference->crs,
+            .world_origin = loaded->georeference->world_origin,
+            .world_unit_scale = loaded->georeference->world_unit_scale,
+            .world_origin_provenance = lfs::io::project::WorldOriginProvenance::Import});
         ASSERT_TRUE(captured) << lfs::format_for_developer(captured.error());
         const fs::path project_path = temp_dir / "georeference.licht";
         auto saved = document->save(project_path, lfs::io::project::ProjectDocumentSaveOptions{

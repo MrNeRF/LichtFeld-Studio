@@ -46,7 +46,6 @@ namespace lfs::core::param {
         TrainingFeatureSupport masking = TrainingFeatureSupport::Unsupported;
         TrainingFeatureSupport segmentation = TrainingFeatureSupport::Unsupported;
         TrainingFeatureSupport background_modes = TrainingFeatureSupport::Unsupported;
-        TrainingFeatureSupport background_improvements = TrainingFeatureSupport::Unsupported;
         TrainingFeatureSupport exposure_correction = TrainingFeatureSupport::Unsupported;
         TrainingFeatureSupport bilateral_grid = TrainingFeatureSupport::Unsupported;
         TrainingFeatureSupport ppisp = TrainingFeatureSupport::Unsupported;
@@ -82,7 +81,6 @@ namespace lfs::core::param {
                 .masking = TrainingFeatureSupport::Supported,
                 .segmentation = TrainingFeatureSupport::Supported,
                 .background_modes = TrainingFeatureSupport::Supported,
-                .background_improvements = TrainingFeatureSupport::Supported,
                 .exposure_correction = TrainingFeatureSupport::Supported,
                 .bilateral_grid = TrainingFeatureSupport::Supported,
                 .ppisp = TrainingFeatureSupport::Supported,
@@ -107,7 +105,6 @@ namespace lfs::core::param {
                 .masking = TrainingFeatureSupport::Supported,
                 .segmentation = TrainingFeatureSupport::Supported,
                 .background_modes = TrainingFeatureSupport::Supported,
-                .background_improvements = TrainingFeatureSupport::Supported,
                 .exposure_correction = TrainingFeatureSupport::Supported,
                 .bilateral_grid = TrainingFeatureSupport::Supported,
                 .ppisp = TrainingFeatureSupport::Supported,

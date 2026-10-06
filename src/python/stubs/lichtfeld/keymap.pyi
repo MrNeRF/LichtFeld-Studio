@@ -203,6 +203,8 @@ class Action(enum.Enum):
 
     TOGGLE_MAXIMIZE_AREA = 101
 
+    TOGGLE_NODE_EDITOR = 102
+
     DEPTH_WINDOW_DRAG = 86
 
 class ToolMode(enum.Enum):

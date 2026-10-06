@@ -3035,26 +3035,20 @@ namespace lfs::python {
         return combo(label, current_idx, items);
     }
 
-    std::tuple<int, int> RmlImModeLayout::template_list(const std::string& /*list_type_id*/,
+    std::tuple<int, int> RmlImModeLayout::template_list(const std::string& list_type_id,
                                                         const std::string& list_id,
                                                         nb::object data, const std::string& prop_id,
                                                         nb::object active_data, const std::string& active_prop,
                                                         int rows) {
-        std::vector<std::string> items;
+        std::vector<nb::object> row_items;
         int active_idx = 0;
 
         try {
             if (nb::hasattr(data, prop_id.c_str())) {
                 nb::object collection = data.attr(prop_id.c_str());
                 if (nb::hasattr(collection, "__iter__")) {
-                    size_t idx = 0;
-                    for (auto item : collection) {
-                        if (nb::hasattr(item, "name"))
-                            items.push_back(nb::cast<std::string>(item.attr("name")));
-                        else
-                            items.push_back("Item " + std::to_string(idx));
-                        ++idx;
-                    }
+                    for (auto item : collection)
+                        row_items.push_back(nb::borrow<nb::object>(item));
                 }
             }
             if (nb::hasattr(active_data, active_prop.c_str()))
@@ -3063,7 +3057,72 @@ namespace lfs::python {
             LOG_WARN("template_list: failed to get active index for '{}'", active_prop);
         }
 
-        auto [changed, new_idx] = listbox(list_id, active_idx, items, rows);
+        auto list_instance = nb::steal<nb::object>(
+            static_cast<PyObject*>(get_uilist_instance(list_type_id.c_str())));
+        bool changed = false;
+        int new_idx = active_idx;
+        if (doc_ && list_instance.is_valid() && nb::hasattr(list_instance, "draw_item")) {
+            auto row_layout = nb::steal<nb::object>(static_cast<PyObject*>(wrap_uilist_layout(this)));
+            finish_current_line();
+            const auto local_key = build_slot_id("template_list", &list_id);
+            const auto list_key = child_key_stack_.empty()
+                                      ? local_key
+                                      : child_key_stack_.back() + "/" + local_key;
+            auto& list_slot = ensure_slot(SlotType::Line, list_key);
+            if (!list_slot.element) {
+                auto element = doc_->CreateElement("div");
+                element->SetClass("im-template-list", true);
+                element->SetProperty("overflow-y", "auto");
+                list_slot.element = containers_.back().parent->AppendChild(std::move(element));
+            }
+            auto* list_element = list_slot.element;
+            list_element->SetProperty("max-height", std::format("{}dp", std::max(rows, 1) * 24));
+            push_persistent_container(list_key, list_element);
+            for (size_t index = 0; index < row_items.size(); ++index) {
+                const auto row_key = list_key + "/row:" + std::to_string(index);
+                auto& row_slot = ensure_slot(SlotType::Selectable, row_key);
+                if (!row_slot.element) {
+                    auto element = doc_->CreateElement("div");
+                    element->SetClass("context-menu-item", true);
+                    element->SetClass("im-template-list-row", true);
+                    element->AddEventListener(Rml::EventId::Click, new SlotEventListener(row_slot.events));
+                    row_slot.element = list_element->AppendChild(std::move(element));
+                }
+                if (std::exchange(row_slot.events->clicked, false)) {
+                    new_idx = static_cast<int>(index);
+                    changed = true;
+                }
+                push_persistent_container(row_key, row_slot.element);
+                push_id(row_key);
+                try {
+                    list_instance.attr("draw_item")(row_layout,
+                                                    data, row_items[index], 0,
+                                                    active_data, active_prop, index);
+                } catch (const std::exception& e) {
+                    LOG_ERROR("UIList '{}' row {}: {}", list_type_id, index, e.what());
+                }
+                pop_id();
+                pop_persistent_container();
+            }
+            pop_persistent_container();
+            for (int index = 0; index < list_element->GetNumChildren(); ++index)
+                list_element->GetChild(index)->SetClass("active", index == new_idx);
+        } else {
+            std::vector<std::string> items;
+            items.reserve(row_items.size());
+            for (size_t index = 0; index < row_items.size(); ++index) {
+                const auto& item = row_items[index];
+                std::string name = "Item " + std::to_string(index);
+                try {
+                    if (nb::hasattr(item, "name"))
+                        name = nb::cast<std::string>(item.attr("name"));
+                } catch (const std::exception& e) {
+                    LOG_WARN("UIList '{}' item {} name: {}", list_type_id, index, e.what());
+                }
+                items.push_back(std::move(name));
+            }
+            std::tie(changed, new_idx) = listbox(list_id, active_idx, items, rows);
+        }
         if (changed) {
             try {
                 nb::setattr(active_data, active_prop.c_str(), nb::cast(new_idx));
@@ -3072,7 +3131,7 @@ namespace lfs::python {
             }
         }
 
-        return {new_idx, static_cast<int>(items.size())};
+        return {new_idx, static_cast<int>(row_items.size())};
     }
 
     // ── RmlSubLayout ─────────────────────────────────────────

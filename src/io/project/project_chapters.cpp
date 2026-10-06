@@ -2546,6 +2546,16 @@ namespace lfs::io::project {
                 optional<bool>(value, "has_image", "SCNG", field);
             auto split = required<std::string>(value, "split", "SCNG", field);
             auto undistortion = parse_camera_undistortion(value, field);
+            std::uint64_t sfm_observation_count = 0;
+            if (const auto found = value.find("sfm_observations"); found != value.end()) {
+                if (!found->is_number_unsigned()) {
+                    return fail<CameraRecord>(
+                        lfs::ErrorCode::DataLoss, "A scene camera record is invalid.",
+                        std::format("SCNG.{}.sfm_observations must be an unsigned integer", field),
+                        "SCNG", field);
+                }
+                sfm_observation_count = found->get<std::uint64_t>();
+            }
             if (!rotation) {
                 return std::move(rotation).error();
             }
@@ -2636,6 +2646,7 @@ namespace lfs::io::project {
                 .has_image = has_image->value_or(true),
                 .split = std::move(*split),
                 .undistortion = std::move(*undistortion),
+                .sfm_observation_count = sfm_observation_count,
             };
         }
 
@@ -2675,6 +2686,8 @@ namespace lfs::io::project {
                     result["undistortion"]["crop_solve_failed"] = true;
                 }
             }
+            if (value.sfm_observation_count > 0)
+                result["sfm_observations"] = value.sfm_observation_count;
             return result;
         }
 
@@ -3172,14 +3185,44 @@ namespace lfs::io::project {
                 adapted.erase("ppisp_sidecar_path");
                 adapted.erase("config_file");
                 adapted["headless"] = false;
-                auto result =
-                    lfs::core::param::OptimizationParameters::from_json(
-                        nlohmann::json::parse(adapted.dump()));
-                result.headless = false;
-                result.config_file.clear();
-                result.bg_image_path.clear();
-                result.ppisp_sidecar_path.clear();
-                if (const std::string invalid = result.validate(); !invalid.empty()) {
+                const auto decode = [](const nlohmann::json& json) {
+                    auto parameters =
+                        lfs::core::param::OptimizationParameters::from_json(json);
+                    parameters.headless = false;
+                    parameters.config_file.clear();
+                    parameters.bg_image_path.clear();
+                    parameters.ppisp_sidecar_path.clear();
+                    return parameters;
+                };
+                auto stored = nlohmann::json::parse(adapted.dump());
+                auto result = decode(stored);
+                std::string invalid = result.validate();
+                // Another version can store values this one rejects, such as an automatic
+                // setting it does not have. Keep every accepted value and default the rest.
+                const auto defaults =
+                    lfs::core::param::OptimizationParameters::defaults_for_strategy(
+                        result.strategy)
+                        .to_json();
+                for (bool defaulted = true; defaulted && !invalid.empty();) {
+                    defaulted = false;
+                    for (auto fallback = defaults.begin();
+                         !invalid.empty() && fallback != defaults.end(); ++fallback) {
+                        const auto current = stored.find(fallback.key());
+                        if (current == stored.end() || *current == *fallback)
+                            continue;
+                        auto trial = stored;
+                        trial[fallback.key()] = *fallback;
+                        auto candidate = decode(trial);
+                        if (std::string candidate_invalid = candidate.validate();
+                            candidate_invalid != invalid) {
+                            stored = std::move(trial);
+                            result = std::move(candidate);
+                            invalid = std::move(candidate_invalid);
+                            defaulted = true;
+                        }
+                    }
+                }
+                if (!invalid.empty()) {
                     return fail<ParsedParameterPreset>(
                         lfs::ErrorCode::DataLoss,
                         "A pending parameter preset is invalid.",
@@ -3438,6 +3481,7 @@ namespace lfs::io::project {
                 "PRMS", "presets");
         }
         cached_snapshot_ = ParameterManagerSnapshot{
+            .cli_step_locked_strategy = std::nullopt,
             .active_strategy = *active,
             .mcmc_session = std::move(mcmc_session->parameters),
             .mrnf_session = std::move(mrnf_session->parameters),

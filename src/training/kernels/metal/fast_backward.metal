@@ -14,7 +14,31 @@ constant constexpr float kFastGradClamp = 1e4f;
 
 static float fast_clamp_grad(const float g) { return fmin(fmax(g, -kFastGradClamp), kFastGradClamp); }
 
+static bool fast_valid_instance_count(device const uint* counts, const uint capacity) {
+    return counts[1] == 0u && counts[0] > 0u && counts[0] <= capacity;
+}
+
+struct FastClearGradParams {
+    device const uint* counts;
+    device const uint* n_touched;
+    device float4* grads;
+    device float4* normal_grads;
+    uint n, capacity;
+};
+
+kernel void fast_clear_visible_grads(constant FastClearGradParams& p [[buffer(0)]],
+                                     const uint idx [[thread_position_in_grid]]) {
+    if (!fast_valid_instance_count(p.counts, p.capacity) || idx >= p.n || p.n_touched[idx] == 0u)
+        return;
+    p.grads[idx * 3u] = float4(0.0f);
+    p.grads[idx * 3u + 1u] = float4(0.0f);
+    p.grads[idx * 3u + 2u] = float4(0.0f);
+    if (kFastNormalChannel != 0u)
+        p.normal_grads[idx] = float4(0.0f);
+}
+
 struct FastBlendBackwardParams {
+    device const uint* counts;
     device const uint2* ranges;
     device const uint* values;
     device const FastMeanBox* mean_box;
@@ -36,7 +60,7 @@ struct FastBlendBackwardParams {
     device const float* edge_weight;
     device atomic_float* edge_score;
     uint n_instances, n_primitives, width, height;
-    uint grid_w, unused0, unused1, unused2;
+    uint grid_w, capacity, unused1, unused2;
 };
 
 // Reverse-walk state of one pixel.
@@ -187,6 +211,8 @@ kernel void fast_blend_backward(constant FastBlendBackwardParams& p [[buffer(0)]
                                 const uint rank [[thread_index_in_threadgroup]],
                                 const uint lane [[thread_index_in_simdgroup]],
                                 const uint warp [[simdgroup_index_in_threadgroup]]) {
+    if (!fast_valid_instance_count(p.counts, p.capacity))
+        return;
     threadgroup uint s_prim[kFastBlendThreads];
     threadgroup float2 s_mean[kFastBlendThreads];
     threadgroup ushort4 s_bbox[kFastBlendThreads];
@@ -498,7 +524,7 @@ static float4 fast_shN_slot_grad(const uint k, const bool compute, thread const 
 // SH rest slots per thread in fast_backward_sh: a primitive's twelve float4
 // slots spread over kFastShParts threads, so each keeps its updated moments in
 // registers between the bound reduction and the encode.
-constant constexpr uint kFastShSlotsPerThread = 3u;
+constant constexpr uint kFastShSlotsPerThread = 6u;
 constant constexpr uint kFastShParts = kShMaxSlots / kFastShSlotsPerThread;
 
 // Port of apply_shN_grads_packed_joint (8-bit moments on float4-slot cells) for
@@ -507,8 +533,8 @@ constant constexpr uint kFastShParts = kShMaxSlots / kFastShSlotsPerThread;
 static void fast_adam_shN(constant FastAdamGroup& g, const uint p, const uint part, const uint layout_rest,
                           const float3 grad_color, const float3 direction, const bool compute, const float beta1,
                           const float beta2, const float eps, threadgroup float4* scratch, const FastLane t) {
-    const bool q16 = g.value_bits == 16 && g.value_bounds != nullptr && g.value_cells > 0;
-    const bool f16 = g.value_bits == 16 && !q16;
+    const bool q16 = kFastShStorage == kFastShQ16;
+    const bool f16 = kFastShStorage == kFastShFloat16;
     const uint cells = q16 ? uint(g.value_cells) : 0u;
     const uint layout_slots = sh_float4_slots(layout_rest);
     const FastRowStep r = fast_row_step(g, p, 1.0f);
@@ -648,16 +674,18 @@ static float3 fast_sh_mean_grad(device const uchar* shN, device const float2* bo
 }
 
 struct FastBackwardShParams {
+    device const uint* counts;
     device const packed_float3* means;
     device const float* camera;
     device const uchar* shN;
     device const float2* sh_bounds;
     device const uint* n_touched;
+    device const float4* color_depth;
     device float* grads;
     FastAdamGroup sh0;
     FastAdamGroup shN_adam;
     float beta1, beta2, eps;
-    uint n;
+    uint n, capacity;
 };
 
 kernel void fast_backward_sh(constant FastBackwardShParams& p [[buffer(0)]],
@@ -666,6 +694,8 @@ kernel void fast_backward_sh(constant FastBackwardShParams& p [[buffer(0)]],
                              const uint simd_lane [[thread_index_in_simdgroup]],
                              const uint simd_group [[simdgroup_index_in_threadgroup]],
                              const uint simd_groups [[simdgroups_per_threadgroup]]) {
+    if (!fast_valid_instance_count(p.counts, p.capacity))
+        return;
     threadgroup float4 scratch[32];
     const FastLane t = {lane, simd_lane, simd_group, simd_groups, group};
     // kFastShParts threads per primitive; part 0 also owns sh0 and the mean gradient.
@@ -679,6 +709,13 @@ kernel void fast_backward_sh(constant FastBackwardShParams& p [[buffer(0)]],
     if (visible) {
         device const float* g = p.grads + idx * kFastGradStride;
         grad_color = float3(g[6], g[7], g[8]);
+        // The blend clamps colour at zero. Below it, keep only the image
+        // gradients that brighten the splat; the forward never saw the rest.
+        const float3 colour = p.color_depth[idx].xyz;
+        for (uint c = 0; c < 3u; ++c) {
+            if (colour[c] < 0.0f && grad_color[c] >= 0.0f)
+                grad_color[c] = 0.0f;
+        }
         const float3 mean = float3(p.means[idx]);
         const float3 camera = float3(p.camera[0], p.camera[1], p.camera[2]);
         direction = fast_safe_normalize(mean - camera);
@@ -707,6 +744,7 @@ kernel void fast_backward_sh(constant FastBackwardShParams& p [[buffer(0)]],
 }
 
 struct FastBackwardGeometryParams {
+    device const uint* counts;
     device const packed_float3* means;
     device const packed_float3* scales;
     device const float4* rotations;
@@ -717,7 +755,6 @@ struct FastBackwardGeometryParams {
     device const float* grads;
     device const float4* normal_grads;
     device float* densification;
-    device const uchar* far_mask;
     device atomic_float* scale_loss;
     device atomic_float* opacity_loss;
     device const float* sparsity_sigmoid;
@@ -729,10 +766,9 @@ struct FastBackwardGeometryParams {
     FastAdamGroup opacity_adam;
     float beta1, beta2, eps;
     float scale_reg_weight, flatten_reg_weight, opacity_reg_weight, sparsity_rho, sparsity_grad_loss;
-    float median_extent, r_min, r_max;
-    float width, height, fx, fy;
+        float width, height, fx, fy;
     float clip_left, clip_right, clip_top, clip_bottom;
-    uint n, far_mask_n, sparsity_n, per_splat_mean_step;
+    uint n, sparsity_n, capacity;
 };
 
 static float fast_sigmoid(const float x) { return 1.0f / (1.0f + exp(-x)); }
@@ -789,6 +825,8 @@ kernel void fast_backward_geometry(constant FastBackwardGeometryParams& p [[buff
                                    const uint simd_lane [[thread_index_in_simdgroup]],
                                    const uint simd_group [[simdgroup_index_in_threadgroup]],
                                    const uint simd_groups [[simdgroups_per_threadgroup]]) {
+    if (!fast_valid_instance_count(p.counts, p.capacity))
+        return;
     threadgroup float4 scratch[32];
     threadgroup float sum_scratch[32];
     const FastLane t = {lane, simd_lane, simd_group, simd_groups, group};
@@ -972,14 +1010,7 @@ kernel void fast_backward_geometry(constant FastBackwardGeometryParams& p [[buff
         }
     }
 
-    // The per-splat factor scales the applied mean step, not the gradient.
-    float mean_step_scale = 1.0f;
-    if (in_range && p.per_splat_mean_step != 0u && p.far_mask != nullptr && idx < p.far_mask_n &&
-        p.far_mask[idx] != 0u && scaling.param != nullptr && idx * 3u + 2u < uint(scaling.elements)) {
-        device const float* s = reinterpret_cast<device const float*>(scaling.param) + idx * 3u;
-        mean_step_scale = per_splat_mean_step_ratio(s[0], s[1], s[2], p.median_extent, p.r_min, p.r_max);
-    }
-    fast_adam_step(p.means_adam, mean_grads, idx, 3u, mean_step_scale, p.beta1, p.beta2, p.eps, scratch, t);
+    fast_adam_step(p.means_adam, mean_grads, idx, 3u, 1.0f, p.beta1, p.beta2, p.eps, scratch, t);
     fast_adam_step(p.rotation_adam, rotation_grads, idx, 4u, 1.0f, p.beta1, p.beta2, p.eps, scratch, t);
     fast_adam_step(p.scaling_adam, scale_grads, idx, 3u, 1.0f, p.beta1, p.beta2, p.eps, scratch, t);
     fast_adam_step(p.opacity_adam, opacity_grads, idx, 1u, 1.0f, p.beta1, p.beta2, p.eps, scratch, t);

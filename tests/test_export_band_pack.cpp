@@ -127,8 +127,9 @@ TEST_P(ExportBandPack, KeepsInputBackendAfterDefaultChanges) {
     EXPECT_EQ(output.to_vector_uint8(), input.to_vector_uint8());
 }
 
-INSTANTIATE_TEST_SUITE_P(Backends, ExportBandPack, ::testing::ValuesIn(kGpuBackends),
-                         [](const ::testing::TestParamInfo<GpuBackend>& info) { return info.param == GpuBackend::CUDA ? "CUDA" : "Vulkan"; });
+INSTANTIATE_TEST_SUITE_P(Backends, ExportBandPack, ::testing::ValuesIn(kCompiledGpuBackends),
+                         [](const ::testing::TestParamInfo<GpuBackend>& info) { return info.param == GpuBackend::CUDA ? "CUDA" : info.param == GpuBackend::Vulkan ? "Vulkan"
+                                                                                                                                                                  : "Metal"; });
 
 class ExportBandStreams : public lfs::test::CudaBackendTest {};
 

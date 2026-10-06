@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include <array>
 #include <compare>
 #include <cstdint>
@@ -90,7 +91,7 @@ namespace lfs::vis::screen {
         float trailing_extent = 0.0f; // solved extent of child `index + 1`
     };
 
-    struct LayoutGeometry {
+    struct LFS_VIS_API LayoutGeometry {
         Rect bounds;
         std::vector<AreaGeometry> areas;
         std::vector<DividerGeometry> dividers;
@@ -103,7 +104,7 @@ namespace lfs::vis::screen {
         [[nodiscard]] const DividerGeometry* dividerAt(float x, float y, float slop) const;
     };
 
-    class ScreenLayout {
+    class LFS_VIS_API ScreenLayout {
     public:
         struct Node {
             SplitId split; // valid for split nodes
@@ -160,11 +161,6 @@ namespace lfs::vis::screen {
         // same units as the geometry), clamped so both neighbours keep their
         // minimum size. Needs the geometry the drag is based on.
         bool moveDivider(const DividerGeometry& divider, float position);
-
-        // Sets the relative weights of a split's children directly.
-        bool setWeights(SplitId split, const std::vector<float>& weights);
-
-        [[nodiscard]] const Node* findSplit(SplitId split) const;
 
         // Solves the layout into pixel rects inside `bounds`. Edges are
         // snapped to whole units so neighbouring areas never overlap or leave

@@ -95,9 +95,11 @@ namespace lfs::io::project {
     inline constexpr Fourcc FOURCC_VIEW = make_fourcc('V', 'I', 'E', 'W');
     inline constexpr Fourcc FOURCC_EDTR = make_fourcc('E', 'D', 'T', 'R');
     inline constexpr Fourcc FOURCC_SEQR = make_fourcc('S', 'E', 'Q', 'R');
+    inline constexpr Fourcc FOURCC_NODE = make_fourcc('N', 'O', 'D', 'E');
     inline constexpr Fourcc FOURCC_METR = make_fourcc('M', 'E', 'T', 'R');
     inline constexpr Fourcc FOURCC_THMB = make_fourcc('T', 'H', 'M', 'B');
     inline constexpr Fourcc FOURCC_DSRC = make_fourcc('D', 'S', 'R', 'C');
+    inline constexpr Fourcc FOURCC_SFMO = make_fourcc('S', 'F', 'M', 'O');
 
     struct ChunkKey {
         Fourcc fourcc;
@@ -350,24 +352,6 @@ namespace lfs::io::project {
         std::unique_ptr<Impl> impl_;
     };
 
-    class LFS_IO_API MappedRegion {
-    public:
-        MappedRegion(MappedRegion&&) noexcept;
-        MappedRegion& operator=(MappedRegion&&) noexcept;
-        MappedRegion(const MappedRegion&) = delete;
-        MappedRegion& operator=(const MappedRegion&) = delete;
-        ~MappedRegion();
-
-        [[nodiscard]] std::span<const std::byte> bytes() const noexcept;
-        [[nodiscard]] std::uint64_t file_offset() const noexcept;
-
-    private:
-        friend class ProjectReader;
-        struct Impl;
-        explicit MappedRegion(std::unique_ptr<Impl> impl);
-        std::unique_ptr<Impl> impl_;
-    };
-
     class ProjectWriter;
 
     class LFS_IO_API MaterializeRetirementSink {
@@ -449,9 +433,6 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<std::vector<std::byte>> read_preview() const;
         [[nodiscard]] lfs::Result<BoundedInputStream>
         open_bounded_stream(const ChunkInfo& chunk) const;
-        [[nodiscard]] lfs::Result<MappedRegion>
-        map_stored_range(const ChunkInfo& chunk, std::uint64_t relative_offset,
-                         std::uint64_t length) const;
 
         [[nodiscard]] lfs::Result<CleanProof>
         make_clean_proof(const ChunkInfo& chunk, std::uint64_t mutation_epoch) const;

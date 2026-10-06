@@ -19,7 +19,14 @@ from pathlib import Path
 import pytest
 
 from lfs_plugins import portal_account
+from lfs_plugins import credential_storage
 from lfs_plugins.ui.store import RuntimeState
+
+
+@pytest.fixture(autouse=True)
+def account_contract_storage(monkeypatch):
+    # These contracts inspect test JSON files; OS encryption is tested separately.
+    monkeypatch.setattr(credential_storage, "default_backend", credential_storage.FileBackend)
 
 
 class FakeResponse:
@@ -356,6 +363,34 @@ def test_device_flow_state_machine_polls_and_caches_profile(tmp_path, monkeypatc
     assert stored["customer_tier"] == "Professional"
 
 
+@pytest.mark.parametrize("error", [PermissionError("lock denied"), OSError("storage unavailable")])
+@pytest.mark.parametrize("existing_session", [False, True])
+def test_device_credentials_storage_failure_ends_linking(
+    tmp_path, monkeypatch, error, existing_session
+):
+    if existing_session:
+        write_credentials(tmp_path / "account" / "credentials.json")
+    service = make_service(tmp_path, waiter=lambda _seconds: False)
+    previous_credentials = service._current_credentials()
+    stub = StubUrlopen(start_response(), token_pair())
+    monkeypatch.setattr(portal_account, "urlopen", stub)
+
+    def fail_save(_credentials):
+        raise error
+
+    monkeypatch.setattr(service, "_save_credentials", fail_save)
+    assert service.start_device_flow(reauthorize=True)
+    service.wait_for_idle()
+
+    snapshot = service.snapshot()
+    assert snapshot.linking is False
+    assert snapshot.error == "sign_in_unavailable"
+    assert snapshot.signed_in is existing_session
+    assert service._current_credentials() == previous_credentials
+    assert service.busy is False
+    assert len(stub.requests) == 2
+
+
 def test_device_start_failure_publishes_signed_out_error(tmp_path, monkeypatch):
     stub = StubUrlopen(OSError("offline"))
     monkeypatch.setattr(portal_account, "urlopen", stub)
@@ -509,7 +544,8 @@ def test_credentials_use_atomic_replace_and_mode_0600(tmp_path, monkeypatch):
 
     def checked_replace(source, destination):
         replaced.append((Path(source), Path(destination)))
-        assert stat.S_IMODE(Path(source).stat().st_mode) == 0o600
+        if os.name != "nt":
+            assert stat.S_IMODE(Path(source).stat().st_mode) == 0o600
         real_replace(source, destination)
 
     monkeypatch.setattr(portal_account.os, "replace", checked_replace)
@@ -519,7 +555,8 @@ def test_credentials_use_atomic_replace_and_mode_0600(tmp_path, monkeypatch):
 
     assert len(replaced) == 1
     assert replaced[0][1] == service.credentials_file
-    assert stat.S_IMODE(service.credentials_file.stat().st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(service.credentials_file.stat().st_mode) == 0o600
     stored = json.loads(service.credentials_file.read_text(encoding="utf-8"))
     assert stored["version"] == portal_account.CREDENTIALS_VERSION
     assert stored["access_token"] == "access-atomic"

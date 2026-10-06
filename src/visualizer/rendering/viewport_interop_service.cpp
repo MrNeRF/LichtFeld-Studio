@@ -232,8 +232,9 @@ namespace lfs::vis {
         external_scene_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         external_scene_image_size_ = {0, 0};
         external_scene_image_alloc_size_ = {0, 0};
-        frame_completion_semaphore_ = completion_semaphore;
-        frame_completion_value_ = completion_value;
+        frame_completions_.clear();
+        const FrameCompletion completion{completion_semaphore, completion_value};
+        addFrameCompletions(std::span(&completion, 1));
         channel.source_image = std::move(image);
         channel.source_generation = generation;
         channel.source_size = size;
@@ -261,8 +262,9 @@ namespace lfs::vis {
             alloc_size.x > 0 && alloc_size.y > 0 ? alloc_size : size;
         external_scene_image_flip_y_ = flip_y;
         external_scene_image_generation_ = generation;
-        frame_completion_semaphore_ = completion_semaphore;
-        frame_completion_value_ = completion_value;
+        frame_completions_.clear();
+        const FrameCompletion completion{completion_semaphore, completion_value};
+        addFrameCompletions(std::span(&completion, 1));
     }
 
     void ViewportInteropService::setSplitRightImage(std::shared_ptr<const lfs::core::Tensor> image,
@@ -800,8 +802,21 @@ namespace lfs::vis {
         }
     }
 
-    ViewportInteropService::FrameCompletion ViewportInteropService::frameCompletion() const {
-        return {frame_completion_semaphore_, frame_completion_value_};
+    void ViewportInteropService::addFrameCompletions(std::span<const FrameCompletion> completions) {
+        for (const auto completion : completions) {
+            if (completion.semaphore == VK_NULL_HANDLE || completion.value == 0)
+                continue;
+            const auto existing = std::find_if(frame_completions_.begin(), frame_completions_.end(),
+                                               [&](const auto& candidate) { return candidate.semaphore == completion.semaphore; });
+            if (existing == frame_completions_.end())
+                frame_completions_.push_back(completion);
+            else
+                existing->value = std::max(existing->value, completion.value);
+        }
+    }
+
+    std::span<const ViewportInteropService::FrameCompletion> ViewportInteropService::frameCompletions() const {
+        return frame_completions_;
     }
 
     void ViewportInteropService::shutdown(VulkanContext* context) {
@@ -831,8 +846,7 @@ namespace lfs::vis {
         external_scene_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         external_scene_image_size_ = {0, 0};
         external_scene_image_alloc_size_ = {0, 0};
-        frame_completion_semaphore_ = VK_NULL_HANDLE;
-        frame_completion_value_ = 0;
+        frame_completions_.clear();
         shut_down_ = true;
         teardown_context_ = nullptr;
     }

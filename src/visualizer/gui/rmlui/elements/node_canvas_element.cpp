@@ -1,0 +1,2847 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#include "gui/rmlui/elements/node_canvas_element.hpp"
+
+#include "core/event_bridge/localization_manager.hpp"
+#include "core/nodes/registry.hpp"
+#include "core/nodes/tree.hpp"
+#include "gui/global_context_menu.hpp"
+#include "gui/rmlui/elements/node_canvas_dom.hpp"
+#include "gui/rmlui/elements/node_canvas_widgets.hpp"
+#include "gui/rmlui/rml_theme.hpp"
+#include "input/input_controller.hpp"
+#include "scene/scene_manager.hpp"
+#include "sequencer/sequencer_controller.hpp"
+#include "theme/theme.hpp"
+#include "visualizer/app_store.hpp"
+#include "visualizer/core/training_manager.hpp"
+#include "visualizer/nodes/modifier_manager.hpp"
+#include "window/window_manager.hpp"
+
+#include <RmlUi/Core/Context.h>
+#include <RmlUi/Core/Core.h>
+#include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/ElementInstancer.h>
+#include <RmlUi/Core/Elements/ElementFormControl.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
+#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
+#include <RmlUi/Core/Elements/ElementFormControlTextArea.h>
+#include <RmlUi/Core/FontEngineInterface.h>
+#include <RmlUi/Core/Input.h>
+#include <RmlUi/Core/RenderManager.h>
+#include <SDL3/SDL_clipboard.h>
+#include <SDL3/SDL_scancode.h>
+#include <SDL3/SDL_stdinc.h>
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <format>
+#include <ranges>
+
+namespace lfs::vis::gui {
+    namespace {
+        constexpr float kNodeWidth = 224.0f;
+        constexpr float kTitleHeight = 26.0f;
+        constexpr float kSidebarWidth = 280.0f;
+        constexpr int kBezierSegments = 64;
+
+        class CanvasCard final : public Rml::Element {
+        public:
+            explicit CanvasCard(const Rml::String& tag) : Rml::Element(tag) {}
+            Rml::Geometry sockets;
+
+        protected:
+            void OnRender() override {
+                sockets.Render(GetAbsoluteOffset(Rml::BoxArea::Border));
+            }
+        };
+
+        class CanvasOverlay final : public Rml::Element {
+        public:
+            explicit CanvasOverlay(Rml::Geometry& selection)
+                : Rml::Element("div"), selection_(selection) {
+                SetProperty("position", "absolute");
+                SetProperty("left", "0dp");
+                SetProperty("top", "0dp");
+                SetProperty("width", "100%");
+                SetProperty("height", "100%");
+                SetProperty("pointer-events", "none");
+            }
+
+        protected:
+            void OnRender() override {
+                const auto offset = GetAbsoluteOffset(Rml::BoxArea::Content);
+                selection_.Render(offset);
+            }
+
+        private:
+            Rml::Geometry& selection_;
+        };
+
+        std::string px(const float value) { return std::format("{:.1f}px", value); }
+
+        // Measure using the same font and wrapping width as the card, in canvas units.
+        float textHeight(const std::string& text, const float width, const float dp_ratio,
+                         const bool bold = false) {
+            auto* engine = Rml::GetFontEngineInterface();
+            auto face = engine->GetFontFaceHandle("inter", Rml::Style::FontStyle::Normal,
+                                                  bold ? Rml::Style::FontWeight::Bold : Rml::Style::FontWeight::Normal,
+                                                  static_cast<int>(13.0f * dp_ratio));
+            if (!face)
+                face = engine->GetFontFaceHandle("inter", Rml::Style::FontStyle::Normal,
+                                                 Rml::Style::FontWeight::Normal, static_cast<int>(13.0f * dp_ratio));
+            const Rml::String language;
+            const Rml::TextShapingContext shaping{language};
+            int lines = 1;
+            std::size_t start = 0;
+            std::size_t last_space = std::string::npos;
+            for (std::size_t end = 0; end < text.size();) {
+                const auto character_start = end;
+                const auto ch = text[end];
+                if (ch == '\n') {
+                    ++lines;
+                    start = ++end;
+                    last_space = std::string::npos;
+                    continue;
+                }
+                if (ch == ' ' || ch == '\t')
+                    last_space = end;
+                ++end;
+                while (end < text.size() && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80)
+                    ++end;
+                const auto measured = face ? engine->GetStringWidth(face, Rml::StringView(text.data() + start, text.data() + end), shaping)
+                                           : (end - start) * 13.0f * dp_ratio;
+                if (measured > width * dp_ratio) {
+                    ++lines;
+                    start = last_space != std::string::npos && last_space >= start ? last_space + 1 : character_start;
+                    last_space = std::string::npos;
+                }
+            }
+            return lines * 20.0f;
+        }
+
+        using node_widgets::escape;
+        using node_widgets::valuePayload;
+
+        float currentDpRatio(const Rml::Element* element) {
+            const auto* context = element ? element->GetContext() : nullptr;
+            return context ? std::max(context->GetDensityIndependentPixelRatio(), 0.01f) : 1.0f;
+        }
+
+        std::array<float, 4> themeColor(const ThemeColor& value) {
+            return {value.x, value.y, value.z, value.w};
+        }
+
+        Rml::ColourbPremultiplied color(const std::array<float, 4>& value, const float opacity = 1.0f) {
+            const auto byte = [](const float component) {
+                return static_cast<Rml::byte>(std::clamp(component * 255.0f, 0.0f, 255.0f));
+            };
+            const float alpha = value[3] * opacity;
+            return {byte(value[0] * alpha), byte(value[1] * alpha), byte(value[2] * alpha), byte(alpha)};
+        }
+
+        void quad(Rml::Mesh& mesh, const float x0, const float y0, const float x1, const float y1,
+                  const Rml::ColourbPremultiplied value) {
+            const int base = static_cast<int>(mesh.vertices.size());
+            mesh.vertices.push_back({{x0, y0}, value, {0, 0}});
+            mesh.vertices.push_back({{x1, y0}, value, {0, 0}});
+            mesh.vertices.push_back({{x1, y1}, value, {0, 0}});
+            mesh.vertices.push_back({{x0, y1}, value, {0, 0}});
+            mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+        }
+
+        void circle(Rml::Mesh& mesh, const CanvasPoint center, const float radius,
+                    const Rml::ColourbPremultiplied value) {
+            constexpr int segments = 16;
+            const int center_index = static_cast<int>(mesh.vertices.size());
+            mesh.vertices.push_back({{center.x, center.y}, value, {0, 0}});
+            for (int index = 0; index <= segments; ++index) {
+                const float angle = static_cast<float>(index) * 2.0f * 3.14159265f /
+                                    static_cast<float>(segments);
+                mesh.vertices.push_back({{center.x + std::cos(angle) * radius,
+                                          center.y + std::sin(angle) * radius},
+                                         value,
+                                         {0, 0}});
+                if (index > 0)
+                    mesh.indices.insert(mesh.indices.end(),
+                                        {center_index, center_index + index, center_index + index + 1});
+            }
+        }
+
+        void gridDot(Rml::Mesh& mesh, const CanvasPoint center, const float radius,
+                     const Rml::ColourbPremultiplied value) {
+            // At this subpixel size a feathered four-triangle dot is smoother
+            // and substantially smaller than a tessellated circle.
+            const int base = static_cast<int>(mesh.vertices.size());
+            const Rml::ColourbPremultiplied clear(0, 0, 0, 0);
+            mesh.vertices.push_back({{center.x, center.y}, value, {0, 0}});
+            mesh.vertices.push_back({{center.x - radius, center.y - radius}, clear, {0, 0}});
+            mesh.vertices.push_back({{center.x + radius, center.y - radius}, clear, {0, 0}});
+            mesh.vertices.push_back({{center.x + radius, center.y + radius}, clear, {0, 0}});
+            mesh.vertices.push_back({{center.x - radius, center.y + radius}, clear, {0, 0}});
+            mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2,
+                                                     base, base + 2, base + 3,
+                                                     base, base + 3, base + 4,
+                                                     base, base + 4, base + 1});
+        }
+
+        void pathRibbon(Rml::Mesh& mesh, const std::vector<CanvasPoint>& points,
+                        const Rml::ColourbPremultiplied value, const float width, const float dp_ratio) {
+            const int base = static_cast<int>(mesh.vertices.size());
+            const Rml::ColourbPremultiplied transparent(0, 0, 0, 0);
+            for (std::size_t index = 0; index < points.size(); ++index) {
+                const auto point = points[index];
+                const CanvasPoint tangent_vector = points[std::min(index + 1, points.size() - 1)] - points[index == 0 ? 0 : index - 1];
+                const float length = std::max(std::hypot(tangent_vector.x, tangent_vector.y), 0.001f);
+                const CanvasPoint normal{-tangent_vector.y / length, tangent_vector.x / length};
+                const float offsets[] = {-width * 0.5f - dp_ratio, -width * 0.5f,
+                                         width * 0.5f, width * 0.5f + dp_ratio};
+                for (int edge = 0; edge < 4; ++edge) {
+                    const auto vertex = point + normal * offsets[edge];
+                    mesh.vertices.push_back({{vertex.x, vertex.y},
+                                             edge == 0 || edge == 3 ? transparent : value,
+                                             {0, 0}});
+                }
+                if (index == 0)
+                    continue;
+                const int row = base + static_cast<int>(index) * 4;
+                for (int edge = 0; edge < 3; ++edge)
+                    mesh.indices.insert(mesh.indices.end(),
+                                        {row - 4 + edge, row + edge, row + edge + 1,
+                                         row - 4 + edge, row + edge + 1, row - 3 + edge});
+            }
+        }
+
+        void ribbon(Rml::Mesh& mesh, const CanvasPoint from, const CanvasPoint to,
+                    const Rml::ColourbPremultiplied value, const float width, const float dp_ratio) {
+            const float tangent = std::max(std::abs(to.x - from.x) * 0.5f, 36.0f * dp_ratio);
+            const CanvasPoint b{from.x + tangent, from.y};
+            const CanvasPoint c{to.x - tangent, to.y};
+            std::vector<CanvasPoint> points;
+            for (int index = 0; index <= kBezierSegments; ++index) {
+                const float t = static_cast<float>(index) / kBezierSegments;
+                const float u = 1.0f - t;
+                points.push_back(from * (u * u * u) + b * (3.0f * u * u * t) + c * (3.0f * u * t * t) + to * (t * t * t));
+            }
+            pathRibbon(mesh, points, value, width, dp_ratio);
+        }
+
+        void straightRibbon(Rml::Mesh& mesh, const CanvasPoint from, const CanvasPoint to,
+                            const Rml::ColourbPremultiplied value, const float width) {
+            const CanvasPoint delta = to - from;
+            const float length = std::max(std::sqrt(delta.x * delta.x + delta.y * delta.y), 0.001f);
+            const CanvasPoint normal{-delta.y / length * width * 0.5f,
+                                     delta.x / length * width * 0.5f};
+            const int base = static_cast<int>(mesh.vertices.size());
+            mesh.vertices.push_back({{from.x + normal.x, from.y + normal.y}, value, {0, 0}});
+            mesh.vertices.push_back({{from.x - normal.x, from.y - normal.y}, value, {0, 0}});
+            mesh.vertices.push_back({{to.x + normal.x, to.y + normal.y}, value, {0, 0}});
+            mesh.vertices.push_back({{to.x - normal.x, to.y - normal.y}, value, {0, 0}});
+            mesh.indices.insert(mesh.indices.end(),
+                                {base, base + 1, base + 3, base, base + 3, base + 2});
+        }
+
+        std::string sceneTypeLabel(const core::NodeType type) {
+            switch (type) {
+            case core::NodeType::SPLAT: return LOC("node_editor.type_splat");
+            case core::NodeType::POINTCLOUD: return LOC("node_editor.type_point_cloud");
+            case core::NodeType::MESH: return LOC("node_editor.type_mesh");
+            default: return LOC("node_editor.type_unsupported");
+            }
+        }
+
+        std::vector<lfs::nodes::SocketDecl>
+        canvasInputs(const lfs::nodes::NodeTree& tree, const lfs::nodes::Node& node,
+                     const std::shared_ptr<const lfs::nodes::NodeTypeInfo>& type,
+                     const lfs::nodes::TreeResolver& resolver) {
+            if (node.type_id != "lfs.group_input" && node.type_id != "lfs.group_output" &&
+                node.type_id != "lfs.group" && node.type_id != "lfs.reroute")
+                return type ? type->inputs : std::vector<lfs::nodes::SocketDecl>{};
+            return lfs::nodes::effective_inputs(tree, node, resolver);
+        }
+
+        std::vector<lfs::nodes::SocketDecl>
+        canvasOutputs(const lfs::nodes::NodeTree& tree, const lfs::nodes::Node& node,
+                      const std::shared_ptr<const lfs::nodes::NodeTypeInfo>& type,
+                      const lfs::nodes::TreeResolver& resolver) {
+            if (node.type_id != "lfs.group_input" && node.type_id != "lfs.group_output" &&
+                node.type_id != "lfs.group" && node.type_id != "lfs.reroute")
+                return type ? type->outputs : std::vector<lfs::nodes::SocketDecl>{};
+            return lfs::nodes::effective_outputs(tree, node, resolver);
+        }
+    } // namespace
+
+    NodeCanvasElement::NodeCanvasElement(const Rml::String& tag)
+        : Rml::Element(tag), socket_types_(std::make_unique<lfs::nodes::SocketTypeRegistry>()) {
+        SetProperty("drag", "drag");
+        SetAttribute("tab-index", 0);
+        AddEventListener("mousescroll", this, true);
+        AddEventListener("pinch", this, true);
+        AddEventListener("mousemove", this, true);
+        AddEventListener("mouseover", this, true);
+        AddEventListener("drag", this, true);
+        AddEventListener("dblclick", this, true);
+        AddEventListener("blur", this, true);
+        AddEventListener("focus", this, true);
+        AddEventListener("click", this, true);
+        AddEventListener("keydown", this, true);
+        AddEventListener("change", this, true);
+        AddEventListener("mousedown", this, true);
+        for (const char* event : {"curvebegin", "curvechange", "curveend", "curvecancel", "curvefocus"})
+            AddEventListener(event, this, true);
+    }
+
+    NodeCanvasElement::~NodeCanvasElement() {
+        RemoveEventListener("mousescroll", this, true);
+        RemoveEventListener("pinch", this, true);
+        RemoveEventListener("mousemove", this, true);
+        RemoveEventListener("mouseover", this, true);
+        RemoveEventListener("drag", this, true);
+        RemoveEventListener("dblclick", this, true);
+        RemoveEventListener("blur", this, true);
+        RemoveEventListener("keydown", this, true);
+        RemoveEventListener("change", this, true);
+        RemoveEventListener("mousedown", this, true);
+        for (const char* event : {"curvebegin", "curvechange", "curveend", "curvecancel", "curvefocus"})
+            RemoveEventListener(event, this, true);
+        if (scene_manager_)
+            scene_manager_->setModifierSelectionPreview({}, std::nullopt);
+        if (manager_)
+            manager_->clearViewportNodeSelection();
+    }
+
+    void NodeCanvasElement::setContext(SceneManager* scene_manager, GlobalContextMenu* context_menu) {
+        scene_manager_ = scene_manager;
+        manager_ = scene_manager ? &scene_manager->modifierManager() : nullptr;
+        context_menu_ = context_menu;
+        last_generation_ = 0;
+        dom_dirty_ = true;
+        geometry_dirty_ = true;
+    }
+
+    void NodeCanvasElement::setSidebarVisible(const bool visible) {
+        if (sidebar_visible_ == visible)
+            return;
+        sidebar_visible_ = visible;
+        dom_dirty_ = true;
+        geometry_dirty_ = true;
+    }
+
+    void NodeCanvasElement::invalidateView() {
+        dom_dirty_ = true;
+        geometry_dirty_ = true;
+        geometry_zoom_ = -1.0f;
+        frame_pending_ = true;
+    }
+
+    void NodeCanvasElement::setView(const CanvasPoint pan, const float zoom) {
+        interaction_.setView(pan, zoom);
+        rebuildModel();
+        updateNodePositions();
+        geometry_dirty_ = true;
+    }
+
+    nlohmann::json NodeCanvasElement::viewState() {
+        nlohmann::json result = {{"target", host_uuid_}, {"tree", active_tree_uuid_}, {"modifier", active_modifier_uuid_}, {"selected_nodes", selected_nodes_}, {"pan", {interaction_.pan().x, interaction_.pan().y}}, {"zoom", interaction_.zoom()}, {"preview_selection", preview_selection_}, {"nodes", nlohmann::json::array()}, {"links", interaction_.links().size()}};
+        result["gesture_active"] = interaction_.active();
+        result["pointer_down"] = pointer_down_;
+        result["pointer"] = {interaction_.pointer().x, interaction_.pointer().y};
+        const auto size = GetBox().GetSize(Rml::BoxArea::Content);
+        result["size"] = {size.x, size.y};
+        result["screen_offset"] = {panel_screen_offset_.x, panel_screen_offset_.y};
+        result["sidebar_visible"] = sidebar_visible_;
+        result["breadcrumb"] = nlohmann::json::array();
+        if (const auto host = activeHost()) {
+            if (const auto* scene_node = scene_manager_->getScene().getNodeByUuid(*host))
+                result["breadcrumb"].push_back({{"label", scene_node->name}, {"tree", group_path_.empty() ? active_tree_uuid_ : group_path_.front().tree_uuid}});
+        }
+        if (const auto* root = manager_ ? manager_->tree(group_path_.empty() ? active_tree_uuid_ : group_path_.front().tree_uuid) : nullptr)
+            result["breadcrumb"].push_back({{"label", root->name}, {"tree", root->uuid}});
+        for (const auto& entry : group_path_) {
+            const auto* outer = manager_ ? manager_->tree(entry.tree_uuid) : nullptr;
+            const auto* group = outer ? outer->find_node(entry.node) : nullptr;
+            const auto referenced = group ? group->properties.value("tree", std::string{}) : std::string{};
+            const auto* graph = manager_ ? manager_->tree(referenced) : nullptr;
+            result["breadcrumb"].push_back({{"label", graph ? graph->name : entry.node}, {"tree", referenced}, {"instance", entry.node}});
+        }
+        result["selected_links"] = nlohmann::json::array();
+        if (selected_link_)
+            result["selected_links"].push_back({{"from_node", selected_link_->from.node}, {"from_socket", selected_link_->from.identifier}, {"to_node", selected_link_->to.node}, {"to_socket", selected_link_->to.identifier}});
+        for (const auto& node : interaction_.nodes()) {
+            nlohmann::json sockets = nlohmann::json::array();
+            for (const auto& socket : node.sockets) {
+                const auto point = interaction_.graphToScreen(socket.position);
+                sockets.push_back({{"identifier", socket.identifier}, {"type", socket.type}, {"output", socket.direction == CanvasSocketDirection::Output}, {"position", {point.x + panel_screen_offset_.x, point.y + panel_screen_offset_.y}}});
+            }
+            const auto origin = interaction_.graphToScreen({node.bounds.x, node.bounds.y});
+            result["nodes"].push_back({{"name", node.id}, {"bounds", {node.bounds.x, node.bounds.y, node.bounds.width, node.bounds.height}}, {"screen_bounds", {origin.x + panel_screen_offset_.x, origin.y + panel_screen_offset_.y, node.bounds.width * interaction_.zoom(), node.bounds.height * interaction_.zoom()}}, {"sockets", sockets}});
+        }
+        return result;
+    }
+
+    bool NodeCanvasElement::showModifier(const std::string_view uuid) {
+        const auto host = activeHost();
+        const auto* stack = host && manager_ ? manager_->stack(*host) : nullptr;
+        if (!stack || std::ranges::find(stack->modifiers, uuid, &Modifier::uuid) == stack->modifiers.end())
+            return false;
+        active_modifier_uuid_ = uuid;
+        group_path_.clear();
+        dom_dirty_ = true;
+        syncModel();
+        return true;
+    }
+
+    bool NodeCanvasElement::enterGroup(const std::string_view name) {
+        auto* tree = activeTree();
+        auto* node = tree ? tree->find_node(name) : nullptr;
+        if (!node || node->type_id != "lfs.group" || !manager_)
+            return false;
+        const auto uuid = node->properties.value("tree", std::string{});
+        if (uuid.empty() || !manager_->tree(uuid))
+            return false;
+        group_path_.push_back({tree->uuid, node->name});
+        active_tree_uuid_ = uuid;
+        selected_nodes_.clear();
+        selected_link_.reset();
+        interaction_.cancel();
+        frame_pending_ = true;
+        dom_dirty_ = true;
+        geometry_dirty_ = true;
+        return true;
+    }
+
+    bool NodeCanvasElement::exitGroup() {
+        if (group_path_.empty())
+            return false;
+        active_tree_uuid_ = group_path_.back().tree_uuid;
+        const auto instance = group_path_.back().node;
+        group_path_.pop_back();
+        selected_nodes_ = {instance};
+        selected_link_.reset();
+        interaction_.cancel();
+        frame_pending_ = true;
+        dom_dirty_ = true;
+        geometry_dirty_ = true;
+        return true;
+    }
+
+    bool NodeCanvasElement::selectNodes(const std::unordered_set<std::string>& nodes,
+                                        const std::optional<lfs::nodes::Link>& link) {
+        syncModel();
+        const auto* tree = activeTree();
+        if (!tree || std::ranges::any_of(nodes, [&](const auto& name) { return !tree->find_node(name); }))
+            return false;
+        std::optional<CanvasLink> selected;
+        if (link) {
+            const auto found = std::ranges::find_if(interaction_.links(), [&](const auto& item) {
+                return item.from.node == link->from_node && item.from.identifier == link->from_socket &&
+                       item.to.node == link->to_node && item.to.identifier == link->to_socket;
+            });
+            if (found == interaction_.links().end())
+                return false;
+            selected = *found;
+        }
+        selected_nodes_ = nodes;
+        selected_link_ = selected;
+        interaction_.setSelectedNodes(nodes);
+        updateSelectedClasses();
+        updateSidebar();
+        updateSelectionPreview();
+        geometry_dirty_ = true;
+        return true;
+    }
+
+    void NodeCanvasElement::setPreviewSelection(const bool enabled) {
+        preview_selection_ = enabled;
+        preview_selection_opt_out_ = !enabled;
+        updateSelectionPreview();
+    }
+
+    bool NodeCanvasElement::paintSelectionSelected() const {
+        const auto* tree = activeTree();
+        const auto* node = tree && selected_nodes_.size() == 1
+                               ? tree->find_node(*selected_nodes_.begin())
+                               : nullptr;
+        return node && node->type_id == "lfs.paint_selection";
+    }
+
+    bool NodeCanvasElement::paintModeActive() const {
+        return manager_ && manager_->paintModeActive();
+    }
+
+    void NodeCanvasElement::togglePaintMode() {
+        if (manager_ && paintSelectionSelected()) {
+            manager_->setPaintMode(!manager_->paintModeActive());
+            dom_dirty_ = true;
+        }
+    }
+
+    bool NodeCanvasElement::GetIntrinsicDimensions(Rml::Vector2f& dimensions, float& ratio) {
+        dimensions = {640.0f, 320.0f};
+        ratio = 0.0f;
+        return true;
+    }
+
+    std::optional<core::Uuid> NodeCanvasElement::activeHost() const {
+        if (!scene_manager_)
+            return std::nullopt;
+        const auto ids = scene_manager_->getSelectedNodeIds();
+        if (ids.size() != 1)
+            return std::nullopt;
+        const auto* node = scene_manager_->getScene().getNodeById(ids.front());
+        if (!node || (node->type != core::NodeType::SPLAT && node->type != core::NodeType::POINTCLOUD &&
+                      node->type != core::NodeType::MESH))
+            return std::nullopt;
+        if (scene_manager_->getContentType() == SceneManager::ContentType::Dataset &&
+            node->uuid != scene_manager_->getScene().getTrainingModelNodeUuid())
+            return std::nullopt;
+        return node->uuid;
+    }
+
+    bool NodeCanvasElement::editableMode() const {
+        if (!scene_manager_)
+            return false;
+        const auto content = scene_manager_->getContentType();
+        return content == SceneManager::ContentType::SplatFiles ||
+               content == SceneManager::ContentType::Dataset;
+    }
+
+    lfs::nodes::NodeTree* NodeCanvasElement::activeTree() {
+        return manager_ && !active_tree_uuid_.empty() ? manager_->tree(active_tree_uuid_) : nullptr;
+    }
+
+    const lfs::nodes::NodeTree* NodeCanvasElement::activeTree() const {
+        return const_cast<NodeCanvasElement*>(this)->activeTree();
+    }
+
+    std::string NodeCanvasElement::instancePrefix() const {
+        std::string result;
+        for (const auto& entry : group_path_)
+            result += entry.node + "/";
+        return result;
+    }
+
+    void NodeCanvasElement::ensureDom() {
+        if (nodes_element_)
+            return;
+        auto* document = GetOwnerDocument();
+        if (!document)
+            return;
+        auto nodes = document->CreateElement("div");
+        nodes->SetId("node-canvas-nodes");
+        auto viewport = document->CreateElement("div");
+        viewport->SetId("node-canvas-viewport");
+        viewport_element_ = AppendChild(std::move(viewport));
+        nodes_element_ = viewport_element_->AppendChild(std::move(nodes));
+        static Rml::ElementInstancerGeneric<Rml::Element> overlay_instancer;
+        Rml::ElementPtr overlay(new CanvasOverlay(overlay_geometry_));
+        overlay->SetInstancer(&overlay_instancer);
+        AppendChild(std::move(overlay));
+        auto notice = document->CreateElement("div");
+        notice->SetId("node-canvas-notice");
+        notice_element_ = AppendChild(std::move(notice));
+        auto breadcrumb = document->CreateElement("div");
+        breadcrumb->SetId("node-editor-breadcrumb");
+        breadcrumb_element_ = AppendChild(std::move(breadcrumb));
+        auto sidebar = document->CreateElement("div");
+        sidebar->SetId("node-editor-sidebar");
+        sidebar_element_ = AppendChild(std::move(sidebar));
+    }
+
+    std::array<float, 4> NodeCanvasElement::socketColor(const std::string_view type) const {
+        if (const auto info = socket_types_->find(type))
+            return info->color;
+        return {0.65f, 0.65f, 0.65f, 1.0f};
+    }
+
+    std::string NodeCanvasElement::categoryColor(const std::string_view category) const {
+        const auto& palette = theme().palette;
+        const ThemeColor tint = category == "Selection"    ? palette.warning
+                                : category == "Input"      ? palette.success
+                                : category == "Splat"      ? palette.secondary
+                                : category == "Colour"     ? palette.warning
+                                : category == "Clean-up"   ? palette.success
+                                : category == "Conversion" ? palette.primary
+                                : category == "Utilities"  ? palette.text_dim
+                                : category == "Output"     ? palette.secondary
+                                                           : palette.info;
+        constexpr float strength = 0.32f;
+        return rml_theme::colorToRml({palette.surface.x * (1.0f - strength) + tint.x * strength,
+                                      palette.surface.y * (1.0f - strength) + tint.y * strength,
+                                      palette.surface.z * (1.0f - strength) + tint.z * strength, 1.0f});
+    }
+
+    void NodeCanvasElement::syncModel() {
+        ensureDom();
+        updateProgress();
+        const auto language_generation = event::LocalizationManager::getInstance().getCurrentLanguageGeneration();
+        if (language_generation_ != language_generation) {
+            language_generation_ = language_generation;
+            dom_dirty_ = true;
+            closeAddMenu();
+        }
+        // Paint mode also ends from the viewport, MCP or a selection change.
+        if (const bool painting = paintModeActive(); painting != paint_mode_shown_) {
+            paint_mode_shown_ = painting;
+            dom_dirty_ = true;
+        }
+        const float ratio = currentDpRatio(this);
+        const auto signature = rml_theme::currentThemeSignature();
+        if (dp_ratio_ != ratio || theme_signature_ != signature) {
+            dp_ratio_ = ratio;
+            theme_signature_ = signature;
+            interaction_.setDpRatio(ratio);
+            dom_dirty_ = true;
+            geometry_dirty_ = true;
+        }
+        if (active_field_)
+            return;
+        const auto selection_generation = app_store().selection_generation.get();
+        const auto host = activeHost();
+        const std::string next_host = host ? host->to_string() : std::string{};
+        const std::uint64_t generation = manager_ ? manager_->generation() : 0;
+        // A result may change during a gesture, but its live layout belongs to
+        // the gesture until release. Do not replace it with stored locations.
+        if (interaction_.active() && next_host == host_uuid_) {
+            if (manager_ && last_result_generation_ != manager_->resultGeneration()) {
+                last_result_generation_ = manager_->resultGeneration();
+                refreshEvaluation();
+                updateEvaluationDom();
+            }
+            return;
+        }
+        if (selection_generation == last_selection_generation_ && generation == last_generation_ &&
+            next_host == host_uuid_ && !dom_dirty_ && !frame_pending_) {
+            if (manager_ && last_result_generation_ != manager_->resultGeneration()) {
+                last_result_generation_ = manager_->resultGeneration();
+                refreshEvaluation();
+                updateEvaluationDom();
+                updateSelectionPreview();
+            }
+            return;
+        }
+        last_selection_generation_ = selection_generation;
+        last_generation_ = generation;
+        last_result_generation_ = manager_ ? manager_->resultGeneration() : 0;
+        if (manager_ && manager_->previewState() && next_host != host_uuid_ &&
+            manager_->previewState()->target.to_string() != next_host)
+            manager_->previewClear();
+        host_uuid_ = next_host;
+
+        const auto previous_tree = active_tree_uuid_;
+        const auto previous_modifier = active_modifier_uuid_;
+        if (!host) {
+            active_tree_uuid_.clear();
+            active_modifier_uuid_.clear();
+            group_path_.clear();
+        } else if (auto* stack = manager_->stack(*host); stack && !stack->modifiers.empty()) {
+            auto found = std::ranges::find(stack->modifiers, active_modifier_uuid_, &Modifier::uuid);
+            if (found == stack->modifiers.end() || !manager_->tree(found->tree_uuid))
+                found = std::ranges::find_if(stack->modifiers, [&](const auto& modifier) {
+                    return manager_->tree(modifier.tree_uuid) != nullptr;
+                });
+            active_modifier_uuid_ = found == stack->modifiers.end() ? std::string{} : found->uuid;
+            const auto root = found == stack->modifiers.end() ? std::string{} : found->tree_uuid;
+            if (previous_modifier != active_modifier_uuid_ || group_path_.empty() || !manager_->tree(active_tree_uuid_)) {
+                active_tree_uuid_ = root;
+                if (previous_modifier != active_modifier_uuid_)
+                    group_path_.clear();
+            }
+        } else {
+            active_tree_uuid_.clear();
+            active_modifier_uuid_.clear();
+            group_path_.clear();
+        }
+        if (previous_tree != active_tree_uuid_) {
+            interaction_.cancel();
+            selected_nodes_.clear();
+            selected_link_.reset();
+            closeAddMenu();
+            geometry_zoom_ = -1.0f;
+            frame_pending_ = true;
+        }
+        rebuildModel();
+        if (activeTree() && seen_trees_.insert(active_tree_uuid_).second) {
+            const auto& nodes = interaction_.nodes();
+            bool overlap = false;
+            for (std::size_t i = 0; i < nodes.size() && !overlap; ++i)
+                for (std::size_t j = i + 1; j < nodes.size() && !overlap; ++j) {
+                    const auto* a = activeTree()->find_node(nodes[i].id);
+                    const auto* b = activeTree()->find_node(nodes[j].id);
+                    if (a->type_id == "lfs.frame" || b->type_id == "lfs.frame" ||
+                        a->type_id == "lfs.note" || b->type_id == "lfs.note")
+                        continue;
+                    overlap = nodes[i].bounds.intersects(nodes[j].bounds);
+                }
+            if (overlap)
+                arrange(false);
+        }
+        rebuildDom();
+        updateBreadcrumb();
+        const auto size = GetBox().GetSize(Rml::BoxArea::Content);
+        if (frame_pending_ && size.x > 1.0f &&
+            (panel_size_.x == 0.0f || (std::abs(size.x - panel_size_.x) < 2.0f && std::abs(size.y - panel_size_.y) < 2.0f))) {
+            frame_pending_ = false;
+            frameAll();
+        }
+        geometry_dirty_ = true;
+        dom_dirty_ = false;
+    }
+
+    bool NodeCanvasElement::needsModelUpdate() const {
+        return dom_dirty_ || geometry_dirty_ || frame_pending_ || pointer_down_ || field_step_direction_ != 0 ||
+               paintModeActive() != paint_mode_shown_ ||
+               language_generation_ != event::LocalizationManager::getInstance().getCurrentLanguageGeneration() ||
+               (manager_ && (manager_->generation() != last_generation_ || manager_->resultGeneration() != last_result_generation_ || manager_->progress().busy)) ||
+               app_store().selection_generation.get() != last_selection_generation_;
+    }
+
+    void NodeCanvasElement::rebuildModel() {
+        visuals_.clear();
+        std::vector<CanvasNode> nodes;
+        std::vector<CanvasLink> links;
+        auto* tree = activeTree();
+        if (!tree) {
+            interaction_.setGraph({}, {});
+            return;
+        }
+        ModifierEvaluation evaluation;
+        if (const auto host = activeHost())
+            if (const auto* result = manager_->lastResult(*host))
+                evaluation = *result;
+        evaluation_errors_ = evaluation.errors;
+        evaluation_total_ms_ = evaluation.total_time_ms;
+        std::string active_modifier_name;
+        if (const auto host = activeHost()) {
+            if (const auto* stack = manager_->stack(*host)) {
+                const auto modifier =
+                    std::ranges::find(stack->modifiers, active_modifier_uuid_, &Modifier::uuid);
+                if (modifier != stack->modifiers.end())
+                    active_modifier_name = modifier->name;
+            }
+        }
+        for (const auto& node : tree->nodes) {
+            const auto type = manager_->registry().find_localized(node.type_id);
+            const lfs::nodes::TreeResolver resolver = [this](const std::string_view uuid) {
+                return manager_->tree(uuid);
+            };
+            const auto inputs = canvasInputs(*tree, node, type, resolver);
+            const auto outputs = canvasOutputs(*tree, node, type, resolver);
+            NodeVisual visual;
+            visual.interaction.id = node.name;
+            visual.interaction.frame = node.ui.value("frame", std::string{});
+            visual.type_id = node.type_id;
+            visual.title = type ? type->label : node.type_id;
+            if (node.type_id == "lfs.group")
+                if (const auto* graph = manager_->tree(node.properties.value("tree", std::string{})))
+                    visual.title = graph->name;
+            visual.category = type ? type->category : "Missing";
+            visual.muted = node.muted;
+            const std::string error_key = active_modifier_name.empty()
+                                              ? instancePrefix() + node.name
+                                              : active_modifier_name + "/" + instancePrefix() + node.name;
+            if (const auto error = evaluation.errors.find(error_key); error != evaluation.errors.end())
+                visual.error = error->second;
+            else if (const auto error = evaluation.errors.find(node.name); error != evaluation.errors.end())
+                visual.error = error->second;
+            const CanvasPoint origin{node.location[0] * dp_ratio_, node.location[1] * dp_ratio_};
+            if (node.type_id == "lfs.reroute") {
+                constexpr float diameter = 18.0f;
+                visual.interaction.bounds = {origin.x - diameter * 0.5f * dp_ratio_,
+                                             origin.y - diameter * 0.5f * dp_ratio_,
+                                             diameter * dp_ratio_, diameter * dp_ratio_};
+                for (const auto& socket : inputs)
+                    visual.interaction.sockets.push_back({.node = node.name, .identifier = socket.identifier, .type = socket.type, .direction = CanvasSocketDirection::Input, .position = origin});
+                for (const auto& socket : outputs)
+                    visual.interaction.sockets.push_back({.node = node.name, .identifier = socket.identifier, .type = socket.type, .direction = CanvasSocketDirection::Output, .position = origin});
+                visuals_.push_back(std::move(visual));
+                continue;
+            }
+            if (node.type_id == "lfs.frame") {
+                visual.interaction.bounds = {origin.x, origin.y, 240.0f * dp_ratio_, 160.0f * dp_ratio_};
+                visuals_.push_back(std::move(visual));
+                continue;
+            }
+            if (node.type_id == "lfs.note") {
+                const float width = std::clamp(node.properties.value("width", 220.0f), 100.0f, 1200.0f);
+                const auto height = textHeight(node.properties.value("text", std::string{}), width - 24.0f, dp_ratio_) + 24.0f;
+                visual.interaction.bounds = {origin.x, origin.y, width * dp_ratio_, height * dp_ratio_};
+                visuals_.push_back(std::move(visual));
+                continue;
+            }
+            constexpr float row_height = 22.0f;
+            float row_y = std::max(kTitleHeight, 18.0f / interaction_.zoom()) + 6.0f;
+            for (const auto& socket : outputs) {
+                visual.interaction.sockets.push_back({.node = node.name, .identifier = socket.identifier, .type = socket.type, .direction = CanvasSocketDirection::Output, .position = {origin.x + kNodeWidth * dp_ratio_, origin.y + (row_y + row_height * 0.5f) * dp_ratio_}});
+                row_y += row_height;
+            }
+            const bool expanded = node_widgets::settingsExpanded(node);
+            const float editor_height = node_widgets::inlineEditorHeight(node);
+            row_y += editor_height == 120 && interaction_.zoom() < 0.75f ? 40 : editor_height;
+            const auto settings = std::ranges::count_if(inputs, node_widgets::singleValue) +
+                                  (type ? std::ranges::count_if(type->properties, [&](const auto& property) {
+                                      return property.kind != lfs::nodes::PropertyKind::Data && node.type_id != "lfs.group";
+                                  })
+                                        : 0);
+            if (settings > 0)
+                row_y += row_height;
+            if (type && expanded && node.type_id != "lfs.group")
+                for (const auto& property : type->properties)
+                    if (property.kind != lfs::nodes::PropertyKind::Data)
+                        row_y += row_height;
+            for (const auto& socket : inputs) {
+                if (!node_widgets::inputVisible(*tree, node, socket))
+                    continue;
+                visual.interaction.sockets.push_back({.node = node.name, .identifier = socket.identifier, .type = socket.type, .direction = CanvasSocketDirection::Input, .position = {origin.x, origin.y + (row_y + row_height * 0.5f) * dp_ratio_}, .multi_input = socket.multi_input});
+                row_y += row_height * node_widgets::inputRows(*tree, node, socket);
+            }
+            const float borders = 2.0f * std::max(1.0f, 0.75f / interaction_.zoom());
+            visual.interaction.bounds = {origin.x, origin.y, kNodeWidth * dp_ratio_,
+                                         (row_y + 6.0f + 20.0f + borders) * dp_ratio_};
+            visuals_.push_back(std::move(visual));
+        }
+        constexpr float frame_padding = 32.0f;
+        for (auto& visual : visuals_) {
+            if (visual.type_id != "lfs.frame")
+                continue;
+            bool found = false;
+            CanvasRect bounds{};
+            for (const auto& member : visuals_) {
+                const auto* item_node = tree->find_node(member.interaction.id);
+                if (!item_node || item_node->ui.value("frame", std::string{}) != visual.interaction.id)
+                    continue;
+                const auto& item = member.interaction.bounds;
+                if (!found) {
+                    bounds = item;
+                    found = true;
+                } else {
+                    const auto right = std::max(bounds.x + bounds.width, item.x + item.width);
+                    const auto bottom = std::max(bounds.y + bounds.height, item.y + item.height);
+                    bounds.x = std::min(bounds.x, item.x);
+                    bounds.y = std::min(bounds.y, item.y);
+                    bounds.width = right - bounds.x;
+                    bounds.height = bottom - bounds.y;
+                }
+            }
+            if (found) {
+                const auto* frame = tree->find_node(visual.interaction.id);
+                const auto width = bounds.width / dp_ratio_ + frame_padding * 2.0f - 24.0f;
+                const auto note = frame->properties.value("note", std::string{});
+                const float header = 24.0f + textHeight(frame->properties.value("label", frame->name), width, dp_ratio_, true) +
+                                     (note.empty() ? 0.0f : 4.0f + textHeight(note, width, dp_ratio_));
+                visual.interaction.bounds = {bounds.x - frame_padding * dp_ratio_, bounds.y - (frame_padding + header) * dp_ratio_,
+                                             bounds.width + frame_padding * 2.0f * dp_ratio_,
+                                             bounds.height + (frame_padding * 2.0f + header) * dp_ratio_};
+            }
+        }
+        for (const auto& visual : visuals_)
+            if (visual.type_id == "lfs.frame")
+                nodes.push_back(visual.interaction);
+        for (const auto& visual : visuals_)
+            if (visual.type_id != "lfs.frame")
+                nodes.push_back(visual.interaction);
+        const auto find_socket = [&](const std::string& node, const std::string& identifier,
+                                     const CanvasSocketDirection direction) -> std::optional<CanvasSocket> {
+            const auto visual = std::ranges::find_if(visuals_, [&](const NodeVisual& item) {
+                return item.interaction.id == node;
+            });
+            if (visual == visuals_.end())
+                return std::nullopt;
+            const auto socket = std::ranges::find_if(visual->interaction.sockets, [&](const CanvasSocket& item) {
+                return item.identifier == identifier && item.direction == direction;
+            });
+            return socket == visual->interaction.sockets.end() ? std::nullopt
+                                                               : std::optional(*socket);
+        };
+        std::unordered_map<std::string, std::unordered_map<std::string, size_t>> input_counts;
+        std::unordered_map<std::string, std::unordered_map<std::string, size_t>> input_indices;
+        for (const auto& link : tree->links)
+            ++input_counts[link.to_node][link.to_socket];
+        for (const auto& link : tree->links) {
+            const auto from = find_socket(link.from_node, link.from_socket, CanvasSocketDirection::Output);
+            auto to = find_socket(link.to_node, link.to_socket, CanvasSocketDirection::Input);
+            if (from && to) {
+                const auto count = input_counts[link.to_node][link.to_socket];
+                if (to->multi_input && count > 1) {
+                    const auto index = input_indices[link.to_node][link.to_socket]++;
+                    to->position.y += (static_cast<float>(index) / static_cast<float>(count - 1) - 0.5f) * 6.0f * dp_ratio_;
+                }
+                links.push_back({*from, *to});
+            }
+        }
+        interaction_.setGraph(std::move(nodes), std::move(links));
+        interaction_.setSelectedNodes(selected_nodes_);
+        updateSelectionPreview();
+    }
+
+    void NodeCanvasElement::updateSelectionPreview() {
+        if (!scene_manager_ || !manager_)
+            return;
+        const auto host = activeHost();
+        if (host && selected_nodes_.size() == 1 && !active_tree_uuid_.empty())
+            manager_->setViewportNodeSelection(*host, active_tree_uuid_, *selected_nodes_.begin());
+        else
+            manager_->clearViewportNodeSelection();
+        if (!preview_selection_opt_out_ && selected_nodes_.size() == 1) {
+            const auto* tree = activeTree();
+            const auto* node = tree ? tree->find_node(*selected_nodes_.begin()) : nullptr;
+            const auto outputs = node ? lfs::nodes::effective_outputs(
+                                            *tree, *node, [this](const std::string_view uuid) {
+                                                return manager_->tree(uuid);
+                                            })
+                                      : std::vector<lfs::nodes::SocketDecl>{};
+            if (std::ranges::any_of(outputs, [](const auto& socket) {
+                    return socket.type == lfs::nodes::BOOL_SOCKET ||
+                           (socket.identifier == "Selection" && socket.type != lfs::nodes::GEOMETRY_SOCKET);
+                }))
+                preview_selection_ = true;
+        }
+        if (!preview_selection_ || !host || selected_nodes_.size() != 1 ||
+            active_modifier_uuid_.empty()) {
+            scene_manager_->setModifierSelectionPreview({}, std::nullopt);
+            return;
+        }
+        scene_manager_->setModifierSelectionPreview(
+            *host, manager_->selectionPreview(*host, active_modifier_uuid_,
+                                              instancePrefix() + *selected_nodes_.begin()));
+    }
+
+    void NodeCanvasElement::refreshEvaluation() {
+        const auto host = activeHost();
+        const auto* result = host && manager_ ? manager_->lastResult(*host) : nullptr;
+        if (!result)
+            return;
+        evaluation_errors_ = result->errors;
+        evaluation_total_ms_ = result->total_time_ms;
+        std::string prefix;
+        if (const auto* stack = manager_->stack(*host)) {
+            const auto modifier = std::ranges::find(stack->modifiers, active_modifier_uuid_, &Modifier::uuid);
+            if (modifier != stack->modifiers.end())
+                prefix = modifier->name + "/" + instancePrefix();
+        }
+        for (auto& visual : visuals_) {
+            const auto error = result->errors.find(prefix + visual.interaction.id);
+            visual.error = error == result->errors.end() ? std::string{} : error->second;
+        }
+    }
+
+    void NodeCanvasElement::rebuildDom() {
+        if (!nodes_element_ || !notice_element_ || !sidebar_element_)
+            return;
+        std::erase_if(node_elements_, [&](const auto& entry) {
+            if (activeTree() && activeTree()->find_node(entry.first))
+                return false;
+            nodes_element_->RemoveChild(entry.second);
+            node_markup_.erase(entry.first);
+            node_content_state_.erase(entry.first);
+            node_layout_.erase(entry.first);
+            selected_nodes_.erase(entry.first);
+            return true;
+        });
+        const auto host = activeHost();
+        notice_element_->SetClass("training-suspended", false);
+        if (!editableMode()) {
+            notice_element_->SetInnerRML("<span>" + escape(LOC("node_editor.edit_mode_notice")) + "</span>");
+            notice_element_->SetProperty("display", "flex");
+        } else if (!host) {
+            notice_element_->SetInnerRML("<span>" + escape(LOC("node_editor.select_node_notice")) + "</span>");
+            notice_element_->SetProperty("display", "flex");
+        } else if (!activeTree()) {
+            std::string suggestions = "<div class=\"node-empty-templates\"><strong>" +
+                                      escape(LOC("node_editor.suggested_templates")) + "</strong><span>" +
+                                      escape(LOC("node_editor.add_modifier_notice")) + "</span><div>";
+            for (const auto& value : manager_->templates()) {
+                if (!value.builtin || (value.id != "colour_grade" && value.id != "box_crop" && value.id != "noise_variation"))
+                    continue;
+                suggestions += "<button data-action=\"template-apply\" data-template=\"" +
+                               escape(value.id) + "\"><strong>" + escape(value.name) +
+                               "</strong><small>" + escape(value.description) + "</small></button>";
+            }
+            suggestions += "</div><button class=\"btn btn--secondary browse-templates\" data-action=\"browse-templates\">" +
+                           escape(LOC("node_editor.browse_templates")) + "</button></div>";
+            notice_element_->SetInnerRML(suggestions);
+            notice_element_->SetProperty("display", "flex");
+        } else if (manager_->trainingSuspended()) {
+            notice_element_->SetClass("training-suspended", true);
+            notice_element_->SetInnerRML(
+                "<span>" + escape(LOC("node_editor.modifiers_paused_while_training")) + "</span>");
+            notice_element_->SetProperty("display", "flex");
+        } else {
+            notice_element_->SetProperty("display", "none");
+        }
+        auto* document = GetOwnerDocument();
+        auto* tree = activeTree();
+        if (document && tree) {
+            for (const auto& visual : visuals_) {
+                const auto* node = tree->find_node(visual.interaction.id);
+                const auto type = node ? manager_->registry().find_localized(node->type_id) : nullptr;
+                const lfs::nodes::TreeResolver resolver = [this](const std::string_view uuid) {
+                    return manager_->tree(uuid);
+                };
+                const auto inputs = node ? canvasInputs(*tree, *node, type, resolver)
+                                         : std::vector<lfs::nodes::SocketDecl>{};
+                const auto outputs = node ? canvasOutputs(*tree, *node, type, resolver)
+                                          : std::vector<lfs::nodes::SocketDecl>{};
+                auto*& element = node_elements_[visual.interaction.id];
+                if (!element) {
+                    static Rml::ElementInstancerGeneric<CanvasCard> card_instancer;
+                    auto card = card_instancer.InstanceElement(nodes_element_, "div", {});
+                    card->SetInstancer(&card_instancer);
+                    element = nodes_element_->AppendChild(std::move(card));
+                }
+                element->SetClass("node-box", true);
+                element->SetClass("node-frame", node && node->type_id == "lfs.frame");
+                element->SetClass("node-reroute", node && node->type_id == "lfs.reroute");
+                element->SetClass("node-note", node && node->type_id == "lfs.note");
+                element->SetClass("selected", selected_nodes_.contains(visual.interaction.id));
+                element->SetClass("muted", visual.muted);
+                element->SetClass("failed", !visual.error.empty());
+                element->SetClass("is-evaluating", busy_node_ == visual.interaction.id);
+                element->SetAttribute("data-node", visual.interaction.id);
+                if (!visual.error.empty())
+                    element->SetAttribute("title", visual.error);
+                else if (type && !type->description.empty())
+                    element->SetAttribute("title", type->description);
+                nlohmann::json content_state = {
+                    {"values", node->input_values},
+                    {"properties", node->properties},
+                    {"selected", selected_nodes_.contains(visual.interaction.id)},
+                    {"paint_mode", manager_->paintModeActive()},
+                    {"descriptor", reinterpret_cast<std::uintptr_t>(type.get())},
+                    {"theme", theme_signature_},
+                    {"language", language_generation_},
+                    {"optional", LOC("node_editor.optional_selection")}};
+                const auto& preview = manager_->previewState();
+                content_state["preview"] = preview && preview->target.to_string() == host_uuid_ &&
+                                           preview->modifier_uuid == active_modifier_uuid_ &&
+                                           preview->node == previewPath(node->name);
+                if (const auto* controller = manager_->sequencer()) {
+                    content_state["animation_time"] = manager_->animationTime();
+                    content_state["animation_revision"] = controller->timelineRevision();
+                }
+                for (const auto& input : inputs)
+                    content_state["inputs"].push_back({input.identifier, input.label, input.type});
+                for (const auto& output : outputs)
+                    content_state["outputs"].push_back({output.identifier, output.label, output.type});
+                if (node_content_state_[visual.interaction.id] != content_state) {
+                    std::string title;
+                    if (node->type_id == "lfs.reroute")
+                        title = "";
+                    else if (node->type_id == "lfs.frame")
+                        title = "<div class=\"frame-label\">" + escape(node->properties.value("label", node->name)) +
+                                "</div><div class=\"frame-note\">" + escape(node->properties.value("note", std::string{})) + "</div>";
+                    else if (node->type_id == "lfs.note")
+                        title = "<div class=\"note-text\">" + escape(node->properties.value("text", std::string{})) + "</div>";
+                    else {
+                        title = "<div class=\"node-title\" title=\"" + escape(type ? type->description : "") + "\" style=\"background-color:" +
+                                categoryColor(visual.category) + "\">" + node_widgets::categoryIcon(visual.category) +
+                                "<span class=\"node-title-label\">" + escape(visual.title) +
+                                "</span>";
+                        if (node->type_id == "lfs.paint_selection" &&
+                            selected_nodes_.contains(node->name))
+                            title += "<button class=\"node-title-tool" +
+                                     std::string(manager_->paintModeActive() ? " active" : "") +
+                                     "\" data-action=\"paint-toggle\" data-node=\"" + escape(node->name) +
+                                     "\" title=\"" + escape(LOC("node_editor.paint")) +
+                                     "\">" + node_widgets::icon("brush") + "</button>";
+                        if (node->type_id == "lfs.group")
+                            title += "<button class=\"node-title-tool\" data-action=\"group-enter\" data-node=\"" +
+                                     escape(node->name) + "\" title=\"Enter graph\">&#x2192;</button>";
+                        const bool previewable = std::ranges::any_of(outputs, [](const auto& output) {
+                            return output.type == lfs::nodes::GEOMETRY_SOCKET ||
+                                   output.type == lfs::nodes::FLOAT_SOCKET ||
+                                   output.type == lfs::nodes::INT_SOCKET ||
+                                   output.type == lfs::nodes::BOOL_SOCKET ||
+                                   output.type == lfs::nodes::VECTOR_SOCKET ||
+                                   output.type == lfs::nodes::COLOUR_SOCKET;
+                        });
+                        if (previewable)
+                            title += "<button class=\"node-title-tool" +
+                                     std::string(content_state["preview"].get<bool>() ? " active" : "") +
+                                     "\" data-action=\"node-preview\" data-node=\"" + escape(node->name) +
+                                     "\" title=\"" + escape(LOC("node_editor.preview_node")) +
+                                     "\">&#x25C9;</button>";
+                        title += "</div><div class=\"socket-rows\">";
+                        for (const auto& output : outputs)
+                            title += "<div class=\"socket-row output\" title=\"" + escape(output.description) + "\"><span class=\"socket-label\">" +
+                                     escape(output.label) + "</span></div>";
+                        title += node_widgets::inlineEditor(*node);
+                        const auto settings = std::ranges::count_if(inputs, node_widgets::singleValue) +
+                                              (type ? std::ranges::count_if(type->properties, [&](const auto& property) {
+                                                  return property.kind != lfs::nodes::PropertyKind::Data && node->type_id != "lfs.group";
+                                              })
+                                                    : 0);
+                        if (settings > 0)
+                            title += "<button class=\"node-settings\" data-action=\"node-settings\" data-node=\"" +
+                                     escape(node->name) + "\"><span class=\"settings-arrow\" data-preserve-content></span> " +
+                                     escape(std::vformat(LOC(settings == 1 ? "node_editor.settings_count_one"
+                                                                           : "node_editor.settings_count_other"),
+                                                         std::make_format_args(settings))) +
+                                     "</button>";
+                        if (type && node->type_id != "lfs.group")
+                            for (const auto& property : type->properties)
+                                if (property.kind != lfs::nodes::PropertyKind::Data)
+                                    title += "<div class=\"socket-row node-property\" title=\"" +
+                                             escape(property.description) + "\">" +
+                                             node_widgets::property(*node, property) + "</div>";
+                        for (const auto& input : inputs) {
+                            const bool has_widget = !input.hide_value &&
+                                                    input.type != lfs::nodes::GEOMETRY_SOCKET;
+                            title += "<div class=\"socket-input\" title=\"" + escape(input.description) + "\"><span class=\"socket-label" +
+                                     std::string(has_widget ? " value-fallback" : "") + "\">" +
+                                     escape(input.label) +
+                                     (input.identifier == "Selection"
+                                          ? "<span class=\"socket-optional\" title=\"" + escape(LOC("node_editor.optional_selection")) + "\"> ?</span>"
+                                          : "") +
+                                     "</span>";
+                            if (has_widget)
+                                title += "<div class=\"inline-value\">" + node_widgets::animatedInput(*manager_, *tree, *node, input, true) +
+                                         "</div>";
+                            title += "</div>";
+                        }
+                        title += "</div><div class=\"node-footer\" data-preserve-content>—</div><div class=\"node-progress\"></div>";
+                    }
+                    if (node_markup_[visual.interaction.id] != title) {
+                        node_widgets::patchMarkup(*element, title);
+                        node_markup_[visual.interaction.id] = std::move(title);
+                        node_layout_.erase(visual.interaction.id);
+                    }
+                    node_content_state_[visual.interaction.id] = std::move(content_state);
+                }
+                Rml::ElementList rows;
+                const bool expanded = node_widgets::settingsExpanded(*node);
+                if (auto* arrow = element->QuerySelector(".settings-arrow"))
+                    arrow->SetClass("expanded", expanded);
+                element->QuerySelectorAll(rows, ".node-property");
+                for (auto* row : rows)
+                    row->SetProperty("display", expanded ? "flex" : "none");
+                rows.clear();
+                element->QuerySelectorAll(rows, ".socket-input");
+                for (std::size_t index = 0; index < inputs.size() && index < rows.size(); ++index) {
+                    auto* row = rows[index];
+                    row->SetProperty("display", node_widgets::inputVisible(*tree, *node, inputs[index]) ? "block" : "none");
+                    row->SetClass("linked", node_widgets::linked(*tree, *node, inputs[index]));
+                    const int count = node_widgets::inputRows(*tree, *node, inputs[index]);
+                    if (row->GetAttribute<int>("data-rows", 0) != count) {
+                        row->SetAttribute("data-rows", count);
+                        row->SetProperty("height", px(count * 22.0f * dp_ratio_ * interaction_.zoom()));
+                    }
+                }
+            }
+        }
+        updateSelectedClasses();
+        updateNodePositions();
+        updateSidebar();
+        updateBreadcrumb();
+    }
+
+    void NodeCanvasElement::updateBreadcrumb() {
+        if (!breadcrumb_element_)
+            return;
+        std::string html;
+        const auto host = activeHost();
+        const auto* scene_node = host && scene_manager_ ? scene_manager_->getScene().getNodeByUuid(*host) : nullptr;
+        if (scene_node)
+            html = "<button data-action=\"breadcrumb-root\">" + escape(scene_node->name) + "</button>";
+        const auto* root = manager_ ? manager_->tree(group_path_.empty() ? active_tree_uuid_ : group_path_.front().tree_uuid) : nullptr;
+        if (root)
+            html += "<span>&gt;</span><button data-action=\"breadcrumb-root\">" + escape(root->name) + "</button>";
+        for (std::size_t index = 0; index < group_path_.size(); ++index) {
+            const auto& entry = group_path_[index];
+            const auto* outer = manager_->tree(entry.tree_uuid);
+            const auto* group = outer ? outer->find_node(entry.node) : nullptr;
+            const auto* graph = group ? manager_->tree(group->properties.value("tree", std::string{})) : nullptr;
+            html += "<span>&gt;</span><button data-action=\"breadcrumb\" data-index=\"" +
+                    std::to_string(index) + "\">" + escape(graph ? graph->name : entry.node) + "</button>";
+        }
+        breadcrumb_element_->SetInnerRML(html);
+        breadcrumb_element_->SetProperty("display", group_path_.empty() ? "none" : "flex");
+    }
+
+    void NodeCanvasElement::updateSelectedClasses() {
+        geometry_nodes_.clear();
+        for (const auto& [name, element] : node_elements_)
+            element->SetClass("selected", selected_nodes_.contains(name));
+        int layer = 0;
+        for (const auto& node : interaction_.nodes()) {
+            if (const auto found = node_elements_.find(node.id); found != node_elements_.end()) {
+                auto* card = found->second;
+                const auto* model = activeTree() ? activeTree()->find_node(node.id) : nullptr;
+                const int node_layer = model && model->type_id == "lfs.frame" ? -1 : layer++;
+                if (card->GetAttribute<int>("data-layer", -2) != node_layer) {
+                    card->SetAttribute("data-layer", node_layer);
+                    card->SetProperty("z-index", std::to_string(node_layer));
+                }
+            }
+        }
+    }
+
+    void NodeCanvasElement::updateNodePositions() {
+        const auto size = GetBox().GetSize(Rml::BoxArea::Content);
+        notice_element_->SetProperty("right", effectiveSidebarVisible() ? "280dp" : "0dp");
+        notice_element_->SetClass("compact-empty", size.y / dp_ratio_ < 180 || size.x / dp_ratio_ < 520);
+        const float width = std::max(0.0f, size.x - (effectiveSidebarVisible() ? kSidebarWidth * dp_ratio_ : 0.0f));
+        if (canvas_width_ != width) {
+            viewport_element_->SetProperty("width", px(width));
+            canvas_width_ = width;
+        }
+        const auto pan = interaction_.pan();
+        if (pan != layout_pan_) {
+            nodes_element_->SetProperty("left", px(pan.x));
+            nodes_element_->SetProperty("top", px(pan.y));
+            layout_pan_ = pan;
+        }
+        const float zoom = interaction_.zoom();
+        for (const auto& node : interaction_.nodes()) {
+            const auto found = node_elements_.find(node.id);
+            if (found == node_elements_.end())
+                continue;
+            const CanvasRect rect{node.bounds.x * zoom, node.bounds.y * zoom,
+                                  node.bounds.width * zoom, node.bounds.height * zoom};
+            const auto previous = node_layout_.find(node.id);
+            const bool fresh = previous == node_layout_.end();
+            if (fresh || previous->second.x != rect.x)
+                found->second->SetProperty("left", px(rect.x));
+            if (fresh || previous->second.y != rect.y)
+                found->second->SetProperty("top", px(rect.y));
+            if (fresh || layout_zoom_ != zoom || previous->second.width != rect.width ||
+                previous->second.height != rect.height) {
+                found->second->SetProperty("width", px(rect.width));
+                found->second->SetProperty("height", px(rect.height));
+                node_widgets::layoutCard(*found->second, zoom, dp_ratio_);
+            }
+            node_layout_[node.id] = rect;
+        }
+        layout_zoom_ = zoom;
+    }
+
+    std::string NodeCanvasElement::previewPath(std::string_view node) const {
+        std::string path;
+        for (const auto& group : group_path_)
+            path += group.node + "/";
+        return path + std::string(node);
+    }
+
+    void NodeCanvasElement::updateSidebar() {
+        if (!sidebar_element_ || !scene_manager_ || !manager_)
+            return;
+        sidebar_element_->SetProperty("display", effectiveSidebarVisible() ? "block" : "none");
+        if (!effectiveSidebarVisible()) {
+            updateEvaluationDom();
+            return;
+        }
+        const auto host_uuid = activeHost();
+        const auto* host = host_uuid ? scene_manager_->getScene().getNodeByUuid(*host_uuid) : nullptr;
+        std::string html = "<div class=\"sidebar-section\"><div class=\"sidebar-heading\">" +
+                           escape(LOC("node_editor.target")) + "</div>";
+        if (host)
+            html += "<div class=\"target-name\">" + escape(host->name) +
+                    "</div><div class=\"target-type\">" + escape(sceneTypeLabel(host->type)) + "</div>";
+        html += "</div><div class=\"sidebar-section\"><div class=\"sidebar-heading\">" +
+                escape(LOC("node_editor.modifiers")) + "</div>";
+        if (const auto* stack = host_uuid ? manager_->stack(*host_uuid) : nullptr) {
+            for (const auto& modifier : stack->modifiers) {
+                const std::string attributes = " data-modifier=\"" + escape(modifier.uuid) + "\"";
+                const bool failed = std::ranges::any_of(evaluation_errors_, [&](const auto& error) {
+                    return error.first == modifier.name || error.first.starts_with(modifier.name + "/");
+                });
+                const bool disabled = !modifier.enabled || !modifier.show_viewport;
+                const std::string status = disabled ? LOC("node_editor.status_disabled")
+                                           : failed ? LOC("node_editor.status_errors")
+                                                    : LOC("node_editor.status_ok");
+                html += "<div class=\"modifier-row" +
+                        std::string(modifier.uuid == active_modifier_uuid_ ? " active" : "") +
+                        "\" data-action=\"modifier\"" + attributes + ">"
+                                                                     "<input type=\"checkbox\" data-action=\"modifier-enabled\"" +
+                        attributes +
+                        (modifier.enabled ? " checked" : "") + "/>"
+                                                               "<div class=\"modifier-name\"><input class=\"modifier-rename\" type=\"text\" data-action=\"modifier-rename\"" +
+                        attributes + " title=\"" + escape(modifier.name) + "\" value=\"" + escape(modifier.name) + "\"/>"
+                                                                                                                   "<span class=\"modifier-name-label\">" +
+                        escape(modifier.name) + "</span></div>"
+                                                "<span class=\"modifier-status" +
+                        std::string(disabled ? " disabled" : failed ? " failed"
+                                                                    : "") +
+                        "\" title=\"" + escape(status) + " · " +
+                        std::format("{:.2f} ms", evaluation_total_ms_) + "\"></span>"
+                                                                         "<button class=\"modifier-eye" +
+                        std::string(modifier.show_viewport ? "" : " disabled") +
+                        "\" data-action=\"modifier-eye\"" + attributes + " title=\"" +
+                        escape(LOC("node_editor.show_viewport")) +
+                        "\"><img sprite=\"icon-visible\"/></button>"
+                        "<button class=\"modifier-menu\" data-action=\"modifier-menu\"" +
+                        attributes +
+                        " title=\"" + escape(LOC("node_editor.modifier_actions")) + "\">⋯</button></div>";
+            }
+        }
+        html += "<button class=\"btn btn--secondary sidebar-button\" data-action=\"add-modifier\">+ " +
+                escape(LOC("node_editor.add_modifier")) + "</button></div>";
+        if (const auto* stack = host_uuid ? manager_->stack(*host_uuid) : nullptr) {
+            const auto modifier = std::ranges::find(stack->modifiers, active_modifier_uuid_, &Modifier::uuid);
+            const auto* graph = modifier != stack->modifiers.end() ? manager_->tree(modifier->tree_uuid) : nullptr;
+            if (graph && graph->group_interface.inputs.size() > 1) {
+                html += "<div class=\"sidebar-section\"><div class=\"sidebar-heading\">" +
+                        escape(LOC("node_editor.template_adjust")) + "</div>";
+                for (const auto& socket : graph->group_interface.inputs) {
+                    if (socket.type == lfs::nodes::GEOMETRY_SOCKET)
+                        continue;
+                    const auto override = modifier->input_overrides.find(socket.identifier);
+                    const auto& value = override == modifier->input_overrides.end() ? socket.default_value : override->second;
+                    const nlohmann::json encoded = value;
+                    const auto payload = encoded.value("value", nlohmann::json{});
+                    const auto attributes = " data-action=\"modifier-input\" data-input=\"" + escape(socket.identifier) + "\"";
+                    html += "<label class=\"setting-row node-setting\"><span class=\"prop-label\">" + escape(socket.label) + "</span>";
+                    if (socket.type == lfs::nodes::BOOL_SOCKET) {
+                        html += "<input type=\"checkbox\"" + attributes + (payload == true ? " checked" : "") + "/>";
+                    } else {
+                        const auto text = payload.is_string() ? payload.get<std::string>() : payload.dump();
+                        html += "<input class=\"modifier-input-value\" type=\"text\"" + attributes +
+                                " value=\"" + escape(text) + "\"/>";
+                    }
+                    html += "</label>";
+                }
+                html += "</div>";
+            }
+        }
+        if (const auto* tree = activeTree(); tree && selected_nodes_.size() == 1) {
+            if (const auto* node = tree->find_node(*selected_nodes_.begin())) {
+                const auto type = manager_->registry().find_localized(node->type_id);
+                html += "<div class=\"sidebar-section\"><div class=\"selected-node-name\">" +
+                        escape(type ? type->label : node->type_id) + "</div>";
+                if (type)
+                    html += "<div class=\"node-description\">" + escape(type->description) + "</div>";
+                html += "<div class=\"target-type\">" + escape(type ? type->category : node->type_id) + "</div>";
+                const auto last_run = nodeStatus(node->name);
+                html += "<div id=\"node-inspector-last-run\" class=\"node-eval-time\" data-preserve-content>" +
+                        escape(node_widgets::nonBreakingStatus(std::vformat(LOC("node_editor.last_run"), std::make_format_args(last_run)))) + "</div>";
+                html += "<label class=\"setting-row\"><span class=\"prop-label\">" +
+                        escape(LOC("node_editor.node_on")) + "</span><input type=\"checkbox\" data-action=\"node-on\" data-node=\"" +
+                        escape(node->name) + "\"" + (node->muted ? "" : " checked") + "/></label>";
+                if (node->type_id == "lfs.paint_selection")
+                    html += "<button class=\"btn sidebar-button" +
+                            std::string(manager_->paintModeActive() ? " active" : "") +
+                            "\" data-action=\"paint-toggle\" data-node=\"" + escape(node->name) +
+                            "\">" + escape(LOC(manager_->paintModeActive() ? "node_editor.paint_done" : "node_editor.paint")) +
+                            "</button>";
+                if (node->type_id == "lfs.group") {
+                    const auto current = node->properties.value("tree", std::string{});
+                    html += "<div class=\"sidebar-heading\">Graph</div><select data-action=\"group-graph\" data-node=\"" + escape(node->name) + "\">";
+                    for (const auto* candidate : manager_->trees()) {
+                        if (candidate->tree_type != tree->tree_type)
+                            continue;
+                        std::string cycle;
+                        const lfs::nodes::TreeResolver resolver = [this](const std::string_view uuid) { return manager_->tree(uuid); };
+                        if (candidate->uuid != current && lfs::nodes::group_reference_would_cycle(*tree, candidate->uuid, resolver, &cycle))
+                            continue;
+                        html += "<option value=\"" + escape(candidate->uuid) + "\"" +
+                                (candidate->uuid == current ? " selected" : "") + ">" + escape(candidate->name) + "</option>";
+                    }
+                    html += "</select><button class=\"btn sidebar-button\" data-action=\"group-enter\" data-node=\"" +
+                            escape(node->name) + "\">Edit graph</button><button class=\"btn sidebar-button\" data-action=\"group-single-user\" data-node=\"" +
+                            escape(node->name) + "\">Make single-user</button>";
+                }
+                const lfs::nodes::NodeTree* interface_tree = tree;
+                if (node->type_id == "lfs.group")
+                    interface_tree = manager_->tree(node->properties.value("tree", std::string{}));
+                if (interface_tree && (node->type_id == "lfs.group" || node->type_id == "lfs.group_input" || node->type_id == "lfs.group_output")) {
+                    html += "<div class=\"sidebar-heading interface-heading\">Interface</div>";
+                    const auto append_side = [&](const bool output, const auto& sockets) {
+                        html += "<div class=\"interface-side\"><div class=\"target-type\">" + std::string(output ? "Outputs" : "Inputs") + "</div>";
+                        for (std::size_t index = 0; index < sockets.size(); ++index) {
+                            const auto& socket = sockets[index];
+                            auto type_label = socket.type.substr(4);
+                            type_label[0] = static_cast<char>(std::toupper(type_label[0]));
+                            html += "<div class=\"interface-row\"><input type=\"text\" data-action=\"interface-label\" data-side=\"" +
+                                    std::string(output ? "output" : "input") + "\" data-socket=\"" + escape(socket.identifier) +
+                                    "\" value=\"" + escape(socket.label) + "\"/><span class=\"interface-type\">" + escape(type_label) +
+                                    "</span><button class=\"btn\" data-action=\"interface-up\" data-side=\"" + std::string(output ? "output" : "input") +
+                                    "\" data-socket=\"" + escape(socket.identifier) + "\"" + (index == 0 ? " disabled" : "") + ">" + node_widgets::icon("dropdown-arrow") + "</button>" +
+                                    "<button class=\"btn\" data-action=\"interface-down\" data-side=\"" + std::string(output ? "output" : "input") +
+                                    "\" data-socket=\"" + escape(socket.identifier) + "\"" + (index + 1 == sockets.size() ? " disabled" : "") + ">" + node_widgets::icon("dropdown-arrow") + "</button>" +
+                                    "<button class=\"btn\" data-action=\"interface-remove\" data-side=\"" + std::string(output ? "output" : "input") +
+                                    "\" data-socket=\"" + escape(socket.identifier) + "\">" + node_widgets::icon("scene/x") + "</button></div>";
+                            const auto attributes = " data-side=\"" + std::string(output ? "output" : "input") +
+                                                    "\" data-socket=\"" + escape(socket.identifier) + "\"";
+                            html += "<div class=\"interface-details\">";
+                            if (socket.type == lfs::nodes::FLOAT_SOCKET) {
+                                const auto value = socket.default_value.template get_if<float>();
+                                html += "<label>Default<input type=\"number\" data-action=\"interface-default\"" + attributes +
+                                        " value=\"" + std::format("{}", value ? *value : 0.0f) + "\"/></label>";
+                            } else if (socket.type == lfs::nodes::INT_SOCKET) {
+                                const auto value = socket.default_value.template get_if<std::int64_t>();
+                                html += "<label>Default<input type=\"number\" data-action=\"interface-default\"" + attributes +
+                                        " value=\"" + std::to_string(value ? *value : 0) + "\"/></label>";
+                            } else if (socket.type == lfs::nodes::BOOL_SOCKET) {
+                                const auto value = socket.default_value.template get_if<bool>();
+                                html += "<label>Default<input type=\"checkbox\" data-action=\"interface-default\"" + attributes +
+                                        (value && *value ? " checked" : "") + "/></label>";
+                            } else if (socket.type == lfs::nodes::STRING_SOCKET) {
+                                const auto value = socket.default_value.template get_if<std::string>();
+                                html += "<label>Default<input type=\"text\" data-action=\"interface-default\"" + attributes +
+                                        " value=\"" + escape(value ? *value : std::string{}) + "\"/></label>";
+                            } else if (socket.type == lfs::nodes::VECTOR_SOCKET) {
+                                const auto value = socket.default_value.template get_if<glm::vec3>();
+                                html += "<label>Default<input type=\"text\" data-action=\"interface-default\"" + attributes +
+                                        " value=\"" + (value ? std::format("{},{},{}", value->x, value->y, value->z) : "0,0,0") + "\"/></label>";
+                            } else if (socket.type == lfs::nodes::COLOUR_SOCKET) {
+                                const auto value = socket.default_value.template get_if<glm::vec4>();
+                                html += "<label>Default<input type=\"text\" data-action=\"interface-default\"" + attributes +
+                                        " value=\"" + (value ? std::format("{},{},{},{}", value->x, value->y, value->z, value->w) : "0,0,0,1") + "\"/></label>";
+                            }
+                            if (socket.type == lfs::nodes::FLOAT_SOCKET || socket.type == lfs::nodes::INT_SOCKET) {
+                                const auto constraint = [&](const char* field, const std::optional<double> value) {
+                                    html += "<label>" + std::string(field) + "<input type=\"number\" data-action=\"interface-constraint\" data-field=\"" +
+                                            field + "\"" + attributes + " value=\"" +
+                                            (value ? std::format("{}", *value) : std::string{}) + "\"/></label>";
+                                };
+                                constraint("min", socket.min);
+                                constraint("max", socket.max);
+                                constraint("step", socket.step);
+                            }
+                            html += "</div>";
+                        }
+                        html += "<div class=\"interface-add\"><select data-role=\"interface-type\"><option value=\"lfs.geometry\">Geometry</option><option value=\"lfs.float\">Float</option><option value=\"lfs.int\">Int</option><option value=\"lfs.bool\">Bool</option><option value=\"lfs.vector\">Vector</option><option value=\"lfs.colour\">Colour</option><option value=\"lfs.string\">String</option></select><button class=\"btn\" data-action=\"interface-add\" data-side=\"" +
+                                std::string(output ? "output" : "input") + "\">" + escape(LOC(output ? "node_editor.add_output" : "node_editor.add_input")) + "</button></div></div>";
+                    };
+                    append_side(false, interface_tree->group_interface.inputs);
+                    append_side(true, interface_tree->group_interface.outputs);
+                }
+                if (type) {
+                    if (!type->help.empty()) {
+                        const bool expanded = expanded_help_.try_emplace(type->id, true).first->second;
+                        html += "<div class=\"node-help" + std::string(expanded ? " expanded" : "") +
+                                "\"><button class=\"node-help-toggle\" data-action=\"node-help\" data-type=\"" +
+                                escape(type->id) + "\"><span class=\"settings-arrow" + std::string(expanded ? " expanded" : "") +
+                                "\"></span> " + escape(LOC("node_editor.how_to_use")) +
+                                "</button><div class=\"node-help-text\">" + escape(type->help) + "</div></div>";
+                    }
+                    for (const auto& socket : lfs::nodes::effective_inputs(*tree, *node, [this](const std::string_view uuid) { return manager_->tree(uuid); })) {
+                        if (socket.hide_value || socket.type == lfs::nodes::GEOMETRY_SOCKET ||
+                            node_widgets::linked(*tree, *node, socket))
+                            continue;
+                        html += "<div class=\"node-setting-help\" title=\"" + escape(socket.description) + "\"><div class=\"setting-row node-setting\"><span class=\"prop-label\">" +
+                                escape(socket.label) + "</span><div class=\"node-field-control\">" +
+                                node_widgets::animatedInput(*manager_, *tree, *node, socket, false) + "</div></div><div class=\"node-field-help\">" +
+                                escape(socket.description) + "</div></div>";
+                    }
+                    for (const auto& property : type->properties) {
+                        if (node->type_id == "lfs.group" && property.identifier == "tree")
+                            continue;
+                        if (property.kind == lfs::nodes::PropertyKind::Data) {
+                            if (node->type_id == "lfs.stored_selection") {
+                                html += "<button class=\"btn sidebar-button\" data-action=\"capture-selection\" title=\"" + escape(property.description) + "\">" +
+                                        escape(LOC("node_editor.capture_selection")) + "</button>";
+                                const nlohmann::json* data = &node->properties;
+                                if (const auto* stack = host_uuid ? manager_->stack(*host_uuid) : nullptr) {
+                                    const auto modifier = std::ranges::find(stack->modifiers, active_modifier_uuid_, &Modifier::uuid);
+                                    if (modifier != stack->modifiers.end())
+                                        if (const auto stored = modifier->stored_selections.find(node->name); stored != modifier->stored_selections.end())
+                                            data = &stored->second;
+                                }
+                                const auto count = data->value("selected_count", std::size_t{0});
+                                html += "<div class=\"node-eval-time\">" + escape(std::vformat(LOC("node_editor.captured_count"), std::make_format_args(count))) + "</div>";
+                            }
+                            continue;
+                        }
+                        const bool multiline = (node->type_id == "lfs.note" && property.identifier == "text") ||
+                                               (node->type_id == "lfs.frame" && property.identifier == "note");
+                        const auto control = multiline
+                                                 ? "<textarea class=\"node-multiline\" rows=\"4\" data-node=\"" + escape(node->name) +
+                                                       "\" data-property=\"" + escape(property.identifier) + "\">" +
+                                                       escape(node->properties.value(property.identifier, std::string{})) + "</textarea>"
+                                                 : node_widgets::property(*node, property);
+                        html += "<div class=\"node-setting-help\" title=\"" + escape(property.description) + "\"><div class=\"setting-row node-setting\"><span class=\"prop-label\">" +
+                                escape(property.label) + "</span><div class=\"node-field-control\">" +
+                                control + "</div></div><div class=\"node-field-help\">" +
+                                escape(property.description) + "</div></div>";
+                    }
+                    if (!type->localization_key.empty())
+                        html += "<button class=\"node-learn-more\" data-action=\"node-learn-more\" data-type=\"" +
+                                escape(type->id) + "\">" + escape(LOC("node_editor.learn_more")) + "</button>";
+                }
+                const auto visual = std::ranges::find_if(visuals_, [&](const NodeVisual& item) {
+                    return item.interaction.id == node->name;
+                });
+                html += "<div id=\"node-inspector-error\" class=\"node-error\" data-preserve-content>" +
+                        escape(visual != visuals_.end() ? visual->error : "") + "</div>";
+                html += "</div>";
+            }
+        }
+        if (sidebar_markup_ != html) {
+            node_widgets::patchMarkup(*sidebar_element_, html);
+            sidebar_markup_ = std::move(html);
+        }
+        updateEvaluationDom();
+    }
+
+    void NodeCanvasElement::rebuildGeometry() {
+        auto* renderer = GetRenderManager();
+        if (!renderer)
+            return;
+        const auto size = GetBox().GetSize(Rml::BoxArea::Content);
+        const float canvas_width = std::max(0.0f, size.x - (effectiveSidebarVisible() ? kSidebarWidth * dp_ratio_ : 0.0f));
+        interaction_.setViewport({0.0f, 0.0f, canvas_width, size.y});
+        const auto& palette = theme().palette;
+        Rml::Mesh frames;
+        for (const auto& node : interaction_.nodes()) {
+            const auto* model = activeTree() ? activeTree()->find_node(node.id) : nullptr;
+            if (!model || model->type_id != "lfs.frame")
+                continue;
+            const auto origin = interaction_.graphToScreen({node.bounds.x, node.bounds.y});
+            const float right = origin.x + node.bounds.width * interaction_.zoom();
+            const float bottom = origin.y + node.bounds.height * interaction_.zoom();
+            const float radius = 8.0f * dp_ratio_ * interaction_.zoom();
+            const auto preset = model->properties.value("colour", std::string{"neutral"});
+            const auto tint = preset == "green" ? palette.success : preset == "orange" ? palette.warning
+                                                                                       : palette.info;
+            const auto fill = color(themeColor(tint), 0.10f);
+            quad(frames, origin.x + radius, origin.y, right - radius, bottom, fill);
+            quad(frames, origin.x, origin.y + radius, origin.x + radius, bottom - radius, fill);
+            quad(frames, right - radius, origin.y + radius, right, bottom - radius, fill);
+            // Quarter-circles keep translucent corners from accumulating alpha.
+            for (int corner = 0; corner < 4; ++corner) {
+                const CanvasPoint centre{corner == 0 || corner == 3 ? right - radius : origin.x + radius,
+                                         corner < 2 ? bottom - radius : origin.y + radius};
+                const int base = static_cast<int>(frames.vertices.size());
+                frames.vertices.push_back({{centre.x, centre.y}, fill, {0, 0}});
+                for (int segment = 0; segment <= 8; ++segment) {
+                    const float angle = (corner + segment / 8.0f) * 1.570796327f;
+                    frames.vertices.push_back({{centre.x + std::cos(angle) * radius, centre.y + std::sin(angle) * radius}, fill, {0, 0}});
+                    if (segment)
+                        frames.indices.insert(frames.indices.end(), {base, base + segment, base + segment + 1});
+                }
+            }
+        }
+        frame_geometry_ = renderer->MakeGeometry(std::move(frames));
+        const bool view_changed = geometry_pan_ != interaction_.pan() ||
+                                  geometry_zoom_ != interaction_.zoom() || geometry_size_ != size ||
+                                  geometry_theme_ != theme_signature_;
+        if (view_changed) {
+            Rml::Mesh grid;
+            const float spacing = 24.0f * dp_ratio_ * interaction_.zoom();
+            const float fade = std::clamp((interaction_.zoom() - 0.3f) / 0.2f, 0.0f, 1.0f);
+            const auto minor = color(themeColor(palette.text), 0.10f * fade);
+            const auto major = color(themeColor(palette.text), 0.17f * fade);
+            const int first_column = static_cast<int>(std::floor(-interaction_.pan().x / spacing));
+            const int first_row = static_cast<int>(std::floor(-interaction_.pan().y / spacing));
+            for (int column = first_column; column * spacing + interaction_.pan().x < canvas_width; ++column)
+                for (int row = first_row; row * spacing + interaction_.pan().y < size.y; ++row) {
+                    const CanvasPoint point{column * spacing + interaction_.pan().x,
+                                            row * spacing + interaction_.pan().y};
+                    if (point.x >= 0.0f && point.y >= 0.0f)
+                        gridDot(grid, point, 0.75f * dp_ratio_,
+                                column % 5 == 0 && row % 5 == 0 ? major : minor);
+                }
+            grid_geometry_ = renderer->MakeGeometry(std::move(grid));
+        }
+
+        const auto route_generation = interaction_.routeGeneration();
+        if (view_changed || geometry_route_generation_ != route_generation ||
+            geometry_selected_link_ != selected_link_ || geometry_highlighted_link_ != interaction_.highlightedLink()) {
+            Rml::Mesh wires;
+            const auto& paths = interaction_.wirePaths();
+            for (std::size_t index = 0; index < interaction_.links().size(); ++index) {
+                const auto& link = interaction_.links()[index];
+                const bool selected = selected_link_ && *selected_link_ == link;
+                const bool highlighted = interaction_.highlightedLink() &&
+                                         *interaction_.highlightedLink() == link;
+                std::vector<CanvasPoint> points;
+                points.reserve(paths[index].size());
+                for (const auto point : paths[index])
+                    points.push_back(interaction_.graphToScreen(point));
+                pathRibbon(wires, points,
+                           color(socketColor(link.from.type), 0.85f),
+                           (selected || highlighted ? 3.5f : 2.5f) * dp_ratio_, dp_ratio_);
+            }
+            wire_geometry_ = renderer->MakeGeometry(std::move(wires));
+            geometry_route_generation_ = route_generation;
+            geometry_selected_link_ = selected_link_;
+            geometry_highlighted_link_ = interaction_.highlightedLink();
+        }
+        Rml::Mesh live_wire;
+        if (interaction_.draggingWire() && interaction_.wireSource()) {
+            const auto& source = *interaction_.wireSource();
+            const CanvasPoint end = interaction_.snappedSocket()
+                                        ? interaction_.graphToScreen(interaction_.snappedSocket()->position)
+                                        : interaction_.pointer();
+            ribbon(live_wire, interaction_.graphToScreen(source.position), end,
+                   color(socketColor(source.type), 0.85f), 2.5f * dp_ratio_, dp_ratio_);
+        }
+        live_wire_geometry_ = renderer->MakeGeometry(std::move(live_wire));
+
+        if (view_changed || geometry_nodes_ != interaction_.nodes() ||
+            geometry_snap_ != interaction_.snappedSocket() || geometry_dragging_wire_ != interaction_.draggingWire()) {
+            for (const auto& node : interaction_.nodes()) {
+                Rml::Mesh sockets;
+                const auto* model = activeTree() ? activeTree()->find_node(node.id) : nullptr;
+                const bool reroute = model && model->type_id == "lfs.reroute";
+                for (const auto& socket : node.sockets) {
+                    if (reroute && socket.direction == CanvasSocketDirection::Input)
+                        continue;
+                    const bool snapped = interaction_.snappedSocket() && *interaction_.snappedSocket() == socket;
+                    const bool compatible = !interaction_.draggingWire() || interaction_.canSnapTo(socket);
+                    const auto position = (socket.position - CanvasPoint{node.bounds.x, node.bounds.y}) * interaction_.zoom();
+                    const float radius = (snapped ? 6.0f : reroute ? 4.0f
+                                                                   : 4.5f) *
+                                         dp_ratio_ * interaction_.zoom();
+                    const auto shape = [&](const float r, const Rml::ColourbPremultiplied fill) {
+                        const float span = socket.multi_input ? 3.0f * dp_ratio_ * interaction_.zoom() : 0.0f;
+                        circle(sockets, {position.x, position.y - span}, r, fill);
+                        if (span > 0.0f) {
+                            circle(sockets, {position.x, position.y + span}, r, fill);
+                            quad(sockets, position.x - r, position.y - span, position.x + r, position.y + span, fill);
+                        }
+                    };
+                    if (reroute && selected_nodes_.contains(node.id))
+                        shape(radius + 3.0f * dp_ratio_ * interaction_.zoom(), color(themeColor(palette.primary)));
+                    shape(radius + 1.5f * dp_ratio_ * interaction_.zoom(), color(themeColor(palette.background)));
+                    shape(radius, color(socketColor(socket.type), snapped ? 1.0f : compatible ? 0.9f
+                                                                                              : 0.2f));
+                }
+                if (const auto card = node_elements_.find(node.id); card != node_elements_.end())
+                    static_cast<CanvasCard*>(card->second)->sockets = renderer->MakeGeometry(std::move(sockets));
+            }
+            geometry_nodes_ = interaction_.nodes();
+            geometry_snap_ = interaction_.snappedSocket();
+            geometry_dragging_wire_ = interaction_.draggingWire();
+        }
+        Rml::Mesh overlay;
+        if (const auto box = interaction_.selectionBox()) {
+            const auto fill = color(themeColor(palette.primary), 0.14f);
+            const auto border = color(themeColor(palette.primary), 0.8f);
+            quad(overlay, box->x, box->y, box->x + box->width, box->y + box->height, fill);
+            quad(overlay, box->x, box->y, box->x + box->width, box->y + dp_ratio_, border);
+            quad(overlay, box->x, box->y + box->height - dp_ratio_, box->x + box->width,
+                 box->y + box->height, border);
+            quad(overlay, box->x, box->y, box->x + dp_ratio_, box->y + box->height, border);
+            quad(overlay, box->x + box->width - dp_ratio_, box->y, box->x + box->width,
+                 box->y + box->height, border);
+        }
+        const auto& cut = interaction_.cutPoints();
+        for (size_t index = 1; index < cut.size(); ++index)
+            straightRibbon(overlay, cut[index - 1], cut[index],
+                           color(themeColor(palette.error), 0.9f), 2.0f * dp_ratio_);
+        overlay_geometry_ = renderer->MakeGeometry(std::move(overlay));
+        geometry_pan_ = interaction_.pan();
+        geometry_zoom_ = interaction_.zoom();
+        geometry_size_ = size;
+        geometry_theme_ = theme_signature_;
+        geometry_dirty_ = false;
+    }
+
+    void NodeCanvasElement::OnRender() {
+        // Stacking/render lists have already been built. Patching DOM here
+        // invalidates them mid-traversal and can omit node cards from a frame.
+        if (geometry_dirty_)
+            rebuildGeometry();
+        const auto offset = GetAbsoluteOffset(Rml::BoxArea::Content);
+        grid_geometry_.Render(offset);
+        frame_geometry_.Render(offset);
+        wire_geometry_.Render(offset);
+        live_wire_geometry_.Render(offset);
+    }
+
+    void NodeCanvasElement::OnUpdate() {
+        repeatFieldStep();
+        syncModel();
+    }
+
+    void NodeCanvasElement::OnResize() {
+        geometry_dirty_ = true;
+        dom_dirty_ = true;
+    }
+
+    CanvasPoint NodeCanvasElement::localPointer(const Rml::Event& event) {
+        const auto offset = GetAbsoluteOffset(Rml::BoxArea::Content);
+        return {event.GetParameter("mouse_x", 0.0f) - offset.x,
+                event.GetParameter("mouse_y", 0.0f) - offset.y};
+    }
+
+    void NodeCanvasElement::focusCanvas() {
+        Focus();
+    }
+
+    void NodeCanvasElement::executeCommands(const std::vector<CanvasCommand>& commands) {
+        auto* tree = activeTree();
+        const auto host = activeHost();
+        if (!tree || !host || commands.empty())
+            return;
+        const bool selection_only = std::ranges::all_of(commands, [](const CanvasCommand& command) {
+            return command.kind == CanvasCommandKind::Select || command.kind == CanvasCommandKind::SelectLink;
+        });
+        const auto before = selection_only ? nlohmann::json{} : tree->to_json();
+        const lfs::nodes::TreeResolver resolver = [this](const std::string_view uuid) {
+            return manager_->tree(uuid);
+        };
+        bool edited = false;
+        bool selection_changed = false;
+        for (const auto& command : commands) {
+            if (command.kind == CanvasCommandKind::Select) {
+                selection_changed = true;
+                selected_nodes_.clear();
+                selected_nodes_.insert(command.nodes.begin(), command.nodes.end());
+                selected_link_.reset();
+                continue;
+            }
+            if (command.kind == CanvasCommandKind::SelectLink && command.before) {
+                selection_changed = true;
+                selected_link_ = command.before;
+                selected_nodes_.clear();
+                continue;
+            }
+            if (command.kind == CanvasCommandKind::Move) {
+                std::unordered_set<std::string> moved(command.nodes.begin(), command.nodes.end());
+                for (const auto& name : command.nodes)
+                    if (const auto* frame = tree->find_node(name); frame && frame->type_id == "lfs.frame")
+                        for (const auto& candidate : tree->nodes)
+                            if (candidate.ui.value("frame", std::string{}) == name)
+                                moved.insert(candidate.name);
+                for (const auto& name : moved)
+                    if (auto* node = tree->find_node(name)) {
+                        node->location[0] += command.delta.x / dp_ratio_;
+                        node->location[1] += command.delta.y / dp_ratio_;
+                        edited = true;
+                    }
+                for (auto& node : tree->nodes) {
+                    if (!moved.contains(node.name) || node.type_id == "lfs.frame")
+                        continue;
+                    if (moved.contains(node.ui.value("frame", std::string{})))
+                        continue;
+                    const auto visual = std::ranges::find_if(visuals_, [&](const NodeVisual& item) {
+                        return item.interaction.id == node.name;
+                    });
+                    if (visual == visuals_.end())
+                        continue;
+                    const CanvasPoint centre{visual->interaction.bounds.x + visual->interaction.bounds.width * 0.5f + command.delta.x,
+                                             visual->interaction.bounds.y + visual->interaction.bounds.height * 0.5f + command.delta.y};
+                    std::string containing;
+                    for (const auto& frame : visuals_)
+                        if (frame.type_id == "lfs.frame" && frame.interaction.id != node.name && frame.interaction.bounds.contains(centre))
+                            containing = frame.interaction.id;
+                    if (containing.empty())
+                        node.ui.erase("frame");
+                    else
+                        node.ui["frame"] = containing;
+                }
+            } else if (command.kind == CanvasCommandKind::Connect && command.after) {
+                const auto& link = *command.after;
+                edited |= tree->add_link(
+                    {link.from.node, link.from.identifier, link.to.node, link.to.identifier}, nullptr,
+                    resolver);
+            } else if (command.kind == CanvasCommandKind::Disconnect && command.before) {
+                const auto& link = *command.before;
+                edited |= tree->remove_link({link.from.node, link.from.identifier, link.to.node, link.to.identifier});
+            } else if (command.kind == CanvasCommandKind::ReRoute && command.before && command.after) {
+                const auto& old = *command.before;
+                const auto& next = *command.after;
+                edited |= tree->remove_link({old.from.node, old.from.identifier, old.to.node, old.to.identifier});
+                edited |= tree->add_link(
+                    {next.from.node, next.from.identifier, next.to.node, next.to.identifier}, nullptr,
+                    resolver);
+            } else if (command.kind == CanvasCommandKind::DeleteLinks) {
+                for (const auto& link : command.links)
+                    edited |= tree->remove_link({link.from.node, link.from.identifier, link.to.node, link.to.identifier});
+            } else if (command.kind == CanvasCommandKind::Splice && command.before && !command.nodes.empty()) {
+                auto* node = tree->find_node(command.nodes.front());
+                const auto type = node ? manager_->registry().find_localized(node->type_id) : nullptr;
+                if (!node || !type)
+                    continue;
+                const auto input = std::ranges::find_if(type->inputs, [&](const lfs::nodes::SocketDecl& socket) {
+                    return lfs::nodes::can_convert_socket(command.before->from.type, socket.type);
+                });
+                const auto output = std::ranges::find_if(type->outputs, [&](const lfs::nodes::SocketDecl& socket) {
+                    return lfs::nodes::can_convert_socket(socket.type, command.before->to.type);
+                });
+                if (input == type->inputs.end() || output == type->outputs.end())
+                    continue;
+                const auto old = *command.before;
+                tree->remove_link({old.from.node, old.from.identifier, old.to.node, old.to.identifier});
+                tree->add_link({old.from.node, old.from.identifier, node->name, input->identifier},
+                               nullptr, resolver);
+                tree->add_link({node->name, output->identifier, old.to.node, old.to.identifier},
+                               nullptr, resolver);
+                edited = true;
+            }
+        }
+        if (edited) {
+            manager_->recordTreeEdit(tree->uuid, before);
+        }
+        const bool layout_only = std::ranges::all_of(commands, [](const CanvasCommand& command) {
+            return command.kind == CanvasCommandKind::Move || command.kind == CanvasCommandKind::Select ||
+                   command.kind == CanvasCommandKind::SelectLink;
+        });
+        if (edited && !layout_only)
+            dom_dirty_ = true;
+        if (layout_only)
+            last_generation_ = manager_->generation();
+        if (selection_changed) {
+            updateSelectedClasses();
+            updateSidebar();
+            updateSelectionPreview();
+        }
+        geometry_dirty_ = true;
+    }
+
+    void NodeCanvasElement::addNode(const std::string_view type_id, const CanvasPoint graph_position) {
+        auto* tree = activeTree();
+        const auto host = activeHost();
+        if (!tree || !host)
+            return;
+        const auto before = tree->to_json();
+        auto& node = tree->add_node(std::string(type_id));
+        node.location = {graph_position.x / dp_ratio_, graph_position.y / dp_ratio_};
+        selected_nodes_ = {node.name};
+        manager_->recordTreeEdit(tree->uuid, before);
+        dom_dirty_ = true;
+    }
+
+    void NodeCanvasElement::addModifier() {
+        const auto host = activeHost();
+        if (!host || !manager_)
+            return;
+        auto& tree = manager_->newTree(LOC("node_editor.default_tree_name"));
+        auto& modifier = manager_->addModifier(*host, tree.uuid);
+        active_tree_uuid_ = tree.uuid;
+        active_modifier_uuid_ = modifier.uuid;
+        dom_dirty_ = true;
+    }
+
+    void NodeCanvasElement::removeSelected() {
+        auto* tree = activeTree();
+        const auto host = activeHost();
+        if (!tree || !host)
+            return;
+        const auto before = tree->to_json();
+        bool changed = false;
+        if (selected_link_) {
+            const auto& link = *selected_link_;
+            changed |= tree->remove_link({link.from.node, link.from.identifier, link.to.node, link.to.identifier});
+            selected_link_.reset();
+        }
+        for (const auto& node : selected_nodes_)
+            changed |= tree->remove_node(node);
+        if (changed) {
+            if (const auto& preview = manager_->previewState();
+                preview && preview->tree_uuid == tree->uuid &&
+                selected_nodes_.contains(preview->node))
+                manager_->previewClear();
+            manager_->recordTreeEdit(tree->uuid, before);
+            selected_nodes_.clear();
+            dom_dirty_ = true;
+        }
+    }
+
+    void NodeCanvasElement::duplicateSelected() {
+        auto* tree = activeTree();
+        const auto host = activeHost();
+        if (!tree || !host || selected_nodes_.empty())
+            return;
+        const std::vector<std::string> names(selected_nodes_.begin(), selected_nodes_.end());
+        const auto clipboard = manager_->copyNodes(tree->uuid, names);
+        if (!clipboard)
+            return;
+        const auto pasted = manager_->pasteNodes(tree->uuid, *clipboard);
+        if (!pasted)
+            return;
+        selected_nodes_ = {pasted->nodes.begin(), pasted->nodes.end()};
+        file_error_ = pasted->dropped_links
+                          ? std::format("{} pasted link(s) were not valid here", pasted->dropped_links)
+                          : std::string{};
+        dom_dirty_ = true;
+    }
+
+    void NodeCanvasElement::copySelected() {
+        auto* tree = activeTree();
+        if (!tree || selected_nodes_.empty())
+            return;
+        const std::vector<std::string> names(selected_nodes_.begin(), selected_nodes_.end());
+        const auto clipboard = manager_->copyNodes(tree->uuid, names);
+        if (clipboard)
+            SDL_SetClipboardText(clipboard->c_str());
+    }
+
+    void NodeCanvasElement::cutSelected() {
+        copySelected();
+        removeSelected();
+    }
+
+    void NodeCanvasElement::pasteClipboard() {
+        auto* tree = activeTree();
+        if (!tree)
+            return;
+        char* raw = SDL_GetClipboardText();
+        const std::string clipboard = raw ? raw : "";
+        SDL_free(raw);
+        const auto pointer = interaction_.pointer();
+        std::optional<std::array<float, 2>> location;
+        if (pointer.x >= 0.0f && pointer.y >= 0.0f && pointer.x <= panel_size_.x &&
+            pointer.y <= panel_size_.y) {
+            const auto graph = interaction_.screenToGraph(pointer);
+            location = std::array<float, 2>{graph.x / dp_ratio_, graph.y / dp_ratio_};
+        }
+        const auto pasted = manager_->pasteNodes(tree->uuid, clipboard, location);
+        if (!pasted) {
+            file_error_ = pasted.error().message;
+            return;
+        }
+        selected_nodes_ = {pasted->nodes.begin(), pasted->nodes.end()};
+        file_error_ = pasted->dropped_links
+                          ? std::format("{} pasted link(s) were not valid here", pasted->dropped_links)
+                          : std::string{};
+        dom_dirty_ = true;
+    }
+
+    void NodeCanvasElement::makeGroupSelected() {
+        auto* tree = activeTree();
+        if (!tree || selected_nodes_.empty())
+            return;
+        const std::vector<std::string> names(selected_nodes_.begin(), selected_nodes_.end());
+        const auto result = manager_->makeGroup(tree->uuid, names);
+        if (!result) {
+            file_error_ = result.error().message;
+            return;
+        }
+        selected_nodes_ = {result->group_node};
+        dom_dirty_ = true;
+    }
+
+    void NodeCanvasElement::ungroupSelected() {
+        auto* tree = activeTree();
+        if (!tree || selected_nodes_.size() != 1)
+            return;
+        const auto result = manager_->ungroup(tree->uuid, *selected_nodes_.begin());
+        if (!result) {
+            file_error_ = result.error().message;
+            return;
+        }
+        selected_nodes_ = {result->begin(), result->end()};
+        dom_dirty_ = true;
+    }
+
+    void NodeCanvasElement::frameSelected() {
+        auto* tree = activeTree();
+        if (!tree || selected_nodes_.empty())
+            return;
+        const std::vector<std::string> names(selected_nodes_.begin(), selected_nodes_.end());
+        const auto result = manager_->frameWrap(tree->uuid, names);
+        if (!result) {
+            file_error_ = result.error().message;
+            return;
+        }
+        selected_nodes_.insert(*result);
+        dom_dirty_ = true;
+    }
+
+    void NodeCanvasElement::insertReroute(const CanvasLink& link, const CanvasPoint graph_position) {
+        auto* tree = activeTree();
+        if (!tree)
+            return;
+        const auto result = manager_->rerouteInsert(
+            tree->uuid, {link.from.node, link.from.identifier, link.to.node, link.to.identifier},
+            std::array<float, 2>{graph_position.x / dp_ratio_, graph_position.y / dp_ratio_});
+        if (!result) {
+            file_error_ = result.error().message;
+            return;
+        }
+        selected_nodes_ = {*result};
+        dom_dirty_ = true;
+    }
+
+    void NodeCanvasElement::toggleMuted() {
+        auto* tree = activeTree();
+        const auto host = activeHost();
+        if (!tree || !host || selected_nodes_.empty())
+            return;
+        const auto before = tree->to_json();
+        for (const auto& name : selected_nodes_)
+            if (auto* node = tree->find_node(name))
+                node->muted = !node->muted;
+        manager_->recordTreeEdit(tree->uuid, before);
+        dom_dirty_ = true;
+    }
+
+    void NodeCanvasElement::frameAll() {
+        if (visuals_.empty())
+            return;
+        float min_x = visuals_.front().interaction.bounds.x;
+        float min_y = visuals_.front().interaction.bounds.y;
+        float max_x = min_x + visuals_.front().interaction.bounds.width;
+        float max_y = min_y + visuals_.front().interaction.bounds.height;
+        for (const auto& visual : visuals_) {
+            min_x = std::min(min_x, visual.interaction.bounds.x);
+            min_y = std::min(min_y, visual.interaction.bounds.y);
+            max_x = std::max(max_x, visual.interaction.bounds.x + visual.interaction.bounds.width);
+            max_y = std::max(max_y, visual.interaction.bounds.y + visual.interaction.bounds.height);
+        }
+        const auto size = GetBox().GetSize(Rml::BoxArea::Content);
+        const float width = std::max(1.0f, size.x - (effectiveSidebarVisible() ? kSidebarWidth * dp_ratio_ : 0.0f));
+        const float zoom = std::clamp(std::min((width - 80.0f * dp_ratio_) / (max_x - min_x),
+                                               (size.y - 80.0f * dp_ratio_) / (max_y - min_y)),
+                                      0.3f, 2.5f);
+        interaction_.setView({width * 0.5f - (min_x + max_x) * 0.5f * zoom,
+                              size.y * 0.5f - (min_y + max_y) * 0.5f * zoom},
+                             zoom);
+        rebuildModel();
+        updateNodePositions();
+        geometry_dirty_ = true;
+    }
+
+    bool NodeCanvasElement::arrange(const bool selection_only,
+                                    const std::optional<std::unordered_set<std::string>>& nodes) {
+        auto* tree = activeTree();
+        if (!tree)
+            return false;
+        auto subset = nodes.value_or(selection_only ? selected_nodes_ : std::unordered_set<std::string>{});
+        for (const auto& name : subset)
+            if (!tree->find_node(name))
+                return false;
+        if (nodes && nodes->empty())
+            return true;
+        if (subset.empty())
+            for (const auto& node : tree->nodes)
+                if (node.type_id != "lfs.note" && node.type_id != "lfs.frame")
+                    subset.insert(node.name);
+                else
+                    std::erase_if(subset, [&](const std::string& name) {
+                        const auto* node = tree->find_node(name);
+                        return node && (node->type_id == "lfs.note" || node->type_id == "lfs.frame");
+                    });
+        if (subset.empty())
+            return true;
+        const auto before = tree->to_json();
+        const auto positions = interaction_.arrangedPositions(tree->input_node().name, tree->output_node().name, subset);
+        for (auto& node : tree->nodes) {
+            const auto found = positions.find(node.name);
+            if (found != positions.end())
+                node.location = {found->second.x / dp_ratio_, found->second.y / dp_ratio_};
+        }
+        manager_->recordTreeEdit(tree->uuid, before);
+        rebuildModel();
+        updateNodePositions();
+        frame_pending_ = !selection_only && !nodes;
+        dom_dirty_ = true;
+        geometry_dirty_ = true;
+        return true;
+    }
+
+    bool NodeCanvasElement::handleKey(const int scancode, const bool shift, const bool control,
+                                      const bool alt) {
+        if (!editableMode())
+            return false;
+        if (scancode == SDL_SCANCODE_I && GetContext())
+            return keyframeInput(GetContext()->GetHoverElement());
+        if (scancode == SDL_SCANCODE_L && shift) {
+            arrange();
+            return true;
+        }
+        if (add_menu_) {
+            if (scancode == SDL_SCANCODE_UP || scancode == SDL_SCANCODE_DOWN) {
+                moveAddHighlight(scancode == SDL_SCANCODE_UP ? -1 : 1);
+                return true;
+            }
+            if (scancode == SDL_SCANCODE_ESCAPE) {
+                closeAddMenu();
+                return true;
+            }
+            if (scancode == SDL_SCANCODE_RETURN || scancode == SDL_SCANCODE_KP_ENTER) {
+                const auto id = first_add_type_;
+                closeAddMenu();
+                if (!id.empty())
+                    addNode(id, add_position_);
+                return true;
+            }
+            return false;
+        }
+        if (active_field_) {
+            if (scancode == SDL_SCANCODE_ESCAPE) {
+                finishFieldEdit(true);
+                return true;
+            }
+            return false;
+        }
+        if (auto* context = GetContext()) {
+            const auto* focused = context->GetFocusElement();
+            if (focused && (focused->GetTagName() == "input" || focused->GetTagName() == "select" || focused->GetTagName() == "textarea" || focused->GetTagName() == "node-curve"))
+                return false;
+        }
+        switch (scancode) {
+        case SDL_SCANCODE_ESCAPE:
+            if (manager_ && manager_->previewState()) {
+                manager_->previewClear();
+                dom_dirty_ = true;
+                return true;
+            }
+            if (manager_ && (manager_->paintModeActive() || manager_->colourPickActive())) {
+                manager_->cancelViewportMode();
+                dom_dirty_ = true;
+                return true;
+            }
+            interaction_.cancel();
+            pointer_down_ = false;
+            selected_nodes_ = interaction_.selectedNodes();
+            updateSelectedClasses();
+            updateNodePositions();
+            geometry_dirty_ = true;
+            return true;
+        case SDL_SCANCODE_DELETE:
+            removeSelected();
+            return true;
+        case SDL_SCANCODE_C:
+            if (control) {
+                copySelected();
+                return true;
+            }
+            break;
+        case SDL_SCANCODE_X:
+            if (control)
+                cutSelected();
+            else
+                removeSelected();
+            return true;
+        case SDL_SCANCODE_V:
+            if (control) {
+                pasteClipboard();
+                return true;
+            }
+            break;
+        case SDL_SCANCODE_G:
+            if (control) {
+                if (alt)
+                    ungroupSelected();
+                else
+                    makeGroupSelected();
+                return true;
+            }
+            break;
+        case SDL_SCANCODE_J:
+            if (control) {
+                frameSelected();
+                return true;
+            }
+            break;
+        case SDL_SCANCODE_M:
+            toggleMuted();
+            return true;
+        case SDL_SCANCODE_D:
+            if (shift) {
+                duplicateSelected();
+                return true;
+            }
+            break;
+        case SDL_SCANCODE_A:
+            if (shift) {
+                const auto offset = GetAbsoluteOffset(Rml::BoxArea::Content);
+                openAddMenu(offset.x + interaction_.pointer().x, offset.y + interaction_.pointer().y);
+                return true;
+            }
+            break;
+        case SDL_SCANCODE_HOME:
+            frameAll();
+            return true;
+        case SDL_SCANCODE_TAB:
+            if (selected_nodes_.size() == 1 && enterGroup(*selected_nodes_.begin()))
+                return true;
+            return exitGroup();
+        case SDL_SCANCODE_N:
+            setSidebarVisible(!sidebar_visible_);
+            return true;
+        case SDL_SCANCODE_P:
+            if (manager_ && selected_nodes_.size() == 1) {
+                const auto& state = manager_->previewState();
+                if (state && state->target.to_string() == host_uuid_ &&
+                    state->modifier_uuid == active_modifier_uuid_ && state->node == previewPath(*selected_nodes_.begin()))
+                    manager_->previewClear();
+                else if (const auto host = activeHost())
+                    (void)manager_->previewSet(*host, active_modifier_uuid_ + "/" + previewPath(*selected_nodes_.begin()));
+                dom_dirty_ = true;
+                return true;
+            }
+            break;
+        default: break;
+        }
+        (void)control;
+        (void)alt;
+        return false;
+    }
+
+    void NodeCanvasElement::ProcessEvent(Rml::Event& event) {
+        const auto& event_type = event.GetType();
+        if (editableMode()) {
+            auto* target = event.GetTargetElement();
+            const bool shortcut = event_type == "mousedown" && event.GetParameter("button", 0) == 0 &&
+                                  event.GetParameter<int>("ctrl_key", 0) != 0;
+            const bool button = event_type == "click" && target->GetAttribute<Rml::String>("data-action", "") == "node-keyframe";
+            if ((shortcut || button) && keyframeInput(target)) {
+                event.StopImmediatePropagation();
+                return;
+            }
+            if (shortcut && event.GetParameter<int>("shift_key", 0) != 0 && manager_) {
+                for (auto* element = target; element && element != this; element = element->GetParentNode()) {
+                    const std::string node = element->GetAttribute<Rml::String>("data-node", "");
+                    if (node.empty())
+                        continue;
+                    const auto host = activeHost();
+                    const auto& state = manager_->previewState();
+                    if (state && host && state->target == *host && state->modifier_uuid == active_modifier_uuid_ &&
+                        state->node == previewPath(node))
+                        manager_->previewClear();
+                    else if (host)
+                        (void)manager_->previewSet(*host, active_modifier_uuid_ + "/" + previewPath(node));
+                    dom_dirty_ = true;
+                    event.StopImmediatePropagation();
+                    return;
+                }
+            }
+        }
+        if (event_type == "curvebegin" || event_type == "curvechange" || event_type == "curveend" || event_type == "curvecancel" || event_type == "curvefocus") {
+            auto* target = event.GetTargetElement();
+            auto* graph = activeTree();
+            if (!editableMode() || !graph)
+                return;
+            if (event_type == "curvebegin") {
+                active_field_ = target;
+                field_before_ = graph->to_json();
+            }
+            if (event_type == "curvechange" || event_type == "curvefocus") {
+                if (auto* node = graph->find_node(target->GetAttribute<Rml::String>("data-node", ""))) {
+                    const auto property = event.GetParameter<Rml::String>("property", "");
+                    const auto value = nlohmann::json::parse(event.GetParameter<Rml::String>("value", "[]"), nullptr, false);
+                    node->ui["curve_selected"] = event.GetParameter<int>("selected", -1);
+                    node->ui["curve_channel"] = property;
+                    if (event_type == "curvechange" && !value.is_discarded()) {
+                        node->properties[property] = value;
+                        manager_->markDirty();
+                    }
+                }
+            }
+            if (event_type == "curveend" || event_type == "curvecancel")
+                finishFieldEdit(event_type == "curvecancel");
+            event.StopPropagation();
+            return;
+        }
+        // Colour elements change their value in the target's default action,
+        // before the canvas default action. Capture the undo snapshot first.
+        if (event.GetType() == "mousedown") {
+            auto* target = event.GetTargetElement();
+            if (editableMode() && event.GetParameter("button", 0) == 0 &&
+                (target->GetTagName() == "colour-offset" || target->GetTagName() == "color-picker")) {
+                active_field_ = target;
+                if (const auto* tree = activeTree())
+                    field_before_ = tree->to_json();
+                field_step_direction_ = 0;
+            }
+            return;
+        }
+        if (!editableMode() || processAddMenuEvent(event) || processHelpEvent(event) || processFieldEvent(event))
+            return;
+        // RmlUi mousemove has no bubbling default action. Live gestures must
+        // consume motion as listeners, not wait for ProcessDefaultAction/up.
+        if ((event.GetType() == "mousemove" || event.GetType() == "drag") && pointer_down_) {
+            const auto delta = localPointer(event) - context_press_;
+            if (std::abs(delta.x) + std::abs(delta.y) >= 4.0f)
+                pending_context_menu_ = false;
+            (void)interaction_.pointerMove(localPointer(event));
+            selected_nodes_ = interaction_.selectedNodes();
+            updateSelectedClasses();
+            updateNodePositions();
+            geometry_dirty_ = true;
+            event.StopPropagation();
+            return;
+        }
+        if (event.GetType() == "change" || event.GetType() == "blur") {
+            processControlEvent(event);
+            return;
+        }
+        if (event.GetType() != "mousescroll" && event.GetType() != "pinch")
+            return;
+        const auto pointer = localPointer(event);
+        if (effectiveSidebarVisible() && pointer.x >= GetBox().GetSize(Rml::BoxArea::Content).x - kSidebarWidth * dp_ratio_)
+            return;
+        auto* window = services().windowOrNull();
+        auto* controller = window ? window->inputController() : nullptr;
+        const auto preferences = controller ? controller->trackpadPreferences() : TrackpadPreferenceState{};
+        const auto previous_zoom = interaction_.zoom();
+        if (event.GetType() == "pinch")
+            interaction_.pinch(localPointer(event), event.GetParameter("scale", 1.0f), preferences.zoom_speed);
+        else
+            interaction_.scroll(localPointer(event), {-event.GetParameter("wheel_delta_x", 0.0f), -event.GetParameter("wheel_delta_y", 0.0f)},
+                                preferences, controller ? controller->trackpadTouchCount() : 0,
+                                event.GetParameter<int>("ctrl_key", 0) != 0 || event.GetParameter<int>("meta_key", 0) != 0,
+                                controller ? controller->wheelZoomSpeed() : 11.0f);
+        if (interaction_.zoom() != previous_zoom)
+            rebuildModel();
+        updateNodePositions();
+        geometry_dirty_ = true;
+        event.StopPropagation();
+    }
+
+    void NodeCanvasElement::processControlEvent(Rml::Event& event) {
+        const std::string type = event.GetType();
+        Rml::Element* target = event.GetTargetElement();
+        if (!target)
+            return;
+        const std::string action = target->GetAttribute<Rml::String>("data-action", "");
+        if ((type == "change" || type == "blur") && target) {
+            if (action == "group-graph" && type == "change" && selected_nodes_.size() == 1) {
+                const auto* select = dynamic_cast<Rml::ElementFormControlSelect*>(target);
+                if (auto* graph = activeTree(); select) {
+                    const auto result = manager_->setGroupGraph(graph->uuid, *selected_nodes_.begin(), select->GetValue());
+                    if (!result)
+                        file_error_ = result.error().message;
+                    dom_dirty_ = true;
+                }
+                event.StopPropagation();
+                return;
+            }
+            if (action == "modifier-input" && (type == "change" || type == "blur")) {
+                if (type == "change" && target->GetAttribute<Rml::String>("type", "") == "text" &&
+                    !event.GetParameter("linebreak", false))
+                    return;
+                const auto host = activeHost();
+                auto* stack = host ? manager_->stack(*host) : nullptr;
+                auto* input = dynamic_cast<Rml::ElementFormControlInput*>(target);
+                if (stack && input) {
+                    const auto modifier = std::ranges::find(stack->modifiers, active_modifier_uuid_, &Modifier::uuid);
+                    const auto* graph = modifier != stack->modifiers.end() ? manager_->tree(modifier->tree_uuid) : nullptr;
+                    if (graph) {
+                        const auto identifier = target->GetAttribute<Rml::String>("data-input", "");
+                        const auto socket = std::ranges::find(graph->group_interface.inputs, identifier, &lfs::nodes::InterfaceSocket::identifier);
+                        if (socket != graph->group_interface.inputs.end()) {
+                            auto encoded = nlohmann::json(socket->default_value);
+                            auto payload = socket->type == lfs::nodes::STRING_SOCKET ? nlohmann::json(input->GetValue())
+                                           : socket->type == lfs::nodes::BOOL_SOCKET ? nlohmann::json(target->HasAttribute("checked"))
+                                                                                     : nlohmann::json::parse(input->GetValue(), nullptr, false);
+                            const auto original = encoded.value("value", nlohmann::json{});
+                            const bool valid = !payload.is_discarded() &&
+                                               ((original.is_number() && payload.is_number()) ||
+                                                (original.is_boolean() && payload.is_boolean()) ||
+                                                (original.is_string() && payload.is_string()) ||
+                                                (original.is_array() && payload.is_array() && payload.size() == original.size() &&
+                                                 std::ranges::all_of(payload, [](const auto& component) { return component.is_number(); })));
+                            if (valid) {
+                                if (payload.is_number()) {
+                                    double number = payload.get<double>();
+                                    if (socket->min)
+                                        number = std::max(number, *socket->min);
+                                    if (socket->max)
+                                        number = std::min(number, *socket->max);
+                                    payload = number;
+                                }
+                                encoded["value"] = payload;
+                                const auto value = encoded.get<lfs::nodes::Value>();
+                                const auto current = modifier->input_overrides.find(identifier);
+                                if (current == modifier->input_overrides.end() || nlohmann::json(current->second) != encoded) {
+                                    const nlohmann::json before = stack->modifiers;
+                                    modifier->input_overrides[identifier] = value;
+                                    manager_->recordStackEdit(*host, before, modifier->uuid + ":input:" + identifier);
+                                }
+                                dom_dirty_ = true;
+                            }
+                        }
+                    }
+                }
+                event.StopPropagation();
+                return;
+            }
+            if (action == "interface-label" && type == "blur") {
+                auto* interface_tree = activeTree();
+                if (const auto* selected = interface_tree && selected_nodes_.size() == 1 ? interface_tree->find_node(*selected_nodes_.begin()) : nullptr;
+                    selected && selected->type_id == "lfs.group")
+                    interface_tree = manager_->tree(selected->properties.value("tree", std::string{}));
+                const auto* input = dynamic_cast<Rml::ElementFormControlInput*>(target);
+                if (interface_tree && input) {
+                    const auto result = manager_->interfaceUpdate(
+                        interface_tree->uuid, target->GetAttribute<Rml::String>("data-side", "") == "output",
+                        target->GetAttribute<Rml::String>("data-socket", ""), {{"label", input->GetValue()}});
+                    if (!result)
+                        file_error_ = result.error().message;
+                    dom_dirty_ = true;
+                }
+                event.StopPropagation();
+                return;
+            }
+            if ((action == "interface-default" || action == "interface-constraint") &&
+                (type == "change" || type == "blur")) {
+                auto* interface_tree = activeTree();
+                if (const auto* selected = interface_tree && selected_nodes_.size() == 1
+                                               ? interface_tree->find_node(*selected_nodes_.begin())
+                                               : nullptr;
+                    selected && selected->type_id == "lfs.group")
+                    interface_tree = manager_->tree(selected->properties.value("tree", std::string{}));
+                const bool output = target->GetAttribute<Rml::String>("data-side", "") == "output";
+                const auto identifier = target->GetAttribute<Rml::String>("data-socket", "");
+                auto* input = dynamic_cast<Rml::ElementFormControlInput*>(target);
+                if (interface_tree && input) {
+                    const auto& sockets = output ? interface_tree->group_interface.outputs
+                                                 : interface_tree->group_interface.inputs;
+                    const auto socket = std::ranges::find(sockets, identifier,
+                                                          &lfs::nodes::InterfaceSocket::identifier);
+                    if (socket != sockets.end()) {
+                        nlohmann::json changes = nlohmann::json::object();
+                        const auto text = input->GetValue();
+                        bool valid = true;
+                        if (action == "interface-constraint") {
+                            const auto field = target->GetAttribute<Rml::String>("data-field", "");
+                            if (text.empty())
+                                changes[field] = nullptr;
+                            else {
+                                char* end = nullptr;
+                                const auto value = std::strtod(text.c_str(), &end);
+                                valid = end && *end == '\0';
+                                if (valid)
+                                    changes[field] = value;
+                            }
+                        } else if (socket->type == lfs::nodes::FLOAT_SOCKET) {
+                            char* end = nullptr;
+                            const auto value = std::strtof(text.c_str(), &end);
+                            valid = end && *end == '\0';
+                            if (valid)
+                                changes["default"] = lfs::nodes::Value(value);
+                        } else if (socket->type == lfs::nodes::INT_SOCKET) {
+                            char* end = nullptr;
+                            const auto value = std::strtoll(text.c_str(), &end, 10);
+                            valid = end && *end == '\0';
+                            if (valid)
+                                changes["default"] = lfs::nodes::Value(static_cast<std::int64_t>(value));
+                        } else if (socket->type == lfs::nodes::BOOL_SOCKET) {
+                            changes["default"] = lfs::nodes::Value(target->HasAttribute("checked"));
+                        } else if (socket->type == lfs::nodes::STRING_SOCKET) {
+                            changes["default"] = lfs::nodes::Value(std::string(text));
+                        } else if (socket->type == lfs::nodes::VECTOR_SOCKET) {
+                            glm::vec3 value{};
+                            valid = std::sscanf(text.c_str(), " %f , %f , %f ", &value.x, &value.y, &value.z) == 3;
+                            if (valid)
+                                changes["default"] = lfs::nodes::Value(value);
+                        } else if (socket->type == lfs::nodes::COLOUR_SOCKET) {
+                            glm::vec4 value{};
+                            valid = std::sscanf(text.c_str(), " %f , %f , %f , %f ",
+                                                &value.x, &value.y, &value.z, &value.w) == 4;
+                            if (valid)
+                                changes["default"] = lfs::nodes::Value(value);
+                        }
+                        if (valid) {
+                            const auto result = manager_->interfaceUpdate(interface_tree->uuid, output,
+                                                                          identifier, changes);
+                            if (!result)
+                                file_error_ = result.error().message;
+                        } else {
+                            file_error_ = "Invalid interface value";
+                        }
+                        dom_dirty_ = true;
+                    }
+                }
+                event.StopPropagation();
+                return;
+            }
+            if (action == "node-on" && type == "change") {
+                auto* tree = activeTree();
+                auto* node = tree ? tree->find_node(target->GetAttribute<Rml::String>("data-node", "")) : nullptr;
+                if (node) {
+                    const auto before = tree->to_json();
+                    node->muted = !target->HasAttribute("checked");
+                    manager_->recordTreeEdit(tree->uuid, before);
+                }
+                event.StopPropagation();
+                return;
+            }
+            const auto* text_input = dynamic_cast<Rml::ElementFormControlInput*>(target);
+            const bool text_field = text_input && target->GetAttribute<Rml::String>("type", "") == "text";
+            if (text_field && type == "change" && !event.GetParameter("linebreak", false))
+                return;
+            if (type == "blur" && !text_field)
+                return;
+            if (action == "modifier-enabled") {
+                const auto host = activeHost();
+                auto* stack = host ? manager_->stack(*host) : nullptr;
+                const std::string uuid = target->GetAttribute<Rml::String>("data-modifier", "");
+                const auto found = stack ? std::ranges::find(stack->modifiers, uuid, &Modifier::uuid)
+                                         : std::vector<Modifier>::iterator{};
+                if (host && stack && found != stack->modifiers.end()) {
+                    const nlohmann::json before = stack->modifiers;
+                    const bool checked = target->HasAttribute("checked");
+                    found->enabled = checked;
+                    manager_->recordStackEdit(*host, before);
+                    dom_dirty_ = true;
+                }
+                event.StopPropagation();
+                return;
+            }
+            if (action == "modifier-rename") {
+                const auto host = activeHost();
+                auto* stack = host ? manager_->stack(*host) : nullptr;
+                const std::string uuid = target->GetAttribute<Rml::String>("data-modifier", "");
+                const auto found = stack ? std::ranges::find(stack->modifiers, uuid, &Modifier::uuid)
+                                         : std::vector<Modifier>::iterator{};
+                if (host && stack && found != stack->modifiers.end()) {
+                    if (const auto* input = dynamic_cast<Rml::ElementFormControlInput*>(target))
+                        (void)manager_->renameModifier(*host, found->name, input->GetValue());
+                    dom_dirty_ = true;
+                }
+                event.StopPropagation();
+                return;
+            }
+            commitControl(target, &event, active_field_ != target);
+            event.StopPropagation();
+            return;
+        }
+    }
+
+    bool NodeCanvasElement::isPanPress(const Rml::Event& event) const {
+        auto* window = services().windowOrNull();
+        auto* controller = window ? window->inputController() : nullptr;
+        if (!controller)
+            return false;
+        const int button = event.GetParameter("button", 0);
+        const auto mouse_button = button == 1 ? input::MouseButton::RIGHT : button == 2 ? input::MouseButton::MIDDLE
+                                                                                        : input::MouseButton::LEFT;
+        int modifiers = input::MODIFIER_NONE;
+        if (event.GetParameter<int>("shift_key", 0))
+            modifiers |= input::MODIFIER_SHIFT;
+        if (event.GetParameter<int>("ctrl_key", 0))
+            modifiers |= input::MODIFIER_CTRL;
+        if (event.GetParameter<int>("meta_key", 0))
+            modifiers |= input::MODIFIER_SUPER;
+        if (event.GetParameter<int>("alt_key", 0))
+            modifiers |= input::MODIFIER_ALT;
+        return controller->isPanDrag(mouse_button, modifiers);
+    }
+
+    void NodeCanvasElement::openCanvasMenu(const CanvasPoint pointer) {
+        const auto offset = GetAbsoluteOffset(Rml::BoxArea::Content);
+        const auto graph_pointer = interaction_.screenToGraph(pointer);
+        const bool over_node = std::ranges::any_of(interaction_.nodes(), [&](const auto& node) { return node.bounds.contains(graph_pointer); });
+        if (over_node && context_menu_) {
+            context_menu_->request({{.label = LOC("node_editor.arrange"), .action = "arrange", .shortcut = LOC("node_editor.arrange_shortcut")},
+                                    {.label = LOC("node_editor.add"), .action = "add"}},
+                                   panel_screen_offset_.x + pointer.x, panel_screen_offset_.y + pointer.y,
+                                   [this, pointer, offset](const std::string_view action) {
+                                       if (action == "arrange")
+                                           arrange();
+                                       else if (action == "add")
+                                           openAddMenu(offset.x + pointer.x, offset.y + pointer.y);
+                                   });
+        } else {
+            openAddMenu(offset.x + pointer.x, offset.y + pointer.y);
+        }
+    }
+
+    void NodeCanvasElement::ProcessDefaultAction(Rml::Event& event) {
+        Element::ProcessDefaultAction(event);
+        if (processAddMenuEvent(event) || processFieldEvent(event))
+            return;
+        const std::string type = event.GetType();
+        Rml::Element* target = event.GetTargetElement();
+        std::string action;
+        for (auto* element = target; element && element != this; element = element->GetParentNode()) {
+            action = element->GetAttribute<Rml::String>("data-action", "");
+            if (!action.empty()) {
+                target = element;
+                break;
+            }
+        }
+        if (type == "click" && target) {
+            if (action == "paint-toggle") {
+                togglePaintMode();
+                event.StopPropagation();
+                return;
+            }
+            if (action == "browse-templates") {
+                openTemplateBrowser();
+                event.StopPropagation();
+                return;
+            }
+            if (action == "template-apply") {
+                if (const auto host = activeHost()) {
+                    const auto result = manager_->applyTemplate(
+                        *host, target->GetAttribute<Rml::String>("data-template", ""));
+                    if (result) {
+                        active_modifier_uuid_ = (*result)->uuid;
+                        active_tree_uuid_ = (*result)->tree_uuid;
+                    } else {
+                        file_error_ = result.error().message;
+                    }
+                }
+                dom_dirty_ = true;
+                event.StopPropagation();
+                return;
+            }
+            if (action == "node-preview") {
+                const auto host = activeHost();
+                const std::string node = target->GetAttribute<Rml::String>("data-node", "");
+                const auto& state = manager_->previewState();
+                if (state && host && state->target == *host && state->modifier_uuid == active_modifier_uuid_ &&
+                    state->node == previewPath(node))
+                    manager_->previewClear();
+                else if (host)
+                    (void)manager_->previewSet(*host, active_modifier_uuid_ + "/" + previewPath(node));
+                dom_dirty_ = true;
+                event.StopPropagation();
+                return;
+            }
+            if (action == "capture-view") {
+                if (auto* graph = activeTree()) {
+                    const auto result = manager_->captureViewportCamera(graph->uuid, target->GetAttribute<Rml::String>("data-node", ""));
+                    if (!result)
+                        target->SetAttribute("title", result.error().message);
+                    dom_dirty_ = true;
+                }
+                event.StopPropagation();
+                return;
+            }
+            if (action == "colour-pick") {
+                const std::string node = target->GetAttribute<Rml::String>("data-node", "");
+                const std::string input = target->GetAttribute<Rml::String>("data-input", "");
+                if (!node.empty() && !selected_nodes_.contains(node)) {
+                    selected_nodes_.clear();
+                    selected_nodes_.insert(node);
+                    interaction_.setSelectedNodes(selected_nodes_);
+                    updateSelectedClasses();
+                    updateSidebar();
+                    updateSelectionPreview();
+                    geometry_dirty_ = true;
+                }
+                (void)manager_->beginColourPick(node, input,
+                                                event.GetParameter<int>("shift_key", 0) != 0);
+                dom_dirty_ = true;
+                event.StopPropagation();
+                return;
+            }
+            if (action == "node-settings") {
+                if (auto* tree = activeTree()) {
+                    if (auto* node = tree->find_node(target->GetAttribute<Rml::String>("data-node", ""))) {
+                        const auto before = tree->to_json();
+                        node->ui["settings_expanded"] = !node_widgets::settingsExpanded(*node);
+                        manager_->recordTreeEdit(tree->uuid, before);
+                    }
+                }
+                event.StopPropagation();
+                return;
+            }
+            if (action == "group-enter") {
+                (void)enterGroup(target->GetAttribute<Rml::String>("data-node", ""));
+                event.StopPropagation();
+                return;
+            }
+            if (action == "breadcrumb-root") {
+                while (exitGroup()) {}
+                event.StopPropagation();
+                return;
+            }
+            if (action == "breadcrumb") {
+                const auto index = target->GetAttribute<int>("data-index", -1);
+                while (index >= 0 && group_path_.size() > static_cast<std::size_t>(index + 1))
+                    (void)exitGroup();
+                event.StopPropagation();
+                return;
+            }
+            if (action == "group-single-user") {
+                if (auto* graph = activeTree()) {
+                    const auto result = manager_->makeGroupSingleUser(
+                        graph->uuid, target->GetAttribute<Rml::String>("data-node", ""));
+                    if (!result)
+                        file_error_ = result.error().message;
+                    dom_dirty_ = true;
+                }
+                event.StopPropagation();
+                return;
+            }
+            if (action == "interface-add" || action == "interface-remove" ||
+                action == "interface-up" || action == "interface-down") {
+                auto* interface_tree = activeTree();
+                if (const auto* selected = interface_tree && selected_nodes_.size() == 1 ? interface_tree->find_node(*selected_nodes_.begin()) : nullptr;
+                    selected && selected->type_id == "lfs.group")
+                    interface_tree = manager_->tree(selected->properties.value("tree", std::string{}));
+                const bool output = target->GetAttribute<Rml::String>("data-side", "") == "output";
+                if (interface_tree) {
+                    if (action == "interface-add") {
+                        const auto* select = target->GetParentNode()
+                                                 ? dynamic_cast<Rml::ElementFormControlSelect*>(target->GetParentNode()->QuerySelector("select"))
+                                                 : nullptr;
+                        const auto result = manager_->interfaceAdd(interface_tree->uuid, output,
+                                                                   select ? select->GetValue() : "lfs.float",
+                                                                   output ? "Output" : "Input");
+                        if (!result)
+                            file_error_ = result.error().message;
+                    } else {
+                        const std::string identifier = target->GetAttribute<Rml::String>("data-socket", "");
+                        if (action == "interface-remove") {
+                            const auto result = manager_->interfaceRemove(interface_tree->uuid, output, identifier);
+                            if (!result)
+                                file_error_ = result.error().message;
+                        } else {
+                            const auto& sockets = output ? interface_tree->group_interface.outputs : interface_tree->group_interface.inputs;
+                            const auto found = std::ranges::find(sockets, identifier, &lfs::nodes::InterfaceSocket::identifier);
+                            if (found != sockets.end()) {
+                                const auto current = static_cast<std::size_t>(std::distance(sockets.begin(), found));
+                                const auto next = action == "interface-up" ? current - std::min<std::size_t>(1, current)
+                                                                           : std::min(current + 1, sockets.size() - 1);
+                                const auto result = manager_->interfaceMove(interface_tree->uuid, output, identifier, next);
+                                if (!result)
+                                    file_error_ = result.error().message;
+                            }
+                        }
+                    }
+                    dom_dirty_ = true;
+                }
+                event.StopPropagation();
+                return;
+            }
+            if (action == "add-modifier") {
+                openModifierLibrary(event.GetParameter("mouse_x", 0.0f), event.GetParameter("mouse_y", 0.0f));
+                event.StopPropagation();
+                return;
+            }
+            if (action == "modifier") {
+                const std::string uuid = target->GetAttribute<Rml::String>("data-modifier", "");
+                if (const auto host = activeHost()) {
+                    if (const auto* stack = manager_->stack(*host)) {
+                        const auto found = std::ranges::find(stack->modifiers, uuid, &Modifier::uuid);
+                        if (found != stack->modifiers.end()) {
+                            active_modifier_uuid_ = found->uuid;
+                            active_tree_uuid_ = found->tree_uuid;
+                            dom_dirty_ = true;
+                        }
+                    }
+                }
+                event.StopPropagation();
+                return;
+            }
+            if (action == "modifier-menu") {
+                openModifierMenu(target->GetAttribute<Rml::String>("data-modifier", ""),
+                                 event.GetParameter("mouse_x", 0.0f), event.GetParameter("mouse_y", 0.0f));
+                event.StopPropagation();
+                return;
+            }
+            if (action == "modifier-eye") {
+                const auto host = activeHost();
+                auto* stack = host ? manager_->stack(*host) : nullptr;
+                if (stack) {
+                    const auto found = std::ranges::find(stack->modifiers,
+                                                         target->GetAttribute<Rml::String>("data-modifier", ""), &Modifier::uuid);
+                    if (found != stack->modifiers.end()) {
+                        const nlohmann::json before = stack->modifiers;
+                        found->show_viewport = !found->show_viewport;
+                        manager_->recordStackEdit(*host, before);
+                        dom_dirty_ = true;
+                    }
+                }
+                event.StopPropagation();
+                return;
+            }
+            if (action == "capture-selection") {
+                const auto host = activeHost();
+                auto* stack = host ? manager_->stack(*host) : nullptr;
+                const auto modifier = stack ? std::ranges::find(stack->modifiers, active_modifier_uuid_,
+                                                                &Modifier::uuid)
+                                            : std::vector<Modifier>::iterator{};
+                if (host && stack && modifier != stack->modifiers.end() &&
+                    selected_nodes_.size() == 1)
+                    (void)manager_->captureSelection(*host, modifier->name,
+                                                     *selected_nodes_.begin());
+                dom_dirty_ = true;
+                event.StopPropagation();
+                return;
+            }
+        }
+        if (type == "dblclick" && target) {
+            for (auto* element = target; element && element != this; element = element->GetParentNode()) {
+                const auto name = element->GetAttribute<Rml::String>("data-node", "");
+                if (!name.empty() && enterGroup(name)) {
+                    event.StopPropagation();
+                    return;
+                }
+            }
+            if (const auto link = interaction_.highlightedLink()) {
+                insertReroute(*link, interaction_.screenToGraph(localPointer(event)));
+                event.StopPropagation();
+                return;
+            }
+        }
+        if (!editableMode())
+            return;
+        if (type == "mousedown") {
+            if (action == "node-settings") {
+                event.StopPropagation();
+                return;
+            }
+            focusCanvas();
+            const int button = event.GetParameter("button", 0);
+            const auto pointer = localPointer(event);
+            const auto size = GetBox().GetSize(Rml::BoxArea::Content);
+            if (effectiveSidebarVisible() && pointer.x >= size.x - kSidebarWidth * dp_ratio_)
+                return;
+            CanvasPointerButton canvas_button = CanvasPointerButton::Left;
+            if (button == 1)
+                canvas_button = CanvasPointerButton::Right;
+            else if (button == 2)
+                canvas_button = CanvasPointerButton::Middle;
+            const CanvasModifiers modifiers{
+                .shift = event.GetParameter<int>("shift_key", 0) != 0,
+                .control = event.GetParameter<int>("ctrl_key", 0) != 0 || event.GetParameter<int>("meta_key", 0) != 0,
+                .alt = event.GetParameter<int>("alt_key", 0) != 0,
+            };
+            const bool pan_drag = isPanPress(event);
+            pending_context_menu_ = button == 1 && pan_drag && !modifiers.control;
+            context_press_ = pointer;
+            executeCommands(interaction_.pointerDown(pointer, canvas_button, modifiers, pan_drag));
+            pointer_down_ = interaction_.active();
+            if (button == 1 && !modifiers.control && !pan_drag)
+                openCanvasMenu(pointer);
+            event.StopPropagation();
+        } else if ((type == "mouseup" || type == "dragend") && pointer_down_) {
+            executeCommands(interaction_.pointerUp(localPointer(event)));
+            selected_nodes_ = interaction_.selectedNodes();
+            pointer_down_ = false;
+            updateNodePositions();
+            geometry_dirty_ = true;
+            if (pending_context_menu_) {
+                pending_context_menu_ = false;
+                openCanvasMenu(localPointer(event));
+            }
+            event.StopPropagation();
+        } else if (type == "keydown") {
+            const auto key = static_cast<Rml::Input::KeyIdentifier>(event.GetParameter("key_identifier", 0));
+            int scancode = SDL_SCANCODE_UNKNOWN;
+            if (key == Rml::Input::KI_ESCAPE)
+                scancode = SDL_SCANCODE_ESCAPE;
+            else if (key == Rml::Input::KI_DELETE)
+                scancode = SDL_SCANCODE_DELETE;
+            else if (key == Rml::Input::KI_X)
+                scancode = SDL_SCANCODE_X;
+            else if (key == Rml::Input::KI_C)
+                scancode = SDL_SCANCODE_C;
+            else if (key == Rml::Input::KI_V)
+                scancode = SDL_SCANCODE_V;
+            else if (key == Rml::Input::KI_G)
+                scancode = SDL_SCANCODE_G;
+            else if (key == Rml::Input::KI_J)
+                scancode = SDL_SCANCODE_J;
+            else if (key == Rml::Input::KI_M)
+                scancode = SDL_SCANCODE_M;
+            else if (key == Rml::Input::KI_D)
+                scancode = SDL_SCANCODE_D;
+            else if (key == Rml::Input::KI_A)
+                scancode = SDL_SCANCODE_A;
+            else if (key == Rml::Input::KI_HOME)
+                scancode = SDL_SCANCODE_HOME;
+            else if (key == Rml::Input::KI_N)
+                scancode = SDL_SCANCODE_N;
+            else if (key == Rml::Input::KI_L)
+                scancode = SDL_SCANCODE_L;
+            else if (key == Rml::Input::KI_I)
+                scancode = SDL_SCANCODE_I;
+            else if (key == Rml::Input::KI_P)
+                scancode = SDL_SCANCODE_P;
+            else if (key == Rml::Input::KI_TAB)
+                scancode = SDL_SCANCODE_TAB;
+            if (handleKey(scancode, event.GetParameter<int>("shift_key", 0) != 0,
+                          event.GetParameter<int>("ctrl_key", 0) != 0 ||
+                              event.GetParameter<int>("meta_key", 0) != 0,
+                          event.GetParameter<int>("alt_key", 0) != 0))
+                event.StopPropagation();
+        }
+    }
+
+} // namespace lfs::vis::gui

@@ -660,13 +660,7 @@ namespace lfs::core::internal {
         const ScalarOperand maximum, const size_t count,
         const ExecContext context) {
         LFS_FACADE_TRACE(clamp_scalar);
-        LFS_ASSERT_MSG(data.dtype == DataType::Float32 &&
-                           minimum.kind == ScalarKind::Float &&
-                           maximum.kind == ScalarKind::Float,
-                       "floating clamp adapter requires Float32 operands");
-        tensor_ops::launch_clamp_scalar(
-            cuda_pointer<float>(data), minimum.value.float_value,
-            maximum.value.float_value, count, context.cuda_stream);
+        clamp_fused(data, data, minimum, maximum, count, context);
     }
 
     void CudaBackendOps::clamp_fused(
@@ -679,6 +673,13 @@ namespace lfs::core::internal {
                            "fused integer clamp requires Int32 operands");
             tensor_ops::launch_clamp_fused(cuda_const_pointer<int>(input), cuda_pointer<int>(output),
                                            minimum.value.int32_value, maximum.value.int32_value, count, context.cuda_stream);
+            return;
+        }
+        if (input.dtype == DataType::Float16) {
+            LFS_ASSERT_MSG(output.dtype == DataType::Float16 && minimum.kind == ScalarKind::Float && maximum.kind == ScalarKind::Float,
+                           "half clamp requires Float16 storage and floating bounds");
+            tensor_ops::launch_clamp_fused_half(cuda_const_pointer<__half>(input), cuda_pointer<__half>(output),
+                                                minimum.value.float_value, maximum.value.float_value, count, context.cuda_stream);
             return;
         }
         LFS_ASSERT_MSG(input.dtype == DataType::Float32 &&

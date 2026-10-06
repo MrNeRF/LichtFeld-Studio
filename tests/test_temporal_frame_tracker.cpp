@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "visualizer/rendering/scene_temporal_frame_setup.hpp"
 #include "visualizer/rendering/temporal_frame_tracker.hpp"
 
 #include <gtest/gtest.h>
@@ -152,6 +153,47 @@ namespace lfs::vis {
         EXPECT_TRUE(convergence.enabled());
         EXPECT_EQ(convergence.sequence(), sequence);
         EXPECT_EQ(convergence.jitter(), temporalJitterPixels(sequence));
+    }
+
+    TEST(TemporalFrameTracker, BackendSpecificPhaseControlsSettleAndWrapsJitter) {
+        TemporalConvergenceController convergence;
+        constexpr std::uint32_t phase_count = 18;
+        convergence.prepare(true, true, true, phase_count, phase_count);
+
+        EXPECT_EQ(convergence.remaining(), phase_count);
+        for (std::uint32_t sample = 0; sample < phase_count; ++sample) {
+            EXPECT_EQ(convergence.jitter(), temporalJitterPixels(sample));
+            static_cast<void>(convergence.completeSuccessfulFrame());
+            convergence.prepare(true, false, true, phase_count, phase_count);
+        }
+        EXPECT_EQ(convergence.remaining(), 0u);
+        EXPECT_EQ(convergence.jitter(), temporalJitterPixels(0));
+
+        convergence.prepare(true, false, true, 23, 23);
+        EXPECT_EQ(convergence.remaining(), 23u);
+        EXPECT_EQ(convergence.jitter(), temporalJitterPixels(18));
+    }
+
+    TEST(TemporalFrameTracker, CameraFramesDeferConvergenceButTemporalFollowUpsDoNotRestartIt) {
+        TemporalConvergenceController convergence;
+        const auto camera = prepareSceneTemporalFrame(
+            convergence,
+            {.backend_requested = true,
+             .runtime_ready = true,
+             .frame_dirty = DirtyFlag::CAMERA});
+        EXPECT_TRUE(camera.eligible);
+        EXPECT_TRUE(camera.defer_convergence_until_idle);
+        EXPECT_EQ(convergence.remaining(), TemporalConvergenceController::SAMPLE_COUNT);
+
+        ASSERT_TRUE(convergence.completeSuccessfulFrame());
+        const auto remaining = convergence.remaining();
+        const auto follow_up = prepareSceneTemporalFrame(
+            convergence,
+            {.backend_requested = true,
+             .runtime_ready = true,
+             .frame_dirty = DirtyFlag::TEMPORAL});
+        EXPECT_FALSE(follow_up.defer_convergence_until_idle);
+        EXPECT_EQ(convergence.remaining(), remaining);
     }
 
     TEST(TemporalFrameTracker, JitterOffsetsOnlyTheSuppliedSceneProjection) {
@@ -356,5 +398,46 @@ namespace lfs::vis {
         EXPECT_TRUE(hasTemporalResetReason(
             tracker.prepare(TemporalViewId::Main, input).reset_reasons,
             TemporalResetReason::InvalidInput));
+    }
+} // namespace lfs::vis
+
+namespace lfs::vis {
+    TEST(TemporalProjectionCalibration, CroppedPerspectiveMatchesRasterPixelCenters) {
+        TemporalFrameInput input;
+        input.view.size = {400, 600};
+        input.view.subregion_full_size = {1000, 600};
+        input.view.subregion_origin = {350, 0};
+        input.view.intrinsics_override = rendering::CameraIntrinsics{700, 680, 510, 290};
+        input.output_extent = {800, 1200};
+        TemporalFrameTracker tracker;
+        auto prepared = tracker.prepare(TemporalViewId::SplitRight, input);
+        auto pair = makeTemporalMotionViewProjectionPair(prepared);
+        ASSERT_TRUE(pair);
+        const auto clip = pair->current * glm::vec4(.5f, .2f, -4.f, 1.f);
+        const glm::vec2 pixel{(clip.x / clip.w * .5f + .5f) * 400, (.5f - clip.y / clip.w * .5f) * 600};
+        const auto camera = input.view.getViewMatrix() * glm::vec4(.5f, .2f, -4.f, 1.f);
+        const glm::vec2 expected{700 * camera.x / -camera.z + 510 - 350, 290 - 680 * camera.y / -camera.z};
+        EXPECT_NEAR(pixel.x, expected.x, 1e-4f);
+        EXPECT_NEAR(pixel.y, expected.y, 1e-4f);
+        tracker.commit(TemporalViewId::SplitRight, input);
+        input.view.subregion_origin.x++;
+        EXPECT_TRUE(hasTemporalResetReason(tracker.prepare(TemporalViewId::SplitRight, input).reset_reasons,
+                                           TemporalResetReason::Projection));
+    }
+    TEST(TemporalProjectionCalibration, CroppedOrthographicMatchesRasterPixelCenters) {
+        TemporalFrameInput input;
+        input.view.size = {400, 600};
+        input.view.subregion_full_size = {1000, 600};
+        input.view.subregion_origin = {350, 0};
+        input.view.orthographic = true;
+        input.view.ortho_scale = 100;
+        input.output_extent = {800, 1200};
+        TemporalFrameTracker tracker;
+        auto pair = makeTemporalMotionViewProjectionPair(tracker.prepare(TemporalViewId::SplitLeft, input));
+        ASSERT_TRUE(pair);
+        const auto camera = input.view.getViewMatrix() * glm::vec4(.5f, .2f, -4.f, 1.f);
+        const auto clip = pair->current * glm::vec4(.5f, .2f, -4.f, 1.f);
+        EXPECT_NEAR((clip.x / clip.w * .5f + .5f) * 400, 100 * camera.x + 500 - 350, 1e-4f);
+        EXPECT_NEAR((.5f - clip.y / clip.w * .5f) * 600, 300 - 100 * camera.y, 1e-4f);
     }
 } // namespace lfs::vis

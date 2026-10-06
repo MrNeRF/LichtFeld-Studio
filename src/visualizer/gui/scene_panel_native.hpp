@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/logger.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
@@ -29,10 +30,12 @@ namespace lfs::vis::gui {
     class RmlUIManager;
     class SceneGraphElement;
 
-    class NativeScenePanel : public IPanel {
+    class LFS_VIS_API NativeScenePanel : public IPanel {
     public:
         explicit NativeScenePanel(RmlUIManager* manager);
         ~NativeScenePanel() override;
+        NativeScenePanel(const NativeScenePanel&) = delete;
+        NativeScenePanel& operator=(const NativeScenePanel&) = delete;
 
         void draw(const PanelDrawContext& ctx) override;
         void preload(const PanelDrawContext& ctx) override;
@@ -59,7 +62,6 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool groupSelectedNodesIfFocused();
         [[nodiscard]] bool ungroupSelectedNodeIfFocused();
         [[nodiscard]] bool requestDeleteSelectionIfAvailable();
-        [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
 
     private:
         struct EventListener : Rml::EventListener {
@@ -190,6 +192,7 @@ namespace lfs::vis::gui {
         Rml::Element* logging_empty_el_ = nullptr;
 
         Tab active_tab_ = Tab::Scene;
+        std::optional<core::LogHandlerToken> log_handler_;
         std::optional<SceneTreeSessionChrome> pending_tree_chrome_;
         std::string last_language_;
         uint64_t last_history_generation_ = 0;

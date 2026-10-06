@@ -14,6 +14,7 @@
 #include "scene/scene_manager.hpp"
 #include "screen/screen_service.hpp"
 #include "selection/selection_service.hpp"
+#include "visualizer/nodes/modifier_manager.hpp"
 #include <filesystem>
 
 #include <algorithm>
@@ -231,6 +232,95 @@ TEST_F(SelectionServiceInteractionsTest, SelectionAfterVisibilityChangeUsesRefre
     ASSERT_TRUE(result.success) << result.error;
     EXPECT_EQ(result.affected_count, 1u);
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 0, 1, 0}));
+}
+
+// An attribute-only graph keeps every row where it is, so a picked row reads the stored colour.
+TEST_F(SelectionServiceInteractionsTest, ColourPickMapsEvaluatedElementBackToStoredPayloadWhenRowsFollow) {
+    constexpr float c0 = 0.28209479177387814f;
+    auto& scene = scene_manager_->getScene();
+    auto* const node = scene.getNode("test");
+    ASSERT_NE(node, nullptr);
+    node->model->sh0() = Tensor::from_vector(
+                             {(0.1f - 0.5f) / c0, (0.2f - 0.5f) / c0, (0.3f - 0.5f) / c0,
+                              (0.8f - 0.5f) / c0, (0.6f - 0.5f) / c0, (0.4f - 0.5f) / c0},
+                             {2, 1, 3}, Device::GPU)
+                             .to(DataType::Float32);
+    scene_manager_->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+    auto& manager = scene_manager_->modifierManager();
+    auto& tree = manager.newTree("Exposure");
+    const auto input = tree.input_node().name;
+    const auto output = tree.output_node().name;
+    tree.add_node("lfs.colour_correct", "Correct").input_values["Exposure"] = 1.0f;
+    ASSERT_TRUE(tree.remove_link({input, "Geometry", output, "Geometry"}));
+    ASSERT_TRUE(tree.add_link({input, "Geometry", "Correct", "Geometry"}));
+    ASSERT_TRUE(tree.add_link({"Correct", "Geometry", output, "Geometry"}));
+    manager.addModifier(node->uuid, tree.uuid);
+    const auto evaluation = manager.evaluate(node->uuid);
+    ASSERT_TRUE(evaluation.ok);
+    ASSERT_TRUE(evaluation.rows_follow_source);
+    ASSERT_TRUE(node->evaluated_model);
+    service_->setTestingHoveredGaussianId(1);
+
+    const auto picked = service_->pickAtScreen(50.0f, 50.0f);
+    ASSERT_TRUE(picked.has_value()) << picked.error().message;
+    EXPECT_TRUE(picked->colour_from_stored_payload);
+    ASSERT_EQ(picked->stored_index, std::optional<std::size_t>(1));
+    EXPECT_NEAR(picked->colour.r, 0.8f, 1e-5f);
+    EXPECT_NEAR(picked->colour.g, 0.6f, 1e-5f);
+    EXPECT_NEAR(picked->colour.b, 0.4f, 1e-5f);
+    EXPECT_NEAR(picked->world_position.x, 1.0f, 1e-5f);
+}
+
+// Equal counts prove nothing about row order (a join can swap rows), so without an evaluation
+// that kept the order the pick reports the displayed element.
+TEST_F(SelectionServiceInteractionsTest, ColourPickReadsTheDisplayedElementWhenRowOrderIsUnproven) {
+    constexpr float c0 = 0.28209479177387814f;
+    auto& scene = scene_manager_->getScene();
+    auto* const node = scene.getNode("test");
+    ASSERT_NE(node, nullptr);
+    auto evaluated = make_test_splat({10.0f, 0.0f, 0.0f, 20.0f, 0.0f, 0.0f});
+    evaluated->sh0() = Tensor::from_vector(
+                           {(0.0f - 0.5f) / c0, (1.0f - 0.5f) / c0, (0.0f - 0.5f) / c0,
+                            (0.0f - 0.5f) / c0, (0.0f - 0.5f) / c0, (1.0f - 0.5f) / c0},
+                           {2, 1, 3}, Device::GPU)
+                           .to(DataType::Float32);
+    scene.setNodeEvaluatedPayload(node->uuid,
+                                  std::shared_ptr<lfs::core::SplatData>(std::move(evaluated)),
+                                  {}, {});
+    service_->setTestingHoveredGaussianId(1);
+
+    const auto picked = service_->pickAtScreen(50.0f, 50.0f);
+    ASSERT_TRUE(picked.has_value()) << picked.error().message;
+    EXPECT_FALSE(picked->colour_from_stored_payload);
+    EXPECT_FALSE(picked->stored_index.has_value());
+    EXPECT_NEAR(picked->colour.r, 0.0f, 1e-5f);
+    EXPECT_NEAR(picked->colour.g, 0.0f, 1e-5f);
+    EXPECT_NEAR(picked->colour.b, 1.0f, 1e-5f);
+    EXPECT_NEAR(picked->world_position.x, 20.0f, 1e-5f);
+}
+
+TEST_F(SelectionServiceInteractionsTest, ColourPickFallsBackToEvaluatedPayloadWhenTopologyChanged) {
+    constexpr float c0 = 0.28209479177387814f;
+    auto& scene = scene_manager_->getScene();
+    auto* const node = scene.getNode("test");
+    ASSERT_NE(node, nullptr);
+    auto evaluated = make_test_splat({5.0f, 0.0f, 0.0f});
+    evaluated->sh0() = Tensor::from_vector(
+                           {(0.25f - 0.5f) / c0, (0.5f - 0.5f) / c0, (0.75f - 0.5f) / c0},
+                           {1, 1, 3}, Device::GPU)
+                           .to(DataType::Float32);
+    scene.setNodeEvaluatedPayload(node->uuid,
+                                  std::shared_ptr<lfs::core::SplatData>(std::move(evaluated)),
+                                  {}, {});
+    service_->setTestingHoveredGaussianId(0);
+
+    const auto picked = service_->pickAtScreen(50.0f, 50.0f);
+    ASSERT_TRUE(picked.has_value()) << picked.error().message;
+    EXPECT_FALSE(picked->colour_from_stored_payload);
+    EXPECT_FALSE(picked->stored_index.has_value());
+    EXPECT_NEAR(picked->colour.r, 0.25f, 1e-5f);
+    EXPECT_NEAR(picked->colour.g, 0.5f, 1e-5f);
+    EXPECT_NEAR(picked->colour.b, 0.75f, 1e-5f);
 }
 
 TEST_F(SelectionServiceInteractionsTest, DeleteSelectedGaussiansMapsFullSelectionMaskAcrossHiddenNodes) {

@@ -2,7 +2,20 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-add_library(lfs_vulkan_rasterizer STATIC
+# With the native Metal viewer, the Vulkan rasterizer is a comparison fixture,
+# never a desktop backend.
+if(LFS_TENSOR_METAL)
+    if(NOT BUILD_TESTS)
+        message(FATAL_ERROR "The macOS Vulkan reference rasterizer is test-only")
+    endif()
+    set(_VULKAN_RASTERIZER_TARGET lfs_vulkan_rasterizer_macos_reference)
+    set(_VULKAN_REFERENCE_PROFILE ON)
+else()
+    set(_VULKAN_RASTERIZER_TARGET lfs_vulkan_rasterizer)
+    set(_VULKAN_REFERENCE_PROFILE OFF)
+endif()
+
+add_library(${_VULKAN_RASTERIZER_TARGET} STATIC
         src/barrier_planner.cpp
         src/buffer.cpp
         src/gs_pipeline.cpp
@@ -11,10 +24,9 @@ add_library(lfs_vulkan_rasterizer STATIC
         # Phase 7A: shared bounded-wait + SubmissionState + VulkanDispatch seam.
         # Lives under src/rendering/ so visualizer and tests include it without
         # depending on the visualizer module.
-        ${CMAKE_SOURCE_DIR}/src/rendering/vulkan_wait.cpp
 )
 
-target_include_directories(lfs_vulkan_rasterizer
+target_include_directories(${_VULKAN_RASTERIZER_TARGET}
         PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -22,28 +34,35 @@ target_include_directories(lfs_vulkan_rasterizer
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/core/include>
 )
 
-target_link_libraries(lfs_vulkan_rasterizer
+target_link_libraries(${_VULKAN_RASTERIZER_TARGET}
         PUBLIC
         Vulkan::Vulkan
         GPUOpen::VulkanMemoryAllocator
         lfs_core
+        lfs_vulkan_runtime
         PRIVATE
         lfs_diagnostics
 )
 
-target_compile_features(lfs_vulkan_rasterizer PUBLIC cxx_std_23)
-set_target_properties(lfs_vulkan_rasterizer PROPERTIES
+target_compile_features(${_VULKAN_RASTERIZER_TARGET} PUBLIC cxx_std_23)
+set_target_properties(${_VULKAN_RASTERIZER_TARGET} PROPERTIES
         POSITION_INDEPENDENT_CODE ON
 )
 
-target_compile_definitions(lfs_vulkan_rasterizer PRIVATE
+target_compile_definitions(${_VULKAN_RASTERIZER_TARGET} PRIVATE
         $<$<PLATFORM_ID:Windows>:NOMINMAX>
 )
 
-set(LFS_VULKAN_RASTERIZER_SPV_DIR "${CMAKE_CURRENT_BINARY_DIR}/shader")
-set_property(TARGET lfs_vulkan_rasterizer PROPERTY
+if(_VULKAN_REFERENCE_PROFILE)
+    # Public because the reference adapters share the host-side batch layout.
+    target_compile_definitions(${_VULKAN_RASTERIZER_TARGET} PUBLIC LFS_VULKAN_MACOS_REFERENCE=1)
+    set(LFS_VULKAN_RASTERIZER_SPV_DIR "${CMAKE_CURRENT_BINARY_DIR}/macos-reference/shader")
+else()
+    set(LFS_VULKAN_RASTERIZER_SPV_DIR "${CMAKE_CURRENT_BINARY_DIR}/shader")
+endif()
+set_property(TARGET ${_VULKAN_RASTERIZER_TARGET} PROPERTY
         LFS_VULKAN_RASTERIZER_SPV_DIR "${LFS_VULKAN_RASTERIZER_SPV_DIR}")
-target_compile_definitions(lfs_vulkan_rasterizer PUBLIC
+target_compile_definitions(${_VULKAN_RASTERIZER_TARGET} PUBLIC
         LFS_VULKAN_RASTERIZER_DEV_SPV_DIR="${LFS_VULKAN_RASTERIZER_SPV_DIR}/"
 )
 
@@ -91,6 +110,8 @@ if(LFS_ENABLE_VULKAN_VALIDATION)
 endif()
 
 set(_VULKAN_SHADER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/shader/src)
+# Includes shared with the tensor rasterizer passes.
+set(_SHARED_SLANG_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../slang)
 set(_VULKAN_GENERATED_OUT ${LFS_VULKAN_RASTERIZER_SPV_DIR}/generated)
 set(_VULKAN_RADIX_OUT ${LFS_VULKAN_RASTERIZER_SPV_DIR}/radix_sort)
 
@@ -100,6 +121,8 @@ file(MAKE_DIRECTORY ${_VULKAN_RADIX_OUT})
 file(GLOB _VULKAN_SLANG_ALL
         ${_VULKAN_SHADER_SRC}/slang/*.slang
         ${_VULKAN_SHADER_SRC}/slang/*.inc
+        ${_SHARED_SLANG_SRC}/*.slang
+        ${_SHARED_SLANG_SRC}/*.inc
 )
 set(_VULKAN_RADIX_DEPS
         ${_VULKAN_SHADER_SRC}/radix_sort/config.glsl
@@ -112,10 +135,16 @@ set(_VULKAN_SLANG_FLAGS
         -line-directive-mode none
         -target spirv
 )
+if(_VULKAN_REFERENCE_PROFILE)
+    list(APPEND _VULKAN_SLANG_FLAGS -DLFS_VULKAN_MACOS_REFERENCE=1)
+endif()
 set(_VULKAN_GLSL_FLAGS
         -V
         --target-env vulkan1.2
 )
+if(_VULKAN_REFERENCE_PROFILE)
+    list(APPEND _VULKAN_GLSL_FLAGS -DLFS_VULKAN_MACOS_REFERENCE=1)
+endif()
 if(LFS_ENABLE_VULKAN_SHADER_DEBUG_INFO)
         list(APPEND _VULKAN_SLANG_FLAGS -g3)
         list(APPEND _VULKAN_GLSL_FLAGS -gVS)
@@ -142,6 +171,7 @@ function(_vulkan_add_slang_shader OUT_NAME SRC_FILE)
                         ${_VULKAN_SLANG_FLAGS}
                         ${_defs}
                         -I${_VULKAN_SHADER_SRC}/slang
+                        -I${_SHARED_SLANG_SRC}
                         -o ${_out}
                 ${_spirv_validation}
                 DEPENDS ${_VULKAN_SLANG_ALL} ${_spirv_validation_dependency}
@@ -165,6 +195,7 @@ function(_vulkan_add_slang_shader OUT_NAME SRC_FILE)
                                 ${_VULKAN_SLANG_FLAGS} ${_defs}
                                 -DLFS_BANDED_EXPORT_RENDER=1
                                 -I${_VULKAN_SHADER_SRC}/slang
+                                -I${_SHARED_SLANG_SRC}
                                 -o ${_banded_out}
                         ${_banded_validation}
                         DEPENDS ${_VULKAN_SHADER_SRC}/slang/${SRC_FILE} ${_VULKAN_SLANG_ALL} ${_spirv_validation_dependency}
@@ -294,6 +325,13 @@ _vulkan_add_slang_shader(macro_raster_overlays         macro_raster.slang LFS_RA
 _vulkan_add_slang_shader(macro_raster_overlays_lean    macro_raster.slang LFS_RASTER_OVERLAYS=1 LFS_HIGS_LEAN_STAGING=1)
 _vulkan_add_slang_shader(macro_raster_overlays_fp32    macro_raster.slang LFS_HIGS_FP32=1 LFS_RASTER_OVERLAYS=1)
 _vulkan_add_slang_shader(macro_raster_overlays_fp32_lean macro_raster.slang LFS_HIGS_FP32=1 LFS_RASTER_OVERLAYS=1 LFS_HIGS_LEAN_STAGING=1)
+# Accurate transparent comparison is specific to the Mac test reference.
+if(_VULKAN_REFERENCE_PROFILE)
+    _vulkan_add_slang_shader(macro_raster_fp32_precise_alpha             macro_raster.slang LFS_HIGS_FP32=1 LFS_HIGS_PRECISE_ALPHA=1)
+    _vulkan_add_slang_shader(macro_raster_fp32_lean_precise_alpha        macro_raster.slang LFS_HIGS_FP32=1 LFS_HIGS_LEAN_STAGING=1 LFS_HIGS_PRECISE_ALPHA=1)
+    _vulkan_add_slang_shader(macro_raster_overlays_fp32_precise_alpha    macro_raster.slang LFS_HIGS_FP32=1 LFS_RASTER_OVERLAYS=1 LFS_HIGS_PRECISE_ALPHA=1)
+    _vulkan_add_slang_shader(macro_raster_overlays_fp32_lean_precise_alpha macro_raster.slang LFS_HIGS_FP32=1 LFS_RASTER_OVERLAYS=1 LFS_HIGS_LEAN_STAGING=1 LFS_HIGS_PRECISE_ALPHA=1)
+endif()
 _vulkan_add_slang_shader(macro_compose          macro_compose.slang)
 _vulkan_add_slang_shader(macro_compose_overlays macro_compose.slang LFS_RASTER_OVERLAYS=1)
 
@@ -302,5 +340,5 @@ _vulkan_add_glsl_shader(upsweep_indirect    upsweep.comp)
 _vulkan_add_glsl_shader(spine_indirect      spine.comp)
 _vulkan_add_glsl_shader(downsweep_indirect  downsweep.comp)
 
-add_custom_target(lfs_vulkan_rasterizer_shaders DEPENDS ${VULKAN_RASTERIZER_SHADER_OUTPUTS})
-add_dependencies(lfs_vulkan_rasterizer lfs_vulkan_rasterizer_shaders)
+add_custom_target(${_VULKAN_RASTERIZER_TARGET}_shaders DEPENDS ${VULKAN_RASTERIZER_SHADER_OUTPUTS})
+add_dependencies(${_VULKAN_RASTERIZER_TARGET} ${_VULKAN_RASTERIZER_TARGET}_shaders)

@@ -603,10 +603,6 @@ namespace lfs::python {
         }
     } // namespace
 
-    void set_render_scene_context(core::Scene* scene) {
-        set_scene_for_python(scene);
-    }
-
     core::Scene* get_render_scene() {
         if (auto* app_scene = get_application_scene()) {
             return app_scene;
@@ -997,7 +993,11 @@ namespace lfs::python {
         if (fresh) {
             settings_ = *fresh;
         }
-        prop_.setattr(name, value);
+        // RmlUI writes model values back during refresh. Publishing those
+        // unchanged values would invalidate the settings again on every frame.
+        if (!prop_.setattr(name, value, /*skip_unchanged=*/true)) {
+            return;
+        }
         if (name == "raster_backend") {
             const auto backend = static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend);
             settings_.raster_backend =

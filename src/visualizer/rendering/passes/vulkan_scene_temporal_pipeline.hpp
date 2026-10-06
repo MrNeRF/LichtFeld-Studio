@@ -71,8 +71,6 @@ namespace lfs::vis {
             TemporalResetReason reason = TemporalResetReason::HistoryDisabled);
         void shutdown();
 
-        [[nodiscard]] VkImageView outputView(TemporalViewId view) const;
-        [[nodiscard]] SceneHistoryContract contract(TemporalViewId view) const;
         [[nodiscard]] VulkanSceneTemporalResourceStats resourceStats() const;
 
     private:

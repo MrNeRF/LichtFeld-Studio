@@ -57,7 +57,7 @@ namespace Zep {
 
     // Replace
     ZepCommand_ReplaceRange::ZepCommand_ReplaceRange(ZepBuffer& buffer, ReplaceRangeMode currentMode, const GlyphIterator& startIndex, const GlyphIterator& endIndex, const std::string& strReplace, const GlyphIterator& cursor, const GlyphIterator& cursorAfter)
-        : ZepCommand(buffer, cursor.Valid() ? cursor : endIndex, cursorAfter.Valid() ? cursorAfter : startIndex), m_startIndex(startIndex), m_endIndex(endIndex), m_strReplace(strReplace), m_mode(currentMode) {
+        : ZepCommand(buffer, cursor.Valid() ? cursor : endIndex, cursorAfter.Index() >= 0 ? cursorAfter : startIndex), m_startIndex(startIndex), m_endIndex(endIndex), m_strReplace(strReplace), m_mode(currentMode) {
         m_startIndex.Clamp();
     }
 

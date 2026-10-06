@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mode.h"
+#include <cstdint>
 
 namespace Zep {
 
@@ -11,6 +12,7 @@ namespace Zep {
 
         virtual void Init() override;
         virtual void Begin(ZepWindow* pWindow) override;
+        void AddKeyPress(uint32_t key, uint32_t modifierKeys = ModifierKey::None) override;
         virtual EditorMode DefaultMode() const override {
             return EditorMode::Insert;
         }
