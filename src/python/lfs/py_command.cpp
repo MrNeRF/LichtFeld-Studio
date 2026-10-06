@@ -272,6 +272,7 @@ namespace lfs::python {
             "can_redo", []() { return vis::op::undoHistory().canRedo(); }, "Check if redo is available");
         undo.def(
             "clear", []() { vis::op::undoHistory().clear(); }, "Clear undo history");
+        nb::module_::import_("atexit").attr("register")(undo.attr("clear"));
 
         undo.def(
             "get_undo_name",
