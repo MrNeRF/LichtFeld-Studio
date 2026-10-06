@@ -17,6 +17,7 @@ namespace lfs::vis {
             SceneUpscalerBackend backend, const TensorSceneTemporalRequest& request);
         void reset(TemporalViewId view);
         void resetAll();
+
     private:
         struct Impl;
         std::unique_ptr<Impl> impl_;

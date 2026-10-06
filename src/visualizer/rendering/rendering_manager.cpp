@@ -873,11 +873,11 @@ namespace lfs::vis {
             return;
         if (view.scene_reconstruction_request_logged_)
             LOG_INFO("Scene reconstruction request: {}/{} -> {}/{} (input_scale={:.4f})",
-                view.last_scene_reconstruction_backend_, view.last_scene_reconstruction_preset_,
-                settings.scene_upscaler, settings.scene_upscaler_preset, settings.scene_upscaler_scale);
+                     view.last_scene_reconstruction_backend_, view.last_scene_reconstruction_preset_,
+                     settings.scene_upscaler, settings.scene_upscaler_preset, settings.scene_upscaler_scale);
         else
             LOG_INFO("Scene reconstruction initial request: {}/{} (input_scale={:.4f})",
-                settings.scene_upscaler, settings.scene_upscaler_preset, settings.scene_upscaler_scale);
+                     settings.scene_upscaler, settings.scene_upscaler_preset, settings.scene_upscaler_scale);
         view.scene_reconstruction_request_logged_ = true;
         view.last_scene_reconstruction_backend_ = settings.scene_upscaler;
         view.last_scene_reconstruction_preset_ = settings.scene_upscaler_preset;
@@ -899,8 +899,8 @@ namespace lfs::vis {
         // the convergence sequence as CAMERA would.
         if (changed) {
             LOG_INFO("Scene reconstruction effective: {} -> {} (fallback={})",
-                sceneUpscalerBackendId(selection.requested), sceneUpscalerBackendId(selection.effective),
-                sceneUpscalerFallbackId(selection.fallback));
+                     sceneUpscalerBackendId(selection.requested), sceneUpscalerBackendId(selection.effective),
+                     sceneUpscalerFallbackId(selection.fallback));
             auto& generation = app_store().scene_upscaler_generation;
             generation.set(generation.get() + 1);
             markViewDirty(id, DirtyFlag::TEMPORAL, lfs::vis::FrameReason::SceneChange);

@@ -567,6 +567,21 @@ namespace lfs::training {
         }
 
         auto trainer = std::make_unique<Trainer>(scene);
+        auto source_nodes = document.scene_graph().nodes();
+        if (!source_nodes) {
+            return std::unexpected(std::format(
+                "Failed to read project scene graph for snapshot bindings: {}",
+                lfs::format_for_developer(source_nodes.error())));
+        }
+        lfs::io::project::ScenePayloadBindings snapshot_bindings;
+        const auto training_uuid = scene.getTrainingModelNodeUuid();
+        for (const auto& node : *source_nodes) {
+            if (node.uuid != training_uuid && node.payload) {
+                snapshot_bindings.emplace(node.uuid, *node.payload);
+            }
+        }
+        trainer->set_project_snapshot_payload_bindings(
+            std::move(snapshot_bindings));
         if (recovery_session) {
             trainer->set_recovery_session(*recovery_session);
         }

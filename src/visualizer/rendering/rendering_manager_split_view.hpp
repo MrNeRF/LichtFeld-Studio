@@ -2,10 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
+#include "internal/viewport.hpp"
 #include "rendering_types.hpp"
 #include "split_view_cpu_desc.hpp"
 #include "viewport_interaction_context.hpp"
-#include "internal/viewport.hpp"
 
 #include <memory>
 #include <optional>
@@ -15,12 +15,12 @@
 namespace lfs::core {
     class Camera;
     class Tensor;
-}
+} // namespace lfs::core
 
 namespace lfs::rendering {
     struct FrameMetadata;
     struct ViewportRenderRequest;
-}
+} // namespace lfs::rendering
 
 namespace lfs::vis {
     struct FrameContext;

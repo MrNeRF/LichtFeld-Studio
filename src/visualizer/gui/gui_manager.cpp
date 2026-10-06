@@ -3546,7 +3546,7 @@ namespace lfs::vis::gui {
                         .scale_y = settings.depth_filter_scale_y,
                         .offset_x = settings.depth_filter_offset_x,
                         .offset_y = settings.depth_filter_offset_y,
-                };
+                    };
                 appendCropAndFilterOverlays(params, viewport_layout.view, guide_view, settings, scene_state, scene_manager, gizmo,
                                             depth_window.scale_x,
                                             depth_window.scale_y,

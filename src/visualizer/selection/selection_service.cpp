@@ -508,14 +508,52 @@ namespace lfs::vis {
             }
 
             const size_t visible_count = activeSelectionGaussianCount(scene_manager);
-            if (selection.numel() != visible_count || full_count == 0) {
+            if (full_count == 0) {
                 return {};
             }
 
             const auto visible_indices = scene.getVisibleSelectionIndices();
-            if (!visible_indices || !visible_indices->is_valid() ||
-                visible_indices->numel() != visible_count) {
-                return {};
+            if (selection.numel() == visible_count) {
+                if (!visible_indices || !visible_indices->is_valid() ||
+                    visible_indices->numel() != visible_count) {
+                    return {};
+                }
+            } else {
+                if (!nodeMaskRestrictsSelection(node_mask)) {
+                    return {};
+                }
+                const auto transform_indices = scene.getTransformIndices();
+                if (!transform_indices || !transform_indices->is_valid() ||
+                    transform_indices->numel() != visible_count ||
+                    (visible_indices &&
+                     (!visible_indices->is_valid() || visible_indices->numel() != visible_count)) ||
+                    (!visible_indices && visible_count != full_count)) {
+                    return {};
+                }
+
+                auto scope = visibleNodeScopeMask(scene, visible_count, node_mask);
+                if (!scope.is_valid()) {
+                    return {};
+                }
+                auto selected_positions = scope.nonzero().squeeze(1);
+                if (selected_positions.numel() != selection.numel()) {
+                    return {};
+                }
+                auto selected_indices = visible_indices
+                                            ? visible_indices->index_select(0, selected_positions)
+                                            : std::move(selected_positions);
+
+                core::Tensor expanded;
+                if (preserves_active_group) {
+                    expanded = existing_mask->eq(group_id);
+                    if (expanded.device() != core::Device::GPU) {
+                        expanded = expanded.gpu();
+                    }
+                } else {
+                    expanded = core::Tensor::zeros({full_count}, core::Device::GPU, core::DataType::Bool);
+                }
+                expanded.index_copy_(0, selected_indices, selection);
+                return expanded;
             }
 
             core::Tensor expanded;

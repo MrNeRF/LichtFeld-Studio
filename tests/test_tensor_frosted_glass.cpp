@@ -128,7 +128,8 @@ namespace {
                                               std::size_t(primary_width), 4}));
             EXPECT_EQ(backdrop.bytes(),
                       std::size_t(primary_width * primary_height +
-                                  secondary_width * secondary_height) * 4);
+                                  secondary_width * secondary_height) *
+                          4);
             const auto actual = backdrop.image().to_vector_uint8();
             int max_error = 0;
             for (std::size_t i = 0; i < actual.size(); ++i)
@@ -143,7 +144,7 @@ namespace {
             int max_error = 0;
             for (std::size_t pixel = 0; pixel < outputs.front().second.size(); ++pixel)
                 max_error = std::max(max_error,
-                    std::abs(int(outputs.front().second[pixel]) - int(outputs[i].second[pixel])));
+                                     std::abs(int(outputs.front().second[pixel]) - int(outputs[i].second[pixel])));
             std::cout << "frosted parity "
                       << lfs::core::gpu_backend_name(outputs.front().first) << " vs "
                       << lfs::core::gpu_backend_name(outputs[i].first)

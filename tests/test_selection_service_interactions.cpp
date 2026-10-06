@@ -8,12 +8,18 @@
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "input/input_controller.hpp"
+#include "input/key_codes.hpp"
+#include "internal/viewport.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/rendering_types.hpp"
 #include "scene/scene_manager.hpp"
 #include "screen/screen_service.hpp"
 #include "selection/selection_service.hpp"
+#include "test_view_targets.hpp"
+#include "tools/selection_tool.hpp"
+#include "tools/tool_base.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
 #include <filesystem>
 
@@ -25,6 +31,12 @@
 using lfs::core::DataType;
 using lfs::core::Device;
 using lfs::core::Tensor;
+using lfs::vis::InputController;
+using lfs::vis::ToolContext;
+using lfs::vis::input::ACTION_PRESS;
+using lfs::vis::input::KEY_DELETE;
+using lfs::vis::input::KEYMOD_NONE;
+using lfs::vis::tools::SelectionTool;
 
 namespace {
 
@@ -176,7 +188,8 @@ protected:
                 0.0f,
             }));
 
-        service_ = std::make_unique<lfs::vis::SelectionService>(scene_manager_.get(), rendering_manager_.get());
+        scene_manager_->initSelectionService();
+        service_ = scene_manager_->getSelectionService();
         service_->setTestingViewport({
             .x = 0.0f,
             .y = 0.0f,
@@ -191,7 +204,6 @@ protected:
         lfs::event::EventBridge::instance().clear_all();
         lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
-        service_.reset();
         rendering_manager_.reset();
         scene_manager_.reset();
         lfs::vis::op::undoHistory().clear();
@@ -204,8 +216,61 @@ protected:
     std::unique_ptr<lfs::vis::SceneManager> scene_manager_;
     lfs::vis::screen::ScreenService screens_;
     std::unique_ptr<lfs::vis::RenderingManager> rendering_manager_;
-    std::unique_ptr<lfs::vis::SelectionService> service_;
+    lfs::vis::SelectionService* service_ = nullptr;
 };
+
+TEST_F(SelectionServiceInteractionsTest, DeleteInSelectionToolDoesNotRemoveNodeWithoutGaussianSelection) {
+    const auto node_id = scene_manager_->getScene().getNodeIdByName("test");
+    ASSERT_NE(node_id, lfs::core::NULL_NODE);
+    scene_manager_->selectNode("test");
+    ASSERT_FALSE(scene_manager_->getScene().hasSelection());
+
+    Viewport viewport(100, 100);
+    lfs::vis::TestViewTargets views{viewport};
+    ToolContext context(rendering_manager_.get(), scene_manager_.get(), &views, nullptr);
+    InputController controller(nullptr, views);
+    auto selection_tool = std::make_shared<SelectionTool>();
+    selection_tool->setEnabled(true);
+    controller.setSelectionTool(selection_tool);
+    controller.setToolContext(&context);
+
+    controller.handleKey(KEY_DELETE, ACTION_PRESS, KEYMOD_NONE);
+
+    EXPECT_NE(scene_manager_->getScene().getNodeById(node_id), nullptr);
+}
+
+TEST_F(SelectionServiceInteractionsTest, DeleteCommitsInteractiveSelectionThenDeletesOnlyThoseGaussians) {
+    auto settings = rendering_manager_->getSettings();
+    settings.point_cloud_mode = true;
+    rendering_manager_->updateSettings(settings);
+    scene_manager_->selectNode("test");
+    service_->setTestingScreenPositions(make_screen_positions({10.0f, 10.0f, 80.0f, 80.0f}));
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Rectangle,
+        lfs::vis::SelectionMode::Replace,
+        {0.0f, 0.0f},
+        0.0f));
+    service_->updateInteractiveSelection({50.0f, 50.0f});
+    ASSERT_TRUE(service_->isInteractiveSelectionActive());
+    ASSERT_FALSE(scene_manager_->getScene().hasSelection());
+
+    Viewport viewport(100, 100);
+    lfs::vis::TestViewTargets views{viewport};
+    ToolContext context(rendering_manager_.get(), scene_manager_.get(), &views, nullptr);
+    InputController controller(nullptr, views);
+    auto selection_tool = std::make_shared<SelectionTool>();
+    selection_tool->setEnabled(true);
+    controller.setSelectionTool(selection_tool);
+    controller.setToolContext(&context);
+
+    controller.handleKey(KEY_DELETE, ACTION_PRESS, KEYMOD_NONE);
+
+    EXPECT_FALSE(service_->isInteractiveSelectionActive());
+    const auto* node = scene_manager_->getScene().getNode("test");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    EXPECT_EQ(deleted_values(*node->model), (std::vector<bool>{true, false}));
+}
 
 TEST_F(SelectionServiceInteractionsTest, SelectionAfterVisibilityChangeUsesRefreshedSelectedNodeMask) {
     const auto copy_id = scene_manager_->getScene().addSplat(
@@ -321,6 +386,40 @@ TEST_F(SelectionServiceInteractionsTest, ColourPickFallsBackToEvaluatedPayloadWh
     EXPECT_NEAR(picked->colour.r, 0.25f, 1e-5f);
     EXPECT_NEAR(picked->colour.g, 0.5f, 1e-5f);
     EXPECT_NEAR(picked->colour.b, 0.75f, 1e-5f);
+}
+
+TEST_F(SelectionServiceInteractionsTest, BrushAndLassoAcceptSelectedNodeInMultiSplatScene) {
+    const auto copy_id = scene_manager_->getScene().addSplat(
+        "copy",
+        make_test_splat({
+            2.0f,
+            0.0f,
+            0.0f,
+            3.0f,
+            0.0f,
+            0.0f,
+        }));
+    ASSERT_NE(copy_id, lfs::core::NULL_NODE);
+    scene_manager_->selectNodes({"test"});
+    set_initial_selection({0, 0, 1, 0});
+    service_->setTestingScreenPositions(make_screen_positions({
+        10.0f,
+        10.0f,
+        80.0f,
+        80.0f,
+    }));
+
+    const auto brush = service_->selectBrush(10.0f, 10.0f, 5.0f, lfs::vis::SelectionMode::Replace);
+    ASSERT_TRUE(brush.success) << brush.error;
+    EXPECT_EQ(brush.affected_count, 2u);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0, 1, 0}));
+
+    const auto lasso = service_->selectLasso(
+        {{0.0f, 0.0f}, {50.0f, 0.0f}, {0.0f, 50.0f}},
+        lfs::vis::SelectionMode::Replace);
+    ASSERT_TRUE(lasso.success) << lasso.error;
+    EXPECT_EQ(lasso.affected_count, 2u);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0, 1, 0}));
 }
 
 TEST_F(SelectionServiceInteractionsTest, DeleteSelectedGaussiansMapsFullSelectionMaskAcrossHiddenNodes) {

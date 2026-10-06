@@ -404,24 +404,34 @@ namespace {
     }
 
     // Parse log level from string
-    lfs::core::LogLevel parse_log_level(const std::string& level_str) {
-        if (level_str == "trace")
-            return lfs::core::LogLevel::Trace;
-        if (level_str == "debug")
-            return lfs::core::LogLevel::Debug;
-        if (level_str == "info")
-            return lfs::core::LogLevel::Info;
-        if (level_str == "perf" || level_str == "performance")
-            return lfs::core::LogLevel::Performance;
-        if (level_str == "warn" || level_str == "warning")
-            return lfs::core::LogLevel::Warn;
-        if (level_str == "error")
-            return lfs::core::LogLevel::Error;
-        if (level_str == "critical")
-            return lfs::core::LogLevel::Critical;
-        if (level_str == "off")
-            return lfs::core::LogLevel::Off;
-        return lfs::core::LogLevel::Info; // Default
+    bool parse_log_level(const std::string& level_str, lfs::core::LogLevel& level, std::string& error) {
+        std::string normalized = level_str;
+        std::ranges::transform(normalized, normalized.begin(), [](const unsigned char value) {
+            return static_cast<char>(std::tolower(value));
+        });
+        if (normalized == "trace")
+            level = lfs::core::LogLevel::Trace;
+        else if (normalized == "debug")
+            level = lfs::core::LogLevel::Debug;
+        else if (normalized == "info")
+            level = lfs::core::LogLevel::Info;
+        else if (normalized == "perf" || normalized == "performance")
+            level = lfs::core::LogLevel::Performance;
+        else if (normalized == "warn" || normalized == "warning")
+            level = lfs::core::LogLevel::Warn;
+        else if (normalized == "error")
+            level = lfs::core::LogLevel::Error;
+        else if (normalized == "critical")
+            level = lfs::core::LogLevel::Critical;
+        else if (normalized == "off")
+            level = lfs::core::LogLevel::Off;
+        else {
+            error = std::format(
+                "Invalid log level '{}'. Use: trace, debug, info, perf, warn, error, critical, off",
+                level_str);
+            return false;
+        }
+        return true;
     }
 
     struct SogFlags {
@@ -465,11 +475,17 @@ namespace {
         explicit LogLevelFlag(::args::Group& group)
             : level(group, "level", "Log level (trace, debug, info, perf, warn, error, critical, off)", {"log-level"}) {}
 
-        void apply() {
-            if (level)
-                lfs::core::Logger::get().init(parse_log_level(::args::get(level)));
-            else if (const auto env = lfs::core::environment::value("LFS_LOG_LEVEL"))
-                lfs::core::Logger::get().init(parse_log_level(std::string(*env)));
+        bool apply(std::string& error) {
+            auto parsed = lfs::core::LogLevel::Info;
+            if (level) {
+                if (!parse_log_level(::args::get(level), parsed, error))
+                    return false;
+            } else if (const auto env = lfs::core::environment::value("LFS_LOG_LEVEL")) {
+                if (!parse_log_level(std::string(*env), parsed, error))
+                    return false;
+            }
+            lfs::core::Logger::get().init(parsed);
+            return true;
         }
     };
 
@@ -610,6 +626,28 @@ namespace {
             return std::unexpected("No output formats specified");
         }
         return formats;
+    }
+
+    std::optional<std::string> validateOutputFormatSuffix(
+        const std::filesystem::path& output_path,
+        const lfs::core::param::OutputFormat format) {
+        if (output_path.empty() || std::filesystem::is_directory(output_path)) {
+            return std::nullopt;
+        }
+
+        auto extension = output_path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](const unsigned char c) {
+                           return static_cast<char>(std::tolower(c));
+                       });
+        const auto expected_extension =
+            lfs::core::param::output_format_extension(format);
+        if (!extension.empty() && extension != expected_extension) {
+            return std::format(
+                "Output extension '{}' does not match selected format (expected '{}')",
+                extension, expected_extension);
+        }
+        return std::nullopt;
     }
 
     std::expected<std::tuple<ParseResult, std::function<void()>>, std::string> parse_arguments(
@@ -953,7 +991,9 @@ namespace {
 
                 // Check environment variable first
                 if (const auto env_level = lfs::core::environment::value("LFS_LOG_LEVEL")) {
-                    level = parse_log_level(std::string(*env_level));
+                    std::string error;
+                    if (!parse_log_level(std::string(*env_level), level, error))
+                        return std::unexpected(error);
                 }
                 // Verbose/quiet flags override environment variable
                 if (verbose) {
@@ -964,7 +1004,9 @@ namespace {
                 }
                 // CLI --log-level takes final precedence
                 if (log_level) {
-                    level = parse_log_level(::args::get(log_level));
+                    std::string error;
+                    if (!parse_log_level(::args::get(log_level), level, error))
+                        return std::unexpected(error);
                 }
                 if (log_file) {
                     log_file_path = ::args::get(log_file);
@@ -1166,6 +1208,10 @@ namespace {
                 }
             }
             if (init_path) {
+                if (params.resume_checkpoint || params.resume_project) {
+                    return std::unexpected("--init cannot be used together with --resume");
+                }
+
                 const auto path_str = ::args::get(init_path);
                 params.init_path = path_str;
 
@@ -1912,14 +1958,56 @@ lfs::io::args::parse_args_and_params(int argc, const char* const argv[]) {
 
     params->dataset.loading_params = lfs::core::param::LoadingParams{};
 
-    if (apply_overrides) {
-        apply_overrides();
-    }
     const auto flag_given = [&args](const std::string_view flag) {
         return std::ranges::any_of(args, [flag](const std::string& arg) {
             return arg == flag || (arg.starts_with(flag) && arg.size() > flag.size() && arg[flag.size()] == '=');
         });
     };
+    const auto flag_value = [&args](const std::string_view flag)
+        -> std::optional<std::string_view> {
+        const std::string joined = std::string(flag) + "=";
+        for (size_t i = 0; i < args.size(); ++i) {
+            if (args[i] == flag && i + 1 < args.size())
+                return args[i + 1];
+            if (args[i].starts_with(joined))
+                return std::string_view(args[i]).substr(joined.size());
+        }
+        return std::nullopt;
+    };
+    if (const auto value = flag_value("--sh-degree-interval");
+        value && !value->empty() && value->front() == '-') {
+        return std::unexpected(std::format(
+            "sh_degree_interval must be positive (got {})", *value));
+    }
+
+    if (apply_overrides) {
+        apply_overrides();
+    }
+    const auto validate_cli_nonnegative = [&flag_given](
+                                              const std::string_view flag,
+                                              const std::string_view name,
+                                              const float value) -> std::optional<std::string> {
+        if (!flag_given(flag))
+            return std::nullopt;
+        if (!std::isfinite(value) || value < 0.0f)
+            return std::format("{} must be finite and nonnegative (got {})", name, value);
+        return std::nullopt;
+    };
+    if (auto error = validate_cli_nonnegative(
+            "--normal-loss-weight", "normal_loss_weight", params->optimization.normal_loss_weight))
+        return std::unexpected("ERROR: " + *error);
+    if (auto error = validate_cli_nonnegative("--normal-consistency-weight", "normal_consistency_weight",
+                                              params->optimization.normal_consistency_weight))
+        return std::unexpected("ERROR: " + *error);
+    if (auto error = validate_cli_nonnegative("--normal-flatten-weight", "normal_flatten_weight",
+                                              params->optimization.normal_flatten_weight))
+        return std::unexpected("ERROR: " + *error);
+    if (flag_given("--max-screen-share") &&
+        (!std::isfinite(params->optimization.max_screen_share) ||
+         params->optimization.max_screen_share < 0.0f || params->optimization.max_screen_share > 1.0f))
+        return std::unexpected(std::format(
+            "ERROR: max_screen_share must be finite and within [0, 1] (got {})",
+            params->optimization.max_screen_share));
     if (flag_given("--eval-steps") && !params->optimization.enable_eval)
         return std::unexpected("--eval-steps needs --eval or --eval-all; without them no evaluation runs");
     if (flag_given("--eval-space") && !params->optimization.undistort) {
@@ -2037,7 +2125,9 @@ namespace {
             return std::unexpected(std::format("Missing input path\n\n{}", parser.Help()));
         }
 
-        log_level.apply();
+        std::string log_level_error;
+        if (!log_level.apply(log_level_error))
+            return std::unexpected(log_level_error);
 
         param::ConvertParameters params;
         params.input_path = lfs::core::utf8_to_path(::args::get(input));
@@ -2079,6 +2169,10 @@ namespace {
             } else {
                 return std::unexpected(std::format("Unknown extension '{}'. Use --format", params.output_path.extension().string()));
             }
+        }
+
+        if (auto suffix = validateOutputFormatSuffix(params.output_path, params.format)) {
+            return std::unexpected(*suffix);
         }
 
         if (tiles) {
@@ -2168,7 +2262,9 @@ namespace {
             return std::unexpected("Use either positional output or --output, not both");
         }
 
-        log_level.apply();
+        std::string log_level_error;
+        if (!log_level.apply(log_level_error))
+            return std::unexpected(log_level_error);
 
         param::Mesh2SplatParameters params;
         params.input_path = lfs::core::utf8_to_path(::args::get(input));
@@ -2215,6 +2311,13 @@ namespace {
                 params.formats = {*fmt};
             } else if (!params.output_path.extension().empty() && !std::filesystem::is_directory(params.output_path)) {
                 return std::unexpected(std::format("Unknown extension '{}'. Use --format", params.output_path.extension().string()));
+            }
+        }
+
+        if (params.formats.size() == 1) {
+            if (auto suffix =
+                    validateOutputFormatSuffix(params.output_path, params.format)) {
+                return std::unexpected(*suffix);
             }
         }
 

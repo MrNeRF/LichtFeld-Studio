@@ -20,10 +20,10 @@ namespace lfs::rendering {
     };
 
     struct TensorSceneResolveParameters {
-        std::array<std::uint32_t, 4> extents{};       // render width/height, output width/height
+        std::array<std::uint32_t, 4> extents{};        // render width/height, output width/height
         std::array<std::uint32_t, 4> current_layout{}; // allocation width/height, channels, float
-        std::array<float, 4> control{};               // history valid, weight, motion rejection, unused
-        std::array<float, 4> current_uv{};            // scale xy, clamp max zw
+        std::array<float, 4> control{};                // history valid, weight, motion rejection, unused
+        std::array<float, 4> current_uv{};             // scale xy, clamp max zw
         std::array<float, 4> depth_control{};          // enabled, relative, absolute, far
         std::array<float, 4> jitter_pixels{};          // current xy, previous zw
         std::array<float, 4> reconstruction{};         // sharpness, motion confidence span
@@ -36,14 +36,14 @@ namespace lfs::rendering {
         std::array<float, 4> pixel_motion{}; // current pixel center, motion
         std::array<float, 4> jitter{};       // current, previous
         std::array<std::uint32_t, 4> extents{};
-        std::array<float, 4> depth{}; // current, history, far, history valid
+        std::array<float, 4> depth{};     // current, history, far, history valid
         std::array<float, 4> settings0{}; // weight, relative depth, absolute depth, motion rejection
         std::array<float, 4> settings1{}; // confidence span, sharpness, depth available, unused
     };
 
     struct TensorSceneResolveResult {
         std::array<float, 4> color{};
-        std::array<float, 4> uv{}; // current render uv, previous render uv
+        std::array<float, 4> uv{};     // current render uv, previous render uv
         std::array<float, 4> status{}; // previous uv, effective history weight, rejection
     };
     static_assert(sizeof(TensorSceneResolveSample) == 176);

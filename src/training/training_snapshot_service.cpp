@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -49,6 +50,11 @@
 #include <thread>
 #include <utility>
 
+#if defined(__APPLE__)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -61,6 +67,150 @@
 #endif
 
 namespace lfs::training {
+
+    namespace {
+#if defined(__APPLE__)
+        constexpr std::size_t FILE_BACKED_SNAPSHOT_THRESHOLD =
+            64ull * 1024 * 1024;
+#endif
+    } // namespace
+
+    struct TrainingSnapshotBytes::Impl {
+        std::unique_ptr<std::byte[]> bytes;
+        std::FILE* file = nullptr;
+        mutable void* mapping = nullptr;
+        std::size_t size = 0;
+    };
+
+    TrainingSnapshotBytes::TrainingSnapshotBytes(
+        const std::size_t size,
+        const bool overwrite)
+        : impl_(std::make_unique<Impl>()) {
+        impl_->size = size;
+#if defined(__APPLE__)
+        if (size >= FILE_BACKED_SNAPSHOT_THRESHOLD) {
+            // An unlinked spool keeps the capture out of anonymous memory; the
+            // kernel can evict its clean pages under pressure. Without a usable
+            // temporary file the capture falls back to heap staging.
+            impl_->file = std::tmpfile();
+            if (impl_->file &&
+                ::ftruncate(::fileno(impl_->file), static_cast<off_t>(size)) == 0) {
+                return;
+            }
+            LOG_WARN("Checkpoint spool unavailable ({}); staging {} bytes in memory",
+                     std::strerror(errno), size);
+            if (impl_->file) {
+                std::fclose(impl_->file);
+                impl_->file = nullptr;
+            }
+        }
+#endif
+        impl_->bytes = overwrite
+                           ? std::make_unique_for_overwrite<std::byte[]>(size)
+                           : std::make_unique<std::byte[]>(size);
+    }
+
+    TrainingSnapshotBytes::~TrainingSnapshotBytes() {
+#if defined(__APPLE__)
+        if (impl_ && impl_->mapping) {
+            ::munmap(impl_->mapping, impl_->size);
+        }
+#endif
+        if (impl_ && impl_->file) {
+            std::fclose(impl_->file);
+        }
+    }
+
+    std::size_t TrainingSnapshotBytes::size() const noexcept {
+        return impl_->size;
+    }
+
+    std::byte* TrainingSnapshotBytes::data() noexcept {
+        return impl_->bytes.get();
+    }
+
+    const std::byte* TrainingSnapshotBytes::data() const noexcept {
+        return impl_->bytes.get();
+    }
+
+    bool TrainingSnapshotBytes::file_backed() const noexcept {
+        return impl_->file != nullptr;
+    }
+
+    lfs::Result<std::span<const std::byte>>
+    TrainingSnapshotBytes::mapped_data() const {
+        if (impl_->bytes) {
+            return std::span<const std::byte>(impl_->bytes.get(), impl_->size);
+        }
+#if defined(__APPLE__)
+        if (!impl_->mapping) {
+            impl_->mapping = ::mmap(
+                nullptr, impl_->size, PROT_READ, MAP_SHARED,
+                ::fileno(impl_->file), 0);
+            if (impl_->mapping == MAP_FAILED) {
+                impl_->mapping = nullptr;
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::Unavailable,
+                    .domain = lfs::ErrorDomain::Training,
+                    .user_message =
+                        "The training snapshot could not be mapped.",
+                    .detail = std::format(
+                        "Checkpoint spool mapping failed: {}",
+                        std::strerror(errno)),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+            }
+        }
+        return std::span<const std::byte>(
+            static_cast<const std::byte*>(impl_->mapping), impl_->size);
+#else
+        return lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::Unavailable,
+            .domain = lfs::ErrorDomain::Training,
+            .user_message = "The training snapshot could not be mapped.",
+            .detail = "Checkpoint spool mapping is unavailable",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        });
+#endif
+    }
+
+    void TrainingSnapshotBytes::write_at(
+        const std::uint64_t offset,
+        std::span<const std::byte> source) {
+        if (offset > impl_->size ||
+            source.size() > impl_->size - offset) {
+            throw std::out_of_range(
+                "Checkpoint spool write is out of bounds");
+        }
+        if (source.empty()) {
+            return;
+        }
+        if (impl_->bytes) {
+            std::memcpy(impl_->bytes.get() + offset,
+                        source.data(), source.size());
+            return;
+        }
+#if defined(__APPLE__)
+        std::size_t completed = 0;
+        while (completed < source.size()) {
+            const auto written = ::pwrite(
+                ::fileno(impl_->file), source.data() + completed,
+                source.size() - completed,
+                static_cast<off_t>(offset + completed));
+            if (written < 0 && errno == EINTR) {
+                continue;
+            }
+            if (written <= 0) {
+                throw std::runtime_error(std::format(
+                    "Checkpoint spool write failed: {}",
+                    std::strerror(errno)));
+            }
+            completed += static_cast<std::size_t>(written);
+        }
+#else
+        throw std::runtime_error("Checkpoint spool is unavailable");
+#endif
+    }
 
     namespace {
 
@@ -778,7 +928,8 @@ namespace lfs::training {
 
             void release(std::unique_ptr<TrainingSnapshotBytes> bytes) {
                 std::scoped_lock lock(mutex);
-                if (!retired && bytes->size() <= max_retired_bytes)
+                if (!retired && !bytes->file_backed() &&
+                    bytes->size() <= max_retired_bytes)
                     retired = std::move(bytes);
             }
 
@@ -1157,16 +1308,19 @@ namespace lfs::training {
                     ring->wait(slot_index);
                     for (const auto& segment :
                          task.segments) {
-                        non_temporal_copy(
-                            task.capture
-                                    ->staging->data() +
-                                segment
-                                    .destination_offset,
-                            static_cast<
-                                const std::byte*>(
-                                slot.pinned) +
+                        const auto source = std::span<const std::byte>(
+                            static_cast<const std::byte*>(slot.pinned) +
                                 segment.pinned_offset,
                             segment.bytes);
+                        if (auto* destination =
+                                task.capture->staging->data()) {
+                            non_temporal_copy(
+                                destination + segment.destination_offset,
+                                source.data(), source.size());
+                        } else {
+                            task.capture->staging->write_at(
+                                segment.destination_offset, source);
+                        }
                     }
                     ring->release(slot_index);
                 } catch (const std::exception& e) {
@@ -1241,7 +1395,9 @@ namespace lfs::training {
                     capture->metrics.host_rss_delta_bytes = std::max(
                         capture->metrics.host_rss_delta_bytes, rss_after_drain - capture->baseline_rss_bytes);
                 capture->metrics.host_ram_within_gate =
-                    capture->metrics.host_rss_delta_bytes <= capture->metrics.checkpoint_bytes + HOST_MEMORY_GATE_HEADROOM_BYTES;
+                    capture->metrics.host_rss_delta_bytes <=
+                    capture->metrics.host_staging_bytes +
+                        HOST_MEMORY_GATE_HEADROOM_BYTES;
                 bool consistent =
                     capture->error.empty() &&
                     !capture->stamps.empty();
@@ -1402,11 +1558,11 @@ namespace lfs::training {
                     return 0;
                 }
                 if (count > 0) {
-                    std::memcpy(
-                        capture_->staging->data() +
-                            cursor_,
-                        source,
-                        static_cast<std::size_t>(count));
+                    capture_->staging->write_at(
+                        cursor_,
+                        std::span<const std::byte>(
+                            reinterpret_cast<const std::byte*>(source),
+                            static_cast<std::size_t>(count)));
                     add_stamp(
                         cursor_,
                         static_cast<std::uint64_t>(
@@ -2000,8 +2156,18 @@ namespace lfs::training {
                     "Snapshot host-memory requirement overflows",
                     LFS_SOURCE_SITE_CURRENT());
             }
+            const bool file_backed_staging =
+#if defined(__APPLE__)
+                prepared->checkpoint_bytes >=
+                FILE_BACKED_SNAPSHOT_THRESHOLD;
+#else
+                false;
+#endif
+            const auto resident_staging_bytes =
+                file_backed_staging ? std::uint64_t{0}
+                                    : prepared->checkpoint_bytes;
             const auto required_host_memory =
-                prepared->checkpoint_bytes + reserve_bytes;
+                resident_staging_bytes + reserve_bytes;
             // An idle recycled buffer must never turn a previously viable
             // save into a memory-pressure rejection. Live readers retain
             // their own buffers; the pool can only release retired storage.
@@ -2025,14 +2191,18 @@ namespace lfs::training {
                     host_memory.available_bytes,
                     std::format(
                         "Training snapshot {}: {} bytes available, "
-                        "{} required ({} snapshot + {} reserve)",
+                        "{} required ({} resident staging + {} reserve; "
+                        "{} disk spool)",
                         request.relaxed_host_memory_gate
                             ? "rejected"
                             : "deferred",
                         host_memory.available_bytes,
                         required_host_memory,
-                        prepared->checkpoint_bytes,
-                        reserve_bytes),
+                        resident_staging_bytes,
+                        reserve_bytes,
+                        file_backed_staging
+                            ? prepared->checkpoint_bytes
+                            : 0),
                     LFS_SOURCE_SITE_CURRENT());
             }
             prepared->staging = impl_->acquire_staging(
@@ -2051,7 +2221,13 @@ namespace lfs::training {
                 impl_->config.ring_slots *
                 impl_->config.band_bytes;
             prepared->metrics.host_staging_bytes =
-                prepared->checkpoint_bytes;
+                prepared->staging->file_backed()
+                    ? 0
+                    : prepared->checkpoint_bytes;
+            prepared->metrics.disk_staging_bytes =
+                prepared->staging->file_backed()
+                    ? prepared->checkpoint_bytes
+                    : 0;
             prepared->metrics.host_rss_delta_bytes =
                 rss_after >=
                         prepared->baseline_rss_bytes
@@ -2066,7 +2242,7 @@ namespace lfs::training {
                 true;
             prepared->metrics.host_ram_within_gate =
                 prepared->metrics.host_rss_delta_bytes <=
-                prepared->checkpoint_bytes +
+                prepared->metrics.host_staging_bytes +
                     HOST_MEMORY_GATE_HEADROOM_BYTES;
             prepared->metrics.service_initialization_ms =
                 impl_->initialization_ms;
@@ -2286,7 +2462,7 @@ namespace lfs::training {
             }
             pending->metrics.host_ram_within_gate =
                 pending->metrics.host_rss_delta_bytes <=
-                pending->metrics.checkpoint_bytes +
+                pending->metrics.host_staging_bytes +
                     HOST_MEMORY_GATE_HEADROOM_BYTES;
 
             pending->metrics.safe_point_entry_ms =

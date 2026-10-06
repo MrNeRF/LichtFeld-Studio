@@ -631,6 +631,39 @@ namespace {
         }
     }
 
+    TEST(ProjectChapterTest, SiblingDatasetReferenceSurvivesProjectFolderMove) {
+        TemporaryDirectory temporary;
+        const fs::path origin = temporary.path / "origin";
+        const fs::path project_root = origin / "saved";
+        const fs::path dataset = origin / "dataset";
+        fs::create_directories(project_root);
+        fs::create_directories(dataset / "images");
+        {
+            std::ofstream image(dataset / "images" / "frame.bin", std::ios::binary);
+            image << "image-bytes";
+        }
+
+        ReferencesChapter references;
+        auto dataset_uuid = upsert_path_reference(
+            references, project_root, dataset, "dataset", "dataset");
+        ASSERT_TRUE(dataset_uuid)
+            << lfs::format_for_developer(dataset_uuid.error());
+
+        auto rows = references.records();
+        ASSERT_TRUE(rows);
+        ASSERT_EQ(rows->size(), 1u);
+        EXPECT_EQ(rows->front().locator.base, LocatorBase::Project);
+        EXPECT_EQ(rows->front().locator.preferred, "../dataset");
+
+        const fs::path relocated = temporary.path / "relocated";
+        fs::rename(origin, relocated);
+        const auto resolved = resolve_path_reference(
+            references, relocated / "saved", *dataset_uuid);
+        ASSERT_TRUE(resolved);
+        EXPECT_EQ(resolved->lexically_normal(),
+                  (relocated / "dataset").lexically_normal());
+    }
+
     TEST(ProjectChapterTest, SceneGraphBatchedUpsertRetainsUnknownNodeMembers) {
         const auto node_id = uuid_literal("43000000-0000-4000-8000-000000000001");
         const std::string source = std::format(

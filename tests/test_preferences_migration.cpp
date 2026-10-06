@@ -388,10 +388,9 @@ TEST(PreferencesMigration, StartupIgnoresBackendMissingFromBuildAndPreservesSave
     const auto missing = std::find(lfs::core::kCompiledGpuBackends.begin(),
                                    lfs::core::kCompiledGpuBackends.end(), lfs::core::GpuBackend::Vulkan) ==
                          lfs::core::kCompiledGpuBackends.end();
-    if (!missing) GTEST_SKIP() << "Vulkan is compiled in this configuration";
-    writePreferences(*paths, {{"schema_version", 2}, {"tensor_backend", {{"backend", "vulkan"},
-                                                  {"vulkan_device", "0"},
-                                                  {"vulkan_validation", 2}}}});
+    if (!missing)
+        GTEST_SKIP() << "Vulkan is compiled in this configuration";
+    writePreferences(*paths, {{"schema_version", 2}, {"tensor_backend", {{"backend", "vulkan"}, {"vulkan_device", "0"}, {"vulkan_validation", 2}}}});
     auto& preferences = lfs::vis::UserPreferences::instance();
     ASSERT_EQ(preferences.tensorBackend().backend, lfs::core::GpuBackend::Vulkan);
     const auto sanitized = preferences.sanitizeTensorBackend();

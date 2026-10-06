@@ -545,11 +545,11 @@ namespace {
         settings.scene_upscaler_preset = "quality";
         auto& state = gui::RmlStatusBarTestAccess::model(status_bar_);
         gui::RmlStatusBarTestAccess::updateUpscaler(status_bar_, settings,
-            {SceneUpscalerBackend::Temporal, SceneUpscalerBackend::Temporal, SceneUpscalerFallback::None});
+                                                    {SceneUpscalerBackend::Temporal, SceneUpscalerBackend::Temporal, SceneUpscalerFallback::None});
         const auto active_label = state.upscaler_value;
         EXPECT_FALSE(active_label.empty());
         gui::RmlStatusBarTestAccess::updateUpscaler(status_bar_, settings,
-            {SceneUpscalerBackend::Temporal, SceneUpscalerBackend::Native, SceneUpscalerFallback::UnsupportedMode});
+                                                    {SceneUpscalerBackend::Temporal, SceneUpscalerBackend::Native, SceneUpscalerFallback::UnsupportedMode});
         EXPECT_NE(state.upscaler_value, active_label);
         EXPECT_NE(state.upscaler_tooltip.find(LOC("status_bar.upscaler_unsupported")), std::string::npos);
         const auto native_label = state.upscaler_value;

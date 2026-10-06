@@ -9,8 +9,12 @@
 
 #include <memory>
 
-namespace lfs::core { class Tensor; }
-namespace lfs::rendering { class TensorSceneTemporalKernels; }
+namespace lfs::core {
+    class Tensor;
+}
+namespace lfs::rendering {
+    class TensorSceneTemporalKernels;
+}
 
 namespace lfs::vis {
     struct TensorSceneTemporalRequest {

@@ -771,7 +771,7 @@ namespace {
         t.div_(1.0f);
         ct + ct;
         ct - ct;
-        ct * ct;
+        ct* ct;
         ct / ct;
         ct % ct;
         ct == ct;
@@ -780,7 +780,7 @@ namespace {
         ct <= ct;
         ct > ct;
         ct >= ct;
-        ct && ct;
+        ct&& ct;
         ct || ct;
         ct | ct;
     };
@@ -1119,9 +1119,9 @@ namespace {
         TensorLeaf(t).stream_hint();
         TensorLeaf(t).snapshot();
         TensorLeaf(t).map(operation);
-        ct.template apply([](const X & value) { return value; });
+        ct.template apply([](const X& value) { return value; });
         t.template inplace([](X&) {});
-        ct.template timed("", [](const X & value) { return value; });
+        ct.template timed("", [](const X& value) { return value; });
     };
 
     using LeafExpr = TensorLeaf;
@@ -1212,7 +1212,7 @@ namespace {
         row = 1.0f;
         const_row - const_row;
         const_row + const_row;
-        const_row * const_row;
+        const_row* const_row;
         const_row / const_row;
         const_row - 1.0f;
         const_row + 1.0f;

@@ -32,6 +32,23 @@
 
 namespace lfs::core {
     namespace param {
+        std::string_view output_format_extension(
+            const OutputFormat format) noexcept {
+            switch (format) {
+            case OutputFormat::PLY: return ".ply";
+            case OutputFormat::SOG: return ".sog";
+            case OutputFormat::SSOG: return ".ssog";
+            case OutputFormat::SPZ: return ".spz";
+            case OutputFormat::GLB: return ".glb";
+            case OutputFormat::HTML: return ".html";
+            case OutputFormat::USD: return ".usd";
+            case OutputFormat::USDA: return ".usda";
+            case OutputFormat::USDC: return ".usdc";
+            case OutputFormat::RAD: return ".rad";
+            }
+            return ".ply";
+        }
+
         namespace {
             using prop::PropertyMeta;
             using prop::PropertyObjectRef;
@@ -679,6 +696,8 @@ namespace lfs::core {
                 return std::format("steps_scaler must be finite (got {})", steps_scaler);
             if (!std::isfinite(max_screen_share))
                 return std::format("max_screen_share must be finite (got {})", max_screen_share);
+            if (perf_bench_warmup < 0)
+                return std::format("perf_bench_warmup must be nonnegative (got {})", perf_bench_warmup);
             if (ppisp_warmup_steps < 0)
                 return std::format("ppisp_warmup_steps must be nonnegative (got {})", ppisp_warmup_steps);
             if (debug_python && (debug_python_port <= 0 || debug_python_port > 65535))
@@ -897,6 +916,12 @@ namespace lfs::core {
         }
 
         std::string DatasetConfig::validate() const {
+            // Exports go to output_path / output_name, so the name must stay inside it.
+            if (const auto name = lfs::core::utf8_to_path(output_name);
+                output_name == "." || name.has_root_path() || name.has_root_name() ||
+                std::ranges::any_of(name, [](const auto& part) { return part == ".."; })) {
+                return "output-name must stay inside the output path (no absolute paths or '..')";
+            }
             if (resize_factor != -1 && resize_factor < 1)
                 return std::format("resize_factor must be -1 or positive (got {})", resize_factor);
             if (test_every <= 0)

@@ -562,6 +562,7 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
             auto tensor = lfs::core::Tensor::empty(std::move(shape), lfs::core::Device::GPU, dtype);
             if (tensor.ndim() > 0 && capacity > tensor.size(0))
                 tensor.reserve(capacity);
+            tensor.mark_renderer_storage();
             tensor.set_name(std::string(name));
             return tensor;
         };

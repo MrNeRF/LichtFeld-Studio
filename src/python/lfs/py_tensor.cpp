@@ -14,6 +14,7 @@
 #include "core/tensor_vulkan_interop.hpp"
 #include "python/python_runtime.hpp"
 
+#include <cmath>
 #include <cstring>
 #if LFS_HAS_CUDA
 #include <cuda_runtime.h>
@@ -89,7 +90,7 @@ namespace lfs::python {
                 r.bits = 8;
                 break;
             case DataType::Bool:
-                r.code = kDLUInt;
+                r.code = kDLBool;
                 r.bits = 8;
                 break;
             default: throw std::runtime_error("Unsupported dtype for DLPack");
@@ -110,6 +111,8 @@ namespace lfs::python {
                 return DataType::Int64;
             if (dt.code == kDLUInt && dt.bits == 8)
                 return DataType::UInt8;
+            if (dt.code == kDLBool && dt.bits == 8)
+                return DataType::Bool;
             throw std::runtime_error("Unsupported DLPack dtype");
         }
 
@@ -314,7 +317,7 @@ namespace lfs::python {
         }
         switch (tensor_.dtype()) {
         case DataType::Float32: return tensor_.item<float>();
-        case DataType::Float16: return tensor_.item<float>(); // Tensor handles conversion
+        case DataType::Float16: return tensor_.to(DataType::Float32).item<float>();
         case DataType::Int32: return static_cast<float>(tensor_.item<int>());
         case DataType::Int64: return static_cast<float>(tensor_.item<int64_t>());
         case DataType::UInt8: return static_cast<float>(tensor_.item<unsigned char>());
@@ -334,7 +337,20 @@ namespace lfs::python {
         } else if (tensor_.dtype() == DataType::UInt8 || tensor_.dtype() == DataType::Bool) {
             return static_cast<int64_t>(tensor_.item<unsigned char>());
         }
-        return static_cast<int64_t>(tensor_.item<float>());
+        const float value = tensor_.dtype() == DataType::Float16
+                                ? tensor_.to(DataType::Float32).item<float>()
+                                : tensor_.item<float>();
+        if (std::isnan(value)) {
+            throw std::domain_error("cannot convert NaN to integer");
+        }
+        if (!std::isfinite(value)) {
+            throw std::overflow_error("cannot convert infinity to integer");
+        }
+        constexpr double int64_limit = 9223372036854775808.0;
+        if (static_cast<double>(value) < -int64_limit || static_cast<double>(value) >= int64_limit) {
+            throw std::overflow_error("floating-point value is outside the int64 range");
+        }
+        return static_cast<int64_t>(value);
     }
 
     bool PyTensor::item_bool() const {
@@ -344,10 +360,18 @@ namespace lfs::python {
         if (tensor_.dtype() == DataType::Bool) {
             return tensor_.item<unsigned char>() != 0;
         }
+        if (tensor_.dtype() == DataType::Float16) {
+            return tensor_.to(DataType::Float32).item<float>() != 0.0f;
+        }
         return tensor_.item<float>() != 0.0f;
     }
 
     nb::object PyTensor::numpy(bool copy) const {
+        if (!copy && tensor_.device() == Device::CPU && !tensor_.is_contiguous()) {
+            throw std::runtime_error(
+                "numpy(copy=False): non-contiguous CPU tensors cannot be exported without a copy; "
+                "call contiguous() or use copy=True");
+        }
         Tensor host = tensor_.device() == Device::GPU ? tensor_.cpu() : tensor_;
         Tensor cpu_tensor = host.is_contiguous() ? std::move(host) : host.contiguous();
 
@@ -601,6 +625,10 @@ namespace lfs::python {
             const auto values = cpu_tensor.to_vector();
             return build_nested_list(dims, 0, offset, [&](size_t index) { return nb::cast(values[index]); });
         }
+        case DataType::Float16: {
+            const auto values = cpu_tensor.to(DataType::Float32).to_vector();
+            return build_nested_list(dims, 0, offset, [&](size_t index) { return nb::cast(values[index]); });
+        }
         case DataType::Int32: {
             const auto values = cpu_tensor.to_vector_int();
             return build_nested_list(dims, 0, offset, [&](size_t index) { return nb::cast(values[index]); });
@@ -649,6 +677,8 @@ namespace lfs::python {
         const auto nb_dtype = arr.dtype();
         if (nb_dtype == nb::dtype<float>()) {
             dtype = DataType::Float32;
+        } else if (nb_dtype == nb::dtype<NumpyFloat16>()) {
+            dtype = DataType::Float16;
         } else if (nb_dtype == nb::dtype<int32_t>()) {
             dtype = DataType::Int32;
         } else if (nb_dtype == nb::dtype<int64_t>()) {
@@ -667,6 +697,7 @@ namespace lfs::python {
         size_t elem_size = 4;
         switch (dtype) {
         case DataType::Float32: elem_size = 4; break;
+        case DataType::Float16: elem_size = 2; break;
         case DataType::Int32: elem_size = 4; break;
         case DataType::Int64: elem_size = 8; break;
         case DataType::UInt8:

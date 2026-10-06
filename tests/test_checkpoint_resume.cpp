@@ -89,6 +89,12 @@ namespace lfs::training {
     };
 } // namespace lfs::training
 
+TEST(PerfBenchCollectorTest, ConfigureHonorsZeroWarmup) {
+    lfs::training::PerfBenchCollector::configure(true, 0);
+    EXPECT_EQ(lfs::training::PerfBenchCollector::warmup_iters(), 0);
+    lfs::training::PerfBenchCollector::configure(false, 200);
+}
+
 namespace {
 
     lfs::Error make_retry_test_error(const lfs::ErrorCode code) {
@@ -1352,6 +1358,17 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
+    TEST(CheckpointParamsJsonTest, SavedNonstandardNumericRangesRemainLoadable) {
+        auto saved = lfs::core::param::OptimizationParameters{}.to_json();
+        saved["max_screen_share"] = 1.5f;
+        saved["normal_loss_weight"] = -1.0f;
+
+        const auto loaded = lfs::core::param::OptimizationParameters::from_json(saved);
+        EXPECT_FLOAT_EQ(loaded.max_screen_share, 1.5f);
+        EXPECT_FLOAT_EQ(loaded.normal_loss_weight, -1.0f);
+        EXPECT_TRUE(loaded.validate().empty());
+    }
+
     TEST(CheckpointParamsJsonTest, SplatCompositionParamsRoundTrip) {
         const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_params_json";
         std::error_code ec;
@@ -1453,6 +1470,37 @@ namespace {
         EXPECT_TRUE(loaded->add_splat_paths.empty());
         EXPECT_TRUE(loaded->add_splat_freeze.empty());
 
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    TEST(CheckpointParamsJsonTest,
+         MissingImageBackgroundDoesNotBlockCheckpointLoad) {
+        const auto temp_dir =
+            std::filesystem::temp_directory_path() /
+            "lfs_checkpoint_missing_bg_image";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        auto params = make_params_json_test_params(temp_dir);
+        params.optimization.bg_mode =
+            lfs::core::param::BackgroundMode::Image;
+        params.optimization.bg_image_path =
+            temp_dir / "moved-background.png";
+        auto source_model = make_checkpoint_test_splat(2);
+        lfs::training::MCMC source_strategy(*source_model);
+        ASSERT_TRUE(lfs::test::write_checkpoint_fixture(
+                        temp_dir, 5, source_strategy, params,
+                        nullptr, nullptr, nullptr, nullptr)
+                        .has_value());
+
+        auto loaded = lfs::core::load_checkpoint_params(
+            lfs::test::checkpoint_fixture_path(temp_dir));
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+        EXPECT_EQ(loaded->optimization.bg_mode,
+                  lfs::core::param::BackgroundMode::Image);
+        EXPECT_EQ(loaded->optimization.bg_image_path,
+                  params.optimization.bg_image_path);
         std::filesystem::remove_all(temp_dir, ec);
     }
 
@@ -2059,6 +2107,41 @@ namespace {
         EXPECT_EQ(roundtrip.frozen_ranges().size(), 2u);
     }
 
+    TEST(ProjectSnapshotTest, CapturesPayloadBindingsForSecondarySplats) {
+        lfs::core::Scene scene;
+        const auto training_id = scene.addSplat(
+            "training", make_checkpoint_test_splat(2));
+        ASSERT_NE(training_id, lfs::core::NULL_NODE);
+        scene.setTrainingModelNode(training_id);
+        const auto secondary_id = scene.addSplat(
+            "secondary", make_checkpoint_test_splat(2));
+        ASSERT_NE(secondary_id, lfs::core::NULL_NODE);
+        const auto secondary_uuid = scene.getNodeUuid(secondary_id);
+        const lfs::io::project::ScenePayloadBindings inherited_bindings{
+            {secondary_uuid,
+             lfs::io::project::PayloadBinding{
+                 .fourcc = "SPLT",
+                 .instance_uuid = secondary_uuid,
+                 .source_kind = "ply"}}};
+
+        lfs::core::param::TrainingParameters params;
+        params.optimization.strategy = "mcmc";
+        lfs::training::ProjectSnapshotCpuState state;
+        const auto captured =
+            lfs::training::capture_project_snapshot_cpu_state(
+                scene, params, lfs::test::licht::fixed_uuid(9991), 1,
+                state, {}, inherited_bindings);
+        ASSERT_TRUE(captured)
+            << lfs::format_for_developer(captured.error());
+        ASSERT_EQ(state.scene_graph.nodes.size(), 2u);
+        const auto secondary = std::ranges::find(
+            state.scene_graph.nodes, secondary_uuid,
+            &lfs::io::project::SceneNodeRecord::uuid);
+        ASSERT_NE(secondary, state.scene_graph.nodes.end());
+        ASSERT_TRUE(secondary->payload.has_value());
+        EXPECT_EQ(secondary->payload->fourcc, "SPLT");
+    }
+
     // Catches a mask spec that the trainer's setup dispatch mistakes for a mesh path or rejects
     // although the evaluator supports it.
     TEST(TrainerEvalMaskSetup, SpecsWithoutFilesInitializeTheTrainer) {
@@ -2571,6 +2654,123 @@ namespace {
         std::cout << " count=" << reopened->checkpoint_uuids().size()
                   << '\n';
 
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           FailedConfiguredProjectSaveFailsTraining) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_failed_configured_project_save";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        auto params = make_tiny_headless_params(output_path, 2);
+        params.save_project_at_iteration = 1;
+        params.save_project_path = output_path / "blocked.licht";
+        std::filesystem::create_directory(params.save_project_path);
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        auto trainer = std::make_unique<lfs::training::Trainer>(scene);
+        ASSERT_TRUE(trainer->initialize(params));
+        lfs::training::grant_headless_project_saves(*trainer, params);
+
+        auto train = trainer->train();
+        EXPECT_FALSE(train);
+        if (!train) {
+            EXPECT_NE(lfs::format_for_developer(train.error()).find("blocked.licht"),
+                      std::string::npos);
+        }
+        trainer->shutdown();
+        EXPECT_TRUE(std::filesystem::exists(output_path / "project.licht"));
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           EvaluationWithNoIncludedViewsFailsTraining) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_eval_mask_skips_every_view";
+        const auto mask_path = output_path / "empty-masks";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(mask_path);
+
+        auto params = make_tiny_headless_params(output_path, 2);
+        params.optimization.enable_eval = true;
+        params.optimization.eval_steps = {1};
+        params.optimization.eval_mask =
+            "masks:" + lfs::core::path_to_utf8(mask_path);
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        lfs::training::Trainer trainer(scene);
+        ASSERT_TRUE(trainer.initialize(params));
+        lfs::training::grant_headless_project_saves(trainer, params);
+
+        auto train = trainer.train();
+        EXPECT_FALSE(train);
+        EXPECT_EQ(trainer.get_current_iteration(), 2);
+        trainer.shutdown();
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           MissingImageBackgroundFailsTrainerInitialization) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_missing_image_background_init";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        auto params = make_tiny_headless_params(output_path, 2);
+        params.optimization.bg_mode =
+            lfs::core::param::BackgroundMode::Image;
+        params.optimization.bg_image_path =
+            output_path / "missing-background.png";
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        lfs::training::Trainer trainer(scene);
+        const auto init = trainer.initialize(params);
+        ASSERT_FALSE(init.has_value());
+        EXPECT_NE(init.error().find("missing-background.png"),
+                  std::string::npos);
+        trainer.shutdown();
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           UnreadableImageBackgroundFailsTrainerInitialization) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_unreadable_image_background_init";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+        const auto image_path = output_path / "invalid-background.png";
+        std::ofstream(image_path, std::ios::binary) << "not an image";
+
+        auto params = make_tiny_headless_params(output_path, 2);
+        params.optimization.bg_mode =
+            lfs::core::param::BackgroundMode::Image;
+        params.optimization.bg_image_path = image_path;
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        lfs::training::Trainer trainer(scene);
+        const auto init = trainer.initialize(params);
+        ASSERT_FALSE(init.has_value());
+        EXPECT_NE(init.error().find("Failed to load image background"),
+                  std::string::npos);
+        trainer.shutdown();
         std::filesystem::remove_all(output_path, ec);
     }
 

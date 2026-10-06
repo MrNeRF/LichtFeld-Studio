@@ -87,9 +87,9 @@ namespace lfs::rendering {
     SplatPointRenderer::~SplatPointRenderer() = default;
 
     lfs::Result<void> SplatPointRenderer::render(const SplatPointInputs& in,
-                                                  const PointParameters& point,
-                                                  const uint32_t width, const uint32_t height,
-                                                  const std::array<float, 4> background) {
+                                                 const PointParameters& point,
+                                                 const uint32_t width, const uint32_t height,
+                                                 const std::array<float, 4> background) {
         auto& s = *impl_;
         const auto tensor_valid = [&](const Tensor* tensor) {
             return tensor && tensor->is_valid() && tensor->device() == Device::GPU &&
@@ -157,20 +157,31 @@ namespace lfs::rendering {
         DrawParameters parameters{.point = point, .extent = {width, height}};
         const auto present = [](const Tensor* tensor) { return tensor && tensor->is_valid() ? tensor : nullptr; };
         const std::array draw_bindings{
-            M::Binding{0, count ? in.positions : nullptr}, M::Binding{8, count ? in.colors : nullptr},
-            M::Binding{16, in.objects.empty() ? nullptr : &s.objects}, M::Binding{24, present(in.transform_indices)},
-            M::Binding{32, present(in.selection)}, M::Binding{40, present(in.preview)},
-            M::Binding{48, selection_enabled ? &s.palette : nullptr}, M::Binding{56, present(in.deleted)},
-            M::Binding{64, nullptr}, M::Binding{72, nullptr},
+            M::Binding{0, count ? in.positions : nullptr},
+            M::Binding{8, count ? in.colors : nullptr},
+            M::Binding{16, in.objects.empty() ? nullptr : &s.objects},
+            M::Binding{24, present(in.transform_indices)},
+            M::Binding{32, present(in.selection)},
+            M::Binding{40, present(in.preview)},
+            M::Binding{48, selection_enabled ? &s.palette : nullptr},
+            M::Binding{56, present(in.deleted)},
+            M::Binding{64, nullptr},
+            M::Binding{72, nullptr},
         };
         auto color_draw = M::Draw{
-            .vertex = "pointVertex", .fragment = "pointColorFragment",
+            .vertex = "pointVertex",
+            .fragment = "pointColorFragment",
             .arguments = {std::as_bytes(std::span(&parameters, 1)), draw_bindings},
-            .color = &s.rgba, .depth = &s.raster_depth, .vertex_count = 6,
+            .color = &s.rgba,
+            .depth = &s.raster_depth,
+            .vertex_count = 6,
             .instance_count = uint32_t(count),
-            .depth_compare = M::Compare::Less, .depth_write = true,
-            .clear_color = true, .color_clear = background,
-            .clear_depth = true, .depth_clear = 1.0f,
+            .depth_compare = M::Compare::Less,
+            .depth_write = true,
+            .clear_color = true,
+            .color_clear = background,
+            .clear_depth = true,
+            .depth_clear = 1.0f,
         };
         if (auto result = s.module->draw(color_draw); !result)
             return result;
@@ -186,9 +197,16 @@ namespace lfs::rendering {
             return result;
 
         const std::array copy_bindings{
-            M::Binding{0, nullptr}, M::Binding{8, nullptr}, M::Binding{16, nullptr}, M::Binding{24, nullptr},
-            M::Binding{32, nullptr}, M::Binding{40, nullptr}, M::Binding{48, nullptr}, M::Binding{56, nullptr},
-            M::Binding{64, &s.depth_rgba}, M::Binding{72, &s.linear, M::Access::ReadWrite},
+            M::Binding{0, nullptr},
+            M::Binding{8, nullptr},
+            M::Binding{16, nullptr},
+            M::Binding{24, nullptr},
+            M::Binding{32, nullptr},
+            M::Binding{40, nullptr},
+            M::Binding{48, nullptr},
+            M::Binding{56, nullptr},
+            M::Binding{64, &s.depth_rgba},
+            M::Binding{72, &s.linear, M::Access::ReadWrite},
         };
         return s.module->dispatch({
             .function = "extractPointDepth",

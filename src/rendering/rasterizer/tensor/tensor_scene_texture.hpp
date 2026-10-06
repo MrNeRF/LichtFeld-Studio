@@ -23,7 +23,7 @@ namespace lfs::rendering {
     public:
         explicit TensorSceneTextureKernels(core::GpuBackend backend) : backend_(backend) {}
         lfs::Result<void> dispatch(bool unpack, const SceneTextureParameters& parameters,
-                                  const std::array<core::Tensor*, 8>& tensors);
+                                   const std::array<core::Tensor*, 8>& tensors);
 
     private:
         core::GpuBackend backend_;

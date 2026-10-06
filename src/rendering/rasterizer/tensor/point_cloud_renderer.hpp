@@ -47,9 +47,9 @@ namespace lfs::rendering {
         SplatPointRenderer& operator=(const SplatPointRenderer&) = delete;
 
         [[nodiscard]] lfs::Result<void> render(const SplatPointInputs& inputs,
-                                                const PointParameters& parameters,
-                                                uint32_t width, uint32_t height,
-                                                std::array<float, 4> background);
+                                               const PointParameters& parameters,
+                                               uint32_t width, uint32_t height,
+                                               std::array<float, 4> background);
 
         [[nodiscard]] const core::Tensor& color() const;        // UInt8 [H,W,4]
         [[nodiscard]] const core::Tensor& linear_depth() const; // Float32 [H,W]

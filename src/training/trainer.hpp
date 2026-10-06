@@ -361,6 +361,8 @@ namespace lfs::training {
             bool at_step_boundaries = false; // save_steps + sparsity phase boundary
         };
         void set_trainer_project_save_policy(TrainerProjectSavePolicy policy);
+        void set_project_snapshot_payload_bindings(
+            lfs::io::project::ScenePayloadBindings bindings);
         [[nodiscard]] TrainerProjectSavePolicy
         trainer_project_save_policy() const;
         [[nodiscard]] std::optional<std::filesystem::path>
@@ -746,6 +748,8 @@ namespace lfs::training {
 
         std::unique_ptr<TrainingSnapshotService>
             project_snapshot_service_;
+        lfs::io::project::ScenePayloadBindings
+            project_snapshot_payload_bindings_;
         std::optional<PreparedTrainingSnapshot>
             prepared_project_snapshot_;
         std::shared_ptr<ProjectSnapshotChapters>
@@ -898,6 +902,7 @@ namespace lfs::training {
         // Metrics evaluator - handles all evaluation logic
         std::unique_ptr<lfs::training::MetricsEvaluator> evaluator_;
         std::optional<std::filesystem::path> lpips_weights_path_;
+        std::optional<lfs::Error> deferred_evaluation_error_;
 
         // Single mutex that protects the model during training
         mutable std::shared_mutex render_mutex_;

@@ -835,7 +835,7 @@ namespace {
         }
         const Rendered frozen = render(s, base, v, nullptr);
         const auto lists = frozen.lists;
-        auto derivative = [&](std::vector<double> Params::* member, const size_t index) {
+        auto derivative = [&](std::vector<double> Params::*member, const size_t index) {
             constexpr double h = 1e-5;
             Params p = base;
             (p.*member)[index] += h;
@@ -844,7 +844,7 @@ namespace {
             const double down = loss(render(s, p, v, &lists), w);
             return (up - down) / (2 * h);
         };
-        auto all = [&](std::vector<double> Params::* member, const size_t size) {
+        auto all = [&](std::vector<double> Params::*member, const size_t size) {
             std::vector<double> out(size);
             for (size_t i = 0; i < size; ++i)
                 out[i] = derivative(member, i);
@@ -1223,7 +1223,7 @@ namespace {
         const float inf = std::numeric_limits<float>::infinity();
         struct Case {
             const char* name;
-            std::vector<float> Scene::* field;
+            std::vector<float> Scene::*field;
             int width;
             float value;
         };

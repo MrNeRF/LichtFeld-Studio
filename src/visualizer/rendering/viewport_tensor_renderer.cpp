@@ -12,10 +12,10 @@
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "internal/resource_paths.hpp"
+#include "split_view_tensor_program.hpp"
 #include "tensor_frame_uploads.hpp"
 #include "view_render_state.hpp"
 #include "viewport_compose_program.hpp"
-#include "split_view_tensor_program.hpp"
 #include "viewport_grid_program.hpp"
 #include "viewport_overlay_program.hpp"
 #include "viewport_reference_state.hpp"
@@ -810,9 +810,8 @@ namespace lfs::vis {
                                    static_cast<std::uint32_t>(SceneUpscalerBackend::FirstExternal) ||
                                (isMetalFxBackend(desc.scene_upscaler) && metalFxBackendAvailable(desc.scene_upscaler));
         impl_->upscaler = resolveSceneUpscalerSelection(desc.scene_upscaler,
-            available && !desc.scene_upscaler_mode_unsupported && !view.scene_upscaler_runtime_failed_,
-            desc.scene_upscaler_mode_unsupported ? SceneUpscalerFallback::UnsupportedMode :
-                                                  SceneUpscalerFallback::RuntimeUnavailable);
+                                                        available && !desc.scene_upscaler_mode_unsupported && !view.scene_upscaler_runtime_failed_,
+                                                        desc.scene_upscaler_mode_unsupported ? SceneUpscalerFallback::UnsupportedMode : SceneUpscalerFallback::RuntimeUnavailable);
     }
 
     void ViewportReferenceRenderer::record(const GraphicsFrame& frame,

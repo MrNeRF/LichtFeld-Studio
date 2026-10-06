@@ -81,11 +81,16 @@ namespace lfs::rendering {
             return loaded;
         DispatchParameters dispatch{.motion = parameters};
         const std::array bindings{
-            Module::Binding{0, &depth}, Module::Binding{8, &output, Module::Access::ReadWrite},
-            Module::Binding{16, nullptr}, Module::Binding{24, nullptr},
-            Module::Binding{32, nullptr}, Module::Binding{40, nullptr},
-            Module::Binding{48, nullptr}, Module::Binding{56, nullptr},
-            Module::Binding{64, nullptr}, Module::Binding{72, nullptr},
+            Module::Binding{0, &depth},
+            Module::Binding{8, &output, Module::Access::ReadWrite},
+            Module::Binding{16, nullptr},
+            Module::Binding{24, nullptr},
+            Module::Binding{32, nullptr},
+            Module::Binding{40, nullptr},
+            Module::Binding{48, nullptr},
+            Module::Binding{56, nullptr},
+            Module::Binding{64, nullptr},
+            Module::Binding{72, nullptr},
         };
         const auto arguments = std::as_bytes(std::span(&dispatch, 1));
         return impl_->module->dispatch({
@@ -139,12 +144,16 @@ namespace lfs::rendering {
             return loaded;
         DispatchParameters dispatch{.resolve = parameters};
         const std::array bindings{
-            Module::Binding{0, nullptr}, Module::Binding{8, nullptr},
-            Module::Binding{16, &current}, Module::Binding{24, history},
-            Module::Binding{32, &motion_tensor}, Module::Binding{40, current_depth},
+            Module::Binding{0, nullptr},
+            Module::Binding{8, nullptr},
+            Module::Binding{16, &current},
+            Module::Binding{24, history},
+            Module::Binding{32, &motion_tensor},
+            Module::Binding{40, current_depth},
             Module::Binding{48, history_depth},
             Module::Binding{56, &output, Module::Access::ReadWrite},
-            Module::Binding{64, nullptr}, Module::Binding{72, nullptr},
+            Module::Binding{64, nullptr},
+            Module::Binding{72, nullptr},
         };
         const auto arguments = std::as_bytes(std::span(&dispatch, 1));
         return impl_->module->dispatch({
@@ -175,12 +184,16 @@ namespace lfs::rendering {
             return loaded;
         DispatchParameters dispatch{.resolve = parameters};
         const std::array bindings{
-            Module::Binding{0, nullptr}, Module::Binding{8, nullptr},
-            Module::Binding{16, &current}, Module::Binding{24, nullptr},
-            Module::Binding{32, nullptr}, Module::Binding{40, nullptr},
+            Module::Binding{0, nullptr},
+            Module::Binding{8, nullptr},
+            Module::Binding{16, &current},
+            Module::Binding{24, nullptr},
+            Module::Binding{32, nullptr},
+            Module::Binding{40, nullptr},
             Module::Binding{48, nullptr},
             Module::Binding{56, &output, Module::Access::ReadWrite},
-            Module::Binding{64, nullptr}, Module::Binding{72, nullptr},
+            Module::Binding{64, nullptr},
+            Module::Binding{72, nullptr},
         };
         const auto arguments = std::as_bytes(std::span(&dispatch, 1));
         return impl_->module->dispatch({
@@ -206,10 +219,14 @@ namespace lfs::rendering {
             return loaded;
         const DispatchParameters dispatch{.count = static_cast<std::uint32_t>(samples.size())};
         const std::array bindings{
-            Module::Binding{0, nullptr}, Module::Binding{8, nullptr},
-            Module::Binding{16, nullptr}, Module::Binding{24, nullptr},
-            Module::Binding{32, nullptr}, Module::Binding{40, nullptr},
-            Module::Binding{48, nullptr}, Module::Binding{56, nullptr},
+            Module::Binding{0, nullptr},
+            Module::Binding{8, nullptr},
+            Module::Binding{16, nullptr},
+            Module::Binding{24, nullptr},
+            Module::Binding{32, nullptr},
+            Module::Binding{40, nullptr},
+            Module::Binding{48, nullptr},
+            Module::Binding{56, nullptr},
             Module::Binding{64, &input},
             Module::Binding{72, &output, Module::Access::ReadWrite},
         };

@@ -1145,7 +1145,21 @@ namespace lfs::app {
             set_bool("antialiasing", settings.antialiasing);
             set_bool("mip_filter", settings.mip_filter);
             set_int("sh_degree", settings.sh_degree);
-            set_float("render_scale", settings.render_scale);
+            if (args.contains("render_scale")) {
+                const auto& value = args["render_scale"];
+                if (!value.is_number()) {
+                    return std::unexpected(
+                        "Field 'render_scale' must be a number between 0.25 and 1.0");
+                }
+                const double render_scale = value.get<double>();
+                if (!std::isfinite(render_scale) || render_scale < 0.25 ||
+                    render_scale > 1.0) {
+                    return std::unexpected(
+                        "Field 'render_scale' must be between 0.25 and 1.0");
+                }
+                settings.render_scale = static_cast<float>(render_scale);
+                touched = true;
+            }
             if (auto result = set_scene_reconstruction(settings); !result)
                 return result;
             set_bool("show_crop_box", settings.show_crop_box);

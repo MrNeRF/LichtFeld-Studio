@@ -233,10 +233,9 @@ namespace lfs::vis::gui {
             const std::array bindings{
                 Module::Binding{0, &dummy_texture},
                 Module::Binding{8, &target, Module::Access::ReadWrite}};
-            auto result = mask_program->dispatch({
-                .function = "clearRegion",
-                .arguments = {std::as_bytes(std::span(&parameters, 1)), bindings},
-                .groups = {Module::groups_for(rect.width, 64), rect.height, 1}});
+            auto result = mask_program->dispatch({.function = "clearRegion",
+                                                  .arguments = {std::as_bytes(std::span(&parameters, 1)), bindings},
+                                                  .groups = {Module::groups_for(rect.width, 64), rect.height, 1}});
             if (!result)
                 LOG_ERROR("Tensor RmlUi region clear failed: {}", result.error().detail());
             return result.has_value();

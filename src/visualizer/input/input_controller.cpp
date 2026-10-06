@@ -2315,13 +2315,24 @@ namespace lfs::vis {
 
             case input::Action::DELETE_SELECTED:
                 if (tool_context_) {
-                    if (auto* sm = tool_context_->getSceneManager();
-                        sm && !sm->getScene().hasSelection()) {
-                        const auto selected = sm->getSelectedNodeNames();
-                        if (!selected.empty()) {
-                            for (const auto& name : selected)
-                                cmd::RemovePLY{.name = name, .keep_children = false}.emit();
-                            return;
+                    if (auto* sm = tool_context_->getSceneManager(); sm) {
+                        if (selection_tool_ && selection_tool_->isEnabled()) {
+                            if (auto* selection_service = sm->getSelectionService();
+                                selection_service && selection_service->isInteractiveSelectionActive()) {
+                                if (!selection_service->finishInteractiveSelection().success) {
+                                    return;
+                                }
+                            }
+                            if (!sm->getScene().hasSelection()) {
+                                return;
+                            }
+                        } else if (!sm->getScene().hasSelection()) {
+                            const auto selected = sm->getSelectedNodeNames();
+                            if (!selected.empty()) {
+                                for (const auto& name : selected)
+                                    cmd::RemovePLY{.name = name, .keep_children = false}.emit();
+                                return;
+                            }
                         }
                     }
                 }

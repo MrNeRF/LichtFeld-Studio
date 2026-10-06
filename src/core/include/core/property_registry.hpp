@@ -68,7 +68,7 @@ namespace lfs::core::prop {
         PropertyGroupBuilder(const std::string& group_id, const std::string& group_name)
             : group_{.id = group_id, .name = group_name} {}
 
-        PropertyGroupBuilder& float_prop(float StructT::* member,
+        PropertyGroupBuilder& float_prop(float StructT::*member,
                                          const std::string& id,
                                          const std::string& name,
                                          float default_val,
@@ -90,7 +90,7 @@ namespace lfs::core::prop {
             return *this;
         }
 
-        PropertyGroupBuilder& int_prop(int StructT::* member,
+        PropertyGroupBuilder& int_prop(int StructT::*member,
                                        const std::string& id,
                                        const std::string& name,
                                        int default_val,
@@ -112,7 +112,7 @@ namespace lfs::core::prop {
             return *this;
         }
 
-        PropertyGroupBuilder& size_prop(size_t StructT::* member,
+        PropertyGroupBuilder& size_prop(size_t StructT::*member,
                                         const std::string& id,
                                         const std::string& name,
                                         size_t default_val,
@@ -134,7 +134,7 @@ namespace lfs::core::prop {
             return *this;
         }
 
-        PropertyGroupBuilder& bool_prop(bool StructT::* member,
+        PropertyGroupBuilder& bool_prop(bool StructT::*member,
                                         const std::string& id,
                                         const std::string& name,
                                         bool default_val,
@@ -147,7 +147,7 @@ namespace lfs::core::prop {
             return *this;
         }
 
-        PropertyGroupBuilder& string_prop(std::string StructT::* member,
+        PropertyGroupBuilder& string_prop(std::string StructT::*member,
                                           const std::string& id,
                                           const std::string& name,
                                           const std::string& default_val = "",
@@ -161,7 +161,7 @@ namespace lfs::core::prop {
         }
 
         template <typename EnumT>
-        PropertyGroupBuilder& enum_prop(EnumT StructT::* member,
+        PropertyGroupBuilder& enum_prop(EnumT StructT::*member,
                                         const std::string& id,
                                         const std::string& name,
                                         EnumT default_val,
@@ -181,7 +181,7 @@ namespace lfs::core::prop {
 
         template <typename EnumT>
         PropertyGroupBuilder& enum_prop(
-            EnumT StructT::* member,
+            EnumT StructT::*member,
             const std::string& id,
             const std::string& name,
             EnumT default_val,
@@ -202,7 +202,7 @@ namespace lfs::core::prop {
 
         template <typename EnumT>
         PropertyGroupBuilder& enum_prop(
-            EnumT StructT::* member,
+            EnumT StructT::*member,
             const std::string& id,
             const std::string& name,
             EnumT default_val,
@@ -224,7 +224,7 @@ namespace lfs::core::prop {
 
         // AnimatableProperty<T> with undo/animation support
         template <typename T>
-        PropertyGroupBuilder& animatable_prop(AnimatableProperty<T> StructT::* member,
+        PropertyGroupBuilder& animatable_prop(AnimatableProperty<T> StructT::*member,
                                               const std::string& id,
                                               const std::string& name,
                                               const T& /*default_val*/,
@@ -249,7 +249,7 @@ namespace lfs::core::prop {
             return *this;
         }
 
-        PropertyGroupBuilder& vec3_prop(glm::vec3 StructT::* member,
+        PropertyGroupBuilder& vec3_prop(glm::vec3 StructT::*member,
                                         const std::string& id,
                                         const std::string& name,
                                         const glm::vec3& default_val,
@@ -266,7 +266,7 @@ namespace lfs::core::prop {
             return *this;
         }
 
-        PropertyGroupBuilder& color3_prop(glm::vec3 StructT::* member,
+        PropertyGroupBuilder& color3_prop(glm::vec3 StructT::*member,
                                           const std::string& id,
                                           const std::string& name,
                                           const glm::vec3& default_val,
@@ -283,7 +283,7 @@ namespace lfs::core::prop {
             return *this;
         }
 
-        PropertyGroupBuilder& color3_prop(std::array<float, 3> StructT::* member,
+        PropertyGroupBuilder& color3_prop(std::array<float, 3> StructT::*member,
                                           const std::string& id,
                                           const std::string& name,
                                           const std::array<float, 3>& default_val,
@@ -380,7 +380,7 @@ namespace lfs::core::prop {
 
     private:
         template <typename EnumT>
-        PropertyGroupBuilder& enum_prop_impl(EnumT StructT::* member,
+        PropertyGroupBuilder& enum_prop_impl(EnumT StructT::*member,
                                              const std::string& id,
                                              const std::string& name,
                                              EnumT default_val,
@@ -409,7 +409,7 @@ namespace lfs::core::prop {
         }
 
         template <typename MemberT, typename GetFn, typename SetFn>
-        PropertyGroupBuilder& add_prop(MemberT StructT::* member,
+        PropertyGroupBuilder& add_prop(MemberT StructT::*member,
                                        const std::string& id,
                                        const std::string& name,
                                        PropType type,
