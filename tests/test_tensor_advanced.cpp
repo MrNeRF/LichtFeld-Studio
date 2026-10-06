@@ -10,10 +10,12 @@
 
 using namespace lfs::core;
 
-TEST(TensorAdvancedTest, LinspaceIncludesEndpointsAndRejectsZeroSteps) {
+TEST(TensorAdvancedTest, LinspaceIncludesEndpointsAndZeroStepsAreEmpty) {
     const auto values = Tensor::linspace(-1.0f, 1.0f, 5, Device::CUDA).cpu().to_vector();
     EXPECT_EQ(values, (std::vector<float>{-1.0f, -0.5f, 0.0f, 0.5f, 1.0f}));
-    EXPECT_THROW(Tensor::linspace(0.0f, 1.0f, 0, Device::CUDA), std::runtime_error);
+    const auto empty = Tensor::linspace(0.0f, 1.0f, 0, Device::CUDA);
+    EXPECT_EQ(empty.shape(), TensorShape({0}));
+    EXPECT_TRUE(empty.is_empty());
 }
 
 TEST(TensorAdvancedTest, StackPreservesValuesAndRejectsEmptyInput) {
