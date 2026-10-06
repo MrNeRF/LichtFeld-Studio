@@ -101,12 +101,14 @@ class ExtractionContracts(unittest.TestCase):
         for source in (bad, self.root / "missing é.nut"):
             result = self.probe(source)
             self.assertFalse(result["success"])
-            self.assertEqual(result["error_code"], 2)
+            self.assertEqual(result["error_code"], "DataLoss" if source == bad else "NotFound")
+            self.assertEqual(result["error_domain"], "IO")
             self.assertLess(result["ffmpeg_code"], 0)
         for timeout in (0, -1):
             result = self.probe(timeout_ms=timeout)
             self.assertFalse(result["success"])
-            self.assertEqual(result["error_code"], 1)
+            self.assertEqual(result["error_code"], "InvalidArgument")
+            self.assertEqual(result["ffmpeg_code"], 0)
 
     def test_probe_matrix_matches_real_player_and_explicit_extraction(self):
         base = self.root / "rotation-base.mov"

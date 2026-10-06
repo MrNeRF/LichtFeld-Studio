@@ -53,10 +53,26 @@ namespace lfs::media {
                 return state.expired ? 1 : 0;
             }
         };
-        ProbeResult failure(ProbeErrorCode code, int error, const char* operation, bool expired) {
+        Error invalidOptions(const char* message) {
+            return make_error({.code = ErrorCode::InvalidArgument,
+                               .domain = ErrorDomain::IO,
+                               .detail = message,
+                               .detection = LFS_SOURCE_SITE_CURRENT()});
+        }
+        Error failure(int error, const char* operation, bool expired) {
             char text[AV_ERROR_MAX_STRING_SIZE]{};
             av_strerror(error, text, sizeof(text));
-            return {std::nullopt, {expired ? ProbeErrorCode::TimedOut : code, error, std::string(operation) + ": " + text}};
+            const auto code = expired ? ErrorCode::DeadlineExceeded : error == AVERROR(ENOMEM)   ? ErrorCode::ResourceExhausted
+                                                                  : error == AVERROR(ENOENT)     ? ErrorCode::NotFound
+                                                                  : error == AVERROR(EACCES)     ? ErrorCode::PermissionDenied
+                                                                  : error == AVERROR_INVALIDDATA ? ErrorCode::DataLoss
+                                                                                                 : ErrorCode::Unavailable;
+            return make_error({.code = code,
+                               .domain = ErrorDomain::IO,
+                               .detail = std::string(operation) + ": " + text,
+                               .detection = LFS_SOURCE_SITE_CURRENT(),
+                               .fields = SmallFields{}.add("operation", std::string_view(operation)),
+                               .native = NativeError{ErrorDomain::IO, error, text}});
         }
     } // namespace
 
@@ -219,30 +235,30 @@ namespace lfs::media {
         }
     } // namespace detail
 
-    ProbeResult MediaProbe::inspect(const std::filesystem::path& path, const ProbeOptions& options) {
+    Result<MediaDescription> MediaProbe::inspect(const std::filesystem::path& path, const ProbeOptions& options) {
         if (path.empty() || path.native().find(std::filesystem::path::value_type{}) != std::string::npos || options.timeout.count() <= 0 ||
             (options.depth != ProbeDepth::Headers && options.depth != ProbeDepth::StreamInfo))
-            return {std::nullopt, {ProbeErrorCode::InvalidOptions, 0, "Probe requires a path and a positive timeout"}};
+            return invalidOptions("Probe requires a valid path, depth and positive timeout");
         const auto utf8 = core::path_to_utf8(path);
         if (utf8.find('\0') != std::string::npos)
-            return {std::nullopt, {ProbeErrorCode::InvalidOptions, 0, "Probe path contains a null byte"}};
+            return invalidOptions("Probe path contains a null byte");
         Deadline deadline{std::chrono::steady_clock::now(), options.timeout};
         AVFormatContext* raw = avformat_alloc_context();
         if (!raw)
-            return failure(ProbeErrorCode::OpenInput, AVERROR(ENOMEM), "Allocate input", false);
+            return failure(AVERROR(ENOMEM), "Allocate input", false);
         auto close = [](AVFormatContext* context) { avformat_close_input(&context); };
         raw->interrupt_callback = {Deadline::interrupt, &deadline};
         const int opened = avformat_open_input(&raw, utf8.c_str(), nullptr, nullptr);
         std::unique_ptr<AVFormatContext, decltype(close)> context(raw, close);
         if (opened < 0)
-            return failure(ProbeErrorCode::OpenInput, opened, "Open input", deadline.expired);
+            return failure(opened, "Open input", deadline.expired);
         if (options.depth == ProbeDepth::StreamInfo) {
             const int probed = avformat_find_stream_info(context.get(), nullptr);
             if (probed < 0)
-                return failure(ProbeErrorCode::StreamInfo, probed, "Read stream info", deadline.expired);
+                return failure(probed, "Read stream info", deadline.expired);
         }
         auto description = detail::describeContext(context.get());
         description.stream_info_probed = options.depth == ProbeDepth::StreamInfo;
-        return {std::move(description), {}};
+        return description;
     }
 } // namespace lfs::media

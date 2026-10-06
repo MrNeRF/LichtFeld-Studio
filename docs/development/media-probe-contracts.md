@@ -1,15 +1,13 @@
 # Shared media probe and video metadata contracts
 
-Branch: `codex/media-probe-contracts`.
-Base: `19eb57ecde873f161fdefee68ded1a2741fe43ea` (`upstream/dev`, includes PR #2877).
-Validation and scope are recorded below; remote check results are tracked by the pull request.
-
 ## Implemented API
 
 `src/io/include/io/media/media_probe.hpp` exposes `lfs::media::MediaProbe::inspect`
-using standard C++ types. The public header requires neither FFmpeg headers nor
+using owned C++ data and `lfs::Result<MediaDescription>` from `core/error.hpp`.
+The public header requires neither FFmpeg headers nor
 GUI, renderer or JSON types. Implementation is currently compiled into the
-existing `lfs_video` target and the standalone CPU test runner.
+existing `lfs_video` target and the standalone CPU test runner. `lfs_video`
+propagates its core dependency to consumers of the public result type.
 
 | Contract | Result |
 |---|---|
@@ -19,7 +17,7 @@ existing `lfs_video` target and the standalone CPU test runner.
 | Color | Optional primaries, transfer, matrix, range and component depth derived from pixel format or codec raw sample depth |
 | Orientation | Original rotate tag and nine display-matrix integers, metadata source, optional clockwise angle and reflection flag |
 | Probe depth | Headers or FFmpeg stream-info probing; result records whether packet probing was requested and completed |
-| Errors | Typed option/open/probe/timeout errors, native FFmpeg code and message; unsuccessful results contain no partial description |
+| Errors | `lfs::Error` in the IO domain: InvalidArgument, NotFound, PermissionDenied, ResourceExhausted, DeadlineExceeded, DataLoss or Unavailable; native FFmpeg code and operation retained; failure has no partial description |
 | Lifetime | Returned strings/vectors/matrices own their data; no FFmpeg pointer escapes the API |
 
 No images are written. StreamInfo can read packets and run FFmpeg software codec
@@ -28,6 +26,12 @@ cooperative interrupt callback and is not a hard wall-clock guarantee. Empty or
 NUL-containing paths and invalid timeout/depth options are rejected before opening.
 Property values can originate from FFmpeg packet analysis; declared FPS does not
 prove CFR, and a missing duration is not synthesized from frame count/FPS.
+
+Invalid options have no native status. FFmpeg failures retain `NativeError` and
+an `operation` field (`Allocate input`, `Open input`, or `Read stream info`), so
+callers can identify the stage independently of the stable error category.
+A timeout takes precedence over the underlying FFmpeg status. Other unmapped
+FFmpeg failures use `Unavailable`; the original status is never discarded.
 
 ## Integration and corrected behavior
 
@@ -50,17 +54,6 @@ explicit extractor rotation continues to transform the saved images.
 
 ## Verification
 
-Executed locally on Windows, 6 October 2026:
-
-- MSVC 19.44 Release build compiling actual probe, player and extractor sources.
-- `MediaExtractionContracts`: 22 Python test methods, including the original 16
-  extraction tests and 6 added probe/preview tests with parameterized cases.
-- `MediaProbeUnitContracts`: native assertions for absent properties, signed and
-  zero timestamps, invalid timebases, tag/matrix precedence, reflection,
-  truncated/degenerate matrices, invalid tags/options/paths and stream selection.
-- `MediaFixturePreparation`: 7 Python test methods.
-- I/O discipline, backend-neutrality and Python syntax checks; `git diff --check`.
-
 The suite compares source properties to independent ffprobe output, verifies
 probe does not change source bytes, tests audio-only and audio-first/multi-video
 inputs, and compares real SDR preview and explicitly rotated extraction pixels
@@ -70,8 +63,9 @@ version-dependent rotate-tag remux behavior. Pixel comparisons allow 3/255 for
 library-version rounding. Native assertions fail in Release builds as well.
 
 The existing Release CI steps already run the expanded CTest directory: no workflow
-or job is added. This branch has not run on Linux/macOS or with GPU/HDR backends;
-a cooperative timeout expiry has not been qualified across blocking demuxers.
+or job is added. GPU/HDR backends and cooperative timeout expiry across blocking
+demuxers require
+separate qualification.
 The JSON adapter is test support, not a public command-line interface.
 
 ## Commands

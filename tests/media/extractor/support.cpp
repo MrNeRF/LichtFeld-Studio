@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "core/crash_handler.hpp"
 #include "core/logger.hpp"
 #include "io/hdr_libplacebo.hpp"
 #include <iostream>
@@ -8,6 +9,8 @@
 // Test-only log sink: no user log files, singleton app or diagnostics runtime.
 // No decoder, writer, selection, geometry or metadata implementation is mocked.
 namespace lfs::core {
+    // Diagnostics stay on stderr in the headless runner.
+    void write_crash_diagnostic(std::string_view message) noexcept { std::cerr << message << '\n'; }
     struct Logger::Impl {};
     Logger::Logger() = default;
     Logger::~Logger() = default;

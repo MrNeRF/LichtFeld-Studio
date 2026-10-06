@@ -51,9 +51,16 @@ int main(int argc, char** argv) {
             auto timestamp = [&](const std::optional<Timestamp>& value) -> json {
                 return value ? json{{"ticks", value->ticks}, {"time_base", json::array({value->time_base.numerator, value->time_base.denominator})}} : json(nullptr);
             };
-            json output{{"success", result.media.has_value()}, {"error_code", static_cast<int>(result.error.code)}, {"ffmpeg_code", result.error.ffmpeg_code}, {"error", result.error.message}};
-            if (result.media) {
-                const auto& source = *result.media;
+            json output{{"success", result.has_value()}, {"error_code", nullptr}, {"ffmpeg_code", 0}, {"error", ""}};
+            if (!result) {
+                output["error_code"] = lfs::to_string(result.error().code());
+                output["error"] = result.error().detail();
+                output["error_domain"] = lfs::to_string(result.error().domain());
+                if (result.error().native())
+                    output["ffmpeg_code"] = result.error().native()->code;
+            }
+            if (result) {
+                const auto& source = *result;
                 output["container"] = source.container;
                 output["stream_info_probed"] = source.stream_info_probed;
                 output["duration"] = timestamp(source.duration);

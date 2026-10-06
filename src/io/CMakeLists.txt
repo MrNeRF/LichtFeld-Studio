@@ -87,8 +87,9 @@ target_include_directories(lfs_video SYSTEM PRIVATE
 )
 
 target_link_libraries(lfs_video
-        PRIVATE
+        PUBLIC
         lfs_core
+        PRIVATE
         PkgConfig::FFMPEG
         spdlog::spdlog
         nlohmann_json::nlohmann_json

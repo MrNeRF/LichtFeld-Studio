@@ -20,14 +20,20 @@ namespace {
 
 int runProbeUnitContracts() {
     using namespace lfs::media;
-    require(MediaProbe::inspect({}).error.code == ProbeErrorCode::InvalidOptions, "empty path rejected");
+    require(MediaProbe::inspect({}).error().code() == lfs::ErrorCode::InvalidArgument, "empty path rejected");
+    const auto optionFailure = MediaProbe::inspect({});
+    require(!optionFailure && !optionFailure.error().native(), "option failure has no native FFmpeg status");
+    const auto copied = optionFailure;
+    require(copied.error().domain() == lfs::ErrorDomain::IO &&
+                !copied.error().frames().empty() && !copied.error().detail().empty(),
+            "structured error owns diagnostics and detection site after copy");
     auto nulPath = std::filesystem::path("bad").native();
     nulPath.push_back(0);
     nulPath += std::filesystem::path("suffix").native();
-    require(MediaProbe::inspect(std::filesystem::path(nulPath)).error.code == ProbeErrorCode::InvalidOptions, "embedded NUL rejected before path conversion");
+    require(MediaProbe::inspect(std::filesystem::path(nulPath)).error().code() == lfs::ErrorCode::InvalidArgument, "embedded NUL rejected before path conversion");
     ProbeOptions invalidOptions;
     invalidOptions.depth = static_cast<ProbeDepth>(-1);
-    require(MediaProbe::inspect("unused", invalidOptions).error.code == ProbeErrorCode::InvalidOptions, "invalid depth rejected");
+    require(MediaProbe::inspect("unused", invalidOptions).error().code() == lfs::ErrorCode::InvalidArgument, "invalid depth rejected");
     auto release = [](AVFormatContext* context) { avformat_free_context(context); };
     std::unique_ptr<AVFormatContext, decltype(release)> context(avformat_alloc_context(), release);
     require(context != nullptr, "allocate test context");

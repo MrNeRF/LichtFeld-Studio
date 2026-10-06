@@ -36,6 +36,9 @@ add_executable(media_extraction_runner runner.cpp support.cpp probe_unit_contrac
     ${MEDIA_ROOT}/src/io/video_player.cpp
     ${MEDIA_ROOT}/src/io/video_frame_extractor.cpp
     ${MEDIA_ROOT}/src/io/hdr_tonemap.cpp
+    ${MEDIA_ROOT}/src/core/memory_domain.cpp
+    ${MEDIA_ROOT}/src/core/error.cpp
+    ${MEDIA_ROOT}/src/core/failure_report.cpp
     ${MEDIA_ROOT}/src/core/image_codecs.cpp
     ${MEDIA_ROOT}/src/core/image_exr.cpp)
 target_compile_features(media_extraction_runner PRIVATE cxx_std_23)

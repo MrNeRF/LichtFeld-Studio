@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "core/error.hpp"
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -71,16 +72,6 @@ namespace lfs::media {
         // First usable header video, matching the existing player/extractor.
         std::optional<int> selected_video_stream;
     };
-    enum class ProbeErrorCode { None,
-                                InvalidOptions,
-                                OpenInput,
-                                StreamInfo,
-                                TimedOut };
-    struct ProbeError {
-        ProbeErrorCode code = ProbeErrorCode::None;
-        int ffmpeg_code = 0;
-        std::string message;
-    };
     enum class ProbeDepth { Headers,
                             StreamInfo };
     struct ProbeOptions {
@@ -88,16 +79,12 @@ namespace lfs::media {
         // Cooperative FFmpeg I/O interruption, not a hard wall-clock guarantee.
         std::chrono::milliseconds timeout{10000};
     };
-    struct ProbeResult {
-        std::optional<MediaDescription> media;
-        ProbeError error;
-    };
     // Metadata only: no image output, hardware context or application runtime.
     // StreamInfo may read packets and use FFmpeg's software codec probing.
     class MediaProbe {
     public:
-        [[nodiscard]] static ProbeResult inspect(const std::filesystem::path& path,
-                                                 const ProbeOptions& options = {});
+        [[nodiscard]] static Result<MediaDescription> inspect(const std::filesystem::path& path,
+                                                              const ProbeOptions& options = {});
     };
     // Legacy preview accepts quarter turns only; the description retains raw values.
     [[nodiscard]] int legacyQuarterTurn(const Orientation& orientation);
