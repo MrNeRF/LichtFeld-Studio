@@ -175,6 +175,10 @@ and do not download a public corpus.
 The root package baseline/overlays and existing FFmpeg/image codec stack are reused.
 OpenImageIO is not required or reintroduced. `FFMPEG_LIBRARIES` passes through
 `target_link_libraries` so static vcpkg optimized/debug qualifiers remain valid.
+On Linux, `lfs_media` keeps FFmpeg's static avcodec/avutil archive symbols local.
+Their x86 assembly uses direct references to internal data; leaving that data
+interposable prevents linking the shared module. This applies in Release and
+hidden-symbol builds and in the offline production harness.
 License obligations follow the repository GPL-3.0-or-later distribution and exact
 installed package notices. FFmpeg's effective license is build dependent; the
 runtime reports it alongside configuration flags. There is no separate manifest
@@ -188,3 +192,7 @@ future dependency must undergo its own version/transitive/license review.
 Use `runtime.job.describe`, `runtime.job.wait` and `runtime.job.control` (`cancel`) for state and control, or `lichtfeld://runtime/jobs/media.extract`. Media job queries/control bypass the GUI work queue. `runtime.events.tail` and subscriptions expose `media.extract.started`, `.progress`, `.completed`, `.failed` and `.cancelled`, with generation, progress and accepted counts. Progress state is updated on every callback; event delivery is throttled to 10 Hz plus the final update to keep the journal bounded. Native typed error codes are retained in the wire envelope. Application shutdown stops MCP requests, cancels and joins the worker before releasing the viewer/GPU runtime.
 
 The `MediaMcpContracts` test uses the production tool registry and event routing, verifies file pixels against FFmpeg, overlapping-job rejection, cancellation, retained failures and nested schema validation. It is registered with existing root tests without adding a CI workflow.
+On macOS, its native runner loads the complete static CPython embedding archive,
+following Studio's existing test-host convention. Shared Studio libraries resolve
+Python symbols from their host; an ordinary archive link can discard symbols
+needed at runtime before the runner enters `main`.

@@ -30,6 +30,13 @@ target_include_directories(lfs_media PUBLIC "${_media_root}/src/io/include"
     PRIVATE "${_media_root}/src" "${_media_root}/src/io" ${_media_ffmpeg_include})
 target_link_libraries(lfs_media PUBLIC lfs_error
     PRIVATE lfs_image_codecs lfs_logger ${_media_ffmpeg_libraries})
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # FFmpeg's x86 assembly uses direct relocations to archive-local data.
+    # Keep those symbols local when linking static FFmpeg into this shared module,
+    # including Release builds without LFS_HIDDEN_SYMBOLS and the CPU test harness.
+    target_link_options(lfs_media PRIVATE
+        "LINKER:--exclude-libs,libavcodec.a:libavutil.a")
+endif()
 set_target_properties(lfs_media PROPERTIES POSITION_INDEPENDENT_CODE ON
     CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"

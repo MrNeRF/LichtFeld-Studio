@@ -85,6 +85,10 @@ registration, production assertion behavior and delegated diagnostics/event stat
 CLI contracts check output parity, real version/help, errors/progress and partial
 results; the POSIX SIGTERM contract is explicitly skipped on Windows. Python
 contracts exercise ownership, GIL and callbacks through the real binding source.
+The Linux x86 CLI contracts also verify that FFmpeg's internal assembly constants
+are absent from the shared module's dynamic lookup scope; public media operations
+remain covered by the extraction contracts. Static FFmpeg must link successfully
+before these runtime checks can run.
 
 The current interval/FPS end-boundary difference is characterized explicitly:
 interval includes a frame at an exactly matching end timestamp, FPS excludes it.
@@ -142,3 +146,8 @@ is present. See [module contracts](../../docs/development/media-ingest-core-cli.
 for the runtime graph, Python API, shared ownership and remaining boundaries.
 
 `MediaMcpContracts` builds the production MCP media adapter in the root test configuration. It validates probe/extraction, asynchronous state, event routing, duplicate-job rejection, cancellation and nested request errors using synthetic public-tool fixtures. It does not require a GPU device.
+The macOS native runner supplies CPython's complete embedding archive because
+Studio's shared libraries resolve Python from their host process. Running this
+CTest contract also verifies that those dependencies load before `main`.
+Its fixture is lossless RGB so exact output/rotation comparisons do not depend
+on YUV conversion rounding between the fixture tool and Studio's linked FFmpeg.

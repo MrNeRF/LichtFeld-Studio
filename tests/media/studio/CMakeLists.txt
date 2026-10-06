@@ -10,6 +10,15 @@ set_target_properties(media_mcp_runner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CM
 target_include_directories(media_mcp_runner PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/app/include)
 target_compile_features(media_mcp_runner PRIVATE cxx_std_23)
 target_link_libraries(media_mcp_runner PRIVATE lfs_mcp lfs_media lfs_core)
+if(APPLE)
+    # Studio's shared libraries resolve CPython from their host process on macOS.
+    # This native runner must supply the complete embedding runtime, just like
+    # the other Studio contract executables; ordinary archive linking drops it.
+    find_package(Python REQUIRED COMPONENTS Development.Embed)
+    target_link_options(media_mcp_runner PRIVATE
+        "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
+    target_link_libraries(media_mcp_runner PRIVATE lfs_python_embed)
+endif()
 add_test(NAME MediaMcpContracts COMMAND ${Python_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/../test_mcp_media.py --runner $<TARGET_FILE:media_mcp_runner>)
 set_tests_properties(MediaMcpContracts PROPERTIES LABELS "media;cpu;integration" TIMEOUT 300

@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Production CPU CLI contracts; synthetic offline input and legacy references."""
 import argparse
+import ctypes
 import importlib.util
 import json
 import os
+import platform
 import re
 import signal
 from pathlib import Path
@@ -47,6 +49,16 @@ class IngestCLI(unittest.TestCase):
         self.assertIsNotNone(expected)
         self.assertEqual(version["version"],expected.group(1))
         self.assertIn(b"--hdr-to-sdr",subprocess.check_output([str(CLI),"--help"]))
+    @unittest.skipUnless(sys.platform.startswith("linux") and platform.machine().lower() in ("x86_64","amd64"),
+                         "ELF x86 FFmpeg assembly symbol isolation")
+    def test_elf_ffmpeg_assembly_data_stays_private(self):
+        library=ctypes.CDLL(str(CLI.parent/"liblfs_media.so"))
+        # These direct-reference assembly constants must not be interposable.
+        # Public MediaIngest APIs remain exercised by the CLI contracts below.
+        for symbol in ("ff_pw_9","ff_pw_512"):
+            with self.subTest(symbol=symbol):
+                with self.assertRaises(ValueError):
+                    ctypes.c_uint64.in_dll(library,symbol)
     def test_probe_rational_inventory_and_unicode_no_output(self):
         before={p.name:p.read_bytes() for p in self.corpus.iterdir()}
         result,_=self.invoke("probe",self.source())

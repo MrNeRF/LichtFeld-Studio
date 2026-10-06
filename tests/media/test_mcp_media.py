@@ -20,8 +20,11 @@ class McpMedia(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         cls.root = Path(cls.temp.name)
         cls.source = cls.root / "clip é 日本語.nut"
+        # Keep the MCP output/rotation reference lossless RGB. The fixture tool
+        # can use a newer FFmpeg than Studio; YUV conversion rounding differs.
         subprocess.run([FFMPEG, "-v", "error", "-f", "lavfi", "-i",
                         "testsrc2=size=64x48:rate=10:duration=0.5", "-c:v", "ffv1",
+                        "-pix_fmt", "bgr0",
                         str(cls.source)], check=True, timeout=30)
 
     def invoke(self, cancel=False, **options):
