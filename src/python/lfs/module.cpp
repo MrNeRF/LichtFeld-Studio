@@ -377,7 +377,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -3502,7 +3502,9 @@ NB_MODULE(lichtfeld, m) {
                 throw std::runtime_error("Only 'jet' colormap is currently supported");
             }
             const auto& t = values.tensor();
-            assert(t.shape().rank() == 1);
+            if (t.shape().rank() != 1) {
+                throw std::invalid_argument("values must have rank 1");
+            }
 
             auto v = t.clamp(0.0f, 1.0f);
 
