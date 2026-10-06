@@ -57,7 +57,9 @@ class IngestCLI(unittest.TestCase):
                ("cfr-asymmetric",["--size","40","24"],{"width":40,"height":24}),
                ("cfr-asymmetric",["--start","0.1"],{"start":0.1}),
                ("cfr-asymmetric",["--format","jpeg"],{"format":"jpg"}),
-               ("cfr-asymmetric",["--window"],{"sharpness":True,"window":True})]
+               ("cfr-asymmetric",["--window"],{"sharpness":True,"window":True}),
+               ("cfr-asymmetric",["--window","--algorithm","laplacian"],{"sharpness":True,"window":True,"algorithm":"laplacian"}),
+               ("cfr-asymmetric",["--window","--algorithm","tenengrad"],{"sharpness":True,"window":True,"algorithm":"tenengrad"})]
         for name,options,legacy_options in cases:
             with self.subTest(options=options):
                 work=Path(tempfile.mkdtemp(dir=self.root));output=work/"CLI é 日本語";legacy=work/"legacy"

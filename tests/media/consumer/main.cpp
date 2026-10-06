@@ -34,6 +34,54 @@ int exercise(const std::filesystem::path& input, const std::filesystem::path& ou
     require(MediaIngest::extract(request, memory).has_value() && memory.frames()[0].view().layout.width == 32, "scale uses actual source dimensions");
     require(retained.view().layout.width == 64 && retained.view().pixels.size() == 6144, "retained surface survives sink reuse");
     request.geometry = {};
+    struct ObserveSink : FrameSink {
+        int calls = 0;
+        SinkResult begin(const SinkSession&) override {
+            ++calls;
+            return {};
+        }
+        SinkResult write(const FrameView&) override {
+            ++calls;
+            return {};
+        }
+    } untouched;
+    for (int variant = 0; variant < 5; ++variant) {
+        auto invalid = request;
+        if (variant == 0)
+            invalid.selection.mode = static_cast<SelectionMode>(-1);
+        if (variant == 1)
+            invalid.geometry.mode = static_cast<ResizeMode>(-1);
+        if (variant == 2)
+            invalid.sharpness.method = static_cast<SharpnessMethod>(-1);
+        if (variant == 3)
+            invalid.input.clear();
+        if (variant == 4) {
+            auto path = input.native();
+            path.push_back(std::filesystem::path::value_type{});
+            invalid.input = path;
+        }
+        const auto rejected = MediaIngest::extract(invalid, untouched);
+        require(!rejected && rejected.error().code() == lfs::ErrorCode::InvalidArgument &&
+                    accepted(rejected.error()) == 0 && untouched.calls == 0,
+                "malformed request rejected before sink callbacks");
+    }
+    for (int variant = 0; variant < 3; ++variant) {
+        FileExtraction invalid;
+        invalid.files.output_directory = output;
+        if (variant == 0) {
+            auto path = output.native();
+            path.push_back(std::filesystem::path::value_type{});
+            invalid.files.output_directory = path;
+        }
+        if (variant == 1)
+            invalid.files.filename_pattern = std::string("name\0tail", 9);
+        if (variant == 2)
+            invalid.files.format = static_cast<FrameFileFormat>(-1);
+        const auto rejected = MediaIngest::extractFiles(request, invalid);
+        require(!rejected && rejected.error().code() == lfs::ErrorCode::InvalidArgument && !std::filesystem::exists(output),
+                "malformed output rejected before filesystem effects");
+    }
+
     MemoryFrameSink limited(6144);
     const auto limit = MediaIngest::extract(request, limited);
     require(!limit && limit.error().code() == lfs::ErrorCode::ResourceExhausted && accepted(limit.error()) == 1 && limited.frames().size() == 1, "budget error crosses API unchanged");

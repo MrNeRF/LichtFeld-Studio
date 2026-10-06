@@ -98,7 +98,8 @@ add_test(NAME MediaIngestCLIContracts
 add_test(NAME MediaIngestPackageConsumer
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../test_ingest_package.py
         --build ${CMAKE_CURRENT_BINARY_DIR}/standalone-media --cmake ${CMAKE_COMMAND}
-        --generator "${CMAKE_GENERATOR}" --toolchain "${CMAKE_TOOLCHAIN_FILE}"
+        --generator "${CMAKE_GENERATOR}" --compiler "${CMAKE_CXX_COMPILER}"
+        --resource-compiler "${CMAKE_RC_COMPILER}" --manifest-tool "${CMAKE_MT}" --toolchain "${CMAKE_TOOLCHAIN_FILE}"
         --triplet "${VCPKG_TARGET_TRIPLET}" --packages "${VCPKG_INSTALLED_DIR}"
         --prefix "${CMAKE_PREFIX_PATH}" --deployment-target "${CMAKE_OSX_DEPLOYMENT_TARGET}"
         --osx-architectures "${CMAKE_OSX_ARCHITECTURES}")

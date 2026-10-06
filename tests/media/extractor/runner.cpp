@@ -102,6 +102,12 @@ int main(int argc, char** argv) {
             params.custom_width = request.at("width").get<int>();
             params.custom_height = request.at("height").get<int>();
         }
+        const auto algorithm = request.value("algorithm", "combined");
+        if (algorithm != "laplacian" && algorithm != "tenengrad" && algorithm != "combined")
+            throw std::runtime_error("Unknown test sharpness algorithm");
+        params.sharpness.algorithm = algorithm == "laplacian"   ? SharpnessAlgorithm::LAPLACIAN
+                                     : algorithm == "tenengrad" ? SharpnessAlgorithm::TENENGRAD
+                                                                : SharpnessAlgorithm::COMBINED;
         params.sharpness.enabled = request.value("sharpness", false);
         params.sharpness.window_mode = request.value("window", false);
         params.sharpness.threshold = request.value("threshold", 0.0);

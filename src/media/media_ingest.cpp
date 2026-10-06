@@ -13,18 +13,22 @@ namespace lfs::media {
         io::VideoFrameExtractor::Params parameters(const IngestRequest& request) {
             io::VideoFrameExtractor::Params p;
             p.video_path = request.input;
-            p.mode = static_cast<io::ExtractionMode>(request.selection.mode);
+            p.mode = request.selection.mode == SelectionMode::FPS ? io::ExtractionMode::FPS : io::ExtractionMode::INTERVAL;
             p.fps = request.selection.fps;
             p.frame_interval = request.selection.interval;
             p.start_time = request.start_seconds;
             p.end_time = request.end_seconds;
-            p.resolution_mode = static_cast<io::ResolutionMode>(request.geometry.mode);
+            p.resolution_mode = request.geometry.mode == ResizeMode::Original ? io::ResolutionMode::Original
+                                : request.geometry.mode == ResizeMode::Scale  ? io::ResolutionMode::Scale
+                                                                              : io::ResolutionMode::Custom;
             p.scale = request.geometry.scale;
             p.custom_width = request.geometry.width;
             p.custom_height = request.geometry.height;
             p.rotation = request.geometry.clockwise_rotation;
             p.sharpness.enabled = request.sharpness.enabled;
-            p.sharpness.algorithm = static_cast<io::SharpnessAlgorithm>(request.sharpness.method);
+            p.sharpness.algorithm = request.sharpness.method == SharpnessMethod::Laplacian   ? io::SharpnessAlgorithm::LAPLACIAN
+                                    : request.sharpness.method == SharpnessMethod::Tenengrad ? io::SharpnessAlgorithm::TENENGRAD
+                                                                                             : io::SharpnessAlgorithm::COMBINED;
             p.sharpness.threshold = request.sharpness.threshold;
             p.sharpness.window_mode = request.sharpness.window;
             p.sharpness.window_candidates_target = request.sharpness.window_candidates;
@@ -56,6 +60,14 @@ namespace lfs::media {
             try {
                 if (request.convert_hdr_to_sdr)
                     return failure(ErrorCode::Unsupported, "HDR to SDR is unavailable in the CPU Media Ingest profile", 0);
+                if (request.input.empty() || request.input.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos)
+                    return failure(ErrorCode::InvalidArgument, "Input path must be nonempty and contain no NUL", 0);
+                if (request.selection.mode != SelectionMode::FPS && request.selection.mode != SelectionMode::Interval)
+                    return failure(ErrorCode::InvalidArgument, "Invalid frame selection mode", 0);
+                if (request.geometry.mode != ResizeMode::Original && request.geometry.mode != ResizeMode::Scale && request.geometry.mode != ResizeMode::Custom)
+                    return failure(ErrorCode::InvalidArgument, "Invalid resize mode", 0);
+                if (request.sharpness.method != SharpnessMethod::Laplacian && request.sharpness.method != SharpnessMethod::Tenengrad && request.sharpness.method != SharpnessMethod::Combined)
+                    return failure(ErrorCode::InvalidArgument, "Invalid sharpness method", 0);
                 auto p = parameters(request);
                 if (files) {
                     p.output_dir = files->files.output_directory;
@@ -64,8 +76,10 @@ namespace lfs::media {
                     p.jpg_quality = files->files.jpeg_quality;
                     p.generate_metadata = files->write_metadata;
                     if (files->files.output_directory.empty() ||
+                        files->files.output_directory.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos ||
+                        files->files.filename_pattern.find('\0') != std::string::npos ||
                         (files->files.format != FrameFileFormat::PNG && files->files.format != FrameFileFormat::JPEG))
-                        return failure(ErrorCode::InvalidArgument, "File extraction requires an output directory and supported format", 0);
+                        return failure(ErrorCode::InvalidArgument, "File extraction requires a nonempty output directory, supported format and NUL-free paths/names", 0);
                 }
                 // Request-only validation reuses the same rules as the compatibility
                 // adapter; the decoder validates actual source layout/timebase later.
@@ -77,10 +91,8 @@ namespace lfs::media {
                         return failure(ErrorCode::InvalidArgument, "Scale must be finite and positive", 0);
                     request_validation.resolution_mode = io::ResolutionMode::Original;
                 }
-                if (request.input.empty() || request.input.native().find(std::filesystem::path::value_type{}) != std::string::npos ||
-                    static_cast<unsigned>(request.sharpness.method) > static_cast<unsigned>(SharpnessMethod::Combined) ||
-                    !io::VideoFrameExtractor::validateParams(request_validation, 1, 1, 1.0, layout, error))
-                    return failure(ErrorCode::InvalidArgument, error.empty() ? "Input path is required" : error, 0);
+                if (!io::VideoFrameExtractor::validateParams(request_validation, 1, 1, 1.0, layout, error))
+                    return failure(ErrorCode::InvalidArgument, error, 0);
                 int discarded = 0;
                 p.progress_callback = [&](int current, int estimated, int skipped) {
                     discarded = skipped;

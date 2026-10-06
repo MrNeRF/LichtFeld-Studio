@@ -20,6 +20,9 @@ def main():
     parser.add_argument("--build",type=Path,required=True)
     parser.add_argument("--cmake",default="cmake")
     parser.add_argument("--generator",default="Ninja")
+    parser.add_argument("--compiler",default="")
+    parser.add_argument("--resource-compiler",default="")
+    parser.add_argument("--manifest-tool",default="")
     parser.add_argument("--toolchain",default="")
     parser.add_argument("--triplet",default="")
     parser.add_argument("--packages",default="")
@@ -39,6 +42,9 @@ def main():
         shutil.move(staged,relocated)
         command=[args.cmake,"-S",ROOT/"tests/media/consumer","-B",build,"-G",args.generator,"-DCMAKE_BUILD_TYPE=Release",
                  "-DCMAKE_PREFIX_PATH="+str(relocated)+((';'+args.prefix) if args.prefix else ''),"-DVCPKG_MANIFEST_INSTALL=OFF"]
+        if args.compiler: command.append("-DCMAKE_CXX_COMPILER="+args.compiler)
+        if args.resource_compiler: command.append("-DCMAKE_RC_COMPILER="+args.resource_compiler)
+        if args.manifest_tool: command.append("-DCMAKE_MT="+args.manifest_tool)
         if args.toolchain: command.append("-DCMAKE_TOOLCHAIN_FILE="+args.toolchain)
         if args.triplet: command.append("-DVCPKG_TARGET_TRIPLET="+args.triplet)
         if args.packages: command.append("-DVCPKG_INSTALLED_DIR="+args.packages)

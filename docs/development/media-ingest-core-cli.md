@@ -59,6 +59,9 @@ source dimensions and timebase are checked by the decoder. Scaling is validated
 against real dimensions, rather than rejecting a fractional scale using the
 placeholder dimensions of request-only validation. Invalid selection, geometry,
 sharpness method, numeric values and output format return `InvalidArgument`.
+Embedded NUL in input/output paths or filename patterns is rejected before
+callbacks or output creation. Public enums map explicitly to compatibility enums,
+so their numeric ordering is not part of the internal bridge contract.
 The facade follows existing parameter validation for JPEG quality 1–100.
 Direct `FileFrameSink` preserves its separate legacy normalization policy (zero
 means 90, other JPEG values clamp to 1–100, PNG ignores this option).
@@ -67,7 +70,8 @@ Sink `Result` failures preserve their code/domain/native status and add accepted
 frame count in error context. Decoder/compatibility-adapter failures currently
 return `Unavailable`, except cancelled jobs return `Cancelled`; this bridge does
 not yet preserve a distinct native error for every decoder failure. Probe uses
-its existing richer error taxonomy. Host exceptions become `Internal`. A failed
+its existing richer error taxonomy. Exceptions escaping facade setup become `Internal`; callback/decoder exceptions
+handled by the compatibility engine still follow its `Unavailable` bridge. A failed
 or cancelled extraction does not imply that already accepted images/snapshots
 were removed. File writes are not atomic; metadata-writer warning behavior remains
 that of the compatibility adapter.
@@ -129,7 +133,10 @@ add_executable(consumer main.cpp)
 target_link_libraries(consumer PRIVATE LichtFeldMedia::media)
 ```
 
-Configure the consumer with both SDK and codec prefixes/toolchain as needed. The
+Configure the consumer with both SDK and codec prefixes/toolchain as needed.
+The static SDK and consumer must use compatible compiler/standard-library ABIs;
+the package test explicitly reuses the parent C++ compiler and Windows SDK
+resource/manifest tools rather than selecting unrelated tools from PATH. The
 exported target propagates C++23 and necessary static-library definitions. SDK
 installation is not a self-contained runtime release: the executable and consumer
 still require dynamic codec libraries on PATH/the platform loader's search path.
