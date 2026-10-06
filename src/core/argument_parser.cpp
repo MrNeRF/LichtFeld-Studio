@@ -402,24 +402,34 @@ namespace {
     }
 
     // Parse log level from string
-    lfs::core::LogLevel parse_log_level(const std::string& level_str) {
-        if (level_str == "trace")
-            return lfs::core::LogLevel::Trace;
-        if (level_str == "debug")
-            return lfs::core::LogLevel::Debug;
-        if (level_str == "info")
-            return lfs::core::LogLevel::Info;
-        if (level_str == "perf" || level_str == "performance")
-            return lfs::core::LogLevel::Performance;
-        if (level_str == "warn" || level_str == "warning")
-            return lfs::core::LogLevel::Warn;
-        if (level_str == "error")
-            return lfs::core::LogLevel::Error;
-        if (level_str == "critical")
-            return lfs::core::LogLevel::Critical;
-        if (level_str == "off")
-            return lfs::core::LogLevel::Off;
-        return lfs::core::LogLevel::Info; // Default
+    bool parse_log_level(const std::string& level_str, lfs::core::LogLevel& level, std::string& error) {
+        std::string normalized = level_str;
+        std::ranges::transform(normalized, normalized.begin(), [](const unsigned char value) {
+            return static_cast<char>(std::tolower(value));
+        });
+        if (normalized == "trace")
+            level = lfs::core::LogLevel::Trace;
+        else if (normalized == "debug")
+            level = lfs::core::LogLevel::Debug;
+        else if (normalized == "info")
+            level = lfs::core::LogLevel::Info;
+        else if (normalized == "perf" || normalized == "performance")
+            level = lfs::core::LogLevel::Performance;
+        else if (normalized == "warn" || normalized == "warning")
+            level = lfs::core::LogLevel::Warn;
+        else if (normalized == "error")
+            level = lfs::core::LogLevel::Error;
+        else if (normalized == "critical")
+            level = lfs::core::LogLevel::Critical;
+        else if (normalized == "off")
+            level = lfs::core::LogLevel::Off;
+        else {
+            error = std::format(
+                "Invalid log level '{}'. Use: trace, debug, info, perf, warn, error, critical, off",
+                level_str);
+            return false;
+        }
+        return true;
     }
 
     struct SogFlags {
@@ -463,11 +473,17 @@ namespace {
         explicit LogLevelFlag(::args::Group& group)
             : level(group, "level", "Log level (trace, debug, info, perf, warn, error, critical, off)", {"log-level"}) {}
 
-        void apply() {
-            if (level)
-                lfs::core::Logger::get().init(parse_log_level(::args::get(level)));
-            else if (const auto env = lfs::core::environment::value("LFS_LOG_LEVEL"))
-                lfs::core::Logger::get().init(parse_log_level(std::string(*env)));
+        bool apply(std::string& error) {
+            auto parsed = lfs::core::LogLevel::Info;
+            if (level) {
+                if (!parse_log_level(::args::get(level), parsed, error))
+                    return false;
+            } else if (const auto env = lfs::core::environment::value("LFS_LOG_LEVEL")) {
+                if (!parse_log_level(std::string(*env), parsed, error))
+                    return false;
+            }
+            lfs::core::Logger::get().init(parsed);
+            return true;
         }
     };
 
@@ -944,7 +960,9 @@ namespace {
 
                 // Check environment variable first
                 if (const auto env_level = lfs::core::environment::value("LFS_LOG_LEVEL")) {
-                    level = parse_log_level(std::string(*env_level));
+                    std::string error;
+                    if (!parse_log_level(std::string(*env_level), level, error))
+                        return std::unexpected(error);
                 }
                 // Verbose/quiet flags override environment variable
                 if (verbose) {
@@ -955,7 +973,9 @@ namespace {
                 }
                 // CLI --log-level takes final precedence
                 if (log_level) {
-                    level = parse_log_level(::args::get(log_level));
+                    std::string error;
+                    if (!parse_log_level(::args::get(log_level), level, error))
+                        return std::unexpected(error);
                 }
                 if (log_file) {
                     log_file_path = ::args::get(log_file);
@@ -2000,7 +2020,9 @@ namespace {
             return std::unexpected(std::format("Missing input path\n\n{}", parser.Help()));
         }
 
-        log_level.apply();
+        std::string log_level_error;
+        if (!log_level.apply(log_level_error))
+            return std::unexpected(log_level_error);
 
         param::ConvertParameters params;
         params.input_path = lfs::core::utf8_to_path(::args::get(input));
@@ -2131,7 +2153,9 @@ namespace {
             return std::unexpected("Use either positional output or --output, not both");
         }
 
-        log_level.apply();
+        std::string log_level_error;
+        if (!log_level.apply(log_level_error))
+            return std::unexpected(log_level_error);
 
         param::Mesh2SplatParameters params;
         params.input_path = lfs::core::utf8_to_path(::args::get(input));

@@ -60,6 +60,34 @@ TEST(ArgumentParserTest, DataPathLichtWithoutOutputPathBindsProject) {
     EXPECT_FALSE((*parsed)->dataset.output_path_explicit);
 }
 
+TEST(ArgumentParserTest, RejectsUnknownLogLevels) {
+    const auto data_path = make_test_path("lfs_arg_parser_log_level_data");
+    const auto output_path = make_test_path("lfs_arg_parser_log_level_output");
+    for (const std::string level : {"nonsense", "5", "", "fatal"}) {
+        const char* argv[] = {
+            "LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+            "--output-path", output_path.c_str(), "--log-level", level.c_str()};
+        const auto parsed = lfs::core::args::parse_args_and_params(
+            static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(parsed) << level;
+        EXPECT_NE(parsed.error().find("log level"), std::string::npos) << parsed.error();
+        EXPECT_NE(parsed.error().find(level), std::string::npos) << parsed.error();
+    }
+}
+
+TEST(ArgumentParserTest, LogLevelsAreCaseInsensitiveAndKeepAliases) {
+    const auto data_path = make_test_path("lfs_arg_parser_log_alias_data");
+    const auto output_path = make_test_path("lfs_arg_parser_log_alias_output");
+    for (const std::string level : {"TRACE", "performance", "WARNING"}) {
+        const char* argv[] = {
+            "LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+            "--output-path", output_path.c_str(), "--log-level", level.c_str()};
+        const auto parsed = lfs::core::args::parse_args_and_params(
+            static_cast<int>(std::size(argv)), argv);
+        ASSERT_TRUE(parsed) << parsed.error();
+    }
+}
+
 TEST(ArgumentParserTest,
      GuiProjectAndResumeLichtSelectProjectOpenFlow) {
     const auto directory =
