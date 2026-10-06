@@ -701,6 +701,24 @@ namespace lfs::mcp {
         EXPECT_EQ(json::parse(serialize_response(failure))["id"], 7);
     }
 
+    TEST(McpProtocolTest, FractionalRequestIdsAreEchoedOnSuccess) {
+        McpServer server;
+        ASSERT_TRUE(server.handle_request(
+                              JsonRpcRequest{.id = int64_t{1}, .method = "initialize"})
+                        .result.has_value());
+        for (const auto request_text : {
+                 R"({"jsonrpc":"2.0","id":3.14159,"method":"ping"})",
+                 R"({"jsonrpc":"2.0","id":2.5,"method":"ping"})"}) {
+            const auto request_json = json::parse(request_text);
+            const auto expected_id = request_json.at("id");
+            const auto request = parse_request(request_text);
+            const auto response = server.handle_request(request);
+            ASSERT_TRUE(response.result.has_value());
+            EXPECT_FALSE(response.error.has_value());
+            EXPECT_EQ(json::parse(serialize_response(response)).at("id"), expected_id);
+        }
+    }
+
     TEST(McpProtocolTest, RequestIdStringEchoedOnSuccessAndErrorPaths) {
         McpServer server;
         const auto success = server.handle_request(JsonRpcRequest{.id = std::string("req-a"), .method = "ping"});
