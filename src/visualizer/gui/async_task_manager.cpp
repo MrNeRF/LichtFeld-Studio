@@ -1561,6 +1561,8 @@ namespace lfs::vis::gui {
                     LOC(lichtfeld::Strings::Runtime::TASK_INITIALIZING))) {
                 return;
             }
+            import_state_.show_completion.store(
+                false, std::memory_order_release);
             {
                 const std::lock_guard lock(import_state_.mutex);
                 import_state_.path = e.path;

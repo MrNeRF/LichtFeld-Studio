@@ -5916,6 +5916,47 @@ contract["test_selection_submode_follows_native_mode"](lf)
         EXPECT_TRUE(overlay.show_completion);
     }
 
+    TEST_F(VisualizerImplResetTest,
+           RapidSequentialDatasetLoadsCompleteTheSecondImportJob) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        const auto first = temporary_.path / "first-dataset";
+        const auto second = temporary_.path / "second-dataset";
+
+        core::events::state::DatasetLoadStarted{.path = first}.emit();
+        ASSERT_TRUE(tasks.isImporting());
+        core::events::state::DatasetLoadCompleted{
+            .path = first,
+            .success = true,
+            .error = std::nullopt,
+            .num_images = 17,
+            .num_points = 29,
+        }
+            .emit();
+        EXPECT_FALSE(tasks.isImporting());
+        EXPECT_TRUE(tasks.isImportCompletionShowing());
+
+        core::events::state::DatasetLoadStarted{.path = second}.emit();
+        ASSERT_TRUE(tasks.isImporting());
+        const bool stale_completion_overlay =
+            tasks.isImportCompletionShowing();
+        core::events::state::DatasetLoadCompleted{
+            .path = second,
+            .success = true,
+            .error = std::nullopt,
+            .num_images = 31,
+            .num_points = 47,
+        }
+            .emit();
+
+        EXPECT_FALSE(tasks.isImporting());
+        EXPECT_FALSE(stale_completion_overlay);
+        EXPECT_TRUE(tasks.getImportSuccess());
+        EXPECT_EQ(tasks.getImportNumImages(), 31u);
+        EXPECT_EQ(tasks.getImportNumPoints(), 47u);
+        EXPECT_TRUE(tasks.isImportCompletionShowing());
+    }
+
     TEST_F(VisualizerImplResetTest, RenderAllocationFailureKeepsEarlierImportsUsable) {
         const auto first = makeSplatFixture("capacity-first");
         const auto second = makeSplatFixture("capacity-second");
