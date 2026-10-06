@@ -38,7 +38,7 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          brew install autoconf autoconf-archive automake libtool vulkan-loader molten-vk
+          brew install autoconf autoconf-archive automake libtool vulkan-loader molten-vk ffmpeg
           cmake --version
           ninja --version
 
@@ -128,6 +128,19 @@ jobs:
         run: |
           cmake --build build-macos-release --target mac_native_drag_drop_contracts --parallel 4
           ctest --test-dir build-macos-release -R '^MacNativeDragDropContracts$' --no-tests=error --output-on-failure
+
+      - name: Run offline media regression tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          cmake -S tests/media -B build-media-fixtures
+          ctest --test-dir build-media-fixtures --output-on-failure --no-tests=error
+          cmake -S tests/media/extractor -B build-media-extractor -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$PWD/build-macos-release/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=arm64-osx -DVCPKG_MANIFEST_INSTALL=OFF
+          cmake --build build-media-extractor --parallel 2
+          ctest --test-dir build-media-extractor --output-on-failure --no-tests=error
 
       - name: Run GPU and VideoToolbox tests
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}

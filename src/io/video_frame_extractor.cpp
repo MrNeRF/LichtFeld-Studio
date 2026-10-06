@@ -113,6 +113,13 @@ namespace lfs::io {
             const AVColorRange fallback_range) {
             if (!context || !source)
                 return false;
+            const auto* pixel_description = av_pix_fmt_desc_get(
+                static_cast<AVPixelFormat>(source->format));
+            // YUV matrices/ranges do not describe an RGB source. Applying them
+            // during RGB resize can change the colors even though no color-space
+            // conversion was requested.
+            if (pixel_description && (pixel_description->flags & AV_PIX_FMT_FLAG_RGB))
+                return true;
             const AVColorSpace colorspace = source->colorspace != AVCOL_SPC_UNSPECIFIED
                                                 ? source->colorspace
                                                 : fallback_colorspace;
@@ -2453,6 +2460,18 @@ namespace lfs::io {
                 cleanup();
                 outcome_ = ExtractionOutcome::Cancelled;
                 error = e.what();
+                return false;
+            } catch (const std::filesystem::filesystem_error& e) {
+                cleanup();
+                // MSVC's what() can contain ACP-encoded paths and localized text.
+                // Build this public error from native paths instead of returning
+                // bytes that are invalid UTF-8 to the GUI or JSON consumers.
+                error = "Filesystem operation failed [" + std::string(e.code().category().name()) +
+                        ":" + std::to_string(e.code().value()) + "]";
+                if (!e.path1().empty())
+                    error += " " + lfs::core::path_to_utf8(e.path1());
+                if (!e.path2().empty())
+                    error += " -> " + lfs::core::path_to_utf8(e.path2());
                 return false;
             } catch (const std::exception& e) {
                 cleanup();
