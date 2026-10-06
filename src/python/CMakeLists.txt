@@ -800,3 +800,16 @@ if(BUILD_PORTABLE)
     message(STATUS "  Python executable: ${Python_EXECUTABLE}")
     message(STATUS "  Python stdlib: ${VCPKG_PYTHON_STDLIB}")
 endif()
+
+# The signed bundle cannot write bytecode at runtime, so ship it. Sources never
+# change inside the bundle, so the cache is validated by hash, not mtime.
+if(LFS_MACOS_PORTABLE_APP)
+    install(CODE "
+        execute_process(
+            COMMAND \"${Python_EXECUTABLE}\" -m compileall -q -j 0
+                --invalidation-mode unchecked-hash
+                \"\${CMAKE_INSTALL_PREFIX}/${PYTHON_INSTALL_DIR}\"
+                \"\${CMAKE_INSTALL_PREFIX}/${PYTHON_INSTALL_STDLIB}\"
+            COMMAND_ERROR_IS_FATAL ANY)
+    " COMPONENT runtime)
+endif()
