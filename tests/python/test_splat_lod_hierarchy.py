@@ -85,6 +85,15 @@ def _import_hierarchy_module(monkeypatch, simplify_fn, save_fn):
     return import_module("lfs_splat_lod_hierarchy"), scene_state
 
 
+def test_build_splat_lod_hierarchy_rejects_nonfinite_ratio(monkeypatch):
+    def _unexpected_simplify(*args, **kwargs):
+        pytest.fail("simplification must not run for a non-finite ratio")
+
+    module, _ = _import_hierarchy_module(monkeypatch, _unexpected_simplify, lambda *args, **kwargs: None)
+    with pytest.raises(ValueError, match="ratio must be finite"):
+        module.build_splat_lod_hierarchy(_FakeSplatData("source", 4), ratio=float("nan"), max_levels=2)
+
+
 def test_build_splat_lod_hierarchy_tracks_global_node_ids_across_levels(monkeypatch):
     source = _FakeSplatData("lod0", 4)
     lod1 = _FakeSplatData("lod1", 3)

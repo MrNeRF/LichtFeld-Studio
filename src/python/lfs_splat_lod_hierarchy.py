@@ -338,6 +338,8 @@ def build_splat_lod_hierarchy(
 
     import lichtfeld as lf
 
+    if not math.isfinite(ratio):
+        raise ValueError("ratio must be finite")
     if ratio <= 0.0 or ratio > 1.0:
         raise ValueError("ratio must be in the range (0, 1]")
     if lod_base <= 1.0:
