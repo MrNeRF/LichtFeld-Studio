@@ -431,6 +431,7 @@ namespace lfs::vis {
                                             now - native_state.tile_failure->time >= GT_COMPARISON_IMAGE_RETRY_COOLDOWN;
                 std::lock_guard lock(gt_comparison_image_mutex_);
                 const bool source_retry_due = gt_comparison_full_source_slot_ &&
+                                              gt_comparison_full_source_slot_->owner == id &&
                                               gt_comparison_full_source_slot_->status == GTComparisonImageStatus::Failed &&
                                               now - gt_comparison_full_source_slot_->failure_time >= GT_COMPARISON_IMAGE_RETRY_COOLDOWN;
                 if (tile_retry_due || source_retry_due) {
@@ -486,7 +487,8 @@ namespace lfs::vis {
         for (auto id : visible)
             viewState(id).last_visible = now;
         for (auto it = view_states_.begin(); it != view_states_.end();) {
-            if (now - it->second->last_visible > std::chrono::milliseconds(300)) {
+            if (!view_source_.viewSettings(it->first) ||
+                now - it->second->last_visible > std::chrono::milliseconds(300)) {
                 depth_window_epochs_[it->first] = {it->second->depth_window_mode_epoch_, it->second->depth_window_projection_generation_};
                 invalidateGTComparisonActualSizeResources(*it->second);
                 retired_view_states_.push_back(std::move(it->second));
@@ -724,12 +726,9 @@ namespace lfs::vis {
         if (!scene_manager) {
             return false;
         }
-        {
-            std::lock_guard<std::mutex> lock(settings_mutex_);
-            if (activeSettingsLocked().gt_comparison_mode != GTComparisonMode::RGB) {
-                return false;
-            }
-        }
+        const auto settings = getSettings();
+        if (!gtComparisonActualSizeEligible(settings.view()))
+            return false;
         const auto& cameras = scene_manager->getScene().getAllCamerasCached();
         std::shared_ptr<lfs::core::Camera> camera;
         const int current_camera_id = camera_interaction_service_.currentCameraId();
@@ -748,7 +747,7 @@ namespace lfs::vis {
             }
         }
         return camera && detail::isGTComparisonActualSizeAvailable(
-                             *camera, GTComparisonMode::RGB);
+                             *camera, settings.view());
     }
 
     void RenderingManager::setGTComparisonCropOrigin(const glm::ivec2 origin, const ViewId id) {
@@ -769,6 +768,10 @@ namespace lfs::vis {
         if (!crop.valid()) {
             return;
         }
+        // A pan anchors a new center in the displayed crop. Clamping/rounding
+        // during a later resize does not overwrite this intent.
+        view.gt_comparison_actual_size_state_.desired_crop_center =
+            glm::dvec2(crop.origin) + glm::dvec2(crop.extent) * 0.5;
         const bool crop_changed =
             crop.origin != view.gt_comparison_actual_size_state_.crop.origin;
         if (!crop_changed && crop.origin == published.crop.origin) {

@@ -503,6 +503,11 @@ namespace lfs::vis {
         }
     }
 
+    [[nodiscard]] inline bool gtComparisonActualSizeEligible(const ViewSettings& settings) {
+        return settings.gt_comparison_mode == GTComparisonMode::RGB &&
+               !settings.orthographic && !settings.equirectangular;
+    }
+
     inline void sanitizeGTComparisonSettings(ViewSettings& settings) {
         switch (settings.gt_comparison_mode) {
         case GTComparisonMode::RGB:
@@ -514,7 +519,7 @@ namespace lfs::vis {
             settings.gt_comparison_mode = GTComparisonMode::RGB;
             break;
         }
-        if (settings.gt_comparison_mode != GTComparisonMode::RGB) {
+        if (!gtComparisonActualSizeEligible(settings)) {
             settings.gt_comparison_actual_size = false;
         }
     }

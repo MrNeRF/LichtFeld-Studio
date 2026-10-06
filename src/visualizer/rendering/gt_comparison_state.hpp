@@ -39,6 +39,7 @@ namespace lfs::vis {
         glm::ivec2 full_extent{0, 0};
         glm::ivec2 framebuffer_extent{0, 0};
         detail::GTComparisonCrop crop{};
+        std::optional<glm::dvec2> desired_crop_center;
         std::optional<detail::GTComparisonTileKey> tile_key;
         std::optional<TileFailure> tile_failure;
         // Retain the failure through automatic retries until a native frame publishes.

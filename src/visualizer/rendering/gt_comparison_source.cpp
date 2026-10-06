@@ -456,19 +456,31 @@ namespace lfs::vis {
             prefetch_gt_comparison_image_requests_.clear();
             released_full_source = std::exchange(gt_comparison_full_source_slot_, std::nullopt);
         }
-        setGTComparisonActualSizeError(view, {});
-        view.gt_comparison_actual_size_state_.reset();
-        clearPublishedGTComparisonActualFrame(view);
+        // This is a global cache/scene epoch change, independent of which
+        // viewport happened to request it. Release every per-view source handle.
+        const auto reset_view = [&](ViewRenderState& target) {
+            setGTComparisonActualSizeError(target, {});
+            target.gt_comparison_actual_size_state_.reset();
+            clearPublishedGTComparisonActualFrame(target);
+            target.split_left_source_ = nullptr;
+            target.split_left_source_size_ = {0, 0};
+            target.split_left_source_camera_uid_ = -1;
+            target.split_left_source_undistorted_ = false;
+        };
+        {
+            std::lock_guard lock(views_mutex_);
+            reset_view(view);
+            for (auto& [id, target] : view_states_)
+                if (target.get() != &view)
+                    reset_view(*target);
+        }
+        gt_comparison_cuda_owner_ = kNoView;
         gt_comparison_cuda_image_.reset();
         gt_comparison_cuda_source_ = nullptr;
         gt_comparison_cuda_generation_ = 0;
         gt_comparison_cuda_camera_uid_ = -1;
         gt_comparison_cuda_size_ = {0, 0};
         gt_comparison_cuda_undistorted_ = false;
-        view.split_left_source_ = nullptr;
-        view.split_left_source_size_ = {0, 0};
-        view.split_left_source_camera_uid_ = -1;
-        view.split_left_source_undistorted_ = false;
         gt_comparison_loading_placeholder_.reset();
         gt_comparison_failed_placeholder_.reset();
     }
@@ -539,7 +551,8 @@ namespace lfs::vis {
         if (view.rendered_settings) {
             const auto& previous = *view.rendered_settings;
             if (previous.gt_comparison_actual_size != settings.gt_comparison_actual_size ||
-                (splitViewUsesGTComparison(previous.split_view_mode) && !rgb_comparison)) {
+                (previous.split_view_mode != settings.split_view_mode ||
+                 previous.gt_comparison_mode != settings.gt_comparison_mode)) {
                 invalidateGTComparisonActualSizeResources(view, rgb_comparison);
                 clearPublishedGTComparisonActualFrame(view);
             }
@@ -783,7 +796,8 @@ namespace lfs::vis {
             }
 
             const bool source_changed =
-                view.gt_comparison_actual_size_state_.source_generation != lookup.generation;
+                view.gt_comparison_actual_size_state_.source_generation != lookup.generation ||
+                state.cpu_source != lookup.source;
             const bool reset_crop =
                 source_changed ||
                 view.gt_comparison_actual_size_state_.full_extent != full_extent ||
@@ -791,20 +805,10 @@ namespace lfs::vis {
                     full_extent,
                     view.gt_comparison_actual_size_state_.framebuffer_extent,
                     view.gt_comparison_actual_size_state_.crop);
-            const bool framebuffer_changed =
-                view.gt_comparison_actual_size_state_.framebuffer_extent != physical_viewport;
-            const auto crop =
-                reset_crop
-                    ? detail::centerGTComparisonCrop(full_extent, physical_viewport)
-                : framebuffer_changed
-                    ? detail::resizeGTComparisonCropPreservingCenter(
-                          full_extent,
-                          physical_viewport,
-                          view.gt_comparison_actual_size_state_.crop)
-                    : detail::clampGTComparisonCrop(
-                          full_extent,
-                          physical_viewport,
-                          view.gt_comparison_actual_size_state_.crop.origin);
+            if (reset_crop || !state.desired_crop_center)
+                state.desired_crop_center = glm::dvec2(full_extent) * 0.5;
+            const auto crop = detail::cropGTComparisonFromCenter(full_extent, physical_viewport,
+                                                                 *state.desired_crop_center);
             if (!crop.valid()) {
                 throw std::runtime_error("full-resolution comparison crop is empty");
             }

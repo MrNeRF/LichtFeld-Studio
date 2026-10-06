@@ -1927,7 +1927,7 @@ namespace lfs::vis {
                             const bool actual_size_requested =
                                 frame_settings.gt_comparison_actual_size &&
                                 detail::isGTComparisonActualSizeAvailable(
-                                    *camera, gt_mode);
+                                    *camera, frame_settings.view());
                             if (actual_size_requested) {
                                 const auto actual_frame = prepareGTActualFrame(view_state,
                                                                                *camera,

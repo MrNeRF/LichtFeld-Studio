@@ -480,7 +480,8 @@ namespace lfs::app {
                     auto restored = vis::screen::viewSettingsFromJson(patch, space->settings);
                     if (!restored)
                         return json{{"error", "Invalid view settings"}};
-                    space->settings = *restored;
+                    if (!impl->screens().editViewSettings(view.value, [&](auto& settings) { settings = *restored; }))
+                        return json{{"error", "Not a 3D view"}};
                     notify_screen_changed(impl);
                     return json{{"success", true},
                                 {"view", view.value},

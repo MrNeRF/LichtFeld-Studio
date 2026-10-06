@@ -103,6 +103,18 @@ namespace lfs::vis::detail {
                crop.origin.x <= max_origin.x && crop.origin.y <= max_origin.y;
     }
 
+    // The caller retains this unrounded center across all resizes, including
+    // clamped small-image views. Sampling origins never become the next center.
+    [[nodiscard]] inline GTComparisonCrop cropGTComparisonFromCenter(
+        const glm::ivec2 full_extent, const glm::ivec2 viewport_extent,
+        const glm::dvec2 desired_center) {
+        const glm::ivec2 extent = glm::min(full_extent, viewport_extent);
+        const glm::dvec2 bounded = glm::clamp(desired_center - glm::dvec2(extent) * 0.5,
+                                              glm::dvec2(0.0), glm::dvec2(glm::max(full_extent - extent, glm::ivec2(0))));
+        return clampGTComparisonCrop(full_extent, viewport_extent,
+                                     {static_cast<int>(std::lround(bounded.x)), static_cast<int>(std::lround(bounded.y))});
+    }
+
     [[nodiscard]] inline GTComparisonCrop resizeGTComparisonCropPreservingCenter(
         const glm::ivec2 full_extent,
         const glm::ivec2 viewport_extent,
@@ -183,27 +195,9 @@ namespace lfs::vis::detail {
             static_cast<float>(bottom - top)};
     }
 
-    [[nodiscard]] inline glm::dvec2 physicalScaleForExtents(
-        const glm::ivec2 logical_extent,
-        const glm::ivec2 physical_extent) {
-        return {
-            logical_extent.x > 0 && physical_extent.x > 0
-                ? static_cast<double>(physical_extent.x) /
-                      static_cast<double>(logical_extent.x)
-                : 1.0,
-            logical_extent.y > 0 && physical_extent.y > 0
-                ? static_cast<double>(physical_extent.y) /
-                      static_cast<double>(logical_extent.y)
-                : 1.0};
-    }
-
-    [[nodiscard]] inline glm::ivec2 roundedPhysicalDrag(
-        const glm::dvec2 logical_displacement,
-        const glm::dvec2 captured_scale) {
-        const glm::dvec2 physical = logical_displacement * captured_scale;
-        return {
-            static_cast<int>(std::lround(physical.x)),
-            static_cast<int>(std::lround(physical.y))};
+    [[nodiscard]] inline glm::ivec2 roundedPhysicalDrag(const glm::dvec2 framebuffer_displacement) {
+        return {static_cast<int>(std::lround(framebuffer_displacement.x)),
+                static_cast<int>(std::lround(framebuffer_displacement.y))};
     }
 
     [[nodiscard]] inline bool isGTComparisonActualSizeCameraModelSupported(
@@ -215,8 +209,8 @@ namespace lfs::vis::detail {
 
     [[nodiscard]] inline bool isGTComparisonActualSizeAvailable(
         const lfs::core::Camera& camera,
-        const GTComparisonMode mode) {
-        return mode == GTComparisonMode::RGB &&
+        const ViewSettings& settings) {
+        return gtComparisonActualSizeEligible(settings) &&
                camera.has_image() && !camera.image_path().empty() &&
                isGTComparisonActualSizeCameraModelSupported(camera.camera_model_type()) &&
                (!camera.has_distortion() || camera.is_undistort_precomputed());

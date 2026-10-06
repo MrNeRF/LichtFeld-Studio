@@ -68,6 +68,7 @@ namespace lfs::vis::screen {
             return false;
         edit(space->settings);
         sanitizeDepthViewSettings(space->settings);
+        sanitizeGTComparisonSettings(space->settings);
         if (splitViewEnabled(space->settings.split_view_mode)) {
             for (const auto id : screen_.areas()) {
                 if (id.value != view) {

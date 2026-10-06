@@ -1060,17 +1060,7 @@ namespace lfs::vis {
                         gt_image_pan_start_mouse_ = {x, y};
                         gt_image_pan_start_origin_ =
                             rendering->getGTComparisonCropOrigin(drag_view_);
-                        glm::ivec2 logical_extent{0, 0};
-                        glm::ivec2 physical_extent{0, 0};
-                        if (window_) {
-                            SDL_GetWindowSize(
-                                window_, &logical_extent.x, &logical_extent.y);
-                            SDL_GetWindowSizeInPixels(
-                                window_, &physical_extent.x, &physical_extent.y);
-                        }
-                        gt_image_pan_physical_scale_ =
-                            detail::physicalScaleForExtents(
-                                logical_extent, physical_extent);
+                        // WindowManager already routes framebuffer-space mouse positions.
                         break;
                     }
                     const int context_camera_id =
@@ -1673,8 +1663,7 @@ namespace lfs::vis {
                     rendering->setGTComparisonCropOrigin(
                         gt_image_pan_start_origin_ -
                             detail::roundedPhysicalDrag(
-                                current_pos - gt_image_pan_start_mouse_,
-                                gt_image_pan_physical_scale_),
+                                current_pos - gt_image_pan_start_mouse_),
                         drag_view_);
                 }
                 return;
@@ -3399,7 +3388,6 @@ namespace lfs::vis {
         drag_view_ = kNoView;
         gt_image_pan_start_mouse_ = {0.0, 0.0};
         gt_image_pan_start_origin_ = {0, 0};
-        gt_image_pan_physical_scale_ = {1.0, 1.0};
         pending_click_drag_ = {};
         forced_mouse_press_action_ = input::Action::NONE;
         is_node_rect_dragging_ = false;

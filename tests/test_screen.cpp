@@ -647,6 +647,19 @@ namespace lfs::vis::screen {
         EXPECT_NE(info.rotation[5], info.rotation[7]);
     }
 
+    TEST_F(ScreenTest, JsonProjectionWritesClearUnsupportedNativeComparison) {
+        for (const auto* field : {"orthographic", "equirectangular"}) {
+            ViewSettings initial;
+            initial.gt_comparison_actual_size = true;
+            auto unsupported = viewSettingsFromJson(nlohmann::json{{field, true}}, initial);
+            ASSERT_TRUE(unsupported);
+            EXPECT_FALSE(unsupported->gt_comparison_actual_size);
+            auto perspective = viewSettingsFromJson(nlohmann::json{{field, false}}, *unsupported);
+            ASSERT_TRUE(perspective);
+            EXPECT_FALSE(perspective->gt_comparison_actual_size);
+        }
+    }
+
     TEST_F(ScreenTest, ViewSettingsJsonRoundTripsEveryField) {
         ViewSettings s;
         s.focal_length_mm = 50.0f;

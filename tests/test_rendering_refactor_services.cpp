@@ -641,12 +641,11 @@ namespace lfs::vis {
         EXPECT_EQ(splitViewDividerPixel(200, 0.5f), 100);
         EXPECT_EQ(splitViewDividerPixel(200, 0.75f), 150);
 
-        const auto scale = detail::physicalScaleForExtents({1000, 500}, {2000, 750});
-        EXPECT_DOUBLE_EQ(scale.x, 2.0);
-        EXPECT_DOUBLE_EQ(scale.y, 1.5);
-        EXPECT_EQ(
-            detail::roundedPhysicalDrag({2.25, -5.0 / 3.0}, scale),
-            glm::ivec2(5, -3));
+        for (const double ratio : {1.0, 1.25, 1.5, 2.0}) {
+            // A physical drag of 20 pixels arrives identically at all ratios.
+            const glm::dvec2 window_drag = glm::dvec2(20.0, -12.0) / ratio;
+            EXPECT_EQ(detail::roundedPhysicalDrag(window_drag * ratio), glm::ivec2(20, -12));
+        }
     }
 
     TEST(SplitViewServiceTest, ActualSizeSupportsPerspectiveCameraModelsOnly) {
@@ -662,6 +661,60 @@ namespace lfs::vis {
             CameraModelType::ORTHO));
         EXPECT_FALSE(detail::isGTComparisonActualSizeCameraModelSupported(
             CameraModelType::EQUIRECTANGULAR));
+    }
+
+    TEST(GTComparisonCropTest, OddEvenResizeCyclesPreserveUnroundedCenterAndPanReanchors) {
+        const glm::ivec2 full{8193, 4321};
+        const glm::dvec2 center{4021.5, 2140.5};
+        const auto original = detail::cropGTComparisonFromCenter(full, {1001, 701}, center);
+        for (int i = 0; i < 1000; ++i) {
+            for (const auto size : {glm::ivec2(1000, 700), glm::ivec2(1002, 702), glm::ivec2(9000, 5000), glm::ivec2(1001, 701)}) {
+                const auto crop = detail::cropGTComparisonFromCenter(full, size, center);
+                EXPECT_TRUE(detail::isGTComparisonCropValidForViewport(full, size, crop));
+            }
+            EXPECT_EQ(detail::cropGTComparisonFromCenter(full, {1001, 701}, center), original);
+        }
+        const auto displayed = detail::cropGTComparisonFromCenter(full, {1000, 700}, center);
+        const glm::dvec2 panned_center = glm::dvec2(displayed.origin - glm::ivec2(15, -9)) + glm::dvec2(displayed.extent) * 0.5;
+        const auto panned = detail::cropGTComparisonFromCenter(full, displayed.extent, panned_center);
+        EXPECT_EQ(panned.origin, displayed.origin - glm::ivec2(15, -9));
+        EXPECT_EQ(detail::cropGTComparisonFromCenter(full, {1000, 700}, panned_center), panned);
+    }
+
+    TEST(GTComparisonSettingsTest, UnsupportedViewProjectionsClearNativeRequestPermanently) {
+        for (const bool orthographic : {false, true}) {
+            screen::ScreenService views;
+            const auto id = views.activeView();
+            ASSERT_TRUE(views.editViewSettings(id, [&](auto& s) {
+                s.gt_comparison_actual_size = true;
+                s.orthographic = orthographic;
+                s.equirectangular = !orthographic;
+            }));
+            EXPECT_FALSE(views.viewSettings(id)->gt_comparison_actual_size);
+            EXPECT_FALSE(gtComparisonActualSizeEligible(*views.viewSettings(id)));
+            ASSERT_TRUE(views.editViewSettings(id, [](auto& s) { s.orthographic = false; s.equirectangular = false; }));
+            EXPECT_TRUE(gtComparisonActualSizeEligible(*views.viewSettings(id)));
+            EXPECT_FALSE(views.viewSettings(id)->gt_comparison_actual_size);
+        }
+    }
+
+    TEST(ViewportRequestBuilderTest, PointCloudProjectionUsesCropIntrinsicsAndPreservesClipOrientation) {
+        lfs::rendering::PointCloudRenderRequest frame;
+        frame.frame_view.size = {319, 241};
+        frame.frame_view.intrinsics_override = lfs::rendering::CameraIntrinsics{
+            .focal_x = 501.0f,
+            .focal_y = 603.0f,
+            .center_x = 117.25f,
+            .center_y = 151.75f};
+        const auto request = buildPointSceneRequest(frame, RenderSettings{});
+        EXPECT_FLOAT_EQ(request.focal_y, 603.0f);
+        for (const auto point : {glm::vec3(0.0f, 0.0f, -2.0f), glm::vec3(0.1f, -0.15f, -2.0f)}) {
+            const auto world = glm::inverse(frame.frame_view.getViewMatrix()) * glm::vec4(point, 1.0f);
+            const auto clip = request.view_projection * world;
+            const glm::vec2 pixel = (glm::vec2(clip) / clip.w + 1.0f) * glm::vec2(frame.frame_view.size) * 0.5f;
+            EXPECT_NEAR(pixel.x, 501.0f * point.x / -point.z + 117.25f, 1.0e-4f);
+            EXPECT_NEAR(pixel.y, -603.0f * point.y / -point.z + 151.75f, 1.0e-4f);
+        }
     }
 
     TEST(SplitViewServiceTest, ActualSizeCropPreservesFocalLengthAndOffsetsPrincipalPoint) {
@@ -1082,6 +1135,22 @@ namespace lfs::vis {
             EXPECT_FALSE(manager.gt_comparison_full_source_slot_);
             EXPECT_FALSE(manager.gt_comparison_cuda_image_);
         }
+        void globalInvalidation() {
+            auto& a = manager.viewState(owner);
+            const auto source = image();
+            a.gt_comparison_actual_size_state_.cpu_source = source;
+            a.gt_comparison_actual_size_state_.cuda_source = source;
+            a.gt_comparison_actual_size_state_.crop = {{11, 7}, {32, 24}};
+            manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+                .owner = owner,
+                .status = Status::Ready,
+                .cpu_source = source};
+            manager.invalidateGTComparisonImageCache(manager.viewState(other));
+            EXPECT_FALSE(a.gt_comparison_actual_size_state_.cpu_source);
+            EXPECT_FALSE(a.gt_comparison_actual_size_state_.cuda_source);
+            EXPECT_FALSE(manager.gt_comparison_full_source_slot_);
+            EXPECT_EQ(a.gt_comparison_actual_size_state_.crop.origin, glm::ivec2(0));
+        }
         void cameraSwitch() {
             manager.setCurrentCameraId(0);
             (void)manager.getOrQueueGTComparisonFullSource({.owner = owner, .source_key = {.camera_uid = 0, .image_path = "0.png"}});
@@ -1145,14 +1214,17 @@ namespace lfs::vis {
             EXPECT_TRUE(manager.gt_comparison_image_cache_.empty());
             EXPECT_TRUE(manager.pending_gt_comparison_image_request_);
         }
-        void calibration() {
+        void calibration(bool prefetch = false, bool promote = false) {
+            manager.invalidateGTComparisonImageCache(manager.viewState(owner));
             using namespace lfs::core;
             auto camera = std::make_shared<Camera>(Tensor::eye(3, Device::CPU),
                                                    Tensor::zeros({3}, Device::CPU), 24.0f, 23.0f, 16.0f, 12.0f,
                                                    Tensor(), Tensor(), CameraModelType::PINHOLE, "0.png", "0.png", std::filesystem::path{}, 32, 24, 0);
             auto r = request(0);
             r.camera = camera;
-            auto old = beginForeground(r);
+            auto old = prefetch ? beginPrefetch(r) : beginForeground(r);
+            if (promote)
+                (void)manager.getOrQueueGTComparisonImage(r);
             camera->adopt_undistortion({});
             EXPECT_EQ(manager.completeGTComparisonImage(old, image(), {}, false), kNoView);
             EXPECT_TRUE(manager.gt_comparison_image_cache_.empty());
@@ -1180,6 +1252,12 @@ namespace lfs::vis {
     TEST_F(RenderingManagerGTComparisonReviewTest, ObsoletePrefetchCannotBePromotedAcrossInvalidation) { immutableEpoch(false); }
     TEST_F(RenderingManagerGTComparisonReviewTest, PromotedPrefetchRetainsItsDecodeEpoch) { immutableEpoch(true); }
     TEST_F(RenderingManagerGTComparisonReviewTest, CalibrationRevisionRejectsDecodedOldPixels) { calibration(); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, CalibrationRevisionRejectsPrefetchIncludingPromotion) {
+        calibration(true, false);
+        calibration(true, true);
+    }
+    TEST_F(RenderingManagerGTComparisonReviewTest, GlobalInvalidationFromOtherViewReleasesOwner) { globalInvalidation(); }
+
     TEST_F(RenderingManagerGTComparisonReviewTest, CacheOnlyCompletionHasNoRedrawConsumer) { prefetchOnlyAndPromotion(); }
 
     TEST(RenderingManagerActualSizeCacheTest,

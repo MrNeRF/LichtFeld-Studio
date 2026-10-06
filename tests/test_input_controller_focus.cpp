@@ -1036,8 +1036,8 @@ namespace lfs::vis {
     }
 
     TEST_F(InputControllerFocusTest, GTImagePanConvertsTotalDragToPhysicalPixelsOnce) {
-        const auto scale = detail::physicalScaleForExtents({1000, 500}, {2000, 1000});
-        const auto displacement = detail::roundedPhysicalDrag({3.25, -3.5}, scale);
+        // These are already physical positions after WindowManager's scaling.
+        const auto displacement = detail::roundedPhysicalDrag({6.5, -7.0});
         const glm::ivec2 origin = glm::ivec2(100, 200) - displacement;
 
         EXPECT_EQ(origin, glm::ivec2(93, 207));

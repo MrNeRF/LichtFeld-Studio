@@ -508,7 +508,8 @@ namespace lfs::python {
                         auto restored = vis::screen::viewSettingsFromJson(patch, space->settings);
                         if (!restored)
                             return "Invalid view settings";
-                        space->settings = *restored;
+                        if (!impl->screens().editViewSettings(area_id(view).value, [&](auto& settings) { settings = *restored; }))
+                            return "Not a 3D view";
                         notify_screen_changed(impl);
                         return {};
                     },
