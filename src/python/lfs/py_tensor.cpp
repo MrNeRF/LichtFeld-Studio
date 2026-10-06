@@ -1664,6 +1664,9 @@ namespace lfs::python {
             std::vector<size_t> dims;
             dims.reserve(shape.size());
             for (auto d : shape) {
+                if (d < 0) {
+                    throw nb::value_error("Tensor shape contains a negative dimension");
+                }
                 dims.push_back(static_cast<size_t>(d));
             }
             return TensorShape(dims);
