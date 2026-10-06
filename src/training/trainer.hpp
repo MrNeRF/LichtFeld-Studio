@@ -451,6 +451,7 @@ namespace lfs::training {
 
         // Frozen: .codex_tmp/error-architecture-analysis.md Section 7.3.
         enum class StepDisposition : std::uint8_t { Continue,
+                                                    Retry,
                                                     Stop };
         enum class StepPhase : std::uint8_t {
             AcquireData,
@@ -497,7 +498,8 @@ namespace lfs::training {
             int iter,
             lfs::core::Camera* cam,
             lfs::core::Tensor gt_image,
-            std::stop_token stop_token = {});
+            std::stop_token stop_token = {},
+            bool replay_fast_capacity = false);
 
         [[nodiscard]] static RetryDecision classify_forward_retry(
             const lfs::Error& forward_error, MutationStamp stamp, unsigned attempts) noexcept;

@@ -85,6 +85,10 @@ namespace lfs::training {
             core::TensorReadback count_readback;
             std::array<uint32_t, 2> count_words{};
             uint32_t instance_capacity = 0;
+            uint32_t pending_capacity = 0;
+            uint32_t last_instance_count = 0;
+            bool defer_count = false;
+            bool forced_capacity = false;
             Frame frame;
             std::string message;
         };
@@ -266,6 +270,8 @@ namespace lfs::training {
                                            const lfs::gpu_ops::RenderOutputs& outputs, Tensor& max_screen_share) {
             auto& s = state_of(saved);
             s.frame = {};
+            if (s.count_readback.pending())
+                throw std::logic_error("Metal FastGS forward needs its deferred count resolved before reuse");
             if (!splats.means.is_valid() || splats.means.ndim() != 2 || splats.means.shape()[0] == 0)
                 return fail(s, Code::Failed, "n_primitives is 0 - model has no gaussians");
             if (splats.means.shape()[0] > static_cast<size_t>(std::numeric_limits<int>::max()))
@@ -487,20 +493,28 @@ namespace lfs::training {
                 // would synchronize the later raster work before returning the count.
                 s.count_readback.enqueue(s.counts.slice(0, 0, 2));
                 const uint32_t speculated = s.instance_capacity;
-                if (speculated > 0)
+                s.pending_capacity = speculated;
+                if (speculated > 0) {
                     encode_raster(speculated);
-                s.count_readback.wait(std::as_writable_bytes(std::span(s.count_words)));
-                const uint64_t n_instances = uint64_t{s.count_words[0]} |
-                                             (uint64_t{s.count_words[1]} << 32);
-                if (n_instances > static_cast<uint64_t>(std::numeric_limits<int>::max()))
-                    return fail(s, Code::InstanceOverflow,
-                                std::format("FastGS instance count exceeds 32-bit range: {} instances from {} "
-                                            "primitives across {} tiles",
-                                            n_instances, n, n_tiles));
-                f.n_instances = static_cast<uint32_t>(n_instances);
-                if (speculated == 0 || f.n_instances > speculated) {
-                    s.instance_capacity = std::max<uint32_t>(1024, f.n_instances + f.n_instances / 4);
-                    encode_raster(s.instance_capacity);
+                    f.n_instances = speculated;
+                }
+                const bool defer_count = std::exchange(s.defer_count, false);
+                if (!defer_count || speculated == 0) {
+                    s.count_readback.wait(std::as_writable_bytes(std::span(s.count_words)));
+                    const uint64_t n_instances = uint64_t{s.count_words[0]} |
+                                                 (uint64_t{s.count_words[1]} << 32);
+                    if (n_instances > static_cast<uint64_t>(std::numeric_limits<int>::max()))
+                        return fail(s, Code::InstanceOverflow,
+                                    std::format("FastGS instance count exceeds 32-bit range: {} instances from {} "
+                                                "primitives across {} tiles",
+                                                n_instances, n, n_tiles));
+                    f.n_instances = static_cast<uint32_t>(n_instances);
+                    s.last_instance_count = f.n_instances;
+                    if (speculated == 0 || f.n_instances > speculated) {
+                        s.instance_capacity = std::max<uint32_t>(1024, f.n_instances + f.n_instances / 4);
+                        s.pending_capacity = s.instance_capacity;
+                        encode_raster(s.instance_capacity);
+                    }
                 }
             } catch (const core::MemoryAllocationError& e) {
                 return fail(s, Code::ResourceExhausted, std::format("OUT_OF_MEMORY: {}", e.what()));
@@ -588,35 +602,35 @@ namespace lfs::training {
         }
 
         struct BlendBackwardParams {
-            uint64_t ranges, values, mean_box, conic_opacity, color_depth, normals;
+            uint64_t counts, ranges, values, mean_box, conic_opacity, color_depth, normals;
             uint64_t grad_image, grad_alpha, grad_depth, grad_normal, bg_color, bg_image, n_contrib,
                 final_transmittance;
             uint64_t grads, normal_grads, densification, error_map, edge_weight, edge_score;
             uint32_t n_instances, n_primitives, width, height;
-            uint32_t grid_w, unused0, unused1, unused2;
+            uint32_t grid_w, capacity, unused1, unused2;
         };
 
         struct ClearGradParams {
-            uint64_t n_touched, grads, normal_grads;
-            uint32_t n;
+            uint64_t counts, n_touched, grads, normal_grads;
+            uint32_t n, capacity;
         };
 
         struct BackwardShParams {
-            uint64_t means, camera, shN, sh_bounds, n_touched, color_depth, grads;
+            uint64_t counts, means, camera, shN, sh_bounds, n_touched, color_depth, grads;
             AdamGroupParams sh0, shN_adam;
             float beta1, beta2, eps;
-            uint32_t n;
+            uint32_t n, capacity;
         };
 
         struct BackwardGeometryParams {
-            uint64_t means, scales, rotations, opacities, view, camera, n_touched, grads, normal_grads;
+            uint64_t counts, means, scales, rotations, opacities, view, camera, n_touched, grads, normal_grads;
             uint64_t densification, scale_loss, opacity_loss, sparsity_sigmoid, sparsity_z, sparsity_u;
             AdamGroupParams means_adam, rotation_adam, scaling_adam, opacity_adam;
             float beta1, beta2, eps;
             float scale_reg_weight, flatten_reg_weight, opacity_reg_weight, sparsity_rho, sparsity_grad_loss;
             float width, height, fx, fy;
             float clip_left, clip_right, clip_top, clip_bottom;
-            uint32_t n, sparsity_n;
+            uint32_t n, sparsity_n, capacity;
         };
 
         // A read-only per-pixel map given as [H, W] or [1, H, W], made contiguous.
@@ -697,9 +711,9 @@ namespace lfs::training {
             }
             const Tensor none;
             const Tensor& normal_grads_use = normal_channel ? s.normal_grads : none;
-            const ClearGradParams clear{mk::address(s.n_touched), mk::address(s.grads),
-                                        normal_channel ? mk::address(s.normal_grads) : 0, f.n};
-            launch("fast_clear_visible_grads", clear, {&s.n_touched, &s.grads, &normal_grads_use},
+            const ClearGradParams clear{mk::address(s.counts), mk::address(s.n_touched), mk::address(s.grads),
+                                        normal_channel ? mk::address(s.normal_grads) : 0, f.n, s.pending_capacity};
+            launch("fast_clear_visible_grads", clear, {&s.counts, &s.n_touched, &s.grads, &normal_grads_use},
                    core::GpuKernelModule::groups_for(f.n, 256), 1, 256,
                    {{kNormalChannelConstant, normal_channel ? 1u : 0u}});
 
@@ -709,6 +723,7 @@ namespace lfs::training {
                 const Tensor& bg_use = has_bg_image ? f.bg_image : (solid_bg ? f.bg_color : none);
                 const Tensor& densification_use = blend_densification != 0 ? densification : none;
                 const BlendBackwardParams params{
+                    .counts = mk::address(s.counts),
                     .ranges = mk::address(s.ranges),
                     .values = mk::address(s.values[f.sorted]),
                     .mean_box = mk::address(s.mean_box),
@@ -734,13 +749,13 @@ namespace lfs::training {
                     .width = f.width,
                     .height = f.height,
                     .grid_w = f.grid_w,
-                    .unused0 = 0,
+                    .capacity = s.pending_capacity,
                     .unused1 = 0,
                     .unused2 = 0,
                 };
                 const Tensor& normals_use = normal_channel ? s.normals : none;
                 launch("fast_blend_backward", params,
-                       {&s.ranges, &s.values[f.sorted], &s.mean_box, &s.conic_opacity, &s.color_depth, &normals_use,
+                       {&s.counts, &s.ranges, &s.values[f.sorted], &s.mean_box, &s.conic_opacity, &s.color_depth, &normals_use,
                         &grad_image, &grad_alpha, &grad_depth, &grad_normal, &bg_use, &s.n_contrib,
                         &s.final_transmittance, &s.grads, &normal_grads_use, &densification_use, &error, &edge_weight,
                         &edge_scores},
@@ -752,8 +767,9 @@ namespace lfs::training {
             }
 
             const uint32_t blocks = div_up(f.n, 256);
-            std::vector<const Tensor*> uses{&f.means, &f.camera, &f.shN, &f.sh_bounds, &s.n_touched, &s.color_depth, &s.grads};
+            std::vector<const Tensor*> uses{&s.counts, &f.means, &f.camera, &f.shN, &f.sh_bounds, &s.n_touched, &s.color_depth, &s.grads};
             const BackwardShParams sh{
+                .counts = mk::address(s.counts),
                 .means = mk::address(f.means),
                 .camera = mk::address(f.camera),
                 .shN = f.sh_bases > 1 ? address_if(f.shN) : 0,
@@ -767,6 +783,7 @@ namespace lfs::training {
                 .beta2 = adam.beta2,
                 .eps = adam.eps,
                 .n = f.n,
+                .capacity = s.pending_capacity,
             };
             // The kernels clamp to degree 3: 15 rest coefficients in 12 float4 slots.
             LFS_ASSERT_MSG(f.sh_layout_rest <= 15 && (f.sh_layout_rest * 3 + 3) / 4 <= kShParts * kShSlotsPerThread,
@@ -783,7 +800,7 @@ namespace lfs::training {
             const auto& means_group = group(AdamSlot::Means);
 
             const ClipBounds clip = clip_bounds(f);
-            uses = {&f.means, &f.scales, &f.rotations, &f.opacities, &f.view, &f.camera, &s.n_touched, &s.grads,
+            uses = {&s.counts, &f.means, &f.scales, &f.rotations, &f.opacities, &f.view, &f.camera, &s.n_touched, &s.grads,
                     &normal_grads_use};
             if (count_visible)
                 uses.push_back(&densification);
@@ -794,6 +811,7 @@ namespace lfs::training {
             if (sparsity)
                 uses.insert(uses.end(), {&adam.sparsity_sigmoid, &adam.sparsity_z, &adam.sparsity_u});
             const BackwardGeometryParams geometry{
+                .counts = mk::address(s.counts),
                 .means = mk::address(f.means),
                 .scales = mk::address(f.scales),
                 .rotations = mk::address(f.rotations),
@@ -834,6 +852,7 @@ namespace lfs::training {
                 .n = f.n,
 
                 .sparsity_n = sparsity ? mk::count32(adam.sparsity_sigmoid.numel(), "sparsity") : 0,
+                .capacity = s.pending_capacity,
 
             };
             launch("fast_backward_geometry", geometry, std::span<const Tensor* const>(uses), blocks, 1, 256,
@@ -843,6 +862,45 @@ namespace lfs::training {
         void release(lfs::gpu_ops::FastSaved& saved) noexcept {
             if (saved.backend)
                 static_cast<MetalFastState&>(*saved.backend).frame = {};
+        }
+
+        void set_deferred_count(lfs::gpu_ops::FastSaved& saved, const bool enabled) {
+            state_of(saved).defer_count = enabled;
+        }
+
+        lfs::gpu_ops::RasterResult resolve_deferred_count(lfs::gpu_ops::FastSaved& saved, const bool wait) {
+            auto& s = state_of(saved);
+            if (!s.count_readback.pending())
+                return {.code = Code::Success, .has_work = s.last_instance_count != 0, .message = {}};
+            const auto bytes = std::as_writable_bytes(std::span(s.count_words));
+            if (wait) {
+                s.count_readback.wait(bytes);
+            } else if (!s.count_readback.poll(bytes)) {
+                return {.code = Code::Pending, .has_work = false, .message = {}};
+            }
+            const uint64_t count = uint64_t{s.count_words[0]} | (uint64_t{s.count_words[1]} << 32);
+            if (count > static_cast<uint64_t>(std::numeric_limits<int>::max()))
+                return fail(s, Code::InstanceOverflow,
+                            std::format("FastGS instance count exceeds 32-bit range: {} instances", count));
+            s.last_instance_count = static_cast<uint32_t>(count);
+            s.frame.n_instances = s.last_instance_count;
+            if (count > s.pending_capacity) {
+                const uint32_t required = static_cast<uint32_t>(count);
+                if (!s.forced_capacity)
+                    s.instance_capacity = std::max<uint32_t>(1024, required + required / 4);
+                return fail(s, Code::CapacityOverflow,
+                            std::format("FastGS instance capacity {} is smaller than the required {} instances",
+                                        s.pending_capacity, required));
+            }
+            return {.code = Code::Success, .has_work = count != 0, .message = {}};
+        }
+
+        void set_instance_capacity_for_testing(lfs::gpu_ops::FastSaved& saved, const uint32_t capacity) {
+            auto& s = state_of(saved);
+            if (s.count_readback.pending())
+                throw std::logic_error("Cannot force FastGS capacity while a count is pending");
+            s.instance_capacity = capacity;
+            s.forced_capacity = capacity != 0;
         }
 
         void release_caches(lfs::gpu_ops::FastSaved& saved) noexcept {
@@ -961,6 +1019,9 @@ namespace lfs::training {
             .warmup = warmup,
             .record_vram = record_vram,
             .release_caches = release_caches,
+            .set_deferred_count = set_deferred_count,
+            .resolve_deferred_count = resolve_deferred_count,
+            .set_instance_capacity_for_testing = set_instance_capacity_for_testing,
         };
         return ops;
     }

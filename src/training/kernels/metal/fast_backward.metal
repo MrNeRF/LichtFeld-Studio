@@ -14,16 +14,21 @@ constant constexpr float kFastGradClamp = 1e4f;
 
 static float fast_clamp_grad(const float g) { return fmin(fmax(g, -kFastGradClamp), kFastGradClamp); }
 
+static bool fast_valid_instance_count(device const uint* counts, const uint capacity) {
+    return counts[1] == 0u && counts[0] > 0u && counts[0] <= capacity;
+}
+
 struct FastClearGradParams {
+    device const uint* counts;
     device const uint* n_touched;
     device float4* grads;
     device float4* normal_grads;
-    uint n;
+    uint n, capacity;
 };
 
 kernel void fast_clear_visible_grads(constant FastClearGradParams& p [[buffer(0)]],
                                      const uint idx [[thread_position_in_grid]]) {
-    if (idx >= p.n || p.n_touched[idx] == 0u)
+    if (!fast_valid_instance_count(p.counts, p.capacity) || idx >= p.n || p.n_touched[idx] == 0u)
         return;
     p.grads[idx * 3u] = float4(0.0f);
     p.grads[idx * 3u + 1u] = float4(0.0f);
@@ -33,6 +38,7 @@ kernel void fast_clear_visible_grads(constant FastClearGradParams& p [[buffer(0)
 }
 
 struct FastBlendBackwardParams {
+    device const uint* counts;
     device const uint2* ranges;
     device const uint* values;
     device const FastMeanBox* mean_box;
@@ -54,7 +60,7 @@ struct FastBlendBackwardParams {
     device const float* edge_weight;
     device atomic_float* edge_score;
     uint n_instances, n_primitives, width, height;
-    uint grid_w, unused0, unused1, unused2;
+    uint grid_w, capacity, unused1, unused2;
 };
 
 // Reverse-walk state of one pixel.
@@ -205,6 +211,8 @@ kernel void fast_blend_backward(constant FastBlendBackwardParams& p [[buffer(0)]
                                 const uint rank [[thread_index_in_threadgroup]],
                                 const uint lane [[thread_index_in_simdgroup]],
                                 const uint warp [[simdgroup_index_in_threadgroup]]) {
+    if (!fast_valid_instance_count(p.counts, p.capacity))
+        return;
     threadgroup uint s_prim[kFastBlendThreads];
     threadgroup float2 s_mean[kFastBlendThreads];
     threadgroup ushort4 s_bbox[kFastBlendThreads];
@@ -666,6 +674,7 @@ static float3 fast_sh_mean_grad(device const uchar* shN, device const float2* bo
 }
 
 struct FastBackwardShParams {
+    device const uint* counts;
     device const packed_float3* means;
     device const float* camera;
     device const uchar* shN;
@@ -676,7 +685,7 @@ struct FastBackwardShParams {
     FastAdamGroup sh0;
     FastAdamGroup shN_adam;
     float beta1, beta2, eps;
-    uint n;
+    uint n, capacity;
 };
 
 kernel void fast_backward_sh(constant FastBackwardShParams& p [[buffer(0)]],
@@ -685,6 +694,8 @@ kernel void fast_backward_sh(constant FastBackwardShParams& p [[buffer(0)]],
                              const uint simd_lane [[thread_index_in_simdgroup]],
                              const uint simd_group [[simdgroup_index_in_threadgroup]],
                              const uint simd_groups [[simdgroups_per_threadgroup]]) {
+    if (!fast_valid_instance_count(p.counts, p.capacity))
+        return;
     threadgroup float4 scratch[32];
     const FastLane t = {lane, simd_lane, simd_group, simd_groups, group};
     // kFastShParts threads per primitive; part 0 also owns sh0 and the mean gradient.
@@ -733,6 +744,7 @@ kernel void fast_backward_sh(constant FastBackwardShParams& p [[buffer(0)]],
 }
 
 struct FastBackwardGeometryParams {
+    device const uint* counts;
     device const packed_float3* means;
     device const packed_float3* scales;
     device const float4* rotations;
@@ -756,7 +768,7 @@ struct FastBackwardGeometryParams {
     float scale_reg_weight, flatten_reg_weight, opacity_reg_weight, sparsity_rho, sparsity_grad_loss;
         float width, height, fx, fy;
     float clip_left, clip_right, clip_top, clip_bottom;
-    uint n, sparsity_n;
+    uint n, sparsity_n, capacity;
 };
 
 static float fast_sigmoid(const float x) { return 1.0f / (1.0f + exp(-x)); }
@@ -813,6 +825,8 @@ kernel void fast_backward_geometry(constant FastBackwardGeometryParams& p [[buff
                                    const uint simd_lane [[thread_index_in_simdgroup]],
                                    const uint simd_group [[simdgroup_index_in_threadgroup]],
                                    const uint simd_groups [[simdgroups_per_threadgroup]]) {
+    if (!fast_valid_instance_count(p.counts, p.capacity))
+        return;
     threadgroup float4 scratch[32];
     threadgroup float sum_scratch[32];
     const FastLane t = {lane, simd_lane, simd_group, simd_groups, group};

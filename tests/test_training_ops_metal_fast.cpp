@@ -717,6 +717,109 @@ namespace {
         EXPECT_EQ(codes_before, download_bytes(g.shN));
     }
 
+    TEST_P(PortableFastRaster, CapacityOverflowIsNoOpAndReplayMatchesLargeCapacity) {
+        const auto& table = fast_ops();
+        if (table.set_deferred_count == nullptr || table.resolve_deferred_count == nullptr ||
+            table.set_instance_capacity_for_testing == nullptr)
+            GTEST_SKIP() << "backend has no deferred FastGS count path";
+
+        Scene s = make_scene(24, 1, 48, 40, 73u, -2.3f, -1.6f);
+        const LossWeights w = random_weights(s.width, s.height, 17u, false);
+        const Tensor grad_image = plane(w.image, 3, s.height, s.width);
+        const size_t n = static_cast<size_t>(s.count);
+        const size_t pixels = static_cast<size_t>(s.width) * s.height;
+        std::vector<float> map(pixels, 0.5f);
+        const Tensor error_map = upload(map, {static_cast<size_t>(s.height), static_cast<size_t>(s.width)});
+        const Tensor edge_map = upload(map, {static_cast<size_t>(s.height), static_cast<size_t>(s.width)});
+        Tensor none;
+
+        auto run_backward = [&](Frame& frame, Gpu& g, AdamState& state, Tensor& densification,
+                                Tensor& edge_scores) {
+            ops::BackwardAdam adam = make_adam(g, state, s.count, {});
+            state.scale_loss = Tensor::zeros({1}, Device::GPU);
+            state.opacity_loss = Tensor::zeros({1}, Device::GPU);
+            adam.scale_reg_loss = state.scale_loss;
+            adam.opacity_reg_loss = state.opacity_loss;
+            adam.scale_reg_weight = 0.2f;
+            adam.opacity_reg_weight = 0.3f;
+            table.backward(frame.saved, {.image = grad_image, .alpha = none, .depth = none, .normal = none},
+                           densification, error_map, edge_map, edge_scores, adam, DensificationType::MRNF);
+        };
+
+        Gpu replay_gpu = upload_scene(s, ops::ShStorage::Float32);
+        const HostParams original = read_params(replay_gpu);
+        Frame replay;
+        replay.saved.backend = table.create();
+        table.set_instance_capacity_for_testing(replay.saved, 1);
+        table.set_deferred_count(replay.saved, true);
+        forward(replay, s, replay_gpu, {});
+        ASSERT_EQ(replay.result.code, ops::RasterResult::Code::Success) << replay.result.message;
+        AdamState replay_state;
+        Tensor replay_densification = Tensor::zeros({2, n}, Device::GPU);
+        Tensor replay_edges = Tensor::zeros({n}, Device::GPU);
+        run_backward(replay, replay_gpu, replay_state, replay_densification, replay_edges);
+        const ops::RasterResult overflow = table.resolve_deferred_count(replay.saved, true);
+        ASSERT_EQ(overflow.code, ops::RasterResult::Code::CapacityOverflow) << overflow.message;
+
+        const HostParams after_overflow = read_params(replay_gpu);
+        EXPECT_EQ(original.means, after_overflow.means);
+        EXPECT_EQ(original.scales, after_overflow.scales);
+        EXPECT_EQ(original.rotations, after_overflow.rotations);
+        EXPECT_EQ(original.opacities, after_overflow.opacities);
+        EXPECT_EQ(original.sh0, after_overflow.sh0);
+        EXPECT_EQ(original.shN, after_overflow.shN);
+        EXPECT_EQ(download(replay_densification), std::vector<float>(2 * n, 0.0f));
+        EXPECT_EQ(download(replay_edges), std::vector<float>(n, 0.0f));
+        EXPECT_EQ(download(replay_state.scale_loss), std::vector<float>(1, 0.0f));
+        EXPECT_EQ(download(replay_state.opacity_loss), std::vector<float>(1, 0.0f));
+        for (size_t i = 0; i < replay_state.moments.size(); ++i) {
+            if (replay_state.moments[i].is_valid())
+                EXPECT_EQ(download_bytes(replay_state.moments[i]),
+                          std::vector<uint8_t>(replay_state.moments[i].bytes(), 0));
+        }
+
+        constexpr uint32_t large_capacity = 1u << 20;
+        table.set_instance_capacity_for_testing(replay.saved, large_capacity);
+        table.set_deferred_count(replay.saved, true);
+        forward(replay, s, replay_gpu, {});
+        ASSERT_EQ(replay.result.code, ops::RasterResult::Code::Success) << replay.result.message;
+        run_backward(replay, replay_gpu, replay_state, replay_densification, replay_edges);
+        const ops::RasterResult replay_result = table.resolve_deferred_count(replay.saved, true);
+        ASSERT_EQ(replay_result.code, ops::RasterResult::Code::Success) << replay_result.message;
+
+        Gpu baseline_gpu = upload_scene(s, ops::ShStorage::Float32);
+        Frame baseline;
+        baseline.saved.backend = table.create();
+        table.set_instance_capacity_for_testing(baseline.saved, large_capacity);
+        table.set_deferred_count(baseline.saved, true);
+        forward(baseline, s, baseline_gpu, {});
+        ASSERT_EQ(baseline.result.code, ops::RasterResult::Code::Success) << baseline.result.message;
+        AdamState baseline_state;
+        Tensor baseline_densification = Tensor::zeros({2, n}, Device::GPU);
+        Tensor baseline_edges = Tensor::zeros({n}, Device::GPU);
+        run_backward(baseline, baseline_gpu, baseline_state, baseline_densification, baseline_edges);
+        const ops::RasterResult baseline_result = table.resolve_deferred_count(baseline.saved, true);
+        ASSERT_EQ(baseline_result.code, ops::RasterResult::Code::Success) << baseline_result.message;
+
+        const HostParams replay_params = read_params(replay_gpu);
+        const HostParams baseline_params = read_params(baseline_gpu);
+        auto expect_same = [](const std::vector<float>& a, const std::vector<float>& b, const char* name) {
+            ASSERT_EQ(a.size(), b.size()) << name;
+            for (size_t i = 0; i < a.size(); ++i)
+                EXPECT_NEAR(a[i], b[i], 1e-6f) << name << " at " << i;
+        };
+        expect_same(replay_params.means, baseline_params.means, "means");
+        expect_same(replay_params.scales, baseline_params.scales, "scales");
+        expect_same(replay_params.rotations, baseline_params.rotations, "rotations");
+        expect_same(replay_params.opacities, baseline_params.opacities, "opacities");
+        expect_same(replay_params.sh0, baseline_params.sh0, "sh0");
+        expect_same(replay_params.shN, baseline_params.shN, "shN");
+        expect_same(download(replay_densification), download(baseline_densification), "densification");
+        expect_same(download(replay_edges), download(baseline_edges), "edge scores");
+        expect_same(download(replay_state.scale_loss), download(baseline_state.scale_loss), "scale loss");
+        expect_same(download(replay_state.opacity_loss), download(baseline_state.opacity_loss), "opacity loss");
+    }
+
     // Reference gradient of every parameter by central differences.
     struct ReferenceGrads {
         std::vector<double> means, scales, rotations, opacities, sh0, rest, mean2d;

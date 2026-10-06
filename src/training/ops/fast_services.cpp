@@ -44,6 +44,15 @@ namespace lfs::training {
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             });
         }
+        if (result.code == Code::CapacityOverflow || result.code == Code::Pending) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::CUDA,
+                .user_message = "FastGS instance capacity validation was not resolved before commit.",
+                .detail = detail,
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
         const bool exhausted = result.code == Code::ResourceExhausted;
         return lfs::make_error(lfs::ErrorInit{
             .code = exhausted ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::Internal,

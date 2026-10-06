@@ -102,6 +102,8 @@ namespace lfs::gpu_ops {
 
     struct RasterResult {
         enum class Code { Success,
+                          Pending,
+                          CapacityOverflow,
                           ResourceExhausted,
                           InstanceOverflow,
                           Failed };
@@ -136,6 +138,14 @@ namespace lfs::gpu_ops {
             bool run_gaussian_backward, size_t num_primitives);
         // Drops cached output tensors. The live forward frame stays owned by release.
         void (*release_caches)(FastSaved&) noexcept;
+
+        // Backends with a GPU-valid speculative forward may defer capacity
+        // validation until immediately before the step's persistent commit.
+        // A CapacityOverflow result means the attempted raster/backward was a
+        // device-side no-op and the same step must be replayed.
+        void (*set_deferred_count)(FastSaved&, bool) = nullptr;
+        RasterResult (*resolve_deferred_count)(FastSaved&, bool wait) = nullptr;
+        void (*set_instance_capacity_for_testing)(FastSaved&, uint32_t) = nullptr;
     };
 
 } // namespace lfs::gpu_ops
