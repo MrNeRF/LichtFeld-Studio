@@ -526,11 +526,93 @@ def test_transform_controls_hide_overlay_when_tool_is_inactive(transform_control
 
     panel.mount(doc)
     assert "hidden" in doc.wrap.classes
-
     doc.wrap.classes.discard("hidden")
     panel.update(doc)
 
     assert "hidden" in doc.wrap.classes
+
+
+def test_transform_controls_keeps_other_numeric_bindings_live_while_focused(transform_controls_module):
+    module, _state = transform_controls_module
+    panel = module.TransformControlsController()
+    panel._handle = _DataModelHandleStub()
+
+    # This is the original _dirty_all binding contract. Keep every field
+    # refresh when no edit has focus.
+    previous_bindings = [
+        name
+        for axis in ("x", "y", "z")
+        for name in (
+            f"transform_pos_{axis}_str",
+            f"transform_rot_{axis}_str",
+            f"transform_scale_{axis}_str",
+        )
+    ] + [
+        "transform_scale_u_str",
+        "transform_reset_label",
+        "transform_bake_label",
+        "transform_show_translate",
+        "transform_show_rotate",
+        "transform_show_scale",
+        "transform_show_actions",
+    ]
+    panel._dirty_all()
+    assert panel._handle.dirty_calls == previous_bindings
+
+    panel._handle.dirty_calls.clear()
+    panel._focused_input_property = "transform_rot_y_str"
+    panel._dirty_all()
+    assert panel._handle.dirty_calls == [
+        name for name in previous_bindings if name != "transform_rot_y_str"
+    ]
+
+    panel._handle.dirty_calls.clear()
+    panel._on_input_blur(None, "transform_rot_y_str")
+    panel._dirty_all()
+    assert panel._handle.dirty_calls == previous_bindings
+
+
+def test_transform_controls_keeps_typed_numeric_text_until_blur(transform_controls_module):
+    module, _state = transform_controls_module
+    panel = module.TransformControlsController()
+    model = _DataModelStub()
+    panel.bind_model(model)
+
+    # Previously correct display formatting remains unchanged when not editing.
+    panel._trans = [1.25, -2.5, 0.0]
+    panel._euler = [10.0, -20.0, 30.0]
+    panel._scale = [0.125, 2.0, 1.0]
+    assert model.bound_binds["transform_pos_x_str"][0]() == "1.250"
+    assert model.bound_binds["transform_rot_y_str"][0]() == "-20.0"
+    assert model.bound_binds["transform_scale_u_str"][0]() == "1.042"
+
+    panel._focused_input_property = "transform_rot_y_str"
+    model.bound_binds["transform_rot_y_str"][1]("-20")
+    assert model.bound_binds["transform_rot_y_str"][0]() == "-20"
+    model.bound_binds["transform_rot_y_str"][1]("-")
+    assert model.bound_binds["transform_rot_y_str"][0]() == "-"
+
+    panel._focused_input_property = "transform_scale_u_str"
+    model.bound_binds["transform_scale_u_str"][1]("0.01")
+    assert model.bound_binds["transform_scale_u_str"][0]() == "0.01"
+
+    panel._on_input_blur(None, "transform_scale_u_str")
+    assert model.bound_binds["transform_scale_u_str"][0]() == "0.010"
+
+
+def test_transform_controls_rejects_nonfinite_numeric_edits(transform_controls_module):
+    module, _state = transform_controls_module
+    panel = module.TransformControlsController()
+    model = _DataModelStub()
+    panel.bind_model(model)
+    panel._trans = [1.25, -2.5, 0.0]
+    panel._scale = [0.125, 2.0, 1.0]
+
+    model.bound_binds["transform_pos_x_str"][1]("nan")
+    model.bound_binds["transform_scale_u_str"][1]("inf")
+
+    assert panel._trans == [1.25, -2.5, 0.0]
+    assert panel._scale == [0.125, 2.0, 1.0]
 
 
 def test_transform_controls_bake_commits_active_edit(transform_controls_module):

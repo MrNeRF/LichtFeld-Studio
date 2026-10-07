@@ -159,6 +159,8 @@ class TransformControlsController:
         self._step_repeat_last = 0.0
 
         self._focus_active = False
+        self._focused_input_property = None
+        self._focused_input_text = None
         self._escape_revert = w.EscapeRevertController()
         self._last_state_key = None
         self._force_dirty = False
@@ -179,23 +181,31 @@ class TransformControlsController:
             idx = _AXIS_INDEX[axis]
             model.bind(
                 f"transform_pos_{axis}_str",
-                lambda i=idx: f"{self._trans[i]:.3f}",
+                lambda i=idx, a=axis: self._numeric_display_value(
+                    f"transform_pos_{a}_str", f"{self._trans[i]:.3f}"
+                ),
                 lambda v, i=idx: self._set_value("pos", i, v),
             )
             model.bind(
                 f"transform_rot_{axis}_str",
-                lambda i=idx: f"{self._euler[i]:.1f}",
+                lambda i=idx, a=axis: self._numeric_display_value(
+                    f"transform_rot_{a}_str", f"{self._euler[i]:.1f}"
+                ),
                 lambda v, i=idx: self._set_value("rot", i, v),
             )
             model.bind(
                 f"transform_scale_{axis}_str",
-                lambda i=idx: f"{self._scale[i]:.3f}",
+                lambda i=idx, a=axis: self._numeric_display_value(
+                    f"transform_scale_{a}_str", f"{self._scale[i]:.3f}"
+                ),
                 lambda v, i=idx: self._set_value("scale", i, v),
             )
 
         model.bind(
             "transform_scale_u_str",
-            lambda: f"{sum(self._scale) / 3.0:.3f}",
+            lambda: self._numeric_display_value(
+                "transform_scale_u_str", f"{sum(self._scale) / 3.0:.3f}"
+            ),
             lambda v: self._set_uniform_scale(v),
         )
 
@@ -233,14 +243,21 @@ class TransformControlsController:
         ):
             el = doc.get_element_by_id(input_id)
             if el:
-                el.add_event_listener("focus", self._on_input_focus)
+                value_property = f"{input_id.replace('-', '_')}_str"
+                el.add_event_listener(
+                    "focus",
+                    lambda event, prop=value_property: self._on_input_focus(event, prop),
+                )
                 self._escape_revert.bind(
                     el,
                     input_id,
                     lambda: True,
                     lambda _snapshot: self._cancel_active_edit(),
                 )
-                el.add_event_listener("blur", self._on_input_blur)
+                el.add_event_listener(
+                    "blur",
+                    lambda event, prop=value_property: self._on_input_blur(event, prop),
+                )
 
     def update(self, doc):
         dirty = False
@@ -308,6 +325,7 @@ class TransformControlsController:
         self._visible = False
         self._active_tool = ""
         self._selected = []
+        self._focused_input_property = None
         self._escape_revert.clear()
         self._state.reset_single_edit()
         self._state.reset_multi_edit()
@@ -445,16 +463,28 @@ class TransformControlsController:
         if not self._handle:
             return
         for axis in ("x", "y", "z"):
-            self._handle.dirty(f"transform_pos_{axis}_str")
-            self._handle.dirty(f"transform_rot_{axis}_str")
-            self._handle.dirty(f"transform_scale_{axis}_str")
-        self._handle.dirty("transform_scale_u_str")
+            value_property = f"transform_pos_{axis}_str"
+            if value_property != self._focused_input_property:
+                self._handle.dirty(value_property)
+            value_property = f"transform_rot_{axis}_str"
+            if value_property != self._focused_input_property:
+                self._handle.dirty(value_property)
+            value_property = f"transform_scale_{axis}_str"
+            if value_property != self._focused_input_property:
+                self._handle.dirty(value_property)
+        if self._focused_input_property != "transform_scale_u_str":
+            self._handle.dirty("transform_scale_u_str")
         self._handle.dirty("transform_reset_label")
         self._handle.dirty("transform_bake_label")
         self._handle.dirty("transform_show_translate")
         self._handle.dirty("transform_show_rotate")
         self._handle.dirty("transform_show_scale")
         self._handle.dirty("transform_show_actions")
+
+    def _numeric_display_value(self, value_property, formatted_value):
+        if value_property == self._focused_input_property and self._focused_input_text is not None:
+            return self._focused_input_text
+        return formatted_value
 
     def _begin_edit(self):
         if len(self._selected) == 1:
@@ -483,9 +513,18 @@ class TransformControlsController:
                     self._state.multi_visualizer_world_transforms_before.append(world_transform)
 
     def _set_value(self, group, idx, value_str):
+        value_property = {
+            "pos": f"transform_pos_{('x', 'y', 'z')[idx]}_str",
+            "rot": f"transform_rot_{('x', 'y', 'z')[idx]}_str",
+            "scale": f"transform_scale_{('x', 'y', 'z')[idx]}_str",
+        }.get(group)
+        if value_property == self._focused_input_property:
+            self._focused_input_text = str(value_str)
         try:
             val = float(value_str)
         except ValueError:
+            return
+        if not math.isfinite(val):
             return
 
         if not self._state.editing_active and not self._state.multi_editing_active:
@@ -511,10 +550,15 @@ class TransformControlsController:
         self._force_dirty = True
 
     def _set_uniform_scale(self, value_str):
+        if self._focused_input_property == "transform_scale_u_str":
+            self._focused_input_text = str(value_str)
         try:
-            val = max(float(value_str), MIN_SCALE)
+            val = float(value_str)
         except ValueError:
             return
+        if not math.isfinite(val):
+            return
+        val = max(val, MIN_SCALE)
 
         if not self._state.editing_active and not self._state.multi_editing_active:
             self._begin_edit()
@@ -756,17 +800,23 @@ class TransformControlsController:
                 except Exception as exc:
                     print(f"Transform bake failed: {exc}")
 
-    def _on_input_focus(self, event):
+    def _on_input_focus(self, event, value_property=None):
         if self._focus_active:
             return
         self._focus_active = True
+        self._focused_input_property = value_property
+        self._focused_input_text = None
         target = event.current_target()
         if target is not None:
             target.select()
         self._begin_edit()
 
-    def _on_input_blur(self, event):
+    def _on_input_blur(self, event, value_property=None):
         del event
+        if value_property is not None and value_property != self._focused_input_property:
+            return
+        self._focused_input_property = None
+        self._focused_input_text = None
         if not self._focus_active:
             return
         self._focus_active = False
@@ -774,6 +824,7 @@ class TransformControlsController:
             self._commit_single_edit()
         elif self._state.multi_editing_active:
             self._commit_multi_edit()
+        self._force_dirty = True
 
     def _cancel_active_edit(self):
         if self._state.editing_active and self._state.editing_node_names and self._state.transforms_before_edit:
