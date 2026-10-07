@@ -110,6 +110,11 @@ namespace lfs::vis::op {
 
     [[nodiscard]] LFS_VIS_API std::optional<glm::mat4> resolveAlignSnapTargetWorld(const SceneManager& scene);
 
+    // Orthographic pixels per world unit for one viewer panel: a split-view panel can carry its own zoom.
+    [[nodiscard]] inline float alignPanelOrthoScale(const Viewport& panel_viewport, const RenderSettings& settings) {
+        return panel_viewport.ortho_scale_override.value_or(settings.ortho_scale);
+    }
+
     inline constexpr float kAlignMarkerWorldRadius = 0.05f;
     [[nodiscard]] float alignMarkerScreenRadius(const glm::vec3& world_pos,
                                                 const glm::mat4& view,

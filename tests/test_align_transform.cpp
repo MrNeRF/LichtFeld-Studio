@@ -136,6 +136,18 @@ namespace {
         }
     }
 
+    TEST(AlignPanelOrthoScale, PanelZoomOverridesGlobalScale) {
+        lfs::vis::RenderSettings settings;
+        settings.orthographic = true;
+        settings.ortho_scale = 100.0f;
+        Viewport panel(800, 600);
+        EXPECT_FLOAT_EQ(lfs::vis::op::alignPanelOrthoScale(panel, settings), 100.0f);
+
+        // A split-view panel zoomed on its own must draw and pick markers at its own scale.
+        panel.ortho_scale_override = 400.0f;
+        EXPECT_FLOAT_EQ(lfs::vis::op::alignPanelOrthoScale(panel, settings), 400.0f);
+    }
+
     TEST(AlignEdgeToWorldX, IdentityUpMapsPositiveZEdgeToPlusX) {
         const glm::mat4 up(1.0f);
         const glm::vec3 p0(0.0f, 0.0f, 0.0f);

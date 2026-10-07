@@ -536,6 +536,7 @@ namespace lfs::vis::op {
         const float screen_scale_x = panel_info->width / static_cast<float>(std::max(panel_info->render_width, 1));
         const float screen_scale_y = panel_info->height / static_cast<float>(std::max(panel_info->render_height, 1));
         const glm::vec2 click_screen(static_cast<float>(x), static_cast<float>(y));
+        const float ortho_scale = alignPanelOrthoScale(projection_viewport, render_settings);
 
         std::optional<int> best;
         float best_dist = std::numeric_limits<float>::max();
@@ -548,7 +549,7 @@ namespace lfs::vis::op {
                 picked_points_[i],
                 render_settings.focal_length_mm,
                 render_settings.orthographic,
-                render_settings.ortho_scale);
+                ortho_scale);
             if (!projected) {
                 continue;
             }
@@ -562,7 +563,7 @@ namespace lfs::vis::op {
                 projection_viewport.getProjectionMatrix(render_settings.focal_length_mm),
                 static_cast<float>(projection_viewport.windowSize.y),
                 render_settings.orthographic,
-                render_settings.ortho_scale,
+                ortho_scale,
                 screen_scale_x,
                 screen_scale_y);
             const float hit_radius = std::max(static_cast<float>(kMarkerHitRadiusPx), marker_radius);
@@ -641,7 +642,7 @@ namespace lfs::vis::op {
                     depth,
                     render_settings.focal_length_mm,
                     render_settings.orthographic,
-                    render_settings.ortho_scale),
+                    alignPanelOrthoScale(projection_viewport, render_settings)),
                 .panel = panel_info->panel};
     }
 

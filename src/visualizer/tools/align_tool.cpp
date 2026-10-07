@@ -193,7 +193,7 @@ namespace lfs::vis::tools {
                 proj.focal_length_mm = fallback_focal_length_mm;
             }
             proj.orthographic = settings.orthographic;
-            proj.ortho_scale = settings.ortho_scale;
+            proj.ortho_scale = op::alignPanelOrthoScale(*panel_info->viewport, settings);
 
             proj.viewport = *panel_info->viewport;
             proj.viewport.windowSize = {panel_info->render_width, panel_info->render_height};
@@ -441,7 +441,7 @@ namespace lfs::vis::tools {
             const auto settings = rendering_manager->getSettings();
             panel_proj_fallback.focal_length_mm = settings.focal_length_mm;
             panel_proj_fallback.orthographic = settings.orthographic;
-            panel_proj_fallback.ortho_scale = settings.ortho_scale;
+            panel_proj_fallback.ortho_scale = op::alignPanelOrthoScale(tool_context_->getViewport(), settings);
         }
         panel_proj_fallback.viewport = tool_context_->getViewport();
         panel_proj_fallback.viewport.windowSize = {fallback_render_width, fallback_render_height};
