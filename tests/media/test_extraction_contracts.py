@@ -57,6 +57,46 @@ class ExtractionContracts(unittest.TestCase):
                 self.assertEqual(bytes(frame["pixels"]), pixels[index*6144:(index+1)*6144])
             self.assertEqual(result["payload_bytes"], len(result["frames"])*6144)
 
+    def test_shared_cpu_player_seek_close_and_pixels(self):
+        source = self.corpus / "cfr-asymmetric.nut"
+        work = Path(tempfile.mkdtemp(prefix="shared-preview-", dir=self.root))
+        reference = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(source),
+                                            "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+        for seeks, index in (([], 0), ([0.3], 3), ([0.3, 0.1], 1)):
+            request = work / "preview.json"
+            request.write_text(json.dumps({"operation": "preview", "input": str(source), "seek": seeks}), encoding="utf-8")
+            result = subprocess.run([str(RUNNER), str(request)], capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            preview = json.loads(result.stdout)
+            self.assertTrue(preview["success"], preview["error"])
+            self.assertFalse(preview["hardware_decode"])
+            self.assertTrue(preview["closed"])
+            self.assertAlmostEqual(preview["time"], index / 10)
+            self.assertEqual(bytes(preview["pixels"]), reference[index * 6144:(index + 1) * 6144])
+
+    def test_cpu_encode_session_roundtrip_pts_metadata_and_lifecycle(self):
+        work = Path(tempfile.mkdtemp(prefix="encode-session-", dir=self.root))
+        video = work / "encoded é 日本語.mp4"
+        request = work / "encode.json"
+        request.write_text(json.dumps({"operation": "encode-session", "output": str(video)}, ensure_ascii=False), encoding="utf-8")
+        result = subprocess.run([str(RUNNER), str(request)], capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(report["success"])
+        self.assertEqual(report["writer_calls"], 8)
+        decoded = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_frames", "-show_streams",
+                                                      "-show_format", "-of", "json", str(video)]))
+        self.assertEqual(len(decoded["frames"]), 4)
+        self.assertEqual(decoded["format"]["tags"]["comment"], report["comment"])
+        self.assertEqual((decoded["streams"][0]["width"], decoded["streams"][0]["height"]), (64, 48))
+        for index, frame in enumerate(decoded["frames"]):
+            self.assertAlmostEqual(float(frame["best_effort_timestamp_time"]), index / 10)
+        pixels = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(video), "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"])
+        self.assertEqual(len(pixels), 4 * 4608)
+        for index in range(4):
+            luma = pixels[index * 4608:index * 4608 + 3072]
+            self.assertLessEqual(max(abs(value - (32 + index * 32)) for value in luma), 5)
+
     def test_optional_jpeg_backend_failures_and_cpu_fallback(self):
         reference, files = self.extract(format="jpg")
         self.assertTrue(reference["success"], reference["error"])

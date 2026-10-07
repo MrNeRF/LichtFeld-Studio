@@ -39,11 +39,13 @@ endif()
 if(NOT LFS_HAS_CUDA)
     return()
 endif()
-add_executable(media_studio_runner runner.cpp)
+find_package(GTest CONFIG REQUIRED)
+add_executable(media_studio_runner runner.cpp native_video_contracts.cpp
+    ${CMAKE_SOURCE_DIR}/tests/test_video_cuda_frame_handoff.cpp)
 set_target_properties(media_studio_runner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
-target_include_directories(media_studio_runner PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(media_studio_runner PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
 target_compile_features(media_studio_runner PRIVATE cxx_std_23)
-target_link_libraries(media_studio_runner PRIVATE lfs_video lfs_io lfs_core lfs_media CUDA::cudart)
+target_link_libraries(media_studio_runner PRIVATE lfs_video lfs_io lfs_core lfs_media CUDA::cudart GTest::gtest)
 if(TARGET nvimgcodec)
     add_custom_command(TARGET media_studio_runner POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:nvimgcodec>" "$<TARGET_FILE_DIR:media_studio_runner>")
@@ -57,7 +59,7 @@ endif()
 add_test(NAME MediaStudioBackendContracts COMMAND ${Python_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/../test_studio_backends.py --runner $<TARGET_FILE:media_studio_runner>)
 set_tests_properties(MediaStudioBackendContracts PROPERTIES LABELS "media;gpu;integration" TIMEOUT 300
-    SKIP_RETURN_CODE 77 ENVIRONMENT "LFS_MEDIA_TEST_FFMPEG=${LFS_MEDIA_TEST_FFMPEG}")
+    SKIP_RETURN_CODE 77 ENVIRONMENT "LFS_MEDIA_TEST_FFMPEG=${LFS_MEDIA_TEST_FFMPEG};LFS_MEDIA_TEST_FFPROBE=${LFS_MEDIA_TEST_FFPROBE}")
 if(WIN32)
     set_tests_properties(MediaStudioBackendContracts PROPERTIES ENVIRONMENT_MODIFICATION
         "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR};PATH=path_list_prepend:${CUDAToolkit_BIN_DIR};PATH=path_list_prepend:${CUDAToolkit_BIN_DIR}/x64")

@@ -90,8 +90,8 @@ TEST_F(VideoCudaFrameHandoff, WaitsForProducerAndConsumerStreams) {
         producer_gate.release.release();
     ASSERT_TRUE(producer_started);
 
-    AVCUDADeviceContext decoder_context{};
-    decoder_context.cuda_ctx = current_context;
+    lfs::media::detail::CudaDecodeContext decoder_context{};
+    decoder_context.context = current_context;
     decoder_context.stream = reinterpret_cast<CUstream>(producer.value);
 
     auto handoff = std::async(std::launch::async, [&]() {
@@ -145,8 +145,8 @@ TEST_F(VideoCudaFrameHandoff, UnwindWaitsForConsumerStream) {
     ASSERT_EQ(cuCtxGetCurrent(&current_context), CUDA_SUCCESS);
     ASSERT_NE(current_context, nullptr);
 
-    AVCUDADeviceContext decoder_context{};
-    decoder_context.cuda_ctx = current_context;
+    lfs::media::detail::CudaDecodeContext decoder_context{};
+    decoder_context.context = current_context;
     decoder_context.stream = reinterpret_cast<CUstream>(producer.value);
 
     CallbackGate consumer_gate;

@@ -5,6 +5,7 @@
 
 #include "io/video/video_encoder_interface.hpp"
 #include "io/video/video_export_options.hpp"
+#include "media/video_encode_session.hpp"
 
 #include <expected>
 #include <filesystem>
@@ -42,6 +43,7 @@ namespace lfs::io::video {
         [[nodiscard]] std::expected<void, std::string> close() override;
 
         [[nodiscard]] bool isOpen() const;
+        [[nodiscard]] media::VideoEncodeBackend backend() const;
 
     private:
         std::unique_ptr<VideoEncoderImpl> impl_;

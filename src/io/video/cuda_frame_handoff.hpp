@@ -5,24 +5,19 @@
 
 #pragma once
 
-extern "C" {
-#include <libavutil/frame.h>
-#include <libavutil/hwcontext_cuda.h>
-}
+#include "media/cuda_frame.hpp"
 
 #include <cuda_runtime_api.h>
 
 namespace lfs::io::video {
 
-    // Orders work produced by FFmpeg's CUDA stream before work submitted through
-    // the CUDA runtime, and keeps the AVFrame's storage alive until that runtime
-    // work has completed.
+    // Orders the decoder's CUDA stream before the consumer's runtime work.
+    // Media keeps decoded storage alive until this handoff has finished; the
+    // host adapter never inspects or retains decoder objects.
     class CudaFrameHandoff {
     public:
-        explicit CudaFrameHandoff(const AVFrame* frame,
+        explicit CudaFrameHandoff(const media::detail::CudaDecodeContext& decoder_context,
                                   cudaStream_t consumer_stream = nullptr);
-        CudaFrameHandoff(const AVCUDADeviceContext& decoder_context,
-                         cudaStream_t consumer_stream);
         ~CudaFrameHandoff();
 
         CudaFrameHandoff(const CudaFrameHandoff&) = delete;

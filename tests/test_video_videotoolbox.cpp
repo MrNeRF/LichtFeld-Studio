@@ -58,6 +58,11 @@ namespace {
             return false;
         }
 
+        if (encoder.backend() != lfs::media::VideoEncodeBackend::VideoToolbox) {
+            std::cerr << "H.264 fixture silently fell back from VideoToolbox\n";
+            return false;
+        }
+
         std::vector<std::uint8_t> rgba(WIDTH * HEIGHT * 4, 0);
         for (int pixel = 0; pixel < WIDTH * HEIGHT; ++pixel) {
             rgba[pixel * 4] = 255;

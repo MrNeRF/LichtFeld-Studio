@@ -14,6 +14,7 @@ int runProbeUnitContracts();
 int runFrameSinkUnitContracts();
 int runSharedCoreContracts();
 nlohmann::json runJpegBackendContracts(const nlohmann::json&);
+nlohmann::json runEncodeSessionContracts(const nlohmann::json&);
 
 // Test adapter only: decoding, selection, geometry, codecs and metadata execute
 // the production sources directly. The JSON protocol is not a public CLI.
@@ -31,21 +32,30 @@ int main(int argc, char** argv) {
             return runSharedCoreContracts();
         std::ifstream input(lfs::core::utf8_to_path(argv[1]));
         const auto request = json::parse(input);
+        if (request.value("operation", "extract") == "encode-session") {
+            std::cout << runEncodeSessionContracts(request).dump() << '\n';
+            return 0;
+        }
         if (request.value("operation", "extract") == "jpeg-backend") {
             std::cout << runJpegBackendContracts(request).dump() << '\n';
             return 0;
         }
         if (request.value("operation", "extract") == "preview") {
-            VideoPlayer player;
+            VideoPlayer player({.allow_hardware_decode = false});
             const bool success = player.open(lfs::core::utf8_to_path(request.at("input").get<std::string>()));
-            json output{{"success", success}, {"error", player.takeError()}};
+            json output{{"success", success}, {"error", player.takeError()}, {"hardware_decode", player.hardwareDecodeActive()}};
             if (success) {
+                for (const double seconds : request.value("seek", std::vector<double>{}))
+                    player.seek(seconds);
                 output["rotation"] = player.rotation();
                 output["gpu_rotation"] = player.currentFrameHasGpuRotation();
                 output["size"] = json::array({player.width(), player.height()});
                 const auto* pixels = player.currentFrameData();
                 const size_t size = static_cast<size_t>(player.width()) * player.height() * player.currentFrameChannels();
                 output["pixels"] = std::vector<unsigned char>(pixels, pixels + size);
+                output["time"] = player.currentTime();
+                player.close();
+                output["closed"] = !player.isOpen() && !player.hardwareDecodeActive() && player.currentFrameData() == nullptr;
             }
             std::cout << output.dump() << '\n';
             return 0;

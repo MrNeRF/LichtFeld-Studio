@@ -6,7 +6,7 @@ get_filename_component(_media_root "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 add_library(lfs_media SHARED
     media_ingest.cpp media_backends.cpp hdr_renderer.cpp
     media_probe.cpp frame_sink.cpp file_frame_sink.cpp
-    video_frame_extractor.cpp hdr_tonemap.cpp)
+    video_frame_extractor.cpp video_player.cpp video_encode_session.cpp hdr_tonemap.cpp)
 target_compile_definitions(lfs_media PRIVATE LFS_MEDIA_EXPORTS)
 target_compile_features(lfs_media PUBLIC cxx_std_23)
 target_include_directories(lfs_media PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -14,6 +14,9 @@ target_include_directories(lfs_media PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include
 # Existing Studio adapters consume the provider's public FFmpeg ABI until they
 # migrate to opaque media frame contracts; they never link FFmpeg themselves.
 target_include_directories(lfs_media SYSTEM PUBLIC ${FFMPEG_INCLUDE_DIRS})
+if(LFS_HAS_CUDA)
+    target_include_directories(lfs_media SYSTEM PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+endif()
 target_link_libraries(lfs_media PUBLIC lfs_error
     PRIVATE lfs_image_codecs lfs_logger)
 include("${_media_root}/cmake/FFmpegProvider.cmake")

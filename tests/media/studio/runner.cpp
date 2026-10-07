@@ -9,8 +9,11 @@
 #include <algorithm>
 #include <cuda_runtime.h>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <iostream>
 #include <nlohmann/json.hpp>
+
+nlohmann::json runNativeVideoContracts(const nlohmann::json& request);
 
 int main(int argc, char** argv) {
     using namespace lfs;
@@ -23,17 +26,29 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Expected JSON request path");
         if (std::string_view(argv[1]) == "--check-gpu")
             return 0;
+        const bool handoff_tests = std::string_view(argv[1]) == "--handoff-unit";
         core::Logger::get().init(core::LogLevel::Warn, "", "", true,
-                                 core::path_to_utf8(core::utf8_to_path(argv[1]).parent_path()));
+                                 handoff_tests ? "" : core::path_to_utf8(core::utf8_to_path(argv[1]).parent_path()));
         if (cudaFree(nullptr) != cudaSuccess)
             throw std::runtime_error("CUDA context unavailable");
         struct GpuShutdown {
             ~GpuShutdown() { core::teardown_gpu_before_exit(); }
         } shutdown;
+        if (handoff_tests) {
+            int test_argc = 1;
+            char* test_argv[] = {argv[0], nullptr};
+            ::testing::InitGoogleTest(&test_argc, test_argv);
+            return RUN_ALL_TESTS();
+        }
         io::registerStudioMediaBackends();
         const auto caps = media::MediaIngest::capabilities();
         std::ifstream stream(core::utf8_to_path(argv[1]));
         const auto request = json::parse(stream);
+        const auto operation = request.value("operation", "extract");
+        if (operation == "native-preview" || operation == "native-encode" || operation == "native-encode-session") {
+            std::cout << runNativeVideoContracts(request).dump() << '\n';
+            return 0;
+        }
         media::IngestRequest input;
         input.input = core::utf8_to_path(request.at("input").get<std::string>());
         input.selection.mode = media::SelectionMode::Interval;

@@ -146,10 +146,10 @@ namespace lfs::io {
             bool canConvertHardware() const noexcept override {
                 return gpu_rgb_buffer && (rotation == 0 || gpu_rotated_buffer);
             }
-            void convertHardware(const AVFrame* frame, std::uint8_t* readback) override {
-                handoff = std::make_unique<video::CudaFrameHandoff>(frame);
-                video::nv12ToRgbCuda(frame->data[0], frame->data[1], gpu_rgb_buffer,
-                                     src_width, src_height, frame->linesize[0], frame->linesize[1], nullptr);
+            void convertHardware(const media::detail::CudaVideoFrame& frame, std::uint8_t* readback) override {
+                handoff = std::make_unique<video::CudaFrameHandoff>(frame.decoder);
+                video::nv12ToRgbCuda(frame.planes[0], frame.planes[1], gpu_rgb_buffer,
+                                     src_width, src_height, frame.row_stride[0], frame.row_stride[1], nullptr);
                 requireCudaSuccess(cudaGetLastError(), "CUDA NV12-to-RGB conversion failed");
                 if (readback)
                     requireCudaSuccess(cudaMemcpy(readback, gpu_rgb_buffer, frame_size,

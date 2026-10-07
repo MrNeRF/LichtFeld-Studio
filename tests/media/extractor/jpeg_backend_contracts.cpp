@@ -18,7 +18,7 @@ namespace {
     public:
         std::size_t capacity() const noexcept override { return slots.size(); }
         bool canConvertHardware() const noexcept override { return false; }
-        void convertHardware(const AVFrame*, std::uint8_t*) override { throw std::runtime_error("unexpected hardware frame"); }
+        void convertHardware(const lfs::media::detail::CudaVideoFrame&, std::uint8_t*) override { throw std::runtime_error("unexpected hardware frame"); }
         void finishHardware() override {}
         void* queueHardware(std::size_t) override { throw std::runtime_error("unexpected hardware queue"); }
         void* queueHost(std::size_t i, const std::uint8_t*) override { return &slots.at(i); }

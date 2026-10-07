@@ -21,6 +21,8 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+#include "media/cuda_frame_ffmpeg.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -1506,7 +1508,10 @@ namespace lfs::io {
                     }
 
                     if (use_full_gpu_pipeline) {
-                        gpu_jpeg->convertHardware(hw_frame, params.sharpness.enabled ? cpu_contiguous_buffer : nullptr);
+                        const auto hardware_frame = media::detail::cudaFrameView(hw_frame);
+                        if (!hardware_frame)
+                            throw lfs::Exception(hardware_frame.error());
+                        gpu_jpeg->convertHardware(*hardware_frame, params.sharpness.enabled ? cpu_contiguous_buffer : nullptr);
                         double frame_score = 0.0;
                         if (params.sharpness.enabled) {
                             frame_score = computeSharpnessScore(

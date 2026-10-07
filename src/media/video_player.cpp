@@ -2,7 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "video_player.hpp"
+#include "media/video_player.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "media/hdr_renderer.hpp"
@@ -15,9 +15,6 @@ extern "C" {
 #include <libavutil/display.h>
 #include <libavutil/dovi_meta.h>
 #include <libavutil/hwcontext.h>
-#if LFS_HAS_CUDA
-#include <libavutil/hwcontext_cuda.h>
-#endif
 #include <libavutil/imgutils.h>
 #include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
@@ -174,6 +171,8 @@ namespace lfs::io {
 
     class VideoPlayer::Impl {
     public:
+        explicit Impl(const VideoPlayerOptions options)
+            : allow_hardware_decode_(options.allow_hardware_decode) {}
         enum class DecodeResult {
             Frame,
             EndOfStream,
@@ -263,7 +262,7 @@ namespace lfs::io {
                 source_range_ = AVCOL_RANGE_MPEG;
 
 #if LFS_HAS_CUDA
-            const char* hw_decoder_name = getHwDecoderName(codec_id);
+            const char* hw_decoder_name = allow_hardware_decode_ ? getHwDecoderName(codec_id) : nullptr;
 #else
             const char* hw_decoder_name = nullptr;
 #endif
@@ -497,6 +496,7 @@ namespace lfs::io {
             frame_duration_timestamp_ = 1;
             display_width_ = 0;
             display_height_ = 0;
+            display_buffer_.clear();
             display_gpu_rotation_ = false;
             playback_start_time_ = -1.0;
             eof_reached_ = false;
@@ -674,6 +674,7 @@ namespace lfs::io {
         }
         [[nodiscard]] int currentFrameChannels() const { return display_channels_; }
         [[nodiscard]] bool currentFrameHasGpuRotation() const { return display_gpu_rotation_; }
+        [[nodiscard]] bool hardwareDecodeActive() const { return using_hw_decode_; }
 
         [[nodiscard]] int width() const { return display_width_; }
         [[nodiscard]] int height() const { return display_height_; }
@@ -1039,6 +1040,7 @@ namespace lfs::io {
         bool demux_eof_ = false;
         bool decoder_drain_sent_ = false;
         bool using_hw_decode_ = false;
+        const bool allow_hardware_decode_;
 
         int video_stream_idx_ = -1;
         int src_width_ = 0;
@@ -1094,11 +1096,14 @@ namespace lfs::io {
         std::string last_error_;
     };
 
-    VideoPlayer::VideoPlayer() : impl_(std::make_unique<Impl>()) {}
+    VideoPlayer::VideoPlayer() : VideoPlayer(VideoPlayerOptions{}) {}
+    VideoPlayer::VideoPlayer(const VideoPlayerOptions options) : impl_(std::make_unique<Impl>(options)) {}
     VideoPlayer::~VideoPlayer() = default;
 
     bool VideoPlayer::open(const std::filesystem::path& path) { return impl_->open(path); }
+    void VideoPlayer::close() { impl_->close(); }
     bool VideoPlayer::isOpen() const { return impl_->isOpen(); }
+    bool VideoPlayer::hardwareDecodeActive() const { return impl_->hardwareDecodeActive(); }
 
     void VideoPlayer::togglePlayPause() { impl_->togglePlayPause(); }
     bool VideoPlayer::isPlaying() const { return impl_->isPlaying(); }
