@@ -13,12 +13,12 @@ namespace lfs::media {
     } // namespace
 
     Result<std::size_t> FrameView::requiredBytes() const {
-        if (layout.format != FramePixelFormat::RGB8 || layout.width <= 0 || layout.height <= 0)
-            return Result<std::size_t>(make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Frame requires positive RGB8 dimensions", .detection = LFS_SOURCE_SITE_CURRENT()}));
+        if (!pixelBytes(layout.format) || layout.width <= 0 || layout.height <= 0)
+            return Result<std::size_t>(make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Frame requires positive dimensions and a supported pixel format", .detection = LFS_SOURCE_SITE_CURRENT()}));
         const auto width = static_cast<std::size_t>(layout.width);
-        if (width > std::numeric_limits<std::size_t>::max() / 3)
+        if (width > std::numeric_limits<std::size_t>::max() / pixelBytes(layout.format))
             return Result<std::size_t>(make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Frame row size overflows", .detection = LFS_SOURCE_SITE_CURRENT()}));
-        const auto row_bytes = width * 3;
+        const auto row_bytes = width * pixelBytes(layout.format);
         const auto rows = static_cast<std::size_t>(layout.height - 1);
         if (layout.row_stride < row_bytes ||
             (rows && layout.row_stride > (std::numeric_limits<std::size_t>::max() - row_bytes) / rows))
@@ -33,7 +33,7 @@ namespace lfs::media {
         if (!size)
             return Result<FrameSurface>(size.error());
         auto pixels = std::make_shared<std::vector<std::uint8_t>>(*size, 0);
-        const auto row_bytes = static_cast<std::size_t>(source.layout.width) * 3;
+        const auto row_bytes = static_cast<std::size_t>(source.layout.width) * pixelBytes(source.layout.format);
         for (int row = 0; row < source.layout.height; ++row) {
             const auto offset = static_cast<std::size_t>(row) * source.layout.row_stride;
             std::memcpy(pixels->data() + offset, source.pixels.data() + offset, row_bytes);

@@ -387,6 +387,8 @@ namespace lfs::gui {
             request.sharpness.window_candidates = params.window_candidates_target;
             request.sharpness.window = params.sharpness_window_mode;
             request.convert_hdr_to_sdr = params.convert_hdr_to_sdr;
+            request.output_format = params.format == io::ImageFormat::EXR ? media::FramePixelFormat::RGBFloat32 : media::FramePixelFormat::RGB8;
+            request.input_color = params.input_color;
             request.cancelled = [this] { return stop_extraction_requested_.load(); };
             request.progress = [this](const media::IngestProgress& progress) {
                 updateProgress(progress.processed, progress.estimated, progress.discarded);
@@ -394,7 +396,9 @@ namespace lfs::gui {
             media::FileExtraction files;
             files.files.output_directory = params.output_dir;
             files.files.filename_pattern = params.filename_pattern;
-            files.files.format = params.format == io::ImageFormat::PNG ? media::FrameFileFormat::PNG : media::FrameFileFormat::JPEG;
+            files.files.format = params.format == io::ImageFormat::EXR ? media::FrameFileFormat::EXR : params.format == io::ImageFormat::PNG ? media::FrameFileFormat::PNG
+                                                                                                                                             : media::FrameFileFormat::JPEG;
+            files.files.exr = params.exr;
             files.files.jpeg_quality = params.jpg_quality;
             files.write_metadata = params.generate_metadata;
             const auto result = media::MediaIngest::extractFiles(request, files);
@@ -664,6 +668,9 @@ namespace lfs::gui {
         interval_input_el_ = nullptr;
         interval_value_el_ = nullptr;
         format_select_el_ = nullptr;
+        exr_selects_.fill(nullptr);
+        exr_options_el_ = nullptr;
+        metadata_option_el_ = nullptr;
         quality_row_el_ = nullptr;
         quality_slider_el_ = nullptr;
         quality_value_el_ = nullptr;
@@ -741,6 +748,11 @@ namespace lfs::gui {
         interval_input_el_ = document_->GetElementById("interval-input");
         interval_value_el_ = document_->GetElementById("interval-value");
         format_select_el_ = dynamic_cast<Rml::ElementFormControlSelect*>(document_->GetElementById("format-select"));
+        constexpr std::array<const char*, 4> exr_ids{"exr-precision", "exr-compression", "input-transfer", "input-primaries"};
+        for (size_t i = 0; i < exr_ids.size(); ++i)
+            exr_selects_[i] = dynamic_cast<Rml::ElementFormControlSelect*>(document_->GetElementById(exr_ids[i]));
+        exr_options_el_ = document_->GetElementById("exr-options");
+        metadata_option_el_ = document_->GetElementById("metadata-option");
         quality_row_el_ = document_->GetElementById("quality-row");
         quality_slider_el_ = document_->GetElementById("quality-slider");
         quality_value_el_ = document_->GetElementById("quality-value");
@@ -871,6 +883,8 @@ namespace lfs::gui {
         listen_input(fps_slider_el_);
         listen_change(interval_input_el_);
         listen_change(format_select_el_);
+        for (auto* control : exr_selects_)
+            listen_change(control);
         listen_change(quality_slider_el_);
         listen_input(quality_slider_el_);
         listen_change(resolution_select_el_);
@@ -1052,7 +1066,7 @@ namespace lfs::gui {
         bool changed = false;
         changed |= setCachedChecked(hdr_to_sdr_el_, hdr_to_sdr_);
         changed |= setCachedProperty(hdr_to_sdr_row_el_, "display",
-                                     is_hdr ? "inline-flex" : "none");
+                                     (is_hdr && format_selection_ != 2) ? "inline-flex" : "none");
         changed |= setCachedDisabled(hdr_to_sdr_el_,
                                      extracting_.load() || !conversion_supported);
 
@@ -1164,6 +1178,12 @@ namespace lfs::gui {
 
         changed |= setCachedSelect(mode_select_el_, mode_selection_);
         changed |= setCachedSelect(format_select_el_, format_selection_);
+        changed |= setCachedProperty(exr_options_el_, "display", format_selection_ == 2 ? "block" : "none");
+        changed |= setCachedProperty(metadata_option_el_, "display", format_selection_ == 2 ? "none" : "inline-flex");
+        for (size_t i = 0; i < exr_selects_.size(); ++i) {
+            changed |= setCachedSelect(exr_selects_[i], exr_selections_[i]);
+            changed |= setCachedDisabled(exr_selects_[i], extracting);
+        }
         changed |= setCachedSelect(resolution_select_el_, resolution_mode_);
         changed |= setCachedSelect(scale_select_el_, scale_selection_);
 
@@ -1322,7 +1342,8 @@ namespace lfs::gui {
                                  player_->isOpen()
                                      ? LOCF(VideoExtractor::OUTPUT_RES, out_w, out_h)
                                      : std::format("{} --", LOC(VideoExtractor::OUTPUT)));
-        const char* const ext = format_selection_ == 0 ? ".png" : ".jpg";
+        const char* const ext = format_selection_ == 2 ? ".exr" : format_selection_ == 0 ? ".png"
+                                                                                         : ".jpg";
         const std::string preview = io::formatFrameFilenameStem(filename_pattern_.data(), 1);
         changed |= setCachedText(pattern_example_el_,
                                  LOCF(VideoExtractor::EXAMPLE, preview.c_str(), ext));
@@ -1417,7 +1438,9 @@ namespace lfs::gui {
             if (pending_params_set_) {
                 // Clear the folder
                 const auto& dir = pending_params_.output_dir;
-                if (std::filesystem::exists(dir)) {
+                if (pending_params_.format == io::ImageFormat::EXR)
+                    pending_params_.exr.overwrite = true;
+                if (pending_params_.format != io::ImageFormat::EXR && std::filesystem::exists(dir)) {
                     for (const auto& entry : std::filesystem::directory_iterator(dir)) {
                         if (!entry.is_regular_file())
                             continue;
@@ -1486,6 +1509,13 @@ namespace lfs::gui {
             mode_selection_ = mode_select_el_ ? mode_select_el_->GetSelection() : mode_selection_;
         } else if (id == "format-select") {
             format_selection_ = format_select_el_ ? format_select_el_->GetSelection() : format_selection_;
+        } else if (id == "exr-precision" || id == "exr-compression" || id == "input-transfer" || id == "input-primaries") {
+            if (extracting_.load())
+                return;
+            constexpr std::array<const char*, 4> ids{"exr-precision", "exr-compression", "input-transfer", "input-primaries"};
+            for (size_t i = 0; i < ids.size(); ++i)
+                if (id == ids[i] && exr_selects_[i])
+                    exr_selections_[i] = exr_selects_[i]->GetSelection();
         } else if (id == "resolution-select") {
             resolution_mode_ = resolution_select_el_ ? resolution_select_el_->GetSelection() : resolution_mode_;
         } else if (id == "scale-select") {
@@ -1661,7 +1691,16 @@ namespace lfs::gui {
         params.mode = mode_selection_ == 0 ? io::ExtractionMode::FPS : io::ExtractionMode::INTERVAL;
         params.fps = static_cast<double>(fps_);
         params.frame_interval = frame_interval_;
-        params.format = format_selection_ == 0 ? io::ImageFormat::PNG : io::ImageFormat::JPG;
+        params.format = format_selection_ == 2 ? io::ImageFormat::EXR : format_selection_ == 0 ? io::ImageFormat::PNG
+                                                                                               : io::ImageFormat::JPG;
+        if (format_selection_ == 2) {
+            params.exr.precision = exr_selections_[0] == 1 ? media::ExrPrecision::Float : media::ExrPrecision::Half;
+            params.exr.compression = exr_selections_[1] == 1 ? media::ExrCompression::None : media::ExrCompression::ZIP;
+            constexpr std::array<media::ColorTransfer, 4> transfers{media::ColorTransfer::Unspecified, media::ColorTransfer::Linear, media::ColorTransfer::Srgb, media::ColorTransfer::Bt709};
+            constexpr std::array<media::ColorPrimaries, 3> primaries{media::ColorPrimaries::Unspecified, media::ColorPrimaries::Bt709, media::ColorPrimaries::Bt2020};
+            params.input_color.transfer = transfers[std::clamp(exr_selections_[2], 0, 3)];
+            params.input_color.primaries = primaries[std::clamp(exr_selections_[3], 0, 2)];
+        }
         params.jpg_quality = jpg_quality_;
         params.start_time = static_cast<double>(trim_start_);
         params.end_time = static_cast<double>(trim_end_);
@@ -1686,7 +1725,7 @@ namespace lfs::gui {
         params.window_candidates_target = window_candidates_target_;
         params.sharpness_threshold = static_cast<double>(readIntValue(sharpness_threshold_slider_el_, 10));
         params.generate_metadata = generate_metadata_el_ && generate_metadata_el_->HasAttribute("checked");
-        params.convert_hdr_to_sdr = hdr_to_sdr_;
+        params.convert_hdr_to_sdr = format_selection_ != 2 && hdr_to_sdr_;
         params.rotation = rotation_deg_;
 
         // Check if output folder already contains generated extraction files
@@ -1700,7 +1739,7 @@ namespace lfs::gui {
                 ext_lower.reserve(ext.size());
                 for (auto c : ext)
                     ext_lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-                if (ext_lower == ".jpg" || ext_lower == ".jpeg" || ext_lower == ".png" ||
+                if (ext_lower == ".jpg" || ext_lower == ".jpeg" || ext_lower == ".png" || ext_lower == ".exr" ||
                     entry.path().filename() == "extraction_metadata.json") {
                     has_generated = true;
                     break;

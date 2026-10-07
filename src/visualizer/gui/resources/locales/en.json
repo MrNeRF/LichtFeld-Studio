@@ -2091,6 +2091,15 @@
     "select_output_location": "Select Output Location"
   },
   "video_extractor": {
+    "format_exr": "EXR · Linear SDR",
+    "exr_precision": "Precision",
+    "exr_compression": "Compression",
+    "exr_uncompressed": "Uncompressed",
+    "input_transfer": "Input transfer",
+    "input_primaries": "Input primaries",
+    "source_metadata": "Source metadata",
+    "linear": "Linear",
+    "exr_profile_hint": "Linear SDR with color and timing metadata. Integer RGB up to 16-bit or planar YUV 4:4:4 only. HDR and subsampled YUV are unsupported. Override missing metadata only when the source color is known; the preview remains a display image.",
     "title": "Extract Frames from Video",
     "select_preview": "Select a video file to preview",
     "step_backward": "Step backward",

@@ -64,9 +64,11 @@ namespace {
                 std::cout << "media-ingest version\nmedia-ingest capabilities\nmedia-ingest probe INPUT [--headers-only] [--timeout-ms N]\n"
                              "media-ingest extract INPUT --output DIRECTORY [--fps N | --interval N]\n"
                              "  [--start SECONDS] [--end SECONDS] [--rotate 0|90|180|270]\n"
-                             "  [--scale N | --size WIDTH HEIGHT] [--format png|jpeg] [--quality N]\n"
+                             "  [--scale N | --size WIDTH HEIGHT] [--format png|jpeg|exr] [--quality N]\n"
                              "  [--name PATTERN] [--metadata] [--sharpness THRESHOLD] [--window]\n"
-                             "  [--algorithm laplacian|tenengrad|combined] [--candidates N] [--hdr-to-sdr] [--quiet]\n";
+                             "  [--algorithm laplacian|tenengrad|combined] [--candidates N] [--hdr-to-sdr] [--quiet]\n"
+                             "  EXR: [--exr-precision half|float] [--exr-compression zip|none] [--overwrite]\n"
+                             "       [--input-transfer auto|linear|srgb|bt709] [--input-primaries auto|bt709|bt2020]\n";
                 return 0;
             }
             if (args.size() == 2 && args[1] == "version") {
@@ -76,7 +78,7 @@ namespace {
             }
             if (args.size() == 2 && args[1] == "capabilities") {
                 const auto c = MediaIngest::capabilities();
-                std::cout << json{{"schema_version", 1}, {"success", true}, {"software_decode", c.software_decode}, {"rgb8", c.rgb8}, {"png", c.png}, {"jpeg", c.jpeg}, {"hardware_decode", c.hardware_decode}, {"hdr_to_sdr", c.hdr_to_sdr}}.dump() << '\n';
+                std::cout << json{{"schema_version", 1}, {"success", true}, {"software_decode", c.software_decode}, {"rgb8", c.rgb8}, {"png", c.png}, {"jpeg", c.jpeg}, {"hardware_decode", c.hardware_decode}, {"hdr_to_sdr", c.hdr_to_sdr}, {"rgb_float_sdr", c.rgb_float_sdr}, {"exr", c.exr}, {"float_sdr_profile", c.float_sdr_profile}}.dump() << '\n';
                 return 0;
             }
             if (args.size() < 3 || (args[1] != "probe" && args[1] != "extract"))
@@ -85,7 +87,7 @@ namespace {
             request.input = lfs::core::utf8_to_path(args[2]);
             FileExtraction output;
             ProbeOptions probe;
-            bool quiet = false, selection_set = false, geometry_set = false;
+            bool quiet = false, selection_set = false, geometry_set = false, exr_options = false, quality_set = false;
             for (size_t i = 3; i < args.size(); ++i) {
                 const auto& flag = args[i];
                 auto value = [&]() -> const std::string& { if(i+1>=args.size()) throw std::invalid_argument("Missing value for "+flag); return args[++i]; };
@@ -126,15 +128,47 @@ namespace {
                     request.end_seconds = number<double>(value());
                 else if (flag == "--rotate")
                     request.geometry.clockwise_rotation = number<int>(value());
-                else if (flag == "--quality")
+                else if (flag == "--quality") {
+                    quality_set = true;
                     output.files.jpeg_quality = number<int>(value());
-                else if (flag == "--name")
+                } else if (flag == "--name")
                     output.files.filename_pattern = value();
                 else if (flag == "--format") {
                     const auto& format = value();
-                    if (format != "png" && format != "jpeg" && format != "jpg")
-                        throw std::invalid_argument("Format must be png or jpeg");
-                    output.files.format = format == "png" ? FrameFileFormat::PNG : FrameFileFormat::JPEG;
+                    if (format != "png" && format != "jpeg" && format != "jpg" && format != "exr")
+                        throw std::invalid_argument("Format must be png, jpeg or exr");
+                    output.files.format = format == "png" ? FrameFileFormat::PNG : format == "exr" ? FrameFileFormat::EXR
+                                                                                                   : FrameFileFormat::JPEG;
+                } else if (flag == "--exr-precision") {
+                    exr_options = true;
+                    const auto& precision = value();
+                    if (precision != "half" && precision != "float")
+                        throw std::invalid_argument("EXR precision must be half or float");
+                    output.files.exr.precision = precision == "half" ? ExrPrecision::Half : ExrPrecision::Float;
+                } else if (flag == "--exr-compression") {
+                    exr_options = true;
+                    const auto& compression = value();
+                    if (compression != "zip" && compression != "none")
+                        throw std::invalid_argument("EXR compression must be zip or none");
+                    output.files.exr.compression = compression == "zip" ? ExrCompression::ZIP : ExrCompression::None;
+                } else if (flag == "--overwrite") {
+                    exr_options = true;
+                    output.files.exr.overwrite = true;
+                } else if (flag == "--input-transfer") {
+                    exr_options = true;
+                    const auto& curve = value();
+                    if (curve != "auto" && curve != "linear" && curve != "srgb" && curve != "bt709")
+                        throw std::invalid_argument("Unsupported input transfer override");
+                    request.input_color.transfer = curve == "linear" ? ColorTransfer::Linear : curve == "srgb" ? ColorTransfer::Srgb
+                                                                                           : curve == "bt709"  ? ColorTransfer::Bt709
+                                                                                                               : ColorTransfer::Unspecified;
+                } else if (flag == "--input-primaries") {
+                    exr_options = true;
+                    const auto& primaries = value();
+                    if (primaries != "auto" && primaries != "bt709" && primaries != "bt2020")
+                        throw std::invalid_argument("Unsupported input primaries override");
+                    request.input_color.primaries = primaries == "bt709" ? ColorPrimaries::Bt709 : primaries == "bt2020" ? ColorPrimaries::Bt2020
+                                                                                                                         : ColorPrimaries::Unspecified;
                 } else if (flag == "--metadata")
                     output.write_metadata = true;
                 else if (flag == "--quiet")
@@ -168,6 +202,14 @@ namespace {
                     return failed(result.error());
                 std::cout << json{{"schema_version", 1}, {"success", true}, {"media", json_detail::description(*result)}}.dump() << '\n';
                 return 0;
+            }
+            if (output.files.format == FrameFileFormat::EXR) {
+                if (quality_set)
+                    throw std::invalid_argument("JPEG quality does not apply to EXR");
+                request.output_format = FramePixelFormat::RGBFloat32;
+                output.write_metadata = true;
+            } else if (exr_options) {
+                throw std::invalid_argument("EXR options require --format exr");
             }
             cancellation = 0;
             std::signal(SIGINT, interrupt);

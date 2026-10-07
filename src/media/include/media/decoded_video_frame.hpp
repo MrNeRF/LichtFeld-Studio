@@ -67,7 +67,8 @@ namespace lfs::media {
                                 Bottom };
     enum class AlphaMode { Unknown,
                            Independent,
-                           Premultiplied };
+                           Premultiplied,
+                           None };
     struct FrameComponent {
         int plane = 0, step = 0, offset = 0, shift = 0, depth = 0;
     };

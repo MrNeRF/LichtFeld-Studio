@@ -3,7 +3,7 @@
 ## Production ownership
 
 `src/media/CMakeLists.txt` defines the shared C++23 `lfs_media` target in the
-application's existing build and dependency graph. It owns the probe, RGB8 frame
+application's existing build and dependency graph. It owns the probe, RGB8/float frame
 sinks, ingest facade, extractor and HDR facade. `lfs_video` owns Studio's native
 GPU adapters, preview and scene-video encoding. The dialog calls
 `MediaIngest::extractFiles`; embedded Python exposes `lichtfeld.media` next to
@@ -17,7 +17,7 @@ There is one shared implementation of each stateful core responsibility:
 | `lfs_diagnostics` | Profiler state and CPU accounting | Standard library; optional native operations registered by Studio |
 | `lfs_logger` | Existing logger and environment settings | spdlog, `lfs_diagnostics` |
 | `lfs_error` | Errors, memory domains, failure reports, reporters, bus, envelopes, latches and guarded tasks | Logger, nlohmann-json; GNU stacktrace support where needed |
-| `lfs_image_codecs` | Existing `image_codecs.cpp` and `image_exr.cpp` | Existing PNG/JPEG/ZLIB/TIFF/WebP/OpenEXRCore packages |
+| `lfs_image_codecs` | Image decoding and encoding, including stream-based EXR | Shared errors; existing PNG/JPEG/ZLIB/TIFF/WebP/OpenEXRCore packages |
 | `lfs_core` | Tensor/application core and native diagnostics adapter | Public shared error and codec targets; existing GPU dependencies |
 | `lfs_media` | Probe, frame ownership/sinks, extraction and facade | Error, codecs, logger, FFmpeg |
 | `media-ingest` | CLI arguments and JSON protocol | `lfs_media` |
@@ -95,7 +95,10 @@ media-ingest extract "clip.nut" --output "frames" --fps 5 --start 1 --end 10 \
 The CLI uses the application's generated Git version. Help includes
 `--hdr-to-sdr`, selection, geometry, filename, metadata and sharpness options.
 Unknown/conflicting options and invalid numeric values produce structured errors.
-Output defaults to PNG; metadata is opt-in. Rotation remains explicit.
+Output defaults to PNG; PNG/JPEG metadata is opt-in. EXR requires the bounded
+linear SDR profile and always records metadata. See [linear SDR/EXR contracts](media-linear-exr.md)
+for precision, input limits, independent image output and UI/API options.
+Rotation remains explicit.
 
 Except help, stdout contains one final JSON object (`schema_version: 1`, `success`).
 Probe includes container/stream inventory, optional color/orientation metadata,

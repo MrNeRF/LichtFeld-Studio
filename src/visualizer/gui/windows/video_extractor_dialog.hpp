@@ -44,6 +44,8 @@ namespace lfs::gui {
         int frame_interval = 1;
         io::ImageFormat format = io::ImageFormat::PNG;
         int jpg_quality = 95;
+        media::ExrOutputOptions exr;
+        media::FrameColor input_color;
 
         double start_time = 0.0;
         double end_time = -1.0;
@@ -164,6 +166,10 @@ namespace lfs::gui {
         int frame_interval_ = 1;
 
         int format_selection_ = 0;
+        std::array<int, 4> exr_selections_{};
+        std::array<Rml::ElementFormControlSelect*, 4> exr_selects_{};
+        Rml::Element* exr_options_el_ = nullptr;
+        Rml::Element* metadata_option_el_ = nullptr;
         int jpg_quality_ = 95;
         int window_candidates_target_ = 10;
 

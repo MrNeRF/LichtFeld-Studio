@@ -215,8 +215,13 @@ namespace lfs::app {
                     {"end_seconds", number},
                     {"convert_hdr_to_sdr", boolean},
                     {"allow_hardware_decode", boolean},
-                    {"format", {{"type", "string"}, {"enum", {"png", "jpeg"}}}},
+                    {"format", {{"type", "string"}, {"enum", {"png", "jpeg", "exr"}}}},
                     {"jpeg_quality", integer},
+                    {"exr_precision", {{"type", "string"}, {"enum", {"half", "float"}}}},
+                    {"exr_compression", {{"type", "string"}, {"enum", {"zip", "none"}}}},
+                    {"overwrite", boolean},
+                    {"input_transfer", {{"type", "string"}, {"enum", {"auto", "linear", "srgb", "bt709"}}}},
+                    {"input_primaries", {{"type", "string"}, {"enum", {"auto", "bt709", "bt2020"}}}},
                     {"filename_pattern", {{"type", "string"}}},
                     {"write_metadata", boolean}};
         }
@@ -272,6 +277,15 @@ namespace lfs::app {
             request.end_seconds = args.value("end_seconds", -1.0);
             request.convert_hdr_to_sdr = args.value("convert_hdr_to_sdr", false);
             request.allow_hardware_decode = args.value("allow_hardware_decode", true);
+            if (args.value("format", "png") == "exr")
+                request.output_format = FramePixelFormat::RGBFloat32;
+            const auto transfer = args.value("input_transfer", "auto");
+            request.input_color.transfer = transfer == "linear" ? ColorTransfer::Linear : transfer == "srgb" ? ColorTransfer::Srgb
+                                                                                      : transfer == "bt709"  ? ColorTransfer::Bt709
+                                                                                                             : ColorTransfer::Unspecified;
+            const auto primaries = args.value("input_primaries", "auto");
+            request.input_color.primaries = primaries == "bt709" ? ColorPrimaries::Bt709 : primaries == "bt2020" ? ColorPrimaries::Bt2020
+                                                                                                                 : ColorPrimaries::Unspecified;
             return request;
         }
     } // namespace
@@ -289,7 +303,7 @@ namespace lfs::app {
                                [](const json&) {
                                    const auto caps = MediaIngest::capabilities();
                                    const auto codecs = MediaIngest::codecBuildInfo();
-                                   return json{{"success", true}, {"software_decode", caps.software_decode}, {"rgb8", caps.rgb8}, {"png", caps.png}, {"jpeg", caps.jpeg}, {"hardware_decode", caps.hardware_decode}, {"hdr_to_sdr", caps.hdr_to_sdr}, {"ffmpeg_version", codecs.ffmpeg_version}, {"ffmpeg_license", codecs.ffmpeg_license}, {"ffmpeg_configuration", codecs.ffmpeg_configuration}};
+                                   return json{{"success", true}, {"software_decode", caps.software_decode}, {"rgb8", caps.rgb8}, {"png", caps.png}, {"jpeg", caps.jpeg}, {"hardware_decode", caps.hardware_decode}, {"hdr_to_sdr", caps.hdr_to_sdr}, {"rgb_float_sdr", caps.rgb_float_sdr}, {"exr", caps.exr}, {"float_sdr_profile", caps.float_sdr_profile}, {"ffmpeg_version", codecs.ffmpeg_version}, {"ffmpeg_license", codecs.ffmpeg_license}, {"ffmpeg_configuration", codecs.ffmpeg_configuration}};
                                });
         registry.register_tool(mcp::McpTool{
                                    .name = "media.probe",
@@ -316,7 +330,15 @@ namespace lfs::app {
                                        return mcp::invalid_argument_result(*error, "media.extract");
                                    FileExtraction files;
                                    files.files.output_directory = core::utf8_to_path(args.at("output_directory").get<std::string>());
-                                   files.files.format = args.value("format", "png") == "jpeg" ? FrameFileFormat::JPEG : FrameFileFormat::PNG;
+                                   const auto format = args.value("format", "png");
+                                   const bool exr = format == "exr";
+                                   if ((!exr && (args.contains("exr_precision") || args.contains("exr_compression") || args.contains("overwrite") || args.contains("input_transfer") || args.contains("input_primaries"))) || (exr && (args.contains("jpeg_quality") || args.value("convert_hdr_to_sdr", false))))
+                                       return mcp::invalid_argument_result("EXR options require EXR; EXR does not accept JPEG quality or HDR to SDR", "media.extract");
+                                   files.files.format = exr ? FrameFileFormat::EXR : format == "jpeg" ? FrameFileFormat::JPEG
+                                                                                                      : FrameFileFormat::PNG;
+                                   files.files.exr.precision = args.value("exr_precision", "half") == "float" ? ExrPrecision::Float : ExrPrecision::Half;
+                                   files.files.exr.compression = args.value("exr_compression", "zip") == "none" ? ExrCompression::None : ExrCompression::ZIP;
+                                   files.files.exr.overwrite = args.value("overwrite", false);
                                    files.files.jpeg_quality = args.value("jpeg_quality", 95);
                                    files.files.filename_pattern = args.value("filename_pattern", files.files.filename_pattern);
                                    files.write_metadata = args.value("write_metadata", false);

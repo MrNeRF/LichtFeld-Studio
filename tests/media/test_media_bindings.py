@@ -83,6 +83,49 @@ class MediaBindings(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "callback sentinel"):
             media.MediaIngest.extract(self.request(), cancelled=failed)
 
+    def test_float_owned_extraction_and_independent_image_output(self):
+        import struct
+        request = self.request()
+        request.output_format = media.FramePixelFormat.RGBFloat32
+        request.input_color.transfer = media.ColorTransfer.Linear
+        request.input_color.primaries = media.ColorPrimaries.Bt709
+        report, frames = media.MediaIngest.extract(request)
+        self.assertEqual(report.frames_accepted, len(frames))
+        self.assertEqual(frames[0].layout.row_stride, 64 * 12)
+        self.assertEqual(frames[0].layout.color.transfer, media.ColorTransfer.Linear)
+        self.assertEqual(frames[0].info.origin, media.FrameOrigin.Decoded)
+        files = media.FileExtraction()
+        files.files.output_directory = self.root / "float-files"
+        files.files.format = media.FrameFileFormat.EXR
+        files.files.exr.precision = media.ExrPrecision.Float
+        self.assertEqual(media.MediaIngest.extract_files(request, files).frames_accepted, len(frames))
+        self.assertTrue((files.files.output_directory / "extraction_metadata.json").is_file())
+        color = media.FrameColor()
+        color.transfer = media.ColorTransfer.Linear
+        color.primaries = media.ColorPrimaries.Bt709
+        color.alpha = media.AlphaMode.NoAlpha
+        info = media.FrameInfo()
+        info.origin = media.FrameOrigin.Rendered
+        raw = struct.pack("fff", -.25, 2.0, .1234567)
+        surface = media.FrameSurface.from_bytes(1, 1, media.FramePixelFormat.RGBFloat32, raw, color=color, info=info)
+        self.assertEqual(surface.pixels, raw)
+        self.assertIsNone(surface.info.source_timestamp)
+        options = media.ExrOutputOptions()
+        options.precision = media.ExrPrecision.Float
+        options.compression = media.ExrCompression.Uncompressed
+        target = self.root / "renderer é 日本語.exr"
+        media.ImageOutput.write_exr(target, surface, options)
+        previous = target.read_bytes()
+        with self.assertRaises(MEDIA_ERROR):
+            media.ImageOutput.write_exr(target, surface, options)
+        options.overwrite = True
+        def failed():
+            raise ValueError("EXR cancellation sentinel")
+        with self.assertRaisesRegex(ValueError, "EXR cancellation sentinel"):
+            media.ImageOutput.write_exr(target, surface, options, cancelled=failed)
+        self.assertEqual(target.read_bytes(), previous)
+        self.assertFalse(list(self.root.glob("*.tmp")))
+
     def test_callbacks_run_with_gil_and_other_thread_can_run(self):
         event = threading.Event()
         worker = threading.Thread(target=event.set)

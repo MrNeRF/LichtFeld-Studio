@@ -2093,6 +2093,15 @@
     "select_output_location": "Seleziona Posizione di Output"
   },
   "video_extractor": {
+    "format_exr": "EXR · SDR lineare",
+    "exr_precision": "Precisione",
+    "exr_compression": "Compressione",
+    "exr_uncompressed": "Non compresso",
+    "input_transfer": "Curva di ingresso",
+    "input_primaries": "Primarie di ingresso",
+    "source_metadata": "Metadati sorgente",
+    "linear": "Lineare",
+    "exr_profile_hint": "SDR lineare con metadati di colore e tempo. Solo RGB intero fino a 16 bit o YUV planare 4:4:4. HDR e YUV sottocampionato non supportati. Sostituisci i metadati mancanti solo se conosci il colore della sorgente; l’anteprima resta un’immagine per la visualizzazione.",
     "title": "Estrai fotogrammi da video",
     "select_preview": "Seleziona un video per l'anteprima",
     "step_backward": "Fotogramma precedente",

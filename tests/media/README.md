@@ -44,6 +44,14 @@ script; no third-party media are bundled.
 
 ## Public media later
 
+Linear SDR/EXR contracts additionally generate lossless integer RGB16 and planar
+YUV444 fixtures with declared transfer, primaries, matrix and range. Their raw
+source codes, analytic float references and independent EXR reader qualify
+precision without downloads. `MediaFloatExrUnitContracts`,
+`MediaFloatExrReferenceContracts` and `MediaPublicImageOutputContracts` are CPU
+tests in the existing root configuration. Python and MCP suites also exercise
+EXR through their production entry points; [details](../../docs/development/media-linear-exr.md).
+
 A public-media catalog is intentionally not populated with unverified URLs. Before
 adding a real sample, record its direct download URL, source page, permission or
 license, size, SHA-256, format properties, test IDs and required backend. Reuse the

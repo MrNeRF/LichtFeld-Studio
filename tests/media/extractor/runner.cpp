@@ -14,6 +14,7 @@
 int runProbeUnitContracts();
 int runFrameSinkUnitContracts();
 int runSharedCoreContracts();
+int runFloatExrUnitContracts();
 nlohmann::json runJpegBackendContracts(const nlohmann::json&);
 nlohmann::json runEncodeSessionContracts(const nlohmann::json&);
 
@@ -31,6 +32,8 @@ int main(int argc, char** argv) {
             return runProbeUnitContracts();
         if (std::string_view(argv[1]) == "--shared-core-unit")
             return runSharedCoreContracts();
+        if (std::string_view(argv[1]) == "--float-exr-unit")
+            return runFloatExrUnitContracts();
         std::ifstream input(lfs::core::utf8_to_path(argv[1]));
         const auto request = json::parse(input);
         if (request.value("operation", "extract") == "encode-session") {
