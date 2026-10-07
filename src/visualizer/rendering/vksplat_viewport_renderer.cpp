@@ -1229,6 +1229,20 @@ namespace lfs::vis {
             }
         }
 
+        // Bit 0 keeps a node undimmed, bit 1 keeps it drawn; nodes past a mask's end keep that bit.
+        void stageForwardNodeMaskCpu(std::vector<std::uint8_t>& dst,
+                                     const std::vector<bool>& emphasized,
+                                     const std::vector<bool>& visible,
+                                     const std::size_t byte_count) {
+            dst.assign(byte_count, 0u);
+            const std::size_t count = std::min(std::max(emphasized.size(), visible.size()), byte_count);
+            for (std::size_t i = 0; i < count; ++i) {
+                const bool undimmed = i >= emphasized.size() || emphasized[i];
+                const bool drawn = i >= visible.size() || visible[i];
+                dst[i] = static_cast<std::uint8_t>((undimmed ? 1u : 0u) | (drawn ? 2u : 0u));
+            }
+        }
+
         void stageSelectionPrimitivesCpu(std::vector<float>& dst,
                                          const std::vector<glm::vec4>& primitives) {
             const std::size_t count = std::max<std::size_t>(primitives.size(), 1u);
@@ -4515,20 +4529,19 @@ namespace lfs::vis {
             hasOverlayTensor(request.overlay.emphasis.transient_mask.mask, num_splats);
         const bool transform_indices_enabled = hasTransformIndices(request.scene.transform_indices, num_splats);
 
-        // Compare/split view restricts which scene nodes a panel may draw via
-        // request.scene.node_visibility_mask. The forward path reuses the per-node
-        // node_mask buffer (indexed by transform_indices, same as emphasis) to
-        // hard-cull hidden nodes, mirroring the selection-query path. Visibility
-        // culling and emphasis dimming are mutually exclusive in practice (compare
-        // mode clears emphasis), so the restricting mask owns the shared buffer.
+        // Compare/split view and hidden nodes of a consolidated model restrict which
+        // scene nodes may draw via request.scene.node_visibility_mask. The per-node
+        // node_mask buffer (indexed by transform_indices) carries emphasis and this
+        // culling in separate bits, so hiding a node keeps unselected nodes dimmed.
         const auto& node_visibility_mask = request.scene.node_visibility_mask;
         const bool node_visibility_restricts =
             transform_indices_enabled &&
             std::any_of(node_visibility_mask.begin(), node_visibility_mask.end(),
                         [](const bool visible) { return !visible; });
-        const std::vector<bool>& forward_node_mask_source =
-            node_visibility_restricts ? node_visibility_mask
-                                      : request.overlay.emphasis.emphasized_node_mask;
+        const auto& emphasized_node_mask = request.overlay.emphasis.emphasized_node_mask;
+        static const std::vector<bool> kNoCulling;
+        const std::vector<bool>& culling_node_mask = node_visibility_restricts ? node_visibility_mask : kNoCulling;
+        const std::size_t node_mask_count = std::max(emphasized_node_mask.size(), culling_node_mask.size());
 
         // Whether the forward rasterizer must run the overlay/selection path.
         // Projection-only filters such as crop/use, depth hide, and split-view
@@ -4567,7 +4580,7 @@ namespace lfs::vis {
                                                             : sizeof(std::int32_t),
                                   sizeof(std::int32_t));
         const std::size_t node_mask_region_bytes =
-            alignUp(std::max<std::size_t>(forward_node_mask_source.size(), 1), 4);
+            alignUp(std::max<std::size_t>(node_mask_count, 1), 4);
         const std::size_t overlay_params_region_bytes =
             static_cast<std::size_t>(ParamCount) * 4 * sizeof(float);
         const std::size_t model_transforms_region_bytes =
@@ -4689,13 +4702,16 @@ namespace lfs::vis {
             const bool node_mask_cache_hit =
                 !slot.node_mask_upload_cpu.empty() &&
                 slot.cached_node_mask_output_slot == output_slot &&
-                slot.cached_emphasized_node_mask == forward_node_mask_source;
+                slot.cached_emphasized_node_mask == emphasized_node_mask &&
+                slot.cached_culling_node_mask == culling_node_mask;
             if (!node_mask_cache_hit) {
                 LOG_TIMER("uploadOverlayBindings.prepare_sources.node_mask");
-                stageNodeMaskCpu(slot.node_mask_upload_cpu,
-                                 forward_node_mask_source,
-                                 slot.region_bytes[OverlayNodeMask]);
-                slot.cached_emphasized_node_mask = forward_node_mask_source;
+                stageForwardNodeMaskCpu(slot.node_mask_upload_cpu,
+                                        emphasized_node_mask,
+                                        culling_node_mask,
+                                        slot.region_bytes[OverlayNodeMask]);
+                slot.cached_emphasized_node_mask = emphasized_node_mask;
+                slot.cached_culling_node_mask = culling_node_mask;
                 slot.cached_node_mask_output_slot = output_slot;
                 slot.node_mask_uploaded = false;
             }
@@ -4708,7 +4724,7 @@ namespace lfs::vis {
                     selection_enabled,
                     preview_enabled,
                     transform_indices_enabled,
-                    forward_node_mask_source.size(),
+                    node_mask_count,
                     node_visibility_restricts);
                 if (!overlay_params_cpu) {
                     return std::unexpected(overlay_params_cpu.error());

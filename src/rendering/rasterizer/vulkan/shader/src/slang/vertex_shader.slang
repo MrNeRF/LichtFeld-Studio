@@ -357,14 +357,14 @@ SplatActiveState compute_splat_active_state(
     }
 
     if (active && overlay_enabled(emphasis_flags.x) && node_data_enabled && node_idx >= 0 && node_idx < node_count) {
-        if (read_byte(node_mask, uint(node_idx)) == 0) {
+        if ((read_byte(node_mask, uint(node_idx)) & 1u) == 0u) {
             overlay_flags |= (OVERLAY_FLAG_DIM | OVERLAY_FLAG_NONSELECTABLE);
         }
     }
 
     float4 visibility_flags = overlay_params[OVERLAY_PARAM_VISIBILITY_FLAGS];
     if (active && overlay_enabled(visibility_flags.x) && node_data_enabled && node_idx >= 0 && node_idx < node_count) {
-        if (read_byte(node_mask, uint(node_idx)) == 0) {
+        if ((read_byte(node_mask, uint(node_idx)) & 2u) == 0u) {
             active = false;
         }
     }

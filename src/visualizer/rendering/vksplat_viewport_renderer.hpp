@@ -426,9 +426,10 @@ namespace lfs::vis {
             std::size_t cached_transform_indices_bytes = 0;
             bool transform_indices_uploaded = false;
             std::vector<std::uint8_t> node_mask_upload_cpu;
-            // Fingerprint of emphasized_node_mask currently staged in the
-            // interop buffer.
+            // Fingerprint of the emphasized and culling visibility masks currently
+            // staged in the interop buffer.
             std::vector<bool> cached_emphasized_node_mask;
+            std::vector<bool> cached_culling_node_mask;
             OutputSlot cached_node_mask_output_slot = OutputSlot::Main;
             bool node_mask_uploaded = false;
             std::vector<float> overlay_params_upload_cpu;
