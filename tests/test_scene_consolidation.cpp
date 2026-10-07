@@ -1025,6 +1025,28 @@ TEST(SceneCombinedImport, OrdinaryBuildFailuresKeepAutomaticRetry) {
     EXPECT_EQ(scene.getCombinedModel()->size(), 4u);
 }
 
+// Catches a worker that stays silent outside imports: a large multi-node edit such as
+// deleting a node left the viewport without splats until the next input event.
+TEST(SceneCombinedBuild, WorkerCompletionOutsideImportAnnouncesReadyModel) {
+    Scene scene;
+    scene.addSplat("first", make_alias_test_model(0.0f));
+    scene.addSplat("second", make_alias_test_model(1.0f));
+    std::atomic<int> ready{0};
+    lfs::event::ScopedHandler handler;
+    handler.subscribe<lfs::core::events::state::CombinedModelBuildReady>([&](const auto& event) {
+        if (event.scene == &scene)
+            ++ready;
+    });
+    scene.requestCombinedModelBuild(true);
+    while (scene.combinedModelBuildPending()) {
+        (void)scene.combinedModelBuildError();
+        std::this_thread::yield();
+    }
+    EXPECT_EQ(ready.load(), 1);
+    ASSERT_NE(scene.getCombinedModel(), nullptr);
+    EXPECT_EQ(scene.getCombinedModel()->size(), 4);
+}
+
 TEST(SceneCombinedEncode, QuantizedStorageCoversReservedModelCapacity) {
     using lfs::core::DataType;
     using lfs::core::TensorShape;

@@ -1492,8 +1492,7 @@ namespace lfs::core {
                     completed_combined_model_build_ = std::move(built);
                 }
                 combined_model_build_running_.store(false, std::memory_order_release);
-                if (import_validation_.load())
-                    events::state::CombinedModelBuildReady{.scene = this}.emit();
+                events::state::CombinedModelBuildReady{.scene = this}.emit();
             });
     }
 
