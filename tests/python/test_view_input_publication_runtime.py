@@ -140,6 +140,26 @@ def test_gt_comparison_mcp_toggle_refuses_in_viewer_mode(runtime):
     assert "Traceback" not in output
 
 
+@pytest.mark.parametrize("submode", ["rectangle", "polygon", "lasso", "rings"])
+def test_ui_tool_invoke_preserves_requested_select_submode(runtime, submode):
+    endpoint, _, _ = runtime
+    _tool(endpoint, "ui_tool_clear_active", {"clear_submode": True})
+    activated = _tool(endpoint, "ui_tool_invoke", {
+        "tool_id": "builtin.select", "submode_id": submode,
+    })
+    assert activated["success"]
+    assert activated["requested_submode_id"] == submode
+    assert activated["active_submode_id"] == submode
+
+
+def test_ui_tool_invoke_without_submode_keeps_centers_default(runtime):
+    endpoint, _, _ = runtime
+    _tool(endpoint, "ui_tool_clear_active", {"clear_submode": True})
+    activated = _tool(endpoint, "ui_tool_invoke", {"tool_id": "builtin.select"})
+    assert activated["success"]
+    assert activated["active_submode_id"] == "centers"
+
+
 def test_editing_actions_request_render(runtime):
     endpoint, log, path = runtime
     actions = [
