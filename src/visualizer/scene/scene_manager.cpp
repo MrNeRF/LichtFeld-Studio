@@ -1971,8 +1971,6 @@ namespace lfs::vis {
 
         selection_.selectNodes(ids);
         python::invalidate_poll_caches(1);
-        if (services().renderingOrNull())
-            services().renderingOrNull()->triggerSelectionFlash();
     }
 
     void SceneManager::addToSelection(const std::string& name) {
@@ -1987,8 +1985,6 @@ namespace lfs::vis {
             return;
         selection_.addToSelection(id);
         python::invalidate_poll_caches(1);
-        if (services().renderingOrNull())
-            services().renderingOrNull()->triggerSelectionFlash();
     }
 
     void SceneManager::removeFromSelection(const std::string& name) {
@@ -2003,8 +1999,6 @@ namespace lfs::vis {
             return;
         selection_.removeFromSelection(id);
         python::invalidate_poll_caches(1);
-        if (services().renderingOrNull())
-            services().renderingOrNull()->triggerSelectionFlash();
     }
 
     void SceneManager::clearSelection() {

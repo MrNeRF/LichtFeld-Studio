@@ -1569,7 +1569,7 @@ namespace lfs::vis {
                           glm::vec4(request.overlay.emphasis.dim_non_emphasized ? 1.0f : 0.0f,
                                     transform_indices_enabled ? 1.0f : 0.0f,
                                     static_cast<float>(node_mask_count),
-                                    request.overlay.emphasis.flash_intensity));
+                                    0.0f));
                 writeVec4(dst,
                           CursorFlags,
                           glm::vec4(request.overlay.cursor.enabled ? 1.0f : 0.0f,
@@ -4546,7 +4546,6 @@ namespace lfs::vis {
             crop_dims ||
             ellipsoid_dims ||
             emphasis.dim_non_emphasized ||
-            emphasis.flash_intensity > 0.0f ||
             emphasis.focused_gaussian_id >= 0 ||
             request.overlay.cursor.enabled ||
             request.overlay.markers.show_rings ||

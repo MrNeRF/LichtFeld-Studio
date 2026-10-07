@@ -200,10 +200,8 @@
         "_highlight": "Highlighted items",
 
         "selection": [0.23, 0.39, 0.63, 1.0],
-        "_selection": "Selected items",
+        "_selection": "Selected items"
 
-        "selection_flash": [0.55, 0.7, 0.94, 1.0],
-        "_selection_flash": "Selection flash effect"
       }
     },
 
@@ -410,10 +408,8 @@
         "_highlight": "Highlighted items",
 
         "selection": [0.5, 0.65, 0.85, 1.0],
-        "_selection": "Selected items",
+        "_selection": "Selected items"
 
-        "selection_flash": [0.65, 0.78, 0.95, 1.0],
-        "_selection_flash": "Selection flash effect"
       }
     }
   }

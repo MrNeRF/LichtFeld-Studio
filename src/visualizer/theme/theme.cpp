@@ -42,7 +42,6 @@ namespace lfs::vis {
         constexpr float OVERLAY_HINT_ALPHA = 0.78f;
         constexpr float OVERLAY_HIGHLIGHT_ALPHA = 0.7f;
         constexpr float OVERLAY_SELECTION_ALPHA = 0.78f;
-        constexpr float OVERLAY_SELECTION_FLASH_ALPHA = 0.9f;
 
         // Theme state
         Theme g_current_theme;
@@ -351,7 +350,6 @@ namespace lfs::vis {
                 .icon = {0.3f, 0.4f, 0.5f, 1.0f},
                 .highlight = {0.7f, 0.8f, 0.9f, 1.0f},
                 .selection = {0.5f, 0.65f, 0.85f, 1.0f},
-                .selection_flash = {0.65f, 0.78f, 0.95f, 1.0f},
             },
         };
 
@@ -390,7 +388,6 @@ namespace lfs::vis {
                 .icon = {0.514f, 0.647f, 0.596f, 1.0f},
                 .highlight = {0.400f, 0.467f, 0.431f, 1.0f},
                 .selection = {0.271f, 0.522f, 0.533f, 1.0f},
-                .selection_flash = {0.557f, 0.753f, 0.486f, 1.0f},
             },
         };
 
@@ -429,7 +426,6 @@ namespace lfs::vis {
                 .icon = {0.537f, 0.706f, 0.980f, 1.0f},
                 .highlight = {0.455f, 0.502f, 0.624f, 1.0f},
                 .selection = {0.345f, 0.482f, 0.757f, 1.0f},
-                .selection_flash = {0.651f, 0.890f, 0.631f, 1.0f},
             },
         };
 
@@ -468,7 +464,6 @@ namespace lfs::vis {
                 .icon = {0.125f, 0.624f, 0.710f, 1.0f},
                 .highlight = {0.804f, 0.839f, 0.957f, 1.0f},
                 .selection = {0.627f, 0.729f, 0.949f, 1.0f},
-                .selection_flash = {0.745f, 0.816f, 0.969f, 1.0f},
             },
         };
 
@@ -507,7 +502,6 @@ namespace lfs::vis {
                 .icon = {0.561f, 0.737f, 0.733f, 1.0f},
                 .highlight = {0.369f, 0.427f, 0.518f, 1.0f},
                 .selection = {0.369f, 0.506f, 0.675f, 1.0f},
-                .selection_flash = {0.639f, 0.745f, 0.549f, 1.0f},
             },
         };
 
@@ -1238,7 +1232,6 @@ namespace lfs::vis {
             overlay["icon"] = colorToJson(t.overlay.icon);
             overlay["highlight"] = colorToJson(t.overlay.highlight);
             overlay["selection"] = colorToJson(t.overlay.selection);
-            overlay["selection_flash"] = colorToJson(t.overlay.selection_flash);
 
             const auto write_gradient = [&j](const char* name,
                                              const std::optional<ThemeGradient>& gradient) {
@@ -1426,8 +1419,6 @@ namespace lfs::vis {
                         t.overlay.highlight = colorFromJson(o["highlight"]);
                     if (o.contains("selection"))
                         t.overlay.selection = colorFromJson(o["selection"]);
-                    if (o.contains("selection_flash"))
-                        t.overlay.selection_flash = colorFromJson(o["selection_flash"]);
                 }
 
                 if (j.contains("gradients")) {

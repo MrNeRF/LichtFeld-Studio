@@ -84,7 +84,6 @@ namespace lfs::vis {
         int hovered_camera_id = -1;
         int current_camera_id = -1;
         int hovered_gaussian_id = -1;
-        float selection_flash_intensity = 0;
         std::vector<FrameViewPanel> view_panels;
 
         [[nodiscard]] const FrameViewPanel* findViewPanel(const SplitViewPanelId panel_id) const {

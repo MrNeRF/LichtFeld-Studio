@@ -483,12 +483,10 @@ namespace lfs::vis {
                                        : nullptr,
                            .additive = selection_overlay_enabled && ctx.cursor_preview.add_mode},
                       .emphasized_node_mask = (selection_overlay_enabled &&
-                                                       (ctx.settings.desaturate_unselected ||
-                                                        ctx.selection_flash_intensity > 0.0f)
+                                                       ctx.settings.desaturate_unselected
                                                    ? ctx.scene_state.selected_node_mask
                                                    : std::vector<bool>{}),
                       .dim_non_emphasized = selection_overlay_enabled && ctx.settings.desaturate_unselected,
-                      .flash_intensity = selection_overlay_enabled ? ctx.selection_flash_intensity : 0.0f,
                       .focused_gaussian_id = (selection_overlay_enabled && ring_selection_mode && overlay_visible)
                                                  ? ctx.cursor_preview.focused_gaussian_id
                                                  : -1},

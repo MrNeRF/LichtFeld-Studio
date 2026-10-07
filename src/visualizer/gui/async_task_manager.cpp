@@ -465,7 +465,6 @@ namespace lfs::vis::gui {
             .shadow_map_resolution = render_settings.mesh_shadow_resolution,
             .is_emphasized = is_selected,
             .dim_non_emphasized = render_settings.desaturate_unselected && any_selected,
-            .flash_intensity = 0.0f,
             .background_color = render_settings.background_color,
             .transparent_background = environmentBackgroundEnabled(render_settings)};
     }
@@ -723,7 +722,6 @@ namespace lfs::vis::gui {
                         .backface_culling = options.backface_culling,
                         .is_emphasized = options.is_emphasized,
                         .dim_non_emphasized = options.dim_non_emphasized,
-                        .flash_intensity = options.flash_intensity,
                         .wireframe_overlay = options.wireframe_overlay,
                         .wireframe_color = options.wireframe_color,
                         .wireframe_width = options.wireframe_width,

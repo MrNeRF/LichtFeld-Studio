@@ -279,15 +279,7 @@ namespace lfs::vis {
             animation_state_.setPivotAnimationEndTime(end_time);
         }
 
-        void triggerSelectionFlash() {
-            markDirty(animation_state_.triggerSelectionFlash(), lfs::vis::FrameReason::Selection);
-        }
-
         void setOverlayAnimationActive(const bool active) { animation_state_.setOverlayAnimationActive(active); }
-
-        [[nodiscard]] float getSelectionFlashIntensity() const {
-            return animation_state_.selectionFlashIntensity();
-        }
 
         // Settings management
         void updateSettings(const RenderSettings& settings);

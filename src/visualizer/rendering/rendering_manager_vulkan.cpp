@@ -973,7 +973,6 @@ namespace lfs::vis {
                 item.backface_culling = settings.mesh_backface_culling;
                 item.is_emphasized = mesh.is_selected;
                 item.dim_non_emphasized = dim_non_emphasized;
-                item.flash_intensity = frame_ctx.selection_flash_intensity;
                 item.wireframe_overlay = settings.mesh_wireframe;
                 item.wireframe_color = settings.mesh_wireframe_color;
                 item.wireframe_width = settings.mesh_wireframe_width;
@@ -2579,7 +2578,6 @@ namespace lfs::vis {
             .hovered_camera_id = camera_interaction_service_.hoveredCameraId(),
             .current_camera_id = camera_interaction_service_.currentCameraId(),
             .hovered_gaussian_id = viewport_overlay_service_.hoveredGaussianId(),
-            .selection_flash_intensity = getSelectionFlashIntensity(),
             .view_panels = {}};
 
         std::shared_ptr<lfs::core::Tensor> rendered_image;

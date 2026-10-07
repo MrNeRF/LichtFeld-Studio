@@ -132,7 +132,6 @@ namespace lfs::rendering {
         GaussianTransientMaskOverlayState transient_mask;
         std::vector<bool> emphasized_node_mask;
         bool dim_non_emphasized = false;
-        float flash_intensity = 0.0f;
         int focused_gaussian_id = -1;
     };
 
@@ -386,7 +385,6 @@ namespace lfs::rendering {
         int shadow_map_resolution = 2048;
         bool is_emphasized = false;
         bool dim_non_emphasized = false;
-        float flash_intensity = 0.0f;
         glm::vec3 background_color{0.0f};
         bool transparent_background = false;
     };
