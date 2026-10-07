@@ -1782,6 +1782,7 @@ def test_card_rename_writes_project_title_and_library_name(panel_module, monkeyp
     )
     def run_operation(_id, _title, operation, **kwargs):
         assert kwargs.get("closed_file", True) is True
+        assert kwargs.get("reverify_asset") is True
         operation(lambda *_args: None, lambda: False)
         kwargs["after"]()
 
