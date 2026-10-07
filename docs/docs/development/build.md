@@ -265,6 +265,11 @@ out of the normal application loop without changing any shipped feature. The
 canonical [source build guide](../../building_and_distribution.md#tests)
 documents the test build targets, CTest tiers, and required real-data layout.
 
+`BUILD_VISUALIZER_TESTS` defaults to `OFF`. When enabled, its visualizer test
+executable is included in the default full build, so the usual app build also
+compiles the enabled regression tests. Normal app and packaging builds with this
+option disabled do not build that executable.
+
 Before a complete MSVC build, use the
 [Windows build preflight](windows-build-preflight) to check Windows-specific
 source contracts and replay affected configured C/C++ translation units without

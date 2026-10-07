@@ -8624,7 +8624,7 @@ namespace lfs::vis::gui {
             result += source;
         };
 
-        add(ui_toggle_pending_ || ui_visibility_resize_active_, "ui_toggle");
+        add(ui_toggle_pending_ || ui_visibility_resize_active_, "ui_visibility");
         add(cameraThumbnailRefreshDue(now), "camera_thumbnails");
         add(fullscreen_toggle_pending_ && now >= fullscreen_toggle_next_allowed_at_,
             "fullscreen_toggle");

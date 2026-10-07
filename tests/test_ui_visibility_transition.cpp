@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <glm/vec2.hpp>
 #include <gtest/gtest.h>
 #include <optional>
 #include <string>
