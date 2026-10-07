@@ -12,6 +12,7 @@
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/tensor.hpp"
+#include "gui/volume_guide_visibility.hpp"
 #include "io/cache_image_loader.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -2946,3 +2947,31 @@ namespace lfs::vis {
     }
 
 } // namespace lfs::vis
+
+namespace lfs::vis::gui {
+    template <typename Volume>
+    class VolumeGuideVisibilityTest : public ::testing::Test {};
+    using GuideVolumes = ::testing::Types<core::Scene::RenderableCropBox, core::Scene::RenderableEllipsoid>;
+    TYPED_TEST_SUITE(VolumeGuideVisibilityTest, GuideVolumes);
+
+    TYPED_TEST(VolumeGuideVisibilityTest, SelectionGuideIgnoresHiddenCropHelper) {
+        const std::vector<TypeParam> volumes{{.node_id = 7, .effectively_visible = false}};
+        EXPECT_TRUE(activeVolumeGuideVisible(false, 7, volumes));
+    }
+
+    TYPED_TEST(VolumeGuideVisibilityTest, SelectionGuideSurvivesMissingCropSnapshot) {
+        EXPECT_TRUE(activeVolumeGuideVisible(false, 7, std::vector<TypeParam>{}));
+    }
+
+    TYPED_TEST(VolumeGuideVisibilityTest, ExistingGuideVisibilityIsPreserved) {
+        const std::vector<TypeParam> volumes{
+            {.node_id = 7, .effectively_visible = false},
+            {.node_id = 8, .effectively_visible = true}};
+        EXPECT_TRUE(activeVolumeGuideVisible(false, core::NULL_NODE, volumes));
+        EXPECT_TRUE(activeVolumeGuideVisible(false, 8, volumes));
+        EXPECT_FALSE(activeVolumeGuideVisible(true, core::NULL_NODE, volumes));
+        EXPECT_FALSE(activeVolumeGuideVisible(true, 7, volumes));
+        EXPECT_TRUE(activeVolumeGuideVisible(true, 8, volumes));
+        EXPECT_FALSE(activeVolumeGuideVisible(true, 9, volumes));
+    }
+} // namespace lfs::vis::gui

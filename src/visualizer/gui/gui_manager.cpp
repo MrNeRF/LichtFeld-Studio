@@ -19,6 +19,7 @@
 #include "gui/frustum_overlay_key.hpp"
 #include "gui/import_error.hpp"
 #include "gui/viewport_gizmo_geometry.hpp"
+#include "gui/volume_guide_visibility.hpp"
 #include "preferences.hpp"
 #include "window/vulkan_result.hpp"
 #include <ft2build.h>
@@ -3261,25 +3262,13 @@ namespace lfs::vis::gui {
                 if (!scene_state || !scene_manager)
                     return true;
                 const core::NodeId selected_id = scene_manager->getSelectedNodeCropBoxId();
-                if (selected_id == core::NULL_NODE)
-                    return !gizmo.cropbox_affects_render;
-                for (const auto& cb : scene_state->cropboxes) {
-                    if (cb.node_id == selected_id)
-                        return cb.effectively_visible;
-                }
-                return false;
+                return activeVolumeGuideVisible(gizmo.cropbox_affects_render, selected_id, scene_state->cropboxes);
             };
             const auto selected_ellipsoid_is_visible = [&]() {
                 if (!scene_state || !scene_manager)
                     return true;
                 const core::NodeId selected_id = scene_manager->getSelectedNodeEllipsoidId();
-                if (selected_id == core::NULL_NODE)
-                    return !gizmo.ellipsoid_affects_render;
-                for (const auto& el : scene_state->ellipsoids) {
-                    if (el.node_id == selected_id)
-                        return el.effectively_visible;
-                }
-                return false;
+                return activeVolumeGuideVisible(gizmo.ellipsoid_affects_render, selected_id, scene_state->ellipsoids);
             };
 
             if (gizmo.cropbox_active && selected_cropbox_is_visible()) {
