@@ -46,7 +46,7 @@ namespace lfs::training {
             uint64_t parameter, packed, bounds, gradient;
             int32_t primitives, attributes;
             float lr, bc1_rcp, bc2_sqrt_rcp;
-            uint32_t apply_screen_share;
+            uint32_t apply_screen_share, apply_mean_step;
         };
 
         struct BatchParams {
@@ -56,6 +56,9 @@ namespace lfs::training {
             int32_t screen_share_count;
             float screen_share_limit, screen_share_penalty;
             float beta1, beta2, eps;
+            uint64_t mean_scales, mean_far;
+            int32_t mean_scale_count, mean_far_count;
+            float mean_median;
         };
 
         void step_batch(const std::span<const JointStep> steps, const AdamMasks& masks, const AdamHyper& hyper,
@@ -70,9 +73,14 @@ namespace lfs::training {
                 .beta1 = hyper.beta1,
                 .beta2 = hyper.beta2,
                 .eps = hyper.eps,
+                .mean_scales = mk::address(masks.mean_step_scales),
+                .mean_far = mk::address(masks.mean_step_far),
+                .mean_scale_count = count(masks.mean_step_scales),
+                .mean_far_count = count(masks.mean_step_far),
+                .mean_median = modifiers.mean_step_median_extent,
             };
             std::vector<const Tensor*> uses{&masks.frozen, &masks.crop_damping,
-                                            &masks.screen_share};
+                                            &masks.screen_share, &masks.mean_step_scales, &masks.mean_step_far};
             int entries = 0;
             int max_primitives = 0;
             for (const JointStep& step : steps) {
@@ -99,6 +107,7 @@ namespace lfs::training {
                     .bc1_rcp = step.bc1_rcp,
                     .bc2_sqrt_rcp = step.bc2_sqrt_rcp,
                     .apply_screen_share = step.apply_screen_share ? 1u : 0u,
+                    .apply_mean_step = step.apply_mean_step ? 1u : 0u,
                 };
                 max_primitives = std::max(max_primitives, step.primitives);
                 uses.insert(uses.end(), {&step.parameter, &step.packed, &step.bounds, &step.gradient});

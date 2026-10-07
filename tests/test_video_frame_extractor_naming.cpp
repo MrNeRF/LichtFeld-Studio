@@ -6,7 +6,7 @@
 
 #include "core/tensor_backend.hpp"
 #include "io/video/video_encoder.hpp"
-#include "io/video_frame_extractor.hpp"
+#include "media/video_frame_extractor.hpp"
 
 #include <gtest/gtest.h>
 

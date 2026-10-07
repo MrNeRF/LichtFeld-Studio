@@ -143,7 +143,7 @@ namespace lfs::training::vulkan {
         const uint64_t tiles = uint64_t(p.grid_width) * p.grid_height;
         LFS_ASSERT_MSG(p.grid_width <= 65535 && p.grid_height <= 65535 && tiles <= INT_MAX / 256, "Fast tile grid exceeds indexing capacity");
         const uint32_t tile_bits = std::bit_width(static_cast<uint32_t>(tiles - 1));
-        p.depth_bits = std::min(23u, 32u - tile_bits);
+        p.depth_bits = 32;
         p.active_bases = params.sh.active_bases;
         p.rest = params.sh.layout_bases - 1;
         // Keep the push block within its existing size: low bit is mip, remaining bits encode dilation.
@@ -232,7 +232,7 @@ namespace lfs::training::vulkan {
                         // Retained buffers already include bounded growth headroom.
                         for (size_t slot = 8; slot < 12; ++slot) {
                             if (!s.scratch[slot].is_valid() || s.scratch[slot].numel() < capacity)
-                                s.scratch[slot] = Tensor::empty({capacity}, Device::GPU, DataType::UInt32);
+                                s.scratch[slot] = Tensor::empty({capacity}, Device::GPU, slot < 10 ? DataType::Int64 : DataType::UInt32);
                         }
                         s.keys_a = Tensor(s.scratch[8]);
                         s.keys_b = Tensor(s.scratch[9]);
@@ -248,7 +248,7 @@ namespace lfs::training::vulkan {
                         s.scalar_readback.enqueue_range(s.visibility, 4, 8);
                         s.mark(6);
                         launch(s, 3, p.visible);
-                        const bool in_a = vulkan_pair_sort({&s.keys_a, &s.keys_b, &s.values_a, &s.values_b}, p.instances, 0, tile_bits + p.depth_bits, false, nullptr, &s.visibility);
+                        const bool in_a = vulkan_pair_sort({&s.keys_a, &s.keys_b, &s.values_a, &s.values_b}, p.instances, 0, tile_bits + p.depth_bits, true, nullptr, &s.visibility);
                         p.keys = address(in_a ? s.keys_a : s.keys_b);
                         p.values = address(in_a ? s.values_a : s.values_b);
                         launch(s, 4, p.instances);
@@ -290,14 +290,14 @@ namespace lfs::training::vulkan {
                         return failure(s, RasterResult::Code::InstanceOverflow, "Fast instance count exceeds signed indexing");
                     p.instances = static_cast<uint32_t>(instances);
                     s.mark(6);
-                    s.keys_a = s.temporary(8, p.instances, DataType::UInt32);
-                    s.keys_b = s.temporary(9, p.instances, DataType::UInt32);
+                    s.keys_a = s.temporary(8, p.instances, DataType::Int64);
+                    s.keys_b = s.temporary(9, p.instances, DataType::Int64);
                     s.values_a = s.temporary(10, p.instances, DataType::UInt32);
                     s.values_b = s.temporary(11, p.instances, DataType::UInt32);
                     p.keys = address(s.keys_a);
                     p.values = address(s.values_a);
                     launch(s, 3, p.visible);
-                    bool in_a = vulkan_pair_sort({&s.keys_a, &s.keys_b, &s.values_a, &s.values_b}, p.instances, 0, tile_bits + p.depth_bits, false);
+                    bool in_a = vulkan_pair_sort({&s.keys_a, &s.keys_b, &s.values_a, &s.values_b}, p.instances, 0, tile_bits + p.depth_bits, true);
                     p.keys = address(in_a ? s.keys_a : s.keys_b);
                     p.values = address(in_a ? s.values_a : s.values_b);
                     launch(s, 4, p.instances);

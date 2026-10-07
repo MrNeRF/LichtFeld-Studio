@@ -8,6 +8,9 @@
 #include <stdexcept>
 
 namespace lfs::training {
+    core::Tensor metal_flip_error_map(const core::Tensor&, const core::Tensor&, float);
+    core::Tensor metal_flip_error_image(const core::Tensor&);
+
     namespace {
         using lfs::gpu_ops::RoiParams;
         using lfs::gpu_ops::Tensor;
@@ -128,6 +131,8 @@ namespace lfs::training {
             .random_background = random_background,
             .canny = canny,
             .normalize_scalar = normalize_scalar,
+            .flip_error_map = metal_flip_error_map,
+            .flip_error_image = metal_flip_error_image,
         };
         return ops;
     }

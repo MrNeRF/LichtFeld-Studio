@@ -350,7 +350,7 @@ namespace lfs::io {
                 const lfs::core::CUDAStreamGuard execution_scope(stream);
                 lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(tensor, uint8_tensor, lfs::gpu_ops::ImageConversion::F32CHWToU8CHW, tensor.shape()[1], tensor.shape()[2], tensor.shape()[0], {});
                 tensor = std::move(uint8_tensor);
-            } else {
+            } else if (!params.decode_float) {
                 tensor = quantize_rgb_to_u16_grid(tensor, stream);
             }
             const cudaError_t status = cudaStreamSynchronize(stream);
@@ -483,7 +483,7 @@ namespace lfs::io {
             return {};
         };
 
-        if (auto jpeg_data = load_cached_jpeg_blob(cache_key)) {
+        if (auto jpeg_data = params.skip_blob_cache ? nullptr : load_cached_jpeg_blob(cache_key)) {
             if (auto tensor = decode_cached_hit(jpeg_data);
                 tensor.is_valid() && tensor.numel() > 0) {
                 return tensor;
@@ -494,7 +494,7 @@ namespace lfs::io {
 
         if (is_original_jpeg) {
             auto data = std::make_shared<std::vector<uint8_t>>(read_file(path));
-            if (!needs_requested_processing) {
+            if (!needs_requested_processing && !params.skip_blob_cache) {
                 put_in_jpeg_cache(cache_key, data);
             }
 
@@ -510,7 +510,7 @@ namespace lfs::io {
                               describe_current_exception("non-standard nvImageCodec exception"));
                 }
             }
-        } else if (!config_.use_16bit_color && !needs_requested_processing) {
+        } else if (!decodes_16bit(params) && !decodes_float(path, params) && !needs_requested_processing) {
             const std::string path_str = lfs::core::path_to_utf8(path);
             int w = 0, h = 0, ch = 0;
             unsigned char* img_data = stbi_load(path_str.c_str(), &w, &h, &ch, 3);
@@ -556,7 +556,7 @@ namespace lfs::io {
                 lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(gpu_uint8, decoded, lfs::gpu_ops::ImageConversion::U8HWCToF32CHW, H, W, C, {});
             }
 
-            if (is_nvcodec_available()) {
+            if (is_nvcodec_available() && !params.skip_blob_cache) {
                 try {
                     auto nvcodec = acquire_nvcodec_loader(config_.decoder_pool_size);
                     auto jpeg_bytes = nvcodec->encode_to_jpeg(decoded, config_.cache_jpeg_quality, lfs::core::getCurrentCUDAStream());
@@ -602,7 +602,7 @@ namespace lfs::io {
 
         Tensor decoded;
         Tensor gpu_staging;
-        if (params.undistort) {
+        if (params.undistort || decodes_float(path, params)) {
             auto ahead = take_decoded_ahead(path, HostDecodeKind::Float32);
             auto [img_data, width, height, channels] = ahead
                                                            ? std::tuple{static_cast<float*>(ahead->data.release()), ahead->width, ahead->height, ahead->channels}
@@ -618,11 +618,14 @@ namespace lfs::io {
             gpu_staging = cpu_tensor.to(Device::GPU, stream);
             synchronize_async_upload_before_free(stream, "image");
             lfs::core::free_image_float(img_data);
-            decoded = gpu_staging.permute({2, 0, 1}).contiguous();
+            const auto [target_width, target_height] = lfs::core::resized_image_dimensions(width, height, params.resize_factor, params.max_width);
+            decoded = params.undistort || (target_width == width && target_height == height)
+                          ? gpu_staging.permute({2, 0, 1}).contiguous()
+                          : lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->resize(gpu_staging, target_height, target_width, lfs::gpu_ops::Resample::LanczosRGB, 2);
         } else {
             auto decode_params = params;
             decode_params.cuda_stream = stream;
-            decoded = load_rgb_decoded_ahead(path, decode_params, config_.use_16bit_color);
+            decoded = load_rgb_decoded_ahead(path, decode_params, decodes_16bit(params));
         }
 
         return decoded;
@@ -633,7 +636,7 @@ namespace lfs::io {
                                                    const std::string& cache_key,
                                                    void* cuda_stream,
                                                    const LoadParams& params) {
-        const bool lossless = config_.use_16bit_color || params.undistort;
+        const bool lossless = decodes_16bit(params) || params.undistort;
         if (lossless && !jpeg2k_cache_available_.load(std::memory_order_relaxed))
             return;
 

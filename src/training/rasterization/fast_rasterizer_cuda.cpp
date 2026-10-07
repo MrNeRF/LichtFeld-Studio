@@ -678,7 +678,9 @@ namespace lfs::training {
         const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
         ctx.completion_stream = stream;
         for (const auto* input : std::initializer_list<const core::Tensor*>{&grad_image, &grad_alpha_extra, &grad_depth, &grad_normal,
-                                                                            &ctx.bg_image, &ctx.bg_color, &ctx.image, &ctx.alpha, &error_map}) {
+                                                                            &ctx.bg_image, &ctx.bg_color, &ctx.image, &ctx.alpha, &error_map,
+                                                                            &adam.rendered_count, &adam.erank_reg_loss, &adam.dc_reg_loss, &adam.sh_rest_reg_loss,
+                                                                            &adam.scale_reg_loss, &adam.opacity_reg_loss, &adam.mean_step_far_mask}) {
             if (input->is_valid())
                 input->sync_to_stream(stream);
         }
@@ -851,6 +853,13 @@ namespace lfs::training {
             bwd_shN_bits,
             edge_weight,
             edge_score);
+        for (const core::Tensor* output : std::initializer_list<const core::Tensor*>{
+                 &adam.rendered_count, &adam.erank_reg_loss, &adam.dc_reg_loss, &adam.sh_rest_reg_loss}) {
+            if (output->is_valid()) {
+                output->record_stream(stream);
+                core::bridgeStreams(stream, output->stream());
+            }
+        }
 
         ctx.mark_forward_context_released();
         state.frame = {};
@@ -862,9 +871,8 @@ namespace lfs::training {
 
     fast_lfs::rasterization::FusedAdamParam fast_adam_group(const lfs::gpu_ops::BackwardAdamParam& src) {
         fast_lfs::rasterization::FusedAdamParam dst;
-        if (!src.enabled) {
-            return dst;
-        }
+        // Disabled groups still provide read-only parameters for regularizers.
+        // The kernel's enabled flag gates parameter and optimizer-state writes.
         dst.param = static_cast<float*>(lfs::core::resolve_exportable_device_ptr(src.parameter));
         if (src.value_bits == 16 && src.sh_value_bounds.is_valid() && src.sh_value_bounds.numel() > 0) {
             dst.sh_value_bounds = static_cast<float*>(
@@ -896,7 +904,7 @@ namespace lfs::training {
         dst.n_attributes = src.attributes;
         dst.step_size = src.step_size;
         dst.bias_correction2_sqrt_rcp = src.bc2_sqrt_rcp;
-        dst.enabled = true;
+        dst.enabled = src.enabled;
         if (src.screen_share.is_valid() && src.screen_share.numel() > 0 &&
             src.screen_share_limit > 0.f && src.screen_share_limit < 1.f) {
             dst.screen_share_max = src.screen_share.ptr<float>();
@@ -913,6 +921,15 @@ namespace lfs::training {
         fused.beta2 = adam.beta2;
         fused.eps = adam.eps;
         fused.scale_reg_weight = adam.scale_reg_weight;
+        fused.scale_reg_log = adam.scale_reg_log;
+        fused.scale_reg_normalizer = adam.scale_reg_normalizer;
+        fused.erank_reg_weight = adam.erank_reg_weight;
+        fused.dc_reg_weight = adam.dc_reg_weight;
+        fused.sh_rest_reg_weight = adam.sh_rest_reg_weight;
+        fused.rendered_count = adam.rendered_count.is_valid() ? core::Tensor(adam.rendered_count).ptr<float>() : nullptr;
+        fused.erank_reg_loss_out = adam.erank_reg_loss.is_valid() ? core::Tensor(adam.erank_reg_loss).ptr<float>() : nullptr;
+        fused.dc_reg_loss_out = adam.dc_reg_loss.is_valid() ? core::Tensor(adam.dc_reg_loss).ptr<float>() : nullptr;
+        fused.sh_rest_reg_loss_out = adam.sh_rest_reg_loss.is_valid() ? core::Tensor(adam.sh_rest_reg_loss).ptr<float>() : nullptr;
         fused.flatten_reg_weight = adam.flatten_reg_weight;
         fused.opacity_reg_weight = adam.opacity_reg_weight;
         if (adam.scale_reg_weight > 0.f && adam.scale_reg_loss.is_valid() && adam.scale_reg_loss.numel() > 0) {
@@ -938,6 +955,12 @@ namespace lfs::training {
         fused.sh0 = fast_adam_group(adam.groups[static_cast<std::size_t>(AdamSlot::Sh0)]);
         fused.shN = fast_adam_group(adam.groups[static_cast<std::size_t>(AdamSlot::ShN)]);
 
+        fused.per_splat_mean_step = adam.per_splat_mean_step;
+        fused.mean_step_median_extent = adam.mean_step_median_extent;
+        if (adam.mean_step_far_mask.is_valid() && adam.mean_step_far_mask.numel() > 0 && fused.means.n_primitives > 0) {
+            fused.mean_step_far_mask = adam.mean_step_far_mask.ptr<bool>();
+            fused.mean_step_far_mask_n = static_cast<int>(std::min(adam.mean_step_far_mask.numel(), static_cast<size_t>(fused.means.n_primitives)));
+        }
         fused.enabled = fused.means.enabled || fused.scaling.enabled || fused.rotation.enabled ||
                         fused.opacity.enabled || fused.sh0.enabled || fused.shN.enabled;
         return fused;
@@ -1028,6 +1051,7 @@ namespace lfs::training {
         view.per_instance_sort_total_size = frame.forward_ctx.per_instance_sort_total_size;
         view.frame_id = frame.forward_ctx.frame_id;
         view.completion_stream = frame.completion_stream;
+        view.primitive_work_indices = frame.forward_ctx.primitive_work_indices;
         return view;
     }
 

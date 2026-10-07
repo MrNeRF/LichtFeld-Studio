@@ -38,8 +38,11 @@ namespace lfs::training {
             float lr, bc1, bc2, beta1, beta2, eps;
             float frozen_scale, crop_scale;
             float screen_limit, screen_penalty, step_size;
+            uint64_t mean_scales, mean_far;
+            uint32_t mean_scale_count, mean_far_count;
+            float mean_median;
         };
-        static_assert(sizeof(Params) == 184);
+        static_assert(sizeof(Params) == 216);
         static_assert(offsetof(Params, primitives) == 80);
         static_assert(offsetof(Params, lr) == 140);
 
@@ -210,10 +213,16 @@ namespace lfs::training {
 
                 p.screen_limit = modifiers.screen_share_limit;
                 p.screen_penalty = modifiers.screen_share_penalty;
-                p.entry_count = (step->apply_screen_share ? 2u : 0u);
+                p.entry_count = (step->apply_screen_share ? 2u : 0u) | (step->apply_mean_step ? 1u : 0u);
+                p.mean_scales = optional<float>(masks.mean_step_scales);
+                p.mean_far = optional<bool>(masks.mean_step_far);
+                p.mean_scale_count = optional_count(masks.mean_step_scales);
+                p.mean_far_count = optional_count(masks.mean_step_far);
+                p.mean_median = modifiers.mean_step_median_extent;
                 std::vector<StorageRef> reads{ref(step->parameter), ref(step->packed), ref(step->bounds),
                                               ref(step->gradient)};
-                for (const Tensor* tensor : {&masks.frozen, &masks.crop_damping, &masks.screen_share}) {
+                for (const Tensor* tensor : {&masks.frozen, &masks.crop_damping, &masks.screen_share,
+                                             &masks.mean_step_scales, &masks.mean_step_far}) {
                     if (tensor->is_valid() && tensor->numel() != 0)
                         reads.push_back(ref(*tensor));
                 }

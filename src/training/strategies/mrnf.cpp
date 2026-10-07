@@ -5,6 +5,7 @@
 #include "mrnf.hpp"
 #include "core/alloc_counter.hpp"
 #include "core/assert.hpp"
+#include "core/camera.hpp"
 #include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
@@ -12,12 +13,15 @@
 #include "core/tensor_completion.hpp"
 #include "core/tensor_execution.hpp"
 #include "core/tensor_serialization.hpp"
+#include "core/tensor_upload.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "lfs/training/mean_step_scale.cuh"
 #include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/perf_bench.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
+#include "training/dataset.hpp"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -39,6 +43,7 @@ namespace lfs::training {
         constexpr int MRNF_BOUNDS_RECOMPUTE_INTERVAL_REFINES = 5;
         constexpr float MRNF_RAW_OPACITY_PRUNE_THRESHOLD = -5.54126358f; // logit(1 / 255)
         constexpr float MRNF_LOG_MIN_SCALE_THRESHOLD = -23.0258509f;     // log(1e-10)
+        constexpr float MRNF_SH_C0 = 0.28209479177387814f;
 
         [[nodiscard]] lfs::core::Tensor compact_bool_indices(
             const lfs::core::Tensor& mask, size_t count) {
@@ -57,6 +62,20 @@ namespace lfs::training {
             return indices;
         }
 
+        [[nodiscard]] lfs::core::Tensor squeeze_leading_ones(lfs::core::Tensor tensor) {
+            while (tensor.is_valid() && tensor.ndim() > 1 && tensor.shape()[0] == 1) {
+                tensor = tensor.squeeze(0);
+            }
+            return tensor;
+        }
+
+        [[nodiscard]] bool is_gpu_image(const lfs::core::Tensor& tensor) {
+            return tensor.is_valid() &&
+                   tensor.device() == lfs::core::Device::GPU &&
+                   (tensor.dtype() == lfs::core::DataType::Float32 ||
+                    tensor.dtype() == lfs::core::DataType::UInt8);
+        }
+
         [[nodiscard]] lfs::core::Tensor zero_splat_vector(const size_t n, const lfs::core::Device device) {
             if (device != lfs::core::Device::GPU) {
                 return lfs::core::Tensor::zeros({n}, device);
@@ -64,6 +83,11 @@ namespace lfs::training {
             auto tensor = lfs::core::Tensor::empty_exact({n}, lfs::core::DataType::Float32);
             tensor.zero_();
             return tensor;
+        }
+
+        [[nodiscard]] float logit_clamped(const float p) {
+            const float q = std::min(std::max(p, 1e-6f), 1.0f - 1e-6f);
+            return std::log(q / (1.0f - q));
         }
 
         [[nodiscard]] std::size_t tensor_vram_required_bytes(
@@ -488,7 +512,12 @@ namespace lfs::training {
         _densify_n_allocated_peak_bytes = 0;
         _densify_child_required_peak_bytes = 0;
         _densify_child_allocated_peak_bytes = 0;
-        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(optimParams);
+        if (optimParams.gut && optimParams.opacity_decay_rendered_only)
+            LOG_WARN("opacity_decay_rendered_only has no effect with GUT");
+        auto resolved_params = optimParams;
+        resolved_params.resolve_mrnf_capacity_defaults();
+        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(
+            std::move(resolved_params));
 
         if (_params->max_cap > 0) {
             const size_t capacity = static_cast<size_t>(_params->max_cap);
@@ -584,11 +613,26 @@ namespace lfs::training {
         const size_t n = static_cast<size_t>(_splat_data->size());
         const size_t tracking_capacity = splat_reserved_capacity(*_splat_data);
         reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
+        if (_params->opacity_decay_rendered_only && !_params->gut)
+            reset_vector_buffer(_rendered_count, n, _splat_data->means().device(), tracking_capacity);
+        else
+            _rendered_count = lfs::core::Tensor();
 
         publish_vram_attribution();
         compute_bounds();
+        refresh_camera_hull();
+
+        cancel_blob_seeding();
+        // A point cloud that already fills the capacity leaves no room for seeds, so skip capturing views for them.
+        if (n > 0 && (_params->max_cap <= 0 || static_cast<int64_t>(n) < int64_t{_params->max_cap}))
+            _blob_seeder = std::make_unique<BlobSeeder>(_splat_data->means());
 
         LOG_INFO("MRNF strategy initialized with {} Gaussians", n);
+    }
+
+    void MRNF::set_training_dataset(std::shared_ptr<CameraDataset> views) {
+        _views = std::move(views);
+        refresh_camera_hull();
     }
 
     lfs::core::Tensor MRNF::edge_score_scratch(const int iter) {
@@ -728,6 +772,7 @@ namespace lfs::training {
             account_tensor("edge.precomputed_scores", _precomputed_edge_scores);
             account_tensor("edge.score_sum", _edge_score_sum);
             account_tensor("edge.view_scores", _edge_view_scores);
+            account_tensor("far_field_mask", _far_field_mask);
 
             _strategy_required_peak_bytes =
                 std::max(_strategy_required_peak_bytes, strategy_required);
@@ -761,6 +806,15 @@ namespace lfs::training {
             }
         } catch (...) {
             // Attribution must never alter the training control path.
+        }
+    }
+
+    void MRNF::post_render(int iter, RenderOutput& render_output) {
+        const auto& seed_image = render_output.stable_target_image.is_valid() ? render_output.stable_target_image
+                                                                              : render_output.target_image;
+        if (_blob_seeder && render_output.camera && iter < static_cast<int>(_params->grow_until_iter) &&
+            is_gpu_image(seed_image)) {
+            _blob_seeder->capture(*render_output.camera, squeeze_leading_ones(seed_image));
         }
     }
 
@@ -849,9 +903,13 @@ namespace lfs::training {
 
     void MRNF::permute_gaussian_rows(const lfs::core::Tensor& perm) {
         morton::permute_row_tensor(_refine_weight_max, perm);
+        if (_rendered_count.is_valid())
+            morton::permute_row_tensor(_rendered_count, perm);
         morton::permute_row_tensor(_precomputed_edge_scores, perm);
         morton::permute_row_tensor(_edge_score_sum, perm);
         morton::permute_row_tensor(_free_mask, perm);
+        morton::permute_row_tensor(_far_field_mask, perm);
+        publish_mean_step_far_mask();
     }
 
     bool MRNF::is_refining(int iter) const {
@@ -885,17 +943,6 @@ namespace lfs::training {
                                          .value_or(core::default_gpu_backend()));
         }
 
-        if (_params && screen_share_shrink_active(iter) &&
-            screen_share_cap_active(_params->max_screen_share) &&
-            _splat_data->_max_screen_share.is_valid() &&
-            _splat_data->_max_screen_share.numel() == n) {
-            auto& log_scales_clip = _splat_data->scaling_raw();
-            assert(log_scales_clip.shape()[0] == n && log_scales_clip.shape()[1] == 3);
-            const lfs::core::Tensor no_frozen;
-            const auto& frozen = _optimizer ? _optimizer->frozen_mask() : no_frozen;
-            training_ops(lfs::core::default_gpu_backend()).refine->clip_scales(log_scales_clip, _splat_data->_max_screen_share, frozen, _params->max_screen_share);
-        }
-
         auto raw_opacities = _splat_data->opacity_raw();
         if (raw_opacities.ndim() == 2 && raw_opacities.shape()[1] == 1)
             raw_opacities = raw_opacities.squeeze(-1);
@@ -912,18 +959,6 @@ namespace lfs::training {
         auto prune_mask = (raw_opacities < MRNF_RAW_OPACITY_PRUNE_THRESHOLD) |
                           compute_near_zero_rotation_mask(_splat_data->rotation_raw()) |
                           (scale_max < MRNF_LOG_MIN_SCALE_THRESHOLD);
-
-        // Bounds-dependent pruning is unsafe for one-point or colocated models:
-        // log(0) would classify every finite scale as oversized. Keep the
-        // bounds-independent safety checks active until a real scene extent exists.
-        if (_bounds_valid) {
-            const float max_allowed =
-                _bounds.max_extent <= std::numeric_limits<float>::max() / 100.0f
-                    ? _bounds.max_extent * 100.0f
-                    : std::numeric_limits<float>::max();
-            const float log_max_allowed = std::log(max_allowed);
-            training_ops(lfs::core::default_gpu_backend()).mrnf->prune_bounds(means, scale_max, prune_mask, {_bounds.center[0], _bounds.center[1], _bounds.center[2]}, max_allowed, log_max_allowed);
-        }
 
         if (_free_mask.is_valid() && n > 0) {
             auto active_mask = _free_mask.slice(0, 0, n).logical_not();
@@ -961,13 +996,27 @@ namespace lfs::training {
         }
 
         grow_and_split(iter, pruned_count);
+        if (iter >= static_cast<int>(_params->grow_until_iter)) {
+            cancel_blob_seeding();
+        } else if (_blob_seeds.valid()) {
+            if (_blob_seeds.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+                _blob_seed_worker.join();
+                append_blob_seeds(_blob_seeds.get());
+            }
+        } else if (_blob_seeder && (_blob_seeder->budget_exhausted() ||
+                                    iter > static_cast<int>(_views ? _views->size() : 0))) {
+            start_blob_seeding();
+        }
 
         enforce_max_cap();
         apply_decay(iter);
+        ensure_mean_step_far_mask();
 
         const size_t new_n = static_cast<size_t>(_splat_data->size());
         const size_t tracking_capacity = splat_reserved_capacity(*_splat_data);
         reset_vector_buffer(_refine_weight_max, new_n, _splat_data->means().device(), tracking_capacity);
+        if (_params->opacity_decay_rendered_only && !_params->gut)
+            reset_vector_buffer(_rendered_count, new_n, _splat_data->means().device(), tracking_capacity);
         ensure_densification_info_shape();
         _splat_data->_densification_info.zero_();
         if (_splat_data->_max_screen_share.is_valid() &&
@@ -1007,6 +1056,116 @@ namespace lfs::training {
             return {};
         }
         return _splat_data->_densification_info.slice(0, 0, 1).squeeze(0);
+    }
+
+    void MRNF::refresh_camera_hull() {
+        _camera_hull_valid = false;
+        _far_field_mask = {};
+        // Invalidate the borrowed pointer before any early return.
+        publish_mean_step_far_mask();
+        _cam_centroid[0] = 0.0f;
+        _cam_centroid[1] = 0.0f;
+        _cam_centroid[2] = 0.0f;
+        _orbit_radius = 0.0f;
+
+        const size_t n_cam = _views ? _views->size() : 0;
+        float sum_x = 0.0f;
+        float sum_y = 0.0f;
+        float sum_z = 0.0f;
+        std::vector<float> positions;
+        positions.reserve(n_cam * 3);
+        size_t counted = 0;
+        for (size_t i = 0; i < n_cam; ++i) {
+            lfs::core::Camera* cam = _views->get_camera(i);
+            if (!cam) {
+                continue;
+            }
+            auto pos = cam->cam_position().cpu().contiguous();
+            if (!pos.is_valid() || pos.numel() < 3) {
+                continue;
+            }
+            const float* p = pos.ptr<float>();
+            if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2])) {
+                continue;
+            }
+            sum_x += p[0];
+            sum_y += p[1];
+            sum_z += p[2];
+            positions.push_back(p[0]);
+            positions.push_back(p[1]);
+            positions.push_back(p[2]);
+            ++counted;
+        }
+        if (counted < 2) {
+            return;
+        }
+
+        const float inv = 1.0f / static_cast<float>(counted);
+        const float cx = sum_x * inv;
+        const float cy = sum_y * inv;
+        const float cz = sum_z * inv;
+        float radius = 0.0f;
+        for (size_t i = 0; i < counted; ++i) {
+            const float dx = positions[i * 3 + 0] - cx;
+            const float dy = positions[i * 3 + 1] - cy;
+            const float dz = positions[i * 3 + 2] - cz;
+            radius = std::max(radius, std::sqrt(dx * dx + dy * dy + dz * dz));
+        }
+
+        const float centroid_norm = std::sqrt(cx * cx + cy * cy + cz * cz);
+        const float radius_eps =
+            32.0f * std::numeric_limits<float>::epsilon() * std::max(centroid_norm, 1.0f);
+        if (!std::isfinite(radius) || radius <= radius_eps) {
+            return;
+        }
+
+        _cam_centroid[0] = cx;
+        _cam_centroid[1] = cy;
+        _cam_centroid[2] = cz;
+        _orbit_radius = radius;
+        _camera_hull_valid = true;
+        const size_t n = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
+        if (n > 0) {
+            refresh_far_field_mask(n);
+        }
+    }
+
+    void MRNF::refresh_far_field_mask(const size_t n) {
+        using namespace lfs::core;
+        if (!_camera_hull_valid || n == 0) {
+            _far_field_mask = Tensor();
+            publish_mean_step_far_mask();
+            return;
+        }
+        if (!_far_field_mask.is_valid() ||
+            _far_field_mask.device() != Device::GPU ||
+            _far_field_mask.dtype() != DataType::Bool ||
+            _far_field_mask.numel() != n) {
+            _far_field_mask = Tensor::zeros_bool({n}, Device::GPU);
+        }
+        const auto center = Tensor::from_vector(std::vector<float>{_cam_centroid[0], _cam_centroid[1], _cam_centroid[2]}, {1, 3}, Device::GPU);
+        const auto offset = _splat_data->means() - center;
+        const float radius = kFarMaskOrbits * _orbit_radius;
+        _far_field_mask = (offset * offset).sum(1) > radius * radius;
+        publish_mean_step_far_mask();
+    }
+
+    void MRNF::publish_mean_step_far_mask() {
+        if (!_optimizer) {
+            return;
+        }
+        const size_t n = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
+        if (!_camera_hull_valid || n == 0 || !_far_field_mask.is_valid() ||
+            _far_field_mask.numel() != n) {
+            _optimizer->set_mean_step_far_mask({});
+            return;
+        }
+        _optimizer->set_mean_step_far_mask(_far_field_mask);
+    }
+
+    void MRNF::ensure_mean_step_far_mask() {
+        const size_t n = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
+        refresh_far_field_mask(n);
     }
 
     lfs::core::Tensor MRNF::sample_gumbel_topk(
@@ -1110,64 +1269,6 @@ namespace lfs::training {
             n_grow = std::min(n_grow, budget - actual_replace);
         }
 
-        Tensor oversize_inds;
-        Tensor oversize_mask;
-        int actual_oversize = 0;
-        if (n_grow > 0 &&
-            _params->oversize_split_fraction > 0.0f &&
-            screen_share_cap_active(_params->max_screen_share) &&
-            _splat_data->_max_screen_share.is_valid() &&
-            _splat_data->_max_screen_share.numel() == n) {
-            int n_oversize = static_cast<int>(std::round(
-                static_cast<float>(n_grow) * _params->oversize_split_fraction));
-            n_oversize = std::max(0, std::min(n_oversize, n_grow));
-            if (n_oversize > 0) {
-                Tensor error_score = _refine_weight_max;
-                if (edge_guidance.is_valid()) {
-                    error_score = error_score * edge_guidance;
-                }
-                if (_optimizer) {
-                    error_score = apply_crop_damping_to_scores(*_optimizer, error_score);
-                }
-                error_score = error_score.contiguous();
-                Tensor oversize_weights = Tensor::zeros({n}, Device::GPU);
-                const lfs::core::Tensor no_frozen;
-                const auto& frozen = _optimizer ? _optimizer->frozen_mask() : no_frozen;
-                training_ops(lfs::core::default_gpu_backend()).refine->oversize_scores(error_score, _splat_data->_max_screen_share, frozen, oversize_weights, _params->max_screen_share);
-                if (active_mask.is_valid()) {
-                    oversize_weights = oversize_weights * active_mask;
-                }
-                if (trainable_mask.is_valid()) {
-                    oversize_weights = oversize_weights * trainable_mask;
-                }
-                if (replace_mask.is_valid()) {
-                    oversize_weights = oversize_weights.masked_fill(replace_mask, 0.0f);
-                }
-                training_ops(lfs::core::default_gpu_backend()).refine->counts({}, {}, oversize_weights, {}, _refine_counts_dev);
-                host_counts = _refine_counts_dev.to_vector_int64();
-                const int selectable_oversize = static_cast<int>(host_counts[2]);
-                if (selectable_oversize > 0) {
-                    const int oversize_budget = std::min(n_oversize, selectable_oversize);
-                    oversize_inds = sample_gumbel_topk(
-                        oversize_weights, oversize_budget, seed + 3,
-                        static_cast<size_t>(selectable_oversize));
-                    actual_oversize =
-                        oversize_inds.is_valid() ? static_cast<int>(oversize_inds.numel()) : 0;
-                    if (actual_oversize > 0) {
-                        oversize_mask = Tensor::zeros_bool({n}, Device::GPU);
-                        auto true_vals = Tensor::ones_bool(
-                            {static_cast<size_t>(actual_oversize)}, Device::GPU);
-                        oversize_mask.index_put_(oversize_inds, true_vals);
-                        LFS_COUNTER_ADD("strategy.mrnf.oversize_split", actual_oversize);
-                    }
-                }
-            }
-        }
-
-        if (n_grow > 0) {
-            n_grow = std::max(0, n_grow - actual_oversize);
-        }
-
         if (n_grow > 0) {
             Tensor growth_weights = above_threshold * _refine_weight_max;
             if (edge_guidance.is_valid()) {
@@ -1178,9 +1279,6 @@ namespace lfs::training {
                 // Keep replacement and growth disjoint on device instead of
                 // deduplicating sampled indices on the host.
                 growth_weights = growth_weights.masked_fill(replace_mask, 0.0f);
-            }
-            if (oversize_mask.is_valid()) {
-                growth_weights = growth_weights.masked_fill(oversize_mask, 0.0f);
             }
 
             // Growth nnz is data-dependent on replace_mask — second packed slot.
@@ -1198,9 +1296,6 @@ namespace lfs::training {
         std::vector<Tensor> split_parts;
         if (replace_inds.is_valid() && replace_inds.numel() > 0) {
             split_parts.push_back(replace_inds);
-        }
-        if (oversize_inds.is_valid() && oversize_inds.numel() > 0) {
-            split_parts.push_back(oversize_inds);
         }
         if (growth_inds.is_valid() && growth_inds.numel() > 0) {
             split_parts.push_back(growth_inds);
@@ -1321,6 +1416,7 @@ namespace lfs::training {
                 append_start,
                 count,
                 &shn_batch);
+            clear_rendered_support(chunk_indices);
             shn_batch.flush();
             reused += append_start;
         }
@@ -1585,6 +1681,8 @@ namespace lfs::training {
         }
         if (_refine_weight_max.is_valid() && _refine_weight_max.numel() > new_size)
             compact(_refine_weight_max);
+        if (_rendered_count.is_valid() && _rendered_count.numel() > new_size)
+            compact(_rendered_count);
         if (_precomputed_edge_scores.is_valid() && _precomputed_edge_scores.numel() > new_size)
             compact(_precomputed_edge_scores);
         if (_edge_score_sum.is_valid() && _edge_score_sum.numel() > new_size)
@@ -1593,6 +1691,7 @@ namespace lfs::training {
 
         remap_frozen_ranges_after_compaction(*_splat_data, valid_indices, old_size);
         apply_frozen_ranges_to_optimizer(*_splat_data, *_optimizer);
+        ensure_mean_step_far_mask();
     }
 
     void MRNF::inject_noise(int iter) {
@@ -1617,6 +1716,11 @@ namespace lfs::training {
              .median_scale = _bounds.median_size});
     }
 
+    void MRNF::clear_rendered_support(const lfs::core::Tensor& indices) {
+        if (_rendered_count.is_valid() && indices.numel() > 0)
+            _rendered_count.index_put_(indices, lfs::core::Tensor::zeros({indices.numel()}, _splat_data->means().device()));
+    }
+
     void MRNF::apply_decay(int iter) {
         const size_t n = static_cast<size_t>(_splat_data->size());
         if (n == 0)
@@ -1625,13 +1729,15 @@ namespace lfs::training {
         const float train_t = static_cast<float>(iter) / static_cast<float>(_params->iterations);
         const auto frozen_mask = make_frozen_mask(*_splat_data, n, _splat_data->means().device());
 
+        assert(!_params->opacity_decay_rendered_only || _params->gut || _rendered_count.numel() == n);
         mrnf_ops().decay(
             _splat_data->opacity_raw(),
             _splat_data->scaling_raw(),
             frozen_mask,
             {.opacity_decay = _params->opacity_decay,
              .scale_decay = _params->scale_decay,
-             .train_t = train_t});
+             .train_t = train_t,
+             .rendered_count = _params->opacity_decay_rendered_only && !_params->gut ? _rendered_count : lfs::core::Tensor{}});
     }
 
     void MRNF::enforce_max_cap() {
@@ -1810,6 +1916,7 @@ namespace lfs::training {
         // previous-occupant / pre-split gradients on rewritten rows.
         zero_adam_grads_at_indices(*_optimizer, target_indices, layout_rest);
 
+        clear_rendered_support(target_indices);
         set_deleted_mask_rows(*_splat_data, _free_mask, target_indices, false);
 
         return {target_indices, count - slots_to_fill};
@@ -1920,8 +2027,79 @@ namespace lfs::training {
             }
         };
 
+        if (_params->opacity_decay_rendered_only && !_params->gut)
+            ensure(_rendered_count, DataType::Float32);
         ensure(_free_mask, DataType::Bool);
         ensure(_refine_weight_max, DataType::Float32);
+    }
+
+    void MRNF::start_blob_seeding() {
+        std::promise<BlobSeeds> promise;
+        _blob_seeds = promise.get_future();
+        _blob_seed_worker = std::jthread(
+            [seeder = std::move(_blob_seeder), promise = std::move(promise), backend = lfs::core::default_gpu_backend()](const std::stop_token stop) mutable {
+                BlobSeeds seeds;
+                try {
+                    lfs::core::TensorWorkQueue queue(backend);
+                    const lfs::core::TensorWorkQueue::Scope guard(queue);
+                    seeds = seeder->triangulate(stop);
+                    seeder.reset();
+                    queue.wait();
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Blob seeding failed: {}", e.what());
+                    seeds = {};
+                }
+                promise.set_value(std::move(seeds));
+            });
+    }
+
+    void MRNF::cancel_blob_seeding() {
+        _blob_seeder.reset();
+        _blob_seed_worker = {};
+        _blob_seeds = {};
+    }
+
+    void MRNF::append_blob_seeds(BlobSeeds seeds) {
+        using namespace lfs::core;
+        LOG_TIMER("MRNF::append_blob_seeds");
+        const size_t budget = _params->max_cap > 0
+                                  ? std::min(static_cast<size_t>(std::max<int64_t>(0, int64_t{_params->max_cap} - static_cast<int64_t>(active_count()))),
+                                             static_cast<size_t>(kBlobSeedCapacityFraction * _params->max_cap))
+                                  : seeds.size();
+        const size_t count = std::min(seeds.size(), budget);
+        if (count == 0) {
+            return;
+        }
+
+        std::vector<float> means(seeds.means.begin(), seeds.means.begin() + static_cast<std::ptrdiff_t>(count * 3));
+        std::vector<float> sh0(count * 3);
+        std::vector<float> scales(count * 3);
+        std::vector<float> rotations(count * 4, 0.0f);
+        for (size_t i = 0; i < count; ++i) {
+            for (int c = 0; c < 3; ++c) {
+                sh0[i * 3 + c] = (seeds.colors[i * 3 + c] - 0.5f) / MRNF_SH_C0;
+                scales[i * 3 + c] = seeds.log_scales[i];
+            }
+            rotations[i * 4] = 1.0f;
+        }
+        auto pos = Tensor::from_vector(means, TensorShape({count, 3}), Device::GPU);
+        auto rot = Tensor::from_vector(rotations, TensorShape({count, 4}), Device::GPU);
+        auto scl = Tensor::from_vector(scales, TensorShape({count, 3}), Device::GPU);
+        auto sh0_t = Tensor::from_vector(sh0, TensorShape({count, 1, 3}), Device::GPU);
+        auto opa = Tensor::full({count}, logit_clamped(kBlobSeedOpacity), Device::GPU);
+        Tensor shN;
+        if (const size_t sh_rest = _splat_data->max_sh_coeffs_rest(); sh_rest > 0) {
+            shN = Tensor::zeros({count, sh_rest, 3}, Device::GPU);
+        }
+
+        lfs::training::sh_value::ShNMutationBatch shn_batch(*_splat_data);
+        auto [filled, remaining_after_fill] = fill_free_slots_with_data(
+            pos, rot, scl, sh0_t, shN, opa, static_cast<int64_t>(count), &shn_batch);
+        const size_t append_start = count - static_cast<size_t>(remaining_after_fill);
+        append_child_rows(pos, rot, scl, sh0_t, shN, opa, append_start, count, &shn_batch);
+        shn_batch.flush();
+        LOG_INFO("MRNF: added {} blob seeds", count);
+        LFS_COUNTER_ADD("strategy.mrnf.blob_seed", count);
     }
 
     void MRNF::compute_bounds() {
@@ -1952,6 +2130,11 @@ namespace lfs::training {
 
         if (n == 0) {
             _bounds_valid = false;
+            _median_splat_extent = 0.0f;
+            _median_splat_extent_valid = false;
+            if (_optimizer) {
+                _optimizer->set_per_splat_mean_step(false, 0.0f);
+            }
             return;
         }
 
@@ -1997,6 +2180,26 @@ namespace lfs::training {
         _bounds_valid = true;
         _refine_windows_since_bounds = 0;
 
+        lfs::core::Tensor active_scales = _splat_data->scaling_raw();
+        if (active_indices.is_valid()) {
+            active_scales = active_scales.index_select(0, active_indices).contiguous();
+        }
+        float median_extent = 0.0f;
+        bool median_ok = false;
+        if (active_scales.is_valid() &&
+            active_scales.numel() >= n * 3) {
+            const auto extents = (active_scales.sum(1) * (1.0f / 3.0f)).exp();
+            const auto usable = extents.masked_select(extents.isfinite().logical_and(extents > 0.0f));
+            if (usable.numel() > 0) {
+                const auto [sorted, indices] = usable.sort();
+                median_extent = sorted[usable.numel() / 2].item_as<float>();
+                median_ok = std::isfinite(median_extent) && median_extent > 0.0f;
+            }
+        }
+        _median_splat_extent = median_extent;
+        _median_splat_extent_valid =
+            median_ok && std::isfinite(median_extent) && median_extent > 0.0f;
+
         sync_mean_learning_rate();
     }
 
@@ -2004,13 +2207,20 @@ namespace lfs::training {
         if (!_optimizer || !_bounds_valid)
             return;
         _optimizer->set_param_lr(ParamType::Means, _mean_lr_unscaled * _bounds.median_size);
+        if (_median_splat_extent_valid) {
+            _optimizer->set_per_splat_mean_step(true, _median_splat_extent);
+            const size_t n = static_cast<size_t>(_splat_data->size());
+            if (_camera_hull_valid && n > 0 && (!_far_field_mask.is_valid() || _far_field_mask.numel() != n)) {
+                refresh_far_field_mask(n);
+            } else {
+                publish_mean_step_far_mask();
+            }
+        } else {
+            _optimizer->set_per_splat_mean_step(false, 0.0f);
+        }
     }
 
     bool MRNF::screen_share_shrink_active(const int iter) const {
-        if (!_params->gut) {
-            return true;
-        }
-        // During growth, oversized splats are split to preserve coverage.
         // Shrink only once growth has ended and refinement has begun. Compare
         // cadence buckets rather than multiplying a potentially large step.
         return iter > 0 && _params->refine_every > 0 &&
@@ -2033,7 +2243,23 @@ namespace lfs::training {
             _scale_lr_current *= _scale_lr_gamma;
             _optimizer->set_param_lr(ParamType::Scaling, _scale_lr_current);
             sync_mean_learning_rate();
+            apply_late_lr_anneal(iter);
         }
+    }
+
+    // Opacity and color keep fitting per-view detail after growth ends; decaying
+    // their rates from there to the last iteration stops that memorization.
+    void MRNF::apply_late_lr_anneal(const int iter) {
+        const int start = static_cast<int>(_params->grow_until_iter);
+        const int end = static_cast<int>(_params->iterations);
+        if (iter < start || end <= start)
+            return;
+        assert(_params->shs_lr > 0.0f && _params->late_lr_anneal > 0.0f && _params->late_lr_anneal <= 1.0f);
+        const double progress = std::min(1.0, static_cast<double>(iter - start) / static_cast<double>(end - start));
+        const double factor = std::pow(static_cast<double>(_params->late_lr_anneal), progress);
+        _optimizer->set_param_lr(ParamType::Opacity, static_cast<double>(_params->opacity_lr) * factor);
+        _optimizer->set_param_lr(ParamType::Sh0, static_cast<double>(_params->shs_lr) * factor);
+        _optimizer->set_param_lr(ParamType::ShN, static_cast<double>(_params->shs_lr / 20.0f) * factor);
     }
 
     void MRNF::remove_gaussians(const lfs::core::Tensor& mask) {
@@ -2119,6 +2345,7 @@ namespace lfs::training {
     }
 
     void MRNF::deserialize(std::istream& is) {
+        cancel_blob_seeding();
         uint32_t magic = 0, version = 0;
         lfs::core::serialization_detail::read_exact(is, &magic, sizeof(magic), "MRNF magic");
         lfs::core::serialization_detail::read_exact(is, &version, sizeof(version), "MRNF version");
@@ -2201,6 +2428,11 @@ namespace lfs::training {
         const size_t capacity = splat_reserved_capacity(*_splat_data);
         const size_t tracking_capacity = capacity;
         reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
+        if (_params->opacity_decay_rendered_only && !_params->gut) {
+            reset_vector_buffer(_rendered_count, n, _splat_data->means().device(), tracking_capacity);
+            _rendered_count.fill_(1.0f);
+        } else
+            _rendered_count = lfs::core::Tensor();
         ensure_densification_info_shape();
         _precomputed_edge_scores = lfs::core::Tensor();
         _edge_precompute_valid = false;
@@ -2221,6 +2453,7 @@ namespace lfs::training {
             _optimizer->set_param_lr(ParamType::Scaling, _scale_lr_current);
             sync_mean_learning_rate();
         }
+        ensure_mean_step_far_mask();
         publish_vram_attribution();
     }
 
@@ -2232,6 +2465,7 @@ namespace lfs::training {
 
     void MRNF::adopt_checkpoint_state(IStrategy& loaded) noexcept {
         auto& source = checked_checkpoint_source<MRNF>(loaded);
+        cancel_blob_seeding();
         if (_optimizer)
             _optimizer->adopt_checkpoint_state(*source._optimizer);
         if (_scheduler)
@@ -2242,15 +2476,23 @@ namespace lfs::training {
                 _params->gut && screen_share_cap_active(_params->max_screen_share));
         }
         std::swap(_refine_weight_max, source._refine_weight_max);
+        std::swap(_rendered_count, source._rendered_count);
         std::swap(_precomputed_edge_scores, source._precomputed_edge_scores);
         std::swap(_edge_precompute_valid, source._edge_precompute_valid);
         std::swap(_edge_score_sum, source._edge_score_sum);
         std::swap(_edge_view_scores, source._edge_view_scores);
         std::swap(_edge_sample_count, source._edge_sample_count);
         std::swap(_free_mask, source._free_mask);
+        std::swap(_far_field_mask, source._far_field_mask);
+        std::swap(_cam_centroid, source._cam_centroid);
+        std::swap(_orbit_radius, source._orbit_radius);
+        std::swap(_camera_hull_valid, source._camera_hull_valid);
         std::swap(_bounds, source._bounds);
         std::swap(_bounds_valid, source._bounds_valid);
         std::swap(_refine_windows_since_bounds, source._refine_windows_since_bounds);
+        std::swap(_median_splat_extent, source._median_splat_extent);
+        std::swap(_median_splat_extent_valid, source._median_splat_extent_valid);
+        publish_mean_step_far_mask();
         std::swap(_mean_lr_unscaled, source._mean_lr_unscaled);
         std::swap(_scale_lr_current, source._scale_lr_current);
         std::swap(_mean_lr_gamma, source._mean_lr_gamma);
@@ -2267,7 +2509,18 @@ namespace lfs::training {
 
     void MRNF::set_optimization_params(const lfs::core::param::OptimizationParameters& params) {
         const bool renderer_changed = _params && _params->gut != params.gut;
-        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(params);
+        const bool support_changed = !_params || _params->opacity_decay_rendered_only != params.opacity_decay_rendered_only;
+        auto resolved_params = params;
+        resolved_params.resolve_mrnf_capacity_defaults();
+        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(std::move(resolved_params));
+        if ((support_changed || renderer_changed) && params.gut && params.opacity_decay_rendered_only)
+            LOG_WARN("opacity_decay_rendered_only has no effect with GUT");
+        if (_splat_data && (support_changed || renderer_changed)) {
+            if (params.opacity_decay_rendered_only && !params.gut)
+                reset_vector_buffer(_rendered_count, _splat_data->size(), _splat_data->means().device(), splat_reserved_capacity(*_splat_data));
+            else
+                _rendered_count = lfs::core::Tensor();
+        }
 
         if (_mean_lr_unscaled <= 0.0) {
             _mean_lr_unscaled = params.means_lr;

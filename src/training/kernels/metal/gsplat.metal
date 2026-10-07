@@ -122,6 +122,14 @@ static float gsplat_fisheye_theta(device const GsplatCamera& cam, const float de
     return x;
 }
 
+// Tangential and prism terms act on the theta-scaled point.
+static float2 gsplat_thin_prism_terms(device const GsplatCamera& cam, const float2 point) {
+    const float p1 = cam.prism[0], p2 = cam.prism[1], sx1 = cam.prism[2], sy1 = cam.prism[3];
+    const float r2 = point.x * point.x + point.y * point.y;
+    return float2(2.0f * p1 * point.x * point.y + p2 * (r2 + 2.0f * point.x * point.x) + sx1 * r2,
+                  p1 * (r2 + 2.0f * point.y * point.y) + 2.0f * p2 * point.x * point.y + sy1 * r2);
+}
+
 static bool gsplat_in_bounds(const float2 p, const uint2 resolution) {
     const float mx = float(resolution.x) * kGsplatMargin;
     const float my = float(resolution.y) * kGsplatMargin;
@@ -182,12 +190,11 @@ static bool gsplat_camera_to_image(device const GsplatCamera& cam, const float3 
     } else {
         if (thetad <= 0.0f)
             return false;
-        const float scale = thetad / norm;
-        const float dx = scale * p.x, dy = scale * p.y;
-        const float p1 = cam.prism[0], p2 = cam.prism[1], sx1 = cam.prism[2], sy1 = cam.prism[3];
-        const float dr2 = dx * dx + dy * dy;
-        const float xd = dx + 2.0f * p1 * dx * dy + p2 * (dr2 + 2.0f * dx * dx) + sx1 * dr2;
-        const float yd = dy + p1 * (dr2 + 2.0f * dy * dy) + 2.0f * p2 * dx * dy + sy1 * dr2;
+        const float2 theta_point = p.xy * (theta / norm);
+        const float2 prism = gsplat_thin_prism_terms(cam, theta_point);
+        const float radial_scale = thetad / norm;
+        const float xd = radial_scale * p.x + prism.x;
+        const float yd = radial_scale * p.y + prism.y;
         image = cam.focal * float2(xd, yd) + cam.principal;
     }
     return gsplat_in_bounds(image, cam.resolution) && theta <= cam.max_angle;
@@ -255,22 +262,32 @@ static GsplatRay gsplat_pixel_ray(device const GsplatCamera& cam, const float2 p
             ray /= length(ray);
         } else {
             if (cam.model == kGsplatThinPrism) {
-                const float p1 = cam.prism[0], p2 = cam.prism[1], sx1 = cam.prism[2], sy1 = cam.prism[3];
-                for (int i = 0; i < 5; ++i) {
-                    const float dr2 = uv.x * uv.x + uv.y * uv.y;
-                    const float dx = 2.0f * p1 * uv.x * uv.y + p2 * (dr2 + 2.0f * uv.x * uv.x) + sx1 * dr2;
-                    const float dy = p1 * (dr2 + 2.0f * uv.y * uv.y) + 2.0f * p2 * uv.x * uv.y + sy1 * dr2;
-                    uv.x -= dx;
-                    uv.y -= dy;
+                float2 radial_point = uv, theta_point = float2(0.0f);
+                float theta = 0.0f;
+                for (int i = 0; i <= 5; ++i) {
+                    if (i > 0)
+                        radial_point = uv - gsplat_thin_prism_terms(cam, theta_point);
+                    const float thetad = length(radial_point);
+                    bool converged;
+                    theta = gsplat_fisheye_theta(cam, thetad, converged);
+                    valid = !(theta < 0.0f || theta >= cam.max_angle || !converged);
+                    if (!valid)
+                        break;
+                    theta_point = thetad >= 1e-6f ? radial_point * (theta / thetad) : float2(0.0f);
                 }
-            }
-            const float delta = length(uv);
-            bool converged;
-            const float theta = gsplat_fisheye_theta(cam, delta, converged);
-            valid = !(theta < 0.0f || theta >= cam.max_angle || !converged);
-            if (valid && delta >= 1e-6f) {
-                const float s = sin(theta) / delta;
-                ray = float3(s * uv.x, s * uv.y, cos(theta));
+                if (valid && theta >= 1e-6f) {
+                    const float scale = sin(theta) / theta;
+                    ray = float3(scale * theta_point.x, scale * theta_point.y, cos(theta));
+                }
+            } else {
+                const float delta = length(uv);
+                bool converged;
+                const float theta = gsplat_fisheye_theta(cam, delta, converged);
+                valid = !(theta < 0.0f || theta >= cam.max_angle || !converged);
+                if (valid && delta >= 1e-6f) {
+                    const float s = sin(theta) / delta;
+                    ray = float3(s * uv.x, s * uv.y, cos(theta));
+                }
             }
         }
     }

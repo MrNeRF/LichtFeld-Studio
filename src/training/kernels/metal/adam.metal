@@ -51,6 +51,7 @@ struct AdamStep {
     float bc1_rcp;
     float bc2_sqrt_rcp;
     uint apply_screen_share;
+    uint apply_mean_step;
 };
 
 struct AdamBatchParams {
@@ -63,6 +64,11 @@ struct AdamBatchParams {
     float beta1;
     float beta2;
     float eps;
+    device const float* mean_scales;
+    device const bool* mean_far;
+    int mean_scale_count;
+    int mean_far_count;
+    float mean_median;
 };
 
 // Grid (blocks of the largest step, steps). Rows whose update is skipped still
@@ -86,7 +92,15 @@ kernel void adam_step_batch(constant AdamBatchParams& p [[buffer(0)]], uint2 gro
     float us_s[kAdamMaxAttributes];
     float4 local = float4(kAdamInf, -kAdamInf, kAdamInf, -kAdamInf);
     const int row = in_range ? min(step.attributes, kAdamMaxAttributes) : 0;
-    const float step_size = row_lr * step.bc1_rcp;
+    float step_size = row_lr * step.bc1_rcp;
+    if (in_range && step.apply_mean_step != 0u && p.mean_scales != nullptr && p.mean_far != nullptr &&
+        prim < p.mean_far_count && long(prim) * 3 + 2 < p.mean_scale_count &&
+        p.mean_median > 0.0f && p.mean_far[prim]) {
+        const float extent = exp((p.mean_scales[prim * 3] + p.mean_scales[prim * 3 + 1] +
+                                  p.mean_scales[prim * 3 + 2]) *
+                                 (1.0f / 3.0f));
+        step_size *= fmin(fmax(extent / p.mean_median, 1.0f), 300.0f);
+    }
     for (int i = 0; i < row; ++i) {
         const long cell = long(prim) * step.attributes + i;
         const float2 mv = C::decode_g1g2(step.packed, cell, old_mm);

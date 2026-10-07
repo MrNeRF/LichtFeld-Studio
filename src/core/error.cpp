@@ -3,7 +3,7 @@
 
 #include "core/error.hpp"
 
-#include "core/memory_pressure.hpp"
+#include "core/memory_domain.hpp"
 
 #include <atomic>
 #include <format>
@@ -87,7 +87,7 @@ namespace lfs {
         // that cannot allocate — finds these already built from whichever
         // earlier, healthy make_error()/format_for_developer() call touched
         // them first. This mirrors the existing allocation-free
-        // AllocationFailure seed's role in memory_pressure.hpp, adapted to
+        // AllocationFailure seed's role in memory_domain.hpp, adapted to
         // the fact that ErrorPayload itself is not a POD.
         ErrorPayload& immortal_payload(const bool unknown_seed) noexcept {
             static ErrorPayload oom_seed(ErrorCode::ResourceExhausted, ErrorDomain::Core,
@@ -512,7 +512,7 @@ namespace lfs::core {
 
     } // namespace
 
-    // Phase 1 error-architecture adapter (declared in memory_pressure.hpp,
+    // Phase 1 error-architecture adapter (declared in memory_domain.hpp,
     // defined here so that header stays free of core/error.hpp and therefore
     // safe for any future CUDA translation unit that includes it).
     Error to_error(const AllocationFailure& failure, const SourceSite site) {

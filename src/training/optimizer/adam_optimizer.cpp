@@ -164,6 +164,7 @@ namespace lfs::training {
 
             .screen_share_limit = screen_share_limit_,
             .screen_share_penalty = screen_share_penalty_,
+            .mean_step_median_extent = mean_step_median_extent_,
         };
     }
 
@@ -216,6 +217,49 @@ namespace lfs::training {
         cropbox_lr_scale_ = scale;
     }
 
+    void AdamOptimizer::set_per_splat_mean_step(const bool enabled, const float median_extent) {
+        per_splat_mean_step_ = enabled;
+        mean_step_median_extent_ = median_extent;
+        if (!enabled) {
+            set_mean_step_far_mask({});
+        }
+    }
+
+    void AdamOptimizer::set_mean_step_far_mask(lfs::core::Tensor mask) {
+        if (!mask.is_valid() || mask.numel() == 0) {
+            mean_step_far_mask_ = nullptr;
+            mean_step_far_mask_n_ = 0;
+            mean_step_far_mask_storage_ = {};
+            return;
+        }
+        LFS_ASSERT_MSG(mask.dtype() == lfs::core::DataType::Bool && mask.ndim() == 1,
+                       "AdamOptimizer mean-step far mask must be a 1D bool tensor");
+        LFS_ASSERT_MSG(mask.numel() <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                       "AdamOptimizer mean-step far mask exceeds the supported row count");
+        // Retain owned, contiguous device storage for the raw mask pointer.
+        auto uploaded = mask.device() == lfs::core::Device::GPU ? mask : mask.gpu();
+        auto storage = uploaded.is_contiguous() && uploaded.owns_memory()
+                           ? uploaded
+                           : uploaded.clone();
+        const auto* pointer = storage.ptr<bool>();
+        // A raw pointer alone cannot keep a replaced strategy tensor alive.
+        mean_step_far_mask_storage_ = std::move(storage);
+        mean_step_far_mask_ = pointer;
+        mean_step_far_mask_n_ = static_cast<int>(mean_step_far_mask_storage_.numel());
+    }
+
+    void AdamOptimizer::validate_mean_step_far_mask() {
+        const auto& means = splat_data_.means();
+        const size_t n = means.is_valid() && means.ndim() > 0 ? means.shape()[0] : 0;
+        if (mean_step_far_mask_ != nullptr &&
+            (mean_step_far_mask_n_ < 0 || static_cast<size_t>(mean_step_far_mask_n_) != n)) {
+            LOG_WARN("AdamOptimizer: mean_step_far_mask row-count mismatch (mask={}, means={}); "
+                     "ignoring binding until the strategy republishes it",
+                     mean_step_far_mask_n_, n);
+            set_mean_step_far_mask({});
+        }
+    }
+
     void AdamOptimizer::set_screen_share_cap(const float* max_share, const int n,
                                              const float limit, const float penalty) {
         screen_share_max_ = max_share;
@@ -239,6 +283,7 @@ namespace lfs::training {
 
     void AdamOptimizer::step(const int iteration) {
         LFS_TRACE("kernel.adam.step");
+        validate_mean_step_far_mask();
         refresh_screen_share_buffer();
         if (fused_step_iteration_ == iteration) {
             last_step_zeroed_gradients_ = true;
@@ -303,6 +348,7 @@ namespace lfs::training {
                 .bc1_rcp = static_cast<float>(bias_correction1_rcp),
                 .bc2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp),
                 .apply_screen_share = type == ParamType::Scaling,
+                .apply_mean_step = type == ParamType::Means && per_splat_mean_step_,
             };
         };
 
@@ -325,6 +371,8 @@ namespace lfs::training {
                 .crop_damping = crop_damping_mask_,
 
                 .screen_share = screen_share_max_ != nullptr ? splat_data_._max_screen_share : absent_,
+                .mean_step_scales = per_splat_mean_step_ ? splat_data_.scaling_raw() : absent_,
+                .mean_step_far = mean_step_far_mask_storage_,
             };
             adam_ops().step_batch(steps, masks, adam_hyper(), adam_modifiers());
         }
@@ -722,6 +770,10 @@ namespace lfs::training {
     lfs::gpu_ops::BackwardAdam AdamOptimizer::prepare_fastgs_fused_adam(
         const int iteration,
         const lfs::core::TensorExecutionTarget execution_stream) {
+        validate_mean_step_far_mask();
+        if (mean_step_far_mask_storage_.is_valid()) {
+            mean_step_far_mask_storage_.sync_to_stream(execution_stream);
+        }
         if (crop_damping_mask_.is_valid()) {
             crop_damping_mask_.sync_to_stream(execution_stream);
         }
@@ -991,7 +1043,9 @@ namespace lfs::training {
             .beta1 = beta1,
             .beta2 = beta2,
             .eps = eps,
-
+            .per_splat_mean_step = per_splat_mean_step_,
+            .mean_step_median_extent = mean_step_median_extent_,
+            .mean_step_far_mask = mean_step_far_mask_storage_,
         };
     }
 

@@ -16,6 +16,7 @@ from . import (
     keymap as keymap,
     log as log,
     mcp as mcp,
+    media as media,
     mesh as mesh,
     nn as nn,
     nodes as nodes,
@@ -876,10 +877,10 @@ class Tensor:
     def from_dlpack(obj: object) -> Tensor:
         """Create tensor from DLPack capsule or object"""
 
-    def __getitem__(self, arg: object, /) -> Tensor:
+    def __getitem__(self, key: object | None) -> Tensor:
         """Get item/slice"""
 
-    def __setitem__(self, arg0: object, arg1: object, /) -> None:
+    def __setitem__(self, key: object | None, value: object) -> None:
         """Set item/slice"""
 
     @overload
@@ -2123,6 +2124,15 @@ class EvalSpace(enum.Enum):
 
     UNDISTORTED = 1
 
+class EvalBitDepth(enum.Enum):
+    AUTO = 0
+
+    EIGHT = 1
+
+    SIXTEEN = 2
+
+    FLOAT = 3
+
 class DensifyErrorMap(enum.Enum):
     SSIM = 0
 
@@ -2318,6 +2328,15 @@ class OptimizationParams:
     def eval_all(self, arg: bool, /) -> None: ...
 
     @property
+    def eval_flip(self) -> bool:
+        """
+        Also compute FLIP per evaluated image and save its error map next to the evaluation images
+        """
+
+    @eval_flip.setter
+    def eval_flip(self, arg: bool, /) -> None: ...
+
+    @property
     def eval_mask(self) -> str:
         """
         Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range, points or a splat); training is not affected
@@ -2364,15 +2383,6 @@ class OptimizationParams:
 
     @screen_share_penalty.setter
     def screen_share_penalty(self, arg: float, /) -> None: ...
-
-    @property
-    def oversize_split_fraction(self) -> float:
-        """
-        Fraction of MRNF growth budget used to split Gaussians over the screen-share cap; 0 disables
-        """
-
-    @oversize_split_fraction.setter
-    def oversize_split_fraction(self, arg: float, /) -> None: ...
 
     @property
     def steps_scaler(self) -> float:
@@ -2651,6 +2661,15 @@ class OptimizationParams:
     def eval_space(self, arg: EvalSpace, /) -> None: ...
 
     @property
+    def eval_bit_depth(self) -> EvalBitDepth:
+        """
+        Grid the render is quantized to before evaluation metrics: auto = each reference image's own encoding (8-bit, 16-bit or float)
+        """
+
+    @eval_bit_depth.setter
+    def eval_bit_depth(self, arg: EvalBitDepth, /) -> None: ...
+
+    @property
     def save_steps(self) -> list[int]:
         """List of iterations at which to save the project (project.licht)"""
 
@@ -2923,4 +2942,4 @@ class CheckpointParams:
 def read_checkpoint_params(path: str) -> CheckpointParams | None:
     """Read training parameters from a checkpoint (None if failed)"""
 
-__all__: tuple = ('context', 'gaussians', 'session', 'get_scene', 'Tensor', 'Hook', 'ScopedHandler', 'SplatSimplifyResult', 'SplatSimplifyMergeTree', 'on_training_start', 'on_iteration_start', 'on_post_step', 'on_pre_optimizer_step', 'on_training_end', 'mesh_to_splat', 'is_mesh2splat_active', 'get_mesh2splat_progress', 'get_mesh2splat_stage', 'get_mesh2splat_error', 'simplify_splats', 'simplify_splat_data_with_history', 'build_splat_lod_hierarchy', 'cancel_splat_simplify', 'is_splat_simplify_active', 'get_splat_simplify_progress', 'get_splat_simplify_stage', 'get_splat_simplify_error', 'on_frame', 'stop_animation', 'on_scene_time', 'clear_scene_time', 'run', 'list_scene', 'mat4', 'colormap', 'help', 'scene', 'io', 'packages', 'mcp')
+__all__: tuple = ('context', 'gaussians', 'session', 'get_scene', 'Tensor', 'Hook', 'ScopedHandler', 'SplatSimplifyResult', 'SplatSimplifyMergeTree', 'on_training_start', 'on_iteration_start', 'on_post_step', 'on_pre_optimizer_step', 'on_training_end', 'mesh_to_splat', 'is_mesh2splat_active', 'get_mesh2splat_progress', 'get_mesh2splat_stage', 'get_mesh2splat_error', 'simplify_splats', 'simplify_splat_data_with_history', 'build_splat_lod_hierarchy', 'cancel_splat_simplify', 'is_splat_simplify_active', 'get_splat_simplify_progress', 'get_splat_simplify_stage', 'get_splat_simplify_error', 'on_frame', 'stop_animation', 'on_scene_time', 'clear_scene_time', 'run', 'list_scene', 'mat4', 'colormap', 'help', 'scene', 'io', 'media', 'packages', 'mcp')

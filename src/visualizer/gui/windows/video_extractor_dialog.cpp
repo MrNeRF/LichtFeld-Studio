@@ -13,6 +13,8 @@
 #include "gui/string_keys.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/utils/native_file_dialog.hpp"
+#include "io/media_studio_backends.hpp"
+#include "media/media_ingest.hpp"
 #include <cctype>
 
 #include <RmlUi/Core.h>
@@ -248,6 +250,7 @@ namespace lfs::gui {
 
     VideoExtractorDialog::VideoExtractorDialog()
         : player_(std::make_unique<io::VideoPlayer>()) {
+        io::registerStudioMediaBackends();
         listener_.owner = this;
     }
 
@@ -361,47 +364,47 @@ namespace lfs::gui {
         joinExtractionThread();
 
         extraction_thread_.emplace([this, params]() {
-            io::VideoFrameExtractor extractor;
-
-            io::VideoFrameExtractor::Params extract_params;
-            extract_params.video_path = params.video_path;
-            extract_params.output_dir = params.output_dir;
-            extract_params.mode = params.mode;
-            extract_params.fps = params.fps;
-            extract_params.frame_interval = params.frame_interval;
-            extract_params.format = params.format;
-            extract_params.jpg_quality = params.jpg_quality;
-            extract_params.start_time = params.start_time;
-            extract_params.end_time = params.end_time;
-            extract_params.resolution_mode = params.resolution_mode;
-            extract_params.scale = params.scale;
-            extract_params.custom_width = params.custom_width;
-            extract_params.custom_height = params.custom_height;
-            extract_params.filename_pattern = params.filename_pattern;
-            extract_params.sharpness.enabled = params.sharpness_enabled;
-            extract_params.sharpness.algorithm = params.sharpness_algorithm;
-            extract_params.sharpness.threshold = params.sharpness_threshold;
-            extract_params.sharpness.window_candidates_target = params.window_candidates_target;
-            extract_params.sharpness.window_mode = params.sharpness_window_mode;
-            extract_params.generate_metadata = params.generate_metadata;
-            extract_params.convert_hdr_to_sdr = params.convert_hdr_to_sdr;
-            extract_params.rotation = params.rotation;
-            extract_params.cancel_requested = [this]() {
-                return stop_extraction_requested_.load();
+            io::registerStudioMediaBackends();
+            media::IngestRequest request;
+            request.input = params.video_path;
+            request.selection.mode = params.mode == io::ExtractionMode::FPS ? media::SelectionMode::FPS : media::SelectionMode::Interval;
+            request.selection.fps = params.fps;
+            request.selection.interval = params.frame_interval;
+            request.start_seconds = params.start_time;
+            request.end_seconds = params.end_time;
+            request.geometry.mode = params.resolution_mode == io::ResolutionMode::Original ? media::ResizeMode::Original
+                                    : params.resolution_mode == io::ResolutionMode::Scale  ? media::ResizeMode::Scale
+                                                                                           : media::ResizeMode::Custom;
+            request.geometry.scale = params.scale;
+            request.geometry.width = params.custom_width;
+            request.geometry.height = params.custom_height;
+            request.geometry.clockwise_rotation = params.rotation;
+            request.sharpness.enabled = params.sharpness_enabled;
+            request.sharpness.method = params.sharpness_algorithm == io::SharpnessAlgorithm::LAPLACIAN   ? media::SharpnessMethod::Laplacian
+                                       : params.sharpness_algorithm == io::SharpnessAlgorithm::TENENGRAD ? media::SharpnessMethod::Tenengrad
+                                                                                                         : media::SharpnessMethod::Combined;
+            request.sharpness.threshold = params.sharpness_threshold;
+            request.sharpness.window_candidates = params.window_candidates_target;
+            request.sharpness.window = params.sharpness_window_mode;
+            request.convert_hdr_to_sdr = params.convert_hdr_to_sdr;
+            request.cancelled = [this] { return stop_extraction_requested_.load(); };
+            request.progress = [this](const media::IngestProgress& progress) {
+                updateProgress(progress.processed, progress.estimated, progress.discarded);
             };
-
-            extract_params.progress_callback = [this](const int current, const int total, const int discarded) {
-                updateProgress(current, total, discarded);
-            };
-
-            std::string error;
-            if (!extractor.extract(extract_params, error)) {
-                if (extractor.lastOutcome() == io::ExtractionOutcome::Cancelled) {
+            media::FileExtraction files;
+            files.files.output_directory = params.output_dir;
+            files.files.filename_pattern = params.filename_pattern;
+            files.files.format = params.format == io::ImageFormat::PNG ? media::FrameFileFormat::PNG : media::FrameFileFormat::JPEG;
+            files.files.jpeg_quality = params.jpg_quality;
+            files.write_metadata = params.generate_metadata;
+            const auto result = media::MediaIngest::extractFiles(request, files);
+            if (!result) {
+                if (result.error().code() == ErrorCode::Cancelled) {
                     LOG_INFO("Video frame extraction stopped");
                     setExtractionStopped();
                 } else {
-                    LOG_ERROR("Video frame extraction failed: {}", error);
-                    setExtractionError(error);
+                    LOG_ERROR("Video frame extraction failed: {}", result.error().detail());
+                    setExtractionError(std::string(result.error().detail()));
                 }
             } else {
                 LOG_INFO("Video frame extraction completed successfully");

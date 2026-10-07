@@ -47,6 +47,7 @@ using lfs::core::DataType;
 using lfs::core::Device;
 using lfs::core::SplatData;
 using lfs::core::Tensor;
+using lfs::core::param::EvalBitDepth;
 using lfs::training::CameraDataset;
 using lfs::training::DatasetConfig;
 using lfs::training::EvalMetrics;
@@ -220,7 +221,7 @@ namespace {
 
 TEST(EvalMetricsCsv, HeaderAppendsGeometryColumnsWithoutRenamingExisting) {
     EXPECT_EQ(EvalMetrics::to_csv_header(),
-              "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b");
+              "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b,flip");
 
     EvalMetrics missing;
     missing.iteration = 200;
@@ -228,7 +229,7 @@ TEST(EvalMetricsCsv, HeaderAppendsGeometryColumnsWithoutRenamingExisting) {
     missing.ssim = 0.5f;
     missing.elapsed_time = 0.01f;
     missing.num_gaussians = 10;
-    EXPECT_EQ(missing.to_csv_row(), "200,1.000000,0.500000,,0.010000,10,,,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000");
+    EXPECT_EQ(missing.to_csv_row(), "200,1.000000,0.500000,,0.010000,10,,,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,");
 
     EvalMetrics present = missing;
     present.normal_angle_deg = 12.5f;
@@ -236,7 +237,8 @@ TEST(EvalMetricsCsv, HeaderAppendsGeometryColumnsWithoutRenamingExisting) {
     present.bias_r = 0.001f;
     present.bias_g = -0.002f;
     present.bias_b = 0.003f;
-    EXPECT_EQ(present.to_csv_row(), "200,1.000000,0.500000,,0.010000,10,12.500000,0.250000,0.001000,-0.002000,0.003000,0.000000,0.000000,0.000000");
+    present.flip = 0.125f;
+    EXPECT_EQ(present.to_csv_row(), "200,1.000000,0.500000,,0.010000,10,12.500000,0.250000,0.001000,-0.002000,0.003000,0.000000,0.000000,0.000000,0.125000");
 }
 
 TEST(EvalMetricsEvent, ZeroLpipsRemainsPresent) {
@@ -466,8 +468,136 @@ TEST_P(MetricsEvaluatorGeom, MatchingRenderedAndPriorNormalIsNearZero) {
     ASSERT_TRUE(metrics.normal_angle_deg.has_value());
     EXPECT_NEAR(*metrics.normal_angle_deg, 0.0f, 2.0f);
     EXPECT_EQ(EvalMetrics::to_csv_header(),
-              "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b");
+              "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b,flip");
 
+    std::filesystem::remove_all(tmp);
+}
+
+// Catches FLIP missing from the per-view record, the CSV row or the saved error map when enabled, and
+// FLIP computed when it is not.
+TEST(MetricsEvaluator, FlipIsReportedAndSavedOnlyWhenEnabled) {
+    if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend())) {
+        GTEST_SKIP() << "Selected GPU backend not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_eval_flip";
+    std::filesystem::remove_all(tmp);
+    const auto image_path = std::filesystem::path(TEST_DATA_DIR) / "bicycle" / "images_8" / "_DSC8679.JPG";
+    const auto [width, height, channels] = lfs::core::get_image_info(image_path);
+    ASSERT_GT(width, 0);
+    auto dataset = std::make_shared<CameraDataset>(
+        std::vector<std::shared_ptr<Camera>>{make_eval_camera(image_path, {}, width, height)}, DatasetConfig{},
+        CameraDataset::Split::ALL);
+    auto splat = make_front_facing_splat();
+    auto background = Tensor::zeros({3}, Device::GPU);
+
+    for (const bool enabled : {true, false}) {
+        auto params = make_eval_params(tmp / (enabled ? "on" : "off"));
+        params.optimization.eval_flip = enabled;
+        params.optimization.enable_save_eval_images = true;
+        std::filesystem::create_directories(params.dataset.output_path);
+        MetricsEvaluator evaluator(params);
+        const auto metrics = evaluator.evaluate(1, splat, dataset, background);
+        ASSERT_TRUE(metrics.valid);
+        ASSERT_EQ(metrics.views.size(), 1u);
+        const auto flip_png = params.dataset.output_path / "eval_step_1" / "_DSC8679_flip.png";
+        EXPECT_EQ(metrics.views[0].flip.has_value(), enabled);
+        EXPECT_EQ(metrics.flip.has_value(), enabled);
+        EXPECT_EQ(std::filesystem::exists(flip_png), enabled);
+        EXPECT_EQ(metrics.to_csv_row().ends_with(","), !enabled);
+        if (!enabled)
+            continue;
+        EXPECT_GT(*metrics.views[0].flip, 0.0f);
+        EXPECT_LE(*metrics.views[0].flip, 1.0f);
+        EXPECT_FLOAT_EQ(*metrics.flip, *metrics.views[0].flip);
+        const auto [flip_width, flip_height, flip_channels] = lfs::core::get_image_info(flip_png);
+        EXPECT_EQ(flip_width, width);
+        EXPECT_EQ(flip_height, height);
+    }
+    std::filesystem::remove_all(tmp);
+}
+
+// Fails when a masked evaluation does not save one 3x2 image per view (as rendered, mask applied, inverted mask
+// applied) and nothing else, or names its files by evaluation index instead of the camera; an evaluation without a
+// mask keeps the 1x2 pair.
+TEST(MetricsEvaluator, MaskedEvaluationSavesGridNamedAfterTheCamera) {
+    if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend())) {
+        GTEST_SKIP() << "Selected GPU backend not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_eval_mask_grid";
+    std::filesystem::remove_all(tmp);
+    const auto image_path = std::filesystem::path(TEST_DATA_DIR) / "bicycle" / "images_8" / "_DSC8679.JPG";
+    const auto [width, height, channels] = lfs::core::get_image_info(image_path);
+    ASSERT_GT(width, 0);
+    auto dataset = std::make_shared<CameraDataset>(
+        std::vector<std::shared_ptr<Camera>>{make_eval_camera(image_path, {}, width, height),
+                                             make_eval_camera(image_path, {}, width, height)},
+        DatasetConfig{}, CameraDataset::Split::ALL);
+    auto splat = make_front_facing_splat();
+    auto background = Tensor::zeros({3}, Device::GPU);
+
+    struct Rgb {
+        std::vector<uint8_t> pixels;
+        int width = 0, height = 0;
+        const uint8_t* at(int x, int y) const { return &pixels[(static_cast<size_t>(y) * width + x) * 3]; }
+    };
+    const auto read_rgb = [](const std::filesystem::path& path) {
+        auto [data, image_width, image_height, image_channels] = lfs::core::load_image(path);
+        EXPECT_NE(data, nullptr) << path;
+        Rgb rgb{std::vector<uint8_t>(static_cast<size_t>(image_width) * image_height * 3), image_width, image_height};
+        for (size_t pixel = 0; data && pixel < rgb.pixels.size() / 3; ++pixel)
+            std::memcpy(&rgb.pixels[pixel * 3], data + pixel * image_channels, 3);
+        lfs::core::free_image(data);
+        return rgb;
+    };
+
+    for (const bool masked : {true, false}) {
+        auto params = make_eval_params(tmp / (masked ? "masked" : "plain"));
+        params.optimization.enable_save_eval_images = true;
+        std::filesystem::create_directories(params.dataset.output_path);
+        MetricsEvaluator evaluator(params);
+        if (masked)
+            evaluator.set_eval_mesh(lfs::training::make_evaluation_box(
+                lfs::training::axis_aligned_box_corners({-1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f}),
+                false));
+        ASSERT_TRUE(evaluator.evaluate(1, splat, dataset, background).valid);
+
+        const auto dir = params.dataset.output_path / "eval_step_1";
+        EXPECT_FALSE(std::filesystem::exists(dir / "0.png"));
+        EXPECT_TRUE(std::filesystem::exists(dir / "_DSC8679_1.png"));
+        EXPECT_FALSE(std::filesystem::exists(dir / "_DSC8679_unmasked.png"));
+        EXPECT_FALSE(std::filesystem::exists(dir / "_DSC8679_metric_mask.png"));
+        const auto saved = read_rgb(dir / "_DSC8679.png");
+        ASSERT_EQ(saved.width, 2 * width + 4);
+        ASSERT_EQ(saved.height, masked ? 3 * height + 8 : height);
+        if (!masked)
+            continue;
+
+        // Every pixel shows in exactly one of the two lower rows, unchanged, and the box splits the view.
+        size_t inside = 0, outside = 0, mismatches = 0;
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                for (const int half : {0, width + 4}) {
+                    const uint8_t* rendered = saved.at(half + x, y);
+                    const uint8_t* applied = saved.at(half + x, y + height + 4);
+                    const uint8_t* inverted = saved.at(half + x, y + 2 * (height + 4));
+                    const bool in_applied = applied[0] | applied[1] | applied[2];
+                    const bool in_inverted = inverted[0] | inverted[1] | inverted[2];
+                    inside += in_applied;
+                    outside += in_inverted;
+                    mismatches += in_applied && in_inverted;
+                    for (int c = 0; c < 3; ++c)
+                        mismatches += applied[c] + inverted[c] != rendered[c];
+                }
+            }
+        }
+        EXPECT_GT(inside, 0u);
+        EXPECT_GT(outside, 0u);
+        EXPECT_EQ(mismatches, 0u);
+    }
     std::filesystem::remove_all(tmp);
 }
 
@@ -673,6 +803,84 @@ TEST_P(MetricsEvaluatorImages, DownscaledGroundTruthMatchesGpuLanczos) {
         EXPECT_NEAR(static_cast<float>(actual_values[index]), expected_u8, 1.0f) << index;
     }
 
+    std::filesystem::remove_all(tmp);
+}
+
+// Catches a 16-bit reference rounded to 8 bits, a render quantized to a grid other than the reference's,
+// a forced depth that does not override the file's own encoding, and a forced float depth that decodes a
+// 16-bit file through 8 bits.
+TEST(MetricsEvaluator, EvaluationBitDepthFollowsTheReferenceEncoding) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_eval_bit_depth";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 8;
+    constexpr int kH = 4;
+    std::vector<uint16_t> pixels16(static_cast<size_t>(kW) * kH * 3);
+    for (size_t index = 0; index < pixels16.size(); ++index)
+        pixels16[index] = static_cast<uint16_t>(1000 + 37 * index);
+    const auto path16 = tmp / "gt16.png";
+    ASSERT_TRUE(lfs::core::save_png(path16, pixels16.data(), kW, kH, 3, 16, 0));
+    const std::vector<uint8_t> pixels8(static_cast<size_t>(kW) * kH * 3, 77);
+    const auto path8 = tmp / "gt8.png";
+    write_u8_hwc_png(path8, pixels8, kH, kW);
+
+    constexpr float kRendered = 0.123456f;
+    const auto render = [](Camera& render_camera, float) -> lfs::Result<lfs::training::EvaluationRenderResult> {
+        lfs::training::RenderOutput output;
+        output.image = Tensor::full({size_t{3}, static_cast<size_t>(render_camera.image_height()),
+                                     static_cast<size_t>(render_camera.image_width())},
+                                    kRendered, Device::GPU);
+        return lfs::training::EvaluationRenderResult{.output = std::move(output)};
+    };
+    const auto prepare = [&](const std::filesystem::path& path, const EvalBitDepth setting) {
+        auto camera = make_eval_camera(path, {}, kW, kH);
+        auto params = make_eval_params(tmp / "out");
+        params.optimization.eval_bit_depth = setting;
+        auto prepared = prepare_evaluation_view(*camera, params, render);
+        EXPECT_TRUE(prepared.has_value()) << prepared.error().detail();
+        return std::move(*prepared);
+    };
+    const auto rendered_value = [](const lfs::training::PreparedEvaluationView& view) {
+        return view.output.image.cpu().to_vector().front();
+    };
+
+    const auto native16 = prepare(path16, EvalBitDepth::Auto);
+    EXPECT_EQ(native16.inputs.bit_depth, 16);
+    ASSERT_EQ(native16.inputs.gt_image.dtype(), DataType::Float32);
+    const auto gt16 = native16.inputs.gt_image.cpu().to_vector();
+    ASSERT_EQ(gt16.size(), pixels16.size());
+    for (int c = 0; c < 3; ++c)
+        for (int i = 0; i < kW * kH; ++i)
+            EXPECT_NEAR(gt16[static_cast<size_t>(c) * kW * kH + i], pixels16[static_cast<size_t>(i) * 3 + c] / 65535.0f,
+                        1e-6f);
+    EXPECT_FLOAT_EQ(rendered_value(native16), std::round(kRendered * 65535.0f) / 65535.0f);
+
+    const auto forced8 = prepare(path16, EvalBitDepth::Eight);
+    EXPECT_EQ(forced8.inputs.bit_depth, 8);
+    const auto gt8 = forced8.inputs.gt_image.cpu().to_vector();
+    for (int c = 0; c < 3; ++c)
+        for (int i = 0; i < kW * kH; ++i)
+            EXPECT_FLOAT_EQ(gt8[static_cast<size_t>(c) * kW * kH + i] * 255.0f,
+                            std::round(pixels16[static_cast<size_t>(i) * 3 + c] * 255.0f / 65535.0f));
+    EXPECT_FLOAT_EQ(rendered_value(forced8), std::round(kRendered * 255.0f) / 255.0f);
+
+    const auto float16 = prepare(path16, EvalBitDepth::Float);
+    EXPECT_EQ(float16.inputs.bit_depth, 32);
+    const auto gt_float = float16.inputs.gt_image.cpu().to_vector();
+    ASSERT_EQ(gt_float.size(), gt16.size());
+    for (size_t i = 0; i < gt_float.size(); ++i)
+        EXPECT_NEAR(gt_float[i], gt16[i], 1e-6f) << i;
+
+    const auto forced_float = prepare(path8, EvalBitDepth::Float);
+    EXPECT_EQ(forced_float.inputs.bit_depth, 32);
+    EXPECT_FLOAT_EQ(rendered_value(forced_float), kRendered);
+
+    EXPECT_EQ(prepare(path8, EvalBitDepth::Auto).inputs.bit_depth, 8);
     std::filesystem::remove_all(tmp);
 }
 
@@ -1399,6 +1607,7 @@ TEST(ViewEvaluationJson, FileFormatStaysFixed) {
         .psnr = 24.0f,
         .ssim = 0.8f,
         .lpips = 0.2f,
+        .flip = 0.1f,
         .evaluated_pixel_fraction = 0.75f,
         .validity_mask_applied = true};
     const lfs::training::ViewMetrics skipped{
@@ -1419,9 +1628,9 @@ TEST(ViewEvaluationJson, FileFormatStaysFixed) {
     EXPECT_EQ(keys(record), (std::vector<std::string>{"evaluations", "height", "width"}));
     ASSERT_EQ(record.at("evaluations").size(), 2u);
     EXPECT_EQ(keys(record.at("evaluations")[0]),
-              (std::vector<std::string>{"evaluated_pixel_fraction", "lpips", "masked", "psnr", "split", "ssim", "step", "validity_mask_applied"}));
+              (std::vector<std::string>{"bit_depth", "evaluated_pixel_fraction", "flip", "lpips", "masked", "psnr", "split", "ssim", "step", "validity_mask_applied"}));
     EXPECT_EQ(keys(record.at("evaluations")[1]),
-              (std::vector<std::string>{"evaluated_pixel_fraction", "lpips", "masked", "psnr", "skipped_reason", "split", "ssim", "step", "validity_mask_applied"}));
+              (std::vector<std::string>{"bit_depth", "evaluated_pixel_fraction", "lpips", "masked", "psnr", "skipped_reason", "split", "ssim", "step", "validity_mask_applied"}));
     EXPECT_TRUE(record.at("evaluations")[0].at("step").is_number_integer());
     EXPECT_TRUE(record.at("evaluations")[0].at("psnr").is_number_float());
     EXPECT_TRUE(record.at("evaluations")[0].at("masked").is_boolean());

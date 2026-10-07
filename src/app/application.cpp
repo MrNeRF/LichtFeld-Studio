@@ -46,6 +46,7 @@
 #include "visualizer/visualizer.hpp"
 
 #include "app/mcp_gui_tools.hpp"
+#include "app/mcp_media_tools.hpp"
 #include "gui/gpu_memory_query.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
@@ -79,6 +80,7 @@
 #endif
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 #ifdef WIN32
 #include <windows.h>
@@ -487,6 +489,10 @@ namespace lfs::app {
             }
             auto checkpoint_params =
                 std::move(**parsed_params);
+            const auto checkpoint_dataset_path =
+                checkpoint_params.dataset.data_path;
+            const auto checkpoint_images_folder =
+                checkpoint_params.dataset.images;
 
             // Only retain the source dataset when the effective training root
             // still denotes the checkpoint's dataset (including path aliases).
@@ -499,8 +505,47 @@ namespace lfs::app {
                                                   ? recovery_document.document().source_path()
                                                   : std::nullopt;
             if (!cli_params.dataset.data_path.empty()) {
-                checkpoint_params.dataset.data_path =
-                    cli_params.dataset.data_path;
+                checkpoint_params.dataset.data_path = cli_params.dataset.data_path;
+            } else {
+                std::optional<std::filesystem::path> resolved_dataset;
+                if (const auto dataset_ref =
+                        recovery_document.document().project().dataset_reference();
+                    dataset_ref && *dataset_ref) {
+                    auto external = io::project::resolve_path_reference(
+                        recovery_document.document().references(), path.parent_path(), **dataset_ref);
+                    if (external && std::filesystem::is_directory(*external)) {
+                        resolved_dataset = std::move(*external);
+                    }
+                }
+                if (!resolved_dataset && std::filesystem::is_directory(checkpoint_dataset_path)) {
+                    resolved_dataset = checkpoint_dataset_path;
+                }
+                if (!resolved_dataset) {
+                    const auto manifest = recovery_document.document().parameters().embedded_dataset();
+                    if (manifest && *manifest && (**manifest).complete) {
+                        auto cache_dir = io::project::embedded_dataset_cache_dir(
+                            recovery_document.document());
+                        if (!cache_dir) {
+                            return std::move(cache_dir).error();
+                        }
+                        auto extracted = io::project::extract_embedded_dataset(
+                            recovery_document.document(), *cache_dir);
+                        if (!extracted) {
+                            return std::move(extracted).error();
+                        }
+                        if (*extracted) {
+                            resolved_dataset = std::move(**extracted);
+                            checkpoint_params.dataset.images = (**manifest).images_folder;
+                        }
+                    }
+                }
+                if (!resolved_dataset) {
+                    return training_project_error(
+                        lfs::ErrorCode::NotFound,
+                        "The project's dataset is neither reachable nor completely embedded",
+                        LFS_SOURCE_SITE_CURRENT());
+                }
+                checkpoint_params.dataset.data_path = std::move(*resolved_dataset);
             }
             if (!cli_params.dataset.output_path.empty()) {
                 checkpoint_params.dataset.output_path =
@@ -561,6 +606,76 @@ namespace lfs::app {
                     "Project hydration did not preserve the lazy CKPT "
                     "trainer-state barrier",
                     LFS_SOURCE_SITE_CURRENT());
+            }
+
+            const bool dataset_root_changed =
+                checkpoint_params.dataset.data_path != checkpoint_dataset_path;
+            const bool images_folder_changed =
+                checkpoint_params.dataset.images != checkpoint_images_folder;
+            if (dataset_root_changed) {
+                scene.rebaseCameraAssetPaths(
+                    checkpoint_dataset_path, checkpoint_params.dataset.data_path);
+            }
+            if (images_folder_changed) {
+                scene.rebaseCameraAssetPaths(
+                    checkpoint_params.dataset.data_path / checkpoint_images_folder,
+                    checkpoint_params.dataset.data_path / checkpoint_params.dataset.images);
+            }
+            if (dataset_root_changed || images_folder_changed) {
+                const auto missing_images = scene.revalidateCameraImagePresence();
+                if (!missing_images.empty()) {
+                    return training_project_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        "The supplied dataset is not compatible with the resumed project's cameras",
+                        LFS_SOURCE_SITE_CURRENT());
+                }
+            }
+            if (checkpoint_params.optimization.mask_mode != core::param::MaskMode::None) {
+                auto mask_source = io::Loader::create()->load(
+                    checkpoint_params.dataset.data_path,
+                    io::LoadOptions{
+                        .resize_factor = checkpoint_params.dataset.resize_factor,
+                        .max_width = checkpoint_params.dataset.max_width,
+                        .images_folder = checkpoint_params.dataset.images,
+                        .min_track_length = checkpoint_params.dataset.min_track_length,
+                        .load_masks = true,
+                    });
+                if (!mask_source) {
+                    return training_project_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        std::format(
+                            "Could not load sidecar masks for resumed project: {}",
+                            mask_source.error().format()),
+                        LFS_SOURCE_SITE_CURRENT());
+                }
+                const auto* loaded_scene = std::get_if<io::LoadedScene>(&mask_source->data);
+                if (!loaded_scene) {
+                    return training_project_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        "The resumed dataset did not load as a camera scene",
+                        LFS_SOURCE_SITE_CURRENT());
+                }
+                std::unordered_map<std::string, std::filesystem::path> masks_by_image;
+                for (const auto& camera : loaded_scene->cameras) {
+                    if (camera && camera->has_mask()) {
+                        masks_by_image.try_emplace(camera->image_name(), camera->mask_path());
+                    }
+                }
+                size_t bound_mask_count = 0;
+                for (const auto& camera : scene.getAllCameras()) {
+                    if (!camera || camera->has_mask()) {
+                        continue;
+                    }
+                    const auto mask = masks_by_image.find(camera->image_name());
+                    if (mask != masks_by_image.end()) {
+                        camera->set_mask_path(mask->second);
+                        ++bound_mask_count;
+                    }
+                }
+                scene.rebaseCameraAssetPaths(
+                    checkpoint_params.dataset.data_path,
+                    checkpoint_params.dataset.data_path);
+                LOG_DEBUG("Bound {} sidecar masks to resumed project cameras", bound_mask_count);
             }
             if (hydration->checkpoint_header->iteration < 0) {
                 return training_project_error(
@@ -1665,6 +1780,7 @@ namespace lfs::app {
                 vis::setRuntimeServiceControls({});
                 mcp::setActiveMcpHttpServer(nullptr);
                 mcp_http.stop();
+                shutdown_media_extract_job();
             });
             if (!mcp_http.start({
                     .enabled = mcp_preferences.enabled,
@@ -1679,6 +1795,7 @@ namespace lfs::app {
             vis::setRuntimeServiceControls({});
             mcp::setActiveMcpHttpServer(nullptr);
             mcp_http.stop();
+            shutdown_media_extract_job();
 
             // GuiManager drains scheduled Python UI work while tearing down the
             // viewer. Keep the runtime/GIL available until that work and the

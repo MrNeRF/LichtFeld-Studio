@@ -27,6 +27,9 @@ namespace lfs::vis::op {
     }
 
     bool Pipeline::poll(SceneManager& scene) const {
+        if (stages_.empty()) {
+            return false;
+        }
         for (const auto& stage : stages_) {
             auto op = stage.factory();
             if (!op->poll(scene)) {

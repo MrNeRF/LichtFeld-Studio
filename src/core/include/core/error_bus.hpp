@@ -80,7 +80,7 @@ namespace lfs {
     // on the PUBLISHING (worker) thread and must be noexcept, non-blocking, and
     // enqueue-only to a thread-safe queue drained on the UI frame. It must never
     // touch RmlUi documents on the worker thread.
-    class LFS_CORE_API NativeErrorConsumer {
+    class LFS_ERROR_API NativeErrorConsumer {
     public:
         virtual ~NativeErrorConsumer() = default;
         virtual void on_error(const ErrorNotification& notification,
@@ -91,7 +91,7 @@ namespace lfs {
 
     // RAII unsubscribe handle (SubscriptionToken shape). Destroying it removes
     // the consumer from the bus. The consumer must outlive its Subscription.
-    class LFS_CORE_API Subscription {
+    class LFS_ERROR_API Subscription {
     public:
         Subscription() noexcept = default;
         Subscription(ErrorBus* bus, std::uint64_t id) noexcept;
@@ -116,7 +116,7 @@ namespace lfs {
     // counted; the first publish at or after kWindow re-delivers, carrying the
     // number of suppressed repeats since that delivery, then resets. Entries idle
     // for kIdleExpiry are swept to bound the map.
-    struct LFS_CORE_API ErrorDedup {
+    struct LFS_ERROR_API ErrorDedup {
         static constexpr std::chrono::seconds kWindow{5};
         static constexpr std::chrono::seconds kIdleExpiry{60};
 
@@ -140,7 +140,7 @@ namespace lfs {
         std::unordered_map<std::uint64_t, Entry> entries_;
     };
 
-    class LFS_CORE_API ErrorBus {
+    class LFS_ERROR_API ErrorBus {
     public:
         // Process-wide bus. Singleton for the same exe/Python-module reason
         // EventBridge is: publishers span modules and must reach one instance

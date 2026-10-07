@@ -62,7 +62,8 @@ namespace lfs::training {
                 params.scale_decay,
                 params.train_t,
                 log_scales.shape()[0],
-                lfs::core::getCurrentCUDAStream());
+                lfs::core::getCurrentCUDAStream(),
+                params.rendered_count.is_valid() ? params.rendered_count.ptr<float>() : nullptr);
         }
 
         Bounds percentile_bounds(const Tensor& means, const float percentile) {
@@ -112,8 +113,9 @@ namespace lfs::training {
         }
         void prune_bounds(const Tensor& means, const Tensor& scale_max, Tensor& mask,
                           std::array<float, 3> center, float maximum, float log_maximum) {
-            mrnf_strategy::launch_prune_bounds_or(means.ptr<float>(), scale_max.ptr<float>(), mask.ptr<bool>(),
-                                                  means.size(0), center.data(), maximum, log_maximum);
+            const auto origin = Tensor::from_vector(std::vector<float>{center[0], center[1], center[2]}, {1, 3}, means.device());
+            const auto distance = (means - origin).abs().max(1);
+            mask.copy_from(mask.logical_or((scale_max > log_maximum).logical_or(means.isfinite().all(1).logical_and(distance > maximum))));
         }
         void replace_parent_weights(const Tensor& opacity, const Tensor& visibility, const Tensor& active,
                                     const Tensor& trainable, const Tensor& edge, Tensor& weights) {

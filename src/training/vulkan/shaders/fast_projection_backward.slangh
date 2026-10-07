@@ -26,7 +26,22 @@ struct mat3x3_triu {
     }
 };
 float4 clampGradient4(float4 g) { return float4(clampGradient(g.x), clampGradient(g.y), clampGradient(g.z), clampGradient(g.w)); }
-float scaleRegularization(BackPush back, uint cell) { return back.scaleWeight > 0 && back.scaleElements > 0 ? back.scaleWeight * exp(loadFloat(back.forward.scales, cell)) / float(back.scaleElements) : 0; }
+#include "effective_rank.slangh"
+float scaleRegularization(BackPush back, uint cell) {
+    if (back.scaleWeight <= 0 || back.scaleElements == 0)
+        return 0;
+    float raw = loadFloat(back.forward.scales, cell);
+    if (back.logScale != 0)
+        return raw <= -40.0f ? 0 : back.scaleWeight * 0.01f / (float(back.scaleElements) * back.scaleNormalizer);
+    return back.scaleWeight * exp(raw) / float(back.scaleElements);
+}
+void regularizerLoss(uint64_t destination, float value) {
+    if (destination != 0) {
+        float sum = WaveActiveSum(value);
+        if (WaveIsFirstLane() && sum != 0)
+            atomicFloat(destination, 0, sum);
+    }
+}
 void flattenRegularization(BackPush back, uint i, inout float grads[3]) {
     if (back.flattenWeight <= 0 || back.scaleElements == 0)
         return;
@@ -384,6 +399,64 @@ void projectionBackward(BackPush back, uint primitive_idx) {
         flattenRegularization(back, primitive_idx, scale_grads);
         opacity_grads[0] = opacityRegularization(back, primitive_idx);
     }
+    if (back.renderedCount != 0 && work_idx != 0xffffffffu)
+        storeFloat(back.renderedCount, primitive_idx, loadFloat(back.renderedCount, primitive_idx) + 1.0f);
+    float3 rawScales = load3(p.scales, primitive_idx);
+    float scaleLoss = 0;
+    if (back.scaleWeight > 0 && back.scaleElements > 0) {
+        float3 value = back.logScale != 0 ? max(rawScales, float3(-40.0f)) * (0.01f / back.scaleNormalizer) : exp(rawScales);
+        scaleLoss = back.scaleWeight * (value.x + value.y + value.z) / float(back.scaleElements);
+    }
+    regularizerLoss(back.scaleLoss, scaleLoss);
+    float erankLoss = 0;
+    if (back.erankWeight > 0) {
+        EffectiveRankPenalty penalty = effective_rank_penalty(rawScales.x, rawScales.y, rawScales.z);
+        float coef = back.erankWeight / float(p.count);
+        erankLoss = coef * penalty.value;
+        [unroll] for (uint a = 0; a < 3; ++a) scale_grads[a] += coef * penalty.gradient[a];
+    }
+    regularizerLoss(back.erankLoss, erankLoss);
+    float dcLoss = 0, shLoss = 0;
+    if (back.dcWeight > 0 || back.shWeight > 0) {
+        float3 colour;
+        float3 imageGradient = float3(0);
+        if (work_idx != 0xffffffffu) {
+            Projected shaded = projectedAt(p, work_idx);
+            colour = float3(shaded.red, shaded.green, shaded.blue);
+            imageGradient = screen3(back, work_idx, 6);
+        } else {
+            float basis[16];
+            shBasis(direction(load3(p.means, primitive_idx) - load3(p.camera, 0)), basis);
+            colour = 0.5f + basis[0] * load3(p.sh0, primitive_idx);
+            for (uint k = 1; k < p.activeBases; ++k)
+                colour += basis[k] * shColor(p, primitive_idx, k - 1);
+        }
+        float3 dc = load3(p.sh0, primitive_idx);
+        float3 dcGradient = load3(back.dcGradient, primitive_idx);
+        const float limit = 0.5f / 0.28209479177387814f;
+        for (uint c = 0; c < 3; ++c) {
+            bool allowed = colour[c] >= 0 || imageGradient[c] < 0;
+            float delta = dc[c] > limit ? dc[c] - limit : dc[c] < -limit ? dc[c] + limit
+                                                                         : 0;
+            if (allowed)
+                dcGradient[c] += (2.0f * back.dcWeight / 3.0f) * delta;
+            dcLoss += (back.dcWeight / 3.0f) * delta * delta;
+            if (back.shWeight > 0 && p.activeBases > 1) {
+                float coef = back.shWeight / (float(p.count) * float((p.activeBases - 1) * 3));
+                for (uint k = 0; k < p.activeBases - 1; ++k) {
+                    float v = shColor(p, primitive_idx, k)[c];
+                    uint a = k * 3 + c;
+                    uint cell = ((primitive_idx / 32 * back.slots + a / 4) * 32 + primitive_idx % 32) * 4 + a % 4;
+                    if (allowed)
+                        storeFloat(back.shGradient, cell, loadFloat(back.shGradient, cell) + 2.0f * coef * v);
+                    shLoss += coef * v * v;
+                }
+            }
+        }
+        store3(back.dcGradient, primitive_idx, dcGradient);
+    }
+    regularizerLoss(back.dcLoss, dcLoss);
+    regularizerLoss(back.shLoss, shLoss);
     [unroll] for (uint a = 0; a < 3; ++a) {
         storeFloat(back.meanGradient, primitive_idx * 3 + a, mean_grads[a]);
         storeFloat(back.scaleGradient, primitive_idx * 3 + a, scale_grads[a]);

@@ -365,6 +365,14 @@ namespace lfs::core {
         }
     }
 
+    namespace {
+        // Register even before handler installation, preserving early reports.
+        [[maybe_unused]] const bool failure_writer_registered = [] {
+            register_failure_report_writer(write_crash_diagnostic);
+            return true;
+        }();
+    } // namespace
+
     void install_crash_handlers() {
         std::call_once(g_install_once, [] {
             if (crash_handlers_disabled()) {

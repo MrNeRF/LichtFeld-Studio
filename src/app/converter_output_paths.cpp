@@ -5,28 +5,6 @@
 
 namespace lfs::app {
 
-    namespace {
-
-        [[nodiscard]] const char* format_extension(
-            const lfs::core::param::OutputFormat format) {
-            using lfs::core::param::OutputFormat;
-            switch (format) {
-            case OutputFormat::PLY: return ".ply";
-            case OutputFormat::SOG: return ".sog";
-            case OutputFormat::SSOG: return ".ssog";
-            case OutputFormat::SPZ: return ".spz";
-            case OutputFormat::GLB: return ".glb";
-            case OutputFormat::HTML: return ".html";
-            case OutputFormat::USD: return ".usd";
-            case OutputFormat::USDA: return ".usda";
-            case OutputFormat::USDC: return ".usdc";
-            case OutputFormat::RAD: return ".rad";
-            }
-            return ".ply";
-        }
-
-    } // namespace
-
     std::filesystem::path generate_converter_output_path(
         const std::filesystem::path& input,
         const std::filesystem::path& output_template,
@@ -40,7 +18,8 @@ namespace lfs::app {
                 output_template.empty() ? default_output : output_template);
         }
 
-        const auto extension = format_extension(format);
+        const std::string extension(
+            lfs::core::param::output_format_extension(format));
         const auto working_directory = std::filesystem::current_path();
         auto converted_name = input.stem();
         converted_name += suffix;

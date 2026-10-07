@@ -422,6 +422,15 @@ TEST(VisualizerPostedWorkTest, GuardedShutdownCancellationMakesWaitingFutureRead
     EXPECT_EQ(result.error().code(), lfs::ErrorCode::Cancelled);
 }
 
+namespace {
+    void write_splt_project(
+        const std::filesystem::path& path,
+        std::unique_ptr<lfs::core::SplatData> model,
+        std::string_view node_name = "Splat",
+        std::unique_ptr<lfs::core::SplatData> second_model = {},
+        std::string_view second_node_name = {});
+}
+
 class VisualizerImplResetTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
@@ -549,6 +558,50 @@ protected:
             {.output_path = path, .binary = true, .async = false});
         EXPECT_TRUE(saved);
         return path;
+    }
+
+    void expectDroppedProjectReplacesCurrent(
+        lfs::vis::VisualizerImpl& viewer,
+        std::mutex& queue_mutex,
+        std::vector<lfs::vis::Visualizer::WorkItem>& queue,
+        const bool wait_for_hydration) {
+        const auto& temporary = temporary_.path;
+        const auto project_a = temporary / "project-a.licht";
+        const auto project_b = temporary / "project-b.licht";
+        write_splt_project(project_a, lfs::test::licht::make_splat(2), "Project A only");
+        write_splt_project(project_b, lfs::test::licht::make_splat(3),
+                           "Project B only",
+                           lfs::test::licht::make_splat(2),
+                           "Project B second");
+        const auto project_a_bytes =
+            lfs::test::licht::read_file_bytes(project_a);
+
+        ASSERT_TRUE(viewer.projectOpen(
+            project_a, lfs::vis::ProjectSwitchDisposition::DiscardChanges));
+        ASSERT_TRUE(waitUntil([&] {
+            const auto info = viewer.projectGetInfo();
+            return info && info->hydration_state == "hydrating";
+        }));
+        if (wait_for_hydration) {
+            ASSERT_TRUE(waitForHydrationComplete(viewer, queue_mutex, queue));
+        }
+
+        lfs::core::events::cmd::ProjectOpen{.path = project_b}.emit();
+        ASSERT_TRUE(pumpUntil(
+            queue_mutex, queue, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info && info->path == project_b &&
+                       info->hydration_state == "complete";
+            }));
+
+        const auto info = viewer.projectGetInfo();
+        ASSERT_TRUE(info);
+        EXPECT_EQ(info->path, project_b);
+        EXPECT_NE(viewer.getScene().getNode("Project B only"), nullptr);
+        EXPECT_NE(viewer.getScene().getNode("Project B second"), nullptr);
+        EXPECT_EQ(viewer.getScene().getNode("Project A only"), nullptr);
+        EXPECT_EQ(lfs::test::licht::read_file_bytes(project_a),
+                  project_a_bytes);
     }
 
     void installModalOverlay(
@@ -970,60 +1023,68 @@ namespace {
 
     void write_splt_project(
         const std::filesystem::path& path,
-        std::unique_ptr<lfs::core::SplatData> model) {
+        std::unique_ptr<lfs::core::SplatData> model,
+        const std::string_view node_name,
+        std::unique_ptr<lfs::core::SplatData> second_model,
+        const std::string_view second_node_name) {
         auto document =
             lfs::test::licht::make_empty_document(
                 lfs::core::generate_uuid_v4(), 1);
-        const auto splat_uuid =
-            lfs::core::generate_uuid_v4();
-        lfs::test::licht::require_status(
-            document->edit_scene_graph().upsert_node(
-                lfs::io::project::SceneNodeRecord{
-                    .uuid = splat_uuid,
-                    .type = "splat",
-                    .name = "Splat",
-                    .child_order = 0,
-                    .payload =
-                        lfs::io::project::PayloadBinding{
+        const auto append_splat = [&](std::unique_ptr<lfs::core::SplatData> data,
+                                      const std::string_view name,
+                                      const std::uint32_t child_order) {
+            const auto splat_uuid = lfs::core::generate_uuid_v4();
+            lfs::test::licht::require_status(
+                document->edit_scene_graph().upsert_node(
+                    lfs::io::project::SceneNodeRecord{
+                        .uuid = splat_uuid,
+                        .type = "splat",
+                        .name = std::string(name),
+                        .child_order = child_order,
+                        .payload = lfs::io::project::PayloadBinding{
                             .fourcc = "SPLT",
                             .instance_uuid = splat_uuid,
                             .source_kind = "ply",
                         },
-                }));
-        auto splat = lfs::test::licht::require_result(
-            lfs::io::project::SplatChapterPayload::capture(
-                *model,
-                lfs::io::project::SplatSourceKind::ImportedPly,
-                false));
-        const auto splat_hash =
-            lfs::io::project::xxh3_128(splat.bytes());
-        lfs::test::licht::require_status(
-            document->set_splat(
-                splat_uuid, std::move(splat)));
-        lfs::test::licht::require_status(
-            document->edit_project().upsert_embed_decision(
-                lfs::io::project::EmbedDecision{
-                    .uuid = splat_uuid,
-                    .node_uuid = splat_uuid,
-                    .payload_fourcc = "SPLT",
-                    .decision = "embedded",
-                    .reason = "viewer shN fixture",
-                }));
-        lfs::test::licht::require_status(
-            document->edit_project()
-                .upsert_embedded_payload_provenance(
-                    lfs::io::project::EmbeddedPayloadProvenance{
+                    }));
+            auto splat = lfs::test::licht::require_result(
+                lfs::io::project::SplatChapterPayload::capture(
+                    *data,
+                    lfs::io::project::SplatSourceKind::ImportedPly,
+                    false));
+            const auto splat_hash =
+                lfs::io::project::xxh3_128(splat.bytes());
+            lfs::test::licht::require_status(
+                document->set_splat(splat_uuid, std::move(splat)));
+            lfs::test::licht::require_status(
+                document->edit_project().upsert_embed_decision(
+                    lfs::io::project::EmbedDecision{
                         .uuid = splat_uuid,
                         .node_uuid = splat_uuid,
-                        .fourcc = "SPLT",
-                        .import_locator =
-                            {.preferred = "assets/SPLT.bin",
-                             .base = lfs::io::project::
-                                 LocatorBase::Project},
-                        .import_fingerprint =
-                            lfs::test::licht::fingerprint(41),
-                        .content_xxh3_128 = splat_hash,
+                        .payload_fourcc = "SPLT",
+                        .decision = "embedded",
+                        .reason = "viewer shN fixture",
                     }));
+            lfs::test::licht::require_status(
+                document->edit_project()
+                    .upsert_embedded_payload_provenance(
+                        lfs::io::project::EmbeddedPayloadProvenance{
+                            .uuid = splat_uuid,
+                            .node_uuid = splat_uuid,
+                            .fourcc = "SPLT",
+                            .import_locator =
+                                {.preferred = "assets/SPLT.bin",
+                                 .base = lfs::io::project::
+                                     LocatorBase::Project},
+                            .import_fingerprint =
+                                lfs::test::licht::fingerprint(41),
+                            .content_xxh3_128 = splat_hash,
+                        }));
+        };
+        append_splat(std::move(model), node_name, 0);
+        if (second_model) {
+            append_splat(std::move(second_model), second_node_name, 1);
+        }
         auto options =
             lfs::test::licht::
                 deterministic_document_save_options(
@@ -1791,6 +1852,24 @@ contract["test_selection_submode_follows_native_mode"](lf)
             ASSERT_TRUE(read);
             EXPECT_EQ(embedded, source_bytes);
         }
+    }
+
+    TEST_F(VisualizerImplResetTest, DroppedProjectReplacesCurrentDuringHydration) {
+        LFS_CUDA_BACKEND_OR_RETURN();
+        auto options = projectOptions();
+        lfs::vis::VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        expectDroppedProjectReplacesCurrent(
+            viewer, viewer.work_queue_mutex_, viewer.work_queue_, false);
+    }
+
+    TEST_F(VisualizerImplResetTest, DroppedProjectReplacesCurrentAfterHydration) {
+        LFS_CUDA_BACKEND_OR_RETURN();
+        auto options = projectOptions();
+        lfs::vis::VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        expectDroppedProjectReplacesCurrent(
+            viewer, viewer.work_queue_mutex_, viewer.work_queue_, true);
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -5942,6 +6021,47 @@ contract["test_selection_submode_follows_native_mode"](lf)
         EXPECT_FALSE(overlay.active);
         EXPECT_FALSE(overlay.success);
         EXPECT_TRUE(overlay.show_completion);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           RapidSequentialDatasetLoadsCompleteTheSecondImportJob) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        const auto first = temporary_.path / "first-dataset";
+        const auto second = temporary_.path / "second-dataset";
+
+        core::events::state::DatasetLoadStarted{.path = first}.emit();
+        ASSERT_TRUE(tasks.isImporting());
+        core::events::state::DatasetLoadCompleted{
+            .path = first,
+            .success = true,
+            .error = std::nullopt,
+            .num_images = 17,
+            .num_points = 29,
+        }
+            .emit();
+        EXPECT_FALSE(tasks.isImporting());
+        EXPECT_TRUE(tasks.isImportCompletionShowing());
+
+        core::events::state::DatasetLoadStarted{.path = second}.emit();
+        ASSERT_TRUE(tasks.isImporting());
+        const bool stale_completion_overlay =
+            tasks.isImportCompletionShowing();
+        core::events::state::DatasetLoadCompleted{
+            .path = second,
+            .success = true,
+            .error = std::nullopt,
+            .num_images = 31,
+            .num_points = 47,
+        }
+            .emit();
+
+        EXPECT_FALSE(tasks.isImporting());
+        EXPECT_FALSE(stale_completion_overlay);
+        EXPECT_TRUE(tasks.getImportSuccess());
+        EXPECT_EQ(tasks.getImportNumImages(), 31u);
+        EXPECT_EQ(tasks.getImportNumPoints(), 47u);
+        EXPECT_TRUE(tasks.isImportCompletionShowing());
     }
 
     TEST_F(VisualizerImplResetTest, RenderAllocationFailureKeepsEarlierImportsUsable) {

@@ -154,6 +154,7 @@ namespace {
     TEST_F(BilateralOpsTest, RegistryRequiresBilateralOnlyWhenEnabled) {
         using namespace lfs::training;
         lfs::core::param::TrainingParameters params;
+        params.optimization.use_exposure_correction = false;
         EXPECT_FALSE(required_training_families(params, {}).test(static_cast<size_t>(Family::Bilateral)));
         params.optimization.use_bilateral_grid = true;
         EXPECT_TRUE(required_training_families(params, {}).test(static_cast<size_t>(Family::Bilateral)));

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/video/video_encoder.hpp"
-#include "io/video_frame_extractor.hpp"
+#include "media/video_frame_extractor.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/environment.hpp"
+#include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor_backend.hpp"
 #include "io/formats/rad.hpp"
@@ -680,4 +681,44 @@ TEST(PlyToRadLod, VulkanViewportRadUsesInputBackend) {
         EXPECT_FALSE(renderer.hasRenderTarget(primary));
         EXPECT_FALSE(renderer.readOutputImage(context, primary));
     }
+}
+
+TEST(PlyToRadLod, BorrowedSingleNodeMergePreservesRadLodOnReexport) {
+    const auto temp_dir =
+        std::filesystem::temp_directory_path() / "ply_to_rad_lod_reexport";
+    std::filesystem::remove_all(temp_dir);
+    std::filesystem::create_directories(temp_dir);
+    const auto ply_path = temp_dir / "source.ply";
+    const auto source_rad_path = temp_dir / "source.rad";
+    const auto reexport_rad_path = temp_dir / "reexport.rad";
+
+    write_synthetic_ply(ply_path, make_synthetic_splats(12'000));
+    lfs::io::PlyToRadLodOptions options;
+    options.target_bucket_splats = 512;
+    options.temp_dir = temp_dir / "scratch";
+    const auto converted =
+        lfs::io::convert_ply_to_rad_lod(ply_path, source_rad_path, options);
+    ASSERT_TRUE(converted.has_value()) << converted.error().message;
+
+    auto loaded = lfs::io::load_rad(source_rad_path);
+    ASSERT_TRUE(loaded.has_value()) << loaded.error();
+    ASSERT_TRUE(loaded->lod_tree && loaded->lod_tree->has_tree());
+    const auto source_count = loaded->size();
+    const auto source_nodes = loaded->lod_tree->total_nodes();
+
+    auto merged = lfs::core::Scene::mergeSplatsWithTransforms(
+        {{&*loaded, glm::mat4{1.0f}}},
+        lfs::core::Scene::MergeStorageMode::BorrowSingleIdentity);
+    ASSERT_NE(merged, nullptr);
+
+    const auto saved = lfs::io::save_rad(
+        *merged, lfs::io::RadSaveOptions{.output_path = reexport_rad_path});
+    ASSERT_TRUE(saved.has_value()) << saved.error().message;
+    auto reexported = lfs::io::load_rad(reexport_rad_path);
+    ASSERT_TRUE(reexported.has_value()) << reexported.error();
+    ASSERT_TRUE(reexported->lod_tree && reexported->lod_tree->has_tree());
+    EXPECT_EQ(reexported->size(), source_count);
+    EXPECT_EQ(reexported->lod_tree->total_nodes(), source_nodes);
+
+    std::filesystem::remove_all(temp_dir);
 }

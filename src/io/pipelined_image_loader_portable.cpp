@@ -173,10 +173,11 @@ namespace lfs::io {
             std::lock_guard stats_lock(stats_mutex_);
             ++stats_.cpu_decode_calls;
         }
-        if (!params.undistort && !encoded)
-            return load_rgb_decoded_ahead(path, params, config_.use_16bit_color);
+        const bool float_decode = decodes_float(path, params);
+        if (!params.undistort && !float_decode && !encoded)
+            return load_rgb_decoded_ahead(path, params, decodes_16bit(params));
         Tensor host;
-        if (params.undistort) {
+        if (params.undistort || float_decode) {
             auto ahead = take_decoded_ahead(path, HostDecodeKind::Float32);
             auto [data, width, height, channels] = ahead
                                                        ? std::tuple{static_cast<float*>(ahead->data.release()), ahead->width, ahead->height, ahead->channels}
@@ -184,7 +185,7 @@ namespace lfs::io {
             if (!data)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
             const std::unique_ptr<float, decltype(&lfs::core::free_image_float)> owner(data, lfs::core::free_image_float);
-            host = Tensor::from_blob(data, image_shape(height, width, channels), lfs::core::Device::CPU, DataType::Float32).clone();
+            host = Tensor::from_blob(data, {static_cast<size_t>(height), static_cast<size_t>(width), static_cast<size_t>(channels)}, lfs::core::Device::CPU, DataType::Float32).clone();
             if (channels <= 2) {
                 auto gray = host.slice(2, 0, 1);
                 host = Tensor::cat({gray, gray, gray}, 2);
@@ -192,7 +193,7 @@ namespace lfs::io {
                 host = host.slice(2, 0, 3);
             }
             host = host.permute({2, 0, 1}).contiguous();
-        } else if (config_.use_16bit_color) {
+        } else if (decodes_16bit(params)) {
             auto [data, width, height, channels] = lfs::core::load_image_u16(path, params.resize_factor, params.max_width);
             if (!data)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
@@ -211,7 +212,13 @@ namespace lfs::io {
             host = host_uint8_planar(data, height, width, channels, lfs::core::free_image);
         }
         Tensor image = to_device(upload, host);
-        if (!params.undistort && config_.use_16bit_color) {
+        if (!params.undistort && float_decode) {
+            const auto [target_width, target_height] = lfs::core::resized_image_dimensions(static_cast<int>(image.shape()[2]), static_cast<int>(image.shape()[1]), params.resize_factor, params.max_width);
+            if (target_width != static_cast<int>(image.shape()[2]) || target_height != static_cast<int>(image.shape()[1]))
+                image = lfs::core::shared_image_ops(config_.backend)->resize(image, target_height, target_width, lfs::gpu_ops::Resample::LanczosFloatCHW, 2);
+            if (params.output_uint8)
+                image = float_to_uint8(image);
+        } else if (!params.undistort && decodes_16bit(params)) {
             image = image.to(DataType::Float32).mul(UINT16_SCALE);
             if (params.output_uint8)
                 image = float_to_uint8(image);
@@ -227,7 +234,7 @@ namespace lfs::io {
                 image.contiguous(), undistort_for(*params.undistort, image, params.resize_factor, params.max_width), nullptr);
             if (restore_uint8)
                 image = float_to_uint8(image);
-            else
+            else if (!params.decode_float)
                 image = image.clamp(0.0f, 1.0f).mul(65535.0f).add(0.5f).to(DataType::Int32).to(DataType::Float32).div(65535.0f);
         }
         return image.contiguous();

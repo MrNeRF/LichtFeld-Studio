@@ -98,6 +98,15 @@ namespace lfs::gpu_ops {
         float opacity_reg_weight = 0.f;
         float sparsity_rho = 0.f;
         float sparsity_grad_loss = 0.f;
+        bool per_splat_mean_step = false;
+        float mean_step_median_extent = 0.f;
+        Tensor mean_step_far_mask;
+        bool scale_reg_log = false;
+        float scale_reg_normalizer = 1.f;
+        float erank_reg_weight = 0.f;
+        float dc_reg_weight = 0.f;
+        float sh_rest_reg_weight = 0.f;
+        Tensor rendered_count, erank_reg_loss, dc_reg_loss, sh_rest_reg_loss;
     };
 
     struct RasterResult {

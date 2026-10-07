@@ -152,9 +152,7 @@ namespace lfs::training {
 
         // Tile bits plus depth bits of the packed instance key (packed_instance_depth_bits).
         uint32_t tile_bits(const uint32_t n_tiles) { return n_tiles <= 1 ? 0 : std::bit_width(n_tiles - 1); }
-        uint32_t depth_bits(const uint32_t n_tiles) {
-            return static_cast<uint32_t>(std::clamp(32 - static_cast<int>(tile_bits(n_tiles)), 0, 23));
-        }
+        uint32_t depth_bits(const uint32_t) { return 32; }
 
         void fill(Tensor& buffer, const size_t count, const uint32_t value) {
             struct {
@@ -440,7 +438,7 @@ namespace lfs::training {
                 const auto encode_raster = [&](const uint32_t capacity) {
                     fill(s.ranges, size_t{n_tiles} * 2, 0);
                     for (uint32_t i = 0; i < 2; ++i) {
-                        reserve(s.keys[i], capacity, DataType::UInt32,
+                        reserve(s.keys[i], capacity, DataType::Int64,
                                 i == 0 ? "fast.sort.keys0" : "fast.sort.keys1");
                         reserve(s.values[i], capacity, DataType::UInt32,
                                 i == 0 ? "fast.sort.values0" : "fast.sort.values1");
@@ -553,12 +551,10 @@ namespace lfs::training {
         };
         static_assert(sizeof(AdamGroupParams) == 120);
 
-        // fast_adam_group: disabled groups stay zero and are never touched.
+        // Retain read-only storage even when parameter and moment updates are disabled.
         AdamGroupParams adam_group(const lfs::gpu_ops::BackwardAdamParam& src, std::vector<const Tensor*>& uses) {
             AdamGroupParams dst{};
-            if (!src.enabled)
-                return dst;
-            dst.param = mk::address(src.parameter);
+            dst.param = address_if(src.parameter);
             uses.push_back(&src.parameter);
             if (src.value_bits == 16) {
                 dst.value_bits = 16;
@@ -590,7 +586,7 @@ namespace lfs::training {
             dst.attributes = src.attributes;
             dst.step_size = src.step_size;
             dst.bc2_sqrt_rcp = src.bc2_sqrt_rcp;
-            dst.enabled = 1;
+            dst.enabled = src.enabled ? 1u : 0u;
             if (present(src.screen_share) && src.screen_share_limit > 0.f && src.screen_share_limit < 1.f) {
                 dst.screen_share = mk::address(src.screen_share);
                 dst.screen_share_n = static_cast<int32_t>(src.screen_share.numel());
@@ -620,6 +616,8 @@ namespace lfs::training {
             AdamGroupParams sh0, shN_adam;
             float beta1, beta2, eps;
             uint32_t n, capacity;
+            uint64_t dc_loss, sh_loss, sh0_values;
+            float dc_weight, sh_weight;
         };
 
         struct BackwardGeometryParams {
@@ -631,6 +629,10 @@ namespace lfs::training {
             float width, height, fx, fy;
             float clip_left, clip_right, clip_top, clip_bottom;
             uint32_t n, sparsity_n, capacity;
+            uint32_t log_scale;
+            uint64_t rendered_count, erank_loss, mean_far;
+            float scale_normalizer, erank_weight, mean_median;
+            uint32_t per_splat_mean_step;
         };
 
         // A read-only per-pixel map given as [H, W] or [1, H, W], made contiguous.
@@ -767,7 +769,10 @@ namespace lfs::training {
             }
 
             const uint32_t blocks = div_up(f.n, 256);
-            std::vector<const Tensor*> uses{&s.counts, &f.means, &f.camera, &f.shN, &f.sh_bounds, &s.n_touched, &s.color_depth, &s.grads};
+            std::vector<const Tensor*> uses{&s.counts, &f.means, &f.camera, &f.sh0, &f.shN, &f.sh_bounds, &s.n_touched, &s.color_depth, &s.grads};
+            for (const Tensor* output : {&adam.dc_reg_loss, &adam.sh_rest_reg_loss})
+                if (present(*output))
+                    uses.push_back(output);
             const BackwardShParams sh{
                 .counts = mk::address(s.counts),
                 .means = mk::address(f.means),
@@ -784,6 +789,11 @@ namespace lfs::training {
                 .eps = adam.eps,
                 .n = f.n,
                 .capacity = s.pending_capacity,
+                .dc_loss = address_if(adam.dc_reg_loss),
+                .sh_loss = address_if(adam.sh_rest_reg_loss),
+                .sh0_values = mk::address(f.sh0),
+                .dc_weight = adam.dc_reg_weight,
+                .sh_weight = adam.sh_rest_reg_weight,
             };
             // The kernels clamp to degree 3: 15 rest coefficients in 12 float4 slots.
             LFS_ASSERT_MSG(f.sh_layout_rest <= 15 && (f.sh_layout_rest * 3 + 3) / 4 <= kShParts * kShSlotsPerThread,
@@ -810,6 +820,9 @@ namespace lfs::training {
                 uses.push_back(&adam.opacity_reg_loss);
             if (sparsity)
                 uses.insert(uses.end(), {&adam.sparsity_sigmoid, &adam.sparsity_z, &adam.sparsity_u});
+            for (const Tensor* tensor : {&adam.rendered_count, &adam.erank_reg_loss, &adam.mean_step_far_mask})
+                if (present(*tensor))
+                    uses.push_back(tensor);
             const BackwardGeometryParams geometry{
                 .counts = mk::address(s.counts),
                 .means = mk::address(f.means),
@@ -853,6 +866,14 @@ namespace lfs::training {
 
                 .sparsity_n = sparsity ? mk::count32(adam.sparsity_sigmoid.numel(), "sparsity") : 0,
                 .capacity = s.pending_capacity,
+                .log_scale = adam.scale_reg_log,
+                .rendered_count = address_if(adam.rendered_count),
+                .erank_loss = address_if(adam.erank_reg_loss),
+                .mean_far = address_if(adam.mean_step_far_mask),
+                .scale_normalizer = adam.scale_reg_normalizer,
+                .erank_weight = adam.erank_reg_weight,
+                .mean_median = adam.mean_step_median_extent,
+                .per_splat_mean_step = adam.per_splat_mean_step,
 
             };
             launch("fast_backward_geometry", geometry, std::span<const Tensor* const>(uses), blocks, 1, 256,

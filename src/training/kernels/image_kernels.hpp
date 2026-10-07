@@ -34,5 +34,7 @@ namespace lfs::training::kernels {
         cudaStream_t stream = nullptr);
 
     lfs::core::Tensor quantize_to_8bit_grid(const lfs::core::Tensor& image);
+    // Clamps to [0, 1] and rounds to the nearest of `levels` + 1 evenly spaced values.
+    lfs::core::Tensor quantize_to_grid(const lfs::core::Tensor& image, float levels);
 
 } // namespace lfs::training::kernels

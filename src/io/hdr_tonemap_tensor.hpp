@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "hdr_libplacebo.hpp"
+#include "media/hdr_renderer.hpp"
 
 #include <memory>
 

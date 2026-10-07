@@ -6,8 +6,9 @@
 // one HdrLibplaceboRenderer selects.
 
 #include "core/tensor_backend.hpp"
-#include "hdr_libplacebo.hpp"
 #include "hdr_tonemap_tensor.hpp"
+#include "media/hdr_renderer.hpp"
+#include "media_studio_backends.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -177,9 +178,13 @@ namespace {
         bool rgba;
     };
 
-    class HdrTensorTonemap : public testing::TestWithParam<Case> {};
+    class HdrTensorTonemap : public testing::TestWithParam<Case> {
+    public:
+        static void SetUpTestSuite() { lfs::io::registerStudioMediaBackends(); }
+    };
 
     TEST(HdrTonemapPerformance, DISABLED_FourK) {
+        lfs::io::registerStudioMediaBackends();
         if (!std::filesystem::exists(LFS_HDR_TEST_FFMPEG))
             GTEST_SKIP() << "ffmpeg is unavailable";
         const auto directory = std::filesystem::temp_directory_path() / "lfs-hdr-benchmark";
@@ -255,12 +260,12 @@ namespace {
         };
         HdrTensorRenderer tensor;
         std::vector<unsigned char> actual;
-        render(tensor, actual);
+        ASSERT_NO_FATAL_FAILURE(render(tensor, actual));
         EXPECT_EQ(lfs::core::default_gpu_backend(), lfs::core::GpuBackend::Metal);
 
         HdrLibplaceboRenderer reference;
         std::vector<unsigned char> expected;
-        render(reference, expected);
+        ASSERT_NO_FATAL_FAILURE(render(reference, expected));
 #ifndef LFS_USE_VULKAN
         // Without Vulkan, HdrLibplaceboRenderer is the tensor implementation.
         EXPECT_EQ(expected, actual);

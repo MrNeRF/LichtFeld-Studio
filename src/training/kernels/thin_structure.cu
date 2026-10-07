@@ -1,0 +1,303 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#include "core/assert.hpp"
+#include "core/cuda_error.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "lfs/training/ops/structure_cuda.hpp"
+#include "warp_reduce.cuh"
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <nvtx3/nvToolsExt.h>
+#include <type_traits>
+
+namespace lfs::training::kernels {
+    namespace {
+        constexpr int BLOCK_SIZE = 256;
+        constexpr int MAX_FILTER_RADIUS = 10;
+        constexpr int HORIZONTAL_TILE_WIDTH = 128;
+        constexpr int VERTICAL_TILE_WIDTH = 32;
+        constexpr int VERTICAL_TILE_HEIGHT = 8;
+        constexpr std::array<double, 4> RIDGE_SIGMAS{0.8, 1.2, 1.8, 2.5};
+        constexpr float STRUCTURE_RESPONSE_CAP = 4.0f;
+
+        __global__ void densification_weight_kernel(float* error, const float* structure, size_t n, float gain) {
+            const size_t i = blockIdx.x * static_cast<size_t>(blockDim.x) + threadIdx.x;
+            if (i < n)
+                error[i] *= 1.0f + gain * fminf(fmaxf(structure[i], 0.0f), STRUCTURE_RESPONSE_CAP);
+        }
+        struct DerivativeFilter {
+            float g[2 * MAX_FILTER_RADIUS + 1];
+            float d1[2 * MAX_FILTER_RADIUS + 1];
+            float d2[2 * MAX_FILTER_RADIUS + 1];
+            int radius;
+            float sigma_sq;
+        };
+
+        __device__ int reflect_index(int index, const int length) {
+            const int period = 2 * length;
+            index %= period;
+            if (index < 0)
+                index += period;
+            return index < length ? index : period - 1 - index;
+        }
+
+        template <typename T>
+        __device__ float luminance_at(const T* image, const int n, const int i) {
+            const float scale = std::is_same_v<T, uint8_t> ? 1.0f / 255.0f : 1.0f;
+            return scale * (0.2126f * image[i] + 0.7152f * image[n + i] + 0.0722f * image[2 * n + i]);
+        }
+
+        // Rows of the band are image rows first_row + r, reflected at the image border.
+        template <typename T>
+        __global__ void hessian_horizontal(const T* input, float* horizontal, const int height, const int width,
+                                           const int first_row, const size_t band_stride,
+                                           const DerivativeFilter filter) {
+            __shared__ float tile[HORIZONTAL_TILE_WIDTH + 2 * MAX_FILTER_RADIUS];
+            const int tiles_per_row = (width + HORIZONTAL_TILE_WIDTH - 1) / HORIZONTAL_TILE_WIDTH;
+            const int band_row = blockIdx.x / tiles_per_row;
+            const int image_row = first_row + band_row;
+            const int row = image_row >= 0 && image_row < height ? image_row : reflect_index(image_row, height);
+            const int tile_x = (blockIdx.x % tiles_per_row) * HORIZONTAL_TILE_WIDTH;
+            const int n = height * width;
+            for (int j = threadIdx.x; j < HORIZONTAL_TILE_WIDTH + 2 * filter.radius; j += blockDim.x) {
+                const int source_x = tile_x + j - filter.radius;
+                const int reflected_x = source_x >= 0 && source_x < width ? source_x : reflect_index(source_x, width);
+                tile[j] = luminance_at(input, n, row * width + reflected_x);
+            }
+            __syncthreads();
+            const int x = tile_x + threadIdx.x;
+            if (x >= width)
+                return;
+            float g = 0.0f, d1 = 0.0f, d2 = 0.0f;
+            for (int k = -filter.radius; k <= filter.radius; ++k) {
+                const float value = tile[threadIdx.x + k + filter.radius];
+                const int j = k + filter.radius;
+                g += value * filter.g[j];
+                d1 += value * filter.d1[j];
+                d2 += value * filter.d2[j];
+            }
+            const size_t i = static_cast<size_t>(band_row) * width + x;
+            horizontal[i] = g;
+            horizontal[band_stride + i] = d1;
+            horizontal[2 * band_stride + i] = d2;
+        }
+
+        // The band holds the horizontal responses of image rows first_row - radius onwards.
+        __global__ void hessian_vertical(const float* horizontal, float* output,
+                                         const int height, const int width, const int first_row,
+                                         const size_t band_stride, const DerivativeFilter filter,
+                                         const bool first_scale) {
+            __shared__ float tile[3][VERTICAL_TILE_WIDTH * (VERTICAL_TILE_HEIGHT + 2 * MAX_FILTER_RADIUS)];
+            const int tiles_per_row = (width + VERTICAL_TILE_WIDTH - 1) / VERTICAL_TILE_WIDTH;
+            const int tile_x = (blockIdx.x % tiles_per_row) * VERTICAL_TILE_WIDTH;
+            const int band_tile_y = (blockIdx.x / tiles_per_row) * VERTICAL_TILE_HEIGHT;
+            const int tile_y = first_row + band_tile_y;
+            const int thread = threadIdx.y * blockDim.x + threadIdx.x;
+            const int tile_elements = VERTICAL_TILE_WIDTH * (VERTICAL_TILE_HEIGHT + 2 * filter.radius);
+            for (int j = thread; j < tile_elements; j += blockDim.x * blockDim.y) {
+                const int x = tile_x + j % VERTICAL_TILE_WIDTH;
+                const size_t source = static_cast<size_t>(band_tile_y + j / VERTICAL_TILE_WIDTH) * width + x;
+                tile[0][j] = x < width ? horizontal[source] : 0.0f;
+                tile[1][j] = x < width ? horizontal[band_stride + source] : 0.0f;
+                tile[2][j] = x < width ? horizontal[2 * band_stride + source] : 0.0f;
+            }
+            __syncthreads();
+            const int x = tile_x + threadIdx.x, y = tile_y + threadIdx.y;
+            if (x >= width || y >= height)
+                return;
+            float hxx = 0.0f, hxy = 0.0f, hyy = 0.0f;
+            for (int k = -filter.radius; k <= filter.radius; ++k) {
+                const int source = (threadIdx.y + k + filter.radius) * VERTICAL_TILE_WIDTH + threadIdx.x;
+                const int j = k + filter.radius;
+                hxx += tile[2][source] * filter.g[j];
+                hxy += tile[1][source] * filter.d1[j];
+                hyy += tile[0][source] * filter.d2[j];
+            }
+            hxx *= filter.sigma_sq;
+            hxy *= filter.sigma_sq;
+            hyy *= filter.sigma_sq;
+            const float disc = sqrtf(fmaxf((hxx - hyy) * (hxx - hyy) + 4.0f * hxy * hxy, 0.0f));
+            const float a = fabsf(0.5f * (hxx + hyy + disc));
+            const float b = fabsf(0.5f * (hxx + hyy - disc));
+            const float hi = fmaxf(a, b), lo = fminf(a, b);
+            const float response = hi * (hi - lo) / (hi + lo + 1e-6f);
+            const int i = y * width + x;
+            output[i] = first_scale ? response : fmaxf(output[i], response);
+        }
+
+        template <typename T>
+        __global__ void structure_sum(const float* data, const T* image, float* partial, const int n) {
+            float sum = 0.0f, minimum = std::numeric_limits<float>::infinity(), maximum = -std::numeric_limits<float>::infinity();
+            for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x) {
+                sum += data[i];
+                const float luminance = luminance_at(image, n, i);
+                minimum = fminf(minimum, luminance);
+                maximum = fmaxf(maximum, luminance);
+            }
+            sum = lfs::core::warp_ops::block_reduce_sum(sum);
+            minimum = lfs::core::warp_ops::block_reduce_min(minimum);
+            maximum = lfs::core::warp_ops::block_reduce_max(maximum);
+            if (threadIdx.x == 0) {
+                partial[blockIdx.x] = sum;
+                partial[1024 + blockIdx.x] = minimum;
+                partial[2048 + blockIdx.x] = maximum;
+            }
+        }
+
+        __global__ void normalize_structure(float* data, const float* partial, const int blocks, const int n) {
+            __shared__ float inv_mean;
+            float sum = 0.0f, minimum = std::numeric_limits<float>::infinity(), maximum = -std::numeric_limits<float>::infinity();
+            for (int i = threadIdx.x; i < blocks; i += blockDim.x) {
+                sum += partial[i];
+                minimum = fminf(minimum, partial[1024 + i]);
+                maximum = fmaxf(maximum, partial[2048 + i]);
+            }
+            sum = lfs::core::warp_ops::block_reduce_sum(sum);
+            minimum = lfs::core::warp_ops::block_reduce_min(minimum);
+            maximum = lfs::core::warp_ops::block_reduce_max(maximum);
+            if (threadIdx.x == 0)
+                inv_mean = sum > 0.0f && maximum > minimum ? static_cast<float>(n) / sum : 0.0f;
+            __syncthreads();
+            const int i = blockIdx.x * blockDim.x + threadIdx.x;
+            if (i < n)
+                data[i] *= inv_mean;
+        }
+
+        template <typename T>
+        __global__ void weight_kernel(const float* structure, const T* base, float* output,
+                                      const int height, const int width, const float gain,
+                                      const bool valid_padding) {
+            const int i = blockIdx.x * blockDim.x + threadIdx.x;
+            if (i >= height * width)
+                return;
+            const int x = i % width, y = i / width;
+            const bool inside = !valid_padding || height <= 10 || width <= 10 ||
+                                (x >= 5 && x < width - 5 && y >= 5 && y < height - 5);
+            float base_value = 1.0f;
+            if (base != nullptr) {
+                if constexpr (std::is_same_v<T, uint8_t>)
+                    base_value = base[i] != 0 ? 1.0f : 0.0f;
+                else
+                    base_value = base[i];
+            }
+            output[i] = inside ? base_value * (1.0f + gain * fminf(structure[i], STRUCTURE_RESPONSE_CAP)) : 0.0f;
+        }
+    } // namespace
+
+    void cuda_ridge_structure_map(const lfs::core::Tensor& image, lfs::core::Tensor& output,
+                                  RidgeWorkspace& workspace) {
+        using namespace lfs::core;
+        LFS_ASSERT(image.device() == Device::GPU && image.ndim() == 3 && image.shape()[0] == 3);
+        LFS_ASSERT(image.is_contiguous() && image.shape()[1] > 0 && image.shape()[2] > 0);
+        LFS_ASSERT(image.dtype() == DataType::Float32 || image.dtype() == DataType::UInt8);
+        const int height = static_cast<int>(image.shape()[1]);
+        const int width = static_cast<int>(image.shape()[2]);
+        const int n = height * width;
+        const int band_rows = static_cast<int>(workspace.band_rows(static_cast<size_t>(height), static_cast<size_t>(width)));
+        workspace.ensure_size(static_cast<size_t>(band_rows), static_cast<size_t>(width));
+        const size_t band_stride = workspace.horizontal.numel() / 3;
+        LFS_ASSERT((output.shape() == TensorShape{static_cast<size_t>(height), static_cast<size_t>(width)}));
+        LFS_ASSERT(output.dtype() == DataType::Float32 && output.device() == Device::GPU);
+        const auto stream = prepare_inputs_for_stream({&image, &output, &workspace.horizontal, &workspace.reduction});
+        workspace.horizontal.set_stream(stream);
+        workspace.reduction.set_stream(stream);
+        output.set_stream(stream);
+        nvtxRangePushA("structure_map");
+        const int blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        const int horizontal_tiles = (width + HORIZONTAL_TILE_WIDTH - 1) / HORIZONTAL_TILE_WIDTH;
+        const int vertical_tiles = (width + VERTICAL_TILE_WIDTH - 1) / VERTICAL_TILE_WIDTH;
+        const dim3 vertical_threads(VERTICAL_TILE_WIDTH, VERTICAL_TILE_HEIGHT);
+        bool first_scale = true;
+        for (const double sigma : RIDGE_SIGMAS) {
+            DerivativeFilter filter{};
+            filter.radius = static_cast<int>(4.0 * sigma + 0.5);
+            LFS_ASSERT(filter.radius <= MAX_FILTER_RADIUS);
+            filter.sigma_sq = static_cast<float>(sigma * sigma);
+            double sum = 0.0;
+            for (int k = -filter.radius; k <= filter.radius; ++k)
+                sum += std::exp(-0.5 * k * k / (sigma * sigma));
+            for (int k = -filter.radius; k <= filter.radius; ++k) {
+                const double g = std::exp(-0.5 * k * k / (sigma * sigma)) / sum;
+                const int j = k + filter.radius;
+                filter.g[j] = static_cast<float>(g);
+                filter.d1[j] = static_cast<float>(k * g / (sigma * sigma));
+                filter.d2[j] = static_cast<float>((k * k / (sigma * sigma) - 1.0) * g / (sigma * sigma));
+            }
+            for (int first_row = 0; first_row < height; first_row += band_rows) {
+                const int rows = std::min(band_rows, (height - first_row + VERTICAL_TILE_HEIGHT - 1) / VERTICAL_TILE_HEIGHT * VERTICAL_TILE_HEIGHT);
+                const int horizontal_blocks = horizontal_tiles * (rows + 2 * filter.radius);
+                if (image.dtype() == DataType::UInt8) {
+                    hessian_horizontal<<<horizontal_blocks, HORIZONTAL_TILE_WIDTH, 0, stream>>>(
+                        image.ptr<uint8_t>(), workspace.horizontal.ptr<float>(), height, width, first_row - filter.radius, band_stride, filter);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.hessian_horizontal_u8");
+                } else {
+                    hessian_horizontal<<<horizontal_blocks, HORIZONTAL_TILE_WIDTH, 0, stream>>>(
+                        image.ptr<float>(), workspace.horizontal.ptr<float>(), height, width, first_row - filter.radius, band_stride, filter);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.hessian_horizontal_f32");
+                }
+                hessian_vertical<<<vertical_tiles*(rows / VERTICAL_TILE_HEIGHT), vertical_threads, 0, stream>>>(
+                    workspace.horizontal.ptr<float>(), output.ptr<float>(), height, width, first_row, band_stride, filter, first_scale);
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.hessian_vertical");
+            }
+            first_scale = false;
+        }
+        const int reduction_blocks = std::min(blocks, 1024);
+        if (image.dtype() == DataType::UInt8) {
+            structure_sum<<<reduction_blocks, BLOCK_SIZE, 0, stream>>>(output.ptr<float>(), image.ptr<uint8_t>(), workspace.reduction.ptr<float>(), n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.sum_u8");
+        } else {
+            structure_sum<<<reduction_blocks, BLOCK_SIZE, 0, stream>>>(output.ptr<float>(), image.ptr<float>(), workspace.reduction.ptr<float>(), n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.sum_f32");
+        }
+        normalize_structure<<<blocks, BLOCK_SIZE, 0, stream>>>(output.ptr<float>(), workspace.reduction.ptr<float>(), reduction_blocks, n);
+        nvtxRangePop();
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.ridge");
+    }
+
+    void cuda_structure_photometric_weight(const lfs::core::Tensor& structure, const lfs::core::Tensor& base_weight,
+                                           lfs::core::Tensor& output, const float gain,
+                                           const bool valid_padding) {
+        using namespace lfs::core;
+        LFS_ASSERT(structure.device() == Device::GPU && structure.ndim() == 2 && structure.dtype() == DataType::Float32);
+        LFS_ASSERT(std::isfinite(gain) && gain >= 0.0f && gain <= 4.0f);
+        LFS_ASSERT(!base_weight.is_valid() || (base_weight.device() == Device::GPU && base_weight.shape() == structure.shape()));
+        if (!output.is_valid() || output.shape() != structure.shape())
+            output = Tensor::empty(structure.shape(), Device::GPU);
+        const int height = static_cast<int>(structure.shape()[0]);
+        const int width = static_cast<int>(structure.shape()[1]);
+        const int blocks = (height * width + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        const auto stream = prepare_inputs_for_stream({&structure, &output});
+        if (base_weight.is_valid())
+            base_weight.sync_to_stream(stream);
+        output.set_stream(stream);
+        if (base_weight.is_valid() && (base_weight.dtype() == DataType::UInt8 || base_weight.dtype() == DataType::Bool)) {
+            weight_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(structure.ptr<float>(), base_weight.ptr<uint8_t>(), output.ptr<float>(),
+                                                             height, width, gain, valid_padding);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.weight_u8");
+        } else {
+            LFS_ASSERT(!base_weight.is_valid() || base_weight.dtype() == DataType::Float32);
+            weight_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(structure.ptr<float>(), base_weight.is_valid() ? base_weight.ptr<float>() : nullptr,
+                                                             output.ptr<float>(), height, width, gain, valid_padding);
+        }
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.weight");
+    }
+    void cuda_structure_densification_weight(lfs::core::Tensor& error, const lfs::core::Tensor& structure, const float gain) {
+        using namespace lfs::core;
+        LFS_ASSERT(std::isfinite(gain) && gain >= 0.0f);
+        if (gain == 0.0f)
+            return;
+        LFS_ASSERT(error.device() == Device::GPU && error.ndim() == 2 && error.dtype() == DataType::Float32 && error.is_contiguous());
+        LFS_ASSERT(structure.device() == Device::GPU && structure.shape() == error.shape() && structure.dtype() == DataType::Float32 && structure.is_contiguous());
+        const auto stream = prepare_inputs_for_stream({&error, &structure});
+        structure.sync_to_stream(stream);
+        constexpr int threads = 256;
+        const auto blocks = static_cast<unsigned>((error.numel() + threads - 1) / threads);
+        densification_weight_kernel<<<blocks, threads, 0, stream>>>(error.ptr<float>(), structure.ptr<float>(), error.numel(), gain);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.densification");
+    }
+
+} // namespace lfs::training::kernels

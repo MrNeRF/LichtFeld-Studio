@@ -34,6 +34,8 @@
 #include "io/splat_path.hpp"
 #include "training/dataset.hpp"
 
+#include <array>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <memory>
@@ -984,6 +986,19 @@ namespace lfs::python {
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
 
         m.def("set_project_preview", [](const std::filesystem::path& path, const nb::bytes& png) {
+            constexpr std::array<unsigned char, 8> png_signature{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+            if (png.size() != 0) {
+                if (png.size() < png_signature.size() ||
+                    std::memcmp(png.data(), png_signature.data(), png_signature.size()) != 0) {
+                    throw std::invalid_argument("png_bytes must contain a valid PNG image");
+                }
+                const auto* data = reinterpret_cast<const std::uint8_t*>(png.data());
+                auto [pixels, width, height, channels] = core::load_image_from_memory(data, png.size());
+                const std::unique_ptr<unsigned char, decltype(&core::free_image)> decoded(pixels, &core::free_image);
+                if (!decoded || width <= 0 || height <= 0 || channels <= 0) {
+                    throw std::invalid_argument("png_bytes must contain a valid PNG image");
+                }
+            }
             std::optional<lfs::Result<project::ProjectInspectorCard>> result;
             {
                 nb::gil_scoped_release release;

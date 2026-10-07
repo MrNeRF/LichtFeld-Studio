@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <tuple>
 
+#include "io/media_studio_backends.hpp"
 #include "notification_bridge.hpp"
 #include "py_animation.hpp"
 #include "py_cameras.hpp"
@@ -27,6 +28,7 @@
 #include "py_gizmo.hpp"
 #include "py_io.hpp"
 #include "py_mcp.hpp"
+#include "py_media.hpp"
 #include "py_mesh.hpp"
 #include "py_mesh2splat.hpp"
 #include "py_nn.hpp"
@@ -142,6 +144,13 @@ enum class OperatorResult { Finished,
                             Running };
 
 namespace {
+
+    thread_local int python_run_depth = 0;
+
+    struct ScopedPythonRunDepth {
+        ScopedPythonRunDepth() { ++python_run_depth; }
+        ~ScopedPythonRunDepth() { --python_run_depth; }
+    };
 
     using lfs::training::Command;
     using lfs::training::CommandCenter;
@@ -3315,6 +3324,9 @@ NB_MODULE(lichtfeld, m) {
     // I/O submodule
     auto io_module = m.def_submodule("io", "File I/O operations");
     lfs::python::register_io(io_module);
+    lfs::io::registerStudioMediaBackends();
+    auto media_module = m.def_submodule("media", "Shared Media Ingest API");
+    lfs::python::register_media(media_module);
 
     auto diagnostics_module = m.def_submodule("diagnostics", "System diagnostics API");
     lfs::python::register_diagnostics(diagnostics_module);
@@ -3502,16 +3514,35 @@ NB_MODULE(lichtfeld, m) {
 
             nb::module_ sys = nb::module_::import_("sys");
             nb::list sys_path = nb::cast<nb::list>(sys.attr("path"));
+            nb::object builtins = nb::module_::import_("builtins");
+            const bool nested_run = python_run_depth > 0;
+            const nb::object previous_file = nested_run ? builtins.attr("__file__") : nb::none();
+            const nb::list previous_sys_path = nested_run
+                                                   ? nb::cast<nb::list>(sys_path.attr("copy")())
+                                                   : nb::list();
+            const ScopedPythonRunDepth run_depth;
             nb::str parent_str(parent.c_str());
             if (!nb::cast<bool>(sys_path.attr("__contains__")(parent_str))) {
                 sys_path.attr("insert")(0, parent_str);
             }
-
-            nb::object builtins = nb::module_::import_("builtins");
             builtins.attr("__file__") = nb::str(abs_path.c_str());
 
             nb::object py_exec = builtins.attr("exec");
-            py_exec(code);
+            const auto restore_nested_context = [&] {
+                if (!nested_run)
+                    return;
+                sys.attr("path") = sys_path;
+                sys_path.attr("clear")();
+                sys_path.attr("extend")(previous_sys_path);
+                builtins.attr("__file__") = previous_file;
+            };
+            try {
+                py_exec(code);
+            } catch (...) {
+                restore_nested_context();
+                throw;
+            }
+            restore_nested_context();
 
             LOG_INFO("Executed script: {}", path);
         },
@@ -3656,7 +3687,9 @@ NB_MODULE(lichtfeld, m) {
                 throw std::runtime_error("Only 'jet' colormap is currently supported");
             }
             const auto& t = values.tensor();
-            assert(t.shape().rank() == 1);
+            if (t.shape().rank() != 1) {
+                throw std::invalid_argument("values must have rank 1");
+            }
 
             auto v = t.clamp(0.0f, 1.0f);
 
@@ -3931,5 +3964,5 @@ Example:
         // Utilities
         "run", "list_scene", "mat4", "colormap", "help",
         // Submodules
-        "scene", "io", "packages", "mcp");
+        "scene", "io", "media", "packages", "mcp");
 }

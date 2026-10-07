@@ -55,6 +55,7 @@ struct LossReduceParams {
     float scale;
     float divisor;
     float offset;
+    float denominator;
 };
 
 // result = offset + scale * (sum / divisor). Masked: partials hold the loss sums
@@ -79,7 +80,7 @@ kernel void loss_reduce_final(constant LossReduceParams& p [[buffer(0)]],
     if (rank != 0)
         return;
     if (p.masked != 0) {
-        const float normalized = mask * p.channels + kSsimMaskEpsilon;
+        const float normalized = p.denominator > 0.0f ? p.denominator : mask * p.channels + kSsimMaskEpsilon;
         p.result[0] = sum / normalized;
         p.mask_sum[0] = normalized;
     } else {

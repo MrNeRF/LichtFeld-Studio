@@ -2,10 +2,10 @@
 
 ## Public contracts
 
-`io/media/frame_sink.hpp` defines synchronous CPU delivery in RGB8. The public
+`media/frame_sink.hpp` defines synchronous CPU delivery in RGB8. The public
 contract uses owned C++ types and core `lfs::Result<void>`; no FFmpeg, CUDA,
-renderer or JSON types appear in it. It is compiled into the existing `lfs_video`
-target. This is an extraction boundary, not yet a separately installed library.
+renderer or JSON types appear in it. It belongs to the shared `lfs_media` target
+used by Studio and root tests. Separate installed SDK packaging is deferred.
 
 `FrameLayout` contains positive width/height, byte stride and pixel format.
 `FrameView` borrows read-only pixels during `FrameSink::write`. `requiredBytes()`
@@ -115,9 +115,10 @@ hardware/platform qualification and are not proved by CPU SDR tests.
 
 ## Tests and reproducibility
 
-The existing `tests/media/extractor` CTest project compiles real production probe,
-player, extractor, sinks, core errors and image writers. It uses the existing
-Release CI steps; no workflow/job or dependency is added. See
+The root media CTest targets consume the production probe, extractor, sinks,
+shared errors and image writers. A CPU reference preview translation unit is
+compiled only in the test runner. The existing Release CI steps build
+`media_contracts` and run the root media label; no workflow/job or dependency is added. See
 [media test instructions](../../tests/media/README.md) for toolchain commands.
 
 Eight additional Python methods exercise retained memory pixels against independent
@@ -139,4 +140,4 @@ different workloads. Local results and exact revision bookkeeping belong in the
 implementation plan/PR description, not in this durable contract document.
 
 JPEG quality preserves the legacy writer policy: zero selects 90; other values
-are clamped to 1–100. PNG ignores JPEG quality.
+are clamped to 1â€“100. PNG ignores JPEG quality.

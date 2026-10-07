@@ -12,6 +12,9 @@ struct Params {
     float lr, bc1, bc2, beta1, beta2, eps;
     float frozenScale, cropScale;
     float screenLimit, screenPenalty, stepSize;
+    uint64_t meanScales, meanFar;
+    uint meanScaleCount, meanFarCount;
+    float meanMedian;
 };
 struct Push { uint64_t parameters; };
 
@@ -94,16 +97,24 @@ float log1pSmall(float x) {
 }
 float2 decodeMV(float2 us) {
     float x = max(us.y, 0.0f);
-    float root = x > 0.118f ? exp2(us.y * 1.4426950408889634f) - 1.0f : expm1Small(us.y);
-    float r = 1e-15f * root;
-    float v = r * r;
-    float m = v == 0.0f ? 0.0f : us.x * (r + 1e-15f);
+    float root = x > 0.118f ? roundedSub(exp2(roundedMul(us.y, 1.4426950408889634f)), 1.0f) : expm1Small(us.y);
+    float r = roundedMul(1e-15f, root);
+    float v = roundedMul(r, r);
+    float m = v == 0.0f ? 0.0f : roundedMul(us.x, roundedAdd(r, 1e-15f));
     return float2(m, v);
+}
+// FastGS CUDA uses --use_fast_math: a reciprocal multiply for the codec
+// and a fused subtraction for the parameter update.
+float adamDivide(float a, float b) {
+    return roundedMul(a, rcp(b));
+}
+float adamUpdate(float value, float step, float m, float v, float bc2, float eps) {
+    return fma(-roundedMul(step, m), rcp(fma(sqrt(v), bc2, eps)), value);
 }
 float2 encodeUS(float m, float v) {
     float r = sqrt(max(v, 0.0f));
     float x = max(r, 0.0f) * (1.0f / 1e-15f);
-    return float2(m * (1.0f / (r + 1e-15f)), x > 0.125f ? log2(1.0f + x) * 0.6931471805599453f : log1pSmall(x));
+    return float2(adamDivide(m, r + 1e-15f), x > 0.125f ? log2(1.0f + x) * 0.6931471805599453f : log1pSmall(x));
 }
 void storeUS(Params p, uint64_t cell, float2 us, float4 mm) {
     uint u = qCode(us.x, mm.x, mm.y, p.bits), s = qCode(us.y, mm.z, mm.w, p.bits);
@@ -125,7 +136,7 @@ float loadShValue(Params p, uint row, uint slot, uint k, uint c, float2 bounds) 
         uint cell = k * 4 + c;
         if (cell >= p.valueCells) return 0.0f;
         uint code = ((Ptr<uint16_t, Access.Read>)p.parameter)[shQ16Index(p, row, k, c)];
-        return bounds.x + (bounds.y - bounds.x) * (float(code) * (1.0f / 65535.0f));
+        return fma(bounds.y - bounds.x, float(code) * (1.0f / 65535.0f), bounds.x);
     }
     if (p.valueBits == 16)
         return f16tof32(((Ptr<uint16_t, Access.Read>)p.parameter)[slot * 4 + c]);
@@ -173,6 +184,13 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
         bool valid = row < p.primitives;
         bool apply = valid;
         float step = rowScale(p, row, false);
+        if (valid && (p.entryCount & 1u) != 0u && p.meanScales != 0 && p.meanFar != 0 &&
+            row < p.meanFarCount && uint64_t(row) * 3 + 2 < p.meanScaleCount && p.meanMedian > 0.0f &&
+            ((Ptr<uint8_t, Access.Read>)p.meanFar)[row] != 0) {
+            Ptr<float, Access.Read> scales = (Ptr<float, Access.Read>)p.meanScales;
+            float extent = exp((scales[row * 3] + scales[row * 3 + 1] + scales[row * 3 + 2]) * (1.0f / 3.0f));
+            step *= qMin(qMax(extent / p.meanMedian, 1.0f), 300.0f);
+        }
         if (valid && p.frozenMask != 0 && row < p.frozenCount && ((Ptr<uint8_t, Access.Read>)p.frozenMask)[row] != 0 && p.frozenScale == 0.0f) apply = false;
         if (valid && p.cropMask != 0 && row < p.cropCount && ((Ptr<uint8_t, Access.Read>)p.cropMask)[row] != 0 && p.cropScale == 0.0f) apply = false;
         if (valid) for (uint a=0; a<attrs; ++a) {
@@ -186,7 +204,7 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
             if (apply) {
                 m[a] = fma(p.beta1, mv.x, (1.0f-p.beta1)*(g+h));
                 v[a] = fma(p.beta2, mv.y, roundedMul(roundedMul(1.0f-p.beta2,g),g));
-                ((Ptr<float, Access.ReadWrite>)p.parameter)[cell] -= step * m[a] / (sqrt(v[a])*p.bc2+p.eps);
+                ((Ptr<float, Access.ReadWrite>)p.parameter)[cell] = adamUpdate(((Ptr<float, Access.Read>)p.parameter)[cell], step, m[a], v[a], p.bc2, p.eps);
             }
             float2 us=encodeUS(m[a],v[a]); usU[a]=us.x; usS[a]=us.y;
             umin=qMin(umin,us.x); umax=qMax(umax,us.x); smin=qMin(smin,us.y); smax=qMax(smax,us.y);
@@ -251,7 +269,8 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
         if(apply) {
             m=fma(p.beta1,mv.x,(1.0f-p.beta1)*g);
             v=fma(p.beta2,mv.y,roundedMul(roundedMul(1.0f-p.beta2,g),g));
-            if(k<activeSlots) value-=step*m/(sqrt(v)*p.bc2+p.eps);
+            if (k < activeSlots)
+                value = adamUpdate(value, step, m, v, p.bc2, p.eps);
             if(p.valueBits==16&&p.valueBounds==0) value=f16tof32(f32tof16(value));
         }
         float2 us=encodeUS(m,v); umin=qMin(umin,us.x);umax=qMax(umax,us.x);smin=qMin(smin,us.y);smax=qMax(smax,us.y);
@@ -267,7 +286,12 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
     if(valid) for(uint k=0;k<slots;++k) for(uint c=0;c<4;++c){
         uint slot=shSlot(row,k,slots);uint64_t cell=uint64_t(slot)*4+c;float2 mv=decodeMV(loadUS(p,cell,oldmm));
         float value=loadShValue(p,row,slot,k,c,oldvb);float g=k<activeSlots?((Ptr<float,Access.Read>)p.gradient)[cell]:0.0f;
-        if(apply){mv.x=fma(p.beta1,mv.x,(1-p.beta1)*g);mv.y=fma(p.beta2,mv.y,roundedMul(roundedMul(1-p.beta2,g),g));if(k<activeSlots)value-=step*mv.x/(sqrt(mv.y)*p.bc2+p.eps);}
+        if (apply) {
+            mv.x = fma(p.beta1, mv.x, (1 - p.beta1) * g);
+            mv.y = fma(p.beta2, mv.y, roundedMul(roundedMul(1 - p.beta2, g), g));
+            if (k < activeSlots)
+                value = adamUpdate(value, step, mv.x, mv.y, p.bc2, p.eps);
+        }
         storeUS(p,cell,encodeUS(mv.x,mv.y),newMomentBounds);
         if(p.valueBounds!=0&&p.valueCells>k*4+c) storeShValue(p,row,slot,k,c,value,newValueBounds);
         else if(p.valueBounds==0) storeShValue(p,row,slot,k,c,value,float2(0));

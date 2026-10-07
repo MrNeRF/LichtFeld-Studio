@@ -11,9 +11,9 @@ add_library(lfs_logger SHARED
 
 target_include_directories(lfs_logger
     PUBLIC
-        ${CMAKE_SOURCE_DIR}/src/core/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include
     PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../..
 )
 
 target_link_libraries(lfs_logger

@@ -11,16 +11,6 @@
 
 namespace lfs::training::mrnf_strategy {
 
-    void launch_prune_bounds_or(
-        const float* means,
-        const float* max_log_scales,
-        bool* prune_mask,
-        size_t N,
-        const float* center,
-        float max_allowed,
-        float log_max_allowed,
-        void* stream = nullptr);
-
     void launch_replace_parent_weights(
         const float* opacities,
         const float* visibility,
@@ -87,7 +77,8 @@ namespace lfs::training::mrnf_strategy {
         float scale_decay,
         float train_t,
         size_t N,
-        void* stream = nullptr);
+        void* stream = nullptr,
+        const float* rendered_count = nullptr);
 
     /**
      * Compute percentile-based bounding box on GPU.
@@ -106,6 +97,14 @@ namespace lfs::training::mrnf_strategy {
         size_t N,
         float percentile,
         MRNFBounds* bounds,
+        void* stream = nullptr);
+
+    // Median of geomean(exp(scaling_raw)); out_valid is false when no usable extent remains.
+    void launch_median_geomean_extent(
+        const float* scaling_raw,
+        size_t N,
+        float* out_median,
+        bool* out_valid,
         void* stream = nullptr);
 
     /**
@@ -138,6 +137,16 @@ namespace lfs::training::mrnf_strategy {
     void launch_fold_densification_error_and_zero(
         float* refine_weight_max,
         float* densification_info,
+        size_t N,
+        void* stream = nullptr);
+
+    void launch_far_field_mask(
+        const float* means,
+        float centroid_x,
+        float centroid_y,
+        float centroid_z,
+        float far_radius,
+        bool* far_out,
         size_t N,
         void* stream = nullptr);
 

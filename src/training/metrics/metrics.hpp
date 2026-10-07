@@ -72,7 +72,9 @@ namespace lfs::training {
         std::optional<float> psnr;
         std::optional<float> ssim;
         std::optional<float> lpips;
+        std::optional<float> flip;
         bool masked = false;
+        int bit_depth = 8;
         float evaluated_pixel_fraction = 0.0f;
         bool validity_mask_applied = false;
         std::string skipped_reason;
@@ -82,6 +84,7 @@ namespace lfs::training {
         float psnr = 0.0f;
         float ssim = 0.0f;
         std::optional<float> lpips;
+        std::optional<float> flip;
         float elapsed_time = 0.0f;
         int num_gaussians = 0;
         int iteration = 0;
@@ -107,6 +110,9 @@ namespace lfs::training {
             if (lpips && std::isfinite(*lpips)) {
                 ss << ", LPIPS: " << *lpips;
             }
+            if (flip && std::isfinite(*flip)) {
+                ss << ", FLIP: " << *flip;
+            }
             ss << ", Time: " << elapsed_time << "s/image"
                << ", #GS: " << num_gaussians
                << ", bias=(" << bias_r << "," << bias_g << "," << bias_b << ")"
@@ -121,7 +127,7 @@ namespace lfs::training {
         }
 
         static std::string to_csv_header() {
-            return "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b";
+            return "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b,flip";
         }
 
         [[nodiscard]] std::string to_csv_row() const {
@@ -144,18 +150,26 @@ namespace lfs::training {
                 ss << *depth_absrel;
             }
             ss << "," << bias_r << "," << bias_g << "," << bias_b
-               << "," << bias_corr_r << "," << bias_corr_g << "," << bias_corr_b;
+               << "," << bias_corr_r << "," << bias_corr_g << "," << bias_corr_b << ",";
+            if (flip && std::isfinite(*flip)) {
+                ss << *flip;
+            }
             return ss.str();
         }
     };
 
     [[nodiscard]] lfs::core::Tensor image_for_metrics_and_save(const lfs::core::Tensor& image);
+    // 8 or 16 quantizes to that integer grid, 32 (float references) only clamps to [0, 1].
+    [[nodiscard]] lfs::core::Tensor image_for_metrics(const lfs::core::Tensor& image, int bit_depth);
+    [[nodiscard]] int evaluation_bit_depth(const std::filesystem::path& reference,
+                                           lfs::core::param::EvalBitDepth setting);
 
     struct EvaluationViewInputs {
         lfs::core::Tensor gt_image;
         lfs::core::Tensor user_mask;
         int source_width = 0;
         int source_height = 0;
+        int bit_depth = 8;
     };
 
     struct EvaluationRenderResult {
@@ -178,9 +192,11 @@ namespace lfs::training {
         RenderOutput output;
         lfs::core::Tensor raw_image;
         lfs::core::Tensor metric_mask;
+        lfs::core::Tensor validity_mask; // [H,W] where the render warped to the source grid has a pixel
         EvaluationRenderGeometry render_geometry;
         bool validity_mask_applied = false;
         bool erode_ssim_mask = false;
+        bool user_mask_applied = false;
     };
 
     struct EvaluationMesh {

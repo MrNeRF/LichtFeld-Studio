@@ -99,7 +99,8 @@ namespace lfs::training {
         int iteration,
         ProjectSnapshotCpuState& output,
         std::span<const lfs::core::Uuid>
-            selected_node_uuids = {});
+            selected_node_uuids = {},
+        const lfs::io::project::ScenePayloadBindings& inherited_bindings = {});
 
     // Fallback for callers without a live ParameterManager (for example,
     // headless periodic checkpoint saves). GUI training saves must use the
@@ -113,7 +114,8 @@ namespace lfs::training {
         int iteration,
         ProjectSnapshotCpuState& output,
         std::span<const lfs::core::Uuid>
-            selected_node_uuids = {});
+            selected_node_uuids = {},
+        const lfs::io::project::ScenePayloadBindings& inherited_bindings = {});
 
     // Builds JSON/DOM-backed chapters exclusively from a detached safe-point
     // copy. This may run after the optimizer is allowed to mutate again.

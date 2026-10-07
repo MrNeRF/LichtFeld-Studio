@@ -1991,21 +1991,6 @@ namespace lfs::io::project {
             return absolute.lexically_normal();
         }
 
-        bool path_is_under(
-            const std::filesystem::path& root,
-            const std::filesystem::path& candidate) {
-            if (root.empty()) {
-                return false;
-            }
-            const auto relative =
-                candidate.lexically_relative(root);
-            if (relative.empty() || relative == ".") {
-                return true;
-            }
-            const auto first = relative.begin();
-            return first == relative.end() || *first != std::filesystem::path("..");
-        }
-
         bool fingerprint_content_matches(
             const ReferenceFingerprint& expected,
             const ReferenceFingerprint& observed) {
@@ -2096,14 +2081,12 @@ namespace lfs::io::project {
         };
         if (!project_root.empty()) {
             const auto root = absolute_lexically(project_root);
-            if (path_is_under(root, absolute)) {
-                const auto relative = absolute.lexically_relative(root);
-                const auto first = relative.begin();
-                if (!relative.empty() && relative != "." &&
-                    (first == relative.end() || *first != std::filesystem::path(".."))) {
-                    locator.preferred = lfs::core::path_to_generic_utf8(relative);
-                    locator.base = LocatorBase::Project;
-                }
+            const auto relative = absolute.lexically_relative(root);
+            if (!relative.empty() && relative != "." &&
+                relative.is_relative()) {
+                locator.preferred =
+                    lfs::core::path_to_generic_utf8(relative);
+                locator.base = LocatorBase::Project;
             }
         }
 

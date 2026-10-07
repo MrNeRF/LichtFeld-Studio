@@ -73,7 +73,7 @@ namespace lfs::training {
         constexpr std::size_t FILE_BACKED_SNAPSHOT_THRESHOLD =
             64ull * 1024 * 1024;
 #endif
-    }
+    } // namespace
 
     struct TrainingSnapshotBytes::Impl {
         std::unique_ptr<std::byte[]> bytes;
@@ -150,27 +150,27 @@ namespace lfs::training {
             if (impl_->mapping == MAP_FAILED) {
                 impl_->mapping = nullptr;
                 return lfs::make_error(lfs::ErrorInit{
-                        .code = lfs::ErrorCode::Unavailable,
-                        .domain = lfs::ErrorDomain::Training,
-                        .user_message =
-                            "The training snapshot could not be mapped.",
-                        .detail = std::format(
-                            "Checkpoint spool mapping failed: {}",
-                            std::strerror(errno)),
-                        .detection = LFS_SOURCE_SITE_CURRENT(),
-                    });
+                    .code = lfs::ErrorCode::Unavailable,
+                    .domain = lfs::ErrorDomain::Training,
+                    .user_message =
+                        "The training snapshot could not be mapped.",
+                    .detail = std::format(
+                        "Checkpoint spool mapping failed: {}",
+                        std::strerror(errno)),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
             }
         }
         return std::span<const std::byte>(
             static_cast<const std::byte*>(impl_->mapping), impl_->size);
 #else
         return lfs::make_error(lfs::ErrorInit{
-                .code = lfs::ErrorCode::Unavailable,
-                .domain = lfs::ErrorDomain::Training,
-                .user_message = "The training snapshot could not be mapped.",
-                .detail = "Checkpoint spool mapping is unavailable",
-                .detection = LFS_SOURCE_SITE_CURRENT(),
-            });
+            .code = lfs::ErrorCode::Unavailable,
+            .domain = lfs::ErrorDomain::Training,
+            .user_message = "The training snapshot could not be mapped.",
+            .detail = "Checkpoint spool mapping is unavailable",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        });
 #endif
     }
 

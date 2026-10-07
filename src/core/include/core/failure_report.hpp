@@ -29,7 +29,7 @@ namespace lfs::core {
         Critical,
     };
 
-    struct LFS_CORE_API FailureReport {
+    struct LFS_ERROR_API FailureReport {
         std::string_view family;
         std::string_view error;
         std::string_view contract;
@@ -52,33 +52,38 @@ namespace lfs::core {
         bool capture_stack = true;
     };
 
-    LFS_CORE_API void register_failure_report_section_provider(
+    // The app owns durable crash files. Headless consumers keep the same error
+    // semantics without loading the app runtime. nullptr removes the writer.
+    using FailureReportWriter = void (*)(std::string_view text) noexcept;
+    LFS_ERROR_API void register_failure_report_writer(FailureReportWriter writer) noexcept;
+
+    LFS_ERROR_API void register_failure_report_section_provider(
         std::string_view family,
         FailureReportSectionProvider provider);
 
-    LFS_CORE_API std::string capture_host_stacktrace(size_t skip_frames = 0);
-    LFS_CORE_API std::string format_failure_report(
+    LFS_ERROR_API std::string capture_host_stacktrace(size_t skip_frames = 0);
+    LFS_ERROR_API std::string format_failure_report(
         const FailureReport& report,
         std::string_view stacktrace);
-    LFS_CORE_API std::string format_failure_report(
+    LFS_ERROR_API std::string format_failure_report(
         std::string_view family,
         std::string_view contract,
         std::string_view expression,
         std::string_view message,
         const SourceSite& location,
         std::string_view stacktrace);
-    LFS_CORE_API std::string format_contract_failure_report(
+    LFS_ERROR_API std::string format_contract_failure_report(
         std::string_view contract,
         std::string_view expression,
         std::string_view message,
         const SourceSite& location,
         std::string_view stacktrace);
-    LFS_CORE_API void emit_failure_report(
+    LFS_ERROR_API void emit_failure_report(
         const FailureReport& report,
         FailureReportSeverity severity = FailureReportSeverity::Error);
 
-    LFS_CORE_API void reset_failure_report_dedup_for_testing() noexcept;
-    LFS_CORE_API bool decide_failure_report_for_testing(
+    LFS_ERROR_API void reset_failure_report_dedup_for_testing() noexcept;
+    LFS_ERROR_API bool decide_failure_report_for_testing(
         std::string_view family,
         long long code,
         std::string_view site,
@@ -86,7 +91,7 @@ namespace lfs::core {
 
     namespace detail {
 
-        [[noreturn]] LFS_CORE_API void assertion_failed(
+        [[noreturn]] LFS_ERROR_API void assertion_failed(
             std::string_view contract,
             std::string_view expression,
             std::string_view message,

@@ -2578,28 +2578,30 @@ namespace lfs::core {
     }
 
     std::vector<std::shared_ptr<const lfs::core::Camera>> Scene::getVisibleCameras() const {
-        return getVisibleCamerasCached();
+        return *getVisibleCamerasCached();
     }
 
-    const std::vector<std::shared_ptr<const lfs::core::Camera>>&
+    std::shared_ptr<const std::vector<std::shared_ptr<const lfs::core::Camera>>>
     Scene::getVisibleCamerasCached() const {
-        if (cached_visible_cameras_valid_ &&
-            cached_visible_cameras_render_generation_ == render_generation_ &&
+        const std::uint64_t render_generation = render_generation_.load(std::memory_order_acquire);
+        std::lock_guard lock(camera_cache_mutex_);
+        if (cached_visible_cameras_ &&
+            cached_visible_cameras_render_generation_ == render_generation &&
             cached_visible_cameras_camera_list_generation_ == camera_list_generation_) {
             return cached_visible_cameras_;
         }
 
-        cached_visible_cameras_.clear();
-        cached_visible_cameras_.reserve(nodes_.size());
+        auto cameras = std::make_shared<std::vector<std::shared_ptr<const lfs::core::Camera>>>();
+        cameras->reserve(nodes_.size());
         for (const auto& node : nodes_) {
             if (node->type == NodeType::CAMERA && node->camera &&
                 isNodeEffectivelyVisible(node->id)) {
-                cached_visible_cameras_.push_back(node->camera);
+                cameras->push_back(node->camera);
             }
         }
-        cached_visible_cameras_render_generation_ = render_generation_;
+        cached_visible_cameras_ = std::move(cameras);
+        cached_visible_cameras_render_generation_ = render_generation;
         cached_visible_cameras_camera_list_generation_ = camera_list_generation_;
-        cached_visible_cameras_valid_ = true;
         return cached_visible_cameras_;
     }
 
@@ -4847,6 +4849,11 @@ namespace lfs::core {
                         (src->shN_value_quantized() && src->shN_value_bounds().is_valid())
                             ? src->shN_value_bounds()
                             : lfs::core::Tensor{});
+                    if (src->lod_tree) {
+                        result->lod_tree =
+                            std::make_unique<lfs::core::SplatLodTree>(
+                                *src->lod_tree);
+                    }
                     return limit_degree(std::move(result));
                 }
 
@@ -5908,26 +5915,28 @@ namespace lfs::core {
     }
 
     std::vector<std::shared_ptr<lfs::core::Camera>> Scene::getAllCameras() const {
-        return getAllCamerasCached();
+        return *getAllCamerasCached();
     }
 
-    const std::vector<std::shared_ptr<lfs::core::Camera>>&
+    std::shared_ptr<const std::vector<std::shared_ptr<lfs::core::Camera>>>
     Scene::getAllCamerasCached() const {
-        if (cached_all_cameras_valid_ &&
-            cached_all_cameras_render_generation_ == render_generation_ &&
+        const std::uint64_t render_generation = render_generation_.load(std::memory_order_acquire);
+        std::lock_guard lock(camera_cache_mutex_);
+        if (cached_all_cameras_ &&
+            cached_all_cameras_render_generation_ == render_generation &&
             cached_all_cameras_camera_list_generation_ == camera_list_generation_) {
             return cached_all_cameras_;
         }
 
-        cached_all_cameras_.clear();
-        cached_all_cameras_.reserve(nodes_.size());
+        auto cameras = std::make_shared<std::vector<std::shared_ptr<lfs::core::Camera>>>();
+        cameras->reserve(nodes_.size());
         for (const auto& node : nodes_) {
             if (node->type == NodeType::CAMERA && node->camera)
-                cached_all_cameras_.push_back(node->camera);
+                cameras->push_back(node->camera);
         }
-        cached_all_cameras_render_generation_ = render_generation_;
+        cached_all_cameras_ = std::move(cameras);
+        cached_all_cameras_render_generation_ = render_generation;
         cached_all_cameras_camera_list_generation_ = camera_list_generation_;
-        cached_all_cameras_valid_ = true;
         return cached_all_cameras_;
     }
 

@@ -19,7 +19,25 @@ void main(uint3 groupId:SV_GroupID,uint lane:SV_GroupIndex,uniform Parameters p)
     uint3 groups=spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
     uint i=groupId.x*256u+lane;
     if(operation==0){if(i>=p.count)return;if(flagAt(p.d,p.countA,i)||!(((Ptr<float,Access.Read>)p.c)[i]>0.0f))return;float logit=((Ptr<float,Access.Read>)p.b)[i];float a=pow(max(1.0f-1.0f/(1.0f+exp(-logit)),0.0f),150.0f)*p.x*p.y;if(a<1e-12f)return;float3 n=normalCurand(mrnfBlock(p.seed,uint64_t(i))).xyz;Ptr<float,Access.ReadWrite> means=(Ptr<float,Access.ReadWrite>)p.a;for(uint j=0;j<3;++j)means[i*3+j]+=clamp(a*n[j],-p.z,p.z);return;}
-    if(operation==1){if(i>=p.count)return;Ptr<float,Access.ReadWrite> opacity=(Ptr<float,Access.ReadWrite>)p.a,scales=(Ptr<float,Access.ReadWrite>)p.b;bool frozen=flagAt(p.c,p.countA,i);if(frozen)return;float od=p.x,sd=p.y;float t=1.0f-p.w;if((od*t!=0.0f || isinf(opacity[i]))&&!isnan(opacity[i])){float prob=1.0f/(1.0f+exp(-opacity[i]));prob=clamp(prob-od*t,1e-12f,asfloat(0x3f7fffffu));opacity[i]=log(prob/(1.0f-prob));}float factor=1.0f-sd*t;for(uint j=0;j<3;++j)scales[i*3+j]=log(max(exp(scales[i*3+j])*factor,1e-12f));return;}
+    if (operation == 1) {
+        if (i >= p.count)
+            return;
+        Ptr<float, Access.ReadWrite> opacity = (Ptr<float, Access.ReadWrite>)p.a, scales = (Ptr<float, Access.ReadWrite>)p.b;
+        bool frozen = flagAt(p.c, p.countA, i);
+        if (frozen)
+            return;
+        float od = p.x, sd = p.y;
+        float t = 1.0f - p.w;
+        if ((p.d == 0 || ((Ptr<float, Access.Read>)p.d)[i] > 0.0f) && (od * t != 0.0f || isinf(opacity[i])) && !isnan(opacity[i])) {
+            float prob = 1.0f / (1.0f + exp(-opacity[i]));
+            prob = clamp(prob - od * t, 1e-12f, asfloat(0x3f7fffffu));
+            opacity[i] = log(prob / (1.0f - prob));
+        }
+        float factor = 1.0f - sd * t;
+        for (uint j = 0; j < 3; ++j)
+            scales[i * 3 + j] = log(max(exp(scales[i * 3 + j]) * factor, 1e-12f));
+        return;
+    }
     if(operation==3){if(i<p.count){Ptr<float,Access.ReadWrite> wm=(Ptr<float,Access.ReadWrite>)p.a,d=(Ptr<float,Access.ReadWrite>)p.b;wm[i]=max(wm[i],d[p.count+i]);d[p.count+i]=0.0f;}return;}
     if(operation==11){if(i>=p.count)return;Ptr<float,Access.Read> means=(Ptr<float,Access.Read>)p.a,scale=(Ptr<float,Access.Read>)p.b;Ptr<uint8_t,Access.ReadWrite> mask=(Ptr<uint8_t,Access.ReadWrite>)p.c;float maxAxis=max(abs(means[i*3]-p.x),max(abs(means[i*3+1]-p.y),abs(means[i*3+2]-p.z)));bool finiteCoord=isfinite(means[i*3])&&isfinite(means[i*3+1])&&isfinite(means[i*3+2]);mask[i]=(scale[i]>p.u0 || (finiteCoord&&maxAxis>p.w))?1u:mask[i];return;}
     if(operation==12){if(i>=p.count)return;float v=((Ptr<float,Access.Read>)p.a)[i]*(((Ptr<float,Access.Read>)p.b)[i]>0.0f?1.0f:0.0f);if(p.c!=0)v*=flagAt(p.c,p.countA,i)?1.0f:0.0f;if(p.d!=0)v*=flagAt(p.d,p.countB,i)?1.0f:0.0f;if(p.e!=0)v*=((Ptr<float,Access.Read>)p.e)[i];((Ptr<float,Access.ReadWrite>)p.f)[i]=v;return;}

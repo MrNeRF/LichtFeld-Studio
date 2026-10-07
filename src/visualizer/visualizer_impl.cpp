@@ -3593,7 +3593,8 @@ namespace lfs::vis {
                 lfs::core::events::cmd::
                     ShowProjectSwitchConfirmation{
                         .new_project = true,
-                        .path = {}}
+                        .path = {},
+                        .stop_training = stop_training}
                         .emit();
                 return;
             }
@@ -3726,7 +3727,8 @@ namespace lfs::vis {
                     .path = {},
                     .create_path = path,
                     .allow_existing_destination_replacement =
-                        allow_existing_destination_replacement}
+                        allow_existing_destination_replacement,
+                    .stop_training = stop_training}
                     .emit();
                 return preflight;
             }
@@ -3844,7 +3846,8 @@ namespace lfs::vis {
                         .new_project = false,
                         .path = path,
                         .keep_asset_manager_open =
-                            keep_asset_manager_open}
+                            keep_asset_manager_open,
+                        .stop_training = stop_training}
                         .emit();
                 return;
             }

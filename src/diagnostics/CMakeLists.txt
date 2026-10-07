@@ -15,13 +15,7 @@ target_include_directories(lfs_diagnostics
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
-        ${CUDAToolkit_INCLUDE_DIRS}
-        ${CMAKE_SOURCE_DIR}/src/core/include
-)
-
-target_link_libraries(lfs_diagnostics
-    PUBLIC
-        $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>
+        ${CMAKE_CURRENT_SOURCE_DIR}/../core/include
 )
 
 target_compile_features(lfs_diagnostics PUBLIC cxx_std_23)

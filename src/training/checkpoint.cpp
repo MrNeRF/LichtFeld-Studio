@@ -512,6 +512,10 @@ namespace lfs::training {
             if (!loaded_strategy_result)
                 throw std::runtime_error("Cannot construct checkpoint strategy: " + loaded_strategy_result.error());
             auto loaded_strategy = std::move(*loaded_strategy_result);
+            // Dataset-derived state belongs to the candidate too: MRNF builds
+            // its camera hull and far-field mask during initialization. Adopting
+            // a candidate without cameras would disable those protections.
+            loaded_strategy->set_training_dataset(strategy.get_training_dataset());
             auto* checkpoint_adopter = dynamic_cast<ICheckpointStateAdopter*>(&strategy);
             if (checkpoint_adopter && checkpoint_adopter->has_checkpoint_runtime_state())
                 loaded_strategy->initialize(loaded_params.optimization);
