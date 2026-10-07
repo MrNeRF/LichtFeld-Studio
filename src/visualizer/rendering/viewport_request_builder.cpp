@@ -469,7 +469,8 @@ namespace lfs::vis {
                       .ring_width = ctx.settings.ring_width,
                       .show_center_markers = ctx.settings.show_center_markers},
                  .cursor =
-                     {.enabled = ctx.cursor_preview.active && overlay_visible,
+                     {.enabled = ctx.cursor_preview.active && ctx.cursor_preview.highlight_splats &&
+                                 overlay_visible,
                       .cursor = {ctx.cursor_preview.x, ctx.cursor_preview.y},
                       .radius = ctx.cursor_preview.radius,
                       .saturation_preview = ctx.cursor_preview.saturation_mode,

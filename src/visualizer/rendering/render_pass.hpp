@@ -34,6 +34,9 @@ namespace lfs::vis {
         std::optional<SplitViewPanelId> panel;
         int focused_gaussian_id = -1;
         SelectionPreviewMode selection_mode{};
+        // A preview that does not re-render on pointer motion must not tint
+        // splats, or the tint stays wherever the last unrelated frame put it.
+        bool highlight_splats = true;
     };
 
     struct GizmoState {

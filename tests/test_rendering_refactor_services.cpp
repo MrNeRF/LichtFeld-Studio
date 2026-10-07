@@ -2688,6 +2688,29 @@ namespace lfs::vis {
         EXPECT_TRUE(right_request.overlay.cursor.enabled);
     }
 
+    // Catches the passive brush hover tinting splats: it never re-renders on motion, so
+    // the first unrelated frame froze a green brush blob where the pointer last rested.
+    TEST(ViewportRequestBuilderTest, CursorPreviewWithoutSplatHighlightLeavesSplatsUntinted) {
+        Viewport viewport;
+        RenderSettings settings;
+        FrameContext ctx{
+            .viewport = viewport,
+            .settings = settings,
+            .render_size = {800, 600},
+            .cursor_preview =
+                {.active = true,
+                 .x = 120.0f,
+                 .y = 80.0f,
+                 .radius = 24.0f,
+                 .add_mode = true,
+                 .highlight_splats = false},
+        };
+
+        EXPECT_FALSE(buildViewportRenderRequest(ctx, {800, 600}).overlay.cursor.enabled);
+        ctx.cursor_preview.highlight_splats = true;
+        EXPECT_TRUE(buildViewportRenderRequest(ctx, {800, 600}).overlay.cursor.enabled);
+    }
+
     TEST(ViewportRequestBuilderTest, TrainingSuppressesInteractiveSelectionOverlayButKeepsRenderMarkers) {
         using lfs::core::DataType;
         using lfs::core::Device;

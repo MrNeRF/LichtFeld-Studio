@@ -16,7 +16,8 @@ namespace lfs::vis {
                               lfs::core::Tensor* selection_tensor,
                               bool saturation_mode, float saturation_amount,
                               std::optional<SplitViewPanelId> panel,
-                              int focused_gaussian_id) {
+                              int focused_gaussian_id,
+                              bool highlight_splats) {
             cursor_preview_.active = active;
             cursor_preview_.x = x;
             cursor_preview_.y = y;
@@ -27,6 +28,7 @@ namespace lfs::vis {
             cursor_preview_.saturation_amount = saturation_amount;
             cursor_preview_.panel = panel;
             cursor_preview_.focused_gaussian_id = focused_gaussian_id;
+            cursor_preview_.highlight_splats = highlight_splats;
         }
 
         void clearCursorPreview() {
