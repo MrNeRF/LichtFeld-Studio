@@ -987,7 +987,8 @@ namespace lfs::core {
             if (node->model) {
                 build.inputs.push_back({borrowCombinedModel(node->model.get()),
                                         isNodeEffectivelyVisible(node->id),
-                                        selection_offset});
+                                        selection_offset,
+                                        node->id});
             }
             selection_offset += node_size;
         }
@@ -1313,9 +1314,24 @@ namespace lfs::core {
         }
         cached_combined_ = std::move(build.model);
         cached_combined_includes_hidden_ = build.includes_hidden_splats;
+        cached_combined_node_ids_.clear();
+        bool missing_node_id = false;
+        for (const auto& input : build.inputs) {
+            if (input.model && (build.includes_hidden_splats || input.visible)) {
+                if (input.node_id == NULL_NODE) {
+                    missing_node_id = true;
+                    break;
+                }
+                cached_combined_node_ids_.push_back(input.node_id);
+            }
+        }
+        if (missing_node_id) {
+            cached_combined_node_ids_.clear();
+        }
         cached_transform_indices_ = std::move(build.transform_indices);
         cached_visible_selection_indices_ = std::move(build.visible_selection_indices);
         single_node_model_ = nullptr;
+        single_node_id_ = NULL_NODE;
         model_cache_valid_.store(true, std::memory_order_release);
         transform_cache_valid_.store(false, std::memory_order_release);
         invalidateVisibleSelectionMaskCache();
@@ -2421,6 +2437,31 @@ namespace lfs::core {
         return visible;
     }
 
+    std::vector<Scene::VisibleSplatNodeSlot> Scene::getCombinedSplatNodeSlots() const {
+        if (consolidated_ && !consolidated_node_slots_.empty()) {
+            std::vector<VisibleSplatNodeSlot> slots;
+            slots.reserve(consolidated_node_slots_.size());
+            for (size_t slot_index = 0; slot_index < consolidated_node_slots_.size(); ++slot_index) {
+                const auto id = consolidated_node_slots_[slot_index].id;
+                slots.push_back({.node = id == NULL_NODE ? nullptr : getNodeById(id), .slot_index = slot_index});
+            }
+            return slots;
+        }
+        if (single_node_model_) {
+            const auto* node = single_node_id_ == NULL_NODE ? nullptr : getNodeById(single_node_id_);
+            return {{.node = node, .slot_index = 0}};
+        }
+        if (cached_combined_ && !cached_combined_node_ids_.empty()) {
+            std::vector<VisibleSplatNodeSlot> slots;
+            slots.reserve(cached_combined_node_ids_.size());
+            for (size_t slot_index = 0; slot_index < cached_combined_node_ids_.size(); ++slot_index) {
+                slots.push_back({.node = getNodeById(cached_combined_node_ids_[slot_index]), .slot_index = slot_index});
+            }
+            return slots;
+        }
+        return getVisibleSplatNodeSlots();
+    }
+
     std::shared_ptr<SplatData> Scene::SplatSnapshot::materialize() const {
         if (!data || row_offset > data->size() || row_count > data->size() - row_offset)
             throw std::runtime_error("Invalid scene snapshot range.");
@@ -2624,8 +2665,10 @@ namespace lfs::core {
             // Point single-node cache at the training model without copying SH.
             if (const auto* node = getNode(training_model_node_); node && node->model) {
                 single_node_model_ = node->model.get();
+                single_node_id_ = node->id;
                 cached_combined_.reset();
                 cached_combined_includes_hidden_ = false;
+                cached_combined_node_ids_.clear();
                 model_cache_valid_.store(true, std::memory_order_release);
             }
             return;
@@ -2689,6 +2732,9 @@ namespace lfs::core {
         if (visible_nodes.empty()) {
             cached_combined_.reset();
             cached_combined_includes_hidden_ = false;
+            cached_combined_node_ids_.clear();
+            single_node_model_ = nullptr;
+            single_node_id_ = NULL_NODE;
             cached_transform_indices_.reset();
             cached_visible_selection_indices_.reset();
             invalidateVisibleSelectionMaskCache();
@@ -2700,8 +2746,10 @@ namespace lfs::core {
         if (!include_hidden_splats && visible_nodes.size() == 1) {
             const auto* node = visible_nodes[0];
             single_node_model_ = node->model.get();
+            single_node_id_ = node->id;
             cached_combined_.reset();
             cached_combined_includes_hidden_ = false;
+            cached_combined_node_ids_.clear();
             cached_transform_indices_.reset();
             cached_visible_selection_indices_.reset();
             single_node_selection_offset_ = visible_selection_offsets[0];
@@ -2729,7 +2777,8 @@ namespace lfs::core {
             if (node->model) {
                 inputs.push_back({borrowCombinedModel(node->model.get()),
                                   include_hidden_splats || isNodeEffectivelyVisible(node->id),
-                                  selection_offset});
+                                  selection_offset,
+                                  node->id});
             }
             selection_offset += node_size;
         }
@@ -2741,6 +2790,12 @@ namespace lfs::core {
             std::move(inputs), full_selection_count, combined_model_allocator_,
             render_generation_.load(std::memory_order_acquire), include_hidden_splats);
         cached_combined_ = built.model;
+        cached_combined_node_ids_.clear();
+        for (const auto& input : built.inputs) {
+            if (input.model && (include_hidden_splats || input.visible)) {
+                cached_combined_node_ids_.push_back(input.node_id);
+            }
+        }
         cached_transform_indices_ = built.transform_indices;
         cached_visible_selection_indices_ = built.visible_selection_indices;
         cached_combined_includes_hidden_ = include_hidden_splats;
@@ -4336,6 +4391,7 @@ namespace lfs::core {
         std::swap(next_node_id_, staged->next_node_id_);
 
         cached_combined_.swap(staged->cached_combined_);
+        cached_combined_node_ids_.swap(staged->cached_combined_node_ids_);
         cached_transform_indices_.swap(
             staged->cached_transform_indices_);
         cached_visible_selection_indices_.swap(
@@ -4344,6 +4400,7 @@ namespace lfs::core {
         consolidated_node_slots_.swap(
             staged->consolidated_node_slots_);
         single_node_model_ = staged->single_node_model_;
+        single_node_id_ = staged->single_node_id_;
         consolidated_ = staged->consolidated_;
         ++consolidated_generation_;
         model_cache_valid_.store(false, std::memory_order_release);

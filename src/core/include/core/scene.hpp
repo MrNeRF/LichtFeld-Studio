@@ -425,6 +425,7 @@ namespace lfs::core {
             std::shared_ptr<const lfs::core::SplatData> model;
             bool visible = true;
             size_t selection_offset = 0;
+            NodeId node_id = NULL_NODE;
         };
 
         struct CombinedModelBuild {
@@ -502,6 +503,7 @@ namespace lfs::core {
             size_t slot_index = 0;
         };
         [[nodiscard]] std::vector<VisibleSplatNodeSlot> getVisibleSplatNodeSlots() const;
+        [[nodiscard]] std::vector<VisibleSplatNodeSlot> getCombinedSplatNodeSlots() const;
 
         struct SplatSnapshot {
             std::shared_ptr<lfs::core::SplatData> data;
@@ -772,8 +774,10 @@ namespace lfs::core {
         mutable uint64_t cached_visible_selection_mask_visibility_generation_ = 0;
         mutable std::atomic<bool> model_cache_valid_{false};
         mutable const lfs::core::SplatData* single_node_model_ = nullptr;
+        mutable NodeId single_node_id_ = NULL_NODE;
         mutable size_t single_node_selection_offset_ = 0;
         mutable size_t single_node_full_selection_count_ = 0;
+        mutable std::vector<NodeId> cached_combined_node_ids_;
 
         mutable std::mutex combined_model_mutex_;
         SplatTensorAllocator combined_model_allocator_;

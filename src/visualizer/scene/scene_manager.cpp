@@ -334,15 +334,6 @@ namespace lfs::vis {
             }
         }
 
-        [[nodiscard]] bool hasActiveSelectionFilter(const RenderingManager* const rendering_manager) {
-            if (!rendering_manager) {
-                return false;
-            }
-
-            const auto settings = rendering_manager->getSettings();
-            return settings.depth_filter_enabled || settings.crop_filter_for_selection;
-        }
-
         [[nodiscard]] SelectionMode selectionModeFromString(const std::string& mode) {
             if (mode == "add") {
                 return SelectionMode::Add;
@@ -6101,9 +6092,7 @@ namespace lfs::vis {
 
     void SceneManager::invertSelection() {
         auto* rendering_manager = services().renderingOrNull();
-        if (selection_service_ &&
-            rendering_manager &&
-            hasActiveSelectionFilter(rendering_manager)) {
+        if (selection_service_ && rendering_manager) {
             (void)selection_service_->invertFiltered();
             return;
         }
@@ -6173,9 +6162,7 @@ namespace lfs::vis {
         const bool is_selection_tool = (tool == ToolType::Selection);
         auto* rendering_manager = services().renderingOrNull();
 
-        if (selection_service_ &&
-            rendering_manager &&
-            hasActiveSelectionFilter(rendering_manager)) {
+        if (selection_service_ && rendering_manager) {
             (void)selection_service_->selectAllFiltered();
             return;
         }

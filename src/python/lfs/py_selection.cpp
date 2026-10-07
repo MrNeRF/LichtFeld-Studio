@@ -575,6 +575,8 @@ namespace lfs::python {
                     current = core::cuda::selection_grow(
                         current, model->means(), radius, group_id,
                         transform_context.indices_ptr(), transform_context.transforms_ptr());
+                if (auto* selection_service = get_ss())
+                    selection_service->restrictToEffectiveNodeScope(current);
                 apply_selection_state_with_undo(
                     *sm, "selection.grow",
                     [updated = std::move(current)](core::Scene& target_scene) mutable {

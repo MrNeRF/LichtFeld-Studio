@@ -108,6 +108,7 @@ namespace lfs::vis {
         [[nodiscard]] SelectionResult applyMask(const std::vector<uint8_t>& mask, SelectionMode mode);
         [[nodiscard]] SelectionResult applyMask(const core::Tensor& mask, SelectionMode mode);
         [[nodiscard]] SelectionResult previewMask(const core::Tensor& mask, SelectionMode mode);
+        void restrictToEffectiveNodeScope(core::Tensor& selection) const;
 
         void beginStroke();
         [[nodiscard]] core::Tensor* getStrokeSelection();
@@ -148,6 +149,7 @@ namespace lfs::vis {
         void setTestingScreenPositionsForCamera(int camera_index, std::shared_ptr<core::Tensor> screen_positions);
         void setTestingViewport(ViewportInfo viewport);
         void setTestingHoveredGaussianId(std::optional<int> hovered_gaussian_id);
+        [[nodiscard]] const core::Tensor* interactivePreviewSelectionForTesting() const;
         // Applies completed GPU count readbacks without waiting. The scene
         // manager calls this once per render-state build; selection commands
         // also poll before starting a new commit.
@@ -303,13 +305,19 @@ namespace lfs::vis {
         void applyDepthFilter(core::Tensor& selection) const;
         void clearInteractivePreviewState();
         bool allowPassiveHoverPreview(glm::vec2 cursor_pos);
-        [[nodiscard]] std::vector<bool> effectiveNodeMask(bool restrict_to_selected_nodes) const;
+        [[nodiscard]] const std::vector<bool>& effectiveNodeMask(bool restrict_to_selected_nodes) const;
         [[nodiscard]] SelectionFilterState defaultFilterState() const;
 
         SceneManager* scene_manager_;
         RenderingManager* rendering_manager_;
 
         bool stroke_active_ = false;
+        mutable bool effective_node_mask_cache_valid_ = false;
+        mutable uint64_t effective_node_mask_render_generation_ = 0;
+        mutable uint32_t effective_node_mask_selection_generation_ = 0;
+        mutable const core::SplatData* effective_node_mask_model_ = nullptr;
+        mutable bool effective_node_mask_restrict_to_selected_ = false;
+        mutable std::vector<bool> effective_node_mask_cache_;
         std::optional<glm::vec2> last_passive_hover_position_;
         bool passive_hover_suppressed_ = false;
         core::Tensor stroke_selection_;

@@ -291,6 +291,40 @@ namespace lfs::vis {
             return std::any_of(node_mask.begin(), node_mask.end(), [](const bool enabled) { return !enabled; });
         }
 
+        [[nodiscard]] std::vector<bool> unlockedVisibleNodeMask(
+            const core::Scene& scene,
+            const std::vector<bool>& requested_node_mask) {
+            const auto combined_slots = scene.getCombinedSplatNodeSlots();
+            std::vector<bool> node_mask(combined_slots.size(), false);
+            for (const auto& slot : combined_slots) {
+                if (slot.slot_index >= node_mask.size()) {
+                    continue;
+                }
+                if (!slot.node || !scene.isNodeEffectivelyVisible(slot.node->id)) {
+                    continue;
+                }
+                node_mask[slot.slot_index] = true;
+                for (auto* node = slot.node; node;
+                     node = node->parent_id == core::NULL_NODE ? nullptr : scene.getNodeById(node->parent_id)) {
+                    if (static_cast<bool>(node->locked)) {
+                        node_mask[slot.slot_index] = false;
+                        break;
+                    }
+                }
+            }
+
+            if (!requested_node_mask.empty()) {
+                if (requested_node_mask.size() != node_mask.size()) {
+                    return std::vector<bool>(node_mask.size(), false);
+                }
+                for (size_t i = 0; i < node_mask.size(); ++i) {
+                    node_mask[i] = node_mask[i] && requested_node_mask[i];
+                }
+            }
+
+            return node_mask;
+        }
+
         [[nodiscard]] bool copySelectionIfSameSize(const core::Tensor& source, core::Tensor& output) {
             if (!source.is_valid() || !output.is_valid() || source.numel() != output.numel()) {
                 return false;
@@ -1431,7 +1465,7 @@ namespace lfs::vis {
         const auto inverted = current_active.logical_xor(toggle_mask);
 
         return commitSelection(
-            inverted, SelectionMode::Replace, {}, SelectionFilterState{}, "selection.invert.filtered");
+            inverted, SelectionMode::Replace, node_mask, SelectionFilterState{}, "selection.invert.filtered");
     }
 
     SelectionResult SelectionService::applyMask(const std::vector<uint8_t>& mask, SelectionMode mode) {
@@ -1599,6 +1633,12 @@ namespace lfs::vis {
 
     void SelectionService::setTestingHoveredGaussianId(std::optional<int> hovered_gaussian_id) {
         testing_hovered_gaussian_id_ = hovered_gaussian_id;
+    }
+
+    const core::Tensor* SelectionService::interactivePreviewSelectionForTesting() const {
+        return interactive_selection_.working_selection.is_valid()
+                   ? &interactive_selection_.working_selection
+                   : nullptr;
     }
 
     std::optional<SelectionService::ViewerViewportContext> SelectionService::resolveViewerViewportContext(
@@ -2323,6 +2363,8 @@ namespace lfs::vis {
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
+        auto& scene = scene_manager_->getScene();
+        const auto effective_node_mask = unlockedVisibleNodeMask(scene, node_mask);
         pollPendingSelectionCounts();
         auto selection_mask = [&] {
             LOG_TIMER_THRESHOLD("SelectionService::commitSelection.ensure_cuda_bool_mask", 1.0);
@@ -2343,10 +2385,9 @@ namespace lfs::vis {
 
         {
             LOG_TIMER_THRESHOLD("SelectionService::commitSelection.apply_filters", 1.0);
-            applyFilters(selection_mask, filters, node_mask);
+            applyFilters(selection_mask, filters, effective_node_mask);
         }
 
-        auto& scene = scene_manager_->getScene();
         const auto existing_mask = scene.getSelectionMask();
         const uint8_t group_id = scene.getActiveSelectionGroup();
         const size_t full_count = scene.getSelectionGaussianCount();
@@ -2368,7 +2409,7 @@ namespace lfs::vis {
         const size_t selection_count = selection_mask.numel();
         const bool add_mode = (apply_mode != SelectionMode::Remove);
         const bool replace_mode = (apply_mode == SelectionMode::Replace);
-        const bool node_scope_restricts = nodeMaskRestrictsSelection(node_mask);
+        const bool node_scope_restricts = nodeMaskRestrictsSelection(effective_node_mask);
         const bool scoped_replace = replace_mode && existing_full_mask && node_scope_restricts;
 
         std::shared_ptr<core::Tensor> commit_transform_indices;
@@ -2378,7 +2419,7 @@ namespace lfs::vis {
             if (commit_transform_indices &&
                 commit_transform_indices->is_valid() &&
                 commit_transform_indices->numel() == selection_count) {
-                commit_node_mask = &node_mask;
+                commit_node_mask = &effective_node_mask;
             }
         }
 
@@ -2410,7 +2451,7 @@ namespace lfs::vis {
                 return expandSelectionToSceneMask(
                     scene_manager_, selection_mask, apply_mode, group_id,
                     existing_full_mask,
-                    node_mask);
+                    effective_node_mask);
             }();
         }
         if (!scene_selection_mask.is_valid() && !use_indexed_commit) {
@@ -3706,11 +3747,68 @@ namespace lfs::vis {
         }
     }
 
-    std::vector<bool> SelectionService::effectiveNodeMask(const bool restrict_to_selected_nodes) const {
-        if (!scene_manager_ || !restrict_to_selected_nodes || !scene_manager_->hasSelectedNode()) {
-            return {};
+    const std::vector<bool>& SelectionService::effectiveNodeMask(const bool restrict_to_selected_nodes) const {
+        if (!scene_manager_) {
+            static const std::vector<bool> empty;
+            return empty;
         }
-        return scene_manager_->getSelectedNodeMask();
+        const auto& scene = scene_manager_->getScene();
+        const auto render_generation = scene.renderGeneration();
+        const auto selection_generation = scene_manager_->selectionState().generation();
+        const auto* const model = scene.peekCombinedModel();
+        if (effective_node_mask_cache_valid_ &&
+            effective_node_mask_render_generation_ == render_generation &&
+            effective_node_mask_selection_generation_ == selection_generation &&
+            effective_node_mask_model_ == model &&
+            effective_node_mask_restrict_to_selected_ == restrict_to_selected_nodes) {
+            return effective_node_mask_cache_;
+        }
+        std::vector<bool> selected_node_mask;
+        if (restrict_to_selected_nodes && scene_manager_->hasSelectedNode()) {
+            const auto slots = scene.getCombinedSplatNodeSlots();
+            selected_node_mask.assign(slots.size(), false);
+            auto selected_ids = scene_manager_->getSelectedNodeIds();
+            for (auto& selected_id : selected_ids) {
+                const auto* selected = scene.getNodeById(selected_id);
+                if (selected && selected->type == core::NodeType::CROPBOX &&
+                    selected->parent_id != core::NULL_NODE) {
+                    selected_id = selected->parent_id;
+                }
+            }
+            for (const auto& slot : slots) {
+                if (!slot.node) {
+                    continue;
+                }
+                for (auto* node = slot.node; node;
+                     node = node->parent_id == core::NULL_NODE ? nullptr : scene.getNodeById(node->parent_id)) {
+                    if (std::find(selected_ids.begin(), selected_ids.end(), node->id) != selected_ids.end()) {
+                        selected_node_mask[slot.slot_index] = true;
+                        break;
+                    }
+                }
+            }
+        }
+        effective_node_mask_cache_ = unlockedVisibleNodeMask(scene, selected_node_mask);
+        effective_node_mask_render_generation_ = render_generation;
+        effective_node_mask_selection_generation_ = selection_generation;
+        effective_node_mask_model_ = model;
+        effective_node_mask_restrict_to_selected_ = restrict_to_selected_nodes;
+        effective_node_mask_cache_valid_ = true;
+        return effective_node_mask_cache_;
+    }
+
+    void SelectionService::restrictToEffectiveNodeScope(core::Tensor& selection) const {
+        if (!scene_manager_ || !selection.is_valid()) {
+            return;
+        }
+        const auto node_mask = effectiveNodeMask(true);
+        if (!nodeMaskRestrictsSelection(node_mask)) {
+            return;
+        }
+        const auto transform_indices = scene_manager_->getScene().getTransformIndices();
+        if (transform_indices && transform_indices->is_valid()) {
+            rendering::filter_selection_by_node_mask(selection, *transform_indices, node_mask);
+        }
     }
 
     SelectionFilterState SelectionService::defaultFilterState() const {
