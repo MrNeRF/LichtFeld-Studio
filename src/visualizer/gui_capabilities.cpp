@@ -620,6 +620,44 @@ namespace lfs::vis::cap {
             return {};
         }
 
+        std::vector<std::string> top_level_transform_targets(
+            const core::Scene& scene,
+            const std::vector<std::string>& targets) {
+            std::unordered_set<core::NodeId> selected_ids;
+            selected_ids.reserve(targets.size());
+            for (const auto& name : targets) {
+                if (const auto* const node = scene.getNode(name))
+                    selected_ids.insert(node->id);
+            }
+
+            std::vector<std::string> top_level_names;
+            top_level_names.reserve(targets.size());
+            std::unordered_set<core::NodeId> emitted_ids;
+            emitted_ids.reserve(targets.size());
+            for (const auto& name : targets) {
+                const auto* const node = scene.getNode(name);
+                if (!node) {
+                    top_level_names.push_back(name);
+                    continue;
+                }
+                if (!emitted_ids.insert(node->id).second)
+                    continue;
+
+                bool ancestor_selected = false;
+                for (core::NodeId parent_id = node->parent_id; parent_id != core::NULL_NODE;) {
+                    if (selected_ids.contains(parent_id)) {
+                        ancestor_selected = true;
+                        break;
+                    }
+                    const auto* const parent = scene.getNodeById(parent_id);
+                    parent_id = parent ? parent->parent_id : core::NULL_NODE;
+                }
+                if (!ancestor_selected)
+                    top_level_names.push_back(name);
+            }
+            return top_level_names;
+        }
+
         core::NodeId find_attached_child_node(const core::Scene& scene,
                                               const core::NodeId parent_id,
                                               const core::NodeType type) {
@@ -853,10 +891,11 @@ namespace lfs::vis::cap {
         if (!translation && !rotation && !scale)
             return std::unexpected("At least one transform component must be provided");
 
+        const auto transform_targets = top_level_transform_targets(scene_manager.getScene(), targets);
         auto entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
-        entry->captureTransforms(targets);
+        entry->captureTransforms(transform_targets);
 
-        for (const auto& name : targets) {
+        for (const auto& name : transform_targets) {
             const auto world_transform = scene_coords::nodeVisualizerWorldTransform(scene_manager.getScene(), name);
             if (!world_transform)
                 return std::unexpected("Node not found: " + name);
@@ -885,10 +924,11 @@ namespace lfs::vis::cap {
         if (targets.empty())
             return std::unexpected("No transform targets provided");
 
+        const auto transform_targets = top_level_transform_targets(scene_manager.getScene(), targets);
         auto entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
-        entry->captureTransforms(targets);
+        entry->captureTransforms(transform_targets);
 
-        for (const auto& name : targets) {
+        for (const auto& name : transform_targets) {
             const auto* node = scene_manager.getScene().getNode(name);
             if (!node)
                 return std::unexpected(std::format("Cannot transform '{}': node not found", name));
@@ -896,7 +936,7 @@ namespace lfs::vis::cap {
                 return std::unexpected(std::format("Cannot transform '{}': node is locked", name));
         }
 
-        for (const auto& name : targets) {
+        for (const auto& name : transform_targets) {
             if (!scene_manager.setNodeTransform(name, transform))
                 return std::unexpected(std::format("Cannot transform '{}': node is locked", name));
         }
@@ -913,10 +953,11 @@ namespace lfs::vis::cap {
         if (targets.empty())
             return std::unexpected("No transform targets provided");
 
+        const auto transform_targets = top_level_transform_targets(scene_manager.getScene(), targets);
         auto entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
-        entry->captureTransforms(targets);
+        entry->captureTransforms(transform_targets);
 
-        for (const auto& name : targets) {
+        for (const auto& name : transform_targets) {
             const auto world_transform = scene_coords::nodeVisualizerWorldTransform(scene_manager.getScene(), name);
             if (!world_transform)
                 return std::unexpected("Node not found: " + name);
@@ -939,11 +980,12 @@ namespace lfs::vis::cap {
         if (targets.empty())
             return std::unexpected("No transform targets provided");
 
+        const auto transform_targets = top_level_transform_targets(scene_manager.getScene(), targets);
         auto entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
-        entry->captureTransforms(targets);
+        entry->captureTransforms(transform_targets);
 
         const glm::mat4 rotation_delta = glm::eulerAngleXYZ(value.x, value.y, value.z);
-        for (const auto& name : targets) {
+        for (const auto& name : transform_targets) {
             const auto world_transform = scene_coords::nodeVisualizerWorldTransform(scene_manager.getScene(), name);
             if (!world_transform)
                 return std::unexpected("Node not found: " + name);
@@ -969,10 +1011,11 @@ namespace lfs::vis::cap {
         if (targets.empty())
             return std::unexpected("No transform targets provided");
 
+        const auto transform_targets = top_level_transform_targets(scene_manager.getScene(), targets);
         auto entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
-        entry->captureTransforms(targets);
+        entry->captureTransforms(transform_targets);
 
-        for (const auto& name : targets) {
+        for (const auto& name : transform_targets) {
             const auto world_transform = scene_coords::nodeVisualizerWorldTransform(scene_manager.getScene(), name);
             if (!world_transform)
                 return std::unexpected("Node not found: " + name);
