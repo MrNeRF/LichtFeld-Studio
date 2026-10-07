@@ -1164,6 +1164,67 @@ namespace lfs::vis {
         EXPECT_TRUE(orbit_controller.isCameraDragging());
     }
 
+    // A translate drag ends with the pointer still over the handle. That hover must not
+    // swallow a middle-button orbit, and it must not outlive the pointer leaving the gizmo.
+    TEST_F(WindowInputDispatchTest, TranslateReleaseHoverKeepsMiddleOrbitAndClearsOnLeave) {
+        auto& scene_manager = *viewer_->getSceneManager();
+        auto& scene = viewer_->getScene();
+        const core::NodeId node_id = scene.addGroup("Orbit after translate");
+        ASSERT_NE(node_id, core::NULL_NODE);
+        scene_manager.selectNode(node_id);
+        viewer_->getEditorContext().update(&scene_manager, viewer_->getTrainerManager());
+        viewer_->getEditorContext().setActiveTool(ToolType::Translate);
+        UnifiedToolRegistry::instance().setActiveTool("builtin.translate");
+        auto& gizmo = gui_->gizmo();
+        gizmo.setOperation(gui::GizmoOperation::Translate);
+        gizmo.setTransformSpace(TransformSpace::World);
+        gizmo.setPivotMode(PivotMode::Origin);
+
+        auto& camera = viewer_->getViewport().camera;
+        camera.t = {0.0f, 0.0f, 12.0f};
+        camera.pivot = {0.0f, 0.0f, 0.0f};
+        camera.R = rendering::makeVisualizerLookAtRotation(camera.t, camera.pivot);
+
+        gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
+        const gui::ViewportLayout layout{.pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+        gizmo.updateToolState(ui, false);
+        auto& frame = frameInput();
+        const auto render_at = [&](const float x, const float y, const bool down, const bool clicked) {
+            frame.mouse_x = x;
+            frame.mouse_y = y;
+            frame.mouse_down[0] = down;
+            frame.mouse_clicked[0] = clicked;
+            frame.mouse_released[0] = false;
+            gizmo.renderNodeTransformGizmo(ui, layout);
+        };
+
+        render_at(236.0f, 150.0f, false, false);
+        ASSERT_TRUE(gui::isTranslationGizmoHovered());
+        render_at(236.0f, 150.0f, true, true);
+        render_at(266.0f, 150.0f, true, false);
+        ASSERT_TRUE(gui::isTranslationGizmoActive());
+        render_at(266.0f, 150.0f, false, false);
+        ASSERT_FALSE(gui::isTranslationGizmoActive());
+        ASSERT_TRUE(gui::isTranslationGizmoHovered());
+        gui::guiFocusState().want_capture_mouse = false;
+
+        Viewport orbit_viewport(400, 300);
+        InputController orbit_controller(nullptr, orbit_viewport);
+        orbit_controller.updateViewportBounds(0.0f, 0.0f, 400.0f, 300.0f);
+        orbit_controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE), input::ACTION_PRESS,
+                                           266.0, 150.0);
+        EXPECT_TRUE(orbit_controller.isCameraDragging());
+        orbit_controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE), input::ACTION_RELEASE,
+                                           266.0, 150.0);
+
+        context_->ProcessMouseMove(60, 260, 0);
+        EXPECT_TRUE(gui_->passiveMouseMoveNeedsRender(60.0f, 260.0f));
+        render_at(60.0f, 260.0f, false, false);
+        EXPECT_FALSE(gui::isTranslationGizmoHovered());
+        gui::guiFocusState().want_capture_mouse = false;
+        EXPECT_FALSE(gui_->passiveMouseMoveNeedsRender(60.0f, 260.0f));
+    }
+
     TEST_F(WindowInputDispatchTest, TranslateXAxisCenterlineDragSurvivesSmallViewTilts) {
         for (const float tilt : {0.0f, 1.0f, 2.0f, 3.0f, 5.0f}) {
             SCOPED_TRACE(tilt);

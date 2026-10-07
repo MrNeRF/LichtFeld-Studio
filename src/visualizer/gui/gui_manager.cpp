@@ -8306,6 +8306,11 @@ namespace lfs::vis::gui {
             return true;
         }
 
+        // Gizmo hover is refreshed only when the gizmo is drawn. Without a frame,
+        // a pointer that left the gizmo keeps claiming the next viewport press.
+        if (isTransformGizmoOverOrUsing())
+            return true;
+
         if (!guiFocusState().want_capture_mouse && isPositionInViewport(mouse_x, mouse_y)) {
             if (auto* const sel = viewer_ ? viewer_->getSelectionTool() : nullptr; sel && sel->isEnabled()) {
                 return selectionCursorNeedsRender(mouse_x, mouse_y);

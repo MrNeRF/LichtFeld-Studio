@@ -898,8 +898,11 @@ namespace lfs::vis {
             // Pivot placement is a viewport-global double-click gesture and must
             // remain available when an editing gizmo is merely hovered. Active
             // gizmo manipulation still owns the pointer until the drag finishes.
+            // Gizmos only grab the left button, so hovering one never blocks
+            // camera navigation on the other buttons.
             if (isTransformGizmoUsing() ||
-                (over_transform_gizmo && bound_action != input::Action::CAMERA_SET_PIVOT)) {
+                (is_left_button && over_transform_gizmo &&
+                 bound_action != input::Action::CAMERA_SET_PIVOT)) {
                 return;
             }
 
