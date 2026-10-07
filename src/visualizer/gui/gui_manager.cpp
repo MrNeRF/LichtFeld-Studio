@@ -4559,7 +4559,7 @@ namespace lfs::vis::gui {
             viewer_->getRenderingManager()->setViewportResizeActive(true);
             int ww = 0;
             int wh = 0;
-            SDL_GetWindowSize(viewer_->getWindow(), &ww, &wh);
+            SDL_GetWindowSizeInPixels(viewer_->getWindow(), &ww, &wh);
             ScreenState ss;
             ss.work_pos = {0.0f, 0.0f};
             ss.work_size = {static_cast<float>(ww), static_cast<float>(wh)};
@@ -8425,7 +8425,7 @@ namespace lfs::vis::gui {
         }
         if (ui_visibility_resize_active_)
             return;
-        const auto size = viewer_->getWindowManager()->getWindowSize();
+        const auto size = viewer_->getWindowManager()->getFramebufferSize();
         const float menu_h = rml_menu_bar_.barHeight();
         const float status_h = PanelLayoutManager::STATUS_BAR_HEIGHT * current_ui_scale_;
         const ScreenState screen{
@@ -8496,7 +8496,7 @@ namespace lfs::vis::gui {
         int window_w = 0;
         int window_h = 0;
         if (viewer_ && viewer_->getWindow()) {
-            SDL_GetWindowSize(viewer_->getWindow(), &window_w, &window_h);
+            SDL_GetWindowSizeInPixels(viewer_->getWindow(), &window_w, &window_h);
         }
         const float work_w = static_cast<float>(window_w);
         const float work_h = static_cast<float>(window_h);

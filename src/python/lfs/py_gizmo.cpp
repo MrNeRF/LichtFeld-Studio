@@ -12,6 +12,7 @@
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "visualizer/input/sdl_coordinate_utils.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
 
@@ -39,7 +40,7 @@ namespace lfs::python {
             static bool previous_left_down = false;
             float mouse_x = 0.0f;
             float mouse_y = 0.0f;
-            const SDL_MouseButtonFlags buttons = SDL_GetMouseState(&mouse_x, &mouse_y);
+            const SDL_MouseButtonFlags buttons = lfs::vis::input::mouseStateInPixels(SDL_GetMouseFocus(), &mouse_x, &mouse_y);
             const bool left_down = (buttons & SDL_BUTTON_LMASK) != 0;
             const bool left_clicked = left_down && !previous_left_down;
             previous_left_down = left_down;
