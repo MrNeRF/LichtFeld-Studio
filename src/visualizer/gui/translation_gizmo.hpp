@@ -51,5 +51,6 @@ namespace lfs::vis::gui {
 
     [[nodiscard]] bool isTranslationGizmoHovered();
     [[nodiscard]] bool isTranslationGizmoActive();
+    void cancelTranslationGizmoDrag();
 
 } // namespace lfs::vis::gui

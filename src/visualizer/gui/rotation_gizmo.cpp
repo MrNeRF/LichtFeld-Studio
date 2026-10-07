@@ -696,4 +696,9 @@ namespace lfs::vis::gui {
         return g_active.active;
     }
 
+    void cancelRotationGizmoDrag() {
+        g_active = ActiveState{};
+        g_hovered = false;
+    }
+
 } // namespace lfs::vis::gui

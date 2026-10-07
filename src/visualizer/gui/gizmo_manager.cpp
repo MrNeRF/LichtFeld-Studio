@@ -3120,6 +3120,40 @@ namespace lfs::vis::gui {
         current_operation_ = GizmoOperation::Translate;
     }
 
+    bool GizmoManager::cancelActiveNodeTransformDrag() {
+        if (!node_gizmo_active_ || node_gizmo_node_names_.empty() || node_transforms_before_drag_.empty()) {
+            return false;
+        }
+
+        auto* const scene_manager = viewer_ ? viewer_->getSceneManager() : nullptr;
+        if (!scene_manager) {
+            return false;
+        }
+
+        const size_t restore_count = std::min(node_gizmo_node_names_.size(), node_transforms_before_drag_.size());
+        for (size_t i = 0; i < restore_count; ++i) {
+            scene_manager->setNodeTransform(node_gizmo_node_names_[i], node_transforms_before_drag_[i]);
+        }
+
+        cancelTranslationGizmoDrag();
+        cancelRotationGizmoDrag();
+        cancelScaleGizmoDrag();
+        cancelBoundsGizmoDrag();
+        node_gizmo_active_ = false;
+        node_bounds_scale_active_ = false;
+        node_selection_bounds_scale_active_ = false;
+        node_gizmo_node_names_.clear();
+        node_transforms_before_drag_.clear();
+        node_original_visualizer_world_transforms_.clear();
+
+        if (auto* const rendering_manager = viewer_->getRenderingManager()) {
+            rendering_manager->setCropboxGizmoActive(false);
+            rendering_manager->setEllipsoidGizmoActive(false);
+            rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, FrameReason::SceneChange);
+        }
+        return true;
+    }
+
     void GizmoManager::setSelectionSubMode(SelectionSubMode mode) {
         const bool was_volume_mode = isSelectionVolumeSubMode(selection_mode_);
         selection_mode_ = mode;

@@ -878,6 +878,10 @@ namespace lfs::vis {
         }
 
         const bool is_right_button = button == static_cast<int>(input::AppMouseButton::RIGHT);
+        if (action == input::ACTION_PRESS && is_right_button && isTransformGizmoUsing() && gui &&
+            gui->gizmo().cancelActiveNodeTransformDrag()) {
+            return;
+        }
         if (action == input::ACTION_PRESS &&
             is_right_button &&
             pending_camera_context_menu_.active &&
@@ -1669,6 +1673,11 @@ namespace lfs::vis {
         const bool gui_keyboard_focus = input_router_
                                             ? input_router_->keyboardFocus() == input::InputTarget::Gui
                                             : gui::guiFocusState().want_capture_keyboard;
+        if (action == input::ACTION_PRESS && logical_key == input::KEY_ESCAPE &&
+            isTransformGizmoUsing() && gui && gui->gizmo().cancelActiveNodeTransformDrag()) {
+            return;
+        }
+
         if (action == input::ACTION_PRESS && logical_key == input::KEY_ESCAPE &&
             gui_keyboard_focus) {
             return;
