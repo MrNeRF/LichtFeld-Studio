@@ -147,6 +147,7 @@ namespace lfs::vis::gui {
         bool has_viewport_geometry_ = false;
         Rml::Element* root_ = nullptr;
         Rml::Element* perf_strip_ = nullptr;
+        Rml::Element* perf_strip_header_ = nullptr;
         Rml::Element* perf_card_ = nullptr;
         Rml::Element* perf_rate_ = nullptr;
         Rml::Element* perf_vram_process_ = nullptr;
