@@ -1904,6 +1904,14 @@ namespace lfs::core {
     }
 
     std::vector<bool> Scene::getNodeVisibilityMask() const {
+        if (const auto pending_ids = pendingRebuildSlotIds(); !pending_ids.empty()) {
+            std::vector<bool> mask;
+            mask.reserve(pending_ids.size());
+            for (const NodeId id : pending_ids) {
+                mask.push_back(getNodeById(id) && isNodeEffectivelyVisible(id));
+            }
+            return mask;
+        }
         if (!consolidated_ || consolidated_node_slots_.empty()) {
             return {};
         }
@@ -2668,7 +2676,9 @@ namespace lfs::core {
                 cached_combined_.reset();
                 cached_combined_includes_hidden_ = false;
                 cached_combined_node_ids_.clear();
+                cached_transform_indices_.reset();
                 model_cache_valid_.store(true, std::memory_order_release);
+                transform_cache_valid_.store(false, std::memory_order_release);
             }
             return;
         }
@@ -2816,11 +2826,30 @@ namespace lfs::core {
         transform_cache_valid_.store(false, std::memory_order_release);
     }
 
+    std::vector<NodeId> Scene::pendingRebuildSlotIds() const {
+        if (consolidated_ || model_cache_valid_.load(std::memory_order_acquire) ||
+            !combinedModelBuildPending())
+            return {};
+        if (single_node_model_)
+            return {single_node_id_};
+        if (cached_combined_ && !cached_combined_includes_hidden_)
+            return cached_combined_node_ids_;
+        return {};
+    }
+
     void Scene::rebuildTransformCacheIfNeeded() const {
         if (transform_cache_valid_.load(std::memory_order_acquire))
             return;
 
         cached_transforms_.clear();
+        if (const auto pending_ids = pendingRebuildSlotIds(); !pending_ids.empty()) {
+            cached_transforms_.reserve(pending_ids.size());
+            for (const NodeId id : pending_ids) {
+                cached_transforms_.push_back(getNodeById(id) ? getWorldTransform(id) : glm::mat4(1.0f));
+            }
+            transform_cache_valid_.store(true, std::memory_order_release);
+            return;
+        }
         if (consolidated_ && !consolidated_node_slots_.empty()) {
             cached_transforms_.reserve(consolidated_node_slots_.size());
             for (const auto& slot : consolidated_node_slots_) {
@@ -2854,7 +2883,13 @@ namespace lfs::core {
         std::vector<int> degrees;
         // Same slot ordering as getVisibleNodeTransforms, including retained
         // holes after consolidation. Never truncate inactive source SH data.
-        if (consolidated_ && !consolidated_node_slots_.empty()) {
+        if (const auto pending_ids = pendingRebuildSlotIds(); !pending_ids.empty()) {
+            degrees.reserve(pending_ids.size());
+            for (const NodeId id : pending_ids) {
+                const auto* node = getNodeById(id);
+                degrees.push_back(node && node->model ? node->model->get_active_sh_degree() : 0);
+            }
+        } else if (consolidated_ && !consolidated_node_slots_.empty()) {
             const int fallback = cached_combined_ ? cached_combined_->get_active_sh_degree() : 0;
             degrees.reserve(consolidated_node_slots_.size());
             for (const auto& slot : consolidated_node_slots_) {

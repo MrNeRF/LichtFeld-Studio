@@ -712,7 +712,6 @@ namespace lfs::core {
             invalidateBounds();
             model_cache_valid_.store(false, std::memory_order_release);
             transform_cache_valid_.store(false, std::memory_order_release);
-            cached_transform_indices_.reset();
             cached_visible_selection_indices_.reset();
             invalidateVisibleSelectionMaskCache();
             publishRenderInvalidation();
@@ -886,6 +885,9 @@ namespace lfs::core {
         [[nodiscard]] std::unique_ptr<lfs::core::SplatData>
         retireCombinedModelIfInFlight(
             std::unique_ptr<lfs::core::SplatData> model) const;
+        // Slot layout of the geometry getCombinedModel() keeps serving while a worker rebuild is
+        // pending; empty when the served geometry already matches the visible nodes.
+        [[nodiscard]] std::vector<NodeId> pendingRebuildSlotIds() const;
         void rebuildTransformCacheIfNeeded() const;
         void updateWorldTransform(const SceneNode& node) const;
         void removeNodeInternal(NodeId id, bool keep_children);
