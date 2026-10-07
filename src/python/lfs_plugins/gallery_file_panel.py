@@ -240,7 +240,7 @@ class GalleryFilePanel(Panel):
             "show_unlinked_hint": lambda: bool((self._review or {}).get("unlinked")),
             "unlinked_copy": lambda: tr("review.unlinked_copy"),
             "submit_label": self._submit_label,
-            "format_hint": lambda: tr("format." + self._fields.get("upload_format", "sog") + "_hint"),
+            "format_hint": lambda: tr("format." + self._fields.get("upload_format", "ssog") + "_hint"),
             "includes": lambda: (self._review or {}).get("includes", ""),
             "quota": lambda: (self._review or {}).get("quota", ""),
             "warning": lambda: (self._review or {}).get("warning", ""),
@@ -359,7 +359,7 @@ class GalleryFilePanel(Panel):
         if not size and link.get("uploadFormat") == self._fields.get("upload_format"):
             size = ((self._review or {}).get("scene") or {}).get("contentLength")
         if not size:
-            size = estimate_upload_size(asset.get("publication", {}), self._fields.get("upload_format", "sog"))
+            size = estimate_upload_size(asset.get("publication", {}), self._fields.get("upload_format", "ssog"))
         return format_size(size) if size else tr("review.estimate_pending")
 
     def _finish(self, submitted):

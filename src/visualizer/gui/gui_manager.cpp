@@ -20,6 +20,7 @@
 #include "gui/import_error.hpp"
 #include "gui/rmlui/elements/node_canvas_element.hpp"
 #include "gui/viewport_gizmo_geometry.hpp"
+#include "gui/volume_guide_visibility.hpp"
 #include "ipc/view_context.hpp"
 #include "preferences.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
@@ -3376,25 +3377,13 @@ namespace lfs::vis::gui {
                 if (!scene_state || !scene_manager)
                     return true;
                 const core::NodeId selected_id = scene_manager->getSelectedNodeCropBoxId();
-                if (selected_id == core::NULL_NODE)
-                    return !gizmo.cropbox_affects_render;
-                for (const auto& cb : scene_state->cropboxes) {
-                    if (cb.node_id == selected_id)
-                        return cb.effectively_visible;
-                }
-                return false;
+                return activeVolumeGuideVisible(gizmo.cropbox_affects_render, selected_id, scene_state->cropboxes);
             };
             const auto selected_ellipsoid_is_visible = [&]() {
                 if (!scene_state || !scene_manager)
                     return true;
                 const core::NodeId selected_id = scene_manager->getSelectedNodeEllipsoidId();
-                if (selected_id == core::NULL_NODE)
-                    return !gizmo.ellipsoid_affects_render;
-                for (const auto& el : scene_state->ellipsoids) {
-                    if (el.node_id == selected_id)
-                        return el.effectively_visible;
-                }
-                return false;
+                return activeVolumeGuideVisible(gizmo.ellipsoid_affects_render, selected_id, scene_state->ellipsoids);
             };
 
             if (gizmo.cropbox_active && selected_cropbox_is_visible()) {
@@ -8005,6 +7994,11 @@ namespace lfs::vis::gui {
             screen_host_.cursor() != screen::GestureCursor::Default) {
             return true;
         }
+
+        // Gizmo hover is refreshed only when the gizmo is drawn. Without a frame,
+        // a pointer that left the gizmo keeps claiming the next viewport press.
+        if (isTransformGizmoOverOrUsing())
+            return true;
 
         if (!guiFocusState().want_capture_mouse && isPositionInViewport(mouse_x, mouse_y)) {
             if (const auto* const scene_manager = viewer_ ? viewer_->getSceneManager() : nullptr;

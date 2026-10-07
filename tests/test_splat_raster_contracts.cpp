@@ -88,6 +88,30 @@ namespace {
         return r;
     }
 
+    TEST_P(SplatRasterContracts, UnusedEmphasisLaneDoesNotChangeRenderedColor) {
+        const ProjectedSplat splat{{16, 16, 3, 3}, {1, 0, 1, .8f}, {.2f, .3f, .4f, 1}, {0, 0, 32, 32}};
+        auto input = upload_one(splat);
+        std::array<std::array<float, 4>, 207> parameters{};
+        parameters[24][3] = -1;
+        std::array<std::array<float, 4>, 128> colors{};
+        // Bit 2 and emphasis.w are reserved and must not affect selection color.
+        const std::array<uint32_t, 1> flags{4};
+        auto p = upload(parameters), f = upload(flags);
+        SplatRasterizer rasterizer(GetParam());
+        ASSERT_TRUE(rasterizer.reserve(1, 32, 32, 4));
+        const SplatRasterOverlay overlay{&p, &f, nullptr, nullptr, std::as_bytes(std::span(colors))};
+        const auto request = params(1, 32, 32, SplatRasterMode::Gaussian, 4, {}, 1);
+        ASSERT_TRUE(rasterizer.rasterize(input, nullptr, 1, SplatRasterMode::Gaussian, request, &overlay));
+        const auto before = readback(rasterizer, 32, 32);
+        parameters[20][3] = 1;
+        p = upload(parameters);
+        ASSERT_TRUE(rasterizer.rasterize(input, nullptr, 1, SplatRasterMode::Gaussian, request, &overlay));
+        const auto after = readback(rasterizer, 32, 32);
+        EXPECT_EQ(before.color, after.color);
+        EXPECT_EQ(before.depth, after.depth);
+        EXPECT_EQ(before.pick, after.pick);
+    }
+
     TEST_P(SplatRasterContracts, StableCompositingModesScanBoundariesAndReuseMatchCpuOracle) {
         constexpr uint32_t width = 37, height = 29, capacity = 131073;
         const std::array<float, 4> bg{.15f, .1f, .2f, .4f};

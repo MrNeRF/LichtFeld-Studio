@@ -481,7 +481,7 @@ if(TARGET lfs_visualizer AND TARGET lfs_vulkan_rasterizer_macos_reference)
                 set_tests_properties(MacViewerParity_tensorVulkan_${_tensor_case} PROPERTIES
                     LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
             endforeach()
-            foreach(_overlay IN ITEMS selection preview crop ellipsoid window markers flash affine)
+            foreach(_overlay IN ITEMS selection preview crop ellipsoid window markers affine)
                 add_test(NAME MacViewerParity_${_overlay} COMMAND mac_viewer_backend_benchmark
                     --smoke --overlay ${_overlay}
                     --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-${_overlay}.json")

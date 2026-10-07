@@ -71,7 +71,8 @@ namespace lfs::vis {
         constexpr float kInteractiveResizeRenderScale = 0.33f;
         constexpr auto kTrainingOutputResizeStableDelay = std::chrono::milliseconds(500);
 
-        void setVulkanMeshFrame(ViewRenderState& view, VulkanMeshFrame frame) {
+        void setVulkanMeshFrame(ViewRenderState& view, VulkanMeshFrame frame, SceneRenderer* renderer) {
+            frame.retainSplitOutputs(renderer);
             auto& native = vulkanViewRenderState(view);
             std::lock_guard lock(native.mesh_frame_mutex);
             native.mesh_frame = std::move(frame);
@@ -1387,7 +1388,6 @@ namespace lfs::vis {
             .hovered_camera_id = camera_interaction_service_.hoveredCameraId(),
             .current_camera_id = view_state.gt_comparison_camera_uid_ >= 0 ? view_state.gt_comparison_camera_uid_ : camera_interaction_service_.currentCameraId(),
             .hovered_gaussian_id = view_state.viewport_overlay_service_.hoveredGaussianId(),
-            .selection_flash_intensity = view_state.animation_state_.selectionFlashIntensity(),
             .view_panels = {},
             .scene_jitter_pixels = applied_temporal_jitter_pixels,
         };
@@ -2761,7 +2761,7 @@ namespace lfs::vis {
                                                               ? pc_request.frame_view.far_plane
                                                               : 1000.0f;
                     }
-                    setVulkanMeshFrame(view_state, std::move(mesh_frame));
+                    setVulkanMeshFrame(view_state, std::move(mesh_frame), scene_renderer_.get());
                 } else {
                     clearVulkanMeshFrame(view_state);
                 }
@@ -2907,7 +2907,7 @@ namespace lfs::vis {
                                         temporal_frame_published = true;
                                     }
                                 }
-                                setVulkanMeshFrame(view_state, std::move(mesh_frame));
+                                setVulkanMeshFrame(view_state, std::move(mesh_frame), scene_renderer_.get());
                             } else {
                                 clearVulkanMeshFrame(view_state);
                             }
@@ -3249,7 +3249,7 @@ namespace lfs::vis {
                                                           : 1000.0f;
             }
 
-            setVulkanMeshFrame(view_state, std::move(gpu_mesh_frame));
+            setVulkanMeshFrame(view_state, std::move(gpu_mesh_frame), scene_renderer_.get());
             if (pending_split_view.enabled &&
                 pending_split_view.left.temporal_input.has_value() &&
                 pending_split_view.right.temporal_input.has_value()) {

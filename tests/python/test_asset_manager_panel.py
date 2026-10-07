@@ -969,7 +969,8 @@ def test_real_folder_menu_reveals_or_removes_mapping(panel_module, monkeypatch):
     menu["on_action"]("remove")
     assert calls == [("projects",)]
 
-def test_open_project_verifies_then_uses_project_lifecycle(panel_module):
+@pytest.mark.parametrize("last_error", ["", "Previous catalog operation failed"])
+def test_open_project_verifies_then_uses_project_lifecycle(panel_module, last_error):
     panel = panel_module.AssetManagerPanel()
     asset = _project()
     project = SimpleNamespace(to_dict=lambda: asset)
@@ -977,14 +978,125 @@ def test_open_project_verifies_then_uses_project_lifecycle(panel_module):
     panel._asset_index = _index(
         assets={asset["id"]: asset},
         verify_asset=lambda project_id: project if project_id == asset["id"] else None,
+        last_error=last_error,
     )
 
     panel._load_asset(asset["id"])
 
+    assert _wait_until(lambda: bool(panel_module.lf._test_state.opened))
     assert panel_module.lf._test_state.opened == [
         (asset["path"], True, False, True)
     ]
     assert panel.get_selected_asset_id() == asset["id"]
+
+def test_open_project_returns_while_verification_is_blocked(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    entered, release, returned = threading.Event(), threading.Event(), threading.Event()
+    scheduled = []
+    monkeypatch.setattr(panel_module.lf.ui, "schedule_on_ui_thread", scheduled.append)
+
+    def verify(_asset_id):
+        entered.set()
+        assert release.wait(5)
+        return SimpleNamespace(to_dict=lambda: asset)
+
+    panel._asset_index = _index(assets={asset["id"]: asset}, verify_asset=verify)
+    panel._folder_scan_cancel = threading.Event()
+    panel._catalog_verify_cancel = threading.Event()
+    panel._folder_scan_rerun_pending = True
+
+    def open_on_ui():
+        panel._load_asset(asset["id"])
+        returned.set()
+
+    caller = threading.Thread(target=open_on_ui)
+    caller.start()
+    try:
+        assert entered.wait(2)
+        assert returned.wait(1), "Project opening blocked the UI on catalog verification"
+        assert panel._folder_scan_cancel.is_set()
+        assert panel._catalog_verify_cancel.is_set()
+        assert not panel._folder_scan_rerun_pending
+        assert panel_module.lf._test_state.opened == []
+    finally:
+        release.set()
+        caller.join(5)
+    assert _wait_until(lambda: bool(scheduled))
+    for callback in scheduled:
+        callback()
+    assert panel_module.lf._test_state.opened == [(asset["path"], True, False, True)]
+
+@pytest.mark.parametrize("active_worker", ["_folder_scan_active", "_catalog_verify_active"])
+def test_project_save_poll_defers_catalog_access_during_scan(panel_module, active_worker):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    project = SimpleNamespace(id=asset["id"])
+    accesses = []
+
+    def find(_path):
+        assert not getattr(panel, active_worker), "UI poll waited on the busy catalog"
+        accesses.append("find")
+        return project
+
+    panel._asset_index = _index(
+        assets={asset["id"]: asset}, find_asset_by_path=find,
+        verify_asset=lambda _id: accesses.append("verify") or project,
+    )
+    panel_module.lf.project_poll_write = lambda: {
+        "path": asset["path"], "generation": asset["generation"] + 1, "running": False,
+    }
+    setattr(panel, active_worker, True)
+    assert panel._refresh_after_project_write() is False
+    assert accesses == []
+    setattr(panel, active_worker, False)
+    assert panel._refresh_after_project_write() is True
+    assert accesses == ["find", "verify"]
+
+@pytest.mark.parametrize("invalidate", ["new_request", "unmount"])
+def test_open_project_ignores_stale_verification(panel_module, monkeypatch, invalidate):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    scheduled = []
+    monkeypatch.setattr(panel_module.lf.ui, "schedule_on_ui_thread", scheduled.append)
+    panel._asset_index = _index(
+        assets={asset["id"]: asset},
+        verify_asset=lambda _id: SimpleNamespace(to_dict=lambda: asset),
+    )
+    panel._load_asset(asset["id"])
+    assert _wait_until(lambda: len(scheduled) == 1)
+    if invalidate == "unmount":
+        panel.on_unmount(None)
+    else:
+        panel._load_asset(asset["id"])
+        assert _wait_until(lambda: len(scheduled) == 2)
+    scheduled[0]()
+    assert panel_module.lf._test_state.opened == []
+    if invalidate == "new_request":
+        scheduled[1]()
+        assert panel_module.lf._test_state.opened == [(asset["path"], True, False, True)]
+
+@pytest.mark.parametrize("result", ["missing", "unavailable", "error"])
+def test_open_project_rejects_failed_verification(panel_module, monkeypatch, result):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project(available=False, exists=False, status="MISSING")
+    scheduled, refreshed = [], []
+    monkeypatch.setattr(panel_module.lf.ui, "schedule_on_ui_thread", scheduled.append)
+    panel.refresh_catalog = lambda **kwargs: refreshed.append(kwargs)
+
+    def verify(_id):
+        if result == "error":
+            raise OSError("Cannot read project")
+        return None if result == "missing" else SimpleNamespace(to_dict=lambda: asset)
+
+    panel._asset_index = _index(assets={asset["id"]: asset}, verify_asset=verify)
+    panel._load_asset(asset["id"])
+    assert _wait_until(lambda: bool(scheduled))
+    scheduled[0]()
+    assert panel_module.lf._test_state.opened == []
+    assert bool(refreshed) == (result == "unavailable")
+    if result == "error":
+        assert panel._catalog_notice == "Cannot read project"
 
 def test_gallery_overlay_has_no_projects_details_button(panel_module):
     from lfs_plugins.gallery_transfer_overlay import GalleryTransferOverlay
@@ -1069,6 +1181,7 @@ def test_open_project_confirms_before_discarding_unsaved_changes(panel_module):
 
     panel._load_asset(asset["id"])
 
+    assert _wait_until(lambda: bool(state.confirm_dialogs))
     assert state.opened == []
     assert len(state.confirm_dialogs) == 1
     title, _message, buttons, callback = state.confirm_dialogs[0]

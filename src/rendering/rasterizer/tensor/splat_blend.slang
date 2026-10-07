@@ -482,8 +482,6 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
                         radiance = lerp(radiance, overlay_target(status_bits, p.selection_colors), .9f);
                     else if ((status_bits & 127u) != 0u)
                         radiance = lerp(radiance, p.selection_colors[status_bits & 127u].xyz, .8f);
-                    if ((flags & 4u) != 0u && p.overlay_params[20].w > 0)
-                        radiance = lerp(radiance, float3(1, .95f, .6f), p.overlay_params[20].w * .5f);
                 }
                 const float total_transmittance = (kRasterFlags & 64u) != 0u ? composed_transmittance * transmittance : transmittance;
                 const float weight = alpha * total_transmittance;

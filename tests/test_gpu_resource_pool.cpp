@@ -234,3 +234,25 @@ TEST(GpuResourcePool, TimelineMonotonicBookkeepingAcrossReuse) {
     b->payload->timeline_value = 6;
     EXPECT_GT(b->payload->timeline_value, 5u);
 }
+
+TEST(GpuResourcePool, PublicationWaitsForLastOwnerAndFinalConsumer) {
+    auto pool = makePool();
+    DestroyCapture cap;
+    const auto key = makeKey();
+    const auto serial = pool.registerCreated(key, makeUnit(99)).acquisition_serial;
+    ASSERT_TRUE(pool.retain(serial));
+    ASSERT_TRUE(pool.retain(serial));
+    pool.release(serial, 7, 10, true);
+    pool.releaseRetained(serial, 20);
+    const auto producer_done = [](const FakeUnit&, uint64_t) { return true; };
+    pool.drain(false, producer_done, [](uint64_t) { return true; }, cap.fn());
+    EXPECT_TRUE(cap.destroyed_ids.empty());
+    EXPECT_TRUE(pool.isRetained(serial));
+    EXPECT_FALSE(pool.acquire(key));
+    pool.releaseRetained(serial, 30);
+    EXPECT_FALSE(pool.isRetained(serial));
+    pool.drain(false, producer_done, [](uint64_t value) { return value <= 29; }, cap.fn());
+    EXPECT_TRUE(cap.destroyed_ids.empty());
+    pool.drain(false, producer_done, [](uint64_t value) { return value <= 30; }, cap.fn());
+    EXPECT_EQ(cap.destroyed_ids, std::vector<uint64_t>{99});
+}

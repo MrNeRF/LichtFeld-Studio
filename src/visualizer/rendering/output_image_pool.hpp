@@ -9,6 +9,7 @@
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_result.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -105,6 +106,10 @@ namespace lfs::vis {
 
         void trimIdle(const DestroyFn& destroy);
         void trimAged(const DestroyFn& destroy);
+
+        [[nodiscard]] bool isRetained(std::uint64_t serial) const { return pool_.isRetained(serial); }
+        [[nodiscard]] bool retain(std::uint64_t serial);
+        void releaseRetained(std::uint64_t serial, std::uint64_t consumer_serial);
 
         [[nodiscard]] std::size_t idleBytes() const;
         [[nodiscard]] std::size_t liveCount() const;

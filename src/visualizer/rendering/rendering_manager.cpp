@@ -1678,10 +1678,10 @@ namespace lfs::vis {
                                                  const bool add_mode, lfs::core::Tensor* selection_tensor,
                                                  const bool saturation_mode, const float saturation_amount,
                                                  const std::optional<SplitViewPanelId> panel,
-                                                 const int focused_gaussian_id, const bool request_render) {
+                                                 const int focused_gaussian_id, const bool highlight_splats) {
         this->state().viewport_overlay_service_.setCursorPreview(active, x, y, radius, add_mode, selection_tensor,
-                                                                 saturation_mode, saturation_amount, panel, focused_gaussian_id);
-        if (request_render)
+                                                                 saturation_mode, saturation_amount, panel, focused_gaussian_id, highlight_splats);
+        if (highlight_splats)
             markViewDirty(this->state().id, DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
     }
 

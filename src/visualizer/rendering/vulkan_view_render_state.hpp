@@ -6,6 +6,7 @@
 #include "passes/vulkan_environment_pass.hpp"
 #include "passes/vulkan_mesh_pass.hpp"
 #include "passes/vulkan_split_view_pass.hpp"
+#include "scene_renderer.hpp"
 #include "view_render_state.hpp"
 #include "vulkan_viewport_frame_resources.hpp"
 
@@ -28,6 +29,15 @@ namespace lfs::vis {
         VulkanDepthBlitParams depth_blit;
         VulkanSplitViewParams split_view;
         std::optional<TemporalFrame> temporal;
+        std::array<std::shared_ptr<void>, 2> split_output_lifetimes;
+
+        void retainSplitOutputs(SceneRenderer* renderer) {
+            if (!renderer || !split_view.enabled)
+                return;
+            split_output_lifetimes = {
+                renderer->retainOutputImage(SceneImageViewHandle::fromNative(split_view.left.external_image_view)),
+                renderer->retainOutputImage(SceneImageViewHandle::fromNative(split_view.right.external_image_view))};
+        }
     };
 
     struct ViewportReferenceState {

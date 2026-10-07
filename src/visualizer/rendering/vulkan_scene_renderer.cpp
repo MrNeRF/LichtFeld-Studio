@@ -41,6 +41,7 @@ namespace lfs::vis {
                                                                               const rendering::ViewportRenderRequest& request, RenderTargetId target, bool synchronize) override {
                 return renderer_.rerenderSelectionOverlay(context_, model, request, target, synchronize);
             }
+            std::shared_ptr<void> retainOutputImage(SceneImageViewHandle image) override { return renderer_.retainOutputImage(image.native<VkImageView>()); }
             bool nextOutputImagesNeedResize(glm::ivec2 size, RenderTargetId target) const override { return renderer_.nextOutputImagesNeedResize(size, target); }
             std::expected<std::shared_ptr<core::Tensor>, std::string> readColorImage(RenderTargetId target, OutputImageFormat format) const override {
                 switch (format) {

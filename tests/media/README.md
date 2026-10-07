@@ -159,10 +159,9 @@ and storage reuse). They do not register or initialize GPU backends. Native runn
 contracts separately check CUDA/Vulkan bytes, timeline ordering and plane sentinels;
 the existing macOS HDR target covers Metal/Vulkan conversion. Vulkan program
 resources retire at context shutdown, after queued work finishes and before the
-device is destroyed. `GpuProgramContracts` covers retained compute/raster
-programs and two live thread-local color caches across repeated backend restarts.
-The color operation reloads its program for the new context without a global
-lock in the conversion hot path.
+device is destroyed. The implementation in dev keeps cached program descriptors
+and rebuilds their resources lazily for the next context. `GpuProgramContracts`
+includes the upstream regression for using a retained module after backend restart.
 
 CPU probe contracts also describe synthetic VideoToolbox/CUDA frame metadata
 without initializing hardware. They check the VideoToolbox `data[3]` handle,

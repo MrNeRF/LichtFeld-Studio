@@ -12,7 +12,7 @@ layout(set = 0, binding = 0) uniform LightUbo {
     vec4 camera_pos; // xyz = camera position, w unused
     vec4 light_dir;  // xyz = world-space light direction (normalized)
     vec4 params;     // x = intensity, y = ambient, z = shadow_enabled, w unused
-    vec4 selection;  // x = emphasized, y = dim others, z = flash intensity
+    vec4 selection;  // x = emphasized, y = dim others, zw = reserved
     mat4 light_vp;   // light view-projection (for sampling shadow map)
 } u_light;
 layout(set = 0, binding = 1) uniform sampler2DShadow u_shadow_map;
@@ -136,15 +136,10 @@ void main() {
 
     bool is_emphasized = u_light.selection.x > 0.5;
     bool dim_non_emphasized = u_light.selection.y > 0.5;
-    float flash_intensity = u_light.selection.z;
 
     if (dim_non_emphasized && !is_emphasized) {
         float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
         color = mix(color, vec3(luma), 0.6);
-    }
-    if (is_emphasized && flash_intensity > 0.0) {
-        vec3 flash_color = vec3(1.0, 0.95, 0.6);
-        color = mix(color, flash_color, flash_intensity * 0.5);
     }
 
     outColor = vec4(color, albedo.a);

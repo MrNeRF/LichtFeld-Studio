@@ -1817,6 +1817,35 @@ namespace lfs::vis {
         });
     }
 
+    std::shared_ptr<void> VksplatViewportRenderer::retainOutputImage(const VkImageView view) {
+        if (view == VK_NULL_HANDLE)
+            return {};
+        std::lock_guard lock(readback_mutex_);
+        for (const auto& [target, column] : ring_.table()) {
+            for (const auto& slot : column.slots) {
+                if (slot.image.view != view || !slot.color_pool_serial)
+                    continue;
+                const auto serial = slot.color_pool_serial;
+                if (!output_pool_.retain(serial))
+                    return {};
+                const auto depth_serial = slot.depth_pool_serial;
+                if (depth_serial)
+                    (void)output_pool_.retain(depth_serial);
+                return std::shared_ptr<void>(reinterpret_cast<void*>(1),
+                                             [this, serial, depth_serial, lifetime = std::weak_ptr(publication_lifetime_)](void*) {
+                                                 if (lifetime.expired())
+                                                     return;
+                                                 std::lock_guard release_lock(readback_mutex_);
+                                                 const auto consumer = context_ ? context_->lastFrameSubmitSerial() : 0;
+                                                 output_pool_.releaseRetained(serial, consumer);
+                                                 if (depth_serial)
+                                                     output_pool_.releaseRetained(depth_serial, consumer);
+                                             });
+            }
+        }
+        return {};
+    }
+
     void VksplatViewportRenderer::releaseSceneResources() {
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (!context_) {
@@ -1889,6 +1918,7 @@ namespace lfs::vis {
         // cancellation in that same order so reset cannot invert the pair.
         cancelArenaHandoff();
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
+        publication_lifetime_ = std::make_shared<int>(0);
         live_submit_callback_ = {};
         // Join page producers before waiting on the device. A device-idle wait
         // does not stop workers from submitting more work or reading metadata.
@@ -4043,7 +4073,6 @@ namespace lfs::vis {
             ellipsoid_dims ||
             view_volume_dims ||
             emphasis.dim_non_emphasized ||
-            emphasis.flash_intensity > 0.0f ||
             emphasis.focused_gaussian_id >= 0 ||
             request.overlay.cursor.enabled ||
             request.overlay.markers.show_rings ||
@@ -5134,7 +5163,7 @@ namespace lfs::vis {
         const int bucket_h = static_cast<int>(ceil64(static_cast<std::uint32_t>(size.y)));
         const glm::ivec2 bucket{bucket_w, bucket_h};
         if (slot.image.image != VK_NULL_HANDLE && slot.depth_image.image != VK_NULL_HANDLE &&
-            slot.alloc_size == bucket) {
+            slot.alloc_size == bucket && !output_pool_.isRetained(slot.color_pool_serial)) {
             slot.size = valid;
             return {};
         }

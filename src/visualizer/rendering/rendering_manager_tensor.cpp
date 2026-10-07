@@ -374,7 +374,6 @@ namespace lfs::vis {
             .hovered_camera_id = camera_interaction_service_.hoveredCameraId(),
             .current_camera_id = view.gt_comparison_camera_uid_ >= 0 ? view.gt_comparison_camera_uid_ : camera_interaction_service_.currentCameraId(),
             .hovered_gaussian_id = view.viewport_overlay_service_.hoveredGaussianId(),
-            .selection_flash_intensity = view.animation_state_.selectionFlashIntensity(),
             .scene_jitter_pixels = temporal_setup.jitter_pixels,
         };
         const auto render_started = std::chrono::steady_clock::now();

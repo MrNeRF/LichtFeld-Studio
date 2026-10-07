@@ -31,6 +31,21 @@ def test_gallery_preferences_preserve_each_other_and_old_format(tmp_path):
     set_preference('uploadFormat', 'ssog', tmp_path)
     assert read_preferences(tmp_path) == dict(uploadFormat='ssog', posterCacheMiB=128)
 
+def test_gallery_upload_format_defaults_to_ssog_and_releases_pinned_sog(tmp_path):
+    # Catches the old startup writeback: every install stored "sog" without a user choice.
+    from lfs_plugins.gallery_preferences import read_preferences, set_preference
+    assert read_preferences(tmp_path)['uploadFormat'] == 'ssog'
+    (tmp_path / 'preferences.json').write_text('{"uploadFormat":"sog","posterCacheMiB":64}')
+    assert read_preferences(tmp_path)['uploadFormat'] == 'ssog'
+    set_preference('uploadFormat', 'sog', tmp_path)
+    assert read_preferences(tmp_path)['uploadFormat'] == 'sog'
+
+def test_gallery_preference_writeback_of_current_value_does_not_pin_it(tmp_path):
+    from lfs_plugins.gallery_preferences import set_preference
+    set_preference('uploadFormat', 'ssog', tmp_path)
+    set_preference('posterCacheMiB', 64, tmp_path)
+    assert not (tmp_path / 'preferences.json').exists()
+
 @pytest.mark.parametrize('key,value', [('posterCacheMiB', 0), ('posterCacheMiB', 4097),
      ('askBeforePublic', 'false'), ('uploadFormat', 'bad')])
 def test_gallery_preferences_reject_invalid_values(tmp_path, key, value):

@@ -145,6 +145,8 @@ namespace lfs::vis {
             std::shared_ptr<core::Tensor> depth;
         };
         virtual lfs::Result<OutputTensors> readOutputTensors(RenderTargetId) const;
+        // Keeps a published image alive until all copied frame descriptions release it.
+        virtual std::shared_ptr<void> retainOutputImage(SceneImageViewHandle) { return {}; }
         virtual bool hasRenderTarget(RenderTargetId) const = 0;
         virtual bool releaseRenderTarget(RenderTargetId) = 0;
         virtual void releaseSceneResources() = 0;

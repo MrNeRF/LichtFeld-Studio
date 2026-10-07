@@ -184,6 +184,3 @@ def by_color(gaussian_index: int, threshold: float = 0.20000000298023224) -> Non
     Picks the SH DC color of the gaussian at the given index and selects all
     gaussians whose per-channel color difference is within the threshold (0-1).
     """
-
-def trigger_flash() -> None:
-    """Trigger selection flash animation feedback"""

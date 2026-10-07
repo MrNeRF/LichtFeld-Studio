@@ -234,8 +234,6 @@ def test_transform_images_match_reference(backend, tmp_path, numpy):
     metrics = []
     for case in manifest["cases"]:
         _apply(endpoint, case["setup"])
-        # Node selection flashes for half a second; compare the settled image.
-        time.sleep(0.75)
         _tool(endpoint, "render_settings_set", {"raster_backend": backend})
         for state in ("identity", "transformed"):
             _apply(endpoint, case[state])

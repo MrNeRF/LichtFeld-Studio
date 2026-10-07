@@ -207,7 +207,7 @@ namespace {
                 continue;
             }
             if (arg == "--overlay") {
-                if (value != "selection" && value != "preview" && value != "crop" && value != "ellipsoid" && value != "window" && value != "markers" && value != "flash" && value != "affine" && value != "rings" && value != "selected-rings")
+                if (value != "selection" && value != "preview" && value != "crop" && value != "ellipsoid" && value != "window" && value != "markers" && value != "affine" && value != "rings" && value != "selected-rings")
                     throw std::runtime_error("Unknown overlay fixture");
                 o.overlay = value;
                 continue;
@@ -817,13 +817,6 @@ namespace {
                 static const std::vector<glm::mat4> transforms = {
                     glm::scale(glm::rotate(glm::mat4(1), .2f, glm::vec3(0, 1, 0)), glm::vec3(1.3f, .7f, 1.1f))};
                 request.scene.model_transforms = &transforms;
-            }
-            if (o.overlay == "flash") {
-                static const std::vector<glm::mat4> transforms = {glm::mat4(1)};
-                request.scene.model_transforms = &transforms;
-                request.scene.transform_indices = std::make_shared<core::Tensor>(core::Tensor::zeros({o.count}, core::Device::GPU, core::DataType::Int32));
-                request.overlay.emphasis.emphasized_node_mask = {true};
-                request.overlay.emphasis.flash_intensity = .8f;
             }
             if (!vis::MetalViewportRenderer::supports(model, request))
                 throw std::runtime_error("Unsupported native benchmark frame: means device=" + std::to_string(int(model.means_raw().device())) +

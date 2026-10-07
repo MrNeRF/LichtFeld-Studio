@@ -275,10 +275,6 @@ namespace lfs::vis {
             viewState(view).animation_state_.setPivotAnimationEndTime(end_time);
         }
 
-        void triggerSelectionFlash() {
-            markDirty(this->state().animation_state_.triggerSelectionFlash(), lfs::vis::FrameReason::Selection);
-        }
-
         void setOverlayAnimationActive(const bool active) {
             this->state().animation_state_.setOverlayAnimationActive(active);
         }
@@ -525,7 +521,7 @@ namespace lfs::vis {
                                    lfs::core::Tensor* selection_tensor = nullptr,
                                    bool saturation_mode = false, float saturation_amount = 0.0f,
                                    std::optional<SplitViewPanelId> panel = std::nullopt,
-                                   int focused_gaussian_id = -1, bool request_render = true);
+                                   int focused_gaussian_id = -1, bool highlight_splats = true);
         void clearCursorPreviewState();
         [[nodiscard]] bool isCursorPreviewActive() const { return this->state().viewport_overlay_service_.isCursorPreviewActive(); }
         [[nodiscard]] std::optional<SplitViewPanelId> getCursorPreviewPanel() const {

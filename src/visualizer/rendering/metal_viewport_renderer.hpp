@@ -75,6 +75,7 @@ namespace lfs::vis {
         lfs::Result<SceneRenderer::ReadbackTicketStatus> pollReadback(uint64_t, bool wait) const;
         void abandonReadback(uint64_t) const;
         size_t outstandingReadbacks() const;
+        std::shared_ptr<void> retainOutputImage(SceneImageViewHandle);
         lfs::Status release(RenderTargetId);
         lfs::Status releaseAll();
 

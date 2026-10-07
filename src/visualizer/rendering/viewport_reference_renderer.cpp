@@ -25,9 +25,11 @@ namespace lfs::vis {
         VulkanViewportPass pass;
         VulkanViewportPassParams params;
         GraphicsContext* graphics = nullptr;
+        std::array<std::shared_ptr<void>, 2> split_output_lifetimes;
     };
     namespace {
-        VulkanViewportPassParams referenceParams(const ViewportFrameDesc& desc, ViewRenderState& view_state) {
+        VulkanViewportPassParams referenceParams(const ViewportFrameDesc& desc, ViewRenderState& view_state,
+                                                 std::array<std::shared_ptr<void>, 2>& lifetimes) {
             VulkanViewportPassParams params;
             params.frame_slot = desc.frame_slot;
             params.viewport_pos = desc.viewport_pos;
@@ -78,6 +80,7 @@ namespace lfs::vis {
                 std::lock_guard lock(native.mesh_frame_mutex);
                 return native.mesh_frame;
             }();
+            lifetimes = std::move(mesh_frame.split_output_lifetimes);
             auto temporal_frame = std::move(mesh_frame.temporal);
             params.mesh_view_projection = mesh_frame.view_projection;
             params.mesh_camera_position = mesh_frame.camera_position;
@@ -373,7 +376,7 @@ namespace lfs::vis {
         return context && impl_->pass.init(*context);
     }
     void ViewportReferenceRenderer::prepare(GraphicsContext& graphics, const ViewportFrameDesc& desc, ViewRenderState& view) {
-        impl_->params = referenceParams(desc, view);
+        impl_->params = referenceParams(desc, view, impl_->split_output_lifetimes);
         if (auto* context = vulkanContextOrNull(&graphics))
             impl_->pass.prepare(*context, impl_->params);
     }
@@ -444,7 +447,7 @@ namespace lfs::vis {
     }
     void ViewportReferenceRenderer::prepareImport(GraphicsContext& graphics, const ViewportFrameDesc& desc,
                                                   ViewRenderState& view, ViewportReferenceRenderer* resident) {
-        impl_->params = referenceParams(desc, view);
+        impl_->params = referenceParams(desc, view, impl_->split_output_lifetimes);
         if (auto* context = vulkanContextOrNull(&graphics))
             impl_->pass.prepareImport(*context, impl_->params, resident ? &resident->impl_->pass : nullptr);
     }

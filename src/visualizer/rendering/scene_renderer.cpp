@@ -176,6 +176,7 @@ namespace lfs::vis {
                 return copyOutputTensors(native(), t);
             }
 #endif
+            std::shared_ptr<void> retainOutputImage(SceneImageViewHandle image) override { return native_ ? native_->retainOutputImage(image) : nullptr; }
             bool hasRenderTarget(RenderTargetId t) const override { return outputs_.contains(t); }
             bool releaseRenderTarget(RenderTargetId t) override {
                 if (native_) {
