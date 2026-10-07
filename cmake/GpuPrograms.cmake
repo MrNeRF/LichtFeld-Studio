@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 include_guard(GLOBAL)
+include("${CMAKE_CURRENT_LIST_DIR}/GpuProgramCuda.cmake")
 find_program(LFS_GPU_SLANGC NAMES slangc
     HINTS "${VCPKG_INSTALLED_DIR}/${VCPKG_HOST_TRIPLET}/tools/shader-slang"
           "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/shader-slang"
@@ -23,6 +24,9 @@ function(lfs_add_gpu_program target name)
     file(MAKE_DIRECTORY "${directory}")
     set(outputs)
     set(embed_args)
+    if(LFS_HAS_CUDA)
+        lfs_gpu_program_cuda_flags(cuda_flags)
+    endif()
     set(embed_flags)
     if(PROGRAM_RELAXED_MATH)
         set(embed_flags --relaxed-math)
@@ -58,13 +62,11 @@ function(lfs_add_gpu_program target name)
             endif()
             if(LFS_HAS_CUDA AND stage STREQUAL "COMPUTE")
                 set(cuda_source "${directory}/${entry}.cu")
-                set(output "${directory}/${entry}.ptx")
+                set(output "${directory}/${entry}.fatbin")
                 add_custom_command(OUTPUT "${output}" "${output}.json" BYPRODUCTS "${cuda_source}"
                     COMMAND "${LFS_GPU_SLANGC}" "${source}" ${defines} -entry "${entry}" -stage compute
                         -target cuda -fp-mode precise -line-directive-mode none -o "${cuda_source}" -reflection-json "${output}.json"
-                    # Match the application's runtime SM floor; NVCC's default can be
-                    # too old for the half intrinsics enabled in the Slang CUDA prelude.
-                    COMMAND "${CMAKE_CUDA_COMPILER}" --ptx "--gpu-architecture=compute_${LFS_RUNTIME_MIN_SM}"
+                    COMMAND "${CMAKE_CUDA_COMPILER}" --fatbin ${cuda_flags}
                         --std=c++17 --fmad=false -DSLANG_CUDA_ENABLE_HALF=1
                         "${cuda_source}" -o "${output}"
                     DEPENDS "${source}" "${LFS_GPU_SLANGC}" ${PROGRAM_DEPENDS} VERBATIM)

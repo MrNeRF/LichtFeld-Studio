@@ -200,7 +200,18 @@ if(BUILD_TESTS)
         COMPUTE waveOps sharedReduce atomics narrowAndWide prepareIndirect markIndirect optionalInput variant)
     lfs_add_gpu_program(gpu_program_contracts program_features_variant SOURCE shaders/program_features.slang
         COMPUTE variant DEFINES LFS_FEATURE_VARIANT=5)
+    add_test(NAME GpuProgramCudaArchitectures COMMAND ${CMAKE_COMMAND}
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/test_gpu_program_cuda.cmake")
     add_test(NAME GpuProgramContracts COMMAND gpu_program_contracts)
+    if(LFS_HAS_CUDA)
+        lfs_gpu_program_cuda_flags(_program_cuda_flags)
+    endif()
+    if(LFS_HAS_CUDA AND "${_program_cuda_flags}" MATCHES "sm_[0-9]")
+        # A driver capable of JIT-compiling PTX would otherwise hide missing SASS.
+        add_test(NAME GpuProgramNativeCodeContracts COMMAND gpu_program_contracts)
+        set_tests_properties(GpuProgramNativeCodeContracts PROPERTIES
+            ENVIRONMENT "CUDA_DISABLE_PTX_JIT=1" LABELS "tensor;gpu" TIMEOUT 120)
+    endif()
     set_tests_properties(GpuProgramContracts PROPERTIES LABELS "tensor;gpu" TIMEOUT 120)
     if(TARGET lfs_tensor_rasterizer)
         add_executable(tensor_rasterizer_contracts
