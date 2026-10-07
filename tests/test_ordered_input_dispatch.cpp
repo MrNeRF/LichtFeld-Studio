@@ -15,10 +15,12 @@
 #include "gui/rml_modal_overlay.hpp"
 #include "gui/rml_sequencer_overlay.hpp"
 #include "gui/rmlui/elements/python_editor_element.hpp"
+#include "gui/rmlui/elements/scene_graph_element.hpp"
 #include "gui/rmlui/elements/terminal_element.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rotation_gizmo.hpp"
 #include "gui/scale_gizmo.hpp"
+#include "gui/scene_panel_native.hpp"
 #include "gui/translation_gizmo.hpp"
 #include "input/frame_input_buffer.hpp"
 #include "input/input_controller.hpp"
@@ -29,6 +31,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "tools/unified_tool_registry.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer_impl.hpp"
 #include "window/window_manager.hpp"
 #include <RmlUi/Core.h>
@@ -502,6 +505,7 @@ namespace lfs::vis {
 namespace lfs::vis {
     class WindowInputDispatchTest : public ::testing::Test {
     protected:
+        virtual bool keepSceneHandlers() const { return false; }
         void SetUp() override {
             ASSERT_TRUE(SDL_Init(SDL_INIT_VIDEO));
             ViewerOptions options;
@@ -510,8 +514,10 @@ namespace lfs::vis {
             viewer_ = std::make_unique<VisualizerImpl>(options);
             window_ = viewer_->getWindowManager();
             gui_ = viewer_->getGuiManager();
-            lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
+            if (!keepSceneHandlers()) {
+                lfs::event::EventBridge::instance().clear_all();
+                lfs::core::event::bus().clear_all();
+            }
             window_->window_ = SDL_CreateWindow("Input dispatch", 400, 300, SDL_WINDOW_HIDDEN);
             ASSERT_NE(window_->window_, nullptr);
             ASSERT_TRUE(manager().initWithRenderInterface(window_->window_, 1.f,
@@ -1957,5 +1963,125 @@ namespace lfs::vis {
         EXPECT_EQ(listener_.ends, 1);
         EXPECT_EQ(listener_.cancelled_ends, 0);
         listener_.callback = {};
+    }
+} // namespace lfs::vis
+
+namespace lfs::vis {
+    class ScenePanelRefreshTest : public WindowInputDispatchTest {
+    protected:
+        bool keepSceneHandlers() const override { return true; }
+
+        void checkMutation(const bool cached, const bool add_group, const bool from_menu = false) {
+            auto& scene_manager = *viewer_->getSceneManager();
+            auto& scene = scene_manager.getScene();
+            const auto original = scene.addGroup("Original");
+            gui::NativeScenePanel panel(&manager());
+            gui::PanelDrawContext ctx;
+            ctx.scene = &scene;
+            ctx.scene_generation = python::get_scene_generation();
+            ctx.frame_serial = 1;
+            panel.preload(ctx);
+            auto* context = manager().getContext("scene_panel_native");
+            ASSERT_NE(context, nullptr);
+            auto* tree = dynamic_cast<gui::SceneGraphElement*>(
+                context->GetDocument(0)->GetElementById("tree-container"));
+            ASSERT_NE(tree, nullptr);
+            ASSERT_EQ(tree->nodeCount(), 1u);
+            auto& ledger = viewer_->getRenderingManager()->frameDemandLedger();
+            const auto consume = [&] {
+                static_cast<void>(app_store().store().drain_dirty_into_frame());
+                return ledger.plan(FrameClock::now());
+            };
+            static_cast<void>(consume());
+
+            // The frame context was captured before the action mutated the scene.
+            if (from_menu) {
+                const auto action = add_group ? std::string("scene_panel:add_group_root")
+                                              : "scene_panel:duplicate:" + std::to_string(original);
+                menu().request({{"Create node", action}}, 0, 0);
+                auto* menu_context = manager().getContext("global_context_menu");
+                ASSERT_NE(menu_context, nullptr);
+                auto* item = menu_context->GetDocument(0)->QuerySelector("[data-ctx-action]");
+                ASSERT_NE(item, nullptr);
+                item->DispatchEvent("click", {});
+            } else {
+                if (add_group)
+                    scene_manager.addGroupNode("Added");
+                else
+                    ASSERT_FALSE(scene_manager.duplicateNodeTree(original).empty());
+                EXPECT_TRUE(consume().present);
+            }
+            gui::PanelInputState input;
+            input.mouse_clicked[0] = from_menu;
+            gui::PanelDirectRenderRequest request;
+            request.input = cached ? nullptr : &input;
+            request.mode = cached ? gui::PanelDirectRenderMode::Cached : gui::PanelDirectRenderMode::Preload;
+            request.width = 400;
+            request.height = 300;
+            panel.renderDirect(request, ctx);
+            EXPECT_EQ(tree->nodeCount(), 2u);
+            if (from_menu)
+                EXPECT_TRUE(consume().present);
+
+            // A fresh idle frame must neither retain stale rows nor request more frames.
+            ctx.scene_generation = python::get_scene_generation();
+            ++ctx.frame_serial;
+            request.mode = gui::PanelDirectRenderMode::Cached;
+            request.input = nullptr;
+            panel.renderDirect(request, ctx);
+            EXPECT_EQ(tree->nodeCount(), 2u);
+            EXPECT_TRUE(consume().empty());
+            EXPECT_FALSE(ledger.nextDeadline(FrameClock::now()).has_value());
+        }
+    };
+
+    TEST_F(ScenePanelRefreshTest, UnchangedPanelStaysIdle) {
+        auto& scene = viewer_->getSceneManager()->getScene();
+        scene.addGroup("Existing");
+        gui::NativeScenePanel panel(&manager());
+        gui::PanelDrawContext ctx;
+        ctx.scene = &scene;
+        ctx.scene_generation = python::get_scene_generation();
+        panel.preload(ctx);
+        auto& ledger = viewer_->getRenderingManager()->frameDemandLedger();
+        static_cast<void>(app_store().store().drain_dirty_into_frame());
+        static_cast<void>(ledger.plan(FrameClock::now()));
+        const auto start = std::chrono::steady_clock::now();
+        constexpr int repeats = 10000;
+        for (int i = 0; i < repeats; ++i) {
+            panel.renderDirect({.mode = gui::PanelDirectRenderMode::Cached,
+                                .width = 400,
+                                .height = 300},
+                               ctx);
+        }
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        RecordProperty("idle_update_ns", std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count() / repeats);
+        EXPECT_TRUE(ledger.plan(FrameClock::now()).empty());
+        EXPECT_FALSE(ledger.nextDeadline(FrameClock::now()).has_value());
+        const auto sync_start = std::chrono::steady_clock::now();
+        for (int i = 0; i < repeats; ++i)
+            panel.preload(ctx);
+        const auto sync_elapsed = std::chrono::steady_clock::now() - sync_start;
+        RecordProperty("live_sync_ns", std::chrono::duration_cast<std::chrono::nanoseconds>(sync_elapsed).count() / repeats);
+        EXPECT_TRUE(ledger.plan(FrameClock::now()).empty());
+    }
+
+    TEST_F(ScenePanelRefreshTest, ContextMenuDuplicateRefreshesLiveTree) {
+        checkMutation(false, false, true);
+    }
+    TEST_F(ScenePanelRefreshTest, ContextMenuDuplicateRefreshesCachedTree) {
+        checkMutation(true, false, true);
+    }
+    TEST_F(ScenePanelRefreshTest, ContextMenuAddGroupRefreshesCachedTree) {
+        checkMutation(true, true, true);
+    }
+    TEST_F(ScenePanelRefreshTest, DuplicateRefreshesLiveTreeWithCapturedFrameContext) {
+        checkMutation(false, false);
+    }
+    TEST_F(ScenePanelRefreshTest, DuplicateRefreshesCachedTreeWithCapturedFrameContext) {
+        checkMutation(true, false);
+    }
+    TEST_F(ScenePanelRefreshTest, AddGroupRefreshesCachedTreeWithCapturedFrameContext) {
+        checkMutation(true, true);
     }
 } // namespace lfs::vis

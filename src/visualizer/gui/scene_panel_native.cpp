@@ -569,6 +569,7 @@ namespace lfs::vis::gui {
         if (auto* gui = services().guiOrNull()) {
             const std::string action = gui->globalContextMenu().pollResult();
             if (!action.empty() && tree_el_ && tree_el_->executeContextMenuAction(action)) {
+                syncPanel(ctx);
                 host_.markContentDirty();
                 host_.drawDirect(x, y, w, h);
                 return true;
@@ -744,8 +745,12 @@ namespace lfs::vis::gui {
                 changed = true;
         }
 
+        // Menu actions can mutate the scene after the frame context was captured.
+        // Synchronize the tree with the generation recorded in the panel stamp.
+        auto current_ctx = ctx;
+        current_ctx.scene_generation = app_store().scene_generation.get();
         changed |= syncLocale();
-        changed |= syncSceneState(ctx);
+        changed |= syncSceneState(current_ctx);
         changed |= syncHistoryState();
         changed |= syncLoggingState();
         changed |= syncTabState();
