@@ -1948,8 +1948,8 @@ namespace {
             }
         }
         // Cell indices clamp far from the origin; coincident points there still count each other.
-        const auto far = tensor({1e9f, 0, 0, 1e9f, 0, 0, 1e9f, 0, 0}, {3, 3});
-        EXPECT_EQ(host<int>(lfs::core::radius_neighbor_counts(far, Tensor::full_bool({3}, true, device()), 1.0f, 2)),
+        const auto distant_points = tensor({1e9f, 0, 0, 1e9f, 0, 0, 1e9f, 0, 0}, {3, 3});
+        EXPECT_EQ(host<int>(lfs::core::radius_neighbor_counts(distant_points, Tensor::full_bool({3}, true, device()), 1.0f, 2)),
                   (std::vector<int>{2, 2, 2}));
         EXPECT_THROW(lfs::core::radius_neighbor_counts(points, references, 1.0f, 0), std::exception);
         const auto empty = lfs::core::radius_neighbor_counts(Tensor::empty({0, 3}, device()), Tensor::full_bool({0}, true, device()), 1.0f, 3);
@@ -3248,7 +3248,7 @@ namespace {
             const float* p = &xyz[i * 3];
             if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2]))
                 continue;
-            std::vector<float> near, ring;
+            std::vector<float> nearby, ring;
             for (size_t j = 0; j < count; ++j) {
                 const float* q = &xyz[j * 3];
                 if (j == i || !std::isfinite(q[0]) || !std::isfinite(q[1]) || !std::isfinite(q[2]))
@@ -3259,12 +3259,12 @@ namespace {
                 const float dx = p[0] - q[0], dy = p[1] - q[1], dz = p[2] - q[2];
                 const float distance = dx * dx + dy * dy + dz * dz;
                 if (reach <= 1)
-                    near.push_back(distance);
+                    nearby.push_back(distance);
                 else if (reach == 2)
                     ring.push_back(distance);
             }
-            auto& candidates = near;
-            if (near.size() < 3)
+            auto& candidates = nearby;
+            if (nearby.size() < 3)
                 candidates.insert(candidates.end(), ring.begin(), ring.end());
             std::ranges::sort(candidates);
             const size_t found = std::min<size_t>(3, candidates.size());

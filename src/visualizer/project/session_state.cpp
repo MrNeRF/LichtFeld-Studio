@@ -992,6 +992,8 @@ namespace lfs::vis::project {
         }
 
         RenderSettings settings = base;
+        // Native-size comparison is temporary inspection state, never project state.
+        settings.gt_comparison_actual_size = false;
         if (auto status = read_fields(
                 json,
                 settings,

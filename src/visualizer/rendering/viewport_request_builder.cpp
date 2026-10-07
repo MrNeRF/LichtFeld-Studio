@@ -764,9 +764,16 @@ namespace lfs::vis {
                                                              const RenderSettings& settings) {
         const auto& view = frame.frame_view;
         const glm::mat4 view_matrix = view.getViewMatrix();
-        const glm::mat4 projection = lfs::rendering::createProjectionMatrix(
+        const auto intrinsics = view.getCameraIntrinsics();
+        glm::mat4 projection = lfs::rendering::createProjectionMatrix(
             view.size, lfs::rendering::focalLengthToVFov(view.focal_length_mm), view.orthographic,
             view.ortho_scale, view.near_plane, view.far_plane);
+        if (!view.orthographic) {
+            projection[0][0] = 2.0f * intrinsics.focal_x / view.size.x;
+            projection[1][1] = 2.0f * intrinsics.focal_y / view.size.y;
+            projection[2][0] = 1.0f - 2.0f * intrinsics.center_x / view.size.x;
+            projection[2][1] = 2.0f * intrinsics.center_y / view.size.y - 1.0f;
+        }
         // The projection is OpenGL NDC (Y up); images have a top-left origin.
         glm::mat4 clip_y_flip(1.0f);
         clip_y_flip[1][1] = -1.0f;
@@ -797,7 +804,7 @@ namespace lfs::vis {
         request.transparent_background = frame.transparent_background;
         request.orthographic = view.orthographic;
         request.ortho_scale = view.ortho_scale;
-        request.focal_y = lfs::core::fov2focal(lfs::rendering::focalLengthToVFovRad(view.focal_length_mm), view.size.y);
+        request.focal_y = intrinsics.focal_y;
         request.voxel_size = frame.render.voxel_size;
         request.scaling_modifier = frame.render.scaling_modifier;
         request.depth_view = settings.depth_view;

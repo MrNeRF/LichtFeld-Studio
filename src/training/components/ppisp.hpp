@@ -3,6 +3,7 @@
 
 #pragma once
 #include "core/tensor.hpp"
+#include "core/tensor_ppisp.hpp"
 #include <cassert>
 #include <cmath>
 #include <expected>
@@ -64,13 +65,10 @@ namespace lfs::training {
         bool train_crf = true;      // When false, CRF stays at identity and is not stepped
     };
 
-    /// Full-width row band of a larger image: vignetting is evaluated in full-image
-    /// coordinates so banded application matches a single full-image pass exactly.
-    /// full_height == 0 means the input covers the whole image.
-    struct PPISPRegion {
-        int y_offset = 0;
-        int full_height = 0;
-    };
+    /// Crop of a larger image: vignetting is evaluated in full-image coordinates
+    /// so regional application matches a single full-image pass exactly.
+    /// A zero full extent uses the input extent on that axis.
+    using PPISPRegion = lfs::core::PpispRegion;
 
     /// Physically-Plausible Image Signal Processing for per-camera/per-frame appearance modeling
     class PPISP {

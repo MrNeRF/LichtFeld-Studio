@@ -43,6 +43,7 @@ namespace lfs::vis {
     };
     struct ViewportSplitView {
         bool enabled = false, loss_visualization = false;
+        bool exact_texel_sampling = false;
         ViewportSplitPanel left, right;
         float split_position = 0.5f;
         glm::ivec4 content_rect{0};

@@ -502,6 +502,12 @@ class ProjectInspectorParameters:
     def embedded_images(self) -> int: ...
 
     @property
+    def embedded_masks(self) -> int: ...
+
+    @property
+    def embedded_depths(self) -> int: ...
+
+    @property
     def embedded_normals(self) -> int: ...
 
     @property
@@ -713,6 +719,12 @@ class DatasetEmbedResult:
     def images_embedded(self) -> int: ...
 
     @property
+    def masks_embedded(self) -> int: ...
+
+    @property
+    def depths_embedded(self) -> int: ...
+
+    @property
     def normals_embedded(self) -> int: ...
 
     @property
@@ -912,6 +924,9 @@ def export_html(data: lichtfeld.scene.SplatData, path: str | os.PathLike, kmeans
 
 def is_ssog_path(path: str | os.PathLike) -> bool:
     """Check for an SSOG bundle, manifest or directory."""
+
+def is_tiles3d_path(path: str | os.PathLike) -> bool:
+    """Check for a 3D Tiles tileset JSON."""
 
 def is_dataset_path(path: str | os.PathLike) -> bool:
     """Check if path is a dataset directory"""

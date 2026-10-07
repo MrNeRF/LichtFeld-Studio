@@ -248,6 +248,21 @@ class Ellipsoid:
     def __dir__(self) -> list:
         """List available attributes"""
 
+class PointCloudUpdateTicket:
+    @property
+    def state(self) -> str: ...
+
+    @property
+    def error(self) -> str: ...
+
+    @property
+    def inputs_released(self) -> bool: ...
+
+    def cancel(self) -> bool:
+        """
+        Cancel before publication. In-flight source memory remains retained until inputs_released.
+        """
+
 class PointCloud:
     @property
     def means(self) -> lichtfeld.Tensor:
@@ -305,6 +320,11 @@ class PointCloud:
 
     def set_data(self, points: lichtfeld.Tensor, colors: lichtfeld.Tensor) -> None:
         """Replace point cloud data with new points and colors tensors"""
+
+    def set_data_async(self, points: object, colors: object, *, centroid: tuple[float, float, float] | None = None, queue_policy: str = 'latest') -> PointCloudUpdateTicket:
+        """
+        Queue an independent snapshot off the viewer thread. Keep inputs immutable until inputs_released; poll state for publication.
+        """
 
     def set_colors(self, colors: lichtfeld.Tensor) -> None:
         """Update colors without re-uploading positions [N, 3]"""

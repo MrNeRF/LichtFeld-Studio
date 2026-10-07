@@ -36,7 +36,7 @@ struct Parameters {
     uint leftFilter;
     uint rightFilter;
     uint lossVisualization;
-    uint padding;
+    uint exactTexelSampling;
     float2 leftUvScale;
     float2 leftUvClamp;
     float2 rightUvScale;
@@ -88,6 +88,14 @@ float3 samplePanel(Ptr<uint8_t, Access.Read> image, uint width, uint height,
                    uint channels, uint floatingPoint, uint chw, float2 uv,
                    float start, float end, uint normalize, uint flipY, uint spatialFilter,
                    float2 uvScale, float2 uvClamp, float2 texcoordScale, float2 texcoordOffset) {
+    if (p.exactTexelSampling != 0) {
+        uint x = min(uint(uv.x * p.contentWidth), width - 1u);
+        uint y = min(uint(uv.y * p.contentHeight), height - 1u);
+        if (flipY != 0) y = min(p.contentHeight - 1u - y, height - 1u);
+        return float3(readChannel(image, width, height, channels, floatingPoint, chw, x, y, 0),
+                      readChannel(image, width, height, channels, floatingPoint, chw, x, y, 1),
+                      readChannel(image, width, height, channels, floatingPoint, chw, x, y, 2));
+    }
     float u = normalize != 0 ? (uv.x - start) / max(end - start, 1e-6) : uv.x;
     float v = flipY != 0 ? 1.0 - uv.y : uv.y;
     float2 st = min((float2(u, v) * texcoordScale + texcoordOffset) * uvScale, uvClamp);

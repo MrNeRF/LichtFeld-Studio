@@ -16,3 +16,9 @@
 #else
 #include <Python.h>
 #endif
+
+// CPython's Windows pyconfig.h exports a generic PLATFORM macro. It collides
+// with the localized About::BuildInfo::PLATFORM key in mixed Python/GUI users.
+#if defined(_WIN32) && defined(PLATFORM)
+#undef PLATFORM
+#endif

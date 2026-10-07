@@ -17,6 +17,7 @@
 #include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
 #include "core/tensor_sh.hpp"
+#include "core/transform_utils.hpp"
 
 #include <algorithm>
 #include <array>
@@ -243,6 +244,14 @@ namespace lfs::core {
             type == MutationType::NODE_REPARENTED ||
             type == MutationType::CLEARED) {
             ++camera_list_generation_;
+        }
+
+        if (type == MutationType::NODE_ADDED ||
+            type == MutationType::NODE_REMOVED ||
+            type == MutationType::MODEL_CHANGED ||
+            type == MutationType::CLEARED) {
+            std::unique_lock lock(selection_mutex_);
+            selected_count_valid_ = false;
         }
 
         switch (type) {
@@ -665,6 +674,7 @@ namespace lfs::core {
         auto* node = getMutableNode(name);
         if (!node || node->type != NodeType::POINTCLOUD || !point_cloud)
             return;
+        node->point_cloud_revision->fetch_add(1, std::memory_order_release);
         const auto count = point_cloud->size();
         const auto slices = capturePerNodeSelectionSlices(SelectionDomain::PointCloud);
         node->point_cloud = std::move(point_cloud);
@@ -674,6 +684,37 @@ namespace lfs::core {
         auto preserved = slices;
         preserved.erase(node->uuid);
         applyPerNodeSelectionSlices(SelectionDomain::PointCloud, preserved);
+    }
+
+    Scene::PointCloudRetirement Scene::publishNodePointCloud(
+        const Uuid& uuid, std::shared_ptr<PointCloud> point_cloud, const glm::vec3 centroid,
+        std::shared_ptr<PointCloud> merged) {
+        auto* node = getNodeByUuid(uuid);
+        if (!node || node->type != NodeType::POINTCLOUD || !point_cloud)
+            throw std::runtime_error("Point-cloud target no longer exists");
+        Transaction transaction(*this);
+        PointCloudRetirement previous;
+        previous.cloud = std::exchange(node->point_cloud, std::move(point_cloud));
+        node->point_cloud_revision->fetch_add(1, std::memory_order_release);
+        previous.evaluated = std::move(node->evaluated_point_cloud);
+        previous.merged = std::move(prepared_point_cloud_render_);
+        if (initial_point_cloud_ == previous.cloud)
+            initial_point_cloud_ = node->point_cloud;
+        node->gaussian_count.store(node->point_cloud->size(), std::memory_order_release);
+        node->centroid = centroid;
+        node->payload_hydration = PayloadHydrationState::Loaded;
+        {
+            std::unique_lock lock(selection_mutex_);
+            previous.selection = std::move(point_cloud_selection_mask_);
+            has_point_cloud_selection_ = false;
+            selection_group_counts_dirty_ = true;
+        }
+        point_cloud_modified_ = true;
+        notifyMutation(MutationType::SELECTION_CHANGED);
+        notifyMutation(MutationType::MODEL_CHANGED);
+        prepared_point_cloud_render_ = std::move(merged);
+        prepared_point_cloud_render_generation_ = renderGeneration();
+        return previous;
     }
 
     void Scene::replaceNodeMesh(const std::string& name, std::shared_ptr<MeshData> mesh) {
@@ -776,6 +817,8 @@ namespace lfs::core {
     }
 
     void Scene::clear(const bool internal_import) {
+        point_cloud_update_epoch_->fetch_add(1, std::memory_order_release);
+        prepared_point_cloud_render_.reset();
         if (!internal_import)
             events::state::SceneReplacing{.scene = this}.emit();
         Transaction txn(*this);
@@ -2183,6 +2226,9 @@ namespace lfs::core {
                 }
                 changed = true;
             }
+            if (changed) {
+                selected_count_valid_ = false;
+            }
         }
 
         if (changed) {
@@ -3032,6 +3078,35 @@ namespace lfs::core {
         return getSelectionMask(SelectionDomain::Splat);
     }
 
+    size_t Scene::selectedCount() const {
+        const size_t splat_capacity = currentSelectionCapacity(SelectionDomain::Splat);
+        const size_t point_cloud_capacity = currentSelectionCapacity(SelectionDomain::PointCloud);
+        std::unique_lock lock(selection_mutex_);
+
+        const auto matches_capacity = [](const std::shared_ptr<Tensor>& mask, const size_t capacity) {
+            return !mask || (mask->is_valid() && mask->ndim() == 1 && mask->numel() == capacity);
+        };
+        if (!matches_capacity(selection_mask_, splat_capacity) ||
+            !matches_capacity(point_cloud_selection_mask_, point_cloud_capacity)) {
+            selected_count_valid_ = false;
+        }
+
+        if (!selected_count_valid_) {
+            selected_count_ = 0;
+            if (selection_mask_ && selection_mask_->is_valid() && selection_mask_->ndim() == 1 &&
+                selection_mask_->numel() == splat_capacity) {
+                selected_count_ += selection_mask_->count_nonzero();
+            }
+            if (point_cloud_selection_mask_ && point_cloud_selection_mask_->is_valid() &&
+                point_cloud_selection_mask_->ndim() == 1 &&
+                point_cloud_selection_mask_->numel() == point_cloud_capacity) {
+                selected_count_ += point_cloud_selection_mask_->count_nonzero();
+            }
+            selected_count_valid_ = true;
+        }
+        return selected_count_;
+    }
+
     std::shared_ptr<lfs::core::Tensor> Scene::getSelectionMask(
         const SelectionDomain domain) const {
         const size_t expected_size =
@@ -3091,6 +3166,7 @@ namespace lfs::core {
                 selected_count = 0;
             }
             selected_count_ = selected_count;
+            selected_count_valid_ = true;
             selection_group_counts_dirty_ = true;
         }
         events::state::SelectionChanged{
@@ -3119,6 +3195,7 @@ namespace lfs::core {
                 count = 0;
             }
             selected_count_ = count;
+            selected_count_valid_ = true;
             selection_group_counts_dirty_ = true;
         }
         events::state::SelectionChanged{
@@ -3171,6 +3248,7 @@ namespace lfs::core {
             point_cloud_selection_mask_ = std::move(mask);
             has_point_cloud_selection_ =
                 point_cloud_selection_mask_ != nullptr;
+            selected_count_valid_ = false;
             selection_group_counts_dirty_ = true;
         }
         const int selection_count = static_cast<int>(
@@ -3199,6 +3277,7 @@ namespace lfs::core {
             has_selection_ = selection_mask_ != nullptr && has_selection;
             installed = has_selection_;
             selected_count_ = has_selection_ ? selected_count_hint : 0;
+            selected_count_valid_ = !has_selection_;
             selection_group_counts_dirty_ = has_selection_;
         }
         events::state::SelectionChanged{
@@ -3223,7 +3302,9 @@ namespace lfs::core {
             has_selection = has_selection_;
             if (!has_selection_) {
                 selection_mask_.reset();
+                selected_count_ = 0;
             }
+            selected_count_valid_ = true;
         }
         if (has_selection) {
             applySelectionGroupCounts(group_counts);
@@ -3249,6 +3330,7 @@ namespace lfs::core {
             has_selection_ = false;
             has_point_cloud_selection_ = false;
             selected_count_ = 0;
+            selected_count_valid_ = true;
         }
         clearSelectionGroupCounts();
         selection_group_counts_dirty_ = false;
@@ -3302,6 +3384,7 @@ namespace lfs::core {
                                   : nullptr;
             has_selection_ = has_selection;
             selected_count_ = 0;
+            selected_count_valid_ = true;
             selection_group_counts_dirty_ = false;
             if (has_selection_) {
                 selected_count_ = selection_mask_->count_nonzero();
@@ -3600,20 +3683,25 @@ namespace lfs::core {
 
         std::array<std::shared_ptr<lfs::core::Tensor>, 2>
             selection_masks;
+        bool has_valid_mask = false;
         {
             std::shared_lock lock(selection_mutex_);
             selection_masks = {
                 selection_mask_,
                 point_cloud_selection_mask_,
             };
-            if (std::ranges::none_of(
-                    selection_masks,
-                    [](const auto& mask) {
-                        return mask && mask->is_valid();
-                    })) {
-                selection_group_counts_dirty_ = false;
-                return;
+            has_valid_mask = std::ranges::any_of(
+                selection_masks,
+                [](const auto& mask) { return mask && mask->is_valid(); });
+        }
+        if (!has_valid_mask) {
+            {
+                std::unique_lock lock(selection_mutex_);
+                selected_count_ = 0;
+                selected_count_valid_ = true;
             }
+            selection_group_counts_dirty_ = false;
+            return;
         }
 
         for (const auto& selection_mask : selection_masks) {
@@ -3632,9 +3720,14 @@ namespace lfs::core {
                 }
             }
         }
-        selected_count_ = 0;
+        size_t selected_count = 0;
         for (const auto& group : selection_groups_) {
-            selected_count_ += group.count;
+            selected_count += group.count;
+        }
+        {
+            std::unique_lock lock(selection_mutex_);
+            selected_count_ = selected_count;
+            selected_count_valid_ = true;
         }
         selection_group_counts_dirty_ = false;
     }
@@ -3690,6 +3783,7 @@ namespace lfs::core {
                 point_cloud_selection_mask_ &&
                 point_cloud_selection_mask_->is_valid() &&
                 any_remaining[1];
+            selected_count_valid_ = false;
         }
 
         if (auto* group = findGroup(id)) {
@@ -3707,6 +3801,8 @@ namespace lfs::core {
             point_cloud_selection_mask_.reset();
             has_selection_ = false;
             has_point_cloud_selection_ = false;
+            selected_count_ = 0;
+            selected_count_valid_ = true;
         }
         selection_groups_.clear();
         next_group_id_ = 1;
@@ -4203,6 +4299,7 @@ namespace lfs::core {
         for (const auto& group : selection_groups_) {
             selected_count_ += group.count;
         }
+        selected_count_valid_ = true;
         selection_group_counts_dirty_ = false;
     }
 
@@ -4214,6 +4311,9 @@ namespace lfs::core {
         assert(!restore_staging_);
         assert(transaction_depth_ == 0);
 
+        point_cloud_update_epoch_->fetch_add(1, std::memory_order_release);
+        prepared_point_cloud_render_.swap(staged->prepared_point_cloud_render_);
+        std::swap(prepared_point_cloud_render_generation_, staged->prepared_point_cloud_render_generation_);
         // The restore swaps the entire node graph. Join the worker before the
         // old graph moves into the returned Scene, so a later destruction of
         // that graph cannot race reads from the target's captured inputs.
@@ -4249,6 +4349,7 @@ namespace lfs::core {
         has_point_cloud_selection_ =
             staged->has_point_cloud_selection_;
         selected_count_ = staged->selected_count_;
+        selected_count_valid_ = false;
         ++selection_generation_;
         selection_group_counts_dirty_ =
             staged->selection_group_counts_dirty_;
@@ -4437,6 +4538,10 @@ namespace lfs::core {
                 has_point_cloud_selection_,
                 point_count);
             selection_group_counts_dirty_ = true;
+        }
+        {
+            std::unique_lock lock(selection_mutex_);
+            selected_count_valid_ = false;
         }
         return report;
     }
@@ -5028,6 +5133,14 @@ namespace lfs::core {
             return false;
 
         const glm::mat4 old_world = getWorldTransform(node_id);
+        const glm::mat4 new_parent_world =
+            new_parent == NULL_NODE ? glm::mat4(1.0f) : getWorldTransform(new_parent);
+        const auto new_local = finiteLocalTransform(new_parent_world, old_world);
+        if (!new_local) {
+            LOG_WARN("Cannot reparent '{}': destination transform cannot preserve a finite world transform",
+                     node->name);
+            return false;
+        }
 
         if (node->parent_id != NULL_NODE) {
             if (auto* old_parent = getNodeById(node->parent_id)) {
@@ -5044,9 +5157,7 @@ namespace lfs::core {
         }
 
         // Keep the node visually in place: re-express its world pose in the new parent's frame.
-        const glm::mat4 new_parent_world =
-            new_parent == NULL_NODE ? glm::mat4(1.0f) : getWorldTransform(new_parent);
-        node->local_transform.set(glm::inverse(new_parent_world) * old_world, false);
+        node->local_transform.set(*new_local, false);
 
         markTransformDirty(node_id);
         notifyMutation(MutationType::NODE_REPARENTED);
@@ -5090,13 +5201,22 @@ namespace lfs::core {
 
         const NodeId old_parent = node->parent_id;
         const glm::mat4 old_world = getWorldTransform(node_id);
+        std::optional<glm::mat4> new_local;
+        if (old_parent != new_parent) {
+            const glm::mat4 new_parent_world =
+                new_parent == NULL_NODE ? glm::mat4(1.0f) : getWorldTransform(new_parent);
+            new_local = finiteLocalTransform(new_parent_world, old_world);
+            if (!new_local) {
+                LOG_WARN("Cannot move '{}': destination transform cannot preserve a finite world transform",
+                         node->name);
+                return false;
+            }
+        }
 
         // Keep the node visually in place across a parent change by re-expressing its world pose
         // in the new parent's frame. Pure reorders (same parent) leave the transform untouched.
         const auto preserveWorldTransform = [&] {
-            const glm::mat4 new_parent_world =
-                new_parent == NULL_NODE ? glm::mat4(1.0f) : getWorldTransform(new_parent);
-            node->local_transform.set(glm::inverse(new_parent_world) * old_world, false);
+            node->local_transform.set(*new_local, false);
         };
 
         if (new_parent != NULL_NODE) {
@@ -5693,6 +5813,12 @@ namespace lfs::core {
         const auto* node = getNodeByUuid(uuid);
         if (!node) {
             LOG_ERROR("Cannot set training model node: UUID {} does not resolve", uuid.to_string());
+            training_model_uuid_ = {};
+            training_model_node_.clear();
+            return;
+        }
+        if (node->model_streamed) {
+            LOG_WARN("Cannot set training model node: '{}' is a streamed model and cannot be trained", node->name);
             training_model_uuid_ = {};
             training_model_node_.clear();
             return;

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/camera.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
@@ -30,6 +31,7 @@
 #include "visualizer_impl.hpp"
 
 #include <algorithm>
+#include <filesystem>
 #include <glm/glm.hpp>
 #include <gtest/gtest.h>
 #include <memory>
@@ -972,6 +974,14 @@ TEST_F(DepthWindowDragLifecycleTest, ModifierReleaseClearsDepthWindowDragPreview
 }
 
 TEST_F(DepthWindowDragLifecycleTest, GtToggleClearsDepthWindowDragPreview) {
+    scene_manager_->changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+    auto& scene = scene_manager_->getScene();
+    const auto group = scene.addCameraGroup("Cameras", scene.addGroup("Dataset"), 1);
+    auto camera = std::make_shared<lfs::core::Camera>(
+        Tensor::eye(3, Device::CPU), Tensor::zeros({size_t{3}}, Device::CPU),
+        100.0f, 100.0f, 32.0f, 32.0f, Tensor(), Tensor(), lfs::core::CameraModelType::PINHOLE,
+        "source", std::filesystem::path("source.png"), std::filesystem::path{}, 64, 64, 1);
+    scene.addCamera("source", group, std::move(camera));
     expectMidDragPreviewActive();
     lfs::core::events::cmd::ToggleGTComparison{}.emit();
     EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());

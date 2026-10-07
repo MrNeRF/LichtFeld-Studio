@@ -26,14 +26,22 @@ namespace lfs::rendering {
         constexpr size_t kPaletteEntries = 257;
 
         struct DrawParameters {
+            uint64_t pointers[11]{};
+            std::array<uint32_t, 2> extent{};
+            std::array<uint32_t, 2> padding{};
+        };
+        static_assert(sizeof(DrawParameters) == 104);
+        static_assert(offsetof(DrawParameters, extent) == 88);
+
+        struct InlineDrawParameters {
             uint64_t pointers[10]{};
             PointParameters point;
             std::array<uint32_t, 2> extent{};
             std::array<uint32_t, 2> padding{};
         };
-        static_assert(sizeof(DrawParameters) == 352);
-        static_assert(offsetof(DrawParameters, point) == 80);
-        static_assert(offsetof(DrawParameters, extent) == 336);
+        static_assert(sizeof(InlineDrawParameters) == 352);
+        static_assert(offsetof(InlineDrawParameters, point) == 80);
+        static_assert(offsetof(InlineDrawParameters, extent) == 336);
 
         lfs::Result<void> failure(std::string detail) {
             return lfs::Result<void>::failure(lfs::make_error({
@@ -48,7 +56,8 @@ namespace lfs::rendering {
     struct SplatPointRenderer::Impl {
         core::GpuBackend backend;
         std::unique_ptr<M> module;
-        Tensor objects, palette;
+        bool buffered_parameters = false;
+        Tensor objects, palette, point_parameters;
         Tensor rgba, raster_depth, depth_rgba, linear;
         std::deque<core::TensorUpload> uploads;
 
@@ -147,6 +156,9 @@ namespace lfs::rendering {
             if (!loaded)
                 return lfs::Result<void>::failure(std::move(loaded).error());
             s.module = std::move(*loaded);
+            for (const auto& entry : point_cloud_entries())
+                if (entry.backend == s.backend && entry.name == "pointVertex")
+                    s.buffered_parameters = entry.parameter_bytes == sizeof(DrawParameters);
         }
         s.reserve(width, height);
         if (!in.objects.empty())
@@ -154,7 +166,13 @@ namespace lfs::rendering {
         if (selection_enabled)
             s.upload(s.palette, in.selection_palette);
 
-        DrawParameters parameters{.point = point, .extent = {width, height}};
+        const bool buffered = s.buffered_parameters;
+        if (buffered)
+            s.upload(s.point_parameters, std::as_bytes(std::span(&point, 1)));
+        DrawParameters parameters{.extent = {width, height}};
+        InlineDrawParameters inline_parameters{.point = point, .extent = {width, height}};
+        const auto parameter_bytes = buffered ? std::as_bytes(std::span(&parameters, 1))
+                                              : std::as_bytes(std::span(&inline_parameters, 1));
         const auto present = [](const Tensor* tensor) { return tensor && tensor->is_valid() ? tensor : nullptr; };
         const std::array draw_bindings{
             M::Binding{0, count ? in.positions : nullptr},
@@ -167,11 +185,12 @@ namespace lfs::rendering {
             M::Binding{56, present(in.deleted)},
             M::Binding{64, nullptr},
             M::Binding{72, nullptr},
+            M::Binding{80, &s.point_parameters},
         };
         auto color_draw = M::Draw{
             .vertex = "pointVertex",
             .fragment = "pointColorFragment",
-            .arguments = {std::as_bytes(std::span(&parameters, 1)), draw_bindings},
+            .arguments = {parameter_bytes, std::span(draw_bindings).first(buffered ? 11 : 10)},
             .color = &s.rgba,
             .depth = &s.raster_depth,
             .vertex_count = 6,
@@ -207,10 +226,11 @@ namespace lfs::rendering {
             M::Binding{56, nullptr},
             M::Binding{64, &s.depth_rgba},
             M::Binding{72, &s.linear, M::Access::ReadWrite},
+            M::Binding{80, nullptr},
         };
         return s.module->dispatch({
             .function = "extractPointDepth",
-            .arguments = {std::as_bytes(std::span(&parameters, 1)), copy_bindings},
+            .arguments = {parameter_bytes, std::span(copy_bindings).first(buffered ? 11 : 10)},
             .groups = {(width + 15u) / 16u, (height + 15u) / 16u, 1},
             .group = {16, 16, 1},
         });

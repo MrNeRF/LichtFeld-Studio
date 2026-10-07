@@ -10,6 +10,7 @@
 #include "core/property_registry.hpp"
 #include "io/loader.hpp"
 #include "py_error.hpp"
+#include "py_viewer_dispatch.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/core/training_manager.hpp"
 #include "visualizer/core/training_state.hpp"
@@ -20,6 +21,7 @@
 #include "visualizer/scene/scene_manager.hpp"
 #include <algorithm>
 #include <nanobind/ndarray.h>
+#include <nanobind/stl/shared_ptr.h>
 #include <stdexcept>
 
 namespace lfs::python {
@@ -211,7 +213,67 @@ namespace lfs::python {
         return PyMeshInfo(live.mesh);
     }
 
+    PyPointCloud::PyPointCloud(core::PointCloud* pc, const bool owns,
+                               core::SceneNode* node, core::Scene* scene)
+        : pc_(pc), owns_(owns), node_(node), scene_(scene) {
+        assert(pc_ != nullptr);
+        if (node && scene) {
+            payload_keep_alive_ = node->point_cloud;
+            const auto epoch = scene->pointCloudUpdateEpoch();
+            update_target_ = {scene, epoch->load(), node->uuid, node->point_cloud_revision,
+                              node->point_cloud_revision->load(std::memory_order_acquire), 0, epoch};
+        }
+    }
+
+    std::shared_ptr<vis::PointCloudUpdateTicket> PyPointCloud::set_data_async(
+        nb::object points, nb::object colors,
+        std::optional<std::tuple<float, float, float>> centroid, const std::string& queue_policy) {
+        reject_viewer_work_in_node_execute();
+        if (queue_policy != "latest")
+            throw nb::value_error("queue_policy must be 'latest'");
+        auto* viewer = get_visualizer();
+        auto manager = viewer ? viewer->pointCloudUpdates() : nullptr;
+        if (!manager || !update_target_.revision)
+            throw std::runtime_error("Async updates require an initialized viewer and a scene-owned point cloud");
+        if (update_target_.scene_generation != update_target_.scene_epoch->load(std::memory_order_acquire) || update_target_.scene != get_application_scene())
+            throw std::runtime_error("Scene reference is no longer valid");
+        struct Owners {
+            nb::object points, colors;
+            nb::ndarray<nb::numpy, nb::device::cpu> points_array, colors_array;
+        };
+        auto owners = std::shared_ptr<Owners>(new Owners{std::move(points), std::move(colors), {}, {}}, [](Owners* p) {
+            nb::gil_scoped_acquire gil;
+            delete p;
+        });
+        const auto source = [](nb::object object, nb::ndarray<nb::numpy, nb::device::cpu>& array, const bool colors) {
+            if (nb::isinstance<PyTensor>(object))
+                return nb::cast<const PyTensor&>(object).tensor();
+            if (!nb::try_cast(object, array, false))
+                throw nb::type_error("Expected a LichtFeld Tensor or a contiguous CPU NumPy array");
+            if (array.ndim() != 2 || array.shape(1) != 3 ||
+                (array.shape(0) > 0 && (array.stride(1) != 1 || (array.shape(0) > 1 && array.stride(0) != 3))))
+                throw nb::value_error("Point-cloud arrays must be C-contiguous [N, 3]");
+            const auto dtype = array.dtype();
+            if (dtype != nb::dtype<float>() && (!colors || dtype != nb::dtype<uint8_t>()))
+                throw nb::value_error(colors ? "Colors must have dtype float32 or uint8" : "Positions must have dtype float32");
+            return core::Tensor::from_blob(array.data(), {array.shape(0), size_t{3}}, core::Device::CPU,
+                                           dtype == nb::dtype<float>() ? core::DataType::Float32 : core::DataType::UInt8);
+        };
+        vis::PointCloudUpdateInput input;
+        input.points = source(owners->points, owners->points_array, false);
+        input.colors = source(owners->colors, owners->colors_array, true);
+        input.source_owners = owners;
+        if (centroid)
+            input.centroid = glm::vec3(std::get<0>(*centroid), std::get<1>(*centroid), std::get<2>(*centroid));
+        auto target = update_target_;
+        target.expected_revision = target.revision->load(std::memory_order_acquire);
+        nb::gil_scoped_release gil;
+        return manager->submit(std::move(target), std::move(input));
+    }
+
     int64_t PyPointCloud::filter(const PyTensor& keep_mask) {
+        if (update_target_.revision)
+            update_target_.revision->fetch_add(1, std::memory_order_release);
         const auto& mask = keep_mask.tensor();
         assert(mask.dtype() == core::DataType::Bool && "Mask must be boolean");
         assert(mask.shape().rank() == 1 && "Mask must be 1D");
@@ -239,6 +301,8 @@ namespace lfs::python {
     }
 
     int64_t PyPointCloud::filter_indices(const PyTensor& indices) {
+        if (update_target_.revision)
+            update_target_.revision->fetch_add(1, std::memory_order_release);
         const auto& idx = indices.tensor();
         assert(idx.shape().rank() == 1 && "Indices must be 1D");
 
@@ -263,6 +327,8 @@ namespace lfs::python {
     }
 
     void PyPointCloud::set_data(const PyTensor& points, const PyTensor& colors) {
+        if (update_target_.revision)
+            update_target_.revision->fetch_add(1, std::memory_order_release);
         const auto& pts = points.tensor();
         const auto& cols = colors.tensor();
         assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
@@ -288,6 +354,8 @@ namespace lfs::python {
     }
 
     void PyPointCloud::set_colors(const PyTensor& colors) {
+        if (update_target_.revision)
+            update_target_.revision->fetch_add(1, std::memory_order_release);
         const auto& cols = colors.tensor();
         assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
         assert(cols.shape()[0] == pc_->size());
@@ -299,6 +367,8 @@ namespace lfs::python {
     }
 
     void PyPointCloud::set_means(const PyTensor& points) {
+        if (update_target_.revision)
+            update_target_.revision->fetch_add(1, std::memory_order_release);
         const auto& pts = points.tensor();
         assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
         assert(pts.shape()[0] == pc_->size());
@@ -1170,6 +1240,13 @@ namespace lfs::python {
                 })
             .def("__dir__", &PyEllipsoid::python_dir, "List available attributes");
 
+        nb::class_<vis::PointCloudUpdateTicket>(m, "PointCloudUpdateTicket")
+            .def_prop_ro("state", &vis::PointCloudUpdateTicket::state)
+            .def_prop_ro("error", &vis::PointCloudUpdateTicket::error)
+            .def_prop_ro("inputs_released", &vis::PointCloudUpdateTicket::inputsReleased)
+            .def("cancel", &vis::PointCloudUpdateTicket::cancel,
+                 "Cancel before publication. In-flight source memory remains retained until inputs_released.");
+
         // PointCloud class
         nb::class_<PyPointCloud>(m, "PointCloud")
             .def_prop_ro("means", &PyPointCloud::means, "Position tensor [N, 3]")
@@ -1190,6 +1267,10 @@ namespace lfs::python {
                  "Keep only points at specified indices, returns number of points removed")
             .def("set_data", &PyPointCloud::set_data, nb::arg("points"), nb::arg("colors"),
                  "Replace point cloud data with new points and colors tensors")
+            .def("set_data_async", &PyPointCloud::set_data_async,
+                 nb::arg("points"), nb::arg("colors"), nb::kw_only(),
+                 nb::arg("centroid") = nb::none(), nb::arg("queue_policy") = "latest",
+                 "Queue an independent snapshot off the viewer thread. Keep inputs immutable until inputs_released; poll state for publication.")
             .def("set_colors", &PyPointCloud::set_colors, nb::arg("colors"),
                  "Update colors without re-uploading positions [N, 3]")
             .def("set_means", &PyPointCloud::set_means, nb::arg("points"),

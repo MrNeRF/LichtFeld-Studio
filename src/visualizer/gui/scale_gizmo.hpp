@@ -53,5 +53,6 @@ namespace lfs::vis::gui {
 
     [[nodiscard]] bool isScaleGizmoHovered();
     [[nodiscard]] bool isScaleGizmoActive();
+    void cancelScaleGizmoDrag();
 
 } // namespace lfs::vis::gui

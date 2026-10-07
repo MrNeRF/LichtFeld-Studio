@@ -33,7 +33,7 @@ def import_dialog_module(monkeypatch, tmp_path):
     lf_stub.io = SimpleNamespace(is_ssog_path=lambda path: (
         Path(path).is_file() and (Path(path).suffix == ".ssog" or Path(path).name == "lod-meta.json")
         or (Path(path) / "lod-meta.json").is_file()
-    ))
+    ), is_tiles3d_path=lambda _path: False)
     lf_stub.ui = SimpleNamespace(
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
         PanelHeightMode=SimpleNamespace(CONTENT="CONTENT"),

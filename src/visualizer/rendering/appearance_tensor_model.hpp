@@ -30,7 +30,7 @@ namespace lfs::vis {
                                                         const lfs::core::Tensor& controller_params = {}) const;
         [[nodiscard]] lfs::core::Tensor apply(const lfs::core::Tensor& rgb_chw,
                                               int camera_uid, const PPISPOverrides& overrides,
-                                              bool use_controller) const;
+                                              bool use_controller, const lfs::core::PpispRegion& region = {}) const;
 
     private:
         lfs::core::GpuBackend backend_ = lfs::core::GpuBackend::Vulkan;

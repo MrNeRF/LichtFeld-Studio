@@ -9,7 +9,9 @@
 
 #include "core/parameters.hpp"
 #include <expected>
+#include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -64,8 +66,12 @@ namespace lfs::io::args {
         Command command;
         std::string name;
     };
+    struct LichtMode {
+        std::filesystem::path project_path;
+        std::optional<std::filesystem::path> dataset_path;
+    };
 
-    using ParsedArgs = std::variant<TrainingMode, ConvertMode, Mesh2SplatMode, PreprocessMode, HelpMode, VersionMode, WarmupMode, TensorBackendSelftestMode, PluginMode>;
+    using ParsedArgs = std::variant<TrainingMode, ConvertMode, Mesh2SplatMode, PreprocessMode, HelpMode, VersionMode, WarmupMode, TensorBackendSelftestMode, PluginMode, LichtMode>;
 
     LFS_IO_API std::expected<ParsedArgs, std::string> parse_args(int argc, const char* const argv[]);
 

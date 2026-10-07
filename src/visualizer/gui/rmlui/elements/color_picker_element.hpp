@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/EventListener.h>
 #include <RmlUi/Core/Geometry.h>
@@ -12,7 +14,7 @@ namespace lfs::vis::gui {
 
     class ColorPickerElement : public Rml::Element {
     public:
-        explicit ColorPickerElement(const Rml::String& tag);
+        LFS_VIS_API explicit ColorPickerElement(const Rml::String& tag);
 
     protected:
         void OnRender() override;

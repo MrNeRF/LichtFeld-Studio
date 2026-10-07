@@ -75,6 +75,12 @@ body {
     image-color: @{text};
 }
 
+.streamed-badge {
+    color: @{warning};
+    background-color: @{alpha(warning,0.14)};
+    border-color: @{alpha(warning,0.55)};
+}
+
 .row-icon.type-icon.splat        { image-color: @{alpha(info,0.90)}; }
 .row-icon.type-icon.group        { image-color: @{alpha(text_dim,0.80)}; }
 .row-icon.type-icon.ply_sequence { image-color: @{alpha(info,0.86)}; }

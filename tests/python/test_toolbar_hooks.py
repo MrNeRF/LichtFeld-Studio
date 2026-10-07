@@ -2332,15 +2332,15 @@ def test_align_toolbar_signature_tracks_can_apply(toolbar_module):
     can_apply["value"] = True
     signature_enabled = controller._toolbar_signature(None)
     assert signature_disabled != signature_enabled
-    assert signature_disabled[-4:-1] == (False, True, False)
-    assert signature_enabled[-4:-1] == (True, True, False)
+    assert signature_disabled[-6:-3] == (False, True, False)
+    assert signature_enabled[-6:-3] == (True, True, False)
 
     preview["value"] = True
     assert controller._toolbar_signature(None) != signature_enabled
 
     lf_stub.ui.get_active_tool = lambda: "builtin.select"
     signature_other_tool = controller._toolbar_signature(None)
-    assert signature_other_tool[-4:-1] == (False, True, False)
+    assert signature_other_tool[-6:-3] == (False, True, False)
 
 
 def test_align_toolbar_actions_route_to_gizmo_dispatch(toolbar_module):

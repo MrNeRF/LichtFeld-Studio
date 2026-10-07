@@ -421,6 +421,24 @@ namespace lfs::vis {
         for (auto& [id, view] : view_states_)
             if (const auto flags = view->animation_state_.pollDirtyState())
                 markViewDirty(id, flags, FrameReason::Overlay);
+        for (auto& [id, view] : view_states_) {
+            // The idle loop also polls here. Only request a scene frame once the
+            // existing cooldown expires; the Fit preview can stay cached meanwhile.
+            const auto& native_state = view->gt_comparison_actual_size_state_;
+            if (!native_state.error.empty()) {
+                const auto now = std::chrono::steady_clock::now();
+                const bool tile_retry_due = native_state.tile_failure &&
+                                            now - native_state.tile_failure->time >= GT_COMPARISON_IMAGE_RETRY_COOLDOWN;
+                std::lock_guard lock(gt_comparison_image_mutex_);
+                const bool source_retry_due = gt_comparison_full_source_slot_ &&
+                                              gt_comparison_full_source_slot_->owner == id &&
+                                              gt_comparison_full_source_slot_->status == GTComparisonImageStatus::Failed &&
+                                              now - gt_comparison_full_source_slot_->failure_time >= GT_COMPARISON_IMAGE_RETRY_COOLDOWN;
+                if (tile_retry_due || source_retry_due) {
+                    markViewDirty(id, DirtyFlag::SPLIT_VIEW, FrameReason::AsyncCompletion);
+                }
+            }
+        }
         if (lod_controller_ && lod_controller_->hasReadyResults())
             markDirty(DirtyFlag::CAMERA, lfs::vis::FrameReason::CameraMotion);
         for (const auto id : ledger_views_)
@@ -447,16 +465,32 @@ namespace lfs::vis {
 
     void RenderingManager::dropViewStates() {
         std::lock_guard lock(views_mutex_);
-        for (auto& [id, view] : view_states_)
+        for (auto& [id, view] : view_states_) {
+            invalidateGTComparisonActualSizeResources(*view);
             retired_view_states_.push_back(std::move(view));
+        }
         view_states_.clear();
         depth_window_epochs_.clear();
         ++view_lifetime_epoch_;
     }
 
     void RenderingManager::retainVisibleViews(const std::vector<ViewId>& visible) {
-        std::lock_guard lock(views_mutex_);
         const auto epoch = view_source_.screenEpoch();
+        std::vector<ViewId> known_views;
+        {
+            std::lock_guard lock(views_mutex_);
+            known_views.reserve(view_states_.size());
+            for (const auto& [id, view] : view_states_)
+                known_views.push_back(id);
+        }
+        // Query the screen outside views_mutex_: ScreenService notifies
+        // markViewDirty while holding its own lock.
+        std::unordered_set<ViewId> removed_views;
+        for (const auto id : known_views)
+            if (!view_source_.viewSettings(id))
+                removed_views.insert(id);
+
+        std::lock_guard lock(views_mutex_);
         if (screen_epoch_ != epoch) {
             dropViewStates();
             screen_epoch_ = epoch;
@@ -467,8 +501,10 @@ namespace lfs::vis {
         for (auto id : visible)
             viewState(id).last_visible = now;
         for (auto it = view_states_.begin(); it != view_states_.end();) {
-            if (now - it->second->last_visible > std::chrono::milliseconds(300)) {
+            if (removed_views.contains(it->first) ||
+                now - it->second->last_visible > std::chrono::milliseconds(300)) {
                 depth_window_epochs_[it->first] = {it->second->depth_window_mode_epoch_, it->second->depth_window_projection_generation_};
+                invalidateGTComparisonActualSizeResources(*it->second);
                 retired_view_states_.push_back(std::move(it->second));
                 it = view_states_.erase(it);
             } else
@@ -680,6 +716,140 @@ namespace lfs::vis {
         }
     }
 
+    void RenderingManager::setCurrentCameraId(const int cam_id) {
+        const bool changed = camera_interaction_service_.currentCameraId() != cam_id;
+        camera_interaction_service_.setCurrentCameraId(cam_id);
+        if (changed)
+            invalidateCameraMetricsRequests(true);
+        std::vector<ViewId> known_views;
+        {
+            std::lock_guard lock(views_mutex_);
+            known_views.reserve(view_states_.size());
+            for (const auto& [id, view] : view_states_)
+                known_views.push_back(id);
+        }
+        std::vector<ViewId> gt_views;
+        gt_views.reserve(known_views.size());
+        for (const auto id : known_views)
+            if (const auto settings = view_source_.viewSettings(id);
+                settings && splitViewUsesGTComparison(settings->split_view_mode))
+                gt_views.push_back(id);
+        {
+            std::lock_guard lock(views_mutex_);
+            for (const auto id : gt_views) {
+                const auto found = view_states_.find(id);
+                if (found == view_states_.end())
+                    continue;
+                auto& view = *found->second;
+                if (view.gt_comparison_camera_uid_ != cam_id) {
+                    view.gt_comparison_camera_uid_ = cam_id;
+                    invalidateGTComparisonActualSizeResources(view);
+                    clearPublishedGTComparisonActualFrame(view);
+                }
+            }
+        }
+        markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::PPISP, FrameReason::SettingsChange);
+    }
+
+    bool RenderingManager::isGTComparisonActualSizeRequested(ViewId id) const {
+        if (id == kNoView)
+            id = activeViewId();
+        const auto settings = view_source_.viewSettings(id);
+        return settings && splitViewUsesGTComparison(settings->split_view_mode) &&
+               settings->gt_comparison_actual_size &&
+               gtComparisonActualSizeEligible(*settings);
+    }
+
+    bool RenderingManager::isGTComparisonActualSizeAvailable(
+        const SceneManager* const scene_manager, const ViewId view) const {
+        if (!scene_manager) {
+            return false;
+        }
+        const auto settings = trySettingsForView(
+            view == kNoView ? activeViewId() : view);
+        if (!settings || !gtComparisonActualSizeEligible(settings->view()))
+            return false;
+        const auto cameras = scene_manager->getScene().getAllCamerasCached();
+        std::shared_ptr<lfs::core::Camera> camera;
+        const int current_camera_id = camera_interaction_service_.currentCameraId();
+        for (const auto& candidate : *cameras) {
+            if (candidate && candidate->uid() == current_camera_id) {
+                camera = candidate;
+                break;
+            }
+        }
+        if (!camera) {
+            const auto first = std::find_if(cameras->begin(), cameras->end(), [](const auto& candidate) {
+                return static_cast<bool>(candidate);
+            });
+            if (first != cameras->end()) {
+                camera = *first;
+            }
+        }
+        return camera && detail::isGTComparisonActualSizeAvailable(
+                             *camera, settings->view());
+    }
+
+    void RenderingManager::setGTComparisonCropOrigin(const glm::ivec2 origin, const ViewId id) {
+        auto& view = viewState(id == kNoView ? activeViewId() : id);
+        if (!view.gt_comparison_published_actual_frame_) {
+            return;
+        }
+        const auto& published = *view.gt_comparison_published_actual_frame_;
+        if (view.gt_comparison_actual_size_state_.source_key != published.source_key ||
+            view.gt_comparison_actual_size_state_.source_generation !=
+                published.source_generation) {
+            return;
+        }
+        const auto crop = detail::clampGTComparisonCrop(
+            published.full_extent,
+            published.framebuffer_extent,
+            origin);
+        if (!crop.valid()) {
+            return;
+        }
+        // A pan anchors a new center in the displayed crop. Clamping/rounding
+        // during a later resize does not overwrite this intent.
+        view.gt_comparison_actual_size_state_.desired_crop_center =
+            glm::dvec2(crop.origin) + glm::dvec2(crop.extent) * 0.5;
+        view.gt_comparison_actual_size_state_.pending_pan_camera_uid.reset();
+        view.gt_comparison_actual_size_state_.pending_pan_offset = {0, 0};
+        const bool crop_changed =
+            crop.origin != view.gt_comparison_actual_size_state_.crop.origin;
+        if (!crop_changed && crop.origin == published.crop.origin) {
+            return;
+        }
+        if (crop_changed) {
+            view.gt_comparison_actual_size_state_.crop = crop;
+            invalidateGTComparisonActualSizeTile(view);
+        }
+        markViewDirty(view.id, DirtyFlag::SPLIT_VIEW, FrameReason::CameraMotion);
+    }
+
+    void RenderingManager::setGTComparisonCropOffsetFromCenter(
+        const glm::ivec2 offset, const ViewId id) {
+        const ViewId target = id == kNoView ? activeViewId() : id;
+        if (!isGTComparisonActualSizeRequested(target))
+            return;
+        auto& view = viewState(target);
+        auto& state = view.gt_comparison_actual_size_state_;
+        state.pending_pan_camera_uid = camera_interaction_service_.currentCameraId();
+        state.pending_pan_offset = offset;
+        if (state.full_extent.x > 0 && state.full_extent.y > 0 &&
+            state.framebuffer_extent.x > 0 && state.framebuffer_extent.y > 0) {
+            state.desired_crop_center =
+                glm::dvec2(state.full_extent) * 0.5 + glm::dvec2(offset);
+            const auto crop = detail::cropGTComparisonFromCenter(
+                state.full_extent, state.framebuffer_extent,
+                *state.desired_crop_center);
+            if (crop.valid() && crop != state.crop) {
+                state.crop = crop;
+                invalidateGTComparisonActualSizeTile(view);
+            }
+        }
+        markViewDirty(view.id, DirtyFlag::SPLIT_VIEW, FrameReason::CameraMotion);
+    }
+
     void RenderingManager::retainVksplatScratch() {
         vksplat_idle_since_ = std::chrono::steady_clock::now();
     }
@@ -700,6 +870,15 @@ namespace lfs::vis {
     void RenderingManager::updateSettings(const RenderSettings& new_settings,
                                           const DirtyMask dirty_flags,
                                           const SceneUpscalerPresetUpdate preset_update) {
+        (void)updateSettingsForView(activeViewId(), new_settings, dirty_flags, preset_update);
+    }
+
+    bool RenderingManager::updateSettingsForView(const ViewId target_view, const RenderSettings& new_settings,
+                                                 const DirtyMask dirty_flags,
+                                                 const SceneUpscalerPresetUpdate preset_update) {
+        if (!view_source_.viewSettings(target_view))
+            return false;
+        auto& target_state = viewState(target_view);
         RenderSettings sanitized_settings = new_settings;
         if (const auto requested = sceneUpscalerBackendFromId(sanitized_settings.scene_upscaler);
             requested && !sceneUpscalerBackendAvailable(*requested)) {
@@ -731,29 +910,44 @@ namespace lfs::vis {
         sanitized_settings.scene_upscaler = backend_id;
         sanitized_settings.scene_upscaler_preset = std::string(preset.id);
         sanitized_settings.scene_upscaler_scale = preset.input_scale;
+        sanitizeGTComparisonSettings(sanitized_settings);
         bool clear_metrics = false;
         bool lod_request_changed = false;
         bool lod_enabled_turned_on = false;
+        bool actual_size_setting_changed = false;
+        bool gt_comparison_deactivated = false;
+        bool leaving_gt_rgb = false;
         // Equal-mode writes can re-enter from latch release and take only
         // settings_mutex_. A mode change releases it before acquiring the
         // transition mutex, then rechecks the mode under both locks.
         std::unique_lock<std::mutex> transition_lock;
         for (;;) {
             std::unique_lock<std::mutex> lock(settings_mutex_);
-            auto settings = activeSettingsLocked();
+            const auto current_view = view_source_.viewSettings(target_view);
+            if (!current_view)
+                return false;
+            auto settings = RenderSettings(settings_, *current_view);
             const bool split_mode_changes =
                 settings.split_view_mode != sanitized_settings.split_view_mode;
             if (split_mode_changes && !transition_lock.owns_lock()) {
                 lock.unlock();
-                transition_lock = std::unique_lock<std::mutex>(this->state().depth_window_transition_mutex_);
+                transition_lock = std::unique_lock<std::mutex>(target_state.depth_window_transition_mutex_);
                 continue;
             }
             const SplitViewMode previous_split_mode = settings.split_view_mode;
-            if (this->state().split_view_service_.isGTComparisonActive(settings) ||
-                this->state().split_view_service_.isGTComparisonActive(sanitized_settings)) {
+            if (target_state.split_view_service_.isGTComparisonActive(settings) ||
+                target_state.split_view_service_.isGTComparisonActive(sanitized_settings)) {
                 sanitized_settings.show_camera_frustums = false;
             }
 
+            actual_size_setting_changed =
+                settings.gt_comparison_actual_size !=
+                sanitized_settings.gt_comparison_actual_size;
+            gt_comparison_deactivated =
+                target_state.split_view_service_.isGTComparisonActive(settings) &&
+                !target_state.split_view_service_.isGTComparisonActive(sanitized_settings);
+            leaving_gt_rgb = settings.gt_comparison_mode == GTComparisonMode::RGB &&
+                             sanitized_settings.gt_comparison_mode != GTComparisonMode::RGB;
             const float previous_depth_filter_scale_x = settings.depth_filter_scale_x;
             const float previous_depth_filter_scale_y = settings.depth_filter_scale_y;
             const float previous_depth_filter_offset_x =
@@ -806,28 +1000,37 @@ namespace lfs::vis {
                 previous_depth_filter_max_z != settings.depth_filter_max.z;
 
             if (depth_window_projection_changed) {
-                this->state().depth_window_drag_owner_ = 0;
-                this->state().depth_window_drag_backup_.reset();
+                target_state.depth_window_drag_owner_ = 0;
+                target_state.depth_window_drag_backup_.reset();
             }
             if (settings.depth_filter_min.z != previous_depth_min_z ||
                 settings.depth_filter_max.z != previous_depth_max_z) {
-                ++this->state().depth_window_projection_generation_;
+                ++target_state.depth_window_projection_generation_;
             }
             if (split_mode_changes)
                 applyDepthWindowModeTransitionLocked(
                     previous_split_mode,
-                    settings.split_view_mode);
+                    settings.split_view_mode, target_view);
             const bool scene_changed = settings_ != settings.scene();
-            storeActiveSettingsLocked(settings);
+            if (!view_source_.editViewSettings(target_view, [&](ViewSettings& view) { view = settings.view(); }))
+                return false;
+            settings_ = settings.scene();
             if (scene_changed)
                 markDirty(dirty_flags, lfs::vis::FrameReason::SceneChange);
             else
-                markViewDirty(view_source_.activeView(), dirty_flags, FrameReason::SettingsChange);
+                markViewDirty(target_view, dirty_flags, FrameReason::SettingsChange);
             break;
         }
 
         if (lod_request_changed && lod_controller_) {
             lod_controller_->invalidatePendingWork();
+        }
+        if (actual_size_setting_changed || gt_comparison_deactivated || leaving_gt_rgb) {
+            invalidateGTComparisonActualSizeResources(target_state,
+                                                      actual_size_setting_changed && !gt_comparison_deactivated && !leaving_gt_rgb);
+            if (sanitized_settings.gt_comparison_actual_size) {
+                target_state.gt_comparison_actual_size_state_.requested_at = std::chrono::steady_clock::now();
+            }
         }
         if (lod_enabled_turned_on) {
             lod_controller_needs_sync_traversal_ = true;
@@ -839,6 +1042,7 @@ namespace lfs::vis {
         if (clear_metrics) {
             invalidateCameraMetricsRequests(true);
         }
+        return true;
     }
 
     RenderSettings RenderingManager::activeSettingsLocked() const {
@@ -859,6 +1063,12 @@ namespace lfs::vis {
     RenderSettings RenderingManager::settingsForView(const ViewId view) const {
         std::lock_guard lock(settings_mutex_);
         return RenderSettings(settings_, view_source_.viewSettings(view).value());
+    }
+
+    std::optional<RenderSettings> RenderingManager::trySettingsForView(const ViewId view) const {
+        std::lock_guard lock(settings_mutex_);
+        const auto settings = view_source_.viewSettings(view);
+        return settings ? std::optional{RenderSettings(settings_, *settings)} : std::nullopt;
     }
 
     RenderSettings RenderingManager::getSettings() const {
@@ -988,6 +1198,18 @@ namespace lfs::vis {
     bool RenderingManager::isGTComparisonActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         return this->state().split_view_service_.isGTComparisonActive(activeSettingsLocked());
+    }
+
+    bool RenderingManager::hasGTComparisonAvailable() const {
+        const auto* const scene_manager = services().sceneOrNull();
+        if (!scene_manager || !scene_manager->hasDataset()) {
+            return false;
+        }
+
+        const auto cameras = scene_manager->getScene().getAllCamerasCached();
+        return cameras && std::any_of(cameras->begin(), cameras->end(), [](const auto& camera) {
+                   return camera && camera->has_image() && !camera->image_path().empty();
+               });
     }
 
     bool RenderingManager::isPLYComparisonActive() const {
@@ -1129,8 +1351,10 @@ namespace lfs::vis {
     }
 
     bool RenderingManager::depthWindowSnapshotCurrent(const op::DepthWindowModeSnapshot& snapshot) const {
+        const auto screen_epoch = view_source_.screenEpoch();
+        const bool view_exists = view_source_.viewSettings(snapshot.view).has_value();
         std::lock_guard lock(views_mutex_);
-        if (snapshot.screen_epoch != view_source_.screenEpoch() || snapshot.lifetime_epoch != view_lifetime_epoch_ || !view_source_.viewSettings(snapshot.view))
+        if (snapshot.screen_epoch != screen_epoch || snapshot.lifetime_epoch != view_lifetime_epoch_ || !view_exists)
             return false;
         if (const auto view = view_states_.find(snapshot.view); view != view_states_.end())
             return snapshot.mode_epoch == view->second->depth_window_mode_epoch_;
@@ -1174,17 +1398,18 @@ namespace lfs::vis {
     }
 
     void RenderingManager::applyDepthWindowModeTransitionLocked(
-        const SplitViewMode previous_mode, const SplitViewMode new_mode) {
+        const SplitViewMode previous_mode, const SplitViewMode new_mode, const ViewId target_view) {
+        auto& target_state = viewState(target_view == kNoView ? activeViewId() : target_view);
         if (splitViewUsesGTComparison(previous_mode) ==
             splitViewUsesGTComparison(new_mode))
             return;
         // GT suspends selection filtering; an old drag must not overwrite its
         // successor.
-        if (this->state().depth_window_drag_owner_ && this->state().depth_window_drag_backup_)
-            applyDepthWindowProjectionLocked(this->state().id, *this->state().depth_window_drag_backup_);
-        this->state().depth_window_drag_owner_ = 0;
-        this->state().depth_window_drag_backup_.reset();
-        ++this->state().depth_window_mode_epoch_;
+        if (target_state.depth_window_drag_owner_ && target_state.depth_window_drag_backup_)
+            applyDepthWindowProjectionLocked(target_state.id, *target_state.depth_window_drag_backup_);
+        target_state.depth_window_drag_owner_ = 0;
+        target_state.depth_window_drag_backup_.reset();
+        ++target_state.depth_window_mode_epoch_;
     }
 
     void RenderingManager::clearLatestCameraMetrics() {
@@ -1430,6 +1655,11 @@ namespace lfs::vis {
 
         if (result.clear_viewport_output) {
             this->state().viewport_artifact_service_.clearViewportOutput();
+            clearPublishedGTComparisonActualFrame(state());
+        }
+        if (splitViewUsesGTComparison(result.previous_mode) &&
+            !splitViewUsesGTComparison(result.current_mode)) {
+            invalidateGTComparisonActualSizeResources(state());
         }
 
         if (result.restore_equirectangular) {

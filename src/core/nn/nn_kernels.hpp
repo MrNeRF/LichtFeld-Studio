@@ -41,7 +41,7 @@ namespace lfs::core::nn::kernels {
 
     // sm_80+ tensor-core path for the 3x3 implicit conv on tap-major
     // ([9][C_out][C_in]) fp16 weights built by conv3x3_weight_taps from OIHW.
-    bool conv3x3_mma_available();
+    LFS_CORE_API bool conv3x3_mma_available();
     LFS_CORE_API void conv3x3_weight_taps(const void* weight, void* weight_taps, int cout, int cin,
                                           cudaStream_t stream);
     void conv2d_implicit_3x3_mma(const void* input, const void* weight_taps, const void* bias,

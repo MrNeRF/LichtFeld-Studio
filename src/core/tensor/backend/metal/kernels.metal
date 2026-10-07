@@ -2622,6 +2622,8 @@ struct PpispParams {
     float crf[15];
     int y_offset;
     int full_height;
+    int x_offset;
+    int full_width;
 };
 
 struct PpispApplyParams {
@@ -2638,8 +2640,9 @@ kernel void ppisp_apply(constant PpispApplyParams& args [[buffer(0)]], uint i [[
     if (i >= uint(plane))
         return;
     const int full_height = p.full_height > 0 ? p.full_height : height;
-    const float resolution = float(max(width, full_height));
-    const float x = (float(i % uint(width)) + 0.5f - width * 0.5f) / resolution;
+    const int full_width = p.full_width > 0 ? p.full_width : width;
+    const float resolution = float(max(full_width, full_height));
+    const float x = (float(int(i % uint(width)) + p.x_offset) + 0.5f - full_width * 0.5f) / resolution;
     const float y = (float(int(i / uint(width)) + p.y_offset) + 0.5f - full_height * 0.5f) / resolution;
     float3 rgb;
     for (int c = 0; c < 3; ++c) {

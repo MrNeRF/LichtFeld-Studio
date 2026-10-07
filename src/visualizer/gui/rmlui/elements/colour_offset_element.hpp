@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
+#include "core/export.hpp"
+
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/EventListener.h>
 #include <RmlUi/Core/Geometry.h>
@@ -13,7 +15,7 @@ namespace lfs::vis::gui {
     // their mean until a channel reaches its declared -1..1 bound.
     class ColourOffsetElement final : public Rml::Element, private Rml::EventListener {
     public:
-        explicit ColourOffsetElement(const Rml::String& tag);
+        LFS_VIS_API explicit ColourOffsetElement(const Rml::String& tag);
 
     protected:
         void OnRender() override;

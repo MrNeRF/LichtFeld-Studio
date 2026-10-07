@@ -107,6 +107,45 @@ namespace {
         EXPECT_FLOAT_EQ(linear(16, 44), -1.0f);
     }
 
+    TEST_P(SplatPointRendererContracts, QueuedFramesKeepTheirOwnCameraAndCropParameters) {
+        constexpr uint32_t width = 32, height = 32;
+        std::array<float, 3> position{0.0f, 0.0f, -2.0f}, color{0.0f, 1.0f, 0.0f};
+        auto positions = Tensor::from_blob(position.data(), {1, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+        auto colors = Tensor::from_blob(color.data(), {1, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+        const SplatPointInputs inputs{.positions = &positions, .colors = &colors};
+        SplatPointRenderer renderer(GetParam());
+        std::vector<Tensor> frames, depths;
+        for (uint32_t frame = 0; frame < 12; ++frame) {
+            PointParameters parameters;
+            parameters.view = parameters.view_projection = parameters.crop_to_local = identity();
+            parameters.view_projection[10] = -0.1f;
+            parameters.view_projection[12] = (frame % 2) ? 0.5f : -0.5f;
+            parameters.crop_min = {-1.0f, -1.0f, -3.0f, 0.0f};
+            parameters.crop_max = {1.0f, 1.0f, -1.0f, 0.0f};
+            parameters.voxel_focal_ortho = {0.125f, 1.0f, float(height), 0.0f};
+            parameters.counts = {0, 0, 1u | 8u, 32};
+            if (frame % 3 == 2)
+                parameters.crop_min[0] = 0.25f;
+            const auto result = renderer.render(inputs, parameters, width, height, {0, 0, 0, 0});
+            ASSERT_TRUE(result) << result.error().detail();
+            frames.push_back(renderer.color().clone());
+            depths.push_back(renderer.linear_depth().clone());
+        }
+        for (uint32_t frame = 0; frame < frames.size(); ++frame) {
+            SCOPED_TRACE(frame);
+            const auto rgba = frames[frame].to(Device::CPU);
+            const auto depth = depths[frame].to(Device::CPU);
+            const uint32_t x = (frame % 2) ? 24 : 8;
+            const auto pixel = size_t(16) * width + x;
+            const bool cropped = frame % 3 == 2;
+            EXPECT_EQ(rgba.ptr<uint8_t>()[pixel * 4 + 1], cropped ? 0 : 255);
+            EXPECT_FLOAT_EQ(depth.ptr<float>()[pixel], cropped ? -1.0f : 2.0f);
+            const auto other = size_t(16) * width + (32 - x);
+            EXPECT_EQ(rgba.ptr<uint8_t>()[other * 4 + 1], 0);
+            EXPECT_FLOAT_EQ(depth.ptr<float>()[other], -1.0f);
+        }
+    }
+
     INSTANTIATE_TEST_SUITE_P(Backends, SplatPointRendererContracts,
                              testing::ValuesIn(kCompiledGpuBackends),
                              [](const auto& info) { return std::string(gpu_backend_name(info.param)); });

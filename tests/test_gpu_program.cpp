@@ -8,6 +8,7 @@
 #include "program_features_variant.hpp"
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <gtest/gtest.h>
 #include <vector>
 
@@ -21,6 +22,41 @@ namespace {
         uint32_t padding = 0;
     };
     class Programs : public testing::TestWithParam<GpuBackend> {};
+
+    TEST(CudaProgramArtifacts, CudaEntriesUseFatbinaryContainers) {
+#if LFS_HAS_CUDA
+        for (const auto entries : {program_contract_entries(), program_features_entries(),
+                                   program_features_variant_entries()}) {
+            for (const auto& entry : entries) {
+                if (entry.backend != GpuBackend::CUDA)
+                    continue;
+                SCOPED_TRACE(entry.name);
+                ASSERT_GE(entry.code.size(), sizeof(uint32_t));
+                uint32_t magic = 0;
+                std::memcpy(&magic, entry.code.data(), sizeof(magic));
+                // Raw nvcc fatbinary header, not a PTX-only text module.
+                EXPECT_EQ(magic, 0xba55ed50u);
+            }
+        }
+#else
+        GTEST_SKIP() << "CUDA backend not built";
+#endif
+    }
+
+    TEST(CudaProgramArtifacts, EmbeddedComputeProgramsLoadOnTheDevice) {
+#if LFS_HAS_CUDA
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA device unavailable";
+        const GpuBackendScope scope(GpuBackend::CUDA);
+        for (const auto entries : {program_contract_entries(), program_features_entries(),
+                                   program_features_variant_entries()}) {
+            const auto loaded = M::load(entries, GpuBackend::CUDA);
+            ASSERT_TRUE(loaded) << loaded.error().detail();
+        }
+#else
+        GTEST_SKIP() << "CUDA backend not built";
+#endif
+    }
 
     TEST_P(Programs, SameSlangComputeMatchesCpuAndTensorTimeline) {
         if (!gpu_backend_available(GetParam()))

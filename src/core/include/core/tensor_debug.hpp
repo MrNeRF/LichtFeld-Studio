@@ -69,7 +69,7 @@ namespace lfs::core::debug {
     private:
         Tensor difference_;
         Tensor scale_;
-        friend TensorDiff diff_tensors(const Tensor&, const Tensor&, float);
+        friend LFS_CORE_API TensorDiff diff_tensors(const Tensor&, const Tensor&, float);
     };
 
     inline void log_tensor_diff(const Tensor& expected, const Tensor& actual,

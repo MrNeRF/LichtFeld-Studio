@@ -5,9 +5,11 @@
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
+#include "gui/bounds_gizmo.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/rml_modal_overlay.hpp"
@@ -15,19 +17,28 @@
 #include "gui/rmlui/elements/python_editor_element.hpp"
 #include "gui/rmlui/elements/terminal_element.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
+#include "gui/rotation_gizmo.hpp"
+#include "gui/scale_gizmo.hpp"
+#include "gui/translation_gizmo.hpp"
 #include "input/frame_input_buffer.hpp"
 #include "input/input_controller.hpp"
 #include "input/key_codes.hpp"
+#include "licht_test_support.hpp"
+#include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "test_view_targets.hpp"
+#include "tools/unified_tool_registry.hpp"
 #include "visualizer_impl.hpp"
 #include "window/window_manager.hpp"
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <cstring>
 #include <future>
+#include <glm/gtc/type_ptr.hpp>
 #include <gtest/gtest.h>
 #include <thread>
 #include <vector>
@@ -634,6 +645,276 @@ namespace lfs::vis {
         }
         bool startupVisible() { return gui_->startup_overlay_.isVisible(); }
         bool languageOpen() { return gui_->startup_overlay_.isLanguageSelectOpen(); }
+
+        void dragXAxisCenterlineAtViewTilt(const float tilt_degrees, const bool scale, const float y_offset = 0.0f,
+                                           const float start_x = 236.0f) {
+            auto& scene_manager = *viewer_->getSceneManager();
+            auto& scene = viewer_->getScene();
+            const core::NodeId node_id = scene.addGroup(
+                std::string("Axis centerline drag ") + (scale ? "scale " : "translate ") + std::to_string(tilt_degrees));
+            ASSERT_NE(node_id, core::NULL_NODE);
+            scene_manager.selectNode(node_id);
+            viewer_->getEditorContext().update(&scene_manager, viewer_->getTrainerManager());
+            viewer_->getEditorContext().setActiveTool(scale ? ToolType::Scale : ToolType::Translate);
+            UnifiedToolRegistry::instance().setActiveTool(scale ? "builtin.scale" : "builtin.translate");
+            auto& gizmo = gui_->gizmo();
+            gizmo.setOperation(scale ? gui::GizmoOperation::Scale : gui::GizmoOperation::Translate);
+            gizmo.setTransformSpace(TransformSpace::World);
+            gizmo.setPivotMode(PivotMode::Origin);
+
+            auto& camera = viewer_->getViewport().camera;
+            const float tilt = glm::radians(tilt_degrees);
+            camera.t = {12.0f * std::sin(tilt), 0.0f, 12.0f * std::cos(tilt)};
+            camera.pivot = {0.0f, 0.0f, 0.0f};
+            camera.R = rendering::makeVisualizerLookAtRotation(camera.t, camera.pivot);
+            controller_->setViewer(viewer_.get());
+            controller_->updateViewportBounds(0.0f, 0.0f, 400.0f, 300.0f);
+
+            gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
+            const gui::ViewportLayout layout{.view = viewer_->activeView().id, .pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+            gui_->ui_hidden_ = true;
+            gui_->viewport_layout_ = layout;
+            gizmo.updateToolState(ui, false);
+            auto& frame = window_->frame_input_;
+            const glm::vec2 start{start_x, 150.0f + y_offset};
+            frame.mouse_x = start.x;
+            frame.mouse_y = start.y;
+            frame.mouse_down[0] = frame.mouse_clicked[0] = frame.mouse_released[0] = false;
+            gui::guiFocusState().want_capture_mouse = false;
+            gizmo.renderNodeTransformGizmo(ui, layout);
+            const glm::mat4 before = scene.getNodeTransform(node_id);
+
+            controller_->handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_PRESS,
+                                           start.x, start.y);
+            frame.mouse_down[0] = true;
+            frame.mouse_clicked[0] = true;
+            frame.mouse_released[0] = false;
+            frame.mouse_x = start.x;
+            gizmo.renderNodeTransformGizmo(ui, layout);
+            frame.mouse_x = start.x + 30.0f;
+            gizmo.renderNodeTransformGizmo(ui, layout);
+            const glm::mat4 after = scene.getNodeTransform(node_id);
+            if (scale) {
+                EXPECT_GT(std::abs(after[0][0] - before[0][0]), 1e-4f);
+            } else {
+                EXPECT_GT(std::abs(after[3].x - before[3].x), 1e-4f);
+            }
+
+            controller_->handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_RELEASE,
+                                           frame.mouse_x, frame.mouse_y);
+            frame.mouse_down[0] = false;
+            frame.mouse_released[0] = true;
+            gizmo.renderNodeTransformGizmo(ui, layout);
+        }
+
+        void dragXYPlaneAtNormalView(const bool scale) {
+            auto& scene_manager = *viewer_->getSceneManager();
+            auto& scene = viewer_->getScene();
+            const core::NodeId node_id = scene.addGroup(scale ? "Scale plane handle drag" : "Translate plane handle drag");
+            ASSERT_NE(node_id, core::NULL_NODE);
+            scene_manager.selectNode(node_id);
+            viewer_->getEditorContext().update(&scene_manager, viewer_->getTrainerManager());
+            viewer_->getEditorContext().setActiveTool(scale ? ToolType::Scale : ToolType::Translate);
+            UnifiedToolRegistry::instance().setActiveTool(scale ? "builtin.scale" : "builtin.translate");
+            auto& gizmo = gui_->gizmo();
+            gizmo.setOperation(scale ? gui::GizmoOperation::Scale : gui::GizmoOperation::Translate);
+            gizmo.setTransformSpace(TransformSpace::World);
+            gizmo.setPivotMode(PivotMode::Origin);
+            auto& camera = viewer_->getViewport().camera;
+            camera.t = {0.0f, 0.0f, 12.0f};
+            camera.pivot = {0.0f, 0.0f, 0.0f};
+            camera.R = rendering::makeVisualizerLookAtRotation(camera.t, camera.pivot);
+            controller_->setViewer(viewer_.get());
+            controller_->updateViewportBounds(0.0f, 0.0f, 400.0f, 300.0f);
+
+            gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
+            const gui::ViewportLayout layout{.view = viewer_->activeView().id, .pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+            gui_->ui_hidden_ = true;
+            gui_->viewport_layout_ = layout;
+            gizmo.updateToolState(ui, false);
+            auto& frame = window_->frame_input_;
+            constexpr glm::vec2 start{230.0f, 120.0f};
+            frame.mouse_x = start.x;
+            frame.mouse_y = start.y;
+            frame.mouse_down[0] = frame.mouse_clicked[0] = frame.mouse_released[0] = false;
+            gui::guiFocusState().want_capture_mouse = false;
+            gizmo.renderNodeTransformGizmo(ui, layout);
+            if (scale) {
+                EXPECT_TRUE(gui::isScaleGizmoHovered());
+            }
+            const glm::mat4 before = scene.getNodeTransform(node_id);
+            controller_->handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_PRESS,
+                                           start.x, start.y);
+            frame.mouse_down[0] = true;
+            frame.mouse_clicked[0] = true;
+            frame.mouse_released[0] = false;
+            gizmo.renderNodeTransformGizmo(ui, layout);
+            frame.mouse_x = start.x + 12.0f;
+            frame.mouse_y = start.y + (scale ? -12.0f : 12.0f);
+            gizmo.renderNodeTransformGizmo(ui, layout);
+            const glm::mat4 after = scene.getNodeTransform(node_id);
+            if (scale) {
+                EXPECT_GT(std::abs(after[0][0] - before[0][0]), 1e-4f);
+                EXPECT_GT(std::abs(after[1][1] - before[1][1]), 1e-4f);
+            } else {
+                EXPECT_GT(std::abs(after[3].x - before[3].x), 1e-4f);
+                EXPECT_GT(std::abs(after[3].y - before[3].y), 1e-4f);
+                EXPECT_NEAR(after[3].x, 0.32914072f, 1e-6f);
+                EXPECT_NEAR(after[3].y, 0.32914030f, 1e-6f);
+            }
+
+            controller_->handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_RELEASE,
+                                           frame.mouse_x, frame.mouse_y);
+            frame.mouse_down[0] = false;
+            frame.mouse_released[0] = true;
+            gizmo.renderNodeTransformGizmo(ui, layout);
+        }
+
+        enum class TransformDragMode { Translate,
+                                       Rotate,
+                                       Scale,
+                                       BoundsScale };
+        enum class TransformDragFinish { Escape,
+                                         RightClick,
+                                         LeftRelease };
+
+        static bool sameMatrixBits(const glm::mat4& lhs, const glm::mat4& rhs) {
+            return std::memcmp(glm::value_ptr(lhs), glm::value_ptr(rhs), sizeof(glm::mat4)) == 0;
+        }
+
+        void exerciseTransformDrag(const TransformDragMode mode, const TransformDragFinish finish) {
+            auto& scene_manager = *viewer_->getSceneManager();
+            auto& scene = viewer_->getScene();
+            const bool bounds_scale = mode == TransformDragMode::BoundsScale;
+            const core::NodeId node_id = bounds_scale
+                                             ? scene.addSplat("Cancel drag", lfs::test::licht::make_splat(3))
+                                             : scene.addGroup("Cancel drag");
+            ASSERT_NE(node_id, core::NULL_NODE);
+            scene_manager.changeContentType(SceneManager::ContentType::SplatFiles);
+            scene_manager.selectNode(node_id);
+            viewer_->getEditorContext().update(&scene_manager, viewer_->getTrainerManager());
+
+            gui::GizmoOperation operation = gui::GizmoOperation::Translate;
+            ToolType tool = ToolType::Translate;
+            const char* tool_id = "builtin.translate";
+            if (mode == TransformDragMode::Rotate) {
+                operation = gui::GizmoOperation::Rotate;
+                tool = ToolType::Rotate;
+                tool_id = "builtin.rotate";
+            } else if (mode == TransformDragMode::Scale || bounds_scale) {
+                operation = gui::GizmoOperation::Scale;
+                tool = ToolType::Scale;
+                tool_id = "builtin.scale";
+            }
+            viewer_->getEditorContext().setActiveTool(tool);
+            UnifiedToolRegistry::instance().setActiveTool(tool_id);
+            auto& gizmo = gui_->gizmo();
+            gizmo.setOperation(operation);
+            gizmo.setTransformSpace(TransformSpace::World);
+            gizmo.setPivotMode(PivotMode::Origin);
+
+            auto& camera = viewer_->getViewport().camera;
+            camera.t = {0.0f, 0.0f, 12.0f};
+            camera.pivot = {0.0f, 0.0f, 0.0f};
+            camera.R = rendering::makeVisualizerLookAtRotation(camera.t, camera.pivot);
+            controller_->setViewer(viewer_.get());
+            controller_->updateViewportBounds(0.0f, 0.0f, 400.0f, 300.0f);
+
+            gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
+            const gui::ViewportLayout layout{.view = viewer_->activeView().id, .pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+            gui_->ui_hidden_ = true;
+            gui_->viewport_layout_ = layout;
+            gizmo.updateToolState(ui, false);
+            auto& frame = window_->frame_input_;
+            frame.mouse_down[0] = frame.mouse_clicked[0] = frame.mouse_released[0] = false;
+
+            const auto hovered = [&] {
+                switch (mode) {
+                case TransformDragMode::Translate: return gui::isTranslationGizmoHovered();
+                case TransformDragMode::Rotate: return gui::isRotationGizmoHovered();
+                case TransformDragMode::Scale: return gui::isScaleGizmoHovered();
+                case TransformDragMode::BoundsScale: return gui::isBoundsGizmoHovered();
+                }
+                return false;
+            };
+            glm::vec2 start{200.0f, 150.0f};
+            if (mode == TransformDragMode::Translate)
+                start += glm::vec2(55.0f, 3.0f);
+            else if (mode == TransformDragMode::Rotate)
+                start += glm::vec2(0.0f, -75.0f);
+            else if (mode == TransformDragMode::Scale)
+                start += glm::vec2(55.0f, 0.0f);
+            else
+                start += glm::vec2(65.0f, 0.0f);
+
+            const auto probe = [&](const glm::vec2 pos) {
+                frame.mouse_x = pos.x;
+                frame.mouse_y = pos.y;
+                gui::guiFocusState().want_capture_mouse = false;
+                gizmo.renderNodeTransformGizmo(ui, layout);
+                return hovered();
+            };
+            bool found = probe(start);
+            if (!found) {
+                for (int y = 48; y <= 252 && !found; y += 6) {
+                    for (int x = 48; x <= 352 && !found; x += 6)
+                        found = probe({static_cast<float>(x), static_cast<float>(y)});
+                }
+                if (found)
+                    start = {frame.mouse_x, frame.mouse_y};
+            }
+            ASSERT_TRUE(found) << "no transform handle found for mode " << static_cast<int>(mode);
+
+            const glm::mat4 before = scene.getNodeTransform(node_id);
+            op::undoHistory().clear();
+            const size_t undo_before = op::undoHistory().undoCount();
+            gui::guiFocusState().want_capture_mouse = false;
+            controller_->handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_PRESS,
+                                           start.x, start.y);
+            frame.mouse_x = start.x;
+            frame.mouse_y = start.y;
+            frame.mouse_down[0] = true;
+            frame.mouse_clicked[0] = true;
+            frame.mouse_released[0] = false;
+            gizmo.renderNodeTransformGizmo(ui, layout);
+
+            bool changed = false;
+            for (const glm::vec2 delta : {glm::vec2(28.0f, 0.0f), glm::vec2(0.0f, 28.0f),
+                                          glm::vec2(20.0f, 20.0f), glm::vec2(-24.0f, 0.0f)}) {
+                frame.mouse_x = start.x + delta.x;
+                frame.mouse_y = start.y + delta.y;
+                frame.mouse_clicked[0] = false;
+                gizmo.renderNodeTransformGizmo(ui, layout);
+                if (!sameMatrixBits(before, scene.getNodeTransform(node_id))) {
+                    changed = true;
+                    break;
+                }
+            }
+            ASSERT_TRUE(changed) << "pointer drag did not change the selected node transform";
+
+            if (finish == TransformDragFinish::Escape) {
+                controller_->handleKey(input::KEY_ESCAPE, input::ACTION_PRESS, input::KEYMOD_NONE);
+            } else if (finish == TransformDragFinish::RightClick) {
+                controller_->handleMouseButton(static_cast<int>(input::AppMouseButton::RIGHT), input::ACTION_PRESS,
+                                               frame.mouse_x, frame.mouse_y);
+            } else {
+                controller_->handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_RELEASE,
+                                               frame.mouse_x, frame.mouse_y);
+                frame.mouse_down[0] = false;
+                frame.mouse_released[0] = true;
+                gizmo.renderNodeTransformGizmo(ui, layout);
+            }
+
+            const glm::mat4 after = scene.getNodeTransform(node_id);
+            if (finish == TransformDragFinish::LeftRelease) {
+                EXPECT_FALSE(sameMatrixBits(before, after));
+                EXPECT_EQ(op::undoHistory().undoCount(), undo_before + 1);
+            } else {
+                EXPECT_TRUE(sameMatrixBits(before, after));
+                EXPECT_EQ(op::undoHistory().undoCount(), undo_before);
+            }
+        }
+
         Viewport viewport_{400, 300};
         TestViewTargets view_targets_{viewport_};
         std::unique_ptr<VisualizerImpl> viewer_;
@@ -646,6 +927,53 @@ namespace lfs::vis {
         uint64_t timestamp_ = 0;
         gui::rml_input::TextInputEscapeRevertController revert_;
     };
+
+#define TRANSFORM_DRAG_CANCEL_TEST(test_name, drag_mode, finish_mode) \
+    TEST_F(WindowInputDispatchTest, test_name) {                      \
+        exerciseTransformDrag(TransformDragMode::drag_mode,           \
+                              TransformDragFinish::finish_mode);      \
+    }
+
+    TRANSFORM_DRAG_CANCEL_TEST(EscapeCancelsTranslateAndAddsNoUndo, Translate, Escape)
+    TRANSFORM_DRAG_CANCEL_TEST(RightClickCancelsTranslateAndAddsNoUndo, Translate, RightClick)
+    TRANSFORM_DRAG_CANCEL_TEST(LeftReleaseCommitsTranslateAndAddsOneUndo, Translate, LeftRelease)
+    TRANSFORM_DRAG_CANCEL_TEST(EscapeCancelsRotateAndAddsNoUndo, Rotate, Escape)
+    TRANSFORM_DRAG_CANCEL_TEST(RightClickCancelsRotateAndAddsNoUndo, Rotate, RightClick)
+    TRANSFORM_DRAG_CANCEL_TEST(LeftReleaseCommitsRotateAndAddsOneUndo, Rotate, LeftRelease)
+    TRANSFORM_DRAG_CANCEL_TEST(EscapeCancelsScaleAndAddsNoUndo, Scale, Escape)
+    TRANSFORM_DRAG_CANCEL_TEST(RightClickCancelsScaleAndAddsNoUndo, Scale, RightClick)
+    TRANSFORM_DRAG_CANCEL_TEST(LeftReleaseCommitsScaleAndAddsOneUndo, Scale, LeftRelease)
+    TRANSFORM_DRAG_CANCEL_TEST(EscapeCancelsBoundsScaleAndAddsNoUndo, BoundsScale, Escape)
+    TRANSFORM_DRAG_CANCEL_TEST(RightClickCancelsBoundsScaleAndAddsNoUndo, BoundsScale, RightClick)
+    TRANSFORM_DRAG_CANCEL_TEST(LeftReleaseCommitsBoundsScaleAndAddsOneUndo, BoundsScale, LeftRelease)
+
+#undef TRANSFORM_DRAG_CANCEL_TEST
+
+    TEST_F(WindowInputDispatchTest, TranslateXAxisCenterlineDragSurvivesSmallViewTilts) {
+        for (const float tilt : {0.0f, 1.0f, 2.0f, 3.0f, 5.0f}) {
+            SCOPED_TRACE(tilt);
+            dragXAxisCenterlineAtViewTilt(tilt, false);
+        }
+    }
+
+    TEST_F(WindowInputDispatchTest, ScaleXAxisCenterlineDragSurvivesSmallViewTilts) {
+        for (const float tilt : {0.0f, 1.0f, 2.0f, 3.0f, 5.0f}) {
+            SCOPED_TRACE(tilt);
+            dragXAxisCenterlineAtViewTilt(tilt, true);
+        }
+    }
+
+    TEST_F(WindowInputDispatchTest, TranslateXAxisThreePixelOffsetStillDrags) {
+        dragXAxisCenterlineAtViewTilt(0.0f, false, 3.0f, 255.0f);
+    }
+
+    TEST_F(WindowInputDispatchTest, TranslateXYPlaneHandleStillDragsAtNormalView) {
+        dragXYPlaneAtNormalView(false);
+    }
+
+    TEST_F(WindowInputDispatchTest, ScaleXYPlaneHandleStillDragsAtNormalView) {
+        dragXYPlaneAtNormalView(true);
+    }
 
     TEST_F(WindowInputDispatchTest, OpeningAndClosingModalChangesOwnerWithinOneBatch) {
         click();
@@ -662,7 +990,7 @@ namespace lfs::vis {
             request.on_result = [&](const auto& result) { submitted = result.input_value; };
             gui_->enqueueModal(std::move(request));
         });
-        handlers.subscribe<core::events::cmd::ToggleGTComparison>([&](const auto&) { ++shortcuts; });
+        handlers.subscribe<core::events::cmd::ToggleSplitView>([&](const auto&) { ++shortcuts; });
         key(SDL_SCANCODE_S, SDL_KMOD_CTRL);
         ASSERT_TRUE(modal().isOpen());
         // A background panel must not steal the modal's focus or text handler.
@@ -673,7 +1001,7 @@ namespace lfs::vis {
         key(SDL_SCANCODE_RETURN);
         EXPECT_EQ(submitted, "modal");
         EXPECT_FALSE(modal().isOpen());
-        key(SDL_SCANCODE_G);
+        key(SDL_SCANCODE_V);
         EXPECT_EQ(shortcuts, 1);
         EXPECT_FALSE(SDL_TextInputActive(nativeWindow()));
     }
@@ -683,14 +1011,14 @@ namespace lfs::vis {
         text("field");
         int shortcuts = 0;
         lfs::event::ScopedHandler handlers;
-        handlers.subscribe<core::events::cmd::ToggleGTComparison>([&](const auto&) { ++shortcuts; });
+        handlers.subscribe<core::events::cmd::ToggleSplitView>([&](const auto&) { ++shortcuts; });
         menu().request({}, 200, 100, {});
-        key(SDL_SCANCODE_G);
+        key(SDL_SCANCODE_V);
         text("hidden");
         EXPECT_EQ(field_->GetValue(), "field");
         EXPECT_EQ(shortcuts, 0);
         key(SDL_SCANCODE_ESCAPE);
-        key(SDL_SCANCODE_G);
+        key(SDL_SCANCODE_V);
         EXPECT_EQ(shortcuts, 1);
     }
 
@@ -713,11 +1041,11 @@ namespace lfs::vis {
     TEST_F(WindowInputDispatchTest, ClickEscapeThenViewportShortcutHasNoPhantomTextFocus) {
         int shortcuts = 0;
         lfs::event::ScopedHandler handlers;
-        handlers.subscribe<core::events::cmd::ToggleGTComparison>([&](const auto&) { ++shortcuts; });
+        handlers.subscribe<core::events::cmd::ToggleSplitView>([&](const auto&) { ++shortcuts; });
         click();
         text("changed");
         key(SDL_SCANCODE_ESCAPE);
-        key(SDL_SCANCODE_G);
+        key(SDL_SCANCODE_V);
         EXPECT_FALSE(manager().wantsTextInput());
         EXPECT_FALSE(SDL_TextInputActive(nativeWindow()));
         EXPECT_EQ(shortcuts, 1);
@@ -808,9 +1136,9 @@ namespace lfs::vis {
         });
         int shortcuts = 0;
         lfs::event::ScopedHandler handlers;
-        handlers.subscribe<core::events::cmd::ToggleGTComparison>([&](const auto&) { ++shortcuts; });
+        handlers.subscribe<core::events::cmd::ToggleSplitView>([&](const auto&) { ++shortcuts; });
         click(300, 200);
-        key(SDL_SCANCODE_G);
+        key(SDL_SCANCODE_V);
         EXPECT_EQ(presses, 1);
         EXPECT_FALSE(SDL_TextInputActive(nativeWindow()));
         EXPECT_EQ(shortcuts, 1);
@@ -1123,7 +1451,7 @@ namespace lfs::vis {
                     callback(event);
             }
         } listener_;
-        Rml::ObserverPtr<Rml::Element> handle_;
+        Rml::ObserverPtr<Rml::Element> handle_{nullptr};
         float delivered_x_ = 0;
         bool delivered_down_ = false;
 

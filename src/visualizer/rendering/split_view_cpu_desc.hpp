@@ -23,6 +23,7 @@ namespace lfs::vis {
 
     struct SplitViewCpuDesc {
         bool loss_visualization = false;
+        bool exact_texel_sampling = false;
         SplitViewCpuPanelDesc left;
         SplitViewCpuPanelDesc right;
         float split_position = 0.5f;

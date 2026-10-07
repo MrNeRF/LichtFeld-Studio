@@ -114,7 +114,7 @@ endif()
 # Standalone tensor/training proofs must not pull in the Vulkan window or its
 # test harness when the core Vulkan backend is disabled.
 if(LFS_TENSOR_METAL AND BUILD_TESTS AND NOT LFS_TENSOR_VULKAN)
-    add_executable(metal_tensor_contracts test_tensor_metal.cpp test_tensor_restored.cpp)
+    add_executable(metal_tensor_contracts test_tensor_metal.cpp test_tensor_restored.cpp test_tensor_image_regions.cpp)
     target_compile_features(metal_tensor_contracts PRIVATE cxx_std_23)
     target_compile_definitions(metal_tensor_contracts PRIVATE LFS_TENSOR_PRIVATE_ACCESS)
     target_include_directories(metal_tensor_contracts PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -201,7 +201,18 @@ if(BUILD_TESTS)
         COMPUTE waveOps sharedReduce atomics narrowAndWide prepareIndirect markIndirect optionalInput variant)
     lfs_add_gpu_program(gpu_program_contracts program_features_variant SOURCE shaders/program_features.slang
         COMPUTE variant DEFINES LFS_FEATURE_VARIANT=5)
+    add_test(NAME GpuProgramCudaArchitectures COMMAND ${CMAKE_COMMAND}
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/test_gpu_program_cuda.cmake")
     add_test(NAME GpuProgramContracts COMMAND gpu_program_contracts)
+    if(LFS_HAS_CUDA)
+        lfs_gpu_program_cuda_flags(_program_cuda_flags)
+    endif()
+    if(LFS_HAS_CUDA AND "${_program_cuda_flags}" MATCHES "sm_[0-9]")
+        # A driver capable of JIT-compiling PTX would otherwise hide missing SASS.
+        add_test(NAME GpuProgramNativeCodeContracts COMMAND gpu_program_contracts)
+        set_tests_properties(GpuProgramNativeCodeContracts PROPERTIES
+            ENVIRONMENT "CUDA_DISABLE_PTX_JIT=1" LABELS "tensor;gpu" TIMEOUT 120)
+    endif()
     set_tests_properties(GpuProgramContracts PROPERTIES LABELS "tensor;gpu" TIMEOUT 120)
     if(TARGET lfs_tensor_rasterizer)
         add_executable(tensor_rasterizer_contracts
@@ -259,6 +270,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
         test_menu_bar_title.cpp
+        test_point_cloud_updates.cpp
 
         test_preferences_migration.cpp
         test_scene_upscaler_registry.cpp
@@ -719,10 +731,12 @@ if(NOT LFS_HAS_CUDA)
         test_tensor_backend_semantics.cpp
         test_error_bus.cpp
         test_tensor_restored.cpp
+        test_tensor_image_regions.cpp
         test_nodes_core.cpp
         test_nodes_scene.cpp
         test_nodes_modifier_manager.cpp
         test_splat_simplify.cpp
+        test_tiles3d.cpp
         test_node_canvas_interaction.cpp
         test_mcp_node_tools.cpp
         test_mcp_screen_tools.cpp
@@ -869,6 +883,7 @@ set(TEST_FILES
     test_selection_ops.cpp
     test_tensor_point_ops.cpp
     test_tensor_restored.cpp
+    test_tensor_image_regions.cpp
     test_tensor_expression.cpp
     test_tensor_expression_cuda.cu
     test_tensor_warp_reduce.cpp
@@ -1000,6 +1015,7 @@ set(TEST_FILES
     test_tensor_inplace_capacity.cpp
     test_sog_format.cpp
     test_ssog_format.cpp
+    test_tiles3d.cpp
     test_splat_decimate.cpp
     test_ply_error_taxonomy.cpp
     test_ply_io_throughput.cpp
@@ -1038,6 +1054,7 @@ set(TEST_FILES
     test_training_terminal_state.cpp
     test_headless_run_coordinator.cpp
     test_argument_parser.cpp
+    test_licht_command.cpp
     test_user_paths.cpp
     test_window_state.cpp
     test_crash_handler.cpp
@@ -1264,6 +1281,7 @@ if(LFS_TENSOR_VULKAN)
         test_tensor_backend_parity.cpp
         test_tensor_backend_semantics.cpp
         test_tensor_restored.cpp
+        test_tensor_image_regions.cpp
         test_ply_vulkan_q16_bands.cpp
         test_viewer_vulkan_load.cpp
         test_headless_vulkan_device_selection.cpp
@@ -1338,6 +1356,7 @@ list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/app/mcp_pointer_tool.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_operator_schema.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/licht_command.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter_output_paths.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter_overwrite.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_params.cpp
@@ -1735,6 +1754,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_dense_matching.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_export_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gizmo_context.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gt_compare_controls.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_histogram_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_http.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_import_dialog_panels.py
@@ -1940,6 +1960,18 @@ if(WIN32)
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TORCH_DLL}"
                 "$<TARGET_FILE_DIR:${TEST_TARGET}>")
         endforeach()
+        # Torch may bundle an older CUDA runtime with the same DLL filename.
+        # Match the toolkit used to build core (including diagnostics entry points).
+        file(GLOB _lfs_test_cuda_runtime_dlls
+            "${CUDAToolkit_BIN_DIR}/cudart64*.dll"
+            "${CUDAToolkit_BIN_DIR}/curand64*.dll"
+            "${CUDAToolkit_BIN_DIR}/x64/cudart64*.dll"
+            "${CUDAToolkit_BIN_DIR}/x64/curand64*.dll")
+        foreach(CUDA_DLL ${_lfs_test_cuda_runtime_dlls})
+            add_custom_command(TARGET ${TEST_TARGET} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CUDA_DLL}"
+                    "$<TARGET_FILE_DIR:${TEST_TARGET}>")
+        endforeach()
         if(TARGET nvimgcodec)
             add_dependencies(${TEST_TARGET} nvimgcodec)
             add_custom_command(TARGET ${TEST_TARGET} POST_BUILD
@@ -2135,3 +2167,26 @@ foreach(_lfs_tensor_test_target IN ITEMS
         target_compile_definitions(${_lfs_tensor_test_target} PRIVATE LFS_TENSOR_PRIVATE_ACCESS)
     endif()
 endforeach()
+
+if(LFS_TENSOR_VULKAN AND BUILD_TESTS)
+    function(lfs_write_program_inventory)
+        get_property(reflections GLOBAL PROPERTY LFS_GPU_PROGRAM_REFLECTIONS)
+        string(REPLACE ";" "\n" reflections "${reflections}")
+        file(WRITE "${CMAKE_BINARY_DIR}/gpu_program_reflections.txt" "${reflections}\n")
+    endfunction()
+    cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL lfs_write_program_inventory)
+    add_executable(gpu_push_constant_contracts test_tensor_gpu_push_constants.cpp)
+    target_include_directories(gpu_push_constant_contracts PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_definitions(gpu_push_constant_contracts PRIVATE LFS_TENSOR_PRIVATE_ACCESS=1
+        LFS_PROGRAM_INVENTORY="${CMAKE_BINARY_DIR}/gpu_program_reflections.txt")
+    target_link_libraries(gpu_push_constant_contracts PRIVATE lfs_core GTest::gtest_main Vulkan::Vulkan)
+    target_compile_features(gpu_push_constant_contracts PRIVATE cxx_std_23)
+    add_dependencies(gpu_push_constant_contracts lfs_shader_headers)
+
+    if(TARGET lfs_training_vulkan_shaders)
+        add_dependencies(gpu_push_constant_contracts lfs_training_vulkan_shaders)
+        target_compile_definitions(gpu_push_constant_contracts PRIVATE
+            LFS_TRAINING_MANIFEST_DIR="${CMAKE_BINARY_DIR}/lfs_training_spv")
+    endif()
+    add_test(NAME GpuPushConstantContracts COMMAND gpu_push_constant_contracts)
+endif()

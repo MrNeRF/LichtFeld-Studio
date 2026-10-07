@@ -1217,7 +1217,7 @@ TEST_F(DiscoverySweep, ScatterMinMaxPropagateNaNsLikeTorch) {
             std::vector<float>{1.0f}, {1}, Device::CPU);
         const auto expected = torch::tensor({1.0f}, torch::kFloat32)
                                   .scatter_reduce(0, torch_indices, torch_source,
-                                                  reduce, /*include_self=*/true);
+                                                  c10::string_view(reduce.data(), reduce.size()), /*include_self=*/true);
         ASSERT_TRUE(std::isnan(expected.item<float>()));
 
         actual.scatter_(0, indices, source, mode);

@@ -8,8 +8,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <format>
 #include <stdexcept>
+#include <type_traits>
 
 namespace lfs::training {
     namespace {
@@ -18,18 +20,38 @@ namespace lfs::training {
 
         struct ForwardParams {
             uint64_t exposure, vignetting, color, crf, rgb_in, rgb_out;
-            int32_t height, width, y_offset, full_height, camera_index, frame_index;
+            int32_t height, width, y_offset, full_height, camera_index, frame_index, x_offset, full_width;
         };
+
+        static_assert(std::is_standard_layout_v<ForwardParams>);
+        static_assert(sizeof(ForwardParams) == 80);
+        static_assert(offsetof(ForwardParams, exposure) == 0);
+        static_assert(offsetof(ForwardParams, vignetting) == 8);
+        static_assert(offsetof(ForwardParams, color) == 16);
+        static_assert(offsetof(ForwardParams, crf) == 24);
+        static_assert(offsetof(ForwardParams, rgb_in) == 32);
+        static_assert(offsetof(ForwardParams, rgb_out) == 40);
+        static_assert(offsetof(ForwardParams, height) == 48);
+        static_assert(offsetof(ForwardParams, width) == 52);
+        static_assert(offsetof(ForwardParams, y_offset) == 56);
+        static_assert(offsetof(ForwardParams, full_height) == 60);
+        static_assert(offsetof(ForwardParams, camera_index) == 64);
+        static_assert(offsetof(ForwardParams, frame_index) == 68);
+        static_assert(offsetof(ForwardParams, x_offset) == 72);
+        static_assert(offsetof(ForwardParams, full_width) == 76);
 
         void forward(const PPISPInputs& p, In rgb, Out corrected, const PPISPRegion& r) {
             const int height = static_cast<int>(rgb.shape()[1]);
             const int width = static_cast<int>(rgb.shape()[2]);
+            const int full_width = r.full_width > 0 ? r.full_width : width;
+            if (r.x_offset < 0 || r.x_offset + width > full_width)
+                throw std::invalid_argument("PPISP crop exceeds full width");
             if (height <= 0 || width <= 0 || r.y_offset < 0 || r.y_offset + height > r.full_height)
                 throw std::invalid_argument(std::format("PPISP band [{}, {}) of width {} must lie inside {} rows",
                                                         r.y_offset, r.y_offset + height, width, r.full_height));
             const ForwardParams params{mk::address(p.exposure), mk::address(p.vignetting), mk::address(p.color),
                                        mk::address(p.crf), mk::address(rgb), mk::address(corrected),
-                                       height, width, r.y_offset, r.full_height, r.camera_index, r.frame_index};
+                                       height, width, r.y_offset, r.full_height, r.camera_index, r.frame_index, r.x_offset, full_width};
             mk::launch_items("ppisp_forward", params, {&p.exposure, &p.vignetting, &p.color, &p.crf, &rgb, &corrected},
                              static_cast<size_t>(height) * width);
         }

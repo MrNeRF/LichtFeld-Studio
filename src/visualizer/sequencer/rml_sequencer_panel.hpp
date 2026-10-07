@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include "input/frame_input_buffer.hpp"
 
 #include "gui/rmlui/rml_tooltip.hpp"
@@ -111,7 +113,7 @@ namespace lfs::vis {
     public:
         RmlSequencerPanel(SequencerController& controller, gui::panels::SequencerUIState& ui_state,
                           gui::RmlUIManager* rml_manager);
-        ~RmlSequencerPanel();
+        LFS_VIS_API ~RmlSequencerPanel();
 
         RmlSequencerPanel(const RmlSequencerPanel&) = delete;
         RmlSequencerPanel& operator=(const RmlSequencerPanel&) = delete;

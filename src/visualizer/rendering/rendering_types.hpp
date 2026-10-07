@@ -311,6 +311,7 @@ namespace lfs::vis {
         // Comparison inside this view
         SplitViewMode split_view_mode = SplitViewMode::Disabled;
         GTComparisonMode gt_comparison_mode = GTComparisonMode::RGB;
+        bool gt_comparison_actual_size = false;
         float split_position = 0.5f;
         size_t split_view_offset = 0;
 
@@ -351,6 +352,7 @@ namespace lfs::vis {
                    show_pivot == other.show_pivot &&
                    split_view_mode == other.split_view_mode &&
                    gt_comparison_mode == other.gt_comparison_mode &&
+                   gt_comparison_actual_size == other.gt_comparison_actual_size &&
                    split_position == other.split_position &&
                    split_view_offset == other.split_view_offset &&
                    depth_view == other.depth_view &&
@@ -501,6 +503,11 @@ namespace lfs::vis {
         }
     }
 
+    [[nodiscard]] inline bool gtComparisonActualSizeEligible(const ViewSettings& settings) {
+        return settings.gt_comparison_mode == GTComparisonMode::RGB &&
+               !settings.orthographic && !settings.equirectangular;
+    }
+
     inline void sanitizeGTComparisonSettings(ViewSettings& settings) {
         switch (settings.gt_comparison_mode) {
         case GTComparisonMode::RGB:
@@ -511,6 +518,9 @@ namespace lfs::vis {
         default:
             settings.gt_comparison_mode = GTComparisonMode::RGB;
             break;
+        }
+        if (!gtComparisonActualSizeEligible(settings)) {
+            settings.gt_comparison_actual_size = false;
         }
     }
 

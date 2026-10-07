@@ -373,6 +373,44 @@ TEST_F(ColmapImageLayoutTest, FiltersTextPointCloudByMinimumTrackLength) {
     EXPECT_EQ(result->value.point_cloud.size(), 1u);
 }
 
+// Catches a wrong parallax limit or ray centre, resolved points that move, a far point clamped off its ray, depths
+// along the baseline (no resolvable parallax) treated as resolvable, and viewer imports without camera views that
+// clamp. Two cameras 1 apart with a 100 px focal resolve 0.25 px of parallax straight ahead out to 400.
+TEST_F(ColmapImageLayoutTest, PullsUnresolvedPointDepthsToTheirTracksParallaxLimit) {
+    LFS_CUDA_BACKEND_OR_RETURN();
+
+    const fs::path dataset_dir = temp_dir_ / "far_points";
+    write_text_file(dataset_dir / "cameras.txt", "1 PINHOLE 100 100 100 100 50 50\n");
+    write_text_file(dataset_dir / "images.txt",
+                    "1 1 0 0 0 0 0 0 1 a.png\n\n"
+                    "2 1 0 0 0 -1 0 0 1 b.png\n\n");
+    write_png(dataset_dir / "images" / "a.png");
+    write_png(dataset_dir / "images" / "b.png");
+    write_text_file(dataset_dir / "points3D.txt",
+                    "1 0.5 0 10 255 0 0 0.1 1 0 2 0\n"
+                    "2 0.5 0 4000 0 255 0 0.1 1 1 2 1\n"
+                    "3 1000 0 0 0 0 255 0.1 1 2 2 2\n");
+
+    lfs::io::ColmapPointCloudRecords records;
+    const auto cameras = lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {}, &records);
+    ASSERT_TRUE(cameras.has_value()) << cameras.error().format();
+    const auto clamped = lfs::io::read_colmap_point_cloud_text(dataset_dir, {}, &records);
+    ASSERT_TRUE(clamped.has_value()) << clamped.error().format();
+    const auto unclamped = lfs::io::read_colmap_point_cloud_text(dataset_dir);
+    ASSERT_TRUE(unclamped.has_value()) << unclamped.error().format();
+
+    const auto positions = clamped->value.means.cpu();
+    const auto original = unclamped->value.means.cpu();
+    ASSERT_EQ(positions.shape()[0], 3u);
+    const float* p = positions.ptr<float>();
+    const float* o = original.ptr<float>();
+    const float expected[9] = {0.5f, 0.0f, 10.0f, 0.5f, 0.0f, 400.0f, 1000.0f, 0.0f, 0.0f};
+    for (int i = 0; i < 9; ++i) {
+        EXPECT_NEAR(p[i], expected[i], 1e-3f) << "coordinate " << i;
+    }
+    EXPECT_FLOAT_EQ(o[5], 4000.0f);
+}
+
 TEST_F(ColmapImageLayoutTest, ResolvesDepthMapsByImageName) {
     const fs::path dataset_dir = temp_dir_ / "dataset";
     const fs::path image_path = dataset_dir / "images" / "frame_0000.png";

@@ -17,6 +17,14 @@ namespace lfs::core {
         bool crop_solve_failed = false;
     };
 
+    namespace detail {
+        LFS_CORE_API UndistortParams initialize_undistort_params(
+            float fx, float fy, float cx, float cy,
+            int width, int height,
+            const Tensor& radial, const Tensor& tangential,
+            CameraModelType model);
+    } // namespace detail
+
     LFS_CORE_API UndistortParams compute_undistort_params(
         float fx, float fy, float cx, float cy,
         int width, int height,
@@ -55,6 +63,10 @@ namespace lfs::core {
     LFS_CORE_API Tensor undistort_image(const Tensor& src, const UndistortParams& params,
                                         void* stream);
 
+    LFS_CORE_API Tensor undistort_image_region(
+        const Tensor& source, const UndistortParams& params,
+        int destination_x, int destination_y, int width, int height, void* stream);
+
     LFS_CORE_API Tensor distort_image_to_source(const Tensor& src, const UndistortParams& params,
                                                 Tensor& validity_mask, void* stream);
 
@@ -76,6 +88,9 @@ namespace lfs::core {
     LFS_CORE_API Tensor undistort_mask(const Tensor& src, const UndistortParams& params, void* stream);
 
     namespace internal {
+        LFS_CORE_API Tensor undistort_image_region_tensor(
+            const Tensor& input, const UndistortParams& params,
+            int destination_x, int destination_y, int width, int height);
         LFS_CORE_API Tensor warp_image_tensor(const Tensor& input, const UndistortParams& params, int mode, bool inverse, Tensor* validity);
         LFS_CORE_API Tensor undistort_image_tensor(const Tensor& input, const UndistortParams& params, bool mask);
         LFS_CORE_API Tensor resize_image_prior_tensor(const Tensor& input, int height, int width, bool normal);

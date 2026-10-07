@@ -589,8 +589,12 @@ namespace lfs::python {
                     const auto local_transform =
                         vis::scene_coords::nodeLocalTransformFromVisualizerWorld(
                             sm->getScene(), state_->target_node_name, state_->matrix);
-                    if (local_transform)
-                        sm->setNodeTransform(state_->target_node_name, *local_transform);
+                    if (!local_transform) {
+                        LOG_WARN("TransformGizmo '{}' rejected a target transform because its parent cannot preserve a finite world transform",
+                                 state_->id);
+                        return;
+                    }
+                    sm->setNodeTransform(state_->target_node_name, *local_transform);
                 } else {
                     sm->setNodeTransform(state_->target_node_name, state_->matrix);
                 }

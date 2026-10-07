@@ -342,6 +342,7 @@ namespace lfs::vis {
         const auto& split = frame.split_view;
         desc.split_view.enabled = split.enabled;
         desc.split_view.loss_visualization = split.loss_visualization;
+        desc.split_view.exact_texel_sampling = split.exact_texel_sampling;
         desc.split_view.split_position = split.split_position;
         desc.split_view.content_rect = split.content_rect;
         desc.split_view.coordinate_extent = split.coordinate_extent;

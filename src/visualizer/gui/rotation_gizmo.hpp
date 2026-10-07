@@ -49,5 +49,6 @@ namespace lfs::vis::gui {
 
     [[nodiscard]] bool isRotationGizmoHovered();
     [[nodiscard]] bool isRotationGizmoActive();
+    void cancelRotationGizmoDrag();
 
 } // namespace lfs::vis::gui

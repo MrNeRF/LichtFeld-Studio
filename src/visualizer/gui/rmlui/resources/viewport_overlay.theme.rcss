@@ -208,6 +208,46 @@
     image-color: @{controls.selected_icon};
 }
 
+#gt-compare-mode-block .viewport-gt-compare-actual-size {
+    color: @{text};
+}
+
+#gt-compare-mode-block .viewport-gt-compare-actual-size.selected {
+    color: @{background};
+}
+
+#gt-compare-mode-block .viewport-gt-compare-actual-size.loading {
+    color: @{primary};
+    background-color: transparent;
+    border-color: @{alpha(primary,0.65)};
+}
+
+.viewport-gt-compare-spinner {
+    border-color: @{alpha(primary,0.25)};
+    border-top-color: @{primary};
+}
+
+#gt-compare-mode-block .viewport-gt-compare-status.failed,
+.viewport-gt-compare-warning {
+    color: @{warning};
+    border-color: @{warning};
+}
+
+.viewport-gt-compare-retry {
+    color: @{text};
+    border-color: @{border};
+}
+
+#gt-compare-mode-block .viewport-gt-compare-actual-size.selected.transitioning {
+    color: @{background};
+    background-color: @{primary};
+    border-color: @{alpha(text,0.65)};
+}
+
+#gt-compare-mode-block .viewport-gt-compare-actual-size.selected.disabled {
+    color: @{text_dim};
+}
+
 .icon-btn.disabled,
 .icon-btn.disabled:hover,
 .icon-btn.disabled:active {

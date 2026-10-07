@@ -54,6 +54,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Rendering
         rendering/camera_interaction_service.cpp
+        rendering/gt_comparison_source.cpp
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/output_image_pool.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/mesh_offscreen_renderer.cpp>
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/mesh_offscreen_renderer_tensor.cpp>
@@ -63,7 +64,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/rendering_manager_events.cpp
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/rendering_manager_vulkan.cpp>
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/rendering_manager_tensor.cpp>
-        rendering/rendering_manager_gt_cache.cpp
         rendering/rendering_manager_split_view.cpp
         rendering/rendering_manager_lod.cpp
         rendering/display_tensors.cpp
@@ -80,6 +80,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/lod_page_cache.cpp
         rendering/lod_upload_engine.cpp
         rendering/spark_lod_controller.cpp
+        $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/split_capture_compositor.cpp>
         rendering/split_view_service.cpp
         rendering/viewport_artifact_service.cpp
         rendering/viewport_frame_lifecycle_service.cpp
@@ -183,8 +184,10 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Scene management
         scene/scene_manager.cpp
+        scene/point_cloud_updates.cpp
         scene/point_cloud_merge.cpp
         scene/selection_state.cpp
+        scene/splat_tile_streamer.cpp
         scene/viewer_splat_quantize.cpp
 
         # Input handling

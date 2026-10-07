@@ -23,7 +23,7 @@ namespace fast_lfs::optimizer::kernels::adam {
     // (matches fused preprocess_backward / joint_adam::kBlockSizeDevice).
     // Frozen / crop-damped rows with zero lr skip the Adam update but still
     // re-encode under the new block bounds (same as fused adam_step_row_joint).
-    template <int BITS>
+    template <int BITS, bool MEAN_STEP_ENABLED = true>
     __global__ void adam_step_joint_contiguous_batched_cu(
         const __grid_constant__ JointContiguousBatch batch,
         const bool* frozen_mask,
@@ -79,16 +79,18 @@ namespace fast_lfs::optimizer::kernels::adam {
             else
                 row_lr *= cropbox_lr_scale;
         }
-        if (ent.apply_mean_step && mean_step_scale_raw != nullptr &&
-            mean_step_far_mask != nullptr && prim < mean_step_far_mask_n &&
-            mean_step_far_mask[prim]) {
-            const int sb = prim * 3;
-            if (sb + 2 < mean_step_scale_n) {
-                row_lr *= lfs::training::per_splat_mean_step_ratio(
-                    mean_step_scale_raw[sb],
-                    mean_step_scale_raw[sb + 1],
-                    mean_step_scale_raw[sb + 2],
-                    mean_step_median_extent);
+        if constexpr (MEAN_STEP_ENABLED) {
+            if (ent.apply_mean_step && mean_step_scale_raw != nullptr &&
+                mean_step_far_mask != nullptr && prim < mean_step_far_mask_n &&
+                mean_step_far_mask[prim]) {
+                const int sb = prim * 3;
+                if (sb + 2 < mean_step_scale_n) {
+                    row_lr *= lfs::training::per_splat_mean_step_ratio(
+                        mean_step_scale_raw[sb],
+                        mean_step_scale_raw[sb + 1],
+                        mean_step_scale_raw[sb + 2],
+                        mean_step_median_extent);
+                }
             }
         }
 

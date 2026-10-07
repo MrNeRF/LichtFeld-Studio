@@ -32,6 +32,7 @@
 #include "io/project_operations.hpp"
 #include "io/project_recovery.hpp"
 #include "io/splat_path.hpp"
+#include "io/splat_tile_source.hpp"
 #include "training/dataset.hpp"
 
 #include <array>
@@ -638,6 +639,8 @@ namespace lfs::python {
             .def_ro("embedded_dataset_present", &project::ProjectInspectorParameters::embedded_dataset_present)
             .def_ro("embedded_dataset_complete", &project::ProjectInspectorParameters::embedded_dataset_complete)
             .def_ro("embedded_images", &project::ProjectInspectorParameters::embedded_images)
+            .def_ro("embedded_masks", &project::ProjectInspectorParameters::embedded_masks)
+            .def_ro("embedded_depths", &project::ProjectInspectorParameters::embedded_depths)
             .def_ro("embedded_normals", &project::ProjectInspectorParameters::embedded_normals)
             .def_ro("embedded_sparse", &project::ProjectInspectorParameters::embedded_sparse);
 
@@ -735,6 +738,8 @@ namespace lfs::python {
         nb::class_<project::DatasetEmbedResult>(m, "DatasetEmbedResult")
             .def_ro("card", &project::DatasetEmbedResult::card)
             .def_ro("images_embedded", &project::DatasetEmbedResult::images_embedded)
+            .def_ro("masks_embedded", &project::DatasetEmbedResult::masks_embedded)
+            .def_ro("depths_embedded", &project::DatasetEmbedResult::depths_embedded)
             .def_ro("normals_embedded", &project::DatasetEmbedResult::normals_embedded)
             .def_ro("sparse_embedded", &project::DatasetEmbedResult::sparse_embedded)
             .def_ro("bytes_embedded", &project::DatasetEmbedResult::bytes_embedded);
@@ -1499,6 +1504,8 @@ namespace lfs::python {
 
         m.def("is_ssog_path", &io::is_ssog_path, nb::arg("path"),
               "Check for an SSOG bundle, manifest or directory.");
+        m.def("is_tiles3d_path", &io::is_tiles3d_path, nb::arg("path"),
+              "Check for a 3D Tiles tileset JSON.");
 
         m.def(
             "is_dataset_path",

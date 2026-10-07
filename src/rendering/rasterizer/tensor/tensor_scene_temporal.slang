@@ -16,6 +16,7 @@ struct Parameters {
     Ptr<float4, Access.ReadWrite> output;
     Ptr<uint8_t, Access.Read> samples;
     Ptr<uint8_t, Access.ReadWrite> oracleOutput;
+#if LFS_TEMPORAL_PASS == 0
     float4 inverseCurrentViewProjection0;
     float4 inverseCurrentViewProjection1;
     float4 inverseCurrentViewProjection2;
@@ -26,6 +27,7 @@ struct Parameters {
     float4 previousViewProjection3;
     uint4 renderInfo;
     float4 depthInfo;
+#elif LFS_TEMPORAL_PASS == 1
     uint4 extents;
     uint4 currentLayout;
     float4 control;
@@ -33,11 +35,14 @@ struct Parameters {
     float4 depthControl;
     float4 jitterPixels;
     float4 reconstruction;
+#else
     uint count;
     uint3 padding;
+#endif
 };
 [[vk::push_constant]] ConstantBuffer<Parameters> p;
 
+#if LFS_TEMPORAL_PASS == 0
 float viewDepthToNdc(float viewDepth) {
     const float nearPlane = p.depthInfo.x;
     const float farPlane = p.depthInfo.y;
@@ -97,6 +102,8 @@ void scene_motion(uint3 tid : SV_DispatchThreadID) {
         motion.y = -motion.y;
     p.motionOutput[pixel.y * extent.x + pixel.x] = motion;
 }
+
+#endif
 
 struct ResolveCoreInput {
     float4 current, history;
@@ -193,6 +200,7 @@ ResolveCoreResult resolveCore(ResolveCoreInput s) {
     return r;
 }
 
+#if LFS_TEMPORAL_PASS == 1
 float4 loadCurrent(uint2 pixel) {
     const uint index = (pixel.y * p.currentLayout.x + pixel.x) * p.currentLayout.z;
     if (p.currentLayout.w != 0u)
@@ -342,6 +350,9 @@ void scene_temporal_resolve(uint3 tid : SV_DispatchThreadID) {
     p.output[pixel.y * outputExtent.x + pixel.x] = resolveCore(input).color;
 }
 
+#endif
+
+#if LFS_TEMPORAL_PASS == 2
 struct OracleSample {
     float4 current, history;
     float4 neighborhoodMin, neighborhoodMax, neighborhoodCrossSum;
@@ -388,3 +399,5 @@ void scene_temporal_resolve_samples(uint3 tid : SV_DispatchThreadID) {
     result.status = float4(r.previousUv, r.weight, float(r.rejection));
     ((Ptr<OracleResult, Access.ReadWrite>)p.oracleOutput)[tid.x] = result;
 }
+
+#endif

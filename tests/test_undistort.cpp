@@ -6,6 +6,8 @@
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_image.hpp"
 #include "cuda_backend_test.hpp"
 #include "gut_camera_model_cuda.hpp"
 #include "io/formats/colmap.hpp"
@@ -24,6 +26,10 @@
 #include <vector>
 
 using namespace lfs::core;
+
+namespace tensor_hardening {
+    cudaError_t launch_delay_kernel(cudaStream_t stream, uint64_t cycles);
+}
 
 namespace {
 
@@ -98,6 +104,86 @@ namespace {
         for (int i = 0; i < 12; ++i) {
             EXPECT_FLOAT_EQ(actual.distortion[i], expected.distortion[i]);
         }
+    }
+
+    UndistortParams make_region_test_params(const CameraModelType model) {
+        UndistortParams params{};
+        params.src_fx = 24.0f;
+        params.src_fy = 23.0f;
+        params.src_cx = 16.0f;
+        params.src_cy = 12.0f;
+        params.dst_fx = 24.0f;
+        params.dst_fy = 23.0f;
+        params.dst_cx = 16.0f;
+        params.dst_cy = 12.0f;
+        params.src_width = 32;
+        params.src_height = 24;
+        params.dst_width = 32;
+        params.dst_height = 24;
+        params.model_type = model;
+        if (model == CameraModelType::PINHOLE) {
+            params.distortion[0] = -0.08f;
+            params.distortion[1] = 0.01f;
+            params.distortion[3] = 0.002f;
+            params.distortion[4] = -0.001f;
+            params.num_distortion = 5;
+        } else if (model == CameraModelType::FISHEYE) {
+            params.distortion[0] = 0.04f;
+            params.distortion[1] = -0.005f;
+            params.num_distortion = 4;
+        } else {
+            params.distortion[0] = 0.03f;
+            params.distortion[1] = -0.004f;
+            params.distortion[4] = 0.001f;
+            params.distortion[5] = -0.0015f;
+            params.distortion[6] = 0.0005f;
+            params.distortion[8] = -0.0004f;
+            params.num_distortion = 10;
+        }
+        return params;
+    }
+
+    void expect_region_matches_full(
+        const Tensor& source,
+        const Tensor& float_source,
+        const UndistortParams& params,
+        const int x,
+        const int y,
+        const int width,
+        const int height) {
+        auto full = undistort_image(float_source, params, nullptr);
+        auto region = undistort_image_region(
+            source, params, x, y, width, height, nullptr);
+        cudaDeviceSynchronize();
+
+        ASSERT_EQ(region.dtype(), DataType::Float32);
+        ASSERT_EQ(region.shape(), TensorShape(
+                                      {size_t{3},
+                                       static_cast<std::size_t>(height),
+                                       static_cast<std::size_t>(width)}));
+        const auto expected =
+            full.slice(1, y, y + height).slice(2, x, x + width).cpu().contiguous();
+        const auto actual = region.cpu().contiguous();
+        const float* expected_data = expected.ptr<float>();
+        const float* actual_data = actual.ptr<float>();
+        ASSERT_NE(expected_data, nullptr);
+        ASSERT_NE(actual_data, nullptr);
+        for (std::size_t index = 0; index < actual.numel(); ++index) {
+            EXPECT_NEAR(actual_data[index], expected_data[index], 1.0e-6f)
+                << "mismatch at region element " << index;
+        }
+    }
+
+    void expect_image_undistort_apis_reject(
+        const Tensor& source,
+        const UndistortParams& params) {
+        EXPECT_THROW(
+            (void)undistort_image(source, params, nullptr),
+            std::invalid_argument);
+        EXPECT_THROW(
+            (void)undistort_image_region(
+                source, params, 0, 0, 4, 4, nullptr),
+            std::invalid_argument);
     }
 
     std::pair<float, float> direct_full_opencv_distortion(
@@ -1511,6 +1597,191 @@ TEST(UndistortConsistency, MaskAndImageSameDimensions) {
     EXPECT_EQ(img_dst.shape()[2], mask_dst.shape()[1]);
 }
 
+TEST(UndistortRegion, FloatAndUInt8MatchFullFrameSlicesForAllModels) {
+    constexpr std::size_t kElements = 3u * 24u * 32u;
+    std::vector<std::uint8_t> uint8_values(kElements);
+    std::vector<float> float_values(kElements);
+    for (std::size_t i = 0; i < kElements; ++i) {
+        uint8_values[i] = static_cast<std::uint8_t>((i * 37u + 11u) % 256u);
+        float_values[i] = static_cast<float>(uint8_values[i]) / 255.0f;
+    }
+    const auto uint8_source =
+        Tensor::from_blob(
+            uint8_values.data(), {size_t{3}, size_t{24}, size_t{32}}, Device::CPU,
+            DataType::UInt8)
+            .cuda();
+    const auto float_source =
+        Tensor::from_vector(
+            float_values, {size_t{3}, size_t{24}, size_t{32}}, Device::CPU)
+            .cuda();
+    const std::array<CameraModelType, 3> models{
+        CameraModelType::PINHOLE,
+        CameraModelType::FISHEYE,
+        CameraModelType::THIN_PRISM_FISHEYE};
+    const std::array<std::array<int, 4>, 3> regions{{
+        {0, 0, 7, 5},
+        {12, 9, 8, 6},
+        {25, 19, 7, 5},
+    }};
+
+    for (const auto model : models) {
+        const auto params = make_region_test_params(model);
+        for (const auto& region : regions) {
+            SCOPED_TRACE(static_cast<int>(model));
+            expect_region_matches_full(
+                float_source,
+                float_source,
+                params,
+                region[0],
+                region[1],
+                region[2],
+                region[3]);
+            expect_region_matches_full(
+                uint8_source,
+                float_source,
+                params,
+                region[0],
+                region[1],
+                region[2],
+                region[3]);
+        }
+    }
+}
+
+TEST(UndistortRegion, RejectsInvalidDestinationRegions) {
+    const auto params = make_region_test_params(CameraModelType::PINHOLE);
+    const auto source =
+        Tensor::zeros({size_t{3}, size_t{24}, size_t{32}}, Device::CUDA);
+
+    EXPECT_THROW(
+        (void)undistort_image_region(source, params, -1, 0, 4, 4, nullptr),
+        std::invalid_argument);
+    EXPECT_THROW(
+        (void)undistort_image_region(source, params, 30, 20, 4, 5, nullptr),
+        std::invalid_argument);
+    EXPECT_THROW(
+        (void)undistort_image_region(source, params, 0, 0, 0, 4, nullptr),
+        std::invalid_argument);
+}
+
+TEST(ImageTensorBackends, UndistortRegionMatchesFullFrameOnCpuAndVulkan) {
+    std::vector<std::uint8_t> values(3u * 24u * 32u);
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        values[i] = static_cast<std::uint8_t>((i * 37u + 11u) % 256u);
+    }
+    const auto cpu_source = Tensor::from_blob(
+                                values.data(), {size_t{3}, size_t{24}, size_t{32}},
+                                Device::CPU, DataType::UInt8)
+                                .clone();
+    const auto check_regions = [&](const Tensor& source) {
+        const auto float_source = source.to(DataType::Float32).div(255.0f);
+        for (const auto model : {CameraModelType::PINHOLE, CameraModelType::FISHEYE,
+                                 CameraModelType::THIN_PRISM_FISHEYE}) {
+            const auto params = make_region_test_params(model);
+            expect_region_matches_full(source, float_source, params, 0, 0, 7, 5);
+            expect_region_matches_full(source, float_source, params, 12, 9, 8, 6);
+            expect_region_matches_full(source, float_source, params, 25, 19, 7, 5);
+        }
+    };
+    check_regions(cpu_source);
+    if (gpu_backend_available(GpuBackend::Vulkan)) {
+        const GpuBackendScope scope(GpuBackend::Vulkan);
+        check_regions(cpu_source.to(Device::GPU));
+    }
+}
+
+TEST(UndistortImageContract, FullAndRegionRejectSameInvalidSources) {
+    const auto params = make_region_test_params(CameraModelType::PINHOLE);
+    const Tensor invalid;
+    expect_image_undistort_apis_reject(invalid, params);
+
+    const auto rank_two =
+        Tensor::zeros({size_t{24}, size_t{32}}, Device::CUDA);
+    expect_image_undistort_apis_reject(rank_two, params);
+
+    const auto hwc =
+        Tensor::zeros({size_t{24}, size_t{32}, size_t{3}}, Device::CUDA);
+    const auto noncontiguous_chw = hwc.permute({2, 0, 1});
+    ASSERT_EQ(
+        noncontiguous_chw.shape(),
+        TensorShape({size_t{3}, size_t{24}, size_t{32}}));
+    ASSERT_FALSE(noncontiguous_chw.is_contiguous());
+    // Upstream materializes non-contiguous CHW input. Both public entry points
+    // must preserve that contract after adding destination regions.
+    expect_region_matches_full(noncontiguous_chw, noncontiguous_chw.contiguous(),
+                               params, 4, 3, 7, 5);
+
+    const auto unsupported = Tensor::zeros(
+        {size_t{3}, size_t{24}, size_t{32}},
+        Device::CUDA,
+        DataType::Int32);
+    expect_image_undistort_apis_reject(unsupported, params);
+
+    const auto wrong_dimensions =
+        Tensor::zeros({size_t{3}, size_t{23}, size_t{32}}, Device::CUDA);
+    expect_image_undistort_apis_reject(wrong_dimensions, params);
+}
+
+TEST(UndistortRegion, PreservesProducerOrderingOnRequestedNonblockingStream) {
+    cudaStream_t producer = nullptr;
+    cudaStream_t execution = nullptr;
+    cudaStream_t gate_holder = nullptr;
+    cudaEvent_t gate = nullptr;
+    ASSERT_EQ(
+        cudaStreamCreateWithFlags(&producer, cudaStreamNonBlocking),
+        cudaSuccess);
+    ASSERT_EQ(
+        cudaStreamCreateWithFlags(&execution, cudaStreamNonBlocking),
+        cudaSuccess);
+    ASSERT_EQ(
+        cudaStreamCreateWithFlags(&gate_holder, cudaStreamNonBlocking),
+        cudaSuccess);
+    ASSERT_EQ(cudaEventCreateWithFlags(&gate, cudaEventDisableTiming), cudaSuccess);
+
+    Tensor source;
+    {
+        CUDAStreamGuard guard(producer);
+        source = Tensor::zeros(
+            {size_t{3}, size_t{24}, size_t{32}}, Device::CUDA);
+    }
+    ASSERT_EQ(source.stream(), producer);
+    ASSERT_EQ(cudaStreamSynchronize(producer), cudaSuccess);
+
+    ASSERT_EQ(
+        tensor_hardening::launch_delay_kernel(gate_holder, 100000000ULL),
+        cudaSuccess);
+    ASSERT_EQ(cudaEventRecord(gate, gate_holder), cudaSuccess);
+    ASSERT_EQ(cudaStreamWaitEvent(producer, gate, 0), cudaSuccess);
+    {
+        CUDAStreamGuard guard(producer);
+        source.fill_(0.625f, producer);
+    }
+
+    auto params = make_region_test_params(CameraModelType::PINHOLE);
+    for (float& coefficient : params.distortion) {
+        coefficient = 0.0f;
+    }
+    params.num_distortion = 0;
+    auto region = undistort_image_region(
+        source, params, 8, 6, 8, 6, execution);
+    EXPECT_EQ(region.stream(), execution);
+    EXPECT_EQ(cudaStreamQuery(execution), cudaErrorNotReady);
+
+    ASSERT_EQ(cudaStreamSynchronize(execution), cudaSuccess);
+    const auto values = region.cpu().to_vector();
+    ASSERT_EQ(values.size(), 3u * 6u * 8u);
+    for (const float value : values) {
+        EXPECT_NEAR(value, 0.625f, 1.0e-6f);
+    }
+
+    source = Tensor();
+    region = Tensor();
+    EXPECT_EQ(cudaStreamDestroy(execution), cudaSuccess);
+    EXPECT_EQ(cudaStreamDestroy(producer), cudaSuccess);
+    EXPECT_EQ(cudaStreamDestroy(gate_holder), cudaSuccess);
+    EXPECT_EQ(cudaEventDestroy(gate), cudaSuccess);
+}
+
 // ====================== Center pixel preservation ======================
 
 TEST(UndistortCenter, CenterPixelPreserved) {
@@ -1829,5 +2100,20 @@ TEST(ImageTensorBackends, LargePhotoKeepsAdjacentPixelIndicesDistinct) {
     if (gpu_backend_available(GpuBackend::Vulkan)) {
         const GpuBackendScope scope(GpuBackend::Vulkan);
         EXPECT_FLOAT_EQ(undistort_mask_area(mask.gpu(), params, nullptr).cpu().ptr<float>()[0], expected);
+    }
+}
+
+TEST(UndistortRegion, IdentityCropRetainsTheFullImageFastPath) {
+    auto params = make_region_test_params(CameraModelType::PINHOLE);
+    std::fill(std::begin(params.distortion), std::end(params.distortion), 0.0f);
+    params.num_distortion = 0;
+    for (const auto device : {Device::CPU, Device::GPU}) {
+        const auto source = Tensor::randn({3, 24, 32}, device);
+        const auto full = undistort_image(source, params, nullptr).cpu();
+        const auto cropped = undistort_image_region(source, params, 5, 7, 13, 9, nullptr).cpu();
+        const auto expected = full.slice(1, 7, 16).slice(2, 5, 18).contiguous();
+        ASSERT_EQ(cropped.shape(), expected.shape());
+        for (std::size_t i = 0; i < cropped.numel(); ++i)
+            EXPECT_FLOAT_EQ(cropped.ptr<float>()[i], expected.ptr<float>()[i]) << i;
     }
 }

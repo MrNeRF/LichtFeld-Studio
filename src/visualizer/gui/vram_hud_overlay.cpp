@@ -355,6 +355,7 @@ namespace lfs::vis::gui {
         last_perf_expanded_ = true;
         root_ = nullptr;
         perf_strip_ = nullptr;
+        perf_strip_header_ = nullptr;
         perf_card_ = nullptr;
         perf_rate_ = nullptr;
         perf_vram_process_ = nullptr;
@@ -427,6 +428,7 @@ namespace lfs::vis::gui {
 
         root_ = document_->GetElementById("vram-hud-overlay");
         perf_strip_ = document_->GetElementById("perf-hud-strip");
+        perf_strip_header_ = document_->GetElementById("perf-hud-strip-header");
         perf_card_ = document_->GetElementById("perf-hud-card");
         perf_rate_ = document_->GetElementById("perf-hud-strip-rate");
         perf_vram_process_ = document_->GetElementById("perf-hud-vram-process");
@@ -609,6 +611,12 @@ namespace lfs::vis::gui {
             header_->AddEventListener(Rml::EventId::Drag, &header_drag_listener_);
             header_->AddEventListener(Rml::EventId::Dragend, &header_drag_listener_);
             header_->AddEventListener(Rml::EventId::Dblclick, &click_listener_);
+        }
+        if (perf_strip_header_) {
+            perf_strip_header_->AddEventListener(Rml::EventId::Dragstart, &header_drag_listener_);
+            perf_strip_header_->AddEventListener(Rml::EventId::Drag, &header_drag_listener_);
+            perf_strip_header_->AddEventListener(Rml::EventId::Dragend, &header_drag_listener_);
+            perf_strip_header_->AddEventListener(Rml::EventId::Click, &click_listener_);
         }
         if (resize_handle_) {
             resize_handle_->AddEventListener(Rml::EventId::Dragstart, &resize_drag_listener_);
@@ -864,8 +872,12 @@ namespace lfs::vis::gui {
             return;
 
         const bool visible = state_.visible || state_.perf_hud.visible;
+        const bool compact = state_.perf_hud.visible && !state_.perf_hud.expanded;
         root_->SetClass("hidden", !visible);
-        root_->SetClass("perf-hud-compact", state_.perf_hud.visible && !state_.perf_hud.expanded);
+        root_->SetClass("perf-hud-compact", compact);
+        root_->SetProperty(
+            "pointer-events",
+            vram_hud_geometry::pointerTargetEnabled(visible, compact, false) ? "auto" : "none");
         root_->SetProperty("opacity", std::format("{:.2f}", opacity_));
         if (!visible)
             return;
@@ -876,10 +888,12 @@ namespace lfs::vis::gui {
             pushTimelineSample();
         }
         applySparklines();
-        const bool compact = state_.perf_hud.visible && !state_.perf_hud.expanded;
         if (perf_strip_) {
             perf_strip_->SetClass("hidden", !state_.perf_hud.visible || state_.perf_hud.expanded);
             perf_strip_->SetProperty("display", compact ? "flex" : "none");
+            perf_strip_->SetProperty(
+                "pointer-events",
+                vram_hud_geometry::pointerTargetEnabled(visible, compact, true) ? "auto" : "none");
         }
         if (perf_card_) {
             perf_card_->SetClass("hidden", compact);
@@ -2514,6 +2528,13 @@ namespace lfs::vis::gui {
         const float mx = event.GetParameter("mouse_x", 0.0f);
         const float my = event.GetParameter("mouse_y", 0.0f);
         if (type == Rml::EventId::Dragstart) {
+            const bool compact = state_.perf_hud.visible && !state_.perf_hud.expanded;
+            auto* const drag_surface = compact && perf_strip_ ? perf_strip_ : root_;
+            const auto drag_offset = drag_surface->GetAbsoluteOffset();
+            const auto drag_size = drag_surface->GetBox().GetSize();
+            if (!vram_hud_geometry::capturesPointer(
+                    true, drag_offset.x, drag_offset.y, drag_size.x, drag_size.y, mx, my))
+                return;
             dragging_header_ = true;
             pointer_captured_ = true;
             const auto box = root_->GetAbsoluteOffset();
@@ -2527,18 +2548,21 @@ namespace lfs::vis::gui {
         } else if (type == Rml::EventId::Drag && dragging_header_) {
             const float dx = mx - drag_start_mouse_x_;
             const float dy = my - drag_start_mouse_y_;
+            const bool compact = state_.perf_hud.visible && !state_.perf_hud.expanded;
             const auto bounds = viewportSize(
                 root_, document_, viewport_size_, has_viewport_geometry_);
+            const auto strip_size = perf_strip_ ? perf_strip_->GetBox().GetSize() : Rml::Vector2f{};
+            const auto root_size = root_->GetBox().GetSize();
+            const float drag_width = vram_hud_geometry::dragExtent(
+                compact, size_w_ > 0.0f ? size_w_ : root_size.x, strip_size.x);
+            const float drag_height = vram_hud_geometry::dragExtent(
+                compact, size_h_ > 0.0f ? size_h_ : root_size.y, strip_size.y);
             pos_x_ = std::max(
-                0.0f, vram_hud_geometry::clampPosition(
-                          drag_start_pos_x_ + dx,
-                          size_w_ > 0.0f ? size_w_ : root_->GetBox().GetSize().x,
-                          bounds.x));
+                0.0f, vram_hud_geometry::clampDragPosition(
+                          drag_start_pos_x_ + dx, drag_width, bounds.x));
             pos_y_ = std::max(
-                0.0f, vram_hud_geometry::clampPosition(
-                          drag_start_pos_y_ + dy,
-                          size_h_ > 0.0f ? size_h_ : root_->GetBox().GetSize().y,
-                          bounds.y));
+                0.0f, vram_hud_geometry::clampDragPosition(
+                          drag_start_pos_y_ + dy, drag_height, bounds.y));
             root_->SetProperty("right", "auto");
             root_->SetProperty("left", std::format("{:.1f}px", pos_x_));
             root_->SetProperty("top", std::format("{:.1f}px", pos_y_));
@@ -2546,9 +2570,17 @@ namespace lfs::vis::gui {
         } else if (type == Rml::EventId::Dragend && dragging_header_) {
             dragging_header_ = false;
             pointer_captured_ = dragging_resize_;
+            const bool compact = state_.perf_hud.visible && !state_.perf_hud.expanded;
             const auto bounds = viewportSize(
                 root_, document_, viewport_size_, has_viewport_geometry_);
-            const auto extent = root_->GetBox().GetSize();
+            const auto root_size = root_->GetBox().GetSize();
+            const auto strip_size = perf_strip_ ? perf_strip_->GetBox().GetSize() : Rml::Vector2f{};
+            const Rml::Vector2f extent{
+                vram_hud_geometry::dragExtent(
+                    compact, size_w_ > 0.0f ? size_w_ : root_size.x, strip_size.x),
+                vram_hud_geometry::dragExtent(
+                    compact, size_h_ > 0.0f ? size_h_ : root_size.y, strip_size.y),
+            };
             const auto left = pos_x_ < 24.0f;
             const auto right = bounds.x - pos_x_ - extent.x < 24.0f;
             const auto top = pos_y_ < 24.0f;

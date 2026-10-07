@@ -12,6 +12,7 @@
 #include "core/tensor_image.hpp"
 #include "core/uuid.hpp"
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <filesystem>
@@ -21,6 +22,15 @@
 #include <vector>
 
 namespace lfs::core {
+
+    struct CameraCalibration {
+        float fx = 0.0f;
+        float fy = 0.0f;
+        float cx = 0.0f;
+        float cy = 0.0f;
+        int width = 0;
+        int height = 0;
+    };
 
     enum class CameraSplit : uint8_t {
         Train,
@@ -263,8 +273,14 @@ namespace lfs::core {
         // Install parameters computed for an equivalent camera record without
         // repeating the distortion solve or its device-to-host copies.
         void adopt_undistortion(const UndistortParams& params) noexcept;
+        std::uint64_t calibration_revision() const noexcept { return _calibration_revision.load(); }
         bool is_undistort_precomputed() const noexcept { return _undistort_precomputed; }
         void prepare_undistortion(float blank_pixels = 0.0f);
+        void restore_undistortion_state(
+            const CameraCalibration& source,
+            const CameraCalibration& destination,
+            bool prepared,
+            bool crop_solve_failed = false);
         bool is_undistort_prepared() const noexcept { return _undistort_prepared; }
         bool has_distortion() const noexcept;
         const UndistortParams& undistort_params() const noexcept { return _undistort_params; }
@@ -339,6 +355,7 @@ namespace lfs::core {
         bool _undistort_precomputed = false;
         bool _undistort_prepared = false;
         UndistortParams _undistort_params{};
+        std::atomic<std::uint64_t> _calibration_revision{0};
 
         // CUDA stream for async operations
         cudaStream_t _stream = nullptr;

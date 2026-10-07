@@ -9,7 +9,16 @@ struct UndistortParams {
     int num_distortion;
 };
 struct WarpPush {
+#ifdef LFS_WARP_GPU_PROGRAM
+    Ptr<uint8_t, Access.Read> input;
+    Ptr<float, Access.ReadWrite> output;
+    Ptr<int, Access.ReadWrite> validity;
+    Ptr<UndistortParams, Access.Read> camera;
+#else
+    // The existing Vulkan finalizer consumes scalar device addresses. Metal's
+    // module reflection needs typed pointers; both layouts remain 56 bytes.
     uint64_t input, output, validity, camera;
+#endif
     int width, height, channels, mode, inverse, quadrature;
 };
 [[vk::push_constant]] ConstantBuffer<WarpPush> pc;
@@ -118,8 +127,31 @@ bool seed_inverse_distortion(
     return true;
 }
 
+// Mode bits 0..7 select the operation; bit 8 identifies RGB8 storage.
+// Keep WarpPush at 56 bytes on Vulkan and Metal. Vulkan byte storage uses
+// aligned word reads so it does not require optional shaderInt8 arithmetic.
+#ifdef LFS_WARP_GPU_PROGRAM
+typedef Ptr<uint8_t, Access.Read> ImageSource;
+#else
+#include "byte_read.slangh"
+typedef uint64_t ImageSource;
+#endif
+float read_image_sample(ImageSource source, int index) {
+    if ((pc.mode & 256) != 0) {
+#ifdef LFS_WARP_GPU_PROGRAM
+        return float(uint(source[index])) / 255.0f;
+#else
+        return float(loadByte(source, uint64_t(index))) / 255.0f;
+#endif
+    }
+    return ((Ptr<float, Access.Read>)source)[index];
+}
+ImageSource offset_image_source(ImageSource source, int elements) {
+    return source + elements * ((pc.mode & 256) != 0 ? 1u : 4u);
+}
+
 float bilinear_sample_renormalized(
-    Ptr<float, Access.Read> src,
+    ImageSource src,
     const int width, const int height, const int stride,
     const float sx, const float sy,
     const bool positive_only = false) {
@@ -136,7 +168,7 @@ float bilinear_sample_renormalized(
             const int x = x0 + dx;
             if (x < 0 || x >= width || y < 0 || y >= height)
                 continue;
-            const float sample = src[y * stride + x];
+            const float sample = read_image_sample(src, y * stride + x);
             if (!isfinite(sample) || (positive_only && sample <= 0.0f))
                 continue;
             const float wx = dx == 0 ? 1.0f - fx : fx;
@@ -151,7 +183,7 @@ float bilinear_sample_renormalized(
         return 0.0f;
     const int nearest_x = min(max(int(floor(sx + 0.5f)), 0), width - 1);
     const int nearest_y = min(max(int(floor(sy + 0.5f)), 0), height - 1);
-    return src[nearest_y * stride + nearest_x];
+    return read_image_sample(src, nearest_y * stride + nearest_x);
 }
 
 float lanczos3_weight(const float value) {
@@ -168,7 +200,7 @@ float lanczos3_weight(const float value) {
 }
 
 bool lanczos3_sample(
-    Ptr<float, Access.Read> src,
+    ImageSource src,
     const int width, const int height, const int channels,
     const float sx, const float sy,
     inout float values[4], out float absolute_inside, out float absolute_full) {
@@ -198,7 +230,7 @@ bool lanczos3_sample(
             absolute_inside += abs(weight);
             const int index = y * width + x;
             for (int channel = 0; channel < channels; ++channel)
-                weighted[channel] += src[channel * plane + index] * weight;
+                weighted[channel] += read_image_sample(src, channel * plane + index) * weight;
         }
     }
 
@@ -210,13 +242,13 @@ bool lanczos3_sample(
 
     for (int channel = 0; channel < channels; ++channel) {
         values[channel] = bilinear_sample_renormalized(
-            src + channel * plane, width, height, width, sx, sy);
+            offset_image_source(src, channel * plane), width, height, width, sx, sy);
     }
     return false;
 }
 
 void undistort_image_kernel(
-    Ptr<float, Access.Read> src,
+    ImageSource src,
     Ptr<float, Access.ReadWrite> dst,
     const int channels,
     const int ox, const int oy,
@@ -338,7 +370,7 @@ bool inverse_distortion(
 }
 
 void distort_image_to_source_kernel(
-    Ptr<float, Access.Read> src,
+    ImageSource src,
     Ptr<float, Access.ReadWrite> dst,
     Ptr<int, Access.ReadWrite> validity,
     const int channels,
@@ -405,7 +437,7 @@ void distort_image_to_source_kernel(
 }
 
 void undistort_area_kernel(
-    Ptr<float, Access.Read> src,
+    ImageSource src,
     Ptr<float, Access.ReadWrite> dst,
     const int channels,
     const int mode,
@@ -442,7 +474,7 @@ void undistort_area_kernel(
             } else {
                 for (int channel = 0; channel < channels; ++channel) {
                     result[channel] += bilinear_sample_renormalized(
-                        src + channel * input_plane,
+                        offset_image_source(src, channel * input_plane),
                         params.src_width, params.src_height, params.src_width,
                         sx, sy);
                 }
@@ -476,7 +508,7 @@ void undistort_area_kernel(
 }
 
 void distort_area_to_source_kernel(
-    Ptr<float, Access.Read> src,
+    ImageSource src,
     Ptr<float, Access.ReadWrite> dst,
     const int channels,
     const int mode,
@@ -515,7 +547,7 @@ void distort_area_to_source_kernel(
             } else {
                 for (int channel = 0; channel < channels; ++channel) {
                     result[channel] += bilinear_sample_renormalized(
-                        src + channel * input_plane,
+                        offset_image_source(src, channel * input_plane),
                         params.dst_width, params.dst_height, params.dst_width,
                         sx, sy);
                 }
@@ -548,30 +580,33 @@ void distort_area_to_source_kernel(
         dst[channel * output_plane + output_index] = result[channel];
 }
 
+#ifdef LFS_WARP_GPU_PROGRAM
+#define main imageWarp
+#endif
 [numthreads(256, 1, 1)] void main(uint3 tid : SV_DispatchThreadID, uint3 groups : SV_GroupID) {
     UndistortParams params = ((Ptr<UndistortParams, Access.Read>)pc.camera)[0];
-    Ptr<float, Access.Read> src = (Ptr<float, Access.Read>)pc.input;
+    ImageSource src = (ImageSource)pc.input;
     Ptr<float, Access.ReadWrite> dst = (Ptr<float, Access.ReadWrite>)pc.output;
     const uint count = uint(pc.width * pc.height);
     const uint stride = min(65535u, (count + 255u) / 256u) * 256u;
     for (uint index = tid.x; index < count; index += stride) {
         int x = int(index) % pc.width, y = int(index) / pc.width;
-        if (pc.mode == 4) {
+        if ((pc.mode & 255) == 4) {
             float ux, uy;
             const bool valid = inverse_distortion((float(x) + 0.5 - params.src_cx) / params.src_fx,
                                                   (float(y) + 0.5 - params.src_cy) / params.src_fy, params, ux, uy);
             dst[2 * index] = valid ? ux : asfloat(0x7fc00000u);
             dst[2 * index + 1] = valid ? uy : asfloat(0x7fc00000u);
-        } else if (pc.mode == 0) {
+        } else if ((pc.mode & 255) == 0) {
             if (pc.inverse != 0)
                 distort_image_to_source_kernel(src, dst, (Ptr<int, Access.ReadWrite>)pc.validity, pc.channels, x, y, params);
             else
                 undistort_image_kernel(src, dst, pc.channels, x, y, pc.quadrature, params);
         } else {
             if (pc.inverse != 0)
-                distort_area_to_source_kernel(src, dst, pc.channels, pc.mode - 1, x, y, params);
+                distort_area_to_source_kernel(src, dst, pc.channels, (pc.mode & 255) - 1, x, y, params);
             else
-                undistort_area_kernel(src, dst, pc.channels, pc.mode - 1, x, y, pc.quadrature, params);
+                undistort_area_kernel(src, dst, pc.channels, (pc.mode & 255) - 1, x, y, pc.quadrature, params);
         }
     }
 }

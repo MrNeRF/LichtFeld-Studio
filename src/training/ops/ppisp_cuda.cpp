@@ -21,7 +21,8 @@ namespace lfs::training {
             kernels::launch_ppisp_forward_chw_region(
                 p.exposure.ptr<float>(), p.vignetting.ptr<float>(), p.color.ptr<float>(), p.crf.ptr<float>(),
                 rgb.ptr<float>(), corrected.ptr<float>(), static_cast<int>(rgb.shape()[1]),
-                static_cast<int>(rgb.shape()[2]), r.y_offset, r.full_height,
+                static_cast<int>(rgb.shape()[2]), r.x_offset, r.y_offset,
+                r.full_width > 0 ? r.full_width : static_cast<int>(rgb.shape()[2]), r.full_height,
                 r.cameras, r.frames, r.camera_index, r.frame_index, nullptr);
         }
 

@@ -2195,6 +2195,14 @@ def has_active_operator() -> bool:
 def can_edit_gaussian_selection() -> bool:
     """Return true when Gaussian selection editing is available"""
 
+def is_splat_editing_blocked() -> bool:
+    """
+    Return true while a visible streamed model blocks splat-level selection and edits
+    """
+
+def is_node_streamed(name: str) -> bool:
+    """Return true when the named node shows a streamed, read-only model"""
+
 def has_gaussian_selection() -> bool:
     """Return true when any Gaussians are selected"""
 
@@ -2253,6 +2261,32 @@ def get_gt_comparison_mode() -> str:
 
 def set_gt_comparison_mode(mode: str) -> None:
     """Set ground-truth comparison mode."""
+
+def get_gt_comparison_actual_size() -> bool:
+    """Return whether GT comparison 1:1 pixel mode is requested."""
+
+def set_gt_comparison_actual_size(enabled: bool) -> None:
+    """Enable or disable GT comparison 1:1 pixel mode."""
+
+def is_gt_comparison_actual_size_available() -> bool:
+    """
+    Return whether the selected GT camera supports RGB perspective 1:1 pixel mode, including usable saved undistortion calibration when distortion is present. Legacy projects may require dataset reimport and resave.
+    """
+
+def is_gt_comparison_actual_size_active() -> bool:
+    """
+    Return whether the currently published viewport frame uses GT comparison 1:1 pixel mode.
+    """
+
+def get_gt_comparison_actual_size_error() -> str:
+    """
+    Return the current GT 1:1 preparation error, retained during automatic recovery.
+    """
+
+def retry_gt_comparison_actual_size() -> None:
+    """
+    Retry requested GT 1:1 preparation immediately, reusing any valid source or active load.
+    """
 
 def cycle_gt_comparison_mode() -> str:
     """
@@ -2627,6 +2661,10 @@ def get_multi_transform_mode() -> int:
 
 def set_multi_transform_mode(mode: int) -> None:
     """Set multi-transform mode (0=Group, 1=Individual)"""
+
+MULTI_TRANSFORM_MODE_SELECTION: int = 0
+
+MULTI_TRANSFORM_MODE_INDIVIDUAL: int = 1
 
 def request_thumbnail(video_id: str) -> None:
     """Request download of a YouTube thumbnail for the given video ID"""

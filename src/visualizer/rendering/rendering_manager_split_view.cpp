@@ -361,6 +361,15 @@ namespace lfs::vis {
         };
         const auto sample_panel_color = [&](const SplitViewCpuPanelDesc& panel,
                                             const auto& data, const float u, const float v) {
+            if (params.exact_texel_sampling) {
+                const int w = std::get<1>(data), h = std::get<2>(data);
+                const int x = std::clamp(static_cast<int>(u * rect_width), 0, w - 1);
+                const int local_y = static_cast<int>(v * rect_height);
+                const int y = std::clamp(panel.flip_y ? rect_height - 1 - local_y : local_y, 0, h - 1);
+                const float* pixels = std::get<0>(data).template ptr<float>();
+                const auto at = [&](int c) { return pixels[(static_cast<std::size_t>(c) * h + y) * w + x]; };
+                return glm::vec3{at(0), at(1), at(2)};
+            }
             float panel_u = u;
             if (panel.normalize_x_to_panel) {
                 const float span = std::max(panel.end_position - panel.start_position, 1e-6f);

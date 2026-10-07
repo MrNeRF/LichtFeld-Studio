@@ -23,6 +23,7 @@ namespace lfs::gpu_ops {
     struct PPISPRegion {
         int y_offset, full_height;
         int cameras, frames, camera_index, frame_index;
+        int x_offset = 0, full_width = 0;
     };
     struct PPISPOps {
         void (*forward)(const PPISPInputs&, In rgb, Out corrected, const PPISPRegion&);

@@ -31,6 +31,15 @@ namespace lfs::core::cuda {
     LFS_CORE_API Tensor distort_normal_to_source_area(const Tensor& src, const UndistortParams& params,
                                                       cudaStream_t stream);
 
+    LFS_CORE_API Tensor undistort_image_region(
+        const Tensor& source,
+        const UndistortParams& params,
+        int destination_x,
+        int destination_y,
+        int width,
+        int height,
+        cudaStream_t stream);
+
     LFS_CORE_API Tensor undistort_mask(const Tensor& src, const UndistortParams& params, cudaStream_t stream);
 
     Tensor inverse_distortion_sample_map(const UndistortParams& params, cudaStream_t stream);

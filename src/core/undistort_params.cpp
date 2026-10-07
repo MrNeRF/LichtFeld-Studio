@@ -485,11 +485,11 @@ namespace lfs::core {
             normalized_x, normalized_y);
     }
 
-    UndistortParams compute_undistort_params(
+    UndistortParams detail::initialize_undistort_params(
         float fx, float fy, float cx, float cy,
         int width, int height,
         const Tensor& radial, const Tensor& tangential,
-        CameraModelType model, float blank_pixels) {
+        CameraModelType model) {
 
         UndistortParams params{};
         params.src_fx = fx;
@@ -595,6 +595,18 @@ namespace lfs::core {
         params.dst_cy = cy;
         params.dst_width = width;
         params.dst_height = height;
+
+        return params;
+    }
+
+    UndistortParams compute_undistort_params(
+        float fx, float fy, float cx, float cy,
+        int width, int height,
+        const Tensor& radial, const Tensor& tangential,
+        CameraModelType model, float blank_pixels) {
+
+        UndistortParams params = detail::initialize_undistort_params(
+            fx, fy, cx, cy, width, height, radial, tangential, model);
 
         const bool needs_undistorted_crop =
             model != CameraModelType::PINHOLE || params.num_distortion > 0;

@@ -350,6 +350,9 @@ namespace lfs::vis {
     }
 
     VisualizerImpl::~VisualizerImpl() {
+        // Join uploads before Python owners or the graphics device can be torn down.
+        if (auto updates = std::atomic_exchange(&point_cloud_updates_, std::shared_ptr<PointCloudUpdateManager>{}))
+            updates->shutdown();
         if (vksplat_spirv_preload_future_.valid())
             vksplat_spirv_preload_future_.wait();
         // ProjectLifecycle owns worker threads and calls back into the viewer
@@ -1146,6 +1149,45 @@ namespace lfs::vis {
                 }
                 wakeMainLoop();
             });
+        vis::set_view_render_settings_callbacks(
+            [this]() -> std::optional<vis::RenderSettingsTarget> {
+                return screen_service_.read([&](const auto& screen) -> std::optional<vis::RenderSettingsTarget> {
+                    const auto view = screen.activeView().value;
+                    if (!screen.view(screen::AreaId{view}))
+                        return std::nullopt;
+                    return vis::RenderSettingsTarget{view, screen_service_.screenEpoch()};
+                });
+            },
+            [this](const vis::RenderSettingsTarget target) -> std::optional<vis::RenderSettingsProxy> {
+                if (!rendering_manager_ || target.screen_epoch != screen_service_.screenEpoch())
+                    return std::nullopt;
+                const auto settings = rendering_manager_->trySettingsForView(target.view);
+                return settings ? std::optional{vis::to_proxy(*settings)} : std::nullopt;
+            },
+            [this](const vis::RenderSettingsTarget target, const vis::RenderSettingsProxy& proxy,
+                   const vis::RenderSettingsUpdateIntent intent) -> std::optional<vis::RenderSettingsProxy> {
+                if (!rendering_manager_ || target.screen_epoch != screen_service_.screenEpoch())
+                    return std::nullopt;
+                auto settings = rendering_manager_->trySettingsForView(target.view);
+                if (!settings)
+                    return std::nullopt;
+                const auto previous_upscaler = settings->scene_upscaler;
+                const auto previous_preset = settings->scene_upscaler_preset;
+                vis::apply_proxy(*settings, proxy);
+                const auto preset_update = intent.scene_upscaler_explicit && !intent.scene_upscaler_preset_explicit
+                                               ? SceneUpscalerPresetUpdate::RestoreRememberedForBackend
+                                               : SceneUpscalerPresetUpdate::UseRequested;
+                if (!rendering_manager_->updateSettingsForView(target.view, *settings, DirtyFlag::ALL, preset_update))
+                    return std::nullopt;
+                const auto applied = rendering_manager_->trySettingsForView(target.view);
+                if (!applied)
+                    return std::nullopt;
+                if (applied->scene_upscaler != previous_upscaler || applied->scene_upscaler_preset != previous_preset)
+                    saveSceneUpscalerPreference(applied->scene_upscaler, applied->scene_upscaler_preset);
+                wakeMainLoop();
+                return vis::to_proxy(*applied);
+            });
+        callback_cleanup_.add([] { vis::set_view_render_settings_callbacks(nullptr, nullptr, nullptr); });
         callback_cleanup_.add([] { vis::set_render_settings_callbacks(nullptr, nullptr); });
     }
 
@@ -1385,6 +1427,8 @@ namespace lfs::vis {
             pending_render_work.swap(render_work_queue_);
         }
 
+        if (auto updates = std::atomic_load(&point_cloud_updates_))
+            updates->stop();
         python::request_plugin_preload_stop();
 
         for (auto& work : pending_work) {
@@ -1601,10 +1645,13 @@ namespace lfs::vis {
                 if (path.empty()) {
                     return;
                 }
-                if (auto saved =
-                        command.path.empty()
-                            ? projectSaveAsFromDialog(path, true)
-                            : projectSaveAs(path, true);
+                if (auto saved = command.path.empty()
+                                     ? projectSaveAsFromDialog(
+                                           path, true,
+                                           command.fresh_training_start)
+                                     : projectSaveAs(
+                                           path, true,
+                                           command.fresh_training_start);
                     !saved) {
                     publish_project_error(
                         "Save Project As",
@@ -2115,6 +2162,10 @@ namespace lfs::vis {
                 }
             }
             window_initialized_ = true;
+            auto* graphics = window_manager_->getGraphicsContext();
+            auto allocator = graphics->splatTensorAllocator();
+            std::atomic_store(&point_cloud_updates_, std::make_shared<PointCloudUpdateManager>(
+                                                         preparePointCloudUpdate(std::move(allocator)), [this] { wakeMainLoop(); }, true));
 
             window_manager_->pollEvents();
             window_manager_->updateWindowSize();
@@ -2253,6 +2304,51 @@ namespace lfs::vis {
                 .emit();
         }
 
+        if (auto updates = std::atomic_load(&point_cloud_updates_)) {
+            updates->resolveQueued([this](PointCloudUpdateTarget& target, PointCloudUpdateInput& input) {
+                auto& scene = getScene();
+                if (target.scene != &scene || target.scene_epoch != scene.pointCloudUpdateEpoch() ||
+                    target.scene_generation != target.scene_epoch->load(std::memory_order_acquire))
+                    throw std::runtime_error("Scene changed before point-cloud preparation");
+                const auto* node = scene.getNodeByUuid(target.uuid);
+                if (!node || node->type != core::NodeType::POINTCLOUD || node->point_cloud_revision != target.revision ||
+                    target.revision->load() != target.expected_revision)
+                    throw std::runtime_error("Point-cloud target was removed or replaced");
+                target.render_generation = scene.renderGeneration();
+                input.transform = scene.getWorldTransform(node->id);
+                input.target_visible = scene.isNodeEffectivelyVisible(node->id);
+                for (const auto* other : scene.getNodes()) {
+                    if (other->uuid == target.uuid) {
+                        input.target_index = input.companions.size();
+                        continue;
+                    }
+                    if (other->type != core::NodeType::POINTCLOUD ||
+                        !scene.isNodeEffectivelyVisible(other->id))
+                        continue;
+                    auto cloud = other->evaluated_point_cloud ? other->evaluated_point_cloud : other->point_cloud;
+                    if (cloud && cloud->size() > 0)
+                        input.companions.push_back({std::move(cloud), scene.getWorldTransform(other->id)});
+                }
+            });
+            updates->publishReady([this](const PointCloudUpdateTarget& target,
+                                         const PointCloudUpdateManager::Prepared& prepared,
+                                         core::Scene::PointCloudRetirement& retired) {
+                auto& scene = getScene();
+                if (target.scene != &scene || target.scene_epoch != scene.pointCloudUpdateEpoch() ||
+                    target.scene_generation != target.scene_epoch->load(std::memory_order_acquire))
+                    throw std::runtime_error("Scene changed before point-cloud publication");
+                auto* node = scene.getNodeByUuid(target.uuid);
+                if (!node || node->type != core::NodeType::POINTCLOUD ||
+                    node->point_cloud_revision != target.revision ||
+                    target.revision->load(std::memory_order_acquire) != target.expected_revision ||
+                    (prepared.merged && scene.renderGeneration() != target.render_generation))
+                    throw std::runtime_error("Point-cloud target was removed or replaced");
+                if (trainer_manager_ && trainer_manager_->isTrainingActive())
+                    throw std::runtime_error("Cannot replace a point cloud during active training");
+                retired = scene.publishNodePointCloud(target.uuid, prepared.cloud, prepared.centroid, prepared.merged);
+            });
+        }
+
         // Process MCP work queue
         {
             std::vector<WorkItem> work;
@@ -2277,6 +2373,28 @@ namespace lfs::vis {
 
         // Update editor context state from scene/trainer
         editor_context_.update(scene_manager_.get(), trainer_manager_.get());
+
+        if (const auto& viewport = getViewport();
+            scene_manager_ && rendering_manager_ && viewport.windowSize.y > 0) {
+            // Select tiles for the view's actual projection: orthographic zoom and the
+            // all-around equirectangular image change what each tile's error looks like.
+            // Every 3D view draws the same streamed model; the active camera picks the
+            // detail, and with other views visible nothing is culled to its frustum.
+            const auto view = rendering_manager_->settingsForView(rendering_manager_->activeViewId()).view();
+            const std::size_t visible_views =
+                gui_manager_ ? gui_manager_->visibleViews().size() : screen_service_.screen().views().size();
+            scene_manager_->updateTileStreams(
+                {.view = viewport.getViewMatrix(),
+                 .projection = lfs::rendering::createProjectionMatrixFromFocal(
+                     viewport.windowSize, view.focal_length_mm, view.orthographic, view.ortho_scale),
+                 .viewport_height = static_cast<float>(viewport.windowSize.y),
+                 .vfov_radians = lfs::rendering::focalLengthToVFovRad(view.focal_length_mm),
+                 .orthographic = view.orthographic,
+                 .ortho_scale = view.ortho_scale,
+                 .equirectangular = view.equirectangular,
+                 .cull = visible_views <= 1},
+                [this] { wakeMainLoop(); });
+        }
 
         if (pending_training_completion_refresh_frames_ > 0 &&
             (!trainer_manager_ || !trainer_manager_->isTrainingActive())) {
@@ -2371,7 +2489,8 @@ namespace lfs::vis {
 
     bool VisualizerImpl::hasPendingWork() const {
         std::lock_guard lock(work_queue_mutex_);
-        return !work_queue_.empty();
+        const auto updates = std::atomic_load(&point_cloud_updates_);
+        return !work_queue_.empty() || (updates && updates->hasReady());
     }
 
     bool VisualizerImpl::isMotionOnlyWake() const {
@@ -4266,6 +4385,14 @@ namespace lfs::vis {
     VisualizerImpl::projectSaveAs(
         const std::filesystem::path& path,
         const bool regenerate_preview) {
+        return projectSaveAs(path, regenerate_preview, false);
+    }
+
+    lfs::Result<void>
+    VisualizerImpl::projectSaveAs(
+        const std::filesystem::path& path,
+        const bool regenerate_preview,
+        const bool fresh_training_start) {
         if (!project_lifecycle_) {
             return visualizerFailure<void>(
                 lfs::ErrorCode::Unavailable,
@@ -4274,7 +4401,8 @@ namespace lfs::vis {
                 "project.lifecycle");
         }
         return project_lifecycle_->saveAs(
-            path, regenerate_preview);
+            path, regenerate_preview, false,
+            fresh_training_start);
     }
 
     lfs::Result<void>
@@ -4312,7 +4440,8 @@ namespace lfs::vis {
     lfs::Result<void>
     VisualizerImpl::projectSaveAsFromDialog(
         const std::filesystem::path& path,
-        const bool regenerate_preview) {
+        const bool regenerate_preview,
+        const bool fresh_training_start) {
         if (!project_lifecycle_) {
             return visualizerFailure<void>(
                 lfs::ErrorCode::Unavailable,
@@ -4321,7 +4450,8 @@ namespace lfs::vis {
                 "project.lifecycle");
         }
         return project_lifecycle_->saveAs(
-            path, regenerate_preview, true);
+            path, regenerate_preview, true,
+            fresh_training_start);
     }
 
     bool VisualizerImpl::projectContainsEmbeddedSecrets()

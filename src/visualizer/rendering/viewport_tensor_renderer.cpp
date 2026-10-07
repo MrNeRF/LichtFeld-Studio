@@ -156,7 +156,7 @@ namespace lfs::vis {
             std::uint32_t left_filter = 0;
             std::uint32_t right_filter = 0;
             std::uint32_t loss_visualization = 0;
-            std::uint32_t padding = 0;
+            std::uint32_t exact_texel_sampling = 0;
             std::uint32_t vector_padding = 0;
             std::array<float, 2> left_uv_scale{1, 1};
             std::array<float, 2> left_uv_clamp{1, 1};
@@ -424,6 +424,7 @@ namespace lfs::vis {
                 .left_filter = split.left.spatial_filter ? 1u : 0u,
                 .right_filter = split.right.spatial_filter ? 1u : 0u,
                 .loss_visualization = split.loss_visualization ? 1u : 0u,
+                .exact_texel_sampling = split.exact_texel_sampling ? 1u : 0u,
                 .left_uv_scale = vec2(split.left.uv_scale),
                 .left_uv_clamp = vec2(split.left.uv_clamp_max),
                 .right_uv_scale = vec2(split.right.uv_scale),

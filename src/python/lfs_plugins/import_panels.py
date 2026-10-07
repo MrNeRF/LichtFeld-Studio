@@ -356,7 +356,7 @@ class NewProjectPanel(_ImportDialogPanel):
 
     @staticmethod
     def _is_splat_path(path: str) -> bool:
-        if lf.io.is_ssog_path(path):
+        if lf.io.is_ssog_path(path) or lf.io.is_tiles3d_path(path):
             return True
         suffix = Path(path).suffix.lower()
         return suffix in {".ply", ".sog", ".ssog", ".spz", ".glb", ".rad"} or suffix.startswith(".usd")

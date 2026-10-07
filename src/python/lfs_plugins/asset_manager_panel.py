@@ -1634,6 +1634,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             str(value)
             for value in (
                 asset.get("name"),
+                self._get_asset_display_name(asset),
                 asset.get("path"),
                 asset.get("type"),
                 asset.get("project_uuid"),
@@ -2879,7 +2880,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             name = str(data.get("name") or "").strip()
             if name:
                 after = None if asset.get("recent_only") else lambda: self._rename_catalog_entry(asset["id"], name)
-                self._start_project_operation(asset["id"], "Rename project", lambda _progress, _cancel: self._native_io_call("set_project_title", path, name), after=after)
+                self._start_project_operation(
+                    asset["id"],
+                    "Rename project",
+                    lambda _progress, _cancel: self._native_io_call("set_project_title", path, name),
+                    after=after,
+                    reverify_asset=True,
+                )
         elif action == "repair":
             destination = str(data.get("destination") or "")
             if not destination:

@@ -95,6 +95,8 @@ namespace lfs::io::project {
         bool embedded_dataset_present = false;
         bool embedded_dataset_complete = false;
         std::uint64_t embedded_images = 0;
+        std::uint64_t embedded_masks = 0;
+        std::uint64_t embedded_depths = 0;
         std::uint64_t embedded_normals = 0;
         std::uint64_t embedded_sparse = 0;
     };

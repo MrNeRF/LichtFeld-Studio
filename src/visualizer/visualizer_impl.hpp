@@ -22,6 +22,7 @@
 #include "project/session_state.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "scene/point_cloud_updates.hpp"
 #include "scene/scene_manager.hpp"
 #include "screen/screen_service.hpp"
 #include "tools/tool_base.hpp"
@@ -85,6 +86,7 @@ namespace lfs::vis {
         [[nodiscard]] const core::Scene& getScene() const {
             return scene_manager_->getScene();
         }
+        std::shared_ptr<PointCloudUpdateManager> pointCloudUpdates() override { return std::atomic_load(&point_cloud_updates_); }
         bool postWork(WorkItem work) override;
         bool pumpPostedWorkForProjectWrite() override;
         bool postRenderWork(WorkItem work);
@@ -117,6 +119,10 @@ namespace lfs::vis {
         lfs::Result<void>
         projectSaveAs(const std::filesystem::path& path,
                       bool regenerate_preview = true) override;
+        lfs::Result<void>
+        projectSaveAs(const std::filesystem::path& path,
+                      bool regenerate_preview,
+                      bool fresh_training_start);
         lfs::Result<void>
         projectCreateAt(
             const std::filesystem::path& path,
@@ -347,6 +353,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_RestoreThenTrainWritesNewCheckpoint_Test;
         friend class VisualizerImplResetTest_HeadlessOpenPrintsHydrationStagesWhenBenchPathSet_Test;
         friend class VisualizerImplResetTest_ResetTrainingPreservesExplicitInitPath_Test;
+        friend class VisualizerImplResetTest_FreshTrainingStartSaveAsDropsCheckpointHistory_Test;
+        friend class VisualizerImplResetTest_FailedFreshTrainingStartSaveAsPreservesSourceHistory_Test;
         friend class VisualizerImplResetTest_ResetTrainingStopsTrainerDuringStarting_Test;
         friend class VisualizerImplResetTest_DirtyProjectSwitchRequiresExplicitDiscardAuthorization_Test;
         friend class VisualizerImplResetTest_NewProjectDirtyGateRunsBelowEveryCommandEntry_Test;
@@ -472,6 +480,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWritesScratch_Test;
         friend class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWaitsForAutosaveQuietPeriod_Test;
         friend class VisualizerImplResetTest_SaveAsMigratesScratchAutosaveToSidecar_Test;
+        friend class VisualizerImplResetTest_SaveAsSettlesCompletedSidecarAutosave_Test;
         friend class VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
         friend class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
         friend class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
@@ -511,7 +520,8 @@ namespace lfs::vis {
     private:
         lfs::Result<void> projectSaveAsFromDialog(
             const std::filesystem::path& path,
-            bool regenerate_preview);
+            bool regenerate_preview,
+            bool fresh_training_start = false);
         void abandonSaveAndExitAttempt();
         void armStopSaveAndExit(
             std::optional<std::filesystem::path>
@@ -697,6 +707,7 @@ namespace lfs::vis {
         EditorContext editor_context_;
 
         mutable std::mutex work_queue_mutex_;
+        std::shared_ptr<PointCloudUpdateManager> point_cloud_updates_;
         std::vector<WorkItem> work_queue_;
         std::vector<WorkItem> render_work_queue_;
         std::thread::id viewer_thread_id_;

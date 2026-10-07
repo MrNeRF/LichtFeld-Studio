@@ -915,6 +915,11 @@ namespace lfs::vis {
             return false;
         }
 
+        if (auto streamed = streamedTrainingModelReason()) {
+            static_cast<void>(rejectStart(std::move(*streamed), lfs::ErrorCode::FailedPrecondition));
+            return false;
+        }
+
         if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend())) {
             static_cast<void>(rejectStart("Training requires an available GPU", lfs::ErrorCode::FailedPrecondition));
             return false;
@@ -958,7 +963,20 @@ namespace lfs::vis {
             return lfs::Status::failure(
                 rejectStart("Scene has no cameras", lfs::ErrorCode::FailedPrecondition));
         }
+        if (auto streamed = streamedTrainingModelReason()) {
+            return lfs::Status::failure(
+                rejectStart(std::move(*streamed), lfs::ErrorCode::FailedPrecondition));
+        }
         return {};
+    }
+
+    std::optional<std::string> TrainerManager::streamedTrainingModelReason() const {
+        if (!scene_)
+            return std::nullopt;
+        const auto* const node = scene_->getNodeByUuid(scene_->getTrainingModelNodeUuid());
+        if (!node || !node->model_streamed)
+            return std::nullopt;
+        return std::format("'{}' is a streamed model and cannot be trained.", node->name);
     }
 
     lfs::Result<void> TrainerManager::waitForInitialization() {

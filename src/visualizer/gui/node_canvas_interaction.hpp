@@ -25,7 +25,7 @@ namespace lfs::vis::gui {
         bool operator==(const CanvasPoint&) const = default;
     };
 
-    struct CanvasRect {
+    struct LFS_VIS_API CanvasRect {
         float x = 0.0f;
         float y = 0.0f;
         float width = 0.0f;

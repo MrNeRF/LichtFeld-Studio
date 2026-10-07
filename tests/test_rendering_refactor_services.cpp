@@ -8,6 +8,7 @@
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
@@ -21,24 +22,30 @@
 #include "operator/ops/selection_ops.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/render_constants.hpp"
+#include "rendering/rendering.hpp"
 #include "rendering/vksplat_viewport_renderer.hpp"
 #include "screen/screen_service.hpp"
 #include "selection/selection_service.hpp"
 #include "tools/selection_tool.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/rendering/gt_comparison_cache_utils.hpp"
+#include "visualizer/rendering/gt_comparison_geometry.hpp"
 #include "visualizer/rendering/render_pass.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
+#include "visualizer/rendering/rendering_manager_split_view.hpp"
+#include "visualizer/rendering/split_capture_compositor.hpp"
 #include "visualizer/rendering/split_view_service.hpp"
 #include "visualizer/rendering/stale_frame_guard.hpp"
 #include "visualizer/rendering/viewport_artifact_service.hpp"
 #include "visualizer/rendering/viewport_frame_lifecycle_service.hpp"
+#include "visualizer/rendering/viewport_interop_service.hpp"
 #include "visualizer/rendering/viewport_request_builder.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -46,6 +53,8 @@
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <stdexcept>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -195,6 +204,29 @@ namespace lfs::vis {
             initialized = true;
         }
 
+        bool has_cuda_device() {
+            return lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA);
+        }
+
+        void writeU8Image(const std::filesystem::path& path,
+                          const int width,
+                          const int height,
+                          const int channels,
+                          std::vector<std::uint8_t> pixels,
+                          const int jpeg_quality = 100) {
+            if (pixels.size() != static_cast<std::size_t>(width) * height * channels) {
+                throw std::invalid_argument("test image byte count does not match its shape");
+            }
+            auto image = lfs::core::Tensor::from_blob(
+                             pixels.data(),
+                             {static_cast<std::size_t>(height),
+                              static_cast<std::size_t>(width),
+                              static_cast<std::size_t>(channels)},
+                             lfs::core::Device::CPU,
+                             lfs::core::DataType::UInt8)
+                             .clone();
+            lfs::core::save_image_u8(path, std::move(image), jpeg_quality);
+        }
     } // namespace
 
     class RenderingManagerEventsTest : public ::testing::Test {
@@ -202,13 +234,31 @@ namespace lfs::vis {
         void SetUp() override {
             lfs::event::EventBridge::instance().clear_all();
             lfs::core::event::bus().clear_all();
+            services().clear();
         }
 
         void TearDown() override {
+            services().clear();
             lfs::event::EventBridge::instance().clear_all();
             lfs::core::event::bus().clear_all();
         }
     };
+
+    namespace {
+        void addDatasetCameraWithImage(SceneManager& manager) {
+            manager.changeContentType(SceneManager::ContentType::Dataset);
+            auto& scene = manager.getScene();
+            const auto group = scene.addCameraGroup("Cameras", scene.addGroup("Dataset"), 1);
+            auto camera = std::make_shared<lfs::core::Camera>(
+                lfs::core::Tensor::eye(3, lfs::core::Device::CPU),
+                lfs::core::Tensor::zeros({size_t{3}}, lfs::core::Device::CPU),
+                100.0f, 100.0f, 32.0f, 32.0f,
+                lfs::core::Tensor(), lfs::core::Tensor(), lfs::core::CameraModelType::PINHOLE,
+                "source", std::filesystem::path("source.png"), std::filesystem::path{},
+                64, 64, 1);
+            scene.addCamera("source", group, std::move(camera));
+        }
+    } // namespace
 
     class SceneManagerRenderStateTest : public ::testing::Test {
     protected:
@@ -494,6 +544,1326 @@ namespace lfs::vis {
         EXPECT_FALSE(render_camera->equirectangular);
     }
 
+    TEST(SplitCaptureCompositorTest, LossCaptureKeepsHeatmapWithoutDivider) {
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+        VulkanSplitViewParams params;
+        params.enabled = true;
+        params.loss_visualization = true;
+        params.content_rect = {0, 0, 16, 12};
+        params.left.image = std::make_shared<Tensor>(Tensor::zeros({3, 12, 16}, Device::CPU));
+        params.right.image = std::make_shared<Tensor>(Tensor::full({3, 12, 16}, 0.25f, Device::CPU));
+        const auto expected = gtLossHeatmapColor(glm::vec3(0.0f), glm::vec3(0.25f));
+        for (const bool exact : {false, true}) {
+            params.exact_texel_sampling = exact;
+            const auto capture = composeSplitCaptureCpu(params, {16, 12});
+            ASSERT_TRUE(capture && capture->is_valid());
+            const auto pixels = capture->to_vector();
+            for (int channel = 0; channel < 3; ++channel)
+                for (int pixel = 0; pixel < 16 * 12; ++pixel)
+                    EXPECT_NEAR(pixels[channel * 16 * 12 + pixel], expected[channel], 1e-6f);
+        }
+    }
+
+    TEST(SplitViewServiceTest, ActualSizeCropCentersAndClampsInIntegerPixels) {
+        const auto centered =
+            detail::centerGTComparisonCrop({8192, 6144}, {3840, 2160});
+        EXPECT_EQ(centered.origin, glm::ivec2(2176, 1992));
+        EXPECT_EQ(centered.extent, glm::ivec2(3840, 2160));
+
+        const auto clamped =
+            detail::clampGTComparisonCrop({8192, 6144}, {3840, 2160}, {-20, 9000});
+        EXPECT_EQ(clamped.origin, glm::ivec2(0, 3984));
+        EXPECT_EQ(clamped.extent, glm::ivec2(3840, 2160));
+
+        const auto letterboxed =
+            detail::centerGTComparisonCrop({1000, 3000}, {2000, 1000});
+        EXPECT_EQ(letterboxed.origin, glm::ivec2(0, 1000));
+        EXPECT_EQ(letterboxed.extent, glm::ivec2(1000, 1000));
+
+        const auto resized =
+            detail::centerGTComparisonCrop({8192, 6144}, {2560, 1440});
+        EXPECT_EQ(resized.origin, glm::ivec2(2816, 2352));
+        EXPECT_EQ(resized.extent, glm::ivec2(2560, 1440));
+
+        const auto smaller_than_viewport =
+            detail::centerGTComparisonCrop({1000, 800}, {2000, 1000});
+        EXPECT_EQ(smaller_than_viewport.origin, glm::ivec2(0, 0));
+        EXPECT_EQ(smaller_than_viewport.extent, glm::ivec2(1000, 800));
+    }
+
+    TEST(SplitViewServiceTest, ActualSizeCropFromCenterGrowsShrinksAndClamps) {
+        const auto grown = detail::cropGTComparisonFromCenter(
+            {8192, 6144}, {2560, 1440}, {3960.0, 2540.0});
+        EXPECT_EQ(grown.origin, glm::ivec2(2680, 1820));
+        EXPECT_EQ(grown.extent, glm::ivec2(2560, 1440));
+
+        const auto shrunk = detail::cropGTComparisonFromCenter(
+            {8192, 6144}, {1280, 720}, {3960.0, 2540.0});
+        EXPECT_EQ(shrunk.origin, glm::ivec2(3320, 2180));
+        EXPECT_EQ(shrunk.extent, glm::ivec2(1280, 720));
+
+        const auto odd = detail::cropGTComparisonFromCenter(
+            {101, 101}, {4, 6}, {12.5, 22.5});
+        EXPECT_EQ(odd.origin, glm::ivec2(11, 20));
+        EXPECT_EQ(odd.extent, glm::ivec2(4, 6));
+
+        const auto one_axis_letterboxed =
+            detail::cropGTComparisonFromCenter(
+                {1000, 3000}, {2000, 1500}, {500.0, 1500.0});
+        EXPECT_EQ(one_axis_letterboxed.origin, glm::ivec2(0, 750));
+        EXPECT_EQ(one_axis_letterboxed.extent, glm::ivec2(1000, 1500));
+
+        const auto edge_clamped = detail::cropGTComparisonFromCenter(
+            {8192, 6144}, {3840, 2160}, {7232.0, 5604.0});
+        EXPECT_EQ(edge_clamped.origin, glm::ivec2(4352, 3984));
+        EXPECT_EQ(edge_clamped.extent, glm::ivec2(3840, 2160));
+
+        const auto hidpi = detail::cropGTComparisonFromCenter(
+            {8192, 6144}, {3001, 1501}, {3500.0, 2400.0});
+        EXPECT_EQ(hidpi.origin, glm::ivec2(2000, 1650));
+        EXPECT_EQ(hidpi.extent, glm::ivec2(3001, 1501));
+
+        const auto centered = detail::cropGTComparisonFromCenter(
+            {8192, 6144}, {2560, 1440}, {4096.0, 3072.0});
+        EXPECT_EQ(centered.origin, glm::ivec2(2816, 2352));
+        EXPECT_EQ(centered.extent, glm::ivec2(2560, 1440));
+    }
+
+    TEST(SplitViewServiceTest, ActualSizeGeometryUsesPhysicalEdgesAndOneRoundedDrag) {
+        const glm::ivec2 physical_extent{2001, 1001};
+        const glm::ivec2 logical_extent{1000, 500};
+        const auto physical_rect =
+            detail::centeredGTComparisonContentRect(physical_extent, {1000, 800});
+        EXPECT_EQ(physical_rect, glm::ivec4(500, 100, 1000, 800));
+
+        const auto logical_rect = detail::physicalToLogicalContentRect(
+            physical_rect, physical_extent, logical_extent);
+        EXPECT_NEAR(logical_rect.x, 500.0 * 1000.0 / 2001.0, 1.0e-4);
+        EXPECT_NEAR(logical_rect.y, 100.0 * 500.0 / 1001.0, 1.0e-4);
+        EXPECT_NEAR(logical_rect.z, 1000.0 * 1000.0 / 2001.0, 1.0e-4);
+        EXPECT_NEAR(logical_rect.w, 800.0 * 500.0 / 1001.0, 1.0e-4);
+
+        EXPECT_EQ(splitViewDividerPixel(200, 0.25f), 50);
+        EXPECT_EQ(splitViewDividerPixel(200, 0.5f), 100);
+        EXPECT_EQ(splitViewDividerPixel(200, 0.75f), 150);
+
+        for (const double ratio : {1.0, 1.25, 1.5, 2.0}) {
+            // A physical drag of 20 pixels arrives identically at all ratios.
+            const glm::dvec2 window_drag = glm::dvec2(20.0, -12.0) / ratio;
+            EXPECT_EQ(detail::roundedPhysicalDrag(window_drag * ratio), glm::ivec2(20, -12));
+        }
+    }
+
+    TEST(SplitViewServiceTest, ActualSizeSupportsPerspectiveCameraModelsOnly) {
+        using lfs::core::CameraModelType;
+
+        EXPECT_TRUE(detail::isGTComparisonActualSizeCameraModelSupported(
+            CameraModelType::PINHOLE));
+        EXPECT_TRUE(detail::isGTComparisonActualSizeCameraModelSupported(
+            CameraModelType::FISHEYE));
+        EXPECT_TRUE(detail::isGTComparisonActualSizeCameraModelSupported(
+            CameraModelType::THIN_PRISM_FISHEYE));
+        EXPECT_FALSE(detail::isGTComparisonActualSizeCameraModelSupported(
+            CameraModelType::ORTHO));
+        EXPECT_FALSE(detail::isGTComparisonActualSizeCameraModelSupported(
+            CameraModelType::EQUIRECTANGULAR));
+    }
+
+    TEST(GTComparisonCropTest, OddEvenResizeCyclesPreserveUnroundedCenterAndPanReanchors) {
+        const glm::ivec2 full{8193, 4321};
+        const glm::dvec2 center{4021.5, 2140.5};
+        const auto original = detail::cropGTComparisonFromCenter(full, {1001, 701}, center);
+        for (int i = 0; i < 1000; ++i) {
+            for (const auto size : {glm::ivec2(1000, 700), glm::ivec2(1002, 702), glm::ivec2(9000, 5000), glm::ivec2(1001, 701)}) {
+                const auto crop = detail::cropGTComparisonFromCenter(full, size, center);
+                EXPECT_TRUE(detail::isGTComparisonCropValidForViewport(full, size, crop));
+            }
+            EXPECT_EQ(detail::cropGTComparisonFromCenter(full, {1001, 701}, center), original);
+        }
+        const auto displayed = detail::cropGTComparisonFromCenter(full, {1000, 700}, center);
+        const glm::dvec2 panned_center = glm::dvec2(displayed.origin - glm::ivec2(15, -9)) + glm::dvec2(displayed.extent) * 0.5;
+        const auto panned = detail::cropGTComparisonFromCenter(full, displayed.extent, panned_center);
+        EXPECT_EQ(panned.origin, displayed.origin - glm::ivec2(15, -9));
+        EXPECT_EQ(detail::cropGTComparisonFromCenter(full, {1000, 700}, panned_center), panned);
+    }
+
+    TEST(GTComparisonSettingsTest, UnsupportedViewProjectionsClearNativeRequestPermanently) {
+        for (const bool orthographic : {false, true}) {
+            screen::ScreenService views;
+            const auto id = views.activeView();
+            ASSERT_TRUE(views.editViewSettings(id, [&](auto& s) {
+                s.gt_comparison_actual_size = true;
+                s.orthographic = orthographic;
+                s.equirectangular = !orthographic;
+            }));
+            EXPECT_FALSE(views.viewSettings(id)->gt_comparison_actual_size);
+            EXPECT_FALSE(gtComparisonActualSizeEligible(*views.viewSettings(id)));
+            ASSERT_TRUE(views.editViewSettings(id, [](auto& s) { s.orthographic = false; s.equirectangular = false; }));
+            EXPECT_TRUE(gtComparisonActualSizeEligible(*views.viewSettings(id)));
+            EXPECT_FALSE(views.viewSettings(id)->gt_comparison_actual_size);
+        }
+    }
+
+    TEST(ViewportRequestBuilderTest, PointCloudProjectionUsesCropIntrinsicsAndPreservesClipOrientation) {
+        lfs::rendering::PointCloudRenderRequest frame;
+        frame.frame_view.size = {319, 241};
+        frame.frame_view.intrinsics_override = lfs::rendering::CameraIntrinsics{
+            .focal_x = 501.0f,
+            .focal_y = 603.0f,
+            .center_x = 117.25f,
+            .center_y = 151.75f};
+        const auto request = buildPointSceneRequest(frame, RenderSettings{});
+        EXPECT_FLOAT_EQ(request.focal_y, 603.0f);
+        for (const auto point : {glm::vec3(0.0f, 0.0f, -2.0f), glm::vec3(0.1f, -0.15f, -2.0f)}) {
+            const auto world = glm::inverse(frame.frame_view.getViewMatrix()) * glm::vec4(point, 1.0f);
+            const auto clip = request.view_projection * world;
+            const glm::vec2 pixel = (glm::vec2(clip) / clip.w + 1.0f) * glm::vec2(frame.frame_view.size) * 0.5f;
+            EXPECT_NEAR(pixel.x, 501.0f * point.x / -point.z + 117.25f, 1.0e-4f);
+            EXPECT_NEAR(pixel.y, -603.0f * point.y / -point.z + 151.75f, 1.0e-4f);
+        }
+    }
+
+    TEST(SplitViewServiceTest, ActualSizeCropPreservesFocalLengthAndOffsetsPrincipalPoint) {
+        using lfs::core::Camera;
+        using lfs::core::CameraModelType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        Camera camera(
+            Tensor::from_vector(
+                {1.0f, 0.0f, 0.0f,
+                 0.0f, 1.0f, 0.0f,
+                 0.0f, 0.0f, 1.0f},
+                {size_t{3}, size_t{3}},
+                Device::CPU),
+            Tensor::from_vector({0.0f, 0.0f, 0.0f}, {size_t{3}}, Device::CPU),
+            500.0f,
+            600.0f,
+            320.0f,
+            240.0f,
+            Tensor(),
+            Tensor(),
+            CameraModelType::PINHOLE,
+            "test.png",
+            {},
+            {},
+            640,
+            480,
+            8);
+
+        const auto render_camera = detail::buildGTRenderCamera(
+            camera,
+            {320, 240},
+            glm::mat4(1.0f),
+            detail::GTComparisonPixelRegion{
+                .origin = {100, 50},
+                .full_extent = {640, 480}});
+        ASSERT_TRUE(render_camera);
+        ASSERT_TRUE(render_camera->intrinsics);
+        EXPECT_FLOAT_EQ(render_camera->intrinsics->focal_x, 500.0f);
+        EXPECT_FLOAT_EQ(render_camera->intrinsics->focal_y, 600.0f);
+        EXPECT_FLOAT_EQ(render_camera->intrinsics->center_x, 220.0f);
+        EXPECT_FLOAT_EQ(render_camera->intrinsics->center_y, 190.0f);
+    }
+
+    TEST(SplitViewServiceTest, ActualSizePointCloudRenderMatchesFitCropAndPanPixels) {
+        if (!has_cuda_device()) {
+            GTEST_SKIP() << "CUDA device required";
+        }
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        lfs::core::Camera camera(
+            Tensor::from_vector({1.0f, 0.0f, 0.0f,
+                                 0.0f, 1.0f, 0.0f,
+                                 0.0f, 0.0f, 1.0f},
+                                {size_t{3}, size_t{3}}, Device::CPU),
+            Tensor::from_vector({0.0f, 0.0f, 0.0f}, {size_t{3}}, Device::CPU),
+            500.0f, 600.0f, 320.0f, 240.0f,
+            Tensor(), Tensor(), lfs::core::CameraModelType::PINHOLE,
+            "test.png", {}, {}, 640, 480, 8);
+        lfs::core::PointCloud points(
+            Tensor::from_vector({0.0f, 0.0f, 2.0f,
+                                 0.12f, -0.08f, 2.0f,
+                                 -0.08f, 0.10f, 2.0f},
+                                {size_t{3}, size_t{3}}, Device::CPU),
+            Tensor::from_vector({1.0f, 0.0f, 0.0f,
+                                 0.0f, 1.0f, 0.0f,
+                                 0.0f, 0.0f, 1.0f},
+                                {size_t{3}, size_t{3}}, Device::CPU));
+        auto engine = lfs::rendering::RenderingEngine::create();
+        ASSERT_TRUE(engine->initialize());
+
+        const auto expect_pixels = [&](const std::optional<detail::GTComparisonPixelRegion> region,
+                                       const std::array<glm::ivec2, 3>& centers,
+                                       const int radius) {
+            const auto render_camera = detail::buildGTRenderCamera(
+                camera, {320, 240}, glm::mat4(1.0f), region);
+            ASSERT_TRUE(render_camera);
+            lfs::rendering::PointCloudRenderRequest request;
+            request.frame_view.size = {320, 240};
+            request.frame_view.rotation = render_camera->rotation;
+            request.frame_view.translation = render_camera->translation;
+            request.frame_view.intrinsics_override = render_camera->intrinsics;
+            request.render.voxel_size = 0.02f;
+            auto rendered = engine->renderPointCloudImage(points, request);
+            ASSERT_TRUE(rendered) << rendered.error();
+            ASSERT_TRUE(rendered->image);
+            const auto image = rendered->image->cpu().contiguous();
+            const float* pixels = image.ptr<float>();
+            for (int channel = 0; channel < 3; ++channel) {
+                SCOPED_TRACE(channel);
+                glm::ivec2 minimum{320, 240};
+                glm::ivec2 maximum{-1, -1};
+                for (int y = 0; y < 240; ++y) {
+                    for (int x = 0; x < 320; ++x) {
+                        // Point-cloud images and GT pixel coordinates both use top-down rows.
+                        if (pixels[channel * 320 * 240 + y * 320 + x] > 0.5f) {
+                            minimum = glm::min(minimum, glm::ivec2(x, y));
+                            maximum = glm::max(maximum, glm::ivec2(x, y));
+                        }
+                    }
+                }
+                EXPECT_EQ(minimum, centers[channel] - glm::ivec2(radius));
+                EXPECT_EQ(maximum, centers[channel] + glm::ivec2(radius));
+            }
+        };
+
+        // The same three projected points in a half-size Fit preview and native crops.
+        expect_pixels(std::nullopt, {{{160, 120}, {175, 108}, {150, 135}}}, 3);
+        expect_pixels(detail::GTComparisonPixelRegion{.origin = {100, 50}, .full_extent = {640, 480}},
+                      {{{220, 190}, {250, 166}, {200, 220}}}, 6);
+        expect_pixels(detail::GTComparisonPixelRegion{.origin = {117, 37}, .full_extent = {640, 480}},
+                      {{{203, 203}, {233, 179}, {183, 233}}}, 6);
+    }
+
+    TEST(SplitViewServiceTest, ActualSizeCropScalesUndistortedIntrinsicsBeforeOffset) {
+        using lfs::core::Camera;
+        using lfs::core::CameraModelType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        Camera camera(
+            Tensor::from_vector(
+                {1.0f, 0.0f, 0.0f,
+                 0.0f, 1.0f, 0.0f,
+                 0.0f, 0.0f, 1.0f},
+                {size_t{3}, size_t{3}},
+                Device::CPU),
+            Tensor::from_vector({0.0f, 0.0f, 0.0f}, {size_t{3}}, Device::CPU),
+            500.0f,
+            600.0f,
+            320.0f,
+            240.0f,
+            Tensor::from_vector({-0.08f, 0.01f}, {size_t{2}}, Device::CPU),
+            Tensor(),
+            CameraModelType::PINHOLE,
+            "test.png",
+            {},
+            {},
+            640,
+            480,
+            9);
+        camera.precompute_undistortion();
+        ASSERT_TRUE(camera.is_undistort_precomputed());
+        const auto& undistort = camera.undistort_params();
+        const auto scaled = lfs::core::scale_undistort_params(
+            undistort, 1001, 751);
+        const glm::ivec2 full_extent{
+            scaled.dst_width,
+            scaled.dst_height};
+        const glm::ivec2 crop_origin{37, 29};
+
+        const auto render_camera = detail::buildGTRenderCamera(
+            camera,
+            {320, 240},
+            glm::mat4(1.0f),
+            detail::GTComparisonPixelRegion{
+                .origin = crop_origin,
+                .full_extent = full_extent,
+                .full_intrinsics = lfs::rendering::CameraIntrinsics{
+                    .focal_x = scaled.dst_fx,
+                    .focal_y = scaled.dst_fy,
+                    .center_x = scaled.dst_cx,
+                    .center_y = scaled.dst_cy}});
+        ASSERT_TRUE(render_camera);
+        ASSERT_TRUE(render_camera->intrinsics);
+        EXPECT_FLOAT_EQ(render_camera->intrinsics->focal_x, scaled.dst_fx);
+        EXPECT_FLOAT_EQ(render_camera->intrinsics->focal_y, scaled.dst_fy);
+        EXPECT_FLOAT_EQ(
+            render_camera->intrinsics->center_x,
+            scaled.dst_cx - static_cast<float>(crop_origin.x));
+        EXPECT_FLOAT_EQ(
+            render_camera->intrinsics->center_y,
+            scaled.dst_cy - static_cast<float>(crop_origin.y));
+    }
+
+    TEST(SplitViewServiceTest, RestoredUndistortionCalibrationSurvivesTransformCopies) {
+        using lfs::core::Camera;
+        using lfs::core::CameraCalibration;
+        using lfs::core::CameraModelType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        const auto rotation = Tensor::from_vector(
+            {1.0f, 0.0f, 0.0f,
+             0.0f, 1.0f, 0.0f,
+             0.0f, 0.0f, 1.0f},
+            {size_t{3}, size_t{3}}, Device::CPU);
+        const auto translation =
+            Tensor::from_vector({0.0f, 0.0f, 0.0f}, {size_t{3}}, Device::CPU);
+        const CameraCalibration source{
+            .fx = 801.25f,
+            .fy = 799.75f,
+            .cx = 639.5f,
+            .cy = 359.25f,
+            .width = 1280,
+            .height = 720};
+        const CameraCalibration destination{
+            .fx = 733.125f,
+            .fy = 731.875f,
+            .cx = 602.75f,
+            .cy = 341.5f,
+            .width = 1207,
+            .height = 683};
+
+        const std::array models{
+            CameraModelType::PINHOLE,
+            CameraModelType::FISHEYE,
+            CameraModelType::THIN_PRISM_FISHEYE};
+        for (const auto model : models) {
+            const auto radial = model == CameraModelType::PINHOLE
+                                    ? Tensor::from_vector({-0.08f, 0.01f}, {size_t{2}}, Device::CPU)
+                                    : Tensor::from_vector(
+                                          {0.04f, -0.005f, 0.001f, -0.0002f},
+                                          {size_t{4}}, Device::CPU);
+            const auto tangential = model == CameraModelType::THIN_PRISM_FISHEYE
+                                        ? Tensor::from_vector(
+                                              {0.001f, -0.0015f, 0.0005f, -0.0004f},
+                                              {size_t{4}}, Device::CPU)
+                                        : Tensor();
+            for (const bool prepared : {false, true}) {
+                SCOPED_TRACE(static_cast<int>(model));
+                SCOPED_TRACE(prepared);
+                Camera camera(
+                    rotation, translation,
+                    source.fx, source.fy, source.cx, source.cy,
+                    radial, tangential, model,
+                    "calibration.png", "calibration.png", {},
+                    source.width, source.height, 101);
+                camera.restore_undistortion_state(
+                    source, destination, prepared, true);
+
+                ASSERT_TRUE(camera.is_undistort_precomputed());
+                EXPECT_EQ(camera.is_undistort_prepared(), prepared);
+                const auto& params = camera.undistort_params();
+                EXPECT_FLOAT_EQ(params.src_fx, source.fx);
+                EXPECT_FLOAT_EQ(params.src_fy, source.fy);
+                EXPECT_FLOAT_EQ(params.src_cx, source.cx);
+                EXPECT_FLOAT_EQ(params.src_cy, source.cy);
+                EXPECT_EQ(params.src_width, source.width);
+                EXPECT_EQ(params.src_height, source.height);
+                EXPECT_FLOAT_EQ(params.dst_fx, destination.fx);
+                EXPECT_FLOAT_EQ(params.dst_fy, destination.fy);
+                EXPECT_FLOAT_EQ(params.dst_cx, destination.cx);
+                EXPECT_FLOAT_EQ(params.dst_cy, destination.cy);
+                EXPECT_EQ(params.dst_width, destination.width);
+                EXPECT_EQ(params.dst_height, destination.height);
+                EXPECT_EQ(params.model_type, model);
+                EXPECT_TRUE(params.crop_solve_failed);
+
+                Camera transformed(camera, camera.world_view_transform());
+                EXPECT_TRUE(transformed.is_undistort_precomputed());
+                EXPECT_EQ(transformed.is_undistort_prepared(), prepared);
+                EXPECT_EQ(transformed.undistort_params().src_width, source.width);
+                EXPECT_EQ(transformed.undistort_params().dst_width, destination.width);
+                EXPECT_FLOAT_EQ(transformed.undistort_params().dst_fx, destination.fx);
+                EXPECT_EQ(transformed.undistort_params().model_type, model);
+                EXPECT_EQ(
+                    transformed.undistort_params().num_distortion,
+                    params.num_distortion);
+                EXPECT_TRUE(transformed.undistort_params().crop_solve_failed);
+                for (int i = 0; i < 12; ++i) {
+                    EXPECT_FLOAT_EQ(
+                        transformed.undistort_params().distortion[i],
+                        params.distortion[i]);
+                }
+                const auto& current = prepared ? destination : source;
+                EXPECT_FLOAT_EQ(transformed.focal_x(), current.fx);
+                EXPECT_FLOAT_EQ(transformed.focal_y(), current.fy);
+                EXPECT_FLOAT_EQ(transformed.center_x(), current.cx);
+                EXPECT_FLOAT_EQ(transformed.center_y(), current.cy);
+                EXPECT_EQ(transformed.camera_width(), current.width);
+                EXPECT_EQ(transformed.camera_height(), current.height);
+            }
+        }
+    }
+
+    TEST(RenderingManagerActualSizeStateTest,
+         PublishesOnlyAtCommitAndRetainsAcrossResourceInvalidation) {
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        const detail::GTComparisonSourceKey source_key{
+            .camera_uid = 17,
+            .image_path = "frame.png"};
+        const RenderingManager::GTComparisonActualFrame::Snapshot prepared{
+            .source_key = source_key,
+            .source_generation = 9,
+            .full_extent = {400, 300},
+            .framebuffer_extent = {200, 120},
+            .crop = {
+                .origin = {30, 15},
+                .extent = {100, 80}}};
+
+        manager.state().gt_comparison_actual_size_state_.source_key = source_key;
+        manager.state().gt_comparison_actual_size_state_.source_generation = 9;
+        manager.state().gt_comparison_actual_size_state_.full_extent = {400, 300};
+        manager.state().gt_comparison_actual_size_state_.framebuffer_extent = {200, 120};
+        manager.state().gt_comparison_actual_size_state_.crop = prepared.crop;
+        manager.state().gt_comparison_actual_size_state_.fit_fallback =
+            std::make_shared<lfs::core::Tensor>();
+        manager.gt_comparison_image_cache_.emplace_back();
+
+        RenderingManager::GTComparisonActualFrame candidate;
+        candidate.snapshot = prepared;
+        EXPECT_FALSE(manager.isGTComparisonActualSizeActive());
+        EXPECT_EQ(manager.getGTComparisonCropOrigin(), glm::ivec2(0, 0));
+        EXPECT_TRUE(manager.state().gt_comparison_actual_size_state_.fit_fallback);
+
+        manager.state().gt_comparison_actual_size_state_.error = "previous native failure";
+        EXPECT_FALSE(manager.getGTComparisonActualSizeError().empty());
+        manager.publishGTComparisonActualFrame(manager.state(), *candidate.snapshot);
+        EXPECT_TRUE(manager.getGTComparisonActualSizeError().empty());
+        EXPECT_TRUE(manager.isGTComparisonActualSizeActive());
+        EXPECT_EQ(manager.getGTComparisonCropOrigin(), prepared.crop.origin);
+        EXPECT_FALSE(manager.state().gt_comparison_actual_size_state_.fit_fallback);
+        EXPECT_TRUE(manager.gt_comparison_image_cache_.empty());
+
+        const auto bounds = manager.getContentBounds(manager.activeViewId(), {100, 60});
+        EXPECT_FLOAT_EQ(bounds.x, 25.0f);
+        EXPECT_FLOAT_EQ(bounds.y, 10.0f);
+        EXPECT_FLOAT_EQ(bounds.width, 50.0f);
+        EXPECT_FLOAT_EQ(bounds.height, 40.0f);
+
+        manager.invalidateGTComparisonActualSizeResources(manager.state());
+        EXPECT_TRUE(manager.isGTComparisonActualSizeActive());
+        EXPECT_EQ(manager.getGTComparisonCropOrigin(), prepared.crop.origin);
+
+        manager.state().gt_comparison_actual_size_state_.source_key = source_key;
+        manager.state().gt_comparison_actual_size_state_.source_generation = 9;
+        manager.state().gt_comparison_actual_size_state_.full_extent = prepared.full_extent;
+        manager.state().gt_comparison_actual_size_state_.framebuffer_extent =
+            prepared.framebuffer_extent;
+        manager.state().gt_comparison_actual_size_state_.crop = prepared.crop;
+        manager.setGTComparisonCropOrigin({60, 30});
+        EXPECT_EQ(
+            manager.state().gt_comparison_actual_size_state_.crop.origin,
+            glm::ivec2(60, 30));
+        EXPECT_EQ(manager.getGTComparisonCropOrigin(), prepared.crop.origin);
+
+        auto replacement = prepared;
+        replacement.crop = manager.state().gt_comparison_actual_size_state_.crop;
+        manager.publishGTComparisonActualFrame(manager.state(), replacement);
+        EXPECT_EQ(manager.getGTComparisonCropOrigin(), glm::ivec2(60, 30));
+
+        // The production presentation path clears the snapshot when a newly
+        // assembled Fit fallback replaces the native frame.
+        manager.clearPublishedGTComparisonActualFrame(manager.state());
+        EXPECT_FALSE(manager.isGTComparisonActualSizeActive());
+        EXPECT_EQ(manager.getGTComparisonCropOrigin(), glm::ivec2(0, 0));
+    }
+
+    // The worker is stopped at the queue/decode/publication boundary so these
+    // tests control completion order without filesystem timing or sleeps.
+    class RenderingManagerGTComparisonReviewTest : public ::testing::Test {
+    protected:
+        screen::ScreenService views;
+        RenderingManager manager{views};
+        ViewId owner = views.activeView();
+        ViewId other = views.screen().split(screen::AreaId{owner}, screen::SplitAxis::Columns, 0.5f).value;
+        using Request = RenderingManager::GTComparisonPreviewRequest;
+        using Full = RenderingManager::GTComparisonFullSourceRequest;
+        using Status = RenderingManager::GTComparisonImageStatus;
+
+        void SetUp() override {
+            manager.gt_comparison_image_worker_.request_stop();
+            manager.gt_comparison_image_cv_.notify_all();
+            manager.gt_comparison_image_worker_.join();
+            manager.retainVisibleViews({owner, other});
+            manager.editViewSettings(owner, [](auto& s) { s.split_view_mode = SplitViewMode::GTComparison; });
+        }
+        auto image(glm::ivec2 size = {32, 24}) {
+            return std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::empty(
+                {3, static_cast<std::size_t>(size.y), static_cast<std::size_t>(size.x)},
+                lfs::core::Device::CPU, lfs::core::DataType::UInt8));
+        }
+        Request request(int uid, glm::ivec2 size = {32, 24}) {
+            return {.owner = owner, .camera_uid = uid, .image_path = std::to_string(uid) + ".png", .image_size = size};
+        }
+        Request beginForeground(Request request) {
+            (void)manager.getOrQueueGTComparisonImage(request);
+            auto result = *manager.pending_gt_comparison_image_request_;
+            manager.pending_gt_comparison_image_request_.reset();
+            manager.active_gt_comparison_worker_request_ = result;
+            manager.active_gt_comparison_image_is_prefetch_ = false;
+            return result;
+        }
+        Request beginPrefetch(Request request) {
+            manager.queueGTComparisonImagePrefetch(request);
+            EXPECT_FALSE(manager.prefetch_gt_comparison_image_requests_.empty());
+            if (manager.prefetch_gt_comparison_image_requests_.empty())
+                return {};
+            auto result = manager.prefetch_gt_comparison_image_requests_.back();
+            manager.prefetch_gt_comparison_image_requests_.pop_back();
+            manager.active_gt_comparison_worker_request_ = result;
+            manager.active_gt_comparison_image_is_prefetch_ = true;
+            return result;
+        }
+        void ownership() {
+            auto& a = manager.viewState(owner);
+            a.gt_comparison_actual_size_state_.crop = {{11, 7}, {32, 24}};
+            const auto source = image();
+            manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+                .owner = owner,
+                .status = Status::Ready,
+                .source_key = {.camera_uid = 0},
+                .cpu_source = source};
+            manager.gt_comparison_cuda_owner_ = owner;
+            manager.gt_comparison_cuda_image_ = source;
+            manager.invalidateGTComparisonActualSizeResources(manager.viewState(other));
+            ASSERT_TRUE(manager.gt_comparison_full_source_slot_);
+            EXPECT_EQ(manager.gt_comparison_full_source_slot_->cpu_source, source);
+            EXPECT_EQ(manager.gt_comparison_cuda_image_, source);
+            EXPECT_EQ(a.gt_comparison_actual_size_state_.crop.origin, glm::ivec2(11, 7));
+            manager.invalidateGTComparisonActualSizeTile(manager.viewState(other));
+            EXPECT_EQ(manager.gt_comparison_cuda_image_, source);
+            manager.dropViewStates();
+            EXPECT_FALSE(manager.gt_comparison_full_source_slot_);
+            EXPECT_FALSE(manager.gt_comparison_cuda_image_);
+        }
+        void cropResizeAndPendingPan() {
+            using namespace lfs::core;
+            if (!gpu_backend_available(GpuBackend::CUDA))
+                GTEST_SKIP() << "CUDA device required for native display upload";
+            const Camera camera(Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+                                70.0f, 72.0f, 50.5f, 40.5f, Tensor(), Tensor(), CameraModelType::PINHOLE,
+                                "0.png", "0.png", {}, 101, 81, 0);
+            manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+                .owner = owner,
+                .status = Status::Ready,
+                .source_key = {.camera_uid = 0, .image_path = "0.png"},
+                .generation = 1,
+                .cpu_source = image({101, 81})};
+            auto& view = manager.viewState(owner);
+            auto frame = manager.prepareGTActualFrame(view, camera, {20, 18});
+            ASSERT_TRUE(frame.snapshot);
+            manager.publishGTComparisonActualFrame(view, *frame.snapshot);
+            manager.setGTComparisonCropOrigin({11, 17}, owner);
+            const glm::dvec2 center{21, 26};
+            for (int i = 0; i < 20; ++i) {
+                const glm::ivec2 extent = i % 2 ? glm::ivec2{20, 18} : glm::ivec2{21, 19};
+                frame = manager.prepareGTActualFrame(view, camera, extent);
+                ASSERT_TRUE(frame.snapshot);
+                manager.publishGTComparisonActualFrame(view, *frame.snapshot);
+                EXPECT_EQ(view.gt_comparison_actual_size_state_.desired_crop_center, center);
+            }
+            EXPECT_EQ(frame.snapshot->crop.origin, glm::ivec2(11, 17));
+            // A resize has prepared a new tile but the user still sees the old
+            // committed crop. Panning must anchor to that displayed extent.
+            frame = manager.prepareGTActualFrame(view, camera, {21, 19});
+            ASSERT_TRUE(frame.snapshot);
+            manager.setGTComparisonCropOrigin({9, 14}, owner);
+            const glm::dvec2 panned_center{19, 23};
+            EXPECT_EQ(view.gt_comparison_actual_size_state_.desired_crop_center, panned_center);
+            frame = manager.prepareGTActualFrame(view, camera, {21, 19});
+            ASSERT_TRUE(frame.snapshot);
+            EXPECT_EQ(view.gt_comparison_actual_size_state_.desired_crop_center, panned_center);
+            EXPECT_EQ(frame.snapshot->crop, detail::cropGTComparisonFromCenter({101, 81}, {21, 19}, panned_center));
+        }
+        void sameSourceRedecodeKeepsCrop() {
+            using namespace lfs::core;
+            if (!gpu_backend_available(GpuBackend::CUDA))
+                GTEST_SKIP() << "CUDA device required for native display upload";
+            const Camera camera(Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+                                70.0f, 72.0f, 50.5f, 40.5f, Tensor(), Tensor(), CameraModelType::PINHOLE,
+                                "0.png", "0.png", {}, 101, 81, 0);
+            const auto ready_slot = [&](const std::uint64_t generation) {
+                manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+                    .owner = owner,
+                    .status = Status::Ready,
+                    .source_key = {.camera_uid = 0, .image_path = "0.png"},
+                    .generation = generation,
+                    .cpu_source = image({101, 81})};
+            };
+            ready_slot(1);
+            auto& view = manager.viewState(owner);
+            auto frame = manager.prepareGTActualFrame(view, camera, {20, 18});
+            ASSERT_TRUE(frame.snapshot);
+            manager.publishGTComparisonActualFrame(view, *frame.snapshot);
+            manager.setGTComparisonCropOrigin({11, 17}, owner);
+            const auto panned = view.gt_comparison_actual_size_state_.desired_crop_center;
+
+            // A late decode of the same image must not recentre the user's crop.
+            ready_slot(2);
+            frame = manager.prepareGTActualFrame(view, camera, {20, 18});
+            ASSERT_TRUE(frame.snapshot);
+            EXPECT_EQ(view.gt_comparison_actual_size_state_.desired_crop_center, panned);
+            EXPECT_EQ(frame.snapshot->crop.origin, glm::ivec2(11, 17));
+        }
+        void pendingPanWhileLoading() {
+            using namespace lfs::core;
+            if (!gpu_backend_available(GpuBackend::CUDA))
+                GTEST_SKIP() << "CUDA device required for native display upload";
+            auto settings = manager.settingsForView(owner);
+            settings.gt_comparison_actual_size = true;
+            ASSERT_TRUE(manager.updateSettingsForView(
+                owner, settings, DirtyFlag::SPLIT_VIEW));
+            manager.setCurrentCameraId(0);
+            EXPECT_TRUE(manager.isGTComparisonActive());
+            EXPECT_TRUE(manager.isGTComparisonActualSizeRequested(owner));
+            EXPECT_FALSE(manager.isGTComparisonActualSizeActive(owner));
+
+            manager.setGTComparisonCropOffsetFromCenter({-12, 7}, owner);
+            EXPECT_TRUE(manager.isGTComparisonActive());
+            EXPECT_TRUE(manager.isGTComparisonActualSizeRequested(owner));
+            EXPECT_EQ(manager.getCurrentCameraId(), 0);
+            auto& view = manager.viewState(owner);
+            ASSERT_EQ(view.gt_comparison_actual_size_state_.pending_pan_camera_uid,
+                      std::optional{0});
+            EXPECT_EQ(view.gt_comparison_actual_size_state_.pending_pan_offset,
+                      glm::ivec2(-12, 7));
+
+            const Camera camera(Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+                                70.0f, 72.0f, 50.5f, 40.5f, Tensor(), Tensor(), CameraModelType::PINHOLE,
+                                "0.png", "0.png", {}, 101, 81, 0);
+            manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+                .owner = owner,
+                .status = Status::Ready,
+                .source_key = {.camera_uid = 0, .image_path = "0.png"},
+                .generation = 1,
+                .cpu_source = image({101, 81})};
+            const auto frame = manager.prepareGTActualFrame(view, camera, {20, 18});
+            ASSERT_TRUE(frame.snapshot);
+            EXPECT_FALSE(view.gt_comparison_actual_size_state_.pending_pan_camera_uid);
+            const glm::dvec2 desired_center = glm::dvec2(101, 81) * 0.5 +
+                                              glm::dvec2(-12, 7);
+            EXPECT_EQ(view.gt_comparison_actual_size_state_.desired_crop_center,
+                      desired_center);
+            EXPECT_EQ(frame.snapshot->crop,
+                      detail::cropGTComparisonFromCenter(
+                          {101, 81}, {20, 18}, desired_center));
+        }
+        void globalInvalidation() {
+            auto& a = manager.viewState(owner);
+            const auto source = image();
+            a.gt_comparison_actual_size_state_.cpu_source = source;
+            a.gt_comparison_actual_size_state_.cuda_source = source;
+            a.gt_comparison_actual_size_state_.crop = {{11, 7}, {32, 24}};
+            manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+                .owner = owner,
+                .status = Status::Ready,
+                .cpu_source = source};
+            manager.invalidateGTComparisonImageCache(manager.viewState(other));
+            EXPECT_FALSE(a.gt_comparison_actual_size_state_.cpu_source);
+            EXPECT_FALSE(a.gt_comparison_actual_size_state_.cuda_source);
+            EXPECT_FALSE(manager.gt_comparison_full_source_slot_);
+            EXPECT_EQ(a.gt_comparison_actual_size_state_.crop.origin, glm::ivec2(0));
+        }
+        void cameraSwitch() {
+            manager.setCurrentCameraId(0);
+            (void)manager.getOrQueueGTComparisonFullSource({.owner = owner, .source_key = {.camera_uid = 0, .image_path = "0.png"}});
+            const auto old = *manager.pending_gt_comparison_full_source_request_;
+            manager.pending_gt_comparison_full_source_request_.reset();
+            manager.active_gt_comparison_worker_request_ = old;
+            manager.setCurrentCameraId(1);
+            EXPECT_EQ(manager.viewState(owner).gt_comparison_camera_uid_, 1);
+            EXPECT_EQ(manager.viewState(other).gt_comparison_camera_uid_, -1);
+            (void)manager.getOrQueueGTComparisonFullSource({.owner = owner, .source_key = {.camera_uid = 1, .image_path = "1.png"}});
+            EXPECT_EQ(manager.completeGTComparisonImage(old, image(), {}, false), kNoView);
+            ASSERT_TRUE(manager.gt_comparison_full_source_slot_);
+            EXPECT_EQ(manager.gt_comparison_full_source_slot_->status, Status::Loading);
+            EXPECT_EQ(manager.gt_comparison_full_source_slot_->source_key.camera_uid, 1);
+            const auto current = *manager.pending_gt_comparison_full_source_request_;
+            manager.pending_gt_comparison_full_source_request_.reset();
+            manager.active_gt_comparison_worker_request_ = current;
+            const auto pixels = image();
+            EXPECT_EQ(manager.completeGTComparisonImage(current, pixels, {}, false), owner);
+            EXPECT_EQ(manager.gt_comparison_full_source_slot_->cpu_source, pixels);
+            EXPECT_EQ(manager.gt_comparison_full_source_slot_->source_key.camera_uid, 1);
+            auto first = beginForeground(request(0));
+            auto second = request(1);
+            (void)manager.getOrQueueGTComparisonImage(second);
+            EXPECT_EQ(manager.completeGTComparisonImage(first, image(), {}, false), kNoView);
+            EXPECT_TRUE(manager.gt_comparison_image_cache_.empty());
+        }
+        void budget() {
+            auto foreground = beginForeground(request(0, {8193, 4321}));
+            auto displayed = image(foreground.image_size);
+            EXPECT_EQ(manager.completeGTComparisonImage(foreground, displayed, {}, false), owner);
+            manager.queueGTComparisonImagePrefetch(request(1, {8193, 4321}));
+            EXPECT_TRUE(manager.prefetch_gt_comparison_image_requests_.empty());
+            auto speculative = beginPrefetch(request(1, {1024, 1024}));
+            manager.queueGTComparisonImagePrefetch(request(2, {2048, 2048}));
+            manager.queueGTComparisonImagePrefetch(request(3, {2048, 2048}));
+            EXPECT_EQ(manager.prefetch_gt_comparison_image_requests_.size(), 1u);
+            // Admission changes while decode is in flight: the newly displayed
+            // image alone exceeds the budget. Completion must not evict it.
+            auto replacement = request(4, {8193, 8193});
+            (void)manager.getOrQueueGTComparisonImage(replacement);
+            replacement = *manager.pending_gt_comparison_image_request_;
+            auto replacement_image = image(replacement.image_size);
+            manager.insertGTComparisonImageCacheEntry(replacement, replacement_image, {}, std::chrono::steady_clock::now());
+            EXPECT_EQ(manager.completeGTComparisonImage(speculative, image(speculative.image_size), {}, false), kNoView);
+            ASSERT_EQ(manager.gt_comparison_image_cache_.size(), 1u);
+            EXPECT_EQ(manager.gt_comparison_image_cache_.front().image, replacement_image);
+            EXPECT_FALSE(manager.active_gt_comparison_worker_request_);
+        }
+        void immutableEpoch(bool promote) {
+            auto decoded = beginPrefetch(request(1));
+            if (promote) {
+                (void)manager.getOrQueueGTComparisonImage(request(1));
+                EXPECT_FALSE(manager.active_gt_comparison_image_is_prefetch_);
+            }
+            manager.invalidateGTComparisonImageCache(manager.viewState(owner));
+            (void)manager.getOrQueueGTComparisonImage(request(1));
+            ASSERT_TRUE(manager.pending_gt_comparison_image_request_);
+            EXPECT_NE(decoded.cache_epoch, manager.pending_gt_comparison_image_request_->cache_epoch);
+            EXPECT_EQ(manager.completeGTComparisonImage(decoded, image(), {}, false), kNoView);
+            EXPECT_TRUE(manager.gt_comparison_image_cache_.empty());
+            EXPECT_TRUE(manager.pending_gt_comparison_image_request_);
+        }
+        void calibration(bool prefetch = false, bool promote = false) {
+            manager.invalidateGTComparisonImageCache(manager.viewState(owner));
+            using namespace lfs::core;
+            auto camera = std::make_shared<Camera>(Tensor::eye(3, Device::CPU),
+                                                   Tensor::zeros({3}, Device::CPU), 24.0f, 23.0f, 16.0f, 12.0f,
+                                                   Tensor(), Tensor(), CameraModelType::PINHOLE, "0.png", "0.png", std::filesystem::path{}, 32, 24, 0);
+            auto r = request(0);
+            r.camera = camera;
+            auto old = prefetch ? beginPrefetch(r) : beginForeground(r);
+            if (promote)
+                (void)manager.getOrQueueGTComparisonImage(r);
+            camera->adopt_undistortion({});
+            EXPECT_EQ(manager.completeGTComparisonImage(old, image(), {}, false), kNoView);
+            EXPECT_TRUE(manager.gt_comparison_image_cache_.empty());
+            auto next = beginForeground(r);
+            EXPECT_NE(old.calibration_revision, next.calibration_revision);
+            EXPECT_EQ(manager.completeGTComparisonImage(next, image(), {}, false), owner);
+        }
+        void prefetchOnlyAndPromotion() {
+            auto speculative = beginPrefetch(request(1));
+            EXPECT_EQ(manager.completeGTComparisonImage(speculative, image(), {}, false), kNoView);
+            ASSERT_EQ(manager.gt_comparison_image_cache_.size(), 1u);
+            auto promoted = beginPrefetch(request(2));
+            (void)manager.getOrQueueGTComparisonImage(request(2));
+            EXPECT_EQ(manager.completeGTComparisonImage(promoted, image(), {}, false), owner);
+            ASSERT_EQ(manager.gt_comparison_image_cache_.size(), 2u);
+            auto cancelled = beginPrefetch(request(3));
+            EXPECT_EQ(manager.completeGTComparisonImage(cancelled, {}, "cancelled", true), kNoView);
+            EXPECT_FALSE(manager.active_gt_comparison_worker_request_);
+        }
+    };
+
+    TEST_F(RenderingManagerGTComparisonReviewTest, PreparedResizeAndPanPreserveDesiredCenter) { cropResizeAndPendingPan(); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, PanWhileNativeSourceLoadsKeepsRequestAndAppliesIntent) { pendingPanWhileLoading(); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, SameSourceRedecodeKeepsPannedCrop) { sameSourceRedecodeKeepsCrop(); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, UnrelatedViewResetPreservesOwnerAndTeardownReleases) { ownership(); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, SameSizedCameraSwitchRejectsPreviousFitAndNativeCompletion) { cameraSwitch(); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, EightKAdmissionReservationsAndCompletionProtectDisplayedImage) { budget(); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, ObsoletePrefetchCannotBePromotedAcrossInvalidation) { immutableEpoch(false); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, PromotedPrefetchRetainsItsDecodeEpoch) { immutableEpoch(true); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, CalibrationRevisionRejectsDecodedOldPixels) { calibration(); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, CalibrationRevisionRejectsPrefetchIncludingPromotion) {
+        calibration(true, false);
+        calibration(true, true);
+    }
+    TEST_F(RenderingManagerGTComparisonReviewTest, GlobalInvalidationFromOtherViewReleasesOwner) { globalInvalidation(); }
+
+    TEST_F(RenderingManagerGTComparisonReviewTest, CacheOnlyCompletionHasNoRedrawConsumer) { prefetchOnlyAndPromotion(); }
+
+    TEST(RenderingManagerActualSizeCacheTest,
+         RetainsReadySourceAcrossTogglesAndClearsOnContextChanges) {
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        manager.gt_comparison_image_worker_.request_stop();
+        manager.gt_comparison_image_cv_.notify_all();
+        manager.gt_comparison_image_worker_.join();
+        auto settings = manager.getSettings();
+        settings.split_view_mode = SplitViewMode::GTComparison;
+        settings.gt_comparison_actual_size = true;
+        manager.updateSettings(settings);
+        const detail::GTComparisonSourceKey key{.camera_uid = 17, .image_path = "frame.png"};
+        const auto source = std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::empty(
+            {3, 8, 12}, lfs::core::Device::CPU, lfs::core::DataType::UInt8));
+        const auto seed_source = [&] {
+            manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+                .owner = manager.activeViewId(),
+                .status = RenderingManager::GTComparisonImageStatus::Ready,
+                .source_key = key,
+                .generation = manager.gt_comparison_full_source_generation_,
+                .cpu_source = source};
+        };
+        seed_source();
+        const auto generation = manager.gt_comparison_full_source_generation_;
+        manager.state().gt_comparison_actual_size_state_.cpu_source = source;
+        manager.state().gt_comparison_actual_size_state_.visible_tile = source;
+        manager.state().gt_comparison_actual_size_state_.error = "old error";
+        settings.gt_comparison_actual_size = false;
+        manager.updateSettings(settings);
+        ASSERT_TRUE(manager.gt_comparison_full_source_slot_);
+        EXPECT_EQ(manager.gt_comparison_full_source_slot_->cpu_source, source);
+        EXPECT_EQ(manager.gt_comparison_full_source_generation_, generation);
+        EXPECT_FALSE(manager.state().gt_comparison_actual_size_state_.cpu_source);
+        EXPECT_FALSE(manager.state().gt_comparison_actual_size_state_.visible_tile);
+        EXPECT_TRUE(manager.getGTComparisonActualSizeError().empty());
+        settings.gt_comparison_actual_size = true;
+        manager.updateSettings(settings);
+        const auto hit = manager.getOrQueueGTComparisonFullSource({.source_key = key});
+        EXPECT_EQ(hit.source, source);
+        EXPECT_EQ(hit.generation, generation);
+        EXPECT_FALSE(manager.pending_gt_comparison_full_source_request_);
+
+        settings.gt_comparison_actual_size = false;
+        manager.updateSettings(settings);
+        settings.gt_comparison_mode = GTComparisonMode::Depth;
+        manager.updateSettings(settings);
+        EXPECT_FALSE(manager.gt_comparison_full_source_slot_);
+        settings.gt_comparison_mode = GTComparisonMode::RGB;
+        manager.updateSettings(settings);
+        seed_source();
+        manager.setCurrentCameraId(18);
+        EXPECT_FALSE(manager.gt_comparison_full_source_slot_);
+        seed_source();
+        settings.split_view_mode = SplitViewMode::Disabled;
+        manager.updateSettings(settings);
+        EXPECT_FALSE(manager.gt_comparison_full_source_slot_);
+        seed_source();
+        manager.invalidateGTComparisonImageCache(manager.state());
+        EXPECT_FALSE(manager.gt_comparison_full_source_slot_);
+        seed_source();
+        const auto miss = manager.getOrQueueGTComparisonFullSource(
+            {.source_key = {.camera_uid = 17, .image_path = "replacement.png"}});
+        EXPECT_EQ(miss.status, RenderingManager::GTComparisonImageStatus::Loading);
+        EXPECT_FALSE(miss.source);
+    }
+
+    TEST(RenderingManagerActualSizeCacheTest,
+         RetryAndCancellationPreserveOnlyCurrentWork) {
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        manager.retainVisibleViews({manager.activeViewId()});
+        manager.gt_comparison_image_worker_.request_stop();
+        manager.gt_comparison_image_cv_.notify_all();
+        manager.gt_comparison_image_worker_.join();
+        auto settings = manager.getSettings();
+        settings.split_view_mode = SplitViewMode::GTComparison;
+        settings.gt_comparison_actual_size = true;
+        manager.updateSettings(settings);
+        const detail::GTComparisonSourceKey key{.camera_uid = 17, .image_path = "frame.png"};
+        manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+            .owner = manager.activeViewId(),
+            .status = RenderingManager::GTComparisonImageStatus::Failed,
+            .source_key = key,
+            .generation = manager.gt_comparison_full_source_generation_,
+            .error = "decode failed",
+            .failure_time = std::chrono::steady_clock::now()};
+        manager.state().gt_comparison_actual_size_state_.error = "decode failed";
+        manager.state().dirty_mask_.store(0);
+        EXPECT_FALSE(manager.pollDirtyState());
+        manager.gt_comparison_full_source_slot_->failure_time -= std::chrono::seconds(3);
+        EXPECT_TRUE(manager.pollDirtyState());
+        EXPECT_NE(manager.state().dirty_mask_.load() & DirtyFlag::SPLIT_VIEW, 0u);
+        manager.gt_comparison_full_source_slot_->failure_time = std::chrono::steady_clock::now();
+        EXPECT_EQ(manager.getOrQueueGTComparisonFullSource({.source_key = key}).status,
+                  RenderingManager::GTComparisonImageStatus::Failed);
+        EXPECT_FALSE(manager.pending_gt_comparison_full_source_request_);
+        manager.retryGTComparisonActualSize();
+        EXPECT_FALSE(manager.gt_comparison_full_source_slot_);
+        EXPECT_TRUE(manager.getGTComparisonActualSizeError().empty());
+        const auto pending = manager.getOrQueueGTComparisonFullSource({.source_key = key});
+        manager.active_gt_comparison_worker_request_ = *manager.pending_gt_comparison_full_source_request_;
+        manager.pending_gt_comparison_full_source_request_.reset();
+        manager.retryGTComparisonActualSize();
+        const auto same = manager.getOrQueueGTComparisonFullSource({.source_key = key});
+        EXPECT_EQ(same.generation, pending.generation);
+        EXPECT_TRUE(manager.active_gt_comparison_worker_request_);
+        EXPECT_FALSE(manager.pending_gt_comparison_full_source_request_);
+
+        settings.gt_comparison_actual_size = false;
+        manager.updateSettings(settings);
+        EXPECT_FALSE(manager.gt_comparison_full_source_slot_);
+        EXPECT_FALSE(manager.pending_gt_comparison_full_source_request_);
+        EXPECT_GT(manager.gt_comparison_full_source_generation_, pending.generation);
+        const auto& stale = std::get<RenderingManager::GTComparisonFullSourceRequest>(
+            *manager.active_gt_comparison_worker_request_);
+        EXPECT_NE(stale.generation, manager.gt_comparison_full_source_generation_);
+
+        settings.gt_comparison_actual_size = true;
+        manager.updateSettings(settings);
+        const auto source = std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::empty(
+            {3, 8, 12}, lfs::core::Device::CPU, lfs::core::DataType::UInt8));
+        manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+            .owner = manager.activeViewId(),
+            .status = RenderingManager::GTComparisonImageStatus::Ready,
+            .source_key = key,
+            .generation = manager.gt_comparison_full_source_generation_,
+            .cpu_source = source};
+        manager.state().gt_comparison_actual_size_state_.tile_failure =
+            RenderingManager::GTComparisonActualSizeState::TileFailure{.error = "tile failed"};
+        manager.state().gt_comparison_actual_size_state_.error = "tile failed";
+        manager.state().dirty_mask_.store(0);
+        EXPECT_TRUE(manager.pollDirtyState());
+        manager.retryGTComparisonActualSize();
+        EXPECT_FALSE(manager.state().gt_comparison_actual_size_state_.tile_failure);
+        EXPECT_TRUE(manager.getGTComparisonActualSizeError().empty());
+        EXPECT_EQ(manager.getOrQueueGTComparisonFullSource({.source_key = key}).source, source);
+        EXPECT_FALSE(manager.pending_gt_comparison_full_source_request_);
+    }
+
+    TEST(RenderingManagerGTComparisonGenerationTest,
+         SplitLeftGenerationRemainsMonotonicAcrossInvalidations) {
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        auto source_a = lfs::core::Tensor::empty(
+            {3, 4, 6}, lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+        auto source_b = lfs::core::Tensor::empty(
+            {3, 4, 6}, lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+        auto source_c = lfs::core::Tensor::empty(
+            {3, 4, 6}, lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+        constexpr glm::ivec2 source_size{6, 4};
+
+        manager.updateSplitLeftCpuSourceIdentity(manager.state(),
+                                                 &source_a, source_size, 11, false);
+        const auto generation_a = manager.state().split_left_image_generation_;
+        EXPECT_NE(generation_a, 0u);
+        EXPECT_NE(generation_a & RenderingManager::SPLIT_LEFT_GENERATION_BIT, 0u);
+
+        manager.invalidateGTComparisonImageCache(manager.state());
+        EXPECT_EQ(manager.state().split_left_image_generation_, generation_a);
+        EXPECT_EQ(manager.state().split_left_source_, nullptr);
+
+        manager.updateSplitLeftCpuSourceIdentity(manager.state(),
+                                                 &source_b, source_size, 12, false);
+        const auto generation_b = manager.state().split_left_image_generation_;
+        EXPECT_GT(generation_b, generation_a);
+
+        lfs::vis::ViewportInteropSlotInputs interop{
+            .source_ok = true,
+            .frame_slot_in_range = true,
+            .target_present = true,
+            .target_size_matches = true,
+            .target_valid_size_matches = true,
+            .target_interop_valid = true,
+            .target_layout_read_only = true,
+            .source_generation = generation_b,
+            .uploaded_source_generation = generation_a};
+        EXPECT_NE(
+            lfs::vis::decideViewportInteropEarly(interop).action,
+            lfs::vis::ViewportInteropAction::CacheHit);
+
+        interop.uploaded_source_generation = generation_b;
+        EXPECT_EQ(
+            lfs::vis::decideViewportInteropEarly(interop).action,
+            lfs::vis::ViewportInteropAction::CacheHit);
+        manager.updateSplitLeftCpuSourceIdentity(manager.state(),
+                                                 &source_b, source_size, 12, false);
+        EXPECT_EQ(manager.state().split_left_image_generation_, generation_b);
+
+        manager.invalidateGTComparisonActualSizeResources(manager.state());
+        EXPECT_EQ(manager.state().split_left_image_generation_, generation_b);
+        EXPECT_EQ(manager.state().split_left_source_, nullptr);
+
+        manager.updateSplitLeftCpuSourceIdentity(manager.state(),
+                                                 &source_c, source_size, 13, true);
+        EXPECT_GT(manager.state().split_left_image_generation_, generation_b);
+    }
+
+    TEST(RenderingManagerActualSizeFailureTest,
+         KeyedCooldownRetainsFallbackAndAllowsRelevantChanges) {
+        using State = RenderingManager::GTComparisonActualSizeState;
+        State state;
+        state.fit_fallback = std::make_shared<lfs::core::Tensor>();
+        state.visible_tile = std::make_shared<lfs::core::Tensor>();
+        state.tile_key = detail::GTComparisonTileKey{};
+
+        const detail::GTComparisonTileKey failed_key{
+            .source_generation = 4,
+            .full_extent = {8192, 6144},
+            .framebuffer_extent = {1920, 1080},
+            .crop = {
+                .origin = {3136, 2532},
+                .extent = {1920, 1080}},
+            .distorted = true};
+        const auto failed_at =
+            std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+        state.tile_failure = State::TileFailure{
+            .key = failed_key,
+            .time = failed_at,
+            .error = "tile allocation failed"};
+
+        EXPECT_TRUE(state.tile_failure->suppresses(
+            failed_key,
+            failed_at + std::chrono::seconds(1),
+            RenderingManager::GT_COMPARISON_IMAGE_RETRY_COOLDOWN));
+        EXPECT_FALSE(state.tile_failure->suppresses(
+            failed_key,
+            failed_at + RenderingManager::GT_COMPARISON_IMAGE_RETRY_COOLDOWN,
+            RenderingManager::GT_COMPARISON_IMAGE_RETRY_COOLDOWN));
+
+        for (int changed_field = 0; changed_field < 5; ++changed_field) {
+            auto changed = failed_key;
+            switch (changed_field) {
+            case 0:
+                ++changed.source_generation;
+                break;
+            case 1:
+                ++changed.full_extent.x;
+                break;
+            case 2:
+                ++changed.framebuffer_extent.y;
+                break;
+            case 3:
+                ++changed.crop.origin.x;
+                break;
+            case 4:
+                changed.distorted = false;
+                break;
+            }
+            EXPECT_FALSE(state.tile_failure->suppresses(
+                changed,
+                failed_at + std::chrono::milliseconds(1),
+                RenderingManager::GT_COMPARISON_IMAGE_RETRY_COOLDOWN));
+        }
+
+        state.invalidateTile();
+        EXPECT_TRUE(state.fit_fallback);
+        EXPECT_TRUE(state.tile_failure);
+        EXPECT_FALSE(state.visible_tile);
+        EXPECT_FALSE(state.tile_key);
+
+        state.tile_failure.reset();
+        EXPECT_FALSE(state.tile_failure);
+        EXPECT_TRUE(state.fit_fallback);
+    }
+
+    TEST(RenderingManagerActualSizeFailureTest,
+         PinholeUploadFailureRetriesAndReusesCache) {
+        using lfs::core::Camera;
+        using lfs::core::CameraModelType;
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::MemoryDomain;
+        using lfs::core::MemoryPressureCoordinator;
+        using lfs::core::Tensor;
+
+        if (!has_cuda_device()) {
+            GTEST_SKIP() << "CUDA device required";
+        }
+
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        manager.gt_comparison_image_worker_.request_stop();
+        manager.gt_comparison_image_cv_.notify_all();
+        manager.gt_comparison_image_worker_.join();
+        auto settings = manager.getSettings();
+        settings.split_view_mode = SplitViewMode::GTComparison;
+        settings.gt_comparison_mode = GTComparisonMode::RGB;
+        settings.gt_comparison_actual_size = true;
+        manager.updateSettings(settings);
+
+        Camera camera(
+            Tensor::from_vector(
+                {1.0f, 0.0f, 0.0f,
+                 0.0f, 1.0f, 0.0f,
+                 0.0f, 0.0f, 1.0f},
+                {3, 3}, Device::CPU),
+            Tensor::from_vector({0.0f, 0.0f, 0.0f}, {3}, Device::CPU),
+            24.0f, 23.0f, 16.0f, 12.0f,
+            Tensor(), Tensor(), CameraModelType::PINHOLE,
+            "frame.png", "frame.png", {}, 32, 24, 17);
+        const detail::GTComparisonSourceKey source_key{
+            .camera_uid = camera.uid(),
+            .image_path = camera.image_path()};
+        const auto source = std::make_shared<Tensor>(
+            Tensor::zeros({3, 24, 32}, Device::CPU, DataType::UInt8));
+        const auto fallback = std::make_shared<Tensor>(
+            Tensor::zeros({3, 6, 8}, Device::CPU, DataType::UInt8));
+        manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+            .owner = manager.activeViewId(),
+            .status = RenderingManager::GTComparisonImageStatus::Ready,
+            .source_key = source_key,
+            .generation = manager.gt_comparison_full_source_generation_,
+            .cpu_source = source};
+        auto& state = manager.state().gt_comparison_actual_size_state_;
+        state.source_key = source_key;
+        state.fit_fallback = fallback;
+
+        std::atomic<bool> fail_upload{true};
+        std::atomic<std::size_t> allocation_attempts{0};
+        struct AllocationProbeReset {
+            ~AllocationProbeReset() {
+                MemoryPressureCoordinator::instance().set_allocation_probe(nullptr);
+            }
+        } reset_probe;
+        MemoryPressureCoordinator::instance().set_allocation_probe(
+            [&](const MemoryDomain domain, std::size_t) {
+                if (domain != MemoryDomain::CudaDevice) {
+                    return false;
+                }
+                ++allocation_attempts;
+                return fail_upload.load();
+            });
+
+        constexpr glm::ivec2 viewport{16, 12};
+        const auto failed = manager.prepareGTActualFrame(manager.state(), camera, viewport);
+        ASSERT_EQ(failed.status, RenderingManager::GTComparisonImageStatus::Failed);
+        EXPECT_GT(allocation_attempts.load(), 0u);
+        EXPECT_FALSE(failed.tile);
+        EXPECT_FALSE(failed.error.empty());
+        EXPECT_EQ(manager.getGTComparisonActualSizeError(), failed.error);
+        EXPECT_EQ(failed.fallback, fallback);
+        EXPECT_EQ(state.fit_fallback, fallback);
+        EXPECT_EQ(state.cpu_source, source);
+        EXPECT_FALSE(state.visible_tile);
+        EXPECT_FALSE(state.tile_key);
+        ASSERT_TRUE(state.tile_failure);
+        EXPECT_FALSE(state.tile_failure->key.distorted);
+
+        const auto failed_attempts = allocation_attempts.load();
+        const auto suppressed = manager.prepareGTActualFrame(manager.state(), camera, viewport);
+        EXPECT_EQ(suppressed.status, RenderingManager::GTComparisonImageStatus::Failed);
+        EXPECT_EQ(suppressed.error, failed.error);
+        EXPECT_EQ(suppressed.fallback, fallback);
+        EXPECT_EQ(allocation_attempts.load(), failed_attempts);
+
+        fail_upload = false;
+        manager.retryGTComparisonActualSize();
+        EXPECT_FALSE(state.tile_failure);
+        EXPECT_TRUE(manager.getGTComparisonActualSizeError().empty());
+        ASSERT_TRUE(manager.gt_comparison_full_source_slot_);
+        EXPECT_EQ(manager.gt_comparison_full_source_slot_->cpu_source, source);
+        const auto ready = manager.prepareGTActualFrame(manager.state(), camera, viewport);
+        ASSERT_EQ(ready.status, RenderingManager::GTComparisonImageStatus::Ready);
+        ASSERT_TRUE(ready.tile && ready.tile->is_valid());
+        EXPECT_EQ(ready.tile->device(), Device::CUDA);
+        EXPECT_EQ(ready.tile, manager.gt_comparison_cuda_image_);
+        ASSERT_TRUE(state.visible_tile);
+        EXPECT_EQ(state.visible_tile->device(), Device::CPU);
+        EXPECT_EQ(manager.gt_comparison_cuda_source_, state.visible_tile.get());
+        EXPECT_EQ(state.fit_fallback, fallback);
+        EXPECT_FALSE(manager.isGTComparisonActualSizeActive());
+
+        const auto cpu_tile = state.visible_tile;
+        const auto generation = manager.state().split_left_image_generation_;
+        EXPECT_NE(generation & RenderingManager::SPLIT_LEFT_GENERATION_BIT, 0u);
+        const auto ready_attempts = allocation_attempts.load();
+        fail_upload = true;
+        const auto cached = manager.prepareGTActualFrame(manager.state(), camera, viewport);
+        EXPECT_EQ(cached.status, RenderingManager::GTComparisonImageStatus::Ready);
+        EXPECT_EQ(cached.tile, ready.tile);
+        EXPECT_EQ(state.visible_tile, cpu_tile);
+        EXPECT_EQ(manager.state().split_left_image_generation_, generation);
+        EXPECT_EQ(allocation_attempts.load(), ready_attempts);
+
+        ASSERT_TRUE(ready.snapshot);
+        manager.publishGTComparisonActualFrame(manager.state(), *ready.snapshot);
+        EXPECT_TRUE(manager.isGTComparisonActualSizeActive());
+        EXPECT_FALSE(state.fit_fallback);
+        EXPECT_TRUE(manager.getGTComparisonActualSizeError().empty());
+    }
+
+    TEST(SplitViewServiceTest, ActualSizeCaptureUsesExactTexelsFlipAndLetterbox) {
+        constexpr int panel_width = 8;
+        constexpr int panel_height = 6;
+        constexpr std::size_t panel_pixels = panel_width * panel_height;
+        std::vector<float> left_values(3 * panel_pixels);
+        std::vector<float> right_values(3 * panel_pixels);
+        for (int channel = 0; channel < 3; ++channel) {
+            for (int y = 0; y < panel_height; ++y) {
+                for (int x = 0; x < panel_width; ++x) {
+                    const auto index = static_cast<std::size_t>(channel) * panel_pixels +
+                                       static_cast<std::size_t>(y) * panel_width + x;
+                    left_values[index] = 0.1f + channel * 0.2f + y * 0.01f + x * 0.001f;
+                    right_values[index] = 0.5f + channel * 0.1f + y * 0.01f + x * 0.001f;
+                }
+            }
+        }
+        auto left = std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::from_vector(
+            left_values, {3, panel_height, panel_width}, lfs::core::Device::CPU));
+        auto right = std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::from_vector(
+            right_values, {3, panel_height, panel_width}, lfs::core::Device::CPU));
+
+        VulkanSplitViewParams params{
+            .enabled = true,
+            .left = {.image = left},
+            .right = {.image = right, .flip_y = true},
+            .split_position = 0.5f,
+            .content_rect = {2, 1, panel_width, panel_height},
+            .coordinate_extent = {12, 8},
+            .background = {0.01f, 0.02f, 0.03f},
+            .exact_texel_sampling = true};
+        const auto output = composeSplitCaptureCpu(params, {12, 8});
+        ASSERT_TRUE(output && output->is_valid());
+        const SplitViewCpuDesc shared_params{
+            .exact_texel_sampling = true,
+            .left = {.image = left},
+            .right = {.image = right, .flip_y = true},
+            .split_position = params.split_position,
+            .content_rect = params.content_rect,
+            .coordinate_extent = params.coordinate_extent,
+            .background = params.background};
+        const auto shared_output = composeSplitViewCpuImage(shared_params, {12, 8});
+        ASSERT_TRUE(shared_output && shared_output->is_valid());
+        ASSERT_EQ(shared_output->numel(), output->numel());
+        // Upstream captures publish upright HWC; the legacy test compositor is CHW.
+        const auto shared_chw = shared_output->permute({2, 0, 1}).contiguous();
+        for (std::size_t i = 0; i < output->numel(); ++i)
+            EXPECT_FLOAT_EQ(shared_chw.ptr<float>()[i], output->ptr<float>()[i]) << i;
+        const float* data = output->ptr<float>();
+        constexpr std::size_t output_pixels = 12 * 8;
+        const auto at = [&](const int channel, const int x, const int y) {
+            return data[static_cast<std::size_t>(channel) * output_pixels +
+                        static_cast<std::size_t>(y) * 12 + x];
+        };
+
+        EXPECT_FLOAT_EQ(at(0, 0, 0), 0.01f);
+        EXPECT_FLOAT_EQ(at(1, 0, 0), 0.02f);
+        EXPECT_FLOAT_EQ(at(0, 2, 1), left_values[0]);
+        EXPECT_FLOAT_EQ(at(0, 3, 6), left_values[5 * panel_width + 1]);
+        EXPECT_FLOAT_EQ(at(0, 8, 1), right_values[5 * panel_width + 6]);
+        EXPECT_FLOAT_EQ(at(2, 9, 6), right_values[2 * panel_pixels + 7]);
+        EXPECT_NEAR(at(0, 5, 1), 0.29f * 0.8f, 1.0e-6f);
+    }
+
+    TEST(SplitViewServiceTest, FitCaptureRetainsLinearSampling) {
+        const std::vector<float> values{
+            0.0f, 1.0f, 2.0f, 3.0f,
+            0.0f, 1.0f, 2.0f, 3.0f,
+            0.0f, 1.0f, 2.0f, 3.0f};
+        auto image = std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::from_vector(
+            values, {3, 2, 2}, lfs::core::Device::CPU));
+        VulkanSplitViewParams params{
+            .enabled = true,
+            .left = {.image = image},
+            .right = {.image = image},
+            .split_position = 0.75f,
+            .content_rect = {0, 0, 10, 6},
+            .coordinate_extent = {10, 6},
+            .exact_texel_sampling = false};
+        const auto output = composeSplitCaptureCpu(params, {10, 6});
+        ASSERT_TRUE(output && output->is_valid());
+        const float* data = output->ptr<float>();
+        // Pixel-center UVs map (1, 1) to source coordinates (-0.2, 0),
+        // where linear filtering clamps to the first texel.
+        EXPECT_FLOAT_EQ(data[1 * 10 + 1], 0.0f);
+
+        // Away from the edge and divider, (3, 2) maps to (0.2, 1/3).
+        // Bilinear interpolation of {0, 1; 2, 3} gives 0.2 + 2/3 = 13/15,
+        // rather than the first texel that nearest sampling would select.
+        EXPECT_NEAR(data[2 * 10 + 3], 13.0f / 15.0f, 1.0e-6f);
+    }
+
     TEST(CameraImageLoadTest, PreviewLoadsCanAvoidMutatingCameraImageDimensions) {
         using lfs::core::Camera;
         using lfs::core::CameraModelType;
@@ -545,6 +1915,115 @@ namespace lfs::vis {
         EXPECT_EQ(camera.image_height(), 3);
 
         std::filesystem::remove(image_path);
+    }
+
+    TEST(CameraImageLoadTest, NativeResolutionRgb8LoaderPreservesEightBitBytesAndChannelPolicy) {
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::TensorShape;
+
+        for (const auto [width, height] : {
+                 std::pair{1, 1}, std::pair{7, 1}, std::pair{1, 7},
+                 std::pair{5, 2}, std::pair{7, 5}}) {
+            SCOPED_TRACE(std::format("{}x{}", width, height));
+            const std::size_t pixel_count = static_cast<std::size_t>(width) * height;
+            const auto stamp = std::to_string(
+                std::chrono::steady_clock::now().time_since_epoch().count());
+            const auto root = std::filesystem::temp_directory_path() /
+                              ("lfs_gt_rgb8_native_" + stamp);
+            std::filesystem::create_directories(root);
+
+            std::vector<std::uint8_t> gray(pixel_count);
+            std::vector<std::uint8_t> two_channel(pixel_count * 2);
+            std::vector<std::uint8_t> rgb(pixel_count * 3);
+            std::vector<std::uint8_t> rgba(pixel_count * 4);
+            for (std::size_t index = 0; index < pixel_count; ++index) {
+                gray[index] = static_cast<std::uint8_t>(11 + index);
+                two_channel[index * 2] = static_cast<std::uint8_t>(21 + index);
+                two_channel[index * 2 + 1] = static_cast<std::uint8_t>(101 + index);
+                rgb[index * 3] = static_cast<std::uint8_t>(31 + index);
+                rgb[index * 3 + 1] = static_cast<std::uint8_t>(111 + index);
+                rgb[index * 3 + 2] = static_cast<std::uint8_t>(211 - index);
+                rgba[index * 4] = static_cast<std::uint8_t>(41 + index);
+                rgba[index * 4 + 1] = static_cast<std::uint8_t>(121 + index);
+                rgba[index * 4 + 2] = static_cast<std::uint8_t>(221 - index);
+                rgba[index * 4 + 3] = static_cast<std::uint8_t>(7 + index);
+            }
+
+            const auto gray_path = root / "gray.png";
+            const auto two_path = root / "two.png";
+            const auto rgb_path = root / "rgb.png";
+            const auto rgba_path = root / "rgba.png";
+            const auto jpeg_path = root / "rgb.jpg";
+            ASSERT_NO_THROW(writeU8Image(gray_path, width, height, 1, gray));
+            ASSERT_NO_THROW(writeU8Image(two_path, width, height, 2, two_channel));
+            ASSERT_NO_THROW(writeU8Image(rgb_path, width, height, 3, rgb));
+            ASSERT_NO_THROW(writeU8Image(rgba_path, width, height, 4, rgba));
+            ASSERT_NO_THROW(writeU8Image(jpeg_path, width, height, 3, rgb));
+
+            const auto loaded_rgb = lfs::core::load_image_rgb8_chw_native_resolution(rgb_path);
+            const auto repeated_rgb = lfs::core::load_image_rgb8_chw_native_resolution(rgb_path);
+            ASSERT_TRUE(loaded_rgb.is_valid());
+            EXPECT_EQ(loaded_rgb.device(), Device::CPU);
+            EXPECT_EQ(loaded_rgb.dtype(), DataType::UInt8);
+            EXPECT_EQ(loaded_rgb.shape(), TensorShape({size_t{3}, static_cast<size_t>(height), static_cast<size_t>(width)}));
+            EXPECT_TRUE(loaded_rgb.is_contiguous());
+            EXPECT_TRUE(loaded_rgb.owns_memory());
+            EXPECT_FALSE(loaded_rgb.is_view());
+            EXPECT_EQ(loaded_rgb.stream(), nullptr);
+            EXPECT_EQ(loaded_rgb.to_vector_uint8(), repeated_rgb.to_vector_uint8());
+
+            const auto expect_channels = [&](const std::filesystem::path& path,
+                                             const std::vector<std::uint8_t>& expected_r,
+                                             const std::vector<std::uint8_t>& expected_g,
+                                             const std::vector<std::uint8_t>& expected_b) {
+                const auto loaded = lfs::core::load_image_rgb8_chw_native_resolution(path);
+                const auto values = loaded.to_vector_uint8();
+                ASSERT_EQ(values.size(), 3 * pixel_count);
+                for (std::size_t index = 0; index < pixel_count; ++index) {
+                    EXPECT_EQ(values[index], expected_r[index]);
+                    EXPECT_EQ(values[pixel_count + index], expected_g[index]);
+                    EXPECT_EQ(values[2 * pixel_count + index], expected_b[index]);
+                }
+            };
+
+            expect_channels(gray_path, gray, gray, gray);
+            std::vector<std::uint8_t> two_r(pixel_count);
+            std::vector<std::uint8_t> two_g(pixel_count);
+            std::vector<std::uint8_t> two_b(pixel_count);
+            std::vector<std::uint8_t> rgb_r(pixel_count);
+            std::vector<std::uint8_t> rgb_g(pixel_count);
+            std::vector<std::uint8_t> rgb_b(pixel_count);
+            std::vector<std::uint8_t> rgba_r(pixel_count);
+            std::vector<std::uint8_t> rgba_g(pixel_count);
+            std::vector<std::uint8_t> rgba_b(pixel_count);
+            for (std::size_t index = 0; index < pixel_count; ++index) {
+                two_r[index] = two_channel[index * 2];
+                two_g[index] = two_channel[index * 2 + 1];
+                two_b[index] = static_cast<std::uint8_t>(
+                    (static_cast<std::uint16_t>(two_r[index]) + two_g[index]) / 2u);
+                rgb_r[index] = rgb[index * 3];
+                rgb_g[index] = rgb[index * 3 + 1];
+                rgb_b[index] = rgb[index * 3 + 2];
+                rgba_r[index] = rgba[index * 4];
+                rgba_g[index] = rgba[index * 4 + 1];
+                rgba_b[index] = rgba[index * 4 + 2];
+            }
+            expect_channels(two_path, two_r, two_g, two_b);
+            expect_channels(rgb_path, rgb_r, rgb_g, rgb_b);
+            expect_channels(rgba_path, rgba_r, rgba_g, rgba_b);
+
+            const auto jpeg_first =
+                lfs::core::load_image_rgb8_chw_native_resolution(jpeg_path).to_vector_uint8();
+            const auto jpeg_second =
+                lfs::core::load_image_rgb8_chw_native_resolution(jpeg_path).to_vector_uint8();
+            EXPECT_EQ(jpeg_first, jpeg_second);
+            EXPECT_THROW(
+                (void)lfs::core::load_image_rgb8_chw_native_resolution(root / "missing.png"),
+                std::runtime_error);
+
+            std::filesystem::remove_all(root);
+        }
     }
 
     TEST(SplitViewServiceTest, SharedCameraPoseHelperNormalizesSceneRotationAndAppliesVisualizerAxes) {
@@ -1136,7 +2615,7 @@ namespace lfs::vis {
         const auto left = scene.addSplat("left", makeTestSplat(0.0f));
         const auto right = scene.addSplat("right", makeTwoPointTestSplat(1.0f, 2.0f));
         scene.getNodeById(right)->model->deleted() =
-            lfs::core::Tensor::from_vector({1.0f, 0.0f}, {size_t{2}}, lfs::core::Device::CUDA)
+            lfs::core::Tensor::from_vector({1.0f, 0.0f}, {size_t{2}}, lfs::core::Device::GPU)
                 .to(lfs::core::DataType::Bool);
         EXPECT_EQ(scene.getVisibleGaussianCount(), 2u);
         EXPECT_FALSE(scene.hasPreparedCombinedModel());
@@ -2699,6 +4178,9 @@ namespace lfs::vis {
     }
 
     TEST_F(RenderingManagerEventsTest, SceneLoadedDisablesGtComparison) {
+        SceneManager scene_manager;
+        addDatasetCameraWithImage(scene_manager);
+        services().set(&scene_manager);
         lfs::vis::screen::ScreenService manager_views;
         RenderingManager manager{manager_views};
         lfs::core::events::cmd::ToggleGTComparison{}.emit();
@@ -2714,7 +4196,24 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
     }
 
+    TEST_F(RenderingManagerEventsTest, ViewerCannotEnterGtComparisonThroughCommand) {
+        services().clear();
+        SceneManager scene_manager;
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        services().set(&scene_manager);
+        services().set(&manager);
+
+        lfs::core::events::cmd::ToggleGTComparison{}.emit();
+
+        EXPECT_FALSE(manager.isGTComparisonActive());
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+    }
+
     TEST_F(RenderingManagerEventsTest, SceneClearedDisablesGtComparison) {
+        SceneManager scene_manager;
+        addDatasetCameraWithImage(scene_manager);
+        services().set(&scene_manager);
         lfs::vis::screen::ScreenService manager_views;
         RenderingManager manager{manager_views};
         lfs::core::events::cmd::ToggleGTComparison{}.emit();
@@ -3037,6 +4536,7 @@ namespace lfs::vis {
     };
 
     TEST_F(DepthWindowGtHookTest, GtToggleCancelsDepthWindowDragAndClearsHover) {
+        addDatasetCameraWithImage(*viewer_->getSceneManager());
         ASSERT_TRUE(startDepthDrag());
         const op::ModalEvent move{
             .type = op::ModalEvent::Type::MOUSE_MOVE,

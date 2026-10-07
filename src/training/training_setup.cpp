@@ -21,6 +21,7 @@
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
 #include "io/project_document.hpp"
+#include "io/splat_tile_source.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "normal_auto_generate.hpp"
@@ -171,6 +172,18 @@ namespace lfs::training {
                                                                      "'{}': invalid SplatData",
                                                                      lfs::core::path_to_utf8(init_file)))
                                                        .user_message()));
+            }
+
+            if (init_result->tile_source) {
+                // Too large to load at full detail: the loader returned only the coarsest
+                // cut it would start streaming from. Training starts from that cut.
+                const auto everything = [](std::uint32_t) { return true; };
+                const auto full = lfs::io::select_splat_tiles(
+                    *init_result->tile_source, {.sse_per_error = 1.0f, .max_sse = 0.0f}, everything);
+                LOG_WARN("Tileset '{}' is too large to load at full detail; training starts from its "
+                         "coarsest level ({} of {} splats)",
+                         lfs::core::path_to_utf8(init_file.filename()), (*splat_ptr)->size(),
+                         full.render_splats);
             }
 
             auto model = std::make_unique<lfs::core::SplatData>(std::move(**splat_ptr));

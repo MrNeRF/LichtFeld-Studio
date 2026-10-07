@@ -498,7 +498,7 @@ struct PpispForwardParams {
     device const float* rgb_in;
     device float* rgb_out;
     int height, width, y_offset, full_height;
-    int camera_index, frame_index;
+    int camera_index, frame_index, x_offset, full_width;
 };
 
 kernel void ppisp_forward(constant PpispForwardParams& p [[buffer(0)]], uint index [[thread_position_in_grid]]) {
@@ -508,11 +508,11 @@ kernel void ppisp_forward(constant PpispForwardParams& p [[buffer(0)]], uint ind
     const int y = int(index) / p.width;
     const int x = int(index) % p.width;
     float3 rgb = float3(p.rgb_in[index], p.rgb_in[pixels + index], p.rgb_in[2 * pixels + index]);
-    const float2 pixel = float2(float(x) + 0.5f, float(p.y_offset + y) + 0.5f);
+    const float2 pixel = float2(float(p.x_offset + x) + 0.5f, float(p.y_offset + y) + 0.5f);
     if (p.frame_index != -1)
         rgb = ppisp_apply_exposure(rgb, p.exposure[p.frame_index]);
     if (p.camera_index != -1)
-        rgb = ppisp_apply_vignetting(rgb, p.vignetting + p.camera_index * 15, pixel, float(p.width),
+        rgb = ppisp_apply_vignetting(rgb, p.vignetting + p.camera_index * 15, pixel, float(p.full_width),
                                      float(p.full_height));
     if (p.frame_index != -1)
         rgb = ppisp_apply_color_correction(rgb, ppisp_load_color(p.color + p.frame_index * 8));

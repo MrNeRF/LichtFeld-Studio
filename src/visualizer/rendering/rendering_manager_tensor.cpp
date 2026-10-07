@@ -90,6 +90,7 @@ namespace lfs::vis {
 
         SplitViewCpuDesc cpuSplitViewDesc(const ViewportSplitView& split) {
             return {.loss_visualization = split.loss_visualization,
+                    .exact_texel_sampling = split.exact_texel_sampling,
                     .left = cpuPanelDesc(split.left),
                     .right = cpuPanelDesc(split.right),
                     .split_position = split.split_position,
@@ -224,6 +225,7 @@ namespace lfs::vis {
         view.framebuffer_viewport_rect_ = {.top_left = top_left, .size = size};
         // Same settings bookkeeping as the Vulkan manager: a settings change
         // re-renders the view, and the stale-view check compares against it.
+        syncGTComparisonViewSettings(view, context.settings);
         if (!view.rendered_settings || view.rendered_settings->view() != context.settings.view() ||
             view.rendered_settings->scene() != context.settings.scene()) {
             view.dirty_mask_.fetch_or(DirtyFlag::ALL);
@@ -369,7 +371,7 @@ namespace lfs::vis {
             .cursor_preview = view.viewport_overlay_service_.cursorPreview(),
             .gizmo = gizmo_state_,
             .hovered_camera_id = camera_interaction_service_.hoveredCameraId(),
-            .current_camera_id = camera_interaction_service_.currentCameraId(),
+            .current_camera_id = view.gt_comparison_camera_uid_ >= 0 ? view.gt_comparison_camera_uid_ : camera_interaction_service_.currentCameraId(),
             .hovered_gaussian_id = view.viewport_overlay_service_.hoveredGaussianId(),
             .selection_flash_intensity = view.animation_state_.selectionFlashIntensity(),
             .scene_jitter_pixels = temporal_setup.jitter_pixels,
@@ -693,21 +695,20 @@ namespace lfs::vis {
                                        : gt_mode == GTComparisonMode::Depth ? camera->has_depth()
                                                                             : camera->has_normal();
             GTComparisonImageLookup lookup;
-            if (has_reference && !reference_path.empty()) {
+            GTComparisonActualFrame actual_frame;
+            const bool actual_requested = frame_settings.gt_comparison_actual_size &&
+                                          detail::isGTComparisonActualSizeAvailable(*camera, frame_settings.view());
+            if (actual_requested) {
+                actual_frame = prepareGTActualFrame(view, *camera, size);
+                lookup.status = actual_frame.status;
+                lookup.image = actual_frame.tile ? actual_frame.tile : actual_frame.fallback;
+                lookup.error = actual_frame.error;
+            } else if (has_reference && !reference_path.empty()) {
                 const bool undistort =
                     camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
                     camera->is_undistort_precomputed() &&
                     (rgb_reference || !camera->is_undistort_prepared());
-                lookup = getOrQueueGTComparisonImage({.camera_uid = camera->uid(),
-                                                      .mode = gt_mode,
-                                                      .image_path = reference_path,
-                                                      .preview_max_dimension = std::max(gt_size.x, gt_size.y),
-                                                      .image_size = gt_size,
-                                                      .undistort_requested = undistort,
-                                                      .undistort_params = undistort ? camera->undistort_params() : lfs::core::UndistortParams{},
-                                                      .depth_visualization_mode = frame_settings.depth_visualization_mode,
-                                                      .background_color = frame_settings.background_color,
-                                                      .camera = camera});
+                lookup = getOrQueueGTComparisonImage({.owner = view.id, .camera_uid = camera->uid(), .mode = gt_mode, .image_path = reference_path, .preview_max_dimension = std::max(gt_size.x, gt_size.y), .image_size = gt_size, .undistort_requested = undistort, .undistort_params = undistort ? camera->undistort_params() : lfs::core::UndistortParams{}, .depth_visualization_mode = frame_settings.depth_visualization_mode, .background_color = frame_settings.background_color, .camera = camera});
                 if (lookup.status == GTComparisonImageStatus::Loading)
                     markViewDirty(context.view, DirtyFlag::SPLIT_VIEW, FrameReason::SettingsChange);
             } else {
@@ -727,7 +728,8 @@ namespace lfs::vis {
             const glm::ivec2 reference_size{lfs::rendering::imageWidth(*reference, reference_layout),
                                             lfs::rendering::imageHeight(*reference, reference_layout)};
             const auto render_camera = detail::buildGTRenderCamera(
-                *camera, reference_size, detail::currentSceneTransform(context.scene_manager, camera->uid()));
+                *camera, reference_size, detail::currentSceneTransform(context.scene_manager, camera->uid()),
+                actual_frame.pixel_region);
             if (!render_camera)
                 return keep_previous("GT comparison could not build the dataset render camera");
             auto rendered = render_panel(*model, scene_state, reference_size,
@@ -745,8 +747,13 @@ namespace lfs::vis {
                     return keep_previous("Normal GT comparison requires pinhole camera intrinsics");
                 compare = makeNormalDisplayFromDepthTensor(*rendered->depth, *render_camera->intrinsics);
             } else {
+                lfs::core::PpispRegion region;
+                if (actual_frame.pixel_region) {
+                    const auto& pixels = *actual_frame.pixel_region;
+                    region = {.x_offset = pixels.origin.x, .y_offset = pixels.origin.y, .full_width = pixels.full_extent.x, .full_height = pixels.full_extent.y};
+                }
                 compare = applyViewportAppearanceCorrection(
-                    std::move(compare), context.scene_manager, frame_settings, camera->uid());
+                    std::move(compare), context.scene_manager, frame_settings, camera->uid(), region);
             }
             if (!compare || !compare->is_valid())
                 return keep_previous("GT comparison could not prepare the rendered display panel");
@@ -763,13 +770,21 @@ namespace lfs::vis {
             if (!reference || !compare)
                 return keep_previous("GT comparison failed to upload display panels to the GPU");
 
-            const SplitCompositeContentRect rect =
-                resolveSplitCompositeContentRect(size, true, reference_size);
+            auto rect = resolveSplitCompositeContentRect(size, true, reference_size);
+            const bool native_ready = actual_frame.tile && actual_frame.snapshot;
+            if (native_ready) {
+                const auto& r = actual_frame.content_rect;
+                rect = {.x = r.x, .y = r.y, .width = r.z, .height = r.w};
+                publishGTComparisonActualFrame(view, *actual_frame.snapshot);
+            } else {
+                clearPublishedGTComparisonActualFrame(view);
+            }
             ViewportSplitView split{
                 .enabled = true,
                 .loss_visualization = gtComparisonShowsLoss(gt_mode),
+                .exact_texel_sampling = native_ready,
                 .left = makeTensorSplitPanel(std::move(reference), {}, view.split_left_render_target_,
-                                             0.0f, frame_settings.split_position, true),
+                                             0.0f, frame_settings.split_position, !native_ready),
                 .right = makeTensorSplitPanel(std::move(compare), std::move(rendered->depth),
                                               view.split_right_render_target_,
                                               frame_settings.split_position, 1.0f),

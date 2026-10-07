@@ -805,6 +805,7 @@ add_executable(${PROJECT_NAME}
     src/app/mcp_pointer_tool.cpp
     src/app/mcp_ui_registry_tools.cpp
     src/app/converter.cpp
+    src/app/licht_command.cpp
     src/app/converter_output_paths.cpp
     src/app/converter_overwrite.cpp
     resources/lichtfeld-studio.rc

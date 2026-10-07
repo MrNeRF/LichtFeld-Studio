@@ -121,6 +121,9 @@ namespace lfs::io::project {
         // missing THMB.
         std::span<const std::byte> preview_png;
         bool remove_preview = false;
+        // Save As may omit run metrics from the destination while preserving
+        // the open source document if publication fails.
+        bool omit_metrics = false;
         // When enabled, an ordinary explicit save creates a dataset preview
         // only when the opened source has no THMB.
         bool regenerate_dataset_preview = true;
@@ -327,9 +330,11 @@ namespace lfs::io::project {
         [[nodiscard]] std::vector<lfs::core::Uuid>
         dataset_source_uuids() const;
         [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
-        embed_dataset_batch(const EmbeddedDatasetManifest& manifest,
+        embed_dataset_batch(EmbeddedDatasetManifest manifest,
                             std::span<const DatasetEmbedSource> sources,
-                            const ProjectDocumentSaveOptions& options = {});
+                            const ProjectDocumentSaveOptions& options = {},
+                            std::function<void(float, const std::string&)> progress = {},
+                            std::function<bool()> cancel = {});
 
         [[nodiscard]] const LazyChunkValue*
         find_ppisp(const lfs::core::Uuid& instance_uuid) const noexcept;

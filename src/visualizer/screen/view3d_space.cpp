@@ -263,8 +263,10 @@ namespace lfs::vis::screen {
     void setOrthographic(View3DSpace& view, const bool enabled, const float viewport_height) {
         auto& s = view.settings;
         view.auto_orthographic = false;
-        if (enabled == s.orthographic)
+        if (enabled == s.orthographic) {
+            sanitizeGTComparisonSettings(s);
             return;
+        }
         if (enabled) {
             constexpr float kMinScale = 1.0f;
             constexpr float kMaxScale = 10000.0f;
@@ -274,6 +276,7 @@ namespace lfs::vis::screen {
                 s.ortho_scale = std::clamp(viewport_height / (2.0f * distance * half_tan), kMinScale, kMaxScale);
         }
         s.orthographic = enabled;
+        sanitizeGTComparisonSettings(s);
     }
 
     void setAxisView(View3DSpace& view, const ViewAxis axis, const float viewport_height) {
@@ -446,6 +449,7 @@ namespace lfs::vis::screen {
             s.depth_filter_transform = lfs::geometry::EuclideanTransform(glm::quat_cast(R), t);
         }
         sanitizeDepthViewSettings(s);
+        sanitizeGTComparisonSettings(s);
         return s;
     }
 

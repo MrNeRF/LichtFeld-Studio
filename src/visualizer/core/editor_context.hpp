@@ -93,6 +93,9 @@ namespace lfs::vis {
         // Capability queries
         [[nodiscard]] bool canTransformSelectedNode() const;
         [[nodiscard]] bool canSelectGaussians() const;
+        // A visible streamed model swaps its splats at any time, so splat-level
+        // selection and edits are unsafe while it is shown.
+        [[nodiscard]] bool isSplatEditingBlocked() const { return has_visible_streamed_model_; }
         [[nodiscard]] bool forcePointCloudMode() const { return mode_ == EditorMode::PRE_TRAINING; }
 
         // Active tool management (legacy - will be removed)
@@ -149,6 +152,7 @@ namespace lfs::vis {
         bool has_gaussians_ = false;
         bool has_editable_transform_selection_ = false;
         bool has_editable_splat_selection_ = false;
+        bool has_visible_streamed_model_ = false;
         bool has_editable_align_selection_ = false;
         bool tool_restore_guard_ = false;
 

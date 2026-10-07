@@ -363,8 +363,30 @@ namespace lfs::io::project {
         friend bool operator==(const EllipsoidRecord&, const EllipsoidRecord&) = default;
     };
 
-    // Camera calibration in SCNG is always the source (pre-rectification) calibration
-    // that belongs to the stored distortion model; rectified calibration is derived runtime state.
+    struct CameraCalibrationRecord {
+        float focal_x = 0.0f;
+        float focal_y = 0.0f;
+        float center_x = 0.0f;
+        float center_y = 0.0f;
+        std::int32_t width = 0;
+        std::int32_t height = 0;
+
+        friend bool operator==(const CameraCalibrationRecord&,
+                               const CameraCalibrationRecord&) = default;
+    };
+
+    struct CameraUndistortionRecord {
+        CameraCalibrationRecord source;
+        CameraCalibrationRecord destination;
+        bool prepared = false;
+        bool crop_solve_failed = false;
+
+        friend bool operator==(const CameraUndistortionRecord&,
+                               const CameraUndistortionRecord&) = default;
+    };
+
+    // The outer SCNG calibration stores the source (pre-rectification) calibration.
+    // The optional undistortion record also preserves rectified runtime state.
     struct CameraRecord {
         std::int32_t uid = -1;
         std::int32_t camera_id = 0;
@@ -392,6 +414,7 @@ namespace lfs::io::project {
         // camera objects; parsers default this to true.
         bool has_image = true;
         std::string split = "train";
+        std::optional<CameraUndistortionRecord> undistortion;
         // Observations of this camera node in the project's SFMO chapter.
         std::uint64_t sfm_observation_count = 0;
 

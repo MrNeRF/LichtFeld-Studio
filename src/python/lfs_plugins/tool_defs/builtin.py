@@ -117,8 +117,22 @@ def _poll_has_gaussians(context) -> bool:
     )
 
 
+def _splat_editing_blocked() -> bool:
+    try:
+        import lichtfeld as lf
+
+        is_blocked = getattr(getattr(lf, "ui", None), "is_splat_editing_blocked", None)
+        return bool(is_blocked()) if callable(is_blocked) else False
+    except Exception:
+        return False
+
+
 def _poll_can_select(context) -> bool:
-    return _poll_has_gaussians(context) and not _selection_is_crop_volume()
+    return (
+        _poll_has_gaussians(context)
+        and not _selection_is_crop_volume()
+        and not _splat_editing_blocked()
+    )
 
 
 def _poll_can_transform(context) -> bool:

@@ -7,6 +7,7 @@
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
+#include "core/splat_data.hpp"
 #include "core/user_paths.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
@@ -20,6 +21,7 @@
 #include "operator/operator_registry.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/gt_comparison_geometry.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "screen/screen_service.hpp"
@@ -295,6 +297,7 @@ namespace lfs::vis {
         services().set(&scene_manager);
         services().set(&rendering_manager);
         auto& scene = scene_manager.getScene();
+        scene_manager.changeContentType(SceneManager::ContentType::Dataset);
         const auto group = scene.addCameraGroup("Cameras", scene.addGroup("Dataset"), 3);
         for (const int uid : {4, 17, 42}) {
             auto camera = std::make_shared<core::Camera>(
@@ -302,12 +305,12 @@ namespace lfs::vis {
                 core::Tensor::zeros({3}, core::Device::CPU),
                 100.0f, 100.0f, 32.0f, 32.0f,
                 core::Tensor(), core::Tensor(), core::CameraModelType::PINHOLE,
-                std::to_string(uid), std::filesystem::path{}, std::filesystem::path{},
+                std::to_string(uid), std::filesystem::path("source.png"), std::filesystem::path{},
                 64, 64, uid);
             scene.addCamera(std::to_string(uid), group, std::move(camera));
         }
         ASSERT_EQ(services().trainerOrNull(), nullptr);
-        core::events::cmd::ToggleGTComparison{}.emit();
+        controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
         ASSERT_TRUE(rendering_manager.isGTComparisonActive());
         const auto press = [&](const int key, const int expected_uid) {
             controller.handleKey(key, input::ACTION_PRESS, input::KEYMOD_NONE);
@@ -371,7 +374,7 @@ namespace lfs::vis {
         controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
         controller.handleKey(input::KEY_V, input::ACTION_PRESS, input::KEYMOD_NONE);
 
-        EXPECT_EQ(toggle_gt_count, 1);
+        EXPECT_EQ(toggle_gt_count, 0);
         EXPECT_EQ(toggle_split_count, 1);
     }
 
@@ -397,8 +400,90 @@ namespace lfs::vis {
         controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
         controller.handleKey(input::KEY_V, input::ACTION_PRESS, input::KEYMOD_NONE);
 
-        EXPECT_EQ(toggle_gt_count, 1);
+        EXPECT_EQ(toggle_gt_count, 0);
         EXPECT_EQ(toggle_split_count, 1);
+    }
+
+    TEST_F(InputControllerFocusTest, GUsesNodeCompareForViewerAndKeepsVBindings) {
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        Viewport viewport(200, 200);
+        class CommandRecordingViewTargets final : public ViewTargets {
+        public:
+            explicit CommandRecordingViewTargets(Viewport& viewport) : views_(viewport) {}
+            ViewTarget activeView() override { return views_.activeView(); }
+            ViewTarget viewAt(float x, float y) override { return views_.viewAt(x, y); }
+            ViewTarget findView(ViewId id) override { return views_.findView(id); }
+            ViewId viewId(const Viewport& viewport) const override { return views_.viewId(viewport); }
+            std::uint64_t viewEpoch() const override { return views_.viewEpoch(); }
+            void activateView(ViewId id) override { views_.activateView(id); }
+            bool runViewCommand(ViewId id, std::string_view command) override {
+                commands.emplace_back(id, command);
+                return true;
+            }
+            std::vector<std::pair<ViewId, std::string>> commands;
+
+        private:
+            TestViewTargets views_;
+        } controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        router.focusViewportKeyboard();
+
+        SceneManager scene_manager;
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager rendering_manager{manager_views};
+        services().set(&scene_manager);
+        services().set(&rendering_manager);
+        auto& scene = scene_manager.getScene();
+        const auto make_splat = [](const float x) {
+            return std::make_unique<lfs::core::SplatData>(
+                0,
+                Tensor::from_vector({x, 0.0f, 2.0f}, {size_t{1}, size_t{3}}, Device::CPU),
+                Tensor::from_vector({1.0f, 1.0f, 1.0f}, {size_t{1}, size_t{1}, size_t{3}}, Device::CPU),
+                Tensor::zeros({size_t{1}, size_t{0}, size_t{3}}, Device::CPU, DataType::Float32),
+                Tensor::zeros({size_t{1}, size_t{3}}, Device::CPU),
+                Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f}, {size_t{1}, size_t{4}}, Device::CPU),
+                Tensor::from_vector({8.0f}, {size_t{1}, size_t{1}}, Device::CPU),
+                1.0f);
+        };
+        int split_toggles = 0;
+        int gt_toggles = 0;
+        lfs::event::ScopedHandler handlers;
+        handlers.subscribe<core::events::cmd::ToggleSplitView>([&](const auto&) { ++split_toggles; });
+        handlers.subscribe<core::events::cmd::ToggleGTComparison>([&](const auto&) { ++gt_toggles; });
+
+        controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
+        EXPECT_EQ(split_toggles, 0);
+        EXPECT_EQ(gt_toggles, 0);
+        EXPECT_FALSE(rendering_manager.isGTComparisonActive());
+
+        scene.addSplat("first", make_splat(0.0f));
+        controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
+        EXPECT_EQ(split_toggles, 0);
+        EXPECT_EQ(gt_toggles, 0);
+        EXPECT_FALSE(rendering_manager.isGTComparisonActive());
+
+        scene.addSplat("second", make_splat(1.0f));
+        controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
+        EXPECT_EQ(split_toggles, 1);
+        EXPECT_EQ(gt_toggles, 0);
+        EXPECT_FALSE(rendering_manager.isGTComparisonActive());
+
+        controller.handleKey(input::KEY_V, input::ACTION_PRESS, input::KEYMOD_NONE);
+        EXPECT_EQ(split_toggles, 2);
+        EXPECT_EQ(gt_toggles, 0);
+
+        controller.handleKey(input::KEY_V, input::ACTION_PRESS, input::KEYMOD_SHIFT);
+        EXPECT_EQ(split_toggles, 2);
+        EXPECT_EQ(gt_toggles, 0);
+        ASSERT_EQ(controller_views.commands.size(), 1u);
+        EXPECT_EQ(controller_views.commands.front().first, controller_views.activeView().id);
+        EXPECT_EQ(controller_views.commands.front().second, "area:side");
     }
 
     TEST_F(InputControllerFocusTest, EscapeWithScenePanelFocusStaysWithGui) {
@@ -439,7 +524,7 @@ namespace lfs::vis {
         router.focusViewportKeyboard();
         controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
 
-        EXPECT_EQ(toggle_gt_count, 1);
+        EXPECT_EQ(toggle_gt_count, 0);
     }
 
     TEST_F(InputControllerFocusTest, ViewportViewHotkeysStayBlockedDuringTextEntry) {
@@ -1032,6 +1117,14 @@ namespace lfs::vis {
         core::events::cmd::ToggleSplitView{}.emit();
 
         EXPECT_FALSE(controller.isContinuousInputActive());
+    }
+
+    TEST_F(InputControllerFocusTest, GTImagePanConvertsTotalDragToPhysicalPixelsOnce) {
+        // These are already physical positions after WindowManager's scaling.
+        const auto displacement = detail::roundedPhysicalDrag({6.5, -7.0});
+        const glm::ivec2 origin = glm::ivec2(100, 200) - displacement;
+
+        EXPECT_EQ(origin, glm::ivec2(93, 207));
     }
 
     TEST_F(InputControllerFocusTest, FpvModeUsesInPlaceLookForPrimaryCameraDrag) {

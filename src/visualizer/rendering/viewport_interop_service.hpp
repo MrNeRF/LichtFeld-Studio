@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include "core/tensor.hpp"
 #include "core/tensor_vulkan_interop.hpp"
 
@@ -108,8 +110,8 @@ namespace lfs::vis {
     // channels. Visualizer presentation concern (namespace lfs::vis).
     class ViewportInteropService {
     public:
-        ViewportInteropService();
-        ~ViewportInteropService();
+        LFS_VIS_API ViewportInteropService();
+        LFS_VIS_API ~ViewportInteropService();
 
         ViewportInteropService(const ViewportInteropService&) = delete;
         ViewportInteropService& operator=(const ViewportInteropService&) = delete;

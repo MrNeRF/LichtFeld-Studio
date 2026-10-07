@@ -18,6 +18,7 @@
 #include <limits>
 #include <nvtx3/nvToolsExt.h>
 #include <stdexcept>
+#include <type_traits>
 
 namespace lfs::core::cuda {
 
@@ -48,8 +49,16 @@ namespace lfs::core::cuda {
         using detail::thin_prism_fisheye_from_theta_point;
         using detail::thin_prism_increment;
 
+        template <typename T>
+        __device__ float normalized_sample(T value) {
+            if constexpr (std::is_same_v<T, std::uint8_t>)
+                return static_cast<float>(value) / 255.0f;
+            return static_cast<float>(value);
+        }
+
+        template <typename T>
         __device__ float bilinear_sample_renormalized(
-            const float* __restrict__ src,
+            const T* __restrict__ src,
             const int width, const int height, const int stride,
             const float sx, const float sy,
             const bool positive_only = false) {
@@ -66,7 +75,7 @@ namespace lfs::core::cuda {
                     const int x = x0 + dx;
                     if (x < 0 || x >= width || y < 0 || y >= height)
                         continue;
-                    const float sample = src[y * stride + x];
+                    const float sample = normalized_sample(src[y * stride + x]);
                     if (!isfinite(sample) || (positive_only && sample <= 0.0f))
                         continue;
                     const float wx = dx == 0 ? 1.0f - fx : fx;
@@ -81,7 +90,7 @@ namespace lfs::core::cuda {
                 return 0.0f;
             const int nearest_x = min(max(static_cast<int>(floorf(sx + 0.5f)), 0), width - 1);
             const int nearest_y = min(max(static_cast<int>(floorf(sy + 0.5f)), 0), height - 1);
-            return src[nearest_y * stride + nearest_x];
+            return normalized_sample(src[nearest_y * stride + nearest_x]);
         }
 
         __device__ float lanczos3_weight(const float value) {
@@ -99,8 +108,9 @@ namespace lfs::core::cuda {
                     (pi_value / static_cast<float>(LANCZOS_RADIUS)));
         }
 
+        template <typename T>
         __device__ bool lanczos3_sample(
-            const float* __restrict__ src,
+            const T* __restrict__ src,
             const int width, const int height, const int channels,
             const float sx, const float sy,
             float* values, float& absolute_inside, float& absolute_full) {
@@ -130,7 +140,7 @@ namespace lfs::core::cuda {
                     absolute_inside += fabsf(weight);
                     const int index = y * width + x;
                     for (int channel = 0; channel < channels; ++channel)
-                        weighted[channel] += src[channel * plane + index] * weight;
+                        weighted[channel] += normalized_sample(src[channel * plane + index]) * weight;
                 }
             }
 
@@ -147,9 +157,10 @@ namespace lfs::core::cuda {
             return false;
         }
 
+        template <typename T>
         __global__ void __launch_bounds__(BLOCK_DIM* BLOCK_DIM)
             undistort_image_kernel(
-                const float* __restrict__ src,
+                const T* __restrict__ src,
                 float* __restrict__ dst,
                 const int channels,
                 const int output_y_offset,
@@ -628,42 +639,53 @@ namespace lfs::core::cuda {
 
     } // anonymous namespace
 
-    Tensor undistort_image(
-        const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
+    Tensor undistort_image_region(
+        const Tensor& src, const UndistortParams& full_params,
+        const int x, const int y, const int width, const int height, cudaStream_t stream) {
+        if (!src.is_valid() || src.ndim() != 3 || src.device() != Device::GPU ||
+            (src.dtype() != DataType::UInt8 && src.dtype() != DataType::Float32) ||
+            src.size(0) == 0 || src.size(0) > 4 || full_params.src_width <= 0 || full_params.src_height <= 0 ||
+            src.size(1) != size_t(full_params.src_height) || src.size(2) != size_t(full_params.src_width) ||
+            x < 0 || y < 0 || width <= 0 || height <= 0 ||
+            int64_t(x) + width > full_params.dst_width || int64_t(y) + height > full_params.dst_height) {
+            throw std::invalid_argument("Invalid undistort image source or destination region");
+        }
         const GpuBackendScope backend_scope(GpuBackend::CUDA);
-        assert(src.is_valid());
-        assert(src.ndim() == 3);
-        assert(src.device() == Device::GPU);
-        assert(src.dtype() == DataType::Float32);
         const CUDAStreamGuard stream_guard(stream);
         const auto input = src.contiguous();
         input.sync_to_stream(stream);
-        const int channels = static_cast<int>(input.shape()[0]);
-        assert(channels > 0 && channels <= 4);
-        assert(static_cast<int>(src.shape()[1]) == params.src_height);
-        assert(static_cast<int>(src.shape()[2]) == params.src_width);
-        if (is_identity_resample(params))
-            return input.clone();
-
-        nvtxRangePush("undistort_image");
-        auto dst = Tensor::empty(
-            {static_cast<size_t>(channels), static_cast<size_t>(params.dst_height),
-             static_cast<size_t>(params.dst_width)},
-            Device::GPU, DataType::Float32);
-        const dim3 block(BLOCK_DIM, BLOCK_DIM);
-        for (int output_y = 0; output_y < params.dst_height; output_y += OUTPUT_TILE_ROWS) {
-            const int tile_rows = std::min(OUTPUT_TILE_ROWS, params.dst_height - output_y);
-            const dim3 grid(
-                (params.dst_width + BLOCK_DIM - 1) / BLOCK_DIM,
-                (tile_rows + BLOCK_DIM - 1) / BLOCK_DIM);
-            undistort_image_kernel<<<grid, block, 0, stream>>>(
-                input.ptr<float>(), dst.ptr<float>(), channels, output_y,
-                area_quadrature(params), params);
+        auto params = full_params;
+        params.dst_cx -= x;
+        params.dst_cy -= y;
+        params.dst_width = width;
+        params.dst_height = height;
+        const int channels = static_cast<int>(input.size(0));
+        if (is_identity_resample(full_params)) {
+            auto crop = input.slice(1, y, y + height).slice(2, x, x + width).contiguous();
+            return crop.dtype() == DataType::UInt8 ? crop.to(DataType::Float32).div(255.0f) : crop.clone();
         }
-        const cudaError_t error = cudaGetLastError();
-        assert(error == cudaSuccess && "undistort_image_kernel launch failed");
-        nvtxRangePop();
+        auto dst = Tensor::empty({size_t(channels), size_t(height), size_t(width)}, Device::GPU, DataType::Float32);
+        const dim3 block(BLOCK_DIM, BLOCK_DIM);
+        for (int output_y = 0; output_y < height; output_y += OUTPUT_TILE_ROWS) {
+            const int tile_rows = std::min(OUTPUT_TILE_ROWS, height - output_y);
+            const dim3 grid((width + BLOCK_DIM - 1) / BLOCK_DIM, (tile_rows + BLOCK_DIM - 1) / BLOCK_DIM);
+            if (input.dtype() == DataType::UInt8) {
+                undistort_image_kernel<<<grid, block, 0, stream>>>(
+                    input.ptr<std::uint8_t>(), dst.ptr<float>(), channels, output_y, area_quadrature(params), params);
+                if (cudaGetLastError() != cudaSuccess)
+                    throw std::runtime_error("undistort image UInt8 kernel launch failed");
+            } else {
+                undistort_image_kernel<<<grid, block, 0, stream>>>(
+                    input.ptr<float>(), dst.ptr<float>(), channels, output_y, area_quadrature(params), params);
+                if (cudaGetLastError() != cudaSuccess)
+                    throw std::runtime_error("undistort image Float32 kernel launch failed");
+            }
+        }
         return dst;
+    }
+
+    Tensor undistort_image(const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
+        return undistort_image_region(src, params, 0, 0, params.dst_width, params.dst_height, stream);
     }
 
     Tensor distort_image_to_source(

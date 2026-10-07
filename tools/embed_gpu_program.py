@@ -25,6 +25,8 @@ def main():
         assert len(parameters) == 1, f"{entry}: expected one global parameter block, got {len(parameters)}"
         layout = parameters[0]["type"]["elementVarLayout"]
         parameter_bytes = layout["binding"]["size"]
+        if backend == "Vulkan":
+            source.append(f'static_assert({parameter_bytes} <= 256, "{entry}: Vulkan push constants exceed 256 bytes");')
         fields = layout["type"]["fields"]
         offsets = [f["binding"]["offset"] for f in fields if f["type"]["kind"] == "pointer"]
         assert all(f["type"]["kind"] in ("pointer", "scalar", "vector", "matrix") for f in fields), \
@@ -32,11 +34,12 @@ def main():
         group = next(e for e in reflection["entryPoints"] if e["name"] == entry).get("threadGroupSize", [1, 1, 1])
         data = pathlib.Path(path).read_bytes()
         # PTX driver loading expects a zero-terminated string.
-        if backend == "CUDA":
+        if backend == "CUDA" and pathlib.Path(path).suffix == ".ptx":
             data += b"\0"
         symbol = f"artifact_{i // 5}"
         source.append(f"const std::array<uint32_t, {len(offsets)}> {symbol}_offsets{{" + ','.join(map(str, offsets)) + '};')
-        source.append(f"alignas(4) const unsigned char {symbol}[] = {{")
+        alignment = 8 if backend == "CUDA" else 4
+        source.append(f"alignas({alignment}) const unsigned char {symbol}[] = {{")
         source.extend(','.join(str(b) for b in data[j:j + 32]) + ',' for j in range(0, len(data), 32))
         source.append('};')
         entries.append(f'{{"{entry}", M::Stage::{stage}, lfs::core::GpuBackend::{backend}, '

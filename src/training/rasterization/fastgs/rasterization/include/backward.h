@@ -12,6 +12,10 @@
 
 namespace fast_lfs::rasterization {
 
+    // Compare the runtime-generic and settings-specialized preprocess kernels in tests.
+    void set_force_generic_preprocess_for_testing(bool force) noexcept;
+    [[nodiscard]] bool force_generic_preprocess_for_testing() noexcept;
+
     void backward(
         const float* densification_error_map,
         const float* grad_image,

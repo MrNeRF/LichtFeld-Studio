@@ -114,6 +114,122 @@ namespace {
 
 } // namespace
 
+TEST(SceneSelectionCountTest, SceneClearResetsTheCachedSelectionCount) {
+    lfs::core::Scene scene;
+    ASSERT_NE(scene.addSplat("selected", make_test_splat({
+                                             0.0f,
+                                             0.0f,
+                                             0.0f,
+                                             1.0f,
+                                             0.0f,
+                                             0.0f,
+                                             2.0f,
+                                             0.0f,
+                                             0.0f,
+                                             3.0f,
+                                             0.0f,
+                                             0.0f,
+                                         })),
+              lfs::core::NULL_NODE);
+    scene.setSelectionMask(std::make_shared<Tensor>(make_uint8_mask({1, 1, 0, 0})));
+    ASSERT_EQ(scene.selectedCount(), 2u);
+
+    scene.clear();
+
+    EXPECT_EQ(scene.getSelectionMask(), nullptr);
+    EXPECT_EQ(scene.selectedCount(), 0u);
+}
+
+TEST(SceneSelectionCountTest, ModelCompactionRecountsTheResizedMask) {
+    lfs::core::Scene scene;
+    ASSERT_NE(scene.addSplat("selected", make_test_splat({
+                                             0.0f,
+                                             0.0f,
+                                             0.0f,
+                                             1.0f,
+                                             0.0f,
+                                             0.0f,
+                                             2.0f,
+                                             0.0f,
+                                             0.0f,
+                                             3.0f,
+                                             0.0f,
+                                             0.0f,
+                                         })),
+              lfs::core::NULL_NODE);
+    scene.setSelectionMask(std::make_shared<Tensor>(make_uint8_mask({1, 0, 0, 1})));
+    ASSERT_EQ(scene.selectedCount(), 2u);
+
+    scene.replaceNodeModel("selected", make_test_splat({
+                                           0.0f,
+                                           0.0f,
+                                           0.0f,
+                                           1.0f,
+                                           0.0f,
+                                           0.0f,
+                                       }));
+
+    const auto mask = scene.getSelectionMask();
+    ASSERT_NE(mask, nullptr);
+    EXPECT_EQ(mask->numel(), 2u);
+    EXPECT_EQ(mask->count_nonzero(), 1u);
+    EXPECT_EQ(scene.selectedCount(), mask->count_nonzero());
+}
+
+TEST(SceneSelectionCountTest, RemovingSelectedNodeKeepsTheCountInSync) {
+    lfs::core::Scene scene;
+    const auto id = scene.addSplat("selected", make_test_splat({
+                                                   0.0f,
+                                                   0.0f,
+                                                   0.0f,
+                                                   1.0f,
+                                                   0.0f,
+                                                   0.0f,
+                                               }));
+    ASSERT_NE(id, lfs::core::NULL_NODE);
+    scene.setSelectionMask(std::make_shared<Tensor>(make_uint8_mask({1, 0})));
+    ASSERT_EQ(scene.selectedCount(), 1u);
+
+    scene.removeNodeById(id);
+
+    EXPECT_EQ(scene.getSelectionMask(), nullptr);
+    EXPECT_EQ(scene.selectedCount(), 0u);
+}
+
+TEST(SceneSelectionCountTest, DeferredAndOrdinarySelectionCountsMatchTheirMasks) {
+    lfs::core::Scene scene;
+    ASSERT_NE(scene.addSplat("selected", make_test_splat({
+                                             0.0f,
+                                             0.0f,
+                                             0.0f,
+                                             1.0f,
+                                             0.0f,
+                                             0.0f,
+                                             2.0f,
+                                             0.0f,
+                                             0.0f,
+                                             3.0f,
+                                             0.0f,
+                                             0.0f,
+                                         })),
+              lfs::core::NULL_NODE);
+    scene.setSelection({0, 2});
+    ASSERT_EQ(scene.selectedCount(), 2u);
+
+    scene.setSelectionMaskDeferred(
+        std::make_shared<Tensor>(make_uint8_mask({0, 0, 0, 1})), true, 2);
+    const auto deferred_mask = scene.getSelectionMask();
+    ASSERT_NE(deferred_mask, nullptr);
+    EXPECT_EQ(scene.selectedCount(), deferred_mask->count_nonzero());
+
+    scene.setSelectionMask(std::make_shared<Tensor>(make_uint8_mask({0, 1, 1, 0})));
+    const auto ordinary_mask = scene.getSelectionMask();
+    ASSERT_NE(ordinary_mask, nullptr);
+    EXPECT_EQ(scene.selectedCount(), ordinary_mask->count_nonzero());
+    scene.clearSelection();
+    EXPECT_EQ(scene.selectedCount(), 0u);
+}
+
 TEST(SelectionMaskNormalizationTest, MatchesReferenceForSoftDeletedGroupedMillionRowScene) {
     constexpr size_t kRows = 1'000'000;
     lfs::core::Scene scene;

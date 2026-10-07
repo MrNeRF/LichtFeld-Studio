@@ -312,3 +312,24 @@ namespace {
     }
 
 } // namespace
+
+TEST(TensorFactoryBackends, ExplicitArangeDeviceMatchesCpu) {
+    using namespace lfs::core;
+    for (const auto backend : {GpuBackend::CUDA, GpuBackend::Vulkan, GpuBackend::Metal}) {
+        if (!gpu_backend_available(backend))
+            continue;
+        SCOPED_TRACE(static_cast<int>(backend));
+        const GpuBackendScope scope(backend);
+        for (const auto range : {std::array<float, 3>{-1.f, 2.f, .25f},
+                                 std::array<float, 3>{2.f, -1.f, -.25f},
+                                 std::array<float, 3>{2.f, -1.f, .25f}}) {
+            const auto cpu = Tensor::arange(range[0], range[1], range[2], Device::CPU);
+            const auto gpu = Tensor::arange(range[0], range[1], range[2], Device::GPU);
+            EXPECT_EQ(cpu.device(), Device::CPU);
+            EXPECT_EQ(gpu.device(), Device::GPU);
+            EXPECT_EQ(gpu_backend_of(gpu), backend);
+            EXPECT_EQ(gpu.to_vector(), cpu.to_vector());
+            EXPECT_EQ(Tensor::arange(range[0], range[1], range[2]).to_vector(), cpu.to_vector());
+        }
+    }
+}

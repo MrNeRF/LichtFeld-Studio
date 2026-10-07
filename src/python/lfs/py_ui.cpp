@@ -51,6 +51,7 @@
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/core/training_manager.hpp"
+#include "visualizer/gui/gizmo_manager.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui/sequencer_ui_state.hpp"
@@ -67,6 +68,7 @@
 #include "visualizer/tools/unified_tool_registry.hpp"
 #include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/Core.h>
+#include <stdexcept>
 #include <typeinfo>
 
 #include "config.h"
@@ -4109,6 +4111,21 @@ namespace lfs::python {
             "Return true when Gaussian selection editing is available");
 
         m.def(
+            "is_splat_editing_blocked", []() -> bool {
+                const auto* editor = get_editor_context();
+                return editor && editor->isSplatEditingBlocked();
+            },
+            "Return true while a visible streamed model blocks splat-level selection and edits");
+
+        m.def(
+            "is_node_streamed", [](const std::string& name) -> bool {
+                const auto* sm = get_scene_manager();
+                const auto* node = sm ? sm->getScene().getNode(name) : nullptr;
+                return node && node->model_streamed;
+            },
+            nb::arg("name"), "Return true when the named node shows a streamed, read-only model");
+
+        m.def(
             "has_gaussian_selection", []() -> bool {
                 const auto* sm = get_scene_manager();
                 return sm && sm->getScene().hasSelection();
@@ -4245,7 +4262,9 @@ namespace lfs::python {
         // Scene panel context menu actions
         m.def(
             "go_to_camera_view",
-            [](int cam_uid) { lfs::core::events::cmd::GoToCamView{.cam_id = cam_uid}.emit(); },
+            [](int cam_uid) {
+                invoke_on_viewer([cam_uid] { lfs::core::events::cmd::GoToCamView{.cam_id = cam_uid}.emit(); });
+            },
             nb::arg("cam_uid"), "Go to camera view by UID");
 
         m.def(
@@ -4255,7 +4274,13 @@ namespace lfs::python {
 
         m.def(
             "toggle_gt_comparison",
-            []() { lfs::core::events::cmd::ToggleGTComparison{}.emit(); },
+            []() {
+                auto* const rendering = lfs::python::get_rendering_manager();
+                if (!rendering || (!rendering->isGTComparisonActive() && !rendering->hasGTComparisonAvailable())) {
+                    throw std::runtime_error("GT comparison requires a loaded dataset with source images");
+                }
+                invoke_on_viewer([] { lfs::core::events::cmd::ToggleGTComparison{}.emit(); });
+            },
             "Toggle ground-truth comparison split view");
 
         m.def(
@@ -4285,55 +4310,135 @@ namespace lfs::python {
         m.def(
             "set_gt_comparison_mode",
             [](const std::string& mode) {
-                auto* rm = lfs::python::get_rendering_manager();
-                if (!rm)
-                    return;
-                auto settings = rm->getSettings();
-                if (mode == "rgb" || mode == "color" || mode == "image") {
-                    settings.gt_comparison_mode = vis::GTComparisonMode::RGB;
-                } else if (mode == "normal" || mode == "normals") {
-                    settings.gt_comparison_mode = vis::GTComparisonMode::Normal;
-                } else if (mode == "depth") {
-                    settings.gt_comparison_mode = vis::GTComparisonMode::Depth;
-                } else if (mode == "loss") {
-                    settings.gt_comparison_mode = vis::GTComparisonMode::Loss;
-                } else {
-                    throw nb::value_error("GT comparison mode must be 'rgb', 'normal', 'depth', or 'loss'");
-                }
-                rm->updateSettings(settings, vis::DirtyFlag::ALL);
+                invoke_on_viewer([mode] {
+                    auto* rm = lfs::python::get_rendering_manager();
+                    if (!rm)
+                        return;
+                    auto settings = rm->getSettings();
+                    if (mode == "rgb" || mode == "color" || mode == "image") {
+                        settings.gt_comparison_mode = vis::GTComparisonMode::RGB;
+                    } else if (mode == "normal" || mode == "normals") {
+                        settings.gt_comparison_mode = vis::GTComparisonMode::Normal;
+                    } else if (mode == "depth") {
+                        settings.gt_comparison_mode = vis::GTComparisonMode::Depth;
+                    } else if (mode == "loss") {
+                        settings.gt_comparison_mode = vis::GTComparisonMode::Loss;
+                    } else {
+                        throw nb::value_error("GT comparison mode must be 'rgb', 'normal', 'depth', or 'loss'");
+                    }
+                    rm->updateSettings(settings, vis::DirtyFlag::ALL);
+                });
             },
             nb::arg("mode"), "Set ground-truth comparison mode.");
 
         m.def(
+            "get_gt_comparison_actual_size",
+            []() {
+                auto* rm = lfs::python::get_rendering_manager();
+                return rm && rm->getSettings().gt_comparison_actual_size;
+            },
+            "Return whether GT comparison 1:1 pixel mode is requested.");
+
+        m.def(
+            "set_gt_comparison_actual_size",
+            [](const bool enabled) {
+                invoke_on_viewer([enabled] {
+                    auto* rm = lfs::python::get_rendering_manager();
+                    if (!rm)
+                        return;
+                    auto settings = rm->getSettings();
+                    settings.gt_comparison_actual_size = enabled;
+                    rm->updateSettings(settings, vis::DirtyFlag::SPLIT_VIEW);
+                });
+            },
+            nb::arg("enabled"),
+            "Enable or disable GT comparison 1:1 pixel mode.");
+
+        m.def(
+            "is_gt_comparison_actual_size_available",
+            []() {
+                return invoke_on_viewer(
+                    []() {
+                        auto* rm = lfs::python::get_rendering_manager();
+                        return rm && rm->isGTComparisonActualSizeAvailable(
+                                         lfs::python::get_scene_manager());
+                    },
+                    false);
+            },
+            "Return whether the selected GT camera supports RGB perspective 1:1 pixel mode, "
+            "including usable saved undistortion calibration when distortion is present. "
+            "Legacy projects may require dataset reimport and resave.");
+
+        m.def(
+            "is_gt_comparison_actual_size_active",
+            []() {
+                return invoke_on_viewer(
+                    []() {
+                        auto* rm = lfs::python::get_rendering_manager();
+                        return rm && rm->isGTComparisonActualSizeActive();
+                    },
+                    false);
+            },
+            "Return whether the currently published viewport frame uses GT comparison "
+            "1:1 pixel mode.");
+
+        m.def(
+            "get_gt_comparison_actual_size_error",
+            []() {
+                return invoke_on_viewer(
+                    []() -> std::string {
+                        auto* rm = lfs::python::get_rendering_manager();
+                        return rm ? rm->getGTComparisonActualSizeError() : std::string{};
+                    },
+                    std::string{});
+            },
+            "Return the current GT 1:1 preparation error, retained during automatic recovery.");
+
+        m.def(
+            "retry_gt_comparison_actual_size",
+            []() {
+                invoke_on_viewer([] {
+                    if (auto* rm = lfs::python::get_rendering_manager()) {
+                        rm->retryGTComparisonActualSize();
+                    }
+                });
+            },
+            "Retry requested GT 1:1 preparation immediately, reusing any valid source or active load.");
+
+        m.def(
             "cycle_gt_comparison_mode",
             []() -> const char* {
-                auto* rm = lfs::python::get_rendering_manager();
-                if (!rm)
-                    return "rgb";
-                auto settings = rm->getSettings();
-                switch (settings.gt_comparison_mode) {
-                case vis::GTComparisonMode::RGB:
-                    settings.gt_comparison_mode = vis::GTComparisonMode::Normal;
-                    break;
-                case vis::GTComparisonMode::Normal:
-                    settings.gt_comparison_mode = vis::GTComparisonMode::Depth;
-                    break;
-                case vis::GTComparisonMode::Depth:
-                    settings.gt_comparison_mode = vis::GTComparisonMode::Loss;
-                    break;
-                case vis::GTComparisonMode::Loss:
-                default:
-                    settings.gt_comparison_mode = vis::GTComparisonMode::RGB;
-                    break;
-                }
-                rm->updateSettings(settings, vis::DirtyFlag::ALL);
-                switch (settings.gt_comparison_mode) {
-                case vis::GTComparisonMode::Normal: return "normal";
-                case vis::GTComparisonMode::Depth: return "depth";
-                case vis::GTComparisonMode::Loss: return "loss";
-                case vis::GTComparisonMode::RGB:
-                default: return "rgb";
-                }
+                return invoke_on_viewer(
+                    []() -> const char* {
+                        auto* rm = lfs::python::get_rendering_manager();
+                        if (!rm)
+                            return "rgb";
+                        auto settings = rm->getSettings();
+                        switch (settings.gt_comparison_mode) {
+                        case vis::GTComparisonMode::RGB:
+                            settings.gt_comparison_mode = vis::GTComparisonMode::Normal;
+                            break;
+                        case vis::GTComparisonMode::Normal:
+                            settings.gt_comparison_mode = vis::GTComparisonMode::Depth;
+                            break;
+                        case vis::GTComparisonMode::Depth:
+                            settings.gt_comparison_mode = vis::GTComparisonMode::Loss;
+                            break;
+                        case vis::GTComparisonMode::Loss:
+                        default:
+                            settings.gt_comparison_mode = vis::GTComparisonMode::RGB;
+                            break;
+                        }
+                        rm->updateSettings(settings, vis::DirtyFlag::ALL);
+                        switch (settings.gt_comparison_mode) {
+                        case vis::GTComparisonMode::Normal: return "normal";
+                        case vis::GTComparisonMode::Depth: return "depth";
+                        case vis::GTComparisonMode::Loss: return "loss";
+                        case vis::GTComparisonMode::RGB:
+                        default: return "rgb";
+                        }
+                    },
+                    "rgb");
             },
             "Cycle ground-truth comparison mode: rgb -> normal -> depth -> loss -> rgb.");
 
@@ -5128,6 +5233,11 @@ namespace lfs::python {
         m.def("get_multi_transform_mode", &get_multi_transform_mode, "Get multi-transform mode (0=Group, 1=Individual)");
 
         m.def("set_multi_transform_mode", &set_multi_transform_mode, nb::arg("mode"), "Set multi-transform mode (0=Group, 1=Individual)");
+
+        m.attr("MULTI_TRANSFORM_MODE_SELECTION") =
+            static_cast<int>(lfs::vis::gui::MultiTransformMode::Selection);
+        m.attr("MULTI_TRANSFORM_MODE_INDIVIDUAL") =
+            static_cast<int>(lfs::vis::gui::MultiTransformMode::Individual);
 
         // Thumbnail system (for Getting Started window)
         m.def("request_thumbnail", &request_thumbnail, nb::arg("video_id"),

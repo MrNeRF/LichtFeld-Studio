@@ -23,19 +23,56 @@ namespace lfs::core {
             out.masked_fill_(mask, static_cast<float>(group_id));
             return out;
         }
+        Tensor world_positions(const Tensor& means, const Tensor* indices,
+                               const std::vector<glm::mat4>* transforms) {
+            if (!indices && !transforms)
+                return means;
+            LFS_ASSERT_MSG(indices && transforms && !transforms->empty(),
+                           "Selection transforms require indices and matrices");
+            LFS_ASSERT_MSG(indices->dtype() == DataType::Int32 && indices->numel() == means.size(0),
+                           "Selection transform indices must be Int32 [N]");
+            if (means.size(0) == 0)
+                return means;
+
+            std::vector<float> values;
+            values.reserve(transforms->size() * 12);
+            for (const auto& matrix : *transforms) {
+                for (int row = 0; row < 3; ++row) {
+                    for (int column = 0; column < 4; ++column)
+                        values.push_back(matrix[column][row]);
+                }
+            }
+            auto matrices = Tensor::from_vector(values, {transforms->size(), 12}, Device::CPU)
+                                .to(means.device(), means.execution_target());
+            const auto selected = matrices.index_select(0, indices->to(means.device(), means.execution_target()));
+            const auto x = means.slice(1, 0, 1);
+            const auto y = means.slice(1, 1, 2);
+            const auto z = means.slice(1, 2, 3);
+            std::vector<Tensor> columns;
+            for (int row = 0; row < 3; ++row) {
+                const int offset = row * 4;
+                columns.push_back(x * selected.slice(1, offset, offset + 1) +
+                                  y * selected.slice(1, offset + 1, offset + 2) +
+                                  z * selected.slice(1, offset + 2, offset + 3) +
+                                  selected.slice(1, offset + 3, offset + 4));
+            }
+            return Tensor::cat(columns, 1);
+        }
     } // namespace
 
-    Tensor selection_grow(const Tensor& mask, const Tensor& means, const float radius, const uint8_t group_id) {
+    Tensor selection_grow(const Tensor& mask, const Tensor& means, const float radius, const uint8_t group_id,
+                          const Tensor* transform_indices, const std::vector<glm::mat4>* node_transforms) {
         LFS_ASSERT_MSG(mask.dtype() == DataType::UInt8, "selection_grow requires a UInt8 mask");
-        const auto neighbors = radius_neighbors(means, mask, radius);
+        const auto neighbors = radius_neighbors(world_positions(means, transform_indices, node_transforms), mask, radius);
         auto result = mask.clone();
         result.masked_fill_(neighbors.logical_and(mask.eq(0.0f)), static_cast<float>(group_id));
         return result;
     }
 
-    Tensor selection_shrink(const Tensor& mask, const Tensor& means, const float radius) {
+    Tensor selection_shrink(const Tensor& mask, const Tensor& means, const float radius,
+                            const Tensor* transform_indices, const std::vector<glm::mat4>* node_transforms) {
         LFS_ASSERT_MSG(mask.dtype() == DataType::UInt8, "selection_shrink requires a UInt8 mask");
-        const auto neighbors = radius_neighbors(means, mask.eq(0.0f), radius);
+        const auto neighbors = radius_neighbors(world_positions(means, transform_indices, node_transforms), mask.eq(0.0f), radius);
         auto result = mask.clone();
         result.masked_fill_(neighbors, 0.0f);
         return result;

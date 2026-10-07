@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
+#include "core/export.hpp"
 #include "internal/viewport.hpp"
 #include "rendering_types.hpp"
 #include "split_view_cpu_desc.hpp"
@@ -53,6 +54,6 @@ namespace lfs::vis {
         float split_position);
     [[nodiscard]] SplitViewInfo makeGTSplitViewInfo(
         GTComparisonMode mode, const std::string& image_name);
-    [[nodiscard]] std::shared_ptr<lfs::core::Tensor> composeSplitViewCpuImage(
+    [[nodiscard]] LFS_VIS_API std::shared_ptr<lfs::core::Tensor> composeSplitViewCpuImage(
         const SplitViewCpuDesc& params, glm::ivec2 output_size);
 } // namespace lfs::vis

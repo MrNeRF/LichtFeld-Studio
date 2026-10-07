@@ -149,6 +149,9 @@ namespace lfs::io::project {
         // plain CHUNK_ZSTD_V1; readers without this bit refuse the generation.
         CHUNK_BYTESHUFFLE_ZSTD_V1 = 8,
         ENCODED_SCENE_ASSETS = 9,
+        // Scene nodes reference an external 3D Tiles tileset (REFS, source kind
+        // "tiles3d"); readers without it report an unsupported feature.
+        TILESET_REFERENCES = 10,
     };
 
     [[nodiscard]] LFS_IO_API CapabilitySet supported_reader_capabilities();

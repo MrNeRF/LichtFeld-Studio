@@ -307,6 +307,12 @@ include(${CMAKE_SOURCE_DIR}/cmake/GpuPrograms.cmake)
 target_sources(lfs_core PRIVATE tensor/tensor_vignette.cpp tensor/tensor_color.cpp)
 lfs_add_gpu_program(lfs_core rgb_to_yuv_program SOURCE tensor/programs/rgb_to_yuv.slang COMPUTE rgbToYuv420p DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tensor/programs/rgb_to_yuv_math.h")
 lfs_add_gpu_program(lfs_core vignette_program SOURCE tensor/programs/vignette.slang COMPUTE vignette)
+if(LFS_TENSOR_METAL)
+    lfs_add_gpu_program(lfs_core image_warp_program
+        SOURCE tensor/backend/vulkan/shaders/image_warp.slang COMPUTE imageWarp
+        DEFINES LFS_WARP_GPU_PROGRAM=1
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/vulkan/shaders/distortion_model.slangh")
+endif()
 if(LFS_HAS_CUDA)
     target_sources(lfs_core PRIVATE cuda/shared_image_cuda.cpp cuda_diagnostics_backend.cpp)
 endif()

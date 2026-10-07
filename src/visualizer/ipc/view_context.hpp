@@ -125,6 +125,7 @@ namespace lfs::vis {
         bool show_pivot = false;
         int split_view_mode = 0;
         int gt_comparison_mode = 0;
+        bool gt_comparison_actual_size = false;
         float split_position = 0.5f;
         size_t split_view_offset = 0;
         int raster_backend = 2;
@@ -185,6 +186,22 @@ namespace lfs::vis {
         bool scene_upscaler_explicit = false;
         bool scene_upscaler_preset_explicit = false;
     };
+
+    struct RenderSettingsTarget {
+        ViewId view = kNoView;
+        std::uint64_t screen_epoch = 0;
+    };
+    using CaptureRenderSettingsTargetCallback = std::function<std::optional<RenderSettingsTarget>()>;
+    using GetViewRenderSettingsCallback = std::function<std::optional<RenderSettingsProxy>(RenderSettingsTarget)>;
+    using SetViewRenderSettingsCallback = std::function<std::optional<RenderSettingsProxy>(
+        RenderSettingsTarget, const RenderSettingsProxy&, RenderSettingsUpdateIntent)>;
+    LFS_VIS_API void set_view_render_settings_callbacks(CaptureRenderSettingsTargetCallback capture,
+                                                        GetViewRenderSettingsCallback get,
+                                                        SetViewRenderSettingsCallback set);
+    [[nodiscard]] LFS_VIS_API std::optional<RenderSettingsTarget> capture_render_settings_target();
+    [[nodiscard]] LFS_VIS_API std::optional<RenderSettingsProxy> get_render_settings_for_view(RenderSettingsTarget target);
+    [[nodiscard]] LFS_VIS_API std::optional<RenderSettingsProxy> update_render_settings_for_view(
+        RenderSettingsTarget target, const RenderSettingsProxy& settings, RenderSettingsUpdateIntent intent = {});
 
     using GetRenderSettingsCallback = std::function<std::optional<RenderSettingsProxy>()>;
     using SetRenderSettingsCallback =

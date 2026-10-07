@@ -68,8 +68,12 @@ lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut_prefix SOURCE splat_bl
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_present SOURCE splat_present.slang COMPUTE present_viewer)
 lfs_add_gpu_program(lfs_tensor_rasterizer point_cloud SOURCE point_cloud.slang
     COMPUTE extractPointDepth VERTEX pointVertex FRAGMENT pointColorFragment pointDepthFragment)
-lfs_add_gpu_program(lfs_tensor_rasterizer tensor_scene_temporal_program SOURCE tensor_scene_temporal.slang
-    COMPUTE scene_motion scene_spatial scene_temporal_resolve scene_temporal_resolve_samples)
+lfs_add_gpu_program(lfs_tensor_rasterizer tensor_scene_motion_program SOURCE tensor_scene_temporal.slang
+    COMPUTE scene_motion DEFINES LFS_TEMPORAL_PASS=0)
+lfs_add_gpu_program(lfs_tensor_rasterizer tensor_scene_resolve_program SOURCE tensor_scene_temporal.slang
+    COMPUTE scene_spatial scene_temporal_resolve DEFINES LFS_TEMPORAL_PASS=1)
+lfs_add_gpu_program(lfs_tensor_rasterizer tensor_scene_samples_program SOURCE tensor_scene_temporal.slang
+    COMPUTE scene_temporal_resolve_samples DEFINES LFS_TEMPORAL_PASS=2)
 # Parity tests load the passes directly against the native kernels.
 target_include_directories(lfs_tensor_rasterizer PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/gpu_programs/splat_project")
 # Shared includes of the Slang passes; the program rules depend only on their sources.

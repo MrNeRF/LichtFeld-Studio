@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "../../internal/image_warp_params.hpp"
 #include "../facade_trace.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "vk_backend_ops.hpp"
@@ -49,21 +50,13 @@ namespace lfs::core::internal {
             // Use 32-bit stores so the warp does not require shaderInt8.
             mask = Tensor::zeros({size_t(height), size_t(width)}, Device::GPU, DataType::Int32);
         }
-        struct CameraParams {
-            float src_fx, src_fy, src_cx, src_cy, dst_fx, dst_fy, dst_cx, dst_cy;
-            int src_width, src_height, dst_width, dst_height, model_type;
-            float distortion[12];
-            int num_distortion;
-        } camera{p.src_fx, p.src_fy, p.src_cx, p.src_cy, p.dst_fx, p.dst_fy, p.dst_cx, p.dst_cy, p.src_width, p.src_height, p.dst_width, p.dst_height, int(p.model_type), {}, p.num_distortion};
-        std::copy_n(p.distortion, 12, camera.distortion);
+        auto camera = imageWarpCameraParams(p);
         const auto parameters = Tensor::from_blob(&camera, {sizeof(camera)}, Device::CPU, DataType::UInt8).to(Device::GPU);
         const auto source = storage_ref(input), destination = storage_ref(output), camera_storage = storage_ref(parameters);
-        struct WarpPush {
-            uint64_t input, output, validity, camera;
-            int width, height, channels, mode, inverse, quadrature;
-        } push{
+        const ImageWarpDispatchParams push{
             vk::address(source), vk::address(destination), mask.is_valid() ? vk::address(storage_ref(mask)) : 0,
-            vk::address(camera_storage), width, height, channels, mode, inverse,
+            vk::address(camera_storage), width, height, channels,
+            mode | (input.dtype() == DataType::UInt8 ? IMAGE_WARP_UINT8 : 0), inverse,
             std::max(8, int(std::ceil(std::max(p.src_fx / p.dst_fx, p.src_fy / p.dst_fy))))};
         const auto context = acquire_vulkan_context();
         const auto& pipeline = context->pipelines().specialized("image_warp", sizeof(push), {});
