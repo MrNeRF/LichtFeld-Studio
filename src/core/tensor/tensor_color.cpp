@@ -89,7 +89,7 @@ namespace lfs::core {
             if (gpu_process_teardown_started())
                 return Result<void>::failure(make_error({.code = ErrorCode::FailedPrecondition, .domain = ErrorDomain::Tensor, .detail = "RGB conversion cannot dispatch after GPU teardown (teardown_started=true)", .detection = LFS_SOURCE_SITE_CURRENT()}));
             auto& program = colorPrograms().modules[*backend];
-            if (!program) {
+            if (!program || !program->is_live()) {
                 auto loaded = GpuKernelModule::load(rgb_to_yuv_program_entries(), *backend);
                 if (!loaded)
                     return Result<void>::failure(std::move(loaded).error());

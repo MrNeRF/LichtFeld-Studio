@@ -183,6 +183,12 @@ metadata interpretation belong to media. HDR/libplacebo/tensor adapters consume
 borrowed media plane/component/colour descriptors, including mastering display,
 HDR10+, Dolby Vision, ICC and film-grain data; they do not interpret FFmpeg objects.
 
+The decoded descriptor's hardware handle identifies borrowed storage only.
+Hardware views expose no CPU plane pointers; VideoToolbox's pixel-buffer identity
+comes from its dedicated slot. Current HDR adapters require a downloaded software
+frame. Direct decoded GPU import needs a separate device, ownership and
+synchronization contract; the presence of a handle does not enable that path.
+
 The provider exports the media C++ API only. ELF/Mach-O visibility lists hide
 third-party static symbols and prevent assembly constants from becoming
 interposable. Windows uses the package's private import libraries without DLL

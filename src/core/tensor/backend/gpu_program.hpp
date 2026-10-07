@@ -16,6 +16,7 @@ namespace lfs::core::internal {
     class GpuProgram {
     public:
         virtual ~GpuProgram() = default;
+        virtual bool is_live() const noexcept { return true; }
         virtual bool supports_raster() const = 0;
         virtual uint64_t address(const Tensor&) = 0;
         virtual void dispatch(const GpuKernelModule::Dispatch&, const ProgramArguments&) = 0;

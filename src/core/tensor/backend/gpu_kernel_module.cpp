@@ -125,8 +125,15 @@ namespace lfs::core {
         return impl_->program && impl_->program->supports_raster();
     }
 
+    bool GpuKernelModule::is_live() const noexcept {
+        return impl_->program ? impl_->program->is_live() : impl_->metal != nullptr;
+    }
+
     Result<void> GpuKernelModule::dispatch(const Dispatch& dispatch) {
         return program_boundary<void>([&]() -> Result<void> {
+            if (!is_live())
+                return Result<void>::failure(program_error(ErrorCode::FailedPrecondition,
+                                                           std::format("{} program context has shut down", gpu_backend_name(impl_->backend))));
             if (!impl_->program || !impl_->entries.contains({std::string(dispatch.function), Stage::Compute}))
                 return Result<void>::failure(program_error(ErrorCode::NotFound, std::format("Compute entry '{}' not found", dispatch.function)));
             const auto& signature = impl_->entries.at({std::string(dispatch.function), Stage::Compute});
@@ -168,6 +175,9 @@ namespace lfs::core {
 
     Result<void> GpuKernelModule::draw_batch(const std::span<const Draw> draws) {
         return program_boundary<void>([&]() -> Result<void> {
+            if (!is_live())
+                return Result<void>::failure(program_error(ErrorCode::FailedPrecondition,
+                                                           std::format("{} program context has shut down", gpu_backend_name(impl_->backend))));
             if (!supports_raster())
                 return Result<void>::failure(program_error(ErrorCode::Unsupported, std::format("Raster is unsupported by {}", gpu_backend_name(impl_->backend))));
             if (draws.empty())

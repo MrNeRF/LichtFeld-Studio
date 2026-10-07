@@ -158,5 +158,35 @@ int runProbeUnitContracts() {
     decoded->format = -100;
     require(!detail::describeDecodedVideoFrame(decoded.get()), "invalid pixel format rejected");
     decoded->format = invalid_format;
+    // Metadata-only hardware fixtures: no device or decoder is initialized.
+    std::unique_ptr<AVFrame, decltype(releaseFrame)> hardware(av_frame_alloc(), releaseFrame);
+    require(hardware != nullptr, "allocate hardware descriptor fixture");
+    hardware->format = AV_PIX_FMT_VIDEOTOOLBOX;
+    hardware->width = 64;
+    hardware->height = 32;
+    hardware->hw_frames_ctx = av_buffer_allocz(sizeof(AVHWFramesContext));
+    require(hardware->hw_frames_ctx != nullptr, "allocate hardware metadata fixture");
+    auto* hardware_context = reinterpret_cast<AVHWFramesContext*>(hardware->hw_frames_ctx->data);
+    hardware_context->sw_format = AV_PIX_FMT_NV12;
+    std::uint8_t first_slot = 0, pixel_buffer = 0;
+    hardware->data[0] = &first_slot;
+    hardware->data[3] = &pixel_buffer;
+    auto hw_view = detail::describeDecodedVideoFrame(hardware.get());
+    require(hw_view && hw_view->hardware && hw_view->hardware_handle == &pixel_buffer,
+            "VideoToolbox identity comes from data[3], even when data[0] is present");
+    require(hw_view->plane_count == 2 && hw_view->format_name == "nv12",
+            "hardware view retains logical software layout");
+    require(hw_view->planes[0].data == nullptr && hw_view->planes[1].data == nullptr &&
+                hw_view->planes[0].pitch == 0 && hw_view->planes[1].pitch == 0,
+            "hardware handles never masquerade as CPU plane storage");
+    hardware->data[3] = nullptr;
+    require(!detail::describeDecodedVideoFrame(hardware.get()),
+            "VideoToolbox without pixel buffer is rejected instead of falling back to data[0]");
+    hardware->format = AV_PIX_FMT_CUDA;
+    hw_view = detail::describeDecodedVideoFrame(hardware.get());
+    require(hw_view && hw_view->hardware_handle == &first_slot,
+            "CUDA identity retains its data[0] location");
+    hardware->data[0] = nullptr;
+    require(!detail::describeDecodedVideoFrame(hardware.get()), "missing CUDA handle rejected");
     return 0;
 }

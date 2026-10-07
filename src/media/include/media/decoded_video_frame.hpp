@@ -152,6 +152,9 @@ namespace lfs::media {
         std::array<FrameComponent, 4> components{};
         bool hardware = false, big_endian = false, rgb = false, xyz = false, palette = false, bitstream = false, floating = false, bayer = false, alpha = false;
         AlphaMode alpha_mode = AlphaMode::Independent;
+        // Borrowed native identity only, not an importable GPU frame contract.
+        // Hardware views carry no CPU plane pointers. Current HDR adapters
+        // require a downloaded software frame; device/sync import is separate.
         void* hardware_handle = nullptr;
         ColorPrimaries color_primaries = ColorPrimaries::Unspecified;
         ColorTransfer color_trc = ColorTransfer::Unspecified;

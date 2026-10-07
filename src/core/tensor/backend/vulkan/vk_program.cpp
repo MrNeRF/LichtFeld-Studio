@@ -52,6 +52,22 @@ namespace lfs::core::internal {
             }
         };
 
+        // Context shutdown retires these resources even when a caller keeps
+        // the program alive. The callback owns no program/context reference.
+        struct ProgramResources {
+            std::mutex mutex;
+            std::map<std::pair<std::string, size_t>, std::shared_ptr<Pipeline>> compute;
+            std::map<std::tuple<std::string, std::string, VkFormat, size_t, Module::Blend, bool, Module::Compare, bool, Module::Cull>, std::shared_ptr<Pipeline>> raster;
+            std::map<std::tuple<uint32_t, uint32_t, VkFormat, bool>, std::vector<std::shared_ptr<RasterResources>>> targets;
+
+            void release() {
+                std::lock_guard lock(mutex);
+                targets.clear();
+                raster.clear();
+                compute.clear();
+            }
+        };
+
         void transition(VkCommandBuffer command, const Attachment& image, VkImageLayout from, VkImageLayout to) {
             VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
             barrier.srcAccessMask = from == VK_IMAGE_LAYOUT_UNDEFINED ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
@@ -77,8 +93,22 @@ namespace lfs::core::internal {
                     std::memcpy(words.data(), entry.code.data(), entry.code.size());
                     sources_.emplace(std::pair{std::string(entry.name), entry.stage}, std::move(words));
                 }
+                shutdown_release_ = context_->on_shutdown([weak = std::weak_ptr(resources_)] {
+                    if (auto resources = weak.lock())
+                        resources->release();
+                });
             }
+            ~Program() override {
+                // Keep the weak callback reachable until every owned resource
+                // has been released, including during concurrent shutdown.
+                resources_->release();
+                context_->cancel_shutdown_release(shutdown_release_);
+            }
+            bool is_live() const noexcept override { return context_->accepting_work(); }
             bool supports_raster() const override {
+                std::lock_guard lock(resources_->mutex);
+                if (!is_live())
+                    return false;
                 uint32_t count = 0;
                 vkGetPhysicalDeviceQueueFamilyProperties(context_->physical_device(), &count, nullptr);
                 std::vector<VkQueueFamilyProperties> families(count);
@@ -90,7 +120,8 @@ namespace lfs::core::internal {
                 return storage.meta->gpu_descriptor.base_address + storage.byte_offset;
             }
             void dispatch(const Module::Dispatch& launch, const ProgramArguments& arguments) override {
-                std::lock_guard lock(mutex_);
+                std::lock_guard lock(resources_->mutex);
+                require_live();
                 const auto pipeline = compute(launch.function, arguments.parameters.size());
                 std::vector<StorageRef> reads, writes;
                 accesses(arguments, reads, writes);
@@ -117,7 +148,8 @@ namespace lfs::core::internal {
             }
 
             void draw(std::span<const Module::Draw> draws, std::span<const ProgramArguments> arguments) override {
-                std::lock_guard lock(mutex_);
+                std::lock_guard lock(resources_->mutex);
+                require_live();
                 const auto& first = draws.front();
                 const uint32_t width = static_cast<uint32_t>(first.color->size(1)), height = static_cast<uint32_t>(first.color->size(0));
                 const auto format = first.color->dtype() == DataType::UInt8 ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R32G32B32A32_SFLOAT;
@@ -191,6 +223,13 @@ namespace lfs::core::internal {
             }
 
         private:
+            void require_live() const {
+                if (!is_live())
+                    throw Exception(make_error({.code = ErrorCode::FailedPrecondition,
+                                                .domain = ErrorDomain::Tensor,
+                                                .detail = "Vulkan program context has shut down (accepting_work=false)",
+                                                .detection = LFS_SOURCE_SITE_CURRENT()}));
+            }
             void check(VkResult result, const char* operation) { vk_check(context_.get(), result, operation); }
             static void accesses(const ProgramArguments& arguments, std::vector<StorageRef>& reads, std::vector<StorageRef>& writes) {
                 for (auto* tensor : arguments.reads)
@@ -213,12 +252,12 @@ namespace lfs::core::internal {
             // the GPU finished the submission that last used it.
             std::shared_ptr<RasterResources> target(uint32_t width, uint32_t height, VkFormat format, bool depth, VkRenderPass pass) {
                 const auto key = std::tuple{width, height, format, depth};
-                auto& pool = targets_[key];
+                auto& pool = resources_->targets[key];
                 for (const auto& cached : pool)
                     if (cached.use_count() == 1)
                         return cached;
-                if (targets_.size() > 8) {
-                    std::erase_if(targets_, [&](const auto& entry) { return entry.first != key; });
+                if (resources_->targets.size() > 8) {
+                    std::erase_if(resources_->targets, [&](const auto& entry) { return entry.first != key; });
                 }
                 auto result = std::make_shared<RasterResources>();
                 result->device = context_->device();
@@ -287,7 +326,7 @@ namespace lfs::core::internal {
             }
             std::shared_ptr<Pipeline> compute(std::string_view name, size_t bytes) {
                 const auto key = std::pair{std::string(name), bytes};
-                if (auto found = compute_.find(key); found != compute_.end())
+                if (auto found = resources_->compute.find(key); found != resources_->compute.end())
                     return found->second;
                 auto result = layout(bytes, VK_SHADER_STAGE_COMPUTE_BIT);
                 const auto module = shader(name, Module::Stage::Compute);
@@ -298,12 +337,12 @@ namespace lfs::core::internal {
                 const auto status = vkCreateComputePipelines(context_->device(), context_->pipeline_cache(), 1, &info, nullptr, &result->pipeline);
                 vkDestroyShaderModule(context_->device(), module, nullptr);
                 check(status, "Create tensor compute pipeline");
-                compute_.emplace(key, result);
+                resources_->compute.emplace(key, result);
                 return result;
             }
             std::shared_ptr<Pipeline> raster(const Module::Draw& draw, VkFormat format, size_t bytes) {
                 const auto key = std::tuple{std::string(draw.vertex), std::string(draw.fragment), format, bytes, draw.blend, draw.depth != nullptr, draw.depth_compare, draw.depth_write, draw.cull};
-                if (auto found = raster_.find(key); found != raster_.end())
+                if (auto found = resources_->raster.find(key); found != resources_->raster.end())
                     return found->second;
                 auto result = layout(bytes, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
                 VkAttachmentDescription attachments[2]{};
@@ -381,16 +420,14 @@ namespace lfs::core::internal {
                 vkDestroyShaderModule(context_->device(), vertex, nullptr);
                 vkDestroyShaderModule(context_->device(), fragment, nullptr);
                 check(status, "Create tensor raster pipeline");
-                raster_.emplace(key, result);
+                resources_->raster.emplace(key, result);
                 return result;
             }
 
             std::shared_ptr<VulkanContext> context_;
-            std::mutex mutex_;
             std::map<std::pair<std::string, Module::Stage>, std::vector<uint32_t>> sources_;
-            std::map<std::pair<std::string, size_t>, std::shared_ptr<Pipeline>> compute_;
-            std::map<std::tuple<std::string, std::string, VkFormat, size_t, Module::Blend, bool, Module::Compare, bool, Module::Cull>, std::shared_ptr<Pipeline>> raster_;
-            std::map<std::tuple<uint32_t, uint32_t, VkFormat, bool>, std::vector<std::shared_ptr<RasterResources>>> targets_;
+            std::shared_ptr<ProgramResources> resources_ = std::make_shared<ProgramResources>();
+            uint64_t shutdown_release_ = 0;
         };
     } // namespace
 

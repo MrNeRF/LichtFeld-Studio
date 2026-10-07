@@ -1172,9 +1172,16 @@ namespace lfs::core::internal {
         return *pipelines_;
     }
 
-    void VulkanContext::on_shutdown(std::function<void()> release) {
+    uint64_t VulkanContext::on_shutdown(std::function<void()> release) {
         std::lock_guard lock(shutdown_release_mutex_);
-        shutdown_releases_.push_back(std::move(release));
+        const auto id = next_shutdown_release_id_++;
+        shutdown_releases_.emplace_back(id, std::move(release));
+        return id;
+    }
+
+    void VulkanContext::cancel_shutdown_release(const uint64_t id) {
+        std::lock_guard lock(shutdown_release_mutex_);
+        std::erase_if(shutdown_releases_, [id](const auto& entry) { return entry.first == id; });
     }
 
     void VulkanContext::shutdown() {
@@ -1191,13 +1198,13 @@ namespace lfs::core::internal {
                 mark_device_lost_once();
             }
         }
-        std::vector<std::function<void()>> releases;
+        std::vector<std::pair<uint64_t, std::function<void()>>> releases;
         {
             std::lock_guard release_lock(shutdown_release_mutex_);
             releases.swap(shutdown_releases_);
         }
         for (auto& release : releases) {
-            release();
+            release.second();
         }
         if (memory_) {
             memory_->shutdown();

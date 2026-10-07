@@ -82,7 +82,10 @@ namespace lfs::media::detail {
                 return fail(std::format("Hardware decoded frame has no frames context (format={}, size={}x{})", frame->format, frame->width, frame->height));
             const auto* hw = reinterpret_cast<const AVHWFramesContext*>(frame->hw_frames_ctx->data);
             layout = hw->sw_format;
-            out.hardware_handle = frame->data[0];
+            // VideoToolbox stores its borrowed CVPixelBufferRef in slot 3.
+            // Hardware planes are not CPU-addressable; adapters must download
+            // until a device/synchronization-aware import contract is available.
+            out.hardware_handle = frame->data[frame->format == AV_PIX_FMT_VIDEOTOOLBOX ? 3 : 0];
             desc = av_pix_fmt_desc_get(layout);
             if (!desc)
                 return fail(std::format("Hardware decoded frame has unknown software format (format={})", int(layout)));
@@ -114,7 +117,7 @@ namespace lfs::media::detail {
             bool chroma = false;
             for (int c = 1; c < 3 && c < out.component_count; ++c)
                 chroma |= !out.rgb && out.components[c].plane == p && out.components[0].plane != p;
-            out.planes[p] = {frame->data[p], frame->linesize[p], chroma ? AV_CEIL_RSHIFT(out.width, out.chroma_w) : out.width, chroma ? AV_CEIL_RSHIFT(out.height, out.chroma_h) : out.height};
+            out.planes[p] = {out.hardware ? nullptr : frame->data[p], out.hardware ? 0 : frame->linesize[p], chroma ? AV_CEIL_RSHIFT(out.width, out.chroma_w) : out.width, chroma ? AV_CEIL_RSHIFT(out.height, out.chroma_h) : out.height};
         }
         out.color_primaries = static_cast<ColorPrimaries>(frame->color_primaries);
         out.color_trc = static_cast<ColorTransfer>(frame->color_trc);
