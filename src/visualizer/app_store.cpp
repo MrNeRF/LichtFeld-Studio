@@ -50,11 +50,17 @@ namespace lfs::vis {
           scripts_generation(store_, Field::ScriptsGeneration, "scripts_generation", 0),
           language_generation(store_, Field::LanguageGeneration, "language_generation", 0),
           render_settings_generation(store_, Field::RenderSettingsGeneration, "render_settings_generation", 0),
-          viewport_toolbar_generation(store_, Field::ViewportToolbarGeneration, "viewport_toolbar_generation", 0) {}
+          viewport_toolbar_generation(store_, Field::ViewportToolbarGeneration, "viewport_toolbar_generation", 0),
+          align_state_generation(store_, Field::AlignStateGeneration, "align_state_generation", 0) {}
 
     AppStore& app_store() {
         static AppStore instance;
         return instance;
+    }
+
+    void publish_align_state_generation() {
+        auto& signal = app_store().align_state_generation;
+        signal.set(signal.get() + 1);
     }
 
     void publish_language_generation() {

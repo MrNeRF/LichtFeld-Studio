@@ -3986,6 +3986,16 @@ namespace lfs::vis {
                     },
                     metadata,
                     render_result->size);
+                viewport_artifact_service_.setDepthSampler(
+                    [this, size = render_result->size](
+                        int x, int y, std::optional<SplitViewPanelId>, bool nonblocking) {
+                        if (!point_cloud_vulkan_renderer_ || !last_vulkan_context_)
+                            return -1.0f;
+                        return point_cloud_vulkan_renderer_->sampleDepthAtPixel(
+                                                               *last_vulkan_context_,
+                                                               {.pixel = {x, y}, .source_size = size, .nonblocking = nonblocking})
+                            .value_or(-1.0f);
+                    });
 
                 if (resize_result.completed) {
                     lfs::core::Tensor::trim_memory_pool();

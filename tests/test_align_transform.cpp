@@ -4,11 +4,16 @@
 
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
+#include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/ops/align_ops.hpp"
+#include "rendering/point_cloud_vulkan_renderer.hpp"
+#include "rendering/viewport_artifact_service.hpp"
 #include "scene/scene_manager.hpp"
+#include "visualizer/app_store.hpp"
 
+#include <SDL3/SDL.h>
 #include <cmath>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -18,6 +23,117 @@ namespace {
 
     [[nodiscard]] glm::vec3 applyRot(const glm::mat4& m, const glm::vec3& v) {
         return glm::mat3(m) * v;
+    }
+
+    TEST(AlignDepth, PointDepthSamplerFollowsPublishedOutput) {
+        lfs::vis::ViewportArtifactService artifacts;
+        artifacts.setDepthSampler([](int x, int y, auto, bool) { return x == 2 && y == 3 ? 4.0f : -1.0f; });
+        EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(2, 3, {10, 10}), 4.0f);
+        EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(0, 0, {10, 10}), -1.0f);
+        artifacts.updateFromImageOutput({}, {}, {10, 10}, true);
+        EXPECT_FALSE(artifacts.hasDepthSampler());
+        artifacts.setDepthSampler([](int, int, auto, bool) { return 5.0f; });
+        artifacts.clearViewportOutput();
+        EXPECT_FALSE(artifacts.hasDepthSampler());
+    }
+
+    TEST(AlignDepth, VulkanPointCloudDepthMatchesSurfaceWithoutGaussians) {
+        if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
+            GTEST_SKIP() << "SDL video unavailable: " << SDL_GetError();
+        struct VideoGuard {
+            ~VideoGuard() { SDL_QuitSubSystem(SDL_INIT_VIDEO); }
+        } video_guard;
+        std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(
+            SDL_CreateWindow("Alignment depth test", 64, 64, SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN),
+            SDL_DestroyWindow);
+        if (!window)
+            GTEST_SKIP() << "Vulkan window unavailable: " << SDL_GetError();
+        lfs::vis::VulkanContext context;
+        if (!context.init(window.get(), 64, 64))
+            GTEST_SKIP() << "Vulkan unavailable: " << context.lastError();
+        lfs::vis::PointCloudVulkanRenderer renderer;
+        auto positions = lfs::core::Tensor::from_vector(std::vector<float>{0, 0, -5},
+                                                        {std::size_t{1}, std::size_t{3}}, lfs::core::Device::CPU);
+        auto colors = lfs::core::Tensor::from_vector(std::vector<float>{1, 1, 1},
+                                                     {std::size_t{1}, std::size_t{3}}, lfs::core::Device::CPU);
+        const lfs::vis::PointCloudVulkanRenderer::OutputSlot target = lfs::vis::PointCloudVulkanRenderer::OutputSlot::Main;
+        for (const bool orthographic : {false, true}) {
+            lfs::vis::PointCloudVulkanRenderer::RenderRequest request;
+            request.positions = &positions;
+            request.colors = &colors;
+            request.size = {64, 64};
+            request.orthographic = orthographic;
+            request.ortho_scale = 10.0f;
+            request.focal_y = 32.0f;
+            request.voxel_size = 0.5f;
+            request.view_projection = orthographic
+                                          ? glm::ortho(-5.0f, 5.0f, -5.0f, 5.0f, 0.1f, 8.0f)
+                                          : glm::perspective(glm::radians(90.0f), 1.0f, 0.1f, 100.0f);
+            ASSERT_TRUE(renderer.render(context, request, target));
+            const auto depth = renderer.sampleDepthAtPixel(context, {.pixel = {32, 32}, .source_size = {64, 64}, .output_slot = target});
+            ASSERT_TRUE(depth) << depth.error();
+            EXPECT_NEAR(*depth, 5.0f, 1e-3f);
+            lfs::vis::PointCloudVulkanRenderer::DepthSampleRequest async_request{
+                .pixel = {32, 32},
+                .source_size = {64, 64},
+                .output_slot = target,
+                .nonblocking = true};
+            const auto pending = renderer.sampleDepthAtPixel(context, async_request);
+            ASSERT_TRUE(pending);
+            EXPECT_EQ(*pending, lfs::vis::PointCloudVulkanRenderer::kDepthSamplePending);
+            EXPECT_TRUE(renderer.takeRefinementRequest());
+            ASSERT_TRUE(context.deviceWaitIdle());
+            const auto completed = renderer.sampleDepthAtPixel(context, async_request);
+            ASSERT_TRUE(completed);
+            EXPECT_NEAR(*completed, 5.0f, 1e-3f);
+            for (int i = 0; i < 1000; ++i) {
+                async_request.pixel = i % 2 ? glm::ivec2(0, 0) : glm::ivec2(32, 32);
+                const auto sample = renderer.sampleDepthAtPixel(context, async_request);
+                ASSERT_TRUE(sample);
+                if (i % 2)
+                    EXPECT_LT(*sample, 0.0f);
+                else
+                    EXPECT_NEAR(*sample, 5.0f, 1e-3f);
+            }
+            EXPECT_FALSE(renderer.takeRefinementRequest());
+            // Overlay-only redraws must keep the completed snapshot usable.
+            ASSERT_TRUE(renderer.render(context, request, target));
+            async_request.pixel = {32, 32};
+            EXPECT_NEAR(renderer.sampleDepthAtPixel(context, async_request).value(), 5.0f, 1e-3f);
+            EXPECT_FALSE(renderer.takeRefinementRequest());
+            // A changed camera must never reuse the old surface snapshot.
+            request.view = glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, -1));
+            request.view_projection *= request.view;
+            ASSERT_TRUE(renderer.render(context, request, target));
+            EXPECT_EQ(renderer.sampleDepthAtPixel(context, async_request).value(), lfs::vis::PointCloudVulkanRenderer::kDepthSamplePending);
+            ASSERT_TRUE(context.deviceWaitIdle());
+            EXPECT_NEAR(renderer.sampleDepthAtPixel(context, async_request).value(), 6.0f, 1e-3f);
+            (void)renderer.takeRefinementRequest();
+            const auto background = renderer.sampleDepthAtPixel(context, {.pixel = {0, 0}, .source_size = {64, 64}, .output_slot = target});
+            ASSERT_TRUE(background);
+            EXPECT_LT(*background, 0.0f);
+            EXPECT_FALSE(renderer.sampleDepthAtPixel(context, {.pixel = {64, 0}, .source_size = {64, 64}, .output_slot = target}));
+            // Resize/replacement must not reuse the old mapped image or coordinates.
+            request.size = {32, 32};
+            request.focal_y = 16.0f;
+            ASSERT_TRUE(renderer.render(context, request, target));
+            async_request.pixel = {16, 16};
+            async_request.source_size = {32, 32};
+            EXPECT_EQ(renderer.sampleDepthAtPixel(context, async_request).value(), lfs::vis::PointCloudVulkanRenderer::kDepthSamplePending);
+            ASSERT_TRUE(context.deviceWaitIdle());
+            EXPECT_NEAR(renderer.sampleDepthAtPixel(context, async_request).value(), 6.0f, 1e-3f);
+            (void)renderer.takeRefinementRequest();
+
+            // Resetting with a queued copy must retire its images and staging storage.
+            const auto temporary_target = lfs::vis::PointCloudVulkanRenderer::OutputSlot::SplitLeft;
+            ASSERT_TRUE(renderer.render(context, request, temporary_target));
+            async_request.output_slot = temporary_target;
+            EXPECT_EQ(renderer.sampleDepthAtPixel(context, async_request).value(), lfs::vis::PointCloudVulkanRenderer::kDepthSamplePending);
+            renderer.reset();
+            EXPECT_FALSE(renderer.sampleDepthAtPixel(context, async_request));
+            ASSERT_TRUE(context.deviceWaitIdle());
+            (void)renderer.takeRefinementRequest();
+        }
     }
 
     TEST(AlignEdgeToWorldX, IdentityUpMapsPositiveZEdgeToPlusX) {
@@ -255,6 +371,60 @@ namespace lfs::vis::op {
         std::unique_ptr<OperatorContext> context_;
         AlignPickPointOperator operation_;
     };
+
+    TEST_F(AlignPreviewTest, AlignmentChangesNotifyUiOncePerFrame) {
+        auto& store = app_store();
+        (void)store.store().drain_dirty_into_frame();
+        int notifications = 0;
+        auto token = store.align_state_generation.subscribe([&](const auto&) { ++notifications; });
+        const auto generation = store.align_state_generation.get();
+
+        // Repeated synchronization of the same triangle must not keep the UI awake.
+        services().setAlignPickedPoints(services().getAlignPickedPoints());
+        services().setAlignPreviewEnabled(services().getAlignPreviewEnabled());
+        services().setAlignAxisSnapEnabled(services().getAlignAxisSnapEnabled());
+        services().setAlignEdgeToAxisEnabled(services().getAlignEdgeToAxisEnabled());
+        EXPECT_EQ(store.align_state_generation.get(), generation);
+
+        services().setAlignPickedPoints({{0, 0, 0}, {1, 0, 0}, {0, 0, 1}});
+        services().setAlignPreviewEnabled(true);
+        services().setAlignAxisSnapEnabled(true);
+        services().setAlignEdgeToAxisEnabled(true);
+        EXPECT_EQ(notifications, 0);
+        EXPECT_TRUE(store.store().drain_dirty_into_frame());
+        EXPECT_EQ(notifications, 1);
+
+        services().clearAlignPickedPoints();
+        EXPECT_TRUE(store.store().drain_dirty_into_frame());
+        EXPECT_EQ(notifications, 2);
+        services().clearAlignPickedPoints();
+        EXPECT_FALSE(store.store().drain_dirty_into_frame());
+        EXPECT_EQ(notifications, 2);
+    }
+
+    TEST_F(AlignPreviewTest, PointCloudCanAlignBeforeTraining) {
+        auto& scene = manager_->getScene();
+        const auto dataset = scene.addDataset("dataset");
+        auto means = core::Tensor::from_vector(std::vector<float>{0, 2, 0, 1, 2, 1, 0, 3, 1},
+                                               {std::size_t{3}, std::size_t{3}}, core::Device::CPU);
+        auto colors = core::Tensor::from_vector(std::vector<float>(9, 1.0f),
+                                                {std::size_t{3}, std::size_t{3}}, core::Device::CPU);
+        scene.addPointCloud("points", std::make_shared<core::PointCloud>(std::move(means), std::move(colors)), dataset);
+        manager_->selectNode("points");
+        ASSERT_EQ(scene.getTotalGaussianCount(), 0u);
+        ASSERT_TRUE(operation_.poll(*context_));
+        const auto original = scene.getNode("points")->transform();
+        EXPECT_EQ(action(Services::AlignUiAction::Apply), OperatorResult::FINISHED);
+        EXPECT_NE(scene.getNode("points")->transform(), original);
+        ASSERT_TRUE(undoHistory().undo().success);
+        EXPECT_EQ(scene.getNode("points")->transform(), original);
+        manager_->selectNode("dataset");
+        EXPECT_TRUE(operation_.poll(*context_));
+        scene.setNodeLocked("dataset", true);
+        EXPECT_FALSE(operation_.poll(*context_));
+        manager_->clearSelection();
+        EXPECT_FALSE(operation_.poll(*context_));
+    }
 
     TEST_F(AlignPreviewTest, CancelRestoresOriginalTransformAfterTargetIsLocked) {
         const auto original = transform();

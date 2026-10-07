@@ -1217,13 +1217,13 @@ namespace lfs::vis {
     }
 
     float RenderingManager::getDepthAtPixel(const int x, const int y,
-                                            const std::optional<SplitViewPanelId> panel) const {
+                                            const std::optional<SplitViewPanelId> panel, const bool nonblocking) const {
         const float cached_depth = viewport_artifact_service_.sampleLinearDepthAt(
             x,
             y,
             frame_lifecycle_service_.lastViewportSize(),
-            panel);
-        if (cached_depth > 0.0f) {
+            panel, nonblocking);
+        if (cached_depth > 0.0f || viewport_artifact_service_.hasDepthSampler()) {
             return cached_depth;
         }
 

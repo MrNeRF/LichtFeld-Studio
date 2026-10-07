@@ -1317,6 +1317,10 @@ namespace lfs::vis {
         glm::dvec2 current_pos{x, y};
         const double delta_x = x - last_mouse_pos_.x;
         const double delta_y = y - last_mouse_pos_.y;
+        if (align_tool_ && align_tool_->isEnabled() && (delta_x != 0.0 || delta_y != 0.0)) {
+            if (auto* rendering = services().renderingOrNull())
+                rendering->markDirty(DirtyFlag::OVERLAY, FrameReason::Overlay, "align_cursor_moved");
+        }
 
         // Dispatch to modal operators first - if consumed, don't continue
         bool over_gui = false;

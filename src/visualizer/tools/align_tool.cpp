@@ -83,6 +83,11 @@ namespace lfs::vis::tools {
     }
 
     void AlignTool::update(const ToolContext& ctx) {
+        if (isEnabled() && op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint)) {
+            op::ModalEvent event{};
+            event.type = op::ModalEvent::Type::NONE;
+            op::operators().dispatchModalEvent(event);
+        }
         auto* const rm = ctx.getRenderingManager();
         const bool has_status = services().getAlignStatusMessage() != nullptr;
         if (had_align_status_ && !has_status && rm) {
@@ -549,7 +554,7 @@ namespace lfs::vis::tools {
             const float depth = rendering_manager->getDepthAtPixel(
                 depth_x,
                 depth_y,
-                panel_proj_opt ? std::optional<SplitViewPanelId>(panel_proj.info.panel) : std::nullopt);
+                panel_proj_opt ? std::optional<SplitViewPanelId>(panel_proj.info.panel) : std::nullopt, true);
             if (depth > 0.0f && depth < 1e9f) {
                 hover_depth = depth;
             }

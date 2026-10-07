@@ -211,6 +211,7 @@ namespace lfs::vis {
             RenderSettingsGeneration,
             ViewportToolbarGeneration,
             GalleryStateValue,
+            AlignStateGeneration,
         };
 
         AppStore();
@@ -251,12 +252,14 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<std::uint64_t> language_generation;
         lfs::core::reactive::Observable<std::uint64_t> render_settings_generation;
         lfs::core::reactive::Observable<std::uint64_t> viewport_toolbar_generation;
+        lfs::core::reactive::Observable<std::uint64_t> align_state_generation;
 
     private:
         lfs::core::reactive::Store store_;
     };
 
     LFS_VIS_API AppStore& app_store();
+    LFS_VIS_API void publish_align_state_generation();
     LFS_VIS_API void publish_language_generation();
     LFS_VIS_API void publish_viewport_toolbar_generation();
 

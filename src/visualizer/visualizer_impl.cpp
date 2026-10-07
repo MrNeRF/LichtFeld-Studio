@@ -2285,6 +2285,9 @@ namespace lfs::vis {
         if (selection_tool_ && selection_tool_->isEnabled() && tool_context_) {
             selection_tool_->update(*tool_context_);
         }
+        if (align_tool_ && align_tool_->isEnabled() && tool_context_) {
+            align_tool_->update(*tool_context_);
+        }
 
         if (!gui_frame_rendered_) {
             // Wait for at least one GUI frame to render before loading data
