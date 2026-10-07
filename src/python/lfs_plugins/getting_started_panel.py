@@ -78,9 +78,10 @@ class GettingStartedPanel(Panel):
 
         model.bind_func("panel_label", lambda: lf.ui.tr("getting_started.title"))
         for section in ("highlights", "training", "datasets"):
-            model.bind_func(f"show_{section}",
+            binding_name = f"show_{section}"
+            model.bind_func(binding_name,
                             lambda section=section: self._section == section)
-            model.bind_event(f"show_{section}",
+            model.bind_event(binding_name,
                              lambda *_args, section=section: self._set_section(section))
         model.bind_event("open_url", self._on_open_url)
         self._handle = model.get_handle()
