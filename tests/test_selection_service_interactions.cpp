@@ -1087,3 +1087,76 @@ TEST_F(SelectionServiceInteractionsTest, CancelingRingsStrokePreservesTheOrigina
     service_->cancelInteractiveSelection();
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
 }
+
+TEST_F(SelectionServiceInteractionsTest, ViewerSelectionShapesMatchProjectedCentersAtDisplayScale) {
+    using lfs::vis::SelectionMode;
+    using lfs::vis::SelectionShape;
+    Viewport camera(1, 1);
+    const auto settings = rendering_manager_->getSettings();
+    std::vector<float> xyz;
+    for (int y = -4; y <= 4; ++y) {
+        for (int x = -4; x <= 4; ++x) {
+            const auto world = glm::vec3(1, -1, -1) * (camera.camera.t + camera.camera.R * glm::vec3(x * 0.35f, y * 0.35f, -8.0f));
+            xyz.insert(xyz.end(), {world.x, world.y, world.z});
+        }
+    }
+    auto& scene = scene_manager_->getScene();
+    scene.clear();
+    const auto id = scene.addSplat("grid", make_test_splat(xyz));
+    scene_manager_->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+    for (const bool transformed : {false, true}) {
+        const auto transform = glm::translate(glm::mat4(1.0f), transformed ? glm::vec3(0.31f, -0.17f, 0.23f) : glm::vec3(0.0f));
+        scene.setNodeTransform(id, transform);
+        for (const auto size : {glm::ivec2(200, 160), glm::ivec2(250, 200), glm::ivec2(400, 320), glm::ivec2(151, 119)}) {
+            SCOPED_TRACE(::testing::Message() << transformed << " " << size.x << "x" << size.y);
+            service_->setTestingViewport({.x = 324.0f, .y = 30.0f, .width = 200.0f, .height = 160.0f, .render_width = size.x, .render_height = size.y});
+            const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(size, settings.focal_length_mm);
+            std::vector<uint8_t> rect, brush;
+            for (size_t i = 0; i < xyz.size(); i += 3) {
+                const auto world = glm::vec3(1, -1, -1) * glm::vec3(transform * glm::vec4(xyz[i], xyz[i + 1], xyz[i + 2], 1.0f));
+                const auto view = glm::transpose(camera.camera.R) * (world - camera.camera.t);
+                const glm::vec2 pixel(size.x * 0.5f + fx * view.x / -view.z,
+                                      size.y * 0.5f - fy * view.y / -view.z);
+                const glm::vec2 local(pixel.x * 200.0f / size.x, pixel.y * 160.0f / size.y);
+                rect.push_back(local.x >= 73.0f && local.x <= 119.0f && local.y >= 59.0f && local.y <= 103.0f);
+                const glm::vec2 delta(pixel.x - 96.0f * size.x / 200.0f, pixel.y - 81.0f * size.y / 160.0f);
+                brush.push_back(glm::dot(delta, delta) <= std::pow(23.0f * size.x / 200.0f, 2));
+            }
+            ASSERT_TRUE(service_->beginInteractiveSelection(SelectionShape::Rectangle, SelectionMode::Replace, {397, 89}, 0));
+            service_->updateInteractiveSelection({443, 133});
+            ASSERT_TRUE(service_->finishInteractiveSelection().success);
+            EXPECT_EQ(selection_values(*scene_manager_), rect);
+            ASSERT_TRUE(service_->beginInteractiveSelection(SelectionShape::Polygon, SelectionMode::Replace, {397, 89}, 0));
+            ASSERT_TRUE(service_->appendInteractivePolygonVertex({443, 89}));
+            ASSERT_TRUE(service_->appendInteractivePolygonVertex({443, 133}));
+            ASSERT_TRUE(service_->appendInteractivePolygonVertex({397, 133}));
+            ASSERT_TRUE(service_->finishInteractiveSelection().success);
+            EXPECT_EQ(selection_values(*scene_manager_), rect);
+            ASSERT_TRUE(service_->selectRect(73, 59, 119, 103, SelectionMode::Replace, -1).success);
+            EXPECT_EQ(selection_values(*scene_manager_), rect);
+            ASSERT_TRUE(service_->selectPolygon({{73, 59}, {119, 59}, {119, 103}, {73, 103}}, SelectionMode::Replace, -1).success);
+            EXPECT_EQ(selection_values(*scene_manager_), rect);
+            ASSERT_TRUE(service_->selectLasso({{73, 59}, {119, 59}, {119, 103}, {73, 103}}, SelectionMode::Replace, -1).success);
+            EXPECT_EQ(selection_values(*scene_manager_), rect);
+            ASSERT_TRUE(service_->beginInteractiveSelection(SelectionShape::Brush, SelectionMode::Replace, {420, 111}, 23));
+            ASSERT_TRUE(service_->finishInteractiveSelection().success);
+            EXPECT_EQ(selection_values(*scene_manager_), brush);
+            ASSERT_TRUE(service_->selectBrush(96, 81, 23, SelectionMode::Replace, -1).success);
+            EXPECT_EQ(selection_values(*scene_manager_), brush);
+        }
+    }
+}
+
+TEST_F(SelectionServiceInteractionsTest, DatasetCameraSelectionKeepsImagePixelCoordinates) {
+    using lfs::vis::SelectionMode;
+    service_->setTestingViewport({.x = 324, .y = 30, .width = 100, .height = 100, .render_width = 200, .render_height = 200});
+    service_->setTestingScreenPositionsForCamera(3, make_screen_positions({20, 20, 60, 60}));
+    ASSERT_TRUE(service_->selectRect(0, 0, 40, 40, SelectionMode::Replace, 3).success);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+    ASSERT_TRUE(service_->selectPolygon({{0, 0}, {40, 0}, {40, 40}, {0, 40}}, SelectionMode::Replace, 3).success);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+    ASSERT_TRUE(service_->selectLasso({{0, 0}, {40, 0}, {40, 40}, {0, 40}}, SelectionMode::Replace, 3).success);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+    ASSERT_TRUE(service_->selectBrush(20, 20, 15, SelectionMode::Replace, 3).success);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+}

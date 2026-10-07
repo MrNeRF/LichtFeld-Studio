@@ -86,6 +86,8 @@ namespace lfs::vis {
         SelectionService(const SelectionService&) = delete;
         SelectionService& operator=(const SelectionService&) = delete;
 
+        // Viewer commands use logical pixels relative to the focused split panel.
+        // Dataset-camera commands retain coordinates in the camera image resolution.
         [[nodiscard]] SelectionResult selectBrush(float x, float y, float radius, SelectionMode mode,
                                                   int camera_index = 0);
         [[nodiscard]] SelectionResult selectRect(float x0, float y0, float x1, float y1, SelectionMode mode,
@@ -234,7 +236,8 @@ namespace lfs::vis {
                                                       const SelectionFilterState& filters,
                                                       const char* undo_name,
                                                       SelectionCommitOptions options = {});
-        [[nodiscard]] core::Tensor& resetBoolScratchBuffer(core::Tensor& buffer, size_t size);
+        [[nodiscard]] static core::Tensor& resetBoolScratchBuffer(core::Tensor& buffer, size_t size);
+        [[nodiscard]] std::optional<ViewerViewportContext> resolveCommandViewerContext(int camera_index) const;
         [[nodiscard]] std::optional<ViewerViewportContext> resolveViewerViewportContext(
             std::optional<glm::vec2> screen_point = std::nullopt,
             std::optional<SplitViewPanelId> panel_override = std::nullopt) const;
@@ -267,11 +270,11 @@ namespace lfs::vis {
                                                                    int* picked_ring_id_out = nullptr);
         [[nodiscard]] bool buildInteractiveBrushPreviewIncremental();
         [[nodiscard]] bool buildBrushSelection(const std::vector<glm::vec2>& points, float radius,
-                                               core::Tensor& selection_out) const;
+                                               core::Tensor& selection_out, const ViewerViewportContext* context = nullptr) const;
         [[nodiscard]] bool buildRectangleSelection(glm::vec2 start, glm::vec2 end,
-                                                   core::Tensor& selection_out) const;
+                                                   core::Tensor& selection_out, const ViewerViewportContext* context = nullptr) const;
         [[nodiscard]] bool buildPolygonSelection(const std::vector<glm::vec2>& points,
-                                                 core::Tensor& selection_out) const;
+                                                 core::Tensor& selection_out, const ViewerViewportContext* context = nullptr) const;
         [[nodiscard]] bool buildWorldPolygonSelection(const std::vector<glm::vec3>& world_points,
                                                       core::Tensor& selection_out) const;
         [[nodiscard]] std::optional<bool> buildRingSelectionForContext(const ViewerViewportContext& context,
@@ -322,7 +325,7 @@ namespace lfs::vis {
         bool passive_hover_suppressed_ = false;
         core::Tensor stroke_selection_;
         std::shared_ptr<core::Tensor> selection_before_stroke_;
-        core::Tensor command_selection_buffer_;
+        mutable core::Tensor command_selection_buffer_;
         core::Tensor locked_groups_device_mask_;
         std::array<uint32_t, 8> locked_groups_host_mask_{};
         bool locked_groups_host_mask_valid_ = false;

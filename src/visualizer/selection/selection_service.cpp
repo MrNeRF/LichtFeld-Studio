@@ -1109,6 +1109,14 @@ namespace lfs::vis {
             return {false, 0, "Missing managers"};
         }
         const auto filters = defaultFilterState();
+        if (const auto context = resolveCommandViewerContext(camera_index)) {
+            core::Tensor selection;
+            const glm::vec2 point(context->info.x + x, context->info.y + y);
+            if (!buildBrushSelection({point}, radius, selection, &*context)) {
+                return {false, 0, "No screen positions"};
+            }
+            return commitSelection(selection, mode, effectiveNodeMask(true), filters, "selection.brush");
+        }
         const auto settings = rendering_manager_->getSettings();
         const std::vector<glm::vec4> primitives{{x, y, radius * radius, 0.0f}};
         if (const auto frame_view = resolveCommandFrameView(camera_index)) {
@@ -1136,6 +1144,14 @@ namespace lfs::vis {
             return {false, 0, "Missing managers"};
         }
         const auto filters = defaultFilterState();
+        if (const auto context = resolveCommandViewerContext(camera_index)) {
+            core::Tensor selection;
+            const glm::vec2 origin(context->info.x, context->info.y);
+            if (!buildRectangleSelection(origin + glm::vec2(x0, y0), origin + glm::vec2(x1, y1), selection, &*context)) {
+                return {false, 0, "No screen positions"};
+            }
+            return commitSelection(selection, mode, effectiveNodeMask(true), filters, "selection.rect");
+        }
         const auto settings = rendering_manager_->getSettings();
         const std::vector<glm::vec4> primitives{{
             std::min(x0, x1),
@@ -1208,6 +1224,18 @@ namespace lfs::vis {
         }
 
         const auto filters = defaultFilterState();
+        if (const auto context = resolveCommandViewerContext(camera_index)) {
+            core::Tensor selection;
+            std::vector<glm::vec2> points;
+            points.reserve(vertices.size());
+            for (const auto& vertex : vertices) {
+                points.emplace_back(vertex + glm::vec2(context->info.x, context->info.y));
+            }
+            if (!buildPolygonSelection(points, selection, &*context)) {
+                return {false, 0, "No screen positions"};
+            }
+            return commitSelection(selection, mode, effectiveNodeMask(true), filters, "selection.polygon");
+        }
         const auto settings = rendering_manager_->getSettings();
 
         if (const auto frame_view = resolveCommandFrameView(camera_index)) {
@@ -1639,6 +1667,20 @@ namespace lfs::vis {
         return interactive_selection_.working_selection.is_valid()
                    ? &interactive_selection_.working_selection
                    : nullptr;
+    }
+
+    std::optional<SelectionService::ViewerViewportContext> SelectionService::resolveCommandViewerContext(
+        const int camera_index) const {
+        if (camera_index >= 0 && scene_manager_) {
+            if (testing_camera_screen_positions_.contains(camera_index)) {
+                return std::nullopt;
+            }
+            const auto cameras = scene_manager_->getScene().getAllCameras();
+            if (camera_index < static_cast<int>(cameras.size()) && cameras[camera_index]) {
+                return std::nullopt;
+            }
+        }
+        return resolveViewerViewportContext();
     }
 
     std::optional<SelectionService::ViewerViewportContext> SelectionService::resolveViewerViewportContext(
@@ -2901,18 +2943,21 @@ namespace lfs::vis {
     }
 
     bool SelectionService::buildBrushSelection(const std::vector<glm::vec2>& points, const float radius,
-                                               core::Tensor& selection_out) const {
+                                               core::Tensor& selection_out, const ViewerViewportContext* context) const {
         LOG_TIMER("SelectionService::buildBrushSelection");
         if (points.empty()) {
             return false;
         }
 
-        const auto& session = interactive_selection_;
-        if (!scene_manager_ || !rendering_manager_ || !session.viewport_context ||
-            !session.viewport_context->info.valid() || !session.viewport_context->viewport) {
+        const bool command = context != nullptr;
+        if (!context && interactive_selection_.viewport_context) {
+            context = &*interactive_selection_.viewport_context;
+        }
+        if (!scene_manager_ || !rendering_manager_ || !context ||
+            !context->info.valid() || !context->viewport) {
             return false;
         }
-        const auto& info = session.viewport_context->info;
+        const auto& info = context->info;
 
         const auto primitives = buildBrushPrimitives(points, radius, info);
         if (primitives.empty()) {
@@ -2920,7 +2965,7 @@ namespace lfs::vis {
         }
         const auto settings = rendering_manager_->getSettings();
         if (!testing_screen_positions_ && !testing_viewport_) {
-            Viewport projection_viewport = *session.viewport_context->viewport;
+            Viewport projection_viewport = *context->viewport;
             projection_viewport.windowSize = {info.render_width, info.render_height};
             const auto frame_view = frameViewFromViewport(
                 viewportDataFromViewer(projection_viewport, info, settings),
@@ -2929,13 +2974,19 @@ namespace lfs::vis {
             if (auto selection = tryBuildVksplatSelectionMask(
                     scene_manager_, rendering_manager_, frame_view, settings.equirectangular,
                     RenderingManager::VksplatSelectionMaskShape::Brush, primitives);
-                selection && copySelectionIfSameSize(*selection, selection_out)) {
+                selection && (command ? (selection_out = std::move(*selection), true)
+                                      : copySelectionIfSameSize(*selection, selection_out))) {
                 return true;
             }
         }
 
-        const auto screen_positions = getScreenPositionsForContext(*session.viewport_context);
-        if (!screen_positions || !screen_positions->is_valid() || screen_positions->size(0) != selection_out.numel()) {
+        const auto screen_positions = getScreenPositionsForContext(*context);
+        if (!screen_positions || !screen_positions->is_valid()) {
+            return false;
+        }
+        if (command) {
+            selection_out = resetBoolScratchBuffer(command_selection_buffer_, screen_positions->size(0));
+        } else if (screen_positions->size(0) != selection_out.numel()) {
             return false;
         }
 
@@ -2965,14 +3016,17 @@ namespace lfs::vis {
     }
 
     bool SelectionService::buildRectangleSelection(const glm::vec2 start, const glm::vec2 end,
-                                                   core::Tensor& selection_out) const {
+                                                   core::Tensor& selection_out, const ViewerViewportContext* context) const {
         LOG_TIMER("SelectionService::buildRectangleSelection");
-        const auto& session = interactive_selection_;
-        if (!scene_manager_ || !rendering_manager_ || !session.viewport_context ||
-            !session.viewport_context->info.valid() || !session.viewport_context->viewport) {
+        const bool command = context != nullptr;
+        if (!context && interactive_selection_.viewport_context) {
+            context = &*interactive_selection_.viewport_context;
+        }
+        if (!scene_manager_ || !rendering_manager_ || !context ||
+            !context->info.valid() || !context->viewport) {
             return false;
         }
-        const auto& info = session.viewport_context->info;
+        const auto& info = context->info;
 
         const auto render_start = screenToRender(start, info);
         const auto render_end = screenToRender(end, info);
@@ -2984,7 +3038,7 @@ namespace lfs::vis {
         }};
         const auto settings = rendering_manager_->getSettings();
         if (!testing_screen_positions_ && !testing_viewport_) {
-            Viewport projection_viewport = *session.viewport_context->viewport;
+            Viewport projection_viewport = *context->viewport;
             projection_viewport.windowSize = {info.render_width, info.render_height};
             const auto frame_view = frameViewFromViewport(
                 viewportDataFromViewer(projection_viewport, info, settings),
@@ -2993,13 +3047,19 @@ namespace lfs::vis {
             if (auto selection = tryBuildVksplatSelectionMask(
                     scene_manager_, rendering_manager_, frame_view, settings.equirectangular,
                     RenderingManager::VksplatSelectionMaskShape::Rectangle, primitives);
-                selection && copySelectionIfSameSize(*selection, selection_out)) {
+                selection && (command ? (selection_out = std::move(*selection), true)
+                                      : copySelectionIfSameSize(*selection, selection_out))) {
                 return true;
             }
         }
 
-        const auto screen_positions = getScreenPositionsForContext(*session.viewport_context);
-        if (!screen_positions || !screen_positions->is_valid() || screen_positions->size(0) != selection_out.numel()) {
+        const auto screen_positions = getScreenPositionsForContext(*context);
+        if (!screen_positions || !screen_positions->is_valid()) {
+            return false;
+        }
+        if (command) {
+            selection_out = resetBoolScratchBuffer(command_selection_buffer_, screen_positions->size(0));
+        } else if (screen_positions->size(0) != selection_out.numel()) {
             return false;
         }
 
@@ -3013,18 +3073,21 @@ namespace lfs::vis {
     }
 
     bool SelectionService::buildPolygonSelection(const std::vector<glm::vec2>& points,
-                                                 core::Tensor& selection_out) const {
+                                                 core::Tensor& selection_out, const ViewerViewportContext* context) const {
         LOG_TIMER("SelectionService::buildPolygonSelection");
         if (points.size() < 3) {
             return false;
         }
 
-        const auto& session = interactive_selection_;
-        if (!scene_manager_ || !rendering_manager_ || !session.viewport_context ||
-            !session.viewport_context->info.valid() || !session.viewport_context->viewport) {
+        const bool command = context != nullptr;
+        if (!context && interactive_selection_.viewport_context) {
+            context = &*interactive_selection_.viewport_context;
+        }
+        if (!scene_manager_ || !rendering_manager_ || !context ||
+            !context->info.valid() || !context->viewport) {
             return false;
         }
-        const auto& info = session.viewport_context->info;
+        const auto& info = context->info;
 
         std::vector<glm::vec2> render_points;
         render_points.reserve(points.size());
@@ -3034,7 +3097,7 @@ namespace lfs::vis {
 
         const auto settings = rendering_manager_->getSettings();
         if (!testing_screen_positions_ && !testing_viewport_) {
-            Viewport projection_viewport = *session.viewport_context->viewport;
+            Viewport projection_viewport = *context->viewport;
             projection_viewport.windowSize = {info.render_width, info.render_height};
             const auto frame_view = frameViewFromViewport(
                 viewportDataFromViewer(projection_viewport, info, settings),
@@ -3042,13 +3105,19 @@ namespace lfs::vis {
                 settings.depth_clip_enabled ? settings.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE);
             if (auto selection = tryBuildVksplatPolygonSelectionMask(
                     scene_manager_, rendering_manager_, frame_view, settings.equirectangular, render_points);
-                selection && copySelectionIfSameSize(*selection, selection_out)) {
+                selection && (command ? (selection_out = std::move(*selection), true)
+                                      : copySelectionIfSameSize(*selection, selection_out))) {
                 return true;
             }
         }
 
-        const auto screen_positions = getScreenPositionsForContext(*session.viewport_context);
-        if (!screen_positions || !screen_positions->is_valid() || screen_positions->size(0) != selection_out.numel()) {
+        const auto screen_positions = getScreenPositionsForContext(*context);
+        if (!screen_positions || !screen_positions->is_valid()) {
+            return false;
+        }
+        if (command) {
+            selection_out = resetBoolScratchBuffer(command_selection_buffer_, screen_positions->size(0));
+        } else if (screen_positions->size(0) != selection_out.numel()) {
             return false;
         }
 
