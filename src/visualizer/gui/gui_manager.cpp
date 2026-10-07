@@ -1137,6 +1137,7 @@ namespace lfs::vis::gui {
             const RenderSettings& settings,
             const glm::vec3& world_a,
             const glm::vec3& world_b) {
+            const float ortho_scale = panel.viewport->ortho_scale_override.value_or(settings.ortho_scale);
             if (settings.equirectangular) {
                 const glm::mat3 rotation = panel.viewport->getRotationMatrix();
                 const glm::vec3 translation = panel.viewport->getTranslation();
@@ -1205,11 +1206,11 @@ namespace lfs::vis::gui {
                 const float cx = width * 0.5f;
                 const float cy = height * 0.5f;
                 if (settings.orthographic) {
-                    if (!std::isfinite(settings.ortho_scale) || settings.ortho_scale <= 0.0f) {
+                    if (!std::isfinite(ortho_scale) || ortho_scale <= 0.0f) {
                         return std::nullopt;
                     }
-                    return glm::vec2(cx + view.x * settings.ortho_scale,
-                                     cy - view.y * settings.ortho_scale);
+                    return glm::vec2(cx + view.x * ortho_scale,
+                                     cy - view.y * ortho_scale);
                 }
                 const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(
                     panel.render_size, settings.focal_length_mm);
@@ -2843,6 +2844,8 @@ namespace lfs::vis::gui {
                 if (!panel.valid())
                     continue;
                 hashCombine(key.view_projection_hash, hashViewportPose(*panel.viewport));
+                hashCombine(key.view_projection_hash,
+                            hashFloat(panel.viewport->ortho_scale_override.value_or(settings.ortho_scale)));
                 // The overlay is rasterized in screen space. Quantizing layout
                 // values removes sub-pixel churn from repeated UI layout solves
                 // without hiding a meaningful viewport-size change.
@@ -2917,6 +2920,7 @@ namespace lfs::vis::gui {
                     const auto& panel = panels[panel_index];
                     if (!panel.valid())
                         continue;
+                    const float ortho_scale = panel.viewport->ortho_scale_override.value_or(settings.ortho_scale);
                     const glm::mat3 rotation = panel.viewport->getRotationMatrix();
                     const glm::vec3 translation = panel.viewport->getTranslation();
                     const glm::mat3 world_to_panel_rotation = glm::transpose(rotation);
@@ -2980,10 +2984,10 @@ namespace lfs::vis::gui {
                         }
                         if (!settings.equirectangular && center_view.z + radius < -1e-4f) {
                             if (settings.orthographic &&
-                                std::isfinite(settings.ortho_scale) && settings.ortho_scale > 0.0f) {
-                                const float projected_radius = radius * settings.ortho_scale;
-                                const float projected_x = cx + center_view.x * settings.ortho_scale;
-                                const float projected_y = cy - center_view.y * settings.ortho_scale;
+                                std::isfinite(ortho_scale) && ortho_scale > 0.0f) {
+                                const float projected_radius = radius * ortho_scale;
+                                const float projected_x = cx + center_view.x * ortho_scale;
+                                const float projected_y = cy - center_view.y * ortho_scale;
                                 if (projected_x + projected_radius < 0.0f ||
                                     projected_x - projected_radius > width ||
                                     projected_y + projected_radius < 0.0f ||
@@ -3028,8 +3032,8 @@ namespace lfs::vis::gui {
                                     break;
                                 }
                                 const glm::vec2 projected = settings.orthographic
-                                                                ? glm::vec2(cx + view.x * settings.ortho_scale,
-                                                                            cy - view.y * settings.ortho_scale)
+                                                                ? glm::vec2(cx + view.x * ortho_scale,
+                                                                            cy - view.y * ortho_scale)
                                                                 : glm::vec2(cx + view.x * fx / -view.z,
                                                                             cy - view.y * fy / -view.z);
                                 screen_points[corner] = renderToPanelScreen(panel, projected);
@@ -3068,8 +3072,8 @@ namespace lfs::vis::gui {
                             .viewport_pos = panel.pos,
                             .viewport_size = panel.size,
                             .render_size = glm::vec2(panel.render_size),
-                            .focal_x = settings.orthographic ? settings.ortho_scale : fx,
-                            .focal_y = settings.orthographic ? settings.ortho_scale : fy,
+                            .focal_x = settings.orthographic ? ortho_scale : fx,
+                            .focal_y = settings.orthographic ? ortho_scale : fy,
                             .orthographic = settings.orthographic,
                             .equirectangular = settings.equirectangular,
                             .first_instance = first_instance,
@@ -3345,7 +3349,7 @@ namespace lfs::vis::gui {
                 panel.render_size,
                 settings.focal_length_mm,
                 settings.orthographic,
-                settings.ortho_scale,
+                panel.viewport->ortho_scale_override.value_or(settings.ortho_scale),
                 lfs::rendering::DEFAULT_NEAR_PLANE,
                 settings.depth_clip_enabled ? settings.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE);
             const glm::vec4 clip = projection * view * glm::vec4(pivot_world, 1.0f);
@@ -5245,7 +5249,7 @@ namespace lfs::vis::gui {
                         panel.render_size,
                         settings.focal_length_mm,
                         settings.orthographic,
-                        settings.ortho_scale,
+                        panel.viewport->ortho_scale_override.value_or(settings.ortho_scale),
                         lfs::rendering::DEFAULT_NEAR_PLANE,
                         settings.depth_clip_enabled ? settings.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE);
                     VulkanViewportGridOverlay grid{};
@@ -7612,7 +7616,7 @@ namespace lfs::vis::gui {
                                 world_point,
                                 render_settings.focal_length_mm,
                                 render_settings.orthographic,
-                                render_settings.ortho_scale);
+                                projection_viewport.ortho_scale_override.value_or(render_settings.ortho_scale));
                             if (!projected) {
                                 all_visible = false;
                                 break;

@@ -54,6 +54,7 @@
 struct SDL_Cursor;
 
 namespace lfs::vis {
+    class OrthographicZoomTest;
     class WindowInputDispatchTest;
     class VisualizerImpl;
     class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
@@ -284,6 +285,7 @@ namespace lfs::vis {
             friend class lfs::vis::VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoverLegacyScratchThenSaveAsRemovesLegacyFile_Test;
             [[nodiscard]] bool isPositionOverRightPanelResizeEdge(double x, double y) const;
+            friend class lfs::vis::OrthographicZoomTest;
             [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(VkExtent2D extent,
                                                                              std::size_t frame_slot) const;
             void recordVulkanViewport(VkCommandBuffer command_buffer,

@@ -1385,7 +1385,7 @@ namespace lfs::vis::gui {
         const glm::mat4 view = vp.getViewMatrix();
         const glm::ivec2 vp_size(static_cast<int>(active_panel->size.x), static_cast<int>(active_panel->size.y));
         const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
-            vp_size, settings.focal_length_mm, settings.orthographic, settings.ortho_scale);
+            vp_size, settings.focal_length_mm, settings.orthographic, vp.ortho_scale_override.value_or(settings.ortho_scale));
 
         const bool use_world_space = (transform_space_ == TransformSpace::World) || is_multi_selection;
 
@@ -2006,7 +2006,7 @@ namespace lfs::vis::gui {
         const glm::mat4 view = vp.getViewMatrix();
         const glm::ivec2 vp_size(static_cast<int>(active_panel->size.x), static_cast<int>(active_panel->size.y));
         const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
-            vp_size, settings.focal_length_mm, settings.orthographic, settings.ortho_scale);
+            vp_size, settings.focal_length_mm, settings.orthographic, vp.ortho_scale_override.value_or(settings.ortho_scale));
 
         const glm::vec3 local_size = crop_tool_box_max_ - crop_tool_box_min_;
         const glm::vec3 world_scale = glm::max(extractScale(crop_tool_visualizer_transform_), glm::vec3(1e-6f));
@@ -2231,7 +2231,7 @@ namespace lfs::vis::gui {
         const glm::mat4 view = vp.getViewMatrix();
         const glm::ivec2 vp_size(static_cast<int>(active_panel->size.x), static_cast<int>(active_panel->size.y));
         const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
-            vp_size, settings.focal_length_mm, settings.orthographic, settings.ortho_scale);
+            vp_size, settings.focal_length_mm, settings.orthographic, vp.ortho_scale_override.value_or(settings.ortho_scale));
 
         const glm::vec3 cropbox_min = cropbox_node->cropbox->min;
         const glm::vec3 cropbox_max = cropbox_node->cropbox->max;
@@ -2505,7 +2505,7 @@ namespace lfs::vis::gui {
         const glm::mat4 view = vp.getViewMatrix();
         const glm::ivec2 vp_size(static_cast<int>(active_panel->size.x), static_cast<int>(active_panel->size.y));
         const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
-            vp_size, settings.focal_length_mm, settings.orthographic, settings.ortho_scale);
+            vp_size, settings.focal_length_mm, settings.orthographic, vp.ortho_scale_override.value_or(settings.ortho_scale));
 
         const glm::vec3 world_scale = glm::max(extractScale(crop_tool_visualizer_transform_), glm::vec3(1e-6f));
         const glm::mat3 rotation = extractRotation(crop_tool_visualizer_transform_);
@@ -2723,7 +2723,7 @@ namespace lfs::vis::gui {
         const glm::mat4 view = vp.getViewMatrix();
         const glm::ivec2 vp_size(static_cast<int>(active_panel->size.x), static_cast<int>(active_panel->size.y));
         const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
-            vp_size, settings.focal_length_mm, settings.orthographic, settings.ortho_scale);
+            vp_size, settings.focal_length_mm, settings.orthographic, vp.ortho_scale_override.value_or(settings.ortho_scale));
 
         const glm::vec3 radii = ellipsoid_node->ellipsoid->radii;
         const glm::mat4 world_transform = scene_coords::nodeVisualizerWorldTransform(scene_manager->getScene(), ellipsoid_id);

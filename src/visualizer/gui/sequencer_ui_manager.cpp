@@ -1628,7 +1628,7 @@ namespace lfs::vis::gui {
                 pos,
                 settings.focal_length_mm,
                 settings.orthographic,
-                settings.ortho_scale);
+                panel.viewport->ortho_scale_override.value_or(settings.ortho_scale));
             if (!projected)
                 return {-10000.0f, -10000.0f};
             const float scale_x =
@@ -1650,7 +1650,7 @@ namespace lfs::vis::gui {
                 pos,
                 settings.focal_length_mm,
                 settings.orthographic,
-                settings.ortho_scale);
+                panel.viewport->ortho_scale_override.value_or(settings.ortho_scale));
             if (!projected)
                 return false;
             const float margin_x =
@@ -1949,7 +1949,7 @@ namespace lfs::vis::gui {
             render_size,
             settings.focal_length_mm,
             settings.orthographic,
-            settings.ortho_scale);
+            gizmo_viewport->ortho_scale_override.value_or(settings.ortho_scale));
 
         const glm::mat3 rot_mat = glm::mat3_cast(kf->rotation);
         glm::mat4 gizmo_matrix(rot_mat);

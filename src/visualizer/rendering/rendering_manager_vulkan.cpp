@@ -613,7 +613,7 @@ namespace lfs::vis {
                          },
                          .focal_length_mm = settings.focal_length_mm,
                          .orthographic = settings.orthographic,
-                         .ortho_scale = settings.ortho_scale},
+                         .ortho_scale = viewport->ortho_scale_override.value_or(settings.ortho_scale)},
                     .viewport_pos = {screen_viewport_pos.x + offset_x, screen_viewport_pos.y},
                     .viewport_size = {width, screen_viewport_size.y},
                 });

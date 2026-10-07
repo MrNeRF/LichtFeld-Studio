@@ -1606,12 +1606,13 @@ namespace lfs::vis {
                     constexpr float MIN_ORTHO_SCALE = 1.0f;
                     constexpr float MAX_ORTHO_SCALE = 10000.0f;
                     const float scale_factor = 1.0f + delta * ORTHO_ZOOM_FACTOR;
-                    if (&target_viewport != &viewport_) {
-                        const float current = target_viewport.ortho_scale_override.value_or(settings.ortho_scale);
-                        target_viewport.ortho_scale_override =
-                            std::clamp(current * scale_factor, MIN_ORTHO_SCALE, MAX_ORTHO_SCALE);
-                    } else {
-                        settings.ortho_scale = std::clamp(settings.ortho_scale * scale_factor, MIN_ORTHO_SCALE, MAX_ORTHO_SCALE);
+                    const float current = target_viewport.ortho_scale_override.value_or(settings.ortho_scale);
+                    const float scale = std::clamp(current * scale_factor, MIN_ORTHO_SCALE, MAX_ORTHO_SCALE);
+                    if (&target_viewport != &viewport_ || target_viewport.ortho_scale_override) {
+                        target_viewport.ortho_scale_override = scale;
+                    }
+                    if (&target_viewport == &viewport_) {
+                        settings.ortho_scale = scale;
                         services().renderingOrNull()->updateSettings(settings);
                     }
                 } else {
