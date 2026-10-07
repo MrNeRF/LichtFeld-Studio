@@ -868,8 +868,10 @@ namespace lfs::vis {
             const bool source_changed =
                 view.gt_comparison_actual_size_state_.source_generation != lookup.generation ||
                 state.cpu_source != lookup.source;
+            // A different camera, image or calibration already reset this state
+            // above; a re-decode of the same source keeps the user's crop.
             const bool reset_crop =
-                source_changed || view.gt_comparison_actual_size_state_.full_extent != full_extent;
+                view.gt_comparison_actual_size_state_.full_extent != full_extent;
             if (reset_crop || !state.desired_crop_center) {
                 state.desired_crop_center = glm::dvec2(full_extent) * 0.5;
                 if (state.pending_pan_camera_uid == camera.uid()) {

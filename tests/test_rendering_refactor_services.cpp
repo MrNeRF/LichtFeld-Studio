@@ -1181,6 +1181,36 @@ namespace lfs::vis {
             EXPECT_EQ(view.gt_comparison_actual_size_state_.desired_crop_center, panned_center);
             EXPECT_EQ(frame.snapshot->crop, detail::cropGTComparisonFromCenter({101, 81}, {21, 19}, panned_center));
         }
+        void sameSourceRedecodeKeepsCrop() {
+            using namespace lfs::core;
+            if (!gpu_backend_available(GpuBackend::CUDA))
+                GTEST_SKIP() << "CUDA device required for native display upload";
+            const Camera camera(Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+                                70.0f, 72.0f, 50.5f, 40.5f, Tensor(), Tensor(), CameraModelType::PINHOLE,
+                                "0.png", "0.png", {}, 101, 81, 0);
+            const auto ready_slot = [&](const std::uint64_t generation) {
+                manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+                    .owner = owner,
+                    .status = Status::Ready,
+                    .source_key = {.camera_uid = 0, .image_path = "0.png"},
+                    .generation = generation,
+                    .cpu_source = image({101, 81})};
+            };
+            ready_slot(1);
+            auto& view = manager.viewState(owner);
+            auto frame = manager.prepareGTActualFrame(view, camera, {20, 18});
+            ASSERT_TRUE(frame.snapshot);
+            manager.publishGTComparisonActualFrame(view, *frame.snapshot);
+            manager.setGTComparisonCropOrigin({11, 17}, owner);
+            const auto panned = view.gt_comparison_actual_size_state_.desired_crop_center;
+
+            // A late decode of the same image must not recentre the user's crop.
+            ready_slot(2);
+            frame = manager.prepareGTActualFrame(view, camera, {20, 18});
+            ASSERT_TRUE(frame.snapshot);
+            EXPECT_EQ(view.gt_comparison_actual_size_state_.desired_crop_center, panned);
+            EXPECT_EQ(frame.snapshot->crop.origin, glm::ivec2(11, 17));
+        }
         void pendingPanWhileLoading() {
             using namespace lfs::core;
             if (!gpu_backend_available(GpuBackend::CUDA))
@@ -1337,6 +1367,7 @@ namespace lfs::vis {
 
     TEST_F(RenderingManagerGTComparisonReviewTest, PreparedResizeAndPanPreserveDesiredCenter) { cropResizeAndPendingPan(); }
     TEST_F(RenderingManagerGTComparisonReviewTest, PanWhileNativeSourceLoadsKeepsRequestAndAppliesIntent) { pendingPanWhileLoading(); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, SameSourceRedecodeKeepsPannedCrop) { sameSourceRedecodeKeepsCrop(); }
     TEST_F(RenderingManagerGTComparisonReviewTest, UnrelatedViewResetPreservesOwnerAndTeardownReleases) { ownership(); }
     TEST_F(RenderingManagerGTComparisonReviewTest, SameSizedCameraSwitchRejectsPreviousFitAndNativeCompletion) { cameraSwitch(); }
     TEST_F(RenderingManagerGTComparisonReviewTest, EightKAdmissionReservationsAndCompletionProtectDisplayedImage) { budget(); }
