@@ -107,6 +107,15 @@ namespace lfs::app {
             return destination;
         }
 
+        // Without -o, final exports go next to the project the run saves into.
+        [[nodiscard]] core::param::TrainingParameters with_export_folder(
+            core::param::TrainingParameters params,
+            const std::filesystem::path& project_folder) {
+            if (params.dataset.output_path.empty())
+                params.dataset.output_path = project_folder;
+            return params;
+        }
+
         // Empty for a plain dataset-folder run, which keeps the default
         // output_path/project.licht destination.
         [[nodiscard]] std::filesystem::path headless_dataset_project_destination(
@@ -1045,7 +1054,7 @@ namespace lfs::app {
                                 rebound.error()));
                         return 1;
                     }
-                    if (!export_and_shutdown(trainer, *params))
+                    if (!export_and_shutdown(trainer, with_export_folder(*params, params->resume_project->parent_path())))
                         return 1;
                 } else if (params->resume_checkpoint) {
                     const auto ckpt_params_result = loadCheckpointParams(*params, scene);
@@ -1093,7 +1102,7 @@ namespace lfs::app {
                         }
                         return 1;
                     }
-                    if (!export_and_shutdown(trainer, *params))
+                    if (!export_and_shutdown(trainer, with_export_folder(*params, ckpt_params_result->dataset.output_path)))
                         return 1;
                 } else {
                     LOG_INFO("Starting headless training...");
