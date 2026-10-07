@@ -626,6 +626,7 @@ namespace lfs::vis {
             window_->pumping_events_ = false;
         }
         void poll() { window_->pollEvents(); }
+        FrameInputBuffer& frameInput() { return window_->frame_input_; }
         void wait(double timeout) { window_->waitEvents(timeout); }
         SDL_Window* nativeWindow() { return window_->window_; }
         gui::RmlModalOverlay& modal() { return *gui_->rml_modal_overlay_; }
@@ -1007,6 +1008,60 @@ namespace lfs::vis {
     }
 
 #undef TRANSFORM_DRAG_CANCEL_TEST
+
+    // Catches gizmo hover that outlives the crop gizmo: the deleted volume's last hover
+    // made every later viewport press look like a gizmo grab, so orbit never started.
+    TEST_F(WindowInputDispatchTest, ApplyingCropWhileHoveringItsGizmoKeepsViewportOrbit) {
+        auto& scene_manager = *viewer_->getSceneManager();
+        auto& scene = viewer_->getScene();
+        const core::NodeId splat_id = scene.addSplat("Crop orbit", lfs::test::licht::make_splat(3));
+        ASSERT_NE(splat_id, core::NULL_NODE);
+        scene_manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        const core::NodeId cropbox_id = scene.addCropBox("Crop orbit_cropbox", splat_id);
+        ASSERT_NE(cropbox_id, core::NULL_NODE);
+        scene_manager.selectNode(cropbox_id);
+        viewer_->getEditorContext().update(&scene_manager, viewer_->getTrainerManager());
+        UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
+        auto& gizmo = gui_->gizmo();
+        gizmo.setCropToolShape("box");
+        gizmo.setOperation(gui::GizmoOperation::Translate);
+
+        auto& camera = viewer_->getViewport().camera;
+        camera.t = {0.0f, 0.0f, 12.0f};
+        camera.pivot = {0.0f, 0.0f, 0.0f};
+        camera.R = rendering::makeVisualizerLookAtRotation(camera.t, camera.pivot);
+
+        gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
+        const gui::ViewportLayout layout{.pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+        gizmo.updateToolState(ui, false);
+        auto& frame = frameInput();
+        frame.mouse_down[0] = frame.mouse_clicked[0] = frame.mouse_released[0] = false;
+        bool hovered = false;
+        for (int y = 48; y <= 252 && !hovered; y += 4) {
+            for (int x = 48; x <= 352 && !hovered; x += 4) {
+                frame.mouse_x = static_cast<float>(x);
+                frame.mouse_y = static_cast<float>(y);
+                gizmo.renderCropBoxGizmo(ui, layout);
+                hovered = gui::isTranslationGizmoHovered();
+            }
+        }
+        ASSERT_TRUE(hovered) << "no crop gizmo handle found under the pointer";
+
+        gizmo.applyActiveCropTool();
+        ASSERT_EQ(scene.getNodeById(cropbox_id), nullptr);
+        ASSERT_EQ(UnifiedToolRegistry::instance().getActiveTool(), "");
+        gizmo.updateToolState(ui, false);
+        gizmo.renderCropBoxGizmo(ui, layout);
+        gizmo.renderNodeTransformGizmo(ui, layout);
+        gui::guiFocusState().want_capture_mouse = false;
+
+        Viewport orbit_viewport(400, 300);
+        InputController orbit_controller(nullptr, orbit_viewport);
+        orbit_controller.updateViewportBounds(0.0f, 0.0f, 400.0f, 300.0f);
+        orbit_controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE), input::ACTION_PRESS,
+                                           60.0, 250.0);
+        EXPECT_TRUE(orbit_controller.isCameraDragging());
+    }
 
     TEST_F(WindowInputDispatchTest, TranslateXAxisCenterlineDragSurvivesSmallViewTilts) {
         for (const float tilt : {0.0f, 1.0f, 2.0f, 3.0f, 5.0f}) {

@@ -109,6 +109,19 @@ namespace lfs::vis::gui {
             return (frame_input.key_mods & SDL_KMOD_CTRL) != 0;
         }
 
+        // Gizmo hover is refreshed only while that gizmo is drawn. A tool change can stop
+        // drawing the hovered gizmo, and its stale hover would keep claiming viewport presses.
+        void resetIdleGizmoHover() {
+            if (!isTranslationGizmoActive())
+                cancelTranslationGizmoDrag();
+            if (!isRotationGizmoActive())
+                cancelRotationGizmoDrag();
+            if (!isScaleGizmoActive())
+                cancelScaleGizmoDrag();
+            if (!isBoundsGizmoActive())
+                cancelBoundsGizmoDrag();
+        }
+
         struct ViewportGizmoMarker {
             int encoded_axis = -1;
             glm::vec2 screen_pos{0.0f};
@@ -1230,6 +1243,7 @@ namespace lfs::vis::gui {
         if (stamp == last_tool_state_stamp_)
             return;
         last_tool_state_stamp_ = stamp;
+        resetIdleGizmoHover();
 
         if (rendering_manager)
             rendering_manager->setGaussianSelectionVisible(is_selection_mode);
