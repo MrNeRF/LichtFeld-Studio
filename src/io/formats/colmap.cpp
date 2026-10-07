@@ -1714,43 +1714,48 @@ namespace lfs::io {
     // along that ray, from the track's mean centre, to that depth.
     static void clamp_unresolved_depths(std::vector<Point3DData>& points,
                                         const std::unordered_map<uint32_t, std::array<double, 4>>& views) {
-        size_t moved = 0;
-        std::vector<std::array<double, 4>> track;
-        std::vector<double> focals;
-        for (auto& point : points) {
-            track.clear();
-            for (const auto& element : point.track)
-                if (const auto view = views.find(element.image_id); view != views.end())
-                    track.push_back(view->second);
-            if (track.size() < 2)
-                continue;
-            double center[3] = {0.0, 0.0, 0.0};
-            for (const auto& view : track)
+        std::atomic<size_t> moved{0};
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, points.size(), 4096), [&](const tbb::blocked_range<size_t>& range) {
+            std::vector<std::array<double, 4>> track;
+            std::vector<double> focals;
+            size_t moved_here = 0;
+            for (size_t i = range.begin(); i != range.end(); ++i) {
+                auto& point = points[i];
+                track.clear();
+                for (const auto& element : point.track)
+                    if (const auto view = views.find(element.image_id); view != views.end())
+                        track.push_back(view->second);
+                if (track.size() < 2)
+                    continue;
+                double center[3] = {0.0, 0.0, 0.0};
+                for (const auto& view : track)
+                    for (int a = 0; a < 3; ++a)
+                        center[a] += view[a] / static_cast<double>(track.size());
+                const double ray[3] = {point.xyz[0] - center[0], point.xyz[1] - center[1], point.xyz[2] - center[2]};
+                const double depth = std::sqrt(ray[0] * ray[0] + ray[1] * ray[1] + ray[2] * ray[2]);
+                if (!(depth > 0.0) || !std::isfinite(depth))
+                    continue;
+                double across_sq = 0.0;
+                focals.clear();
+                for (const auto& view : track) {
+                    const double offset[3] = {view[0] - center[0], view[1] - center[1], view[2] - center[2]};
+                    const double along = (offset[0] * ray[0] + offset[1] * ray[1] + offset[2] * ray[2]) / depth;
+                    across_sq = std::max(across_sq,
+                                         offset[0] * offset[0] + offset[1] * offset[1] + offset[2] * offset[2] - along * along);
+                    focals.push_back(view[3]);
+                }
+                std::nth_element(focals.begin(), focals.begin() + focals.size() / 2, focals.end());
+                const double limit = focals[focals.size() / 2] * 2.0 * std::sqrt(across_sq) / kResolvedParallaxPixels;
+                if (!(limit > 0.0) || depth <= limit)
+                    continue;
                 for (int a = 0; a < 3; ++a)
-                    center[a] += view[a] / static_cast<double>(track.size());
-            const double ray[3] = {point.xyz[0] - center[0], point.xyz[1] - center[1], point.xyz[2] - center[2]};
-            const double depth = std::sqrt(ray[0] * ray[0] + ray[1] * ray[1] + ray[2] * ray[2]);
-            if (!(depth > 0.0) || !std::isfinite(depth))
-                continue;
-            double across_sq = 0.0;
-            focals.clear();
-            for (const auto& view : track) {
-                const double offset[3] = {view[0] - center[0], view[1] - center[1], view[2] - center[2]};
-                const double along = (offset[0] * ray[0] + offset[1] * ray[1] + offset[2] * ray[2]) / depth;
-                across_sq = std::max(
-                    across_sq, offset[0] * offset[0] + offset[1] * offset[1] + offset[2] * offset[2] - along * along);
-                focals.push_back(view[3]);
+                    point.xyz[a] = center[a] + ray[a] * (limit / depth);
+                ++moved_here;
             }
-            std::nth_element(focals.begin(), focals.begin() + focals.size() / 2, focals.end());
-            const double limit = focals[focals.size() / 2] * 2.0 * std::sqrt(across_sq) / kResolvedParallaxPixels;
-            if (!(limit > 0.0) || depth <= limit)
-                continue;
-            for (int a = 0; a < 3; ++a)
-                point.xyz[a] = center[a] + ray[a] * (limit / depth);
-            ++moved;
-        }
+            moved += moved_here;
+        });
         if (moved > 0)
-            LOG_INFO("COLMAP: moved {} of {} sparse points with unresolved depth to their parallax limit", moved,
+            LOG_INFO("COLMAP: moved {} of {} sparse points with unresolved depth to their parallax limit", moved.load(),
                      points.size());
     }
 
