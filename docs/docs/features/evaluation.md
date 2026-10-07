@@ -12,15 +12,18 @@ LichtFeld Studio can score a reconstruction against its input images while it tr
 | `--eval-flip` | Also compute FLIP and save its error maps. |
 | `--no-save-eval-images` | Skip the comparison images. |
 
-To evaluate a finished project, resume it with the flags you want; it is scored at the iteration it reached. A project whose training had not finished trains to the end first.
+In the GUI the same options sit in the **Dataset** section of the training panel once **Evaluate** is enabled.
+
+## Evaluating a finished model
 
 ```bash
-LichtFeld-Studio --headless --resume output/project.licht --eval
+LichtFeld-Studio eval output/project.licht -o output/eval
+LichtFeld-Studio eval model.ply -d data/scene --images images_4 --enable-mip -o output/eval
 ```
 
-Settings given on the command line replace the ones stored in the project, so the same project can be scored with different masks, spaces or bit depths.
+`eval` scores a model without training it and writes only the files below to `-o`; the model file is not changed. A `.licht` project or `.resume` checkpoint is scored at its last checkpoint with the dataset and settings it was trained with. A splat file (`.ply`, `.spz`, `.sog`, `.ssog`, `.usd`) is scored as saved, as step 0, so pass the dataset and the settings it was trained with: `--images`, `--undistort`, `--max-width`, `--enable-mip`, `--gut`, `--bg-color`, `--add-splat`, `--ppisp-sidecar`. Every option on this page applies and replaces the stored value.
 
-In the GUI the same options sit in the **Dataset** section of the training panel once **Evaluate** is enabled.
+A model trained without `--eval` has seen the held-out images, so its scores show fit; `--eval-all` scores every image.
 
 ## Output files
 

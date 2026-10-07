@@ -560,6 +560,9 @@ namespace lfs::core {
             // Headless camera-path -> video render mode (see --render-camera-path)
             std::optional<RenderPathConfig> render_path = std::nullopt;
 
+            // eval subcommand: score the model without training, saving or exporting.
+            bool evaluate_only = false;
+
             // Python scripts to execute for custom training callbacks
             std::vector<std::filesystem::path> python_scripts;
 

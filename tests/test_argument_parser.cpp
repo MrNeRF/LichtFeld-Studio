@@ -150,6 +150,64 @@ TEST(ArgumentParserTest, EvalSpaceOnResumeTrustsTheProjectsUndistort) {
     EXPECT_FALSE(lfs::core::args::parse_args_and_params(static_cast<int>(std::size(fresh)), fresh));
 }
 
+// Catches the eval subcommand training the model, resuming without evaluation,
+// or capping the splat count of a loaded splat file.
+TEST(ArgumentParserTest, EvalSubcommandEvaluatesTheModelWithoutTraining) {
+    const auto directory = std::filesystem::path(make_test_path("lfs_arg_parser_eval_subcommand"));
+    const auto project = directory / "session.licht";
+    const auto splat = directory / "model.ply";
+    std::ofstream(project).put('\n');
+    std::ofstream(splat).put('\n');
+    const auto project_text = project.string();
+    const auto splat_text = splat.string();
+    const auto output_text = (directory / "eval").string();
+    const auto data_text = directory.string();
+
+    const char* project_argv[] = {"LichtFeld-Studio", "eval", project_text.c_str(), "-o", output_text.c_str(),
+                                  "--eval-mask", "depth:1,2", "--eval-flip"};
+    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(project_argv)), project_argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    auto* mode = std::get_if<lfs::core::args::TrainingMode>(&*parsed);
+    ASSERT_NE(mode, nullptr);
+    EXPECT_TRUE(mode->params->evaluate_only);
+    EXPECT_TRUE(mode->params->optimization.headless);
+    EXPECT_TRUE(mode->params->optimization.enable_eval);
+    EXPECT_TRUE(mode->params->optimization.eval_flip);
+    EXPECT_EQ(mode->params->resume_project, project);
+
+    const char* splat_argv[] = {"LichtFeld-Studio", "eval", splat_text.c_str(), "-d", data_text.c_str(),
+                                "-o", output_text.c_str(), "--eval-all", "--enable-mip", "--max-cap", "1000"};
+    parsed = lfs::core::args::parse_args(static_cast<int>(std::size(splat_argv)), splat_argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    mode = std::get_if<lfs::core::args::TrainingMode>(&*parsed);
+    ASSERT_NE(mode, nullptr);
+    EXPECT_TRUE(mode->params->evaluate_only);
+    EXPECT_TRUE(mode->params->optimization.eval_all);
+    EXPECT_TRUE(mode->params->optimization.mip_filter);
+    EXPECT_EQ(mode->params->optimization.max_cap, 0);
+    ASSERT_TRUE(mode->params->init_path);
+    EXPECT_EQ(lfs::core::utf8_to_path(*mode->params->init_path), splat);
+}
+
+TEST(ArgumentParserTest, EvalSubcommandRejectsTrainingOptionsAndMissingInputs) {
+    const auto directory = std::filesystem::path(make_test_path("lfs_arg_parser_eval_subcommand_errors"));
+    const auto project = directory / "session.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+    const auto splat_text = (directory / "model.ply").string();
+    const auto output_text = (directory / "eval").string();
+
+    const auto fails = [](std::vector<const char*> argv) {
+        return !lfs::core::args::parse_args(static_cast<int>(argv.size()), argv.data());
+    };
+    EXPECT_TRUE(fails({"LichtFeld-Studio", "eval", project_text.c_str()}));
+    EXPECT_TRUE(fails({"LichtFeld-Studio", "eval", project_text.c_str(), "-o", output_text.c_str(), "-i", "100"}));
+    EXPECT_TRUE(fails({"LichtFeld-Studio", "eval", project_text.c_str(), "-o", output_text.c_str(),
+                       "--eval-steps", "100"}));
+    EXPECT_TRUE(fails({"LichtFeld-Studio", "eval", splat_text.c_str(), "-o", output_text.c_str()}));
+    EXPECT_TRUE(fails({"LichtFeld-Studio", "eval", "-o", output_text.c_str()}));
+}
+
 TEST(ArgumentParserTest, HeadlessResumeSelectsEmbeddedCheckpointFlow) {
     const auto directory =
         make_test_path(

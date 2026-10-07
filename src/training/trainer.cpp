@@ -8600,6 +8600,61 @@ namespace lfs::training {
         return result;
     }
 
+    void Trainer::evaluate_at(const int iteration) {
+        evaluator_->print_evaluation_header(iteration);
+        lfs::diagnostics::VramProfiler::instance().mark("evaluation");
+        eval_ppisp_applied_.store(0);
+        eval_ppisp_exif_.store(0);
+        eval_ppisp_nearest_.store(0);
+        const auto evaluation_image_loader = getActiveImageLoader();
+        auto metrics = evaluator_->evaluate(iteration,
+                                            strategy_->get_model(),
+                                            val_dataset_,
+                                            background_,
+                                            evaluation_image_loader.get());
+        if (!metrics.valid) {
+            auto error = lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = "Evaluation produced no valid metrics.",
+                .detail = std::format(
+                    "Evaluation at iteration {} skipped every view or produced no valid metric values",
+                    iteration),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+            LOG_ERROR("{}", lfs::format_for_developer(error));
+            if (!deferred_evaluation_error_)
+                deferred_evaluation_error_ = std::move(error);
+        }
+        if (PerfBenchCollector::enabled() && metrics.valid) {
+            PerfBenchCollector::instance().set_psnr(metrics.psnr);
+        }
+        log_eval_appearance();
+        LOG_INFO("{}", metrics.to_string());
+        photometric_loss_.arena().shrink_to_required();
+    }
+
+    lfs::Status Trainer::evaluate_current_model() {
+        if (!evaluator_ || !evaluator_->is_enabled()) {
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = "Evaluation is not enabled.",
+                .detail = "evaluate_current_model needs a trainer initialized with evaluation enabled",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
+        deferred_evaluation_error_.reset();
+        evaluate_at(current_iteration_.load());
+        evaluator_->save_report();
+        if (deferred_evaluation_error_) {
+            auto error = std::move(*deferred_evaluation_error_);
+            deferred_evaluation_error_.reset();
+            return lfs::Status::failure(std::move(error));
+        }
+        return {};
+    }
+
     lfs::Status Trainer::train(std::stop_token stop_token) {
         // A failed evaluation is reported by the run that recorded it.
         deferred_evaluation_error_.reset();
@@ -9118,38 +9173,7 @@ namespace lfs::training {
             if (iter > get_total_iterations() &&
                 evaluator_->is_enabled() &&
                 evaluator_->should_evaluate(current_iteration_.load(), get_total_iterations())) {
-                const int eval_iteration = current_iteration_.load();
-                evaluator_->print_evaluation_header(eval_iteration);
-                lfs::diagnostics::VramProfiler::instance().mark("evaluation");
-                eval_ppisp_applied_.store(0);
-                eval_ppisp_exif_.store(0);
-                eval_ppisp_nearest_.store(0);
-                const auto evaluation_image_loader = getActiveImageLoader();
-                auto metrics = evaluator_->evaluate(eval_iteration,
-                                                    strategy_->get_model(),
-                                                    val_dataset_,
-                                                    background_,
-                                                    evaluation_image_loader.get());
-                if (!metrics.valid) {
-                    auto error = lfs::make_error(lfs::ErrorInit{
-                        .code = lfs::ErrorCode::FailedPrecondition,
-                        .domain = lfs::ErrorDomain::Training,
-                        .user_message = "Evaluation produced no valid metrics.",
-                        .detail = std::format(
-                            "Evaluation at iteration {} skipped every view or produced no valid metric values",
-                            eval_iteration),
-                        .detection = LFS_SOURCE_SITE_CURRENT(),
-                    });
-                    LOG_ERROR("{}", lfs::format_for_developer(error));
-                    if (!deferred_evaluation_error_)
-                        deferred_evaluation_error_ = std::move(error);
-                }
-                if (PerfBenchCollector::enabled() && metrics.valid) {
-                    PerfBenchCollector::instance().set_psnr(metrics.psnr);
-                }
-                log_eval_appearance();
-                LOG_INFO("{}", metrics.to_string());
-                photometric_loss_.arena().shrink_to_required();
+                evaluate_at(current_iteration_.load());
             }
 
             clearActiveImageLoader();

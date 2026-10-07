@@ -667,6 +667,7 @@ namespace {
                 "LichtFeld Studio: High-performance CUDA implementation of 3D Gaussian Splatting algorithm.\n",
                 "\nSUBCOMMANDS:\n"
                 "convert -- Convert between .ply, .sog, .ssog, .spz, .usd/.usda/.usdc, .html\n"
+                "eval -- Score a finished model or splat file against its images\n"
                 "mesh2splat -- Convert a mesh file to Gaussian splats\n"
                 "preprocess -- Generate depth and/or normal maps for an image dataset\n"
                 "plugin -- Manage plugins (create, check, list)\n"
@@ -683,6 +684,7 @@ namespace {
                 "lichtfeld-studio --render-camera-path path.json --render-load model.ply --render-output out.mp4\n"
                 "lichtfeld-studio -v model.ply\n"
                 "lichtfeld-studio convert in.ply out.spz\n"
+                "lichtfeld-studio eval output/project.licht -o output/eval\n"
                 "lichtfeld-studio mesh2splat model.obj -o model_splat.ply\n"
                 "lichtfeld-studio preprocess ./data/scene --mode both\n"
                 "lichtfeld-studio plugin create my_plugin\n"
@@ -2262,6 +2264,70 @@ namespace {
         return core_args::ConvertMode{params};
     }
 
+    constexpr const char* EVAL_HELP = R"(Usage: LichtFeld-Studio eval <model> -o <output> [options]
+
+Scores a .licht project, .resume checkpoint or splat file without training it.
+A splat file needs -d and the settings it was trained with. Evaluation and
+dataset options work as in training; see the Evaluation page of the docs.
+)";
+
+    std::optional<lfs::core::args::ParsedArgs> parseEvalArgs(const int argc, const char* const argv[], std::string& error) {
+        const std::vector<std::string> args(argv + 2, argv + argc);
+        if (args.empty() || args.front() == "-h" || args.front() == "--help") {
+            std::print("{}", EVAL_HELP);
+            return lfs::core::args::HelpMode{};
+        }
+        const std::string& model = args.front();
+        if (model.starts_with('-')) {
+            error = "Usage: LichtFeld-Studio eval <model> -o <output> [options]";
+            return std::nullopt;
+        }
+
+        const auto given = [&](const std::string_view flag) {
+            return std::ranges::any_of(args, [&](const std::string& arg) {
+                return arg == flag || (arg.starts_with(flag) && arg.size() > flag.size() && arg[flag.size()] == '=');
+            });
+        };
+        for (const std::string_view flag : {"-i", "--iter", "--eval-steps", "--resume", "--init", "--train", "-v",
+                                            "--view", "--export", "--save-project-at-iter", "--render-camera-path"}) {
+            if (given(flag)) {
+                error = std::format(
+                    "eval scores the model as saved; {} does not apply (see 'LichtFeld-Studio eval --help')", flag);
+                return std::nullopt;
+            }
+        }
+        if (!given("-o") && !given("--output-path")) {
+            error = "eval needs -o <output folder>";
+            return std::nullopt;
+        }
+
+        const std::string extension = lfs::core::utf8_to_path(model).extension().string();
+        const bool checkpoint = extension == ".licht" || extension == ".resume";
+        if (!checkpoint && !given("-d") && !given("--data-path")) {
+            error = "eval of a splat file needs -d <dataset>";
+            return std::nullopt;
+        }
+
+        std::vector<std::string> training_args{argv[0], "--headless", checkpoint ? "--resume" : "--init", model};
+        if (!given("--eval") && !given("--eval-all"))
+            training_args.emplace_back("--eval");
+        training_args.insert(training_args.end(), args.begin() + 1, args.end());
+
+        std::vector<const char*> training_argv;
+        training_argv.reserve(training_args.size());
+        for (const auto& arg : training_args)
+            training_argv.push_back(arg.c_str());
+        auto params = lfs::core::args::parse_args_and_params(static_cast<int>(training_argv.size()), training_argv.data());
+        if (!params) {
+            error = params.error();
+            return std::nullopt;
+        }
+        (*params)->evaluate_only = true;
+        if (!checkpoint)
+            (*params)->optimization.max_cap = 0;
+        return lfs::core::args::TrainingMode{std::move(*params)};
+    }
+
     std::expected<lfs::core::args::ParsedArgs, std::string> parseMesh2SplatArgs(const int argc, const char* const argv[]) {
         namespace core_args = lfs::core::args;
         namespace param = lfs::core::param;
@@ -2537,6 +2603,12 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
 
         if (arg1 == "convert") {
             return parseConvertArgs(argc, argv);
+        } else if (arg1 == "eval") {
+            std::string error;
+            if (auto parsed = parseEvalArgs(argc, argv, error)) {
+                return std::move(*parsed);
+            }
+            return std::unexpected(std::move(error));
         } else if (arg1 == "mesh2splat" || arg1 == "mesh-to-splat") {
             return parseMesh2SplatArgs(argc, argv);
         } else if (arg1 == "preprocess") {

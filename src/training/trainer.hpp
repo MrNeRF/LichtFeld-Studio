@@ -229,6 +229,9 @@ namespace lfs::training {
         // Main training method with stop token support
         [[nodiscard]] lfs::Status train(std::stop_token stop_token = {});
 
+        // Scores the model at the current iteration and writes the report; nothing is trained or saved.
+        [[nodiscard]] lfs::Status evaluate_current_model();
+
         // Control methods for GUI interaction
         void request_pause() { pause_requested_ = true; }
         void request_resume() { pause_requested_ = false; }
@@ -684,6 +687,7 @@ namespace lfs::training {
         [[nodiscard]] PPISPControllerPool* controller_pool_for_save(int iteration) const;
         lfs::core::Tensor applyPPISPForEval(const lfs::core::Tensor& rgb, const lfs::core::Camera& cam) const;
         void log_eval_appearance() const;
+        void evaluate_at(int iteration);
         [[nodiscard]] lfs::core::param::TrainingParameters params_for_project_snapshot() const;
         [[nodiscard]] std::function<std::uint64_t(std::uint64_t)> release_image_cache_for_snapshot() const;
         [[nodiscard]] TrainingProgress::Phase get_progress_phase(
