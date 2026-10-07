@@ -645,6 +645,126 @@ namespace lfs::vis {
         bool startupVisible() { return gui_->startup_overlay_.isVisible(); }
         bool languageOpen() { return gui_->startup_overlay_.isLanguageSelectOpen(); }
 
+        void dragXAxisCenterlineAtViewTilt(const float tilt_degrees, const bool scale, const float y_offset = 0.0f,
+                                           const float start_x = 236.0f) {
+            auto& scene_manager = *viewer_->getSceneManager();
+            auto& scene = viewer_->getScene();
+            const core::NodeId node_id = scene.addGroup(
+                std::string("Axis centerline drag ") + (scale ? "scale " : "translate ") + std::to_string(tilt_degrees));
+            ASSERT_NE(node_id, core::NULL_NODE);
+            scene_manager.selectNode(node_id);
+            viewer_->getEditorContext().update(&scene_manager, viewer_->getTrainerManager());
+            viewer_->getEditorContext().setActiveTool(scale ? ToolType::Scale : ToolType::Translate);
+            UnifiedToolRegistry::instance().setActiveTool(scale ? "builtin.scale" : "builtin.translate");
+            auto& gizmo = gui_->gizmo();
+            gizmo.setOperation(scale ? gui::GizmoOperation::Scale : gui::GizmoOperation::Translate);
+            gizmo.setTransformSpace(TransformSpace::World);
+            gizmo.setPivotMode(PivotMode::Origin);
+
+            auto& camera = viewer_->getViewport().camera;
+            const float tilt = glm::radians(tilt_degrees);
+            camera.t = {12.0f * std::sin(tilt), 0.0f, 12.0f * std::cos(tilt)};
+            camera.pivot = {0.0f, 0.0f, 0.0f};
+            camera.R = rendering::makeVisualizerLookAtRotation(camera.t, camera.pivot);
+            controller_->setViewer(viewer_.get());
+            controller_->updateViewportBounds(0.0f, 0.0f, 400.0f, 300.0f);
+
+            gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
+            const gui::ViewportLayout layout{.pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+            gizmo.updateToolState(ui, false);
+            auto& frame = window_->frame_input_;
+            const glm::vec2 start{start_x, 150.0f + y_offset};
+            frame.mouse_x = start.x;
+            frame.mouse_y = start.y;
+            frame.mouse_down[0] = frame.mouse_clicked[0] = frame.mouse_released[0] = false;
+            gui::guiFocusState().want_capture_mouse = false;
+            gizmo.renderNodeTransformGizmo(ui, layout);
+            const glm::mat4 before = scene.getNodeTransform(node_id);
+
+            controller_->handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_PRESS,
+                                           start.x, start.y);
+            frame.mouse_down[0] = true;
+            frame.mouse_clicked[0] = true;
+            frame.mouse_released[0] = false;
+            frame.mouse_x = start.x;
+            gizmo.renderNodeTransformGizmo(ui, layout);
+            frame.mouse_x = start.x + 30.0f;
+            gizmo.renderNodeTransformGizmo(ui, layout);
+            const glm::mat4 after = scene.getNodeTransform(node_id);
+            if (scale) {
+                EXPECT_GT(std::abs(after[0][0] - before[0][0]), 1e-4f);
+            } else {
+                EXPECT_GT(std::abs(after[3].x - before[3].x), 1e-4f);
+            }
+
+            controller_->handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_RELEASE,
+                                           frame.mouse_x, frame.mouse_y);
+            frame.mouse_down[0] = false;
+            frame.mouse_released[0] = true;
+            gizmo.renderNodeTransformGizmo(ui, layout);
+        }
+
+        void dragXYPlaneAtNormalView(const bool scale) {
+            auto& scene_manager = *viewer_->getSceneManager();
+            auto& scene = viewer_->getScene();
+            const core::NodeId node_id = scene.addGroup(scale ? "Scale plane handle drag" : "Translate plane handle drag");
+            ASSERT_NE(node_id, core::NULL_NODE);
+            scene_manager.selectNode(node_id);
+            viewer_->getEditorContext().update(&scene_manager, viewer_->getTrainerManager());
+            viewer_->getEditorContext().setActiveTool(scale ? ToolType::Scale : ToolType::Translate);
+            UnifiedToolRegistry::instance().setActiveTool(scale ? "builtin.scale" : "builtin.translate");
+            auto& gizmo = gui_->gizmo();
+            gizmo.setOperation(scale ? gui::GizmoOperation::Scale : gui::GizmoOperation::Translate);
+            gizmo.setTransformSpace(TransformSpace::World);
+            gizmo.setPivotMode(PivotMode::Origin);
+            auto& camera = viewer_->getViewport().camera;
+            camera.t = {0.0f, 0.0f, 12.0f};
+            camera.pivot = {0.0f, 0.0f, 0.0f};
+            camera.R = rendering::makeVisualizerLookAtRotation(camera.t, camera.pivot);
+            controller_->setViewer(viewer_.get());
+            controller_->updateViewportBounds(0.0f, 0.0f, 400.0f, 300.0f);
+
+            gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
+            const gui::ViewportLayout layout{.pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+            gizmo.updateToolState(ui, false);
+            auto& frame = window_->frame_input_;
+            constexpr glm::vec2 start{230.0f, 120.0f};
+            frame.mouse_x = start.x;
+            frame.mouse_y = start.y;
+            frame.mouse_down[0] = frame.mouse_clicked[0] = frame.mouse_released[0] = false;
+            gui::guiFocusState().want_capture_mouse = false;
+            gizmo.renderNodeTransformGizmo(ui, layout);
+            if (scale) {
+                EXPECT_TRUE(gui::isScaleGizmoHovered());
+            }
+            const glm::mat4 before = scene.getNodeTransform(node_id);
+            controller_->handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_PRESS,
+                                           start.x, start.y);
+            frame.mouse_down[0] = true;
+            frame.mouse_clicked[0] = true;
+            frame.mouse_released[0] = false;
+            gizmo.renderNodeTransformGizmo(ui, layout);
+            frame.mouse_x = start.x + 12.0f;
+            frame.mouse_y = start.y + (scale ? -12.0f : 12.0f);
+            gizmo.renderNodeTransformGizmo(ui, layout);
+            const glm::mat4 after = scene.getNodeTransform(node_id);
+            if (scale) {
+                EXPECT_GT(std::abs(after[0][0] - before[0][0]), 1e-4f);
+                EXPECT_GT(std::abs(after[1][1] - before[1][1]), 1e-4f);
+            } else {
+                EXPECT_GT(std::abs(after[3].x - before[3].x), 1e-4f);
+                EXPECT_GT(std::abs(after[3].y - before[3].y), 1e-4f);
+                EXPECT_NEAR(after[3].x, 0.32914072f, 1e-6f);
+                EXPECT_NEAR(after[3].y, 0.32914030f, 1e-6f);
+            }
+
+            controller_->handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_RELEASE,
+                                           frame.mouse_x, frame.mouse_y);
+            frame.mouse_down[0] = false;
+            frame.mouse_released[0] = true;
+            gizmo.renderNodeTransformGizmo(ui, layout);
+        }
+
         enum class TransformDragMode { Translate,
                                        Rotate,
                                        Scale,
@@ -820,6 +940,32 @@ namespace lfs::vis {
     TRANSFORM_DRAG_CANCEL_TEST(LeftReleaseCommitsBoundsScaleAndAddsOneUndo, BoundsScale, LeftRelease)
 
 #undef TRANSFORM_DRAG_CANCEL_TEST
+
+    TEST_F(WindowInputDispatchTest, TranslateXAxisCenterlineDragSurvivesSmallViewTilts) {
+        for (const float tilt : {0.0f, 1.0f, 2.0f, 3.0f, 5.0f}) {
+            SCOPED_TRACE(tilt);
+            dragXAxisCenterlineAtViewTilt(tilt, false);
+        }
+    }
+
+    TEST_F(WindowInputDispatchTest, ScaleXAxisCenterlineDragSurvivesSmallViewTilts) {
+        for (const float tilt : {0.0f, 1.0f, 2.0f, 3.0f, 5.0f}) {
+            SCOPED_TRACE(tilt);
+            dragXAxisCenterlineAtViewTilt(tilt, true);
+        }
+    }
+
+    TEST_F(WindowInputDispatchTest, TranslateXAxisThreePixelOffsetStillDrags) {
+        dragXAxisCenterlineAtViewTilt(0.0f, false, 3.0f, 255.0f);
+    }
+
+    TEST_F(WindowInputDispatchTest, TranslateXYPlaneHandleStillDragsAtNormalView) {
+        dragXYPlaneAtNormalView(false);
+    }
+
+    TEST_F(WindowInputDispatchTest, ScaleXYPlaneHandleStillDragsAtNormalView) {
+        dragXYPlaneAtNormalView(true);
+    }
 
     TEST_F(WindowInputDispatchTest, OpeningAndClosingModalChangesOwnerWithinOneBatch) {
         click();

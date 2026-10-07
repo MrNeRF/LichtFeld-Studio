@@ -17,6 +17,7 @@ namespace lfs::vis::gui {
         constexpr float CENTER_HIT_RADIUS_PX = 12.0f;
         constexpr float PLANE_NEAR_PX = 24.0f;
         constexpr float PLANE_FAR_PX = 48.0f;
+        constexpr float PLANE_PROJECTED_AREA_EPSILON = 0.001f;
         constexpr float DELTA_EPSILON = 0.000001f;
 
         struct AxisVisual {
@@ -164,6 +165,16 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] bool pointInConvexQuad(const glm::vec2& p, const std::array<glm::vec2, 4>& quad) {
+            float twice_area = 0.0f;
+            for (int i = 0; i < 4; ++i) {
+                const glm::vec2 a = quad[static_cast<size_t>(i)];
+                const glm::vec2 b = quad[static_cast<size_t>((i + 1) % 4)];
+                twice_area += a.x * b.y - b.x * a.y;
+            }
+            if (std::abs(twice_area) <= PLANE_PROJECTED_AREA_EPSILON) {
+                return false;
+            }
+
             float sign = 0.0f;
             for (int i = 0; i < 4; ++i) {
                 const glm::vec2 a = quad[static_cast<size_t>(i)];
@@ -454,12 +465,6 @@ namespace lfs::vis::gui {
                 return TranslationGizmoHandle::View;
             }
 
-            for (const auto& plane : planes) {
-                if (plane.valid && pointInConvexQuad(mouse, plane.quad)) {
-                    return plane.plane.handle;
-                }
-            }
-
             float best_distance2 = std::numeric_limits<float>::max();
             TranslationGizmoHandle best_handle = TranslationGizmoHandle::None;
             for (const auto& axis : axes) {
@@ -473,7 +478,17 @@ namespace lfs::vis::gui {
                 }
             }
 
-            return best_distance2 <= axis_hit_threshold2 ? best_handle : TranslationGizmoHandle::None;
+            if (best_distance2 <= axis_hit_threshold2) {
+                return best_handle;
+            }
+
+            for (const auto& plane : planes) {
+                if (plane.valid && pointInConvexQuad(mouse, plane.quad)) {
+                    return plane.plane.handle;
+                }
+            }
+
+            return TranslationGizmoHandle::None;
         }
 
         [[nodiscard]] glm::vec3 translationForMouse(const TranslationGizmoConfig& config,
