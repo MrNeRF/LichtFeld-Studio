@@ -29,6 +29,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "tools/unified_tool_registry.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer_impl.hpp"
 #include "window/window_manager.hpp"
 #include <RmlUi/Core.h>
@@ -963,6 +964,101 @@ namespace lfs::vis {
         uint64_t timestamp_ = 0;
         gui::rml_input::TextInputEscapeRevertController revert_;
     };
+
+    TEST_F(WindowInputDispatchTest, NodeDeletionPreservesTransformToolThroughReselectionAndHistory) {
+        auto& sm = *viewer_->getSceneManager();
+        auto& scene = viewer_->getScene();
+        auto& editor = viewer_->getEditorContext();
+        auto& gizmo = gui_->gizmo();
+        gizmo.setupEvents();
+        int index = 0;
+        for (const auto tool : {ToolType::Translate, ToolType::Rotate, ToolType::Scale}) {
+            for (const auto pivot : {PivotMode::Origin, PivotMode::BoundsCenter}) {
+                for (const bool remove_selected : {true, false}) {
+                    SCOPED_TRACE(static_cast<int>(tool));
+                    SCOPED_TRACE(remove_selected);
+                    const auto survivor_name = "Survivor " + std::to_string(index);
+                    const auto removed_name = "Removed " + std::to_string(index++);
+                    const auto survivor = scene.addSplat(survivor_name, lfs::test::licht::make_splat(3));
+                    const auto removed = scene.addSplat(removed_name, lfs::test::licht::make_splat(3));
+                    sm.changeContentType(SceneManager::ContentType::SplatFiles);
+                    sm.selectNode(remove_selected ? removed : survivor);
+                    editor.update(&sm, viewer_->getTrainerManager());
+                    core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(tool)}.emit();
+                    gizmo.setPivotMode(pivot);
+                    const auto operation = gizmo.getOperation();
+                    const auto tool_id = app_store().active_tool.get();
+                    ASSERT_EQ(editor.getActiveTool(), tool);
+                    ASSERT_FALSE(tool_id.empty());
+                    const auto check_tool = [&] {
+                        EXPECT_EQ(editor.getActiveTool(), tool);
+                        EXPECT_EQ(app_store().active_tool.get(), tool_id);
+                        EXPECT_EQ(UnifiedToolRegistry::instance().getActiveTool(), tool_id);
+                        EXPECT_EQ(gizmo.getOperation(), operation);
+                        EXPECT_EQ(gizmo.getPivotMode(), pivot);
+                    };
+                    op::undoHistory().clear();
+                    ASSERT_TRUE(sm.removeNodeWithResult(removed, false));
+                    ASSERT_EQ(scene.getNode(removed_name), nullptr);
+                    check_tool();
+                    sm.selectNode(survivor);
+                    editor.update(&sm, viewer_->getTrainerManager());
+                    ASSERT_TRUE(editor.canTransformSelectedNode());
+                    check_tool();
+                    ASSERT_TRUE(op::undoHistory().undo().success);
+                    ASSERT_NE(scene.getNode(removed_name), nullptr);
+                    check_tool();
+                    ASSERT_TRUE(op::undoHistory().redo().success);
+                    ASSERT_EQ(scene.getNode(removed_name), nullptr);
+                    sm.selectNode(survivor_name);
+                    editor.update(&sm, viewer_->getTrainerManager());
+                    check_tool();
+                }
+            }
+        }
+        op::undoHistory().clear();
+        core::events::state::SceneCleared{}.emit();
+        EXPECT_EQ(editor.getActiveTool(), ToolType::None);
+        EXPECT_TRUE(app_store().active_tool.get().empty());
+        EXPECT_EQ(gizmo.getOperation(), gui::GizmoOperation::Translate);
+    }
+
+    TEST_F(WindowInputDispatchTest, UnrelatedDeletionPreservesCropToolAndVolumeDeletionLeavesIt) {
+        auto& sm = *viewer_->getSceneManager();
+        auto& scene = viewer_->getScene();
+        auto& editor = viewer_->getEditorContext();
+        auto& gizmo = gui_->gizmo();
+        gizmo.setupEvents();
+        int index = 0;
+        for (const bool ellipsoid : {false, true}) {
+            for (const auto operation : {gui::GizmoOperation::Translate, gui::GizmoOperation::Rotate,
+                                         gui::GizmoOperation::Scale}) {
+                SCOPED_TRACE(ellipsoid);
+                SCOPED_TRACE(static_cast<int>(operation));
+                const auto suffix = std::to_string(index++);
+                const auto parent = scene.addSplat("Crop parent " + suffix, lfs::test::licht::make_splat(3));
+                const auto other = scene.addSplat("Other " + suffix, lfs::test::licht::make_splat(3));
+                const auto volume = ellipsoid ? scene.addEllipsoid("Volume " + suffix, parent)
+                                              : scene.addCropBox("Volume " + suffix, parent);
+                sm.changeContentType(SceneManager::ContentType::SplatFiles);
+                sm.selectNode(volume);
+                editor.update(&sm, viewer_->getTrainerManager());
+                gizmo.setOperation(operation);
+                ASSERT_EQ(editor.getActiveOperator(), "builtin.cropbox");
+                ASSERT_TRUE(sm.removeNodeWithResult(other, false));
+                EXPECT_EQ(editor.getActiveOperator(), "builtin.cropbox");
+                EXPECT_EQ(app_store().active_tool.get(), "builtin.cropbox");
+                EXPECT_EQ(UnifiedToolRegistry::instance().getActiveTool(), "builtin.cropbox");
+                EXPECT_EQ(gizmo.getOperation(), operation);
+                EXPECT_EQ(sm.getSelectedNodeIds(), std::vector<core::NodeId>{volume});
+                ASSERT_TRUE(sm.removeNodeWithResult(volume, false));
+                EXPECT_EQ(sm.getSelectedNodeIds(), std::vector<core::NodeId>{parent});
+                EXPECT_FALSE(editor.hasActiveOperator());
+                EXPECT_TRUE(UnifiedToolRegistry::instance().getActiveTool().empty());
+                op::undoHistory().clear();
+            }
+        }
+    }
 
 #define TRANSFORM_DRAG_CANCEL_TEST(test_name, drag_mode, finish_mode) \
     TEST_F(WindowInputDispatchTest, test_name) {                      \

@@ -999,7 +999,8 @@ namespace lfs::vis::gui {
             node_selection_bounds_cache_valid_ = false;
         });
 
-        state::PLYRemoved::when([this](const auto&) { deactivateAllTools(); });
+        // Node removal changes the selection, not the chosen tool. Reset only
+        // when the whole scene is cleared so the editor and registry stay in sync.
         state::SceneCleared::when([this](const auto&) { deactivateAllTools(); });
 
         lfs::core::events::tools::SetToolbarTool::when([this](const auto& e) {
