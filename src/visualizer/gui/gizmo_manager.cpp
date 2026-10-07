@@ -1559,6 +1559,8 @@ namespace lfs::vis::gui {
         const bool use_scale_gizmo = node_gizmo_operation_ == GizmoOperation::Scale;
         bool is_using = false;
         bool gizmo_changed = false;
+        bool gizmo_released = false;
+        bool gizmo_returned_to_start = false;
         glm::mat4 delta_matrix(1.0f);
         bool bounds_result_valid = false;
         bool bounds_gizmo_active = false;
@@ -1589,6 +1591,8 @@ namespace lfs::vis::gui {
             const auto bounds_result = drawBoundsGizmo(bounds_config);
             is_using = is_using || bounds_result.active;
             gizmo_changed = gizmo_changed || bounds_result.changed;
+            gizmo_released = gizmo_released || bounds_result.released;
+            gizmo_returned_to_start = gizmo_returned_to_start || bounds_result.returned_to_start;
             bounds_gizmo_active = bounds_result.active;
             if (bounds_result.active) {
                 const glm::mat3 box_rotation = extractRotation(gizmo_matrix);
@@ -1626,6 +1630,8 @@ namespace lfs::vis::gui {
             const auto translation_result = drawTranslationGizmo(translation_config);
             is_using = translation_result.active;
             gizmo_changed = translation_result.changed;
+            gizmo_released = translation_result.released;
+            gizmo_returned_to_start = translation_result.returned_to_start;
             delta_matrix = glm::translate(glm::mat4(1.0f), translation_result.delta_translation);
             if (translation_result.active) {
                 gizmo_matrix[3] =
@@ -1652,6 +1658,8 @@ namespace lfs::vis::gui {
             const auto rotation_result = drawRotationGizmo(rotation_config);
             is_using = rotation_result.active;
             gizmo_changed = rotation_result.changed;
+            gizmo_released = rotation_result.released;
+            gizmo_returned_to_start = rotation_result.returned_to_start;
             delta_matrix = glm::mat4(rotation_result.delta_rotation);
             if (rotation_result.hovered || rotation_result.active) {
                 guiFocusState().want_capture_mouse = true;
@@ -1677,6 +1685,8 @@ namespace lfs::vis::gui {
             scale_result = drawScaleGizmo(scale_config);
             is_using = is_using || scale_result.active;
             gizmo_changed = gizmo_changed || scale_result.changed;
+            gizmo_released = gizmo_released || scale_result.released;
+            gizmo_returned_to_start = gizmo_returned_to_start || scale_result.returned_to_start;
             if (scale_result.changed) {
                 delta_matrix = glm::scale(glm::mat4(1.0f), scale_result.delta_scale);
                 transform_gizmo_matrix[0] *= scale_result.delta_scale.x;
@@ -1733,7 +1743,7 @@ namespace lfs::vis::gui {
             }
         }
 
-        if (gizmo_changed && is_using) {
+        if (gizmo_changed && (is_using || gizmo_released) && !gizmo_returned_to_start) {
             core::Scene::Transaction txn(scene_manager->getScene());
             if (node_gizmo_operation_ == GizmoOperation::Rotate) {
                 const glm::mat3 delta_rot = extractRotation(delta_matrix);
@@ -1874,6 +1884,11 @@ namespace lfs::vis::gui {
                 }
             }
         }
+
+        // Reset from the saved snapshot when the released pointer lands exactly at press.
+        // Incremental rotation and scale deltas can otherwise leave rounding residue.
+        if (gizmo_returned_to_start)
+            (void)cancelActiveNodeTransformDrag();
 
         if (!is_using && node_gizmo_active_) {
             node_gizmo_active_ = false;

@@ -45,6 +45,8 @@ namespace lfs::vis::gui {
         TranslationGizmoHandle active_handle = TranslationGizmoHandle::None;
         glm::vec3 delta_translation{0.0f};
         glm::vec3 total_translation{0.0f};
+        bool released = false;
+        bool returned_to_start = false;
     };
 
     LFS_VIS_API TranslationGizmoResult drawTranslationGizmo(const TranslationGizmoConfig& config);

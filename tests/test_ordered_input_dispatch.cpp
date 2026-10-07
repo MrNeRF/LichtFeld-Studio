@@ -550,6 +550,10 @@ namespace lfs::vis {
             });
         }
         void TearDown() override {
+            gui::cancelTranslationGizmoDrag();
+            gui::cancelRotationGizmoDrag();
+            gui::cancelScaleGizmoDrag();
+            gui::cancelBoundsGizmoDrag();
             revert_.clear();
             gui_->startup_overlay_.shutdown();
             controller_.reset();
@@ -771,7 +775,9 @@ namespace lfs::vis {
                                        BoundsScale };
         enum class TransformDragFinish { Escape,
                                          RightClick,
-                                         LeftRelease };
+                                         LeftRelease,
+                                         ReleaseAtStart,
+                                         ZeroLengthRelease };
 
         static bool sameMatrixBits(const glm::mat4& lhs, const glm::mat4& rhs) {
             return std::memcmp(glm::value_ptr(lhs), glm::value_ptr(rhs), sizeof(glm::mat4)) == 0;
@@ -781,9 +787,10 @@ namespace lfs::vis {
             auto& scene_manager = *viewer_->getSceneManager();
             auto& scene = viewer_->getScene();
             const bool bounds_scale = mode == TransformDragMode::BoundsScale;
+            const std::string node_name = "Cancel drag " + std::to_string(static_cast<int>(mode));
             const core::NodeId node_id = bounds_scale
-                                             ? scene.addSplat("Cancel drag", lfs::test::licht::make_splat(3))
-                                             : scene.addGroup("Cancel drag");
+                                             ? scene.addSplat(node_name, lfs::test::licht::make_splat(3))
+                                             : scene.addGroup(node_name);
             ASSERT_NE(node_id, core::NULL_NODE);
             scene_manager.changeContentType(SceneManager::ContentType::SplatFiles);
             scene_manager.selectNode(node_id);
@@ -871,6 +878,42 @@ namespace lfs::vis {
             frame.mouse_released[0] = false;
             gizmo.renderNodeTransformGizmo(ui, layout);
 
+            if (finish == TransformDragFinish::ZeroLengthRelease) {
+                controller_->handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_RELEASE,
+                                               start.x, start.y);
+                frame.mouse_down[0] = false;
+                frame.mouse_released[0] = true;
+                gizmo.renderNodeTransformGizmo(ui, layout);
+                frame.mouse_released[0] = false;
+                gizmo.renderNodeTransformGizmo(ui, layout);
+                EXPECT_TRUE(sameMatrixBits(before, scene.getNodeTransform(node_id)));
+                EXPECT_EQ(op::undoHistory().undoCount(), undo_before);
+                return;
+            }
+
+            if (finish == TransformDragFinish::ReleaseAtStart) {
+                frame.mouse_x = start.x + 28.0f;
+                frame.mouse_y = start.y;
+                frame.mouse_clicked[0] = false;
+                gizmo.renderNodeTransformGizmo(ui, layout);
+                ASSERT_FALSE(sameMatrixBits(before, scene.getNodeTransform(node_id)))
+                    << "pointer motion did not change the selected node transform";
+
+                controller_->handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_RELEASE,
+                                               start.x, start.y);
+                frame.mouse_x = start.x;
+                frame.mouse_y = start.y;
+                frame.mouse_down[0] = false;
+                frame.mouse_released[0] = true;
+                gizmo.renderNodeTransformGizmo(ui, layout);
+                frame.mouse_released[0] = false;
+                gizmo.renderNodeTransformGizmo(ui, layout);
+
+                EXPECT_TRUE(sameMatrixBits(before, scene.getNodeTransform(node_id)));
+                EXPECT_EQ(op::undoHistory().undoCount(), undo_before);
+                return;
+            }
+
             bool changed = false;
             for (const glm::vec2 delta : {glm::vec2(28.0f, 0.0f), glm::vec2(0.0f, 28.0f),
                                           glm::vec2(20.0f, 20.0f), glm::vec2(-24.0f, 0.0f)}) {
@@ -938,6 +981,30 @@ namespace lfs::vis {
     TRANSFORM_DRAG_CANCEL_TEST(EscapeCancelsBoundsScaleAndAddsNoUndo, BoundsScale, Escape)
     TRANSFORM_DRAG_CANCEL_TEST(RightClickCancelsBoundsScaleAndAddsNoUndo, BoundsScale, RightClick)
     TRANSFORM_DRAG_CANCEL_TEST(LeftReleaseCommitsBoundsScaleAndAddsOneUndo, BoundsScale, LeftRelease)
+
+    TEST_F(WindowInputDispatchTest, SameFrameReleaseAppliesFinalTranslatePosition) {
+        exerciseTransformDrag(TransformDragMode::Translate, TransformDragFinish::ReleaseAtStart);
+    }
+
+    TEST_F(WindowInputDispatchTest, SameFrameReleaseAppliesFinalRotatePosition) {
+        exerciseTransformDrag(TransformDragMode::Rotate, TransformDragFinish::ReleaseAtStart);
+    }
+
+    TEST_F(WindowInputDispatchTest, SameFrameReleaseAppliesFinalScalePosition) {
+        exerciseTransformDrag(TransformDragMode::Scale, TransformDragFinish::ReleaseAtStart);
+    }
+
+    TEST_F(WindowInputDispatchTest, SameFrameReleaseAppliesFinalBoundsPosition) {
+        exerciseTransformDrag(TransformDragMode::BoundsScale, TransformDragFinish::ReleaseAtStart);
+    }
+
+    TEST_F(WindowInputDispatchTest, ZeroLengthGizmoClickDragsAddNoUndoEntry) {
+        for (const auto mode : {TransformDragMode::Translate, TransformDragMode::Rotate,
+                                TransformDragMode::Scale, TransformDragMode::BoundsScale}) {
+            SCOPED_TRACE(static_cast<int>(mode));
+            exerciseTransformDrag(mode, TransformDragFinish::ZeroLengthRelease);
+        }
+    }
 
 #undef TRANSFORM_DRAG_CANCEL_TEST
 
