@@ -1549,7 +1549,7 @@ class PreferencesPanel(Panel):
             self._sync_scene_upscaler_preset_records()
         elif section == "input":
             lf.ui.set_zoom_speed_preference(11.0)
-            lf.ui.set_navigation_speed_preference(8.0)
+            lf.ui.set_navigation_speed_preference(10.0)
             lf.ui.set_remember_camera_navigation(False)
             lf.ui.set_remember_camera_view_snap(False)
             lf.set_camera_navigation_mode("orbit")

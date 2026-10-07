@@ -84,7 +84,7 @@ def preferences_panel_module(monkeypatch):
         viewport_toolbar_position="centered",
         set_viewport_toolbar_position_calls=[],
         zoom_speed=11.0,
-        navigation_speed=8.0,
+        navigation_speed=10.0,
         project_location="",
         embed_dataset_by_default=False,
         project_manager_preferences={
@@ -551,7 +551,7 @@ def test_navigation_speed_preferences_reset_with_input_section(preferences_panel
     panel._reset_section()
 
     assert state.zoom_speed == 11
-    assert state.navigation_speed == 8
+    assert state.navigation_speed == 10
 
 
 def test_project_location_is_saved_and_can_return_to_default(

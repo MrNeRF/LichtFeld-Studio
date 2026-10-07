@@ -273,9 +273,8 @@ namespace lfs::vis {
         Viewport* pan_coast_viewport_ = nullptr;
         Viewport* wasd_momentum_viewport_ = nullptr;
 
-        // Cached whole-scene radius (half the bounds diagonal) that scales WASD
-        // speed and caps pan distance by splat size; 0 means "recompute" (after scene
-        // load/clear).
+        // Cached whole-scene radius (half the bounds diagonal) that caps pan
+        // distance by splat size; 0 means "recompute" (after scene load/clear).
         float scene_extent_ = 0.0f;
         // One-shot guard: the depth-view range is seeded from the trimmed scene
         // radius the first frame the extent is known after a load, then left to

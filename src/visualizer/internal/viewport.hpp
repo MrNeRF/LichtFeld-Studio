@@ -28,7 +28,7 @@ class Viewport {
         float rotateCenterSpeed = 0.002f;
         float rotateRollSpeed = 0.01f;
         float translateSpeed = 0.0005f;
-        float wasdSpeed = 8.0f;
+        float wasdSpeed = 10.0f;
         float maxWasdSpeed = 100.0f;
         bool isOrbiting = false;
 
@@ -107,9 +107,9 @@ class Viewport {
             clearTransientMotion();
         }
 
-        // Record the whole-scene radius (half the bounds diagonal). It scales
-        // WASD speed and caps pan distance so navigation tracks splat size; the
-        // controller feeds it the trimmed whole-scene extent. 0 clears the cache.
+        // Record the whole-scene radius (half the bounds diagonal). It caps pan
+        // distance; the controller feeds it the trimmed whole-scene extent. 0
+        // clears the cache.
         void setSceneExtent(float radius) {
             if (std::isfinite(radius) && radius >= 0.0f)
                 scene_extent_ = radius;
@@ -213,7 +213,10 @@ class Viewport {
                 dir += up ? u : -u;
             }
 
-            const float effective_speed = (wasdSpeed + additional_speed) * wasdMoveScale();
+            const bool held = forward || backward || left || right || up || down;
+            if (held)
+                wasd_hold_seconds_ += deltaTime;
+            const float effective_speed = (wasdSpeed + additional_speed) * unitsPerSecondPerLevel();
             const glm::vec3 target_velocity = dir * effective_speed;
             const float blend = 1.0f - std::exp(-deltaTime * kWasdInertiaRate);
             wasd_velocity = glm::mix(wasd_velocity, target_velocity, blend);
@@ -221,6 +224,8 @@ class Viewport {
             const float stop_speed = kWasdStopFraction * effective_speed;
             if (glm::length2(dir) < 1e-8f && glm::length2(wasd_velocity) < stop_speed * stop_speed) {
                 wasd_velocity = glm::vec3(0.0f);
+                if (!held)
+                    wasd_hold_seconds_ = 0.0f;
                 return;
             }
 
@@ -230,7 +235,10 @@ class Viewport {
         }
 
         [[nodiscard]] bool hasWasdMomentum() const { return glm::length2(wasd_velocity) > 0.0f; }
-        void clearWasdMomentum() { wasd_velocity = glm::vec3(0.0f); }
+        void clearWasdMomentum() {
+            wasd_velocity = glm::vec3(0.0f);
+            wasd_hold_seconds_ = 0.0f;
+        }
 
         // DJI-style stabilized drone flight. Horizontal velocity lives in the
         // world yaw plane so the gimbal pitch never bleeds into the flight
@@ -243,7 +251,10 @@ class Viewport {
             syncDroneIfStale();
 
             const bool sport = additional_speed > 0.0f;
-            const float max_speed = (wasdSpeed + additional_speed) * wasdMoveScale();
+            const bool held = forward || backward || left || right || up || down;
+            if (held)
+                wasd_hold_seconds_ += deltaTime;
+            const float max_speed = (wasdSpeed + additional_speed) * unitsPerSecondPerLevel();
             const float max_climb = max_speed * kDroneClimbSpeedFraction;
 
             const float look_blend = 1.0f - std::exp(-deltaTime * kDroneLookRate);
@@ -299,6 +310,8 @@ class Viewport {
                 drone_vel_v = 0.0f;
                 movement_v = 0.0f;
             }
+            if (!held && glm::length2(drone_vel_h) == 0.0f && drone_vel_v == 0.0f)
+                wasd_hold_seconds_ = 0.0f;
 
             float pivot_distance = glm::length(pivot - t);
             if (!std::isfinite(pivot_distance) || pivot_distance < 0.1f)
@@ -378,6 +391,7 @@ class Viewport {
         void clearDroneMotion() {
             drone_vel_h = glm::vec3(0.0f);
             drone_vel_v = 0.0f;
+            wasd_hold_seconds_ = 0.0f;
             drone_tilt_pitch = 0.0f;
             drone_tilt_roll = 0.0f;
             drone_yaw_target = drone_yaw;
@@ -682,32 +696,32 @@ class Viewport {
             drone_last_R = R;
         }
 
-        // Whole-scene radius (half the bounds diagonal), fed by the controller.
-        // WASD scales by it and panning is capped by it. 0 = unknown, in
-        // which case movement keeps its distance-based behavior. Scenes load in
-        // arbitrary world units (no normalization), so an absolute speed feels right
-        // on one scene and wrong on the next; scaling by this removes that.
-        //
-        // WASD effective speed is wasdSpeed * radius / kWasdReferenceExtent, with
-        // wasdSpeed a 1..100 level (default 8). kWasdReferenceExtent is set so level
-        // 50 crosses one scene radius per second; the level-8 default is a calm
-        // exploration pace and level 100 covers two radii per second.
+        // WASD moves the same in every scene: level 10 is one world unit (a
+        // metre in metric scenes) per second and level 20 two. Holding movement
+        // keys longer than kWasdHoldDelaySeconds speeds it up by
+        // kWasdHoldBoostPerSecond times that speed each second, up to
+        // kWasdHoldMaxBoost times, so a tap stays precise and a long hold
+        // crosses large scenes. Turning or reversing keeps the speed; coming to
+        // rest with no key held starts over.
+        static constexpr float kWasdUnitsPerSecondPerLevel = 0.1f;
+        static constexpr float kWasdHoldDelaySeconds = 0.2f;
+        static constexpr float kWasdHoldBoostPerSecond = 6.0f;
+        static constexpr float kWasdHoldMaxBoost = 20.0f;
+        float wasd_hold_seconds_ = 0.0f;
+
+        float unitsPerSecondPerLevel() const {
+            const float boost = 1.0f + kWasdHoldBoostPerSecond * std::max(0.0f, wasd_hold_seconds_ - kWasdHoldDelaySeconds);
+            return kWasdUnitsPerSecondPerLevel * std::min(boost, kWasdHoldMaxBoost);
+        }
+
+        // Whole-scene radius (half the bounds diagonal), fed by the controller;
+        // panning is capped by it. 0 = unknown, in which case panning keeps its
+        // distance-based behavior.
         float scene_extent_ = 0.0f;
-        static constexpr float kWasdReferenceExtent = 50.0f;
-        static constexpr float kMinMoveScale = 0.05f;
-        static constexpr float kMaxMoveScale = 100.0f;
         // Cap pan distance against the trimmed scene radius. A minimum tied to
         // scene size makes large scenes pan too fast when the camera/pivot is
         // still close to the origin.
         static constexpr float kPanMaxDistanceFraction = 1.0f;
-
-        // WASD multiplier from the scene radius, clamped so degenerate or enormous
-        // bounds can't produce unusable speeds; 1.0 when the extent is unknown.
-        float wasdMoveScale() const {
-            if (scene_extent_ <= 0.0f)
-                return 1.0f;
-            return std::clamp(scene_extent_ / kWasdReferenceExtent, kMinMoveScale, kMaxMoveScale);
-        }
 
         float orbit_vel_yaw = 0.0f;
         float orbit_vel_pitch = 0.0f;

@@ -50,7 +50,7 @@ namespace lfs::vis {
             float centre_speed = 0.002f;
             float roll_speed = 0.01f;
             float translate_speed = 0.0005f;
-            float wasd_speed = 8.0f;
+            float wasd_speed = 10.0f;
             float max_wasd_speed = 100.0f;
             std::optional<float> ortho_scale;
             std::optional<float> ortho_extent_world;
