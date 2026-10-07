@@ -52,22 +52,6 @@ namespace lfs::core::internal {
             }
         };
 
-        // Context shutdown retires these resources even when a caller keeps
-        // the program alive. The callback owns no program/context reference.
-        struct ProgramResources {
-            std::mutex mutex;
-            std::map<std::pair<std::string, size_t>, std::shared_ptr<Pipeline>> compute;
-            std::map<std::tuple<std::string, std::string, VkFormat, size_t, Module::Blend, bool, Module::Compare, bool, Module::Cull>, std::shared_ptr<Pipeline>> raster;
-            std::map<std::tuple<uint32_t, uint32_t, VkFormat, bool>, std::vector<std::shared_ptr<RasterResources>>> targets;
-
-            void release() {
-                std::lock_guard lock(mutex);
-                targets.clear();
-                raster.clear();
-                compute.clear();
-            }
-        };
-
         void transition(VkCommandBuffer command, const Attachment& image, VkImageLayout from, VkImageLayout to) {
             VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
             barrier.srcAccessMask = from == VK_IMAGE_LAYOUT_UNDEFINED ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
@@ -81,9 +65,17 @@ namespace lfs::core::internal {
             vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
         }
 
+        struct Resources {
+            std::mutex mutex;
+            std::map<std::pair<std::string, size_t>, std::shared_ptr<Pipeline>> compute;
+            std::map<std::tuple<std::string, std::string, VkFormat, size_t, Module::Blend, bool, Module::Compare, bool, Module::Cull>, std::shared_ptr<Pipeline>> raster;
+            std::map<std::tuple<uint32_t, uint32_t, VkFormat, bool>, std::vector<std::shared_ptr<RasterResources>>> targets;
+        };
+
         class Program final : public GpuProgram {
         public:
-            explicit Program(std::span<const Module::Entry> entries) : context_(acquire_vulkan_context()) {
+            explicit Program(std::span<const Module::Entry> entries) {
+                ensureContext();
                 for (const auto& entry : entries) {
                     if (entry.backend != GpuBackend::Vulkan)
                         continue;
@@ -93,22 +85,10 @@ namespace lfs::core::internal {
                     std::memcpy(words.data(), entry.code.data(), entry.code.size());
                     sources_.emplace(std::pair{std::string(entry.name), entry.stage}, std::move(words));
                 }
-                shutdown_release_ = context_->on_shutdown([weak = std::weak_ptr(resources_)] {
-                    if (auto resources = weak.lock())
-                        resources->release();
-                });
             }
-            ~Program() override {
-                // Keep the weak callback reachable until every owned resource
-                // has been released, including during concurrent shutdown.
-                resources_->release();
-                context_->cancel_shutdown_release(shutdown_release_);
-            }
-            bool is_live() const noexcept override { return context_->accepting_work(); }
             bool supports_raster() const override {
                 std::lock_guard lock(resources_->mutex);
-                if (!is_live())
-                    return false;
+                ensureContext();
                 uint32_t count = 0;
                 vkGetPhysicalDeviceQueueFamilyProperties(context_->physical_device(), &count, nullptr);
                 std::vector<VkQueueFamilyProperties> families(count);
@@ -121,7 +101,7 @@ namespace lfs::core::internal {
             }
             void dispatch(const Module::Dispatch& launch, const ProgramArguments& arguments) override {
                 std::lock_guard lock(resources_->mutex);
-                require_live();
+                ensureContext();
                 const auto pipeline = compute(launch.function, arguments.parameters.size());
                 std::vector<StorageRef> reads, writes;
                 accesses(arguments, reads, writes);
@@ -149,7 +129,7 @@ namespace lfs::core::internal {
 
             void draw(std::span<const Module::Draw> draws, std::span<const ProgramArguments> arguments) override {
                 std::lock_guard lock(resources_->mutex);
-                require_live();
+                ensureContext();
                 const auto& first = draws.front();
                 const uint32_t width = static_cast<uint32_t>(first.color->size(1)), height = static_cast<uint32_t>(first.color->size(0));
                 const auto format = first.color->dtype() == DataType::UInt8 ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R32G32B32A32_SFLOAT;
@@ -223,12 +203,21 @@ namespace lfs::core::internal {
             }
 
         private:
-            void require_live() const {
-                if (!is_live())
-                    throw Exception(make_error({.code = ErrorCode::FailedPrecondition,
-                                                .domain = ErrorDomain::Tensor,
-                                                .detail = "Vulkan program context has shut down (accepting_work=false)",
-                                                .detection = LFS_SOURCE_SITE_CURRENT()}));
+            void ensureContext() const {
+                if (context_ && context_->device() != VK_NULL_HANDLE)
+                    return;
+                context_ = acquire_vulkan_context();
+                // Cached modules may outlive an explicit backend shutdown. Release
+                // their device objects after submissions finish, before the device
+                // is destroyed, and rebuild lazily on a subsequent dispatch.
+                context_->on_shutdown([weak = std::weak_ptr(resources_)] {
+                    if (auto resources = weak.lock()) {
+                        std::lock_guard lock(resources->mutex);
+                        resources->targets.clear();
+                        resources->raster.clear();
+                        resources->compute.clear();
+                    }
+                });
             }
             void check(VkResult result, const char* operation) { vk_check(context_.get(), result, operation); }
             static void accesses(const ProgramArguments& arguments, std::vector<StorageRef>& reads, std::vector<StorageRef>& writes) {
@@ -424,10 +413,9 @@ namespace lfs::core::internal {
                 return result;
             }
 
-            std::shared_ptr<VulkanContext> context_;
+            mutable std::shared_ptr<VulkanContext> context_;
             std::map<std::pair<std::string, Module::Stage>, std::vector<uint32_t>> sources_;
-            std::shared_ptr<ProgramResources> resources_ = std::make_shared<ProgramResources>();
-            uint64_t shutdown_release_ = 0;
+            const std::shared_ptr<Resources> resources_ = std::make_shared<Resources>();
         };
     } // namespace
 

@@ -563,6 +563,34 @@ def test_verify_catalog_projects_prioritizes_visible_window():
     ) == 5
     assert order == ["3", "1", "0", "2", "4"]
 
+@pytest.mark.parametrize("use_service", [False, True])
+def test_catalog_verify_cancels_between_projects(monkeypatch, tmp_path, use_service):
+    from lfs_plugins.asset_index import LibraryService
+
+    paths, inspections = _write_licht_tree(tmp_path, 5)
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(
+        lambda path: inspections[Path(path).name]))
+    index = AssetIndex(tmp_path / "library.json", tmp_path)
+    assert index.load()
+    for path in paths:
+        index.register_licht_asset(str(path))
+    cancel, reads = threading.Event(), []
+
+    def read(path, _expected_uuid):
+        reads.append(path)
+        cancel.set()
+        return "UNCHANGED", None
+
+    monkeypatch.setattr(index, "_read_project_runtime", read)
+    service = LibraryService(index) if use_service else None
+    try:
+        assert verify_catalog_projects(service or index, cancel, interval_s=60) == 1
+        assert len(reads) == 1
+        assert len(index.list_projects()) == 5
+    finally:
+        if service:
+            service.close()
+
 
 @pytest.mark.parametrize("scan_all", [False, True])
 @pytest.mark.parametrize("remaining", [0, 1])

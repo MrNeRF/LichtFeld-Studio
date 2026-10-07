@@ -2,19 +2,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
-#include "core/tensor_color.hpp"
 #include "core/tensor_vignette.hpp"
 #include "program_contract.hpp"
 #include "program_features.hpp"
 #include "program_features_variant.hpp"
 #include <array>
-#include <barrier>
 #include <cmath>
 #include <cstring>
-#include <exception>
 #include <gtest/gtest.h>
-#include <stdexcept>
-#include <thread>
 #include <vector>
 
 namespace {
@@ -27,89 +22,6 @@ namespace {
         uint32_t padding = 0;
     };
     class Programs : public testing::TestWithParam<GpuBackend> {};
-
-    TEST(VulkanProgramLifecycle, RetainedProgramIsRetiredBeforeDeviceDestruction) {
-        if (!gpu_backend_available(GpuBackend::Vulkan))
-            GTEST_SKIP() << "Vulkan device unavailable";
-        const GpuBackendScope scope(GpuBackend::Vulkan);
-        for (int cycle = 0; cycle < 3; ++cycle) {
-            auto loaded = M::load(program_contract_entries(), GpuBackend::Vulkan);
-            ASSERT_TRUE(loaded) << loaded.error().detail();
-            auto program = std::move(*loaded);
-            ASSERT_TRUE(program->is_live());
-            {
-                auto input = Tensor::ones({128}, Device::GPU);
-                auto output = Tensor::zeros_like(input);
-                const Params params{.count = 128, .scale = 2, .bias = 3};
-                const std::array bindings{M::Binding{0, &input}, M::Binding{8, &output, M::Access::ReadWrite}};
-                ASSERT_TRUE(program->dispatch({.function = "transform", .arguments = {std::as_bytes(std::span(&params, 1)), bindings}, .groups = {2, 1, 1}}));
-                EXPECT_EQ(output.to_vector(), std::vector<float>(128, 5.f));
-                // Leave a second dispatch pending; shutdown must drain it
-                // before retiring the retained pipeline.
-                ASSERT_TRUE(program->dispatch({.function = "transform", .arguments = {std::as_bytes(std::span(&params, 1)), bindings}, .groups = {2, 1, 1}}));
-                if (program->supports_raster()) {
-                    std::array<float, 12> vertices{-1, -1, 0, 1, 1, -1, 0, 1, 0, 1, 0, 1};
-                    auto positions = Tensor::from_blob(vertices.data(), {3, 4}, Device::CPU, DataType::Float32).gpu();
-                    auto colors = Tensor::ones({3, 4}, Device::GPU);
-                    auto color = Tensor::zeros({8, 8, 4}, Device::GPU);
-                    const std::array raster_bindings{M::Binding{0, &positions}, M::Binding{8, &colors}};
-                    ASSERT_TRUE(program->draw({.vertex = "vertexMain", .fragment = "fragmentMain", .arguments = {std::as_bytes(std::span(&params, 1)), raster_bindings}, .color = &color, .vertex_count = 3, .clear_color = true}));
-                }
-            }
-            ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan));
-            EXPECT_FALSE(program->is_live());
-            EXPECT_FALSE(program->supports_raster());
-            auto rejected = program->dispatch({.function = "transform"});
-            ASSERT_FALSE(rejected);
-            EXPECT_EQ(rejected.error().code(), lfs::ErrorCode::FailedPrecondition);
-            EXPECT_FALSE(program->draw({}).has_value());
-            // Destruction after shutdown must never destroy old-device objects.
-            program.reset();
-            ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan));
-        }
-    }
-
-    TEST(VulkanProgramLifecycle, ThreadLocalColorCachesReloadAfterBackendRestart) {
-        if (!gpu_backend_available(GpuBackend::Vulkan))
-            GTEST_SKIP() << "Vulkan device unavailable";
-        std::vector<float> pixels(18 * 34 * 3);
-        for (size_t i = 0; i < pixels.size(); ++i)
-            pixels[i] = float((i * 719) % 1024) / 511.f - .5f;
-        auto host = Tensor::from_blob(pixels.data(), {18, 34, 3}, Device::CPU, DataType::Float32);
-        auto reference = rgb_to_yuv420p(host);
-        ASSERT_TRUE(reference);
-        const std::array expected{reference->y.to_vector_uint8(), reference->u.to_vector_uint8(), reference->v.to_vector_uint8()};
-        std::barrier phases(3);
-        std::array<std::exception_ptr, 2> errors{};
-        std::array<std::jthread, 2> workers;
-        for (size_t i = 0; i < workers.size(); ++i)
-            workers[i] = std::jthread([&, i] {
-                for (int cycle = 0; cycle < 3; ++cycle) {
-                    try {
-                        const GpuBackendScope scope(GpuBackend::Vulkan);
-                        auto result = rgb_to_yuv420p(host.gpu());
-                        if (!result || result->y.to_vector_uint8() != expected[0] || result->u.to_vector_uint8() != expected[1] || result->v.to_vector_uint8() != expected[2])
-                            throw std::runtime_error("color conversion differs after backend restart");
-                    } catch (...) {
-                        errors[i] = std::current_exception();
-                    }
-                    // All GPU tensors are gone, but both TLS program caches live.
-                    phases.arrive_and_wait();
-                    phases.arrive_and_wait();
-                }
-            });
-        bool shutdown_ok = true;
-        for (int cycle = 0; cycle < 3; ++cycle) {
-            phases.arrive_and_wait();
-            shutdown_ok &= shutdown_gpu_backend(GpuBackend::Vulkan).has_value();
-            phases.arrive_and_wait();
-        }
-        for (auto& worker : workers)
-            worker.join();
-        EXPECT_TRUE(shutdown_ok);
-        for (const auto& error : errors)
-            EXPECT_FALSE(error != nullptr);
-    }
 
     TEST(CudaProgramArtifacts, CudaEntriesUseFatbinaryContainers) {
 #if LFS_HAS_CUDA
@@ -144,6 +56,40 @@ namespace {
 #else
         GTEST_SKIP() << "CUDA backend not built";
 #endif
+    }
+
+    TEST(VulkanProgramLifetime, CachedComputeAndRasterSurviveBackendRestart) {
+        if (!gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        auto loaded = M::load(program_contract_entries(), GpuBackend::Vulkan);
+        ASSERT_TRUE(loaded) << loaded.error().detail();
+        auto module = std::move(*loaded);
+        for (int cycle = 0; cycle < 2; ++cycle) {
+            SCOPED_TRACE(cycle);
+            {
+                auto input = Tensor::ones({64}, Device::GPU);
+                auto output = Tensor::zeros({64}, Device::GPU);
+                const Params params{.count = 64, .scale = 2, .bias = 3};
+                const std::array bindings{M::Binding{0, &input}, M::Binding{8, &output, M::Access::ReadWrite}};
+                auto result = module->dispatch({.function = "transform", .arguments = {std::as_bytes(std::span(&params, 1)), bindings}, .groups = {1, 1, 1}});
+                ASSERT_TRUE(result) << result.error().detail();
+                EXPECT_FLOAT_EQ(output.to(Device::CPU).sum().item<float>(), 320);
+                ASSERT_TRUE(module->supports_raster());
+                std::array<float, 12> positions{-1, 1, 0.5f, 1, 1, 1, 0.5f, 1, -1, -1, 0.5f, 1};
+                auto vertices = Tensor::from_blob(positions.data(), {3, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
+                auto colors = Tensor::ones({3, 4}, Device::GPU);
+                auto color = Tensor::zeros({8, 8, 4}, Device::GPU);
+                auto depth = Tensor::ones({8, 8}, Device::GPU);
+                const std::array raster_bindings{M::Binding{0, &vertices}, M::Binding{8, &colors}};
+                result = module->draw({.vertex = "vertexMain", .fragment = "fragmentMain", .arguments = {std::as_bytes(std::span(&params, 1)), raster_bindings}, .color = &color, .depth = &depth, .vertex_count = 3, .clear_color = true, .clear_depth = true});
+                ASSERT_TRUE(result) << result.error().detail();
+                EXPECT_GT(color.to(Device::CPU).sum().item<float>(), 0);
+            }
+            ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan));
+        }
+        // Destruction after the second device shutdown must also be safe.
+        module.reset();
     }
 
     TEST_P(Programs, SameSlangComputeMatchesCpuAndTensorTimeline) {

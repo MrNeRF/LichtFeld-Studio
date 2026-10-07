@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core/assert.hpp"
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -154,6 +155,9 @@ namespace lfs::vis {
                 if (entry.state != State::Retired) {
                     continue;
                 }
+                if (entry.retain_count != 0) {
+                    continue;
+                }
                 const Payload& payload_ref = *entry.payload;
                 const bool prod_ok =
                     !producer_done || producer_done(payload_ref, entry.producer_value);
@@ -187,6 +191,35 @@ namespace lfs::vis {
                 entries_.erase(it);
             }
             free_serials_.clear();
+        }
+
+        [[nodiscard]] bool isRetained(const std::uint64_t serial) const {
+            const auto it = entries_.find(serial);
+            return it != entries_.end() && it->second.retain_count != 0;
+        }
+
+        // Published images may be sampled again after existing submissions retire.
+        // Keep them out of the free list until publication ends.
+        [[nodiscard]] bool retain(const std::uint64_t serial) {
+            const auto it = entries_.find(serial);
+            if (it == entries_.end() || it->second.state == State::Free) {
+                return false;
+            }
+            ++it->second.retain_count;
+            return true;
+        }
+
+        void releaseRetained(const std::uint64_t serial, const std::uint64_t consumer_serial) {
+            const auto it = entries_.find(serial);
+            if (it == entries_.end() || it->second.retain_count == 0) {
+                misuse_flagged_ = true;
+#ifndef NDEBUG
+                LFS_ASSERT_MSG(false, std::format("GpuResourcePool::releaseRetained: unretained serial {}", serial));
+#endif
+                return;
+            }
+            --it->second.retain_count;
+            it->second.consumer_serial = std::max(it->second.consumer_serial, consumer_serial);
         }
 
         // Destroy free entries idle for more than kIdleTrimTicks drain ticks.
@@ -259,6 +292,7 @@ namespace lfs::vis {
             std::uint64_t producer_value = 0;
             std::uint64_t consumer_serial = 0;
             std::uint64_t free_since_tick = 0;
+            std::uint32_t retain_count = 0;
             State state = State::Live;
             bool evict = false;
         };

@@ -196,7 +196,6 @@ bool depth_intersects_pixels(Splat_2D_AlphaBlend g, uint2 origin, uint2 maximum,
             }
 
             gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
-            gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_state.flash_intensity);
 #endif
 
             const float3 color = curr_pixel_state.rgb + gauss_rgba.rgb * curr_pixel_state.a;

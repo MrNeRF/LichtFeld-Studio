@@ -50,6 +50,7 @@ namespace lfs::vis {
 
     class VksplatViewportRenderer {
         friend struct VksplatScratchReleaseTestAccess;
+        friend struct SplitOutputLifetimeTestAccess;
 
     public:
         using RenderResult = SceneRenderer::RenderResult;
@@ -237,6 +238,7 @@ namespace lfs::vis {
             return ring_.contains(target);
         }
         [[nodiscard]] LFS_VIS_API bool releaseRenderTarget(RenderTargetId target);
+        [[nodiscard]] LFS_VIS_API std::shared_ptr<void> retainOutputImage(VkImageView view);
         void releaseSceneResources();
         void reset();
         [[nodiscard]] std::optional<LodPageCache::Snapshot> ensureLodPageCacheSnapshot(
@@ -648,6 +650,7 @@ namespace lfs::vis {
         };
         std::vector<RetiredInputs> retired_inputs_;
         OutputImagePool output_pool_{};
+        std::shared_ptr<int> publication_lifetime_ = std::make_shared<int>(0);
         // Completion counter shared by tensor producers and Vulkan consumers.
         VkSemaphore render_complete_timeline_ = VK_NULL_HANDLE;
         // Last value whose signal operation was accepted by vkQueueSubmit.

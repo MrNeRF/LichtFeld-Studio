@@ -103,7 +103,6 @@ namespace lfs::vis {
         // Selection emphasis (matches master's mesh_pbr.frag).
         bool is_emphasized = false;
         bool dim_non_emphasized = false;
-        float flash_intensity = 0.0f;
         // Wireframe overlay drawn after the main mesh pass.
         bool wireframe_overlay = false;
         glm::vec3 wireframe_color{0.2f, 0.2f, 0.2f};

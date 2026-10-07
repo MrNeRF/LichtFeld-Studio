@@ -428,7 +428,6 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                     }
 
                     gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
-                    gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_state.flash_intensity);
                   #endif
 
                     const float3 color = pixel_state[p].rgb + gauss_rgba.rgb * pixel_state[p].a;
@@ -639,7 +638,6 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                             }
 
                             gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
-                            gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_state.flash_intensity);
 
                             acc_r[k][pj] = half(float(acc_r[k][pj]) + gauss_rgba.x * t);
                             acc_g[k][pj] = half(float(acc_g[k][pj]) + gauss_rgba.y * t);

@@ -124,9 +124,6 @@ namespace lfs::core {
         // Only the first draw may clear.
         [[nodiscard]] Result<void> draw_batch(std::span<const Draw> draws);
         [[nodiscard]] bool supports_raster() const;
-        // False after the program's backend context has shut down. Does not
-        // initialize a device; cached callers reload for the next context.
-        [[nodiscard]] bool is_live() const noexcept;
 
         // Legacy MSL-only training kernels. Kept until the separately scoped
         // single-source training migration; no new shaders use this path.

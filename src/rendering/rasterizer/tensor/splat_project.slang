@@ -322,8 +322,6 @@ void project_splats(uint3 tid : SV_DispatchThreadID) {
         if (active && overlay_enabled(emphasis.y) && node >= 0 && node < int(round(emphasis.z))) {
             if (overlay_enabled(emphasis.x) && p.node_mask[node] == 0u)
                 flags |= 3u;
-            if (emphasis.w > 0 && p.node_mask[node] != 0u)
-                flags |= 4u;
         }
         p.overlay_flags[i] = flags;
         if (!active)

@@ -30,7 +30,7 @@ static const uint U_LIGHT_VP = 8;
 static const uint U_CAMERA = 12;
 static const uint U_LIGHT_DIR = 13;
 static const uint U_LIGHT = 14;      // intensity, ambient, shadow enabled, shadow size
-static const uint U_SELECTION = 15;  // emphasized, dim others, flash, wire width
+static const uint U_SELECTION = 15;  // emphasized, dim others, reserved, wire width
 static const uint U_BASE_COLOR = 16;
 static const uint U_EMISSIVE_METALLIC = 17;
 static const uint U_ROUGHNESS_FLAGS = 18; // roughness, has albedo, has normal, has metallic-roughness
@@ -200,8 +200,6 @@ float4 meshFragment(MeshOutput input, bool front : SV_IsFrontFace) : SV_Target {
     bool emphasized = selection.x > 0.5;
     if (selection.y > 0.5 && !emphasized)
         color = lerp(color, float3(dot(color, float3(0.2126, 0.7152, 0.0722))), 0.6);
-    if (emphasized && selection.z > 0.0)
-        color = lerp(color, float3(1.0, 0.95, 0.6), selection.z * 0.5);
     return float4(color, albedo.a);
 }
 

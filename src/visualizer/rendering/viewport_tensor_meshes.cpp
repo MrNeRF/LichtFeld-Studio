@@ -376,7 +376,7 @@ namespace lfs::vis {
                 base[kLight] = {item.light_intensity, item.ambient, shadow ? 1.0f : 0.0f,
                                 shadow ? float(mesh->shadow.resolution) : 1.0f};
                 base[kSelection] = {item.is_emphasized ? 1.0f : 0.0f, item.dim_non_emphasized ? 1.0f : 0.0f,
-                                    item.flash_intensity, item.wireframe_width};
+                                    0.0f, item.wireframe_width};
                 base[kWireColor] = {item.wireframe_color.r, item.wireframe_color.g, item.wireframe_color.b, 1};
                 for (const auto& submesh : mesh->submeshes) {
                     const auto& material = mesh->materials[submesh.material];

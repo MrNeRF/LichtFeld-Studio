@@ -5,7 +5,10 @@ import json
 import threading
 from pathlib import Path
 
-DEFAULTS = dict(uploadFormat="sog", posterCacheMiB=64)
+DEFAULTS = dict(uploadFormat="ssog", posterCacheMiB=64)
+# Earlier builds wrote the then-default "sog" back on every start, so an
+# unversioned "sog" records no user choice and yields the current default.
+VERSION = 2
 _lock = threading.RLock()
 
 
@@ -26,6 +29,8 @@ def read_preferences(root=None):
                     result[key] = _validate(key, raw[key])
                 except (ValueError, TypeError):
                     pass
+        if raw.get("version") != VERSION and result["uploadFormat"] == "sog":
+            result["uploadFormat"] = DEFAULTS["uploadFormat"]
     except (OSError, ValueError, TypeError, AttributeError):
         pass
     return result
@@ -49,8 +54,10 @@ def set_preference(key, value, root=None):
     with _lock:
         path = _root(root) / "preferences.json"
         values = read_preferences(path.parent)
+        if values[key] == value:
+            return
         values[key] = value
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(values))
+        temporary.write_text(json.dumps(dict(values, version=VERSION)))
         temporary.replace(path)

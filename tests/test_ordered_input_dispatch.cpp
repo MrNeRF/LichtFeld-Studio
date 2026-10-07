@@ -15,10 +15,12 @@
 #include "gui/rml_modal_overlay.hpp"
 #include "gui/rml_sequencer_overlay.hpp"
 #include "gui/rmlui/elements/python_editor_element.hpp"
+#include "gui/rmlui/elements/scene_graph_element.hpp"
 #include "gui/rmlui/elements/terminal_element.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rotation_gizmo.hpp"
 #include "gui/scale_gizmo.hpp"
+#include "gui/scene_panel_native.hpp"
 #include "gui/translation_gizmo.hpp"
 #include "input/frame_input_buffer.hpp"
 #include "input/input_controller.hpp"
@@ -30,6 +32,7 @@
 #include "sequencer/sequencer_controller.hpp"
 #include "test_view_targets.hpp"
 #include "tools/unified_tool_registry.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer_impl.hpp"
 #include "window/window_manager.hpp"
 #include <RmlUi/Core.h>
@@ -503,6 +506,7 @@ namespace lfs::vis {
 namespace lfs::vis {
     class WindowInputDispatchTest : public ::testing::Test {
     protected:
+        virtual bool keepSceneHandlers() const { return false; }
         void SetUp() override {
             ASSERT_TRUE(SDL_Init(SDL_INIT_VIDEO));
             ViewerOptions options;
@@ -511,8 +515,10 @@ namespace lfs::vis {
             viewer_ = std::make_unique<VisualizerImpl>(options);
             window_ = viewer_->getWindowManager();
             gui_ = viewer_->getGuiManager();
-            lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
+            if (!keepSceneHandlers()) {
+                lfs::event::EventBridge::instance().clear_all();
+                lfs::core::event::bus().clear_all();
+            }
             window_->window_ = SDL_CreateWindow("Input dispatch", 400, 300, SDL_WINDOW_HIDDEN);
             ASSERT_NE(window_->window_, nullptr);
             ASSERT_TRUE(manager().initWithRenderInterface(window_->window_, 1.f,
@@ -648,8 +654,8 @@ namespace lfs::vis {
             ASSERT_TRUE(overlay.isLanguageSelectOpen());
             EXPECT_TRUE(overlay.content_dirty_);
         }
-        void setGizmoViewportLayout(const gui::ViewportLayout& layout) {
-            gui_->ui_hidden_ = true;
+        void setGizmoViewportLayout(const gui::ViewportLayout& layout, const bool hidden = true) {
+            gui_->ui_hidden_ = hidden;
             gui_->viewport_layout_ = layout;
         }
         bool startupVisible() { return gui_->startup_overlay_.isVisible(); }
@@ -976,6 +982,101 @@ namespace lfs::vis {
         gui::rml_input::TextInputEscapeRevertController revert_;
     };
 
+    TEST_F(WindowInputDispatchTest, NodeDeletionPreservesTransformToolThroughReselectionAndHistory) {
+        auto& sm = *viewer_->getSceneManager();
+        auto& scene = viewer_->getScene();
+        auto& editor = viewer_->getEditorContext();
+        auto& gizmo = gui_->gizmo();
+        gizmo.setupEvents();
+        int index = 0;
+        for (const auto tool : {ToolType::Translate, ToolType::Rotate, ToolType::Scale}) {
+            for (const auto pivot : {PivotMode::Origin, PivotMode::BoundsCenter}) {
+                for (const bool remove_selected : {true, false}) {
+                    SCOPED_TRACE(static_cast<int>(tool));
+                    SCOPED_TRACE(remove_selected);
+                    const auto survivor_name = "Survivor " + std::to_string(index);
+                    const auto removed_name = "Removed " + std::to_string(index++);
+                    const auto survivor = scene.addSplat(survivor_name, lfs::test::licht::make_splat(3));
+                    const auto removed = scene.addSplat(removed_name, lfs::test::licht::make_splat(3));
+                    sm.changeContentType(SceneManager::ContentType::SplatFiles);
+                    sm.selectNode(remove_selected ? removed : survivor);
+                    editor.update(&sm, viewer_->getTrainerManager());
+                    core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(tool)}.emit();
+                    gizmo.setPivotMode(pivot);
+                    const auto operation = gizmo.getOperation();
+                    const auto tool_id = app_store().active_tool.get();
+                    ASSERT_EQ(editor.getActiveTool(), tool);
+                    ASSERT_FALSE(tool_id.empty());
+                    const auto check_tool = [&] {
+                        EXPECT_EQ(editor.getActiveTool(), tool);
+                        EXPECT_EQ(app_store().active_tool.get(), tool_id);
+                        EXPECT_EQ(UnifiedToolRegistry::instance().getActiveTool(), tool_id);
+                        EXPECT_EQ(gizmo.getOperation(), operation);
+                        EXPECT_EQ(gizmo.getPivotMode(), pivot);
+                    };
+                    op::undoHistory().clear();
+                    ASSERT_TRUE(sm.removeNodeWithResult(removed, false));
+                    ASSERT_EQ(scene.getNode(removed_name), nullptr);
+                    check_tool();
+                    sm.selectNode(survivor);
+                    editor.update(&sm, viewer_->getTrainerManager());
+                    ASSERT_TRUE(editor.canTransformSelectedNode());
+                    check_tool();
+                    ASSERT_TRUE(op::undoHistory().undo().success);
+                    ASSERT_NE(scene.getNode(removed_name), nullptr);
+                    check_tool();
+                    ASSERT_TRUE(op::undoHistory().redo().success);
+                    ASSERT_EQ(scene.getNode(removed_name), nullptr);
+                    sm.selectNode(survivor_name);
+                    editor.update(&sm, viewer_->getTrainerManager());
+                    check_tool();
+                }
+            }
+        }
+        op::undoHistory().clear();
+        core::events::state::SceneCleared{}.emit();
+        EXPECT_EQ(editor.getActiveTool(), ToolType::None);
+        EXPECT_TRUE(app_store().active_tool.get().empty());
+        EXPECT_EQ(gizmo.getOperation(), gui::GizmoOperation::Translate);
+    }
+
+    TEST_F(WindowInputDispatchTest, UnrelatedDeletionPreservesCropToolAndVolumeDeletionLeavesIt) {
+        auto& sm = *viewer_->getSceneManager();
+        auto& scene = viewer_->getScene();
+        auto& editor = viewer_->getEditorContext();
+        auto& gizmo = gui_->gizmo();
+        gizmo.setupEvents();
+        int index = 0;
+        for (const bool ellipsoid : {false, true}) {
+            for (const auto operation : {gui::GizmoOperation::Translate, gui::GizmoOperation::Rotate,
+                                         gui::GizmoOperation::Scale}) {
+                SCOPED_TRACE(ellipsoid);
+                SCOPED_TRACE(static_cast<int>(operation));
+                const auto suffix = std::to_string(index++);
+                const auto parent = scene.addSplat("Crop parent " + suffix, lfs::test::licht::make_splat(3));
+                const auto other = scene.addSplat("Other " + suffix, lfs::test::licht::make_splat(3));
+                const auto volume = ellipsoid ? scene.addEllipsoid("Volume " + suffix, parent)
+                                              : scene.addCropBox("Volume " + suffix, parent);
+                sm.changeContentType(SceneManager::ContentType::SplatFiles);
+                sm.selectNode(volume);
+                editor.update(&sm, viewer_->getTrainerManager());
+                gizmo.setOperation(operation);
+                ASSERT_EQ(editor.getActiveOperator(), "builtin.cropbox");
+                ASSERT_TRUE(sm.removeNodeWithResult(other, false));
+                EXPECT_EQ(editor.getActiveOperator(), "builtin.cropbox");
+                EXPECT_EQ(app_store().active_tool.get(), "builtin.cropbox");
+                EXPECT_EQ(UnifiedToolRegistry::instance().getActiveTool(), "builtin.cropbox");
+                EXPECT_EQ(gizmo.getOperation(), operation);
+                EXPECT_EQ(sm.getSelectedNodeIds(), std::vector<core::NodeId>{volume});
+                ASSERT_TRUE(sm.removeNodeWithResult(volume, false));
+                EXPECT_EQ(sm.getSelectedNodeIds(), std::vector<core::NodeId>{parent});
+                EXPECT_FALSE(editor.hasActiveOperator());
+                EXPECT_TRUE(UnifiedToolRegistry::instance().getActiveTool().empty());
+                op::undoHistory().clear();
+            }
+        }
+    }
+
 #define TRANSFORM_DRAG_CANCEL_TEST(test_name, drag_mode, finish_mode) \
     TEST_F(WindowInputDispatchTest, test_name) {                      \
         exerciseTransformDrag(TransformDragMode::drag_mode,           \
@@ -1075,6 +1176,73 @@ namespace lfs::vis {
         orbit_controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE), input::ACTION_PRESS,
                                            60.0, 250.0);
         EXPECT_TRUE(orbit_controller.isCameraDragging());
+    }
+
+    // A translate drag ends with the pointer still over the handle. That hover must not
+    // swallow a middle-button orbit, and it must not outlive the pointer leaving the gizmo.
+    TEST_F(WindowInputDispatchTest, TranslateReleaseHoverKeepsMiddleOrbitAndClearsOnLeave) {
+        auto& scene_manager = *viewer_->getSceneManager();
+        auto& scene = viewer_->getScene();
+        const core::NodeId node_id = scene.addGroup("Orbit after translate");
+        ASSERT_NE(node_id, core::NULL_NODE);
+        scene_manager.selectNode(node_id);
+        viewer_->getEditorContext().update(&scene_manager, viewer_->getTrainerManager());
+        viewer_->getEditorContext().setActiveTool(ToolType::Translate);
+        UnifiedToolRegistry::instance().setActiveTool("builtin.translate");
+        auto& gizmo = gui_->gizmo();
+        gizmo.setOperation(gui::GizmoOperation::Translate);
+        gizmo.setTransformSpace(TransformSpace::World);
+        gizmo.setPivotMode(PivotMode::Origin);
+
+        auto& camera = viewer_->getViewport().camera;
+        camera.t = {0.0f, 0.0f, 12.0f};
+        camera.pivot = {0.0f, 0.0f, 0.0f};
+        camera.R = rendering::makeVisualizerLookAtRotation(camera.t, camera.pivot);
+
+        gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
+        const gui::ViewportLayout layout{.view = viewer_->activeView().id, .pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+        setGizmoViewportLayout(layout, false);
+        gui_->screenHost().init({.screens = &viewer_->screens(), .rml = &manager(), .scene_manager = &scene_manager});
+        gui_->screenHost().layout({0.0f, 0.0f, 400.0f, 300.0f}, 1.0f);
+        gizmo.updateToolState(ui, false);
+        auto& frame = frameInput();
+        const auto render_at = [&](const float x, const float y, const bool down, const bool clicked) {
+            frame.mouse_x = x;
+            frame.mouse_y = y;
+            frame.mouse_down[0] = down;
+            frame.mouse_clicked[0] = clicked;
+            frame.mouse_released[0] = false;
+            gui::beginTranslationGizmoFrame();
+            gui::guiFocusState().want_capture_mouse = false;
+            gizmo.renderNodeTransformGizmo(ui, layout);
+        };
+
+        render_at(236.0f, 150.0f, false, false);
+        ASSERT_TRUE(gui::isTranslationGizmoHovered());
+        render_at(236.0f, 150.0f, true, true);
+        render_at(266.0f, 150.0f, true, false);
+        ASSERT_TRUE(gui::isTranslationGizmoActive());
+        render_at(266.0f, 150.0f, false, false);
+        ASSERT_FALSE(gui::isTranslationGizmoActive());
+        ASSERT_TRUE(gui::isTranslationGizmoHovered());
+        gui::guiFocusState().want_capture_mouse = false;
+
+        Viewport orbit_viewport(400, 300);
+        TestViewTargets orbit_views{orbit_viewport};
+        InputController orbit_controller(nullptr, orbit_views);
+        orbit_controller.updateViewportBounds(0.0f, 0.0f, 400.0f, 300.0f);
+        orbit_controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE), input::ACTION_PRESS,
+                                           266.0, 150.0);
+        EXPECT_TRUE(orbit_controller.isCameraDragging());
+        orbit_controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE), input::ACTION_RELEASE,
+                                           266.0, 150.0);
+
+        context_->ProcessMouseMove(60, 260, 0);
+        EXPECT_TRUE(gui_->passiveMouseMoveNeedsRender(60.0f, 260.0f));
+        render_at(60.0f, 260.0f, false, false);
+        EXPECT_FALSE(gui::isTranslationGizmoHovered());
+        gui::guiFocusState().want_capture_mouse = false;
+        EXPECT_FALSE(gui_->passiveMouseMoveNeedsRender(60.0f, 260.0f));
     }
 
     TEST_F(WindowInputDispatchTest, TranslateXAxisCenterlineDragSurvivesSmallViewTilts) {
@@ -1986,5 +2154,125 @@ namespace lfs::vis {
         EXPECT_EQ(listener_.ends, 1);
         EXPECT_EQ(listener_.cancelled_ends, 0);
         listener_.callback = {};
+    }
+} // namespace lfs::vis
+
+namespace lfs::vis {
+    class ScenePanelRefreshTest : public WindowInputDispatchTest {
+    protected:
+        bool keepSceneHandlers() const override { return true; }
+
+        void checkMutation(const bool cached, const bool add_group, const bool from_menu = false) {
+            auto& scene_manager = *viewer_->getSceneManager();
+            auto& scene = scene_manager.getScene();
+            const auto original = scene.addGroup("Original");
+            gui::NativeScenePanel panel(&manager());
+            gui::PanelDrawContext ctx;
+            ctx.scene = &scene;
+            ctx.scene_generation = python::get_scene_generation();
+            ctx.frame_serial = 1;
+            panel.preload(ctx);
+            auto* context = manager().getContext("scene_panel_native");
+            ASSERT_NE(context, nullptr);
+            auto* tree = dynamic_cast<gui::SceneGraphElement*>(
+                context->GetDocument(0)->GetElementById("tree-container"));
+            ASSERT_NE(tree, nullptr);
+            ASSERT_EQ(tree->nodeCount(), 1u);
+            auto& ledger = viewer_->getRenderingManager()->frameDemandLedger();
+            const auto consume = [&] {
+                static_cast<void>(app_store().store().drain_dirty_into_frame());
+                return ledger.plan(FrameClock::now());
+            };
+            static_cast<void>(consume());
+
+            // The frame context was captured before the action mutated the scene.
+            if (from_menu) {
+                const auto action = add_group ? std::string("scene_panel:add_group_root")
+                                              : "scene_panel:duplicate:" + std::to_string(original);
+                menu().request({{"Create node", action}}, 0, 0);
+                auto* menu_context = manager().getContext("global_context_menu");
+                ASSERT_NE(menu_context, nullptr);
+                auto* item = menu_context->GetDocument(0)->QuerySelector("[data-ctx-action]");
+                ASSERT_NE(item, nullptr);
+                item->DispatchEvent("click", {});
+            } else {
+                if (add_group)
+                    scene_manager.addGroupNode("Added");
+                else
+                    ASSERT_FALSE(scene_manager.duplicateNodeTree(original).empty());
+                EXPECT_TRUE(consume().present);
+            }
+            gui::PanelInputState input;
+            input.mouse_clicked[0] = from_menu;
+            gui::PanelDirectRenderRequest request;
+            request.input = cached ? nullptr : &input;
+            request.mode = cached ? gui::PanelDirectRenderMode::Cached : gui::PanelDirectRenderMode::Preload;
+            request.width = 400;
+            request.height = 300;
+            panel.renderDirect(request, ctx);
+            EXPECT_EQ(tree->nodeCount(), 2u);
+            if (from_menu)
+                EXPECT_TRUE(consume().present);
+
+            // A fresh idle frame must neither retain stale rows nor request more frames.
+            ctx.scene_generation = python::get_scene_generation();
+            ++ctx.frame_serial;
+            request.mode = gui::PanelDirectRenderMode::Cached;
+            request.input = nullptr;
+            panel.renderDirect(request, ctx);
+            EXPECT_EQ(tree->nodeCount(), 2u);
+            EXPECT_TRUE(consume().empty());
+            EXPECT_FALSE(ledger.nextDeadline(FrameClock::now()).has_value());
+        }
+    };
+
+    TEST_F(ScenePanelRefreshTest, UnchangedPanelStaysIdle) {
+        auto& scene = viewer_->getSceneManager()->getScene();
+        scene.addGroup("Existing");
+        gui::NativeScenePanel panel(&manager());
+        gui::PanelDrawContext ctx;
+        ctx.scene = &scene;
+        ctx.scene_generation = python::get_scene_generation();
+        panel.preload(ctx);
+        auto& ledger = viewer_->getRenderingManager()->frameDemandLedger();
+        static_cast<void>(app_store().store().drain_dirty_into_frame());
+        static_cast<void>(ledger.plan(FrameClock::now()));
+        const auto start = std::chrono::steady_clock::now();
+        constexpr int repeats = 10000;
+        for (int i = 0; i < repeats; ++i) {
+            panel.renderDirect({.mode = gui::PanelDirectRenderMode::Cached,
+                                .width = 400,
+                                .height = 300},
+                               ctx);
+        }
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        RecordProperty("idle_update_ns", std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count() / repeats);
+        EXPECT_TRUE(ledger.plan(FrameClock::now()).empty());
+        EXPECT_FALSE(ledger.nextDeadline(FrameClock::now()).has_value());
+        const auto sync_start = std::chrono::steady_clock::now();
+        for (int i = 0; i < repeats; ++i)
+            panel.preload(ctx);
+        const auto sync_elapsed = std::chrono::steady_clock::now() - sync_start;
+        RecordProperty("live_sync_ns", std::chrono::duration_cast<std::chrono::nanoseconds>(sync_elapsed).count() / repeats);
+        EXPECT_TRUE(ledger.plan(FrameClock::now()).empty());
+    }
+
+    TEST_F(ScenePanelRefreshTest, ContextMenuDuplicateRefreshesLiveTree) {
+        checkMutation(false, false, true);
+    }
+    TEST_F(ScenePanelRefreshTest, ContextMenuDuplicateRefreshesCachedTree) {
+        checkMutation(true, false, true);
+    }
+    TEST_F(ScenePanelRefreshTest, ContextMenuAddGroupRefreshesCachedTree) {
+        checkMutation(true, true, true);
+    }
+    TEST_F(ScenePanelRefreshTest, DuplicateRefreshesLiveTreeWithCapturedFrameContext) {
+        checkMutation(false, false);
+    }
+    TEST_F(ScenePanelRefreshTest, DuplicateRefreshesCachedTreeWithCapturedFrameContext) {
+        checkMutation(true, false);
+    }
+    TEST_F(ScenePanelRefreshTest, AddGroupRefreshesCachedTreeWithCapturedFrameContext) {
+        checkMutation(true, true);
     }
 } // namespace lfs::vis

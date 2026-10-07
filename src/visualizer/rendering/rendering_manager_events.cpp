@@ -89,7 +89,6 @@ namespace lfs::vis {
             [this](const auto& event) { setViewportResizeActive(event.active); });
         event_handlers_.subscribe<ui::GridSettingsChanged>(
             [this](const auto& event) { handleGridSettingsChanged(event); });
-        event_handlers_.subscribe<ui::NodeSelected>([this](const auto&) { triggerSelectionFlash(); });
         event_handlers_.subscribe<state::TrainingStarted>([this](const auto&) { handleTrainingStarted(); });
         event_handlers_.subscribe<state::TrainingCompleted>([this](const auto&) { handleTrainingCompleted(); });
         event_handlers_.subscribe<state::SceneLoaded>([this](const auto&) { handleSceneLoaded(); });

@@ -496,7 +496,8 @@ namespace lfs::vis {
                       .ring_width = ctx.settings.ring_width,
                       .show_center_markers = ctx.settings.show_center_markers},
                  .cursor =
-                     {.enabled = ctx.cursor_preview.active && overlay_visible,
+                     {.enabled = ctx.cursor_preview.active && ctx.cursor_preview.highlight_splats &&
+                                 overlay_visible,
                       .cursor = {ctx.cursor_preview.x, ctx.cursor_preview.y},
                       .radius = ctx.cursor_preview.radius,
                       .saturation_preview = ctx.cursor_preview.saturation_mode,
@@ -510,12 +511,10 @@ namespace lfs::vis {
                                        : nullptr,
                            .additive = selection_overlay_enabled && ctx.cursor_preview.add_mode},
                       .emphasized_node_mask = (selection_overlay_enabled &&
-                                                       (ctx.settings.desaturate_unselected ||
-                                                        ctx.selection_flash_intensity > 0.0f)
+                                                       ctx.settings.desaturate_unselected
                                                    ? ctx.scene_state.selected_node_mask
                                                    : std::vector<bool>{}),
                       .dim_non_emphasized = selection_overlay_enabled && ctx.settings.desaturate_unselected,
-                      .flash_intensity = selection_overlay_enabled ? ctx.selection_flash_intensity : 0.0f,
                       .focused_gaussian_id = (selection_overlay_enabled && ring_selection_mode && overlay_visible)
                                                  ? ctx.cursor_preview.focused_gaussian_id
                                                  : -1},
@@ -843,7 +842,6 @@ namespace lfs::vis {
                 .backface_culling = settings.mesh_backface_culling,
                 .is_emphasized = mesh.is_selected,
                 .dim_non_emphasized = dim_non_emphasized,
-                .flash_intensity = ctx.selection_flash_intensity,
                 .wireframe_overlay = settings.mesh_wireframe,
                 .wireframe_color = settings.mesh_wireframe_color,
                 .wireframe_width = settings.mesh_wireframe_width,

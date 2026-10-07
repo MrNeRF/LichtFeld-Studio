@@ -230,6 +230,7 @@ namespace lfs::vis {
             bool gpu_lod_active = false;
             uint64_t gpu_tree_signature = 0;
             uint32_t gpu_capacity = 0, gpu_source_count = 0, gpu_chunks = 0;
+            uint32_t publication_count = 0;
             bool points = false;
             // Host copies of the tensor results, read after completion: the
             // RasterStatus, and the LOD cut's counts (selected, overflow,
@@ -252,6 +253,7 @@ namespace lfs::vis {
         };
     } // namespace
     struct MetalViewportRenderer::Impl {
+        std::shared_ptr<int> publication_lifetime = std::make_shared<int>(0);
         MetalViewportPresentation* context = nullptr;
         struct LodTree {
             // bounds, links, chunk_to_page, page_age, page_frames, page_to_chunk
@@ -349,8 +351,9 @@ namespace lfs::vis {
                 if (retired.consumer > consumer)
                     return false;
                 for (const auto& frame : retired.state.frames)
-                    if (frame && frame->command && frame->command.status != MTLCommandBufferStatusCompleted &&
-                        frame->command.status != MTLCommandBufferStatusError)
+                    if (frame && (frame->publication_count || frame->consumer_serial > consumer))
+                        return false;
+                    else if (frame && frame->command && frame->command.status != MTLCommandBufferStatusCompleted && frame->command.status != MTLCommandBufferStatusError)
                         return false;
                 return true;
             });
@@ -400,6 +403,7 @@ namespace lfs::vis {
         id<MTLSharedEvent> readback_event = [reader.device() newSharedEvent];
 #ifdef LFS_GRAPHICS_VULKAN
         ~Impl() {
+            publication_lifetime.reset();
             // Teardown only: the event covers every native producer before device idle.
             if (context && completion) {
                 try {
@@ -463,6 +467,7 @@ namespace lfs::vis {
         }
 #else
         ~Impl() {
+            publication_lifetime.reset();
             // Teardown only: never destroy textures a submitted command still uses.
             if (context && event) {
                 try {
@@ -608,8 +613,14 @@ namespace lfs::vis {
             // its last GPU consumer completes. Never recycle it until another
             // frame has been submitted and published successfully.
             size_t index = state.next++ % state.frames.size();
-            if (state.frames[index].get() == state.latest && state.latest)
+            for (size_t attempt = 0; attempt < state.frames.size(); ++attempt) {
+                const auto* candidate = state.frames[index].get();
+                if (!candidate || (candidate != state.latest && !candidate->publication_count))
+                    break;
                 index = state.next++ % state.frames.size();
+            }
+            if (state.frames[index] && (state.frames[index].get() == state.latest || state.frames[index]->publication_count))
+                throw std::runtime_error("Metal viewport output slots are still published");
             auto& frame = state.frames[index];
             if (const uint64_t reported = state.overflow_required->exchange(0, std::memory_order_acq_rel))
                 state.needed_capacity = std::max(state.needed_capacity, withGrowthHeadroom(reported));
@@ -1167,12 +1178,7 @@ namespace lfs::vis {
                 scene_count = transforms.size();
             }
             const size_t node_count = request.overlay.emphasis.emphasized_node_mask.size();
-            const bool needs_overlay = request.filters.crop_region || request.filters.ellipsoid_region ||
-                                       !request.filters.crop_regions.empty() || !request.filters.ellipsoid_regions.empty() ||
-                                       request.filters.view_volume || selection_enabled || preview_enabled || node_count ||
-                                       request.overlay.emphasis.dim_non_emphasized || request.overlay.emphasis.flash_intensity > 0 ||
-                                       request.overlay.emphasis.focused_gaussian_id >= 0 || request.overlay.cursor.enabled ||
-                                       request.overlay.markers.show_rings || request.overlay.markers.show_center_markers;
+            const bool needs_overlay = request.filters.crop_region || request.filters.ellipsoid_region || !request.filters.crop_regions.empty() || !request.filters.ellipsoid_regions.empty() || request.filters.view_volume || selection_enabled || preview_enabled || node_count || request.overlay.emphasis.dim_non_emphasized || request.overlay.emphasis.focused_gaussian_id >= 0 || request.overlay.cursor.enabled || request.overlay.markers.show_rings || request.overlay.markers.show_center_markers;
             if (needs_overlay) {
                 static_assert(detail::ParamCount == 207);
                 static_assert(detail::ViewWindow == 206 && detail::SelectionFlags == 24 && detail::EmphasisFlags == 20);
@@ -1585,6 +1591,33 @@ namespace lfs::vis {
         std::lock_guard lock(impl_->readback_mutex);
         return std::count_if(impl_->readbacks.begin(), impl_->readbacks.end(), [](const auto& entry) { return entry.second.destination != nullptr; });
     }
+    std::shared_ptr<void> MetalViewportRenderer::retainOutputImage(SceneImageViewHandle image)
+    {
+#ifdef LFS_GRAPHICS_VULKAN
+        if (!image)
+            return {};
+        auto& i = *impl_;
+        std::lock_guard lock(i.readback_mutex);
+        for (auto& [target, state] : i.targets) {
+            for (auto& frame : state.frames) {
+                if (!frame || frame->color.view != image.native<VkImageView>())
+                    continue;
+                ++frame->publication_count;
+                return std::shared_ptr<void>(frame.get(),
+                    [impl = &i, lifetime = std::weak_ptr(i.publication_lifetime)](void* pointer) {
+                        if (lifetime.expired())
+                            return;
+                        std::lock_guard release_lock(impl->readback_mutex);
+                        auto* frame = static_cast<Frame*>(pointer);
+                        --frame->publication_count;
+                        frame->consumer_serial = std::max(frame->consumer_serial, impl->publishedConsumerSerial());
+                    });
+            }
+        }
+#endif
+        return {};
+    }
+
     lfs::Status MetalViewportRenderer::release(Slot slot) {
         try {
             auto& i = *impl_;

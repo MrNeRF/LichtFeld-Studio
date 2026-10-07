@@ -146,7 +146,6 @@ namespace lfs::vis {
         ThemeColor icon = {0.47f, 0.63f, 0.78f, 1.0f};
         ThemeColor highlight = {0.31f, 0.47f, 0.7f, 1.0f};
         ThemeColor selection = {0.23f, 0.39f, 0.63f, 1.0f};
-        ThemeColor selection_flash = {0.55f, 0.7f, 0.94f, 1.0f};
     };
 
     struct ThemeGradient {

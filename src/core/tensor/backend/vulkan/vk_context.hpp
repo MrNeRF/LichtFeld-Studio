@@ -16,7 +16,6 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <utility>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -192,10 +191,7 @@ namespace lfs::core::internal {
         void shutdown();
         // Runs `release` early in shutdown(), while the device is still alive, for
         // objects held outside core past their last use (static pipeline caches).
-        LFS_CORE_API uint64_t on_shutdown(std::function<void()> release);
-        // Cancel a transient owner's registration before destroying it. A
-        // callback already taken by shutdown must use weak ownership.
-        void cancel_shutdown_release(uint64_t id);
+        LFS_CORE_API void on_shutdown(std::function<void()> release);
 
     private:
         void create_instance();
@@ -242,8 +238,7 @@ namespace lfs::core::internal {
         void wait_consumer_queue_idle_locked();
         std::mutex shutdown_mutex_;
         std::mutex shutdown_release_mutex_;
-        uint64_t next_shutdown_release_id_ = 1;
-        std::vector<std::pair<uint64_t, std::function<void()>>> shutdown_releases_;
+        std::vector<std::function<void()>> shutdown_releases_;
 #if LFS_HAS_CUDA
         std::unique_ptr<VulkanCudaImportRegistry> cuda_imports_;
 #endif

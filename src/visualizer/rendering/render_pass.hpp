@@ -35,6 +35,9 @@ namespace lfs::vis {
         std::optional<SplitViewPanelId> panel;
         int focused_gaussian_id = -1;
         SelectionPreviewMode selection_mode{};
+        // A preview that does not re-render on pointer motion must not tint
+        // splats, or the tint stays wherever the last unrelated frame put it.
+        bool highlight_splats = true;
     };
 
     struct GizmoState {
@@ -94,7 +97,6 @@ namespace lfs::vis {
         int hovered_camera_id = -1;
         int current_camera_id = -1;
         int hovered_gaussian_id = -1;
-        float selection_flash_intensity = 0;
         std::vector<FrameViewPanel> view_panels;
         glm::vec2 scene_jitter_pixels{0.0f};
 
