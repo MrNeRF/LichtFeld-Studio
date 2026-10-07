@@ -432,8 +432,10 @@ namespace lfs::core {
                     removed != json.end() && removed->is_number_integer() && removed->get<int>() != 0) {
                     LOG_WARN("Ignoring hard_clip_stop_iter: MRNF no longer hard-clips splats by screen share");
                 }
+                constexpr float kRemovedOversizeSplitDefault = 0.15f;
                 if (const auto removed = json.find("oversize_split_fraction");
-                    removed != json.end() && removed->is_number() && removed->get<float>() > 0.0f) {
+                    removed != json.end() && removed->is_number() && removed->get<float>() > 0.0f &&
+                    removed->get<float>() != kRemovedOversizeSplitDefault) {
                     LOG_WARN("Ignoring oversize_split_fraction: MRNF no longer reserves growth for oversized splats");
                 }
                 read_registered_optimization_properties(json, params, skip_missing);

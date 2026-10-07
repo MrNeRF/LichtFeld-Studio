@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/logger.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/parameters.hpp"
 #include "core/property_registry.hpp"
@@ -23,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 using lfs::core::param::apply_explicit_training_overrides;
 using lfs::core::param::OptimizationParameters;
@@ -871,6 +873,23 @@ namespace {
         auto json = params.to_json();
         json["future_bookkeeping"] = {{"arbitrary", true}};
         EXPECT_EQ(OptimizationParameters::from_json(json).to_json(), params.to_json());
+    }
+
+    // Catches warning on every file saved before the removal, which all carry the old 0.15 default.
+    TEST_F(TrainingParametersTest, RemovedOversizeSplitWarnsOnlyForChangedValues) {
+        std::vector<std::string> warnings;
+        const auto token = lfs::core::Logger::get().add_log_handler(
+            [&warnings](const lfs::core::LogLevel level, const lfs::core::SourceSite&, const std::string_view message) {
+                if (level == lfs::core::LogLevel::Warn && message.find("oversize_split_fraction") != std::string_view::npos)
+                    warnings.emplace_back(message);
+            });
+        auto json = OptimizationParameters::mrnf_defaults().to_json();
+        for (const float fraction : {0.15f, 0.0f, 0.3f}) {
+            json["oversize_split_fraction"] = fraction;
+            (void)OptimizationParameters::from_json(json);
+        }
+        lfs::core::Logger::get().remove_log_handler(token);
+        EXPECT_EQ(warnings.size(), 1u);
     }
 
     // Catches validation accepting a zero, negative or non-finite image share.
