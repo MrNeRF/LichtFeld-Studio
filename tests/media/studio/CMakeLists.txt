@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-add_executable(media_mcp_runner mcp_runner.cpp ${CMAKE_SOURCE_DIR}/src/app/mcp_media_tools.cpp)
+add_executable(media_mcp_runner mcp_runner.cpp cpu_color_contracts.cpp ${CMAKE_SOURCE_DIR}/src/app/mcp_media_tools.cpp)
 set_target_properties(media_mcp_runner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 target_include_directories(media_mcp_runner PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/app/include)
 target_compile_features(media_mcp_runner PRIVATE cxx_std_23)

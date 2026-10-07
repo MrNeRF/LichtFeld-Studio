@@ -18,18 +18,18 @@ namespace lfs::io {
         return impl_->renderer.isAvailable(error);
     }
 
-    bool HdrStudioRenderer::tonemapToSdr(const AVFrame* frame, const AVStream* stream,
+    bool HdrStudioRenderer::tonemapToSdr(const media::DecodedVideoFrame* frame,
                                          HdrFormat format, int width, int height,
                                          std::vector<unsigned char>& output,
                                          std::string& error, HdrTonemapTiming* timing) {
-        return impl_->renderer.tonemapToSdr(frame, stream, format, width, height, output, error, timing);
+        return impl_->renderer.tonemapToSdr(frame, format, width, height, output, error, timing);
     }
 
-    bool HdrStudioRenderer::tonemapToSdrRgba(const AVFrame* frame, const AVStream* stream,
+    bool HdrStudioRenderer::tonemapToSdrRgba(const media::DecodedVideoFrame* frame,
                                              HdrFormat format, int width, int height,
                                              int rotation, std::vector<unsigned char>& output,
                                              std::string& error) {
-        return impl_->renderer.tonemapToSdrRgba(frame, stream, format, width, height, rotation, output, error);
+        return impl_->renderer.tonemapToSdrRgba(frame, format, width, height, rotation, output, error);
     }
 
     void HdrStudioRenderer::reset() { impl_->renderer.reset(); }

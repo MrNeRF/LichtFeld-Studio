@@ -85,9 +85,11 @@ results; the POSIX SIGTERM contract is explicitly skipped on Windows. Python
 contracts exercise ownership, GIL and callbacks through the real binding source.
 The Linux x86 CLI contracts also verify that FFmpeg's internal assembly constants
 are absent from the shared module's dynamic lookup scope; public media operations
-remain covered by the extraction contracts. The provider ownership check also requires public encoding/resampling APIs,
-rejects internal exports and FFmpeg definitions in the executable, visualizer
-and complete Python module, and rejects direct Windows FFmpeg imports.
+remain covered by the extraction contracts. The provider ownership check rejects public/internal FFmpeg exports, definitions
+in the executable, visualizer and complete Python module, and direct Windows
+FFmpeg imports. Fixture construction has explicit private test-only links; those
+links do not propagate to product consumers. Session contracts also reject callback
+reentrancy and ownership transfer during a write.
 Static FFmpeg must link successfully before these runtime checks can run.
 
 The current interval/FPS end-boundary difference is characterized explicitly:
@@ -150,3 +152,10 @@ Studio's shared libraries resolve Python from their host process. Running this
 CTest contract also verifies that those dependencies load before `main`.
 Its fixture is lossless RGB so exact output/rotation comparisons do not depend
 on YUV conversion rounding between the fixture tool and Studio's linked FFmpeg.
+
+RGB-to-YUV CPU regressions run inside the existing MCP contract runner and compare
+with the frozen dev tensor producer (rounding boundaries, nonfinite values, strides
+and storage reuse). They do not register or initialize GPU backends. Native runner
+contracts separately check CUDA/Vulkan bytes, timeline ordering and plane sentinels;
+the existing macOS HDR target covers Metal/Vulkan conversion. Program caches retire
+through the core GPU shutdown hook.

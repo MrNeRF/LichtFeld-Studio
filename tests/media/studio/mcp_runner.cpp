@@ -11,6 +11,8 @@
 #include <mutex>
 #include <thread>
 
+nlohmann::json runCpuColorContracts();
+
 int main(int argc, char** argv) {
     using namespace lfs;
     using nlohmann::json;
@@ -21,6 +23,10 @@ int main(int argc, char** argv) {
                                  core::path_to_utf8(core::utf8_to_path(argv[1]).parent_path()));
         std::ifstream stream(core::utf8_to_path(argv[1]));
         const auto input = json::parse(stream);
+        if (input.value("operation", "") == "cpu-color") {
+            std::cout << runCpuColorContracts().dump() << std::endl;
+            return 0;
+        }
         mcp::ToolRegistry registry;
         app::register_media_tools(registry);
         json output;

@@ -32,6 +32,9 @@ namespace lfs::media::detail {
     using HdrFactory = std::unique_ptr<io::HdrRenderer> (*)();
     LFS_MEDIA_API void registerGpuJpegFactory(GpuJpegFactory) noexcept;
     LFS_MEDIA_API void registerHdrFactory(HdrFactory) noexcept;
+    // Registered by GPU hosts independently of the optional JPEG encoder.
+    LFS_MEDIA_API void registerCudaVideoDecodeBackend() noexcept;
+    LFS_MEDIA_API bool hasCudaVideoDecodeBackend() noexcept;
     LFS_MEDIA_API bool hasGpuJpegBackend() noexcept;
     LFS_MEDIA_API bool hasHdrBackend() noexcept;
     LFS_MEDIA_API std::unique_ptr<GpuJpegEncoder> createGpuJpegEncoder(const JpegSettings&);

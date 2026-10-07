@@ -17,19 +17,19 @@ namespace lfs::io {
         error = "No HDR renderer is registered in this host";
         return false;
     }
-    bool HdrLibplaceboRenderer::tonemapToSdr(const AVFrame* frame, const AVStream* stream,
+    bool HdrLibplaceboRenderer::tonemapToSdr(const media::DecodedVideoFrame* frame,
                                              HdrFormat format, int width, int height, std::vector<unsigned char>& output,
                                              std::string& error, HdrTonemapTiming* timing) {
         if (!impl_->renderer)
             return isAvailable(error);
-        return impl_->renderer->tonemapToSdr(frame, stream, format, width, height, output, error, timing);
+        return impl_->renderer->tonemapToSdr(frame, format, width, height, output, error, timing);
     }
-    bool HdrLibplaceboRenderer::tonemapToSdrRgba(const AVFrame* frame, const AVStream* stream,
+    bool HdrLibplaceboRenderer::tonemapToSdrRgba(const media::DecodedVideoFrame* frame,
                                                  HdrFormat format, int width, int height, int rotation, std::vector<unsigned char>& output,
                                                  std::string& error) {
         if (!impl_->renderer)
             return isAvailable(error);
-        return impl_->renderer->tonemapToSdrRgba(frame, stream, format, width, height, rotation, output, error);
+        return impl_->renderer->tonemapToSdrRgba(frame, format, width, height, rotation, output, error);
     }
     void HdrLibplaceboRenderer::reset() {
         if (impl_->renderer)

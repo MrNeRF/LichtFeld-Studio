@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "core/logger.hpp"
 #include "core/path_utils.hpp"
-#include "io/video_player.hpp"
 #include "media/file_frame_sink.hpp"
 #include "media/media_probe.hpp"
 #include "media/video_frame_extractor.hpp"
+#include "media/video_player.hpp"
 #include <fstream>
 #include <iostream>
 #include <nlohmann/json.hpp>
@@ -41,9 +42,16 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (request.value("operation", "extract") == "preview") {
-            VideoPlayer player({.allow_hardware_decode = false});
+            struct DecodeObservation {
+                bool hardware = false;
+                lfs::core::LogHandlerToken token;
+                DecodeObservation() : token(lfs::core::Logger::get().add_log_handler([this](auto, const auto&, std::string_view message) { if(message.starts_with("VideoPlayer: NVDEC decoder:")) hardware=true; })) {}
+                ~DecodeObservation() { lfs::core::Logger::get().remove_log_handler(token); }
+            } observed;
+            auto owner = std::make_unique<VideoPlayer>();
+            auto& player = *owner;
             const bool success = player.open(lfs::core::utf8_to_path(request.at("input").get<std::string>()));
-            json output{{"success", success}, {"error", player.takeError()}, {"hardware_decode", player.hardwareDecodeActive()}};
+            json output{{"success", success}, {"error", player.takeError()}, {"hardware_decode", observed.hardware}};
             if (success) {
                 for (const double seconds : request.value("seek", std::vector<double>{}))
                     player.seek(seconds);
@@ -54,8 +62,8 @@ int main(int argc, char** argv) {
                 const size_t size = static_cast<size_t>(player.width()) * player.height() * player.currentFrameChannels();
                 output["pixels"] = std::vector<unsigned char>(pixels, pixels + size);
                 output["time"] = player.currentTime();
-                player.close();
-                output["closed"] = !player.isOpen() && !player.hardwareDecodeActive() && player.currentFrameData() == nullptr;
+                owner.reset();
+                output["closed"] = true;
             }
             std::cout << output.dump() << '\n';
             return 0;

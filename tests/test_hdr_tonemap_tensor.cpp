@@ -6,7 +6,9 @@
 // one HdrLibplaceboRenderer selects.
 
 #include "core/tensor_backend.hpp"
+#include "core/tensor_color.hpp"
 #include "hdr_tonemap_tensor.hpp"
+#include "media/decoded_video_frame_ffmpeg.hpp"
 #include "media/hdr_renderer.hpp"
 #include "media_studio_backends.hpp"
 
@@ -200,10 +202,12 @@ namespace {
             elapsed.reserve(31);
             for (int call = 0; call < 31; ++call) {
                 const auto started = std::chrono::steady_clock::now();
+                auto described = lfs::media::detail::describeDecodedVideoFrame(clip->frame, clip->stream());
+                ASSERT_TRUE(described.has_value());
                 const bool rendered = preview
-                                          ? renderer.tonemapToSdrRgba(clip->frame, clip->stream(), HdrFormat::HDR10,
+                                          ? renderer.tonemapToSdrRgba(&*described, HdrFormat::HDR10,
                                                                       1920, 1080, 0, pixels, error)
-                                          : renderer.tonemapToSdr(clip->frame, clip->stream(), HdrFormat::HDR10,
+                                          : renderer.tonemapToSdr(&*described, HdrFormat::HDR10,
                                                                   3840, 2160, pixels, error);
                 ASSERT_TRUE(rendered) << error;
                 elapsed.push_back(1000.0 * std::chrono::duration<double>(
@@ -249,10 +253,12 @@ namespace {
         const auto render = [&](auto& renderer, std::vector<unsigned char>& pixels) {
             std::string error;
             ASSERT_TRUE(renderer.isAvailable(error)) << error;
+            auto described = lfs::media::detail::describeDecodedVideoFrame(clip->frame, clip->stream());
+            ASSERT_TRUE(described.has_value());
             for (int call = 0; call < (c.rgba ? 2 : 1); ++call) {
-                ASSERT_TRUE(c.rgba ? renderer.tonemapToSdrRgba(clip->frame, clip->stream(), format, c.width,
+                ASSERT_TRUE(c.rgba ? renderer.tonemapToSdrRgba(&*described, format, c.width,
                                                                c.height, c.rotation, pixels, error)
-                                   : renderer.tonemapToSdr(clip->frame, clip->stream(), format, c.width, c.height,
+                                   : renderer.tonemapToSdr(&*described, format, c.width, c.height,
                                                            pixels, error))
                     << error;
             }
@@ -307,3 +313,39 @@ namespace {
                         Case{"dolby_vision_reshaped", true, Metadata::DolbyVisionReshaped, 320, 180, 0, true}),
         [](const testing::TestParamInfo<Case>& info) { return std::string(info.param.name); });
 } // namespace
+
+TEST(HdrTensorColor, SharedProgramPreservesQuantization) {
+    using namespace lfs::core;
+    std::vector<float> pixels(34 * 18 * 3);
+    for (size_t i = 0; i < pixels.size(); ++i)
+        pixels[i] = float((i * 719) % 1024) / 511.f - .5f;
+    for (int i = 0; i < 255; ++i) {
+        const auto edge = (i + .5f) / 255.f;
+        pixels[3 * i] = std::nextafter(edge, 0.f);
+        pixels[3 * i + 1] = edge;
+        pixels[3 * i + 2] = std::nextafter(edge, 1.f);
+    }
+    pixels[1000] = std::numeric_limits<float>::quiet_NaN();
+    pixels[1001] = std::numeric_limits<float>::infinity();
+    auto host = Tensor::from_blob(pixels.data(), {18, 34, 3}, Device::CPU, DataType::Float32);
+    auto expected = rgb_to_yuv420p(host);
+    ASSERT_TRUE(expected.has_value());
+    for (const auto backend : {GpuBackend::Metal
+#if LFS_TENSOR_VULKAN
+                               ,
+                               GpuBackend::Vulkan
+#endif
+         }) {
+        GpuBackendScope scope(backend);
+        auto input = host.gpu();
+        input = Tensor::cat({input, Tensor::zeros_like(input)}, 1).slice(1, 0, 34);
+        ASSERT_FALSE(input.is_contiguous());
+        auto actual = rgb_to_yuv420p(input);
+        ASSERT_TRUE(actual.has_value());
+        EXPECT_EQ(actual->y.to_vector_uint8(), expected->y.to_vector_uint8());
+        EXPECT_EQ(actual->u.to_vector_uint8(), expected->u.to_vector_uint8());
+        EXPECT_EQ(actual->v.to_vector_uint8(), expected->v.to_vector_uint8());
+        Yuv420Planes invalid{actual->y, actual->u, actual->u};
+        EXPECT_FALSE(rgb_to_yuv420p_into(input, invalid));
+    }
+}

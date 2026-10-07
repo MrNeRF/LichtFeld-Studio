@@ -109,6 +109,9 @@ namespace lfs::core {
 #ifndef LFS_UNICODE_TEST_STANDALONE
     void teardown_gpu_before_exit() noexcept {
         try {
+            // Registered holders release before every backend. Cold holders
+            // do not initialize a GPU, including in CPU-only processes.
+            run_gpu_pre_shutdown_hooks_once();
             static_cast<void>(shutdown_gpu_backend(GpuBackend::Vulkan));
             // release every registered long-lived CUDA holder
             // (TLS FastGS sort workspaces, rasterizer image caches, PPISP shared
@@ -118,9 +121,6 @@ namespace lfs::core {
             // Meyers-singleton pool is destroyed → SIGSEGV (exit 139).
 #if LFS_HAS_CUDA
             const bool cuda_usable = gpu_backend_available(GpuBackend::CUDA);
-            if (cuda_usable) {
-                run_gpu_pre_shutdown_hooks_once();
-            }
             g_gpu_process_teardown_started.store(true, std::memory_order_release);
 
             if (!cuda_usable) {
@@ -259,7 +259,7 @@ namespace lfs::core {
                     ::close(fd);
             }
 
-            struct sigaction action {};
+            struct sigaction action{};
             action.sa_handler = SIG_DFL;
             sigemptyset(&action.sa_mask);
             action.sa_flags = 0;

@@ -4,23 +4,32 @@ option(LFS_BUILD_MEDIA_CLI "Build the optional media-ingest executable" OFF)
 get_filename_component(_media_root "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 
 add_library(lfs_media SHARED
-    media_ingest.cpp media_backends.cpp hdr_renderer.cpp
+    media_ingest.cpp media_backends.cpp hdr_renderer.cpp decoded_video_frame.cpp
     media_probe.cpp frame_sink.cpp file_frame_sink.cpp
     video_frame_extractor.cpp video_player.cpp video_encode_session.cpp hdr_tonemap.cpp)
 target_compile_definitions(lfs_media PRIVATE LFS_MEDIA_EXPORTS)
 target_compile_features(lfs_media PUBLIC cxx_std_23)
 target_include_directories(lfs_media PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
     PRIVATE "${_media_root}/src")
-# Existing Studio adapters consume the provider's public FFmpeg ABI until they
-# migrate to opaque media frame contracts; they never link FFmpeg themselves.
-target_include_directories(lfs_media SYSTEM PUBLIC ${FFMPEG_INCLUDE_DIRS})
+target_include_directories(lfs_media SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
 if(LFS_HAS_CUDA)
     target_include_directories(lfs_media SYSTEM PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
 endif()
 target_link_libraries(lfs_media PUBLIC lfs_error
     PRIVATE lfs_image_codecs lfs_logger)
-include("${_media_root}/cmake/FFmpegProvider.cmake")
-lfs_link_ffmpeg_provider(lfs_media)
+target_link_libraries(lfs_media PRIVATE ${FFMPEG_LIBRARIES})
+# Static third-party objects do not obey this target's C++ visibility preset.
+# Export the media namespace only, including in stripped portable builds.
+if(APPLE)
+    set(_media_exports "${CMAKE_CURRENT_SOURCE_DIR}/media.exports")
+    target_link_options(lfs_media PRIVATE "LINKER:-exported_symbols_list,${_media_exports}")
+elseif(UNIX)
+    set(_media_exports "${CMAKE_CURRENT_SOURCE_DIR}/media.map")
+    target_link_options(lfs_media PRIVATE "LINKER:--version-script=${_media_exports}")
+endif()
+if(_media_exports)
+    set_property(TARGET lfs_media APPEND PROPERTY LINK_DEPENDS "${_media_exports}")
+endif()
 set_target_properties(lfs_media PROPERTIES POSITION_INDEPENDENT_CODE ON
     CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"

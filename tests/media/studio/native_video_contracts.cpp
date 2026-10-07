@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
-#include "io/video/color_convert.cuh"
+#include "core/tensor_color.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "io/video/video_encoder.hpp"
 #include "media/video_player.hpp"
 #include <algorithm>
@@ -86,25 +88,37 @@ namespace {
                              .gpu();
             require(cudaDeviceSynchronize() == cudaSuccess, "conversion input preparation");
             input.set_stream(stream.value);
-            // Tail sentinels make incomplete blocks and the smallest extent
-            // exercise bounds as well as the byte-exact color contract.
+            CUDAStreamGuard execution(stream.value);
             std::array<Tensor, 3> output;
+            Yuv420Planes planes;
             for (int plane = 0; plane < 3; ++plane) {
                 output[plane] = Tensor::empty_like(input, {expected[plane].size() + 64}, DataType::UInt8);
                 output[plane].set_stream(stream.value);
-                require(cudaMemsetAsync(output[plane].data_ptr(), 0xcd, output[plane].bytes(), stream.value) == cudaSuccess,
-                        "conversion sentinel initialization");
+                require(cudaMemsetAsync(output[plane].data_ptr(), 0xcd, output[plane].bytes(), stream.value) == cudaSuccess, "conversion sentinel initialization");
             }
-            lfs::io::video::rgbToYuv420pCuda(input.ptr<float>(), output[0].ptr<std::uint8_t>(),
-                                             output[1].ptr<std::uint8_t>(), output[2].ptr<std::uint8_t>(),
-                                             width, height, stream.value);
+            planes.y = output[0].slice(0, 0, width * height).reshape({height, width});
+            planes.u = output[1].slice(0, 0, width * height / 4).reshape({height / 2, width / 2});
+            planes.v = output[2].slice(0, 0, width * height / 4).reshape({height / 2, width / 2});
+            require(rgb_to_yuv420p_into(input, planes).has_value(), "tensor conversion dispatch");
+            const auto host = Tensor::from_blob(rgb.data(), {static_cast<size_t>(height), static_cast<size_t>(width), 3}, Device::CPU, DataType::Float32);
+            auto cpu = rgb_to_yuv420p(host);
+            require(cpu.has_value(), "CPU conversion dispatch");
+            require(cpu->y.to_vector_uint8() == expected[0] && cpu->u.to_vector_uint8() == expected[1] && cpu->v.to_vector_uint8() == expected[2], "CPU conversion differs from scalar reference");
+#if LFS_TENSOR_VULKAN
+            {
+                GpuBackendScope backend(GpuBackend::Vulkan);
+                auto vk = rgb_to_yuv420p(host.gpu());
+                require(vk.has_value(), "Vulkan conversion dispatch");
+                require(vk->y.to_vector_uint8() == expected[0] && vk->u.to_vector_uint8() == expected[1] && vk->v.to_vector_uint8() == expected[2], "Vulkan conversion differs from scalar reference");
+            }
+#endif
             require(cudaStreamSynchronize(stream.value) == cudaSuccess, "conversion stream completion");
             for (int plane = 0; plane < 3; ++plane) {
                 const auto actual = output[plane].to_vector_uint8();
                 require(std::equal(expected[plane].begin(), expected[plane].end(), actual.begin()),
                         "CUDA conversion differs from scalar Studio color reference");
-                require(std::all_of(actual.begin() + expected[plane].size(), actual.end(), [](auto value) { return value == 0xcd; }),
-                        "CUDA conversion wrote outside plane bounds");
+                require(actual.size() == expected[plane].size() + 64, "conversion output storage extent");
+                require(std::all_of(actual.begin() + expected[plane].size(), actual.end(), [](auto value) { return value == 0xcd; }), "tensor conversion wrote outside visible plane bounds");
                 checked += expected[plane].size();
             }
         }
@@ -159,9 +173,19 @@ nlohmann::json runNativeVideoContracts(const nlohmann::json& request) {
         return {{"success", true}, {"backend", "nvenc"}, {"frames", 12}};
     }
     if (request.at("operation") == "native-preview") {
+        struct DecodeObservation {
+            bool hardware = false;
+            core::LogLevel previous = core::Logger::get().level();
+            core::LogHandlerToken token;
+            DecodeObservation() : token(core::Logger::get().add_log_handler([this](auto, const auto&, std::string_view message) { if(message.starts_with("VideoPlayer: NVDEC decoder:")) hardware=true; })) { core::Logger::get().set_level(core::LogLevel::Info); }
+            ~DecodeObservation() {
+                core::Logger::get().remove_log_handler(token);
+                core::Logger::get().set_level(previous);
+            }
+        } observed;
         io::VideoPlayer player;
         require(player.open(core::utf8_to_path(request.at("input").get<std::string>())), "native player open");
-        require(player.hardwareDecodeActive(), "native player silently fell back to software");
+        require(observed.hardware, "native player silently fell back to software");
         player.seek(.3);
         player.seek(.1);
         require(player.takeError().empty(), "native player seek");
@@ -169,8 +193,6 @@ nlohmann::json runNativeVideoContracts(const nlohmann::json& request) {
         const auto size = static_cast<std::size_t>(player.width()) * player.height() * player.currentFrameChannels();
         require(pixels && size, "native player frame");
         nlohmann::json result{{"success", true}, {"hardware_decode", true}, {"time", player.currentTime()}, {"size", {player.width(), player.height()}}, {"pixels", std::vector<std::uint8_t>(pixels, pixels + size)}};
-        player.close();
-        require(!player.isOpen() && !player.hardwareDecodeActive() && !player.currentFrameData(), "native player close");
         return result;
     }
     io::video::VideoExportOptions options;

@@ -5,9 +5,11 @@
 #include "media/video_player.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "decoded_video_frame_ffmpeg.hpp"
 #include "media/hdr_renderer.hpp"
 #include "media/hdr_tonemap.hpp"
 #include "media/media_probe_ffmpeg.hpp"
+#include "media_backends.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -171,8 +173,6 @@ namespace lfs::io {
 
     class VideoPlayer::Impl {
     public:
-        explicit Impl(const VideoPlayerOptions options)
-            : allow_hardware_decode_(options.allow_hardware_decode) {}
         enum class DecodeResult {
             Frame,
             EndOfStream,
@@ -262,7 +262,9 @@ namespace lfs::io {
                 source_range_ = AVCOL_RANGE_MPEG;
 
 #if LFS_HAS_CUDA
-            const char* hw_decoder_name = allow_hardware_decode_ ? getHwDecoderName(codec_id) : nullptr;
+            // A GPU host registers native media capabilities. CPU hosts do not
+            // initialize or probe a driver merely to show a preview.
+            const char* hw_decoder_name = media::detail::hasCudaVideoDecodeBackend() ? getHwDecoderName(codec_id) : nullptr;
 #else
             const char* hw_decoder_name = nullptr;
 #endif
@@ -674,7 +676,6 @@ namespace lfs::io {
         }
         [[nodiscard]] int currentFrameChannels() const { return display_channels_; }
         [[nodiscard]] bool currentFrameHasGpuRotation() const { return display_gpu_rotation_; }
-        [[nodiscard]] bool hardwareDecodeActive() const { return using_hw_decode_; }
 
         [[nodiscard]] int width() const { return display_width_; }
         [[nodiscard]] int height() const { return display_height_; }
@@ -979,7 +980,12 @@ namespace lfs::io {
                 const bool swapped_dimensions = rotation == 90 || rotation == 270;
                 const int output_width = swapped_dimensions ? height_ : width_;
                 const int output_height = swapped_dimensions ? width_ : height_;
-                if (!hdr_renderer_->tonemapToSdrRgba(src_frame, fmt_ctx_->streams[video_stream_idx_],
+                auto described = media::detail::describeDecodedVideoFrame(src_frame, fmt_ctx_->streams[video_stream_idx_]);
+                if (!described) {
+                    setError(std::string(described.error().detail()));
+                    return false;
+                }
+                if (!hdr_renderer_->tonemapToSdrRgba(&*described,
                                                      hdr_format_,
                                                      output_width, output_height, rotation,
                                                      decoded_frame_.data, renderer_error)) {
@@ -1040,7 +1046,6 @@ namespace lfs::io {
         bool demux_eof_ = false;
         bool decoder_drain_sent_ = false;
         bool using_hw_decode_ = false;
-        const bool allow_hardware_decode_;
 
         int video_stream_idx_ = -1;
         int src_width_ = 0;
@@ -1096,14 +1101,11 @@ namespace lfs::io {
         std::string last_error_;
     };
 
-    VideoPlayer::VideoPlayer() : VideoPlayer(VideoPlayerOptions{}) {}
-    VideoPlayer::VideoPlayer(const VideoPlayerOptions options) : impl_(std::make_unique<Impl>(options)) {}
+    VideoPlayer::VideoPlayer() : impl_(std::make_unique<Impl>()) {}
     VideoPlayer::~VideoPlayer() = default;
 
     bool VideoPlayer::open(const std::filesystem::path& path) { return impl_->open(path); }
-    void VideoPlayer::close() { impl_->close(); }
     bool VideoPlayer::isOpen() const { return impl_->isOpen(); }
-    bool VideoPlayer::hardwareDecodeActive() const { return impl_->hardwareDecodeActive(); }
 
     void VideoPlayer::togglePlayPause() { impl_->togglePlayPause(); }
     bool VideoPlayer::isPlaying() const { return impl_->isPlaying(); }

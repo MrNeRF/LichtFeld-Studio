@@ -8,12 +8,6 @@
 
 namespace lfs::io::video {
 
-    // Contiguous float32 HWC RGB to planar BT.601 limited-range uint8.
-    // Matches Studio's clamp, byte rounding and 2x2 chroma averaging.
-    // All buffers belong to the producer's CUDA context; width/height are even.
-    void rgbToYuv420pCuda(const float* rgb, uint8_t* y, uint8_t* u, uint8_t* v,
-                          int width, int height, cudaStream_t stream);
-
     // Convert NV12 (Y plane + interleaved UV plane) to RGB uint8 on GPU
     // Used for NVDEC hardware decoding output
     void nv12ToRgbCuda(

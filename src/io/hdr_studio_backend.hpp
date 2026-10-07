@@ -11,9 +11,6 @@
 #include <string>
 #include <vector>
 
-struct AVFrame;
-struct AVStream;
-
 namespace lfs::io {
 
     class HdrStudioRenderer final : public HdrRenderer {
@@ -26,13 +23,13 @@ namespace lfs::io {
 
         [[nodiscard]] bool isAvailable(std::string& error);
         [[nodiscard]] std::string_view backendName() const noexcept override;
-        [[nodiscard]] bool tonemapToSdr(const AVFrame* frame, const AVStream* stream,
+        [[nodiscard]] bool tonemapToSdr(const media::DecodedVideoFrame* frame,
                                         HdrFormat source_format,
                                         int output_width, int output_height,
                                         std::vector<unsigned char>& output_rgb,
                                         std::string& error,
                                         HdrTonemapTiming* timing = nullptr);
-        [[nodiscard]] bool tonemapToSdrRgba(const AVFrame* frame, const AVStream* stream,
+        [[nodiscard]] bool tonemapToSdrRgba(const media::DecodedVideoFrame* frame,
                                             HdrFormat source_format,
                                             int output_width, int output_height,
                                             int rotation_degrees,

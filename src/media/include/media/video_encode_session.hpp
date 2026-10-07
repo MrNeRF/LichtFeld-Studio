@@ -58,8 +58,8 @@ namespace lfs::media {
         ~VideoEncodeSession();
         VideoEncodeSession(const VideoEncodeSession&) = delete;
         VideoEncodeSession& operator=(const VideoEncodeSession&) = delete;
-        VideoEncodeSession(VideoEncodeSession&&) noexcept;
-        VideoEncodeSession& operator=(VideoEncodeSession&&) noexcept;
+        VideoEncodeSession(VideoEncodeSession&&);
+        VideoEncodeSession& operator=(VideoEncodeSession&&);
 
         [[nodiscard]] Result<void> open(const std::filesystem::path& path, const VideoEncodeOptions& options);
         [[nodiscard]] Result<void> writeFrame(VideoEncodeWriter& writer);

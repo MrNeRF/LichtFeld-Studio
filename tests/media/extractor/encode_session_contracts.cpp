@@ -13,6 +13,10 @@ namespace {
             throw std::runtime_error(message);
     }
     struct Writer final : lfs::media::VideoEncodeWriter {
+        lfs::media::VideoEncodeSession* reenter = nullptr;
+        const lfs::media::VideoEncodeOptions* options = nullptr;
+        std::filesystem::path path;
+        bool reentrant_checked = false;
         int calls = 0;
         int luma = 32;
         bool reject = false;
@@ -21,6 +25,29 @@ namespace {
         bool nonstandard_exception = false;
         lfs::Result<void> write(const lfs::media::VideoEncodeTarget& target) override {
             ++calls;
+            if (reenter) {
+                require(reenter->close().error().code() == lfs::ErrorCode::FailedPrecondition, "reentrant close rejected");
+                require(reenter->open(path, *options).error().code() == lfs::ErrorCode::FailedPrecondition, "reentrant open rejected");
+                require(reenter->writeFrame(*this).error().code() == lfs::ErrorCode::FailedPrecondition, "reentrant write rejected without another callback");
+                bool move_rejected = false;
+                try {
+                    lfs::media::VideoEncodeSession moved(std::move(*reenter));
+                } catch (const lfs::Exception& error) { move_rejected = error.error().code() == lfs::ErrorCode::FailedPrecondition; }
+                require(move_rejected, "reentrant move rejected without transferring ownership");
+                lfs::media::VideoEncodeSession destination;
+                move_rejected = false;
+                try {
+                    destination = std::move(*reenter);
+                } catch (const lfs::Exception& error) { move_rejected = error.error().code() == lfs::ErrorCode::FailedPrecondition; }
+                require(move_rejected && !destination.isOpen(), "reentrant move assignment preserves ownership");
+                move_rejected = false;
+                try {
+                    *reenter = std::move(destination);
+                } catch (const lfs::Exception& error) { move_rejected = error.error().code() == lfs::ErrorCode::FailedPrecondition; }
+                require(move_rejected, "reentrant destination assignment preserves active state");
+                require(reenter->isOpen(), "reentrant calls preserve active session");
+                reentrant_checked = true;
+            }
             require(target.backend == lfs::media::VideoEncodeBackend::Software &&
                         target.layout == lfs::media::VideoEncodeLayout::YUV420P,
                     "CPU producer must receive software YUV420P planes");
@@ -78,6 +105,13 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
         auto result = session.open(path, invalid);
         require(!result && result.error().code() == lfs::ErrorCode::InvalidArgument,
                 "invalid options rejected before opening output");
+        const auto detail = result.error().detail();
+        if (variant == 3)
+            require(detail.find("1001") != std::string_view::npos, "fps diagnostic includes rejected value");
+        if (variant == 4)
+            require(detail.find("52") != std::string_view::npos, "CRF diagnostic includes rejected value");
+        if (variant == 5)
+            require(detail.find("99") != std::string_view::npos, "backend diagnostic includes rejected value");
         require(!std::filesystem::exists(path), "invalid options do not create output");
     }
     const auto unavailable_path = path.parent_path() / "missing-parent" / "video.mp4";
@@ -89,6 +123,9 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
         throw std::runtime_error(std::string(opened.error().detail()));
     require(session.isOpen() && session.backend() == VideoEncodeBackend::Software, "software session open");
     require(session.open(path, options).error().code() == lfs::ErrorCode::FailedPrecondition, "overlapping open rejected");
+    writer.reenter = &session;
+    writer.options = &options;
+    writer.path = path;
     writer.reject = true;
     require(session.writeFrame(writer).error().code() == lfs::ErrorCode::Cancelled, "producer error preserved");
     writer.reject = false;
@@ -109,12 +146,16 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
     VideoEncodeSession destination;
     destination = std::move(moved);
     require(!moved.isOpen() && destination.isOpen(), "move assignment transfers session ownership");
+    writer.reenter = &destination;
+    writer.options = &options;
+    writer.path = path;
     for (int frame = 0; frame < 4; ++frame) {
         writer.luma = 32 + frame * 32;
         auto result = destination.writeFrame(writer);
         if (!result)
             throw std::runtime_error(std::string(result.error().detail()));
     }
+    require(writer.reentrant_checked, "callback reentrancy exercised");
     require(destination.close().has_value() && !destination.isOpen() && destination.close().has_value(), "flush and repeat close");
     require(destination.writeFrame(writer).error().code() == lfs::ErrorCode::FailedPrecondition, "write after close rejected");
     return {{"success", true}, {"frames", 4}, {"writer_calls", writer.calls}, {"comment", options.comment}};

@@ -37,9 +37,9 @@ namespace {
             error = "test backend rejected request";
             return false;
         }
-        bool tonemapToSdr(const AVFrame*, const AVStream*, lfs::io::HdrFormat, int, int,
+        bool tonemapToSdr(const lfs::media::DecodedVideoFrame*, lfs::io::HdrFormat, int, int,
                           std::vector<unsigned char>&, std::string& error, lfs::io::HdrTonemapTiming*) override { return isAvailable(error); }
-        bool tonemapToSdrRgba(const AVFrame*, const AVStream*, lfs::io::HdrFormat, int, int, int,
+        bool tonemapToSdrRgba(const lfs::media::DecodedVideoFrame*, lfs::io::HdrFormat, int, int, int,
                               std::vector<unsigned char>&, std::string& error) override { return isAvailable(error); }
         void reset() override {}
     };
@@ -68,7 +68,7 @@ int runSharedCoreContracts() {
     io::HdrLibplaceboRenderer renderer;
     std::string error;
     std::vector<unsigned char> pixels;
-    require(!renderer.tonemapToSdr(nullptr, nullptr, io::HdrFormat::HDR10, 1, 1, pixels, error),
+    require(!renderer.tonemapToSdr(nullptr, io::HdrFormat::HDR10, 1, 1, pixels, error),
             "renderer failure is propagated");
     require(error == "test backend rejected request" && pixels.empty(), "front facade delegates to host renderer");
     require(renderer.backendName() == "host", "backend identity delegates to the registered renderer");

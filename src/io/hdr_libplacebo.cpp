@@ -5,14 +5,9 @@
 #include "core/include/core/logger.hpp"
 #include "hdr_studio_backend.hpp"
 
-extern "C" {
-#include <libavutil/frame.h>
-}
-
-#define PL_LIBAV_IMPLEMENTATION 0
+#include "hdr_frame_libplacebo.hpp"
 #include <libplacebo/renderer.h>
 #include <libplacebo/shaders/dithering.h>
-#include <libplacebo/utils/libav.h>
 #include <libplacebo/vulkan.h>
 
 #include <array>
@@ -61,7 +56,7 @@ namespace lfs::io {
             return initialize(error);
         }
 
-        bool tonemap(const AVFrame* const frame, const AVStream* const stream,
+        bool tonemap(const media::DecodedVideoFrame* const frame,
                      const HdrFormat source_format,
                      const int output_width, const int output_height,
                      const int rotation_degrees,
@@ -86,33 +81,20 @@ namespace lfs::io {
 
             const auto render_started = std::chrono::steady_clock::now();
             pl_frame source{};
-            pl_avframe_params map_params{};
-            map_params.frame = frame;
-            map_params.tex = source_textures_.data();
-            map_params.map_dovi = true;
-            if (!pl_map_avframe_ex(gpu_, &source, &map_params)) {
-                error = "libplacebo could not map the decoded video frame";
+            pl_dovi_metadata dovi{};
+            if (!detail::mapDecodedFrame(gpu_, source, dovi, source_textures_.data(), *frame, error))
                 return false;
-            }
 
-            const auto unmap_source = [this, &source]() {
-                pl_unmap_avframe(gpu_, &source);
-            };
             if (source_format == HdrFormat::DOLBY_VISION_NATIVE &&
                 source.repr.sys != PL_COLOR_SYSTEM_DOLBYVISION) {
-                unmap_source();
                 error = "Dolby Vision Profile 5 metadata was not mapped by libplacebo";
                 return false;
             }
-
-            if (stream)
-                pl_frame_copy_stream_props(&source, stream);
 
             source.rotation = pl_rotation_normalize(rotation_degrees / 90);
 
             const bool texture_ready = recreateOutput(output_width, output_height, error);
             if (!texture_ready) {
-                unmap_source();
                 return false;
             }
 
@@ -135,7 +117,6 @@ namespace lfs::io {
             if (!temporal_peak_detection)
                 render_params.peak_detect_params = nullptr;
             const bool rendered = pl_render_image(renderer_, &source, &target, &render_params);
-            unmap_source();
             if (!rendered) {
                 error = "libplacebo failed to render the HDR frame";
                 return false;
@@ -287,22 +268,22 @@ namespace lfs::io {
         return impl_->isAvailable(error);
     }
 
-    bool HdrStudioRenderer::tonemapToSdr(const AVFrame* const frame, const AVStream* const stream,
+    bool HdrStudioRenderer::tonemapToSdr(const media::DecodedVideoFrame* const frame,
                                          const HdrFormat source_format,
                                          const int output_width, const int output_height,
                                          std::vector<unsigned char>& output_rgb,
                                          std::string& error, HdrTonemapTiming* const timing) {
-        return impl_->tonemap(frame, stream, source_format, output_width, output_height, 0,
+        return impl_->tonemap(frame, source_format, output_width, output_height, 0,
                               output_rgb, error, timing, false, false);
     }
 
-    bool HdrStudioRenderer::tonemapToSdrRgba(const AVFrame* const frame, const AVStream* const stream,
+    bool HdrStudioRenderer::tonemapToSdrRgba(const media::DecodedVideoFrame* const frame,
                                              const HdrFormat source_format,
                                              const int output_width, const int output_height,
                                              const int rotation_degrees,
                                              std::vector<unsigned char>& output_rgba,
                                              std::string& error) {
-        return impl_->tonemap(frame, stream, source_format, output_width, output_height,
+        return impl_->tonemap(frame, source_format, output_width, output_height,
                               rotation_degrees, output_rgba, error, nullptr, true, true);
     }
 

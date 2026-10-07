@@ -5,6 +5,7 @@
 #include "media/video_frame_extractor.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "decoded_video_frame_ffmpeg.hpp"
 #include "media/file_frame_sink.hpp"
 #include "media/hdr_renderer.hpp"
 #include "media/hdr_tonemap.hpp"
@@ -1190,7 +1191,12 @@ namespace lfs::io {
                             hdr_renderer = std::make_unique<HdrLibplaceboRenderer>();
                         std::string renderer_error;
                         HdrTonemapTiming frame_timing{};
-                        if (!hdr_renderer->tonemapToSdr(source, video_stream, hdr_format,
+                        auto described = media::detail::describeDecodedVideoFrame(source, video_stream);
+                        if (!described) {
+                            error = std::string(described.error().detail());
+                            return false;
+                        }
+                        if (!hdr_renderer->tonemapToSdr(&*described, hdr_format,
                                                         out_width, out_height,
                                                         hdr_sdr_buffer, renderer_error, &frame_timing)) {
                             LOG_ERROR("HDR extraction renderer failed: {}", renderer_error);

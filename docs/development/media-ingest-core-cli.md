@@ -176,31 +176,32 @@ and do not download a public corpus.
 
 The root package baseline/overlays and existing FFmpeg/image codec stack are reused.
 OpenImageIO is not required or reintroduced. FFmpeg is discovered once in the root
-configuration; only `lfs_media` links its libraries. Package `optimized`/`debug`
-qualifiers and transitive dependencies are preserved. Existing Studio adapters
-receive public FFmpeg headers and resolve their calls through `lfs_media`.
+configuration; product targets link FFmpeg only inside `lfs_media`, with PRIVATE
+includes and links. Package `optimized`/`debug` qualifiers and transitive
+dependencies are preserved. Playback, codec/muxer ownership and decoded-frame
+metadata interpretation belong to media. HDR/libplacebo/tensor adapters consume
+borrowed media plane/component/colour descriptors, including mastering display,
+HDR10+, Dolby Vision, ICC and film-grain data; they do not interpret FFmpeg objects.
 
-On static-package platforms, the provider retains FFmpeg's complete public API
-objects with whole-archive linking. An ELF version script or Mach-O export list
-explicitly exposes the public `av_*`, `avcodec_*`, `avformat_*`, `avutil_*`,
-`avfilter_*`, `avdevice_*`, `avio_*`, `sws_*`, `swr_*`, `swscale_*` and `swresample_*` APIs, alongside exported
-LichtFeld C++ APIs. Other FFmpeg/codec implementation symbols, including `ff_*`
-and `avpriv_*`, stay private. This also prevents x86 assembly constants from
-becoming interposable. Windows' existing shared package is forwarded through
-`lfs_media.dll`; consumers import the provider instead of importing FFmpeg DLLs
-directly. A static Windows package uses an explicit export definition instead.
+The provider exports the media C++ API only. ELF/Mach-O visibility lists hide
+third-party static symbols and prevent assembly constants from becoming
+interposable. Windows uses the package's private import libraries without DLL
+forwarders. No public `av_*`, codec or resampler functions escape media.
 
-Root CLI contracts inspect the actual provider and the application, visualizer
-and complete Python module. They require decoding, encoding and resampling APIs,
-reject internal exports and independent FFmpeg implementations, and check Windows
-consumer imports. Linux additionally checks private assembly constants by lookup.
-The root CMake codemodel verifies that only the provider's final link command
-contains FFmpeg libraries, including in stripped Release binaries.
+Root CLI contracts inspect provider exports, product consumer imports/definitions
+and final link commands, including stripped Release binaries. Tests that construct
+or independently inspect FFmpeg fixtures have explicit PRIVATE links and includes;
+they are the only allowed exceptions to the product ownership rule.
 
-This public FFmpeg ABI is an interim compatibility boundary. Fully encapsulating
-FFmpeg requires moving preview/encoding implementations behind media-owned frame
-contracts and adapting Studio's HDR/tensor users. Public FFmpeg exports can be
-removed only after those consumers stop calling that ABI.
+RGB-to-YUV420p conversion belongs to the tensor library. A single Slang program
+serves CUDA, Vulkan and Metal; its scalar quantization/BT.601 formulas are shared
+with the CPU implementation. Producers can allocate result planes or reuse
+validated storage. Byte rounding, nonfinite values, strided inputs and tensor
+execution timelines retain explicit contracts.
+
+Encoder writers borrow planes only until the callback returns. Reentrant open,
+write, close and ownership transfer are rejected before session state changes;
+normal serialized callers incur no extra synchronization or pixel copies.
 
 License obligations follow the repository GPL-3.0-or-later distribution and exact
 installed package notices. FFmpeg's effective license is build dependent; the

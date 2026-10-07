@@ -6,72 +6,22 @@
 #include "core/logger.hpp"
 #include "core/provenance.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_color.hpp"
 #include "media/video_encode_session.hpp"
 #include <array>
 #include <exception>
 #include <format>
 #if LFS_HAS_CUDA
-#include "color_convert.cuh"
 #include <cuda_runtime.h>
 #endif
 namespace lfs::io::video {
     namespace {
-        struct YuvPlanes {
-            core::Tensor y;
-            core::Tensor u;
-            core::Tensor v;
-        };
-
+        using YuvPlanes = core::Yuv420Planes;
         YuvPlanes rgbToYuv420p(const core::Tensor& rgb) {
-            const int height = static_cast<int>(rgb.size(0));
-            const int width = static_cast<int>(rgb.size(1));
-#if LFS_HAS_CUDA
-            if (core::gpu_backend_of(rgb) == core::GpuBackend::CUDA) {
-                const auto* pixels = rgb.ptr<float>();
-                const auto stream = rgb.stream();
-                auto y = core::Tensor::empty_like(rgb, {static_cast<size_t>(height), static_cast<size_t>(width)}, core::DataType::UInt8);
-                auto u = core::Tensor::empty_like(rgb, {static_cast<size_t>(height / 2), static_cast<size_t>(width / 2)}, core::DataType::UInt8);
-                auto v = core::Tensor::empty_like(rgb, {static_cast<size_t>(height / 2), static_cast<size_t>(width / 2)}, core::DataType::UInt8);
-                y.set_stream(stream);
-                u.set_stream(stream);
-                v.set_stream(stream);
-                rgbToYuv420pCuda(pixels, y.ptr<uint8_t>(), u.ptr<uint8_t>(), v.ptr<uint8_t>(),
-                                 width, height, stream);
-                return {std::move(y), std::move(u), std::move(v)};
-            }
-#endif
-            const auto bytes = (rgb.clamp(0.0f, 1.0f) * 255.0f + 0.5f).floor();
-            const auto channel = [](const core::Tensor& image, const size_t c) {
-                return image.slice(2, c, c + 1).reshape({static_cast<int>(image.size(0)), static_cast<int>(image.size(1))});
-            };
-            const auto y = ((channel(bytes, 0) * 66.0f +
-                             channel(bytes, 1) * 129.0f +
-                             channel(bytes, 2) * 25.0f + 128.0f) /
-                            256.0f)
-                               .floor()
-                               .add(16.0f)
-                               .to(core::DataType::UInt8);
-            const auto chroma = (bytes.reshape({height / 2, 2, width / 2, 2, 3})
-                                     .sum({1, 3}) /
-                                 4.0f)
-                                    .floor();
-            const auto u = ((channel(chroma, 0) * -38.0f +
-                             channel(chroma, 1) * -74.0f +
-                             channel(chroma, 2) * 112.0f + 128.0f) /
-                            256.0f)
-                               .floor()
-                               .add(128.0f)
-                               .clamp(0.0f, 255.0f)
-                               .to(core::DataType::UInt8);
-            const auto v = ((channel(chroma, 0) * 112.0f +
-                             channel(chroma, 1) * -94.0f +
-                             channel(chroma, 2) * -18.0f + 128.0f) /
-                            256.0f)
-                               .floor()
-                               .add(128.0f)
-                               .clamp(0.0f, 255.0f)
-                               .to(core::DataType::UInt8);
-            return {y, u, v};
+            auto result = core::rgb_to_yuv420p(rgb);
+            if (!result)
+                throw lfs::Exception(result.error());
+            return std::move(*result);
         }
 
         lfs::Result<void> transferError(std::string text) {

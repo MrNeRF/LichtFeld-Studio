@@ -4,8 +4,8 @@
 #pragma once
 
 #include "core/provenance.hpp"
-#include "io/video/video_output_extent.hpp"
 #include "io/video/video_reconstruction.hpp"
+#include "media/video_output_extent.hpp"
 
 #include <cstdint>
 #include <expected>
@@ -76,10 +76,8 @@ namespace lfs::io::video {
         const VideoExportOptions& options) {
         if (const auto error = videoOutputExtentError(options.width, options.height))
             return std::unexpected(std::string(*error));
-        if (options.framerate <= 0 || options.framerate > 1000)
-            return std::unexpected("Video framerate must be between 1 and 1000");
-        if (options.crf < 0 || options.crf > 51)
-            return std::unexpected("Video CRF must be between 0 and 51");
+        if (auto error = videoEncodingRangeError(options.framerate, options.crf))
+            return std::unexpected(std::move(*error));
 
         return {};
     }

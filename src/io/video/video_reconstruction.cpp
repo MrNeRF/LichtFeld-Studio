@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/video/video_reconstruction.hpp"
-#include "io/video/video_output_extent.hpp"
+#include "media/video_output_extent.hpp"
 
 #include <algorithm>
 #include <cmath>

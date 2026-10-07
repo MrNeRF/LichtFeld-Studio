@@ -8,19 +8,12 @@
 #include "core/tensor_upload.hpp"
 #include "hdr_tonemap_program.hpp"
 
-extern "C" {
-#include <libavformat/avformat.h>
-#include <libavutil/dovi_meta.h>
-#include <libavutil/hdr_dynamic_metadata.h>
-#include <libavutil/mastering_display_metadata.h>
-#include <libavutil/pixdesc.h>
-}
-
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <format>
 #include <limits>
 #include <mutex>
 #include <numbers>
@@ -272,46 +265,27 @@ namespace lfs::io {
             Hdr hdr;
         };
 
-        template <typename T>
-        const T* frameData(const AVFrame* frame, const AVFrameSideDataType type) {
-            const AVFrameSideData* side = av_frame_get_side_data(frame, type);
-            return side ? reinterpret_cast<const T*>(side->data) : nullptr;
-        }
-
-        template <typename T>
-        const T* streamData(const AVStream* stream, const AVPacketSideDataType type) {
-            if (!stream)
-                return nullptr;
-            const AVPacketSideData* side = av_packet_side_data_get(stream->codecpar->coded_side_data,
-                                                                   stream->codecpar->nb_coded_side_data, type);
-            return side ? reinterpret_cast<const T*>(side->data) : nullptr;
-        }
-
-        float q2f(const AVRational value) { return float(av_q2d(value)); }
-
-        // pl_map_hdr_metadata
-        void mapHdr(Hdr& hdr, const AVMasteringDisplayMetadata* mastering, const AVDynamicHDRPlus* plus) {
-            if (mastering && mastering->has_luminance) {
-                hdr.max_luma = q2f(mastering->max_luminance);
-                hdr.min_luma = q2f(mastering->min_luminance);
-                if (hdr.max_luma < 5.0f || hdr.min_luma >= hdr.max_luma)
-                    hdr.max_luma = hdr.min_luma = 0.0f;
-            }
-            if (mastering && mastering->has_primaries) {
-                const auto& d = mastering->display_primaries;
-                hdr.prim = {{q2f(d[0][0]), q2f(d[0][1])}, {q2f(d[1][0]), q2f(d[1][1])}, {q2f(d[2][0]), q2f(d[2][1])}, {q2f(mastering->white_point[0]), q2f(mastering->white_point[1])}};
-            }
-            if (plus && plus->application_version < 2) {
-                const AVHDRPlusColorTransformParams& params = plus->params[0];
-                float histogram_max = 0.0f;
-                for (int i = 0; i < params.num_distribution_maxrgb_percentiles; ++i)
-                    histogram_max = std::max(histogram_max, q2f(params.distribution_maxrgb[i].percentile));
-                for (size_t i = 0; i < 3; ++i) {
-                    hdr.scene_max[i] = 10000 * q2f(params.maxscl[i]);
-                    if (!hdr.scene_max[i])
-                        hdr.scene_max[i] = histogram_max * 10000;
+        void mapHdr(Hdr& hdr, const media::HdrFrameMetadata& metadata) {
+            if (const auto& master = metadata.mastering) {
+                if (master->luminance) {
+                    hdr.max_luma = master->max_luma;
+                    hdr.min_luma = master->min_luma;
+                    if (hdr.max_luma < 5.f || hdr.min_luma >= hdr.max_luma)
+                        hdr.max_luma = hdr.min_luma = 0.f;
                 }
-                hdr.scene_avg = 10000 * q2f(params.average_maxrgb);
+                if (master->primaries)
+                    hdr.prim = {{master->display[0].x, master->display[0].y},
+                                {master->display[1].x, master->display[1].y},
+                                {master->display[2].x, master->display[2].y},
+                                {master->white.x, master->white.y}};
+            }
+            if (const auto& plus = metadata.hdr10_plus) {
+                for (int c = 0; c < 3; ++c) {
+                    hdr.scene_max[c] = 10000 * static_cast<float>(plus->maxscl[c]);
+                    if (!hdr.scene_max[c])
+                        hdr.scene_max[c] = plus->histogram_max * 10000;
+                }
+                hdr.scene_avg = 10000 * static_cast<float>(plus->average_maxrgb);
             }
         }
 
@@ -403,25 +377,25 @@ namespace lfs::io {
                      {(slope * i1 - o1) / (i1 * t), -3 * (slope * i1 - o1) / t, slope, 0.0f}}};
         }
 
-        bool primaries(const AVColorPrimaries value, Primaries& out) {
+        bool primaries(const media::ColorPrimaries value, Primaries& out) {
             switch (value) {
-            case AVCOL_PRI_UNSPECIFIED:
-            case AVCOL_PRI_BT709: out = BT709; return true;
-            case AVCOL_PRI_BT2020: out = BT2020; return true;
-            case AVCOL_PRI_SMPTE431: out = {{0.680f, 0.320f}, {0.265f, 0.690f}, {0.150f, 0.060f}, {0.3140f, 0.3510f}}; return true;
-            case AVCOL_PRI_SMPTE432: out = {{0.680f, 0.320f}, {0.265f, 0.690f}, {0.150f, 0.060f}, D65}; return true;
+            case media::ColorPrimaries::Unspecified:
+            case media::ColorPrimaries::Bt709: out = BT709; return true;
+            case media::ColorPrimaries::Bt2020: out = BT2020; return true;
+            case media::ColorPrimaries::Smpte431: out = {{0.680f, 0.320f}, {0.265f, 0.690f}, {0.150f, 0.060f}, {0.3140f, 0.3510f}}; return true;
+            case media::ColorPrimaries::Smpte432: out = {{0.680f, 0.320f}, {0.265f, 0.690f}, {0.150f, 0.060f}, D65}; return true;
             default: return false;
             }
         }
 
-        bool lumaCoefficients(const AVFrame* frame, std::array<float, 3>& out) {
+        bool lumaCoefficients(const media::DecodedVideoFrame* frame, std::array<float, 3>& out) {
             switch (frame->colorspace) {
-            case AVCOL_SPC_BT709: out = {0.2126f, 0.7152f, 0.0722f}; return true;
-            case AVCOL_SPC_BT470BG:
-            case AVCOL_SPC_SMPTE170M: out = {0.2990f, 0.5870f, 0.1140f}; return true;
-            case AVCOL_SPC_SMPTE240M: out = {0.2122f, 0.7013f, 0.0865f}; return true;
-            case AVCOL_SPC_BT2020_NCL: out = {0.2627f, 0.6780f, 0.0593f}; return true;
-            case AVCOL_SPC_UNSPECIFIED:
+            case media::ColorMatrix::Bt709: out = {0.2126f, 0.7152f, 0.0722f}; return true;
+            case media::ColorMatrix::Bt470Bg:
+            case media::ColorMatrix::Smpte170M: out = {0.2990f, 0.5870f, 0.1140f}; return true;
+            case media::ColorMatrix::Smpte240M: out = {0.2122f, 0.7013f, 0.0865f}; return true;
+            case media::ColorMatrix::Bt2020Ncl: out = {0.2627f, 0.6780f, 0.0593f}; return true;
+            case media::ColorMatrix::Unspecified:
                 // pl_color_system_guess_ycbcr
                 out = frame->width >= 1280 || frame->height > 576 ? std::array{0.2126f, 0.7152f, 0.0722f}
                                                                   : std::array{0.2990f, 0.5870f, 0.1140f};
@@ -432,30 +406,26 @@ namespace lfs::io {
 
         // pl_map_dovi_metadata, packed per component: pivot count, 9 pivots,
         // then 8 pieces of method, 3 polynomial, MMR order, constant, 3x7 MMR.
-        std::vector<float> packDovi(const AVDOVIMetadata* metadata) {
-            const AVDOVIRpuDataHeader* header = av_dovi_get_header(metadata);
-            const AVDOVIDataMapping* mapping = av_dovi_get_mapping(metadata);
-            std::vector<float> packed(3 * DOVI_COMPONENT, 0.0f);
-            const float pivot_scale = 1.0f / ((1 << header->bl_bit_depth) - 1);
-            const float scale = 1.0f / (1 << header->coef_log2_denom);
+        std::vector<float> packDovi(const media::DolbyVisionMetadata& metadata) {
+            std::vector<float> packed(3 * DOVI_COMPONENT, 0.f);
             for (size_t c = 0; c < 3; ++c) {
-                const AVDOVIReshapingCurve& curve = mapping->curves[c];
+                const auto& curve = metadata.curves[c];
                 float* out = packed.data() + c * DOVI_COMPONENT;
                 out[0] = curve.num_pivots;
                 for (int i = 0; i < curve.num_pivots; ++i)
-                    out[1 + i] = pivot_scale * curve.pivots[i];
+                    out[1 + i] = curve.pivots[i];
                 for (int i = 0; i + 1 < curve.num_pivots; ++i) {
                     float* piece = out + 10 + i * 27;
-                    piece[0] = curve.mapping_idc[i];
-                    if (curve.mapping_idc[i] == AV_DOVI_MAPPING_POLYNOMIAL) {
+                    piece[0] = curve.method[i];
+                    if (curve.method[i] == 0) {
                         for (int k = 0; k < 3; ++k)
-                            piece[1 + k] = k <= curve.poly_order[i] ? scale * curve.poly_coef[i][k] : 0.0f;
+                            piece[1 + k] = curve.polynomial[i][k];
                     } else {
                         piece[4] = curve.mmr_order[i];
-                        piece[5] = scale * curve.mmr_constant[i];
+                        piece[5] = curve.mmr_constant[i];
                         for (int j = 0; j < curve.mmr_order[i]; ++j)
                             for (int k = 0; k < 7; ++k)
-                                piece[6 + j * 7 + k] = scale * curve.mmr_coef[i][j][k];
+                                piece[6 + j * 7 + k] = curve.mmr[i][j][k];
                     }
                 }
             }
@@ -472,76 +442,79 @@ namespace lfs::io {
 
         // pl_map_avframe_ex (map_dovi) and pl_frame_copy_stream_props, then the
         // plane sampling and pl_shader_decode_color of pass_read_image.
-        bool describe(const AVFrame* frame, const AVStream* stream, Source& source, std::string& error) {
-            const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(frame->format));
-            constexpr uint64_t unsupported = AV_PIX_FMT_FLAG_HWACCEL | AV_PIX_FMT_FLAG_BE | AV_PIX_FMT_FLAG_RGB |
-                                             AV_PIX_FMT_FLAG_PAL | AV_PIX_FMT_FLAG_BITSTREAM | AV_PIX_FMT_FLAG_FLOAT;
-            if (!desc || desc->nb_components != 3 || (desc->flags & unsupported) ||
-                desc->comp[0].depth + desc->comp[0].shift > 16) {
-                error = "HDR tensor tonemapper requires a software YCbCr frame";
+        bool describe(const media::DecodedVideoFrame* frame, Source& source, std::string& error) {
+            const auto valid = media::validateDecodedVideoFrame(*frame);
+            if (!valid) {
+                error = valid.error().detail();
+                return false;
+            }
+            const auto* desc = frame;
+            if (frame->component_count != 3 || frame->hardware || frame->big_endian || frame->rgb || frame->palette || frame->bitstream || frame->floating || frame->bayer || frame->components[0].depth + frame->components[0].shift > 16) {
+                error = std::format("HDR tensor tonemapper requires a software YCbCr frame (format={}, components={}, hardware={})", frame->format_name, frame->component_count, frame->hardware);
                 return false;
             }
             Constants& c = source.constants;
-            const int depth = desc->comp[0].depth;
-            const int sample_depth = depth + desc->comp[0].shift > 8 ? 16 : 8;
-            const int chroma_width = AV_CEIL_RSHIFT(frame->width, desc->log2_chroma_w);
-            const int chroma_height = AV_CEIL_RSHIFT(frame->height, desc->log2_chroma_h);
+            const int depth = desc->components[0].depth;
+            const int sample_depth = depth + desc->components[0].shift > 8 ? 16 : 8;
+            const int chroma_width = ((frame->width + (1 << desc->chroma_w) - 1) >> desc->chroma_w);
+            const int chroma_height = ((frame->height + (1 << desc->chroma_h) - 1) >> desc->chroma_h);
             std::array<uint32_t, 4> plane_offset{};
-            for (int plane = 0; plane < av_pix_fmt_count_planes(static_cast<AVPixelFormat>(frame->format)); ++plane) {
-                const size_t rows = plane ? chroma_height : frame->height;
-                if (frame->linesize[plane] <= 0 || !frame->data[plane]) {
-                    error = "HDR tensor tonemapper requires positive plane strides";
+            for (int plane = 0; plane < frame->plane_count; ++plane) {
+                const size_t rows = frame->planes[plane].height;
+                if (frame->planes[plane].pitch <= 0 || !frame->planes[plane].data) {
+                    error = std::format("HDR tensor tonemapper requires positive plane strides (plane={}, pitch={}, data_present={})", plane, frame->planes[plane].pitch, frame->planes[plane].data != nullptr);
                     return false;
                 }
                 plane_offset[plane] = static_cast<uint32_t>(source.plane_bytes);
-                const size_t bytes = static_cast<size_t>(frame->linesize[plane]) * rows;
-                source.planes[plane] = {frame->data[plane], bytes};
+                const size_t bytes = static_cast<size_t>(frame->planes[plane].pitch) * rows;
+                if (bytes > std::numeric_limits<uint32_t>::max() - source.plane_bytes) {
+                    error = std::format("HDR tensor plane storage exceeds address budget (plane={}, bytes={}, total={})", plane, bytes, source.plane_bytes);
+                    return false;
+                }
+                source.planes[plane] = {frame->planes[plane].data, bytes};
                 source.plane_bytes += bytes;
             }
             for (size_t i = 0; i < 3; ++i) {
-                const AVComponentDescriptor& comp = desc->comp[i];
+                const media::FrameComponent& comp = desc->components[i];
                 c.component[i] = {plane_offset[comp.plane] + uint32_t(comp.offset),
-                                  uint32_t(frame->linesize[comp.plane]), uint32_t(comp.step), uint32_t(comp.shift)};
+                                  uint32_t(frame->planes[comp.plane].pitch), uint32_t(comp.step), uint32_t(comp.shift)};
             }
             c.layout = {sample_depth == 16, (1u << depth) - 1, uint32_t(chroma_width), uint32_t(chroma_height)};
 
             Space& space = source.space;
-            mapHdr(space.hdr, frameData<AVMasteringDisplayMetadata>(frame, AV_FRAME_DATA_MASTERING_DISPLAY_METADATA),
-                   frameData<AVDynamicHDRPlus>(frame, AV_FRAME_DATA_DYNAMIC_HDR_PLUS));
-            const auto* dovi = frameData<AVDOVIMetadata>(frame, AV_FRAME_DATA_DOVI_METADATA);
-            if (dovi && !av_dovi_get_header(dovi)->disable_residual_flag)
-                dovi = nullptr;
+            mapHdr(space.hdr, frame->frame_hdr);
+            const auto* dovi = frame->dovi && frame->dovi->disable_residual ? &*frame->dovi : nullptr;
             Matrix decode;
             std::array<double, 3> multiplier{1.0, 1.0, 1.0}, black{};
             const double expand = (1LL << sample_depth) / ((1LL << sample_depth) - 1.0);
             float sample_scale;
             if (dovi) {
-                const AVDOVIColorMetadata* color = av_dovi_get_color(dovi);
-                source.dovi = packDovi(dovi);
+                const auto* color = dovi;
+                source.dovi = packDovi(*dovi);
                 space.primaries = BT2020;
                 space.transfer = Transfer::PQ;
-                space.hdr.min_luma = pqToNits(color->source_min_pq / 4095.0f);
-                space.hdr.max_luma = pqToNits(color->source_max_pq / 4095.0f);
-                if (const AVDOVIDmData* level1 = av_dovi_find_level(dovi, 1)) {
-                    space.hdr.max_pq_y = level1->l1.max_pq / 4095.0f;
-                    space.hdr.avg_pq_y = level1->l1.avg_pq / 4095.0f;
+                space.hdr.min_luma = pqToNits(color->source_min_pq);
+                space.hdr.max_luma = pqToNits(color->source_max_pq);
+                if (color->level1) {
+                    space.hdr.max_pq_y = (*color->level1)[0];
+                    space.hdr.avg_pq_y = (*color->level1)[1];
                 }
                 Matrix linear;
                 for (size_t i = 0; i < 9; ++i) {
-                    decode[i / 3][i % 3] = q2f(color->ycc_to_rgb_matrix[i]);
-                    linear[i / 3][i % 3] = q2f(color->rgb_to_lms_matrix[i]);
+                    decode[i / 3][i % 3] = color->nonlinear[i];
+                    linear[i / 3][i % 3] = color->linear[i];
                 }
                 for (size_t i = 0; i < 3; ++i)
-                    black[i] = q2f(color->ycc_to_rgb_offset[i]) * expand;
+                    black[i] = color->offset[i] * expand;
                 constexpr Matrix DOVI_LMS_TO_RGB{{{3.06441879f, -2.16597676f, 0.10155818f},
                                                   {-0.65612108f, 1.78554118f, -0.12943749f},
                                                   {0.01736321f, -0.04725154f, 1.03004253f}}};
                 c.dovi_lms = rows(multiply(DOVI_LMS_TO_RGB, linear));
                 sample_scale = float(((1LL << sample_depth) - 1.0) / ((1LL << depth) - 1.0));
             } else {
-                if (frame->color_trc == AVCOL_TRC_SMPTE2084) {
+                if (frame->color_trc == media::ColorTransfer::Pq) {
                     space.transfer = Transfer::PQ;
-                } else if (frame->color_trc == AVCOL_TRC_ARIB_STD_B67) {
+                } else if (frame->color_trc == media::ColorTransfer::Hlg) {
                     space.transfer = Transfer::HLG;
                 } else {
                     error = "HDR tensor tonemapper requires PQ or HLG transfer";
@@ -556,7 +529,7 @@ namespace lfs::io {
                 decode = {{{1, 0, 2 * (1 - k[0])},
                            {1, -2 * (1 - k[2]) * k[2] / k[1], -2 * (1 - k[0]) * k[0] / k[1]},
                            {1, 2 * (1 - k[2]), 0}}};
-                const bool full = frame->color_range == AVCOL_RANGE_JPEG;
+                const bool full = frame->color_range == media::ColorRange::Full;
                 const double ymin = full ? 0.0 : 16 / 256.0 * expand, ymax = full ? 1.0 : 235 / 256.0 * expand;
                 const double cmid = 128 / 256.0 * expand, cmax = full ? 1.0 : 240 / 256.0 * expand;
                 multiplier = {1.0 / (ymax - ymin), 0.5 / (cmax - cmid), 0.5 / (cmax - cmid)};
@@ -573,21 +546,20 @@ namespace lfs::io {
             }
             c.decode = rows(decode, offset);
             c.sample = {1.0f / float((1 << sample_depth) - 1), sample_scale, 0.0f, 0.0f};
-            mapHdr(space.hdr, streamData<AVMasteringDisplayMetadata>(stream, AV_PKT_DATA_MASTERING_DISPLAY_METADATA),
-                   streamData<AVDynamicHDRPlus>(stream, AV_PKT_DATA_DYNAMIC_HDR10_PLUS));
+            mapHdr(space.hdr, frame->stream_hdr);
 
             // pl_chroma_location_offset, LEFT when unknown
-            const AVChromaLocation location = frame->chroma_location;
-            const float shift_x = location == AVCHROMA_LOC_CENTER || location == AVCHROMA_LOC_TOP ||
-                                          location == AVCHROMA_LOC_BOTTOM
+            const media::ChromaLocation location = frame->chroma_location;
+            const float shift_x = location == media::ChromaLocation::Center || location == media::ChromaLocation::Top ||
+                                          location == media::ChromaLocation::Bottom
                                       ? 0.0f
                                       : -0.5f;
-            const float shift_y = location == AVCHROMA_LOC_TOPLEFT || location == AVCHROMA_LOC_TOP         ? -0.5f
-                                  : location == AVCHROMA_LOC_BOTTOMLEFT || location == AVCHROMA_LOC_BOTTOM ? 0.5f
-                                                                                                           : 0.0f;
-            const float rx = 1.0f / (1 << desc->log2_chroma_w), ry = 1.0f / (1 << desc->log2_chroma_h);
+            const float shift_y = location == media::ChromaLocation::TopLeft || location == media::ChromaLocation::Top         ? -0.5f
+                                  : location == media::ChromaLocation::BottomLeft || location == media::ChromaLocation::Bottom ? 0.5f
+                                                                                                                               : 0.0f;
+            const float rx = 1.0f / (1 << desc->chroma_w), ry = 1.0f / (1 << desc->chroma_h);
             c.chroma = {rx, (0.5f - shift_x) * rx - 0.5f, ry, (0.5f - shift_y) * ry - 0.5f};
-            c.flags = {desc->log2_chroma_w > 0, desc->log2_chroma_h > 0, dovi != nullptr,
+            c.flags = {desc->chroma_w > 0, desc->chroma_h > 0, dovi != nullptr,
                        space.transfer == Transfer::HLG};
             infer(space);
             return true;
@@ -697,7 +669,7 @@ namespace lfs::io {
             return initialize(error);
         }
 
-        bool tonemap(const AVFrame* frame, const AVStream* stream, const HdrFormat format,
+        bool tonemap(const media::DecodedVideoFrame* frame, const HdrFormat format,
                      const int width, const int height, const int rotation_degrees,
                      std::vector<unsigned char>& output, std::string& error,
                      HdrTonemapTiming* timing, const bool rgba, const bool peak_detection) {
@@ -719,7 +691,7 @@ namespace lfs::io {
 
             const auto render_started = std::chrono::steady_clock::now();
             Source source;
-            if (!describe(frame, stream, source, error))
+            if (!describe(frame, source, error))
                 return false;
             if (format == HdrFormat::DOLBY_VISION_NATIVE && source.dovi.empty()) {
                 error = "Dolby Vision Profile 5 metadata is missing or requires an enhancement layer";
@@ -1019,18 +991,18 @@ namespace lfs::io {
 
     bool HdrTensorRenderer::isAvailable(std::string& error) { return impl_->isAvailable(error); }
 
-    bool HdrTensorRenderer::tonemapToSdr(const AVFrame* frame, const AVStream* stream,
+    bool HdrTensorRenderer::tonemapToSdr(const media::DecodedVideoFrame* frame,
                                          const HdrFormat format, const int width, const int height,
                                          std::vector<unsigned char>& output, std::string& error,
                                          HdrTonemapTiming* timing) {
-        return impl_->tonemap(frame, stream, format, width, height, 0, output, error, timing, false, false);
+        return impl_->tonemap(frame, format, width, height, 0, output, error, timing, false, false);
     }
 
-    bool HdrTensorRenderer::tonemapToSdrRgba(const AVFrame* frame, const AVStream* stream,
+    bool HdrTensorRenderer::tonemapToSdrRgba(const media::DecodedVideoFrame* frame,
                                              const HdrFormat format, const int width, const int height,
                                              const int rotation, std::vector<unsigned char>& output,
                                              std::string& error) {
-        return impl_->tonemap(frame, stream, format, width, height, rotation, output, error, nullptr, true, true);
+        return impl_->tonemap(frame, format, width, height, rotation, output, error, nullptr, true, true);
     }
 
     void HdrTensorRenderer::reset() { impl_->reset(); }

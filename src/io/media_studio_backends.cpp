@@ -15,6 +15,7 @@ namespace lfs::io {
                 return std::make_unique<HdrStudioRenderer>();
             });
 #if LFS_HAS_CUDA
+            media::detail::registerCudaVideoDecodeBackend();
             media::detail::registerGpuJpegFactory(createStudioJpegEncoder);
 #endif
         });

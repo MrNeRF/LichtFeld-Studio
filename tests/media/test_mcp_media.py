@@ -40,6 +40,13 @@ class McpMedia(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
         return json.loads(result.stdout), output
 
+    def test_cpu_color_matches_frozen_dev_with_strides_and_nonfinite_values(self):
+        path = self.root / "cpu-color.json"
+        path.write_text(json.dumps({"operation": "cpu-color"}), encoding="utf-8")
+        result = subprocess.run([str(RUNNER), str(path)], capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
+        self.assertEqual(json.loads(result.stdout), {"success": True, "checked_bytes": 768, "backend": "cpu"})
+
     def test_probe_extract_options_and_single_active_job(self):
         result, output = self.invoke(geometry={"clockwise_rotation": 90})
         self.assertTrue(result["probe"]["success"])

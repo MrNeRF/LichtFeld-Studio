@@ -115,18 +115,17 @@ class IngestCLI(unittest.TestCase):
             ffmpeg=[item["fragment"] for item in fragments if archives.search(item["fragment"])]
             if ffmpeg:
                 providers.add(target["name"])
-                self.assertEqual(target["name"],"lfs_media",f"FFmpeg linked independently by {target['name']}: {ffmpeg}")
-        self.assertEqual(providers,{"lfs_media"})
+                self.assertIn(target["name"],{"lfs_media","media_extraction_runner","hdr_tonemap_contracts","lichtfeld_tests","lichtfeld_format_tests"},f"FFmpeg linked independently by {target['name']}: {ffmpeg}")
+        self.assertIn("lfs_media",providers)
         filename="lfs_media.dll" if sys.platform=="win32" else ("liblfs_media.dylib" if sys.platform=="darwin" else "liblfs_media.so")
         provider=CLI.parent/filename
         exports=defined_symbols(provider,exports=True)
-        required={"avformat_open_input","avcodec_alloc_context3","avcodec_send_frame",
-                  "av_frame_alloc","av_packet_alloc","sws_scale","swr_alloc","swscale_version","swresample_version"}
-        self.assertTrue(required<=exports,f"Missing public provider APIs: {required-exports}")
+        self.assertFalse({name for name in exports if ffmpeg_public(name)},
+                         "FFmpeg public API must stay private to media")
         self.assertFalse({name for name in exports if name.startswith(("ff_","avpriv_"))},
                          "Internal FFmpeg symbols must not escape the provider")
         self.assertTrue(CONSUMERS,"Root application consumers must be supplied")
-        for consumer in [CLI,RUNNER,*CONSUMERS]:
+        for consumer in [CLI,*CONSUMERS]:
             with self.subTest(consumer=consumer.name):
                 self.assertTrue(consumer.is_file(),f"Build the root media_contracts target: missing {consumer}")
                 symbols=defined_symbols(consumer)
@@ -139,7 +138,7 @@ class IngestCLI(unittest.TestCase):
                         command.append("/dump")
                     imports=subprocess.check_output([*command,"/imports",str(consumer)],text=True,errors="replace")
                     self.assertFalse(re.findall(r"\b(?:avcodec|avformat|avutil|avfilter|avdevice|swscale|swresample)-\d+\.dll\b",imports,re.I),
-                                     "Consumers must import FFmpeg through lfs_media")
+                                     "Product consumers must not import FFmpeg")
     def test_probe_rational_inventory_and_unicode_no_output(self):
         before={p.name:p.read_bytes() for p in self.corpus.iterdir()}
         result,_=self.invoke("probe",self.source())

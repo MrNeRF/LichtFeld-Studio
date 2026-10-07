@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "io/video_player.hpp"
+#include "media/decoded_video_frame_ffmpeg.hpp"
 #include "media/media_probe_ffmpeg.hpp"
+#include "media/video_player.hpp"
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/display.h>
@@ -108,5 +109,54 @@ int runProbeUnitContracts() {
     require(audio->discard == AVDISCARD_ALL && second->discard == AVDISCARD_ALL && video->discard == AVDISCARD_DEFAULT, "legacy discard policy");
     require(detail::findUsableHeaderVideoStream(nullptr) == -1, "null context");
     require(detail::describeContext(nullptr).streams.empty(), "null description");
+    require(!detail::describeDecodedVideoFrame(nullptr), "missing decoded frame rejected");
+    auto releaseFrame = [](AVFrame* f) { av_frame_free(&f); };
+    std::unique_ptr<AVFrame, decltype(releaseFrame)> decoded(av_frame_alloc(), releaseFrame);
+    require(decoded != nullptr, "allocate descriptor frame");
+    decoded->format = AV_PIX_FMT_YUV420P10LE;
+    decoded->width = 65;
+    decoded->height = 33;
+    decoded->color_primaries = AVCOL_PRI_BT2020;
+    decoded->color_trc = AVCOL_TRC_SMPTE2084;
+    decoded->colorspace = AVCOL_SPC_BT2020_NCL;
+    decoded->color_range = AVCOL_RANGE_MPEG;
+    require(av_frame_get_buffer(decoded.get(), 64) >= 0, "allocate padded descriptor planes");
+    auto* master = av_mastering_display_metadata_create_side_data(decoded.get());
+    require(master != nullptr, "allocate mastering metadata");
+    master->has_luminance = 1;
+    master->min_luminance = {1, 1000};
+    master->max_luminance = {1000, 1};
+    auto* plus = av_dynamic_hdr_plus_create_side_data(decoded.get());
+    require(plus != nullptr, "allocate HDR10+ metadata");
+    plus->num_windows = 1;
+    plus->params[0].maxscl[0] = {1, 10};
+    plus->params[0].maxscl[1] = {1, 5};
+    plus->params[0].maxscl[2] = {3, 10};
+    plus->params[0].average_maxrgb = {1, 100};
+    auto view = detail::describeDecodedVideoFrame(decoded.get(), video);
+    require(view.has_value(), "describe padded HDR frame");
+    require(view->plane_count == 3 && view->component_count == 3 && view->components[0].depth == 10, "component description");
+    require(view->planes[1].width == 33 && view->planes[1].height == 17 && view->planes[0].pitch == decoded->linesize[0], "odd chroma extent and byte pitches preserved");
+    require(view->planes[0].data == decoded->data[0] && view->color_trc == ColorTransfer::Pq && view->color_primaries == ColorPrimaries::Bt2020, "borrowed storage and independent colour enums");
+    require(view->frame_hdr.mastering && view->frame_hdr.mastering->max_luma == 1000.f && view->frame_hdr.mastering->min_luma == .001f, "mastering luminance precision");
+    require(view->frame_hdr.hdr10_plus && view->frame_hdr.hdr10_plus->maxscl == std::array{.1, .2, .3} && view->frame_hdr.hdr10_plus->average_maxrgb == .01, "HDR10+ normalized values");
+    auto invalid_view = *view;
+    invalid_view.planes[1].pitch = 1;
+    auto invalid_storage = validateDecodedVideoFrame(invalid_view);
+    require(!invalid_storage && invalid_storage.error().detail().find("plane=1") != std::string_view::npos && invalid_storage.error().detail().find("pitch=1") != std::string_view::npos && invalid_storage.error().detail().find("row_bytes=66") != std::string_view::npos, "stride diagnostic includes plane, observed pitch and row bytes");
+    invalid_view = *view;
+    invalid_view.components[1].plane = 4;
+    require(!validateDecodedVideoFrame(invalid_view), "invalid component indices rejected before indexing");
+    invalid_view = *view;
+    invalid_view.frame_hdr.hdr10_plus->num_anchors = 16;
+    require(!validateDecodedVideoFrame(invalid_view), "HDR10+ count cannot exceed metadata storage");
+    invalid_view = *view;
+    invalid_view.planes[0].data += (invalid_view.planes[0].height - 1) * invalid_view.planes[0].pitch;
+    invalid_view.planes[0].pitch *= -1;
+    require(validateDecodedVideoFrame(invalid_view).has_value(), "negative software pitch remains representable");
+    const auto invalid_format = decoded->format;
+    decoded->format = -100;
+    require(!detail::describeDecodedVideoFrame(decoded.get()), "invalid pixel format rejected");
+    decoded->format = invalid_format;
     return 0;
 }

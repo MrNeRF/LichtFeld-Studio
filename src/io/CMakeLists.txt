@@ -33,7 +33,6 @@ add_library(lfs_video STATIC
         include/io/video/video_encoder_interface.hpp
         include/io/video/video_export_options.hpp
         include/io/video/video_extensions.hpp
-        include/io/video/video_output_extent.hpp
         include/io/video/video_reconstruction.hpp
         video/video_encoder.hpp
         video/video_encoder.cpp
@@ -41,10 +40,9 @@ add_library(lfs_video STATIC
         media_studio_backends.cpp
         hdr_tonemap_tensor.hpp
         hdr_tonemap_tensor.cpp
-        video_player.hpp
 )
 if(LFS_USE_VULKAN)
-    target_sources(lfs_video PRIVATE hdr_libplacebo.cpp hdr_libplacebo_av.c)
+    target_sources(lfs_video PRIVATE hdr_libplacebo.cpp)
 else()
     target_sources(lfs_video PRIVATE hdr_libplacebo_unavailable.cpp)
 endif()

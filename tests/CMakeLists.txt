@@ -99,11 +99,12 @@ if(LFS_TENSOR_METAL AND BUILD_TESTS)
     find_program(LFS_HDR_TEST_FFMPEG NAMES ffmpeg)
     add_executable(hdr_tonemap_contracts test_hdr_tonemap_tensor.cpp)
     target_compile_features(hdr_tonemap_contracts PRIVATE cxx_std_23)
-    # FFmpeg's public ABI and headers come from lfs_media through lfs_video.
-    target_include_directories(hdr_tonemap_contracts PRIVATE ${CMAKE_SOURCE_DIR}/src/io)
+    # Fixture construction uses a private FFmpeg link; renderer input is media-owned.
+    target_include_directories(hdr_tonemap_contracts PRIVATE ${CMAKE_SOURCE_DIR}/src/io ${CMAKE_SOURCE_DIR}/src)
     target_compile_definitions(hdr_tonemap_contracts PRIVATE LFS_HDR_TEST_FFMPEG="${LFS_HDR_TEST_FFMPEG}"
         $<$<BOOL:${LFS_USE_VULKAN}>:LFS_USE_VULKAN>)
-    target_link_libraries(hdr_tonemap_contracts PRIVATE lfs_video lfs_core GTest::gtest_main)
+    target_link_libraries(hdr_tonemap_contracts PRIVATE lfs_video lfs_core GTest::gtest_main ${FFMPEG_LIBRARIES})
+    target_include_directories(hdr_tonemap_contracts SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
     add_test(NAME HdrTonemapContracts COMMAND hdr_tonemap_contracts)
     # libplacebo is the precise-math reference; MoltenVK defaults to fast math.
     set_tests_properties(HdrTonemapContracts PROPERTIES ENVIRONMENT "MVK_CONFIG_FAST_MATH_ENABLED=0"
@@ -551,6 +552,8 @@ else()
 endif()
 
 add_executable(lichtfeld_format_tests ${LICHT_FORMAT_TARGET_FILES})
+target_link_libraries(lichtfeld_format_tests PRIVATE ${FFMPEG_LIBRARIES})
+target_include_directories(lichtfeld_format_tests SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
 target_include_directories(lichtfeld_format_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/include
     ${CMAKE_SOURCE_DIR}/src/io/include
@@ -769,11 +772,13 @@ if(NOT LFS_HAS_CUDA)
         list(APPEND TEST_SOURCES test_video_videotoolbox.cpp test_mcp_render_capture_utils.cpp)
     endif()
     add_executable(lichtfeld_tests ${TEST_SOURCES})
+    target_link_libraries(lichtfeld_tests PRIVATE ${FFMPEG_LIBRARIES})
+    target_include_directories(lichtfeld_tests SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
     target_compile_definitions(lichtfeld_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}" TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
     if(APPLE)
         target_sources(lichtfeld_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/io/stb_image_impl.cpp)
-        # lfs_video already links FFmpeg; linking it a second time lets CMake
-        # merge the duplicated "-framework X" pairs into a broken link line.
+        # lfs_video uses opaque media frames. Fixture-only FFmpeg libraries
+        # are linked privately above, preserving package framework qualifiers.
         target_include_directories(lichtfeld_tests SYSTEM PRIVATE
             ${CMAKE_SOURCE_DIR}/external)
         target_link_libraries(lichtfeld_tests PRIVATE lfs_video nlohmann_json::nlohmann_json)
@@ -1340,6 +1345,8 @@ list(APPEND TEST_SOURCES
 
 # Create test executable
 add_executable(lichtfeld_tests ${TEST_SOURCES})
+target_link_libraries(lichtfeld_tests PRIVATE ${FFMPEG_LIBRARIES})
+target_include_directories(lichtfeld_tests SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
 
 # test_assert_hardening.cpp includes the generated ABI header directly. Ensure
 # the build-time tripwire has run before this target starts compiling.

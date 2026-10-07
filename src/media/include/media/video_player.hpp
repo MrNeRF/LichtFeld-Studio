@@ -14,25 +14,16 @@
 
 namespace lfs::io {
 
-    struct VideoPlayerOptions {
-        // False selects software decoding without probing the GPU driver.
-        // Studio keeps the default hardware preference and software fallback.
-        bool allow_hardware_decode = true;
-    };
-
     class LFS_MEDIA_API VideoPlayer {
     public:
         VideoPlayer();
-        explicit VideoPlayer(VideoPlayerOptions options);
         ~VideoPlayer();
 
         VideoPlayer(const VideoPlayer&) = delete;
         VideoPlayer& operator=(const VideoPlayer&) = delete;
 
         bool open(const std::filesystem::path& path);
-        void close();
         bool isOpen() const;
-        bool hardwareDecodeActive() const;
 
         void togglePlayPause();
         bool isPlaying() const;

@@ -6,6 +6,7 @@
 #include "media/video_output_extent.hpp"
 #include <algorithm>
 #include <exception>
+#include <format>
 #include <string_view>
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -81,7 +82,7 @@ namespace lfs::media {
             for (int plane = 0; plane < count; ++plane) {
                 const int row_bytes = plane == 0 || use_nvenc_ ? width_ : width_ / 2;
                 if (!frame_->data[plane] || frame_->linesize[plane] < row_bytes)
-                    return encodeError(ErrorCode::Internal, "Invalid encoder plane storage");
+                    return encodeError(ErrorCode::Internal, std::format("Invalid encoder plane storage (plane={}, data_present={}, linesize={}, row_bytes={})", plane, frame_->data[plane] != nullptr, frame_->linesize[plane], row_bytes));
                 target.planes[plane] = {frame_->data[plane], static_cast<std::size_t>(frame_->linesize[plane]),
                                         row_bytes,
                                         plane == 0 ? height_ : height_ / 2};
@@ -122,6 +123,7 @@ namespace lfs::media {
         }
 
         [[nodiscard]] bool isOpen() const { return is_open_; }
+        bool& inCall() { return in_call_; }
 
     private:
         bool tryInitNvenc(const std::filesystem::path& path, const VideoEncodeOptions& opts) {
@@ -465,6 +467,7 @@ namespace lfs::media {
         int framerate_ = DEFAULT_FRAMERATE;
         int64_t frame_count_ = 0;
         bool is_open_ = false;
+        bool in_call_ = false;
         bool use_nvenc_ = false;
 
     public:
@@ -473,28 +476,45 @@ namespace lfs::media {
 
     VideoEncodeSession::VideoEncodeSession() : impl_(std::make_unique<Impl>()) {}
     VideoEncodeSession::~VideoEncodeSession() = default;
-    VideoEncodeSession::VideoEncodeSession(VideoEncodeSession&&) noexcept = default;
-    VideoEncodeSession& VideoEncodeSession::operator=(VideoEncodeSession&&) noexcept = default;
+    VideoEncodeSession::VideoEncodeSession(VideoEncodeSession&& other) {
+        if (other.impl_ && other.impl_->inCall())
+            throw lfs::Exception(make_error({.code = ErrorCode::FailedPrecondition, .domain = ErrorDomain::IO, .detail = "Cannot move encoder during a frame writer callback (writer_active=true)", .detection = LFS_SOURCE_SITE_CURRENT()}));
+        impl_ = std::move(other.impl_);
+    }
+    VideoEncodeSession& VideoEncodeSession::operator=(VideoEncodeSession&& other) {
+        if ((impl_ && impl_->inCall()) || (other.impl_ && other.impl_->inCall()))
+            throw lfs::Exception(make_error({.code = ErrorCode::FailedPrecondition, .domain = ErrorDomain::IO, .detail = "Cannot replace encoder ownership during a frame writer callback (writer_active=true)", .detection = LFS_SOURCE_SITE_CURRENT()}));
+        if (this != &other)
+            impl_ = std::move(other.impl_);
+        return *this;
+    }
     Result<void> VideoEncodeSession::open(const std::filesystem::path& path, const VideoEncodeOptions& options) {
         if (!impl_)
             impl_ = std::make_unique<Impl>();
+        if (impl_->inCall())
+            return encodeError(ErrorCode::FailedPrecondition, "Cannot open encoder during a frame writer callback (writer_active=true)");
         if (impl_->isOpen())
             return encodeError(ErrorCode::FailedPrecondition, "Encoder is already open");
         if (auto error = io::video::videoOutputExtentError(options.width, options.height))
             return encodeError(ErrorCode::InvalidArgument, std::string(*error));
-        if (options.framerate <= 0 || options.framerate > 1000)
-            return encodeError(ErrorCode::InvalidArgument, "Video framerate must be between 1 and 1000");
-        if (options.crf < 0 || options.crf > 51)
-            return encodeError(ErrorCode::InvalidArgument, "Video CRF must be between 0 and 51");
+        if (auto error = io::video::videoEncodingRangeError(options.framerate, options.crf))
+            return encodeError(ErrorCode::InvalidArgument, std::move(*error));
         if (options.preferred_backend != VideoEncodeBackend::Software &&
             options.preferred_backend != VideoEncodeBackend::Cuda &&
             options.preferred_backend != VideoEncodeBackend::VideoToolbox)
-            return encodeError(ErrorCode::InvalidArgument, "Unknown video encoder backend");
+            return encodeError(ErrorCode::InvalidArgument, std::format("Unknown video encoder backend (got {})", static_cast<int>(options.preferred_backend)));
         return impl_->open(path, options);
     }
     Result<void> VideoEncodeSession::writeFrame(VideoEncodeWriter& writer) {
         if (!impl_)
             return encodeError(ErrorCode::FailedPrecondition, "Encoder not open");
+        if (impl_->inCall())
+            return encodeError(ErrorCode::FailedPrecondition, "Cannot write encoder during a frame writer callback (writer_active=true)");
+        struct CallGuard {
+            bool& active;
+            explicit CallGuard(bool& value) : active(value) { active = true; }
+            ~CallGuard() { active = false; }
+        } guard(impl_->inCall());
         try {
             return impl_->writeFrame(writer);
         } catch (const lfs::Exception& error) {
@@ -508,6 +528,8 @@ namespace lfs::media {
     Result<void> VideoEncodeSession::close() {
         if (!impl_)
             return {};
+        if (impl_->inCall())
+            return encodeError(ErrorCode::FailedPrecondition, "Cannot close encoder during a frame writer callback (writer_active=true)");
         return impl_->close();
     }
     bool VideoEncodeSession::isOpen() const { return impl_ && impl_->isOpen(); }

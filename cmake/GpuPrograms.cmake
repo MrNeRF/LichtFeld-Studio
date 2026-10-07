@@ -16,7 +16,7 @@ function(lfs_add_gpu_program target name)
     # DEFINES (NAME or NAME=VALUE) specialize the module; build each variant
     # as its own program. RELAXED_MATH lets Metal reassociate and use fast
     # functions (GpuKernelModule::Entry::relaxed_math).
-    cmake_parse_arguments(PROGRAM "RELAXED_MATH" "SOURCE" "COMPUTE;VERTEX;FRAGMENT;DEFINES" ${ARGN})
+    cmake_parse_arguments(PROGRAM "RELAXED_MATH" "SOURCE" "COMPUTE;VERTEX;FRAGMENT;DEFINES;DEPENDS" ${ARGN})
     list(TRANSFORM PROGRAM_DEFINES PREPEND "-D" OUTPUT_VARIABLE defines)
     get_filename_component(source "${PROGRAM_SOURCE}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
     set(directory "${CMAKE_CURRENT_BINARY_DIR}/gpu_programs/${name}")
@@ -43,7 +43,7 @@ function(lfs_add_gpu_program target name)
                     COMMAND "${LFS_GPU_SLANGC}" "${source}" ${defines} -entry "${entry}" -stage "${slang_stage}"
                         -target spirv -profile glsl_460 -emit-spirv-directly -fvk-use-entrypoint-name
                         -fvk-use-scalar-layout -fp-mode precise -line-directive-mode none -o "${output}" -reflection-json "${output}.json"
-                    DEPENDS "${source}" "${LFS_GPU_SLANGC}" VERBATIM)
+                    DEPENDS "${source}" ${PROGRAM_DEPENDS} "${LFS_GPU_SLANGC}" VERBATIM)
                 list(APPEND outputs "${output}" "${output}.json")
                 list(APPEND embed_args Vulkan "${cpp_stage}" "${entry}" "${output}" "${output}.json")
             endif()
@@ -52,7 +52,7 @@ function(lfs_add_gpu_program target name)
                 add_custom_command(OUTPUT "${output}" "${output}.json"
                     COMMAND "${LFS_GPU_SLANGC}" "${source}" ${defines} -entry "${entry}" -stage "${slang_stage}"
                         -target metal -fp-mode precise -line-directive-mode none -o "${output}" -reflection-json "${output}.json"
-                    DEPENDS "${source}" "${LFS_GPU_SLANGC}" VERBATIM)
+                    DEPENDS "${source}" ${PROGRAM_DEPENDS} "${LFS_GPU_SLANGC}" VERBATIM)
                 list(APPEND outputs "${output}" "${output}.json")
                 list(APPEND embed_args Metal "${cpp_stage}" "${entry}" "${output}" "${output}.json")
             endif()
@@ -67,7 +67,7 @@ function(lfs_add_gpu_program target name)
                     COMMAND "${CMAKE_CUDA_COMPILER}" --ptx "--gpu-architecture=compute_${LFS_RUNTIME_MIN_SM}"
                         --std=c++17 --fmad=false -DSLANG_CUDA_ENABLE_HALF=1
                         "${cuda_source}" -o "${output}"
-                    DEPENDS "${source}" "${LFS_GPU_SLANGC}" VERBATIM)
+                    DEPENDS "${source}" ${PROGRAM_DEPENDS} "${LFS_GPU_SLANGC}" VERBATIM)
                 list(APPEND outputs "${output}" "${output}.json")
                 list(APPEND embed_args CUDA Compute "${entry}" "${output}" "${output}.json")
             endif()
