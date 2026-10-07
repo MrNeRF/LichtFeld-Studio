@@ -1974,9 +1974,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         placeholder_title_changed = placeholder.get_attribute("title", "") != placeholder_title
         if placeholder_title_changed:
             placeholder.set_attribute("title", placeholder_title)
+        # Leave 12 dp gutters and 4 dp for the side inspector's scrollbar.
         # Side inspectors use their content width. The stacked inspector caps
         # its poster so opening it never consumes the whole results viewport.
-        width = (max(0.0, self._inspector_width - 12.0) if self._layout_class in ("wide", "medium")
+        width = (max(0.0, self._inspector_width - 28.0) if self._layout_class in ("wide", "medium")
                  else min(240.0, max(0.0, self._content_width - 24.0))
                  if self._layout_class in ("compact", "narrow") else 160.0)
         geometry = (width, width * 10.0 / 16.0)

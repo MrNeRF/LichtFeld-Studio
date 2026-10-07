@@ -4950,7 +4950,7 @@ def test_open_in_portal_uses_the_scene_login_destination(panel_module, visibilit
 
 @pytest.mark.parametrize(
     ("layout", "content_width", "expected_width"),
-    [("medium", 800.0, 308.0), ("narrow", 600.0, 240.0)],
+    [("medium", 800.0, 292.0), ("narrow", 600.0, 240.0)],
 )
 def test_info_poster_is_inserted_updated_and_released(
     panel_module, tmp_path, layout, content_width, expected_width
