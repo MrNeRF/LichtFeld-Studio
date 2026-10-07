@@ -57,6 +57,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_python_editor_input.cpp
         test_startup_overlay_geometry.cpp
         test_vram_hud_geometry.cpp
+        test_vram_hud_header_click.cpp
     )
     add_executable(lichtfeld_visualizer_tests EXCLUDE_FROM_ALL
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}
@@ -680,6 +681,7 @@ set(TEST_FILES
     test_training_progress_publisher.cpp
     test_startup_overlay_geometry.cpp
     test_vram_hud_geometry.cpp
+    test_vram_hud_header_click.cpp
     test_menu_bar_title.cpp
     test_status_bar_mining.cpp
     test_rotated_sh_correctness.cpp

@@ -6,6 +6,8 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+
 namespace lfs::vis::gui::vram_hud_geometry {
 
     TEST(VramHudGeometry, ConvertsAbsolutePositionToViewportLocal) {
@@ -44,6 +46,14 @@ namespace lfs::vis::gui::vram_hud_geometry {
         const auto extent = dragExtent(true, expanded_width, compact_width);
         EXPECT_FLOAT_EQ(extent, compact_width);
         EXPECT_FLOAT_EQ(clampDragPosition(900.0f, extent, viewport_width), 804.0f);
+    }
+
+    TEST(VramHudGeometry, PressBecomesDragOnlyPastClickSlop) {
+        EXPECT_FALSE(movedPastClickSlop(0.0f, 0.0f));
+        EXPECT_FALSE(movedPastClickSlop(2.0f, -2.0f));
+        EXPECT_TRUE(movedPastClickSlop(25.0f, 0.0f));
+        EXPECT_TRUE(movedPastClickSlop(-3.0f, 3.0f));
+        EXPECT_FALSE(movedPastClickSlop(std::numeric_limits<float>::quiet_NaN(), 10.0f));
     }
 
 } // namespace lfs::vis::gui::vram_hud_geometry

@@ -69,6 +69,15 @@ namespace lfs::vis::gui::vram_hud_geometry {
         return compact ? compact_extent : expanded_extent;
     }
 
+    // A press that moved past this distance is a drag, so its release must not
+    // also act as a click (e.g. expand the compact strip).
+    inline constexpr float kClickSlopPx = 3.0f;
+
+    [[nodiscard]] inline bool movedPastClickSlop(float dx, float dy) noexcept {
+        return std::isfinite(dx) && std::isfinite(dy) &&
+               dx * dx + dy * dy > kClickSlopPx * kClickSlopPx;
+    }
+
     [[nodiscard]] inline float clampDragPosition(float requested,
                                                  float extent,
                                                  float visible_extent) noexcept {

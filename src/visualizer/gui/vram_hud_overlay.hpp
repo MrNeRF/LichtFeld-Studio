@@ -351,6 +351,7 @@ namespace lfs::vis::gui {
         float drag_start_size_w_ = 0.0f;
         float drag_start_size_h_ = 0.0f;
         bool dragging_header_ = false;
+        bool header_drag_moved_ = false;
         bool dragging_resize_ = false;
         bool pointer_captured_ = false;
         bool geometry_dirty_ = false;

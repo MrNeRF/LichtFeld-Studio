@@ -603,12 +603,14 @@ namespace lfs::vis::gui {
             root_->AddEventListener(Rml::EventId::Mouseout, &click_listener_);
         }
         if (header_) {
+            header_->AddEventListener(Rml::EventId::Mousedown, &header_drag_listener_);
             header_->AddEventListener(Rml::EventId::Dragstart, &header_drag_listener_);
             header_->AddEventListener(Rml::EventId::Drag, &header_drag_listener_);
             header_->AddEventListener(Rml::EventId::Dragend, &header_drag_listener_);
             header_->AddEventListener(Rml::EventId::Dblclick, &click_listener_);
         }
         if (perf_strip_header_) {
+            perf_strip_header_->AddEventListener(Rml::EventId::Mousedown, &header_drag_listener_);
             perf_strip_header_->AddEventListener(Rml::EventId::Dragstart, &header_drag_listener_);
             perf_strip_header_->AddEventListener(Rml::EventId::Drag, &header_drag_listener_);
             perf_strip_header_->AddEventListener(Rml::EventId::Dragend, &header_drag_listener_);
@@ -2351,6 +2353,12 @@ namespace lfs::vis::gui {
             }
             const auto toggle_expanded = target->GetAttribute<Rml::String>("data-perf-toggle-expanded", "");
             if (!toggle_expanded.empty()) {
+                // The release that ends a header drag is not a click.
+                if (owner->header_drag_moved_) {
+                    owner->header_drag_moved_ = false;
+                    event.StopPropagation();
+                    return;
+                }
                 lfs::core::events::ui::TogglePerfHudExpanded{}.emit();
                 event.StopPropagation();
                 return;
@@ -2537,6 +2545,10 @@ namespace lfs::vis::gui {
         const auto type = event.GetId();
         const float mx = event.GetParameter("mouse_x", 0.0f);
         const float my = event.GetParameter("mouse_y", 0.0f);
+        if (type == Rml::EventId::Mousedown) {
+            header_drag_moved_ = false;
+            return;
+        }
         if (type == Rml::EventId::Dragstart) {
             const bool compact = state_.perf_hud.visible && !state_.perf_hud.expanded;
             auto* const drag_surface = compact && perf_strip_ ? perf_strip_ : root_;
@@ -2558,6 +2570,8 @@ namespace lfs::vis::gui {
         } else if (type == Rml::EventId::Drag && dragging_header_) {
             const float dx = mx - drag_start_mouse_x_;
             const float dy = my - drag_start_mouse_y_;
+            if (vram_hud_geometry::movedPastClickSlop(dx, dy))
+                header_drag_moved_ = true;
             const bool compact = state_.perf_hud.visible && !state_.perf_hud.expanded;
             const auto bounds = viewportSize(
                 root_, document_, viewport_size_, has_viewport_geometry_);
