@@ -859,6 +859,26 @@ TEST_F(OperatorRegistryPropsTest, LegacyTransformRotateUsesEditableTargetPivotOn
     EXPECT_FLOAT_EQ(locked_components.translation.z, 0.0f);
 }
 
+TEST_F(OperatorRegistryPropsTest, CachedBoundsFollowRotatedScaledParents) {
+    add_node("target", {0.0f, 0.0f, 0.0f, 2.0f, 4.0f, 6.0f});
+    auto& scene = scene_manager_->getScene();
+    const auto parent = scene.addGroup("parent");
+    const auto nested = scene.addGroup("nested", parent);
+    ASSERT_TRUE(scene.reparent(scene.getNode("target")->id, nested));
+    scene_manager_->selectNode("target");
+    ASSERT_TRUE(lfs::vis::cap::resolveEditableTransformSelection(*scene_manager_, std::nullopt));
+    const auto rotation = glm::rotate(glm::mat4(1.0f), 0.7f, glm::vec3(0, 0, 1));
+    const auto scale = glm::scale(glm::mat4(1.0f), glm::vec3(2, .5f, 3));
+    scene.setNodeTransform("parent", rotation);
+    scene.setNodeTransform("nested", scale);
+    const auto resolved = lfs::vis::cap::resolveEditableTransformSelection(*scene_manager_, std::nullopt);
+    ASSERT_TRUE(resolved);
+    EXPECT_EQ(resolved->local_center, glm::vec3(1, 2, 3));
+    const auto expected = lfs::rendering::visualizerWorldPointFromDataWorld(
+        glm::vec3(rotation * scale * glm::vec4(1, 2, 3, 1)));
+    EXPECT_LT(glm::length(resolved->world_center - expected), 1e-5f);
+}
+
 TEST_F(OperatorRegistryPropsTest, VisualizerFacingTransformSelectionUsesVisualizerWorldCenter) {
     add_node("target", {
                            0.0f,

@@ -608,6 +608,7 @@ set(TEST_FILES
     test_python_io.cpp
     test_extended_unary_ops_vs_torch.cpp
     test_scene_validity.cpp
+    test_scene_bounds_cache.cpp
     test_training_scene_init_concurrency.cpp
     test_training_init_centering.cpp
     test_scene_consolidation.cpp

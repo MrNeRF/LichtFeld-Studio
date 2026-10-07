@@ -473,6 +473,11 @@ namespace lfs::vis {
                 rendering->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY,
                                      FrameReason::SceneChange, "scene_cache");
         });
+        scene_.setTransformInvalidationCallback([] {
+            if (auto* rendering = services().renderingOrNull())
+                rendering->markDirty(DirtyFlag::MESH | DirtyFlag::OVERLAY,
+                                     FrameReason::SceneChange, "scene_transform");
+        });
         core::prop::set_undo_callback(
             [](const std::string& property_path,
                const std::any& old_value,

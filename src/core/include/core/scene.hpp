@@ -186,6 +186,20 @@ namespace lfs::core {
         [[nodiscard]] const glm::mat4& transform() const { return local_transform.get(); }
 
     private:
+        friend class Scene;
+        struct ModelBoundsCache {
+            const SplatData* model = nullptr;
+            const void* means = nullptr;
+            size_t count = 0;
+            uint64_t content_generation = 0;
+            uint64_t deleted_version = 0;
+            glm::vec3 min{0.0f};
+            glm::vec3 max{0.0f};
+            bool valid = false;
+            bool has_bounds = false;
+        };
+        mutable std::mutex model_bounds_mutex_;
+        mutable ModelBoundsCache model_bounds_cache_;
         Scene* scene_ = nullptr;
     };
 
@@ -531,6 +545,9 @@ namespace lfs::core {
         void setRenderInvalidationCallback(RenderInvalidationCallback callback) noexcept {
             render_invalidation_callback_ = callback;
         }
+        void setTransformInvalidationCallback(RenderInvalidationCallback callback) noexcept {
+            transform_invalidation_callback_ = callback;
+        }
 
         enum class MergeStorageMode {
             Clone,
@@ -692,6 +709,7 @@ namespace lfs::core {
         [[nodiscard]] std::optional<glm::mat4> getCameraSceneTransformByUid(int uid) const;
 
         void invalidateCache() {
+            invalidateBounds();
             model_cache_valid_.store(false, std::memory_order_release);
             transform_cache_valid_.store(false, std::memory_order_release);
             cached_transform_indices_.reset();
@@ -701,7 +719,11 @@ namespace lfs::core {
         }
         void invalidateTransformCache() {
             transform_cache_valid_.store(false, std::memory_order_release);
-            publishRenderInvalidation();
+            publishRenderInvalidation(true);
+        }
+        // Geometry writers publish here without invalidating resident render inputs.
+        void invalidateBounds() noexcept {
+            bounds_generation_.fetch_add(1, std::memory_order_release);
         }
         void markDirty() { invalidateCache(); }
         void markTransformDirty(NodeId node);
@@ -808,9 +830,13 @@ namespace lfs::core {
         bool preserve_source_models_ = false;
         mutable std::atomic<uint64_t> render_generation_{0};
         RenderInvalidationCallback render_invalidation_callback_ = nullptr;
-        void publishRenderInvalidation() {
+        RenderInvalidationCallback transform_invalidation_callback_ = nullptr;
+        std::atomic<uint64_t> bounds_generation_{1};
+        void publishRenderInvalidation(const bool transform_only = false) {
             render_generation_.fetch_add(1, std::memory_order_acq_rel);
-            if (render_invalidation_callback_)
+            if (transform_only && transform_invalidation_callback_)
+                transform_invalidation_callback_();
+            else if (render_invalidation_callback_)
                 render_invalidation_callback_();
         }
         mutable uint64_t selection_generation_ = 0;

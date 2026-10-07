@@ -1950,7 +1950,7 @@ namespace lfs::vis::gui {
                             scene_manager->getScene(), node_gizmo_node_names_, updated_min, updated_max)) {
                         gizmo_pivot_ = (updated_min + updated_max) * 0.5f;
                         if (render_manager) {
-                            render_manager->updateSettings(render_manager->getSettings(), DirtyFlag::OVERLAY);
+                            render_manager->markDirty(DirtyFlag::OVERLAY, FrameReason::SceneChange);
                         }
                     }
                 }

@@ -5532,9 +5532,27 @@ namespace lfs::core {
         };
 
         if (node->model && node->model->size() > 0) {
-            glm::vec3 model_min, model_max;
-            if (lfs::core::compute_bounds(*node->model, model_min, model_max)) {
-                expand_bounds(model_min, model_max);
+            const auto generation = bounds_generation_.load(std::memory_order_acquire);
+            const auto* means = node->model->means_raw().data_ptr();
+            const auto count = node->model->size();
+            const auto deleted_version = node->model->deleted_mask_version();
+            std::lock_guard lock(node->model_bounds_mutex_);
+            auto& cached = node->model_bounds_cache_;
+            if (!cached.valid || cached.model != node->model.get() ||
+                cached.means != means || cached.count != count ||
+                cached.content_generation != generation ||
+                cached.deleted_version != deleted_version) {
+                cached.valid = false;
+                cached.has_bounds = lfs::core::compute_bounds(*node->model, cached.min, cached.max);
+                cached.model = node->model.get();
+                cached.means = means;
+                cached.count = count;
+                cached.content_generation = generation;
+                cached.deleted_version = deleted_version;
+                cached.valid = true;
+            }
+            if (cached.has_bounds) {
+                expand_bounds(cached.min, cached.max);
             }
         }
 

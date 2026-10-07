@@ -503,7 +503,9 @@ namespace lfs::vis {
                 }));
             callback_cleanup_.add([token] { token->reset(); });
         };
-        bind_view_input(app_store().scene_generation, DirtyFlag::ALL, FrameReason::SceneChange);
+        // Scene publishes geometry invalidation directly. Its UI generation also
+        // changes for matrices, which must retain the resident splat inputs.
+        bind_view_input(app_store().scene_generation, DirtyFlag::MESH | DirtyFlag::OVERLAY, FrameReason::SceneChange);
         bind_view_input(app_store().selection_generation, DirtyFlag::SELECTION | DirtyFlag::OVERLAY, FrameReason::Selection);
         bind_view_input(app_store().render_settings_generation, DirtyFlag::ALL, FrameReason::SettingsChange);
         auto active_tool_poll_cache_token = std::make_shared<core::reactive::SubscriptionToken>(
