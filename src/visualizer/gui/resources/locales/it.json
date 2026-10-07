@@ -2093,6 +2093,11 @@
     "select_output_location": "Seleziona Posizione di Output"
   },
   "video_extractor": {
+    "exr_half": "HALF (16-bit)",
+    "exr_float": "FLOAT (32-bit)",
+    "srgb": "sRGB",
+    "bt709": "BT.709",
+    "bt2020": "BT.2020",
     "format_exr": "EXR · SDR lineare",
     "exr_precision": "Precisione",
     "exr_compression": "Compressione",

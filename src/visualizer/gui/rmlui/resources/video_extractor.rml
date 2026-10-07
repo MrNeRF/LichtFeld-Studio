@@ -186,7 +186,7 @@
             <div class="settings-row exr-row">
               <div class="exr-field">
                 <span class="field-label exr-label">@tr:video_extractor.exr_precision</span>
-                <select id="exr-precision" class="wide-select"><option value="half">HALF (16-bit)</option><option value="float">FLOAT (32-bit)</option></select>
+                <select id="exr-precision" class="wide-select"><option value="half">@tr:video_extractor.exr_half</option><option value="float">@tr:video_extractor.exr_float</option></select>
               </div>
               <div class="exr-field">
                 <span class="field-label exr-label">@tr:video_extractor.exr_compression</span>
@@ -196,11 +196,11 @@
             <div class="settings-row exr-row">
               <div class="exr-field">
                 <span class="field-label exr-label">@tr:video_extractor.input_transfer</span>
-                <select id="input-transfer" class="wide-select"><option value="auto">@tr:video_extractor.source_metadata</option><option value="linear">@tr:video_extractor.linear</option><option value="srgb">sRGB</option><option value="bt709">BT.709</option></select>
+                <select id="input-transfer" class="wide-select"><option value="auto">@tr:video_extractor.source_metadata</option><option value="linear">@tr:video_extractor.linear</option><option value="srgb">@tr:video_extractor.srgb</option><option value="bt709">@tr:video_extractor.bt709</option></select>
               </div>
               <div class="exr-field">
                 <span class="field-label exr-label">@tr:video_extractor.input_primaries</span>
-                <select id="input-primaries" class="wide-select"><option value="auto">@tr:video_extractor.source_metadata</option><option value="bt709">BT.709</option><option value="bt2020">BT.2020</option></select>
+                <select id="input-primaries" class="wide-select"><option value="auto">@tr:video_extractor.source_metadata</option><option value="bt709">@tr:video_extractor.bt709</option><option value="bt2020">@tr:video_extractor.bt2020</option></select>
               </div>
             </div>
             <p class="inline-note">@tr:video_extractor.exr_profile_hint</p>
