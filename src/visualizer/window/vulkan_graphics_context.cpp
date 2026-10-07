@@ -2,8 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vulkan_graphics_context.hpp"
-#include "core/point_cloud.hpp"
-#include "rendering/point_cloud_render_buffers.hpp"
 
 #include "core/logger.hpp"
 #include "core/tensor_backend_vulkan.hpp"
@@ -123,25 +121,6 @@ namespace lfs::vis {
     lfs::core::SplatTensorAllocator VulkanGraphicsContext::splatTensorAllocator(
         const bool preserve_float_shN) {
         return context_.tensorInterop().splat_allocator(preserve_float_shN);
-    }
-
-    void VulkanGraphicsContext::preparePointCloudStorage(lfs::core::PointCloud& cloud, lfs::core::TensorCompletion ready) {
-        if (cloud.size() == 0) {
-            cloud.render_buffers.reset();
-            return;
-        }
-        auto& interop = context_.tensorInterop();
-        auto positions = interop.buffer(cloud.means);
-        auto colors = interop.buffer(cloud.colors);
-        if (!positions || !colors)
-            throw std::runtime_error("Point-cloud storage is not Vulkan consumable");
-        if (!ready.timeline().semaphore) {
-            const lfs::core::Tensor* tensors[] = {&cloud.means, &cloud.colors};
-            ready = interop.ready(tensors);
-            ready.wait();
-        }
-        cloud.render_buffers = std::make_shared<lfs::core::PointCloudRenderBuffers>(
-            lfs::core::PointCloudRenderBuffers{cloud.means, cloud.colors, *positions, *colors, ready.timeline()});
     }
 
     void VulkanGraphicsContext::connectTensorBackend() {

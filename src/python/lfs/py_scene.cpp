@@ -274,7 +274,6 @@ namespace lfs::python {
     int64_t PyPointCloud::filter(const PyTensor& keep_mask) {
         if (update_target_.revision)
             update_target_.revision->fetch_add(1, std::memory_order_release);
-        pc_->render_buffers.reset();
         const auto& mask = keep_mask.tensor();
         assert(mask.dtype() == core::DataType::Bool && "Mask must be boolean");
         assert(mask.shape().rank() == 1 && "Mask must be 1D");
@@ -304,7 +303,6 @@ namespace lfs::python {
     int64_t PyPointCloud::filter_indices(const PyTensor& indices) {
         if (update_target_.revision)
             update_target_.revision->fetch_add(1, std::memory_order_release);
-        pc_->render_buffers.reset();
         const auto& idx = indices.tensor();
         assert(idx.shape().rank() == 1 && "Indices must be 1D");
 
@@ -331,7 +329,6 @@ namespace lfs::python {
     void PyPointCloud::set_data(const PyTensor& points, const PyTensor& colors) {
         if (update_target_.revision)
             update_target_.revision->fetch_add(1, std::memory_order_release);
-        pc_->render_buffers.reset();
         const auto& pts = points.tensor();
         const auto& cols = colors.tensor();
         assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
@@ -359,7 +356,6 @@ namespace lfs::python {
     void PyPointCloud::set_colors(const PyTensor& colors) {
         if (update_target_.revision)
             update_target_.revision->fetch_add(1, std::memory_order_release);
-        pc_->render_buffers.reset();
         const auto& cols = colors.tensor();
         assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
         assert(cols.shape()[0] == pc_->size());
@@ -373,7 +369,6 @@ namespace lfs::python {
     void PyPointCloud::set_means(const PyTensor& points) {
         if (update_target_.revision)
             update_target_.revision->fetch_add(1, std::memory_order_release);
-        pc_->render_buffers.reset();
         const auto& pts = points.tensor();
         assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
         assert(pts.shape()[0] == pc_->size());

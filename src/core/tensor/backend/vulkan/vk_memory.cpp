@@ -34,7 +34,6 @@ namespace lfs::core::internal {
         constexpr VkDeviceSize kByteWordBytes = 4;
         constexpr VkBufferUsageFlags kStorageUsage =
             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |

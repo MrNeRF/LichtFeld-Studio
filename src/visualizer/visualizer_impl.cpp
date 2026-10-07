@@ -351,7 +351,7 @@ namespace lfs::vis {
 
     VisualizerImpl::~VisualizerImpl() {
         // Join uploads before Python owners or the graphics device can be torn down.
-        if (auto updates = point_cloud_updates_.exchange(nullptr))
+        if (auto updates = std::atomic_exchange(&point_cloud_updates_, std::shared_ptr<PointCloudUpdateManager>{}))
             updates->shutdown();
         if (vksplat_spirv_preload_future_.valid())
             vksplat_spirv_preload_future_.wait();
@@ -1388,7 +1388,7 @@ namespace lfs::vis {
             pending_render_work.swap(render_work_queue_);
         }
 
-        if (auto updates = point_cloud_updates_.load())
+        if (auto updates = std::atomic_load(&point_cloud_updates_))
             updates->stop();
         python::request_plugin_preload_stop();
 
@@ -2122,8 +2122,8 @@ namespace lfs::vis {
             window_initialized_ = true;
             auto* graphics = window_manager_->getGraphicsContext();
             auto allocator = graphics->splatTensorAllocator();
-            point_cloud_updates_.store(std::make_shared<PointCloudUpdateManager>(
-                preparePointCloudUpdate(std::move(allocator), [graphics](core::PointCloud& cloud, core::TensorCompletion ready) { graphics->preparePointCloudStorage(cloud, std::move(ready)); }, graphics->pointCloudUploadDevice()), [this] { wakeMainLoop(); }, true));
+            std::atomic_store(&point_cloud_updates_, std::make_shared<PointCloudUpdateManager>(
+                                                         preparePointCloudUpdate(std::move(allocator)), [this] { wakeMainLoop(); }, true));
 
             window_manager_->pollEvents();
             window_manager_->updateWindowSize();
@@ -2262,7 +2262,7 @@ namespace lfs::vis {
                 .emit();
         }
 
-        if (auto updates = point_cloud_updates_.load()) {
+        if (auto updates = std::atomic_load(&point_cloud_updates_)) {
             updates->resolveQueued([this](PointCloudUpdateTarget& target, PointCloudUpdateInput& input) {
                 auto& scene = getScene();
                 if (target.scene != &scene || target.scene_epoch != scene.pointCloudUpdateEpoch() ||
@@ -2425,7 +2425,7 @@ namespace lfs::vis {
 
     bool VisualizerImpl::hasPendingWork() const {
         std::lock_guard lock(work_queue_mutex_);
-        const auto updates = point_cloud_updates_.load();
+        const auto updates = std::atomic_load(&point_cloud_updates_);
         return !work_queue_.empty() || (updates && updates->hasReady());
     }
 

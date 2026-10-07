@@ -35,7 +35,7 @@ namespace lfs::vis {
         friend struct PointCloudUpdateTicketTestAccess;
         std::atomic<PointCloudUpdateState> state_{PointCloudUpdateState::Queued};
         std::atomic<bool> inputs_released_{false};
-        std::atomic<std::shared_ptr<const std::string>> error_;
+        std::shared_ptr<const std::string> error_;
         void fail(std::string error);
         void supersede();
     };
@@ -111,9 +111,7 @@ namespace lfs::vis {
     };
 
     // All allocation, staging, conversion, validation of values, GPU work, and
-    // renderer-resource import happens in this callback, on the native worker.
+    // publication preparation happens in this callback, on the native worker.
     LFS_VIS_API PointCloudUpdateManager::Prepare preparePointCloudUpdate(
-        core::SplatTensorAllocator allocator,
-        std::function<void(core::PointCloud&, core::TensorCompletion)> prepare_renderer,
-        void* vulkan_device = nullptr);
+        core::SplatTensorAllocator allocator = {});
 } // namespace lfs::vis

@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "point_cloud_updates.hpp"
+#include "core/tensor_execution.hpp"
 #include "core/tensor_upload.hpp"
-#include "rendering/point_cloud_render_buffers.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -41,7 +41,7 @@ namespace lfs::vis {
         // Written before the release-store of Failed and immutable afterwards.
         if (state_.load(std::memory_order_acquire) != PointCloudUpdateState::Failed)
             return {};
-        const auto error = error_.load(std::memory_order_acquire);
+        const auto error = std::atomic_load_explicit(&error_, std::memory_order_acquire);
         return error ? *error : std::string{};
     }
     bool PointCloudUpdateTicket::cancel() {
@@ -66,8 +66,8 @@ namespace lfs::vis {
         // Only the first failure owns the immutable payload. Publish it before
         // Failed, so concurrent/repeated failures cannot race error() readers.
         std::shared_ptr<const std::string> expected;
-        if (!error_.compare_exchange_strong(expected, std::make_shared<const std::string>(std::move(error)),
-                                            std::memory_order_acq_rel, std::memory_order_acquire))
+        if (!std::atomic_compare_exchange_strong_explicit(&error_, &expected, std::make_shared<const std::string>(std::move(error)),
+                                                          std::memory_order_acq_rel, std::memory_order_acquire))
             return;
         while (!terminal(state)) {
             if (state_.compare_exchange_weak(state, PointCloudUpdateState::Failed, std::memory_order_acq_rel))
@@ -200,6 +200,7 @@ namespace lfs::vis {
                 }
                 request->bytes = bytes;
             } catch (const std::exception& e) {
+                // LFS-CENSUS-OK(empty-catch): the ticket exposes the failure to its Python caller.
                 request->ticket->fail(e.what());
             }
         }
@@ -236,6 +237,7 @@ namespace lfs::vis {
                 publish(request->target, request->prepared, request->retired);
                 request->ticket->state_.store(PointCloudUpdateState::Published, std::memory_order_release);
             } catch (const std::exception& e) {
+                // LFS-CENSUS-OK(empty-catch): the ticket exposes the failure to its Python caller.
                 request->ticket->fail(e.what());
             }
         }
@@ -293,6 +295,7 @@ namespace lfs::vis {
                     ticket->inputs_released_.store(true, std::memory_order_release);
                 });
             } catch (const std::exception& e) {
+                // LFS-CENSUS-OK(empty-catch): the ticket exposes the failure to its Python caller.
                 work->ticket->fail(e.what());
             }
             // prepare must settle its own GPU work before returning, including on failure.
@@ -309,18 +312,14 @@ namespace lfs::vis {
     }
 
     PointCloudUpdateManager::Prepare preparePointCloudUpdate(
-        core::SplatTensorAllocator allocator,
-        std::function<void(core::PointCloud&, core::TensorCompletion)> prepare_renderer, void* vulkan_device) {
-        return [allocator = std::move(allocator), prepare_renderer = std::move(prepare_renderer), vulkan_device](
+        core::SplatTensorAllocator allocator) {
+        return [allocator = std::move(allocator)](
                    PointCloudUpdateInput& input, const std::function<void()>& release_inputs) {
             using namespace core;
             const auto backend = gpu_backend_of(input.points).value_or(gpu_backend_of(input.colors).value_or(default_gpu_backend()));
             if (backend != default_gpu_backend())
                 throw std::invalid_argument("GPU source backend must match the viewer backend; convert on the producer first");
-            auto queue_owner = backend == GpuBackend::CUDA && vulkan_device
-                                   ? std::make_shared<TensorWorkQueue>(backend, vulkan_device, nullptr)
-                                   : std::make_shared<TensorWorkQueue>(backend, TensorWorkQueue::Mode::Independent);
-            auto& queue = *queue_owner;
+            TensorWorkQueue queue(backend, TensorWorkQueue::Mode::Independent);
             TensorWorkQueue::Scope scope(queue);
             const auto n = input.points.size(0);
             const TensorShape shape{n, size_t{3}};
@@ -380,14 +379,14 @@ namespace lfs::vis {
                     cloud->colors = allocator ? allocator(shape, n, DataType::Float32, "PointCloud.colors")
                                               : Tensor::empty(shape, Device::GPU, DataType::Float32);
                     if (points_host.is_valid())
-                        points_upload.enqueue(cloud->means, points_host, queue.native_handle());
+                        points_upload.enqueue(cloud->means, points_host, TensorExecutionTarget(queue));
                     else {
                         cloud->means.copy_from(input.points);
                         if (!input.centroid)
                             centroid_gpu = cloud->means.mean(0);
                     }
                     if (colors_host.is_valid())
-                        colors_upload.enqueue(cloud->colors, colors_host, queue.native_handle());
+                        colors_upload.enqueue(cloud->colors, colors_host, TensorExecutionTarget(queue));
                     else {
                         if (input.colors.dtype() == DataType::UInt8) {
                             colors_gpu = input.colors.to(DataType::Float32) / 255.0f;
@@ -454,21 +453,15 @@ namespace lfs::vis {
                 });
                 completion.wait();
             }
-            if (prepare_renderer) {
-                prepare_renderer(*cloud, completion);
-                if (merged)
-                    prepare_renderer(*merged, completion);
-            }
-            if (cloud->render_buffers && completion.timeline().semaphore) {
-                auto buffers = std::make_shared<PointCloudRenderBuffers>(*cloud->render_buffers);
-                // The exported queue semaphore outlives all renderer submissions.
-                buffers->ready.keep_alive = queue_owner;
-                cloud->render_buffers = std::move(buffers);
-            }
-            if (merged && merged->render_buffers && completion.timeline().semaphore) {
-                auto buffers = std::make_shared<PointCloudRenderBuffers>(*merged->render_buffers);
-                buffers->ready.keep_alive = queue_owner;
-                merged->render_buffers = std::move(buffers);
+            // The independent queue retires on this worker. Published tensors
+            // use a stable execution target; renderers acquire their own native
+            // views and dependencies through the public tensor interop seam.
+            const auto target = TensorExecutionTarget::default_queue(backend);
+            cloud->means.set_stream(target);
+            cloud->colors.set_stream(target);
+            if (merged) {
+                merged->means.set_stream(target);
+                merged->colors.set_stream(target);
             }
             return PointCloudUpdateManager::Prepared{std::move(cloud), centroid, std::move(merged)};
         };

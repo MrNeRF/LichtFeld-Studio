@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/point_cloud.hpp"
+#include "scene/point_cloud_updates.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_metal_reader.hpp"
 #include "device_requirements.hpp"
@@ -24,6 +25,7 @@
 #include <filesystem>
 #include <future>
 #include <stdexcept>
+#include <thread>
 #include <unistd.h>
 
 using namespace lfs;
@@ -661,8 +663,26 @@ static void run(bool compare_vulkan) {
         require(!adapter->pollReadbackTicket(first_ticket).has_value(), "Stale native ticket aliased a new destination");
         require(adapter->waitReadbackTicket(*restart_ticket).has_value(), "Restart ticket delivery failed");
     }
-    auto positions = Tensor::from_vector(std::vector<float>{0, 0, -3, 0, 0, -6}, {2, 3}, Device::GPU);
-    auto colors = Tensor::from_vector(std::vector<float>{0, 1, 0, 1, 0, 0}, {2, 3}, Device::GPU);
+    // Run the same native async publication path used by Python, then let
+    // Metal and the Vulkan reference independently consume the published tensors.
+    vis::PointCloudUpdateManager updates(vis::preparePointCloudUpdate(), [] { });
+    vis::PointCloudUpdateInput input;
+    input.points = Tensor::from_vector(std::vector<float> { 0, 0, -3, 0, 0, -6 }, { 2, 3 }, Device::CPU);
+    input.colors = Tensor::from_vector(std::vector<float> { 0, 255, 0, 255, 0, 0 }, { 2, 3 }, Device::CPU).to(core::DataType::UInt8);
+    auto update = updates.submit({ }, std::move(input));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!updates.hasReady() && update->state() != "failed" && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    require(updates.hasReady(), "Async Metal point preparation failed");
+    std::shared_ptr<core::PointCloud> published;
+    updates.publishReady([&](const auto&, const auto& result, auto&) { published = result.cloud; });
+    require(update->state() == "published" && update->inputsReleased(), "Async Metal point publication failed");
+    require(published && core::gpu_backend_of(published->means) == core::GpuBackend::Metal,
+        "Async point publication changed the Metal tensor backend");
+    auto positions = published->means;
+    auto colors = published->colors;
+    published.reset(); // Only renderer/tensor views keep the payload alive from here.
+    updates.shutdown();
     vis::PointCloudVulkanRenderer::RenderRequest points;
     points.positions = &positions;
     points.colors = &colors;

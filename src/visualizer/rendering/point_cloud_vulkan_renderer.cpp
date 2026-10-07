@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "point_cloud_vulkan_renderer.hpp"
-#include "point_cloud_render_buffers.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 #include "vulkan_scene_output.hpp"
 #include <unordered_map>
 #include <unordered_set>
@@ -42,7 +42,8 @@ namespace lfs::vis {
         constexpr std::uint32_t kBindingPreviewSelectionMask = 4;
         constexpr std::uint32_t kBindingSelectionColors = 5;
         constexpr std::uint32_t kBindingDeletedMask = 6;
-        constexpr std::uint32_t kDescriptorBindingCount = 7;
+        constexpr std::uint32_t kBindingVertexAddresses = 7;
+        constexpr std::uint32_t kDescriptorBindingCount = 8;
 
         // Phase 7C-P2: point-cloud is the ResetPreWaitReplacement row only.
         constexpr lfs::rendering::SubmissionFencePolicy kPointCloudFencePolicy =
@@ -421,8 +422,19 @@ namespace lfs::vis {
 
         // Cached input buffers — point clouds rarely change, so we re-upload only
         // when the cache key (tensor pointer / size) changes.
+        struct ResidentBuffers {
+            lfs::core::Tensor positions;
+            lfs::core::Tensor colors;
+            lfs::core::TensorVulkanBuffer positions_buffer;
+            lfs::core::TensorVulkanBuffer colors_buffer;
+            lfs::core::VulkanTimelinePoint ready;
+        };
         struct InputCache {
-            std::shared_ptr<const lfs::core::PointCloudRenderBuffers> prepared_buffers;
+            // Renderer-owned tensor/native leases survive until the previous
+            // submission fence retires, independently of scene publication.
+            std::shared_ptr<const ResidentBuffers> resident_buffers;
+            ManagedBuffer vertex_addresses;
+            std::array<uint64_t, 2> cached_vertex_addresses{};
             uint64_t host_vertex_upload_bytes = 0;
             ManagedBuffer positions;
             ManagedBuffer colors;
@@ -819,30 +831,9 @@ namespace lfs::vis {
             stages[1].module = frag;
             stages[1].pName = "main";
 
-            std::array<VkVertexInputBindingDescription, 2> input_bindings{};
-            input_bindings[0].binding = 0;
-            input_bindings[0].stride = sizeof(float) * 3;
-            input_bindings[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-            input_bindings[1].binding = 1;
-            input_bindings[1].stride = sizeof(float) * 3;
-            input_bindings[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-            std::array<VkVertexInputAttributeDescription, 2> attrs{};
-            attrs[0].location = 0;
-            attrs[0].binding = 0;
-            attrs[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-            attrs[0].offset = 0;
-            attrs[1].location = 1;
-            attrs[1].binding = 1;
-            attrs[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-            attrs[1].offset = 0;
-
+            // Positions/colors are pulled by address in the vertex shader.
             VkPipelineVertexInputStateCreateInfo vi{};
             vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-            vi.vertexBindingDescriptionCount = static_cast<std::uint32_t>(input_bindings.size());
-            vi.pVertexBindingDescriptions = input_bindings.data();
-            vi.vertexAttributeDescriptionCount = static_cast<std::uint32_t>(attrs.size());
-            vi.pVertexAttributeDescriptions = attrs.data();
 
             VkPipelineInputAssemblyStateCreateInfo ia{};
             ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -1279,7 +1270,8 @@ namespace lfs::vis {
                 destroySlot(output.resources);
             retired_outputs.clear();
             submitted = completed = 0;
-            cache.prepared_buffers.reset();
+            cache.resident_buffers.reset();
+            destroyBuffer(allocator, cache.vertex_addresses);
             destroyBuffer(allocator, cache.positions);
             destroyBuffer(allocator, cache.colors);
             destroyBuffer(allocator, cache.transforms);
@@ -1338,30 +1330,34 @@ namespace lfs::vis {
                 return std::unexpected<std::string>("deleted mask must match positions");
             }
 
-            const auto& prepared = req.prepared_buffers;
-            // Leases bind these exact tensor allocations directly. Caller content
-            // revisions invalidate the legacy copied-buffer cache below, not this
-            // shared storage; comparing them to an upload-time revision would
-            // reject valid bindings after unrelated scene invalidations.
-            const bool use_prepared = prepared &&
-                                      prepared->positions.data_ptr() == req.positions->data_ptr() &&
-                                      prepared->colors.data_ptr() == req.colors->data_ptr() &&
-                                      prepared->positions_buffer.device == static_cast<void*>(device) &&
-                                      prepared->colors_buffer.device == static_cast<void*>(device) &&
-                                      prepared->positions_buffer.bytes >= n_points * 3 * sizeof(float) &&
-                                      prepared->colors_buffer.bytes >= n_points * 3 * sizeof(float) &&
-                                      req.positions->dtype() == lfs::core::DataType::Float32 &&
-                                      req.colors->dtype() == lfs::core::DataType::Float32;
-            if (prepared && !use_prepared)
-                // Do not hide invalid handoff metadata behind a synchronous
-                // tensor download/upload on the render thread. The caller can
-                // clear or reprepare the stale metadata explicitly.
-                return std::unexpected<std::string>("Prepared point-cloud storage does not match its tensors or renderer device");
-            // uploadIfChanged is called only after the previous submission's fence.
-            // Its held leases keep old vertex storage alive until that fence completes.
-            cache.prepared_buffers = use_prepared ? prepared : nullptr;
-            if (use_prepared) {
+            std::shared_ptr<ResidentBuffers> resident;
+            if (n_points && req.positions->device() == lfs::core::Device::GPU &&
+                req.colors->device() == lfs::core::Device::GPU &&
+                req.positions->is_contiguous() && req.colors->is_contiguous() &&
+                req.positions->dtype() == lfs::core::DataType::Float32 &&
+                req.colors->dtype() == lfs::core::DataType::Float32) {
+                auto& interop = context->tensorInterop();
+                auto positions = interop.buffer(*req.positions);
+                auto colors = interop.buffer(*req.colors);
+                if (positions && colors) {
+                    if (positions->device != static_cast<void*>(device) || colors->device != static_cast<void*>(device) ||
+                        !positions->device_address || !colors->device_address ||
+                        positions->bytes < n_points * 3 * sizeof(float) || colors->bytes < n_points * 3 * sizeof(float))
+                        return std::unexpected<std::string>("Point-cloud tensor views do not match the renderer device or extent");
+                    const lfs::core::Tensor* tensors[] = {req.positions, req.colors};
+                    resident = std::make_shared<ResidentBuffers>(ResidentBuffers{
+                        *req.positions, *req.colors, *positions, *colors, interop.ready(tensors).timeline()});
+                }
+            }
+            // Called only after the previous submission's fence. Release old
+            // tensor leases here, never when a scene node is replaced.
+            cache.resident_buffers = resident;
+            if (resident) {
                 cache.cached_positions_count = n_points;
+                // The draw count now describes resident tensors, not the old
+                // copied cache. Force a fresh upload when returning to CPU data.
+                cache.cached_positions_ptr = nullptr;
+                cache.cached_colors_ptr = nullptr;
             } else {
                 // positions
                 const void* pos_key = req.positions->ptr<float>();
@@ -1372,7 +1368,7 @@ namespace lfs::vis {
                     if (!tensorToHost(*req.positions, host)) {
                         return std::unexpected<std::string>("Failed to read positions to CPU");
                     }
-                    if (auto r = uploadInto(cb, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                    if (auto r = uploadInto(cb, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                             host.data(), host.size() * sizeof(float),
                                             cache.positions, "positions");
                         !r) {
@@ -1403,7 +1399,7 @@ namespace lfs::vis {
                     if (!tensorToHost(colors_f32, host)) {
                         return std::unexpected<std::string>("Failed to read colors to CPU");
                     }
-                    if (auto r = uploadInto(cb, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                    if (auto r = uploadInto(cb, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                             host.data(), host.size() * sizeof(float),
                                             cache.colors, "colors");
                         !r) {
@@ -1415,6 +1411,22 @@ namespace lfs::vis {
                     cache.cached_colors_dtype = col_dtype;
                     cache.cached_colors_revision = req.colors_revision;
                 }
+            }
+
+            const auto address = [&](const ManagedBuffer& buffer) {
+                VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+                info.buffer = buffer.buffer;
+                return uint64_t(vkGetBufferDeviceAddress(device, &info));
+            };
+            const std::array<uint64_t, 2> addresses{
+                resident ? resident->positions_buffer.device_address : address(cache.positions),
+                resident ? resident->colors_buffer.device_address : address(cache.colors)};
+            if (addresses != cache.cached_vertex_addresses || !cache.vertex_addresses.buffer) {
+                if (auto r = uploadInto(cb, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                        addresses.data(), sizeof(addresses), cache.vertex_addresses, "vertex_addresses");
+                    !r)
+                    return r;
+                cache.cached_vertex_addresses = addresses;
             }
 
             // model_transforms (CPU vector of mat4)
@@ -1667,6 +1679,8 @@ namespace lfs::vis {
             infos[kBindingSelectionColors].range = VK_WHOLE_SIZE;
             infos[kBindingDeletedMask].buffer = deleted_buf;
             infos[kBindingDeletedMask].range = VK_WHOLE_SIZE;
+            infos[kBindingVertexAddresses].buffer = cache.vertex_addresses.buffer;
+            infos[kBindingVertexAddresses].range = VK_WHOLE_SIZE;
 
             std::array<VkWriteDescriptorSet, kDescriptorBindingCount> writes{};
             for (std::uint32_t i = 0; i < writes.size(); ++i) {
@@ -1765,10 +1779,8 @@ namespace lfs::vis {
             xfer_to_vert.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
             xfer_to_vert.srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
             xfer_to_vert.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            xfer_to_vert.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT |
-                                        VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-            xfer_to_vert.dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
-                                         VK_ACCESS_2_SHADER_READ_BIT;
+            xfer_to_vert.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+            xfer_to_vert.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
             VkDependencyInfo xfer_dependency{};
             xfer_dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
             xfer_dependency.memoryBarrierCount = 1;
@@ -1777,24 +1789,18 @@ namespace lfs::vis {
 
             updateDescriptorSet();
 
-            const auto& prepared = cache.prepared_buffers;
-            VkDeviceSize zero_offsets[2] = {
-                prepared ? prepared->positions_buffer.offset : 0,
-                prepared ? prepared->colors_buffer.offset : 0};
-            VkBuffer vbufs[2] = {
-                prepared ? static_cast<VkBuffer>(prepared->positions_buffer.buffer) : cache.positions.buffer,
-                prepared ? static_cast<VkBuffer>(prepared->colors_buffer.buffer) : cache.colors.buffer};
-            const auto positions_bytes = prepared ? prepared->positions_buffer.bytes : cache.positions.size;
-            const auto colors_bytes = prepared ? prepared->colors_buffer.bytes : cache.colors.size;
-            if (vbufs[0] == VK_NULL_HANDLE || vbufs[1] == VK_NULL_HANDLE ||
+            const auto& resident = cache.resident_buffers;
+            const auto positions_bytes = resident ? resident->positions_buffer.bytes : cache.positions.size;
+            const auto colors_bytes = resident ? resident->colors_buffer.bytes : cache.colors.size;
+            if (!cache.cached_vertex_addresses[0] || !cache.cached_vertex_addresses[1] ||
                 cache.cached_positions_count > std::numeric_limits<std::uint32_t>::max() ||
                 positions_bytes < cache.cached_positions_count * sizeof(float) * 3u ||
                 colors_bytes < cache.cached_positions_count * sizeof(float) * 3u) {
                 const std::string error = std::format(
-                    "Point-cloud draw requires non-null vertex buffers, a 32-bit vertex count, and allocations large enough for all vertices (positions_buffer={:#x}, positions_size={}, colors_buffer={:#x}, colors_size={}, vertex_count={}, maximum_vertex_count={}, required_positions_bytes={}, required_colors_bytes={}) ({}:{})",
-                    vkHandleValue(vbufs[0]),
+                    "Point-cloud draw requires non-null device addresses, a 32-bit vertex count, and allocations large enough for all vertices (positions_address={:#x}, positions_size={}, colors_address={:#x}, colors_size={}, vertex_count={}, maximum_vertex_count={}, required_positions_bytes={}, required_colors_bytes={}) ({}:{})",
+                    cache.cached_vertex_addresses[0],
                     cache.positions.size,
-                    vkHandleValue(vbufs[1]),
+                    cache.cached_vertex_addresses[1],
                     cache.colors.size,
                     cache.cached_positions_count,
                     std::numeric_limits<std::uint32_t>::max(),
@@ -1874,8 +1880,6 @@ namespace lfs::vis {
             vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
 
-            vkCmdBindVertexBuffers(command_buffer, 0, 2, vbufs, zero_offsets);
-
             // 64 is the lower bound of Vulkan's guaranteed pointSizeRange; the
             // shader clamps gl_PointSize to this so very-near points don't
             // exceed device limits.
@@ -1933,9 +1937,9 @@ namespace lfs::vis {
             si.commandBufferCount = 1;
             si.pCommandBuffers = &command_buffer;
             VkTimelineSemaphoreSubmitInfo timeline{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
-            VkSemaphore upload_semaphore = prepared ? static_cast<VkSemaphore>(prepared->ready.semaphore) : VK_NULL_HANDLE;
-            uint64_t upload_value = prepared ? prepared->ready.value : 0;
-            VkPipelineStageFlags upload_stage = VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
+            VkSemaphore upload_semaphore = resident ? static_cast<VkSemaphore>(resident->ready.semaphore) : VK_NULL_HANDLE;
+            uint64_t upload_value = resident ? resident->ready.value : 0;
+            VkPipelineStageFlags upload_stage = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
             if (upload_semaphore) {
                 timeline.waitSemaphoreValueCount = 1;
                 timeline.pWaitSemaphoreValues = &upload_value;
@@ -2364,6 +2368,10 @@ namespace lfs::vis {
 
     uint64_t PointCloudOutputOwnershipTestAccess::hostVertexUploadBytes(const PointCloudVulkanRenderer& renderer) {
         return renderer.impl_->cache.host_vertex_upload_bytes;
+    }
+
+    std::weak_ptr<const void> PointCloudOutputOwnershipTestAccess::residentStorage(const PointCloudVulkanRenderer& renderer) {
+        return renderer.impl_->cache.resident_buffers;
     }
 
     const void* PointCloudOutputOwnershipTestAccess::createEmptyOutput(PointCloudVulkanRenderer& renderer, RenderTargetId target) {

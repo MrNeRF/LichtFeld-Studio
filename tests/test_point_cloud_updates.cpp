@@ -395,7 +395,6 @@ TEST(PointCloudUpdates, RestoreKeepsPreparedViewGenerationWithItsPayload) {
 }
 
 #if LFS_GRAPHICS_VULKAN
-#include "rendering/point_cloud_render_buffers.hpp"
 #include "rendering/point_cloud_vulkan_renderer.hpp"
 #include "window/vulkan_graphics_context.hpp"
 #include <cstdlib>
@@ -408,7 +407,7 @@ TEST(PointCloudUpdatesGpu, IndependentSnapshotAndRendererLeasesAvoidHostRoundtri
     VulkanGraphicsContext graphics;
     ASSERT_TRUE(graphics.initializeHeadless());
     graphics.connectTensorBackend();
-    auto native_prepare = preparePointCloudUpdate(graphics.splatTensorAllocator(), [&](PointCloud& cloud, TensorCompletion ready) { graphics.preparePointCloudStorage(cloud, std::move(ready)); }, graphics.pointCloudUploadDevice());
+    auto native_prepare = preparePointCloudUpdate(graphics.splatTensorAllocator());
     PointCloudUpdateManager manager(native_prepare, [] {});
     std::shared_ptr<PointCloud> current;
     auto destination = target();
@@ -416,38 +415,54 @@ TEST(PointCloudUpdatesGpu, IndependentSnapshotAndRendererLeasesAvoidHostRoundtri
         retired.cloud = std::exchange(current, prepared.cloud);
     };
     auto source = input(1024);
+    for (size_t i = 0; i < 1024; ++i) {
+        source.points.ptr<float>()[i * 3 + 2] = -3.0f;
+        source.colors.ptr<float>()[i * 3 + 1] = 1.0f;
+    }
     source.centroid.reset();
     auto ticket = manager.submit(destination, source);
     ASSERT_TRUE(until([&] { return ticket->inputsReleased() && manager.hasReady(); }));
     source.points.ptr<float>()[0] = 99.0f;
     manager.publishReady(publish);
     ASSERT_EQ(ticket->state(), "published");
-    ASSERT_TRUE(current->render_buffers);
     EXPECT_EQ(current->means.cpu().ptr<float>()[0], 0.0f);
     EXPECT_EQ(current->colors.dtype(), DataType::Float32);
-    EXPECT_NE(current->render_buffers->ready.semaphore, nullptr);
     PointCloudVulkanRenderer renderer;
     PointCloudVulkanRenderer::RenderRequest request;
     request.positions = &current->means;
     request.colors = &current->colors;
-    request.prepared_buffers = current->render_buffers;
     request.size = {64, 64};
+    request.focal_y = 64;
+    request.voxel_size = 0.2f;
+    request.view_projection = glm::mat4(0);
+    request.view_projection[0][0] = 1;
+    request.view_projection[1][1] = -1;
+    request.view_projection[2][2] = -1.002002f;
+    request.view_projection[2][3] = -1;
+    request.view_projection[3][2] = -0.2002002f;
     auto frame = renderer.render(graphics.vulkanContext(), request, RenderTargetId{1});
     ASSERT_TRUE(frame) << frame.error();
     EXPECT_EQ(PointCloudOutputOwnershipTestAccess::hostVertexUploadBytes(renderer), 0);
-    // Reject a mismatched lease without a hidden host upload, then allow a
-    // corrected request to render normally using the original prepared storage.
-    auto other_colors = host(1024);
-    request.colors = &other_colors;
-    const auto rejected = renderer.render(graphics.vulkanContext(), request, RenderTargetId{1});
-    ASSERT_FALSE(rejected);
-    EXPECT_NE(rejected.error().find("Prepared point-cloud storage does not match"), std::string::npos);
-    EXPECT_EQ(PointCloudOutputOwnershipTestAccess::hostVertexUploadBytes(renderer), 0);
-    request.colors = &current->colors;
-    frame = renderer.render(graphics.vulkanContext(), request, RenderTargetId{1});
-    ASSERT_TRUE(frame) << frame.error();
-    // Prepared storage aliases the exact GPU tensors, unlike the legacy upload
-    // cache. Changed content/revisions do not require another vertex upload.
+    const auto pixels = renderer.readOutputImage(graphics.vulkanContext(), RenderTargetId{1});
+    ASSERT_TRUE(pixels) << pixels.error();
+    const auto* rgb = (*pixels)->ptr<float>();
+    EXPECT_GT(rgb[(32 * 64 + 32) * 3 + 1], 0.9f);
+    auto positions_cpu = current->means.cpu();
+    auto colors_cpu = current->colors.cpu();
+    auto reference_request = request;
+    reference_request.positions = &positions_cpu;
+    reference_request.colors = &colors_cpu;
+    PointCloudVulkanRenderer reference;
+    const auto reference_frame = reference.render(graphics.vulkanContext(), reference_request, RenderTargetId{1});
+    ASSERT_TRUE(reference_frame) << reference_frame.error();
+    const auto reference_pixels = reference.readOutputImage(graphics.vulkanContext(), RenderTargetId{1});
+    ASSERT_TRUE(reference_pixels) << reference_pixels.error();
+    ASSERT_EQ((*pixels)->numel(), (*reference_pixels)->numel());
+    for (size_t i = 0; i < (*pixels)->numel(); ++i)
+        EXPECT_FLOAT_EQ(rgb[i], (*reference_pixels)->ptr<float>()[i]);
+    reference.reset();
+    // Each draw reacquires views of the exact published tensors. In-place
+    // changes/revisions never trigger a copied position/color cache.
     auto changed = host(1024);
     std::fill_n(changed.ptr<float>(), changed.numel(), 0.5f);
     const auto position_pointer = current->means.data_ptr();
@@ -458,14 +473,12 @@ TEST(PointCloudUpdatesGpu, IndependentSnapshotAndRendererLeasesAvoidHostRoundtri
     EXPECT_FLOAT_EQ(current->means.cpu().ptr<float>()[0], 0.5f);
     EXPECT_FLOAT_EQ(current->colors.cpu().ptr<float>()[0], 0.5f);
     EXPECT_EQ(current->means.data_ptr(), position_pointer);
-    EXPECT_FLOAT_EQ(current->render_buffers->positions.cpu().ptr<float>()[0], 0.5f);
     ++request.positions_revision;
     ++request.colors_revision;
     frame = renderer.render(graphics.vulkanContext(), request, RenderTargetId{1});
     ASSERT_TRUE(frame) << frame.error();
     EXPECT_EQ(PointCloudOutputOwnershipTestAccess::hostVertexUploadBytes(renderer), 0);
-    std::weak_ptr<const PointCloudRenderBuffers> previous = current->render_buffers;
-    request.prepared_buffers.reset();
+    auto previous = PointCloudOutputOwnershipTestAccess::residentStorage(renderer);
     current.reset();
     ticket.reset();
     ASSERT_TRUE(until([&] { return manager.retainedRequests() == 0; }));
@@ -475,7 +488,6 @@ TEST(PointCloudUpdatesGpu, IndependentSnapshotAndRendererLeasesAvoidHostRoundtri
     manager.publishReady(publish);
     request.positions = &current->means;
     request.colors = &current->colors;
-    request.prepared_buffers = current->render_buffers;
     frame = renderer.render(graphics.vulkanContext(), request, RenderTargetId{1});
     ASSERT_TRUE(frame) << frame.error();
     EXPECT_EQ(PointCloudOutputOwnershipTestAccess::hostVertexUploadBytes(renderer), 0);
@@ -490,7 +502,7 @@ TEST(PointCloudUpdatesGpu, MillionPointUploadMeasurements) {
     VulkanGraphicsContext graphics;
     ASSERT_TRUE(graphics.initializeHeadless());
     graphics.connectTensorBackend();
-    auto native_prepare = preparePointCloudUpdate(graphics.splatTensorAllocator(), [&](PointCloud& cloud, TensorCompletion ready) { graphics.preparePointCloudStorage(cloud, std::move(ready)); }, graphics.pointCloudUploadDevice());
+    auto native_prepare = preparePointCloudUpdate(graphics.splatTensorAllocator());
     PointCloudUpdateManager manager(native_prepare, [] {});
     PointCloudVulkanRenderer renderer;
     auto destination = target();
@@ -512,7 +524,6 @@ TEST(PointCloudUpdatesGpu, MillionPointUploadMeasurements) {
         PointCloudVulkanRenderer::RenderRequest request;
         request.positions = &current->means;
         request.colors = &current->colors;
-        request.prepared_buffers = current->render_buffers;
         request.size = {320, 240};
         const auto published = std::chrono::steady_clock::now();
         auto frame = renderer.render(graphics.vulkanContext(), request, RenderTargetId{1});
@@ -536,7 +547,7 @@ TEST(PointCloudUpdatesGpu, MergedViewPreservesNodeOrderAndEmptyReplacement) {
     VulkanGraphicsContext graphics;
     ASSERT_TRUE(graphics.initializeHeadless());
     graphics.connectTensorBackend();
-    auto native_prepare = preparePointCloudUpdate(graphics.splatTensorAllocator(), [&](PointCloud& cloud, TensorCompletion ready) { graphics.preparePointCloudStorage(cloud, std::move(ready)); }, graphics.pointCloudUploadDevice());
+    auto native_prepare = preparePointCloudUpdate(graphics.splatTensorAllocator());
     auto before = std::make_shared<PointCloud>(host(1), host(1));
     auto after = std::make_shared<PointCloud>(host(1), host(1));
     before->means.ptr<float>()[0] = 1.0f;
@@ -554,7 +565,6 @@ TEST(PointCloudUpdatesGpu, MergedViewPreservesNodeOrderAndEmptyReplacement) {
     const auto expected_target = in.transform * glm::vec4(2, 0, 0, 1);
     auto result = native_prepare(in, [] {});
     ASSERT_TRUE(result.merged);
-    ASSERT_TRUE(result.merged->render_buffers);
     auto points = result.merged->means.cpu();
     ASSERT_EQ(points.size(0), 3);
     for (size_t axis = 0; axis < 3; ++axis) {
@@ -569,16 +579,9 @@ TEST(PointCloudUpdatesGpu, MergedViewPreservesNodeOrderAndEmptyReplacement) {
     EXPECT_EQ(result.cloud->size(), 0);
     EXPECT_EQ(result.centroid, glm::vec3(0.0f));
     ASSERT_TRUE(result.merged);
-    ASSERT_TRUE(result.merged->render_buffers);
     points = result.merged->means.cpu();
     ASSERT_EQ(points.size(0), 2);
     EXPECT_FLOAT_EQ(points.ptr<float>()[0], 1.0f);
     EXPECT_FLOAT_EQ(points.ptr<float>()[3], 3.0f);
-    // The graphics hook can also prepare a reused cloud whose payload became
-    // empty; it must release the previous vertex leases in that case.
-    result.merged->means = host(0);
-    result.merged->colors = host(0);
-    graphics.preparePointCloudStorage(*result.merged, {});
-    EXPECT_FALSE(result.merged->render_buffers);
 }
 #endif

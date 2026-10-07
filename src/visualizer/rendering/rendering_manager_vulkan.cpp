@@ -1485,8 +1485,6 @@ namespace lfs::vis {
             auto vk_req = buildPointSceneRequest(pc_request, frame_settings);
             vk_req.positions = positions_ptr;
             vk_req.colors = colors_ptr;
-            if (!(frame_settings.point_cloud_mode && has_visible_gaussian_model))
-                vk_req.prepared_buffers = frame_ctx.scene_state.point_cloud->render_buffers;
             vk_req.positions_revision = point_cloud_data_revision_;
             vk_req.colors_revision = point_cloud_data_revision_;
             if (frame_settings.point_cloud_mode && has_visible_gaussian_model &&
