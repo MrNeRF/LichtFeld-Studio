@@ -1788,7 +1788,13 @@ namespace lfs::vis {
                 return;
 
             case input::Action::TOGGLE_GT_COMPARISON:
-                cmd::ToggleGTComparison{}.emit();
+                if (auto* const rendering = services().renderingOrNull();
+                    rendering && (rendering->isGTComparisonActive() || rendering->hasGTComparisonAvailable())) {
+                    cmd::ToggleGTComparison{}.emit();
+                } else if (const auto* const scene_manager = services().sceneOrNull();
+                           scene_manager && scene_manager->getScene().getVisibleSplatNodeSlots().size() >= 2) {
+                    cmd::ToggleSplitView{}.emit();
+                }
                 return;
 
             case input::Action::OPEN_PREFERENCES:

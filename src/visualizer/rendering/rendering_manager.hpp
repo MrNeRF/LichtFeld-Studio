@@ -312,6 +312,7 @@ namespace lfs::vis {
         [[nodiscard]] std::optional<SplitViewInfo> getSplitViewInfoIfChanged(std::uint64_t& generation) const;
         [[nodiscard]] bool isSplitViewActive() const;
         [[nodiscard]] bool isGTComparisonActive() const;
+        [[nodiscard]] bool hasGTComparisonAvailable() const;
         [[nodiscard]] bool isPLYComparisonActive() const;
         [[nodiscard]] bool isIndependentSplitViewActive() const;
         [[nodiscard]] GTComparisonMode getGTComparisonMode() const;

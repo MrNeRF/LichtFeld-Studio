@@ -7,6 +7,7 @@
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "rendering_manager.hpp"
+#include "scene/scene_manager.hpp"
 #include <algorithm>
 
 namespace lfs::vis {
@@ -110,6 +111,11 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleGTComparison() {
+        if (!isGTComparisonActive() && !hasGTComparisonAvailable()) {
+            LOG_WARN("GT comparison requires a loaded dataset with source images");
+            return;
+        }
+
         SplitViewService::ModeChangeResult result;
 
         {

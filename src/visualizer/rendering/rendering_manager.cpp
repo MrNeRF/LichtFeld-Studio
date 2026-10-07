@@ -685,6 +685,18 @@ namespace lfs::vis {
         return split_view_service_.isGTComparisonActive(settings_);
     }
 
+    bool RenderingManager::hasGTComparisonAvailable() const {
+        const auto* const scene_manager = services().sceneOrNull();
+        if (!scene_manager || !scene_manager->hasDataset()) {
+            return false;
+        }
+
+        const auto cameras = scene_manager->getScene().getAllCamerasCached();
+        return cameras && std::any_of(cameras->begin(), cameras->end(), [](const auto& camera) {
+                   return camera && camera->has_image() && !camera->image_path().empty();
+               });
+    }
+
     bool RenderingManager::isPLYComparisonActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         return splitViewUsesPLYComparison(settings_.split_view_mode);

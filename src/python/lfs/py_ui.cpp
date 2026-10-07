@@ -64,6 +64,7 @@
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/Core.h>
+#include <stdexcept>
 #include <typeinfo>
 
 #include "config.h"
@@ -4227,7 +4228,13 @@ namespace lfs::python {
 
         m.def(
             "toggle_gt_comparison",
-            []() { lfs::core::events::cmd::ToggleGTComparison{}.emit(); },
+            []() {
+                auto* const rendering = lfs::python::get_rendering_manager();
+                if (!rendering || (!rendering->isGTComparisonActive() && !rendering->hasGTComparisonAvailable())) {
+                    throw std::runtime_error("GT comparison requires a loaded dataset with source images");
+                }
+                lfs::core::events::cmd::ToggleGTComparison{}.emit();
+            },
             "Toggle ground-truth comparison split view");
 
         m.def(
