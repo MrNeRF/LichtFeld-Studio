@@ -18,7 +18,7 @@ namespace lfs::training {
                 for (auto* t : writes)
                     if (t->is_valid())
                         uses.push_back(t);
-                const std::pair<uint32_t, uint32_t> constant{0, operation};
+                const std::pair<uint32_t, uint32_t> constant{1, operation};
                 metal::kernels().launch({.function = "blob_main", .params = std::as_bytes(std::span(&p, 1)), .uses = uses, .groups = {static_cast<uint32_t>((items + 255) / 256), 1, 1}, .group = {256, 1, 1}, .constants = std::span(&constant, 1)});
             }
         };

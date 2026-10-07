@@ -1,6 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-constant uint kBlobOperation [[function_constant(0)]];
+constant uint kBlobOperation [[function_constant(1)]];
 struct BlobParams {
     ulong a, b, c, d, e, f;
     int width, height, source_width, source_height;
