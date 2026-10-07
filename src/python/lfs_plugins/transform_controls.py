@@ -567,10 +567,14 @@ class TransformControlsController:
         pivot = self._state.pivot_world
         rotation = _rotation_matrix_xyz(self._state.display_euler) if tool == "builtin.rotate" else None
         zero_rotation = tool == "builtin.rotate" and not any(self._state.display_euler)
+        identity_scale = tool == "builtin.scale" and self._state.display_scale == [1.0, 1.0, 1.0]
+        individual = (
+            lf.ui.get_multi_transform_mode() == lf.ui.MULTI_TRANSFORM_MODE_INDIVIDUAL
+        )
 
         for i, name in enumerate(self._state.multi_node_names):
             original = self._state.multi_visualizer_world_transforms_before[i]
-            if zero_rotation:
+            if zero_rotation or identity_scale:
                 lf.set_node_visualizer_world_transform(name, original)
                 continue
 
@@ -585,10 +589,21 @@ class TransformControlsController:
                     new_transform[offset] = r00 * x + r01 * y + r02 * z
                     new_transform[offset + 1] = r10 * x + r11 * y + r12 * z
                     new_transform[offset + 2] = r20 * x + r21 * y + r22 * z
-                x, y, z = pos[0] - pivot[0], pos[1] - pivot[1], pos[2] - pivot[2]
-                new_transform[12] = pivot[0] + r00 * x + r01 * y + r02 * z
-                new_transform[13] = pivot[1] + r10 * x + r11 * y + r12 * z
-                new_transform[14] = pivot[2] + r20 * x + r21 * y + r22 * z
+                if not individual:
+                    x, y, z = pos[0] - pivot[0], pos[1] - pivot[1], pos[2] - pivot[2]
+                    new_transform[12] = pivot[0] + r00 * x + r01 * y + r02 * z
+                    new_transform[13] = pivot[1] + r10 * x + r11 * y + r12 * z
+                    new_transform[14] = pivot[2] + r20 * x + r21 * y + r22 * z
+                lf.set_node_visualizer_world_transform(name, new_transform)
+                continue
+
+            if tool == "builtin.scale" and individual:
+                factors = self._state.display_scale
+                new_transform = list(original)
+                for axis, offset in enumerate((0, 4, 8)):
+                    new_transform[offset] = original[offset] * factors[axis]
+                    new_transform[offset + 1] = original[offset + 1] * factors[axis]
+                    new_transform[offset + 2] = original[offset + 2] * factors[axis]
                 lf.set_node_visualizer_world_transform(name, new_transform)
                 continue
 

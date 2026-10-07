@@ -120,6 +120,24 @@ def _reference_old_single_rotation(translation, euler_deg, scale):
     return _transform_matrix(translation, euler_deg, scale)
 
 
+def _reference_previous_multi_transform(tool, originals, decompositions, delta, pivot):
+    """Behavior before Individual-mode handling was added to the controller."""
+    result = []
+    for original, decomp in zip(originals, decompositions):
+        if tool == "builtin.rotate":
+            delta_matrix = _around_pivot_matrix(delta, pivot)
+            rows = _multiply4(delta_matrix, _matrix_rows(original))
+            result.append([rows[r][c] for c in range(4) for r in range(4)])
+            continue
+
+        pos = decomp["translation"]
+        rel = [pos[j] - pivot[j] for j in range(3)]
+        new_pos = [pivot[j] + rel[j] * delta[j] for j in range(3)]
+        scale = [decomp["scale"][j] * delta[j] for j in range(3)]
+        result.append(_transform_matrix(new_pos, decomp["rotation_euler_deg"], scale))
+    return result
+
+
 def _decompose_transform(matrix):
     translation = _translation_from_matrix(matrix)
     return {
@@ -139,6 +157,7 @@ def _install_lf_stub(monkeypatch):
         visualizer_world_transforms={},
         selection_visualizer_world_center=None,
         selection_world_center=None,
+        multi_transform_mode=0,
         set_visualizer_world_calls=[],
         set_local_calls=[],
         op_calls=[],
@@ -167,6 +186,9 @@ def _install_lf_stub(monkeypatch):
         get_active_tool=lambda: state.active_tool,
         is_ctrl_down=lambda: False,
         set_panel_parent=lambda _panel_id, _parent: None,
+        get_multi_transform_mode=lambda: state.multi_transform_mode,
+        MULTI_TRANSFORM_MODE_SELECTION=0,
+        MULTI_TRANSFORM_MODE_INDIVIDUAL=1,
     )
     lf_stub.ops = SimpleNamespace(
         invoke=lambda operator_id, **kwargs: state.op_calls.append((operator_id, kwargs))
@@ -514,6 +536,189 @@ def test_transform_controls_multi_translation_and_scale_are_continuous(transform
             )
             previous[name] = list(actual)
         previous_scale = scale
+
+
+def test_transform_controls_individual_scale_preserves_each_origin(transform_controls_module):
+    module, state = transform_controls_module
+    panel = module.TransformControlsController()
+    panel._selected = ["left", "right"]
+    panel._active_tool = "builtin.scale"
+    panel._state.multi_node_names = ["left", "right"]
+    panel._state.pivot_world = [0.0, 0.0, 0.0]
+    panel._state.display_scale = [1.5, 1.5, 1.5]
+    state.multi_transform_mode = module.lf.ui.MULTI_TRANSFORM_MODE_INDIVIDUAL
+    decompositions = {
+        -2.0: {"translation": [-2.0, 0.0, 0.0], "rotation_euler_deg": [0.0] * 3, "scale": [1.0] * 3},
+        2.0: {"translation": [2.0, 0.0, 0.0], "rotation_euler_deg": [0.0] * 3, "scale": [1.0] * 3},
+    }
+    panel._state.multi_visualizer_world_transforms_before = [
+        _translation_matrix(-2.0, 0.0, 0.0),
+        _translation_matrix(2.0, 0.0, 0.0),
+    ]
+    module.lf.decompose_transform = lambda _matrix: pytest.fail("Individual scale must preserve the full matrix")
+    module.lf.compose_transform = lambda *_args: pytest.fail("Individual scale must not rebuild a TRS matrix")
+
+    panel._apply_multi_transform("builtin.scale")
+
+    for name, original in zip(panel._selected, panel._state.multi_visualizer_world_transforms_before):
+        actual = state.visualizer_world_transforms[name]
+        expected = list(original)
+        for offset in (0, 4, 8):
+            expected[offset] *= 1.5
+            expected[offset + 1] *= 1.5
+            expected[offset + 2] *= 1.5
+        assert actual == pytest.approx(expected, abs=1e-8)
+        assert actual[12:15] == original[12:15]
+
+
+def test_transform_controls_individual_rotation_sweeps_continuously_about_each_origin(transform_controls_module):
+    module, state = transform_controls_module
+    orientations = [[17.0, 23.0, 11.0], [-34.0, 4.0, 28.0], [5.0, -19.0, 73.0]]
+    panel, originals, _decompositions = _multi_rotate_panel(module, state, orientations)
+    state.multi_transform_mode = module.lf.ui.MULTI_TRANSFORM_MODE_INDIVIDUAL
+    angles = [step * 0.5 for step in range(1, 361)]
+    angles += [step * 0.5 for step in range(359, -361, -1)]
+
+    for axis in range(3):
+        panel._euler = [0.0, 0.0, 0.0]
+        panel._set_value("rot", axis, "0")
+        previous = {name: list(matrix) for name, matrix in zip(panel._selected, originals)}
+        previous_angle = 0.0
+
+        for angle in angles:
+            panel._set_value("rot", axis, str(angle))
+            euler = [0.0, 0.0, 0.0]
+            euler[axis] = angle
+            for name, original in zip(panel._selected, originals):
+                pivot_at_node = [original[12], original[13], original[14]]
+                delta = _around_pivot_matrix(euler, pivot_at_node)
+                expected_rows = _multiply4(delta, _matrix_rows(original))
+                expected = [expected_rows[r][c] for c in range(4) for r in range(4)]
+                actual = state.visualizer_world_transforms[name]
+                assert actual == pytest.approx(expected, abs=1e-5)
+                assert actual[12:15] == pytest.approx(original[12:15], abs=1e-8)
+
+                step_radians = math.radians(abs(angle - previous_angle))
+                basis_norm = math.sqrt(sum(value * value for value in original[:12]))
+                assert _frobenius_delta(actual, previous[name]) <= 2.0 * step_radians * basis_norm + 1e-8
+                previous[name] = list(actual)
+            previous_angle = angle
+
+
+def test_transform_controls_individual_scale_sweeps_continuously_and_keeps_shear(transform_controls_module):
+    module, state = transform_controls_module
+    panel, originals, decompositions = _multi_rotate_panel(
+        module,
+        state,
+        [[17.0, 23.0, 11.0], [-34.0, 4.0, 28.0], [5.0, -19.0, 73.0]],
+        translations=[[-2.0, 0.5, 0.0], [0.25, -1.0, 2.0], [3.0, 1.5, -0.5]],
+    )
+    panel._active_tool = "builtin.scale"
+    state.multi_transform_mode = module.lf.ui.MULTI_TRANSFORM_MODE_INDIVIDUAL
+    sheared = [
+        1.0, 0.4, 0.0, 0.0,
+        0.2, 1.5, 0.2, 0.0,
+        0.3, 0.1, 1.2, 0.0,
+        -2.0, 0.5, 0.0, 1.0,
+    ]
+    originals[0] = sheared
+    panel._state.multi_visualizer_world_transforms_before[0] = sheared
+    module.lf.decompose_transform = lambda _matrix: pytest.fail("Individual scale must not decompose")
+    module.lf.compose_transform = lambda *_args: pytest.fail("Individual scale must not compose TRS")
+
+    factors = [1.0 - step * 0.01 for step in range(90, -1, -1)]
+    factors += [1.01 + step * 0.01 for step in range(200)]
+    previous = {name: list(matrix) for name, matrix in zip(panel._selected, originals)}
+    previous_factor = 1.0
+    for factor in factors:
+        panel._set_uniform_scale(str(factor))
+        for name, original in zip(panel._selected, originals):
+            expected = list(original)
+            for offset in (0, 4, 8):
+                expected[offset] *= factor
+                expected[offset + 1] *= factor
+                expected[offset + 2] *= factor
+            actual = state.visualizer_world_transforms[name]
+            assert actual == pytest.approx(expected, abs=1e-8)
+            assert actual[12:15] == original[12:15]
+            basis_norm = math.sqrt(sum(value * value for value in original[:12]))
+            assert _frobenius_delta(actual, previous[name]) <= abs(factor - previous_factor) * basis_norm + 1e-8
+            previous[name] = list(actual)
+        previous_factor = factor
+    assert factors[0] == pytest.approx(0.1)
+    assert factors[-1] == pytest.approx(3.0)
+
+
+def test_transform_controls_shared_multi_transforms_match_previous_implementation(transform_controls_module):
+    module, state = transform_controls_module
+    orientations = [[17.0, 23.0, 11.0], [-34.0, 4.0, 28.0], [5.0, -19.0, 73.0]]
+    panel, originals, decompositions = _multi_rotate_panel(module, state, orientations)
+    state.multi_transform_mode = module.lf.ui.MULTI_TRANSFORM_MODE_SELECTION
+
+    _apply_rotation_input(panel, [16.0, -22.0, 43.0])
+    expected = _reference_previous_multi_transform(
+        "builtin.rotate", originals, decompositions, [16.0, -22.0, 43.0], panel._state.pivot_world
+    )
+    for name, result in zip(panel._selected, expected):
+        assert state.visualizer_world_transforms[name] == pytest.approx(result, abs=1e-6)
+
+    panel._active_tool = "builtin.scale"
+    panel._scale = [1.0, 1.0, 1.0]
+    panel._set_uniform_scale("1.35")
+    expected = _reference_previous_multi_transform(
+        "builtin.scale", originals, decompositions, [1.35] * 3, panel._state.pivot_world
+    )
+    for name, result in zip(panel._selected, expected):
+        assert state.visualizer_world_transforms[name] == pytest.approx(result, abs=1e-6)
+
+
+def test_transform_controls_individual_identity_and_translation_modes_are_unchanged(transform_controls_module):
+    module, state = transform_controls_module
+    orientations = [[17.0, 23.0, 11.0], [-34.0, 4.0, 28.0]]
+    panel, originals, _decompositions = _multi_rotate_panel(module, state, orientations)
+    for mode in (module.lf.ui.MULTI_TRANSFORM_MODE_SELECTION, module.lf.ui.MULTI_TRANSFORM_MODE_INDIVIDUAL):
+        state.multi_transform_mode = mode
+        panel._active_tool = "builtin.rotate"
+        panel._euler = [0.0, 0.0, 0.0]
+        panel._set_value("rot", 0, "0")
+        for name, original in zip(panel._selected, originals):
+            assert state.visualizer_world_transforms[name] == original
+
+        panel._active_tool = "builtin.scale"
+        panel._scale = [1.0, 1.0, 1.0]
+        panel._set_uniform_scale("1")
+        for name, original in zip(panel._selected, originals):
+            assert state.visualizer_world_transforms[name] == original
+
+    results = []
+    for mode in (module.lf.ui.MULTI_TRANSFORM_MODE_SELECTION, module.lf.ui.MULTI_TRANSFORM_MODE_INDIVIDUAL):
+        state.multi_transform_mode = mode
+        panel._active_tool = "builtin.translate"
+        panel._trans = [0.0, 0.0, 0.0]
+        panel._set_value("pos", 1, "2.5")
+        results.append([state.visualizer_world_transforms[name] for name in panel._selected])
+    assert results[0] == results[1]
+
+    panel._selected = ["single"]
+    panel._active_tool = "builtin.scale"
+    original = _transform_matrix([1.0, 2.0, 3.0], [13.0, -21.0, 34.0], [0.5, 0.75, 1.25])
+    decomp = {
+        "translation": [1.0, 2.0, 3.0],
+        "rotation_quat": [0.0, 0.0, 0.0, 1.0],
+        "rotation_euler_deg": [13.0, -21.0, 34.0],
+        "scale": [0.5, 0.75, 1.25],
+    }
+    module.lf.get_node_visualizer_world_transform = lambda _name: original
+    module.lf.decompose_transform = lambda _matrix: decomp
+    module.lf.compose_transform = _transform_matrix
+    state.visualizer_world_transforms["single"] = original
+    panel._trans = [4.0, 5.0, 6.0]
+    panel._euler = [1.0, 2.0, 3.0]
+    panel._scale = [1.5, 1.25, 0.5]
+    panel._apply_single_transform()
+    assert state.visualizer_world_transforms["single"] == _transform_matrix(
+        panel._trans, decomp["rotation_euler_deg"], panel._scale
+    )
 
 
 def test_transform_controls_hide_overlay_when_tool_is_inactive(transform_controls_module):

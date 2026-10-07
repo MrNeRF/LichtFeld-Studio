@@ -2624,6 +2624,10 @@ def get_multi_transform_mode() -> int:
 def set_multi_transform_mode(mode: int) -> None:
     """Set multi-transform mode (0=Group, 1=Individual)"""
 
+MULTI_TRANSFORM_MODE_SELECTION: int = 0
+
+MULTI_TRANSFORM_MODE_INDIVIDUAL: int = 1
+
 def request_thumbnail(video_id: str) -> None:
     """Request download of a YouTube thumbnail for the given video ID"""
 
