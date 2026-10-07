@@ -11,6 +11,50 @@
 
 namespace lfs::vis::op {
 
+    namespace {
+        bool has_non_identity_transform(const std::vector<glm::mat4>& transforms) {
+            for (const auto& transform : transforms) {
+                for (int column = 0; column < 4; ++column) {
+                    for (int row = 0; row < 4; ++row) {
+                        const float expected = column == row ? 1.0f : 0.0f;
+                        if (transform[column][row] != expected)
+                            return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        struct SelectionTransformContext {
+            std::shared_ptr<core::Tensor> indices;
+            std::vector<glm::mat4> transforms;
+
+            [[nodiscard]] const core::Tensor* indices_ptr() const {
+                return indices ? indices.get() : nullptr;
+            }
+
+            [[nodiscard]] const std::vector<glm::mat4>* transforms_ptr() const {
+                return indices ? &transforms : nullptr;
+            }
+        };
+
+        SelectionTransformContext selection_transform_context(core::Scene& scene, const size_t model_size) {
+            SelectionTransformContext context;
+            context.transforms = scene.getVisibleNodeTransforms();
+            if (!has_non_identity_transform(context.transforms))
+                return context;
+
+            // Transform metadata can be temporarily unavailable while the
+            // scene cache is rebuilding. Preserve the legacy local-space
+            // behavior in that case instead of rejecting the operation.
+            auto indices = scene.getTransformIndices();
+            if (indices && indices->is_valid() && indices->numel() == model_size) {
+                context.indices = std::move(indices);
+            }
+            return context;
+        }
+    } // namespace
+
     OperationResult SelectAll::execute(SceneManager& scene,
                                        const OperatorProperties& /*props*/,
                                        const std::any& /*input*/) {
@@ -90,6 +134,9 @@ namespace lfs::vis::op {
             return OperationResult::failure("No model loaded");
         }
 
+        auto& core_scene = scene.getScene();
+        const auto transform_context = selection_transform_context(core_scene, model->means().size(0));
+
         const int iterations = props.get_or<int>("iterations", 1);
         const float radius = props.get_or<float>("radius", 0.1f);
         assert(iterations > 0);
@@ -98,7 +145,9 @@ namespace lfs::vis::op {
 
         auto current = *mask;
         for (int i = 0; i < iterations; ++i) {
-            current = core::cuda::selection_grow(current, model->means(), radius, group_id);
+            current = core::cuda::selection_grow(
+                current, model->means(), radius, group_id,
+                transform_context.indices_ptr(), transform_context.transforms_ptr());
         }
 
         scene.getScene().setSelectionMask(std::make_shared<core::Tensor>(std::move(current)));
@@ -122,6 +171,9 @@ namespace lfs::vis::op {
             return OperationResult::failure("No model loaded");
         }
 
+        auto& core_scene = scene.getScene();
+        const auto transform_context = selection_transform_context(core_scene, model->means().size(0));
+
         const int iterations = props.get_or<int>("iterations", 1);
         const float radius = props.get_or<float>("radius", 0.1f);
         assert(iterations > 0);
@@ -129,7 +181,9 @@ namespace lfs::vis::op {
 
         auto current = *mask;
         for (int i = 0; i < iterations; ++i) {
-            current = core::cuda::selection_shrink(current, model->means(), radius);
+            current = core::cuda::selection_shrink(
+                current, model->means(), radius,
+                transform_context.indices_ptr(), transform_context.transforms_ptr());
         }
 
         scene.getScene().setSelectionMask(std::make_shared<core::Tensor>(std::move(current)));
