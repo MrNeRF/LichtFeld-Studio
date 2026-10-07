@@ -11,6 +11,8 @@ namespace lfs::vis::input {
 
     // UI layout and Vulkan drawing use framebuffer pixels. SDL window geometry
     // and pointer events use logical coordinates on high-density displays.
+    // SDL_GetMouseFocus() can return null outside the window; no window scale
+    // is available then, so callers retain the unscaled SDL coordinates.
     inline glm::vec2 windowPixelScale(SDL_Window* window) {
         int width = 0, height = 0, pixel_width = 0, pixel_height = 0;
         if (!window || !SDL_GetWindowSize(window, &width, &height) ||

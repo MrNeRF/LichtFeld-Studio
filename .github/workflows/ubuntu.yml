@@ -153,6 +153,10 @@ jobs:
       - name: Build
         run: cmake --build build -j $(nproc)
 
+      - name: Run CPU-only SDL coordinate tests
+        # The default app build also builds this isolated, SDL-free test executable.
+        run: ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld\.sdl_coordinates$'
+
       - name: Build and run CPU-only format tests
         run: |
           cmake --build build --target lichtfeld_format_tests -j $(nproc)
