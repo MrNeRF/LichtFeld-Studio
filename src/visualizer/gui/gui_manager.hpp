@@ -68,7 +68,11 @@ namespace lfs::vis {
     class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
     class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
     class VisualizerImplResetTest_UiVisibilityWaitsForMatchingFrame_Test;
+    class UiVisibilityTransitionTest_UiVisibilityWaitsForMatchingFrame_Test;
     class VisualizerImplResetTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+    class UiVisibilityTransitionTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+    class UiVisibilityTransitionTest_UiVisibilityFinishesWithoutWaitingForFullscreenGuard_Test;
+    class UiVisibilityTransitionTest_UiVisibilityRequestsFreshFrameWithoutCooldown_Test;
     class VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
     class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
     class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
@@ -264,7 +268,11 @@ namespace lfs::vis {
             friend class lfs::vis::VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
             friend class lfs::vis::VisualizerImplResetTest_UiVisibilityWaitsForMatchingFrame_Test;
+            friend class lfs::vis::UiVisibilityTransitionTest_UiVisibilityWaitsForMatchingFrame_Test;
             friend class lfs::vis::VisualizerImplResetTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+            friend class lfs::vis::UiVisibilityTransitionTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+            friend class lfs::vis::UiVisibilityTransitionTest_UiVisibilityFinishesWithoutWaitingForFullscreenGuard_Test;
+            friend class lfs::vis::UiVisibilityTransitionTest_UiVisibilityRequestsFreshFrameWithoutCooldown_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
@@ -400,7 +408,7 @@ namespace lfs::vis {
             PerfSampler perf_sampler_;
             std::chrono::steady_clock::time_point last_hud_sample_{};
             bool last_hud_expanded_ = false;
-            std::chrono::steady_clock::time_point ui_toggle_next_allowed_at_{};
+            std::chrono::steady_clock::time_point ui_visibility_deadline_{};
             bool ui_toggle_pending_ = false;
             bool ui_visibility_resize_active_ = false;
             bool ui_visibility_layout_committed_ = false;

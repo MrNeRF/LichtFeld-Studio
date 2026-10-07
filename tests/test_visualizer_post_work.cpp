@@ -1933,7 +1933,7 @@ contract["test_selection_submode_follows_native_mode"](lf)
         gui->ui_visibility_target_hidden_ = true;
         gui->ui_visibility_target_layout_.pos = {0.0f, 0.0f};
         gui->ui_visibility_target_layout_.size = {960.0f, 540.0f};
-        gui->interactive_transition_guard_until_ =
+        gui->ui_visibility_deadline_ =
             std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
         rendering->setViewportResizeActive(
             true, ViewportResizeRenderPolicy::FullResolution);

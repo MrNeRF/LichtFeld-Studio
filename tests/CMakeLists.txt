@@ -69,6 +69,7 @@ if(BUILD_VISUALIZER_TESTS)
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
         test_align_transform.cpp
+        test_ui_visibility_transition.cpp
         test_menu_bar_title.cpp
         test_panel_layout_render_demand.cpp
         test_preferences_migration.cpp
@@ -77,7 +78,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_vram_hud_geometry.cpp
         test_vram_hud_header_click.cpp
     )
-    add_executable(lichtfeld_visualizer_tests EXCLUDE_FROM_ALL
+    add_executable(lichtfeld_visualizer_tests
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}
     )
     target_compile_features(lichtfeld_visualizer_tests PRIVATE cxx_std_23)
