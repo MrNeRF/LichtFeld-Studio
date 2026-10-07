@@ -574,53 +574,42 @@ namespace lfs::vis {
         EXPECT_EQ(smaller_than_viewport.extent, glm::ivec2(1000, 800));
     }
 
-    TEST(SplitViewServiceTest, ActualSizeResizePreservesCropCenterAndClamps) {
-        const detail::GTComparisonCrop initial{
-            .origin = {3000, 2000},
-            .extent = {1920, 1080}};
-
-        const auto grown = detail::resizeGTComparisonCropPreservingCenter(
-            {8192, 6144}, {2560, 1440}, initial);
+    TEST(SplitViewServiceTest, ActualSizeCropFromCenterGrowsShrinksAndClamps) {
+        const auto grown = detail::cropGTComparisonFromCenter(
+            {8192, 6144}, {2560, 1440}, {3960.0, 2540.0});
         EXPECT_EQ(grown.origin, glm::ivec2(2680, 1820));
         EXPECT_EQ(grown.extent, glm::ivec2(2560, 1440));
 
-        const auto shrunk = detail::resizeGTComparisonCropPreservingCenter(
-            {8192, 6144}, {1280, 720}, initial);
+        const auto shrunk = detail::cropGTComparisonFromCenter(
+            {8192, 6144}, {1280, 720}, {3960.0, 2540.0});
         EXPECT_EQ(shrunk.origin, glm::ivec2(3320, 2180));
         EXPECT_EQ(shrunk.extent, glm::ivec2(1280, 720));
 
-        const auto odd = detail::resizeGTComparisonCropPreservingCenter(
-            {101, 101}, {4, 6}, {.origin = {10, 20}, .extent = {5, 5}});
+        const auto odd = detail::cropGTComparisonFromCenter(
+            {101, 101}, {4, 6}, {12.5, 22.5});
         EXPECT_EQ(odd.origin, glm::ivec2(11, 20));
         EXPECT_EQ(odd.extent, glm::ivec2(4, 6));
 
         const auto one_axis_letterboxed =
-            detail::resizeGTComparisonCropPreservingCenter(
-                {1000, 3000},
-                {2000, 1500},
-                {.origin = {0, 1000}, .extent = {1000, 1000}});
+            detail::cropGTComparisonFromCenter(
+                {1000, 3000}, {2000, 1500}, {500.0, 1500.0});
         EXPECT_EQ(one_axis_letterboxed.origin, glm::ivec2(0, 750));
         EXPECT_EQ(one_axis_letterboxed.extent, glm::ivec2(1000, 1500));
 
-        const auto edge_clamped = detail::resizeGTComparisonCropPreservingCenter(
-            {8192, 6144},
-            {3840, 2160},
-            {.origin = {6272, 5064}, .extent = {1920, 1080}});
+        const auto edge_clamped = detail::cropGTComparisonFromCenter(
+            {8192, 6144}, {3840, 2160}, {7232.0, 5604.0});
         EXPECT_EQ(edge_clamped.origin, glm::ivec2(4352, 3984));
         EXPECT_EQ(edge_clamped.extent, glm::ivec2(3840, 2160));
 
-        const auto hidpi = detail::resizeGTComparisonCropPreservingCenter(
-            {8192, 6144},
-            {3001, 1501},
-            {.origin = {2500, 1900}, .extent = {2000, 1000}});
+        const auto hidpi = detail::cropGTComparisonFromCenter(
+            {8192, 6144}, {3001, 1501}, {3500.0, 2400.0});
         EXPECT_EQ(hidpi.origin, glm::ivec2(2000, 1650));
         EXPECT_EQ(hidpi.extent, glm::ivec2(3001, 1501));
 
-        const auto invalid_previous =
-            detail::resizeGTComparisonCropPreservingCenter(
-                {8192, 6144}, {2560, 1440}, {});
-        EXPECT_EQ(invalid_previous.origin, glm::ivec2(2816, 2352));
-        EXPECT_EQ(invalid_previous.extent, glm::ivec2(2560, 1440));
+        const auto centered = detail::cropGTComparisonFromCenter(
+            {8192, 6144}, {2560, 1440}, {4096.0, 3072.0});
+        EXPECT_EQ(centered.origin, glm::ivec2(2816, 2352));
+        EXPECT_EQ(centered.extent, glm::ivec2(2560, 1440));
     }
 
     TEST(SplitViewServiceTest, ActualSizeGeometryUsesPhysicalEdgesAndOneRoundedDrag) {
@@ -1149,14 +1138,14 @@ namespace lfs::vis {
                 .generation = 1,
                 .cpu_source = image({101, 81})};
             auto& view = manager.viewState(owner);
-            auto frame = manager.prepareGTActualFrame(view, camera, {20, 18}, nullptr);
+            auto frame = manager.prepareGTActualFrame(view, camera, {20, 18});
             ASSERT_TRUE(frame.snapshot);
             manager.publishGTComparisonActualFrame(view, *frame.snapshot);
             manager.setGTComparisonCropOrigin({11, 17}, owner);
             const glm::dvec2 center{21, 26};
             for (int i = 0; i < 20; ++i) {
                 const glm::ivec2 extent = i % 2 ? glm::ivec2{20, 18} : glm::ivec2{21, 19};
-                frame = manager.prepareGTActualFrame(view, camera, extent, nullptr);
+                frame = manager.prepareGTActualFrame(view, camera, extent);
                 ASSERT_TRUE(frame.snapshot);
                 manager.publishGTComparisonActualFrame(view, *frame.snapshot);
                 EXPECT_EQ(view.gt_comparison_actual_size_state_.desired_crop_center, center);
@@ -1164,15 +1153,58 @@ namespace lfs::vis {
             EXPECT_EQ(frame.snapshot->crop.origin, glm::ivec2(11, 17));
             // A resize has prepared a new tile but the user still sees the old
             // committed crop. Panning must anchor to that displayed extent.
-            frame = manager.prepareGTActualFrame(view, camera, {21, 19}, nullptr);
+            frame = manager.prepareGTActualFrame(view, camera, {21, 19});
             ASSERT_TRUE(frame.snapshot);
             manager.setGTComparisonCropOrigin({9, 14}, owner);
             const glm::dvec2 panned_center{19, 23};
             EXPECT_EQ(view.gt_comparison_actual_size_state_.desired_crop_center, panned_center);
-            frame = manager.prepareGTActualFrame(view, camera, {21, 19}, nullptr);
+            frame = manager.prepareGTActualFrame(view, camera, {21, 19});
             ASSERT_TRUE(frame.snapshot);
             EXPECT_EQ(view.gt_comparison_actual_size_state_.desired_crop_center, panned_center);
             EXPECT_EQ(frame.snapshot->crop, detail::cropGTComparisonFromCenter({101, 81}, {21, 19}, panned_center));
+        }
+        void pendingPanWhileLoading() {
+            using namespace lfs::core;
+            if (!gpu_backend_available(GpuBackend::CUDA))
+                GTEST_SKIP() << "CUDA device required for native display upload";
+            auto settings = manager.settingsForView(owner);
+            settings.gt_comparison_actual_size = true;
+            ASSERT_TRUE(manager.updateSettingsForView(
+                owner, settings, DirtyFlag::SPLIT_VIEW));
+            manager.setCurrentCameraId(0);
+            EXPECT_TRUE(manager.isGTComparisonActive());
+            EXPECT_TRUE(manager.isGTComparisonActualSizeRequested(owner));
+            EXPECT_FALSE(manager.isGTComparisonActualSizeActive(owner));
+
+            manager.setGTComparisonCropOffsetFromCenter({-12, 7}, owner);
+            EXPECT_TRUE(manager.isGTComparisonActive());
+            EXPECT_TRUE(manager.isGTComparisonActualSizeRequested(owner));
+            EXPECT_EQ(manager.getCurrentCameraId(), 0);
+            auto& view = manager.viewState(owner);
+            ASSERT_EQ(view.gt_comparison_actual_size_state_.pending_pan_camera_uid,
+                      std::optional{0});
+            EXPECT_EQ(view.gt_comparison_actual_size_state_.pending_pan_offset,
+                      glm::ivec2(-12, 7));
+
+            const Camera camera(Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+                                70.0f, 72.0f, 50.5f, 40.5f, Tensor(), Tensor(), CameraModelType::PINHOLE,
+                                "0.png", "0.png", {}, 101, 81, 0);
+            manager.gt_comparison_full_source_slot_ = RenderingManager::GTComparisonFullSourceSlot{
+                .owner = owner,
+                .status = Status::Ready,
+                .source_key = {.camera_uid = 0, .image_path = "0.png"},
+                .generation = 1,
+                .cpu_source = image({101, 81})};
+            const auto frame = manager.prepareGTActualFrame(view, camera, {20, 18});
+            ASSERT_TRUE(frame.snapshot);
+            EXPECT_FALSE(view.gt_comparison_actual_size_state_.pending_pan_camera_uid);
+            const glm::dvec2 desired_center = glm::dvec2(101, 81) * 0.5 +
+                                              glm::dvec2(-12, 7);
+            EXPECT_EQ(view.gt_comparison_actual_size_state_.desired_crop_center,
+                      desired_center);
+            EXPECT_EQ(frame.snapshot->crop,
+                      detail::cropGTComparisonFromCenter(
+                          {101, 81}, {20, 18}, desired_center));
         }
         void globalInvalidation() {
             auto& a = manager.viewState(owner);
@@ -1286,6 +1318,7 @@ namespace lfs::vis {
     };
 
     TEST_F(RenderingManagerGTComparisonReviewTest, PreparedResizeAndPanPreserveDesiredCenter) { cropResizeAndPendingPan(); }
+    TEST_F(RenderingManagerGTComparisonReviewTest, PanWhileNativeSourceLoadsKeepsRequestAndAppliesIntent) { pendingPanWhileLoading(); }
     TEST_F(RenderingManagerGTComparisonReviewTest, UnrelatedViewResetPreservesOwnerAndTeardownReleases) { ownership(); }
     TEST_F(RenderingManagerGTComparisonReviewTest, SameSizedCameraSwitchRejectsPreviousFitAndNativeCompletion) { cameraSwitch(); }
     TEST_F(RenderingManagerGTComparisonReviewTest, EightKAdmissionReservationsAndCompletionProtectDisplayedImage) { budget(); }
@@ -1634,7 +1667,7 @@ namespace lfs::vis {
             });
 
         constexpr glm::ivec2 viewport{16, 12};
-        const auto failed = manager.prepareGTActualFrame(manager.state(), camera, viewport, nullptr);
+        const auto failed = manager.prepareGTActualFrame(manager.state(), camera, viewport);
         ASSERT_EQ(failed.status, RenderingManager::GTComparisonImageStatus::Failed);
         EXPECT_GT(allocation_attempts.load(), 0u);
         EXPECT_FALSE(failed.tile);
@@ -1649,7 +1682,7 @@ namespace lfs::vis {
         EXPECT_FALSE(state.tile_failure->key.distorted);
 
         const auto failed_attempts = allocation_attempts.load();
-        const auto suppressed = manager.prepareGTActualFrame(manager.state(), camera, viewport, nullptr);
+        const auto suppressed = manager.prepareGTActualFrame(manager.state(), camera, viewport);
         EXPECT_EQ(suppressed.status, RenderingManager::GTComparisonImageStatus::Failed);
         EXPECT_EQ(suppressed.error, failed.error);
         EXPECT_EQ(suppressed.fallback, fallback);
@@ -1661,7 +1694,7 @@ namespace lfs::vis {
         EXPECT_TRUE(manager.getGTComparisonActualSizeError().empty());
         ASSERT_TRUE(manager.gt_comparison_full_source_slot_);
         EXPECT_EQ(manager.gt_comparison_full_source_slot_->cpu_source, source);
-        const auto ready = manager.prepareGTActualFrame(manager.state(), camera, viewport, nullptr);
+        const auto ready = manager.prepareGTActualFrame(manager.state(), camera, viewport);
         ASSERT_EQ(ready.status, RenderingManager::GTComparisonImageStatus::Ready);
         ASSERT_TRUE(ready.tile && ready.tile->is_valid());
         EXPECT_EQ(ready.tile->device(), Device::CUDA);
@@ -1677,7 +1710,7 @@ namespace lfs::vis {
         EXPECT_NE(generation & RenderingManager::SPLIT_LEFT_GENERATION_BIT, 0u);
         const auto ready_attempts = allocation_attempts.load();
         fail_upload = true;
-        const auto cached = manager.prepareGTActualFrame(manager.state(), camera, viewport, nullptr);
+        const auto cached = manager.prepareGTActualFrame(manager.state(), camera, viewport);
         EXPECT_EQ(cached.status, RenderingManager::GTComparisonImageStatus::Ready);
         EXPECT_EQ(cached.tile, ready.tile);
         EXPECT_EQ(state.visible_tile, cpu_tile);

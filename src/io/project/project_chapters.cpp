@@ -2407,6 +2407,34 @@ namespace lfs::io::project {
                 "SCNG", field);
         }
 
+        lfs::Result<std::int32_t> camera_dimension(
+            const Json& object, const std::string_view key,
+            const std::string_view prefix) {
+            const std::string field = std::format("{}.{}", prefix, key);
+            const auto found = object.find(std::string(key));
+            if (found == object.end()) {
+                return fail<std::int32_t>(
+                    lfs::ErrorCode::DataLoss,
+                    "The project chapter is missing a required field.",
+                    std::format("SCNG.{} is missing", field), "SCNG", field);
+            }
+            constexpr auto maximum = std::numeric_limits<std::int32_t>::max();
+            if (found->is_number_unsigned()) {
+                const auto value = found->get<Json::number_unsigned_t>();
+                if (value <= static_cast<Json::number_unsigned_t>(maximum))
+                    return static_cast<std::int32_t>(value);
+            } else if (found->is_number_integer()) {
+                const auto value = found->get<Json::number_integer_t>();
+                if (value >= 0 && value <= maximum)
+                    return static_cast<std::int32_t>(value);
+            }
+            return fail<std::int32_t>(
+                lfs::ErrorCode::DataLoss, "A saved camera dimension is invalid.",
+                std::format("SCNG.{} must be an integer in [0, {}]", field,
+                            maximum),
+                "SCNG", field);
+        }
+
         lfs::Result<CameraCalibrationRecord> parse_camera_calibration(
             const Json& value, const std::string_view field) {
             if (auto valid = require_object(value, "SCNG", field); !valid) {
@@ -2534,13 +2562,13 @@ namespace lfs::io::project {
             auto model = required<std::int32_t>(
                 value, "camera_model_type", "SCNG", field);
             auto camera_width =
-                required<std::int32_t>(value, "camera_width", "SCNG", field);
+                camera_dimension(value, "camera_width", field);
             auto camera_height =
-                required<std::int32_t>(value, "camera_height", "SCNG", field);
+                camera_dimension(value, "camera_height", field);
             auto image_width =
-                required<std::int32_t>(value, "image_width", "SCNG", field);
+                camera_dimension(value, "image_width", field);
             auto image_height =
-                required<std::int32_t>(value, "image_height", "SCNG", field);
+                camera_dimension(value, "image_height", field);
             auto image_name =
                 required<std::string>(value, "image_name", "SCNG", field);
             auto image_path =

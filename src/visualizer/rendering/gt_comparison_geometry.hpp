@@ -115,42 +115,6 @@ namespace lfs::vis::detail {
                                      {static_cast<int>(std::lround(bounded.x)), static_cast<int>(std::lround(bounded.y))});
     }
 
-    [[nodiscard]] inline GTComparisonCrop resizeGTComparisonCropPreservingCenter(
-        const glm::ivec2 full_extent,
-        const glm::ivec2 viewport_extent,
-        const GTComparisonCrop previous_crop) {
-        if (full_extent.x <= 0 || full_extent.y <= 0 ||
-            viewport_extent.x <= 0 || viewport_extent.y <= 0 ||
-            previous_crop.origin.x < 0 || previous_crop.origin.y < 0 ||
-            previous_crop.extent.x <= 0 || previous_crop.extent.y <= 0 ||
-            previous_crop.extent.x > full_extent.x ||
-            previous_crop.extent.y > full_extent.y ||
-            previous_crop.origin.x > full_extent.x - previous_crop.extent.x ||
-            previous_crop.origin.y > full_extent.y - previous_crop.extent.y) {
-            return centerGTComparisonCrop(full_extent, viewport_extent);
-        }
-
-        const glm::ivec2 next_extent{
-            std::min(full_extent.x, viewport_extent.x),
-            std::min(full_extent.y, viewport_extent.y)};
-        const auto preserve_axis = [](const int origin,
-                                      const int old_extent,
-                                      const int new_extent) {
-            return static_cast<int>(std::lround(
-                static_cast<double>(origin) +
-                (static_cast<double>(old_extent) -
-                 static_cast<double>(new_extent)) /
-                    2.0));
-        };
-        return clampGTComparisonCrop(
-            full_extent,
-            viewport_extent,
-            {preserve_axis(
-                 previous_crop.origin.x, previous_crop.extent.x, next_extent.x),
-             preserve_axis(
-                 previous_crop.origin.y, previous_crop.extent.y, next_extent.y)});
-    }
-
     // x, y, width, height in top-left physical framebuffer coordinates.
     [[nodiscard]] inline glm::ivec4 centeredGTComparisonContentRect(
         const glm::ivec2 framebuffer_extent,

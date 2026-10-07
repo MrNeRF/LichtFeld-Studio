@@ -2723,6 +2723,11 @@ namespace lfs::core::internal {
         const int width = inverse ? p.src_width : p.dst_width;
         const int height = inverse ? p.src_height : p.dst_height;
         const int channels = input.ndim() == 2 ? 1 : int(input.size(0));
+        LFS_ASSERT_MSG(channels <= 4,
+                       std::format(
+                           "Metal image warp supports at most four channels "
+                           "(channels={})",
+                           channels));
         auto output = Tensor::zeros(mode == 4           ? TensorShape{size_t(height), size_t(width), 2}
                                     : input.ndim() == 2 ? TensorShape{size_t(height), size_t(width)}
                                                         : TensorShape{size_t(channels), size_t(height), size_t(width)},

@@ -3,7 +3,6 @@
 
 #include "rendering_manager.hpp"
 
-#include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
@@ -19,6 +18,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdint>
 #include <format>
 #include <stdexcept>
 #include <tuple>
@@ -125,6 +125,67 @@ namespace lfs::vis {
                  static_cast<std::size_t>(destination_width)},
                 lfs::core::Device::CPU);
             return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+        }
+
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> resizeUInt8Preview(
+            const std::shared_ptr<lfs::core::Tensor>& image,
+            const glm::ivec2 target_size) {
+            if (!image || !image->is_valid() || image->device() != lfs::core::Device::CPU ||
+                image->dtype() != lfs::core::DataType::UInt8 || image->ndim() != 3 ||
+                image->size(0) != 3 || !image->is_contiguous() ||
+                target_size.x <= 0 || target_size.y <= 0) {
+                return {};
+            }
+
+            const int source_height = static_cast<int>(image->size(1));
+            const int source_width = static_cast<int>(image->size(2));
+            if (source_width <= 0 || source_height <= 0 ||
+                target_size.x > source_width || target_size.y > source_height) {
+                return {};
+            }
+
+            auto resized = lfs::core::Tensor::empty(
+                {3, static_cast<std::size_t>(target_size.y),
+                 static_cast<std::size_t>(target_size.x)},
+                lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+            const auto* const source = image->ptr<std::uint8_t>();
+            auto* const destination = resized.ptr<std::uint8_t>();
+            const std::size_t source_pixels =
+                static_cast<std::size_t>(source_width) * source_height;
+            const std::size_t destination_pixels =
+                static_cast<std::size_t>(target_size.x) * target_size.y;
+            for (int channel = 0; channel < 3; ++channel) {
+                for (int y = 0; y < target_size.y; ++y) {
+                    const int y0 = y * source_height / target_size.y;
+                    const int y1 = std::max(
+                        y0 + 1, (y + 1) * source_height / target_size.y);
+                    for (int x = 0; x < target_size.x; ++x) {
+                        const int x0 = x * source_width / target_size.x;
+                        const int x1 = std::max(
+                            x0 + 1, (x + 1) * source_width / target_size.x);
+                        std::uint64_t sum = 0;
+                        for (int source_y = y0; source_y < y1; ++source_y) {
+                            const auto row =
+                                static_cast<std::size_t>(source_y) * source_width;
+                            for (int source_x = x0; source_x < x1; ++source_x) {
+                                sum += source[static_cast<std::size_t>(channel) *
+                                                  source_pixels +
+                                              row + source_x];
+                            }
+                        }
+                        const auto samples =
+                            static_cast<std::uint64_t>(x1 - x0) *
+                            static_cast<std::uint64_t>(y1 - y0);
+                        destination[static_cast<std::size_t>(channel) *
+                                        destination_pixels +
+                                    static_cast<std::size_t>(y) * target_size.x + x] =
+                            static_cast<std::uint8_t>((sum + samples / 2) / samples);
+                    }
+                }
+            }
+
+            auto normalized = resized.to(lfs::core::DataType::Float32).div(255.0f);
+            return std::make_shared<lfs::core::Tensor>(std::move(normalized));
         }
     } // namespace
 
@@ -675,8 +736,7 @@ namespace lfs::vis {
     RenderingManager::GTComparisonActualFrame
     RenderingManager::prepareGTActualFrame(ViewRenderState& view,
                                            const lfs::core::Camera& camera,
-                                           const glm::ivec2 physical_viewport,
-                                           cudaStream_t stream) {
+                                           const glm::ivec2 physical_viewport) {
         GTComparisonActualFrame frame;
         std::optional<detail::GTComparisonTileKey> attempted_tile_key;
         const auto fail_tile = [&](std::string error) {
@@ -701,9 +761,19 @@ namespace lfs::vis {
 
         if (view.gt_comparison_actual_size_state_.source_key != source_key) {
             const auto requested_at = view.gt_comparison_actual_size_state_.requested_at;
+            const auto pending_pan_camera_uid =
+                view.gt_comparison_actual_size_state_.pending_pan_camera_uid;
+            const auto pending_pan_offset =
+                view.gt_comparison_actual_size_state_.pending_pan_offset;
             setGTComparisonActualSizeError(view, {});
             view.gt_comparison_actual_size_state_.reset();
             view.gt_comparison_actual_size_state_.source_key = source_key;
+            if (pending_pan_camera_uid == camera.uid()) {
+                view.gt_comparison_actual_size_state_.pending_pan_camera_uid =
+                    pending_pan_camera_uid;
+                view.gt_comparison_actual_size_state_.pending_pan_offset =
+                    pending_pan_offset;
+            }
             view.gt_comparison_actual_size_state_.requested_at =
                 requested_at.time_since_epoch().count() != 0 ? requested_at : std::chrono::steady_clock::now();
             std::lock_guard lock(gt_comparison_image_mutex_);
@@ -800,12 +870,20 @@ namespace lfs::vis {
                 state.cpu_source != lookup.source;
             const bool reset_crop =
                 source_changed || view.gt_comparison_actual_size_state_.full_extent != full_extent;
-            if (reset_crop || !state.desired_crop_center)
+            if (reset_crop || !state.desired_crop_center) {
                 state.desired_crop_center = glm::dvec2(full_extent) * 0.5;
+                if (state.pending_pan_camera_uid == camera.uid()) {
+                    *state.desired_crop_center += glm::dvec2(state.pending_pan_offset);
+                }
+            }
             const auto crop = detail::cropGTComparisonFromCenter(full_extent, physical_viewport,
                                                                  *state.desired_crop_center);
             if (!crop.valid()) {
                 throw std::runtime_error("full-resolution comparison crop is empty");
+            }
+            if (state.pending_pan_camera_uid == camera.uid()) {
+                state.pending_pan_camera_uid.reset();
+                state.pending_pan_offset = {0, 0};
             }
 
             if (source_changed) {
@@ -856,7 +934,7 @@ namespace lfs::vis {
                         crop.origin.y,
                         crop.extent.x,
                         crop.extent.y,
-                        stream);
+                        nullptr);
                 } else {
                     visible = lookup.source
                                   ->slice(
@@ -877,7 +955,6 @@ namespace lfs::vis {
             }
             // Prepare the display upload before Ready so pinhole allocation
             // failures share the native tile recovery path and retry cooldown.
-            const lfs::core::CUDAStreamGuard guard(stream);
             auto cuda_tile = ensureCudaGTViewportImage(view,
                                                        view.gt_comparison_actual_size_state_.visible_tile,
                                                        camera.uid(),
@@ -1103,8 +1180,8 @@ namespace lfs::vis {
                         if (retained) {
                             const double scale = std::min(1.0, static_cast<double>(preview.preview_max_dimension) /
                                                                    std::max(retained->size(1), retained->size(2)));
-                            auto resized = resizePreview(retained, {std::max(1, static_cast<int>(std::lround(retained->size(2) * scale))),
-                                                                    std::max(1, static_cast<int>(std::lround(retained->size(1) * scale)))});
+                            auto resized = resizeUInt8Preview(retained, {std::max(1, static_cast<int>(std::lround(retained->size(2) * scale))),
+                                                                        std::max(1, static_cast<int>(std::lround(retained->size(1) * scale)))});
                             if (resized)
                                 gt_tensor = *resized;
                         } else {
@@ -1142,7 +1219,9 @@ namespace lfs::vis {
                                         lfs::rendering::imageWidth(gt_tensor, gt_layout),
                                         lfs::rendering::imageHeight(gt_tensor, gt_layout),
                                         preview.preview_max_dimension);
-                                    gt_tensor = lfs::core::internal::undistort_image_tensor(gt_tensor, scaled, false);
+                                    gt_tensor = lfs::core::undistort_image(
+                                        gt_tensor.clamp(0.0f, 1.0f).contiguous(), scaled,
+                                        nullptr);
                                 }
                                 gt_tensor = lfs::rendering::flipImageVertical(gt_tensor, gt_layout);
                                 // Static GT display images must be decoupled from the CUDA pool
@@ -1163,7 +1242,8 @@ namespace lfs::vis {
                                         static_cast<int>(depth.shape()[1]),
                                         static_cast<int>(depth.shape()[0]),
                                         preview.preview_max_dimension);
-                                    depth = lfs::core::internal::undistort_image_tensor(depth, scaled, true);
+                                    depth = lfs::core::undistort_depth_area(
+                                        depth, scaled, nullptr);
                                 }
                                 image = lfs::vis::makeDepthDisplayTensor(
                                     depth, preview.depth_visualization_mode, preview.background_color);
@@ -1186,7 +1266,8 @@ namespace lfs::vis {
                                         lfs::rendering::imageWidth(normal, normal_layout),
                                         lfs::rendering::imageHeight(normal, normal_layout),
                                         preview.preview_max_dimension);
-                                    normal = lfs::core::internal::undistort_image_tensor(normal, scaled, false);
+                                    normal = lfs::core::undistort_normal_area(
+                                        normal, scaled, nullptr);
                                 }
                                 image = lfs::vis::makeNormalDisplayTensor(normal);
                                 image = resizePreview(image, preview.image_size);

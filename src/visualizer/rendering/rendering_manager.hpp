@@ -415,10 +415,11 @@ namespace lfs::vis {
         int getCurrentCameraId() const { return camera_interaction_service_.currentCameraId(); }
         int getHoveredCameraId() const { return camera_interaction_service_.hoveredCameraId(); }
         [[nodiscard]] bool isGTComparisonActualSizeAvailable(
-            const SceneManager* scene_manager) const;
+            const SceneManager* scene_manager, ViewId view = kNoView) const;
         [[nodiscard]] bool isGTComparisonActualSizeActive(ViewId view = kNoView) const {
             return viewState(view == kNoView ? activeViewId() : view).gt_comparison_published_actual_frame_.has_value();
         }
+        [[nodiscard]] bool isGTComparisonActualSizeRequested(ViewId view = kNoView) const;
         [[nodiscard]] const std::string& getGTComparisonActualSizeError(ViewId view = kNoView) const {
             return viewState(view == kNoView ? activeViewId() : view).gt_comparison_actual_size_state_.error;
         }
@@ -429,6 +430,7 @@ namespace lfs::vis {
                        : glm::ivec2{0, 0};
         }
         void setGTComparisonCropOrigin(glm::ivec2 origin, ViewId view = kNoView);
+        void setGTComparisonCropOffsetFromCenter(glm::ivec2 offset, ViewId view = kNoView);
 
         struct CameraMetricsOverlayState {
             int camera_id = -1;
@@ -892,8 +894,7 @@ namespace lfs::vis {
             GTComparisonFullSourceRequest request);
         [[nodiscard]] GTComparisonActualFrame prepareGTActualFrame(ViewRenderState& view,
                                                                    const lfs::core::Camera& camera,
-                                                                   glm::ivec2 physical_viewport,
-                                                                   cudaStream_t stream);
+                                                                   glm::ivec2 physical_viewport);
         void queueGTComparisonImagePrefetch(GTComparisonPreviewRequest request);
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> ensureCudaGTViewportImage(ViewRenderState& view,
                                                                                    std::shared_ptr<lfs::core::Tensor> image,

@@ -320,6 +320,7 @@ namespace lfs::vis {
         Viewport* wasdMomentumViewport() const { return rememberedViewport(wasd_momentum_view_); }
         glm::dvec2 gt_image_pan_start_mouse_{0.0, 0.0};
         glm::ivec2 gt_image_pan_start_origin_{0, 0};
+        bool gt_image_pan_started_while_loading_ = false;
         std::chrono::steady_clock::time_point drag_momentum_updated_at_ = std::chrono::steady_clock::now();
         void decayHeldDragMomentum();
 

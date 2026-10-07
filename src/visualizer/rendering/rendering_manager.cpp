@@ -475,8 +475,22 @@ namespace lfs::vis {
     }
 
     void RenderingManager::retainVisibleViews(const std::vector<ViewId>& visible) {
-        std::lock_guard lock(views_mutex_);
         const auto epoch = view_source_.screenEpoch();
+        std::vector<ViewId> known_views;
+        {
+            std::lock_guard lock(views_mutex_);
+            known_views.reserve(view_states_.size());
+            for (const auto& [id, view] : view_states_)
+                known_views.push_back(id);
+        }
+        // Query the screen outside views_mutex_: ScreenService notifies
+        // markViewDirty while holding its own lock.
+        std::unordered_set<ViewId> removed_views;
+        for (const auto id : known_views)
+            if (!view_source_.viewSettings(id))
+                removed_views.insert(id);
+
+        std::lock_guard lock(views_mutex_);
         if (screen_epoch_ != epoch) {
             dropViewStates();
             screen_epoch_ = epoch;
@@ -487,7 +501,7 @@ namespace lfs::vis {
         for (auto id : visible)
             viewState(id).last_visible = now;
         for (auto it = view_states_.begin(); it != view_states_.end();) {
-            if (!view_source_.viewSettings(it->first) ||
+            if (removed_views.contains(it->first) ||
                 now - it->second->last_visible > std::chrono::milliseconds(300)) {
                 depth_window_epochs_[it->first] = {it->second->depth_window_mode_epoch_, it->second->depth_window_projection_generation_};
                 invalidateGTComparisonActualSizeResources(*it->second);
@@ -707,27 +721,53 @@ namespace lfs::vis {
         camera_interaction_service_.setCurrentCameraId(cam_id);
         if (changed)
             invalidateCameraMetricsRequests(true);
-        std::lock_guard lock(views_mutex_);
-        for (auto& [id, view] : view_states_) {
-            const auto settings = view_source_.viewSettings(id);
-            if (!settings || !splitViewUsesGTComparison(settings->split_view_mode))
-                continue;
-            if (view->gt_comparison_camera_uid_ != cam_id) {
-                view->gt_comparison_camera_uid_ = cam_id;
-                invalidateGTComparisonActualSizeResources(*view);
-                clearPublishedGTComparisonActualFrame(*view);
-            }
-            markViewDirty(id, DirtyFlag::SPLIT_VIEW | DirtyFlag::PPISP, FrameReason::SettingsChange);
+        std::vector<ViewId> known_views;
+        {
+            std::lock_guard lock(views_mutex_);
+            known_views.reserve(view_states_.size());
+            for (const auto& [id, view] : view_states_)
+                known_views.push_back(id);
         }
+        std::vector<ViewId> gt_views;
+        gt_views.reserve(known_views.size());
+        for (const auto id : known_views)
+            if (const auto settings = view_source_.viewSettings(id);
+                settings && splitViewUsesGTComparison(settings->split_view_mode))
+                gt_views.push_back(id);
+        {
+            std::lock_guard lock(views_mutex_);
+            for (const auto id : gt_views) {
+                const auto found = view_states_.find(id);
+                if (found == view_states_.end())
+                    continue;
+                auto& view = *found->second;
+                if (view.gt_comparison_camera_uid_ != cam_id) {
+                    view.gt_comparison_camera_uid_ = cam_id;
+                    invalidateGTComparisonActualSizeResources(view);
+                    clearPublishedGTComparisonActualFrame(view);
+                }
+            }
+        }
+        markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::PPISP, FrameReason::SettingsChange);
+    }
+
+    bool RenderingManager::isGTComparisonActualSizeRequested(ViewId id) const {
+        if (id == kNoView)
+            id = activeViewId();
+        const auto settings = view_source_.viewSettings(id);
+        return settings && splitViewUsesGTComparison(settings->split_view_mode) &&
+               settings->gt_comparison_actual_size &&
+               gtComparisonActualSizeEligible(*settings);
     }
 
     bool RenderingManager::isGTComparisonActualSizeAvailable(
-        const SceneManager* const scene_manager) const {
+        const SceneManager* const scene_manager, const ViewId view) const {
         if (!scene_manager) {
             return false;
         }
-        const auto settings = getSettings();
-        if (!gtComparisonActualSizeEligible(settings.view()))
+        const auto settings = trySettingsForView(
+            view == kNoView ? activeViewId() : view);
+        if (!settings || !gtComparisonActualSizeEligible(settings->view()))
             return false;
         const auto cameras = scene_manager->getScene().getAllCamerasCached();
         std::shared_ptr<lfs::core::Camera> camera;
@@ -747,7 +787,7 @@ namespace lfs::vis {
             }
         }
         return camera && detail::isGTComparisonActualSizeAvailable(
-                             *camera, settings.view());
+                             *camera, settings->view());
     }
 
     void RenderingManager::setGTComparisonCropOrigin(const glm::ivec2 origin, const ViewId id) {
@@ -772,6 +812,8 @@ namespace lfs::vis {
         // during a later resize does not overwrite this intent.
         view.gt_comparison_actual_size_state_.desired_crop_center =
             glm::dvec2(crop.origin) + glm::dvec2(crop.extent) * 0.5;
+        view.gt_comparison_actual_size_state_.pending_pan_camera_uid.reset();
+        view.gt_comparison_actual_size_state_.pending_pan_offset = {0, 0};
         const bool crop_changed =
             crop.origin != view.gt_comparison_actual_size_state_.crop.origin;
         if (!crop_changed && crop.origin == published.crop.origin) {
@@ -780,6 +822,30 @@ namespace lfs::vis {
         if (crop_changed) {
             view.gt_comparison_actual_size_state_.crop = crop;
             invalidateGTComparisonActualSizeTile(view);
+        }
+        markViewDirty(view.id, DirtyFlag::SPLIT_VIEW, FrameReason::CameraMotion);
+    }
+
+    void RenderingManager::setGTComparisonCropOffsetFromCenter(
+        const glm::ivec2 offset, const ViewId id) {
+        const ViewId target = id == kNoView ? activeViewId() : id;
+        if (!isGTComparisonActualSizeRequested(target))
+            return;
+        auto& view = viewState(target);
+        auto& state = view.gt_comparison_actual_size_state_;
+        state.pending_pan_camera_uid = camera_interaction_service_.currentCameraId();
+        state.pending_pan_offset = offset;
+        if (state.full_extent.x > 0 && state.full_extent.y > 0 &&
+            state.framebuffer_extent.x > 0 && state.framebuffer_extent.y > 0) {
+            state.desired_crop_center =
+                glm::dvec2(state.full_extent) * 0.5 + glm::dvec2(offset);
+            const auto crop = detail::cropGTComparisonFromCenter(
+                state.full_extent, state.framebuffer_extent,
+                *state.desired_crop_center);
+            if (crop.valid() && crop != state.crop) {
+                state.crop = crop;
+                invalidateGTComparisonActualSizeTile(view);
+            }
         }
         markViewDirty(view.id, DirtyFlag::SPLIT_VIEW, FrameReason::CameraMotion);
     }
@@ -1273,8 +1339,10 @@ namespace lfs::vis {
     }
 
     bool RenderingManager::depthWindowSnapshotCurrent(const op::DepthWindowModeSnapshot& snapshot) const {
+        const auto screen_epoch = view_source_.screenEpoch();
+        const bool view_exists = view_source_.viewSettings(snapshot.view).has_value();
         std::lock_guard lock(views_mutex_);
-        if (snapshot.screen_epoch != view_source_.screenEpoch() || snapshot.lifetime_epoch != view_lifetime_epoch_ || !view_source_.viewSettings(snapshot.view))
+        if (snapshot.screen_epoch != screen_epoch || snapshot.lifetime_epoch != view_lifetime_epoch_ || !view_exists)
             return false;
         if (const auto view = view_states_.find(snapshot.view); view != view_states_.end())
             return snapshot.mode_epoch == view->second->depth_window_mode_epoch_;

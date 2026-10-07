@@ -1931,8 +1931,7 @@ namespace lfs::vis {
                             if (actual_size_requested) {
                                 const auto actual_frame = prepareGTActualFrame(view_state,
                                                                                *camera,
-                                                                               current_size,
-                                                                               nullptr);
+                                                                               current_size);
                                 if (actual_frame.status == GTComparisonImageStatus::Ready &&
                                     actual_frame.tile && actual_frame.tile->is_valid()) {
                                     gt_image = actual_frame.tile;
@@ -1959,7 +1958,8 @@ namespace lfs::vis {
                                     {.owner = view_state.id, .camera_uid = camera->uid(), .mode = gt_mode, .image_path = camera->image_path(), .preview_max_dimension = preview_max_dimension, .image_size = preview_gt_size, .undistort_requested = undistort_requested, .undistort_params = undistort_requested ? camera->undistort_params() : lfs::core::UndistortParams{}, .depth_visualization_mode = frame_settings.depth_visualization_mode, .background_color = frame_settings.background_color, .camera = camera});
                                 gt_image = lookup.image;
                                 if (lookup.status == GTComparisonImageStatus::Loading) {
-                                    markDirty(DirtyFlag::SPLIT_VIEW, FrameReason::AsyncCompletion);
+                                    markViewDirty(context.view, DirtyFlag::SPLIT_VIEW,
+                                                  FrameReason::AsyncCompletion);
                                     if (lookup.stale_image && !lookup.grace_elapsed) {
                                         gt_image = lookup.stale_image;
                                     } else {

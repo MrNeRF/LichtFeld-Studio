@@ -699,7 +699,7 @@ namespace lfs::vis {
             const bool actual_requested = frame_settings.gt_comparison_actual_size &&
                                           detail::isGTComparisonActualSizeAvailable(*camera, frame_settings.view());
             if (actual_requested) {
-                actual_frame = prepareGTActualFrame(view, *camera, size, nullptr);
+                actual_frame = prepareGTActualFrame(view, *camera, size);
                 lookup.status = actual_frame.status;
                 lookup.image = actual_frame.tile ? actual_frame.tile : actual_frame.fallback;
                 lookup.error = actual_frame.error;

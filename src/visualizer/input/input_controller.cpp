@@ -1053,12 +1053,17 @@ namespace lfs::vis {
             switch (bound_action) {
             case input::Action::CAMERA_PAN:
                 if (const auto interaction = resolvePanelInteraction(x, y); interaction && interaction->valid()) {
+                    const auto interaction_view = views_.viewId(*interaction->viewport);
                     if (auto* const rendering = services().renderingOrNull();
-                        rendering && rendering->isGTComparisonActualSizeActive(views_.viewId(*interaction->viewport))) {
+                        rendering && rendering->isGTComparisonActualSizeRequested(interaction_view) &&
+                        rendering->isGTComparisonActualSizeAvailable(
+                            services().sceneOrNull(), interaction_view)) {
                         drag_mode_ = DragMode::GTImagePan;
                         drag_view_ = rememberViewport(interaction->viewport);
                         drag_button_ = button;
                         gt_image_pan_start_mouse_ = {x, y};
+                        gt_image_pan_started_while_loading_ =
+                            !rendering->isGTComparisonActualSizeActive(drag_view_);
                         gt_image_pan_start_origin_ =
                             rendering->getGTComparisonCropOrigin(drag_view_);
                         // WindowManager already routes framebuffer-space mouse positions.
@@ -1661,11 +1666,14 @@ namespace lfs::vis {
             drag_mode_ != DragMode::Splitter) {
             if (drag_mode_ == DragMode::GTImagePan) {
                 if (auto* const rendering = services().renderingOrNull()) {
-                    rendering->setGTComparisonCropOrigin(
-                        gt_image_pan_start_origin_ -
-                            detail::roundedPhysicalDrag(
-                                current_pos - gt_image_pan_start_mouse_),
-                        drag_view_);
+                    const auto drag = detail::roundedPhysicalDrag(
+                        current_pos - gt_image_pan_start_mouse_);
+                    if (gt_image_pan_started_while_loading_) {
+                        rendering->setGTComparisonCropOffsetFromCenter(-drag, drag_view_);
+                    } else {
+                        rendering->setGTComparisonCropOrigin(
+                            gt_image_pan_start_origin_ - drag, drag_view_);
+                    }
                 }
                 return;
             }
@@ -3401,6 +3409,7 @@ namespace lfs::vis {
         drag_view_ = kNoView;
         gt_image_pan_start_mouse_ = {0.0, 0.0};
         gt_image_pan_start_origin_ = {0, 0};
+        gt_image_pan_started_while_loading_ = false;
         pending_click_drag_ = {};
         forced_mouse_press_action_ = input::Action::NONE;
         is_node_rect_dragging_ = false;

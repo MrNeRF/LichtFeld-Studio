@@ -927,6 +927,42 @@ namespace {
         EXPECT_FALSE((*found)->camera->undistortion);
     }
 
+    TEST(ProjectChapterTest, CameraDimensionsRequireInt32JsonIntegersAndAcceptZero) {
+        const auto node_id =
+            uuid_literal("53000000-0000-4000-8000-000000000023");
+        SceneGraphChapter chapter;
+        ASSERT_TRUE(chapter.upsert_node(SceneNodeRecord{
+            .uuid = node_id,
+            .type = "camera",
+            .name = "camera-dimension-base",
+            .child_order = 0,
+            .camera = make_chapter_camera()}));
+        using Json = lfs::io::JsonChapterDom::Json;
+        const Json baseline = Json::parse(chapter.dom().dump());
+
+        for (const auto* field : {
+                 "camera_width", "camera_height", "image_width", "image_height"}) {
+            for (const auto& invalid : std::vector<Json>{
+                     1.5, true, std::int64_t{2147483648LL},
+                     std::numeric_limits<std::uint64_t>::max()}) {
+                SCOPED_TRACE(std::string(field) + "=" + invalid.dump());
+                auto candidate = baseline;
+                candidate["nodes"][0]["camera"][field] = invalid;
+                const auto parsed = SceneGraphChapter::parse(candidate.dump());
+                ASSERT_FALSE(parsed);
+                EXPECT_EQ(parsed.error().code(), lfs::ErrorCode::DataLoss);
+                EXPECT_NE(lfs::format_for_developer(parsed.error()).find(field),
+                          std::string::npos);
+            }
+
+            auto zero = baseline;
+            zero["nodes"][0]["camera"][field] = 0;
+            const auto parsed = SceneGraphChapter::parse(zero.dump());
+            EXPECT_TRUE(parsed)
+                << (parsed ? "" : lfs::format_for_developer(parsed.error()));
+        }
+    }
+
     TEST(ProjectChapterTest, InvalidCameraUndistortionRecordsFailAsDataLoss) {
         const auto node_id =
             uuid_literal("53000000-0000-4000-8000-000000000022");

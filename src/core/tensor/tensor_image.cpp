@@ -6,6 +6,7 @@
 #include "internal/image_resample.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/undistort_resample.hpp"
+#include <format>
 #include <limits>
 #include <stdexcept>
 
@@ -57,7 +58,10 @@ namespace lfs::core::internal {
         const auto source = input.contiguous();
         const bool rgb8 = source.dtype() == DataType::UInt8;
         LFS_ASSERT_MSG(!rgb8 || (!inverse && mode == 0 && source.ndim() == 3),
-                       "UInt8 image warps support forward RGB undistortion only");
+                       std::format(
+                           "UInt8 image warps require forward RGB undistortion "
+                           "(mode={}, inverse={}, ndim={})",
+                           mode, inverse, source.ndim()));
         if (!inverse && mode == 0 && warp_math::is_identity_resample(p))
             return rgb8 ? source.to(DataType::Float32).div(255.0f) : source.clone();
         if (input.device() == Device::GPU) {
