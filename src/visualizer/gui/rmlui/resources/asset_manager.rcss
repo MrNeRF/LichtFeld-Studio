@@ -493,11 +493,20 @@
     height: 28dp;
 }
 
+/* Reserve a separate progress row even when idle so transfers never compress
+   the title/size text or change the virtualized grid's row height. */
 .asset-card-body {
+    box-sizing: border-box;
     display: flex;
+    flex: 0 0 48dp;
     flex-direction: column;
+    justify-content: flex-start;
     min-width: 0;
-    padding: 8dp;
+    height: 48dp;
+    min-height: 48dp;
+    max-height: 48dp;
+    padding: 4dp 8dp;
+    overflow: hidden;
 }
 
 .asset-card-title-row {
@@ -599,12 +608,6 @@
     position: relative;
 }
 
-.asset-card-body {
-    height: 48dp;
-    min-height: 48dp;
-    max-height: 48dp;
-    overflow: hidden;
-}
 
 .asset-list-primary {
     font-weight: 600;
@@ -891,9 +894,6 @@
 .asset-card-slot { flex: 0 0 auto; min-width: 0; }
 .asset-card { position: relative; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
 .asset-card-thumb { box-sizing: border-box; width: 100%; min-height: 1dp; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-/* Reserve a separate progress row even when idle so transfers never compress
-   the title/size text or change the virtualized grid's row height. */
-.asset-card-body { box-sizing: border-box; flex: 0 0 48dp; min-width: 0; height: 48dp; padding: 4dp 8dp; display: flex; flex-direction: column; justify-content: flex-start; }
 .asset-card-title-row, .asset-card-meta { flex: 0 0 16dp; min-width: 0; height: 16dp; line-height: 16dp; display: flex; gap: 8dp; }
 .asset-card-title-row { margin-bottom: 0; }
 .asset-card-meta { flex-direction: row; }
@@ -959,7 +959,7 @@
 .asset-inspector-content > [data-if] { flex: 0 0 auto; min-width: 0; width: 100%; }
 .asset-info-asset-layout { box-sizing: border-box; display: flex; width: 100%; min-width: 0; gap: 0; align-items: stretch; }
 .asset-info-details { box-sizing: border-box; width: 100%; min-width: 0; flex: 0 0 auto; }
-#asset-info-thumbnail { margin: 12dp 12dp 0; padding: 0; min-width: 0; min-height: 0; flex-shrink: 0; border-radius: 4dp; }
+#asset-info-thumbnail { margin: 12dp 12dp 0; padding: 0; min-width: 0; min-height: 0; flex-shrink: 0; border-radius: 4dp; overflow: hidden; }
 .inspector-header { box-sizing: border-box; display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 8dp; padding: 12dp; margin: 0; min-width: 0; border-bottom-width: 1dp; }
 .inspector-title-row { display: flex; align-items: center; gap: 8dp; min-width: 0; }
 .inspector-title-row .inspector-title { flex: 1 1 0dp; width: 0; }

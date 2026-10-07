@@ -73,6 +73,11 @@ PRECISE_SCROLL_STEP = 32.0
 ASSET_LIST_ROW_HEIGHT_DP = 40.0
 ASSET_GALLERY_ROW_HEIGHT_DP = 230.0
 ASSET_CARD_PREFERRED_WIDTH_DP = 208.0
+# Match the inspector gutters in asset_manager.rcss.
+ASSET_INSPECTOR_GUTTER_DP = 12.0
+ASSET_INSPECTOR_SCROLLBAR_DP = 4.0
+ASSET_STACKED_THUMBNAIL_MAX_WIDTH_DP = 240.0
+ASSET_INFO_THUMBNAIL_DEFAULT_WIDTH_DP = 160.0
 ASSET_WINDOW_OVERSCAN_ROWS = 1
 ASSET_WINDOW_BATCH_ROWS = 1
 ASSET_LIST_FALLBACK_ROWS = 24
@@ -1977,9 +1982,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         # Leave 12 dp gutters and 4 dp for the side inspector's scrollbar.
         # Side inspectors use their content width. The stacked inspector caps
         # its poster so opening it never consumes the whole results viewport.
-        width = (max(0.0, self._inspector_width - 28.0) if self._layout_class in ("wide", "medium")
-                 else min(240.0, max(0.0, self._content_width - 24.0))
-                 if self._layout_class in ("compact", "narrow") else 160.0)
+        gutters = 2.0 * ASSET_INSPECTOR_GUTTER_DP
+        width = (max(0.0, self._inspector_width - gutters - ASSET_INSPECTOR_SCROLLBAR_DP)
+                 if self._layout_class in ("wide", "medium")
+                 else min(ASSET_STACKED_THUMBNAIL_MAX_WIDTH_DP, max(0.0, self._content_width - gutters))
+                 if self._layout_class in ("compact", "narrow") else ASSET_INFO_THUMBNAIL_DEFAULT_WIDTH_DP)
         geometry = (width, width * 10.0 / 16.0)
         geometry_changed = geometry != self._info_thumbnail_geometry
         if created or geometry_changed:
