@@ -53,6 +53,7 @@
 #include "training/training_state.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/data_loading_service.hpp"
+#include "visualizer/gui_capabilities.hpp"
 #include "visualizer/include/visualizer/visualizer.hpp"
 #include "visualizer/post_work_utils.hpp"
 #include "visualizer/preferences.hpp"
@@ -2001,6 +2002,44 @@ contract["test_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(cropbox_after->cropbox->enabled, cropbox_before.enabled);
         EXPECT_EQ(cropbox_after->local_transform.get(), transform_before);
         lfs::vis::UnifiedToolRegistry::instance().setActiveTool("");
+    }
+
+    // Catches tool switches that leave crop mode only while the crop tool is active: undo
+    // reselects a crop volume without crop mode, and the transform tool then kept the volume
+    // selected and visible instead of switching to its splat.
+    TEST_F(VisualizerImplResetTest, ToolSwitchLeavesUndoRestoredCropVolumeForItsParent) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NE(viewer.getGuiManager(), nullptr);
+        auto& scene = viewer.getScene();
+        auto* const scene_manager = viewer.getSceneManager();
+        auto& registry = lfs::vis::UnifiedToolRegistry::instance();
+
+        const auto target_id = scene.addSplat("target", lfs::test::licht::make_splat(2));
+        ASSERT_NE(target_id, lfs::core::NULL_NODE);
+        ASSERT_NE(scene.addCropBox("target_cropbox", target_id), lfs::core::NULL_NODE);
+        scene_manager->selectNode("target_cropbox");
+        ASSERT_EQ(registry.getActiveTool(), "builtin.cropbox");
+
+        op::undoHistory().clear();
+        viewer.getGuiManager()->gizmo().setCropToolShape("ellipsoid");
+        const auto ellipsoid_id = cap::ensureEllipsoid(*scene_manager, viewer.getRenderingManager(), target_id);
+        ASSERT_TRUE(ellipsoid_id) << ellipsoid_id.error();
+        scene_manager->selectNode(*ellipsoid_id);
+        ASSERT_EQ(op::undoHistory().undoCount(), 1u);
+        lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(ToolType::Translate)}.emit();
+        ASSERT_EQ(scene_manager->getSelectedNodeName(), "target");
+
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        ASSERT_EQ(scene_manager->getSelectedNodeType(), lfs::core::NodeType::CROPBOX);
+        ASSERT_NE(registry.getActiveTool(), "builtin.cropbox");
+
+        lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(ToolType::Translate)}.emit();
+        EXPECT_EQ(scene_manager->getSelectedNodeName(), "target");
+        const auto* const cropbox = scene.getNodeById(scene.getCropBoxForSplat(target_id));
+        ASSERT_NE(cropbox, nullptr);
+        EXPECT_FALSE(static_cast<bool>(cropbox->visible));
+        EXPECT_EQ(registry.getActiveTool(), "builtin.translate");
+        registry.setActiveTool("");
     }
 
     TEST_F(VisualizerImplResetTest,

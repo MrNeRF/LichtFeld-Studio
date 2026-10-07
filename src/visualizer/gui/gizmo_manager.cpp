@@ -1007,7 +1007,13 @@ namespace lfs::vis::gui {
             const auto tool = static_cast<ToolType>(e.tool_mode);
 
             auto& registry = UnifiedToolRegistry::instance();
-            if (registry.getActiveTool() == "builtin.cropbox") {
+            // Undo can reselect a crop volume without entering the crop tool.
+            const auto* const sm = viewer_->getSceneManager();
+            const bool selected_crop_volume = sm && sm->hasSelectedNode() &&
+                                              (sm->getSelectedNodeType() == core::NodeType::CROPBOX ||
+                                               sm->getSelectedNodeType() == core::NodeType::ELLIPSOID);
+            if (registry.getActiveTool() == "builtin.cropbox" ||
+                (tool != ToolType::None && selected_crop_volume)) {
                 leaveCropTool(true, true, true);
             } else if (editor.hasActiveOperator() && tool != ToolType::Selection) {
                 python::cancel_active_operator();
