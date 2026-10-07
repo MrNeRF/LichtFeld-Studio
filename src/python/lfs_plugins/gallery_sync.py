@@ -163,6 +163,14 @@ def _validate_journal(data):
 COVER_WARNING = "projects.gallery.warning.cover_failed"
 
 
+def portal_sentence(exc):
+    """The sentence a rejected gallery request carries for the user, in the error or its detail."""
+    for text in (exc.error, (exc.detail or {}).get("message")):
+        if isinstance(text, str) and " " in text.strip():
+            return text
+    return ""
+
+
 def friendly_error(exc):
     import lichtfeld as lf
 
@@ -176,6 +184,8 @@ def friendly_error(exc):
                 "Invalid portable LichtFeld project.", "Project checksum failed.",
                 "Embedded project asset checksum failed."):
             return "The downloaded file is damaged or was changed on the portal."
+        if exc.status == 400 and portal_sentence(exc):
+            return redact(portal_sentence(exc))
     if isinstance(status, int):
         key = {401: "authorization_expired", 403: "access", 404: "not_found",
                409: "http_conflict", 413: "too_large", 429: "portal_busy"}.get(status)
@@ -1198,9 +1208,7 @@ class GallerySync:
                     exc = (ConnectionError("Gallery download connection closed before completion")
                         if job.get("kind") == "download" else GalleryTransferInvalid(
                             "The portal closed the upload without acknowledging it. Start a new upload."))
-                elif isinstance(exc, PortalHTTPError) and exc.status == 400 and exc.error in (
-                        "Invalid portable LichtFeld project.", "Project checksum failed.",
-                        "Embedded project asset checksum failed."):
+                elif isinstance(exc, PortalHTTPError) and exc.status == 400 and portal_sentence(exc):
                     exc = GalleryTransferInvalid(friendly_error(exc))
                 with self._lock:
                     job["failureReason"] = safe_text(f"{type(exc).__name__}: {exc}")

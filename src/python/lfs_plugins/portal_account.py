@@ -849,7 +849,7 @@ class PortalAccountService:
         if refresh_result == "membership_required":
             raise PortalHTTPError(403, "membership_required")
         if refresh_result == "invalid":
-            self._clear_local_credentials()
+            self._clear_local_credentials("invalid_token")
             raise PortalHTTPError(401, "invalid_token")
         if refresh_result == "unavailable":
             raise PortalProtocolError("Portal token refresh was unavailable")
@@ -877,7 +877,7 @@ class PortalAccountService:
             if exc.status == 403 and exc.error == "membership_required":
                 self._set_membership_required(credentials)
             elif exc.status == 401 and exc.error == "invalid_token":
-                self._clear_local_credentials()
+                self._clear_local_credentials("invalid_token")
             raise
 
     def _request_with_bearer(
@@ -1092,7 +1092,7 @@ class PortalAccountService:
             remember_secrets(credentials.access_token, credentials.refresh_token)
         return credentials
 
-    def _clear_local_credentials(self) -> None:
+    def _clear_local_credentials(self, error: str = "") -> None:
         try:
             self._storage.delete()
         except FileNotFoundError:
@@ -1100,7 +1100,7 @@ class PortalAccountService:
         except OSError:
             _log.warning("Could not remove local portal credentials")
         self._clear_current_credentials()
-        self._set_signed_out("")
+        self._set_signed_out(error)
 
     def _current_credentials(self) -> Optional[_Credentials]:
         with self._lock:

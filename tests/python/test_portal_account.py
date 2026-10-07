@@ -198,6 +198,21 @@ def test_gallery_delete_preserves_revision_body_on_explicit_retry_after_refresh(
     assert network.requests[-1].get_header('Authorization') == 'Bearer replacement-token'
 
 
+# Catches a session revoked on the portal that signs Studio out without telling the user why.
+def test_revoked_session_signs_out_with_a_reason(tmp_path, monkeypatch):
+    path = tmp_path / "credentials.json"
+    write_credentials(path)
+    account = portal_account.PortalAccountService(credentials_path=path)
+    network = StubUrlopen((401, {"error": "invalid_token"}))
+    monkeypatch.setattr(portal_account, "urlopen", network)
+    monkeypatch.setattr(account, "_refresh_tokens", lambda *args, **kwargs: "invalid")
+    with pytest.raises(portal_account.PortalHTTPError):
+        account.request_json_authenticated("GET", "/api/gallery/v1/me")
+    snapshot = account.snapshot()
+    assert not snapshot.signed_in and not path.exists()
+    assert snapshot.error == "invalid_token"
+
+
 def test_gallery_request_does_not_retry_under_account_changed_during_refresh(tmp_path, monkeypatch):
     from dataclasses import replace
     path = tmp_path / "credentials.json"
