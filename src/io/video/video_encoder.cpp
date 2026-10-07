@@ -11,6 +11,7 @@
 #include <exception>
 #include <format>
 #if LFS_HAS_CUDA
+#include "color_convert.cuh"
 #include <cuda_runtime.h>
 #endif
 namespace lfs::io::video {
@@ -24,6 +25,21 @@ namespace lfs::io::video {
         YuvPlanes rgbToYuv420p(const core::Tensor& rgb) {
             const int height = static_cast<int>(rgb.size(0));
             const int width = static_cast<int>(rgb.size(1));
+#if LFS_HAS_CUDA
+            if (core::gpu_backend_of(rgb) == core::GpuBackend::CUDA) {
+                const auto* pixels = rgb.ptr<float>();
+                const auto stream = rgb.stream();
+                auto y = core::Tensor::empty_like(rgb, {static_cast<size_t>(height), static_cast<size_t>(width)}, core::DataType::UInt8);
+                auto u = core::Tensor::empty_like(rgb, {static_cast<size_t>(height / 2), static_cast<size_t>(width / 2)}, core::DataType::UInt8);
+                auto v = core::Tensor::empty_like(rgb, {static_cast<size_t>(height / 2), static_cast<size_t>(width / 2)}, core::DataType::UInt8);
+                y.set_stream(stream);
+                u.set_stream(stream);
+                v.set_stream(stream);
+                rgbToYuv420pCuda(pixels, y.ptr<uint8_t>(), u.ptr<uint8_t>(), v.ptr<uint8_t>(),
+                                 width, height, stream);
+                return {std::move(y), std::move(u), std::move(v)};
+            }
+#endif
             const auto bytes = (rgb.clamp(0.0f, 1.0f) * 255.0f + 0.5f).floor();
             const auto channel = [](const core::Tensor& image, const size_t c) {
                 return image.slice(2, c, c + 1).reshape({static_cast<int>(image.size(0)), static_cast<int>(image.size(1))});

@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
         std::ifstream stream(core::utf8_to_path(argv[1]));
         const auto request = json::parse(stream);
         const auto operation = request.value("operation", "extract");
-        if (operation == "native-preview" || operation == "native-encode" || operation == "native-encode-session") {
+        if (operation == "native-preview" || operation == "native-encode" || operation == "native-encode-session" || operation == "native-conversion") {
             std::cout << runNativeVideoContracts(request).dump() << '\n';
             return 0;
         }

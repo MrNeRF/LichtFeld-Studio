@@ -40,7 +40,7 @@ class StudioBackends(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr.decode("utf-8",errors="replace") + result.stdout.decode("utf-8",errors="replace"))
         actual = json.loads(result.stdout)
         self.assertTrue(actual["success"],actual)
-        if options.get("operation") in ("native-preview", "native-encode", "native-encode-session"):
+        if options.get("operation") in ("native-preview", "native-encode", "native-encode-session", "native-conversion"):
             return actual, output
         self.assertTrue(actual["hardware"])
         self.assertTrue(actual["hdr"])
@@ -66,6 +66,12 @@ class StudioBackends(unittest.TestCase):
         errors = [abs(a - b) for a, b in zip(pixels, reference)]
         self.assertLess(sum(errors) / len(errors), 2)
         self.assertLessEqual(max(errors), 8)
+
+    def test_cuda_conversion_matches_scalar_color_contract(self):
+        actual, _ = self.invoke(operation="native-conversion")
+        self.assertEqual(actual["extents"], 3)
+        self.assertEqual(actual["checked_bytes"], (2 * 2 + 34 * 18 + 320 * 240) * 3 // 2)
+        self.assertTrue(actual["nondefault_stream"])
 
     def test_shared_encoder_keeps_native_backend_and_studio_producers(self):
         path = self.root / "native-é-日本語.mp4"

@@ -2,9 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
+#include "io/video/color_convert.cuh"
 #include "io/video/video_encoder.hpp"
 #include "media/video_player.hpp"
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <cuda_runtime.h>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <vector>
@@ -13,6 +18,97 @@ namespace {
     void require(bool value, const char* message) {
         if (!value)
             throw std::runtime_error(message);
+    }
+    struct CudaStream {
+        cudaStream_t value = nullptr;
+        CudaStream() {
+            const auto status = cudaStreamCreateWithFlags(&value, cudaStreamNonBlocking);
+            if (status != cudaSuccess)
+                throw std::runtime_error(cudaGetErrorString(status));
+        }
+        ~CudaStream() { cudaStreamDestroy(value); }
+    };
+    nlohmann::json conversionContracts() {
+        using namespace lfs::core;
+        CudaStream stream;
+        std::size_t checked = 0;
+        for (const auto [width, height] : std::array{std::pair{2, 2}, std::pair{34, 18}, std::pair{320, 240}}) {
+            std::vector<float> rgb(static_cast<std::size_t>(width) * height * 3);
+            std::uint32_t seed = 3003;
+            for (auto& value : rgb) {
+                seed = 1664525 * seed + 1013904223;
+                value = static_cast<float>(seed & 65535) / 32768.0f - 0.5f;
+            }
+            // Probe both sides of every byte rounding boundary, plus nonfinite
+            // values. This catches fused multiply/add changing quantization.
+            std::vector<float> edges{-1.0f, 0.0f, 1.0f, 2.0f,
+                                     std::numeric_limits<float>::quiet_NaN(),
+                                     std::numeric_limits<float>::infinity(),
+                                     -std::numeric_limits<float>::infinity()};
+            for (int byte = 0; byte < 255; ++byte) {
+                const float boundary = (byte + .5f) / 255.0f;
+                edges.push_back(std::nextafter(boundary, 0.0f));
+                edges.push_back(boundary);
+                edges.push_back(std::nextafter(boundary, 1.0f));
+            }
+            std::copy_n(edges.begin(), std::min(edges.size(), rgb.size()), rgb.begin());
+            const auto byte = [](float value) {
+                return std::floor(std::clamp(value, 0.0f, 1.0f) * 255.0f + .5f);
+            };
+            const auto output_byte = [](float value) {
+                return std::isnan(value) ? std::uint8_t{0} : static_cast<std::uint8_t>(value);
+            };
+            std::array<std::vector<std::uint8_t>, 3> expected{
+                std::vector<std::uint8_t>(width * height),
+                std::vector<std::uint8_t>(width * height / 4),
+                std::vector<std::uint8_t>(width * height / 4)};
+            for (int row = 0; row < height; row += 2) {
+                for (int col = 0; col < width; col += 2) {
+                    std::array<float, 3> sum{};
+                    for (int dy = 0; dy < 2; ++dy) {
+                        for (int dx = 0; dx < 2; ++dx) {
+                            const auto pixel = (row + dy) * width + col + dx;
+                            const auto r = byte(rgb[3 * pixel]), g = byte(rgb[3 * pixel + 1]), b = byte(rgb[3 * pixel + 2]);
+                            expected[0][pixel] = output_byte(std::floor((66 * r + 129 * g + 25 * b + 128) / 256) + 16);
+                            sum[0] += r;
+                            sum[1] += g;
+                            sum[2] += b;
+                        }
+                    }
+                    const auto r = std::floor(sum[0] / 4), g = std::floor(sum[1] / 4), b = std::floor(sum[2] / 4);
+                    const auto chroma = (row / 2) * (width / 2) + col / 2;
+                    expected[1][chroma] = output_byte(std::clamp(std::floor((-38 * r - 74 * g + 112 * b + 128) / 256) + 128, 0.0f, 255.0f));
+                    expected[2][chroma] = output_byte(std::clamp(std::floor((112 * r - 94 * g - 18 * b + 128) / 256) + 128, 0.0f, 255.0f));
+                }
+            }
+            auto input = Tensor::from_blob(rgb.data(), {static_cast<std::size_t>(height), static_cast<std::size_t>(width), 3},
+                                           Device::CPU, DataType::Float32)
+                             .gpu();
+            require(cudaDeviceSynchronize() == cudaSuccess, "conversion input preparation");
+            input.set_stream(stream.value);
+            // Tail sentinels make incomplete blocks and the smallest extent
+            // exercise bounds as well as the byte-exact color contract.
+            std::array<Tensor, 3> output;
+            for (int plane = 0; plane < 3; ++plane) {
+                output[plane] = Tensor::empty_like(input, {expected[plane].size() + 64}, DataType::UInt8);
+                output[plane].set_stream(stream.value);
+                require(cudaMemsetAsync(output[plane].data_ptr(), 0xcd, output[plane].bytes(), stream.value) == cudaSuccess,
+                        "conversion sentinel initialization");
+            }
+            lfs::io::video::rgbToYuv420pCuda(input.ptr<float>(), output[0].ptr<std::uint8_t>(),
+                                             output[1].ptr<std::uint8_t>(), output[2].ptr<std::uint8_t>(),
+                                             width, height, stream.value);
+            require(cudaStreamSynchronize(stream.value) == cudaSuccess, "conversion stream completion");
+            for (int plane = 0; plane < 3; ++plane) {
+                const auto actual = output[plane].to_vector_uint8();
+                require(std::equal(expected[plane].begin(), expected[plane].end(), actual.begin()),
+                        "CUDA conversion differs from scalar Studio color reference");
+                require(std::all_of(actual.begin() + expected[plane].size(), actual.end(), [](auto value) { return value == 0xcd; }),
+                        "CUDA conversion wrote outside plane bounds");
+                checked += expected[plane].size();
+            }
+        }
+        return {{"success", true}, {"checked_bytes", checked}, {"extents", 3}, {"nondefault_stream", true}};
     }
     struct CudaWriter final : lfs::media::VideoEncodeWriter {
         std::uint8_t luma = 32;
@@ -41,6 +137,8 @@ namespace {
 
 nlohmann::json runNativeVideoContracts(const nlohmann::json& request) {
     using namespace lfs;
+    if (request.at("operation") == "native-conversion")
+        return conversionContracts();
     if (request.at("operation") == "native-encode-session") {
         media::VideoEncodeSession session;
         media::VideoEncodeOptions options{.width = 320, .height = 240, .framerate = 10, .preferred_backend = media::VideoEncodeBackend::Cuda};
@@ -94,6 +192,12 @@ nlohmann::json runNativeVideoContracts(const nlohmann::json& request) {
     for (int index = 1; index < 3; ++index) {
         auto tensor = core::Tensor::ones({240, 320, 3}, index == 1 ? core::Device::GPU : core::Device::CPU)
                           .mul(static_cast<float>(64 + index * 64) / 255.0f);
+        if (index == 1) {
+            // A cropped view must be materialized before the flat CUDA kernel;
+            // the adjacent black half detects an incorrect source row stride.
+            tensor = core::Tensor::cat({tensor, core::Tensor::zeros_like(tensor)}, 1).slice(1, 0, 320);
+            require(!tensor.is_contiguous(), "native encoder exercises strided RGB input");
+        }
         auto written = encoder.writeFrame(tensor);
         if (!written)
             throw std::runtime_error(written.error());
