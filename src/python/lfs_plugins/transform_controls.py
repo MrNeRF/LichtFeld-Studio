@@ -84,6 +84,30 @@ def _rotation_matrix_xyz(euler_deg: List[float]):
     )
 
 
+def _rotate_basis_to_euler(transform, current_euler_deg, target_euler_deg):
+    current_rotation = _rotation_matrix_xyz(current_euler_deg)
+    target_rotation = _rotation_matrix_xyz(target_euler_deg)
+    delta = [
+        [sum(target_rotation[row][k] * current_rotation[col][k] for k in range(3)) for col in range(3)]
+        for row in range(3)
+    ]
+    result = list(transform)
+    for offset in (0, 4, 8):
+        basis = [transform[offset + row] for row in range(3)]
+        for row in range(3):
+            result[offset + row] = sum(delta[row][col] * basis[col] for col in range(3))
+    return result
+
+
+def _scale_basis_columns(transform, factors):
+    result = list(transform)
+    for axis, offset in enumerate((0, 4, 8)):
+        result[offset] = transform[offset] * factors[axis]
+        result[offset + 1] = transform[offset + 1] * factors[axis]
+        result[offset + 2] = transform[offset + 2] * factors[axis]
+    return result
+
+
 # Local node transforms are stored in data axes; the overlay displays visualizer axes.
 def _flip_yz_rows(transform):
     if transform is None or len(transform) != 16:
@@ -584,17 +608,33 @@ class TransformControlsController:
         decomp_current = lf.decompose_transform(current_transform) if current_transform else None
 
         if self._active_tool == "builtin.rotate":
-            euler_to_use = list(self._euler)  # COPY to avoid reference issues
             self._state.euler_display = list(self._euler)  # COPY
-            # Use current translation and scale from node to ensure we're not using stale values
-            trans_to_use = list(decomp_current["translation"]) if decomp_current else list(self._trans)
-            scale_to_use = list(decomp_current["scale"]) if decomp_current else list(self._scale)
+            if current_transform and decomp_current:
+                new_transform = _rotate_basis_to_euler(
+                    current_transform,
+                    decomp_current["rotation_euler_deg"],
+                    self._euler,
+                )
+            else:
+                new_transform = lf.compose_transform(self._trans, self._euler, self._scale)
+        elif self._active_tool == "builtin.translate":
+            if current_transform:
+                new_transform = list(current_transform)
+                new_transform[12:15] = self._trans
+            else:
+                new_transform = lf.compose_transform(self._trans, self._euler, self._scale)
+        elif self._active_tool == "builtin.scale":
+            if current_transform and decomp_current:
+                old_scale = decomp_current["scale"]
+                factors = [
+                    self._scale[axis] / old_scale[axis] if abs(old_scale[axis]) > 1e-12 else 1.0
+                    for axis in range(3)
+                ]
+                new_transform = _scale_basis_columns(current_transform, factors)
+            else:
+                new_transform = lf.compose_transform(self._trans, self._euler, self._scale)
         else:
-            euler_to_use = list(decomp_current["rotation_euler_deg"]) if decomp_current else list(self._euler)
-            trans_to_use = list(self._trans)  # COPY
-            scale_to_use = list(self._scale)  # COPY
-
-        new_transform = lf.compose_transform(trans_to_use, euler_to_use, scale_to_use)
+            new_transform = lf.compose_transform(self._trans, self._euler, self._scale)
         self._set_single_display_transform(node_name, new_transform)
 
         if self._active_tool == "builtin.rotate":
@@ -641,32 +681,22 @@ class TransformControlsController:
                 lf.set_node_visualizer_world_transform(name, new_transform)
                 continue
 
-            if tool == "builtin.scale" and individual:
-                factors = self._state.display_scale
+            if tool == "builtin.translate":
+                delta = [self._state.display_translation[j] - pivot[j] for j in range(3)]
                 new_transform = list(original)
-                for axis, offset in enumerate((0, 4, 8)):
-                    new_transform[offset] = original[offset] * factors[axis]
-                    new_transform[offset + 1] = original[offset + 1] * factors[axis]
-                    new_transform[offset + 2] = original[offset + 2] * factors[axis]
+                for axis in range(3):
+                    new_transform[12 + axis] = original[12 + axis] + delta[axis]
                 lf.set_node_visualizer_world_transform(name, new_transform)
                 continue
 
-            decomp = lf.decompose_transform(original)
-            pos = list(decomp["translation"])
-
-            if tool == "builtin.translate":
-                delta = [self._state.display_translation[j] - pivot[j] for j in range(3)]
-                new_pos = [pos[j] + delta[j] for j in range(3)]
-                new_transform = lf.compose_transform(new_pos, decomp["rotation_euler_deg"], decomp["scale"])
-                lf.set_node_visualizer_world_transform(name, new_transform)
-
-            elif tool == "builtin.scale":
-                rel = [pos[j] - pivot[j] for j in range(3)]
-                new_rel = [rel[j] * self._state.display_scale[j] for j in range(3)]
-                new_pos = [pivot[j] + new_rel[j] for j in range(3)]
-                orig_scale = list(decomp["scale"])
-                new_scale = [orig_scale[j] * self._state.display_scale[j] for j in range(3)]
-                new_transform = lf.compose_transform(new_pos, decomp["rotation_euler_deg"], new_scale)
+            if tool == "builtin.scale":
+                factors = self._state.display_scale
+                new_transform = _scale_basis_columns(original, factors)
+                if not individual:
+                    for axis in range(3):
+                        new_transform[12 + axis] = (
+                            pivot[axis] + (original[12 + axis] - pivot[axis]) * factors[axis]
+                        )
                 lf.set_node_visualizer_world_transform(name, new_transform)
 
     def _can_reset_transform(self) -> bool:

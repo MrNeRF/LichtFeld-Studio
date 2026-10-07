@@ -448,8 +448,8 @@ def test_transform_controls_multi_rotation_preserves_old_correct_cases(transform
     state.visualizer_world_transforms["single"] = original
     panel._euler = [71.0, -2.0, 19.0]
     panel._apply_single_transform()
-    assert state.visualizer_world_transforms["single"] == _reference_old_single_rotation(
-        decomp["translation"], panel._euler, decomp["scale"]
+    assert state.visualizer_world_transforms["single"] == pytest.approx(
+        _reference_old_single_rotation(decomp["translation"], panel._euler, decomp["scale"]), abs=1e-6
     )
 
 
@@ -712,13 +712,127 @@ def test_transform_controls_individual_identity_and_translation_modes_are_unchan
     module.lf.decompose_transform = lambda _matrix: decomp
     module.lf.compose_transform = _transform_matrix
     state.visualizer_world_transforms["single"] = original
-    panel._trans = [4.0, 5.0, 6.0]
+    panel._trans = [1.0, 2.0, 3.0]
     panel._euler = [1.0, 2.0, 3.0]
     panel._scale = [1.5, 1.25, 0.5]
     panel._apply_single_transform()
-    assert state.visualizer_world_transforms["single"] == _transform_matrix(
-        panel._trans, decomp["rotation_euler_deg"], panel._scale
+    assert state.visualizer_world_transforms["single"] == pytest.approx(
+        _transform_matrix(panel._trans, decomp["rotation_euler_deg"], panel._scale), abs=1e-6
     )
+
+
+def _sheared_transform():
+    rows = [
+        [1.0, 0.2, 0.3, 1.0],
+        [0.4, 1.5, 0.1, 2.0],
+        [0.0, 0.2, 1.2, 3.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+    return [rows[r][c] for c in range(4) for r in range(4)]
+
+
+def _single_local_edit(module, state, tool):
+    original = _sheared_transform()
+    displayed = module._flip_yz_rows(original)
+    decomp = {
+        "translation": _translation_from_matrix(displayed),
+        "rotation_quat": [0.0, 0.0, 0.0, 1.0],
+        "rotation_euler_deg": [0.0, 0.0, 0.0],
+        "scale": [2.0, 1.0, 1.0],
+    }
+    module.lf.decompose_transform = lambda _matrix: decomp
+    module.lf.compose_transform = _transform_matrix
+    state.local_transforms["child"] = original
+    panel = module.TransformControlsController()
+    panel._selected = ["child"]
+    panel._active_tool = tool
+    panel._transform_space = 0
+    panel._trans = list(decomp["translation"])
+    panel._euler = list(decomp["rotation_euler_deg"])
+    panel._scale = list(decomp["scale"])
+    return panel, original, displayed
+
+
+def test_transform_controls_single_local_translation_keeps_sheared_basis(transform_controls_module):
+    module, state = transform_controls_module
+    panel, original, displayed = _single_local_edit(module, state, "builtin.translate")
+
+    panel._set_value("pos", 0, "2")
+
+    expected_display = list(displayed)
+    expected_display[12] = 2.0
+    assert state.local_transforms["child"] == pytest.approx(
+        module._flip_yz_rows(expected_display), abs=1e-8
+    )
+    assert state.local_transforms["child"][:12] == original[:12]
+
+
+def test_transform_controls_single_local_rotation_and_scale_keep_shear(transform_controls_module):
+    module, state = transform_controls_module
+    panel, _original, displayed = _single_local_edit(module, state, "builtin.rotate")
+    panel._set_value("rot", 2, "45")
+    rotation = _rotation_matrix([0.0, 0.0, 45.0])
+    expected_rotation = list(displayed)
+    for col in range(3):
+        vec = [displayed[col * 4 + row] for row in range(3)]
+        for row in range(3):
+            expected_rotation[col * 4 + row] = sum(rotation[row][axis] * vec[axis] for axis in range(3))
+    assert state.local_transforms["child"] == pytest.approx(
+        module._flip_yz_rows(expected_rotation), abs=1e-8
+    )
+
+    panel, _original, displayed = _single_local_edit(module, state, "builtin.scale")
+    panel._set_value("scale", 0, "3")
+    expected_scale = list(displayed)
+    for row in range(3):
+        expected_scale[row] *= 1.5
+    assert state.local_transforms["child"] == pytest.approx(
+        module._flip_yz_rows(expected_scale), abs=1e-8
+    )
+
+
+def test_transform_controls_multi_shared_translate_and_scale_keep_shear(transform_controls_module):
+    module, state = transform_controls_module
+    names = ["left", "right"]
+    originals = [_sheared_transform(), _sheared_transform()]
+    originals[0][12:15] = [-2.0, 0.5, 1.0]
+    originals[1][12:15] = [3.0, -0.5, 2.0]
+    module.lf.decompose_transform = lambda _matrix: pytest.fail("Multi-node edits must keep the full basis")
+    module.lf.compose_transform = lambda *_args: pytest.fail("Multi-node edits must not rebuild TRS")
+
+    def panel_for(tool):
+        panel = module.TransformControlsController()
+        panel._selected = names
+        panel._active_tool = tool
+        panel._state.multi_editing_active = True
+        panel._state.multi_node_names = names
+        panel._state.multi_visualizer_world_transforms_before = [list(matrix) for matrix in originals]
+        panel._state.pivot_world = [0.5, 0.0, 0.0]
+        panel._trans = [0.5, 0.0, 0.0]
+        panel._scale = [1.0, 1.0, 1.0]
+        state.multi_transform_mode = module.lf.ui.MULTI_TRANSFORM_MODE_SELECTION
+        return panel
+
+    panel = panel_for("builtin.translate")
+    panel._set_value("pos", 1, "2")
+    for name, original in zip(names, originals):
+        expected = list(original)
+        expected[13] += 2.0
+        assert state.visualizer_world_transforms[name] == pytest.approx(expected, abs=1e-8)
+
+    panel = panel_for("builtin.scale")
+    for axis, factor in enumerate((1.5, 0.75, 2.0)):
+        panel._set_value("scale", axis, str(factor))
+    factors = [1.5, 0.75, 2.0]
+    pivot = panel._state.pivot_world
+    for name, original in zip(names, originals):
+        expected = list(original)
+        for col in range(3):
+            for row in range(3):
+                expected[col * 4 + row] *= factors[col]
+        for axis in range(3):
+            expected[12 + axis] = pivot[axis] + (original[12 + axis] - pivot[axis]) * factors[axis]
+        assert state.visualizer_world_transforms[name] == pytest.approx(expected, abs=1e-8)
 
 
 def test_transform_controls_hide_overlay_when_tool_is_inactive(transform_controls_module):

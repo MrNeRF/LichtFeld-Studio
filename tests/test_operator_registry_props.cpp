@@ -334,6 +334,66 @@ TEST_F(OperatorRegistryPropsTest, TransformOperatorsApplySelectedAncestorOnce) {
     EXPECT_NEAR(glm::length(glm::vec3(actual[0])), 2.0f, 1e-5f);
 }
 
+TEST_F(OperatorRegistryPropsTest, TransformSetTranslationPreservesShearedWorldBasis) {
+    auto& scene = scene_manager_->getScene();
+    const auto parent_id = scene.addGroup("scaled_parent");
+    ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+    ASSERT_NE(scene.addSplat("child", make_test_splat({0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f}), parent_id),
+              lfs::core::NULL_NODE);
+    scene_manager_->setNodeTransform("scaled_parent", glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 1.0f, 1.0f)));
+    scene_manager_->setNodeTransform(
+        "child", glm::rotate(glm::mat4(1.0f), glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f)));
+    const glm::mat4 before =
+        lfs::vis::scene_coords::nodeVisualizerWorldTransform(scene, "child").value();
+    ASSERT_GT(std::abs(glm::dot(glm::vec3(before[0]), glm::vec3(before[1]))), 0.1f);
+
+    ASSERT_TRUE(lfs::vis::cap::setTransform(
+        *scene_manager_, {"child"}, glm::vec3(3.0f, 4.0f, 5.0f), std::nullopt, std::nullopt));
+
+    const glm::mat4 after =
+        lfs::vis::scene_coords::nodeVisualizerWorldTransform(scene, "child").value();
+    for (int column = 0; column < 3; ++column) {
+        EXPECT_NEAR(after[column].x, before[column].x, 1e-5f);
+        EXPECT_NEAR(after[column].y, before[column].y, 1e-5f);
+        EXPECT_NEAR(after[column].z, before[column].z, 1e-5f);
+    }
+    EXPECT_NEAR(after[3].x, 3.0f, 1e-5f);
+    EXPECT_NEAR(after[3].y, 4.0f, 1e-5f);
+    EXPECT_NEAR(after[3].z, 5.0f, 1e-5f);
+}
+
+TEST_F(OperatorRegistryPropsTest, TransformScaleIdentityPreservesShearedWorldMatrix) {
+    auto& scene = scene_manager_->getScene();
+    const auto parent_id = scene.addGroup("scaled_parent");
+    ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+    ASSERT_NE(scene.addSplat("child", make_test_splat({0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f}), parent_id),
+              lfs::core::NULL_NODE);
+    scene_manager_->setNodeTransform("scaled_parent", glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 1.0f, 1.0f)));
+    scene_manager_->setNodeTransform(
+        "child", glm::rotate(glm::mat4(1.0f), glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f)));
+    const glm::mat4 before =
+        lfs::vis::scene_coords::nodeVisualizerWorldTransform(scene, "child").value();
+    ASSERT_GT(std::abs(glm::dot(glm::vec3(before[0]), glm::vec3(before[1]))), 0.1f);
+
+    ASSERT_TRUE(lfs::vis::cap::scaleNodes(*scene_manager_, {"child"}, glm::vec3(1.0f, 1.0f, 1.0f)));
+
+    const glm::mat4 after =
+        lfs::vis::scene_coords::nodeVisualizerWorldTransform(scene, "child").value();
+    EXPECT_EQ(after, before);
+
+    const glm::vec3 factors(1.2f, 0.7f, 1.1f);
+    ASSERT_TRUE(lfs::vis::cap::scaleNodes(*scene_manager_, {"child"}, factors));
+    const glm::mat4 scaled =
+        lfs::vis::scene_coords::nodeVisualizerWorldTransform(scene, "child").value();
+    for (int column = 0; column < 3; ++column) {
+        const glm::vec3 expected = glm::vec3(before[column]) * factors;
+        EXPECT_NEAR(scaled[column].x, expected.x, 1e-5f);
+        EXPECT_NEAR(scaled[column].y, expected.y, 1e-5f);
+        EXPECT_NEAR(scaled[column].z, expected.z, 1e-5f);
+    }
+    EXPECT_EQ(scaled[3], before[3]);
+}
+
 TEST_F(OperatorRegistryPropsTest, MultiNodeGizmoTranslationMovesSelectedTargetsTogether) {
     add_node("left");
     add_node("right");
