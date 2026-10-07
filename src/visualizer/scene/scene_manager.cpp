@@ -31,6 +31,7 @@
 #include "rendering/graphics_external_tensor.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/point_cloud_merge.hpp"
+#include "scene/splat_tile_streamer.hpp"
 #include "scene/viewer_splat_quantize.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/checkpoint.hpp"
@@ -58,6 +59,8 @@
 #include <algorithm>
 #include <cctype>
 #include <format>
+#include <glm/gtc/constants.hpp>
+#include <glm/gtc/matrix_access.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <limits>
 #include <memory>
@@ -486,7 +489,130 @@ namespace lfs::vis {
             consolidated_compaction_thread_.request_stop();
             consolidated_compaction_thread_.join();
         }
+        // Tile workers may still be decoding or merging; they must be gone before the
+        // GPU backend shuts down.
+        tile_streamers_.clear();
+        wait_for_retired_tile_workers();
         clearMeshCpuCache();
+    }
+
+    void SceneManager::updateTileStreams(const TileStreamCamera& camera, const std::function<void()>& wake) {
+        // A detached tileset keeps its path; when undo brings its node back (same uuid),
+        // streaming restarts from the tileset instead of leaving the restored cut editable.
+        std::vector<std::pair<core::Uuid, std::shared_ptr<const io::SplatTileSource>>> reattach;
+        std::vector<core::Uuid> unreadable;
+        for (const auto& [uuid, path] : tile_stream_paths_) {
+            if (tile_streamers_.contains(uuid))
+                continue;
+            const auto* const node = scene_.getNodeByUuid(uuid);
+            if (!node || node->type != core::NodeType::SPLAT || !node->model)
+                continue;
+            if (auto source = io::open_tiles3d(path)) {
+                reattach.emplace_back(uuid, std::move(*source));
+            } else {
+                LOG_WARN("3D Tiles: cannot resume streaming '{}': {}", node->name,
+                         lfs::format_for_developer(source.error()));
+                unreadable.push_back(uuid);
+            }
+        }
+        for (const auto& uuid : unreadable)
+            tile_stream_paths_.erase(uuid);
+        for (auto& [uuid, source] : reattach)
+            attachTileStream(uuid, std::move(source), tile_stream_paths_.at(uuid));
+
+        for (auto it = tile_streamers_.begin(); it != tile_streamers_.end();) {
+            auto* const node = scene_.getNodeByUuid(it->first);
+            if (!node || !node->model || node->model.get() != tile_stream_models_[it->first]) {
+                // Removed, or its model was replaced (undo, project reopen): stop streaming into it
+                // and free its tiles. The path stays so a restored node resumes streaming.
+                if (node)
+                    node->model_streamed = false;
+                tile_stream_models_.erase(it->first);
+                it = tile_streamers_.erase(it);
+                continue;
+            }
+            ++it;
+        }
+
+        // The cache size is one budget for all streamed nodes, not one per node.
+        auto settings = tile_stream_settings_;
+        if (tile_streamers_.size() > 1)
+            settings.cache_fraction /= static_cast<float>(tile_streamers_.size());
+        for (auto it = tile_streamers_.begin(); it != tile_streamers_.end(); ++it) {
+            auto* const node = scene_.getNodeByUuid(it->first);
+            // The viewport camera lives in visualizer world axes; model data in dataset axes.
+            const glm::mat4 model_to_world =
+                lfs::rendering::dataWorldTransformToVisualizerWorld(scene_.getWorldTransform(node->id));
+            io::SplatTileView tile_view{.camera = glm::vec3(glm::inverse(camera.view * model_to_world)[3]),
+                                        .max_sse = settings.max_sse};
+            if (camera.equirectangular) {
+                // The image spans 180 degrees vertically and sees every direction: no culling.
+                tile_view.sse_per_error = camera.viewport_height / glm::pi<float>();
+            } else if (camera.orthographic) {
+                // Pixels per local unit: world zoom times the node's largest scale.
+                const float node_scale = std::max({glm::length(glm::vec3(model_to_world[0])),
+                                                   glm::length(glm::vec3(model_to_world[1])),
+                                                   glm::length(glm::vec3(model_to_world[2]))});
+                tile_view.sse_per_error = camera.ortho_scale * node_scale;
+                tile_view.orthographic = true;
+            } else {
+                tile_view.sse_per_error = camera.viewport_height / (2.0f * std::tan(camera.vfov_radians * 0.5f));
+            }
+            if (settings.cull && camera.cull && !camera.equirectangular) {
+                // Gribb-Hartmann side planes of the actual projection. Perspective side planes
+                // meet at the camera, so they also cull behind it; orthographic ones are
+                // parallel, so the near plane does that.
+                const glm::mat4 clip = camera.projection * camera.view * model_to_world;
+                const auto plane = [&](const glm::vec4& p) { return p / glm::length(glm::vec3(p)); };
+                for (int i = 0; i < 4; ++i) {
+                    const glm::vec4 row = glm::row(clip, i / 2);
+                    tile_view.planes[i] = plane(glm::row(clip, 3) + (i % 2 ? -row : row));
+                }
+                if (camera.orthographic)
+                    tile_view.planes[4] = plane(glm::row(clip, 3) + glm::row(clip, 2));
+            }
+            if (auto model = it->second->update(tile_view, settings, wake)) {
+                LOG_DEBUG("3D Tiles: '{}' now shows {} splats", node->name, model->size());
+                tile_stream_models_[it->first] = model.get();
+                auto previous = scene_.swapNodeModel(node->name, std::move(model));
+                previous.reset();
+                // Selection indices span every node's splats; the swap shifts them.
+                if (scene_.hasSelection())
+                    scene_.clearSelection();
+            }
+        }
+    }
+
+    void SceneManager::attachTileStream(const core::Uuid& node, std::shared_ptr<const io::SplatTileSource> source,
+                                        std::filesystem::path path) {
+        tile_streamers_[node] = SplatTileStreamer::create(std::move(source), makeViewerSplatTensorAllocator());
+        tile_stream_paths_[node] = std::move(path);
+        auto* const scene_node = scene_.getNodeByUuid(node);
+        tile_stream_models_[node] = scene_node ? scene_node->model.get() : nullptr;
+        if (scene_node)
+            scene_node->model_streamed = true;
+    }
+
+    std::optional<std::filesystem::path> SceneManager::tileStreamPath(const core::Uuid& uuid) const {
+        const auto it = tile_stream_paths_.find(uuid);
+        if (it == tile_stream_paths_.end() || !tile_streamers_.contains(uuid))
+            return std::nullopt;
+        return it->second;
+    }
+
+    std::optional<SplatTileStreamStats> SceneManager::tileStreamStats() const {
+        if (tile_streamers_.empty())
+            return std::nullopt;
+        return tile_streamers_.begin()->second->stats();
+    }
+
+    std::optional<std::string> SceneManager::tileMode() const {
+        if (!tile_streamers_.empty())
+            return "stream";
+        for (const auto& uuid : flat_tile_nodes_)
+            if (scene_.getNodeByUuid(uuid))
+                return "flat";
+        return std::nullopt;
     }
 
     void SceneManager::setupEventHandlers() {
@@ -975,6 +1101,10 @@ namespace lfs::vis {
                 const auto* const added = scene_.getNodeById(node_id);
                 assert(added);
                 const std::string added_name = added ? added->name : name;
+                if (added && load_result.tile_source)
+                    attachTileStream(added->uuid, std::move(load_result.tile_source), path);
+                else if (added && load_result.is_tileset)
+                    recordFlatTileNode(added->uuid);
 
                 {
                     std::lock_guard<std::mutex> lock(state_mutex_);
@@ -1173,6 +1303,10 @@ namespace lfs::vis {
             const auto* const added = scene_.getNodeById(node_id);
             assert(added);
             const std::string added_name = added ? added->name : name;
+            if (added && load_result.tile_source)
+                attachTileStream(added->uuid, std::move(load_result.tile_source), path);
+            else if (added && load_result.is_tileset)
+                recordFlatTileNode(added->uuid);
 
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);
@@ -3333,6 +3467,12 @@ namespace lfs::vis {
             }
         }
         op::undoHistory().clear();
+        // Without history no streamed node can be restored; deleting the last node
+        // resets through resetToEmptyState() directly and keeps them for undo.
+        tile_streamers_.clear();
+        tile_stream_models_.clear();
+        tile_stream_paths_.clear();
+        flat_tile_nodes_.clear();
         return resetToEmptyState(false, internal_import);
     }
 
@@ -3560,13 +3700,17 @@ namespace lfs::vis {
         // This keeps dataset "ready" scenes renderable before training has produced gaussians.
         if (!options.metadata_only && !hasRenderableGaussians(state.combined_model)) {
             if (visible_point_cloud_nodes.size() > 1) {
-                state.owned_point_cloud = buildMergedVisiblePointCloud(scene_, visible_point_cloud_nodes);
+                state.owned_point_cloud = scene_.preparedPointCloudRender();
+                if (!state.owned_point_cloud)
+                    state.owned_point_cloud = buildMergedVisiblePointCloud(scene_, visible_point_cloud_nodes);
                 state.point_cloud = state.owned_point_cloud.get();
                 state.point_cloud_transform =
                     rendering::dataWorldTransformToVisualizerWorld(glm::mat4(1.0f));
             }
             if (visible_point_cloud_nodes.size() == 1) {
-                state.point_cloud = scene_.effectivePointCloud(*visible_point_cloud_nodes.front());
+                const auto* node = visible_point_cloud_nodes.front();
+                state.owned_point_cloud = node->evaluated_point_cloud ? node->evaluated_point_cloud : node->point_cloud;
+                state.point_cloud = state.owned_point_cloud.get();
                 state.point_cloud_transform = rendering::dataWorldTransformToVisualizerWorld(
                     scene_.getWorldTransform(visible_point_cloud_nodes.front()->id));
             }
@@ -3796,7 +3940,9 @@ namespace lfs::vis {
                     return;
             }
 
-            if (selected->type == core::NodeType::SPLAT) {
+            if (selected->type == core::NodeType::SPLAT && selected->model_streamed) {
+                LOG_WARN("'{}' is a streamed model and cannot be edited.", selected->name);
+            } else if (selected->type == core::NodeType::SPLAT) {
                 splat_node_names.push_back(selected->name);
             } else if (selected->type == core::NodeType::POINTCLOUD) {
                 pointcloud_node_names.push_back(selected->name);
@@ -3819,7 +3965,7 @@ namespace lfs::vis {
         // Fall back to visible nodes if no selection
         if (splat_node_names.empty() && pointcloud_node_names.empty() && !had_selection) {
             for (const auto* node : scene_.getVisibleNodes()) {
-                if (node->type == core::NodeType::SPLAT) {
+                if (node->type == core::NodeType::SPLAT && !node->model_streamed) {
                     splat_node_names.push_back(node->name);
                 } else if (node->type == core::NodeType::POINTCLOUD) {
                     pointcloud_node_names.push_back(node->name);
@@ -3987,7 +4133,9 @@ namespace lfs::vis {
                     return;
             }
 
-            if (selected->type == core::NodeType::SPLAT) {
+            if (selected->type == core::NodeType::SPLAT && selected->model_streamed) {
+                LOG_WARN("'{}' is a streamed model and cannot be edited.", selected->name);
+            } else if (selected->type == core::NodeType::SPLAT) {
                 splat_node_names.push_back(selected->name);
             } else if (selected->type == core::NodeType::POINTCLOUD) {
                 pointcloud_node_names.push_back(selected->name);
@@ -4009,7 +4157,7 @@ namespace lfs::vis {
         }
         if (splat_node_names.empty() && pointcloud_node_names.empty() && !had_selection) {
             for (const auto* node : scene_.getVisibleNodes()) {
-                if (node->type == core::NodeType::SPLAT) {
+                if (node->type == core::NodeType::SPLAT && !node->model_streamed) {
                     splat_node_names.push_back(node->name);
                 } else if (node->type == core::NodeType::POINTCLOUD) {
                     pointcloud_node_names.push_back(node->name);
@@ -5465,6 +5613,10 @@ namespace lfs::vis {
             LOG_WARN("{}", LOC("nodes.edit_stored_splats_blocked"));
             return false;
         }
+        if (const auto streamed = streamedSplatEditBlock()) {
+            LOG_WARN("{}", *streamed);
+            return false;
+        }
         std::vector<core::SceneNode*> nodes;
         {
             std::shared_lock slock(selection_.mutex());
@@ -5734,6 +5886,13 @@ namespace lfs::vis {
         });
     }
 
+    std::optional<std::string> SceneManager::streamedSplatEditBlock() const {
+        for (const auto* node : scene_.getNodes())
+            if (node && node->model_streamed && scene_.isNodeEffectivelyVisible(node->id))
+                return std::format("'{}' is a streamed model and cannot be edited.", node->name);
+        return std::nullopt;
+    }
+
     void SceneManager::initSelectionService() {
         if (selection_service_)
             return;
@@ -5747,6 +5906,8 @@ namespace lfs::vis {
     std::expected<SceneManager::GaussianDeletionPlan, std::string> SceneManager::buildSelectedGaussianDeletionPlan() {
         if (hasEvaluatedSplatEditConflict())
             return std::unexpected(LOC("nodes.edit_stored_splats_blocked"));
+        if (auto streamed = streamedSplatEditBlock())
+            return std::unexpected(std::move(*streamed));
         const bool crop_volume_node_selected = [&] {
             std::shared_lock slock(selection_.mutex());
             for (const auto node_id : selection_.selectedNodeIds()) {

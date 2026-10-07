@@ -1937,6 +1937,11 @@ namespace lfs::app {
             splats.reserve(node_names.size());
             for (const auto& name : node_names) {
                 const auto* const node = scene.getNode(name);
+                if (node && scene_manager.isTileStreamNode(node->uuid))
+                    return std::unexpected(std::format(
+                        "Node '{}' streams 3D Tiles and holds only the tiles drawn for the current view; "
+                        "it cannot be exported",
+                        name));
                 if (node && node->type == core::NodeType::SPLAT && node->model) {
                     const auto evaluated = apply_modifiers ? node->evaluated_model : nullptr;
                     splats.emplace_back(evaluated ? evaluated.get() : node->model.get(),

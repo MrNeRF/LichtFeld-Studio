@@ -143,10 +143,14 @@ namespace lfs::mcp {
         return core::base64_encode(png_buf);
     }
 
+    // Float images hold [0, 1] values; UInt8 images (the Metal viewport output) are already
+    // display bytes and must not be rescaled.
     inline lfs::Result<std::string> encode_render_tensor_to_base64(core::Tensor image,
                                                                    int width = 0,
                                                                    int height = 0) {
-        image = image.clone().to(core::Device::CPU).to(core::DataType::Float32);
+        image = image.clone().to(core::Device::CPU);
+        if (image.dtype() != core::DataType::UInt8)
+            image = (image.to(core::DataType::Float32).clamp(0, 1) * 255.0f).to(core::DataType::UInt8);
         if (image.ndim() == 4)
             image = image.squeeze(0);
         if (image.ndim() != 3)
@@ -157,7 +161,7 @@ namespace lfs::mcp {
             return capture_error(lfs::ErrorCode::Internal, "Render tensor has an unsupported image layout");
         if (layout == rendering::ImageLayout::CHW)
             image = image.permute({1, 2, 0});
-        image = (image.clamp(0, 1) * 255.0f).to(core::DataType::UInt8).contiguous();
+        image = image.contiguous();
 
         const int src_height = static_cast<int>(image.shape()[0]);
         const int src_width = static_cast<int>(image.shape()[1]);

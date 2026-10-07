@@ -807,6 +807,20 @@ scene-graph scrollbarvertical sliderbar {
     color: #a6adc8;
 }
 
+/* Pill after a streamed splat's name; streamed models are view-dependent and read-only */
+.streamed-badge {
+    display: none;
+    flex-shrink: 0;
+    margin-left: 6dp;
+    padding: 0dp 5dp;
+    height: 14dp;
+    line-height: 14dp;
+    font-size: 10dp;
+    border-width: 1dp;
+    border-radius: 7dp;
+    white-space: nowrap;
+}
+
 
 /* Inline rename input */
 .rename-input {

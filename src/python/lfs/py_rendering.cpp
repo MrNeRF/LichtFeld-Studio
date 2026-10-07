@@ -28,6 +28,7 @@
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/rendering/scene_upscaler_registry.hpp"
 #include "visualizer/rendering/viewport_appearance_correction.hpp"
+#include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include <algorithm>
@@ -42,6 +43,7 @@
 #include <functional>
 #include <numbers>
 #include <optional>
+#include <string>
 #include <variant>
 
 #include <glm/glm.hpp>
@@ -636,7 +638,7 @@ namespace lfs::python {
         group.id = "render_settings";
         group.name = "Render Settings";
 
-        auto add_color3 = [&](std::array<float, 3> Proxy::*member, const std::string& id, const std::string& name,
+        auto add_color3 = [&](std::array<float, 3> Proxy::* member, const std::string& id, const std::string& name,
                               const std::string& desc, std::array<double, 3> default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -656,7 +658,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_bool = [&](bool Proxy::*member, const std::string& id, const std::string& name, const std::string& desc,
+        auto add_bool = [&](bool Proxy::* member, const std::string& id, const std::string& name, const std::string& desc,
                             bool default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -673,7 +675,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_float = [&](float Proxy::*member, const std::string& id, const std::string& name,
+        auto add_float = [&](float Proxy::* member, const std::string& id, const std::string& name,
                              const std::string& desc, double default_val, double min_val, double max_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -692,7 +694,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_int = [&](int Proxy::*member, const std::string& id, const std::string& name,
+        auto add_int = [&](int Proxy::* member, const std::string& id, const std::string& name,
                            const std::string& desc, int default_val, int min_val, int max_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -711,7 +713,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_int_enum = [&](int Proxy::*member, const std::string& id, const std::string& name,
+        auto add_int_enum = [&](int Proxy::* member, const std::string& id, const std::string& name,
                                 const std::string& desc, std::vector<EnumItem> items, int default_idx) {
             PropertyMeta meta;
             meta.id = id;
@@ -746,7 +748,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_string = [&](std::string Proxy::*member, const std::string& id, const std::string& name,
+        auto add_string = [&](std::string Proxy::* member, const std::string& id, const std::string& name,
                               const std::string& desc, const std::string& default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -908,7 +910,7 @@ namespace lfs::python {
                      {{"Manual", "MANUAL", 0}, {"Auto", "AUTO", 1}}, 1);
 
         using PPISP = vis::PPISPOverrides;
-        const auto add_ppisp_float = [&](float PPISP::*member, const char* id, const char* name,
+        const auto add_ppisp_float = [&](float PPISP::* member, const char* id, const char* name,
                                          const char* desc, double def, double min_v, double max_v) {
             PropertyMeta meta;
             meta.id = id;
@@ -927,7 +929,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        const auto add_ppisp_bool = [&](bool PPISP::*member, const char* id, const char* name,
+        const auto add_ppisp_bool = [&](bool PPISP::* member, const char* id, const char* name,
                                         const char* desc, bool def) {
             PropertyMeta meta;
             meta.id = id;
@@ -1501,6 +1503,96 @@ namespace lfs::python {
         return result;
     }
 
+    namespace {
+        // The viewer thread updates and erases the tile streamers and reads their settings
+        // every frame; scripts run on their own thread, so tile state is only touched on
+        // the viewer thread (like the capture functions). Returns `fn()`, or an empty
+        // result when there is no scene or the viewer is shutting down.
+        template <typename Fn>
+        auto on_viewer_thread(Fn fn) -> std::invoke_result_t<Fn, vis::SceneManager&> {
+            using Result = std::invoke_result_t<Fn, vis::SceneManager&>;
+            auto* const viewer = get_visualizer();
+            const auto run = [viewer, &fn]() -> Result {
+                auto* const scene_manager = viewer ? viewer->getSceneManager() : nullptr;
+                return scene_manager ? fn(*scene_manager) : Result{};
+            };
+            if (!viewer || viewer->isOnViewerThread())
+                return run();
+            if (!viewer->acceptsPostedWork())
+                return Result{};
+            nb::gil_scoped_release release;
+            return vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); }, run,
+                [] { return Result{}; });
+        }
+    } // namespace
+
+    nb::dict get_tiles_settings() {
+        const auto settings = on_viewer_thread([](vis::SceneManager& scene_manager) {
+            return std::optional(scene_manager.tileStreamSettings());
+        });
+        nb::dict result;
+        if (settings) {
+            result["cache_fraction"] = settings->cache_fraction;
+            result["max_sse"] = settings->max_sse;
+            result["cull"] = settings->cull;
+            result["freeze"] = settings->freeze;
+            result["num_load_workers"] = settings->num_load_workers;
+        }
+        return result;
+    }
+
+    void set_tiles_settings(const std::optional<float> cache_fraction, const std::optional<float> max_sse,
+                            const std::optional<bool> cull, const std::optional<bool> freeze,
+                            const std::optional<int> num_load_workers) {
+        const bool applied = on_viewer_thread([&](vis::SceneManager& scene_manager) {
+            auto& settings = scene_manager.tileStreamSettings();
+            if (cache_fraction)
+                settings.cache_fraction = std::clamp(*cache_fraction, 0.0f, 1.0f);
+            if (max_sse)
+                settings.max_sse = std::max(*max_sse, 0.0f);
+            if (cull)
+                settings.cull = *cull;
+            if (freeze)
+                settings.freeze = *freeze;
+            if (num_load_workers)
+                settings.num_load_workers = std::max(*num_load_workers, 0);
+            return true;
+        });
+        // Streamers apply settings on the next frame; draw one even when idle.
+        if (applied)
+            request_redraw();
+    }
+
+    std::optional<std::string> get_tiles_mode() {
+        return on_viewer_thread([](vis::SceneManager& scene_manager) { return scene_manager.tileMode(); });
+    }
+
+    std::optional<nb::dict> get_tiles_stats() {
+        const auto stats =
+            on_viewer_thread([](vis::SceneManager& scene_manager) { return scene_manager.tileStreamStats(); });
+        if (!stats)
+            return std::nullopt;
+        nb::dict result;
+        result["tiles"] = stats->tiles;
+        result["drawn_tiles"] = stats->drawn_tiles;
+        result["cached_tiles"] = stats->cached_tiles;
+        result["loading_tiles"] = stats->loading_tiles;
+        result["failed_tiles"] = stats->failed_tiles;
+        result["skipped_contents"] = stats->skipped_contents;
+        result["drawn_splats"] = stats->drawn_splats;
+        result["full_detail_splats"] = stats->full_detail_splats;
+        result["cache_bytes"] = stats->cache_bytes;
+        result["drawn_bytes"] = stats->drawn_bytes;
+        result["cache_limit_bytes"] = stats->cache_limit_bytes;
+        result["gpu_total_bytes"] = stats->gpu_total_bytes;
+        result["build_ms"] = stats->build_ms;
+        result["max_sse"] = stats->max_sse;
+        result["load_workers"] = stats->load_workers;
+        result["mode"] = "stream";
+        return result;
+    }
+
 } // namespace lfs::python
 
 namespace {
@@ -2062,6 +2154,16 @@ Args:
         m.def("get_render_settings", &get_render_settings);
         m.def("get_lod_stats", &get_lod_stats,
               "Get LOD statistics: {enabled, selected, budget, levels:[{level, count}, ...]}");
+        m.def("get_tiles_settings", &get_tiles_settings,
+              "Get 3D Tiles streaming settings: {cache_fraction, max_sse, cull, freeze, num_load_workers}");
+        m.def("set_tiles_settings", &set_tiles_settings, nb::arg("cache_fraction") = nb::none(),
+              nb::arg("max_sse") = nb::none(), nb::arg("cull") = nb::none(), nb::arg("freeze") = nb::none(),
+              nb::arg("num_load_workers") = nb::none(),
+              "Update 3D Tiles streaming settings; omitted values keep their current setting");
+        m.def("get_tiles_stats", &get_tiles_stats,
+              "Get statistics (incl. max_sse in use) of the streamed 3D Tiles node, or None when no tileset streams");
+        m.def("get_tiles_mode", &get_tiles_mode,
+              "How the loaded 3D Tiles node is shown: 'stream', 'flat', or None when no tileset is loaded");
     }
 
 } // namespace lfs::python

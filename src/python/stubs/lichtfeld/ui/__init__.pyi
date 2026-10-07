@@ -2195,6 +2195,14 @@ def has_active_operator() -> bool:
 def can_edit_gaussian_selection() -> bool:
     """Return true when Gaussian selection editing is available"""
 
+def is_splat_editing_blocked() -> bool:
+    """
+    Return true while a visible streamed model blocks splat-level selection and edits
+    """
+
+def is_node_streamed(name: str) -> bool:
+    """Return true when the named node shows a streamed, read-only model"""
+
 def has_gaussian_selection() -> bool:
     """Return true when any Gaussians are selected"""
 

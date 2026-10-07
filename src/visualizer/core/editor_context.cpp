@@ -9,6 +9,7 @@
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
 
+#include <algorithm>
 #include <string_view>
 
 namespace lfs::vis {
@@ -38,7 +39,13 @@ namespace lfs::vis {
         const bool trainer_paused = trainer_manager && trainer_manager->isPaused();
         const bool trainer_finished = trainer_manager && trainer_manager->isFinished();
         const std::size_t scene_node_count = scene_manager ? scene_manager->getScene().getNodeCount() : 0;
+        // Streaming attaches and detaches without a scene mutation, so this is polled.
+        const bool streamed_visible =
+            scene_manager && std::ranges::any_of(scene_manager->getScene().getNodes(), [&](const core::SceneNode* node) {
+                return node && node->model_streamed && scene_manager->getScene().isNodeEffectivelyVisible(node->id);
+            });
         if (state_initialized_ &&
+            streamed_visible == has_visible_streamed_model_ &&
             scene_generation == last_scene_generation_ &&
             selection_generation == last_selection_generation_ &&
             has_scene_manager == last_has_scene_manager_ &&
@@ -57,6 +64,7 @@ namespace lfs::vis {
         last_trainer_paused_ = trainer_paused;
         last_trainer_finished_ = trainer_finished;
         last_scene_node_count_ = scene_node_count;
+        has_visible_streamed_model_ = streamed_visible;
         state_initialized_ = true;
 
         if (!scene_manager) {
@@ -156,7 +164,7 @@ namespace lfs::vis {
     }
 
     bool EditorContext::canSelectGaussians() const {
-        return has_gaussians_ && !isToolsDisabled();
+        return has_gaussians_ && !isToolsDisabled() && !has_visible_streamed_model_;
     }
 
     bool EditorContext::isToolAvailable(const ToolType tool) const {
@@ -169,9 +177,9 @@ namespace lfs::vis {
         case ToolType::None:
             return true;
         case ToolType::Selection:
-            return has_gaussians_;
+            return has_gaussians_ && !has_visible_streamed_model_;
         case ToolType::Mirror:
-            return has_gaussians_ && has_editable_splat_selection_;
+            return has_gaussians_ && has_editable_splat_selection_ && !has_visible_streamed_model_;
         case ToolType::Translate:
         case ToolType::Rotate:
         case ToolType::Scale:

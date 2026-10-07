@@ -23,6 +23,7 @@
 #include "input/sdl_key_mapping.hpp"
 #include "io/loader.hpp"
 #include "io/splat_path.hpp"
+#include "io/splat_tile_source.hpp"
 #include "io/video/video_extensions.hpp"
 #include "operator/operator_context.hpp"
 #include "operator/operator_id.hpp"
@@ -2847,7 +2848,7 @@ namespace lfs::vis {
             if (ext == ".resume") {
                 cmd::ShowResumeCheckpointPopup{.checkpoint_path = filepath}.emit();
                 continue;
-            } else if (lfs::io::is_ssog_path(filepath)) {
+            } else if (lfs::io::is_ssog_path(filepath) || lfs::io::is_tiles3d_path(filepath)) {
                 splat_files.push_back(filepath);
             } else if (ext == ".json") {
                 if (lfs::io::Loader::isDatasetPath(filepath)) {

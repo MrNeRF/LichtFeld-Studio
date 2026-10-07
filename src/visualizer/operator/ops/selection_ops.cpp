@@ -65,7 +65,7 @@ namespace lfs::vis::op {
 
     bool SelectionStrokeOperator::poll(const OperatorContext& ctx,
                                        const OperatorProperties* /*props*/) const {
-        return ctx.scene().getScene().getTotalGaussianCount() > 0;
+        return ctx.scene().getScene().getTotalGaussianCount() > 0 && !ctx.scene().streamedSplatEditBlock();
     }
 
     OperatorResult SelectionStrokeOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {

@@ -78,6 +78,7 @@
 #include <format>
 #include <fstream>
 #include <istream>
+#include <mutex>
 #include <ranges>
 #include <span>
 #include <sstream>
@@ -290,6 +291,58 @@ namespace lfs::vis::project {
                 return source->parent_path();
             }
             return {};
+        }
+
+        // Streamed 3D Tiles nodes are stored as REFS to their tileset; hydration reloads
+        // the tileset and keeps each tile source for the streamer attached after commit.
+        struct Tiles3dHydration {
+            struct Stream {
+                std::shared_ptr<lfs::io::SplatTileSource> source;
+                std::filesystem::path path;
+            };
+            std::mutex mutex;
+            std::unordered_map<lfs::core::Uuid, Stream> streams; // by reference UUID
+        };
+
+        [[nodiscard]] lfs::io::project::ScenePayloadResolver makeTiles3dResolver(
+            const ProjectDocument& document, lfs::core::SplatTensorAllocator allocator,
+            std::shared_ptr<Tiles3dHydration> hydration) {
+            lfs::io::project::ScenePayloadResolver resolver;
+            resolver.splat = [references = document.references(), root = projectRootFor(document),
+                              allocator = std::move(allocator), hydration = std::move(hydration)](
+                                 const PayloadBinding& binding) -> lfs::Result<std::unique_ptr<lfs::core::SplatData>> {
+                using Model = std::unique_ptr<lfs::core::SplatData>;
+                if (binding.fourcc != "REFS" || binding.source_kind != "tiles3d" || !binding.reference_uuid) {
+                    return fail<Model>(lfs::ErrorCode::FailedPrecondition,
+                                       "An external splat payload cannot be opened.",
+                                       std::format("{} ({}) has no external resolver", binding.fourcc,
+                                                   binding.source_kind),
+                                       "REFS");
+                }
+                const auto path = lfs::io::project::resolve_path_reference(references, root, *binding.reference_uuid);
+                if (!path) {
+                    return fail<Model>(lfs::ErrorCode::NotFound,
+                                       "The 3D Tiles tileset of this project was not found.",
+                                       binding.reference_uuid->to_string(), "REFS");
+                }
+                auto loaded = lfs::io::Loader::create()->load(*path, {.splat_tensor_allocator = allocator});
+                if (!loaded) {
+                    return fail<Model>(lfs::ErrorCode::DataLoss, "The 3D Tiles tileset could not be opened.",
+                                       loaded.error().format(), "REFS");
+                }
+                auto* const splat = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&loaded->data);
+                if (!splat || !*splat) {
+                    return fail<Model>(lfs::ErrorCode::DataLoss, "The 3D Tiles tileset has no splat data.",
+                                       lfs::core::path_to_utf8(*path), "REFS");
+                }
+                if (loaded->tile_source) {
+                    std::lock_guard lock(hydration->mutex);
+                    hydration->streams.insert_or_assign(*binding.reference_uuid,
+                                                        Tiles3dHydration::Stream{loaded->tile_source, *path});
+                }
+                return std::make_unique<lfs::core::SplatData>(std::move(**splat));
+            };
+            return resolver;
         }
 
         void publishProjectToast(lfs::Error error,
@@ -6455,8 +6508,48 @@ namespace lfs::vis::project {
             if (!geometry) {
                 continue;
             }
+            // A streamed 3D Tiles node holds only the drawn tiles, so the project
+            // references its tileset instead of embedding the current cut.
+            if (const auto tileset = manager->tileStreamPath(node->uuid)) {
+                std::optional<lfs::core::Uuid> previous;
+                if (const auto bound = bindings.find(node->uuid);
+                    bound != bindings.end() && bound->second.fourcc == "REFS") {
+                    previous = bound->second.reference_uuid;
+                }
+                auto reference = lfs::io::project::upsert_path_reference(
+                    document_->edit_references(), projectRootFor(*document_), *tileset,
+                    std::format("tiles3d:{}", node->uuid.to_string()), "tiles3d", previous);
+                if (!reference) {
+                    return lfs::Status::failure(std::move(reference).error());
+                }
+                bindings.insert_or_assign(node->uuid, PayloadBinding{.fourcc = "REFS",
+                                                                     .instance_uuid = *reference,
+                                                                     .reference_uuid = *reference,
+                                                                     .source_kind = "tiles3d"});
+                if (auto decision = document_->edit_project().upsert_embed_decision(
+                        {.uuid = node->uuid,
+                         .node_uuid = node->uuid,
+                         .payload_fourcc = "REFS",
+                         .decision = "external",
+                         .reference_uuid = *reference,
+                         .reason = "streamed 3D Tiles tileset"});
+                    !decision) {
+                    return decision;
+                }
+                continue;
+            }
             const auto existing =
                 bindings.find(node->uuid);
+            if (existing != bindings.end() && existing->second.fourcc == "REFS" &&
+                existing->second.source_kind == "tiles3d" &&
+                node->payload_hydration == lfs::core::PayloadHydrationState::Loaded) {
+                // Reopened without streaming (full detail fit the GPU): embed like any splat.
+                existing->second = PayloadBinding{.fourcc = "SPLT",
+                                                  .instance_uuid = node->uuid,
+                                                  .reference_uuid = std::nullopt,
+                                                  .source_kind = "generated"};
+                continue;
+            }
             if (existing != bindings.end()) {
                 // Keep the original encoding for view-only saves. Geometry edits
                 // must capture the current resident splats instead of reusing the
@@ -8368,9 +8461,14 @@ namespace lfs::vis::project {
                         }
                         return;
                     }
+                    auto tiles3d = std::make_shared<Tiles3dHydration>();
+                    // Built before the call: argument evaluation order would otherwise
+                    // let the moved allocator reach the resolver empty.
+                    const auto external_payloads = makeTiles3dResolver(*opened_source, allocator, tiles3d);
                     auto staged =
                         opened_source->stage_hydration(
-                            scene_manager->getScene(), {},
+                            scene_manager->getScene(),
+                            external_payloads,
                             std::move(allocator),
                             [this, project_open_job](const std::size_t completed,
                                                      const std::size_t total) {
@@ -8417,7 +8515,8 @@ namespace lfs::vis::project {
                                  plan, hydration_started,
                                  source_opened_at,
                                  payload_staged_at,
-                                 queued_at, project_open_job] {
+                                 queued_at, project_open_job,
+                                 tiles3d] {
                                     if (epoch_.load(
                                             std::memory_order_acquire) !=
                                             epoch ||
@@ -8468,6 +8567,20 @@ namespace lfs::vis::project {
                                     ensureHydratedSplatShNExportable(
                                         manager->getScene(),
                                         display_path);
+                                    // After the final hydrated models are installed: streamers
+                                    // track the model they own.
+                                    if (const auto nodes = document->scene_graph().nodes(); nodes) {
+                                        std::lock_guard lock(tiles3d->mutex);
+                                        for (const auto& node : *nodes) {
+                                            if (!node.payload || node.payload->source_kind != "tiles3d" ||
+                                                !node.payload->reference_uuid)
+                                                continue;
+                                            const auto stream = tiles3d->streams.find(*node.payload->reference_uuid);
+                                            if (stream != tiles3d->streams.end())
+                                                manager->attachTileStream(node.uuid, stream->second.source,
+                                                                          stream->second.path);
+                                        }
+                                    }
                                     const auto scene_committed_at =
                                         std::chrono::steady_clock::
                                             now();

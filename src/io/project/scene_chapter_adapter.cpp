@@ -259,19 +259,20 @@ namespace lfs::io::project {
                     "Payload binding has a null UUID, invalid fourcc, or empty source kind",
                     node.uuid);
             }
-            if (binding.source_kind == "rad") {
+            // Streamed sources (live RAD, 3D Tiles) are referenced, never embedded.
+            if (binding.source_kind == "rad" || binding.source_kind == "tiles3d") {
                 if (binding.fourcc != "REFS" || !binding.reference_uuid ||
                     *binding.reference_uuid != binding.instance_uuid) {
                     return fail<void>(
                         lfs::ErrorCode::FailedPrecondition,
-                        "A live RAD node cannot be embedded.",
-                        "RAD binding must be an external REFS instance", node.uuid);
+                        "A streamed splat node cannot be embedded.",
+                        "RAD and 3D Tiles bindings must be external REFS instances", node.uuid);
                 }
                 if (node.payload_diverged) {
                     return fail<void>(
                         lfs::ErrorCode::FailedPrecondition,
-                        "An edited live RAD node cannot be saved.",
-                        "Bake the RAD node to an embedded resident splat before saving",
+                        "An edited streamed splat node cannot be saved.",
+                        "Edits to a streamed RAD or 3D Tiles node are not stored by its reference",
                         node.uuid);
                 }
                 return {};

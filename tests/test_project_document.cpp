@@ -3779,6 +3779,69 @@ namespace {
                   0u);
     }
 
+    TEST(ProjectDocumentTest, TilesetReferencesRequireReaderCapability) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "tileset-reference.licht";
+        const Uuid project_uuid = fixed_uuid(230);
+        const Uuid tileset_uuid = fixed_uuid(231);
+        const Uuid node_uuid = fixed_uuid(232);
+
+        auto document = make_empty_document(project_uuid, 1000);
+        require_status(document->edit_references().upsert(ReferenceRecord{
+            .uuid = tileset_uuid,
+            .key = "splat.tileset",
+            .kind = "tiles3d",
+            .locator = {.preferred = "tiles/tileset.json", .base = LocatorBase::Project},
+            .fingerprint = fake_fingerprint(13),
+            .unresolved = true,
+        }));
+        require_status(document->edit_project().upsert_embed_decision(EmbedDecision{
+            .uuid = node_uuid,
+            .node_uuid = node_uuid,
+            .payload_fourcc = "REFS",
+            .decision = "external",
+            .reference_uuid = tileset_uuid,
+            .reason = "streamed tileset remains external",
+        }));
+        require_status(document->edit_scene_graph().upsert_node(SceneNodeRecord{
+            .uuid = node_uuid,
+            .type = "splat",
+            .name = "Streamed tileset",
+            .child_order = 0,
+            .payload = PayloadBinding{.fourcc = "REFS",
+                                      .instance_uuid = tileset_uuid,
+                                      .reference_uuid = tileset_uuid,
+                                      .source_kind = "tiles3d"},
+        }));
+        auto saved = document->save(path, save_options(230, 1100));
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+
+        auto reader = ProjectReader::open(path);
+        ASSERT_TRUE(reader) << lfs::format_for_developer(reader.error());
+        EXPECT_TRUE(reader->commit().required_reader_capabilities.contains(TILESET_REFERENCES));
+
+        // A reader from before tileset references reports an unsupported feature
+        // instead of failing on the scene binding as invalid geometry.
+        ReaderOptions older;
+        older.reader_capabilities = CapabilitySet{};
+        for (std::uint8_t bit = 0; bit <= ENCODED_SCENE_ASSETS; ++bit)
+            older.reader_capabilities.set(bit);
+        auto refused = ProjectReader::open(path, older);
+        ASSERT_FALSE(refused);
+        EXPECT_EQ(refused.error().code(), lfs::ErrorCode::Unsupported);
+    }
+
+    TEST(ProjectDocumentTest, ProjectsWithoutTilesetsDoNotRequireTilesetCapability) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "no-tileset.licht";
+        auto document = make_empty_document(fixed_uuid(240), 1000);
+        auto saved = document->save(path, save_options(240, 1100));
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+        auto reader = ProjectReader::open(path);
+        ASSERT_TRUE(reader) << lfs::format_for_developer(reader.error());
+        EXPECT_FALSE(reader->commit().required_reader_capabilities.contains(TILESET_REFERENCES));
+    }
+
     TEST(ProjectDocumentTest,
          MissingReferencesRemainVerbatimAndReverseOwnersInvert) {
         TemporaryDirectory temporary;

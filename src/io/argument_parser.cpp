@@ -15,6 +15,7 @@
 #include "core/user_paths.hpp"
 #include "io/exporter.hpp"
 #include "io/splat_path.hpp"
+#include "io/splat_tile_source.hpp"
 #include <algorithm>
 #include <any>
 #include <args.hxx>
@@ -507,7 +508,7 @@ namespace {
                 std::format("Path does not exist: {}", lfs::core::path_to_utf8(view_path)));
         }
 
-        if (lfs::io::is_ssog_path(view_path)) {
+        if (lfs::io::is_ssog_path(view_path) || lfs::io::is_tiles3d_path(view_path)) {
             params.view_paths.push_back(view_path);
             return {};
         }

@@ -3099,6 +3099,8 @@ namespace lfs::vis {
 
         VmaAllocatorCreateInfo create_info{};
         create_info.flags = surface_ == VK_NULL_HANDLE ? 0 : VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
+        if (buffer_device_address_enabled_)
+            create_info.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
         create_info.physicalDevice = physical_device_;
         create_info.device = device_;
         create_info.instance = instance_;

@@ -50,6 +50,16 @@ namespace lfs::io::project {
             return detail::project_error(lfs::ErrorCode::DataLoss, std::move(message), "Embedded scene asset failed");
         }
 
+        // A scene node streams an external 3D Tiles tileset (TILESET_REFERENCES).
+        template <typename SceneGraph>
+        bool references_tilesets(const SceneGraph& scene_graph) {
+            const auto nodes = scene_graph.nodes();
+            return nodes && std::ranges::any_of(*nodes, [](const auto& node) {
+                       return node.payload && node.payload->fourcc == "REFS" &&
+                              node.payload->source_kind == "tiles3d";
+                   });
+        }
+
         constexpr std::uint16_t P3_CHUNK_VERSION = 1;
         constexpr std::uint64_t DOCUMENT_CLEAN_BASELINE = 0;
         constexpr std::uint32_t PPISP_FILE_MAGIC =
@@ -1418,7 +1428,8 @@ namespace lfs::io::project {
                     fourcc = FOURCC_MESH;
                 } else if (node.type == "splat" &&
                            binding.fourcc == "REFS" &&
-                           binding.source_kind == "rad" &&
+                           (binding.source_kind == "rad" ||
+                            binding.source_kind == "tiles3d") &&
                            binding.reference_uuid &&
                            *binding.reference_uuid ==
                                binding.instance_uuid &&
@@ -3048,6 +3059,10 @@ namespace lfs::io::project {
             commit.extra_reader_capabilities.set(ENCODED_SCENE_ASSETS);
             commit.extra_writer_capabilities.set(ENCODED_SCENE_ASSETS);
         }
+        if (references_tilesets(impl_->scene_graph)) {
+            commit.extra_reader_capabilities.set(TILESET_REFERENCES);
+            commit.extra_writer_capabilities.set(TILESET_REFERENCES);
+        }
         if (commit.commit_uuid.is_nil()) {
             commit.commit_uuid = lfs::core::generate_uuid_v4();
         }
@@ -3935,6 +3950,10 @@ namespace lfs::io::project {
                                                            })) {
             commit.extra_reader_capabilities.set(ENCODED_SCENE_ASSETS);
             commit.extra_writer_capabilities.set(ENCODED_SCENE_ASSETS);
+        }
+        if (references_tilesets(impl_->scene_graph)) {
+            commit.extra_reader_capabilities.set(TILESET_REFERENCES);
+            commit.extra_writer_capabilities.set(TILESET_REFERENCES);
         }
         const bool retains_unknown_json =
             impl_->project.dom().get_json("license").has_value() ||

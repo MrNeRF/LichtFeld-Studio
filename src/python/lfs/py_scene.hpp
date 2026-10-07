@@ -12,6 +12,7 @@
 #include "py_prop.hpp"
 #include "py_splat_data.hpp"
 #include "py_tensor.hpp"
+#include "visualizer/scene/point_cloud_updates.hpp"
 #include <cstdint>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
@@ -117,13 +118,7 @@ namespace lfs::python {
     class PyPointCloud {
     public:
         explicit PyPointCloud(core::PointCloud* pc, bool owns = false,
-                              core::SceneNode* node = nullptr, core::Scene* scene = nullptr)
-            : pc_(pc),
-              owns_(owns),
-              node_(node),
-              scene_(scene) {
-            assert(pc_ != nullptr);
-        }
+                              core::SceneNode* node = nullptr, core::Scene* scene = nullptr);
 
         PyTensor means() const { return PyTensor(pc_->means, false); }
         PyTensor colors() const { return PyTensor(pc_->colors, false); }
@@ -173,6 +168,9 @@ namespace lfs::python {
 
         // Replace point cloud data (for live updates)
         void set_data(const PyTensor& points, const PyTensor& colors);
+        std::shared_ptr<vis::PointCloudUpdateTicket> set_data_async(
+            nb::object points, nb::object colors,
+            std::optional<std::tuple<float, float, float>> centroid, const std::string& queue_policy);
         void set_colors(const PyTensor& colors);
         void set_means(const PyTensor& points);
 
@@ -181,6 +179,8 @@ namespace lfs::python {
 
     private:
         core::PointCloud* pc_;
+        std::shared_ptr<core::PointCloud> payload_keep_alive_;
+        vis::PointCloudUpdateTarget update_target_;
         bool owns_;
         core::SceneNode* node_ = nullptr;
         core::Scene* scene_ = nullptr;

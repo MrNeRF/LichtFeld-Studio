@@ -251,6 +251,9 @@ namespace lfs::vis {
         [[nodiscard]] lfs::Status applyPendingParams();
 
     private:
+        // Rejection message when the training model node streams its splats.
+        [[nodiscard]] std::optional<std::string> streamedTrainingModelReason() const;
+
         struct TrainingCompletionData {
             int iteration = 0;
             float final_loss = 0.0f;

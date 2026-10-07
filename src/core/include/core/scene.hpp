@@ -157,6 +157,9 @@ namespace lfs::core {
 
         std::unique_ptr<lfs::core::SplatData> model;
         std::shared_ptr<lfs::core::PointCloud> point_cloud;
+        // Shared identity lets queued updates detect replacement without dereferencing a node.
+        std::shared_ptr<std::atomic<uint64_t>> point_cloud_revision =
+            std::make_shared<std::atomic<uint64_t>>(0);
         std::shared_ptr<lfs::core::MeshData> mesh;
         std::shared_ptr<lfs::core::SplatData> evaluated_model;
         std::shared_ptr<lfs::core::PointCloud> evaluated_point_cloud;
@@ -173,6 +176,9 @@ namespace lfs::core {
         // In-memory payload no longer matches the source file (edited, generated,
         // pasted, ...); drives the embed-vs-reference decision on project save.
         bool payload_diverged = false;
+        // Model is a view-dependent proxy the app replaces at any time (streamed
+        // splats): it cannot be trained or edited in place. Runtime only.
+        bool model_streamed = false;
         PayloadHydrationState payload_hydration =
             PayloadHydrationState::NotApplicable;
         std::optional<GeoreferencePose> georef_pose;
@@ -303,6 +309,17 @@ namespace lfs::core {
         void replaceNodeModel(const std::string& name, std::unique_ptr<lfs::core::SplatData> model);
         void replaceNodePointCloud(const std::string& name,
                                    std::shared_ptr<lfs::core::PointCloud> point_cloud);
+        // A prepared replacement: no uploads, reductions, or selection-mask copies.
+        // Returns the old payload and selection storage for retirement off the viewer.
+        struct PointCloudRetirement {
+            std::shared_ptr<PointCloud> cloud;
+            std::shared_ptr<PointCloud> evaluated;
+            std::shared_ptr<PointCloud> merged;
+            std::shared_ptr<Tensor> selection;
+        };
+        PointCloudRetirement publishNodePointCloud(
+            const Uuid& uuid, std::shared_ptr<PointCloud> point_cloud, glm::vec3 centroid,
+            std::shared_ptr<PointCloud> merged = {});
         void replaceNodeMesh(const std::string& name,
                              std::shared_ptr<lfs::core::MeshData> mesh);
         // Swap a node's model in place, returning the previous model so the caller can
@@ -635,6 +652,10 @@ namespace lfs::core {
 
         void setPointCloudModified(bool modified) { point_cloud_modified_ = modified; }
         [[nodiscard]] bool isPointCloudModified() const { return point_cloud_modified_; }
+        [[nodiscard]] std::shared_ptr<std::atomic<uint64_t>> pointCloudUpdateEpoch() const { return point_cloud_update_epoch_; }
+        [[nodiscard]] std::shared_ptr<PointCloud> preparedPointCloudRender() const {
+            return prepared_point_cloud_render_generation_ == renderGeneration() ? prepared_point_cloud_render_ : nullptr;
+        }
 
         [[nodiscard]] std::shared_ptr<lfs::core::PointCloud> getInitialPointCloud() const { return initial_point_cloud_; }
         [[nodiscard]] const lfs::core::Tensor& getSceneCenter() const { return scene_center_; }
@@ -899,7 +920,10 @@ namespace lfs::core {
         glm::vec3 training_data_origin_{0.0f};
         lfs::core::Tensor scene_center_;
         bool images_have_alpha_ = false;
+        std::shared_ptr<std::atomic<uint64_t>> point_cloud_update_epoch_ = std::make_shared<std::atomic<uint64_t>>(0);
         bool point_cloud_modified_ = false;
+        std::shared_ptr<PointCloud> prepared_point_cloud_render_;
+        uint64_t prepared_point_cloud_render_generation_ = 0;
         Uuid training_model_uuid_;
         // Derived display label retained for additive name-based APIs. UUID is
         // the sole authority for resolving the training node.

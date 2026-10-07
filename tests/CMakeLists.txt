@@ -258,6 +258,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
         test_menu_bar_title.cpp
+        test_point_cloud_updates.cpp
 
         test_preferences_migration.cpp
         test_scene_upscaler_registry.cpp
@@ -721,6 +722,7 @@ if(NOT LFS_HAS_CUDA)
         test_nodes_scene.cpp
         test_nodes_modifier_manager.cpp
         test_splat_simplify.cpp
+        test_tiles3d.cpp
         test_node_canvas_interaction.cpp
         test_mcp_node_tools.cpp
         test_mcp_screen_tools.cpp
@@ -997,6 +999,7 @@ set(TEST_FILES
     test_tensor_inplace_capacity.cpp
     test_sog_format.cpp
     test_ssog_format.cpp
+    test_tiles3d.cpp
     test_splat_decimate.cpp
     test_ply_error_taxonomy.cpp
     test_ply_io_throughput.cpp

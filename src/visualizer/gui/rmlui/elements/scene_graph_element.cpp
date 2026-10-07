@@ -731,6 +731,10 @@ namespace lfs::vis::gui {
             node_name->SetClass("node-name", true);
             slot.node_name = slot.content->AppendChild(std::move(node_name));
 
+            auto streamed_badge = doc->CreateElement("span");
+            streamed_badge->SetClass("streamed-badge", true);
+            slot.streamed_badge = slot.content->AppendChild(std::move(streamed_badge));
+
             auto actions = doc->CreateElement("span");
             actions->SetClass("row-actions", true);
             auto* actions_el = slot.content->AppendChild(std::move(actions));
@@ -894,6 +898,7 @@ namespace lfs::vis::gui {
             snapshot.has_mask = node->type == core::NodeType::CAMERA &&
                                 (!node->mask_path.empty() ||
                                  (node->camera && node->camera->has_in_memory_mask()));
+            snapshot.streamed = node->type == core::NodeType::SPLAT && node->model_streamed;
 
             switch (node->type) {
             case core::NodeType::SPLAT:
@@ -1055,6 +1060,7 @@ namespace lfs::vis::gui {
             .encoded_label = encode(snapshot.label),
             .padding_left_dp = formatDp((selection_markers_visible_ ? 17 : 4) + depth * 16),
             .has_mask = snapshot.has_mask,
+            .streamed = snapshot.streamed,
             .can_delete = snapshot.can_delete,
             .delete_enabled = snapshot.delete_enabled,
             .can_rename = snapshot.can_rename,
@@ -1483,6 +1489,11 @@ namespace lfs::vis::gui {
         setCachedClass(slot.node_name, "training-disabled",
                        row.type == core::NodeType::CAMERA && !row.training_enabled);
         setCachedInnerRml(slot.node_name, row.encoded_label);
+        setCachedProperty(slot.streamed_badge, "display", row.streamed && !renaming ? "block" : "none");
+        if (row.streamed) {
+            setCachedInnerRml(slot.streamed_badge, LOC("scene.streamed_badge"));
+            setCachedAttribute(slot.streamed_badge, "title", LOC("scene.streamed_badge_tooltip"));
+        }
         if (renaming) {
             if (rename_buffer_.empty())
                 rename_buffer_ = snapshot.name;

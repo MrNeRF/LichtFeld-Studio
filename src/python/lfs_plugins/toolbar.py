@@ -85,6 +85,43 @@ def _ui_label(key, fallback=""):
     return fallback or ""
 
 
+def _ui_bool(name, *args):
+    try:
+        import lichtfeld as lf
+
+        fn = getattr(getattr(lf, "ui", None), name, None)
+        return bool(fn(*args)) if callable(fn) else False
+    except Exception:
+        return False
+
+
+def _crop_targets_streamed() -> bool:
+    """True when a node the crop would apply to shows a streamed, read-only model."""
+    try:
+        import lichtfeld as lf
+
+        scene = lf.get_scene()
+        if scene is None:
+            return False
+        for name in lf.get_selected_node_names() or []:
+            node = scene.get_node(name)
+            if getattr(getattr(node, "type", None), "name", "") in {"CROPBOX", "ELLIPSOID"}:
+                node = scene.get_node_by_id(node.parent_id)
+            if node is not None and _ui_bool("is_node_streamed", node.name):
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def _with_blocked_reason(record, reason_key, reason_text):
+    """Appends why a disabled button is blocked to its tooltip."""
+    record["tooltip_text"] = f'{record["tooltip_text"]} — {_ui_label(reason_key, reason_text)}'
+    # The tooltip appends the action's shortcut after the text; it does nothing while blocked.
+    record["action_id"] = ""
+    return record
+
+
 def _current_selected_node_types() -> tuple[str, ...]:
     try:
         import lichtfeld as lf
@@ -458,7 +495,7 @@ class _GizmoToolbarController:
 
     def _tool_button_record(self, tool_def, active_tool_id, context):
         tooltip_key = self._TOOL_LOCALE_KEYS.get(tool_def.id, "")
-        return _button_record(
+        record = _button_record(
             f"tool-{tool_def.id}",
             "tool",
             tool_def.id,
@@ -469,6 +506,14 @@ class _GizmoToolbarController:
             selected=_tool_selected(tool_def, active_tool_id, context),
             enabled=tool_def.can_activate(context),
         )
+        return self._explain_select_blocked(record, tool_def.id)
+
+    @staticmethod
+    def _explain_select_blocked(record, tool_id):
+        if tool_id == "builtin.select" and not record["enabled"] and _ui_bool("is_splat_editing_blocked"):
+            _with_blocked_reason(record, "toolbar.streamed_select_blocked",
+                                 "Streamed model is read-only.")
+        return record
 
     def _build_selection_records(self, tool_def, active_tool_id, context):
         import lichtfeld as lf
@@ -517,7 +562,7 @@ class _GizmoToolbarController:
             selected=active_tool_id == "builtin.select",
             enabled=enabled,
         )
-        return [group_button], mode_buttons
+        return [self._explain_select_blocked(group_button, "builtin.select")], mode_buttons
 
     def _build_transform_records(self, tool_defs, active_tool_id, context):
         if not tool_defs:
@@ -794,6 +839,20 @@ class _GizmoToolbarController:
 
     def _build_crop_action_records(self, active_tool_id):
         active = active_tool_id == self._CROP_TOOL_ID
+        apply_blocked = active and _crop_targets_streamed()
+        apply_record = _button_record(
+            "crop-apply",
+            "crop_apply",
+            "",
+            _icon_src("check"),
+            tooltip_key="common.apply",
+            tooltip_text="Apply",
+            action_id="APPLY_CROP_BOX",
+            enabled=active and not apply_blocked,
+        )
+        if apply_blocked:
+            _with_blocked_reason(apply_record, "toolbar.streamed_crop_apply_blocked",
+                                 "Streamed model is read-only.")
         return [
             _button_record(
                 "crop-fit",
@@ -822,16 +881,7 @@ class _GizmoToolbarController:
                 tooltip_text="Reset",
                 enabled=active,
             ),
-            _button_record(
-                "crop-apply",
-                "crop_apply",
-                "",
-                _icon_src("check"),
-                tooltip_key="common.apply",
-                tooltip_text="Apply",
-                action_id="APPLY_CROP_BOX",
-                enabled=active,
-            ),
+            apply_record,
             _button_record(
                 "crop-delete",
                 "crop_delete",
@@ -1887,6 +1937,8 @@ class _ViewportToolbarController:
             align_axis_snap,
             align_edge_to_axis,
             _panel_space(_HISTOGRAM_PANEL_ID),
+            _ui_bool("is_splat_editing_blocked"),
+            active_tool == _GizmoToolbarController._CROP_TOOL_ID and _crop_targets_streamed(),
         )
 
     def _on_toolbar_action(self, _handle, _event, args):

@@ -4109,6 +4109,21 @@ namespace lfs::python {
             "Return true when Gaussian selection editing is available");
 
         m.def(
+            "is_splat_editing_blocked", []() -> bool {
+                const auto* editor = get_editor_context();
+                return editor && editor->isSplatEditingBlocked();
+            },
+            "Return true while a visible streamed model blocks splat-level selection and edits");
+
+        m.def(
+            "is_node_streamed", [](const std::string& name) -> bool {
+                const auto* sm = get_scene_manager();
+                const auto* node = sm ? sm->getScene().getNode(name) : nullptr;
+                return node && node->model_streamed;
+            },
+            nb::arg("name"), "Return true when the named node shows a streamed, read-only model");
+
+        m.def(
             "has_gaussian_selection", []() -> bool {
                 const auto* sm = get_scene_manager();
                 return sm && sm->getScene().hasSelection();

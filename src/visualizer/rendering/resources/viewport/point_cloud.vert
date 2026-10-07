@@ -4,8 +4,17 @@
 
 #version 450
 
-layout(location = 0) in vec3 in_position;
-layout(location = 1) in vec3 in_color;
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// Scalar packing preserves contiguous tensor [N,3] storage (12 bytes/point).
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer VertexValues {
+    float values[];
+};
+layout(set = 0, binding = 7) readonly buffer VertexAddresses {
+    uint64_t positions_address;
+    uint64_t colors_address;
+};
 
 layout(set = 0, binding = 0) readonly buffer ModelTransforms {
     mat4 model_transforms[];
@@ -78,6 +87,11 @@ void reject() {
 }
 
 void main() {
+    VertexValues positions = VertexValues(positions_address);
+    VertexValues colors = VertexValues(colors_address);
+    uint first = uint(gl_VertexIndex) * 3u;
+    vec3 in_position = vec3(positions.values[first], positions.values[first + 1u], positions.values[first + 2u]);
+    vec3 in_color = vec3(colors.values[first], colors.values[first + 1u], colors.values[first + 2u]);
     if ((PC_FLAGS & FLAG_HAS_DELETED) != 0 &&
         deleted_mask[gl_VertexIndex] != 0u) {
         reject();

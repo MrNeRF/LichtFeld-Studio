@@ -14,6 +14,7 @@
 #include "io/loader.hpp"
 #include "scene/scene_render_state.hpp"
 #include "scene/selection_state.hpp"
+#include "scene/splat_tile_streamer.hpp"
 #include "selection/selection_service.hpp"
 #include <cstdint>
 #include <expected>
@@ -22,8 +23,10 @@
 #include <glm/vec2.hpp>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace lfs::vis {
 
@@ -126,6 +129,37 @@ namespace lfs::vis {
                                                         bool preserve_raw = false,
                                                         core::NodeId parent = core::NULL_NODE,
                                                         bool defer_import_license = false, core::Uuid* imported_uuid = nullptr, uint32_t* import_selection_generation = nullptr);
+        // A camera that view-dependent tile selection serves, with its actual projection.
+        struct TileStreamCamera {
+            glm::mat4 view{1.0f};
+            glm::mat4 projection{1.0f}; // perspective or orthographic; unused when equirectangular
+            float viewport_height = 0.0f;
+            float vfov_radians = 0.0f;
+            bool orthographic = false;
+            float ortho_scale = 0.0f; // orthographic: pixels per world unit
+            bool equirectangular = false;
+            // Other views draw the same model: when they are visible, culling to this
+            // camera's frustum would leave them without the tiles they look at.
+            bool cull = true;
+        };
+        // Refines view-dependent (3D Tiles) nodes for the camera; main thread.
+        void updateTileStreams(const TileStreamCamera& camera, const std::function<void()>& wake);
+        [[nodiscard]] SplatTileStreamSettings& tileStreamSettings() { return tile_stream_settings_; }
+        // Streams `source` into the splat node `node`; its model then holds only the drawn tiles.
+        void attachTileStream(const core::Uuid& node, std::shared_ptr<const io::SplatTileSource> source,
+                              std::filesystem::path path);
+        [[nodiscard]] bool isTileStreamNode(const core::Uuid& uuid) const { return tile_streamers_.contains(uuid); }
+        // Tileset file of a streamed node, which projects reference instead of embedding.
+        [[nodiscard]] std::optional<std::filesystem::path> tileStreamPath(const core::Uuid& uuid) const;
+        // Statistics of the first streamed node, if any.
+        [[nodiscard]] std::optional<SplatTileStreamStats> tileStreamStats() const;
+        // "stream" when a tileset streams, "flat" when one loaded fully, or nullopt.
+        [[nodiscard]] std::optional<std::string> tileMode() const;
+        // Splat-level selection and edits work on scene-wide indices, which a visible
+        // streamed model shifts on every swap; returns why they are blocked.
+        [[nodiscard]] std::optional<std::string> streamedSplatEditBlock() const;
+        // Records a node whose tileset was small enough to load flat (no streaming).
+        void recordFlatTileNode(const core::Uuid& uuid) { flat_tile_nodes_.insert(uuid); }
         void setImportLicenseCallback(std::function<void(const std::optional<std::vector<uint8_t>>&)> callback) {
             import_license_callback_ = std::move(callback);
         }
@@ -398,6 +432,13 @@ namespace lfs::vis {
         // Durable splat identity to source path. Display-name adapters above
         // resolve to UUID at the API boundary.
         std::unordered_map<core::Uuid, std::filesystem::path> splat_paths_;
+        // Erasing a streamer retires it without waiting for its workers.
+        std::unordered_map<core::Uuid, SplatTileStreamer::Handle> tile_streamers_;
+        std::unordered_map<core::Uuid, std::filesystem::path> tile_stream_paths_;
+        // Model each streamer last installed; any other model means the node was replaced.
+        std::unordered_map<core::Uuid, const core::SplatData*> tile_stream_models_;
+        std::unordered_set<core::Uuid> flat_tile_nodes_; // tilesets small enough to load flat
+        SplatTileStreamSettings tile_stream_settings_;
         std::filesystem::path dataset_path_;
         std::filesystem::path colmap_sparse_path_;
         std::filesystem::path ppisp_path_;

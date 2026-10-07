@@ -178,6 +178,8 @@ namespace lfs::vis {
             project_lifecycle_settings_path;
     };
 
+    class PointCloudUpdateManager;
+
     class LFS_VIS_API Visualizer {
     public:
         struct WorkItem {
@@ -199,6 +201,7 @@ namespace lfs::vis {
         virtual SceneManager* getSceneManager() = 0;
         virtual RenderingManager* getRenderingManager() = 0;
 
+        virtual std::shared_ptr<PointCloudUpdateManager> pointCloudUpdates() { return {}; }
         virtual bool postWork(WorkItem work) = 0;
         // Drain viewer-owned work while an explicit project operation waits
         // for a worker. Normal frames drain this queue from update().
