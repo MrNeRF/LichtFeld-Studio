@@ -1580,6 +1580,74 @@ namespace {
 
 namespace lfs::vis {
 
+    class SceneGenerationRenderPublicationTest : public VisualizerImplResetTest {};
+
+    TEST_F(SceneGenerationRenderPublicationTest, ContentMutationsScheduleSplatsButMatrixEditsStayResident) {
+        VisualizerImpl viewer(projectOptions());
+        auto* const rendering = viewer.getRenderingManager();
+        auto* const scene_manager = viewer.getSceneManager();
+        ASSERT_NE(rendering, nullptr);
+        ASSERT_NE(scene_manager, nullptr);
+        auto& scene = scene_manager->getScene();
+        auto& ledger = rendering->frameDemandLedger();
+
+        const auto consume_plan = [&] {
+            static_cast<void>(app_store().store().drain_dirty_into_frame());
+            return ledger.plan(FrameClock::now());
+        };
+        const auto expect_splat_request = [&] {
+            const auto plan = consume_plan();
+            EXPECT_NE(plan.view_flags[0] & DirtyFlag::SPLATS, 0u);
+        };
+        const auto expect_no_splat_request = [&] {
+            const auto plan = consume_plan();
+            EXPECT_EQ(plan.view_flags[0] & DirtyFlag::SPLATS, 0u);
+        };
+
+        static_cast<void>(consume_plan());
+        const auto node_id = scene.addSplat("publication_node", lfs::test::licht::make_splat(2));
+        ASSERT_NE(node_id, core::NULL_NODE);
+        expect_splat_request();
+
+        scene.setNodeVisibility(node_id, false);
+        expect_splat_request();
+
+        ASSERT_TRUE(scene_manager->removePLYWithResult("publication_node"));
+        expect_splat_request();
+        ASSERT_EQ(op::undoHistory().undoCount(), 1u);
+        op::undoHistory().undo();
+        ASSERT_NE(scene.getNode("publication_node"), nullptr);
+        expect_splat_request();
+
+        core::events::state::CombinedModelBuildReady{.scene = &scene}.emit();
+        ASSERT_TRUE(viewer.pumpPostedWorkForProjectWrite());
+        expect_splat_request();
+
+        const auto group_id = scene.addGroup("publication_group");
+        ASSERT_NE(group_id, core::NULL_NODE);
+        expect_splat_request();
+        const auto reparented_id = scene.getNodeIdByName("publication_node");
+        ASSERT_TRUE(scene.reparent(reparented_id, group_id));
+        expect_splat_request();
+
+        scene.replaceNodeModel("publication_node", lfs::test::licht::make_splat(3));
+        expect_splat_request();
+
+        auto* const node = scene.getNodeById(reparented_id);
+        ASSERT_NE(node, nullptr);
+        node->model->soft_delete(core::Tensor::ones_bool({node->model->size()}, core::Device::CPU));
+        scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        expect_splat_request();
+
+        scene.setNodeTransform("publication_node",
+                               glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)));
+        expect_no_splat_request();
+
+        rendering->pollTrainingRefresh(true, 1);
+        const auto training_plan = consume_plan();
+        EXPECT_NE(training_plan.view_flags[0] & DirtyFlag::SPLATS, 0u);
+    }
+
     class SequencerFrameDemandTest : public VisualizerImplResetTest {
     protected:
         static void SetUpTestSuite() {
