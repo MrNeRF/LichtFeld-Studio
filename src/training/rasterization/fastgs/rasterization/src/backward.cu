@@ -9,10 +9,23 @@
 #include "kernels_backward.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+
+namespace {
+    std::atomic_bool g_force_generic_preprocess_for_testing{false};
+}
+
+void fast_lfs::rasterization::set_force_generic_preprocess_for_testing(const bool force) noexcept {
+    g_force_generic_preprocess_for_testing.store(force, std::memory_order_relaxed);
+}
+
+bool fast_lfs::rasterization::force_generic_preprocess_for_testing() noexcept {
+    return g_force_generic_preprocess_for_testing.load(std::memory_order_relaxed);
+}
 
 void fast_lfs::rasterization::backward(
     const float* densification_error_map,
@@ -157,8 +170,8 @@ void fast_lfs::rasterization::backward(
     float clip_left, clip_right, clip_top, clip_bottom;
     ewa_clip_bounds(w_f, h_f, fx, fy, cx, cy, clip_left, clip_right, clip_top, clip_bottom);
     if (n_primitives > 0) {
-        auto launch_preprocess_backward = [&]<bool MIP_FILTER, int ACTIVE_SH_BASES>() {
-            kernels::backward::preprocess_backward_cu<MIP_FILTER, ACTIVE_SH_BASES><<<div_round_up(n_primitives, config::block_size_preprocess_backward), config::block_size_preprocess_backward, 0, stream>>>(
+        auto launch_preprocess_backward = [&]<bool MIP_FILTER, int ACTIVE_SH_BASES, bool DISABLED_FEATURES>() {
+            kernels::backward::preprocess_backward_cu<MIP_FILTER, ACTIVE_SH_BASES, DISABLED_FEATURES><<<div_round_up(n_primitives, config::block_size_preprocess_backward), config::block_size_preprocess_backward, 0, stream>>>(
                 means,
                 scales_raw,
                 rotations_raw,
@@ -194,21 +207,37 @@ void fast_lfs::rasterization::backward(
                 shN_value_bits);
             LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.backward.preprocess_backward");
         };
-        auto launch_preprocess_backward_for_mip = [&]<int ACTIVE_SH_BASES>() {
+        const bool disabled_features = fused_adam.erank_reg_weight <= 0.0f &&
+                                       fused_adam.dc_reg_weight <= 0.0f &&
+                                       fused_adam.sh_rest_reg_weight <= 0.0f &&
+                                       fused_adam.flatten_reg_weight <= 0.0f &&
+                                       !fused_adam.scale_reg_log &&
+                                       !fused_adam.per_splat_mean_step &&
+                                       fused_adam.rendered_count == nullptr;
+        auto launch_preprocess_backward_for_mip = [&]<int ACTIVE_SH_BASES, bool DISABLED_FEATURES>() {
             if (mip_filter) {
-                launch_preprocess_backward.template operator()<true, ACTIVE_SH_BASES>();
+                launch_preprocess_backward.template operator()<true, ACTIVE_SH_BASES, DISABLED_FEATURES>();
             } else {
-                launch_preprocess_backward.template operator()<false, ACTIVE_SH_BASES>();
+                launch_preprocess_backward.template operator()<false, ACTIVE_SH_BASES, DISABLED_FEATURES>();
+            }
+        };
+        auto launch_specialized = [&]<int ACTIVE_SH_BASES>() {
+            if (force_generic_preprocess_for_testing()) {
+                launch_preprocess_backward_for_mip.template operator()<ACTIVE_SH_BASES, false>();
+            } else if (disabled_features) {
+                launch_preprocess_backward_for_mip.template operator()<ACTIVE_SH_BASES, true>();
+            } else {
+                launch_preprocess_backward_for_mip.template operator()<ACTIVE_SH_BASES, false>();
             }
         };
         if (active_sh_bases <= 1) {
-            launch_preprocess_backward_for_mip.template operator()<1>();
+            launch_specialized.template operator()<1>();
         } else if (active_sh_bases <= 4) {
-            launch_preprocess_backward_for_mip.template operator()<4>();
+            launch_specialized.template operator()<4>();
         } else if (active_sh_bases <= 9) {
-            launch_preprocess_backward_for_mip.template operator()<9>();
+            launch_specialized.template operator()<9>();
         } else {
-            launch_preprocess_backward_for_mip.template operator()<16>();
+            launch_specialized.template operator()<16>();
         }
         check_cuda_with_fastgs_status(cudaGetLastError(), "preprocess_backward", fastgs_status, "preprocess_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
         sync_fastgs_phase_if_requested("preprocess_backward", fastgs_status, "preprocess_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
