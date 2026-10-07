@@ -45,6 +45,7 @@ namespace lfs::vis {
 
     class VksplatViewportRenderer {
         friend struct VksplatScratchReleaseTestAccess;
+        friend struct SplitOutputLifetimeTestAccess;
 
     public:
         struct RenderResult {
@@ -288,6 +289,7 @@ namespace lfs::vis {
 
         void releasePreviewResources();
         void releaseSplitOutputResources();
+        void retainPublishedSplitImages(VkImageView left, VkImageView right);
         void releaseSceneResources();
         void reset();
         [[nodiscard]] std::optional<LodPageCache::Snapshot> ensureLodPageCacheSnapshot(
@@ -676,6 +678,11 @@ namespace lfs::vis {
         static constexpr std::size_t kFrameRingSize = OutputSlotRing::kFrameRingSize;
         OutputSlotRing ring_{};
         OutputImagePool output_pool_{};
+        struct PublishedOutput {
+            VkImageView view = VK_NULL_HANDLE;
+            std::uint64_t serial = 0;
+        };
+        std::array<PublishedOutput, 2> published_split_outputs_{};
         // Vulkan-only completion counter for queue-to-queue dependencies. Keep
         // this separate from the externally shared CUDA payload below so Vulkan
         // readbacks never depend on external-payload tracking semantics.

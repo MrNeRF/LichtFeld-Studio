@@ -155,6 +155,20 @@ namespace lfs::vis {
         lfs::rendering::releaseEnvironmentMapCaches();
     }
 
+    void RenderingManager::setVulkanMeshFrame(VulkanMeshFrame frame) {
+        std::lock_guard lock(vulkan_mesh_frame_mutex_);
+        if (vksplat_viewport_renderer_) {
+            vksplat_viewport_renderer_->retainPublishedSplitImages(
+                frame.split_view.enabled ? frame.split_view.left.external_image_view : VK_NULL_HANDLE,
+                frame.split_view.enabled ? frame.split_view.right.external_image_view : VK_NULL_HANDLE);
+        }
+        vulkan_mesh_frame_ = std::move(frame);
+    }
+
+    void RenderingManager::clearVulkanMeshFrame() {
+        setVulkanMeshFrame({});
+    }
+
     ViewportInteropService& RenderingManager::viewportInterop() {
         assert(viewport_interop_ && "ViewportInteropService not initialized");
         return *viewport_interop_;

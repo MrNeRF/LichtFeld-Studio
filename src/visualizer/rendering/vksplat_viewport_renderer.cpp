@@ -2101,6 +2101,46 @@ namespace lfs::vis {
         logVramBreakdownIfChanged("preview_release");
     }
 
+    void VksplatViewportRenderer::retainPublishedSplitImages(const VkImageView left,
+                                                             const VkImageView right) {
+        const std::array views{left, right};
+        if (views[0] == published_split_outputs_[0].view &&
+            views[1] == published_split_outputs_[1].view) {
+            return;
+        }
+        const std::uint64_t consumer = context_ ? context_->lastFrameSubmitSerial() : 0;
+        for (std::size_t panel = 0; panel < views.size(); ++panel) {
+            auto& published = published_split_outputs_[panel];
+            if (published.view == views[panel]) {
+                continue;
+            }
+            std::uint64_t serial = 0;
+            if (views[panel] != VK_NULL_HANDLE) {
+                // Only renderer-owned views belong to this pool. Interop and staged
+                // panels have separate owners; the output ring has a fixed size.
+                for (const auto& logical : ring_.table()) {
+                    for (const auto& slot : logical) {
+                        if (slot.image.view == views[panel]) {
+                            serial = slot.color_pool_serial;
+                        }
+                    }
+                }
+                if (serial != 0) {
+                    [[maybe_unused]] const bool retained = output_pool_.retain(serial);
+                    LFS_VK_DEBUG_ASSERT(retained,
+                                        "Published split image is not owned by the output pool (serial={})",
+                                        serial);
+                }
+            }
+            if (published.serial != 0) {
+                // A partially rendered pair can retire one output while later GUI
+                // frames still sample the previous publication.
+                output_pool_.releaseRetained(published.serial, consumer);
+            }
+            published = {.view = views[panel], .serial = serial};
+        }
+    }
+
     void VksplatViewportRenderer::releaseSplitOutputResources() {
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (!context_) {
@@ -2203,6 +2243,7 @@ namespace lfs::vis {
         // cancellation in that same order so reset cannot invert the pair.
         cancelArenaHandoff();
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
+        retainPublishedSplitImages(VK_NULL_HANDLE, VK_NULL_HANDLE);
         live_submit_callback_ = {};
         if (context_ && context_->device() != VK_NULL_HANDLE) {
             const VkDevice device = context_->device();

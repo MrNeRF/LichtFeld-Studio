@@ -585,18 +585,12 @@ namespace lfs::vis {
             lfs::vis::VulkanDepthBlitParams depth_blit;
             lfs::vis::VulkanSplitViewParams split_view;
         };
-        void setVulkanMeshFrame(VulkanMeshFrame frame) {
-            std::lock_guard lock(vulkan_mesh_frame_mutex_);
-            vulkan_mesh_frame_ = std::move(frame);
-        }
+        void setVulkanMeshFrame(VulkanMeshFrame frame);
         [[nodiscard]] VulkanMeshFrame getVulkanMeshFrame() const {
             std::lock_guard lock(vulkan_mesh_frame_mutex_);
             return vulkan_mesh_frame_;
         }
-        void clearVulkanMeshFrame() {
-            std::lock_guard lock(vulkan_mesh_frame_mutex_);
-            vulkan_mesh_frame_ = {};
-        }
+        void clearVulkanMeshFrame();
 
         // Preview selection
         void setPreviewSelection(lfs::core::Tensor* preview, bool add_mode = true) {
@@ -1015,6 +1009,7 @@ namespace lfs::vis {
 
         friend class RenderingManagerEventsTest_SceneClearedResetsFrustumLoaderSyncCache_Test;
         friend class SceneManager;
+        friend struct SplitOutputLifetimeTestAccess;
     };
 
 } // namespace lfs::vis
