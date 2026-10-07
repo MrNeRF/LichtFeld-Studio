@@ -1,7 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "lfs/training/ops/blob_vulkan.hpp"
 #include "lfs/training/ops/registry.hpp"
+#include "lfs/training/ops/structure_vulkan.hpp"
 
 #if defined(LFS_TENSOR_VULKAN)
 #include "lfs/training/ops/adam_vulkan.hpp"
@@ -48,6 +50,8 @@ namespace lfs::training {
             .session = &vulkan_session_ops(),
             .shared_image = core::shared_image_ops(core::GpuBackend::Vulkan),
             .lpips = &vulkan_lpips_ops(),
+            .structure = &vulkan_structure_ops(),
+            .blob = &vulkan_blob_ops(),
 #endif
         };
         return table;

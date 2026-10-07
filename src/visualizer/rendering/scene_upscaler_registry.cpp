@@ -211,5 +211,5 @@ namespace lfs::vis {
 #if !defined(LFS_TENSOR_METAL) || defined(LFS_GRAPHICS_VULKAN)
 namespace lfs::vis {
     bool metalFxBackendAvailable(SceneUpscalerBackend) { return false; }
-}
+} // namespace lfs::vis
 #endif

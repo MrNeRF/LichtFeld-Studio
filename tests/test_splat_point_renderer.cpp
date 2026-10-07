@@ -37,8 +37,10 @@ namespace {
                                  pixel_position(44, 16, 3.0f), pixel_position(16, 44, 2.0f)})
             positions.insert(positions.end(), point.begin(), point.end());
         const std::array<std::array<float, 3>, 4> point_colors{{
-            {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f, 0.0f},
-            {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 0.0f},
+            {0.0f, 1.0f, 0.0f},
+            {1.0f, 0.0f, 0.0f},
+            {0.0f, 0.0f, 1.0f},
+            {1.0f, 1.0f, 0.0f},
         }};
         for (const auto& color : point_colors)
             colors.insert(colors.end(), color.begin(), color.end());

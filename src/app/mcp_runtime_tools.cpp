@@ -4,6 +4,7 @@
 #include "app/mcp_runtime_tools.hpp"
 #include "app/mcp_app_utils.hpp"
 #include "app/mcp_event_handlers.hpp"
+#include "app/mcp_media_tools.hpp"
 #include "app/mcp_node_tools.hpp"
 
 #include "core/event_bridge/scoped_handler.hpp"
@@ -75,12 +76,13 @@ namespace lfs::app {
                         {"live_holders", std::move(holders)}};
         }
 
-        constexpr std::array<std::string_view, 8> kRuntimeJobIds = {
+        constexpr std::array<std::string_view, 9> kRuntimeJobIds = {
             "nodes.evaluate",
             "editor.python",
             "training.main",
             "export.scene",
             "import.dataset",
+            "media.extract",
             "export.video",
             "mesh2splat",
             "operator.modal",
@@ -111,6 +113,8 @@ namespace lfs::app {
         }
 
         std::string_view runtime_job_label(const std::string_view job_id) {
+            if (job_id == "media.extract")
+                return "Media Extraction";
             if (job_id == "nodes.evaluate")
                 return "Node evaluation";
             if (job_id == "editor.python") {
@@ -138,6 +142,8 @@ namespace lfs::app {
         }
 
         json runtime_job_event_types_json(const std::string_view job_id) {
+            if (job_id == "media.extract")
+                return json::array({"media.extract.started", "media.extract.progress", "media.extract.completed", "media.extract.failed", "media.extract.cancelled"});
             if (job_id == "nodes.evaluate")
                 return json::array({"nodes.evaluation.started", "nodes.evaluation.progress", "nodes.evaluation.completed", "nodes.evaluation.failed"});
             if (job_id == "editor.python") {
@@ -227,6 +233,13 @@ namespace lfs::app {
                 {"events", std::move(events)},
                 {"nodes", {{"tools", std::move(node_tools)}, {"resources", json::array({"lichtfeld://nodes/types", "lichtfeld://nodes/trees", "lichtfeld://nodes/trees/<uuid>", "lichtfeld://nodes/stacks", "lichtfeld://nodes/stacks/<node uuid>", "lichtfeld://nodes/editor"})}, {"job_id", "nodes.evaluate"}}},
             };
+        }
+
+        template <typename F>
+        auto dispatch_job_work(vis::Visualizer* viewer, const std::string_view job_id, F&& work) {
+            if (job_id == "media.extract")
+                return std::invoke(std::forward<F>(work));
+            return post_and_wait(viewer, std::forward<F>(work));
         }
 
         vis::VisualizerImpl* as_visualizer_impl(vis::Visualizer* viewer) {
@@ -705,6 +718,11 @@ namespace lfs::app {
             const bool include_output,
             const size_t output_max_chars,
             const bool output_tail) {
+            if (job_id == "media.extract") {
+                auto result = media_extract_job_snapshot();
+                add_runtime_job_links(result);
+                return result;
+            }
             auto* const viewer_impl = as_visualizer_impl(viewer);
             if (!viewer_impl) {
                 return std::unexpected("Visualizer implementation is unavailable");
@@ -986,6 +1004,10 @@ namespace lfs::app {
                 if (details.contains("current_frame")) {
                     fingerprint["current_frame"] = details["current_frame"];
                 }
+                if (job.value("id", "") == "media.extract") {
+                    fingerprint["processed"] = details.value("processed", 0);
+                    fingerprint["generation"] = details.value("generation", std::uint64_t{0});
+                }
             }
             return fingerprint;
         }
@@ -1009,6 +1031,13 @@ namespace lfs::app {
             vis::Visualizer* viewer,
             const std::string& job_id,
             const std::string& action) {
+            if (job_id == "media.extract") {
+                if (action != "cancel")
+                    return std::unexpected("Action '" + action + "' is not supported for media.extract");
+                if (const auto result = cancel_media_extract_job(); !result)
+                    return std::unexpected(std::string(result.error().user_message()));
+                return {};
+            }
             auto* const viewer_impl = as_visualizer_impl(viewer);
             if (!viewer_impl) {
                 return std::unexpected("Visualizer implementation is unavailable");
@@ -1215,7 +1244,7 @@ namespace lfs::app {
                     static_cast<size_t>(std::max(0, args.value("output_max_chars", 20000)));
                 const bool output_tail = args.value("output_tail", true);
 
-                return post_and_wait(viewer, [viewer, job_id, include_output, output_max_chars, output_tail]() -> json {
+                return dispatch_job_work(viewer, job_id, [viewer, job_id, include_output, output_max_chars, output_tail]() -> json {
                     auto payload = describe_job_payload_on_gui(
                         viewer,
                         job_id,
@@ -1267,7 +1296,7 @@ namespace lfs::app {
                 const bool output_tail = args.value("output_tail", true);
 
                 auto describe = [&]() -> std::expected<json, std::string> {
-                    return post_and_wait(viewer, [viewer, &job_id, include_output, output_max_chars, output_tail]() {
+                    return dispatch_job_work(viewer, job_id, [viewer, &job_id, include_output, output_max_chars, output_tail]() {
                         return describe_job_payload_on_gui(
                             viewer,
                             job_id,
@@ -1341,7 +1370,7 @@ namespace lfs::app {
                     static_cast<size_t>(std::max(0, args.value("output_max_chars", 20000)));
                 const bool output_tail = args.value("output_tail", true);
 
-                return post_and_wait(viewer, [viewer, job_id, action, include_output, output_max_chars, output_tail]() -> json {
+                return dispatch_job_work(viewer, job_id, [viewer, job_id, action, include_output, output_max_chars, output_tail]() -> json {
                     if (auto result = control_job_on_gui(viewer, job_id, action); !result) {
                         return json{{"error", result.error()}};
                     }
@@ -1466,7 +1495,7 @@ namespace lfs::app {
                     return std::unexpected("Runtime job URI must include an id");
                 }
 
-                return post_and_wait(viewer, [viewer, uri, job_id]() -> std::expected<std::vector<McpResourceContent>, std::string> {
+                return dispatch_job_work(viewer, job_id, [viewer, uri, job_id]() -> std::expected<std::vector<McpResourceContent>, std::string> {
                     auto payload = describe_job_payload_on_gui(viewer, job_id, true, 20000, true);
                     if (!payload) {
                         return std::unexpected(payload.error());

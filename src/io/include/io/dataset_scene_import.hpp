@@ -31,6 +31,10 @@ namespace lfs::training {
         const lfs::core::param::TrainingParameters& params,
         lfs::core::Scene& scene);
 
+    // Reload the points used to initialize training for evaluation after resume.
+    [[nodiscard]] lfs::Result<std::shared_ptr<lfs::core::PointCloud>> loadInitialPointCloud(
+        const lfs::core::param::TrainingParameters& params, const glm::vec3& training_origin);
+
     // Replaces parameter tensors only; the SplatData object stays.
     std::expected<void, std::string> migrateTrainingModelToAllocator(
         const lfs::core::param::TrainingParameters& params,

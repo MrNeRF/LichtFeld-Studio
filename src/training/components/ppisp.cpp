@@ -374,6 +374,25 @@ namespace lfs::training {
                              num_frames_, region);
     }
 
+    lfs::core::Tensor PPISP::apply_interpolated_frames(const lfs::core::Tensor& rgb, int camera_id,
+                                                       int left_uid, int right_uid, float fraction) {
+        assert(finalized_ && fraction >= 0.0f && fraction <= 1.0f);
+        assert(exposure_params_.shape().rank() == 1 && exposure_params_.shape()[0] == static_cast<size_t>(num_frames_));
+        assert(color_params_.shape().rank() == 1 && color_params_.shape()[0] == static_cast<size_t>(num_frames_ * 8));
+        assert(is_known_frame(left_uid) && is_known_frame(right_uid) && is_known_camera(camera_id));
+        assert(rgb.ndim() == 3 && rgb.shape()[0] == 3 && rgb.is_contiguous());
+        assert(rgb.device() == lfs::core::Device::GPU && rgb.dtype() == lfs::core::DataType::Float32);
+        if (left_uid == right_uid)
+            return apply(rgb, camera_id, left_uid);
+        const int left = translate_frame(left_uid);
+        const int right = translate_frame(right_uid);
+        auto exposure = exposure_params_.slice(0, left, left + 1) * (1.0f - fraction) +
+                        exposure_params_.slice(0, right, right + 1) * fraction;
+        auto color = color_params_.slice(0, left * 8, left * 8 + 8) * (1.0f - fraction) +
+                     color_params_.slice(0, right * 8, right * 8 + 8) * fraction;
+        return apply_forward(rgb, translate_camera(camera_id), 0, exposure, color, 1, {});
+    }
+
     lfs::core::Tensor PPISP::apply_with_exposure(const lfs::core::Tensor& rgb, int camera_id, float exposure_ev,
                                                  const PPISPRegion& region) {
         assert(finalized_ && "Must call finalize() before apply_with_exposure()");

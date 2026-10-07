@@ -9,7 +9,6 @@ import time
 import uuid
 
 import lichtfeld as lf
-from .asset_index import display_name
 from .types import Operator
 from .layouts.menus import (
     menu_action,
@@ -208,6 +207,8 @@ def _open_recent_project(path: str) -> None:
 
 def format_recent_project_entry(path: str, tr) -> tuple[str, str]:
     """Return the compact recent-project label and full-path tooltip."""
+    from .asset_index import display_name
+
     windows_path = PureWindowsPath(path)
     display_path = windows_path if windows_path.drive or "\\" in path else Path(path)
     name = display_name({"path": display_path.as_posix(), "name": "", "name_origin": "stem"}) or path
@@ -543,24 +544,31 @@ def _show_project_switch_confirmation(
     keep_asset_manager_open: bool = False,
     create_path: str = "",
     overwrite: bool = False,
+    stop_training: bool = False,
 ) -> None:
+    prior_stop_approval = stop_training
     if new_project:
         title = lf.ui.tr("menu.file.new_project")
         if create_path:
-            callback = lambda stop_training: lf.project_create(
+            callback = lambda confirmed_stop: lf.project_create(
                 create_path,
                 discard_changes=True,
-                stop_training=stop_training,
+                stop_training=prior_stop_approval or confirmed_stop,
                 overwrite=overwrite,
             )
         else:
-            callback = lambda stop_training: _new_project(True, stop_training)
+            callback = lambda approved_stop: _new_project(
+                True, prior_stop_approval or approved_stop
+            )
     else:
         title = lf.ui.tr("menu.file.open_project")
-        callback = lambda stop_training: _open_project(
-            path, True, stop_training, keep_asset_manager_open
+        callback = lambda confirmed_stop: _open_project(
+            path, True, prior_stop_approval or confirmed_stop,
+            keep_asset_manager_open
         )
-    confirm_discard_work_then(title, callback)
+    confirm_discard_work_then(
+        title, callback, ask_stop_training=not prior_stop_approval
+    )
 
 
 def _show_stop_training_confirmation(

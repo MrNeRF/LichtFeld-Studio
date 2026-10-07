@@ -95,8 +95,16 @@ namespace lfs::python {
 
     void PySplatData::set_colors_rgb(const PyTensor& colors) {
         const auto& rgb = colors.tensor();
-        assert(rgb.shape().rank() == 2 && rgb.shape()[1] == 3);
-        assert(rgb.shape()[0] == static_cast<int64_t>(data_->size()));
+        if (rgb.shape().rank() != 2 || rgb.shape()[1] != 3) {
+            throw std::invalid_argument("RGB colors must have shape [N, 3]");
+        }
+        if (rgb.shape()[0] != static_cast<int64_t>(data_->size())) {
+            throw std::invalid_argument("RGB colors must have one row per splat");
+        }
+        const auto invalid = (rgb < 0.0f) || (rgb > 1.0f) || !rgb.isfinite();
+        if (invalid.any().item<bool>()) {
+            throw std::invalid_argument("RGB colors must be finite and within [0, 1]");
+        }
         auto sh0_values = (rgb - SH_DC_OFFSET) / SH_C0;
         auto sh0 = data_->sh0_raw();
         const int n = static_cast<int>(rgb.shape()[0]);

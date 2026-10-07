@@ -7,6 +7,7 @@
 #include "core/shared_image_ops.hpp"
 #include "lfs/training/ops/adam.hpp"
 #include "lfs/training/ops/bilateral.hpp"
+#include "lfs/training/ops/blob.hpp"
 #include "lfs/training/ops/extra_loss.hpp"
 #include "lfs/training/ops/geometry.hpp"
 #include "lfs/training/ops/gsplat.hpp"
@@ -21,6 +22,7 @@
 #include "lfs/training/ops/refine.hpp"
 #include "lfs/training/ops/session.hpp"
 #include "lfs/training/ops/sh.hpp"
+#include "lfs/training/ops/structure.hpp"
 #include "lfs/training/ops/training_image.hpp"
 
 #include <bitset>
@@ -58,6 +60,8 @@ namespace lfs::training {
         const ops::SessionOps* session = nullptr;
         const ops::SharedImageOps* shared_image = nullptr;
         const ops::LpipsOps* lpips = nullptr;
+        const ops::StructureOps* structure = nullptr;
+        const ops::BlobOps* blob = nullptr;
     };
 
     enum class Family {
@@ -80,6 +84,8 @@ namespace lfs::training {
         TrainingImage,
         SharedImage,
         Lpips,
+        Blob,
+        Structure,
         Count
     };
 

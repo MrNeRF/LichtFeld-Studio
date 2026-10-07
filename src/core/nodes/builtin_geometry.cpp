@@ -298,7 +298,7 @@ namespace lfs::nodes::builtin {
             }
             mesh->vertices = core::Tensor::cat(verts, 0);
             mesh->indices = core::Tensor::cat(idx, 0);
-            const auto join_vertex_data = [&](Tensor core::MeshData::* member, size_t channels,
+            const auto join_vertex_data = [&](Tensor core::MeshData::*member, size_t channels,
                                               float fallback) {
                 if (!std::ranges::any_of(meshes, [&](const auto& source) {
                         return (source.get()->*member).is_valid();

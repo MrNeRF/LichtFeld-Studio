@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "io/hdr_tonemap.hpp"
-#include "io/video_frame_extractor.hpp"
+#include "media/hdr_tonemap.hpp"
+#include "media/video_frame_extractor.hpp"
 
 extern "C" {
 #include <libavutil/pixfmt.h>

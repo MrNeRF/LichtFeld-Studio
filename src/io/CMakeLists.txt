@@ -23,16 +23,8 @@ target_compile_definitions(spz_lib PUBLIC SPZ_BUILD_EXTENSIONS)
 target_compile_features(spz_lib PUBLIC cxx_std_17)
 set_target_properties(spz_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-# Video encoding library (FFmpeg + CUDA for GPU-accelerated encoding)
+# Video host adapters use the single FFmpeg provider in lfs_media.
 find_package(PkgConfig REQUIRED)
-# vcpkg swaps FFmpeg's codec between master (x264) and dev (openh264); do not reuse FindPkgConfig's cached library list.
-unset(__pkg_config_checked_FFMPEG CACHE)
-pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
-        libavcodec
-        libavformat
-        libswscale
-        libavutil
-)
 if(LFS_USE_VULKAN)
     pkg_check_modules(LIBPLACEBO REQUIRED IMPORTED_TARGET libplacebo)
 endif()
@@ -46,18 +38,7 @@ add_library(lfs_video STATIC
         video/video_encoder.hpp
         video/video_encoder.cpp
         video/video_reconstruction.cpp
-        include/io/media/media_probe.hpp
-        media_probe_ffmpeg.hpp
-        media_probe.cpp
-        include/io/media/frame_sink.hpp
-        include/io/media/file_frame_sink.hpp
-        frame_sink.cpp
-        file_frame_sink.cpp
-        video_frame_extractor.hpp
-        video_frame_extractor.cpp
-        hdr_tonemap.hpp
-        hdr_tonemap.cpp
-        hdr_libplacebo.hpp
+        media_studio_backends.cpp
         hdr_tonemap_tensor.hpp
         hdr_tonemap_tensor.cpp
         video_player.hpp
@@ -74,7 +55,8 @@ if(LFS_HAS_CUDA)
         video/color_convert.cuh
         video/color_convert.cu
         video/cuda_frame_handoff.hpp
-        video/cuda_frame_handoff.cpp)
+        video/cuda_frame_handoff.cpp
+        media_cuda_backend.cpp)
 endif()
 
 target_include_directories(lfs_video
@@ -93,8 +75,8 @@ target_include_directories(lfs_video SYSTEM PRIVATE
 target_link_libraries(lfs_video
         PUBLIC
         lfs_core
+        lfs_media
         PRIVATE
-        PkgConfig::FFMPEG
         spdlog::spdlog
         nlohmann_json::nlohmann_json
         $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>

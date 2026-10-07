@@ -27,6 +27,11 @@ namespace fast_lfs::optimizer {
         const float beta2,
         const float eps,
         cudaStream_t stream,
+        const float* mean_step_scale_raw,
+        const int mean_step_scale_n,
+        const float mean_step_median_extent,
+        const bool* mean_step_far_mask,
+        const int mean_step_far_mask_n,
         const float* screen_share_max,
         const int screen_share_n,
         const float screen_share_limit,
@@ -48,6 +53,12 @@ namespace fast_lfs::optimizer {
             }
             max_prims = std::max(max_prims, host_entries[i].n_prims);
         }
+        if (mean_step_scale_raw != nullptr) {
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(mean_step_scale_raw, "mean_step_scale_raw");
+        }
+        if (mean_step_far_mask != nullptr) {
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(mean_step_far_mask, "mean_step_far_mask");
+        }
         if (screen_share_max != nullptr) {
             LFS_VALIDATE_CUDA_DEVICE_POINTER(screen_share_max, "screen_share_max");
         }
@@ -61,6 +72,8 @@ namespace fast_lfs::optimizer {
             frozen_mask, frozen_mask_size, frozen_lr_scale,
             crop_damping_mask, crop_damping_mask_size, cropbox_lr_scale,
             beta1, beta2, eps,
+            mean_step_scale_raw, mean_step_scale_n, mean_step_median_extent,
+            mean_step_far_mask, mean_step_far_mask_n,
             screen_share_max, screen_share_n, screen_share_limit, screen_share_penalty);
         LFS_CUDA_LAUNCH_CHECK(stream, "adam_step_joint_contiguous_batched");
     }

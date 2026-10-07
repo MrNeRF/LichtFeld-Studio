@@ -116,3 +116,9 @@ Standard:        Latest
 TabWidth:        4
 UseTab:        Never
 ...
+---
+# Objective-C headers of the macOS-only Apple Reframe import.
+Language:        ObjC
+BasedOnStyle:    WebKit
+IndentWidth:     4
+...

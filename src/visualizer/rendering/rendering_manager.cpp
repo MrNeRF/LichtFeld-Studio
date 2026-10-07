@@ -729,20 +729,20 @@ namespace lfs::vis {
         const auto settings = getSettings();
         if (!gtComparisonActualSizeEligible(settings.view()))
             return false;
-        const auto& cameras = scene_manager->getScene().getAllCamerasCached();
+        const auto cameras = scene_manager->getScene().getAllCamerasCached();
         std::shared_ptr<lfs::core::Camera> camera;
         const int current_camera_id = camera_interaction_service_.currentCameraId();
-        for (const auto& candidate : cameras) {
+        for (const auto& candidate : *cameras) {
             if (candidate && candidate->uid() == current_camera_id) {
                 camera = candidate;
                 break;
             }
         }
         if (!camera) {
-            const auto first = std::find_if(cameras.begin(), cameras.end(), [](const auto& candidate) {
+            const auto first = std::find_if(cameras->begin(), cameras->end(), [](const auto& candidate) {
                 return static_cast<bool>(candidate);
             });
-            if (first != cameras.end()) {
+            if (first != cameras->end()) {
                 camera = *first;
             }
         }

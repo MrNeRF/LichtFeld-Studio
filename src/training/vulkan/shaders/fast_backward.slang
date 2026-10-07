@@ -11,6 +11,9 @@ struct BackPush {
     uint densify, stage, slots, sparsityCount;
     float scaleWeight, flattenWeight, opacityWeight, rho, gradLoss;
     uint scaleElements, opacityElements;
+    uint64_t renderedCount, erankLoss, dcLoss, shLoss, scaleLoss;
+    uint logScale;
+    float scaleNormalizer, erankWeight, dcWeight, shWeight;
 };
 struct Push {
     uint64_t parameters;

@@ -209,8 +209,8 @@ TEST(TensorOrderingTest, ArgExtremeKernelMatchesCpu) {
                                             {4, 4}, Device::GPU);
     const auto [max_values, max_indices] = ties.max_with_indices(1);
     const auto [min_values, min_indices] = ties.min_with_indices(1);
-    EXPECT_EQ(max_indices.cpu().to_vector_int64(), (std::vector<int64_t>{0, 2, 0, 1}));
-    EXPECT_EQ(min_indices.cpu().to_vector_int64(), (std::vector<int64_t>{0, 2, 0, 0}));
+    EXPECT_EQ(max_indices.cpu().to_vector_int64(), (std::vector<int64_t>{0, 0, 0, 1}));
+    EXPECT_EQ(min_indices.cpu().to_vector_int64(), (std::vector<int64_t>{0, 0, 0, 0}));
     EXPECT_TRUE(std::signbit(max_values.cpu().to_vector()[0]));
     EXPECT_TRUE(std::signbit(min_values.cpu().to_vector()[0]));
     EXPECT_EQ(ties.argmax().cpu().to_vector_int64(), (std::vector<int64_t>{4}));

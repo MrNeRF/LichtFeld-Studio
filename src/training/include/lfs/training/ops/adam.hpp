@@ -21,6 +21,7 @@ namespace lfs::gpu_ops {
     // Invalid bindings are absent.
     struct AdamMasks {
         In frozen, crop_damping, screen_share;
+        Tensor mean_step_scales, mean_step_far;
     };
 
     struct AdamModifiers {
@@ -28,6 +29,7 @@ namespace lfs::gpu_ops {
         float cropbox_lr_scale = 1.f;
         float screen_share_limit = 0.f;
         float screen_share_penalty = 0.f;
+        float mean_step_median_extent = 0.f;
     };
 
     // One contiguous [primitives, attributes] parameter with its packed joint
@@ -42,6 +44,7 @@ namespace lfs::gpu_ops {
         float bc1_rcp = 1.f;
         float bc2_sqrt_rcp = 1.f;
         bool apply_screen_share = false;
+        bool apply_mean_step = false;
     };
 
     // value_bits is 0 for float32 values and 16 for half or block-quantized

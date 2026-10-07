@@ -41,7 +41,7 @@ namespace lfs::core {
         ProcessBoundary,
     };
 
-    class LFS_CORE_API ErrorReporter {
+    class LFS_ERROR_API ErrorReporter {
     public:
         static ErrorReporter& get();
 
@@ -62,13 +62,13 @@ namespace lfs::core {
     // NotFound/Cancelled, gated on Logger's active debug level; never for
     // every other anticipated code) so it can be asserted directly instead
     // of by scraping captured stack-trace text.
-    [[nodiscard]] LFS_CORE_API bool should_capture_stack_for_testing(ErrorCode code) noexcept;
+    [[nodiscard]] LFS_ERROR_API bool should_capture_stack_for_testing(ErrorCode code) noexcept;
 
     // Stable 64-bit dedup key over the Section 5.2 fingerprint dimensions
     // (code + native code + detection source + top context-frame operation).
     // Reuses ErrorReporter's existing fingerprint_site() algorithm rather than
     // duplicating it; ErrorBus keys repeated-fault suppression off this. Equal
     // for two errors that share those dimensions, different otherwise.
-    [[nodiscard]] LFS_CORE_API std::uint64_t error_fingerprint(const Error& error) noexcept;
+    [[nodiscard]] LFS_ERROR_API std::uint64_t error_fingerprint(const Error& error) noexcept;
 
 } // namespace lfs::core

@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/path_utils.hpp"
-#include "io/media/file_frame_sink.hpp"
-#include "io/media/media_probe.hpp"
-#include "io/video_frame_extractor.hpp"
 #include "io/video_player.hpp"
+#include "media/file_frame_sink.hpp"
+#include "media/media_probe.hpp"
+#include "media/video_frame_extractor.hpp"
 #include <fstream>
 #include <iostream>
 #include <nlohmann/json.hpp>
@@ -12,6 +12,8 @@
 
 int runProbeUnitContracts();
 int runFrameSinkUnitContracts();
+int runSharedCoreContracts();
+nlohmann::json runJpegBackendContracts(const nlohmann::json&);
 
 // Test adapter only: decoding, selection, geometry, codecs and metadata execute
 // the production sources directly. The JSON protocol is not a public CLI.
@@ -25,8 +27,14 @@ int main(int argc, char** argv) {
             return runFrameSinkUnitContracts();
         if (std::string_view(argv[1]) == "--probe-unit")
             return runProbeUnitContracts();
+        if (std::string_view(argv[1]) == "--shared-core-unit")
+            return runSharedCoreContracts();
         std::ifstream input(lfs::core::utf8_to_path(argv[1]));
         const auto request = json::parse(input);
+        if (request.value("operation", "extract") == "jpeg-backend") {
+            std::cout << runJpegBackendContracts(request).dump() << '\n';
+            return 0;
+        }
         if (request.value("operation", "extract") == "preview") {
             VideoPlayer player;
             const bool success = player.open(lfs::core::utf8_to_path(request.at("input").get<std::string>()));
@@ -102,6 +110,12 @@ int main(int argc, char** argv) {
             params.custom_width = request.at("width").get<int>();
             params.custom_height = request.at("height").get<int>();
         }
+        const auto algorithm = request.value("algorithm", "combined");
+        if (algorithm != "laplacian" && algorithm != "tenengrad" && algorithm != "combined")
+            throw std::runtime_error("Unknown test sharpness algorithm");
+        params.sharpness.algorithm = algorithm == "laplacian"   ? SharpnessAlgorithm::LAPLACIAN
+                                     : algorithm == "tenengrad" ? SharpnessAlgorithm::TENENGRAD
+                                                                : SharpnessAlgorithm::COMBINED;
         params.sharpness.enabled = request.value("sharpness", false);
         params.sharpness.window_mode = request.value("window", false);
         params.sharpness.threshold = request.value("threshold", 0.0);

@@ -14,6 +14,7 @@
 #include "core/tensor_vulkan_interop.hpp"
 #include "python/python_runtime.hpp"
 
+#include <cmath>
 #include <cstring>
 #if LFS_HAS_CUDA
 #include <cuda_runtime.h>
@@ -89,7 +90,7 @@ namespace lfs::python {
                 r.bits = 8;
                 break;
             case DataType::Bool:
-                r.code = kDLUInt;
+                r.code = kDLBool;
                 r.bits = 8;
                 break;
             default: throw std::runtime_error("Unsupported dtype for DLPack");
@@ -110,6 +111,8 @@ namespace lfs::python {
                 return DataType::Int64;
             if (dt.code == kDLUInt && dt.bits == 8)
                 return DataType::UInt8;
+            if (dt.code == kDLBool && dt.bits == 8)
+                return DataType::Bool;
             throw std::runtime_error("Unsupported DLPack dtype");
         }
 
@@ -136,17 +139,20 @@ namespace lfs::python {
         }
 
         // nanobind ndarray::stride(i) is in ELEMENTS (not bytes), matching DLPack.
-        bool ndarray_is_c_contiguous(const nb::ndarray<>& arr) {
+        template <typename Array>
+        bool ndarray_is_c_contiguous(const Array& arr) {
             const size_t ndim = arr.ndim();
             if (ndim == 0 || !arr.stride_ptr()) {
                 return true;
             }
+            for (size_t i = 0; i < ndim; ++i) {
+                if (arr.shape(i) == 0) {
+                    return true;
+                }
+            }
             int64_t expected = 1;
             for (size_t i = ndim; i-- > 0;) {
                 const int64_t extent = static_cast<int64_t>(arr.shape(i));
-                if (extent == 0) {
-                    return true;
-                }
                 // Extent-1 dims may carry arbitrary strides.
                 if (extent != 1 && arr.stride(i) != expected) {
                     return false;
@@ -313,7 +319,7 @@ namespace lfs::python {
         }
         switch (tensor_.dtype()) {
         case DataType::Float32: return tensor_.item<float>();
-        case DataType::Float16: return tensor_.item<float>(); // Tensor handles conversion
+        case DataType::Float16: return tensor_.to(DataType::Float32).item<float>();
         case DataType::Int32: return static_cast<float>(tensor_.item<int>());
         case DataType::Int64: return static_cast<float>(tensor_.item<int64_t>());
         case DataType::UInt8: return static_cast<float>(tensor_.item<unsigned char>());
@@ -333,7 +339,20 @@ namespace lfs::python {
         } else if (tensor_.dtype() == DataType::UInt8 || tensor_.dtype() == DataType::Bool) {
             return static_cast<int64_t>(tensor_.item<unsigned char>());
         }
-        return static_cast<int64_t>(tensor_.item<float>());
+        const float value = tensor_.dtype() == DataType::Float16
+                                ? tensor_.to(DataType::Float32).item<float>()
+                                : tensor_.item<float>();
+        if (std::isnan(value)) {
+            throw std::domain_error("cannot convert NaN to integer");
+        }
+        if (!std::isfinite(value)) {
+            throw std::overflow_error("cannot convert infinity to integer");
+        }
+        constexpr double int64_limit = 9223372036854775808.0;
+        if (static_cast<double>(value) < -int64_limit || static_cast<double>(value) >= int64_limit) {
+            throw std::overflow_error("floating-point value is outside the int64 range");
+        }
+        return static_cast<int64_t>(value);
     }
 
     bool PyTensor::item_bool() const {
@@ -343,10 +362,18 @@ namespace lfs::python {
         if (tensor_.dtype() == DataType::Bool) {
             return tensor_.item<unsigned char>() != 0;
         }
+        if (tensor_.dtype() == DataType::Float16) {
+            return tensor_.to(DataType::Float32).item<float>() != 0.0f;
+        }
         return tensor_.item<float>() != 0.0f;
     }
 
     nb::object PyTensor::numpy(bool copy) const {
+        if (!copy && tensor_.device() == Device::CPU && !tensor_.is_contiguous()) {
+            throw std::runtime_error(
+                "numpy(copy=False): non-contiguous CPU tensors cannot be exported without a copy; "
+                "call contiguous() or use copy=True");
+        }
         Tensor host = tensor_.device() == Device::GPU ? tensor_.cpu() : tensor_;
         Tensor cpu_tensor = host.is_contiguous() ? std::move(host) : host.contiguous();
 
@@ -600,6 +627,10 @@ namespace lfs::python {
             const auto values = cpu_tensor.to_vector();
             return build_nested_list(dims, 0, offset, [&](size_t index) { return nb::cast(values[index]); });
         }
+        case DataType::Float16: {
+            const auto values = cpu_tensor.to(DataType::Float32).to_vector();
+            return build_nested_list(dims, 0, offset, [&](size_t index) { return nb::cast(values[index]); });
+        }
         case DataType::Int32: {
             const auto values = cpu_tensor.to_vector_int();
             return build_nested_list(dims, 0, offset, [&](size_t index) { return nb::cast(values[index]); });
@@ -625,7 +656,8 @@ namespace lfs::python {
         return tensor_.count_nonzero();
     }
 
-    PyTensor PyTensor::from_numpy(nb::ndarray<> arr, bool copy) {
+    PyTensor PyTensor::from_numpy(
+        nb::ndarray<nb::numpy, nb::device::cpu> arr, bool copy) {
         if (!copy) {
             throw std::runtime_error(
                 "from_numpy: zero-copy import is not supported; omit copy or pass copy=True");
@@ -647,6 +679,8 @@ namespace lfs::python {
         const auto nb_dtype = arr.dtype();
         if (nb_dtype == nb::dtype<float>()) {
             dtype = DataType::Float32;
+        } else if (nb_dtype == nb::dtype<NumpyFloat16>()) {
+            dtype = DataType::Float16;
         } else if (nb_dtype == nb::dtype<int32_t>()) {
             dtype = DataType::Int32;
         } else if (nb_dtype == nb::dtype<int64_t>()) {
@@ -665,6 +699,7 @@ namespace lfs::python {
         size_t elem_size = 4;
         switch (dtype) {
         case DataType::Float32: elem_size = 4; break;
+        case DataType::Float16: elem_size = 2; break;
         case DataType::Int32: elem_size = 4; break;
         case DataType::Int64: elem_size = 8; break;
         case DataType::UInt8:
@@ -682,70 +717,80 @@ namespace lfs::python {
         SliceInfo info;
         auto [start, stop, step, count] = sl.compute(dim_size);
         info.start = start;
-        info.stop = stop;
+        info.stop = count == 0 ? start : stop;
         info.step = step;
         return info;
     }
 
-    PyTensor PyTensor::getitem(const nb::object& key) const {
-        // Single integer index
-        if (nb::isinstance<nb::int_>(key)) {
-            int64_t idx = nb::cast<int64_t>(key);
-            if (idx < 0) {
-                idx += static_cast<int64_t>(tensor_.shape()[0]);
-            }
-            if (idx < 0 || idx >= static_cast<int64_t>(tensor_.shape()[0])) {
-                throw std::out_of_range("Index out of range");
-            }
-            return PyTensor(tensor_.slice(0, static_cast<size_t>(idx), static_cast<size_t>(idx + 1)).squeeze(0));
-        }
-
-        // Single slice
-        if (nb::isinstance<nb::slice>(key)) {
-            auto sl = nb::cast<nb::slice>(key);
-            SliceInfo info = parse_slice(sl, tensor_.shape()[0]);
-
-            if (info.step != 1) {
-                throw std::runtime_error("Step != 1 not yet supported");
-            }
-
-            return PyTensor(tensor_.slice(0, static_cast<size_t>(info.start), static_cast<size_t>(info.stop)));
-        }
-
-        // Tuple of indices/slices
+    Tensor PyTensor::index_view(const nb::object& key) const {
+        std::vector<nb::object> items;
         if (nb::isinstance<nb::tuple>(key)) {
-            auto tup = nb::cast<nb::tuple>(key);
-            Tensor result = tensor_;
-
-            // Track dimension offset due to squeezed dimensions
-            int dim_offset = 0;
-
-            for (size_t i = 0; i < tup.size(); ++i) {
-                int current_dim = static_cast<int>(i) - dim_offset;
-                nb::object item = tup[i];
-
-                if (nb::isinstance<nb::int_>(item)) {
-                    int64_t idx = nb::cast<int64_t>(item);
-                    if (idx < 0) {
-                        idx += static_cast<int64_t>(result.shape()[current_dim]);
-                    }
-                    result = result.slice(current_dim, static_cast<size_t>(idx), static_cast<size_t>(idx + 1)).squeeze(current_dim);
-                    dim_offset++;
-                } else if (nb::isinstance<nb::slice>(item)) {
-                    auto sl = nb::cast<nb::slice>(item);
-                    SliceInfo info = parse_slice(sl, result.shape()[current_dim]);
-
-                    if (info.step != 1) {
-                        throw std::runtime_error("Step != 1 not yet supported");
-                    }
-
-                    result = result.slice(current_dim, static_cast<size_t>(info.start), static_cast<size_t>(info.stop));
-                }
+            auto tuple = nb::cast<nb::tuple>(key);
+            items.reserve(tuple.size());
+            for (size_t i = 0; i < tuple.size(); ++i) {
+                items.emplace_back(tuple[i]);
             }
-
-            return PyTensor(result);
+        } else {
+            items.push_back(key);
         }
 
+        size_t consumed_dims = 0;
+        size_t ellipsis_count = 0;
+        for (const auto& item : items) {
+            if (item.ptr() == Py_Ellipsis) {
+                if (++ellipsis_count > 1) {
+                    throw nb::index_error("an index can only have one ellipsis");
+                }
+            } else if (item.is_none()) {
+                continue;
+            } else if (nb::isinstance<nb::int_>(item) || nb::isinstance<nb::slice>(item)) {
+                ++consumed_dims;
+            } else {
+                throw nb::index_error("unsupported tensor index type");
+            }
+        }
+
+        const size_t input_dims = tensor_.ndim();
+        if (consumed_dims > input_dims) {
+            throw nb::index_error("too many indices for tensor");
+        }
+
+        const size_t ellipsis_dims = input_dims - consumed_dims;
+        Tensor result = tensor_;
+        size_t current_dim = 0;
+        for (const auto& item : items) {
+            if (item.ptr() == Py_Ellipsis) {
+                current_dim += ellipsis_dims;
+            } else if (item.is_none()) {
+                result = result.unsqueeze(current_dim);
+                ++current_dim;
+            } else if (nb::isinstance<nb::int_>(item)) {
+                int64_t index = nb::cast<int64_t>(item);
+                const int64_t dim_size = static_cast<int64_t>(result.shape()[current_dim]);
+                if (index < 0) {
+                    index += dim_size;
+                }
+                if (index < 0 || index >= dim_size) {
+                    throw nb::index_error("tensor index out of range");
+                }
+                result = result.slice(current_dim, static_cast<size_t>(index),
+                                      static_cast<size_t>(index + 1))
+                             .squeeze(static_cast<int>(current_dim));
+            } else {
+                const auto info = parse_slice(nb::cast<nb::slice>(item), result.shape()[current_dim]);
+                if (info.step < 0) {
+                    throw nb::value_error("negative slice steps are not supported by Tensor indexing");
+                }
+                result = result.slice(current_dim, static_cast<size_t>(info.start),
+                                      static_cast<size_t>(info.stop),
+                                      static_cast<size_t>(info.step));
+                ++current_dim;
+            }
+        }
+        return result;
+    }
+
+    PyTensor PyTensor::getitem(const nb::object& key) const {
         // Boolean mask
         if (nb::isinstance<PyTensor>(key)) {
             const auto& mask_tensor = nb::cast<const PyTensor&>(key);
@@ -767,7 +812,7 @@ namespace lfs::python {
                                         : tensor_.masked_select(mask));
         }
 
-        throw std::runtime_error("Unsupported index type");
+        return PyTensor(index_view(key));
     }
 
     void PyTensor::setitem(const nb::object& key, const nb::object& value) {
@@ -789,68 +834,14 @@ namespace lfs::python {
             if (is_scalar_value) {
                 target.fill_(scalar_value);
             } else {
-                target.copy_from(val_tensor);
+                Tensor source = val_tensor;
+                while (source.ndim() > target.ndim() && source.shape()[0] == 1) {
+                    source = source.squeeze(0);
+                }
+                source = source.broadcast_to(target.shape());
+                target.copy_from(source);
             }
         };
-
-        // Single integer index
-        if (nb::isinstance<nb::int_>(key)) {
-            int64_t idx = nb::cast<int64_t>(key);
-            if (idx < 0) {
-                idx += static_cast<int64_t>(tensor_.shape()[0]);
-            }
-            if (idx < 0 || idx >= static_cast<int64_t>(tensor_.shape()[0])) {
-                throw std::out_of_range("Index out of range");
-            }
-            Tensor target = tensor_.slice(0, static_cast<size_t>(idx), static_cast<size_t>(idx + 1));
-            assign_to_target(target);
-            return;
-        }
-
-        // Single slice
-        if (nb::isinstance<nb::slice>(key)) {
-            auto sl = nb::cast<nb::slice>(key);
-            SliceInfo info = parse_slice(sl, tensor_.shape()[0]);
-
-            if (info.step != 1) {
-                throw std::runtime_error("Step != 1 not yet supported");
-            }
-
-            Tensor target = tensor_.slice(0, static_cast<size_t>(info.start), static_cast<size_t>(info.stop));
-            assign_to_target(target);
-            return;
-        }
-
-        // Tuple of indices/slices
-        if (nb::isinstance<nb::tuple>(key)) {
-            auto tup = nb::cast<nb::tuple>(key);
-            Tensor target = tensor_;
-
-            for (size_t i = 0; i < tup.size(); ++i) {
-                int current_dim = static_cast<int>(i);
-                nb::object item = tup[i];
-
-                if (nb::isinstance<nb::int_>(item)) {
-                    int64_t idx = nb::cast<int64_t>(item);
-                    if (idx < 0) {
-                        idx += static_cast<int64_t>(target.shape()[current_dim]);
-                    }
-                    target = target.slice(current_dim, static_cast<size_t>(idx), static_cast<size_t>(idx + 1));
-                } else if (nb::isinstance<nb::slice>(item)) {
-                    auto sl = nb::cast<nb::slice>(item);
-                    SliceInfo info = parse_slice(sl, target.shape()[current_dim]);
-
-                    if (info.step != 1) {
-                        throw std::runtime_error("Step != 1 not yet supported");
-                    }
-
-                    target = target.slice(current_dim, static_cast<size_t>(info.start), static_cast<size_t>(info.stop));
-                }
-            }
-
-            assign_to_target(target);
-            return;
-        }
 
         // Boolean mask indexing: tensor[bool_mask] = value
         if (nb::isinstance<PyTensor>(key)) {
@@ -878,7 +869,8 @@ namespace lfs::python {
             }
         }
 
-        throw std::runtime_error("Unsupported index type for setitem");
+        Tensor target = index_view(key);
+        assign_to_target(target);
     }
 
     // Arithmetic operators
@@ -1727,6 +1719,9 @@ namespace lfs::python {
             std::vector<size_t> dims;
             dims.reserve(shape.size());
             for (auto d : shape) {
+                if (d < 0) {
+                    throw nb::value_error("Tensor shape contains a negative dimension");
+                }
                 dims.push_back(static_cast<size_t>(d));
             }
             return TensorShape(dims);
@@ -1763,10 +1758,7 @@ namespace lfs::python {
     PyTensor PyTensor::arange(float start, float end, float step,
                               const std::string& device,
                               const std::string& dtype) {
-        auto t = Tensor::arange(start, end, step);
-        if (device != "cuda" && device != "gpu") {
-            t = t.to(parse_device(device));
-        }
+        auto t = Tensor::arange(start, end, step, parse_device(device));
         if (dtype != "float32") {
             t = t.to(parse_dtype(dtype));
         }
@@ -2087,18 +2079,14 @@ namespace lfs::python {
             .def_static("from_dlpack", &PyTensor::from_dlpack, nb::arg("obj"), "Create tensor from DLPack capsule or object")
 
             // Indexing
-            .def("__getitem__", &PyTensor::getitem, "Get item/slice")
-            .def("__setitem__", &PyTensor::setitem, "Set item/slice")
+            .def("__getitem__", [](const PyTensor& self, nb::handle key) { return self.getitem(nb::borrow<nb::object>(key)); }, nb::arg("key").none(), "Get item/slice")
+            .def("__setitem__", [](PyTensor& self, nb::handle key, nb::object value) { self.setitem(nb::borrow<nb::object>(key), value); }, nb::arg("key").none(), nb::arg("value"), "Set item/slice")
 
             // Arithmetic operators
             .def("__add__", &PyTensor::add, "Add tensor")
             .def("__add__", &PyTensor::add_scalar, "Add scalar")
             .def("__radd__", &PyTensor::add_scalar, "Reverse add scalar")
-            .def(
-                "__iadd__", [](PyTensor& self, const PyTensor& other) -> PyTensor& {
-                    return self.iadd(other);
-                },
-                nb::rv_policy::reference, "In-place add tensor")
+            .def("__iadd__", [](PyTensor& self, const PyTensor& other) -> PyTensor& { return self.iadd(other); }, nb::rv_policy::reference, "In-place add tensor")
             .def("__iadd__", [](PyTensor& self, float scalar) -> PyTensor& { return self.iadd_scalar(scalar); }, nb::rv_policy::reference, "In-place add scalar")
 
             .def("__sub__", &PyTensor::sub, "Subtract tensor")

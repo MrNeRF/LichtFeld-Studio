@@ -59,6 +59,7 @@ namespace lfs::training {
                 entry.bias_correction2_sqrt_rcp = step.bc2_sqrt_rcp;
 
                 entry.apply_screen_share = step.apply_screen_share ? 1 : 0;
+                entry.apply_mean_step = step.apply_mean_step ? 1 : 0;
             }
             fast_lfs::optimizer::adam_step_joint_contiguous_batched(
                 entries,
@@ -73,7 +74,11 @@ namespace lfs::training {
                 hyper.beta2,
                 hyper.eps,
                 lfs::core::getCurrentCUDAStream(),
-
+                optional_ptr<float>(masks.mean_step_scales),
+                count(masks.mean_step_scales),
+                modifiers.mean_step_median_extent,
+                optional_ptr<bool>(masks.mean_step_far),
+                count(masks.mean_step_far),
                 optional_ptr<float>(masks.screen_share),
                 count(masks.screen_share),
                 modifiers.screen_share_limit,

@@ -98,9 +98,7 @@ void shade(FastPush p, uint i, inout Projected o) {
         o.ny = dot(((Ptr<float4, Access.Read>)p.view)[1].xyz, normal);
         o.nz = dot(((Ptr<float4, Access.Read>)p.view)[2].xyz, normal);
     }
-    float z = o.depth;
-    float u = clamp((2 * z + 1) / (z + 1), 1.0f, asfloat(0x3fffffffu));
-    o.depthKey = p.depthBits == 0 ? 0 : (asuint(u) & 0x7fffffu) >> (23 - p.depthBits);
+    o.depthKey = asuint(o.depth);
 }
 void rasterSubgroup(FastPush p, uint tile, uint rank) {
     uint pixel = pixelIndex(p, tile, rank), begin = loadUint(p.ranges, tile * 2), end = loadUint(p.ranges, tile * 2 + 1);
@@ -290,7 +288,7 @@ result:
                         tileFault(p, uint(at), p.instances, 1u);
                         continue;
                     }
-                    storeUint(p.keys, uint(at), (tile << p.depthBits) | o.depthKey);
+                    ((Ptr<uint64_t, Access.ReadWrite>)p.keys)[at] = (uint64_t(tile) << 32) | uint64_t(o.depthKey);
                     storeUint(p.values, uint(at), i);
                     ++at;
                 }
@@ -298,15 +296,15 @@ result:
             if (at != end)
                 tileFault(p, uint(at), uint(end), 2u);
         } else if (p.stage == 4) {
-            uint tile = loadUint(p.keys, i) >> p.depthBits;
+            uint tile = uint(((Ptr<uint64_t, Access.Read>)p.keys)[i] >> 32);
             if (tile >= p.gridWidth * p.gridHeight || loadUint(p.values, i) >= p.visible) {
                 tileFault(p, tile >= p.gridWidth * p.gridHeight ? tile : loadUint(p.values, i),
                           tile >= p.gridWidth * p.gridHeight ? p.gridWidth * p.gridHeight : p.visible, 4u);
                 continue;
             }
-            if (i == 0 || (loadUint(p.keys, i - 1) >> p.depthBits) != tile)
+            if (i == 0 || (uint(((Ptr<uint64_t, Access.Read>)p.keys)[i - 1] >> 32)) != tile)
                 storeUint(p.ranges, 2 * tile, i);
-            if (i + 1 == p.instances || (loadUint(p.keys, i + 1) >> p.depthBits) != tile)
+            if (i + 1 == p.instances || (uint(((Ptr<uint64_t, Access.Read>)p.keys)[i + 1] >> 32)) != tile)
                 storeUint(p.ranges, 2 * tile + 1, i + 1);
         } else if (p.stage == 5) {
             uint tile = i / 256, rank = i % 256, pixel = pixelIndex(p, tile, rank);

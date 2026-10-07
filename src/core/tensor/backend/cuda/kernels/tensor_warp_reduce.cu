@@ -37,7 +37,7 @@ namespace lfs::core::tensor_ops {
             uint32_t bits = __float_as_uint(value);
             uint32_t order;
             if ((bits & 0x7fffffffu) > 0x7f800000u) {
-                order = position == 0 ? 0xfffffffeu : 0xffffffffu;
+                order = 0xffffffffu;
             } else {
                 if ((bits & 0x7fffffffu) == 0)
                     bits = 0; // Signed zeros tie; recover the selected value from the input.

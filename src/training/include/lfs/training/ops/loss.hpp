@@ -22,6 +22,7 @@ namespace lfs::gpu_ops {
         PhotoPath path = PhotoPath::Fused;
         float ssim_weight = 0.f;
         bool valid_padding = true;
+        float denominator = 0.f;
     };
 
     struct PhotoSaved {

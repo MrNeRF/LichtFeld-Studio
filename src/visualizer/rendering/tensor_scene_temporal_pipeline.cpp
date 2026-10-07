@@ -207,7 +207,8 @@ namespace lfs::vis {
 
     void TensorSceneTemporalPipeline::reset(const TemporalViewId view,
                                             const TemporalResetReason reason) {
-        if (Impl::index(view) >= impl_->color_history.size()) return;
+        if (Impl::index(view) >= impl_->color_history.size())
+            return;
         impl_->coordinator.reset(view, reason);
         impl_->color_history[Impl::index(view)].reset();
         impl_->depth_history[Impl::index(view)].reset();

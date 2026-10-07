@@ -1,7 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "lfs/training/ops/blob_cuda.hpp"
 #include "lfs/training/ops/registry.hpp"
+#include "lfs/training/ops/structure_cuda.hpp"
 
 #include "lfs/training/ops/adam_cuda.hpp"
 #include "lfs/training/ops/bilateral_cuda.hpp"
@@ -45,6 +47,8 @@ namespace lfs::training {
             .session = &cuda_session_ops(),
             .shared_image = core::shared_image_ops(core::GpuBackend::CUDA),
             .lpips = &cuda_lpips_ops(),
+            .structure = &cuda_structure_ops(),
+            .blob = &cuda_blob_ops(),
         };
         return table;
     }

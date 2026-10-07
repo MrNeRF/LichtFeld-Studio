@@ -34,8 +34,7 @@ namespace lfs::vis {
             !std::ranges::all_of(id, [](const unsigned char c) {
                 return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
             }) ||
-            id == "native" || id == "spatial" || id == "temporal" ||
-            id == "metalfx_spatial" || id == "metalfx_temporal")
+            id == "native" || id == "spatial" || id == "temporal" || id == "metalfx_spatial" || id == "metalfx_temporal")
             return std::nullopt;
         return id;
     }

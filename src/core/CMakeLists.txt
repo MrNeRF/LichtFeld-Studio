@@ -33,6 +33,8 @@ add_subdirectory(event_bridge)
 
 # Logger shared library (leaf dep, breaks lfs_core ↔ lfs_event_bridge cycle)
 add_subdirectory(logger)
+add_subdirectory(error)
+add_subdirectory(image_codecs)
 
 # Tensor C++ sources (merged from src/core/tensor/)
 set(TENSOR_SOURCES
@@ -229,19 +231,11 @@ set(CORE_SOURCES
         cuda_error.cpp
         cuda_error_typed.cpp
         device_fault.cpp
-        error.cpp
-        error_bus.cpp
         exif.cpp
-        error_envelope.cpp
-        error_latch.cpp
-        error_reporter.cpp
-        guarded_task.cpp
         host_metrics.cpp
-        failure_report.cpp
         cuda/memory_arena_owner.cpp
         cuda/vmm_device_buffer.cpp
         memory_pressure.cpp
-        memory_domain.cpp
         raster_arena.cpp
         operator_callbacks.cpp
         animatable_property.cpp
@@ -251,8 +245,6 @@ set(CORE_SOURCES
         image_loader.cpp
         cuda_version.cpp
         image_io.cpp
-        image_codecs.cpp
-        image_exr.cpp
         mapped_file.cpp
         optimization_properties.cpp
         parameters.cpp
@@ -321,7 +313,7 @@ if(LFS_TENSOR_METAL)
         DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/vulkan/shaders/distortion_model.slangh")
 endif()
 if(LFS_HAS_CUDA)
-    target_sources(lfs_core PRIVATE cuda/shared_image_cuda.cpp)
+    target_sources(lfs_core PRIVATE cuda/shared_image_cuda.cpp cuda_diagnostics_backend.cpp)
 endif()
 
 if(LFS_TENSOR_VULKAN)
@@ -411,6 +403,8 @@ endif()
 target_link_libraries(lfs_core
     PUBLIC
         lfs_logger
+        lfs_error
+        lfs_image_codecs
         lfs_diagnostics
         lfs_event_bridge
         lfs_geometry

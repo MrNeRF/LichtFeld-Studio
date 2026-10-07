@@ -9,8 +9,10 @@
 #include "sequencer/animation_value.hpp"
 #include "sequencer/timeline.hpp"
 
+#include <memory>
 #include <nanobind/nanobind.h>
 #include <optional>
+#include <stdexcept>
 
 namespace nb = nanobind;
 
@@ -18,11 +20,13 @@ namespace lfs::python {
 
     class PyAnimationTrack {
     public:
-        explicit PyAnimationTrack(sequencer::AnimationTrack* track) : track_(track) {}
+        PyAnimationTrack(sequencer::AnimationClip* clip, sequencer::TrackId id,
+                         std::shared_ptr<sequencer::Timeline> owner)
+            : clip_(clip), id_(id), owner_(std::move(owner)) {}
 
-        [[nodiscard]] uint64_t id() const { return track_->id(); }
-        [[nodiscard]] std::string target_path() const { return track_->targetPath(); }
-        [[nodiscard]] size_t keyframe_count() const { return track_->keyframeCount(); }
+        [[nodiscard]] uint64_t id() const { return id_; }
+        [[nodiscard]] std::string target_path() const { return resolve().targetPath(); }
+        [[nodiscard]] size_t keyframe_count() const { return resolve().keyframeCount(); }
 
         void add_keyframe(float time, nb::object value, const std::string& easing = "ease_in_out");
         void remove_keyframe(size_t index);
@@ -31,12 +35,22 @@ namespace lfs::python {
         [[nodiscard]] nb::list keyframes() const;
 
     private:
-        sequencer::AnimationTrack* track_;
+        [[nodiscard]] sequencer::AnimationTrack& resolve() const {
+            if (auto* const track = clip_->getTrack(id_)) {
+                return *track;
+            }
+            throw std::runtime_error("animation track " + std::to_string(id_) + " was removed");
+        }
+
+        sequencer::AnimationClip* clip_;
+        sequencer::TrackId id_;
+        std::shared_ptr<sequencer::Timeline> owner_;
     };
 
     class PyAnimationClip {
     public:
-        explicit PyAnimationClip(sequencer::AnimationClip* clip) : clip_(clip) {}
+        PyAnimationClip(sequencer::AnimationClip* clip, std::shared_ptr<sequencer::Timeline> owner)
+            : clip_(clip), owner_(std::move(owner)) {}
 
         [[nodiscard]] std::string name() const { return clip_->name(); }
         void set_name(const std::string& name) { clip_->setName(name); }
@@ -55,10 +69,14 @@ namespace lfs::python {
 
     private:
         sequencer::AnimationClip* clip_;
+        std::shared_ptr<sequencer::Timeline> owner_;
     };
 
     class PyTimeline {
     public:
+        PyTimeline()
+            : owned_timeline_(std::make_shared<sequencer::Timeline>()),
+              timeline_(owned_timeline_.get()) {}
         explicit PyTimeline(sequencer::Timeline* timeline) : timeline_(timeline) {}
 
         [[nodiscard]] PyAnimationClip animation_clip();
@@ -71,6 +89,7 @@ namespace lfs::python {
         [[nodiscard]] float camera_duration() const { return timeline_->duration(); }
 
     private:
+        std::shared_ptr<sequencer::Timeline> owned_timeline_;
         sequencer::Timeline* timeline_;
     };
 

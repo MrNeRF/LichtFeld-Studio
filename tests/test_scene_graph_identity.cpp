@@ -10,6 +10,8 @@
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "io/formats/colmap.hpp"
+#include "lfs/py_scene.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
@@ -20,7 +22,9 @@
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <memory>
+#include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 using lfs::core::DataType;
@@ -28,6 +32,23 @@ using lfs::core::Device;
 using lfs::core::Tensor;
 
 namespace {
+
+    TEST(PySceneNodeTest, DeletedNodeWrapperRaisesInsteadOfRebinding) {
+        lfs::core::Scene scene;
+        const auto deleted_id = scene.addGroup("deleted");
+        const auto original_uuid = scene.getNodeUuid(deleted_id);
+        lfs::python::PySceneNode wrapper(
+            scene.getNodeById(deleted_id), &scene);
+
+        scene.removeNodeById(deleted_id);
+        const auto replacement_id = scene.addGroup("replacement");
+        ASSERT_NE(replacement_id, lfs::core::NULL_NODE);
+        ASSERT_NE(scene.getNodeUuid(replacement_id), original_uuid);
+
+        EXPECT_THROW(wrapper.id(), std::runtime_error);
+        EXPECT_THROW(wrapper.uuid(), std::runtime_error);
+        EXPECT_THROW(wrapper.type(), std::runtime_error);
+    }
 
     class ScopedPlyRemovedSubscription {
     public:
@@ -563,4 +584,45 @@ TEST(SceneCameraAssetPathTest, RebaseRewritesUnderOldRootAndRefreshesNodeMirrors
     ASSERT_NE(outside_node, nullptr);
     EXPECT_EQ(outside_node->image_path, lfs::core::path_to_utf8(outside));
     EXPECT_TRUE(outside_node->mask_path.empty());
+}
+
+// Fails when the camera caches are rebuilt without a lock: the training thread and the UI thread both rebuild them
+// after every render invalidation (adding a crop box before starting training is enough) and free the cache buffer
+// twice, which aborts with heap corruption.
+TEST(SceneCameraCache, ConcurrentReadersSurviveRenderInvalidation) {
+    const auto loaded = lfs::io::read_colmap_cameras_only(
+        std::filesystem::path(PROJECT_ROOT_PATH) / "data" / "bicycle" / "sparse" / "0");
+    ASSERT_TRUE(loaded.has_value());
+    const auto& cameras = std::get<0>(*loaded);
+    ASSERT_FALSE(cameras.empty());
+
+    lfs::core::Scene scene;
+    const auto group = scene.addCameraGroup("Training", scene.addGroup("Cameras"), cameras.size());
+    for (const auto& camera : cameras)
+        ASSERT_NE(scene.addCamera(camera->image_name(), group, camera), lfs::core::NULL_NODE);
+    const size_t all = scene.getAllCameras().size();
+    const size_t visible = scene.getVisibleCameras().size();
+    ASSERT_EQ(all, cameras.size());
+
+    std::atomic<bool> stop = false;
+    std::atomic<int> mismatches = 0;
+    std::thread invalidator([&] {
+        while (!stop.load(std::memory_order_relaxed))
+            scene.invalidateTransformCache();
+    });
+    std::vector<std::thread> readers;
+    for (int t = 0; t < 4; ++t)
+        readers.emplace_back([&] {
+            for (int i = 0; i < 4000; ++i) {
+                if (scene.getAllCameras().size() != all)
+                    mismatches.fetch_add(1);
+                if (scene.getVisibleCameras().size() != visible)
+                    mismatches.fetch_add(1);
+            }
+        });
+    for (auto& reader : readers)
+        reader.join();
+    stop = true;
+    invalidator.join();
+    EXPECT_EQ(mismatches.load(), 0);
 }

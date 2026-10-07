@@ -56,16 +56,14 @@ namespace lfs::python {
             .value("Mirror", vis::op::BuiltinTool::Mirror)
             .value("Align", vis::op::BuiltinTool::Align);
 
-        nb::enum_<vis::op::OperatorFlags>(ops, "OperatorFlags")
+        nb::enum_<vis::op::OperatorFlags>(ops, "OperatorFlags", nb::is_flag())
             .value("NONE", vis::op::OperatorFlags::NONE)
             .value("REGISTER", vis::op::OperatorFlags::REGISTER)
             .value("UNDO", vis::op::OperatorFlags::UNDO)
             .value("UNDO_GROUPED", vis::op::OperatorFlags::UNDO_GROUPED)
             .value("INTERNAL", vis::op::OperatorFlags::INTERNAL)
             .value("MODAL", vis::op::OperatorFlags::MODAL)
-            .value("BLOCKING", vis::op::OperatorFlags::BLOCKING)
-            .def("__or__", [](vis::op::OperatorFlags a, vis::op::OperatorFlags b) { return a | b; })
-            .def("__and__", [](vis::op::OperatorFlags a, vis::op::OperatorFlags b) { return a & b; });
+            .value("BLOCKING", vis::op::OperatorFlags::BLOCKING);
 
         nb::class_<vis::op::OperatorDescriptor>(ops, "OperatorDescriptor")
             .def(nb::init<>())

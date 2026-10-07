@@ -309,6 +309,7 @@ TEST_F(AdamOpsBytes, StepBatchMatchesLauncherAndSkipsAbsentSteps) {
                 masks.frozen.ptr<bool>(), static_cast<int>(masks.frozen.numel()), kModifiers.frozen_lr_scale,
                 masks.crop.ptr<bool>(), static_cast<int>(masks.crop.numel()), kModifiers.cropbox_lr_scale,
                 kBeta1, kBeta2, kEps, lfs::core::getCurrentCUDAStream(),
+                nullptr, 0, 0.f, nullptr, 0,
                 masks.share.ptr<float>(), static_cast<int>(masks.share.numel()),
                 kModifiers.screen_share_limit, kModifiers.screen_share_penalty);
 

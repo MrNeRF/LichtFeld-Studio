@@ -266,6 +266,7 @@ namespace lfs::core::internal::metal {
         std::map<size_t, std::vector<Block>> free_;
         size_t cached_bytes_ = 0;
         size_t cache_limit_ = 0;
+        bool trim_requested_ = false;
         size_t live_requested_bytes_ = 0;
         size_t live_capacity_bytes_ = 0;
         size_t peak_live_capacity_bytes_ = 0;

@@ -190,7 +190,7 @@ static float float_unary(float value, float scalar, bool scalar_on_right) {
     if (kOp == LFS_OP_Square) return value * value;
     if (kOp == LFS_OP_Tanh) return tanh(value);
     if (kOp == LFS_OP_Rsqrt) return rsqrt(value);
-    if (kOp == LFS_OP_Sign) return float(int(value > 0.0f) - int(value < 0.0f));
+    if (kOp == LFS_OP_Sign) return isnan(value) ? value : float(int(value > 0.0f) - int(value < 0.0f));
     if (kOp == LFS_OP_Reciprocal) return 1.0f / value;
     if (kOp == LFS_OP_Floor) return floor(value);
     if (kOp == LFS_OP_Ceil) return ceil(value);
@@ -493,7 +493,7 @@ static float chain_unary(float value, uint kind) {
     case 17: return value * value;
     case 18: return tanh(value);
     case 19: return rsqrt(value);
-    case 20: return float(int(value > 0.0f) - int(value < 0.0f));
+    case 20: return isnan(value) ? value : float(int(value > 0.0f) - int(value < 0.0f));
     case 21: return 1.0f / value;
     case 22: return floor(value);
     case 23: return ceil(value);
@@ -1193,7 +1193,7 @@ static ulong arg_extreme_key(float value, uint position) {
     uint bits = as_type<uint>(value);
     uint order;
     if ((bits & 0x7fffffffu) > 0x7f800000u) {
-        order = position == 0 ? 0xfffffffeu : 0xffffffffu;
+        order = 0xffffffffu;
     } else {
         if ((bits & 0x7fffffffu) == 0u)
             bits = 0u; // -0 ties +0, as the CPU's strict comparison does.

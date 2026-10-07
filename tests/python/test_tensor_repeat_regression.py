@@ -5,7 +5,7 @@
 import pytest
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
 @pytest.mark.parametrize("shape,repeats", [
     ((1, 2), (2, 3)), ((2, 3), (3, 5)), ((2, 3), (1, 7)),
     ((2, 3), (2, 1, 3)), ((2, 3), (0, 3)), ((0, 3), (2, 3)),
@@ -21,14 +21,14 @@ def test_repeat_matches_tile(lf, numpy, device, shape, repeats):
     numpy.testing.assert_array_equal(tensor.numpy(), array)
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
 def test_repeat_noncontiguous(lf, numpy, device):
     array = numpy.arange(6, dtype=numpy.float32).reshape(2, 3)
     tensor = getattr(lf.Tensor.from_numpy(array), device)().permute((1, 0))
     numpy.testing.assert_array_equal(tensor.repeat((3, 2)).numpy(), numpy.tile(array.T, (3, 2)))
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
 def test_repeat_rejects_negative_counts(lf, device):
     tensor = lf.Tensor.ones((2, 3), device=device)
     with pytest.raises((ValueError, RuntimeError)):

@@ -51,6 +51,10 @@ namespace lfs::training {
                 return ops.shared_image != nullptr;
             case Family::Lpips:
                 return ops.lpips != nullptr;
+            case Family::Blob:
+                return ops.blob != nullptr;
+            case Family::Structure:
+                return ops.structure != nullptr;
             case Family::Count:
                 return false;
             }
@@ -121,6 +125,8 @@ namespace lfs::training {
         case Family::TrainingImage: return "TrainingImage";
         case Family::SharedImage: return "SharedImage";
         case Family::Lpips: return "Lpips";
+        case Family::Blob: return "Blob";
+        case Family::Structure: return "Structure";
         case Family::Count: break;
         }
         return {};

@@ -34,7 +34,9 @@ namespace {
         const auto context = core::internal::acquire_vulkan_context();
         for (const uint32_t kind : {0u, 1u, 2u}) {
             SCOPED_TRACE(kind);
-            auto keys = Tensor::full({1}, kind == 0 ? 1 : 0, Device::GPU, DataType::Int32);
+            // FastGS keys now place the tile id above the full 32-bit depth key.
+            auto keys = Tensor::full({1}, kind == 0 ? static_cast<float>(uint64_t{1} << 32) : 0.0f,
+                                     Device::GPU, DataType::Int64);
             auto values = Tensor::full({1}, kind == 1 ? 1 : 0, Device::GPU, DataType::Int32);
             auto ranges = Tensor::zeros({2}, Device::GPU, DataType::Int32);
             auto offsets = Tensor::ones({1}, Device::GPU, DataType::Int64);

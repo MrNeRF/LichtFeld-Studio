@@ -630,11 +630,11 @@ namespace lfs::core {
                            "arange step cannot be zero");
             const long double extent = static_cast<long double>(end) -
                                        static_cast<long double>(start);
-            LFS_ASSERT_MSG(extent * static_cast<long double>(step) >= 0.0L,
-                           "arange step points away from the end value");
-
-            const long double count_value =
-                std::ceil(extent / static_cast<long double>(step));
+            const bool points_away = (extent > 0.0L && step < 0.0f) ||
+                                     (extent < 0.0L && step > 0.0f);
+            const long double count_value = points_away
+                                                ? 0.0L
+                                                : std::ceil(extent / static_cast<long double>(step));
             LFS_ASSERT_MSG(std::isfinite(count_value) && count_value >= 0.0L &&
                                count_value <=
                                    static_cast<long double>(std::numeric_limits<size_t>::max()),

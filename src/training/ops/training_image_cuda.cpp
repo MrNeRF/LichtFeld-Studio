@@ -12,6 +12,9 @@
 #include <glm/gtc/type_ptr.hpp>
 
 namespace lfs::training {
+    core::Tensor cuda_flip_error_map(const core::Tensor&, const core::Tensor&, float);
+    core::Tensor cuda_flip_error_image(const core::Tensor&);
+
     namespace {
         using lfs::gpu_ops::RoiParams;
         using lfs::gpu_ops::Tensor;
@@ -67,6 +70,9 @@ namespace lfs::training {
             .canny = canny,
             .normalize_scalar = normalize_scalar,
             .quantize_to_8bit_grid = kernels::quantize_to_8bit_grid,
+            .quantize_to_grid = kernels::quantize_to_grid,
+            .flip_error_map = cuda_flip_error_map,
+            .flip_error_image = cuda_flip_error_image,
         };
     } // namespace
 

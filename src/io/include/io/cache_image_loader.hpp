@@ -42,6 +42,10 @@ namespace lfs::io {
         const lfs::core::UndistortParams* undistort = nullptr;
         bool output_uint8 = false;
         bool skip_blob_cache = false;
+        // Keeps 16-bit samples for this request even when the loader decodes 8-bit by default.
+        bool decode_16bit = false;
+        // Keeps floating-point files (EXR, float TIFF) at float precision instead of an integer decode.
+        bool decode_float = false;
     };
 
     // CPU decode at native resolution, then the same GPU Lanczos downscale the nvImageCodec

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/image_codecs.hpp"
-#include "io/media/file_frame_sink.hpp"
-#include "io/media/frame_sink.hpp"
+#include "media/file_frame_sink.hpp"
+#include "media/frame_sink.hpp"
 #include <chrono>
 #include <fstream>
 #include <iterator>

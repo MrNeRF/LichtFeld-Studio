@@ -444,6 +444,8 @@ namespace lfs::io {
                                               const std::vector<uint8_t>* encoded = nullptr) const;
 
         std::string make_cache_key(const std::filesystem::path& path, const LoadParams& params) const;
+        bool decodes_16bit(const LoadParams& params) const { return config_.use_16bit_color || params.decode_16bit; }
+        bool decodes_float(const std::filesystem::path& path, const LoadParams& params) const;
         bool is_jpeg_data(const std::vector<uint8_t>& data) const;
         std::vector<uint8_t> read_file(const std::filesystem::path& path) const;
         std::shared_ptr<std::vector<uint8_t>> load_cached_jpeg_blob(const std::string& cache_key);

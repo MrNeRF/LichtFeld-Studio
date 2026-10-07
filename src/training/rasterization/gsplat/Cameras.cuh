@@ -1150,20 +1150,13 @@ struct ThinPrismFisheyeCameraModel
         if (thetad <= 0.f)
             return {{0.f, 0.f}, false};
 
-        auto const scale = thetad / cam_ray_xy_norm;
-        auto const dx = scale * cam_ray.x;
-        auto const dy = scale * cam_ray.y;
-
-        // Tangential and thin prism distortion
-        auto const& thin_prism = parameters.thin_prism_coeffs;
-        auto const p1 = thin_prism[0];
-        auto const p2 = thin_prism[1];
-        auto const sx1 = thin_prism[2];
-        auto const sy1 = thin_prism[3];
-        auto const dr2 = dx * dx + dy * dy;
-
-        auto const x_dist = dx + 2.f * p1 * dx * dy + p2 * (dr2 + 2.f * dx * dx) + sx1 * dr2;
-        auto const y_dist = dy + p1 * (dr2 + 2.f * dy * dy) + 2.f * p2 * dx * dy + sy1 * dr2;
+        // As in COLMAP, the tangential and prism terms act on the theta-scaled point, not on the
+        // radially distorted one.
+        auto const theta_point = glm::fvec2{cam_ray.x, cam_ray.y} * (theta / cam_ray_xy_norm);
+        auto const prism = thin_prism_terms(theta_point);
+        auto const radial_scale = thetad / cam_ray_xy_norm;
+        auto const x_dist = radial_scale * cam_ray.x + prism.x;
+        auto const y_dist = radial_scale * cam_ray.y + prism.y;
 
         auto const image_point = glm::fvec2{
             parameters.focal_length[0] * x_dist + parameters.principal_point[0],
@@ -1182,39 +1175,43 @@ struct ThinPrismFisheyeCameraModel
                                             parameters.principal_point[1]}) /
                   glm::fvec2{parameters.focal_length[0], parameters.focal_length[1]};
 
-        // Iteratively remove tangential and thin prism distortion
+        // Fixed point on the theta-scaled point p: uv = radial(p) + prism(p).
+        auto radially_distorted = uv;
+        auto theta_point = glm::fvec2{0.f, 0.f};
+        float theta = 0.f;
+        for (size_t i = 0; i <= N_UNDISTORT_ITERATIONS; ++i) {
+            if (i > 0)
+                radially_distorted = uv - thin_prism_terms(theta_point);
+            auto const thetad = length(radially_distorted);
+            bool converged = false;
+            theta = eval_poly_inverse_horner_newton<N_NEWTON_ITERATIONS>(
+                PolynomialProxy<PolynomialType::ODD, 5>{forward_poly_odd},
+                PolynomialProxy<PolynomialType::EVEN, 5>{dforward_poly_even},
+                PolynomialProxy<PolynomialType::FULL, 2>{approx_backward_poly},
+                thetad, converged);
+            if (theta < 0.f || theta >= max_angle || !converged) {
+                return {glm::fvec3{0.f, 0.f, 1.f}, false};
+            }
+            theta_point = thetad >= min_2d_norm ? radially_distorted * (theta / thetad) : glm::fvec2{0.f, 0.f};
+        }
+        if (theta >= min_2d_norm) {
+            auto const scale_factor = std::sin(theta) / theta;
+            return {glm::fvec3{scale_factor * theta_point.x, scale_factor * theta_point.y, std::cos(theta)}, true};
+        } else {
+            return {glm::fvec3{0.f, 0.f, 1.f}, true};
+        }
+    }
+
+    // COLMAP ThinPrismFisheyeCameraModel tangential and prism terms of a theta-scaled point.
+    inline __device__ glm::fvec2 thin_prism_terms(glm::fvec2 const& point) const {
         auto const& thin_prism = parameters.thin_prism_coeffs;
         auto const p1 = thin_prism[0];
         auto const p2 = thin_prism[1];
         auto const sx1 = thin_prism[2];
         auto const sy1 = thin_prism[3];
-        for (size_t i = 0; i < N_UNDISTORT_ITERATIONS; ++i) {
-            auto const dr2 = uv.x * uv.x + uv.y * uv.y;
-            auto const dx = 2.f * p1 * uv.x * uv.y + p2 * (dr2 + 2.f * uv.x * uv.x) + sx1 * dr2;
-            auto const dy = p1 * (dr2 + 2.f * uv.y * uv.y) + 2.f * p2 * uv.x * uv.y + sy1 * dr2;
-            uv.x -= dx;
-            uv.y -= dy;
-        }
-
-        auto const delta = length(uv);
-
-        bool converged = false;
-        auto const theta = eval_poly_inverse_horner_newton<N_NEWTON_ITERATIONS>(
-            PolynomialProxy<PolynomialType::ODD, 5>{forward_poly_odd},
-            PolynomialProxy<PolynomialType::EVEN, 5>{dforward_poly_even},
-            PolynomialProxy<PolynomialType::FULL, 2>{approx_backward_poly},
-            delta, converged);
-
-        if (theta < 0.f || theta >= max_angle || !converged) {
-            return {glm::fvec3{0.f, 0.f, 1.f}, false};
-        }
-
-        if (delta >= min_2d_norm) {
-            auto const scale_factor = std::sin(theta) / delta;
-            return {glm::fvec3{scale_factor * uv.x, scale_factor * uv.y, std::cos(theta)}, true};
-        } else {
-            return {glm::fvec3{0.f, 0.f, 1.f}, true};
-        }
+        auto const r2 = point.x * point.x + point.y * point.y;
+        return {2.f * p1 * point.x * point.y + p2 * (r2 + 2.f * point.x * point.x) + sx1 * r2,
+                p1 * (r2 + 2.f * point.y * point.y) + 2.f * p2 * point.x * point.y + sy1 * r2};
     }
 };
 

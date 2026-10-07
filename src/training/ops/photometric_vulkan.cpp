@@ -17,7 +17,7 @@ namespace lfs::training {
             uint64_t ssim, cs, grad, grad_raw, losses, normalizer;
             uint32_t count, channels, height, width, batch, stage, path, target_byte;
             uint32_t mask_byte, valid_padding, partial_stride, reserved;
-            float weight;
+            float weight, denominator;
         };
         static_assert(sizeof(Params) == 152);
         static_assert(offsetof(Params, count) == 96);
@@ -126,7 +126,7 @@ namespace lfs::training {
                 if (m.ndim() == 3)
                     m = m.squeeze(0);
                 LFS_ASSERT_MSG(m.shape()[0] == dims[2] && m.shape()[1] == dims[3], "Photometric mask shape must match");
-                s.normalizer = (m.dtype() == DataType::Float32 ? m : (m != 0).to(DataType::Float32)).sum();
+                s.normalizer = options.denominator > 0.f ? Tensor{} : (m.dtype() == DataType::Float32 ? m : (m != 0).to(DataType::Float32)).sum();
             }
             Params p{};
             p.corrected = address(a);
@@ -143,6 +143,7 @@ namespace lfs::training {
             p.mask_byte = m.is_valid() && m.dtype() != DataType::Float32;
             p.valid_padding = options.valid_padding;
             p.weight = options.path == PhotoPath::SSIM ? 1.f : options.ssim_weight;
+            p.denominator = options.denominator;
             ensure_buffer(s.losses, dims);
             p.losses = address(s.losses);
             std::vector<core::internal::StorageRef> inputs{ref(a), ref(t)};
@@ -150,7 +151,8 @@ namespace lfs::training {
                 inputs.push_back(ref(r));
             if (m.is_valid()) {
                 inputs.push_back(ref(m));
-                inputs.push_back(ref(s.normalizer));
+                if (s.normalizer.is_valid())
+                    inputs.push_back(ref(s.normalizer));
                 p.normalizer = address(s.normalizer);
             }
             if (options.path == PhotoPath::L1) {
@@ -211,7 +213,9 @@ namespace lfs::training {
                 bind(grad, s.gradient);
             }
             if (masked(options.path))
-                loss = (s.losses.sum() / (s.normalizer * float(p.batch) * float(p.channels) + 1e-8f)).reshape({1});
+                loss = (options.denominator > 0.f ? s.losses.sum() / options.denominator
+                                                  : s.losses.sum() / (s.normalizer * float(p.batch) * float(p.channels) + 1e-8f))
+                           .reshape({1});
             else {
                 auto selected = s.losses;
                 if (options.path != PhotoPath::L1 && options.valid_padding) {

@@ -122,6 +122,9 @@ namespace lfs::training {
         lfs::core::Tensor apply(const lfs::core::Tensor& rgb, int camera_id, int uid,
                                 const PPISPRegion& region = {});
 
+        lfs::core::Tensor apply_interpolated_frames(const lfs::core::Tensor& rgb, int camera_id,
+                                                    int left_uid, int right_uid, float fraction);
+
         /// Same as apply(), but exposure comes from the argument instead of
         /// exposure_params_[frame]. Camera-level vignetting/CRF come from camera_id;
         /// per-frame colour is identity (held-out frames have no colour latent).

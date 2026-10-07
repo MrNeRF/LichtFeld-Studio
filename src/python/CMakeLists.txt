@@ -201,6 +201,7 @@ nanobind_add_module(
     lfs/py_cameras.cpp
     lfs/py_diagnostics.cpp
     lfs/py_io.cpp
+    lfs/py_media.cpp
     lfs/py_packages.cpp
     lfs/py_params.cpp
     lfs/py_plugins.cpp
@@ -267,6 +268,7 @@ set(LFS_PY_INTERNAL_LINK_LIBS
     lfs_python_runtime
     lfs_io
     lfs_video
+    lfs_media
     lfs_rendering_tensor
     lfs_sequencer
     lfs_preprocessing
@@ -320,6 +322,10 @@ if(WIN32)
             "$<TARGET_FILE:lfs_python_runtime>"
             "$<TARGET_FILE:lfs_event_bridge>"
             "$<TARGET_FILE:lfs_core>"
+            "$<TARGET_FILE:lfs_error>"
+            "$<TARGET_FILE:lfs_image_codecs>"
+            "$<TARGET_FILE:lfs_media>"
+            "$<TARGET_FILE:lfs_logger>"
             "$<TARGET_FILE:lfs_diagnostics>"
             "$<TARGET_FILE:lfs_visualizer>"
             "$<TARGET_FILE:lfs_mcp>"
@@ -343,7 +349,7 @@ if(WIN32)
     # Copy vcpkg runtime DLLs
     add_custom_command(TARGET lfs_py POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
-            "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin"
+            "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin"
             "${CMAKE_CURRENT_BINARY_DIR}"
         COMMENT "Copying vcpkg DLLs to Python module directory"
     )
@@ -410,7 +416,7 @@ if '$<CONFIG>' == 'Debug':
 # Add DLL directories (Python 3.8+ requirement on Windows)
 dll_dirs = [
     r'$<TARGET_FILE_DIR:lfs_python_runtime>',
-    r'${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin',
+    r'${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin',
     r'${CMAKE_BINARY_DIR}/external/nvImageCodec/src',
     r'${CUDAToolkit_BIN_DIR}',
     r'${CUDAToolkit_BIN_DIR}/x64',

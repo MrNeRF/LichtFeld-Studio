@@ -181,7 +181,7 @@ namespace lfs::training {
             case lfs::gpu_ops::PhotoPath::MaskedFused: {
                 auto& workspace = state.arena.masked_fused();
                 auto [loss_tensor, ctx] = kernels::masked_fused_l1_ssim_forward(
-                    corrected, target, mask, params.ssim_weight, workspace);
+                    corrected, target, mask, params.ssim_weight, workspace, params.denominator);
                 grad_corrected = kernels::masked_fused_l1_ssim_backward(ctx, workspace);
                 loss = loss_tensor;
                 if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
@@ -193,7 +193,7 @@ namespace lfs::training {
             case lfs::gpu_ops::PhotoPath::MaskedDecoupled: {
                 auto& workspace = state.arena.masked_decoupled();
                 auto [loss_tensor, ctx] = kernels::masked_decoupled_fused_l1_ssim_forward(
-                    corrected, raw, target, mask, params.ssim_weight, workspace);
+                    corrected, raw, target, mask, params.ssim_weight, workspace, params.denominator);
                 auto grads = kernels::masked_decoupled_fused_l1_ssim_backward(ctx, workspace);
                 loss = loss_tensor;
                 grad_corrected = grads.grad_corrected;

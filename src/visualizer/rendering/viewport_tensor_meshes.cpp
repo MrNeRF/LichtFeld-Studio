@@ -4,10 +4,10 @@
 #include "viewport_tensor_meshes.hpp"
 #include "viewport_geometry.hpp"
 
+#include "core/guarded_task.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/tensor.hpp"
-#include "core/guarded_task.hpp"
 #include "mesh_offscreen_renderer.hpp"
 #include "rendering/render_constants.hpp"
 #include "tensor_frame_uploads.hpp"
@@ -526,8 +526,7 @@ namespace lfs::vis {
         } catch (...) {
             // LFS-CENSUS-OK(empty-catch): translate tensor program exceptions at the typed facade boundary.
             return lfs::core::detail::task_failure_from_current_exception<lfs::rendering::MeshLayer>(
-                {.name = "mesh.tensor.offscreen", .domain = lfs::ErrorDomain::Rendering,
-                 .site = LFS_SOURCE_SITE_CURRENT()});
+                {.name = "mesh.tensor.offscreen", .domain = lfs::ErrorDomain::Rendering, .site = LFS_SOURCE_SITE_CURRENT()});
         }
     }
 } // namespace lfs::vis

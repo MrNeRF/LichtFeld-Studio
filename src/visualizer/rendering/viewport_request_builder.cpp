@@ -25,7 +25,8 @@ namespace lfs::vis {
                 view.subregion_full_size != glm::ivec2(0) || view.size.x <= 0 || view.size.y <= 0)
                 return {};
             const auto& scene = ctx.scene_manager->getScene();
-            const auto& cameras = scene.getVisibleCamerasCached();
+            const auto cameras_snapshot = scene.getVisibleCamerasCached();
+            const auto& cameras = *cameras_snapshot;
             auto transforms = ctx.scene_state.camera_scene_transforms;
             if (transforms.size() != cameras.size()) {
                 transforms = scene.getVisibleCameraSceneTransforms();

@@ -630,6 +630,10 @@ namespace lfs::core {
             std::shared_ptr<void> exportable_control;
             std::uint32_t exportable_region = 0;
             std::uint64_t exportable_bound_generation = 0;
+
+            // Storage supplied by the active viewer allocator and directly
+            // consumable by its renderer without a migration copy.
+            bool renderer_storage = false;
         };
 
         void* data_ = nullptr;
@@ -1000,6 +1004,7 @@ namespace lfs::core {
                                   bool replacement = false, std::optional<uint64_t> seed = std::nullopt);
         static Tensor arange(float end);
         static Tensor arange(float start, float end, float step = 1.0f);
+        static Tensor arange(float start, float end, float step, Device device);
         static Tensor linspace(float start, float end, size_t steps, Device device = Device::GPU);
         static Tensor eye(size_t n, Device device = Device::GPU);
         static Tensor eye(size_t m, size_t n, Device device = Device::GPU);
@@ -1238,6 +1243,13 @@ namespace lfs::core {
         bool is_view() const { return is_view_; }
         bool is_external_storage() const {
             return storage_meta_ && static_cast<bool>(storage_meta_->external_owner);
+        }
+        void mark_renderer_storage() {
+            ensure_state();
+            state_->renderer_storage = true;
+        }
+        [[nodiscard]] bool is_renderer_storage() const noexcept {
+            return state_ && state_->renderer_storage;
         }
         bool is_empty() const { return !is_valid() || numel() == 0; }
         // Local deferred flag only — never takes the global IR mutex. Eager IR
@@ -1501,6 +1513,7 @@ namespace lfs::core {
             return slice(std::span<const std::pair<int, int>>(ranges));
         }
         Tensor slice(size_t dim, size_t start, size_t end) const;
+        Tensor slice(size_t dim, size_t start, size_t end, size_t step) const;
 
         Tensor cat(const Tensor& other, int dim = 0) const;
 

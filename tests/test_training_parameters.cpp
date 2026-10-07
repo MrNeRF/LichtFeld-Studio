@@ -119,7 +119,11 @@ namespace {
         EXPECT_EQ(resolved<int>(defaults, "max_cap"), 5'000'000);
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "min_opacity"), 1.0f / 255.0f);
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_reg"), 0.003f);
-        EXPECT_EQ(resolved<size_t>(defaults, "refine_every"), 200u);
+        auto cap_adjusted = defaults;
+        cap_adjusted.max_cap = 1'000'000;
+        EXPECT_NEAR(resolved<float>(cap_adjusted, "grow_fraction"), 0.0758f, 1.0e-7f);
+        EXPECT_FLOAT_EQ(resolved<float>(cap_adjusted, "shs_lr"), 0.005f);
+        EXPECT_EQ(resolved<size_t>(defaults, "refine_every"), 163u);
     }
 
     TEST_F(TrainingParametersTest, StrategyApplicabilityTagsAreCanonicalAndKnown) {
@@ -127,9 +131,9 @@ namespace {
         const std::map<std::string, std::vector<std::string>> expected = {
             {"means_lr_end", {"mrnf"}},
             {"scaling_lr_end", {"mrnf"}},
+            {"late_lr_anneal", {"mrnf"}},
             {"growth_grad_threshold", {"mrnf"}},
             {"grow_fraction", {"mrnf"}},
-            {"oversize_split_fraction", {"mrnf"}},
             {"grow_until_iter", {"mrnf"}},
             {"opacity_decay", {"mrnf"}},
             {"scale_decay", {"mrnf"}},
@@ -137,6 +141,10 @@ namespace {
             {"bounds_percentile", {"mrnf"}},
             {"use_error_map", {"mrnf"}},
             {"use_edge_map", {"mrnf"}},
+            {"scale_reg_decay_power", {"mrnf"}},
+            {"erank_reg", {"mrnf"}},
+            {"dc_reg", {"mrnf"}},
+            {"sh_rest_reg", {"mrnf"}},
             {"prune_opacity", {"igs+"}},
             {"reset_every", {"igs+"}},
             {"min_opacity", {"mcmc"}},
@@ -169,9 +177,19 @@ namespace {
     TEST_F(TrainingParametersTest, ResolvesMcmcFactorySentinels) {
         const auto defaults = OptimizationParameters::defaults_for_strategy("mcmc");
 
+        EXPECT_FALSE(defaults.use_exposure_correction);
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.025f);
         EXPECT_EQ(resolved<int>(defaults, "max_cap"), 1'000'000);
         EXPECT_EQ(resolved<size_t>(defaults, "refine_every"), 100u);
+    }
+
+    TEST_F(TrainingParametersTest, ExposureCorrectionIsEnabledOnlyByMrnfDefaults) {
+        EXPECT_FALSE(OptimizationParameters::defaults_for_strategy("mcmc").use_exposure_correction);
+        EXPECT_FALSE(OptimizationParameters::defaults_for_strategy("igs+").use_exposure_correction);
+        for (const auto strategy : {"mrnf", "mnrf", "lfs"}) {
+            EXPECT_TRUE(OptimizationParameters::defaults_for_strategy(strategy).use_exposure_correction)
+                << strategy;
+        }
     }
 
     // The IGS+ block pins its distinct override set, catching IGS+ factory drift and resolution
@@ -200,6 +218,10 @@ namespace {
 
         for (auto& [strategy, direct_factory] : direct_factories) {
             const auto dispatched = OptimizationParameters::defaults_for_strategy(strategy);
+            if (strategy == "mrnf") {
+                direct_factory.strategy = std::string(strategy);
+                direct_factory.resolve_mrnf_capacity_defaults();
+            }
             for (const auto& meta : group->properties) {
                 SCOPED_TRACE(std::string(strategy) + ":" + meta.id);
                 ASSERT_TRUE(meta.getter);
@@ -225,6 +247,7 @@ namespace {
     TEST_F(TrainingParametersTest, SerializedSurfaceHasRegistryCoverage) {
         OptimizationParameters serialization_probe{};
         serialization_probe.bg_image_path = "coverage-background.png";
+        serialization_probe.thin_structure_weight = 1.0f;
         const auto serialized = serialization_probe.to_json();
 
         const auto group = PropertyRegistry::instance().get_group_snapshot("optimization");
@@ -315,7 +338,7 @@ namespace {
     TEST_F(TrainingParametersTest, BackendConflictsPreserve3DGSAndRejectUnsupportedGutFeatures) {
         using Conflict = lfs::core::param::TrainingBackendConflict;
         struct Case {
-            bool OptimizationParameters::* flag;
+            bool OptimizationParameters::*flag;
             Conflict conflict;
             const char* label;
         };
@@ -408,6 +431,8 @@ namespace {
         EXPECT_EQ(params.exposure_correction_grid_start_iter, 1000);
         EXPECT_FALSE(params.bilateral_grid_active());
         EXPECT_FALSE(params.ppisp_active());
+        EXPECT_FALSE(params.use_bilateral_grid);
+        EXPECT_FALSE(params.use_ppisp);
         EXPECT_TRUE(params.validate().empty());
 
         params.use_exposure_correction = true;
@@ -436,6 +461,11 @@ namespace {
         conflict = params;
         conflict.ppisp_freeze_from_sidecar = true;
         EXPECT_NE(conflict.validate().find(conflict_message), std::string::npos);
+
+        params.use_exposure_correction = false;
+        const auto opted_out_json = params.to_json();
+        EXPECT_FALSE(opted_out_json.at("use_exposure_correction").get<bool>());
+        EXPECT_FALSE(OptimizationParameters::from_json(opted_out_json).use_exposure_correction);
     }
 
     TEST_F(TrainingParametersTest, ResumeAcceptsAppliedSplatCompositionOnly) {
@@ -466,6 +496,12 @@ namespace {
         auto mrnf_json = OptimizationParameters::mrnf_defaults().to_json();
         mrnf_json.erase("max_cap");
         EXPECT_EQ(OptimizationParameters::from_json(mrnf_json).max_cap, 5'000'000);
+
+        auto mcmc_json = OptimizationParameters::mcmc_defaults().to_json();
+        mcmc_json.erase("use_exposure_correction");
+        EXPECT_FALSE(OptimizationParameters::from_json(mcmc_json).use_exposure_correction);
+        mcmc_json["use_exposure_correction"] = true;
+        EXPECT_TRUE(OptimizationParameters::from_json(mcmc_json).use_exposure_correction);
 
         auto igs_json = OptimizationParameters::igs_plus_defaults().to_json();
         igs_json.erase("tv_loss_weight");
@@ -506,6 +542,18 @@ namespace {
             old_json["normal_loss_space"] = wire;
             EXPECT_EQ(OptimizationParameters::from_json(old_json).normal_loss_space, space);
         }
+    }
+
+    TEST_F(TrainingParametersTest, UnknownRegisteredEnumsKeepCurrentDefaultsWhenLoading) {
+        const auto defaults = OptimizationParameters::mrnf_defaults();
+        auto json = defaults.to_json();
+        json["bg_mode"] = "future-background";
+        json["normal_loss_space"] = "future-normal-space";
+
+        const auto restored = OptimizationParameters::from_json(json);
+
+        EXPECT_EQ(restored.bg_mode, defaults.bg_mode);
+        EXPECT_EQ(restored.normal_loss_space, defaults.normal_loss_space);
     }
 
     TEST_F(TrainingParametersTest, NormalAutoGenerateRoundTripAndDefault) {
@@ -720,10 +768,12 @@ namespace {
         expect_non_blocking("exposure correction", params);
 
         params = baseline;
+        params.use_exposure_correction = false;
         params.use_bilateral_grid = true;
         expect_non_blocking("bilateral grid", params);
 
         params = baseline;
+        params.use_exposure_correction = false;
         params.use_ppisp = true;
         expect_non_blocking("PPISP", params);
 
@@ -807,6 +857,100 @@ namespace {
         EXPECT_EQ(igs_result->refine_every, 500u);
         EXPECT_FLOAT_EQ(igs_result->tv_loss_weight, 5.0f);
         EXPECT_EQ(igs_result->strategy, "igs+");
+    }
+
+    TEST_F(TrainingParametersTest, MrnfRegularizationDefaultsAndSchedule) {
+        const auto params = OptimizationParameters::mrnf_defaults();
+        EXPECT_TRUE(resolved<bool>(params, "use_exposure_correction"));
+        EXPECT_FALSE(params.use_bilateral_grid);
+        EXPECT_FALSE(params.use_ppisp);
+        EXPECT_FLOAT_EQ(params.scale_reg, 0.01f);
+        EXPECT_FLOAT_EQ(params.scale_reg_decay_power, 0.4f);
+        EXPECT_FLOAT_EQ(params.erank_reg, 0.001f);
+        EXPECT_FLOAT_EQ(params.dc_reg, 0.001f);
+        EXPECT_FLOAT_EQ(params.sh_rest_reg, 0.001f);
+        EXPECT_FLOAT_EQ(params.lambda_dssim, 0.22f);
+        EXPECT_FLOAT_EQ(params.growth_grad_threshold, 0.00309693f);
+        EXPECT_FLOAT_EQ(params.max_screen_share, 0.586511f);
+        EXPECT_FLOAT_EQ(params.screen_share_penalty, 0.847085f);
+        EXPECT_FLOAT_EQ(params.means_lr, 2.17871e-5f);
+        EXPECT_EQ(params.refine_every, 163u);
+        EXPECT_FLOAT_EQ(params.scaling_lr, 0.00828016f);
+        EXPECT_FLOAT_EQ(params.rotation_lr, 0.0015f);
+        EXPECT_NEAR(params.scale_reg_at(0), 0.014f, 1.0e-7f);
+        EXPECT_FLOAT_EQ(params.scale_reg_at(static_cast<int>(params.iterations)), 0.0f);
+        EXPECT_TRUE(params.validate().empty()) << params.validate();
+        for (const auto* key : {"scale_reg_decay_power", "erank_reg", "dc_reg", "sh_rest_reg"})
+            EXPECT_TRUE(PropertyRegistry::instance().get_property("optimization", key)) << key;
+
+        const auto roundtrip = OptimizationParameters::from_json(params.to_json());
+        EXPECT_FLOAT_EQ(roundtrip.scale_reg_decay_power, 0.4f);
+        EXPECT_FLOAT_EQ(roundtrip.erank_reg, 0.001f);
+        EXPECT_FLOAT_EQ(roundtrip.dc_reg, 0.001f);
+        EXPECT_FLOAT_EQ(roundtrip.sh_rest_reg, 0.001f);
+    }
+
+    TEST_F(TrainingParametersTest, CapacityDefaultsRespectExplicitValues) {
+        const auto factory_defaults = OptimizationParameters::mrnf_defaults();
+        EXPECT_FLOAT_EQ(factory_defaults.grow_fraction, -1.0f);
+        EXPECT_FLOAT_EQ(factory_defaults.shs_lr, -1.0f);
+
+        auto for_capacity = [](int cap) {
+            auto params = OptimizationParameters::mrnf_defaults();
+            params.max_cap = cap;
+            params.resolve_mrnf_capacity_defaults();
+            return params;
+        };
+
+        const auto below_reference = for_capacity(500'000);
+        EXPECT_NEAR(below_reference.grow_fraction, 0.0758f, 1.0e-7f);
+        EXPECT_FLOAT_EQ(below_reference.shs_lr, 0.005f);
+
+        const auto reference = for_capacity(1'000'000);
+        EXPECT_NEAR(reference.grow_fraction, 0.0758f, 1.0e-7f);
+        EXPECT_FLOAT_EQ(reference.shs_lr, 0.005f);
+
+        const auto middle = for_capacity(2'236'068);
+        EXPECT_NEAR(middle.grow_fraction, 0.0979f, 1.0e-4f);
+        EXPECT_NEAR(middle.shs_lr, 0.0033437f, 1.0e-7f);
+
+        const auto saturation = for_capacity(5'000'000);
+        EXPECT_NEAR(saturation.grow_fraction, 0.12f, 1.0e-7f);
+        EXPECT_NEAR(saturation.shs_lr, 0.002236068f, 1.0e-9f);
+
+        const auto above_saturation = for_capacity(20'000'000);
+        EXPECT_NEAR(above_saturation.grow_fraction, 0.12f, 1.0e-7f);
+        EXPECT_NEAR(above_saturation.shs_lr, 0.001118034f, 1.0e-9f);
+
+        auto explicit_values = OptimizationParameters::mrnf_defaults();
+        explicit_values.max_cap = 5'000'000;
+        explicit_values.grow_fraction = 0.2f;
+        explicit_values.shs_lr = 0.004f;
+        explicit_values.resolve_mrnf_capacity_defaults();
+        EXPECT_FLOAT_EQ(explicit_values.grow_fraction, 0.2f);
+        EXPECT_FLOAT_EQ(explicit_values.shs_lr, 0.004f);
+    }
+
+    TEST_F(TrainingParametersTest, ConfigCapacityDefaultsResolveAtTrainingStart) {
+        auto config = OptimizationParameters::mrnf_defaults().to_json();
+        config["max_cap"] = 1'000'000;
+        auto params = OptimizationParameters::from_json(config);
+        EXPECT_FLOAT_EQ(params.grow_fraction, -1.0f);
+        EXPECT_FLOAT_EQ(params.shs_lr, -1.0f);
+        EXPECT_TRUE(params.validate().empty()) << params.validate();
+
+        params.resolve_mrnf_capacity_defaults();
+        EXPECT_NEAR(params.grow_fraction, 0.0758f, 1.0e-7f);
+        EXPECT_FLOAT_EQ(params.shs_lr, 0.005f);
+
+        auto explicit_config = OptimizationParameters::mrnf_defaults().to_json();
+        explicit_config["max_cap"] = 5'000'000;
+        explicit_config["grow_fraction"] = 0.2f;
+        explicit_config["shs_lr"] = 0.004f;
+        auto explicit_params = OptimizationParameters::from_json(explicit_config);
+        explicit_params.resolve_mrnf_capacity_defaults();
+        EXPECT_FLOAT_EQ(explicit_params.grow_fraction, 0.2f);
+        EXPECT_FLOAT_EQ(explicit_params.shs_lr, 0.004f);
     }
 
     TEST_F(TrainingParametersTest, SaveLoadRoundTripPreservesParameters) {

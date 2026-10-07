@@ -228,8 +228,8 @@ namespace lfs::training::kernels {
     namespace {
         // levels arrives at run time so the division compiles exactly like the tensor library's scalar division,
         // which the saved and evaluated images have always used.
-        __global__ void quantize_to_8bit_grid_kernel(const float* __restrict__ input, float* __restrict__ output,
-                                                     const std::size_t n, const float levels) {
+        __global__ void quantize_to_grid_kernel(const float* __restrict__ input, float* __restrict__ output,
+                                                const std::size_t n, const float levels) {
             for (std::size_t i = blockIdx.x * static_cast<std::size_t>(blockDim.x) + threadIdx.x; i < n;
                  i += static_cast<std::size_t>(gridDim.x) * blockDim.x) {
                 const float clamped = fminf(fmaxf(input[i], 0.0f), 1.0f);
@@ -239,7 +239,12 @@ namespace lfs::training::kernels {
     } // namespace
 
     lfs::core::Tensor quantize_to_8bit_grid(const lfs::core::Tensor& image) {
+        return quantize_to_grid(image, 255.0f);
+    }
+
+    lfs::core::Tensor quantize_to_grid(const lfs::core::Tensor& image, const float levels) {
         assert(image.device() == lfs::core::Device::GPU && image.dtype() == lfs::core::DataType::Float32);
+        assert(levels >= 1.0f);
         const cudaStream_t stream = resolve_stream(image.stream());
         const auto source = image.contiguous();
         source.sync_to_stream(stream);
@@ -250,9 +255,9 @@ namespace lfs::training::kernels {
             return out;
         constexpr int block_size = 256;
         const int grid_size = static_cast<int>(std::min<std::size_t>((n + block_size - 1) / block_size, 4096));
-        quantize_to_8bit_grid_kernel<<<grid_size, block_size, 0, stream>>>(source.ptr<float>(), out.ptr<float>(), n,
-                                                                           255.0f);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.image.quantize_to_8bit_grid");
+        quantize_to_grid_kernel<<<grid_size, block_size, 0, stream>>>(source.ptr<float>(), out.ptr<float>(), n,
+                                                                      levels);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.image.quantize_to_grid");
         return out;
     }
 

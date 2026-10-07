@@ -251,6 +251,7 @@ namespace lfs::python {
         params.optimization.max_cap = 16;
         params.optimization.headless = true;
         params.optimization.enable_eval = false;
+        params.optimization.use_exposure_correction = false;
         params.optimization.use_ppisp = use_ppisp;
         return params;
     }

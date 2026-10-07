@@ -1459,7 +1459,7 @@ namespace lfs::io::project {
                 put_u64(header_bytes, record_offset + 8, uncompressed);
             }
             if (auto write = file->write_exact(*provisional_payload_offset,
-                                                framed_header);
+                                               framed_header);
                 !write) {
                 return std::move(write).error();
             }
@@ -1576,7 +1576,7 @@ namespace lfs::io::project {
             const auto chunk_header = encode_chunk_header(row);
             row.header_crc32c = crc32c(0, chunk_header.data(), 60);
             if (auto write = file->write_exact(*header_offset,
-                                                byte_span(chunk_header));
+                                               byte_span(chunk_header));
                 !write) {
                 return std::move(write).error();
             }

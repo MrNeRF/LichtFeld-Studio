@@ -94,7 +94,7 @@ namespace lfs::python {
     }
 
     // Helper to convert ndarray to glm::mat4
-    static glm::mat4 ndarray_to_mat4(nb::ndarray<float, nb::shape<4, 4>> arr) {
+    static glm::mat4 ndarray_to_mat4(nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> arr) {
         glm::mat4 m;
         auto view = arr.view();
         for (int i = 0; i < 4; ++i) {
@@ -174,37 +174,41 @@ namespace lfs::python {
     }
 
     // PySceneNode implementation
-    void PySceneNode::set_local_transform(nb::ndarray<float, nb::shape<4, 4>> transform) {
-        apply_node_transform_with_undo(node_->name, ndarray_to_mat4(transform), scene_);
+    void PySceneNode::set_local_transform(
+        nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> transform) {
+        apply_node_transform_with_undo(node().name, ndarray_to_mat4(transform), scene_);
     }
 
     nb::tuple PySceneNode::local_transform() const {
-        return mat4_to_tuple(node_->local_transform.get());
+        return mat4_to_tuple(node().local_transform.get());
     }
 
     nb::tuple PySceneNode::world_transform() const {
-        return mat4_to_tuple(scene_->getWorldTransform(node_->id));
+        return mat4_to_tuple(scene_->getWorldTransform(node().id));
     }
 
     std::optional<PySplatData> PySceneNode::splat_data() {
-        if (node_->type != core::NodeType::SPLAT || !node_->model) {
+        auto& live = node();
+        if (live.type != core::NodeType::SPLAT || !live.model) {
             return std::nullopt;
         }
-        return PySplatData(node_->model.get());
+        return PySplatData(live.model.get());
     }
 
     std::optional<PyPointCloud> PySceneNode::point_cloud() {
-        if (node_->type != core::NodeType::POINTCLOUD || !node_->point_cloud) {
+        auto& live = node();
+        if (live.type != core::NodeType::POINTCLOUD || !live.point_cloud) {
             return std::nullopt;
         }
-        return PyPointCloud(node_->point_cloud.get(), false, node_, scene_);
+        return PyPointCloud(live.point_cloud.get(), false, &live, scene_);
     }
 
     std::optional<PyMeshInfo> PySceneNode::mesh() {
-        if (node_->type != core::NodeType::MESH || !node_->mesh) {
+        auto& live = node();
+        if (live.type != core::NodeType::MESH || !live.mesh) {
             return std::nullopt;
         }
-        return PyMeshInfo(node_->mesh);
+        return PyMeshInfo(live.mesh);
     }
 
     int64_t PyPointCloud::filter(const PyTensor& keep_mask) {
@@ -311,24 +315,27 @@ namespace lfs::python {
     }
 
     std::optional<PyCropBox> PySceneNode::cropbox() {
-        if (node_->type != core::NodeType::CROPBOX || !node_->cropbox) {
+        auto& live = node();
+        if (live.type != core::NodeType::CROPBOX || !live.cropbox) {
             return std::nullopt;
         }
-        return PyCropBox(node_->cropbox.get());
+        return PyCropBox(live.cropbox.get());
     }
 
     std::optional<PyEllipsoid> PySceneNode::ellipsoid() {
-        if (node_->type != core::NodeType::ELLIPSOID || !node_->ellipsoid) {
+        auto& live = node();
+        if (live.type != core::NodeType::ELLIPSOID || !live.ellipsoid) {
             return std::nullopt;
         }
-        return PyEllipsoid(node_->ellipsoid.get());
+        return PyEllipsoid(live.ellipsoid.get());
     }
 
     std::optional<PyKeyframeData> PySceneNode::keyframe_data() {
-        if (node_->type != core::NodeType::KEYFRAME || !node_->keyframe) {
+        auto& live = node();
+        if (live.type != core::NodeType::KEYFRAME || !live.keyframe) {
             return std::nullopt;
         }
-        const auto& kf = *node_->keyframe;
+        const auto& kf = *live.keyframe;
         return PyKeyframeData{
             .keyframe_index = kf.keyframe_index,
             .time = kf.time,
@@ -765,7 +772,9 @@ namespace lfs::python {
         return mat4_to_tuple(scene_->getWorldTransform(node_id));
     }
 
-    void PyScene::set_node_transform(const std::string& name, nb::ndarray<float, nb::shape<4, 4>> transform) {
+    void PyScene::set_node_transform(
+        const std::string& name,
+        nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> transform) {
         apply_node_transform_with_undo(name, ndarray_to_mat4(transform), scene_);
     }
 
@@ -1396,8 +1405,8 @@ Returns:
             .def("is_node_effectively_visible", &PyScene::is_node_effectively_visible, nb::arg("id"), "Check if a node is visible considering parent visibility")
             // Transforms
             .def("get_world_transform", &PyScene::get_world_transform, nb::arg("node_id"), "Get world-space transform as 4x4 row-major tuple")
-            .def("set_node_transform", &PyScene::set_node_transform, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] ndarray")
             .def("set_node_transform", &PyScene::set_node_transform_tensor, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] Tensor")
+            .def("set_node_transform", &PyScene::set_node_transform, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] ndarray")
             // Combined/training model
             .def("combined_model", &PyScene::combined_model, "Get the merged SplatData for all visible splats (None if empty)")
             .def("training_model", &PyScene::training_model, "Get the SplatData used for training (None if unavailable)")

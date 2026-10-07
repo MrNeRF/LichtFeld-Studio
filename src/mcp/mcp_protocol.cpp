@@ -23,6 +23,9 @@ namespace lfs::mcp {
         if (id.is_number_integer()) {
             return RequestId{id.get<std::int64_t>()};
         }
+        if (id.is_number_float()) {
+            return RequestId{id.get<double>()};
+        }
         if (id.is_string()) {
             return RequestId{id.get<std::string>()};
         }

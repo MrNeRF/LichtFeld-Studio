@@ -658,6 +658,10 @@ namespace lfs::io {
         };
     }
 
+    bool PipelinedImageLoader::decodes_float(const std::filesystem::path& path, const LoadParams& params) const {
+        return params.decode_float && lfs::core::image_quantization_step(path) == 0.0f;
+    }
+
     lfs::core::Tensor PipelinedImageLoader::load_rgb_decoded_ahead(
         const std::filesystem::path& path, const LoadParams& params, const bool sixteen_bit) const {
         if (auto ahead = take_decoded_ahead(path, sixteen_bit ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8)) {
@@ -685,18 +689,18 @@ namespace lfs::io {
     std::optional<PipelinedImageLoader::HostDecodeKind> PipelinedImageLoader::host_decode_kind(
         const std::filesystem::path& path, const LoadParams& params) {
         if (config_.backend == lfs::core::GpuBackend::CUDA) {
-            if (!config_.use_16bit_color && !load_params_need_processing(params))
+            if (!decodes_16bit(params) && !decodes_float(path, params) && !load_params_need_processing(params))
                 return std::nullopt;
             std::ifstream file(path, std::ios::binary);
             unsigned char signature[2]{};
             file.read(reinterpret_cast<char*>(signature), sizeof(signature));
             if ((file.gcount() == 2 && signature[0] == 0xff && signature[1] == 0xd8) ||
-                load_cached_jpeg_blob(make_cache_key(path, params)))
+                (!params.skip_blob_cache && load_cached_jpeg_blob(make_cache_key(path, params))))
                 return std::nullopt;
         }
-        if (params.undistort)
+        if (params.undistort || decodes_float(path, params))
             return HostDecodeKind::Float32;
-        return config_.use_16bit_color ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8;
+        return decodes_16bit(params) ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8;
     }
 
     PipelinedImageLoader::HostPixels PipelinedImageLoader::decode_on_host(
@@ -737,12 +741,16 @@ namespace lfs::io {
         if (params.undistort) {
             std::ostringstream key;
             key << lfs::core::path_to_utf8(path) << ":udr4_" << std::hex
-                << undistort_cache_hash(params, config_.use_16bit_color, 0x726762ULL);
+                << undistort_cache_hash(params, decodes_16bit(params), 0x726762ULL);
+            if (params.decode_float)
+                key << "_f32";
             return key.str();
         }
         auto key = lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
-        if (config_.use_16bit_color)
+        if (decodes_16bit(params))
             key += "_16b";
+        if (params.decode_float)
+            key += "_f32";
         return key;
     }
 

@@ -35,10 +35,18 @@ namespace {
 
     MeshData makeTexturedPlane() {
         const std::vector<float> vertices{
-            -1.0f, -0.75f, -kPlaneDepth,
-            1.0f, -0.75f, -kPlaneDepth,
-            1.0f, 0.75f, -kPlaneDepth,
-            -1.0f, 0.75f, -kPlaneDepth,
+            -1.0f,
+            -0.75f,
+            -kPlaneDepth,
+            1.0f,
+            -0.75f,
+            -kPlaneDepth,
+            1.0f,
+            0.75f,
+            -kPlaneDepth,
+            -1.0f,
+            0.75f,
+            -kPlaneDepth,
         };
         const std::vector<std::int32_t> indices{0, 1, 2, 0, 2, 3};
         MeshData mesh(

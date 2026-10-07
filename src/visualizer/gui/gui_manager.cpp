@@ -2712,7 +2712,8 @@ namespace lfs::vis::gui {
 #endif
 
             if (camera_data_changed) {
-                const auto& all_cameras = scene.getAllCamerasCached();
+                const auto all_cameras_snapshot = scene.getAllCamerasCached();
+                const auto& all_cameras = *all_cameras_snapshot;
                 std::unordered_set<int> scene_camera_uids;
                 scene_camera_uids.reserve(all_cameras.size());
                 for (const auto& camera : all_cameras) {
@@ -2720,7 +2721,8 @@ namespace lfs::vis::gui {
                         scene_camera_uids.insert(camera->uid());
                 }
 
-                const auto& cameras = scene.getVisibleCamerasCached();
+                const auto cameras_snapshot = scene.getVisibleCamerasCached();
+                const auto& cameras = *cameras_snapshot;
                 frustum_cache.begin(scene, scene_render_generation, settings.camera_frustum_scale);
                 const auto scene_transforms = resolveCameraSceneTransforms(scene_manager, scene_state, cameras.size());
                 const auto disabled_uids = scene.getTrainingDisabledCameraUids();
@@ -3546,7 +3548,7 @@ namespace lfs::vis::gui {
                         .scale_y = settings.depth_filter_scale_y,
                         .offset_x = settings.depth_filter_offset_x,
                         .offset_y = settings.depth_filter_offset_y,
-                };
+                    };
                 appendCropAndFilterOverlays(params, viewport_layout.view, guide_view, settings, scene_state, scene_manager, gizmo,
                                             depth_window.scale_x,
                                             depth_window.scale_y,
@@ -4887,7 +4889,7 @@ namespace lfs::vis::gui {
         // The baseline is only used by later change detection. Building it in
         // the init call needlessly blocks the first paint, so use the existing
         // worker and adopt its result from the normal render tick.
-        launchDevResourceScan();
+        launchDevResourceScan(false);
         dev_resource_watch_.next_scan = std::chrono::steady_clock::now() + std::chrono::seconds(1);
         LOG_INFO("Resource hot reload enabled (RmlUI: '{}', locales: '{}')",
                  dev_resource_watch_.rml_dir.empty() ? std::string("<disabled>")
@@ -4989,7 +4991,7 @@ namespace lfs::vis::gui {
         return result;
     }
 
-    void GuiManager::launchDevResourceScan() {
+    void GuiManager::launchDevResourceScan(const bool detect_changes) {
         if (dev_resource_watch_.scan_future.valid())
             return;
 
@@ -5001,12 +5003,13 @@ namespace lfs::vis::gui {
                 std::async(std::launch::async,
                            [rml_dir = std::move(rml_dir),
                             locale_dir = std::move(locale_dir),
-                            previous_times = std::move(previous_times)]() mutable {
+                            previous_times = std::move(previous_times),
+                            detect_changes]() mutable {
                                return GuiManager::scanDevResourceFilesSnapshot(
                                    std::move(rml_dir),
                                    std::move(locale_dir),
                                    std::move(previous_times),
-                                   true);
+                                   detect_changes);
                            });
         } catch (const std::exception& e) {
             LOG_WARN("Resource hot reload async scan could not start: {}", e.what());

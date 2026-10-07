@@ -30,6 +30,9 @@ namespace lfs::gpu_ops {
         // Optional upload/layout specialization; callers retain their default path.
         Tensor (*upload_image_chw)(In cpu_hwc) = nullptr;
         Tensor (*quantize_to_8bit_grid)(In image) = nullptr;
+        Tensor (*quantize_to_grid)(In image, float levels) = nullptr;
+        Tensor (*flip_error_map)(In reference, In test, float pixels_per_degree) = nullptr;
+        Tensor (*flip_error_image)(In error_map) = nullptr;
     };
 
 } // namespace lfs::gpu_ops

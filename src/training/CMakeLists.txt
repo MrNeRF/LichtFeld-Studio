@@ -13,6 +13,9 @@ add_subdirectory(rasterization/gsplat)
 set(LFS_TRAINING_KERNEL_SOURCES
     kernels/loss_tensor_contract.cpp
     kernels/camera_loss_heatmap.cu
+    kernels/thin_structure.cu
+    kernels/blob_seeding.cu
+    kernels/gradient_residual.cu
     kernels/ssim.cu
     kernels/l1_loss.cu
     kernels/ssim_reduction.cu
@@ -91,6 +94,8 @@ set(TRAINING_NEW_SOURCES
     live_model_mutation_guard.cpp
     optimizer/scheduler.cpp
     losses/regularization.cpp
+    ops/blob.cpp
+    ops/structure.cpp
     ops/registry.cpp
     $<$<BOOL:${LFS_TENSOR_VULKAN}>:ops/table_vulkan.cpp>
     $<$<NOT:$<BOOL:${LFS_TENSOR_VULKAN}>>:ops/table_backend_unavailable.cpp>
@@ -101,6 +106,7 @@ set(TRAINING_NEW_SOURCES
     strategies/strategy_utils.cpp
     strategies/mcmc.cpp
     strategies/mrnf.cpp
+    strategies/blob_seeding.cpp
     strategies/strategy_factory.cpp
     strategies/improved_gs_plus.cpp
     components/config_serialization.cpp
@@ -112,6 +118,7 @@ set(TRAINING_NEW_SOURCES
     control/command_api.cpp
     metrics/eval_mask.cpp
     metrics/mesh_mask.cpp
+    metrics/flip.cpp
     metrics/metrics.cpp
         checkpoint.cpp
         project_snapshot_chapters.cpp
@@ -126,8 +133,11 @@ set(TRAINING_NEW_SOURCES
 )
 if(LFS_HAS_CUDA)
     list(APPEND TRAINING_NEW_SOURCES
+        kernels/flip.cu
         ops/table_cuda.cpp
         ops/session_cuda.cpp
+        ops/blob_cuda.cpp
+        ops/structure_cuda.cpp
         ops/photometric_cuda.cpp
         ops/gsplat_cuda.cpp
         ops/adam_cuda.cpp
@@ -164,8 +174,12 @@ if(LFS_TENSOR_METAL)
         kernels/metal/sh.metal
         kernels/metal/morton.metal
         kernels/metal/fast_raster.metal
+        kernels/metal/effective_rank.metal
         kernels/metal/fast_backward.metal
         kernels/metal/gsplat.metal
+        kernels/metal/blob.metal
+        kernels/metal/structure.metal
+        kernels/metal/flip.metal
         kernels/metal/photometric.metal
         kernels/metal/masks.metal
         kernels/metal/mesh_mask.metal
@@ -205,6 +219,9 @@ if(LFS_TENSOR_METAL)
         ops/morton_metal.cpp
         ops/fast_metal.cpp
         ops/gsplat_metal.cpp
+        ops/blob_metal.cpp
+        ops/structure_metal.cpp
+        ops/flip_metal.cpp
         ops/photometric_metal.cpp
         ops/masks_metal.cpp
         ops/extra_loss_metal.cpp

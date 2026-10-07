@@ -143,12 +143,15 @@ namespace lfs::training {
             p.c = frozen.is_valid() ? vk::address(ref(frozen)) : 0;
             p.count = n32(n);
             p.count_a = opt_count(frozen);
+            p.d = args.rendered_count.is_valid() ? vk::address(ref(args.rendered_count)) : 0;
             p.x = args.opacity_decay;
             p.y = args.scale_decay;
             p.w = args.train_t;
             std::vector<StorageRef> rw{ref(opacity), ref(scales)}, reads;
             if (frozen.is_valid())
                 reads.push_back(ref(frozen));
+            if (args.rendered_count.is_valid())
+                reads.push_back(ref(args.rendered_count));
             reads.insert(reads.end(), rw.begin(), rw.end());
             launch(p, kDecay, reads, rw, groups(n));
         }

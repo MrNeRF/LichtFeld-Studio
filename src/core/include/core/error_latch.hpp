@@ -14,7 +14,7 @@ namespace lfs::core {
     // worker's terminal completion vs an MCP/TCP query thread); the Error copy
     // get() returns is a thread-safe intrusive add-ref, so the caller always
     // sees a stable, complete snapshot rather than a torn read.
-    class LFS_CORE_API ErrorLatch {
+    class LFS_ERROR_API ErrorLatch {
     public:
         void set(Error error) noexcept;
         void clear() noexcept;

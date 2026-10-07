@@ -247,7 +247,7 @@ namespace {
                 const glm::vec4 down = sample(uv + glm::vec2(0.0f, texel.y));
                 constexpr float STRENGTH = 0.18f;
                 const glm::vec3 sharpened = glm::vec3(center) * (1.0f + 4.0f * STRENGTH) -
-                                             glm::vec3(left + right + up + down) * STRENGTH;
+                                            glm::vec3(left + right + up + down) * STRENGTH;
                 const glm::vec3 lower = glm::min(glm::vec3(center), glm::min(glm::min(glm::vec3(left), glm::vec3(right)),
                                                                              glm::min(glm::vec3(up), glm::vec3(down))));
                 const glm::vec3 upper = glm::max(glm::vec3(center), glm::max(glm::max(glm::vec3(left), glm::vec3(right)),
@@ -361,7 +361,9 @@ namespace {
                     for (std::uint32_t sy = 0; sy < SCALE; ++sy)
                         for (std::uint32_t sx = 0; sx < SCALE; ++sx) {
                             const auto at = (((std::size_t(y) * SCALE + sy) * WIDTH * SCALE +
-                                              x * SCALE + sx) * 4 + c);
+                                              x * SCALE + sx) *
+                                                 4 +
+                                             c);
                             sum += float(high[at]) / 255.0f;
                         }
                     result[(std::size_t(y) * WIDTH + x) * 4 + c] =

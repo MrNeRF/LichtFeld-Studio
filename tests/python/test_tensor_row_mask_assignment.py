@@ -5,7 +5,7 @@
 import pytest
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
 @pytest.mark.parametrize("shape,mask_values", [
     ((2, 2), [True, False]), ((3, 5), [True, False, True]),
     ((3, 2, 4), [False, True, True]), ((3, 5), [False] * 3),
@@ -29,7 +29,7 @@ def test_row_mask_assignment(lf, numpy, device, shape, mask_values, tensor_value
     numpy.testing.assert_array_equal(tensor[mask].numpy(), expected[mask_array])
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
 def test_row_mask_on_transposed_view(lf, numpy, device):
     array = numpy.arange(12, dtype=numpy.float32).reshape(3, 4)
     base = getattr(lf.Tensor.from_numpy(array), device)()
@@ -42,7 +42,7 @@ def test_row_mask_on_transposed_view(lf, numpy, device):
     numpy.testing.assert_array_equal(base.numpy(), expected)
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
 def test_same_shape_mask_still_selects_elements(lf, numpy, device):
     array = numpy.arange(6, dtype=numpy.float32).reshape(2, 3)
     mask_array = numpy.array([[True, False, True], [False, True, False]])
@@ -53,7 +53,7 @@ def test_same_shape_mask_still_selects_elements(lf, numpy, device):
     numpy.testing.assert_array_equal(tensor.numpy(), array)
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
 def test_row_mask_view_keeps_its_source(lf, numpy, device):
     source = getattr(lf.Tensor.from_numpy(numpy.array([True, False, True, False])), device)()
     mask = source[:3]

@@ -13,6 +13,7 @@ namespace lfs::training {
         std::size_t per_instance_sort_total_size = 0;
         std::uint64_t frame_id = 0;
         cudaStream_t completion_stream = nullptr;
+        const unsigned* primitive_work_indices = nullptr;
     };
 
     [[nodiscard]] CudaFastFrameView cuda_fast_frame_view(const lfs::gpu_ops::FastSaved& saved) noexcept;

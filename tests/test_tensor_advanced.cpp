@@ -10,10 +10,46 @@
 
 using namespace lfs::core;
 
-TEST(TensorAdvancedTest, LinspaceIncludesEndpointsAndRejectsZeroSteps) {
+TEST(TensorAdvancedTest, LinspaceIncludesEndpointsAndZeroStepsAreEmpty) {
     const auto values = Tensor::linspace(-1.0f, 1.0f, 5, Device::GPU).cpu().to_vector();
     EXPECT_EQ(values, (std::vector<float>{-1.0f, -0.5f, 0.0f, 0.5f, 1.0f}));
-    EXPECT_THROW(Tensor::linspace(0.0f, 1.0f, 0, Device::GPU), std::runtime_error);
+    const auto empty = Tensor::linspace(0.0f, 1.0f, 0, Device::GPU);
+    EXPECT_EQ(empty.shape(), TensorShape({0}));
+    EXPECT_TRUE(empty.is_empty());
+}
+
+TEST(TensorAdvancedTest, ArangeCreatesOnRequestedDevice) {
+    const auto host = Tensor::arange(0.0f, 2.0f, 0.5f, Device::CPU);
+    EXPECT_EQ(host.device(), Device::CPU);
+    EXPECT_EQ(host.to_vector(), (std::vector<float>{0.0f, 0.5f, 1.0f, 1.5f}));
+
+    const auto empty_host = Tensor::arange(3.0f, -2.0f, 1.0f, Device::CPU);
+    EXPECT_EQ(empty_host.device(), Device::CPU);
+    EXPECT_EQ(empty_host.shape(), TensorShape({0}));
+
+    const auto device = Tensor::arange(0.0f, 2.0f, 0.5f, Device::GPU);
+    EXPECT_EQ(device.device(), Device::GPU);
+    EXPECT_EQ(device.cpu().to_vector(), host.to_vector());
+}
+
+TEST(TensorAdvancedTest, PositiveSteppedViewsPreserveStorageAndAliasing) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
+        auto source = Tensor::arange(0.0f, 24.0f, 1.0f, device).reshape({2, 3, 4});
+        auto view = source.slice(1, 0, 3, 2).slice(2, 1, 4, 2);
+        EXPECT_EQ(view.shape(), TensorShape({2, 2, 2}));
+        EXPECT_EQ(view.cpu().to_vector(), (std::vector<float>{1, 3, 9, 11, 13, 15, 21, 23}));
+        view.fill_(17.0f);
+        const auto values = source.cpu().to_vector();
+        for (size_t i = 0; i < values.size(); ++i) {
+            const bool selected = ((i / 4) % 3 != 1) && (i % 2 == 1);
+            EXPECT_EQ(values[i], selected ? 17.0f : static_cast<float>(i));
+        }
+        source = Tensor{};
+        EXPECT_EQ(view.cpu().to_vector(), std::vector<float>(8, 17.0f));
+        const auto empty = view.slice(2, 2, 2, 3);
+        EXPECT_EQ(empty.shape(), TensorShape({2, 2, 0}));
+        EXPECT_TRUE(empty.is_empty());
+    }
 }
 
 TEST(TensorAdvancedTest, StackPreservesValuesAndRejectsEmptyInput) {

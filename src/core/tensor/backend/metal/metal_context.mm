@@ -601,8 +601,8 @@ namespace lfs::core::internal::metal {
         cached_bytes_ += block.capacity;
         peak_reserved_bytes_ = std::max(peak_reserved_bytes_, live_capacity_bytes_ + cached_bytes_);
         free_[block.capacity].push_back(std::move(block));
-        if (cached_bytes_ > cache_limit_)
-            evict_locked(cache_limit_);
+        if (trim_requested_ || cached_bytes_ > cache_limit_)
+            evict_locked(trim_requested_ ? 0 : cache_limit_);
     }
 
     // Returns cached blocks to the system, largest first, until at most limit
@@ -626,11 +626,16 @@ namespace lfs::core::internal::metal {
         }
         if (removed)
             [residency_ commit];
+        // If trim raced a tensor whose last GPU use still owns its handle,
+        // keep the request armed until at least one eligible release arrives.
+        if (trim_requested_ && cached_bytes_ == 0 && removed)
+            trim_requested_ = false;
     }
 
     void Context::trim() {
         flush();
         std::lock_guard lock(memory_mutex_);
+        trim_requested_ = true;
         evict_locked(0);
     }
 

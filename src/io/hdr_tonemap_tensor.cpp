@@ -923,9 +923,16 @@ namespace lfs::io {
             auto result = program_->dispatch(
                 {.function = function,
                  .arguments = {std::as_bytes(std::span(&parameters, 1)), bindings},
-                 .groups = {GpuKernelModule::groups_for(threads_x, linear ? 64 : render ? 16 : 8),
-                            GpuKernelModule::groups_for(threads_y, linear ? 1 : render ? 16 : 8), 1},
-                 .group = {linear ? 64u : render ? 16u : 8u, linear ? 1u : render ? 16u : 8u, 1}});
+                 .groups = {GpuKernelModule::groups_for(threads_x, linear ? 64 : render ? 16
+                                                                                        : 8),
+                            GpuKernelModule::groups_for(threads_y, linear ? 1 : render ? 16
+                                                                                       : 8),
+                            1},
+                 .group = {linear ? 64u : render ? 16u
+                                                 : 8u,
+                           linear ? 1u : render ? 16u
+                                                : 8u,
+                           1}});
             if (!result) {
                 error = std::string(result.error().detail());
                 return false;
