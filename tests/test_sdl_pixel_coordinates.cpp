@@ -105,10 +105,82 @@ namespace {
         EXPECT_EQ(buffer.mouse_button_events[1].timestamp, 43u);
     }
 
+    TEST_P(SdlPixelCoordinatesTest, ImmediateMotionAgreesWithFramePolling) {
+        const auto c = GetParam();
+        SDL_Window window{800, 600, c.pixel_width, c.pixel_height};
+        SDL_Event native{};
+        native.type = SDL_EVENT_MOUSE_MOTION;
+        native.motion.windowID = 7;
+        native.motion.x = 123.5f;
+        native.motion.y = 67.25f;
+        native.motion.xrel = 4.0f;
+        native.motion.yrel = -2.0f;
+        const auto event = lfs::vis::input::pointerEventInPixels(native, &window);
+        lfs::vis::FrameInputBuffer frame;
+        frame.beginFrame();
+        frame.processEvent(native, 7);
+        frame.finalize(&window);
+
+        EXPECT_FLOAT_EQ(event.motion.x, frame.mouse_x);
+        EXPECT_FLOAT_EQ(event.motion.y, frame.mouse_y);
+        EXPECT_FLOAT_EQ(event.motion.xrel, 4.0f * c.pixel_width / 800);
+        EXPECT_FLOAT_EQ(event.motion.yrel, -2.0f * c.pixel_height / 600);
+        EXPECT_EQ(event.motion.windowID, native.motion.windowID);
+        EXPECT_FLOAT_EQ(native.motion.x, 123.5f);
+        EXPECT_FLOAT_EQ(native.motion.y, 67.25f);
+    }
+
+    TEST_P(SdlPixelCoordinatesTest, ImmediatePressAndReleaseAgreeWithFrameClicks) {
+        const auto c = GetParam();
+        SDL_Window window{800, 600, c.pixel_width, c.pixel_height};
+        for (const auto type : {SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_EVENT_MOUSE_BUTTON_UP}) {
+            SDL_Event native{};
+            native.type = type;
+            native.button.windowID = 7;
+            native.button.button = SDL_BUTTON_LEFT;
+            native.button.down = type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+            native.button.clicks = 2;
+            native.button.timestamp = 42;
+            native.button.x = 123.5f;
+            native.button.y = 67.25f;
+            const auto event = lfs::vis::input::pointerEventInPixels(native, &window);
+            lfs::vis::FrameInputBuffer frame;
+            frame.beginFrame();
+            frame.processEvent(native, 7);
+            frame.finalize(&window);
+
+            ASSERT_EQ(frame.mouse_button_events.size(), 1u);
+            EXPECT_FLOAT_EQ(event.button.x, frame.mouse_button_events[0].x);
+            EXPECT_FLOAT_EQ(event.button.y, frame.mouse_button_events[0].y);
+            EXPECT_EQ(event.type, type);
+            EXPECT_EQ(event.button.button, native.button.button);
+            EXPECT_EQ(event.button.down, native.button.down);
+            EXPECT_EQ(event.button.clicks, native.button.clicks);
+            EXPECT_EQ(event.button.timestamp, native.button.timestamp);
+        }
+    }
+
+    TEST_P(SdlPixelCoordinatesTest, WheelPositionUsesPixelsAndScrollAmountStaysUnscaled) {
+        const auto c = GetParam();
+        SDL_Window window{800, 600, c.pixel_width, c.pixel_height};
+        SDL_Event native{};
+        native.type = SDL_EVENT_MOUSE_WHEEL;
+        native.wheel.mouse_x = 123.5f;
+        native.wheel.mouse_y = 67.25f;
+        native.wheel.x = 1.0f;
+        native.wheel.y = -2.0f;
+        const auto event = lfs::vis::input::pointerEventInPixels(native, &window);
+        EXPECT_FLOAT_EQ(event.wheel.mouse_x, c.expected_x);
+        EXPECT_FLOAT_EQ(event.wheel.mouse_y, c.expected_y);
+        EXPECT_FLOAT_EQ(event.wheel.x, native.wheel.x);
+        EXPECT_FLOAT_EQ(event.wheel.y, native.wheel.y);
+    }
+
     INSTANTIATE_TEST_SUITE_P(
         DisplayScale, SdlPixelCoordinatesTest,
         testing::Values(
             ScaleCase{800, 600, 123.5f, 67.25f},
+            ScaleCase{1000, 750, 154.375f, 84.0625f},
             ScaleCase{1200, 900, 185.25f, 100.875f},
             ScaleCase{1600, 1200, 247.0f, 134.5f}));
 

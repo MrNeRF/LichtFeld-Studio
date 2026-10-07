@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <SDL3/SDL_events.h>
 #include <SDL3/SDL_mouse.h>
 #include <SDL3/SDL_video.h>
 #include <glm/vec2.hpp>
@@ -31,6 +32,33 @@ namespace lfs::vis::input {
         if (y)
             *y *= scale.y;
         return buttons;
+    }
+
+    // Immediate GUI dispatch must use the same pixels as frame-time polling.
+    // Keep the original event in logical coordinates for native window handling.
+    inline SDL_Event pointerEventInPixels(const SDL_Event& native_event, SDL_Window* window) {
+        SDL_Event event = native_event;
+        const auto scale = windowPixelScale(window);
+        switch (event.type) {
+        case SDL_EVENT_MOUSE_MOTION:
+            event.motion.x *= scale.x;
+            event.motion.y *= scale.y;
+            event.motion.xrel *= scale.x;
+            event.motion.yrel *= scale.y;
+            break;
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        case SDL_EVENT_MOUSE_BUTTON_UP:
+            event.button.x *= scale.x;
+            event.button.y *= scale.y;
+            break;
+        case SDL_EVENT_MOUSE_WHEEL:
+            event.wheel.mouse_x *= scale.x;
+            event.wheel.mouse_y *= scale.y;
+            break;
+        default:
+            break;
+        }
+        return event;
     }
 
 } // namespace lfs::vis::input
