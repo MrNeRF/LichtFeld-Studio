@@ -73,6 +73,17 @@ def _same_rotation(a: List[float], b: List[float]) -> bool:
     return abs(abs(dot) - 1.0) < QUAT_EQUIV_EPSILON
 
 
+def _rotation_matrix_xyz(euler_deg: List[float]):
+    x, y, z = (math.radians(value) for value in euler_deg)
+    cx, cy, cz = math.cos(x), math.cos(y), math.cos(z)
+    sx, sy, sz = math.sin(x), math.sin(y), math.sin(z)
+    return (
+        (cy * cz, -cy * sz, sy),
+        (sx * sy * cz + cx * sz, -sx * sy * sz + cx * cz, -sx * cy),
+        (-cx * sy * cz + sx * sz, cx * sy * sz + sx * cz, cx * cy),
+    )
+
+
 # Local node transforms are stored in data axes; the overlay displays visualizer axes.
 def _flip_yz_rows(transform):
     if transform is None or len(transform) != 16:
@@ -554,9 +565,33 @@ class TransformControlsController:
             return
 
         pivot = self._state.pivot_world
+        rotation = _rotation_matrix_xyz(self._state.display_euler) if tool == "builtin.rotate" else None
+        zero_rotation = tool == "builtin.rotate" and not any(self._state.display_euler)
 
         for i, name in enumerate(self._state.multi_node_names):
             original = self._state.multi_visualizer_world_transforms_before[i]
+            if zero_rotation:
+                lf.set_node_visualizer_world_transform(name, original)
+                continue
+
+            if tool == "builtin.rotate":
+                pos = [original[12], original[13], original[14]]
+                new_transform = list(original)
+                r00, r01, r02 = rotation[0]
+                r10, r11, r12 = rotation[1]
+                r20, r21, r22 = rotation[2]
+                for offset in (0, 4, 8):
+                    x, y, z = original[offset], original[offset + 1], original[offset + 2]
+                    new_transform[offset] = r00 * x + r01 * y + r02 * z
+                    new_transform[offset + 1] = r10 * x + r11 * y + r12 * z
+                    new_transform[offset + 2] = r20 * x + r21 * y + r22 * z
+                x, y, z = pos[0] - pivot[0], pos[1] - pivot[1], pos[2] - pivot[2]
+                new_transform[12] = pivot[0] + r00 * x + r01 * y + r02 * z
+                new_transform[13] = pivot[1] + r10 * x + r11 * y + r12 * z
+                new_transform[14] = pivot[2] + r20 * x + r21 * y + r22 * z
+                lf.set_node_visualizer_world_transform(name, new_transform)
+                continue
+
             decomp = lf.decompose_transform(original)
             pos = list(decomp["translation"])
 
@@ -564,26 +599,6 @@ class TransformControlsController:
                 delta = [self._state.display_translation[j] - pivot[j] for j in range(3)]
                 new_pos = [pos[j] + delta[j] for j in range(3)]
                 new_transform = lf.compose_transform(new_pos, decomp["rotation_euler_deg"], decomp["scale"])
-                lf.set_node_visualizer_world_transform(name, new_transform)
-
-            elif tool == "builtin.rotate":
-                euler_rad = [math.radians(e) for e in self._state.display_euler]
-                cx, cy, cz = math.cos(euler_rad[0]), math.cos(euler_rad[1]), math.cos(euler_rad[2])
-                sx, sy, sz = math.sin(euler_rad[0]), math.sin(euler_rad[1]), math.sin(euler_rad[2])
-                r00, r01, r02 = cy * cz, -cy * sz, sy
-                r10, r11, r12 = sx * sy * cz + cx * sz, -sx * sy * sz + cx * cz, -sx * cy
-                r20, r21, r22 = -cx * sy * cz + sx * sz, cx * sy * sz + sx * cz, cx * cy
-
-                rel = [pos[j] - pivot[j] for j in range(3)]
-                new_rel = [
-                    r00 * rel[0] + r01 * rel[1] + r02 * rel[2],
-                    r10 * rel[0] + r11 * rel[1] + r12 * rel[2],
-                    r20 * rel[0] + r21 * rel[1] + r22 * rel[2],
-                ]
-                new_pos = [pivot[j] + new_rel[j] for j in range(3)]
-                orig_euler = list(decomp["rotation_euler_deg"])
-                new_euler = [orig_euler[j] + self._state.display_euler[j] for j in range(3)]
-                new_transform = lf.compose_transform(new_pos, new_euler, decomp["scale"])
                 lf.set_node_visualizer_world_transform(name, new_transform)
 
             elif tool == "builtin.scale":
