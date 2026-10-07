@@ -739,6 +739,7 @@ list(APPEND TEST_FILES test_octree_lod.cpp)
 list(APPEND TEST_FILES test_ply_to_rad_lod.cpp)
 list(APPEND TEST_FILES test_rad_gpu_encode.cpp)
 list(APPEND TEST_FILES test_rad_meta_sidecar.cpp)
+list(APPEND TEST_FILES test_rad_spark_paging.cpp)
 
 # Keep the source manifest strict: a stale entry should fail configuration
 # instead of silently dropping coverage from the executable.
@@ -840,6 +841,7 @@ if(NOT LFS_SIMPLIFY_TEST_PLY_OK)
             "SplatSimplify.RealPlySimplifyDoesNotUndershootRequestedTarget will be skipped.")
     endif()
 endif()
+target_compile_definitions(lichtfeld_tests PRIVATE LFS_SIMPLIFY_TEST_PLY="${LFS_SIMPLIFY_TEST_PLY}")
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_TEST_INTERNAL_LINK_LIBS
