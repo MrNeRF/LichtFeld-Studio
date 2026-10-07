@@ -2950,7 +2950,7 @@
   "projects.contents.save": "保存 {number} / {total}",
   "projects.contents.current": "現在",
   "projects.contents.checkpoint": "チェックポイント、反復 {iteration}",
-  "projects.contents.dataset_embedded": "データセット、画像 {count} 枚を埋め込み済み",
+  "projects.contents.dataset_embedded": "データセット：画像 {images} 枚、マスク {masks} 枚、深度マップ {depths} 枚、法線マップ {normals} 枚、疎データファイル {sparse} 件を埋め込み済み",
   "projects.contents.dataset_external": "データセット、外部、{path}",
   "projects.contents.reachable": "アクセス可能",
   "projects.contents.missing": "見つかりません",

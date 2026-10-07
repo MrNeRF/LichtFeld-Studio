@@ -2950,7 +2950,7 @@
   "projects.contents.save": "Save {number} of {total}",
   "projects.contents.current": "current",
   "projects.contents.checkpoint": "Checkpoint, iteration {iteration}",
-  "projects.contents.dataset_embedded": "Dataset, {count} images embedded",
+  "projects.contents.dataset_embedded": "Dataset, {images} images, {masks} masks, {depths} depths, {normals} normals and {sparse} sparse files embedded",
   "projects.contents.dataset_external": "Dataset, external, {path}",
   "projects.contents.reachable": "reachable",
   "projects.contents.missing": "missing",

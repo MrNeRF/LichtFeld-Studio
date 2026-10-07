@@ -2925,9 +2925,11 @@ namespace lfs::io::project {
 
     lfs::Result<ProjectDocumentSaveReport>
     ProjectDocument::embed_dataset_batch(
-        const EmbeddedDatasetManifest& manifest,
+        EmbeddedDatasetManifest manifest,
         const std::span<const DatasetEmbedSource> sources,
-        const ProjectDocumentSaveOptions& options) {
+        const ProjectDocumentSaveOptions& options,
+        std::function<void(float, const std::string&)> progress,
+        std::function<bool()> cancel) {
         if (!impl_->source_path || !impl_->source_reader) {
             return fail<ProjectDocumentSaveReport>(
                 lfs::ErrorCode::FailedPrecondition,
@@ -2949,10 +2951,20 @@ namespace lfs::io::project {
             !updated) {
             return std::move(updated).error();
         }
+        std::unordered_set<lfs::core::Uuid> superseded_dataset_uuids;
+        if (auto previous = impl_->parameters.embedded_dataset(); previous && *previous) {
+            for (const auto& entry : (*previous)->entries) {
+                if (std::ranges::none_of(manifest.entries, [&](const auto& replacement) {
+                        return replacement.chunk_uuid == entry.chunk_uuid;
+                    })) {
+                    superseded_dataset_uuids.insert(entry.chunk_uuid);
+                }
+            }
+        }
         const auto parameters_key = singleton_key(FOURCC_PRMS, impl_->project_uuid);
-        const auto parameters_bytes = staged_parameters->to_bytes();
+        const auto planned_parameters_bytes = staged_parameters->to_bytes();
         std::unordered_map<lfs::core::Uuid, const DatasetEmbedSource*> sources_by_uuid;
-        std::uint64_t planned_bytes = parameters_bytes.size();
+        std::uint64_t planned_bytes = planned_parameters_bytes.size();
         for (const auto& source : sources) {
             if (source.entry.chunk_uuid.is_nil() || source.source_path.empty()) {
                 return fail<ProjectDocumentSaveReport>(
@@ -3057,16 +3069,21 @@ namespace lfs::io::project {
             }
         }
         desired.insert(parameters_key);
-        for (const auto& row : impl_->source_reader->chunks()) {
-            if (row.is_live() && row.key.fourcc == FOURCC_DSRC) {
-                desired.erase(row.key);
-            }
+        for (const auto& uuid : superseded_dataset_uuids) {
+            desired.erase(ChunkKey{FOURCC_DSRC, uuid});
         }
         for (const auto& entry : manifest.entries) {
             desired.insert(ChunkKey{FOURCC_DSRC, entry.chunk_uuid});
         }
         for (const auto& row : impl_->source_reader->chunks()) {
             if (!row.is_live() || row.key == parameters_key) {
+                continue;
+            }
+            if (row.key.fourcc == FOURCC_DSRC &&
+                superseded_dataset_uuids.contains(row.key.instance_uuid)) {
+                if (auto erased = writer.erase(row.key); !erased) {
+                    return std::move(erased).error();
+                }
                 continue;
             }
             const auto found = impl_->source_rows.find(row.key);
@@ -3096,15 +3113,26 @@ namespace lfs::io::project {
                 }
             }
         }
-        if (auto written = writer.write_chunk(
-                parameters_key, parameters_bytes, json_options());
-            !written) {
-            return std::move(written).error();
+        std::uint64_t copied_bytes = 0;
+        std::unordered_map<lfs::core::Uuid, std::size_t> manifest_index;
+        manifest_index.reserve(manifest.entries.size());
+        for (std::size_t index = 0; index < manifest.entries.size(); ++index) {
+            manifest_index.emplace(manifest.entries[index].chunk_uuid, index);
         }
         for (const auto& source : sources) {
+            if (cancel && cancel()) {
+                return fail<ProjectDocumentSaveReport>(
+                    lfs::ErrorCode::Cancelled,
+                    "Dataset embedding was canceled.",
+                    "the caller canceled while writing dataset chunks",
+                    "project.dataset_embed");
+            }
             const ChunkKey key{FOURCC_DSRC, source.entry.chunk_uuid};
-            const bool materialize = source.entry.kind == "sparse" ||
-                                     source.entry.kind == "meta";
+            constexpr std::uint64_t MAX_COMPRESSED_DATASET_FILE_BYTES =
+                16ull * 1024 * 1024;
+            const bool materialize =
+                (source.entry.kind == "sparse" || source.entry.kind == "meta") &&
+                source.entry.bytes <= MAX_COMPRESSED_DATASET_FILE_BYTES;
             if (materialize) {
                 std::ifstream input(source.source_path, std::ios::binary);
                 if (!input) {
@@ -3132,8 +3160,7 @@ namespace lfs::io::project {
                         "project.dataset_embed");
                 }
                 Hash128Stream hasher;
-                if (!hasher.update(bytes) || !hasher.valid() ||
-                    hasher.digest() != source.entry.xxh3_128) {
+                if (!hasher.update(bytes) || !hasher.valid()) {
                     return fail<ProjectDocumentSaveReport>(
                         lfs::ErrorCode::DataLoss,
                         "An embedded dataset source changed while it was being copied.",
@@ -3149,6 +3176,19 @@ namespace lfs::io::project {
                         });
                     !written) {
                     return std::move(written).error();
+                }
+                const auto entry = manifest_index.find(source.entry.chunk_uuid);
+                if (entry == manifest_index.end()) {
+                    return fail<ProjectDocumentSaveReport>(
+                        lfs::ErrorCode::DataLoss,
+                        "The embedded dataset manifest references a missing chunk.",
+                        source.entry.chunk_uuid.to_string(), "project.dataset_embed");
+                }
+                manifest.entries[entry->second].xxh3_128 = hasher.digest();
+                copied_bytes += source.entry.bytes;
+                if (progress) {
+                    progress(planned_bytes == 0 ? 0.9F : 0.1F + 0.75F * static_cast<float>(copied_bytes) / static_cast<float>(planned_bytes),
+                             "Writing dataset chunks (hashing)");
                 }
                 continue;
             }
@@ -3171,7 +3211,8 @@ namespace lfs::io::project {
                     "project.dataset_embed");
             }
             Hash128Stream hasher;
-            std::vector<char> buffer(1024 * 1024);
+            std::vector<char> buffer(4 * 1024 * 1024);
+            std::uint64_t file_bytes = 0;
             while (input) {
                 input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
                 const auto count = input.gcount();
@@ -3189,8 +3230,21 @@ namespace lfs::io::project {
                         "project.dataset_embed");
                 }
                 stream.value()->write(buffer.data(), count);
+                file_bytes += static_cast<std::uint64_t>(count);
+                if (progress) {
+                    progress(0.1F + 0.75F * static_cast<float>(copied_bytes + file_bytes) /
+                                        static_cast<float>(std::max<std::uint64_t>(1, planned_bytes)),
+                             "Writing dataset chunks (hashing)");
+                }
+                if (cancel && cancel()) {
+                    return fail<ProjectDocumentSaveReport>(
+                        lfs::ErrorCode::Cancelled,
+                        "Dataset embedding was canceled.",
+                        "the caller canceled while writing dataset chunks",
+                        "project.dataset_embed");
+                }
             }
-            if (!input.eof() || !hasher.valid() || hasher.digest() != source.entry.xxh3_128) {
+            if (!input.eof() || !hasher.valid()) {
                 return fail<ProjectDocumentSaveReport>(
                     lfs::ErrorCode::DataLoss,
                     "An embedded dataset source changed while it was being copied.",
@@ -3200,6 +3254,38 @@ namespace lfs::io::project {
             if (auto ended = writer.end_chunk(); !ended) {
                 return std::move(ended).error();
             }
+            const auto entry = manifest_index.find(source.entry.chunk_uuid);
+            if (entry == manifest_index.end()) {
+                return fail<ProjectDocumentSaveReport>(
+                    lfs::ErrorCode::DataLoss,
+                    "The embedded dataset manifest references a missing chunk.",
+                    source.entry.chunk_uuid.to_string(), "project.dataset_embed");
+            }
+            manifest.entries[entry->second].xxh3_128 = hasher.digest();
+            copied_bytes += source.entry.bytes;
+        }
+        if (progress) {
+            progress(0.9F, "Saving dataset manifest");
+        }
+        if (auto updated = staged_parameters->set_embedded_dataset(manifest);
+            !updated) {
+            return std::move(updated).error();
+        }
+        const auto parameters_bytes = staged_parameters->to_bytes();
+        if (auto written = writer.write_chunk(
+                parameters_key, parameters_bytes, json_options());
+            !written) {
+            return std::move(written).error();
+        }
+        if (progress) {
+            progress(0.95F, "Committing embedded dataset");
+        }
+        if (cancel && cancel()) {
+            return fail<ProjectDocumentSaveReport>(
+                lfs::ErrorCode::Cancelled,
+                "Dataset embedding was canceled.",
+                "the caller canceled before project commit",
+                "project.dataset_embed");
         }
         if (auto committed = writer.commit(); !committed) {
             return std::move(committed).error();

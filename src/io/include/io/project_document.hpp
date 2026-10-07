@@ -324,9 +324,11 @@ namespace lfs::io::project {
         [[nodiscard]] std::vector<lfs::core::Uuid>
         dataset_source_uuids() const;
         [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
-        embed_dataset_batch(const EmbeddedDatasetManifest& manifest,
+        embed_dataset_batch(EmbeddedDatasetManifest manifest,
                             std::span<const DatasetEmbedSource> sources,
-                            const ProjectDocumentSaveOptions& options = {});
+                            const ProjectDocumentSaveOptions& options = {},
+                            std::function<void(float, const std::string&)> progress = {},
+                            std::function<bool()> cancel = {});
 
         [[nodiscard]] const LazyChunkValue*
         find_ppisp(const lfs::core::Uuid& instance_uuid) const noexcept;

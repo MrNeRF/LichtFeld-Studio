@@ -2950,7 +2950,7 @@
   "projects.contents.save": "Zapis {number} z {total}",
   "projects.contents.current": "bieżący",
   "projects.contents.checkpoint": "Punkt kontrolny, iteracja {iteration}",
-  "projects.contents.dataset_embedded": "Zbiór danych, osadzone obrazy: {count}",
+  "projects.contents.dataset_embedded": "Zbiór danych: {images} obrazów, {masks} masek, {depths} map głębi, {normals} map normalnych i {sparse} plików rzadkich osadzonych",
   "projects.contents.dataset_external": "Zbiór danych, zewnętrzny, {path}",
   "projects.contents.reachable": "dostępny",
   "projects.contents.missing": "brak",

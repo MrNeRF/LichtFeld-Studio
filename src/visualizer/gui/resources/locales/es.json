@@ -2950,7 +2950,7 @@
   "projects.contents.save": "Guardado {number} de {total}",
   "projects.contents.current": "actual",
   "projects.contents.checkpoint": "Punto de control, iteración {iteration}",
-  "projects.contents.dataset_embedded": "Conjunto de datos, {count} imágenes integradas",
+  "projects.contents.dataset_embedded": "Conjunto de datos: {images} imágenes, {masks} máscaras, {depths} mapas de profundidad, {normals} normales y {sparse} archivos dispersos integrados",
   "projects.contents.dataset_external": "Conjunto de datos, externo, {path}",
   "projects.contents.reachable": "accesible",
   "projects.contents.missing": "no encontrado",

@@ -2950,7 +2950,7 @@
   "projects.contents.save": "Enregistrement {number} sur {total}",
   "projects.contents.current": "actuel",
   "projects.contents.checkpoint": "Point de reprise, itération {iteration}",
-  "projects.contents.dataset_embedded": "Jeu de données, {count} images intégrées",
+  "projects.contents.dataset_embedded": "Jeu de données : {images} images, {masks} masques, {depths} cartes de profondeur, {normals} normales et {sparse} fichiers de nuage de points intégrés",
   "projects.contents.dataset_external": "Jeu de données, externe, {path}",
   "projects.contents.reachable": "accessible",
   "projects.contents.missing": "introuvable",

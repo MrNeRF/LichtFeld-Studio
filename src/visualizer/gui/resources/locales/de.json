@@ -2950,7 +2950,7 @@
   "projects.contents.save": "Speicherung {number} von {total}",
   "projects.contents.current": "aktuell",
   "projects.contents.checkpoint": "Trainingsstand, Iteration {iteration}",
-  "projects.contents.dataset_embedded": "Datensatz, {count} Bilder eingebettet",
+  "projects.contents.dataset_embedded": "Datensatz, {images} Bilder, {masks} Masken, {depths} Tiefenkarten, {normals} Normalen und {sparse} Sparse-Dateien eingebettet",
   "projects.contents.dataset_external": "Datensatz, extern, {path}",
   "projects.contents.reachable": "erreichbar",
   "projects.contents.missing": "fehlt",

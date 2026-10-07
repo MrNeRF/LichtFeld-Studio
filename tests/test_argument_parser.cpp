@@ -920,6 +920,85 @@ TEST(ArgumentParserTest, ConvertRejectsOutputSuffixThatConflictsWithFormat) {
     EXPECT_NE(parsed.error().find(".ply"), std::string::npos);
 }
 
+TEST(ArgumentParserTest, LichtParsesExistingAndOverrideDatasetPaths) {
+    const auto root = std::filesystem::path(
+        make_test_path("lfs_arg_parser_licht"));
+    const auto project = root / "project.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+    {
+        const char* argv[] = {"LichtFeld-Studio", "licht", project_text.c_str(), "--embed"};
+        const auto parsed = lfs::core::args::parse_args(
+            static_cast<int>(std::size(argv)), argv);
+        ASSERT_TRUE(parsed) << parsed.error();
+        const auto* mode = std::get_if<lfs::core::args::LichtMode>(&*parsed);
+        ASSERT_NE(mode, nullptr);
+        EXPECT_EQ(mode->project_path, project);
+        EXPECT_FALSE(mode->dataset_path);
+    }
+    const auto absolute_dataset = (root / "dataset").string();
+    {
+        const char* argv[] = {"LichtFeld-Studio", "licht", project_text.c_str(),
+                              "--embed", absolute_dataset.c_str()};
+        const auto parsed = lfs::core::args::parse_args(
+            static_cast<int>(std::size(argv)), argv);
+        ASSERT_TRUE(parsed) << parsed.error();
+        const auto* mode = std::get_if<lfs::core::args::LichtMode>(&*parsed);
+        ASSERT_NE(mode, nullptr);
+        ASSERT_TRUE(mode->dataset_path);
+        EXPECT_EQ(*mode->dataset_path, std::filesystem::path(absolute_dataset));
+    }
+    {
+        const char* argv[] = {"LichtFeld-Studio", "licht", project_text.c_str(),
+                              "--embed", "dataset"};
+        const auto parsed = lfs::core::args::parse_args(
+            static_cast<int>(std::size(argv)), argv);
+        ASSERT_TRUE(parsed) << parsed.error();
+        const auto* mode = std::get_if<lfs::core::args::LichtMode>(&*parsed);
+        ASSERT_NE(mode, nullptr);
+        ASSERT_TRUE(mode->dataset_path);
+        EXPECT_EQ(*mode->dataset_path,
+                  std::filesystem::current_path() / "dataset");
+    }
+}
+
+TEST(ArgumentParserTest, LichtRejectsMissingArgumentsAndAcceptsHelp) {
+    const auto root = std::filesystem::path(
+        make_test_path("lfs_arg_parser_licht_errors"));
+    const auto project = root / "project.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+    {
+        const char* argv[] = {"LichtFeld-Studio", "licht", project_text.c_str()};
+        const auto parsed = lfs::core::args::parse_args(
+            static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(parsed);
+        EXPECT_NE(parsed.error().find("--embed"), std::string::npos);
+    }
+    {
+        const char* argv[] = {"LichtFeld-Studio", "licht", project_text.c_str(),
+                              "--embed", "--unknown"};
+        const auto parsed = lfs::core::args::parse_args(
+            static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(parsed);
+        EXPECT_NE(parsed.error().find("Unknown licht argument"), std::string::npos);
+    }
+    {
+        const char* argv[] = {"LichtFeld-Studio", "licht", "--help"};
+        const auto parsed = lfs::core::args::parse_args(
+            static_cast<int>(std::size(argv)), argv);
+        ASSERT_TRUE(parsed);
+        EXPECT_TRUE(std::holds_alternative<lfs::core::args::HelpMode>(*parsed));
+    }
+    {
+        const char* argv[] = {"LichtFeld-Studio", "licht", "missing.licht", "--embed"};
+        const auto parsed = lfs::core::args::parse_args(
+            static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(parsed);
+        EXPECT_NE(parsed.error().find("could not be found"), std::string::npos);
+    }
+}
+
 TEST(ArgumentParserTest, Mesh2SplatRejectsOutputSuffixThatConflictsWithFormat) {
     const auto directory = std::filesystem::path(
         make_test_path("lfs_arg_parser_mesh2splat_suffix"));

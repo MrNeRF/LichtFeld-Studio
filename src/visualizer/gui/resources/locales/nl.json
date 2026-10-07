@@ -2950,7 +2950,7 @@
   "projects.contents.save": "Opslag {number} van {total}",
   "projects.contents.current": "huidig",
   "projects.contents.checkpoint": "Controlepunt, iteratie {iteration}",
-  "projects.contents.dataset_embedded": "Dataset, {count} afbeeldingen ingebed",
+  "projects.contents.dataset_embedded": "Dataset: {images} afbeeldingen, {masks} maskers, {depths} dieptekaarten, {normals} normaalkaarten en {sparse} sparse bestanden ingebed",
   "projects.contents.dataset_external": "Dataset, extern, {path}",
   "projects.contents.reachable": "bereikbaar",
   "projects.contents.missing": "ontbreekt",
