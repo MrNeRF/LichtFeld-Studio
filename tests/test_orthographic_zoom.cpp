@@ -13,6 +13,7 @@
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/visualizer_impl.hpp"
+#include <cmath>
 #include <cstdlib>
 #include <gtest/gtest.h>
 #include <optional>
@@ -25,6 +26,7 @@ namespace lfs::vis {
             if (const auto* previous = std::getenv("LFS_HOME"))
                 previous_home_ = previous;
             setHome(temporary_.path.string());
+            previous_persistence_enabled_ = input::InputBindings::isPersistenceEnabled();
             input::InputBindings::setPersistenceEnabled(false);
             services().clear();
             gui::guiFocusState().reset();
@@ -37,7 +39,7 @@ namespace lfs::vis {
             gui::guiFocusState().reset();
             lfs::event::EventBridge::instance().clear_all();
             lfs::core::event::bus().clear_all();
-            input::InputBindings::setPersistenceEnabled(true);
+            input::InputBindings::setPersistenceEnabled(previous_persistence_enabled_);
             setHome(previous_home_);
         }
 
@@ -83,6 +85,7 @@ namespace lfs::vis {
 
         lfs::test::licht::TemporaryDirectory temporary_{"lfs-orthographic-zoom"};
         std::optional<std::string> previous_home_;
+        bool previous_persistence_enabled_ = true;
     };
 
     TEST_F(OrthographicZoomTest, WheelZoomsSceneWithRestoredOverrideWithoutMovingCamera) {
@@ -165,11 +168,23 @@ namespace lfs::vis {
         EXPECT_FLOAT_EQ(first.frustum_overlay_data->frustum_batches.front().focal_x, 100.0f);
         EXPECT_NEAR(first.grid_overlays.front().projection[0][0], 0.5f, 1e-5f);
 
+        // Subpixel scale drift must not rebuild the cached screen-space outlines.
+        viewport.ortho_scale_override = std::nextafter(100.0f, 101.0f);
+        const auto stable = overlays(viewer);
+        EXPECT_TRUE(stable.frustum_overlay_data->frustum_batches.front().focal_x == 100.0f);
+
         // A panel override can change without global settings or camera pose changing.
         viewport.ortho_scale_override = 200.0f;
         const auto second = overlays(viewer);
         ASSERT_FALSE(second.frustum_overlay_data->frustum_batches.empty());
         EXPECT_FLOAT_EQ(second.frustum_overlay_data->frustum_batches.front().focal_x, 200.0f);
         EXPECT_NEAR(second.grid_overlays.front().projection[0][0], 1.0f, 1e-5f);
+
+        // Python/project overrides can be much smaller than wheel zoom's minimum.
+        viewport.ortho_scale_override = 1.0e-6f;
+        (void)overlays(viewer);
+        viewport.ortho_scale_override = 2.0e-6f;
+        const auto small = overlays(viewer);
+        EXPECT_EQ(small.frustum_overlay_data->frustum_batches.front().focal_x, 2.0e-6f);
     }
 } // namespace lfs::vis

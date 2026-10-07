@@ -2609,7 +2609,6 @@ namespace lfs::vis::gui {
             hashCombine(hash, hashFloat(settings.focal_length_mm));
             hashCombine(hash, settings.orthographic);
             hashCombine(hash, settings.equirectangular);
-            hashCombine(hash, hashFloat(settings.ortho_scale));
             for (int i = 0; i < 3; ++i) {
                 hashCombine(hash, hashFloat(settings.train_camera_color[i]));
                 hashCombine(hash, hashFloat(settings.eval_camera_color[i]));
@@ -2844,8 +2843,12 @@ namespace lfs::vis::gui {
                 if (!panel.valid())
                     continue;
                 hashCombine(key.view_projection_hash, hashViewportPose(*panel.viewport));
-                hashCombine(key.view_projection_hash,
-                            hashFloat(panel.viewport->ortho_scale_override.value_or(settings.ortho_scale)));
+                if (settings.orthographic && !settings.equirectangular) {
+                    // Quantize relative scale so tiny valid overrides still track meaningful zoom.
+                    const float ortho_scale = panel.viewport->ortho_scale_override.value_or(settings.ortho_scale);
+                    hashCombine(key.view_projection_hash,
+                                hashQuantizedFloat(std::log2(ortho_scale), 1.0e-5f));
+                }
                 // The overlay is rasterized in screen space. Quantizing layout
                 // values removes sub-pixel churn from repeated UI layout solves
                 // without hiding a meaningful viewport-size change.

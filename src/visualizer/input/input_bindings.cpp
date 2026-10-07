@@ -273,6 +273,10 @@ namespace lfs::vis::input {
         return std::nullopt;
     }
 
+    bool InputBindings::isPersistenceEnabled() noexcept {
+        return g_persistence_enabled.load(std::memory_order_acquire);
+    }
+
     void InputBindings::setPersistenceEnabled(const bool enabled) noexcept {
         g_persistence_enabled.store(enabled, std::memory_order_release);
     }
