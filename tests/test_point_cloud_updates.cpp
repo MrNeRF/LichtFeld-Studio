@@ -344,9 +344,9 @@ TEST(PointCloudUpdates, ResolvedReservationCanGrowAndShrink) {
     PointCloudUpdateManager manager(prepare, [] {}, true);
     for (const auto [submitted_count, resolved_count] : {std::pair{size_t{1}, size_t{3}}, std::pair{size_t{3}, size_t{1}}}) {
         auto ticket = manager.submit(target(), input(submitted_count));
-        EXPECT_EQ(manager.retainedBytes(), submitted_count * 128);
+        EXPECT_EQ(manager.retainedBytes(), submitted_count * PointCloudUpdateManager::kReservedBytesPerPoint);
         manager.resolveQueued([&](auto&, auto& in) { in = input(resolved_count); });
-        EXPECT_EQ(manager.retainedBytes(), resolved_count * 128);
+        EXPECT_EQ(manager.retainedBytes(), resolved_count * PointCloudUpdateManager::kReservedBytesPerPoint);
         ASSERT_TRUE(until([&] { return ticket->inputsReleased() && manager.hasReady(); }));
         manager.publishReady([&](const auto&, const auto& result, auto&) { EXPECT_EQ(result.cloud->size(), resolved_count); });
         EXPECT_EQ(ticket->state(), "published");

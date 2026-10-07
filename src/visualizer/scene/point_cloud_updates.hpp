@@ -77,6 +77,7 @@ namespace lfs::vis {
         // Limits include obsolete requests until their sources and GPU work are safely retired.
         static constexpr size_t kMaxRequests = 32;
         static constexpr size_t kMaxBytes = 1024ull * 1024 * 1024;
+        static constexpr size_t kReservedBytesPerPoint = 128;
         PointCloudUpdateManager(Prepare prepare, std::function<void()> wake, bool resolve_on_scene = false);
         using Resolve = std::function<void(PointCloudUpdateTarget&, PointCloudUpdateInput&)>;
         void resolveQueued(const Resolve& resolve);

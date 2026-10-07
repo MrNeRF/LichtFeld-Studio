@@ -435,6 +435,7 @@ namespace lfs::vis {
             std::shared_ptr<const ResidentBuffers> resident_buffers;
             ManagedBuffer vertex_addresses;
             std::array<uint64_t, 2> cached_vertex_addresses{};
+            // Cumulative over the renderer lifetime, including cache resets.
             uint64_t host_vertex_upload_bytes = 0;
             ManagedBuffer positions;
             ManagedBuffer colors;

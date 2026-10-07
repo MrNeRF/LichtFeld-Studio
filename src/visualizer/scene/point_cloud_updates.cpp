@@ -122,10 +122,10 @@ namespace lfs::vis {
             throw std::invalid_argument("Async updates require a scene-owned point cloud");
         // Conservative reservation: source, staging, destination and conversion temporaries.
         const size_t n = input.points.size(0);
-        if (n > kMaxBytes / 128)
+        if (n > kMaxBytes / kReservedBytesPerPoint)
             throw std::length_error("Point-cloud update exceeds the 1 GiB preparation budget");
         auto request = std::make_shared<Request>();
-        request->bytes = n * 128;
+        request->bytes = n * kReservedBytesPerPoint;
         request->resolved = !resolve_on_scene_;
         request->target = std::move(target);
         request->input = std::move(input);
@@ -184,11 +184,11 @@ namespace lfs::vis {
                 size_t points = request->input.points.size(0);
                 for (const auto& companion : request->input.companions) {
                     const auto count = static_cast<size_t>(companion.cloud->size());
-                    if (count > kMaxBytes / 128 || points > kMaxBytes / 128 - count)
+                    if (count > kMaxBytes / kReservedBytesPerPoint || points > kMaxBytes / kReservedBytesPerPoint - count)
                         throw std::length_error("Merged point cloud exceeds the preparation budget");
                     points += count;
                 }
-                const auto bytes = points * 128;
+                const auto bytes = points * kReservedBytesPerPoint;
                 std::lock_guard lock(mutex_);
                 if (bytes > request->bytes) {
                     const auto growth = bytes - request->bytes;
