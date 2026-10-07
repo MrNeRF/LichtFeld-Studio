@@ -150,7 +150,7 @@ namespace lfs::vis {
                 if (!target)
                     continue;
 
-                const bool locked = static_cast<bool>(target->locked);
+                const bool locked = scene.isNodeEffectivelyLocked(target->id);
                 const bool transformable = cap::isTransformableNodeType(target->type);
                 if (!transformable) {
                     found_untransformable = true;

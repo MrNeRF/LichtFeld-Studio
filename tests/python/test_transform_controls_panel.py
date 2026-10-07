@@ -193,6 +193,7 @@ def _install_lf_stub(monkeypatch):
     lf_stub.ops = SimpleNamespace(
         invoke=lambda operator_id, **kwargs: state.op_calls.append((operator_id, kwargs))
     )
+    lf_stub.can_transform_selection = lambda: getattr(state, "editable", True)
     lf_stub.get_selected_node_names = lambda: list(state.selected_names)
     lf_stub.get_selection_visualizer_world_center = lambda: (
         list(state.selection_visualizer_world_center)
@@ -870,6 +871,7 @@ def test_transform_controls_keeps_other_numeric_bindings_live_while_focused(tran
         "transform_scale_u_str",
         "transform_reset_label",
         "transform_bake_label",
+        "transform_editable",
         "transform_show_translate",
         "transform_show_rotate",
         "transform_show_scale",
@@ -958,3 +960,22 @@ def test_transform_controls_bake_commits_active_edit(transform_controls_module):
         )
     ]
     assert panel._state.editing_active is False
+
+
+def test_transform_controls_locked_selection_is_read_only(transform_controls_module):
+    module, state = transform_controls_module
+    panel = module.TransformControlsController()
+    model = _DataModelStub()
+    panel.bind_model(model)
+    doc = _DocumentStub()
+    state.editable = False
+    panel.update(doc)
+    assert model.bound_funcs["transform_editable"]() is False
+    before = dict(state.local_transforms)
+    panel._set_value("pos", 0, "4.0")
+    panel._set_uniform_scale("2.0")
+    assert state.local_transforms == before
+    assert not panel._state.editing_active
+    state.editable = True
+    panel.update(doc)
+    assert model.bound_funcs["transform_editable"]() is True

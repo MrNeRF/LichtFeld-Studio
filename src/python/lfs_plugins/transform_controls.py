@@ -168,6 +168,7 @@ class TransformControlsController:
         self._handle = None
         self._doc = None
         self._visible = False
+        self._editable = False
         self._active_tool = ""
         self._selected = []
         self._transform_space = _SPACE_WORLD
@@ -196,6 +197,7 @@ class TransformControlsController:
             if len(self._selected) > 1
             else _ui_label("transform.reset_transform", "Reset Transform"),
         )
+        model.bind_func("transform_editable", lambda: self._editable)
         model.bind_func("transform_bake_label", lambda: _ui_label("transform.bake_transform", "Bake Transform"))
         model.bind_func("transform_show_translate", lambda: self._active_tool == "builtin.translate")
         model.bind_func("transform_show_rotate", lambda: self._active_tool == "builtin.rotate")
@@ -305,6 +307,10 @@ class TransformControlsController:
             return False
 
         self._selected = lf.get_selected_node_names() or []
+        self._editable = bool(lf.can_transform_selection())
+        if not self._editable:
+            self._step_repeat_prop = None
+            self._commit_active_edit()
         self._transform_space = self._current_transform_space()
         self._pivot_mode = self._current_pivot_mode()
 
@@ -456,6 +462,7 @@ class TransformControlsController:
         return (
             RuntimeState.language_generation.value,
             self._active_tool,
+            self._editable,
             tuple(self._selected),
             self._transform_space,
             self._pivot_mode,
@@ -500,6 +507,7 @@ class TransformControlsController:
             self._handle.dirty("transform_scale_u_str")
         self._handle.dirty("transform_reset_label")
         self._handle.dirty("transform_bake_label")
+        self._handle.dirty("transform_editable")
         self._handle.dirty("transform_show_translate")
         self._handle.dirty("transform_show_rotate")
         self._handle.dirty("transform_show_scale")
@@ -537,6 +545,8 @@ class TransformControlsController:
                     self._state.multi_visualizer_world_transforms_before.append(world_transform)
 
     def _set_value(self, group, idx, value_str):
+        if not lf.can_transform_selection():
+            return
         value_property = {
             "pos": f"transform_pos_{('x', 'y', 'z')[idx]}_str",
             "rot": f"transform_rot_{('x', 'y', 'z')[idx]}_str",
@@ -574,6 +584,8 @@ class TransformControlsController:
         self._force_dirty = True
 
     def _set_uniform_scale(self, value_str):
+        if not lf.can_transform_selection():
+            return
         if self._focused_input_property == "transform_scale_u_str":
             self._focused_input_text = str(value_str)
         try:
@@ -777,6 +789,8 @@ class TransformControlsController:
         return False
 
     def _apply_step(self, prop, direction):
+        if not lf.can_transform_selection():
+            return
         cfg = _STEP_CONFIG.get(prop)
         if not cfg:
             return
@@ -818,6 +832,8 @@ class TransformControlsController:
         self._force_dirty = True
 
     def _on_action(self, handle, event, args):
+        if not lf.can_transform_selection():
+            return
         del handle, event
         if not args:
             return

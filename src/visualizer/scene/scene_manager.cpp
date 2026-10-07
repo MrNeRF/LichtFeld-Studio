@@ -2678,7 +2678,7 @@ namespace lfs::vis {
         const auto* node = scene_.getNode(name);
         if (!node)
             return false;
-        if (static_cast<bool>(node->locked)) {
+        if (scene_.isNodeEffectivelyLocked(node->id)) {
             LOG_WARN("Cannot transform '{}': node is locked", name);
             return false;
         }
@@ -5528,7 +5528,7 @@ namespace lfs::vis {
                 if (!visited.insert(id).second)
                     continue;
                 auto* node = scene_.getNodeById(id);
-                if (!node || static_cast<bool>(node->locked))
+                if (!node || scene_.isNodeEffectivelyLocked(node->id))
                     continue;
                 if (node->type == core::NodeType::SPLAT && node->model)
                     nodes.push_back(node);

@@ -753,7 +753,7 @@ namespace lfs::core {
 
     void Scene::setNodeTransform(const NodeId id, const glm::mat4& transform) {
         auto* node = getNodeById(id);
-        if (node && !static_cast<bool>(node->locked)) {
+        if (node && !isNodeEffectivelyLocked(id)) {
             node->local_transform.set(transform, false);
             invalidateTransformCache();
         } else if (node) {
@@ -5505,6 +5505,15 @@ namespace lfs::core {
     Uuid Scene::getNodeUuid(const NodeId id) const {
         const auto* node = getNodeById(id);
         return node ? node->uuid : Uuid{};
+    }
+
+    bool Scene::isNodeEffectivelyLocked(NodeId id) const {
+        while (const auto* node = getNodeById(id)) {
+            if (static_cast<bool>(node->locked))
+                return true;
+            id = node->parent_id;
+        }
+        return false;
     }
 
     bool Scene::isNodeEffectivelyVisible(const NodeId id) const {

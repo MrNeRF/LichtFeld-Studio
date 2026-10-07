@@ -381,6 +381,7 @@ namespace lfs::core {
         void markPayloadDiverged(NodeId id);
 
         [[nodiscard]] bool isNodeEffectivelyVisible(NodeId id) const;
+        [[nodiscard]] bool isNodeEffectivelyLocked(NodeId id) const;
         [[nodiscard]] glm::vec3 getNodeBoundsCenter(NodeId id) const;
         [[nodiscard]] bool getNodeBounds(NodeId id, glm::vec3& out_min, glm::vec3& out_max) const;
 
