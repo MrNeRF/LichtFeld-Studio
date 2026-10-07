@@ -6162,7 +6162,7 @@ namespace lfs::vis {
         const bool is_selection_tool = (tool == ToolType::Selection);
         auto* rendering_manager = services().renderingOrNull();
 
-        if (selection_service_ && rendering_manager) {
+        if (is_selection_tool && selection_service_ && rendering_manager) {
             (void)selection_service_->selectAllFiltered();
             return;
         }
