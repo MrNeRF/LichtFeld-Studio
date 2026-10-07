@@ -532,7 +532,8 @@ namespace lfs::vis {
 
         float requestDepthRetry() {
             depth_snapshot.redraw = true;
-            lfs::python::request_redraw_after(0.001);
+            // Retry at display cadence instead of waking the idle loop every millisecond.
+            lfs::python::request_redraw_after(1.0 / 60.0);
             return PointCloudVulkanRenderer::kDepthSamplePending;
         }
 

@@ -402,6 +402,24 @@ namespace lfs::vis::op {
         EXPECT_EQ(notifications, 2);
     }
 
+    TEST_F(AlignPreviewTest, ClearingStatusWithoutPickedPointsNotifiesUi) {
+        services().clearAlignPickedPoints();
+        services().setAlignStatusMessage("No surface at the selected point", 5.0);
+        auto& store = app_store();
+        (void)store.store().drain_dirty_into_frame();
+        const auto generation = store.align_state_generation.get();
+        ASSERT_NE(services().getAlignStatusMessage(), nullptr);
+
+        services().clearAlignPickedPoints();
+        EXPECT_EQ(services().getAlignStatusMessage(), nullptr);
+        EXPECT_EQ(store.align_state_generation.get(), generation + 1);
+        EXPECT_TRUE(store.store().drain_dirty_into_frame());
+
+        services().clearAlignPickedPoints();
+        EXPECT_EQ(store.align_state_generation.get(), generation + 1);
+        EXPECT_FALSE(store.store().drain_dirty_into_frame());
+    }
+
     TEST_F(AlignPreviewTest, PointCloudCanAlignBeforeTraining) {
         auto& scene = manager_->getScene();
         const auto dataset = scene.addDataset("dataset");

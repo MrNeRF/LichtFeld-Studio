@@ -113,7 +113,7 @@ namespace lfs::vis {
         }
         [[nodiscard]] const std::vector<glm::vec3>& getAlignPickedPoints() const { return align_picked_points_; }
         void clearAlignPickedPoints() {
-            const bool changed = !align_picked_points_.empty();
+            const bool changed = !align_picked_points_.empty() || !align_status_message_.empty();
             align_picked_points_.clear();
             align_selected_point_.reset();
             clearAlignStatusMessage();
