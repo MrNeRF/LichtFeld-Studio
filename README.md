@@ -23,7 +23,7 @@ LichtFeld Studio lets you train new scenes from COLMAP datasets, resume checkpoi
 
 [**Download Windows (Portal)**](https://portal.lichtfeld.io/) •
 [**Build From Source**](docs/building_and_distribution.md) •
-[**Plugin System**](docs/plugin-system.md) •
+[**Python API and Plugins**](docs/plugins/README.md) •
 [**MCP Guide**](docs/docs/development/mcp/index.md) •
 [**Support Development**](#support-development) •
 [**Join Discord**](https://discord.gg/TbxJST2BbC)
@@ -113,7 +113,7 @@ Current project notes:
 - [Project Wiki](https://github.com/MrNeRF/LichtFeld-Studio/wiki/)
 - [FAQ](https://github.com/MrNeRF/LichtFeld-Studio/wiki/Frequently-Asked-Questions)
 - [Source Build Guide](docs/building_and_distribution.md)
-- [Plugin System](docs/plugin-system.md)
+- [Python API and Plugins](docs/plugins/README.md)
 - [Plugin Developer Guide](docs/plugins/getting-started.md)
 - [MCP Guide](docs/docs/development/mcp/index.md)
 - [Plugin Examples](docs/plugins/examples/README.md)
