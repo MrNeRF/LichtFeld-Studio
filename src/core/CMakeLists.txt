@@ -100,6 +100,7 @@ set(CORE_SOURCES
         octree_lod.cpp
         splat_data.cpp
         splat_data_mirror.cpp
+        splat_data_mirror_centroid.cu
         splat_data_transform.cpp
         splat_exportable_storage.cpp
         sh_value_quant.cpp

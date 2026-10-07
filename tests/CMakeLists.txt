@@ -454,6 +454,7 @@ set(TEST_FILES
     test_splat_affine_transform.cpp
     test_splat_sh_affine.cpp
     test_splat_data_clone.cpp
+    test_splat_data_mirror.cpp
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp
     test_tensor_views.cpp
