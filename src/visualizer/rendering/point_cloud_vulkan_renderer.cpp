@@ -537,29 +537,39 @@ namespace lfs::vis {
             return PointCloudVulkanRenderer::kDepthSamplePending;
         }
 
-        std::expected<float, std::string> sampleDepthAsync(VulkanContext& context_arg, const PointCloudVulkanRenderer::DepthSampleRequest& request) {
+        [[nodiscard]] static lfs::Error depthSampleError(std::string detail) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Internal,
+                .domain = lfs::ErrorDomain::Vulkan,
+                .user_message = "Point-cloud depth sampling failed.",
+                .detail = std::move(detail),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+
+        lfs::Result<float> sampleDepthAsync(VulkanContext& context_arg, const PointCloudVulkanRenderer::DepthSampleRequest& request) {
             std::lock_guard lock(command_mutex);
             const auto slot_index = static_cast<std::size_t>(request.output_slot);
             if (!initialized || &context_arg != context || slot_index >= slots.size() ||
                 slots[slot_index].depth_image == VK_NULL_HANDLE)
-                return std::unexpected("No point-cloud output for asynchronous depth sampling");
+                return depthSampleError("No point-cloud output for asynchronous depth sampling");
             const auto& slot = slots[slot_index];
             const auto source = request.source_size;
             const auto pixel = request.pixel;
             if (source.x <= 0 || source.y <= 0 || pixel.x < 0 || pixel.y < 0 ||
                 pixel.x >= source.x || pixel.y >= source.y)
-                return std::unexpected("Point-cloud depth pixel is outside the viewport");
+                return depthSampleError("Point-cloud depth pixel is outside the viewport");
             if (depth_snapshot.state == DepthSnapshot::State::Pending) {
                 const auto status = vkGetFenceStatus(device, depth_snapshot.fence);
                 if (status == VK_NOT_READY) {
                     return requestDepthRetry();
                 }
                 if (status != VK_SUCCESS)
-                    return std::unexpected(vkError("vkGetFenceStatus(point-cloud depth)", status));
+                    return depthSampleError(vkError("vkGetFenceStatus(point-cloud depth)", status));
                 depth_snapshot.state = DepthSnapshot::State::Empty;
                 const auto result = vmaInvalidateAllocation(allocator, depth_snapshot.staging.allocation, 0, VK_WHOLE_SIZE);
                 if (result != VK_SUCCESS)
-                    return std::unexpected(vkError("vmaInvalidateAllocation(point-cloud depth)", result));
+                    return depthSampleError(vkError("vmaInvalidateAllocation(point-cloud depth)", result));
                 depth_snapshot.state = DepthSnapshot::State::Ready;
                 for (auto& retired : retired_depth_outputs)
                     destroySlot(retired);
@@ -569,9 +579,9 @@ namespace lfs::vis {
                 return depth_snapshot.sample(pixel, source);
             depth_snapshot.state = DepthSnapshot::State::Empty;
             if (auto result = ensureDepthSnapshotResources(slot.size); !result)
-                return std::unexpected(result.error());
+                return result.error();
             if (auto result = submitDepthSnapshot(slot); !result)
-                return std::unexpected(result.error());
+                return result.error();
             depth_snapshot.state = DepthSnapshot::State::Pending;
             depth_snapshot.target = request.output_slot;
             depth_snapshot.identity = slot.depth_identity;
@@ -581,7 +591,7 @@ namespace lfs::vis {
             return requestDepthRetry();
         }
 
-        std::expected<void, std::string> ensureDepthSnapshotResources(glm::ivec2 size) {
+        lfs::Status ensureDepthSnapshotResources(glm::ivec2 size) {
             if (depth_snapshot.pool == VK_NULL_HANDLE || depth_snapshot.command == VK_NULL_HANDLE || depth_snapshot.fence == VK_NULL_HANDLE) {
                 if (depth_snapshot.fence != VK_NULL_HANDLE)
                     vkDestroyFence(device, depth_snapshot.fence, nullptr);
@@ -595,18 +605,18 @@ namespace lfs::vis {
                 pool.queueFamilyIndex = context->graphicsQueueFamily();
                 auto result = vkCreateCommandPool(device, &pool, nullptr, &depth_snapshot.pool);
                 if (result != VK_SUCCESS)
-                    return std::unexpected(vkError("vkCreateCommandPool(point-cloud depth)", result));
+                    return lfs::Status::failure(depthSampleError(vkError("vkCreateCommandPool(point-cloud depth)", result)));
                 VkCommandBufferAllocateInfo allocate{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
                 allocate.commandPool = depth_snapshot.pool;
                 allocate.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
                 allocate.commandBufferCount = 1;
                 result = vkAllocateCommandBuffers(device, &allocate, &depth_snapshot.command);
                 if (result != VK_SUCCESS)
-                    return std::unexpected(vkError("vkAllocateCommandBuffers(point-cloud depth)", result));
+                    return lfs::Status::failure(depthSampleError(vkError("vkAllocateCommandBuffers(point-cloud depth)", result)));
                 VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
                 result = vkCreateFence(device, &fence_info, nullptr, &depth_snapshot.fence);
                 if (result != VK_SUCCESS)
-                    return std::unexpected(vkError("vkCreateFence(point-cloud depth)", result));
+                    return lfs::Status::failure(depthSampleError(vkError("vkCreateFence(point-cloud depth)", result)));
             }
             const VkDeviceSize bytes = VkDeviceSize(size.x) * size.y * sizeof(float);
             if (depth_snapshot.staging.size != bytes) {
@@ -621,7 +631,7 @@ namespace lfs::vis {
                 const auto result = vmaCreateBuffer(allocator, &buffer, &allocation,
                                                     &depth_snapshot.staging.buffer, &depth_snapshot.staging.allocation, &info);
                 if (result != VK_SUCCESS)
-                    return std::unexpected(vkError("vmaCreateBuffer(point-cloud depth)", result));
+                    return lfs::Status::failure(depthSampleError(vkError("vmaCreateBuffer(point-cloud depth)", result)));
                 depth_snapshot.staging.size = bytes;
                 depth_snapshot.staging.vram_scope = "vulkan.point_cloud.depth_snapshot";
                 depth_snapshot.staging.vram_label = "interaction";
@@ -632,15 +642,15 @@ namespace lfs::vis {
             return {};
         }
 
-        std::expected<void, std::string> submitDepthSnapshot(const OutputSlotResources& slot) {
+        lfs::Status submitDepthSnapshot(const OutputSlotResources& slot) {
             auto result = vkResetCommandBuffer(depth_snapshot.command, 0);
             if (result != VK_SUCCESS)
-                return std::unexpected(vkError("vkResetCommandBuffer(point-cloud depth)", result));
+                return lfs::Status::failure(depthSampleError(vkError("vkResetCommandBuffer(point-cloud depth)", result)));
             VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
             begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             result = vkBeginCommandBuffer(depth_snapshot.command, &begin);
             if (result != VK_SUCCESS)
-                return std::unexpected(vkError("vkBeginCommandBuffer(point-cloud depth)", result));
+                return lfs::Status::failure(depthSampleError(vkError("vkBeginCommandBuffer(point-cloud depth)", result)));
             context->imageBarriers().transitionImage(depth_snapshot.command, slot.depth_image, slot.image_generation,
                                                      VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
             VkBufferImageCopy copy{};
@@ -653,16 +663,16 @@ namespace lfs::vis {
                                                      VK_IMAGE_ASPECT_DEPTH_BIT, slot.depth_layout);
             result = vkEndCommandBuffer(depth_snapshot.command);
             if (result != VK_SUCCESS)
-                return std::unexpected(vkError("vkEndCommandBuffer(point-cloud depth)", result));
+                return lfs::Status::failure(depthSampleError(vkError("vkEndCommandBuffer(point-cloud depth)", result)));
             result = vkResetFences(device, 1, &depth_snapshot.fence);
             if (result != VK_SUCCESS)
-                return std::unexpected(vkError("vkResetFences(point-cloud depth)", result));
+                return lfs::Status::failure(depthSampleError(vkError("vkResetFences(point-cloud depth)", result)));
             VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
             submit.commandBufferCount = 1;
             submit.pCommandBuffers = &depth_snapshot.command;
             result = lfs::rendering::vk_queue_submit_synced(context->graphicsQueue(), 1, &submit, depth_snapshot.fence);
             if (result != VK_SUCCESS)
-                return std::unexpected(vkError("vkQueueSubmit(point-cloud depth)", result));
+                return lfs::Status::failure(depthSampleError(vkError("vkQueueSubmit(point-cloud depth)", result)));
             return {};
         }
 
@@ -2521,13 +2531,13 @@ namespace lfs::vis {
         return impl_->readOutputImage(context, output_slot);
     }
 
-    std::expected<float, std::string> PointCloudVulkanRenderer::sampleDepthAtPixel(
+    lfs::Result<float> PointCloudVulkanRenderer::sampleDepthAtPixel(
         VulkanContext& context, const DepthSampleRequest& request) {
         if (request.nonblocking)
             return impl_->sampleDepthAsync(context, request);
         auto result = impl_->readOutputImage(context, request.output_slot, &request);
         if (!result)
-            return std::unexpected(result.error());
+            return Impl::depthSampleError(std::move(result.error()));
         return (*result)->ptr<float>()[0];
     }
 

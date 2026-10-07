@@ -71,7 +71,7 @@ namespace {
                                           : glm::perspective(glm::radians(90.0f), 1.0f, 0.1f, 100.0f);
             ASSERT_TRUE(renderer.render(context, request, target));
             const auto depth = renderer.sampleDepthAtPixel(context, {.pixel = {32, 32}, .source_size = {64, 64}, .output_slot = target});
-            ASSERT_TRUE(depth) << depth.error();
+            ASSERT_TRUE(depth) << lfs::format_for_developer(depth.error());
             EXPECT_NEAR(*depth, 5.0f, 1e-3f);
             lfs::vis::PointCloudVulkanRenderer::DepthSampleRequest async_request{
                 .pixel = {32, 32},

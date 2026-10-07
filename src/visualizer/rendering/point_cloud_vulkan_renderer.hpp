@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "rendering/rendering.hpp"
@@ -138,7 +139,7 @@ namespace lfs::vis {
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main);
 
-        [[nodiscard]] std::expected<float, std::string> sampleDepthAtPixel(
+        [[nodiscard]] lfs::Result<float> sampleDepthAtPixel(
             VulkanContext& context, const DepthSampleRequest& request);
         [[nodiscard]] bool takeRefinementRequest();
 
