@@ -6,6 +6,8 @@
 #include "preferences.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -912,6 +914,12 @@ namespace {
         return 0;
     }
 
+    void shutdown_python_tensor_backend() noexcept {
+        if (const auto status = lfs::core::shutdown_gpu_backend(lfs::core::configured_gpu_backend()); !status) {
+            std::fputs("LichtFeld Python: selected tensor backend shutdown failed\n", stderr);
+        }
+    }
+
 } // namespace
 
 lfs::Result<void> lfs::python::clear_application_scene() {
@@ -920,6 +928,13 @@ lfs::Result<void> lfs::python::clear_application_scene() {
 
 NB_MODULE(lichtfeld, m) {
     m.doc() = "LichtFeld Python control module for Gaussian splatting";
+
+    // Extension processes do not pass through the application's normal GPU
+    // teardown. Shut down the selected backend after Python objects are
+    // finalized and before C++ static destructors release driver state.
+    if (std::atexit(shutdown_python_tensor_backend) != 0) {
+        throw std::runtime_error("Failed to register tensor backend shutdown");
+    }
 
     // Phase 9 Section 1.3: create the lichtfeld.Error hierarchy and install the
     // single LIFO exception translator FIRST, before any binding group registers,
