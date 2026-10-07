@@ -2746,6 +2746,49 @@ namespace lfs::vis {
         EXPECT_EQ(point_cloud_request.overlay.transient_mask.mask, nullptr);
     }
 
+    // Gating the whole selection overlay instead of only the Gaussian mask would drop node emphasis too.
+    TEST(ViewportRequestBuilderTest, HiddenGaussianSelectionKeepsNodeEmphasis) {
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        Viewport viewport(640, 480);
+        SceneRenderState scene_state;
+        scene_state.selection_mask = std::make_shared<Tensor>(
+            Tensor::zeros({size_t{2}}, Device::CPU, DataType::UInt8));
+        scene_state.selection_mask->ptr<std::uint8_t>()[0] = 1;
+        scene_state.has_selection = true;
+        scene_state.selected_node_mask = {true, false};
+
+        RenderSettings settings;
+        settings.desaturate_unselected = true;
+
+        FrameContext ctx{
+            .viewport = viewport,
+            .scene_state = scene_state,
+            .settings = settings,
+            .render_size = {640, 480},
+            .viewport_pos = {0, 0},
+            .selection_flash_intensity = 0.5f,
+        };
+        const std::vector<glm::mat4> transforms{glm::mat4(1.0f)};
+
+        const auto shown = buildViewportRenderRequest(ctx, {640, 480});
+        EXPECT_EQ(shown.overlay.emphasis.mask, scene_state.selection_mask);
+        EXPECT_TRUE(shown.overlay.has_selection);
+        EXPECT_EQ(buildPointCloudRenderRequest(ctx, {640, 480}, transforms).overlay.selection_mask,
+                  scene_state.selection_mask);
+
+        ctx.gaussian_selection_visible = false;
+        const auto hidden = buildViewportRenderRequest(ctx, {640, 480});
+        EXPECT_EQ(hidden.overlay.emphasis.mask, nullptr);
+        EXPECT_FALSE(hidden.overlay.has_selection);
+        EXPECT_EQ(hidden.overlay.emphasis.emphasized_node_mask, scene_state.selected_node_mask);
+        EXPECT_TRUE(hidden.overlay.emphasis.dim_non_emphasized);
+        EXPECT_FLOAT_EQ(hidden.overlay.emphasis.flash_intensity, 0.5f);
+        EXPECT_EQ(buildPointCloudRenderRequest(ctx, {640, 480}, transforms).overlay.selection_mask, nullptr);
+    }
+
     TEST_F(RenderingManagerEventsTest, SceneLoadedDisablesGtComparison) {
         SceneManager scene_manager;
         addDatasetCameraWithImage(scene_manager);

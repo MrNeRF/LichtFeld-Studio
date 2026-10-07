@@ -616,6 +616,12 @@ namespace lfs::vis {
         [[nodiscard]] SelectionPreviewMode getSelectionPreviewMode() const {
             return viewport_overlay_service_.selectionPreviewMode();
         }
+        void setGaussianSelectionVisible(const bool visible) {
+            if (gaussian_selection_visible_ == visible)
+                return;
+            gaussian_selection_visible_ = visible;
+            markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
+        }
         [[nodiscard]] int getHoveredGaussianId() const { return viewport_overlay_service_.hoveredGaussianId(); }
 
         // Gizmo state for wireframe sync during manipulation
@@ -1003,6 +1009,7 @@ namespace lfs::vis {
         ViewportInteractionContext viewport_interaction_context_;
 
         ViewportOverlayService viewport_overlay_service_;
+        bool gaussian_selection_visible_ = true;
 
         lfs::event::ScopedHandler event_handlers_;
 

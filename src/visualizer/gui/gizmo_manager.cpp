@@ -1231,6 +1231,9 @@ namespace lfs::vis::gui {
             return;
         last_tool_state_stamp_ = stamp;
 
+        if (rendering_manager)
+            rendering_manager->setGaussianSelectionVisible(is_selection_mode);
+
         if (scene_manager && !ui_hidden) {
             bool is_transform_tool = false;
             if (has_selected_node && !gizmo_type.empty()) {

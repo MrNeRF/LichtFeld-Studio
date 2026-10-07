@@ -783,6 +783,41 @@ TEST_F(OperatorRegistryPropsTest, EditorContextDisablesTransformToolsForMixedUns
                  "selection contains unsupported nodes");
 }
 
+// Checking the crop box node itself leaves Mirror and Align unavailable and ignores the parent's lock.
+TEST_F(OperatorRegistryPropsTest, EditorContextResolvesSelectedCropVolumeToItsParent) {
+    using lfs::vis::ToolType;
+
+    add_node("model");
+    auto& scene = scene_manager_->getScene();
+    const auto model_id = scene.getNode("model")->id;
+    const auto cropbox_id = scene.getOrCreateCropBoxForSplat(model_id);
+    ASSERT_NE(cropbox_id, lfs::core::NULL_NODE);
+    const std::string cropbox_name = scene.getNodeById(cropbox_id)->name;
+
+    lfs::vis::EditorContext model_editor;
+    scene_manager_->selectNode("model");
+    model_editor.update(scene_manager_.get(), nullptr);
+
+    lfs::vis::EditorContext crop_editor;
+    scene_manager_->selectNode(cropbox_name);
+    crop_editor.update(scene_manager_.get(), nullptr);
+
+    EXPECT_EQ(crop_editor.getSelectedNodeType(), lfs::core::NodeType::CROPBOX);
+    for (const auto tool : {ToolType::Selection, ToolType::Translate, ToolType::Rotate, ToolType::Scale,
+                            ToolType::Mirror, ToolType::Align}) {
+        EXPECT_TRUE(model_editor.isToolAvailable(tool)) << static_cast<int>(tool);
+        EXPECT_EQ(crop_editor.isToolAvailable(tool), model_editor.isToolAvailable(tool)) << static_cast<int>(tool);
+    }
+
+    scene.setNodeLocked("model", true);
+    lfs::vis::EditorContext locked_editor;
+    locked_editor.update(scene_manager_.get(), nullptr);
+    EXPECT_TRUE(locked_editor.isToolAvailable(ToolType::Selection));
+    EXPECT_FALSE(locked_editor.isToolAvailable(ToolType::Translate));
+    EXPECT_FALSE(locked_editor.isToolAvailable(ToolType::Mirror));
+    EXPECT_FALSE(locked_editor.isToolAvailable(ToolType::Align));
+}
+
 TEST_F(OperatorRegistryPropsTest, LegacyTransformRotateUsesEditableTargetPivotOnly) {
     add_node("editable", {
                              0.0f,
