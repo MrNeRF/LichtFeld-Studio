@@ -394,7 +394,8 @@ TEST(PointCloudUpdates, RestoreKeepsPreparedViewGenerationWithItsPayload) {
     EXPECT_FALSE(previous->preparedPointCloudRender());
 }
 
-#if LFS_GRAPHICS_VULKAN
+// PointCloudVulkanRenderer is built only without the Metal tensor backend.
+#if LFS_GRAPHICS_VULKAN && !defined(LFS_TENSOR_METAL)
 #include "rendering/point_cloud_vulkan_renderer.hpp"
 #include "window/vulkan_graphics_context.hpp"
 #include <cstdlib>

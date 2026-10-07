@@ -669,7 +669,7 @@ static void run(bool compare_vulkan) {
     vis::PointCloudUpdateInput input;
     input.points = Tensor::from_vector(std::vector<float> { 0, 0, -3, 0, 0, -6 }, { 2, 3 }, Device::CPU);
     input.colors = Tensor::from_vector(std::vector<float> { 0, 255, 0, 255, 0, 0 }, { 2, 3 }, Device::CPU).to(core::DataType::UInt8);
-    auto update = updates.submit({ }, std::move(input));
+    auto update = updates.submit({nullptr, 1, core::generate_uuid_v4(), std::make_shared<std::atomic<uint64_t>>(0), 0}, std::move(input));
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
     while (!updates.hasReady() && update->state() != "failed" && std::chrono::steady_clock::now() < deadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
