@@ -62,6 +62,7 @@ class GettingStartedPanel(Panel):
     """Floating panel displaying tutorial videos and documentation."""
 
     def __init__(self):
+        self._section = "highlights"
         self._handle = None
         self._ready_lock = threading.Lock()
         self._ready_queue = []
@@ -76,8 +77,21 @@ class GettingStartedPanel(Panel):
             return
 
         model.bind_func("panel_label", lambda: lf.ui.tr("getting_started.title"))
+        for section in ("highlights", "training", "datasets"):
+            model.bind_func(f"show_{section}",
+                            lambda section=section: self._section == section)
+            model.bind_event(f"show_{section}",
+                             lambda *_args, section=section: self._set_section(section))
         model.bind_event("open_url", self._on_open_url)
         self._handle = model.get_handle()
+
+    def _set_section(self, section):
+        if self._section == section:
+            return
+        self._section = section
+        if self._handle:
+            for name in ("show_highlights", "show_training", "show_datasets"):
+                self._handle.dirty(name)
 
     def on_mount(self, doc):
         super().on_mount(doc)

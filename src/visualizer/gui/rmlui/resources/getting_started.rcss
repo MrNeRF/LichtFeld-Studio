@@ -1,3 +1,20 @@
+.guide-tabs {
+    display: flex;
+    gap: 6dp;
+    margin: 4dp 0 10dp;
+}
+
+.guide-tab {
+    flex: 1;
+    text-align: center;
+}
+
+.section-hint {
+    font-size: 12dp;
+    line-height: 18dp;
+    margin: 0 0 12dp;
+}
+
 .video-grid {
     display: flex;
     flex-wrap: wrap;
@@ -6,7 +23,10 @@
 }
 
 .video-card {
+    flex: 0 0 160dp;
     width: 160dp;
+    padding: 0;
+    text-align: left;
     cursor: pointer;
 }
 
@@ -16,6 +36,7 @@
     align-items: center;
     height: 90dp;
     border-width: 1dp;
+    border-radius: 6dp;
     transition: background-color border-color 0.12s quadratic-out;
 }
 
@@ -26,14 +47,37 @@
 .card-title {
     display: block;
     font-size: 12dp;
+    line-height: 18dp;
+    min-height: 36dp;
+    margin-top: 8dp;
+}
+
+.card-action {
+    display: block;
+    font-size: 11dp;
     margin-top: 4dp;
-    text-align: center;
+}
+
+.guide-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8dp;
+    border-top-width: 1dp;
+    padding-top: 12dp;
+    margin-top: 12dp;
+}
+
+.browser-hint {
+    font-size: 11dp;
 }
 
 .wiki-link {
     cursor: pointer;
 }
 
-.wiki-link:hover {
+.wiki-link:hover,
+.wiki-link:focus-visible {
     text-decoration: underline;
 }
