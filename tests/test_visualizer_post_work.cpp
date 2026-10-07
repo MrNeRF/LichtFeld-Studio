@@ -4205,6 +4205,109 @@ contract["test_selection_submode_follows_native_mode"](lf)
     }
 
     TEST_F(VisualizerImplResetTest,
+           SaveAsSettlesCompletedSidecarAutosave) {
+        const auto& temporary = temporary_.path;
+        const auto source_path = temporary / "source.licht";
+        const auto destination_path =
+            temporary / "destination.licht";
+        const auto sidecar =
+            lfs::io::project::autosave_sidecar_path(
+                source_path);
+
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(
+            viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ =
+            std::make_unique<InputController>(
+                nullptr, viewer.getViewport());
+        ASSERT_NE(
+            viewer.getScene().addGroup("Initial content"),
+            lfs::core::NULL_NODE);
+        ASSERT_TRUE(
+            viewer.projectSaveAs(source_path, false));
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_, viewer.work_queue_,
+            [&] {
+                return !viewer.jobs().anyRunning(
+                    JobType::ProjectWrite);
+            }));
+
+        const auto autosaved_group =
+            viewer.getScene().addGroup("Autosaved content");
+        ASSERT_NE(autosaved_group, lfs::core::NULL_NODE);
+        const auto edited_transform = glm::translate(
+            glm::mat4(1.0f), glm::vec3(1.25f, -2.5f, 0.75f));
+        viewer.getScene().setNodeTransform(
+            autosaved_group, edited_transform);
+        ASSERT_TRUE(
+            viewer.project_lifecycle_->startAutosave());
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_, viewer.work_queue_,
+            [&] {
+                return !viewer.jobs().anyRunning(
+                    JobType::ProjectWrite);
+            }));
+        ASSERT_TRUE(std::filesystem::is_regular_file(sidecar));
+        const auto source_bytes_before_save_as =
+            lfs::test::licht::read_file_bytes(source_path);
+        const auto sidecar_bytes_before_save_as =
+            lfs::test::licht::read_file_bytes(sidecar);
+
+        const auto saved =
+            viewer.projectSaveAs(destination_path, false);
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_, viewer.work_queue_,
+            [&] {
+                return !viewer.jobs().anyRunning(
+                    JobType::ProjectWrite);
+            }));
+        EXPECT_TRUE(
+            std::filesystem::is_regular_file(source_path));
+        EXPECT_TRUE(
+            std::filesystem::is_regular_file(destination_path));
+        EXPECT_EQ(
+            lfs::test::licht::read_file_bytes(source_path),
+            source_bytes_before_save_as);
+        EXPECT_TRUE(std::filesystem::is_regular_file(sidecar));
+        EXPECT_EQ(
+            lfs::test::licht::read_file_bytes(sidecar),
+            sidecar_bytes_before_save_as);
+        const auto source_recovery =
+            lfs::test::licht::require_result(
+                lfs::io::project::inspect_autosave_recovery(
+                    source_path));
+        EXPECT_EQ(
+            source_recovery.disposition,
+            lfs::io::project::RecoveryDisposition::Offer);
+        EXPECT_EQ(
+            lfs::test::licht::read_file_bytes(sidecar),
+            sidecar_bytes_before_save_as);
+        auto saved_document =
+            lfs::test::licht::require_result(
+                lfs::io::project::ProjectDocument::open(
+                    destination_path));
+        const auto saved_nodes =
+            lfs::test::licht::require_result(
+                saved_document.scene_graph().nodes());
+        const auto saved_group = std::ranges::find_if(
+            saved_nodes, [](const auto& node) {
+                return node.name == "Autosaved content";
+            });
+        ASSERT_NE(saved_group, saved_nodes.end());
+        EXPECT_EQ(saved_group->local_transform[12], 1.25f);
+        EXPECT_EQ(saved_group->local_transform[13], -2.5f);
+        EXPECT_EQ(saved_group->local_transform[14], 0.75f);
+        const auto info = viewer.projectGetInfo();
+        ASSERT_TRUE(info);
+        ASSERT_TRUE(info->path.has_value());
+        EXPECT_EQ(
+            info->path->lexically_normal(),
+            destination_path.lexically_normal());
+    }
+
+    TEST_F(VisualizerImplResetTest,
            RecoveryDismissalPersistsAndNewerCandidateIsOffered) {
         const auto& temporary = temporary_.path;
         const auto project_path =

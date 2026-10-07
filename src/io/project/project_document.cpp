@@ -4886,8 +4886,51 @@ namespace lfs::io::project {
             .cancel = options.save_as_cancel,
             .excluded_checkpoints = options.save_as_excluded_checkpoints,
         };
-        auto compacted = ProjectWriter::compact_to(
-            original_path, temporary, compaction_options);
+        const auto source_autosave =
+            autosave_sidecar_path(original_path);
+        error.clear();
+        const bool preserve_source_autosave =
+            std::filesystem::is_regular_file(
+                source_autosave, error);
+        if (error == std::errc::no_such_file_or_directory) {
+            error.clear();
+        }
+        if (error) {
+            remove_temporary();
+            return fail<ProjectDocumentSaveReport>(
+                lfs::ErrorCode::Unavailable,
+                "The source project's autosave state could not be inspected.",
+                std::format("is_regular_file failed: {}", error.message()),
+                "project.save_as.autosave");
+        }
+
+        lfs::Result<void> compacted;
+        if (preserve_source_autosave) {
+            // The sidecar belongs to the original project and must remain
+            // available there. Save As uses the live document below, so
+            // compact a private copy of the master without touching either
+            // source file; save() then writes the live state to this copy.
+            if (!std::filesystem::copy_file(
+                    original_path, temporary,
+                    std::filesystem::copy_options::none, error)) {
+                remove_temporary();
+                const bool disk_full = detail::disk_full(error);
+                return fail<ProjectDocumentSaveReport>(
+                    disk_full ? lfs::ErrorCode::ResourceExhausted
+                              : lfs::ErrorCode::Unavailable,
+                    disk_full ? lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE
+                              : "The project could not be staged for Save As.",
+                    std::format("copy_file failed: {}", error.message()),
+                    "project.save_as.copy");
+            }
+            auto private_compaction_options = compaction_options;
+            private_compaction_options.writer_lock_lease.reset();
+            compacted = ProjectWriter::compact(
+                temporary, private_compaction_options);
+        } else {
+            compacted = ProjectWriter::compact_to(
+                original_path, temporary, compaction_options);
+        }
         if (!compacted &&
             compacted.error().code() == lfs::ErrorCode::Unavailable) {
             // Save As is read-only on the original and may proceed while

@@ -48,6 +48,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
     class VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
     class VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
+    class VisualizerImplResetTest_SaveAsSettlesCompletedSidecarAutosave_Test;
     class VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
     class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
     class VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
@@ -379,6 +380,7 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_AsyncPausedExplicitPreparationAdoptsItsSnapshot_Test;
 
         friend class lfs::vis::VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveAsSettlesCompletedSidecarAutosave_Test;
         friend class lfs::vis::VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
         friend class lfs::vis::VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
