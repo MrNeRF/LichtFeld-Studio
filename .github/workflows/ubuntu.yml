@@ -172,7 +172,11 @@ jobs:
         if: matrix.build_type == 'Release'
         run: |
           cmake --build build --target media_contracts --parallel 2
-          ctest --test-dir build -L media --output-on-failure --no-tests=error
+          # Match the CPU Python tests: the runner has no NVIDIA driver.
+          mkdir -p "$RUNNER_TEMP/cuda-driver-stub"
+          ln -sf /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/cuda-driver-stub/libcuda.so.1"
+          LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            ctest --test-dir build -L media -LE gpu --output-on-failure --no-tests=error
 
       - name: Run viewer backend policy contracts
         run: |

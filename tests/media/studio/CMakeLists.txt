@@ -5,6 +5,20 @@ set_target_properties(media_mcp_runner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CM
 target_include_directories(media_mcp_runner PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/app/include)
 target_compile_features(media_mcp_runner PRIVATE cxx_std_23)
 target_link_libraries(media_mcp_runner PRIVATE lfs_mcp lfs_media lfs_core)
+if(LFS_HAS_CUDA)
+    # Resolve the driver dependency explicitly, including toolkit stubs on
+    # build-only Linux hosts where no NVIDIA driver is installed.
+    target_link_libraries(media_mcp_runner PRIVATE CUDA::cuda_driver)
+    if(MSVC)
+        # CPU contract hosts must also load without the Windows display driver.
+        # Match the existing CPU visualizer test policy; native GPU paths load
+        # nvcuda.dll when they actually call a driver API.
+        foreach(_media_cpu_host IN ITEMS lfs_core lfs_mcp)
+            target_link_options(${_media_cpu_host} PRIVATE "/DELAYLOAD:nvcuda.dll")
+            target_link_libraries(${_media_cpu_host} PRIVATE delayimp)
+        endforeach()
+    endif()
+endif()
 if(APPLE)
     # Studio's shared libraries resolve CPython from their host process on macOS.
     # This native runner must supply the complete embedding runtime, just like

@@ -133,7 +133,7 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           cmake --build build-macos-release --target media_contracts --parallel 2
-          ctest --test-dir build-macos-release -L media --output-on-failure --no-tests=error
+          ctest --test-dir build-macos-release -L media -LE gpu --output-on-failure --no-tests=error
 
       - name: Run GPU and VideoToolbox tests
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
