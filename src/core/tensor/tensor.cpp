@@ -923,6 +923,10 @@ namespace lfs::core {
             }
             return;
         }
+        // Zero-byte tensors own a static sentinel, not an allocator block.
+        if (data_ == nullptr) {
+            return;
+        }
         if (device_ == Device::CUDA) {
             if (!has_external_storage()) {
                 CudaMemoryPool::instance().record_stream(data_owner_.get(), stream);
