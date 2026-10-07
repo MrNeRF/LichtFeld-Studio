@@ -352,6 +352,7 @@ namespace lfs::training {
             uint64_t partials, result, mask_sum;
             uint32_t count, masked;
             float channels, scale, divisor, offset;
+            float denominator = 0.f;
         };
 
         // result = offset + scale * (sum(partials[0..count)) / divisor).
@@ -362,9 +363,9 @@ namespace lfs::training {
         }
 
         // ssim_reduction.cu normalizes by mask_sum * N * C.
-        void reduce_masked(const Tensor& partials, const uint32_t count, Tensor& loss, Tensor& mask_sum, const int channels) {
+        void reduce_masked(const Tensor& partials, const uint32_t count, Tensor& loss, Tensor& mask_sum, const int channels, const float denominator) {
             const ReduceParams params{mk::address(partials), mk::address(loss), mk::address(mask_sum), count, 1,
-                                      static_cast<float>(channels), 1.f, 1.f, 0.f};
+                                      static_cast<float>(channels), 1.f, 1.f, 0.f, denominator};
             mk::launch("loss_reduce_final", params, {&partials, &loss, &mask_sum}, 1, kMaxGroups);
         }
 
@@ -497,7 +498,7 @@ namespace lfs::training {
                                                   .partials = ws.temp},
                                                  mode, !pure, weight, padding);
             if (masked)
-                reduce_masked(ws.temp, groups, ws.result, ws.mask_sum, images.n * images.c);
+                reduce_masked(ws.temp, groups, ws.result, ws.mask_sum, images.n * images.c, params.denominator);
             else if (pure) // loss = 1 - mean SSIM
                 reduce_final(ws.temp, groups, ws.result, -1.f, static_cast<float>(valid_count(images, padding)), 1.f);
             else

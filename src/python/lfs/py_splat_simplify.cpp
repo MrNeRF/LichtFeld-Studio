@@ -15,9 +15,17 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include <cmath>
+#include <stdexcept>
+
 namespace nb = nanobind;
 
 namespace {
+
+    void validate_simplify_ratio(const double ratio) {
+        if (!std::isfinite(ratio))
+            throw std::invalid_argument("ratio must be finite");
+    }
 
     struct PyProgressCallback {
         nb::object callback;
@@ -163,6 +171,7 @@ namespace lfs::python {
                double ratio,
                float lod_base,
                float opacity_prune_threshold) {
+                validate_simplify_ratio(ratio);
                 auto* scene = get_application_scene();
                 if (!scene)
                     throw std::runtime_error("No scene available");
@@ -196,6 +205,7 @@ namespace lfs::python {
                float lod_base,
                float opacity_prune_threshold,
                nb::object progress) {
+                validate_simplify_ratio(ratio);
                 core::SplatSimplifyOptions opts;
                 opts.ratio = ratio;
                 opts.lod_base = lod_base;

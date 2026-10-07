@@ -102,6 +102,7 @@ namespace lfs::training {
             uint64_t raw_opacity, log_scales, frozen;
             uint32_t frozen_count, count;
             float opacity_decay, scale_decay, train_t;
+            uint64_t rendered_count;
         };
 
         void decay(Tensor& raw_opacity, Tensor& log_scales, const Tensor& frozen,
@@ -112,8 +113,8 @@ namespace lfs::training {
             const DecayKernelParams params{mk::address(raw_opacity), mk::address(log_scales), mk::address(frozen),
                                            optional_count(frozen),
                                            count32(n, "MRNF decay"), p.opacity_decay, p.scale_decay,
-                                           p.train_t};
-            mk::launch_items("mrnf_decay", params, {&raw_opacity, &log_scales, &frozen}, n);
+                                           p.train_t, mk::address(p.rendered_count)};
+            mk::launch_items("mrnf_decay", params, {&raw_opacity, &log_scales, &frozen, &p.rendered_count}, n);
         }
 
         Bounds percentile_bounds(const Tensor& means, const float percentile) {

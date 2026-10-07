@@ -170,11 +170,8 @@ static float3 fast_sh_color(device const packed_float3* sh0, device const uchar*
 }
 
 static uint fast_depth_key(const float depth, const uint depth_bits) {
-    if (depth_bits == 0u)
-        return 0u;
-    float normalized = (2.0f * depth + 1.0f) / (depth + 1.0f);
-    normalized = fmin(fmax(normalized, 1.0f), as_type<float>(0x3fffffffu));
-    return (as_type<uint>(normalized) & 0x7fffffu) >> (23u - depth_bits);
+    (void)depth_bits;
+    return as_type<uint>(depth);
 }
 
 // Bit test, immune to fast-math NaN folding.
@@ -510,7 +507,7 @@ struct FastInstanceParams {
     device const FastTileInfo* tile_info;
     device const uint* n_touched;
     device const uint* offsets;
-    device uint* keys;
+    device ulong* keys;
     device uint* values;
     uint n, grid_w, depth_bits, capacity;
 };
@@ -539,12 +536,12 @@ kernel void fast_create_instances(constant FastInstanceParams& p [[buffer(0)]], 
     if (end < begin || end > p.capacity)
         return;
     uint write_at = begin;
-    uint key = ((uint(info.bounds.z) * p.grid_w + uint(info.bounds.x)) << p.depth_bits) | info.depth_key;
+    ulong key = (ulong(uint(info.bounds.z) * p.grid_w + uint(info.bounds.x)) << 32) | ulong(info.depth_key);
     for (uint scan = walk.scan0; scan < walk.scan1 && write_at < end; ++scan) {
         const uint2 span = fast_walk_span(walk, scan);
         for (uint t = span.x; t < span.y && write_at < end; ++t) {
             const uint tile = walk.along_x ? scan * p.grid_w + t : t * p.grid_w + scan;
-            key = (tile << p.depth_bits) | info.depth_key;
+            key = (ulong(tile) << 32) | ulong(info.depth_key);
             p.keys[write_at] = key;
             p.values[write_at] = idx;
             ++write_at;
@@ -563,9 +560,9 @@ constant constexpr uint kFastSortThreads = 256u;
 constant constexpr uint kFastSortBlock = 2048u;
 
 struct FastSortParams {
-    device const uint* keys_in;
+    device const ulong* keys_in;
     device const uint* values_in;
-    device uint* keys_out;
+    device ulong* keys_out;
     device uint* values_out;
     device uint* histogram;
     device const uint* counts;
@@ -614,8 +611,8 @@ kernel void fast_sort_scatter(constant FastSortParams& p [[buffer(0)]],
         threadgroup_barrier(mem_flags::mem_threadgroup);
         const uint i = chunk + lane;
         const bool valid = i < n;
-        const uint key = valid ? p.keys_in[i] : 0u;
-        const uint digit = (key >> p.shift) & 255u;
+        const ulong key = valid ? p.keys_in[i] : 0ul;
+        const uint digit = uint((key >> p.shift) & 255ul);
         uint peers = uint(static_cast<simd_vote::vote_t>(simd_ballot(valid)));
         for (uint b = 0; b < 8u; ++b) {
             const bool bit = ((digit >> b) & 1u) != 0u;
@@ -644,7 +641,7 @@ kernel void fast_sort_scatter(constant FastSortParams& p [[buffer(0)]],
 }
 
 struct FastRangeParams {
-    device const uint* keys;
+    device const ulong* keys;
     device uint* ranges;
     device const uint* counts;
     uint capacity, n_tiles, depth_bits, unused;
@@ -656,13 +653,13 @@ kernel void fast_tile_ranges(constant FastRangeParams& p [[buffer(0)]], const ui
     const uint n_instances = fast_instance_count(p.counts, p.capacity);
     if (idx >= n_instances)
         return;
-    const uint tile = p.keys[idx] >> p.depth_bits;
+    const uint tile = uint(p.keys[idx] >> 32);
     if (tile >= p.n_tiles)
         return;
     if (idx == 0u) {
         p.ranges[2u * tile] = 0u;
     } else {
-        const uint previous = p.keys[idx - 1u] >> p.depth_bits;
+        const uint previous = uint(p.keys[idx - 1u] >> 32);
         if (previous >= p.n_tiles)
             return;
         if (tile != previous) {

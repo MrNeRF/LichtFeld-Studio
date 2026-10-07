@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_cameras.hpp"
+#include "io/cache_image_loader.hpp"
 #include "rendering/coordinate_conventions.hpp"
 
 #include "python_compat.hpp"
@@ -106,7 +107,7 @@ namespace lfs::python {
         return PyTensor(tensor_from_vec3(visualizer_pose_from_camera(*cam_).translation).gpu(), true);
     }
 
-    PyTensor PyCamera::K() const { return PyTensor(cam_->K(), true); }
+    PyTensor PyCamera::K() const { return PyTensor(cam_->K().squeeze(0), true); }
 
     PyTensor PyCamera::view_matrix() const {
         const auto pose = visualizer_pose_from_camera(*cam_);
@@ -145,7 +146,24 @@ namespace lfs::python {
     }
 
     PyTensor PyCamera::load_image(int resize_factor, int max_width, const bool output_uint8) {
-        return PyTensor(cam_->load_and_get_image(resize_factor, max_width, output_uint8), true);
+        if (core::has_image_loader()) {
+            return PyTensor(
+                cam_->load_and_get_image(resize_factor, max_width, output_uint8), true);
+        }
+        return PyTensor(
+            cam_->load_and_get_image(
+                resize_factor, max_width, output_uint8, true,
+                [](const core::ImageLoadParams& params) {
+                    return io::CacheLoader::getInstance(false)
+                        .load_cached_image(
+                            params.path,
+                            {.resize_factor = params.resize_factor,
+                             .max_width = params.max_width,
+                             .cuda_stream = params.stream,
+                             .output_uint8 = params.output_uint8,
+                             .skip_blob_cache = params.skip_blob_cache});
+                }),
+            true);
     }
 
     PyTensor PyCamera::load_mask(int resize_factor, int max_width, bool invert, float threshold) {

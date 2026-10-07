@@ -12,6 +12,7 @@
 
 #include <cassert>
 #include <format>
+#include <stdexcept>
 
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
@@ -24,8 +25,60 @@ namespace lfs::python {
     using namespace openmesh_bindings;
     namespace OM = OpenMesh;
 
+    namespace {
+
+        void validate_mesh_tensor(const core::Tensor& tensor, const char* field, core::DataType dtype,
+                                  int64_t columns, const char* shape, bool optional, int64_t rows = -1) {
+            if (optional && (!tensor.is_valid() || tensor.numel() == 0)) {
+                return;
+            }
+            if (!tensor.is_valid() || tensor.ndim() != 2 || tensor.shape()[1] != columns || tensor.dtype() != dtype ||
+                (rows >= 0 && tensor.shape()[0] != rows)) {
+                const char* type = dtype == core::DataType::Float32 ? "float32" : "int32";
+                throw std::invalid_argument(std::format("MeshData {} must be a {} tensor with shape {}", field, type,
+                                                        shape));
+            }
+        }
+
+    } // namespace
+
+    void PyMeshData::set_vertices(const PyTensor& t) {
+        validate_mesh_tensor(t.tensor(), "vertices", core::DataType::Float32, 3, "[V, 3]", false);
+        data_->vertices = t.tensor();
+    }
+
+    void PyMeshData::set_normals(const PyTensor& t) {
+        validate_mesh_tensor(t.tensor(), "normals", core::DataType::Float32, 3, "[V, 3]", true,
+                             data_->vertex_count());
+        data_->normals = t.tensor();
+    }
+
+    void PyMeshData::set_indices(const PyTensor& t) {
+        validate_mesh_tensor(t.tensor(), "indices", core::DataType::Int32, 3, "[F, 3]", false);
+        data_->indices = t.tensor();
+    }
+
+    void PyMeshData::set_texcoords(const PyTensor& t) {
+        validate_mesh_tensor(t.tensor(), "texcoords", core::DataType::Float32, 2, "[V, 2]", true,
+                             data_->vertex_count());
+        data_->texcoords = t.tensor();
+    }
+
+    void PyMeshData::set_colors(const PyTensor& t) {
+        validate_mesh_tensor(t.tensor(), "colors", core::DataType::Float32, 4, "[V, 4]", true,
+                             data_->vertex_count());
+        data_->colors = t.tensor();
+    }
+
     PyMeshData PyMeshData::to_device(const std::string& device) const {
-        const auto target = (device == "cuda" || device == "gpu") ? core::Device::GPU : core::Device::CPU;
+        core::Device target;
+        if (device == "cuda" || device == "gpu") {
+            target = core::Device::GPU;
+        } else if (device == "cpu") {
+            target = core::Device::CPU;
+        } else {
+            throw std::invalid_argument("Unknown device: " + device);
+        }
         return PyMeshData(std::make_shared<core::MeshData>(data_->to(target)));
     }
 

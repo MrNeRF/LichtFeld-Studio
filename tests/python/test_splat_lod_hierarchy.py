@@ -85,6 +85,15 @@ def _import_hierarchy_module(monkeypatch, simplify_fn, save_fn):
     return import_module("lfs_splat_lod_hierarchy"), scene_state
 
 
+def test_build_splat_lod_hierarchy_rejects_nonfinite_ratio(monkeypatch):
+    def _unexpected_simplify(*args, **kwargs):
+        pytest.fail("simplification must not run for a non-finite ratio")
+
+    module, _ = _import_hierarchy_module(monkeypatch, _unexpected_simplify, lambda *args, **kwargs: None)
+    with pytest.raises(ValueError, match="ratio must be finite"):
+        module.build_splat_lod_hierarchy(_FakeSplatData("source", 4), ratio=float("nan"), max_levels=2)
+
+
 def test_build_splat_lod_hierarchy_tracks_global_node_ids_across_levels(monkeypatch):
     source = _FakeSplatData("lod0", 4)
     lod1 = _FakeSplatData("lod1", 3)
@@ -226,6 +235,31 @@ def test_hierarchy_save_writes_sidecar_and_node_id_attributes(monkeypatch, tmp_p
 
 def test_lichtfeld_module_exposes_build_splat_lod_hierarchy(lf):
     assert hasattr(lf, "build_splat_lod_hierarchy")
+
+
+def test_hierarchy_rejects_negative_node_ids(monkeypatch):
+    module, _ = _import_hierarchy_module(monkeypatch, lambda *args, **kwargs: None, lambda *args, **kwargs: None)
+    hierarchy = module.SplatLodHierarchy(
+        source_num_points=3,
+        source_visible_count=3,
+        source_node_name=None,
+        source_node_id=None,
+        ratio=0.5,
+        lod_base=2.0,
+        opacity_prune_threshold=0.0,
+        max_levels=2,
+        min_points=1,
+        merge_node_ids=[3],
+        merge_children=[[0, 1]],
+    )
+
+    with pytest.raises(KeyError, match="Unknown node id: -1"):
+        hierarchy.is_leaf(-1)
+    with pytest.raises(KeyError, match="Unknown node id: -1"):
+        hierarchy.children(-1)
+    assert hierarchy.is_leaf(0)
+    assert hierarchy.children(0) is None
+    assert hierarchy.children(3) == [0, 1]
 
 
 def test_build_splat_lod_hierarchy_resolves_source_by_scene_node_name(monkeypatch):

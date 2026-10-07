@@ -43,6 +43,10 @@ namespace lfs::training {
         const bool mcmc = strategy == core::param::kStrategyMCMC;
         const bool mrnf = strategy == core::param::kStrategyMRNF;
         const bool igs = strategy == core::param::kStrategyIGSPlus;
+        if (opt.thin_structure_weight > 0.f || opt.gradient_loss_weight > 0.f || opt.densify_structure_weight > 0.f)
+            required.set(static_cast<size_t>(Family::Structure));
+        if (mrnf)
+            required.set(static_cast<size_t>(Family::Blob));
         if (mcmc || igs) {
             required.set(static_cast<size_t>(Family::Mcmc));
         }

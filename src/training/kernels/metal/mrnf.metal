@@ -231,6 +231,7 @@ struct MrnfDecayParams {
     float opacity_decay;
     float scale_decay;
     float train_t;
+    device const float* rendered_count;
 };
 
 kernel void mrnf_decay(constant MrnfDecayParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
@@ -242,7 +243,8 @@ kernel void mrnf_decay(constant MrnfDecayParams& p [[buffer(0)]], uint i [[threa
     const float t_shrink = 1.0f - p.train_t;
     const float opacity_delta = opacity_decay * t_shrink;
     const float raw = p.raw_opacity[i];
-    if (opacity_delta != 0.0f || mrnf_is_inf(raw))
+    if ((p.rendered_count == nullptr || p.rendered_count[i] > 0.0f) &&
+        (opacity_delta != 0.0f || mrnf_is_inf(raw)))
         p.raw_opacity[i] = mrnf_logit(mrnf_sigmoid(raw) - opacity_delta);
     const float factor = 1.0f - scale_decay * t_shrink;
     for (uint d = 0; d < 3; ++d) {

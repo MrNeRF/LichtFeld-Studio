@@ -452,6 +452,10 @@ EXPECTED_CHECKBOX_ROWS = {
         "training_params.eval_all",
         "training.tooltip.eval_all",
     ),
+    "eval_flip": (
+        "training_params.eval_flip",
+        "training.tooltip.eval_flip",
+    ),
     "eval_mask_invert": (
         "training_params.eval_mask_invert",
         "training.tooltip.eval_mask_invert",
@@ -499,13 +503,32 @@ EXPECTED_SELECT_ROWS = {
             (1, "training.options.eval_space.undistorted"),
         ),
     ),
+    "eval_bit_depth": (
+        "training_params.eval_bit_depth",
+        "training.tooltip.eval_bit_depth",
+        (
+            (0, "training.options.eval_bit_depth.auto"),
+            (1, "training.options.eval_bit_depth.eight"),
+            (2, "training.options.eval_bit_depth.sixteen"),
+            (3, "training.options.eval_bit_depth.float"),
+        ),
+    ),
 }
 
 EXPECTED_ADVANCED_IDS = (
     "means_lr_end",
     "scaling_lr_end",
+    "late_lr_anneal",
     "cropbox_lr_scale",
     "cropbox_loss_weight",
+    "scale_reg_decay_power",
+    "erank_reg",
+    "dc_reg",
+    "sh_rest_reg",
+    "thin_structure_weight",
+    "gradient_loss_weight",
+    "opacity_decay_rendered_only",
+    "densify_structure_weight",
     "morton_reorder_interval",
     "min_opacity",
     "growth_grad_threshold",
@@ -518,8 +541,8 @@ EXPECTED_ADVANCED_IDS = (
     "densify_error_map",
     "max_screen_share",
     "screen_share_penalty",
-    "oversize_split_fraction",
     "use_edge_map",
+    "ppisp_holdout_appearance",
 )
 
 
@@ -550,13 +573,13 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 64
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 64
+    assert len(property_view.MIGRATED_PROP_IDS) == 66
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 66
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 82  # Backend alone has a bespoke selector.
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 93  # Backend has a bespoke selector.
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 
@@ -616,6 +639,8 @@ def test_strategy_applicability_filters_auto_rows_and_search(lf):
     auto_mrnf_only = known_mrnf_only - {"grow_until_iter"}
     for prop_id in known_mrnf_only:
         assert properties[prop_id]["strategies"] == ["mrnf"]
+    # all_strategies() omits the strategy restriction from group_info.
+    assert properties["gradient_loss_weight"].get("strategies", []) == []
 
     params = {
         "strategy": "mcmc",
@@ -638,7 +663,9 @@ def test_strategy_applicability_filters_auto_rows_and_search(lf):
     assert not ({record["id"] for record in binding._records()} & auto_mrnf_only)
     assert "min_opacity" in {record["id"] for record in binding._records()}
     query["value"] = "edge"
-    assert binding._records() == []
+    mcmc_edge_ids = [record["id"] for record in binding._records()]
+    assert mcmc_edge_ids == ["gradient_loss_weight"]
+    assert "use_edge_map" not in mcmc_edge_ids
 
     params["strategy"] = "mnrf"
     query["value"] = ""
@@ -647,7 +674,10 @@ def test_strategy_applicability_filters_auto_rows_and_search(lf):
     }
     assert "min_opacity" not in {record["id"] for record in binding._records()}
     query["value"] = "edge"
-    assert [record["id"] for record in binding._records()] == ["use_edge_map"]
+    assert [record["id"] for record in binding._records()] == [
+        "gradient_loss_weight",
+        "use_edge_map",
+    ]
 
     curated = property_view.SectionBinding(
         "curated_strategy_filter",
@@ -742,7 +772,8 @@ def test_all_number_rows_match_registry_declarations(lf):
         assert prop_info["precision"] == precision
         assert prop_info["step"] == pytest.approx(step)
         if prop_id in property_view.LEARNING_RATES:
-            assert prop_info["live_update"] is True
+            # Opacity LR is fixed during training on this branch; late_lr_anneal schedules it.
+            assert prop_info["live_update"] is (prop_id != "opacity_lr")
 
 
 def test_checkbox_and_select_rows_match_registry_declarations(lf):

@@ -1174,7 +1174,7 @@ TEST_F(FastGSKernelTest, Optimizer_ZeroRows) {
 
     auto host_indices = Tensor::empty({indices.size()}, Device::CPU, DataType::Int64);
     std::memcpy(host_indices.ptr<int64_t>(), indices.data(), indices.size() * sizeof(int64_t));
-    auto device_indices = host_indices.cuda();
+    auto device_indices = host_indices.gpu();
     ASSERT_NO_THROW(opt->reset_state_at_indices(ParamType::Means, device_indices));
 }
 
@@ -1203,7 +1203,7 @@ TEST_F(FastGSKernelTest, Optimizer_ResetRowsTensorMatchesVectorPath) {
         const std::vector<int64_t> rows = {0, 3, 7, static_cast<int64_t>(n_) - 1};
         auto host_rows = Tensor::empty({rows.size()}, Device::CPU, DataType::Int64);
         std::memcpy(host_rows.ptr<int64_t>(), rows.data(), rows.size() * sizeof(int64_t));
-        const auto device_rows = host_rows.cuda().to(index_dtype);
+        const auto device_rows = host_rows.gpu().to(index_dtype);
 
         for (const auto type : {ParamType::Means, ParamType::Opacity}) {
             const auto before = state_bytes(*vector_opt, type);
@@ -2457,8 +2457,45 @@ TEST_F(NormalLossRegression, AxisTieAndGrazingBranchDiscontinuities) {
     EXPECT_GT(std::sqrt(grazing_jump), 1.5);
 }
 
-class NormalLossHunt : public lfs::test::CudaBackendTest {};
+class FastGSFusedAdamSettingsTest : public lfs::test::CudaBackendTest {};
+TEST_F(FastGSFusedAdamSettingsTest, CarriesPerSplatMeanStepAndFarMask) {
+    auto model = make_adam_test_splat(4);
+    AdamOptimizer optimizer(model, AdamConfig{});
+    auto mask = Tensor::from_vector(std::vector<bool>{false, true, false, true}, {4}, Device::GPU);
+    optimizer.set_per_splat_mean_step(true, 0.25f);
+    optimizer.set_mean_step_far_mask(mask);
+    const auto fused = fast_adam_settings(optimizer.prepare_fastgs_fused_adam(1));
+    EXPECT_TRUE(fused.enabled);
+    EXPECT_TRUE(fused.per_splat_mean_step);
+    EXPECT_EQ(fused.mean_step_far_mask, mask.ptr<bool>());
+    EXPECT_EQ(fused.mean_step_far_mask_n, 4);
+    EXPECT_FLOAT_EQ(fused.mean_step_median_extent, 0.25f);
+}
+TEST_F(FastGSFusedAdamSettingsTest, BoundsFarMaskCountToLiveRows) {
+    auto model = make_adam_test_splat(4);
+    AdamOptimizer optimizer(model, AdamConfig{});
+    auto mask = Tensor::ones_bool({8}, Device::GPU);
+    for (const int count : {0, 2, 4, 8}) {
+        auto settings = optimizer.prepare_fastgs_fused_adam(1);
+        settings.per_splat_mean_step = true;
+        settings.mean_step_far_mask = mask.slice(0, 0, count);
+        const auto fused = fast_adam_settings(settings);
+        EXPECT_EQ(fused.mean_step_far_mask, count > 0 ? mask.ptr<bool>() : nullptr);
+        EXPECT_EQ(fused.mean_step_far_mask_n, std::clamp(count, 0, 4));
+    }
+    auto settings = optimizer.prepare_fastgs_fused_adam(1);
+    settings.mean_step_far_mask = mask;
+    settings.groups[0].primitives = 0;
+    EXPECT_EQ(fast_adam_settings(settings).mean_step_far_mask, nullptr);
+    EXPECT_EQ(fast_adam_settings(settings).mean_step_far_mask_n, 0);
+    settings.mean_step_far_mask = {};
+    settings.groups[0].primitives = 4;
+    EXPECT_EQ(fast_adam_settings(settings).mean_step_far_mask_n, 0);
+    settings.per_splat_mean_step = false;
+    EXPECT_FALSE(fast_adam_settings(settings).per_splat_mean_step);
+}
 
+class NormalLossHunt : public lfs::test::CudaBackendTest {};
 TEST_F(NormalLossHunt, JointRotationCodec100kSteps) {
     using C = joint_adam::Codec16;
     constexpr int cells = 256 * 4, steps = 100000;
@@ -2602,7 +2639,7 @@ TEST_F(ScreenShareAdamHinge, HingeDoesNotInflateSecondMoment) {
         entry.bias_correction2_sqrt_rcp = bc2;
         fast_lfs::optimizer::adam_step_joint_contiguous_batched(
             &entry, 1, nullptr, 0, 1.0f, nullptr, 0, 1.0f,
-            beta1, beta2, eps, nullptr, screen_share.ptr<float>(), 1, limit, penalty);
+            beta1, beta2, eps, nullptr, nullptr, 0, 0.f, nullptr, 0, screen_share.ptr<float>(), 1, limit, penalty);
     }
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 

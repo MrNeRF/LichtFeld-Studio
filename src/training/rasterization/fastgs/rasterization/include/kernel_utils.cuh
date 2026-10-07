@@ -474,6 +474,12 @@ namespace fast_lfs::rasterization::kernels {
         const uint element_idx) {
         if (fused_adam.scale_reg_weight <= 0.0f || param.n_elements <= 0)
             return 0.0f;
+        if (fused_adam.scale_reg_log) {
+            if (param.param[element_idx] <= -40.0f)
+                return 0.0f;
+            return fused_adam.scale_reg_weight * 0.01f /
+                   (static_cast<float>(param.n_elements) * fused_adam.scale_reg_normalizer);
+        }
         return fused_adam.scale_reg_weight * expf(param.param[element_idx]) /
                static_cast<float>(param.n_elements);
     }
@@ -687,8 +693,9 @@ namespace fast_lfs::rasterization::kernels {
         float m = mv.x;
         float v = mv.y;
         if (apply_step) {
-            m = beta1 * mv.x + (1.0f - beta1) * grad;
-            v = beta2 * mv.y + (1.0f - beta2) * grad * grad;
+            // Fix contraction order across the two codec passes and backends.
+            m = fmaf(beta1, mv.x, __fmul_rn(1.0f - beta1, grad));
+            v = fmaf(beta2, mv.y, __fmul_rn(__fmul_rn(1.0f - beta2, grad), grad));
             if (update_param) {
                 const float denom = sqrtf(v) * bias_correction2_sqrt_rcp + eps;
                 pc -= row_step_size * m / denom;
@@ -795,6 +802,26 @@ namespace fast_lfs::rasterization::kernels {
         }
     };
 
+    // L2 pull of one shN-rest coefficient toward zero: adds its gradient to grad (unless the
+    // colour gate blocks the channel) and returns its loss term.
+    template <int ACTIVE_SH_BASES>
+    __device__ __forceinline__ float add_sh_rest_regularization(
+        const FusedAdamSettings& fused_adam,
+        const int n_primitives,
+        const uint cell_lin,
+        const uint colour_reg_mask,
+        const float value,
+        float& grad) {
+        constexpr uint kCoefficientCount = (ACTIVE_SH_BASES - 1u) * 3u;
+        if (fused_adam.sh_rest_reg_weight <= 0.0f || cell_lin >= kCoefficientCount || n_primitives <= 0)
+            return 0.0f;
+        const float reg_scale = fused_adam.sh_rest_reg_weight /
+                                (static_cast<float>(n_primitives) * static_cast<float>(kCoefficientCount));
+        if (colour_reg_mask & (1u << (cell_lin % 3u)))
+            grad += 2.0f * reg_scale * value;
+        return reg_scale * value * value;
+    }
+
     // Joint 8-bit shN Adam (swizzled float cells × 2 B). ALL threads must call when joint.
     // Walks ALL layout slots (not only active SH) so inactive bands re-encode under new
     // bounds and stay true-zero when their codes represent (u,log_s)=(0,0).
@@ -816,7 +843,8 @@ namespace fast_lfs::rasterization::kernels {
         const FusedAdamSettings& fused_adam,
         const uint primitive_idx,
         const uint sh_layout_slots,
-        GradSource grad_source) {
+        GradSource grad_source,
+        const uint colour_reg_mask = 7u) {
         using C = lfs::training::joint_adam::DeviceCodec<8>;
         using VC = lfs::core::sh_value::DeviceCodec16;
         constexpr float kInf = 1e30f;
@@ -825,6 +853,9 @@ namespace fast_lfs::rasterization::kernels {
                                p.sh_value_n_cells > 0;
         // IEEE f16 float4-swizzle (exportable GUI): bits==16, no bounds.
         const bool value_f16 = p.sh_value_bits == 16 && !value_q16;
+        // Both codec passes need the original coefficient for its regularizer.
+        // Defer floating-point value writes until the moments have been encoded.
+        const bool defer_value_write = fused_adam.sh_rest_reg_weight > 0.0f;
         const uint n_value_cells = value_q16 ? static_cast<uint>(p.sh_value_n_cells) : 0u;
 
         float row_step_size = p.step_size;
@@ -870,6 +901,7 @@ namespace fast_lfs::rasterization::kernels {
         float local_u_min = kInf, local_u_max = -kInf;
         float local_s_min = kInf, local_s_max = -kInf;
         float local_v_min = kInf, local_v_max = -kInf;
+        float local_sh_rest_loss = 0.0f;
 
         constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
                                                                                      : 3u;
@@ -889,10 +921,13 @@ namespace fast_lfs::rasterization::kernels {
                     float pci = (c == 0) ? pc.x : (c == 1) ? pc.y
                                               : (c == 2)   ? pc.z
                                                            : pc.w;
-                    const float gci = (c == 0) ? gk.x : (c == 1) ? gk.y
-                                                    : (c == 2)   ? gk.z
-                                                                 : gk.w;
+                    float gci = (c == 0) ? gk.x : (c == 1) ? gk.y
+                                              : (c == 2)   ? gk.z
+                                                           : gk.w;
                     const int64_t cell = static_cast<int64_t>(slot) * 4 + c;
+                    if constexpr (ACTIVE_SH_BASES > 1)
+                        local_sh_rest_loss += add_sh_rest_regularization<ACTIVE_SH_BASES>(
+                            fused_adam, p.n_primitives, k * 4u + static_cast<uint>(c), colour_reg_mask, pci, gci);
                     const float2 prim = shN_adam_moment_us<C>(
                         gci, cell, p.joint_packed, old_mm, apply_step, active_slot,
                         beta1, beta2, row_step_size, eps, p.bias_correction2_sqrt_rcp, pci);
@@ -916,7 +951,7 @@ namespace fast_lfs::rasterization::kernels {
                     local_s_min = fminf(local_s_min, prim.y);
                     local_s_max = fmaxf(local_s_max, prim.y);
                 }
-                if (apply_step && active_slot) {
+                if (apply_step && active_slot && !defer_value_write) {
                     if (value_f16) {
                         const uint base = slot * 4u;
                         param_h[base + 0] = __float2half(pc.x);
@@ -960,7 +995,8 @@ namespace fast_lfs::rasterization::kernels {
                 float2 vb = (v_min > v_max) ? make_float2(0.0f, 0.0f)
                                             : make_float2(v_min, v_max);
                 sm_vbounds = vb;
-                *reinterpret_cast<float2*>(p.sh_value_bounds + 2 * bidx) = vb;
+                if (p.enabled)
+                    *reinterpret_cast<float2*>(p.sh_value_bounds + 2 * bidx) = vb;
             }
         }
         __syncthreads();
@@ -979,8 +1015,8 @@ namespace fast_lfs::rasterization::kernels {
                 const bool active_slot = k < N_SLOTS;
                 const float4 gk = grad_source(primitive_idx, k, slot, active_slot);
                 float4 pc = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-                if (value_q16) {
-                    pc = load_shN_param_slot(true, false, param_u16, param_h, param4,
+                if (value_q16 || defer_value_write) {
+                    pc = load_shN_param_slot(value_q16, value_f16, param_u16, param_h, param4,
                                              primitive_idx, k, slot, n_value_cells, old_vmm);
                 }
 #pragma unroll
@@ -988,15 +1024,27 @@ namespace fast_lfs::rasterization::kernels {
                     float pci = (c == 0) ? pc.x : (c == 1) ? pc.y
                                               : (c == 2)   ? pc.z
                                                            : pc.w;
-                    const float gci = (c == 0) ? gk.x : (c == 1) ? gk.y
-                                                    : (c == 2)   ? gk.z
-                                                                 : gk.w;
+                    float gci = (c == 0) ? gk.x : (c == 1) ? gk.y
+                                              : (c == 2)   ? gk.z
+                                                           : gk.w;
                     const int64_t cell = static_cast<int64_t>(slot) * 4 + c;
+                    // The first pass accumulated the loss; this pass re-encodes the regularized moments.
+                    if constexpr (ACTIVE_SH_BASES > 1)
+                        add_sh_rest_regularization<ACTIVE_SH_BASES>(
+                            fused_adam, p.n_primitives, k * 4u + static_cast<uint>(c), colour_reg_mask, pci, gci);
                     const float2 prim = shN_adam_moment_us<C>(
                         gci, cell, p.joint_packed, old_mm, apply_step, active_slot,
                         beta1, beta2, row_step_size, eps, p.bias_correction2_sqrt_rcp, pci);
                     C::encode_us(p.joint_packed, cell, prim.x, prim.y,
                                  new_mm.x, new_mm.z, inv_u_range, inv_s_range);
+                    if (c == 0)
+                        pc.x = pci;
+                    else if (c == 1)
+                        pc.y = pci;
+                    else if (c == 2)
+                        pc.z = pci;
+                    else
+                        pc.w = pci;
                     // Always re-encode under new block bounds (frozen/crop-damped too),
                     // matching joint-moment encode. apply_step only gates the Adam update.
                     if (value_q16) {
@@ -1008,7 +1056,26 @@ namespace fast_lfs::rasterization::kernels {
                         }
                     }
                 }
+                if (defer_value_write && apply_step && active_slot && !value_q16) {
+                    if (value_f16) {
+                        const uint base = slot * 4u;
+                        param_h[base + 0] = __float2half(pc.x);
+                        param_h[base + 1] = __float2half(pc.y);
+                        param_h[base + 2] = __float2half(pc.z);
+                        param_h[base + 3] = __float2half(pc.w);
+                    } else {
+                        param4[slot] = pc;
+                    }
+                }
             }
+        }
+
+        // Every thread reaches this reduction, including overhang and masked
+        // rows. This leaves at most one global scalar update per block.
+        if (fused_adam.sh_rest_reg_loss_out != nullptr) {
+            const float block_sum = lfs::core::warp_ops::block_reduce_sum(local_sh_rest_loss);
+            if (threadIdx.x == 0 && block_sum != 0.0f)
+                atomicAdd(fused_adam.sh_rest_reg_loss_out, block_sum);
         }
     }
 
@@ -1023,13 +1090,15 @@ namespace fast_lfs::rasterization::kernels {
         const float3 mean3d,
         const float3 cam_position,
         const float3 grad_color,
-        const bool compute_sh_grads) {
+        const bool compute_sh_grads,
+        const uint colour_reg_mask = 7u) {
         const FusedAdamParam& p = fused_adam.shN;
         if (p.joint_bits == 8) {
             apply_shN_grads_packed_joint<ACTIVE_SH_BASES>(
                 fused_adam, primitive_idx, sh_layout_slots,
                 ShNGradFromColor<ACTIVE_SH_BASES>(
-                    mean3d, cam_position, grad_color, compute_sh_grads));
+                    mean3d, cam_position, grad_color, compute_sh_grads),
+                colour_reg_mask);
         }
         // Non-joint state is unsupported (joint is the only codec).
     }

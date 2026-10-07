@@ -2192,7 +2192,8 @@ namespace lfs::vis {
             case input::Action::CAMERA_NEXT_VIEW:
             case input::Action::CAMERA_PREV_VIEW: {
                 if (const auto* scene_manager = services().sceneOrNull()) {
-                    const auto& cameras = scene_manager->getScene().getAllCamerasCached();
+                    const auto cameras_snapshot = scene_manager->getScene().getAllCamerasCached();
+                    const auto& cameras = *cameras_snapshot;
                     if (!cameras.empty()) {
                         const auto* rendering = services().renderingOrNull();
                         const int current_uid = rendering ? rendering->getCurrentCameraId() : last_camview_;

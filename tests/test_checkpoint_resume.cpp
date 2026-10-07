@@ -578,6 +578,41 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
+    // Fails when the points training started from cannot be recovered outside the training scene, which the
+    // evaluation points mask needs once a project is resumed.
+    TEST_F(TrainingSetupRegressionTest, InitialPointCloudReloadsTheTrainingSeed) {
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path = std::filesystem::path(TEST_DATA_DIR) / "bicycle";
+        params.dataset.images = TEST_IMAGES;
+        lfs::core::Scene scene;
+        const auto loaded = lfs::training::loadTrainingDataIntoScene(params, scene);
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+        const auto seed = scene.getInitialPointCloud();
+        ASSERT_NE(seed, nullptr);
+        ASSERT_GT(seed->size(), 0);
+
+        const auto from_dataset = lfs::training::loadInitialPointCloud(params, scene.getTrainingDataOrigin());
+        ASSERT_TRUE(from_dataset.has_value()) << from_dataset.error().user_message();
+        ASSERT_EQ((*from_dataset)->size(), seed->size());
+        EXPECT_EQ(((*from_dataset)->means.cpu() - seed->means.cpu()).abs().max().item<float>(), 0.0f);
+
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_initial_point_cloud_reload";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir);
+        const auto init_path = temp_dir / "initial_points.ply";
+        ASSERT_TRUE(lfs::io::save_ply(*seed, {.output_path = init_path}).has_value());
+        params.init_path = lfs::core::path_to_utf8(init_path);
+        const glm::vec3 origin{1.0f, -2.0f, 0.5f};
+        const auto from_init = lfs::training::loadInitialPointCloud(params, origin);
+        ASSERT_TRUE(from_init.has_value()) << from_init.error().user_message();
+        ASSERT_EQ((*from_init)->size(), seed->size());
+        const auto shift = lfs::core::Tensor::from_vector({origin.x, origin.y, origin.z}, {3}, lfs::core::Device::CPU);
+        EXPECT_LT(((*from_init)->means.cpu() - (seed->means.cpu() - shift)).abs().max().item<float>(), 1.0e-5f);
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
     TEST_F(TrainingSetupRegressionTest, ApplyLoadedDatasetKeepsGaussianInitAsPointCloudUntilTrainingStarts) {
         constexpr size_t initial_splats = 8;
 

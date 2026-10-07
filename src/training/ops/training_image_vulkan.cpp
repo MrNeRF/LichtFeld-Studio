@@ -20,6 +20,9 @@
 #include <tuple>
 
 namespace lfs::training {
+    core::Tensor vulkan_flip_error_map(const core::Tensor&, const core::Tensor&, float);
+    core::Tensor vulkan_flip_error_image(const core::Tensor&);
+
     namespace {
         using namespace lfs::core::internal;
         using namespace lfs::gpu_ops;
@@ -232,7 +235,7 @@ namespace lfs::training {
         Tensor upload_image_chw(In cpu_hwc) {
             return cpu_hwc.to(core::Device::GPU).permute({2, 0, 1}).contiguous();
         }
-        const TrainingImageOps kVulkanTrainingImageOps{.heatmap = heatmap, .roi = roi, .resize_background = resize_background, .random_background = random_background, .canny = canny, .normalize_scalar = normalize_scalar, .upload_image_chw = upload_image_chw};
+        const TrainingImageOps kVulkanTrainingImageOps{.heatmap = heatmap, .roi = roi, .resize_background = resize_background, .random_background = random_background, .canny = canny, .normalize_scalar = normalize_scalar, .upload_image_chw = upload_image_chw, .flip_error_map = vulkan_flip_error_map, .flip_error_image = vulkan_flip_error_image};
     } // namespace
     const TrainingImageOps& vulkan_training_image_ops() { return kVulkanTrainingImageOps; }
 } // namespace lfs::training

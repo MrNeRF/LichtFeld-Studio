@@ -99,7 +99,9 @@ class TestOptimizationParams:
         assert params.means_lr >= 0
 
         assert isinstance(params.shs_lr, float)
-        assert params.shs_lr >= 0
+        assert params.shs_lr >= 0 or (
+            params.strategy in {"mrnf", "mnrf", "lfs"} and params.shs_lr == -1.0
+        )
 
         assert isinstance(params.opacity_lr, float)
         assert params.opacity_lr >= 0
@@ -226,6 +228,25 @@ class TestOptimizationParams:
             assert params.scaling_lr == pytest.approx(0.02)
         finally:
             params.set_strategy("mrnf")
+
+    def test_exposure_correction_default_follows_strategy_switch(self, lf):
+        params = lf.optimization_params()
+        original_strategy = params.strategy
+        original_values = {}
+        try:
+            for strategy in ("mcmc", "mrnf"):
+                params.set_strategy(strategy)
+                original_values[strategy] = params.use_exposure_correction
+
+            params.set_strategy("mcmc")
+            assert params.use_exposure_correction is False
+            params.set_strategy("mrnf")
+            assert params.use_exposure_correction is True
+        finally:
+            for strategy, value in original_values.items():
+                params.set_strategy(strategy)
+                params.use_exposure_correction = value
+            params.set_strategy(original_strategy)
 
     def test_switching_to_igs_clears_stale_gut_from_its_preset(self, lf):
         """A hidden GUT value must not survive re-entering the IGS+ preset."""

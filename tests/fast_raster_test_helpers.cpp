@@ -115,6 +115,18 @@ namespace lfs::training {
                     .opacity_reg_weight = fused_extra_gradients.opacity_reg_weight,
                     .sparsity_rho = fused_extra_gradients.sparsity_rho,
                     .sparsity_grad_loss = fused_extra_gradients.sparsity_grad_loss,
+                    .per_splat_mean_step = prepared.per_splat_mean_step,
+                    .mean_step_median_extent = prepared.mean_step_median_extent,
+                    .mean_step_far_mask = prepared.mean_step_far_mask,
+                    .scale_reg_log = fused_extra_gradients.scale_reg_log,
+                    .scale_reg_normalizer = fused_extra_gradients.scale_reg_normalizer,
+                    .erank_reg_weight = fused_extra_gradients.erank_reg_weight,
+                    .dc_reg_weight = fused_extra_gradients.dc_reg_weight,
+                    .sh_rest_reg_weight = fused_extra_gradients.sh_rest_reg_weight,
+                    .rendered_count = device_f32(fused_extra_gradients.rendered_count, {static_cast<size_t>(gaussian_model.size())}),
+                    .erank_reg_loss = device_f32(fused_extra_gradients.erank_reg_loss_out, {1}),
+                    .dc_reg_loss = device_f32(fused_extra_gradients.dc_reg_loss_out, {1}),
+                    .sh_rest_reg_loss = device_f32(fused_extra_gradients.sh_rest_reg_loss_out, {1}),
                 },
                 densification_type);
             if (fastgs_adam_enabled(prepared)) {

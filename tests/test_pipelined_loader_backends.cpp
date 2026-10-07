@@ -13,6 +13,7 @@
 
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -186,6 +187,53 @@ namespace {
         static inline std::vector<uint8_t> rgb8_, rgba_, mask_, normal_;
         static inline std::vector<uint16_t> rgb16_, depth_;
     };
+
+    TEST_P(PipelinedLoaderBackends, EvaluationFloatReferencePreservesGraySamples) {
+        const GpuBackendScope scope(GetParam());
+        // Minimal one-channel Float32 TIFF: values are off both integer grids.
+        std::vector<uint8_t> bytes{'I', 'I', 42, 0, 8, 0, 0, 0};
+        const auto append = [&](uint32_t value, int count) {
+            for (int i = 0; i < count; ++i)
+                bytes.push_back(static_cast<uint8_t>(value >> (8 * i)));
+        };
+        append(10, 2);
+        const auto tag = [&](uint16_t key, uint16_t type, uint32_t value) {
+            append(key, 2);
+            append(type, 2);
+            append(1, 4);
+            append(value, 4);
+        };
+        tag(256, 3, 2);
+        tag(257, 3, 1);
+        tag(258, 3, 32);
+        tag(259, 3, 1);
+        tag(262, 3, 1);
+        tag(273, 4, 134);
+        tag(277, 3, 1);
+        tag(278, 4, 1);
+        tag(279, 4, 8);
+        tag(339, 3, 3);
+        append(0, 4);
+        constexpr float a = 0.123456f, b = 0.654321f;
+        append(std::bit_cast<uint32_t>(a), 4);
+        append(std::bit_cast<uint32_t>(b), 4);
+        const auto file = path("eval-float-gray.tiff");
+        {
+            std::ofstream out(file, std::ios::binary);
+            out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            ASSERT_TRUE(out.good());
+        }
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        PipelinedImageLoader loader(config);
+        lfs::io::LoadParams params;
+        params.decode_float = true;
+        params.decode_16bit = true;
+        params.skip_blob_cache = true;
+        const auto image = loader.load_image_immediate(file, params);
+        ASSERT_EQ(image.dtype(), DataType::Float32);
+        expect_close(image, host({a, b, a, b, a, b}, {3, 1, 2}), 0.0f);
+    }
 
     TEST_P(PipelinedLoaderBackends, DecodeAheadMatchesImmediateOnEachBackend) {
         const GpuBackendScope scope(GetParam());

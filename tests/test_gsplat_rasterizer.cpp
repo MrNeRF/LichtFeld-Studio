@@ -391,7 +391,7 @@ TEST_F(GsplatRasterizerPPISP, NegativeShRadianceDoesNotCreateBrightPixels) {
     auto camera = make_camera(width, height);
     auto model = make_visible_splat(1);
     model->means_raw().fill_(0.0f);
-    auto background = Tensor::zeros({3}, Device::CUDA);
+    auto background = Tensor::zeros({3}, Device::GPU);
     PPISP ppisp(100);
     ppisp.register_frame(0, 0);
     ppisp.finalize();
@@ -402,7 +402,7 @@ TEST_F(GsplatRasterizerPPISP, NegativeShRadianceDoesNotCreateBrightPixels) {
             (color[0] - 0.5f) / 0.28209479177387814f,
             (color[1] - 0.5f) / 0.28209479177387814f,
             (color[2] - 0.5f) / 0.28209479177387814f};
-        model->sh0_raw() = Tensor::from_vector(sh, {1, 1, 3}, Device::CUDA);
+        model->sh0_raw() = Tensor::from_vector(sh, {1, 1, 3}, Device::GPU);
         auto result = gsplat_rasterize_forward(
             camera, *model, background,
             0, 0, 0, 0, 1.0f, false, GsplatRenderMode::RGB, true);
@@ -495,11 +495,11 @@ TEST_F(GsplatRasterizerTest, ShDegreeRampUpUsesAllocatedLayoutForForwardAndGradi
         }
     }
 
-    const auto dirs_gpu = Tensor::from_vector(dirs, {count, 3u}, Device::CUDA);
-    const auto sh0_gpu = Tensor::from_vector(sh0, {count, 1u, 3u}, Device::CUDA);
-    const auto shn_gpu = Tensor::from_vector(swizzled, {swizzled.size()}, Device::CUDA);
-    const auto grads_gpu = Tensor::from_vector(color_grads, {count, 3u}, Device::CUDA);
-    auto colors_gpu = Tensor::empty({count, 3u}, Device::CUDA, DataType::Float32);
+    const auto dirs_gpu = Tensor::from_vector(dirs, {count, 3u}, Device::GPU);
+    const auto sh0_gpu = Tensor::from_vector(sh0, {count, 1u, 3u}, Device::GPU);
+    const auto shn_gpu = Tensor::from_vector(swizzled, {swizzled.size()}, Device::GPU);
+    const auto grads_gpu = Tensor::from_vector(color_grads, {count, 3u}, Device::GPU);
+    auto colors_gpu = Tensor::empty({count, 3u}, Device::GPU, DataType::Float32);
     gsplat_lfs::spherical_harmonics_swizzled_fwd(
         active_degree, layout_degree, dirs_gpu.ptr<float>(), sh0_gpu.ptr<float>(),
         shn_gpu.ptr<float>(), nullptr, count, colors_gpu.ptr<float>(), 3u);
@@ -529,8 +529,8 @@ TEST_F(GsplatRasterizerTest, ShDegreeRampUpUsesAllocatedLayoutForForwardAndGradi
     EXPECT_LT(later_block_color_error, 2e-5f) << "forward error after primitive 31";
 
     constexpr uint32_t active_coefficients = 4;
-    auto coeff_grads_gpu = Tensor::zeros({count, active_coefficients, 3u}, Device::CUDA);
-    auto dir_grads_gpu = Tensor::zeros({count, 3u}, Device::CUDA);
+    auto coeff_grads_gpu = Tensor::zeros({count, active_coefficients, 3u}, Device::GPU);
+    auto dir_grads_gpu = Tensor::zeros({count, 3u}, Device::GPU);
     gsplat_lfs::spherical_harmonics_swizzled_bwd(
         active_coefficients, active_degree, layout_degree, dirs_gpu.ptr<float>(),
         sh0_gpu.ptr<float>(), shn_gpu.ptr<float>(), nullptr, grads_gpu.ptr<float>(),
@@ -593,7 +593,7 @@ TEST_F(GsplatRasterizerTest, GutDepthModesMatchSingleSplatCpuCompositing) {
     auto camera = make_camera(width, height);
     auto splat = make_visible_splat(1);
     splat->means_raw().fill_(0.0f);
-    auto background = Tensor::zeros({3u}, Device::CUDA);
+    auto background = Tensor::zeros({3u}, Device::GPU);
 
     struct ModeCase {
         GsplatRenderMode mode;
@@ -987,20 +987,20 @@ TEST_F(GsplatRasterizerTestPositive, AggregateIntersectionsRenderOnColdAndWarmCa
         auto rotations = Tensor::zeros({size, 4}, Device::CPU);
         for (size_t i = 0; i < size; ++i)
             rotations.ptr<float>()[4 * i] = 1.f;
-        return SplatData(0, Tensor::zeros({size, 3}, Device::CUDA),
-                         Tensor::full({size, 1, 3}, 0.5f, Device::CUDA),
-                         Tensor::zeros({size, 0, 3}, Device::CUDA),
-                         Tensor::zeros({size, 3}, Device::CUDA),
-                         rotations.to(Device::CUDA), Tensor::full({size}, 2.f, Device::CUDA), 1.f);
+        return SplatData(0, Tensor::zeros({size, 3}, Device::GPU),
+                         Tensor::full({size, 1, 3}, 0.5f, Device::GPU),
+                         Tensor::zeros({size, 0, 3}, Device::GPU),
+                         Tensor::zeros({size, 3}, Device::GPU),
+                         rotations.to(Device::GPU), Tensor::full({size}, 2.f, Device::GPU), 1.f);
     };
     auto model = make_model(n);
     auto reference_model = make_model(64);
-    auto R = Tensor::eye(3, Device::CUDA);
-    auto T = Tensor::from_vector({0.f, 0.f, 3.f}, {3}, Device::CUDA);
+    auto R = Tensor::eye(3, Device::GPU);
+    auto T = Tensor::from_vector({0.f, 0.f, 3.f}, {3}, Device::GPU);
     Camera camera(R, T, 5000.f, 5000.f, 2048.f, 2048.f, Tensor(), Tensor(),
                   lfs::core::CameraModelType::PINHOLE, "aggregate_2185", "",
                   std::filesystem::path{}, 4096, 4096, 0);
-    auto background = Tensor::full({3}, 0.25f, Device::CUDA);
+    auto background = Tensor::full({3}, 0.25f, Device::GPU);
     auto render = [&](SplatData& splats) {
         return gsplat_rasterize_forward(camera, splats, background,
                                         0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
@@ -1284,8 +1284,8 @@ TEST_F(GsplatRasterizerTest, GutFromWorldFisheyeGradParity) {
 
 namespace {
     Camera make_extra_parity_camera(lfs::core::CameraModelType model, int w = 96, int h = 64) {
-        auto R = Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, Device::CUDA);
-        auto T = Tensor::from_vector({0.f, 0.f, 3.f}, {3}, Device::CUDA);
+        auto R = Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, Device::GPU);
+        auto T = Tensor::from_vector({0.f, 0.f, 3.f}, {3}, Device::GPU);
         Tensor radial, tangential;
         if (model == lfs::core::CameraModelType::PINHOLE) {
             radial = Tensor::from_vector(
@@ -1319,8 +1319,8 @@ TEST_F(GsplatRasterizerTest, AggregateOverflowTrainingStep) {
     if (!std::getenv("GUT_LARGE_FRAME"))
         GTEST_SKIP();
     constexpr size_t n = 2600000;
-    auto R = Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, Device::CUDA);
-    auto T = Tensor::zeros({3}, Device::CUDA);
+    auto R = Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, Device::GPU);
+    auto T = Tensor::zeros({3}, Device::GPU);
     Camera camera(R, T, 1920.f, 1920.f, 1920.f, 1080.f, Tensor(), Tensor(),
                   lfs::core::CameraModelType::PINHOLE, "aggregate", "", std::filesystem::path{}, 3840, 2160, 0);
     auto means = Tensor::zeros({n, 3}, Device::CPU);
@@ -1329,14 +1329,14 @@ TEST_F(GsplatRasterizerTest, AggregateOverflowTrainingStep) {
         means.ptr<float>()[3 * i + 2] = 5.f;
         rotations.ptr<float>()[4 * i] = 1.f;
     }
-    SplatData model(0, means.to(Device::CUDA), Tensor::full({n, 1, 3}, 0.5f, Device::CUDA),
-                    Tensor::zeros({n, 0, 3}, Device::CUDA), Tensor::full({n, 3}, std::log(0.2f), Device::CUDA),
-                    rotations.to(Device::CUDA), Tensor::zeros({n}, Device::CUDA), 1.f);
+    SplatData model(0, means.to(Device::GPU), Tensor::full({n, 1, 3}, 0.5f, Device::GPU),
+                    Tensor::zeros({n, 0, 3}, Device::GPU), Tensor::full({n, 3}, std::log(0.2f), Device::GPU),
+                    rotations.to(Device::GPU), Tensor::zeros({n}, Device::GPU), 1.f);
     AdamConfig cfg;
     cfg.initial_capacity = n;
     AdamOptimizer opt(model, cfg);
     opt.allocate_gradients(n);
-    auto background = Tensor::zeros({3}, Device::CUDA);
+    auto background = Tensor::zeros({3}, Device::GPU);
     auto r = gsplat_rasterize_forward(camera, model, background,
                                       0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
     ASSERT_TRUE(r.has_value()) << r.error();
@@ -1370,11 +1370,11 @@ TEST_F(GsplatRasterizerTest, TileRangesPreserveCountsAndStableDepthOrder) {
         radii[2 * i] = i % 9 == 0 ? 0 : 8 + (i * 11) % 80;
         radii[2 * i + 1] = 4 + (i * 7) % 70;
     }
-    auto m = Tensor::from_blob(means.data(), {n, 2}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto r = Tensor::from_blob(radii.data(), {n, 2}, Device::CPU, DataType::Int32).to(Device::CUDA);
-    auto d = Tensor::ones({n}, Device::CUDA); // Equal depth: stable tie order matters.
-    auto counts = Tensor::empty({n}, Device::CUDA, DataType::Int32);
-    auto offsets = Tensor::empty({tw * th + 1}, Device::CUDA, DataType::Int32);
+    auto m = Tensor::from_blob(means.data(), {n, 2}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto r = Tensor::from_blob(radii.data(), {n, 2}, Device::CPU, DataType::Int32).to(Device::GPU);
+    auto d = Tensor::ones({n}, Device::GPU); // Equal depth: stable tie order matters.
+    auto counts = Tensor::empty({n}, Device::GPU, DataType::Int32);
+    auto offsets = Tensor::empty({tw * th + 1}, Device::GPU, DataType::Int32);
     auto intersect = [&](gsplat_lfs::TileRange range) {
         return gsplat_lfs::intersect_tile(workspace, m.ptr<float>(), r.ptr<int32_t>(), d.ptr<float>(),
                                           nullptr, nullptr, 1, n, 16, tw, th, true, counts.ptr<int32_t>(), nullptr,
@@ -1421,18 +1421,18 @@ TEST_F(GsplatRasterizerTest, TileBatchesPreserveShRestAlphaAndDensificationGradi
     constexpr size_t n = 50000;
     auto seed = make_parity_splat(n, 0xC0FFEE01u);
     SplatData model(3, seed->means_raw(), seed->sh0_raw(),
-                    Tensor::full({n, 15, 3}, 0.025f, Device::CUDA),
+                    Tensor::full({n, 15, 3}, 0.025f, Device::GPU),
                     seed->scaling_raw(), seed->rotation_raw(), seed->opacity_raw(), 1.f);
     model.set_active_sh_degree(3);
     auto camera = make_extra_parity_camera(lfs::core::CameraModelType::THIN_PRISM_FISHEYE, 99, 67);
-    auto bg = Tensor::full({3}, 0.25f, Device::CUDA);
+    auto bg = Tensor::full({3}, 0.25f, Device::GPU);
     AdamConfig config;
     config.initial_capacity = n;
     AdamOptimizer opt(model, config);
     opt.allocate_gradients(n);
-    auto error_map = Tensor::full({67, 99}, 0.2f, Device::CUDA);
-    auto edge_map = Tensor::full({67, 99}, 0.3f, Device::CUDA);
-    auto scores = Tensor::zeros({n}, Device::CUDA);
+    auto error_map = Tensor::full({67, 99}, 0.2f, Device::GPU);
+    auto edge_map = Tensor::full({67, 99}, 0.3f, Device::GPU);
+    auto scores = Tensor::zeros({n}, Device::GPU);
     const auto prior = lfs::core::environment::value("LFS_GSPLAT_PAIR_BUDGET");
     struct RestoreBudget {
         std::optional<std::string> prior;
@@ -1447,13 +1447,13 @@ TEST_F(GsplatRasterizerTest, TileBatchesPreserveShRestAlphaAndDensificationGradi
         ASSERT_TRUE(lfs::core::environment::set_value("LFS_GSPLAT_PAIR_BUDGET", arm ? "1" : ""));
         opt.zero_grad(1);
         scores.fill_(0.f);
-        model._densification_info = Tensor::zeros({2, n}, Device::CUDA);
+        model._densification_info = Tensor::zeros({2, n}, Device::GPU);
         auto result = gsplat_rasterize_forward(camera, model, bg, 0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
         ASSERT_TRUE(result.has_value()) << result.error();
         EXPECT_EQ(result->second.batches.empty(), arm == 0);
         // Nonzero opacity-output derivatives exercise the alpha/background terms.
-        gsplat_rasterize_backward(result->second, Tensor::full(result->first.image.shape(), 0.7f, Device::CUDA),
-                                  Tensor::full(result->first.alpha.shape(), 0.4f, Device::CUDA), model, opt,
+        gsplat_rasterize_backward(result->second, Tensor::full(result->first.image.shape(), 0.7f, Device::GPU),
+                                  Tensor::full(result->first.alpha.shape(), 0.4f, Device::GPU), model, opt,
                                   error_map, edge_map, scores);
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
         if (arm == 0) {
@@ -1485,12 +1485,12 @@ TEST_F(FastGSInference, PreservesTrainingStateAndScaleRefinement) {
         GTEST_SKIP() << "CUDA device unavailable";
 
     auto model = make_visible_splat(1);
-    model->means() = Tensor::zeros({1, 3}, Device::CUDA);
-    model->scaling_raw() = Tensor::zeros({1, 3}, Device::CUDA);
-    model->_max_screen_share = Tensor::zeros({1}, Device::CUDA);
-    model->_densification_info = Tensor::full({2, 1}, 0.125f, Device::CUDA);
+    model->means() = Tensor::zeros({1, 3}, Device::GPU);
+    model->scaling_raw() = Tensor::zeros({1, 3}, Device::GPU);
+    model->_max_screen_share = Tensor::zeros({1}, Device::GPU);
+    model->_densification_info = Tensor::full({2, 1}, 0.125f, Device::GPU);
     auto camera = make_camera(64, 64);
-    auto background = Tensor::zeros({3}, Device::CUDA);
+    auto background = Tensor::zeros({3}, Device::GPU);
 
     const std::array<const Tensor*, 8> state{
         &model->means(), &model->sh0(), &model->rotation_raw(),
@@ -1543,8 +1543,8 @@ TEST_P(GutScreenShare, PublishedOncePerFrameAndConstrainsOnlyWhenEnabled) {
                                                                          : Model::THIN_PRISM_FISHEYE);
     constexpr size_t n = 50000;
     auto model = make_parity_splat(n, 0xC0FFEE01u);
-    model->_max_screen_share = Tensor::zeros({n}, Device::CUDA);
-    auto bg = Tensor::full({3}, .25f, Device::CUDA);
+    model->_max_screen_share = Tensor::zeros({n}, Device::GPU);
+    auto bg = Tensor::full({3}, .25f, Device::GPU);
     AdamConfig config;
     config.initial_capacity = n;
     AdamOptimizer opt(*model, config);
@@ -1605,8 +1605,8 @@ TEST_P(GutScreenShare, MatchesClippedProjectionAndKeepsRefinementWindowMaximum) 
                                                                          : Model::THIN_PRISM_FISHEYE);
     constexpr size_t n = 50000;
     auto model = make_parity_splat(n, 0xC0FFEE01u);
-    model->_max_screen_share = Tensor::zeros({n}, Device::CUDA);
-    auto bg = Tensor::full({3}, .25f, Device::CUDA);
+    model->_max_screen_share = Tensor::zeros({n}, Device::GPU);
+    auto bg = Tensor::full({3}, .25f, Device::GPU);
     AdamConfig config;
     config.initial_capacity = n;
     AdamOptimizer opt(*model, config);
@@ -1680,7 +1680,7 @@ TEST_P(GutScreenShare, MrnfPreservesGrowthCoverageAndConstrainsMatureSplats) {
             auto& opt = strategy.get_optimizer();
             opt.allocate_gradients(n);
             const int iteration = mature ? 15001 : 100;
-            auto bg = Tensor::full({3}, .25f, Device::CUDA);
+            auto bg = Tensor::full({3}, .25f, Device::GPU);
             auto r = gsplat_rasterize_forward(camera, *model, bg, 0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
             ASSERT_TRUE(r.has_value()) << r.error();
             auto before = model->scaling_raw().clone();
@@ -1700,7 +1700,7 @@ TEST_P(GutScreenShare, MrnfPreservesGrowthCoverageAndConstrainsMatureSplats) {
     }
 }
 
-TEST_P(GutScreenShare, MrnfClipsAfterGrowthAndLeavesUnsetLimitUnchanged) {
+TEST_P(GutScreenShare, RefinementPreservesCoverageWithoutHardClipping) {
     using Model = lfs::core::CameraModelType;
     const int variant = GetParam();
     auto camera = variant == 0 ? make_camera(96, 64)
@@ -1717,7 +1717,7 @@ TEST_P(GutScreenShare, MrnfClipsAfterGrowthAndLeavesUnsetLimitUnchanged) {
             auto params = lfs::core::param::OptimizationParameters::mrnf_defaults();
             params.gut = true;
             params.sh_degree = 0;
-            params.max_cap = n; // isolate clipping: no spare growth budget
+            params.max_cap = n; // isolate refinement: no spare growth budget
             params.use_edge_map = false;
             params.start_refine = 2000;
             params.refine_every = 250;
@@ -1733,7 +1733,7 @@ TEST_P(GutScreenShare, MrnfClipsAfterGrowthAndLeavesUnsetLimitUnchanged) {
             auto& opt = strategy.get_optimizer();
             opt.allocate_gradients(n);
             const int iteration = mature ? 15000 : 2250;
-            auto bg = Tensor::full({3}, .25f, Device::CUDA);
+            auto bg = Tensor::full({3}, .25f, Device::GPU);
             auto r = gsplat_rasterize_forward(camera, *model, bg, 0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
             ASSERT_TRUE(r.has_value()) << r.error();
             auto before = model->scaling_raw().clone();
@@ -1748,8 +1748,7 @@ TEST_P(GutScreenShare, MrnfClipsAfterGrowthAndLeavesUnsetLimitUnchanged) {
                 // strength. Record that baseline to compare growth exactly.
                 EXPECT_LT(diff, 1e-6f);
                 unset_scales[mature] = model->scaling_raw().clone();
-            } else if (mature) {
-                EXPECT_GT(max_abs_diff_tensors(unset_scales[mature], model->scaling_raw()), 1e-3f);
+
             } else {
                 EXPECT_EQ(max_abs_diff_tensors(unset_scales[mature], model->scaling_raw()), 0.f);
             }
@@ -1760,9 +1759,9 @@ TEST_P(GutScreenShare, MrnfClipsAfterGrowthAndLeavesUnsetLimitUnchanged) {
 class GutScreenShareGeometry : public lfs::test::GsplatBackendTest {};
 
 TEST_F(GutScreenShareGeometry, ClippingVisibilityWindowResetAndNonDefaultStream) {
-    auto radii = Tensor::from_vector(std::vector<int32_t>{10, 10, 10, 10, 0, 10, 100, 100}, {4, 2}, Device::CUDA);
-    auto centers = Tensor::from_vector({5.f, 5.f, 95.f, 45.f, 50.f, 25.f, 50.f, 25.f}, {4, 2}, Device::CUDA);
-    auto shares = Tensor::from_vector({.1f, 0.f, .3f, 0.f}, {4}, Device::CUDA);
+    auto radii = Tensor::from_vector(std::vector<int32_t>{10, 10, 10, 10, 0, 10, 100, 100}, {4, 2}, Device::GPU);
+    auto centers = Tensor::from_vector({5.f, 5.f, 95.f, 45.f, 50.f, 25.f, 50.f, 25.f}, {4, 2}, Device::GPU);
+    auto shares = Tensor::from_vector({.1f, 0.f, .3f, 0.f}, {4}, Device::GPU);
     struct Stream {
         cudaStream_t value = nullptr;
         ~Stream() {
@@ -1783,7 +1782,7 @@ TEST_F(GutScreenShareGeometry, ClippingVisibilityWindowResetAndNonDefaultStream)
     EXPECT_FLOAT_EQ(h.ptr<float>()[2], .3f); // invisible retains earlier views
     EXPECT_FLOAT_EQ(h.ptr<float>()[3], 1.f);
     auto previous = shares.clone();
-    radii = Tensor::from_vector(std::vector<int32_t>{1, 1, 1, 1, 0, 1, 1, 1}, {4, 2}, Device::CUDA);
+    radii = Tensor::from_vector(std::vector<int32_t>{1, 1, 1, 1, 0, 1, 1, 1}, {4, 2}, Device::GPU);
     record();
     EXPECT_EQ(max_abs_diff_tensors(previous, shares), 0.f);
     shares.zero_();
@@ -1820,62 +1819,73 @@ TEST_F(GutScreenShareStrategy, RendererSwitchStartsANewMeasurementWindow) {
     EXPECT_FALSE(strategy.get_optimizer().collect_projected_screen_share());
 }
 
-TEST_F(GutScreenShareStrategy, MatureRefinementsReduceActualProjectedAreaBelowLimit) {
+TEST_F(GutScreenShareStrategy, RefinementPreservesAreaAndMatureSoftPenaltyShrinksSplats) {
     auto camera = make_camera(96, 64);
     for (bool enabled : {false, true}) {
-        auto model = make_visible_splat(1);
-        model->means().zero_();
-        // Front-facing surface: isolate clipping of the projected axes.
-        model->scaling_raw() = Tensor::from_vector({-2.f, -2.f, -6.f}, {1, 3}, Device::CUDA);
-        MRNF strategy(*model);
-        auto params = lfs::core::param::OptimizationParameters::mrnf_defaults();
-        params.gut = true;
-        params.sh_degree = 0;
-        params.max_cap = 1;
-        params.use_edge_map = false;
-        params.start_refine = 2000;
-        params.refine_every = 250;
-        params.grow_until_iter = 15000;
-        params.stop_refine = 28500;
-        params.iterations = 30000;
-        params.max_screen_share = enabled ? .1f : 0.f;
-        params.screen_share_penalty = 0.f;
-        params.means_noise_weight = 0.f;
-        params.scale_decay = 0.f;
-        params.opacity_decay = 0.f;
-        strategy.initialize(params);
-        auto& opt = strategy.get_optimizer();
-        opt.allocate_gradients(1);
-        auto bg = Tensor::zeros({3}, Device::CUDA);
-        float initial_area = 0.f;
-        float final_area = 0.f;
-        for (int window = 0; window <= 52; ++window) {
-            auto r = gsplat_rasterize_forward(camera, *model, bg, 0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
-            ASSERT_TRUE(r.has_value()) << r.error();
-            int32_t radii[2]{};
-            float center[2]{};
-            ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-            ASSERT_EQ(cudaMemcpy(radii, r->second.radii_ptr, sizeof(radii), cudaMemcpyDeviceToHost), cudaSuccess);
-            ASSERT_EQ(cudaMemcpy(center, r->second.means2d_ptr, sizeof(center), cudaMemcpyDeviceToHost), cudaSuccess);
-            const float dx = std::max(0.f, std::min(96.f, center[0] + radii[0]) - std::max(0.f, center[0] - radii[0]));
-            const float dy = std::max(0.f, std::min(64.f, center[1] + radii[1]) - std::max(0.f, center[1] - radii[1]));
-            final_area = radii[0] > 0 && radii[1] > 0 ? dx * dy / (96.f * 64.f) : 0.f;
-            if (window == 0)
-                initial_area = final_area;
-            gsplat_rasterize_backward(r->second, Tensor::zeros_like(r->first.image), Tensor{}, *model, opt);
-            if (window < 52)
-                strategy.post_backward(15000 + 250 * window, r->first);
+        for (bool soft_penalty : {false, true}) {
+            auto model = make_visible_splat(1);
+            model->means().zero_();
+            // Front-facing surface: isolate clipping of the projected axes.
+            model->scaling_raw() = Tensor::from_vector({-2.5f, -2.5f, -6.f}, {1, 3}, Device::GPU);
+            MRNF strategy(*model);
+            auto params = lfs::core::param::OptimizationParameters::mrnf_defaults();
+            params.gut = true;
+            params.sh_degree = 0;
+            params.max_cap = 1;
+            params.use_edge_map = false;
+            params.start_refine = 2000;
+            params.refine_every = 250;
+            params.grow_until_iter = 15000;
+            params.stop_refine = 28500;
+            params.iterations = 30000;
+            params.max_screen_share = enabled ? .1f : 0.f;
+            params.screen_share_penalty = soft_penalty ? 1.f : 0.f;
+            params.means_noise_weight = 0.f;
+            params.scale_decay = 0.f;
+            params.opacity_decay = 0.f;
+            strategy.initialize(params);
+            auto& opt = strategy.get_optimizer();
+            opt.allocate_gradients(1);
+            auto bg = Tensor::zeros({3}, Device::GPU);
+            float initial_area = 0.f;
+            float final_area = 0.f;
+            for (int window = 0; window <= 53; ++window) {
+                auto r = gsplat_rasterize_forward(camera, *model, bg, 0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
+                ASSERT_TRUE(r.has_value()) << r.error();
+                int32_t radii[2]{};
+                float center[2]{};
+                ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+                ASSERT_EQ(cudaMemcpy(radii, r->second.radii_ptr, sizeof(radii), cudaMemcpyDeviceToHost), cudaSuccess);
+                ASSERT_EQ(cudaMemcpy(center, r->second.means2d_ptr, sizeof(center), cudaMemcpyDeviceToHost), cudaSuccess);
+                const float dx = std::max(0.f, std::min(96.f, center[0] + radii[0]) - std::max(0.f, center[0] - radii[0]));
+                const float dy = std::max(0.f, std::min(64.f, center[1] + radii[1]) - std::max(0.f, center[1] - radii[1]));
+                final_area = radii[0] > 0 && radii[1] > 0 ? dx * dy / (96.f * 64.f) : 0.f;
+                if (window == 0)
+                    initial_area = final_area;
+                if (window == 1)
+                    EXPECT_EQ(final_area, initial_area) << "Soft shrink must wait for growth to end";
+                gsplat_rasterize_backward(r->second, Tensor::zeros_like(r->first.image), Tensor{}, *model, opt);
+                if (window < 53) {
+                    const int iteration = 14750 + 250 * window;
+                    // GUT applies the optimizer step before its refinement hook, as the trainer does.
+                    opt.zero_grad(iteration);
+                    strategy.step(iteration);
+                    strategy.post_backward(iteration, r->first);
+                }
+            }
+            std::cout << "GUT projected-area constraint: enabled=" << enabled
+                      << " soft=" << soft_penalty << " initial=" << initial_area << " final=" << final_area
+                      << " scale_x=" << model->scaling_raw().cpu().ptr<float>()[0]
+                      << " measured_share=" << model->_max_screen_share.max().item<float>() << '\n';
+            EXPECT_GT(initial_area, .1f);
+            if (enabled && soft_penalty) {
+                EXPECT_GT(final_area, 0.f); // Constrain it without deleting it.
+                EXPECT_LT(final_area, initial_area);
+            } else {
+                EXPECT_EQ(final_area, initial_area);
+            }
+            ASSERT_EQ(model->size(), 1);
         }
-        std::cout << "GUT projected-area constraint: enabled=" << enabled
-                  << " initial=" << initial_area << " final=" << final_area << '\n';
-        EXPECT_GT(initial_area, .1f);
-        if (enabled) {
-            EXPECT_GT(final_area, 0.f); // Constrain it without deleting it.
-            EXPECT_LE(final_area, .1f);
-        } else {
-            EXPECT_EQ(final_area, initial_area);
-        }
-        ASSERT_EQ(model->size(), 1);
     }
 }
 

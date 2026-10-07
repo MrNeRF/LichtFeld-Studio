@@ -6,7 +6,7 @@ struct Params {
     uint64_t ssim, cs, grad, gradRaw, losses, normalizer;
     uint count, channels, height, width, batch, stage, path, targetByte;
     uint maskByte, validPadding, partialStride, reserved;
-    float weight;
+    float weight, denominator;
 };
 struct Push {
     uint64_t parameters;
@@ -48,7 +48,7 @@ float chain(Params p, int x, int y) {
     if (x < 0 || y < 0 || x >= int(p.width) || y >= int(p.height))
         return 0;
     if (masked(p))
-        return maskAt(p, uint(y) * p.width + uint(x)) / (readFloat(p.normalizer, 0) * float(p.batch) * float(p.channels) + 1e-8f);
+        return maskAt(p, uint(y) * p.width + uint(x)) / (p.denominator > 0.0f ? p.denominator : readFloat(p.normalizer, 0) * float(p.batch) * float(p.channels) + 1e-8f);
     bool valid = (operation >> 3u) != 0 && p.validPadding != 0;
     bool cropX = valid && p.width > 10, cropY = valid && p.height > 10;
     if ((cropX && (x < 5 || x >= int(p.width) - 5)) ||

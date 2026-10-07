@@ -6,6 +6,8 @@
 
 // The Metal ops table's families, one accessor per *_metal.cpp.
 namespace lfs::training {
+    const lfs::gpu_ops::BlobOps& metal_blob_ops();
+    const lfs::gpu_ops::StructureOps& metal_structure_ops();
     const lfs::gpu_ops::SessionOps& metal_session_ops();
     const lfs::gpu_ops::TrainingImageOps& metal_training_image_ops();
     const lfs::gpu_ops::AdamOps& metal_adam_ops();

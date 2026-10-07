@@ -315,6 +315,16 @@ protected:
     }
 };
 
+TEST_F(UndoHistoryTest, EmptyPipelineIsNotReadyAndCannotExecute) {
+    lfs::vis::SceneManager scene;
+    lfs::vis::op::Pipeline pipeline;
+
+    EXPECT_FALSE(pipeline.poll(scene));
+    const auto result = pipeline.execute(scene);
+    EXPECT_FALSE(result.ok());
+    EXPECT_EQ(result.error, "Empty pipeline");
+}
+
 TEST_F(UndoHistoryTest, TransactionCommitGroupsEntriesIntoSingleUndoStep) {
     auto& history = lfs::vis::op::undoHistory();
     int value = 0;

@@ -43,6 +43,7 @@ namespace lfs::gpu_ops {
         float opacity_decay = 0.f;
         float scale_decay = 0.f;
         float train_t = 0.f;
+        Tensor rendered_count;
     };
 
     struct GumbelParams {

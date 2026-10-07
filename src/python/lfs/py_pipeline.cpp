@@ -15,6 +15,8 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include <stdexcept>
+
 namespace lfs::python {
 
     namespace {
@@ -109,6 +111,13 @@ namespace lfs::python {
                 kwargs ? dict_to_props(nb::dict(kwargs)) : vis::op::OperatorProperties{});
         }
 
+        template <typename OpClass>
+        PyStage make_selection_iteration_stage(const nb::kwargs& kwargs) {
+            if (kwargs && kwargs.contains("iterations") && nb::cast<int>(kwargs["iterations"]) <= 0)
+                throw std::invalid_argument("iterations must be positive");
+            return make_stage<OpClass>(kwargs);
+        }
+
     } // namespace
 
     void register_pipeline(nb::module_& m) {
@@ -144,9 +153,9 @@ namespace lfs::python {
         select.def(
             "invert", [](nb::kwargs kwargs) { return make_stage<vis::op::SelectInvert>(kwargs); }, "Create invert-selection stage");
         select.def(
-            "grow", [](nb::kwargs kwargs) { return make_stage<vis::op::SelectGrow>(kwargs); }, "Create grow-selection stage");
+            "grow", [](nb::kwargs kwargs) { return make_selection_iteration_stage<vis::op::SelectGrow>(kwargs); }, "Create grow-selection stage");
         select.def(
-            "shrink", [](nb::kwargs kwargs) { return make_stage<vis::op::SelectShrink>(kwargs); }, "Create shrink-selection stage");
+            "shrink", [](nb::kwargs kwargs) { return make_selection_iteration_stage<vis::op::SelectShrink>(kwargs); }, "Create shrink-selection stage");
 
         auto edit = pipe.def_submodule("edit", "Edit operations");
         edit.def(

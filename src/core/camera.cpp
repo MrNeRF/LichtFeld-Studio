@@ -446,6 +446,13 @@ namespace lfs::core {
 
     Tensor Camera::load_and_get_image(int resize_factor, int max_width, const bool output_uint8,
                                       const bool update_dimensions) {
+        return load_and_get_image(resize_factor, max_width, output_uint8, update_dimensions,
+                                  load_image_cached);
+    }
+
+    Tensor Camera::load_and_get_image(int resize_factor, int max_width, const bool output_uint8,
+                                      const bool update_dimensions,
+                                      const ImageLoadFunc& image_loader) {
         if (!_has_image) {
             throw std::runtime_error(std::format(
                 "Dataset image '{}' is missing: {}",
@@ -460,8 +467,7 @@ namespace lfs::core {
             .stream = _stream,
             .output_uint8 = output_uint8};
 
-        auto image = load_image_cached(params);
-
+        auto image = image_loader(params);
         if (update_dimensions) {
             const auto shape = image.shape();
             _image_width = shape[2];
@@ -616,6 +622,12 @@ namespace lfs::core {
     void Camera::set_normal_path(std::filesystem::path path) {
         _normal_path = std::move(path);
         release_normal_cache();
+    }
+
+    void Camera::set_mask_path(std::filesystem::path path) {
+        _mask_path = std::move(path);
+        _cached_mask = Tensor();
+        _mask_loaded = false;
     }
 
     void Camera::set_mask_tensor(Tensor mask) {

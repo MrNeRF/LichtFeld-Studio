@@ -1055,6 +1055,25 @@ def test_new_project_asks_before_stopping_training(monkeypatch, stop):
     assert file_menu.lf.project_create_calls == []
 
 
+def test_project_switch_confirmation_keeps_prior_training_approval(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.project_is_dirty = lambda: True
+    file_menu.lf.is_training_active = lambda: True
+
+    file_menu._show_project_switch_confirmation(
+        True, "", False, "", False, True
+    )
+
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    title, _message, buttons, callback = file_menu.lf.confirm_dialogs[0]
+    assert title == "tr:menu.file.new_project"
+    callback(buttons[1])
+
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    assert file_menu.lf.new_project_calls == [(True, True)]
+    assert file_menu.lf.project_create_calls == []
+
+
 def test_open_recent_while_training_prompts_instead_of_opening(
     monkeypatch, tmp_path
 ):

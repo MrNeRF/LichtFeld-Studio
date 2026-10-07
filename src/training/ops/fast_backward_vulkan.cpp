@@ -19,8 +19,11 @@ namespace lfs::training::vulkan {
             uint32_t densify, stage, slots, sparsity_count;
             float scale_weight, flatten_weight, opacity_weight, rho, grad_loss;
             uint32_t scale_elements, opacity_elements;
+            uint64_t rendered_count, erank_loss, dc_loss, sh_loss, scale_loss;
+            uint32_t log_scale;
+            float scale_normalizer, erank_weight, dc_weight, sh_weight;
         };
-        static_assert(sizeof(BackPush) == 512);
+        static_assert(sizeof(BackPush) == 576);
         static_assert(offsetof(BackPush, image_gradient) == 320);
         static_assert(offsetof(BackPush, densify) == 464);
         static_assert(offsetof(BackPush, scale_weight) == 480);
@@ -89,11 +92,23 @@ namespace lfs::training::vulkan {
         b.slots = slots;
         const auto& scale = adam.groups[static_cast<size_t>(AdamSlot::Scaling)];
         const auto& opacity = adam.groups[static_cast<size_t>(AdamSlot::Opacity)];
-        b.scale_weight = scale.enabled ? adam.scale_reg_weight : 0;
-        b.flatten_weight = scale.enabled ? adam.flatten_reg_weight : 0;
-        b.opacity_weight = opacity.enabled ? adam.opacity_reg_weight : 0;
-        b.scale_elements = scale.enabled ? scale.elements : 0;
-        b.opacity_elements = opacity.enabled ? opacity.elements : 0;
+        // Losses still read disabled groups; only the optimizer dispatch below
+        // gates parameter and moment updates, matching the CUDA descriptor.
+        b.scale_weight = adam.scale_reg_weight;
+        b.flatten_weight = adam.flatten_reg_weight;
+        b.opacity_weight = adam.opacity_reg_weight;
+        b.scale_elements = scale.elements;
+        b.opacity_elements = opacity.elements;
+        b.rendered_count = address(adam.rendered_count);
+        b.erank_loss = address(adam.erank_reg_loss);
+        b.dc_loss = address(adam.dc_reg_loss);
+        b.sh_loss = address(adam.sh_rest_reg_loss);
+        b.scale_loss = address(adam.scale_reg_loss);
+        b.log_scale = adam.scale_reg_log;
+        b.scale_normalizer = adam.scale_reg_normalizer;
+        b.erank_weight = adam.erank_reg_weight;
+        b.dc_weight = adam.dc_reg_weight;
+        b.sh_weight = adam.groups[5].enabled ? adam.sh_rest_reg_weight : 0.f;
         if (adam.sparsity_sigmoid.is_valid() && adam.sparsity_z.is_valid() && adam.sparsity_u.is_valid()) {
             b.sigmoid = address(adam.sparsity_sigmoid);
             b.z = address(adam.sparsity_z);
@@ -117,6 +132,13 @@ namespace lfs::training::vulkan {
                 writes.push_back(ref(*t));
             }
         const auto context = core::internal::acquire_vulkan_context();
+        for (const Tensor* t : std::initializer_list<const Tensor*>{&adam.rendered_count, &adam.erank_reg_loss, &adam.dc_reg_loss,
+                                                                    &adam.sh_rest_reg_loss, &adam.scale_reg_loss}) {
+            if (t->is_valid() && t->numel()) {
+                reads.push_back(ref(*t));
+                writes.push_back(ref(*t));
+            }
+        }
         const std::string_view shader = context->caps().shader_atomic_float ? "fast_backward_atomic" : "fast_backward";
         const uint32_t variant = specialization(p, 0) |
                                  (uint32_t(b.depth_gradient != 0) << 18) | (uint32_t(b.normal_gradient != 0) << 19) |
@@ -135,8 +157,6 @@ namespace lfs::training::vulkan {
         b.stage = 1;
         dispatch(shader, b, reads, writes, std::min((p.count + 127) / 128, context->caps().max_workgroup_count[0]), variant | b.stage);
         // Read every old-state gradient and regularizer before any optimizer write.
-        if (adam.scale_reg_loss.is_valid() && b.scale_weight > 0 && b.scale_elements > 0)
-            adam.scale_reg_loss.add_(s.inputs[1].exp().sum().unsqueeze(0) * (b.scale_weight / float(b.scale_elements)));
         if (adam.opacity_reg_loss.is_valid() && b.opacity_weight > 0 && b.opacity_elements > 0)
             adam.opacity_reg_loss.add_(s.inputs[3].sigmoid().sum().unsqueeze(0) * (b.opacity_weight / float(b.opacity_elements)));
         const AdamHyper hyper{adam.beta1, adam.beta2, adam.eps};
@@ -148,9 +168,10 @@ namespace lfs::training::vulkan {
             // CUDA has no update for unsupported fused widths.
             if (slot == 5 ? g.joint_bits != 8 : (g.joint_bits != 8 && g.joint_bits != 16))
                 continue;
-            const AdamMasks masks{g.frozen_mask, g.crop_damping_mask, g.screen_share};
+            const AdamMasks masks{g.frozen_mask, g.crop_damping_mask, g.screen_share,
+                                  s.inputs[1], adam.mean_step_far_mask};
             const AdamModifiers modifiers{g.frozen_lr_scale, g.cropbox_lr_scale,
-                                          g.screen_share_limit, g.screen_share_penalty};
+                                          g.screen_share_limit, g.screen_share_penalty, adam.mean_step_median_extent};
             if (slot == 5) {
                 if (p.active_bases > 1)
                     vulkan_adam_ops().step_sh(g.parameter, g.packed_moments, g.joint_bounds, g.sh_value_bounds,
@@ -158,7 +179,8 @@ namespace lfs::training::vulkan {
             } else {
                 LFS_ASSERT_MSG(g.primitives == int(p.count) && g.attributes == int(widths[slot]) && g.elements == int(p.count * widths[slot]), "Fast Adam row binding size mismatch");
                 const JointStep step{g.parameter, g.packed_moments, g.joint_bounds, gradients[slot], g.primitives, g.attributes, g.joint_bits,
-                                     g.step_size, 1.f, g.bc2_sqrt_rcp, g.screen_share.is_valid()};
+                                     g.step_size, 1.f, g.bc2_sqrt_rcp, g.screen_share.is_valid(),
+                                     slot == 0 && adam.per_splat_mean_step};
                 vulkan_fused_adam_rows(step, masks, hyper, modifiers);
             }
         }

@@ -748,6 +748,7 @@ if(NOT LFS_HAS_CUDA)
             test_training_command_masks.cpp
             test_mesh_mask_kernels.cpp
             test_training_ops_parity.cpp
+            test_flip.cpp
             test_training_ops_metal_densify.cpp
             test_training_ops_metal_appearance.cpp
             test_training_ops_metal_gsplat.cpp
@@ -768,7 +769,7 @@ if(NOT LFS_HAS_CUDA)
         list(APPEND TEST_SOURCES test_video_videotoolbox.cpp test_mcp_render_capture_utils.cpp)
     endif()
     add_executable(lichtfeld_tests ${TEST_SOURCES})
-    target_compile_definitions(lichtfeld_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+    target_compile_definitions(lichtfeld_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}" TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
     if(APPLE)
         target_sources(lichtfeld_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/io/stb_image_impl.cpp)
         # lfs_video already links FFmpeg; linking it a second time lets CMake
@@ -886,6 +887,10 @@ set(TEST_FILES
     test_fastgs_sort_buffers.cpp
     test_warp_cull_blend.cpp
     test_warp_cull_bwd.cpp
+    test_thin_structure.cpp
+    test_blob_seeding.cpp
+    test_rendered_structure.cpp
+    test_gradient_residual.cpp
     test_fused_reg_loss.cpp
     test_fused_bg_blend.cpp
     test_photometric_hygiene.cpp
@@ -1010,6 +1015,7 @@ set(TEST_FILES
     test_mask_preprocess_fusion.cpp
     test_roi_weight_map.cpp
     test_mesh_mask_kernels.cpp
+    test_flip.cpp
     test_roi_weighted_losses.cpp
     test_checkpoint_resume.cpp
     test_component_config_serialization.cpp
@@ -1185,6 +1191,7 @@ set(TEST_FILES
     test_project_thumbnail_image.cpp
     test_camera_thumbnail_policy.cpp
     test_undistort.cpp
+    gut_camera_model_cuda.cu
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp
     test_mesh_data.cpp
@@ -1756,6 +1763,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_store_subscriptions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_float16_import.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_basic_indexing.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_arg_extrema_nan.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_empty_slices.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_empty_batch_matmul.py
@@ -1867,6 +1875,7 @@ add_test(NAME lichtfeld.python.gpu
     COMMAND ${Python_EXECUTABLE} -m pytest -q
         -m gpu
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_basic_indexing.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_arg_extrema_nan.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_empty_slices.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_empty_batch_matmul.py

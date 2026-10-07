@@ -47,6 +47,8 @@ namespace lfs::training {
             .shared_image = core::shared_image_ops(core::GpuBackend::Metal),
 
             .lpips = &metal_lpips_ops(),
+            .structure = &metal_structure_ops(),
+            .blob = &metal_blob_ops(),
         };
         return table;
     }

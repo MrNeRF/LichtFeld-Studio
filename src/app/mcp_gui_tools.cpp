@@ -24,6 +24,7 @@
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/property_registry.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
@@ -923,6 +924,140 @@ namespace lfs::app {
             vis::RenderingManager* rendering_manager,
             const core::NodeId cropbox_id) {
             return vis::cap::resetCropBox(scene_manager, rendering_manager, cropbox_id);
+        }
+
+        const char* optimization_property_type(const core::prop::PropType type) {
+            using core::prop::PropType;
+            switch (type) {
+            case PropType::Bool: return "bool";
+            case PropType::Int: return "int";
+            case PropType::Float: return "float";
+            case PropType::String: return "string";
+            case PropType::SizeT: return "size";
+            case PropType::Enum: return "enum";
+            default: return "unsupported";
+            }
+        }
+
+        std::string_view enum_wire_value(const core::prop::EnumItem& item) {
+            return item.wire_value.empty() ? item.identifier : item.wire_value;
+        }
+
+        json optimization_value_json(const core::prop::PropertyMeta& meta, const std::any& value) {
+            using core::prop::PropType;
+            switch (meta.type) {
+            case PropType::Bool: return std::any_cast<bool>(value);
+            case PropType::Int: return std::any_cast<int>(value);
+            case PropType::Float: return std::any_cast<float>(value);
+            case PropType::String: return std::any_cast<std::string>(value);
+            case PropType::SizeT: return std::any_cast<size_t>(value);
+            case PropType::Enum: {
+                const int raw = std::any_cast<int>(value);
+                for (const auto& item : meta.enum_items)
+                    if (item.value == raw)
+                        return std::string(enum_wire_value(item));
+                return raw;
+            }
+            default: return nullptr;
+            }
+        }
+
+        lfs::Error optimization_value_error(const core::prop::PropertyMeta& meta, std::string message) {
+            lfs::SmallFields fields;
+            fields.add("property", meta.id);
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::MCP,
+                .severity = lfs::Severity::Error,
+                .retryability = lfs::Retryability::NotRetryable,
+                .operation_id = {},
+                .user_message = message,
+                .detail = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = std::move(fields),
+                .native = std::nullopt,
+            });
+        }
+
+        lfs::Result<std::any> optimization_value_from_json(const core::prop::PropertyMeta& meta,
+                                                           const json& value) {
+            using core::prop::PropType;
+            const auto in_range = [&meta](const double v) -> lfs::Result<void> {
+                if ((meta.min_value && v < *meta.min_value) || (meta.max_value && v > *meta.max_value))
+                    return lfs::Result<void>::failure(optimization_value_error(
+                        meta, std::format("{} must be within [{}, {}]", meta.id, meta.min_value.value_or(-INFINITY),
+                                          meta.max_value.value_or(INFINITY))));
+                return {};
+            };
+            try {
+                switch (meta.type) {
+                case PropType::Bool:
+                    return std::any(value.get<bool>());
+                case PropType::Int:
+                case PropType::Float:
+                case PropType::SizeT: {
+                    if (!value.is_number())
+                        return optimization_value_error(meta, meta.id + " must be a number");
+                    if (auto checked = in_range(value.get<double>()); !checked)
+                        return checked.error();
+                    if (meta.type == PropType::Float)
+                        return std::any(value.get<float>());
+                    if (!value.is_number_integer())
+                        return optimization_value_error(meta, meta.id + " must be an integer");
+                    if (meta.type == PropType::Int)
+                        return std::any(value.get<int>());
+                    return std::any(value.get<size_t>());
+                }
+                case PropType::String:
+                    return std::any(value.get<std::string>());
+                case PropType::Enum: {
+                    const auto wire = value.get<std::string>();
+                    for (const auto& item : meta.enum_items)
+                        if (enum_wire_value(item) == wire)
+                            return std::any(item.value);
+                    return optimization_value_error(meta, meta.id + " must be one of the listed options");
+                }
+                default:
+                    return optimization_value_error(meta, meta.id + " cannot be set over MCP");
+                }
+            } catch (const json::exception&) {
+                return optimization_value_error(meta, meta.id + " has the wrong value type");
+            }
+        }
+
+        json optimization_params_json(core::param::OptimizationParameters params, const bool advanced_only) {
+            params.resolve_mrnf_capacity_defaults();
+            auto ref = core::prop::PropertyObjectRef::cpp(&params);
+            const auto group = core::prop::PropertyRegistry::instance().get_group_snapshot("optimization");
+            json properties = json::array();
+            if (group) {
+                for (const auto& meta : group->properties) {
+                    if ((advanced_only && !meta.is_advanced()) || !meta.getter)
+                        continue;
+                    json entry{{"id", meta.id},
+                               {"name", meta.name},
+                               {"description", meta.description},
+                               {"type", optimization_property_type(meta.type)},
+                               {"value", optimization_value_json(meta, meta.getter(ref))},
+                               {"advanced", meta.is_advanced()},
+                               {"live_update", meta.is_live_update()},
+                               {"readonly", meta.is_readonly()}};
+                    if (meta.min_value)
+                        entry["min"] = *meta.min_value;
+                    if (meta.max_value)
+                        entry["max"] = *meta.max_value;
+                    if (meta.type == core::prop::PropType::Enum) {
+                        json options = json::array();
+                        for (const auto& item : meta.enum_items)
+                            options.push_back(std::string(enum_wire_value(item)));
+                        entry["options"] = std::move(options);
+                    }
+                    if (!meta.strategies.empty())
+                        entry["strategies"] = meta.strategies;
+                    properties.push_back(std::move(entry));
+                }
+            }
+            return json{{"strategy", params.strategy}, {"properties", std::move(properties)}};
         }
 
         json render_settings_json(const vis::RenderSettingsProxy& settings) {
@@ -3397,6 +3532,105 @@ namespace lfs::app {
                     if (!updated)
                         return json{{"success", true}};
                     return render_settings_json(*updated);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "training.params.get",
+                .description = "Read the training parameters for the next run, with type, range, options and whether each is advanced or applies live",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{{"advanced_only", json{{"type", "boolean"}}}},
+                    .required = {}}},
+            [viewer_impl](const json& args) -> json {
+                const bool advanced_only = args.value("advanced_only", false);
+                return post_and_wait(viewer_impl, [viewer_impl, advanced_only]() -> json {
+                    auto* const params = viewer_impl->getParameterManager();
+                    if (!params)
+                        return json{{"error", "Training parameters are not available"}};
+                    return optimization_params_json(params->copyActiveParams(), advanced_only);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "training.params.set",
+                .description = "Set training parameters by id, e.g. {\"values\": {\"thin_structure_weight\": 1.0}}. Options are passed by name. Live-update parameters also change a running training",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{{"values", json{{"type", "object"}}}},
+                    .required = {"values"}}},
+            [viewer_impl](const json& args) -> json {
+                if (!args.contains("values") || !args["values"].is_object() || args["values"].empty())
+                    return json{{"error", "values must be a non-empty object of parameter ids"}};
+                const json values = args["values"];
+                return post_and_wait(viewer_impl, [viewer_impl, values]() -> json {
+                    auto* const params = viewer_impl->getParameterManager();
+                    if (!params)
+                        return json{{"error", "Training parameters are not available"}};
+                    auto& registry = core::prop::PropertyRegistry::instance();
+
+                    struct Change {
+                        core::prop::PropertyMeta meta;
+                        std::any value;
+                    };
+                    std::vector<Change> changes;
+                    std::optional<std::string> strategy;
+                    for (const auto& [id, value] : values.items()) {
+                        auto meta = registry.get_property("optimization", id);
+                        if (!meta || !meta->setter)
+                            return json{{"error", "Unknown training parameter: " + id}};
+                        if (meta->is_readonly())
+                            return json{{"error", "Training parameter is read-only: " + id}};
+                        if (id == "strategy") {
+                            if (!value.is_string() || core::param::canonical_strategy_name(value.get<std::string>()).empty())
+                                return json{{"error", "strategy must be 'mcmc', 'mrnf', or 'igs+'"}};
+                            strategy = std::string(core::param::canonical_strategy_name(value.get<std::string>()));
+                            continue;
+                        }
+                        auto converted = optimization_value_from_json(*meta, value);
+                        if (!converted)
+                            return json{{"error", converted.error().user_message()}};
+                        changes.push_back({std::move(*meta), std::move(*converted)});
+                    }
+
+                    const auto before = params->copyActiveParams();
+                    if (strategy) {
+                        params->modifyActiveParams([&](auto&) {
+                            params->setActiveStrategy(*strategy);
+                            // Presets keep independent values; a GUT value left in the IGS+ slot would be invalid.
+                            if (*strategy == core::param::kStrategyIGSPlus)
+                                params->getActiveParams().gut = false;
+                        });
+                    }
+                    std::vector<std::any> previous;
+                    previous.reserve(changes.size());
+                    params->modifyActiveParams([&](auto& p) {
+                        auto ref = core::prop::PropertyObjectRef::cpp(&p);
+                        for (const auto& change : changes) {
+                            previous.push_back(change.meta.getter(ref));
+                            change.meta.setter(ref, change.value);
+                        }
+                    });
+                    if (const auto error = params->copyActiveParams().validate(); !error.empty()) {
+                        params->modifyActiveParams([&](auto& p) {
+                            auto ref = core::prop::PropertyObjectRef::cpp(&p);
+                            for (size_t i = changes.size(); i-- > 0;)
+                                changes[i].meta.setter(ref, previous[i]);
+                        });
+                        if (strategy)
+                            params->modifyActiveParams([&](auto&) { params->setActiveStrategy(before.strategy); });
+                        return json{{"error", error}};
+                    }
+                    if (strategy)
+                        registry.notify("optimization", "strategy", before.strategy, *strategy);
+                    for (size_t i = 0; i < changes.size(); ++i)
+                        registry.notify("optimization", changes[i].meta.id, previous[i], changes[i].value);
+
+                    auto result = optimization_params_json(params->copyActiveParams(), false);
+                    result["success"] = true;
+                    return result;
                 });
             });
 
