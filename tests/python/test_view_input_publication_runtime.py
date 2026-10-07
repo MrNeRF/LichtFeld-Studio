@@ -118,6 +118,48 @@ def test_input_publication_requests_render(runtime, code):
         _python(endpoint, "lf.set_camera((0, 0, 4), (0, 0, 0))")
 
 
+def test_gt_comparison_mcp_toggle_refuses_in_viewer_mode(runtime):
+    endpoint, _, _ = runtime
+    result = _tool(endpoint, "editor_run", {
+        "code": "import lichtfeld as lf\n"
+        "try:\n    lf.ui.toggle_gt_comparison()\n"
+        "except RuntimeError as error:\n    print(str(error))\n"
+        "assert lf.ui.get_split_view_mode() == 'none'\n"
+        "from lfs_plugins.gt_compare_controls import GTCompareControlsController\n"
+        "class Element:\n    def set_class(self, name, value): self.hidden = value\n"
+        "class Document:\n    def __init__(self): self.block = Element()\n"
+        "    def get_element_by_id(self, name): return self.block if name == 'gt-compare-mode-block' else None\n"
+        "doc = Document(); controls = GTCompareControlsController(); controls.mount(doc); controls.update(doc)\n"
+        "assert doc.block.hidden is True and controls.visible is False",
+        "show_console": False,
+        "timeout_ms": 10000,
+    })
+    assert result["completed"] and not result["timed_out"], result
+    output = result["output"]["text"]
+    assert "GT comparison requires a loaded dataset with source images" in output
+    assert "Traceback" not in output
+
+
+@pytest.mark.parametrize("submode", ["rectangle", "polygon", "lasso", "rings"])
+def test_ui_tool_invoke_preserves_requested_select_submode(runtime, submode):
+    endpoint, _, _ = runtime
+    _tool(endpoint, "ui_tool_clear_active", {"clear_submode": True})
+    activated = _tool(endpoint, "ui_tool_invoke", {
+        "tool_id": "builtin.select", "submode_id": submode,
+    })
+    assert activated["success"]
+    assert activated["requested_submode_id"] == submode
+    assert activated["active_submode_id"] == submode
+
+
+def test_ui_tool_invoke_without_submode_keeps_centers_default(runtime):
+    endpoint, _, _ = runtime
+    _tool(endpoint, "ui_tool_clear_active", {"clear_submode": True})
+    activated = _tool(endpoint, "ui_tool_invoke", {"tool_id": "builtin.select"})
+    assert activated["success"]
+    assert activated["active_submode_id"] == "centers"
+
+
 def test_editing_actions_request_render(runtime):
     endpoint, log, path = runtime
     actions = [

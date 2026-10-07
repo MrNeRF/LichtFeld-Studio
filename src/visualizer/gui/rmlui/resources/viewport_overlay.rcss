@@ -2226,7 +2226,8 @@ body {
     align-items: center;
     gap: 6dp;
     height: 18dp;
-    cursor: pointer;
+    drag: drag;
+    cursor: move;
 }
 
 .perf-hud-strip-title { flex-grow: 1; }

@@ -1038,6 +1038,7 @@ set(TEST_FILES
     test_training_terminal_state.cpp
     test_headless_run_coordinator.cpp
     test_argument_parser.cpp
+    test_licht_command.cpp
     test_user_paths.cpp
     test_window_state.cpp
     test_crash_handler.cpp
@@ -1339,6 +1340,7 @@ list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/app/mcp_pointer_tool.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_operator_schema.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/licht_command.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter_output_paths.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter_overwrite.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_params.cpp

@@ -891,14 +891,14 @@ namespace lfs::app {
                         return json{{"error", description.error()}};
                     }
 
+                    const bool available_before = (*description)["tool"].value("poll", false);
+                    vis::UnifiedToolRegistry::instance().invoke(tool_id);
+
                     if (submode_id) {
                         if (auto result = set_selection_submode(*submode_id); !result) {
                             return json{{"error", result.error()}};
                         }
                     }
-
-                    const bool available_before = (*description)["tool"].value("poll", false);
-                    vis::UnifiedToolRegistry::instance().invoke(tool_id);
 
                     auto payload = current_ui_state_json(viewer);
                     payload["success"] = true;

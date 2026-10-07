@@ -316,6 +316,7 @@ namespace lfs::vis {
         SplitViewInfo getSplitViewInfo() const;
         [[nodiscard]] std::optional<SplitViewInfo> getSplitViewInfoIfChanged(std::uint64_t& generation) const;
         [[nodiscard]] bool isGTComparisonActive() const;
+        [[nodiscard]] bool hasGTComparisonAvailable() const;
         [[nodiscard]] bool isPLYComparisonActive() const;
         [[nodiscard]] bool depthWindowDragPreview(ViewId view = kNoView) const;
         void beginDepthWindowDrag(ViewId view, uint64_t& out_drag_token);

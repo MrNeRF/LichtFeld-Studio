@@ -32,23 +32,6 @@
 
 namespace lfs::core {
     namespace param {
-        std::string_view output_format_extension(
-            const OutputFormat format) noexcept {
-            switch (format) {
-            case OutputFormat::PLY: return ".ply";
-            case OutputFormat::SOG: return ".sog";
-            case OutputFormat::SSOG: return ".ssog";
-            case OutputFormat::SPZ: return ".spz";
-            case OutputFormat::GLB: return ".glb";
-            case OutputFormat::HTML: return ".html";
-            case OutputFormat::USD: return ".usd";
-            case OutputFormat::USDA: return ".usda";
-            case OutputFormat::USDC: return ".usdc";
-            case OutputFormat::RAD: return ".rad";
-            }
-            return ".ply";
-        }
-
         namespace {
             using prop::PropertyMeta;
             using prop::PropertyObjectRef;
@@ -467,8 +450,10 @@ namespace lfs::core {
                     removed != json.end() && removed->is_number_integer() && removed->get<int>() != 0) {
                     LOG_WARN("Ignoring hard_clip_stop_iter: MRNF no longer hard-clips splats by screen share");
                 }
+                constexpr float kRemovedOversizeSplitDefault = 0.15f;
                 if (const auto removed = json.find("oversize_split_fraction");
-                    removed != json.end() && removed->is_number() && removed->get<float>() > 0.0f) {
+                    removed != json.end() && removed->is_number() && removed->get<float>() > 0.0f &&
+                    removed->get<float>() != kRemovedOversizeSplitDefault) {
                     LOG_WARN("Ignoring oversize_split_fraction: MRNF no longer reserves growth for oversized splats");
                 }
                 read_registered_optimization_properties(json, params, skip_missing);

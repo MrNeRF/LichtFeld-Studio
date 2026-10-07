@@ -617,10 +617,10 @@ namespace lfs::core {
                                       size_t selected_count_hint = 0);
         void applyDeferredSelectionCounts(size_t selected_count,
                                           const SelectionGroupCounts& group_counts);
-        // Last completed GPU histogram. Interactive commits update this
-        // asynchronously; callers needing an exact current count must call
-        // updateSelectionGroupCounts() first.
-        [[nodiscard]] size_t selectedCount() const { return selected_count_; }
+        // Returns the last completed count unless the selection mask changed
+        // before its asynchronous histogram completed; then it recomputes from
+        // the current masks.
+        [[nodiscard]] size_t selectedCount() const;
         void clearSelection();
         bool hasSelection() const;
         [[nodiscard]] SelectionStateMetadata captureSelectionStateMetadata() const;
@@ -858,7 +858,8 @@ namespace lfs::core {
         mutable uint64_t cached_live_selection_revision_ = 0;
         mutable bool has_selection_ = false;
         mutable bool has_point_cloud_selection_ = false;
-        size_t selected_count_ = 0;
+        mutable size_t selected_count_ = 0;
+        mutable bool selected_count_valid_ = true;
 
         std::vector<SelectionGroup> selection_groups_;
         uint8_t active_selection_group_ = 1;

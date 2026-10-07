@@ -995,6 +995,10 @@ namespace lfs::vis {
         }
 
         const bool is_right_button = button == static_cast<int>(input::AppMouseButton::RIGHT);
+        if (action == input::ACTION_PRESS && is_right_button && isTransformGizmoUsing() && gui &&
+            gui->gizmo().cancelActiveNodeTransformDrag()) {
+            return;
+        }
         if (action == input::ACTION_PRESS &&
             is_right_button &&
             pending_camera_context_menu_.active &&
@@ -2007,6 +2011,11 @@ namespace lfs::vis {
                                             ? input_router_->keyboardFocus() == input::InputTarget::Gui
                                             : gui::guiFocusState().want_capture_keyboard;
         if (action == input::ACTION_PRESS && logical_key == input::KEY_ESCAPE &&
+            isTransformGizmoUsing() && gui && gui->gizmo().cancelActiveNodeTransformDrag()) {
+            return;
+        }
+
+        if (action == input::ACTION_PRESS && logical_key == input::KEY_ESCAPE &&
             gui_keyboard_focus) {
             return;
         }
@@ -2170,7 +2179,13 @@ namespace lfs::vis {
             }
 
             case input::Action::TOGGLE_GT_COMPARISON:
-                cmd::ToggleGTComparison{}.emit();
+                if (auto* const rendering = services().renderingOrNull();
+                    rendering && (rendering->isGTComparisonActive() || rendering->hasGTComparisonAvailable())) {
+                    cmd::ToggleGTComparison{}.emit();
+                } else if (const auto* const scene_manager = services().sceneOrNull();
+                           scene_manager && scene_manager->getScene().getVisibleSplatNodeSlots().size() >= 2) {
+                    cmd::ToggleSplitView{}.emit();
+                }
                 return;
 
             case input::Action::OPEN_PREFERENCES:

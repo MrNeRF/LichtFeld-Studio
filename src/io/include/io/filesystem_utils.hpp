@@ -15,12 +15,16 @@
 #include <functional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace lfs::io {
+
+    inline constexpr std::array<std::string_view, 2> TRANSFORMS_DATASET_MARKERS = {
+        "transforms.json", "transforms_train.json"};
 
     namespace fs = std::filesystem;
 

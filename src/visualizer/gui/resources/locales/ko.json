@@ -3178,7 +3178,7 @@
   "projects.contents.save": "저장 {number} / {total}",
   "projects.contents.current": "현재",
   "projects.contents.checkpoint": "체크포인트, 반복 {iteration}",
-  "projects.contents.dataset_embedded": "데이터셋, 이미지 {count}개 포함",
+  "projects.contents.dataset_embedded": "데이터셋: 이미지 {images}개, 마스크 {masks}개, 깊이 맵 {depths}개, 법선 맵 {normals}개, 희소 파일 {sparse}개 포함",
   "projects.contents.dataset_external": "데이터셋, 외부, {path}",
   "projects.contents.reachable": "접근 가능",
   "projects.contents.missing": "없음",

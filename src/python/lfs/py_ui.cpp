@@ -51,6 +51,7 @@
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/core/training_manager.hpp"
+#include "visualizer/gui/gizmo_manager.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui/sequencer_ui_state.hpp"
@@ -67,6 +68,7 @@
 #include "visualizer/tools/unified_tool_registry.hpp"
 #include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/Core.h>
+#include <stdexcept>
 #include <typeinfo>
 
 #include "config.h"
@@ -4273,6 +4275,10 @@ namespace lfs::python {
         m.def(
             "toggle_gt_comparison",
             []() {
+                auto* const rendering = lfs::python::get_rendering_manager();
+                if (!rendering || (!rendering->isGTComparisonActive() && !rendering->hasGTComparisonAvailable())) {
+                    throw std::runtime_error("GT comparison requires a loaded dataset with source images");
+                }
                 invoke_on_viewer([] { lfs::core::events::cmd::ToggleGTComparison{}.emit(); });
             },
             "Toggle ground-truth comparison split view");
@@ -5227,6 +5233,11 @@ namespace lfs::python {
         m.def("get_multi_transform_mode", &get_multi_transform_mode, "Get multi-transform mode (0=Group, 1=Individual)");
 
         m.def("set_multi_transform_mode", &set_multi_transform_mode, nb::arg("mode"), "Set multi-transform mode (0=Group, 1=Individual)");
+
+        m.attr("MULTI_TRANSFORM_MODE_SELECTION") =
+            static_cast<int>(lfs::vis::gui::MultiTransformMode::Selection);
+        m.attr("MULTI_TRANSFORM_MODE_INDIVIDUAL") =
+            static_cast<int>(lfs::vis::gui::MultiTransformMode::Individual);
 
         // Thumbnail system (for Getting Started window)
         m.def("request_thumbnail", &request_thumbnail, nb::arg("video_id"),

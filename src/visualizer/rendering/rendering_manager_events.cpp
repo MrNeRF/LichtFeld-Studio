@@ -133,6 +133,11 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleGTComparison() {
+        if (!isGTComparisonActive() && !hasGTComparisonAvailable()) {
+            LOG_WARN("GT comparison requires a loaded dataset with source images");
+            return;
+        }
+
         // Hold across cancellation and mode change to exclude drag release sequences.
         // Acquire transition before settings/history locks; release settings before
         // pushing history.

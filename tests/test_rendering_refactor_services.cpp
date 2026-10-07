@@ -234,13 +234,31 @@ namespace lfs::vis {
         void SetUp() override {
             lfs::event::EventBridge::instance().clear_all();
             lfs::core::event::bus().clear_all();
+            services().clear();
         }
 
         void TearDown() override {
+            services().clear();
             lfs::event::EventBridge::instance().clear_all();
             lfs::core::event::bus().clear_all();
         }
     };
+
+    namespace {
+        void addDatasetCameraWithImage(SceneManager& manager) {
+            manager.changeContentType(SceneManager::ContentType::Dataset);
+            auto& scene = manager.getScene();
+            const auto group = scene.addCameraGroup("Cameras", scene.addGroup("Dataset"), 1);
+            auto camera = std::make_shared<lfs::core::Camera>(
+                lfs::core::Tensor::eye(3, lfs::core::Device::CPU),
+                lfs::core::Tensor::zeros({size_t{3}}, lfs::core::Device::CPU),
+                100.0f, 100.0f, 32.0f, 32.0f,
+                lfs::core::Tensor(), lfs::core::Tensor(), lfs::core::CameraModelType::PINHOLE,
+                "source", std::filesystem::path("source.png"), std::filesystem::path{},
+                64, 64, 1);
+            scene.addCamera("source", group, std::move(camera));
+        }
+    } // namespace
 
     class SceneManagerRenderStateTest : public ::testing::Test {
     protected:
@@ -2566,7 +2584,7 @@ namespace lfs::vis {
         const auto left = scene.addSplat("left", makeTestSplat(0.0f));
         const auto right = scene.addSplat("right", makeTwoPointTestSplat(1.0f, 2.0f));
         scene.getNodeById(right)->model->deleted() =
-            lfs::core::Tensor::from_vector({1.0f, 0.0f}, {size_t{2}}, lfs::core::Device::CUDA)
+            lfs::core::Tensor::from_vector({1.0f, 0.0f}, {size_t{2}}, lfs::core::Device::GPU)
                 .to(lfs::core::DataType::Bool);
         EXPECT_EQ(scene.getVisibleGaussianCount(), 2u);
         EXPECT_FALSE(scene.hasPreparedCombinedModel());
@@ -4129,6 +4147,9 @@ namespace lfs::vis {
     }
 
     TEST_F(RenderingManagerEventsTest, SceneLoadedDisablesGtComparison) {
+        SceneManager scene_manager;
+        addDatasetCameraWithImage(scene_manager);
+        services().set(&scene_manager);
         lfs::vis::screen::ScreenService manager_views;
         RenderingManager manager{manager_views};
         lfs::core::events::cmd::ToggleGTComparison{}.emit();
@@ -4144,7 +4165,24 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
     }
 
+    TEST_F(RenderingManagerEventsTest, ViewerCannotEnterGtComparisonThroughCommand) {
+        services().clear();
+        SceneManager scene_manager;
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        services().set(&scene_manager);
+        services().set(&manager);
+
+        lfs::core::events::cmd::ToggleGTComparison{}.emit();
+
+        EXPECT_FALSE(manager.isGTComparisonActive());
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+    }
+
     TEST_F(RenderingManagerEventsTest, SceneClearedDisablesGtComparison) {
+        SceneManager scene_manager;
+        addDatasetCameraWithImage(scene_manager);
+        services().set(&scene_manager);
         lfs::vis::screen::ScreenService manager_views;
         RenderingManager manager{manager_views};
         lfs::core::events::cmd::ToggleGTComparison{}.emit();
@@ -4467,6 +4505,7 @@ namespace lfs::vis {
     };
 
     TEST_F(DepthWindowGtHookTest, GtToggleCancelsDepthWindowDragAndClearsHover) {
+        addDatasetCameraWithImage(*viewer_->getSceneManager());
         ASSERT_TRUE(startDepthDrag());
         const op::ModalEvent move{
             .type = op::ModalEvent::Type::MOUSE_MOVE,

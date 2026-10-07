@@ -210,8 +210,8 @@ namespace lfs::io {
         }
 
         // Blender/NeRF markers
-        if (safe_exists(path / "transforms.json") ||
-            safe_exists(path / "transforms_train.json")) {
+        if (safe_exists(path / TRANSFORMS_DATASET_MARKERS[0]) ||
+            safe_exists(path / TRANSFORMS_DATASET_MARKERS[1])) {
             LOG_TRACE("Blender/NeRF dataset detected at: {}", lfs::core::path_to_utf8(path));
             return true;
         }
@@ -277,8 +277,8 @@ namespace lfs::io {
         }
 
         // Check for Transforms markers
-        if (safe_exists(path / "transforms.json") ||
-            safe_exists(path / "transforms_train.json")) {
+        if (safe_exists(path / TRANSFORMS_DATASET_MARKERS[0]) ||
+            safe_exists(path / TRANSFORMS_DATASET_MARKERS[1])) {
             return DatasetType::Transforms;
         }
 

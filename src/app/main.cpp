@@ -5,6 +5,7 @@
 #include "app/application.hpp"
 #include "app/converter.hpp"
 #include "app/gpu_preflight.hpp"
+#include "app/licht_command.hpp"
 #include "core/abi.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
@@ -33,6 +34,7 @@
 #include <filesystem>
 #include <print>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -229,6 +231,8 @@ namespace {
                 return lfs::preprocessing::run_preprocess(mode.params);
             } else if constexpr (std::is_same_v<T, lfs::io::args::PluginMode>) {
                 return lfs::python::run_plugin_command(mode);
+            } else if constexpr (std::is_same_v<T, lfs::io::args::LichtMode>) {
+                return lfs::app::run_licht_command(mode);
             } else if constexpr (std::is_same_v<T, lfs::io::args::TrainingMode>) {
                 if constexpr (!LFS_BUILD_TRAINER) {
                     if (mode.params->optimization.headless && !mode.params->render_path) {
@@ -351,10 +355,16 @@ int main(int argc, char* argv[]) {
 
     publishResolvedUserPaths();
 
+    const bool cpu_only_licht_mode =
+        std::holds_alternative<lfs::io::args::LichtMode>(*result) ||
+        (std::holds_alternative<lfs::io::args::HelpMode>(*result) &&
+         argc > 1 && std::string_view(argv[1]) == "licht");
     const int exit_code = lfs::core::run_with_exception_firewall(
         [&result] { return run_mode(std::move(*result)); });
     // CLI modes return here without the viewer's explicit GPU teardown. Drain
     // their backends before validation layers and driver libraries are unloaded.
-    lfs::core::teardown_gpu_before_exit();
+    // Licht embedding and its help path never initialize a GPU; teardown probes CUDA.
+    if (!cpu_only_licht_mode)
+        lfs::core::teardown_gpu_before_exit();
     return exit_code;
 }

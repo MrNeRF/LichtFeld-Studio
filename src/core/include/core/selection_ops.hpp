@@ -6,6 +6,8 @@
 #include "core/export.hpp"
 #include "core/tensor_fwd.hpp"
 #include <cstdint>
+#include <glm/glm.hpp>
+#include <vector>
 
 namespace lfs::core {
 
@@ -14,15 +16,28 @@ namespace lfs::core {
     /// @param means    [N, 3] Float32 gaussian positions
     /// @param radius   expansion radius in scene units
     /// @param group_id group ID to assign to newly selected gaussians
+    /// @param transform_indices optional [N] node-transform index per gaussian
+    /// @param node_transforms optional world transforms in the same order as the indices
     /// @return new mask with expanded selection
-    LFS_CORE_API Tensor selection_grow(const Tensor& mask, const Tensor& means, float radius, uint8_t group_id);
+    LFS_CORE_API Tensor selection_grow(const Tensor& mask,
+                                       const Tensor& means,
+                                       float radius,
+                                       uint8_t group_id,
+                                       const Tensor* transform_indices = nullptr,
+                                       const std::vector<glm::mat4>* node_transforms = nullptr);
 
     /// Shrink selection by radius on the input tensor backend.
     /// @param mask     [N] UInt8 selection mask
     /// @param means    [N, 3] Float32 gaussian positions
     /// @param radius   erosion radius in scene units
+    /// @param transform_indices optional [N] node-transform index per gaussian
+    /// @param node_transforms optional world transforms in the same order as the indices
     /// @return new mask with contracted selection
-    LFS_CORE_API Tensor selection_shrink(const Tensor& mask, const Tensor& means, float radius);
+    LFS_CORE_API Tensor selection_shrink(const Tensor& mask,
+                                         const Tensor& means,
+                                         float radius,
+                                         const Tensor* transform_indices = nullptr,
+                                         const std::vector<glm::mat4>* node_transforms = nullptr);
 
     /// Select gaussians by activated opacity range.
     /// @param opacity_raw  [N] Float32 raw opacity (pre-sigmoid)

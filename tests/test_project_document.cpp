@@ -8,6 +8,7 @@
 #include "core/path_utils.hpp"
 #include "cuda_backend_test.hpp"
 #include "io/embedded_dataset.hpp"
+#include "io/formats/transforms.hpp"
 #include "io/loaders/loader_utils.hpp"
 #include "io/project/project_container_internal.hpp"
 #include "io/project/span_streambuf.hpp"
@@ -41,6 +42,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -1119,10 +1121,9 @@ namespace {
         EXPECT_EQ(live.getNodeUuid(root_node->children[2]), third);
     }
 
-    bool cuda_device_available() {
-        int count = 0;
-        return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
-    }
+    class SceneChapterAdapterGpuTest : public lfs::test::CudaBackendTest {
+        void SetUp() override { LFS_CUDA_BACKEND_OR_RETURN(); }
+    };
 
     std::shared_ptr<lfs::core::Camera> make_adapter_test_camera(
         const std::string& image_name, const int uid, const bool distorted = false) {
@@ -1213,10 +1214,7 @@ namespace {
 
     // Catches observations written into the size-limited JSON scene chapter, decoded when the
     // project opens, rewritten on every save, or altered on the way back.
-    TEST(SceneChapterAdapterTest, SfmObservationsLiveInTheirOwnChapterAndLoadOnFirstUse) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+    TEST_F(SceneChapterAdapterGpuTest, SfmObservationsLiveInTheirOwnChapterAndLoadOnFirstUse) {
         std::vector<Camera::SfmObservation> dense(200'000);
         for (std::size_t i = 0; i < dense.size(); ++i) {
             const auto value = static_cast<float>(i);
@@ -1280,10 +1278,7 @@ namespace {
 
     // Catches a reader that requires the observation reference and so rejects projects written
     // before it existed, or that invents observations for them.
-    TEST(SceneChapterAdapterTest, CamerasWithoutStoredObservationsStillHydrate) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+    TEST_F(SceneChapterAdapterGpuTest, CamerasWithoutStoredObservationsStillHydrate) {
         Scene source;
         const auto group = source.addCameraGroup("Training", source.addDataset("Dataset"), 1);
         add_observed_camera(source, group, "legacy.png", 8, {});
@@ -1304,11 +1299,8 @@ namespace {
         EXPECT_TRUE(restored.getNode("legacy.png")->camera->sfm_observations().empty());
     }
 
-    TEST(SceneChapterAdapterTest,
-         CameraVisibleTrainingEnabledAndHasImageRoundTripIndependently) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+    TEST_F(SceneChapterAdapterGpuTest,
+           CameraVisibleTrainingEnabledAndHasImageRoundTripIndependently) {
 
         Scene source;
         const auto dataset = source.addDataset("Dataset");
@@ -1407,10 +1399,7 @@ namespace {
         }));
     }
 
-    TEST(SceneChapterAdapterTest, PreparedCameraRoundTripPreservesSourceCalibration) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+    TEST_F(SceneChapterAdapterGpuTest, PreparedCameraRoundTripPreservesSourceCalibration) {
 
         auto source = std::make_unique<Scene>();
         const auto dataset = source->addDataset("Dataset");
@@ -6719,6 +6708,140 @@ namespace {
             EXPECT_EQ(require_result(compacted_reader.read_chunk(*row)),
                       read_file_bytes(dataset / entry.rel_path));
         }
+    }
+
+    TEST(ProjectDocumentTest, TransformsDatasetEmbedsResolvedFramePaths) {
+        TemporaryDirectory temporary;
+        const auto dataset = temporary.path / "transforms-dataset";
+        for (const auto* directory : {"train", "test", "masks", "depths", "normals", "points"}) {
+            std::filesystem::create_directories(dataset / directory);
+        }
+        const auto png = lfs::test::licht::one_pixel_png();
+        write_file_bytes(dataset / "train" / "frame_a.png", png);
+        write_file_bytes(dataset / "test" / "frame_b.png", png);
+        write_file_bytes(dataset / "masks" / "frame_a.png", png);
+        write_file_bytes(dataset / "depths" / "frame_a.png", png);
+        write_file_bytes(dataset / "normals" / "frame_a.png", png);
+        const std::string point_cloud =
+            "ply\nformat ascii 1.0\nelement vertex 1\n"
+            "property float x\nproperty float y\nproperty float z\n"
+            "end_header\n0 0 0\n";
+        std::ofstream(dataset / "points" / "cloud.ply") << point_cloud;
+        const nlohmann::json identity = {
+            {1.0, 0.0, 0.0, 0.0},
+            {0.0, 1.0, 0.0, 0.0},
+            {0.0, 0.0, 1.0, 0.0},
+            {0.0, 0.0, 0.0, 1.0},
+        };
+        const nlohmann::json transforms = {
+            {"w", 1},
+            {"h", 1},
+            {"fl_x", 1.0},
+            {"fl_y", 1.0},
+            {"cx", 0.5},
+            {"cy", 0.5},
+            {"ply_file_path", "points/cloud.ply"},
+            {"frames", nlohmann::json::array({
+                           {{"file_path", "train/frame_a"}, {"mask_path", "masks/frame_a.png"}, {"transform_matrix", identity}},
+                           {{"file_path", "test/frame_b.png"},
+                            {"transform_matrix", identity}},
+                       })},
+        };
+        std::filesystem::create_directories(dataset);
+        std::ofstream(dataset / "transforms_train.json") << transforms.dump();
+
+        auto document = require_result_ptr(ProjectDocument::create(fixed_uuid(2991), 100));
+        bind_dataset(*document, dataset);
+        const auto project_path = temporary.path / "transforms.licht";
+        (void)require_result(document->save(project_path, save_options(2992, 200)));
+
+        const auto embedded = require_result(embed_dataset_file(project_path));
+        EXPECT_EQ(embedded.images_embedded, 2u);
+        EXPECT_EQ(embedded.masks_embedded, 1u);
+        EXPECT_EQ(embedded.depths_embedded, 1u);
+        EXPECT_EQ(embedded.normals_embedded, 1u);
+        EXPECT_EQ(embedded.sparse_embedded, 1u);
+        auto reopened = require_result_ptr(ProjectDocument::open(project_path));
+        const auto manifest = require_result(reopened->parameters().embedded_dataset());
+        ASSERT_TRUE(manifest);
+        const auto extraction = temporary.path / "extracted";
+        ASSERT_TRUE(require_result(extract_embedded_dataset(*reopened, extraction)));
+        for (const auto& entry : manifest->entries) {
+            EXPECT_EQ(read_file_bytes(dataset / lfs::core::utf8_to_path(entry.rel_path)),
+                      read_file_bytes(extraction / lfs::core::utf8_to_path(entry.rel_path)));
+        }
+        const auto [cameras, center, splits] =
+            lfs::io::read_transforms_cameras_and_images(extraction, {});
+        (void)center;
+        (void)splits;
+        EXPECT_EQ(cameras.size(), 2u);
+        auto loader = lfs::io::Loader::create();
+        ASSERT_NE(loader, nullptr);
+        auto loaded = loader->load(extraction);
+        ASSERT_TRUE(loaded) << loaded.error().format();
+        const auto& scene = std::get<lfs::io::LoadedScene>(loaded->data);
+        ASSERT_NE(scene.point_cloud, nullptr);
+        EXPECT_EQ(scene.point_cloud->size(), 1);
+    }
+
+    TEST(ProjectDocumentTest, ReembeddingReplacesOnlyThePriorDatasetPayload) {
+        TemporaryDirectory temporary;
+        const auto first = temporary.path / "first";
+        const auto second = temporary.path / "second";
+        for (const auto& root : {first, second}) {
+            std::filesystem::create_directories(root / "train");
+            std::ofstream(root / "transforms_train.json")
+                << R"({"frames":[{"file_path":"train/frame.png"}]})";
+        }
+        const std::array first_frame{std::byte{0x11}};
+        const std::array second_frame{std::byte{0x22}, std::byte{0x33}};
+        write_file_bytes(first / "train" / "frame.png", first_frame);
+        write_file_bytes(second / "train" / "frame.png", second_frame);
+
+        auto document = require_result_ptr(ProjectDocument::create(fixed_uuid(2993), 100));
+        bind_dataset(*document, first);
+        const auto project_path = temporary.path / "replacement.licht";
+        (void)require_result(document->save(project_path, save_options(2994, 200)));
+        (void)require_result(embed_dataset_file(project_path));
+
+        const auto changed = require_result(set_dataset_reference(project_path, second, true));
+        EXPECT_TRUE(changed.content_replaced);
+        (void)require_result(embed_dataset_file(project_path));
+        auto reopened = require_result_ptr(ProjectDocument::open(project_path));
+        const auto manifest = require_result(reopened->parameters().embedded_dataset());
+        ASSERT_TRUE(manifest);
+        const auto frame = std::ranges::find_if(
+            manifest->entries, [](const auto& entry) { return entry.rel_path == "train/frame.png"; });
+        ASSERT_NE(frame, manifest->entries.end());
+        EXPECT_EQ(frame->bytes, 2u);
+        ASSERT_NE(reopened->find_dataset_source(frame->chunk_uuid), nullptr);
+        EXPECT_EQ(reopened->dataset_source_uuids().size(), manifest->entries.size());
+        const auto extracted = temporary.path / "replacement-extracted";
+        ASSERT_TRUE(require_result(extract_embedded_dataset(*reopened, extracted)));
+        EXPECT_EQ(read_file_bytes(extracted / "train/frame.png"),
+                  read_file_bytes(second / "train/frame.png"));
+    }
+
+    TEST(ProjectDocumentTest, EmbeddingPreservesSceneSourcePayloads) {
+        TemporaryDirectory temporary;
+        const auto dataset = temporary.path / "dataset";
+        std::filesystem::create_directories(dataset / "train");
+        const auto image = lfs::test::licht::one_pixel_png();
+        write_file_bytes(dataset / "train" / "frame.png", image);
+        std::ofstream(dataset / "transforms_train.json")
+            << R"({"frames":[{"file_path":"train/frame.png"}]})";
+
+        const auto project_path = temporary.path / "scene.licht";
+        std::filesystem::copy_file(
+            fs::path(PROJECT_ROOT_PATH) / "tests/data/portable-sog.licht", project_path);
+        const auto reference = require_result(set_dataset_reference(
+            project_path, dataset, true));
+        static_cast<void>(reference);
+        static_cast<void>(require_result(embed_dataset_file(project_path)));
+        const auto reopened = require_result_ptr(ProjectDocument::open(project_path));
+        const auto nodes = reopened->scene_graph().nodes();
+        ASSERT_TRUE(nodes);
+        EXPECT_FALSE(nodes->empty());
     }
 
     // Covers lfs::io::project::extract_embedded_dataset, the headless side of

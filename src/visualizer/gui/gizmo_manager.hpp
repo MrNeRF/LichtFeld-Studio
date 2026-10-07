@@ -59,6 +59,7 @@ namespace lfs::vis {
             void renderViewportGizmo(const ViewportLayout& viewport);
             void updateCropFlash();
             void deactivateAllTools();
+            bool cancelActiveNodeTransformDrag();
             LFS_VIS_API void setSelectionSubMode(SelectionSubMode mode);
             LFS_VIS_API void setSelectionVolumeFromDrag(SelectionSubMode mode,
                                             SelectionMode apply_mode,

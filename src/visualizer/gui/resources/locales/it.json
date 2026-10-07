@@ -3178,7 +3178,7 @@
   "projects.contents.save": "Salvataggio {number} di {total}",
   "projects.contents.current": "attuale",
   "projects.contents.checkpoint": "Checkpoint, iterazione {iteration}",
-  "projects.contents.dataset_embedded": "Dataset, {count} immagini incorporate",
+  "projects.contents.dataset_embedded": "Dataset: {images} immagini, {masks} maschere, {depths} mappe di profondità, {normals} normali e {sparse} file sparsi incorporati",
   "projects.contents.dataset_external": "Dataset, esterno, {path}",
   "projects.contents.reachable": "raggiungibile",
   "projects.contents.missing": "mancante",

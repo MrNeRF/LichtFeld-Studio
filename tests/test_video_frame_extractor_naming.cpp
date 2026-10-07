@@ -5,6 +5,7 @@
 #include "cuda_backend_test.hpp"
 
 #include "core/tensor_backend.hpp"
+#include "io/media_studio_backends.hpp"
 #include "io/video/video_encoder.hpp"
 #include "media/video_frame_extractor.hpp"
 
@@ -261,7 +262,12 @@ TEST_P(VideoEncoderInputTest, SolidColorEncodesAndExtracts) {
 INSTANTIATE_TEST_SUITE_P(Backends, VideoEncoderInputTest,
                          ::testing::Values(VideoInput::CpuRgba, VideoInput::VulkanTensor));
 
-class VideoFrameExtractorOutputNaming : public lfs::test::CudaBackendTest {};
+class VideoFrameExtractorOutputNaming : public lfs::test::CudaBackendTest {
+    void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
+        lfs::io::registerStudioMediaBackends();
+    }
+};
 class VideoFrameExtractorCudaOutcome : public lfs::test::CudaBackendTest {};
 
 TEST_F(VideoFrameExtractorOutputNaming, IntervalUsesSourceFrameNumbers) {

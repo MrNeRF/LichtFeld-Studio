@@ -941,7 +941,7 @@ TEST_F(TensorCatReductionBugTest, SizeThresholdsPreserveReductionAcrossKernelBou
         auto cpu1 = Tensor::full({size}, 100.0f, Device::CPU);
         auto cpu2 = Tensor::full({size}, -100.0f, Device::CPU);
 
-        const auto cat = Tensor::cat({cpu1.cuda(), cpu2.cuda()}, 0);
+        const auto cat = Tensor::cat({cpu1.gpu(), cpu2.gpu()}, 0);
 
         verifyMinMax(cat, "SizeThresholdsPreserveReductionAcrossKernelBoundaries");
     }
@@ -1038,4 +1038,24 @@ TEST_F(TensorCatReductionBugTest, CatShCoefficientsAlongMiddleDimension) {
                                   4.0f, 5.0f, 6.0f,
                                   0.0f, 0.0f, 0.0f,
                                   0.0f, 0.0f, 0.0f}));
+}
+
+// The CUDA kernels behind middle- and last-dimension concatenation copied 4-byte words whatever the dtype, so
+// Float16, UInt8 and Int64 results read past their rows and wrote past the output.
+TEST_F(TensorCatReductionBugTest, CatOfNarrowAndWideTypesAlongInnerDimensionsMatchesTheHost) {
+    for (const DataType dtype : {DataType::Float16, DataType::UInt8, DataType::Int64, DataType::Float32}) {
+        for (const int dim : {1, 2}) {
+            std::vector<float> first_values(2 * 3 * 4), second_values(2 * 3 * 4);
+            std::iota(first_values.begin(), first_values.end(), 1.0f);
+            std::iota(second_values.begin(), second_values.end(), 101.0f);
+            const auto first = Tensor::from_vector(first_values, {2, 3, 4}, Device::CPU).to(dtype);
+            const auto second = Tensor::from_vector(second_values, {2, 3, 4}, Device::CPU).to(dtype);
+            const auto expected = Tensor::cat({first, second.slice(size_t(dim), 0, 2).contiguous()}, dim);
+            const auto actual = Tensor::cat({first.to(Device::GPU), second.slice(size_t(dim), 0, 2).contiguous().to(Device::GPU)},
+                                            dim);
+            ASSERT_EQ(actual.shape(), expected.shape());
+            EXPECT_EQ(actual.to(DataType::Float32).cpu().to_vector(), expected.to(DataType::Float32).to_vector())
+                << "dtype " << static_cast<int>(dtype) << " dim " << dim;
+        }
+    }
 }

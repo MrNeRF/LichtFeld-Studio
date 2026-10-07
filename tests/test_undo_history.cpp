@@ -1956,6 +1956,68 @@ TEST_F(UndoHistoryTest, FullNodeGaussianDeleteRemovesNodeAndUndoRestoresIt) {
     EXPECT_EQ(scene_manager->getScene().getNode("model"), nullptr);
 }
 
+TEST_F(UndoHistoryTest, FullNodeGaussianDeleteUndoRedoRestoresNodeInMultiNodeScene) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto original_id = scene.addSplat("original", make_linear_test_splat(2));
+    const auto sibling_id = scene.addSplat("sibling", make_linear_test_splat(2));
+    ASSERT_NE(original_id, lfs::core::NULL_NODE);
+    ASSERT_NE(sibling_id, lfs::core::NULL_NODE);
+    const auto original_uuid = scene.getNodeUuid(original_id);
+    const auto expected_rows = scene.getNodeById(original_id)->model->means_raw().cpu().to_vector();
+    scene.setSelectionMask(std::make_shared<Tensor>(make_uint8_mask({1, 1, 0, 0})));
+    const auto initial_selection = selection_mask_values(scene);
+    ASSERT_EQ(initial_selection.size(), 4);
+    std::vector<std::pair<lfs::core::Uuid, std::vector<uint8_t>>> selection_by_node;
+    const auto initial_roots = scene.getRootNodes();
+    ASSERT_EQ(initial_roots.size(), 2);
+    for (size_t index = 0; index < initial_roots.size(); ++index) {
+        selection_by_node.emplace_back(
+            scene.getNodeUuid(initial_roots[index]),
+            std::vector<uint8_t>(initial_selection.begin() + static_cast<std::ptrdiff_t>(index * 2),
+                                 initial_selection.begin() + static_cast<std::ptrdiff_t>((index + 1) * 2)));
+    }
+
+    scene_manager->deleteSelectedGaussians();
+    EXPECT_EQ(scene.getNodeByUuid(original_uuid), nullptr);
+    ASSERT_NE(scene.getNodeById(sibling_id), nullptr);
+    ASSERT_NE(scene.getNodeById(sibling_id)->model, nullptr);
+    EXPECT_EQ(scene.getNodeById(sibling_id)->model->size(), 2);
+
+    const auto undo_result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(undo_result.success) << undo_result.error;
+    const auto* restored = scene.getNodeByUuid(original_uuid);
+    ASSERT_NE(restored, nullptr);
+    ASSERT_NE(restored->model, nullptr);
+    EXPECT_EQ(restored->model->size(), 2);
+    EXPECT_EQ(restored->model->means_raw().cpu().to_vector(), expected_rows);
+    EXPECT_EQ(scene.getNodeById(sibling_id)->model->size(), 2);
+    const auto restored_selection = selection_mask_values(scene);
+    const auto restored_roots = scene.getRootNodes();
+    ASSERT_EQ(restored_selection.size(), 4);
+    ASSERT_EQ(restored_roots.size(), selection_by_node.size());
+    for (size_t index = 0; index < restored_roots.size(); ++index) {
+        const auto uuid = scene.getNodeUuid(restored_roots[index]);
+        const auto expected = std::find_if(selection_by_node.begin(), selection_by_node.end(),
+                                           [&uuid](const auto& entry) { return entry.first == uuid; });
+        ASSERT_NE(expected, selection_by_node.end());
+        EXPECT_EQ(std::vector<uint8_t>(restored_selection.begin() + static_cast<std::ptrdiff_t>(index * 2),
+                                       restored_selection.begin() + static_cast<std::ptrdiff_t>((index + 1) * 2)),
+                  expected->second);
+    }
+
+    const auto redo_result = lfs::vis::op::undoHistory().redo();
+    ASSERT_TRUE(redo_result.success) << redo_result.error;
+    EXPECT_EQ(scene.getNodeByUuid(original_uuid), nullptr);
+    ASSERT_NE(scene.getNodeById(sibling_id), nullptr);
+    EXPECT_EQ(scene.getNodeById(sibling_id)->model->size(), 2);
+}
+
 TEST_F(UndoHistoryTest, PipelineDeleteRestoresThenStaleSelectionReplayFailsClosed) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     lfs::vis::screen::ScreenService rendering_manager_views;
@@ -2205,7 +2267,7 @@ TEST_F(UndoHistoryTest, SceneSnapshotInvalidatesExistingDeletedMaskOnUndoAndRedo
     scene_manager->getScene().addSplat("model", make_linear_test_splat(16));
     auto& model = *scene_manager->getScene().getMutableNode("model")->model;
     // Training leaves a resident mask, even when no rows are currently deleted.
-    model.deleted() = Tensor::zeros({16}, Device::CUDA, DataType::Bool);
+    model.deleted() = Tensor::zeros({16}, Device::GPU, DataType::Bool);
     const auto* mask_ptr = model.deleted().data_ptr();
     lfs::vis::op::SceneSnapshot snapshot(*scene_manager, "delete.existing_mask");
     snapshot.captureTopology();

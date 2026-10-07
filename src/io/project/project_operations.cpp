@@ -13,6 +13,7 @@
 #include "io/embedded_dataset.hpp"
 #include "io/exporter.hpp"
 #include "io/filesystem_utils.hpp"
+#include "io/formats/transforms.hpp"
 #include "io/loader.hpp"
 #include "io/project_chapters.hpp"
 #include "io/project_container.hpp"
@@ -32,6 +33,7 @@
 #include <istream>
 #include <limits>
 #include <map>
+#include <nlohmann/json.hpp>
 #include <ranges>
 #include <set>
 #include <string_view>
@@ -565,6 +567,8 @@ namespace lfs::io::project {
                                const std::string& configured_images,
                                std::string& images_folder) {
             auto info = lfs::io::detect_dataset_info(root);
+            const bool transforms_dataset =
+                lfs::io::Loader::getDatasetType(root) == DatasetType::Transforms;
             if (!configured_images.empty() && configured_images != ".") {
                 const auto configured = root / lfs::core::utf8_to_path(configured_images);
                 if (std::filesystem::is_directory(configured)) {
@@ -588,12 +592,30 @@ namespace lfs::io::project {
                 }
             };
             append(info.images_path, "image");
-            if (info.has_masks)
-                append(info.masks_path, "mask");
-            if (info.has_depths)
-                append(info.depths_path, "depth");
-            if (info.has_normals)
-                append(info.normals_path, "normal");
+            if (info.has_masks) {
+                if (transforms_dataset) {
+                    for (const auto* folder : MASK_SEARCH_FOLDERS)
+                        append(root / folder, "mask");
+                } else {
+                    append(info.masks_path, "mask");
+                }
+            }
+            if (info.has_depths) {
+                if (transforms_dataset) {
+                    for (const auto* folder : DEPTH_SEARCH_FOLDERS)
+                        append(root / folder, "depth");
+                } else {
+                    append(info.depths_path, "depth");
+                }
+            }
+            if (info.has_normals) {
+                if (transforms_dataset) {
+                    for (const auto* folder : NORMAL_SEARCH_FOLDERS)
+                        append(root / folder, "normal");
+                } else {
+                    append(info.normals_path, "normal");
+                }
+            }
             append(info.sparse_path, "sparse");
             for (const auto name : {"project.ini", "transforms.json",
                                     "transforms_train.json", "transforms_test.json",
@@ -602,6 +624,46 @@ namespace lfs::io::project {
                 if (std::filesystem::is_regular_file(file)) {
                     result.emplace_back(file, "meta");
                 }
+            }
+            if (transforms_dataset) {
+                const auto transforms_path = std::filesystem::is_regular_file(
+                                                 root / "transforms_train.json")
+                                                 ? root / "transforms_train.json"
+                                                 : root / "transforms.json";
+                try {
+                    std::ifstream input(transforms_path, std::ios::binary);
+                    const auto document = nlohmann::json::parse(input);
+                    if (document.contains("frames") && document["frames"].is_array()) {
+                        for (const auto& frame : document["frames"]) {
+                            if (!frame.is_object() || !frame.contains("file_path") ||
+                                !frame["file_path"].is_string()) {
+                                continue;
+                            }
+                            const auto image = GetTransformImagePath(
+                                root, frame["file_path"].get<std::string>());
+                            if (std::filesystem::is_regular_file(image))
+                                result.emplace_back(image, "image");
+                            if (frame.contains("mask_path") && frame["mask_path"].is_string()) {
+                                const auto mask = root / lfs::core::utf8_to_path(
+                                                             frame["mask_path"].get<std::string>());
+                                if (std::filesystem::is_regular_file(mask))
+                                    result.emplace_back(mask, "mask");
+                            }
+                        }
+                    }
+                    if (document.contains("ply_file_path") &&
+                        document["ply_file_path"].is_string()) {
+                        const auto point_cloud = root / lfs::core::utf8_to_path(
+                                                            document["ply_file_path"].get<std::string>());
+                        if (std::filesystem::is_regular_file(point_cloud))
+                            result.emplace_back(point_cloud, "sparse");
+                    }
+                } catch (const std::exception&) {
+                    // LFS-CENSUS-OK(empty-catch): the loader reports malformed metadata when loading.
+                }
+                const auto fallback_point_cloud = root / "pointcloud.ply";
+                if (std::filesystem::is_regular_file(fallback_point_cloud))
+                    result.emplace_back(fallback_point_cloud, "sparse");
             }
             std::set<std::string> seen;
             std::erase_if(result, [&](const auto& item) {
@@ -2221,6 +2283,9 @@ namespace lfs::io::project {
         std::string images_folder;
         auto files = discover_dataset_files(
             *root, snapshot->dataset.images, images_folder);
+        if (progress) {
+            progress(0.02F, "Scanning dataset");
+        }
         EmbeddedDatasetManifest manifest{
             .schema_version = 1,
             .images_folder = images_folder,
@@ -2244,26 +2309,16 @@ namespace lfs::io::project {
                     lfs::ErrorCode::DataLoss, source_path,
                     "A dataset file could not be inspected.", error.message(), "dataset.file");
             }
-            auto hash = hash_dataset_file(source_path);
-            if (!hash) {
-                return std::move(hash).error();
-            }
             EmbeddedDatasetEntry entry{
                 .rel_path = lfs::core::path_to_generic_utf8(source_path.lexically_relative(*root)),
                 .kind = kind,
                 .chunk_uuid = lfs::core::generate_uuid_v4(),
                 .bytes = bytes,
-                .xxh3_128 = *hash,
+                .xxh3_128 = {},
             };
             manifest.entries.push_back(entry);
             sources.push_back(DatasetEmbedSource{.entry = entry, .source_path = source_path});
             total_bytes += bytes;
-            if (progress) {
-                progress(files.empty() ? 0.2F
-                                       : 0.2F + 0.3F * static_cast<float>(index + 1) /
-                                                    static_cast<float>(files.size()),
-                         "Hashing dataset files");
-            }
         }
         std::error_code space_error;
         const auto available = std::filesystem::space(path.parent_path(), space_error).available;
@@ -2289,9 +2344,19 @@ namespace lfs::io::project {
             return std::move(marked).error();
         if (auto marked = document->save(path, options); !marked)
             return std::move(marked).error();
-        auto saved = document->embed_dataset_batch(manifest, sources, options);
+        auto saved = document->embed_dataset_batch(
+            manifest, sources, options,
+            [progress](const float value, const std::string& stage) {
+                if (progress) {
+                    progress(value, stage);
+                }
+            },
+            cancel);
         if (!saved) {
             return std::move(saved).error();
+        }
+        if (progress) {
+            progress(0.97F, "Verifying embedded dataset");
         }
         auto card = inspect_after_save(path);
         if (!card) {
@@ -2308,6 +2373,10 @@ namespace lfs::io::project {
                 ++result.normals_embedded;
             if (entry.kind == "sparse")
                 ++result.sparse_embedded;
+            if (entry.kind == "mask")
+                ++result.masks_embedded;
+            if (entry.kind == "depth")
+                ++result.depths_embedded;
         }
         if (progress) {
             progress(1.0F, "Dataset embedding complete");
@@ -2339,6 +2408,7 @@ namespace lfs::io::project {
             return std::move(current).error();
         }
         bool content_replaced = false;
+        bool unchanged_reference = false;
         if (*current) {
             auto existing = document->references().find(**current);
             if (!existing) {
@@ -2351,6 +2421,7 @@ namespace lfs::io::project {
                     auto check = check_fingerprint(dataset_dir, (*existing)->fingerprint);
                     if (check && check->matches()) {
                         content_replaced = false;
+                        unchanged_reference = true;
                     }
                 } else {
                     content_replaced = true;
@@ -2367,10 +2438,12 @@ namespace lfs::io::project {
                     .base = LocatorBase::Absolute,
                     .absolute_fallback = lfs::core::path_to_utf8(std::filesystem::absolute(dataset_dir)),
                 };
-                auto relinked = document->edit_references().relink(
-                    **current, locator, dataset_dir, accept_content_change);
-                if (!relinked) {
-                    return std::move(relinked).error();
+                if (!unchanged_reference) {
+                    auto relinked = document->edit_references().relink(
+                        **current, locator, dataset_dir, accept_content_change);
+                    if (!relinked) {
+                        return std::move(relinked).error();
+                    }
                 }
             } else {
                 if (auto record = upsert_path_reference(
@@ -2398,6 +2471,17 @@ namespace lfs::io::project {
         if (auto selected = document->edit_project().set_dataset_reference(*current);
             !selected) {
             return std::move(selected).error();
+        }
+        if (unchanged_reference) {
+            auto card = inspect_after_save(path);
+            if (!card) {
+                return std::move(card).error();
+            }
+            return DatasetReferenceResult{
+                .card = *card,
+                .reference_uuid = **current,
+                .content_replaced = false,
+            };
         }
         if (auto marked = mark_contents_edit(*document, "dataset_located"); !marked)
             return std::move(marked).error();

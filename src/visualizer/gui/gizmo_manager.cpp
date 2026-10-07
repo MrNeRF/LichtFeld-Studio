@@ -640,7 +640,11 @@ namespace lfs::vis::gui {
         const glm::mat4 data_world_transform =
             rendering::visualizerWorldTransformToDataWorld(crop_tool_visualizer_transform_);
         const glm::mat4 parent_world = scene.getWorldTransform(node->parent_id);
-        const glm::mat4 local_transform = glm::inverse(parent_world) * data_world_transform;
+        const auto local_transform = core::finiteLocalTransform(parent_world, data_world_transform);
+        if (!local_transform) {
+            LOG_WARN("Cannot commit crop tool transform: parent transform cannot preserve a finite world transform");
+            return false;
+        }
 
         if (crop_tool_shape_ == CropToolShape::Box) {
             if (!node->cropbox)
@@ -657,7 +661,7 @@ namespace lfs::vis::gui {
             if (enable)
                 data.enabled = true;
             scene.setCropBoxData(node->id, data);
-            sm->setNodeTransform(node->name, local_transform);
+            sm->setNodeTransform(node->name, *local_transform);
             scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
             if (rm)
                 rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
@@ -682,7 +686,7 @@ namespace lfs::vis::gui {
         if (enable)
             data.enabled = true;
         scene.setEllipsoidData(node->id, data);
-        sm->setNodeTransform(node->name, local_transform);
+        sm->setNodeTransform(node->name, *local_transform);
         scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         if (rm)
             rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
@@ -3419,6 +3423,40 @@ namespace lfs::vis::gui {
         auto& editor = viewer_->getEditorContext();
         editor.setActiveTool(ToolType::None);
         current_operation_ = GizmoOperation::Translate;
+    }
+
+    bool GizmoManager::cancelActiveNodeTransformDrag() {
+        if (!node_gizmo_active_ || node_gizmo_node_names_.empty() || node_transforms_before_drag_.empty()) {
+            return false;
+        }
+
+        auto* const scene_manager = viewer_ ? viewer_->getSceneManager() : nullptr;
+        if (!scene_manager) {
+            return false;
+        }
+
+        const size_t restore_count = std::min(node_gizmo_node_names_.size(), node_transforms_before_drag_.size());
+        for (size_t i = 0; i < restore_count; ++i) {
+            scene_manager->setNodeTransform(node_gizmo_node_names_[i], node_transforms_before_drag_[i]);
+        }
+
+        cancelTranslationGizmoDrag();
+        cancelRotationGizmoDrag();
+        cancelScaleGizmoDrag();
+        cancelBoundsGizmoDrag();
+        node_gizmo_active_ = false;
+        node_bounds_scale_active_ = false;
+        node_selection_bounds_scale_active_ = false;
+        node_gizmo_node_names_.clear();
+        node_transforms_before_drag_.clear();
+        node_original_visualizer_world_transforms_.clear();
+
+        if (auto* const rendering_manager = viewer_->getRenderingManager()) {
+            rendering_manager->setCropboxGizmoActive(false);
+            rendering_manager->setEllipsoidGizmoActive(false);
+            rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, FrameReason::SceneChange);
+        }
+        return true;
     }
 
     void GizmoManager::setSelectionSubMode(SelectionSubMode mode) {

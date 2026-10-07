@@ -3178,7 +3178,7 @@
   "projects.contents.save": "保存 {number} / {total}",
   "projects.contents.current": "当前",
   "projects.contents.checkpoint": "检查点，迭代 {iteration}",
-  "projects.contents.dataset_embedded": "数据集，已嵌入 {count} 张图像",
+  "projects.contents.dataset_embedded": "数据集：已嵌入 {images} 张图像、{masks} 张掩码、{depths} 张深度图、{normals} 张法线图和 {sparse} 个稀疏文件",
   "projects.contents.dataset_external": "数据集，外部，{path}",
   "projects.contents.reachable": "可访问",
   "projects.contents.missing": "缺失",

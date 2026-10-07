@@ -468,17 +468,20 @@ namespace fast_lfs::rasterization::kernels {
         return 1.0f / (1.0f + expf(-x));
     }
 
+    template <bool RUNTIME_LOG_SCALE = true>
     __device__ inline float scale_regularization_grad(
         const FusedAdamSettings& fused_adam,
         const FusedAdamParam& param,
         const uint element_idx) {
         if (fused_adam.scale_reg_weight <= 0.0f || param.n_elements <= 0)
             return 0.0f;
-        if (fused_adam.scale_reg_log) {
-            if (param.param[element_idx] <= -40.0f)
-                return 0.0f;
-            return fused_adam.scale_reg_weight * 0.01f /
-                   (static_cast<float>(param.n_elements) * fused_adam.scale_reg_normalizer);
+        if constexpr (RUNTIME_LOG_SCALE) {
+            if (fused_adam.scale_reg_log) {
+                if (param.param[element_idx] <= -40.0f)
+                    return 0.0f;
+                return fused_adam.scale_reg_weight * 0.01f /
+                       (static_cast<float>(param.n_elements) * fused_adam.scale_reg_normalizer);
+            }
         }
         return fused_adam.scale_reg_weight * expf(param.param[element_idx]) /
                static_cast<float>(param.n_elements);
@@ -838,7 +841,7 @@ namespace fast_lfs::rasterization::kernels {
     // GradSource(primitive_idx, k, slot, active_slot) -> float4 cell grads. The fused
     // path reconstructs from color; the standalone path loads a swizzled buffer.
     // blockIdx.x is the 256-splat joint-bounds row (256 threads per block).
-    template <int ACTIVE_SH_BASES, typename GradSource>
+    template <int ACTIVE_SH_BASES, bool SEPT_REGULARIZERS = true, typename GradSource>
     __device__ inline void apply_shN_grads_packed_joint(
         const FusedAdamSettings& fused_adam,
         const uint primitive_idx,
@@ -925,7 +928,7 @@ namespace fast_lfs::rasterization::kernels {
                                               : (c == 2)   ? gk.z
                                                            : gk.w;
                     const int64_t cell = static_cast<int64_t>(slot) * 4 + c;
-                    if constexpr (ACTIVE_SH_BASES > 1)
+                    if constexpr (SEPT_REGULARIZERS && ACTIVE_SH_BASES > 1)
                         local_sh_rest_loss += add_sh_rest_regularization<ACTIVE_SH_BASES>(
                             fused_adam, p.n_primitives, k * 4u + static_cast<uint>(c), colour_reg_mask, pci, gci);
                     const float2 prim = shN_adam_moment_us<C>(
@@ -1029,7 +1032,7 @@ namespace fast_lfs::rasterization::kernels {
                                                            : gk.w;
                     const int64_t cell = static_cast<int64_t>(slot) * 4 + c;
                     // The first pass accumulated the loss; this pass re-encodes the regularized moments.
-                    if constexpr (ACTIVE_SH_BASES > 1)
+                    if constexpr (SEPT_REGULARIZERS && ACTIVE_SH_BASES > 1)
                         add_sh_rest_regularization<ACTIVE_SH_BASES>(
                             fused_adam, p.n_primitives, k * 4u + static_cast<uint>(c), colour_reg_mask, pci, gci);
                     const float2 prim = shN_adam_moment_us<C>(
@@ -1072,17 +1075,18 @@ namespace fast_lfs::rasterization::kernels {
 
         // Every thread reaches this reduction, including overhang and masked
         // rows. This leaves at most one global scalar update per block.
-        if (fused_adam.sh_rest_reg_loss_out != nullptr) {
-            const float block_sum = lfs::core::warp_ops::block_reduce_sum(local_sh_rest_loss);
-            if (threadIdx.x == 0 && block_sum != 0.0f)
-                atomicAdd(fused_adam.sh_rest_reg_loss_out, block_sum);
-        }
+        if constexpr (SEPT_REGULARIZERS)
+            if (fused_adam.sh_rest_reg_loss_out != nullptr) {
+                const float block_sum = lfs::core::warp_ops::block_reduce_sum(local_sh_rest_loss);
+                if (threadIdx.x == 0 && block_sum != 0.0f)
+                    atomicAdd(fused_adam.sh_rest_reg_loss_out, block_sum);
+            }
     }
 
     // Joint (u, log_s) Adam step over swizzled shN moments of one primitive.
     // Slot count is derived from ACTIVE_SH_BASES. All threads must call
     // when joint_bits==8 (block bounds).
-    template <int ACTIVE_SH_BASES>
+    template <int ACTIVE_SH_BASES, bool SEPT_REGULARIZERS = true>
     __device__ inline void apply_shN_grads_packed(
         const FusedAdamSettings& fused_adam,
         const uint primitive_idx,
@@ -1094,7 +1098,7 @@ namespace fast_lfs::rasterization::kernels {
         const uint colour_reg_mask = 7u) {
         const FusedAdamParam& p = fused_adam.shN;
         if (p.joint_bits == 8) {
-            apply_shN_grads_packed_joint<ACTIVE_SH_BASES>(
+            apply_shN_grads_packed_joint<ACTIVE_SH_BASES, SEPT_REGULARIZERS>(
                 fused_adam, primitive_idx, sh_layout_slots,
                 ShNGradFromColor<ACTIVE_SH_BASES>(
                     mean3d, cam_position, grad_color, compute_sh_grads),

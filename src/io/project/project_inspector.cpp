@@ -1009,6 +1009,10 @@ namespace lfs::io::project {
                 for (const auto& entry : (**embedded).entries) {
                     if (entry.kind == "image") {
                         ++result.parameters.embedded_images;
+                    } else if (entry.kind == "mask") {
+                        ++result.parameters.embedded_masks;
+                    } else if (entry.kind == "depth") {
+                        ++result.parameters.embedded_depths;
                     } else if (entry.kind == "normal") {
                         ++result.parameters.embedded_normals;
                     } else if (entry.kind == "sparse") {

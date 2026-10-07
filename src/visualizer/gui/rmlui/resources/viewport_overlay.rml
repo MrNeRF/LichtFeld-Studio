@@ -902,7 +902,7 @@
 
     <div id="vram-hud-overlay" class="vram-hud-overlay hidden">
         <div id="perf-hud-strip" class="perf-hud-strip hidden">
-            <div class="perf-hud-strip-header" data-perf-toggle-expanded="true">
+            <div id="perf-hud-strip-header" class="perf-hud-strip-header" data-perf-toggle-expanded="true">
                 <span class="perf-hud-strip-title">@tr:ui.perf_hud_title</span>
                 <span id="perf-hud-strip-rate" class="perf-hud-strip-rate"></span>
                 <span id="vram-hud-strip-health" class="vram-hud-health"></span>

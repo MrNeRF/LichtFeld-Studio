@@ -2513,6 +2513,51 @@ namespace {
 
         return io_args::PreprocessMode{params};
     }
+
+    std::optional<lfs::io::args::ParsedArgs> parseLichtArgs(
+        const int argc, const char* const argv[], std::string& error) {
+        namespace io_args = lfs::io::args;
+        constexpr std::string_view usage =
+            "Usage: LichtFeld-Studio licht <project.licht> --embed [dataset]\n"
+            "       LichtFeld-Studio licht --help\n";
+        const auto invalid = [&](const std::string_view detail) {
+            error = std::format("{}\n{}", detail, usage);
+            return std::optional<io_args::ParsedArgs>{};
+        };
+        if (argc == 3 && (std::string_view(argv[2]) == "--help" ||
+                          std::string_view(argv[2]) == "-h")) {
+            std::print("{}", usage);
+            return io_args::ParsedArgs{io_args::HelpMode{}};
+        }
+        if (argc < 3 || std::string_view(argv[2]) == "--help") {
+            return invalid("Missing .licht project path.");
+        }
+        if (argc < 4 || std::string_view(argv[3]) != "--embed") {
+            return invalid("The licht command currently requires --embed.");
+        }
+        if (argc > 5) {
+            return invalid("Unexpected argument: " + std::string(argv[5]));
+        }
+        const auto project = lfs::core::utf8_to_path(argv[2]);
+        if (project.extension() != ".licht") {
+            return invalid("The project path must have a .licht extension.");
+        }
+        if (!std::filesystem::is_regular_file(project)) {
+            return invalid("The .licht project file could not be found.");
+        }
+        std::optional<std::filesystem::path> dataset;
+        if (argc == 5) {
+            if (std::string_view(argv[4]).starts_with('-')) {
+                return invalid(std::format("Unknown licht argument: {}", argv[4]));
+            }
+            auto override_path = lfs::core::utf8_to_path(argv[4]);
+            if (override_path.is_relative()) {
+                override_path = std::filesystem::current_path() / override_path;
+            }
+            dataset = override_path.lexically_normal();
+        }
+        return io_args::ParsedArgs{io_args::LichtMode{project, dataset}};
+    }
 } // namespace
 
 std::expected<lfs::io::args::ParsedArgs, std::string>
@@ -2569,6 +2614,12 @@ lfs::io::args::parse_args(const int argc, const char* const argv[]) {
             return parseMesh2SplatArgs(argc, argv);
         } else if (arg1 == "preprocess") {
             return parsePreprocessArgs(argc, argv);
+        } else if (arg1 == "licht") {
+            std::string error;
+            if (auto parsed = parseLichtArgs(argc, argv, error)) {
+                return std::move(*parsed);
+            }
+            return std::unexpected(std::move(error));
         } else if (arg1 == "plugin") {
             if (argc < 3) {
                 return std::unexpected("Usage: LichtFeld-Studio plugin <create|check|list> [name]");
