@@ -601,8 +601,23 @@ namespace lfs::core {
                                   SSOG,
                                   GLB };
 
-        [[nodiscard]] LFS_CORE_API std::string_view output_format_extension(
-            OutputFormat format) noexcept;
+        // Inline so that tools compiled without lfs_core, such as the standalone path tests, can use it.
+        [[nodiscard]] constexpr std::string_view output_format_extension(
+            const OutputFormat format) noexcept {
+            switch (format) {
+            case OutputFormat::PLY: return ".ply";
+            case OutputFormat::SOG: return ".sog";
+            case OutputFormat::SSOG: return ".ssog";
+            case OutputFormat::SPZ: return ".spz";
+            case OutputFormat::GLB: return ".glb";
+            case OutputFormat::HTML: return ".html";
+            case OutputFormat::USD: return ".usd";
+            case OutputFormat::USDA: return ".usda";
+            case OutputFormat::USDC: return ".usdc";
+            case OutputFormat::RAD: return ".rad";
+            }
+            return ".ply";
+        }
 
         // PLY -> RAD only: per-bucket LOD tree builder for the out-of-core
         // converter. BHATT is the quality-validated default; OCTREE trades
