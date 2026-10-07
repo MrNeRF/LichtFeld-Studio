@@ -982,7 +982,7 @@ namespace lfs::vis {
             request.on_result = [&](const auto& result) { submitted = result.input_value; };
             gui_->enqueueModal(std::move(request));
         });
-        handlers.subscribe<core::events::cmd::ToggleGTComparison>([&](const auto&) { ++shortcuts; });
+        handlers.subscribe<core::events::cmd::ToggleSplitView>([&](const auto&) { ++shortcuts; });
         key(SDL_SCANCODE_S, SDL_KMOD_CTRL);
         ASSERT_TRUE(modal().isOpen());
         // A background panel must not steal the modal's focus or text handler.
@@ -993,7 +993,7 @@ namespace lfs::vis {
         key(SDL_SCANCODE_RETURN);
         EXPECT_EQ(submitted, "modal");
         EXPECT_FALSE(modal().isOpen());
-        key(SDL_SCANCODE_G);
+        key(SDL_SCANCODE_V);
         EXPECT_EQ(shortcuts, 1);
         EXPECT_FALSE(SDL_TextInputActive(nativeWindow()));
     }
@@ -1003,14 +1003,14 @@ namespace lfs::vis {
         text("field");
         int shortcuts = 0;
         lfs::event::ScopedHandler handlers;
-        handlers.subscribe<core::events::cmd::ToggleGTComparison>([&](const auto&) { ++shortcuts; });
+        handlers.subscribe<core::events::cmd::ToggleSplitView>([&](const auto&) { ++shortcuts; });
         menu().request({}, 200, 100, {});
-        key(SDL_SCANCODE_G);
+        key(SDL_SCANCODE_V);
         text("hidden");
         EXPECT_EQ(field_->GetValue(), "field");
         EXPECT_EQ(shortcuts, 0);
         key(SDL_SCANCODE_ESCAPE);
-        key(SDL_SCANCODE_G);
+        key(SDL_SCANCODE_V);
         EXPECT_EQ(shortcuts, 1);
     }
 
@@ -1033,11 +1033,11 @@ namespace lfs::vis {
     TEST_F(WindowInputDispatchTest, ClickEscapeThenViewportShortcutHasNoPhantomTextFocus) {
         int shortcuts = 0;
         lfs::event::ScopedHandler handlers;
-        handlers.subscribe<core::events::cmd::ToggleGTComparison>([&](const auto&) { ++shortcuts; });
+        handlers.subscribe<core::events::cmd::ToggleSplitView>([&](const auto&) { ++shortcuts; });
         click();
         text("changed");
         key(SDL_SCANCODE_ESCAPE);
-        key(SDL_SCANCODE_G);
+        key(SDL_SCANCODE_V);
         EXPECT_FALSE(manager().wantsTextInput());
         EXPECT_FALSE(SDL_TextInputActive(nativeWindow()));
         EXPECT_EQ(shortcuts, 1);
@@ -1128,9 +1128,9 @@ namespace lfs::vis {
         });
         int shortcuts = 0;
         lfs::event::ScopedHandler handlers;
-        handlers.subscribe<core::events::cmd::ToggleGTComparison>([&](const auto&) { ++shortcuts; });
+        handlers.subscribe<core::events::cmd::ToggleSplitView>([&](const auto&) { ++shortcuts; });
         click(300, 200);
-        key(SDL_SCANCODE_G);
+        key(SDL_SCANCODE_V);
         EXPECT_EQ(presses, 1);
         EXPECT_FALSE(SDL_TextInputActive(nativeWindow()));
         EXPECT_EQ(shortcuts, 1);
