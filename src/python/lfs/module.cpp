@@ -384,7 +384,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -2720,8 +2720,13 @@ NB_MODULE(lichtfeld, m) {
 
             const auto local_transform =
                 lfs::vis::scene_coords::nodeLocalTransformFromVisualizerWorld(sm->getScene(), name, visualizer_world_transform);
-            if (!local_transform)
-                return;
+            if (!local_transform) {
+                if (!sm->getScene().getNode(name))
+                    throw std::runtime_error("set_node_visualizer_world_transform: node not found: " + name);
+                throw std::runtime_error(
+                    "set_node_visualizer_world_transform: parent transform cannot preserve a finite world transform: " +
+                    name);
+            }
 
             if (auto result = lfs::vis::cap::setTransformMatrix(
                     *sm, {name}, *local_transform, "python.set_node_visualizer_world_transform");

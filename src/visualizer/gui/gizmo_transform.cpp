@@ -114,14 +114,14 @@ namespace lfs::vis::gui {
                 const glm::mat4 next_visualizer_world = composition == TransformDeltaComposition::SharedSelectionWorld
                                                             ? visualizer_delta * original_visualizer_world_transforms[i]
                                                             : original_visualizer_world_transforms[i] * visualizer_delta;
-                if (const auto local_transform =
-                        scene_coords::nodeLocalTransformFromVisualizerWorld(
-                            scene, target_names[i], next_visualizer_world)) {
-                    results.push_back(NodeLocalTransformResult{
-                        .name = target_names[i],
-                        .local_transform = *local_transform,
-                    });
-                }
+                const auto local_transform = scene_coords::nodeLocalTransformFromVisualizerWorld(
+                    scene, target_names[i], next_visualizer_world);
+                if (!local_transform)
+                    return {};
+                results.push_back(NodeLocalTransformResult{
+                    .name = target_names[i],
+                    .local_transform = *local_transform,
+                });
             }
 
             return results;

@@ -612,8 +612,12 @@ namespace lfs::vis::cap {
                                                                         const glm::mat4& visualizer_world_transform) {
             const auto local_transform =
                 scene_coords::nodeLocalTransformFromVisualizerWorld(scene_manager.getScene(), name, visualizer_world_transform);
-            if (!local_transform)
-                return std::unexpected("Node not found: " + name);
+            if (!local_transform) {
+                if (!scene_manager.getScene().getNode(name))
+                    return std::unexpected("Node not found: " + name);
+                return std::unexpected(
+                    "Cannot transform '" + name + "': parent transform cannot preserve a finite world transform");
+            }
 
             if (!scene_manager.setNodeTransform(name, *local_transform))
                 return std::unexpected("Cannot transform '" + name + "': node is locked");

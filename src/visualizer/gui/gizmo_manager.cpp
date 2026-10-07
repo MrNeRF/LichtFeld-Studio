@@ -515,7 +515,11 @@ namespace lfs::vis::gui {
         const glm::mat4 data_world_transform =
             rendering::visualizerWorldTransformToDataWorld(crop_tool_visualizer_transform_);
         const glm::mat4 parent_world = scene.getWorldTransform(node->parent_id);
-        const glm::mat4 local_transform = glm::inverse(parent_world) * data_world_transform;
+        const auto local_transform = core::finiteLocalTransform(parent_world, data_world_transform);
+        if (!local_transform) {
+            LOG_WARN("Cannot commit crop tool transform: parent transform cannot preserve a finite world transform");
+            return false;
+        }
 
         if (crop_tool_shape_ == CropToolShape::Box) {
             if (!node->cropbox)
@@ -532,7 +536,7 @@ namespace lfs::vis::gui {
             if (enable)
                 data.enabled = true;
             scene.setCropBoxData(node->id, data);
-            sm->setNodeTransform(node->name, local_transform);
+            sm->setNodeTransform(node->name, *local_transform);
             scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
             if (rm)
                 rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
@@ -557,7 +561,7 @@ namespace lfs::vis::gui {
         if (enable)
             data.enabled = true;
         scene.setEllipsoidData(node->id, data);
-        sm->setNodeTransform(node->name, local_transform);
+        sm->setNodeTransform(node->name, *local_transform);
         scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         if (rm)
             rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);

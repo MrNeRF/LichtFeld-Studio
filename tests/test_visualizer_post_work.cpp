@@ -19,6 +19,8 @@
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/user_paths.hpp"
+#include "gui/gizmo_manager.hpp"
+#include "gui/gui_manager.hpp"
 #include "gui/import_error.hpp"
 #include "gui/scene_tree_session.hpp"
 #include "gui/string_keys.hpp"
@@ -1964,6 +1966,41 @@ contract["test_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(lfs::event::EventBridge::instance().handler_count(
                       typeid(lfs::core::events::cmd::ResetTraining)),
                   0u);
+    }
+
+    TEST_F(VisualizerImplResetTest, CropToolRejectsUnrepresentableParentTransformWithoutMutation) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NE(viewer.getGuiManager(), nullptr);
+        auto& scene = viewer.getScene();
+        auto* const scene_manager = viewer.getSceneManager();
+        ASSERT_NE(scene_manager, nullptr);
+
+        const auto target_id = scene.addSplat("target", lfs::test::licht::make_splat(2));
+        ASSERT_NE(target_id, lfs::core::NULL_NODE);
+        scene.setNodeTransform(target_id, glm::scale(glm::mat4(1.0f), glm::vec3(0.0f)));
+        const auto cropbox_id = scene.addCropBox("target_cropbox", target_id);
+        ASSERT_NE(cropbox_id, lfs::core::NULL_NODE);
+        const auto* cropbox = scene.getNodeById(cropbox_id);
+        ASSERT_NE(cropbox, nullptr);
+        ASSERT_NE(cropbox->cropbox, nullptr);
+        const auto cropbox_before = *cropbox->cropbox;
+        const glm::mat4 transform_before = scene.getNodeById(cropbox_id)->local_transform.get();
+
+        scene_manager->selectNode("target");
+        auto& gizmo = viewer.getGuiManager()->gizmo();
+        gizmo.setCropToolShape("box");
+        ASSERT_TRUE(gizmo.ensureCropToolStateForRestore());
+        lfs::vis::UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
+        gizmo.applyActiveCropTool();
+
+        const auto* cropbox_after = scene.getNodeById(cropbox_id);
+        ASSERT_NE(cropbox_after, nullptr);
+        ASSERT_NE(cropbox_after->cropbox, nullptr);
+        EXPECT_EQ(cropbox_after->cropbox->min, cropbox_before.min);
+        EXPECT_EQ(cropbox_after->cropbox->max, cropbox_before.max);
+        EXPECT_EQ(cropbox_after->cropbox->enabled, cropbox_before.enabled);
+        EXPECT_EQ(cropbox_after->local_transform.get(), transform_before);
+        lfs::vis::UnifiedToolRegistry::instance().setActiveTool("");
     }
 
     TEST_F(VisualizerImplResetTest,

@@ -667,6 +667,52 @@ TEST_F(OperatorRegistryPropsTest, MultiNodeGizmoFiltersSelectedDescendants) {
     }
 }
 
+TEST_F(OperatorRegistryPropsTest, VisualizerWorldConversionRejectsDegenerateParentsAndPreservesLegacyResults) {
+    auto& scene = scene_manager_->getScene();
+    const auto parent = scene.addGroup("transform_parent");
+    const auto child = scene.addSplat("transform_child", make_test_splat({0.0f, 0.0f, 0.0f}), parent);
+    ASSERT_NE(parent, lfs::core::NULL_NODE);
+    ASSERT_NE(child, lfs::core::NULL_NODE);
+
+    glm::mat4 parent_transform = glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, -3.0f, 4.0f));
+    parent_transform = glm::rotate(parent_transform, 0.37f, glm::vec3(0.0f, 1.0f, 0.0f));
+    parent_transform = glm::scale(parent_transform, glm::vec3(1.25f, 0.75f, 1.5f));
+    scene.setNodeTransform(parent, parent_transform);
+
+    glm::mat4 requested_world = glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, 0.5f, 2.0f));
+    requested_world = glm::rotate(requested_world, -0.23f, glm::vec3(1.0f, 0.0f, 0.0f));
+    const auto visualizer_world = lfs::rendering::dataWorldTransformToVisualizerWorld(requested_world);
+    const auto data_world = lfs::rendering::visualizerWorldTransformToDataWorld(visualizer_world);
+    const glm::mat4 legacy = glm::inverse(scene.getWorldTransform(parent)) * data_world;
+    const auto converted = lfs::vis::scene_coords::nodeLocalTransformFromVisualizerWorld(
+        scene, child, visualizer_world);
+    ASSERT_TRUE(converted);
+    EXPECT_EQ(*converted, legacy);
+
+    for (const glm::vec3 scale : {glm::vec3(1.0f, 1.0f, 1.0e-7f), glm::vec3(1.0e3f, 1.0e-3f, 1.0f)}) {
+        scene.setNodeTransform(parent, glm::scale(glm::mat4(1.0f), scale));
+        const glm::mat4 anisotropic_legacy = glm::inverse(scene.getWorldTransform(parent)) * data_world;
+        const auto anisotropic_converted = lfs::vis::scene_coords::nodeLocalTransformFromVisualizerWorld(
+            scene, child, visualizer_world);
+        ASSERT_TRUE(anisotropic_converted);
+        EXPECT_EQ(*anisotropic_converted, anisotropic_legacy);
+    }
+
+    const glm::mat4 local_before = scene.getNodeById(child)->local_transform.get();
+    for (const float scale : {0.0f, 1e-30f}) {
+        scene.setNodeTransform(parent, glm::scale(glm::mat4(1.0f), glm::vec3(scale)));
+        const glm::mat4 legacy_invalid = glm::inverse(scene.getWorldTransform(parent)) * data_world;
+        bool legacy_is_finite = true;
+        for (int column = 0; column < 4; ++column)
+            for (int row = 0; row < 4; ++row)
+                legacy_is_finite = legacy_is_finite && std::isfinite(legacy_invalid[column][row]);
+        EXPECT_FALSE(legacy_is_finite);
+        EXPECT_FALSE(lfs::vis::scene_coords::nodeLocalTransformFromVisualizerWorld(
+            scene, child, visualizer_world));
+        EXPECT_EQ(scene.getNodeById(child)->local_transform.get(), local_before);
+    }
+}
+
 TEST_F(OperatorRegistryPropsTest, MultiNodeGizmoRequiresAllTargetsEditable) {
     add_node("editable");
     add_node("locked");
