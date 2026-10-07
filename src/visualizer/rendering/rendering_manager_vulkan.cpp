@@ -1876,7 +1876,7 @@ namespace lfs::vis {
         }
 
         const auto framebuffer_region =
-            resolveFramebufferViewportRegion(context.viewport, context.logical_screen_size, context.viewport_region);
+            resolveFramebufferViewportRegion(context.viewport, context.screen_size_px, context.viewport_region);
         if (framebuffer_region.valid() && !context.preparing_import) {
             // resolveFramebufferViewportRegion reports a GL bottom-left origin; window
             // readbacks are top-left, so store the flipped form callers actually crop with.
