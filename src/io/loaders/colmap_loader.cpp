@@ -240,7 +240,8 @@ namespace lfs::io {
             } else if (has_cameras_text && has_images_text) {
                 LOG_DEBUG("Reading text COLMAP data");
                 LOG_TIMER_DEBUG("COLMAP read text cameras and images");
-                auto result = read_colmap_cameras_and_images_text(path, actual_images_folder, options);
+                auto result = read_colmap_cameras_and_images_text(path, actual_images_folder, options,
+                                                                  &binary_point_records);
                 if (!result) {
                     return std::unexpected(result.error());
                 }
@@ -342,7 +343,7 @@ namespace lfs::io {
                 LOG_DEBUG("Loading text point cloud");
                 LOG_TIMER_DEBUG("COLMAP load text point cloud");
                 if (use_colmap_track_filter) {
-                    auto pc_result = read_colmap_point_cloud_text_with_stats(path, options);
+                    auto pc_result = read_colmap_point_cloud_text_with_stats(path, options, &binary_point_records);
                     if (!pc_result) {
                         return std::unexpected(pc_result.error());
                     }
@@ -359,7 +360,7 @@ namespace lfs::io {
                         warnings.push_back(diagnostic.message);
                     }
                 } else {
-                    auto pc_result = read_colmap_point_cloud_text(path, options);
+                    auto pc_result = read_colmap_point_cloud_text(path, options, &binary_point_records);
                     if (!pc_result) {
                         return std::unexpected(pc_result.error());
                     }

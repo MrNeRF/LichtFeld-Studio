@@ -1690,6 +1690,70 @@ namespace lfs::io {
         return points;
     }
 
+    // Parallax a track must still resolve at a point's depth, in pixels.
+    constexpr double kResolvedParallaxPixels = 0.25;
+
+    // Each image's centre and focal, by image id, for clamp_unresolved_depths.
+    static void record_views(const std::vector<ImageData>& images,
+                             const std::unordered_map<uint32_t, CameraDataIntermediate>& cameras,
+                             ColmapPointCloudRecords& records) {
+        records.views.clear();
+        for (const auto& image : images) {
+            const auto camera = cameras.find(image.camera_id);
+            if (camera == cameras.end() || camera->second.params.empty())
+                continue;
+            const auto r = qvec2rotmat_values(image.qvec);
+            std::array<double, 4> view{0.0, 0.0, 0.0, camera->second.params[0]};
+            for (int a = 0; a < 3; ++a)
+                view[a] = -(r[a] * image.tvec[0] + r[3 + a] * image.tvec[1] + r[6 + a] * image.tvec[2]);
+            records.views.emplace(image.image_id, view);
+        }
+    }
+
+    // Moves each point beyond the depth at which its track's baseline across its ray resolves kResolvedParallaxPixels
+    // along that ray, from the track's mean centre, to that depth.
+    static void clamp_unresolved_depths(std::vector<Point3DData>& points,
+                                        const std::unordered_map<uint32_t, std::array<double, 4>>& views) {
+        size_t moved = 0;
+        std::vector<std::array<double, 4>> track;
+        std::vector<double> focals;
+        for (auto& point : points) {
+            track.clear();
+            for (const auto& element : point.track)
+                if (const auto view = views.find(element.image_id); view != views.end())
+                    track.push_back(view->second);
+            if (track.size() < 2)
+                continue;
+            double center[3] = {0.0, 0.0, 0.0};
+            for (const auto& view : track)
+                for (int a = 0; a < 3; ++a)
+                    center[a] += view[a] / static_cast<double>(track.size());
+            const double ray[3] = {point.xyz[0] - center[0], point.xyz[1] - center[1], point.xyz[2] - center[2]};
+            const double depth = std::sqrt(ray[0] * ray[0] + ray[1] * ray[1] + ray[2] * ray[2]);
+            if (!(depth > 0.0) || !std::isfinite(depth))
+                continue;
+            double across_sq = 0.0;
+            focals.clear();
+            for (const auto& view : track) {
+                const double offset[3] = {view[0] - center[0], view[1] - center[1], view[2] - center[2]};
+                const double along = (offset[0] * ray[0] + offset[1] * ray[1] + offset[2] * ray[2]) / depth;
+                across_sq = std::max(
+                    across_sq, offset[0] * offset[0] + offset[1] * offset[1] + offset[2] * offset[2] - along * along);
+                focals.push_back(view[3]);
+            }
+            std::nth_element(focals.begin(), focals.begin() + focals.size() / 2, focals.end());
+            const double limit = focals[focals.size() / 2] * 2.0 * std::sqrt(across_sq) / kResolvedParallaxPixels;
+            if (!(limit > 0.0) || depth <= limit)
+                continue;
+            for (int a = 0; a < 3; ++a)
+                point.xyz[a] = center[a] + ray[a] * (limit / depth);
+            ++moved;
+        }
+        if (moved > 0)
+            LOG_INFO("COLMAP: moved {} of {} sparse points with unresolved depth to their parallax limit", moved,
+                     points.size());
+    }
+
     PointCloud point3D_records_to_point_cloud(const std::vector<Point3DData>& points) {
         const uint64_t N = points.size();
         if (N == 0) {
@@ -4255,6 +4319,8 @@ namespace lfs::io {
                     warnings.push_back(std::move(*diagnostic));
                 }
             }
+            if (point_records)
+                clamp_unresolved_depths(records, point_records->views);
             auto cloud = point3D_records_to_point_cloud(records);
             return LoadOutcome<PointCloud>{std::move(cloud), std::move(warnings)};
         } catch (const LoadCancelledError& e) {
@@ -4292,6 +4358,8 @@ namespace lfs::io {
                     warnings.push_back(std::move(*diagnostic));
                 }
             }
+            if (point_records)
+                clamp_unresolved_depths(records, point_records->views);
             auto stats = point3D_records_to_point_cloud_with_stats(std::move(records), options);
             return LoadOutcome<ColmapPointCloudLoadStats>{std::move(stats), std::move(warnings)};
         } catch (const LoadCancelledError& e) {
@@ -4371,6 +4439,8 @@ namespace lfs::io {
             SkipTally point_tally;
             auto cam_map = read_cameras_binary(cams_file, scale_factor, options, &camera_tally);
             auto images = read_images_binary(images_file, options, &pose_tally, &point2d_tally);
+            if (point_records)
+                record_views(images, cam_map, *point_records);
 
             LOG_INFO("Read {} cameras and {} images from COLMAP", cam_map.size(), images.size());
             auto validation = validate_colmap_dataset_layout_impl(base, images_folder, images, options);
@@ -4418,12 +4488,20 @@ namespace lfs::io {
 
     Result<LoadOutcome<PointCloud>> read_colmap_point_cloud_text(
         const std::filesystem::path& filepath,
-        const LoadOptions& options) {
+        const LoadOptions& options,
+        ColmapPointCloudRecords* point_records) {
         LOG_TIMER_TRACE("Read COLMAP point cloud (text)");
         try {
             const fs::path points3d_file = get_sparse_file_path(filepath, "points3D.txt");
             SkipTally tally;
-            auto cloud = read_point3D_text(points3d_file, options, &tally);
+            PointCloud cloud;
+            if (point_records && !point_records->views.empty()) {
+                auto records = read_point3D_text_records(points3d_file, options, TrackParseMode::Full, &tally);
+                clamp_unresolved_depths(records, point_records->views);
+                cloud = point3D_records_to_point_cloud(records);
+            } else {
+                cloud = read_point3D_text(points3d_file, options, &tally);
+            }
             std::vector<Diagnostic> warnings;
             if (auto diagnostic = tally.to_diagnostic(lfs::ErrorCode::DataLoss, "point(s)")) {
                 warnings.push_back(std::move(*diagnostic));
@@ -4444,13 +4522,17 @@ namespace lfs::io {
 
     Result<LoadOutcome<ColmapPointCloudLoadStats>> read_colmap_point_cloud_text_with_stats(
         const std::filesystem::path& filepath,
-        const LoadOptions& options) {
+        const LoadOptions& options,
+        ColmapPointCloudRecords* point_records) {
         LOG_TIMER_TRACE("Read COLMAP point cloud (text)");
         try {
             const fs::path points3d_file = get_sparse_file_path(filepath, "points3D.txt");
             SkipTally tally;
+            const bool clamping = point_records && !point_records->views.empty();
             auto records = read_point3D_text_records(
-                points3d_file, options, TrackParseMode::CountOnly, &tally);
+                points3d_file, options, clamping ? TrackParseMode::Full : TrackParseMode::CountOnly, &tally);
+            if (clamping)
+                clamp_unresolved_depths(records, point_records->views);
             auto stats = point3D_records_to_point_cloud_with_stats(std::move(records), options);
             std::vector<Diagnostic> warnings;
             if (auto diagnostic = tally.to_diagnostic(lfs::ErrorCode::DataLoss, "point(s)")) {
@@ -4473,7 +4555,8 @@ namespace lfs::io {
     Result<LoadOutcome<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>>
     read_colmap_cameras_and_images_text(const std::filesystem::path& base,
                                         const std::string& images_folder,
-                                        const LoadOptions& options) {
+                                        const LoadOptions& options,
+                                        ColmapPointCloudRecords* point_records) {
 
         LOG_TIMER_TRACE("Read COLMAP cameras and images (text)");
 
@@ -4486,6 +4569,8 @@ namespace lfs::io {
             SkipTally pose_tally;
             auto cam_map = read_cameras_text(cams_file, scale_factor, options, &camera_tally);
             auto images = read_images_text_camera_metadata_only(images_file, options, &pose_tally);
+            if (point_records)
+                record_views(images, cam_map, *point_records);
 
             LOG_INFO("Read {} cameras and {} images from COLMAP text files", cam_map.size(), images.size());
             auto validation = validate_colmap_dataset_layout_impl(base, images_folder, images, options);
