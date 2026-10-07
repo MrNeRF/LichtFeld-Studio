@@ -1141,6 +1141,15 @@ def test_folder_counts_match_search_results(panel_module):
     assert len(panel.get_filtered_assets()) == 1
     assert panel.get_folder_list()[0]["project_count"] == 1
 
+def test_search_matches_project_display_title(panel_module):
+    asset = _project(name="Original file name", display_name="Local Revision Test")
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={asset["id"]: asset})
+
+    for query in ("Local Revision Test", "Revision", "Original file name", "bicycle project.licht"):
+        panel._search_query = query
+        assert [row["id"] for row in panel.get_filtered_assets()] == [asset["id"]]
+
 def test_search_matches_path_and_type(panel_module):
     asset = _project(type="capture")
     panel = panel_module.AssetManagerPanel()

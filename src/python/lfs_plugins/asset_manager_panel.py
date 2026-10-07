@@ -1764,6 +1764,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             str(value)
             for value in (
                 asset.get("name"),
+                self._get_asset_display_name(asset),
                 asset.get("path"),
                 asset.get("type"),
                 asset.get("project_uuid"),
