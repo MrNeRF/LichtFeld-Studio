@@ -570,7 +570,8 @@ namespace lfs::vis::gui {
                                     const glm::vec4& color,
                                     const float thickness,
                                     const float view_depth_p0 = 0.0f,
-                                    const float view_depth_p1 = 0.0f) {
+                                    const float view_depth_p1 = 0.0f,
+                                    const std::optional<lfs::rendering::OverlayClipRect>& clip = std::nullopt) {
             if (color.a <= 0.0f) {
                 return;
             }
@@ -582,21 +583,43 @@ namespace lfs::vis::gui {
             const glm::vec2 dir = delta / len;
             const glm::vec2 normal(-dir.y, dir.x);
             const float extent = std::max(thickness, 1.0f) * 0.5f + 2.0f;
-            appendShapeOverlayQuad(out,
-                                   params.viewport_pos,
-                                   params.viewport_size,
-                                   p0 - dir * extent + normal * extent,
-                                   p1 + dir * extent + normal * extent,
-                                   p1 + dir * extent - normal * extent,
-                                   p0 - dir * extent - normal * extent,
-                                   p0,
-                                   p1,
-                                   color,
-                                   {0.0f, std::max(thickness, 1.0f), 0.0f, 1.0f},
-                                   view_depth_p0,
-                                   view_depth_p1,
-                                   view_depth_p1,
-                                   view_depth_p0);
+            const glm::vec4 shape_params{0.0f, std::max(thickness, 1.0f), 0.0f, 1.0f};
+            const std::array<glm::vec2, 4> corners{
+                p0 - dir * extent + normal * extent,
+                p1 + dir * extent + normal * extent,
+                p1 + dir * extent - normal * extent,
+                p0 - dir * extent - normal * extent,
+            };
+            if (!clip) {
+                appendShapeOverlayQuad(out,
+                                       params.viewport_pos,
+                                       params.viewport_size,
+                                       corners[0],
+                                       corners[1],
+                                       corners[2],
+                                       corners[3],
+                                       p0,
+                                       p1,
+                                       color,
+                                       shape_params,
+                                       view_depth_p0,
+                                       view_depth_p1,
+                                       view_depth_p1,
+                                       view_depth_p0);
+                return;
+            }
+
+            const auto clipped = clipPolygonToRect(corners, *clip);
+            const auto depth_at = [&](const glm::vec2& point) {
+                const float t = std::clamp(glm::dot(point - p0, dir) / len, 0.0f, 1.0f);
+                return std::lerp(view_depth_p0, view_depth_p1, t);
+            };
+            for (size_t i = 1; i + 1 < clipped.size(); ++i) {
+                for (const glm::vec2& point : {clipped[0], clipped[i], clipped[i + 1]}) {
+                    appendShapeOverlayTriangle(out, params.viewport_pos, params.viewport_size,
+                                               point, p0, p1, color, shape_params, depth_at(point));
+                }
+            }
         }
 
         void appendShapeOverlayCircle(std::vector<VulkanViewportShapeOverlayVertex>& out,
@@ -1178,43 +1201,63 @@ namespace lfs::vis::gui {
             constexpr float kMinViewZ = -1e-4f;
             const glm::mat3 rotation = panel.viewport->getRotationMatrix();
             const glm::vec3 translation = panel.viewport->getTranslation();
-            glm::vec3 view_a = glm::transpose(rotation) * (world_a - translation);
-            glm::vec3 view_b = glm::transpose(rotation) * (world_b - translation);
+            const glm::vec3 view_a = glm::transpose(rotation) * (world_a - translation);
+            const glm::vec3 view_b = glm::transpose(rotation) * (world_b - translation);
 
-            if (view_a.z >= kMinViewZ && view_b.z >= kMinViewZ) {
+            const float cx = static_cast<float>(std::max(panel.render_size.x, 1)) * 0.5f;
+            const float cy = static_cast<float>(std::max(panel.render_size.y, 1)) * 0.5f;
+            const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(
+                panel.render_size, settings.focal_length_mm);
+            if (settings.orthographic && (!std::isfinite(ortho_scale) || ortho_scale <= 0.0f)) {
                 return std::nullopt;
             }
 
-            const auto clip_to_near = [](glm::vec3& inside, glm::vec3& outside) {
-                const float denom = outside.z - inside.z;
-                if (std::abs(denom) <= 1e-8f) {
-                    return;
-                }
-                const float t = (-1e-4f - inside.z) / denom;
-                outside = glm::mix(inside, outside, std::clamp(t, 0.0f, 1.0f));
-                outside.z = -1e-4f;
+            struct ViewClipPlane {
+                glm::vec3 normal;
+                float offset;
             };
-            if (view_a.z >= kMinViewZ) {
-                clip_to_near(view_b, view_a);
+            const std::array<ViewClipPlane, 5> clip_planes =
+                settings.orthographic
+                    ? std::array<ViewClipPlane, 5>{{
+                          {{0.0f, 0.0f, -1.0f}, kMinViewZ},
+                          {{ortho_scale, 0.0f, 0.0f}, cx},
+                          {{-ortho_scale, 0.0f, 0.0f}, cx},
+                          {{0.0f, -ortho_scale, 0.0f}, cy},
+                          {{0.0f, ortho_scale, 0.0f}, cy},
+                      }}
+                    : std::array<ViewClipPlane, 5>{{
+                          {{0.0f, 0.0f, -1.0f}, kMinViewZ},
+                          {{fx, 0.0f, -cx}, 0.0f},
+                          {{-fx, 0.0f, -cx}, 0.0f},
+                          {{0.0f, -fy, -cy}, 0.0f},
+                          {{0.0f, fy, -cy}, 0.0f},
+                      }};
+
+            float t_enter = 0.0f;
+            float t_exit = 1.0f;
+            for (const auto& plane : clip_planes) {
+                const float distance_a = glm::dot(plane.normal, view_a) + plane.offset;
+                const float distance_b = glm::dot(plane.normal, view_b) + plane.offset;
+                if (distance_a < 0.0f && distance_b < 0.0f) {
+                    return std::nullopt;
+                }
+                if (distance_a < 0.0f) {
+                    t_enter = std::max(t_enter, distance_a / (distance_a - distance_b));
+                } else if (distance_b < 0.0f) {
+                    t_exit = std::min(t_exit, distance_a / (distance_a - distance_b));
+                }
             }
-            if (view_b.z >= kMinViewZ) {
-                clip_to_near(view_a, view_b);
+            if (t_enter >= t_exit) {
+                return std::nullopt;
             }
+            const glm::vec3 clipped_a = glm::mix(view_a, view_b, t_enter);
+            const glm::vec3 clipped_b = glm::mix(view_a, view_b, t_exit);
 
             const auto project_view = [&](const glm::vec3& view) -> std::optional<glm::vec2> {
-                const float width = static_cast<float>(std::max(panel.render_size.x, 1));
-                const float height = static_cast<float>(std::max(panel.render_size.y, 1));
-                const float cx = width * 0.5f;
-                const float cy = height * 0.5f;
                 if (settings.orthographic) {
-                    if (!std::isfinite(ortho_scale) || ortho_scale <= 0.0f) {
-                        return std::nullopt;
-                    }
                     return glm::vec2(cx + view.x * ortho_scale,
                                      cy - view.y * ortho_scale);
                 }
-                const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(
-                    panel.render_size, settings.focal_length_mm);
                 const float depth = -view.z;
                 if (depth <= 0.0f) {
                     return std::nullopt;
@@ -1223,16 +1266,16 @@ namespace lfs::vis::gui {
                                  cy - view.y * fy / depth);
             };
 
-            const auto pa = project_view(view_a);
-            const auto pb = project_view(view_b);
+            const auto pa = project_view(clipped_a);
+            const auto pb = project_view(clipped_b);
             if (!pa || !pb) {
                 return std::nullopt;
             }
             return ProjectedSegment{
                 .a = renderToPanelScreen(panel, *pa),
                 .b = renderToPanelScreen(panel, *pb),
-                .depth_a = -view_a.z,
-                .depth_b = -view_b.z,
+                .depth_a = -clipped_a.z,
+                .depth_b = -clipped_b.z,
             };
         }
 
@@ -1575,7 +1618,9 @@ namespace lfs::vis::gui {
                                        color,
                                        thickness,
                                        depth_aware ? projected->depth_a : 0.0f,
-                                       depth_aware ? projected->depth_b : 0.0f);
+                                       depth_aware ? projected->depth_b : 0.0f,
+                                       lfs::rendering::OverlayClipRect{.min = panel.pos,
+                                                                       .max = panel.pos + panel.size});
             }
         }
 

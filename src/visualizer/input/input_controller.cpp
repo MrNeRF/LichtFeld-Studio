@@ -381,31 +381,31 @@ namespace lfs::vis {
         split_toggle_handler_id_ = cmd::ToggleSplitView::when([this](const auto&) {
             clearViewportDragState();
             clearWasdMomentumViewport();
-            focusSplitPanel(SplitViewPanelId::Left);
+            resetSplitPanelFocus();
         });
         independent_split_toggle_handler_id_ = cmd::ToggleIndependentSplitView::when([this](const auto&) {
             clearViewportDragState();
             clearWasdMomentumViewport();
-            focusSplitPanel(SplitViewPanelId::Left);
+            resetSplitPanelFocus();
         });
         gt_comparison_toggle_handler_id_ = cmd::ToggleGTComparison::when([this](const auto&) {
             clearViewportDragState();
             clearWasdMomentumViewport();
-            focusSplitPanel(SplitViewPanelId::Left);
+            resetSplitPanelFocus();
         });
         scene_cleared_handler_id_ = state::SceneCleared::when([this](const auto&) {
             clearViewportDragState();
             clearWasdMomentumViewport();
             scene_extent_ = 0.0f;
             depth_range_initialized_ = false;
-            focusSplitPanel(SplitViewPanelId::Left);
+            resetSplitPanelFocus();
         });
         scene_loaded_handler_id_ = state::SceneLoaded::when([this](const auto&) {
             clearViewportDragState();
             clearWasdMomentumViewport();
             scene_extent_ = 0.0f;
             depth_range_initialized_ = false;
-            focusSplitPanel(SplitViewPanelId::Left);
+            resetSplitPanelFocus();
         });
 
         window_focus_lost_handler_id_ = internal::WindowFocusLost::when([this](const auto&) {
@@ -784,7 +784,11 @@ namespace lfs::vis {
             is_left_button &&
             action == input::ACTION_PRESS) {
             if (isInViewport(x, y) && isIndependentSplitViewActive()) {
-                focusSplitPanel(splitPanelForScreenX(x));
+                const SplitViewPanelId panel = splitPanelForScreenX(x);
+                focusSplitPanel(panel);
+                if (selection_tool_) {
+                    selection_tool_->setFilterPanel(panel);
+                }
             }
 
             // Check for double-click on camera frustum
@@ -2898,7 +2902,7 @@ namespace lfs::vis {
         }
 
         cmd::ToggleIndependentSplitView{.viewport = &viewport_}.emit();
-        focusSplitPanel(SplitViewPanelId::Left);
+        resetSplitPanelFocus();
     }
 
     SplitViewPanelId InputController::splitPanelForScreenX(const double x) const {
@@ -2955,6 +2959,13 @@ namespace lfs::vis {
     void InputController::focusSplitPanel(const SplitViewPanelId panel) {
         if (auto* const rendering = services().renderingOrNull()) {
             rendering->setFocusedSplitPanel(panel);
+        }
+    }
+
+    void InputController::resetSplitPanelFocus() {
+        focusSplitPanel(SplitViewPanelId::Left);
+        if (selection_tool_) {
+            selection_tool_->setFilterPanel(SplitViewPanelId::Left);
         }
     }
 
