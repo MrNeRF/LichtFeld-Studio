@@ -95,6 +95,7 @@ if(BUILD_VISUALIZER_TESTS)
         lfs_python_runtime
         GTest::gtest_main
         Zep::Zep
+        SDL3::SDL3
     )
     add_test(
         NAME lichtfeld_visualizer_tests

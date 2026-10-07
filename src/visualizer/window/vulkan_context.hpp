@@ -60,7 +60,7 @@ namespace lfs::vis {
         VulkanContext(const VulkanContext&) = delete;
         VulkanContext& operator=(const VulkanContext&) = delete;
 
-        bool init(SDL_Window* window, int framebuffer_width, int framebuffer_height);
+        LFS_VIS_API bool init(SDL_Window* window, int framebuffer_width, int framebuffer_height);
         void shutdown();
         void notifyFramebufferResized(int width, int height, ResizeIntent intent = ResizeIntent::Exact);
         [[nodiscard]] bool hasPendingSwapchainResize() const {
@@ -312,7 +312,7 @@ namespace lfs::vis {
         // waitForSubmittedFrames (no extra locking).
         [[nodiscard]] bool waitForRetiredFrameSubmitSerial(std::uint64_t serial);
         [[nodiscard]] bool waitForImmediateSubmits();
-        [[nodiscard]] bool deviceWaitIdle();
+        [[nodiscard]] LFS_VIS_API bool deviceWaitIdle();
         // Returns false if the wait was rejected (frame inactive / invalid edge);
         // endFrame will refuse submit when any wait fails. A requested value that
         // is already covered by a queued or submitted wait on the same semaphore

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "diagnostics/vram_timeline.hpp"
@@ -27,7 +28,7 @@ namespace Rml {
 namespace lfs::vis::gui {
     class VramTimelineElement;
 
-    class VramHudOverlay {
+    class LFS_VIS_API VramHudOverlay {
     public:
         struct State {
             bool visible = false;
