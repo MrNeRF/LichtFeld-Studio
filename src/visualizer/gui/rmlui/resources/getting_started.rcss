@@ -9,12 +9,6 @@
     text-align: center;
 }
 
-.section-hint {
-    font-size: 12dp;
-    line-height: 18dp;
-    margin: 0 0 12dp;
-}
-
 .video-grid {
     display: flex;
     flex-wrap: wrap;
@@ -23,24 +17,27 @@
 }
 
 .video-card {
-    flex: 0 0 160dp;
-    width: 160dp;
+    flex: 1 1 160dp;
+    min-width: 0;
     padding: 0;
     text-align: left;
     cursor: pointer;
 }
 
 .card-body {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 90dp;
+    position: relative;
+    height: 0;
+    padding-top: 56.25%;
     border-width: 1dp;
     border-radius: 6dp;
     transition: background-color border-color 0.12s quadratic-out;
 }
 
 .play-icon {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     font-size: 22dp;
 }
 
@@ -52,25 +49,15 @@
     margin-top: 8dp;
 }
 
-.card-action {
-    display: block;
-    font-size: 11dp;
-    margin-top: 4dp;
-}
-
 .guide-footer {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     flex-wrap: wrap;
     gap: 8dp;
     border-top-width: 1dp;
     padding-top: 12dp;
     margin-top: 12dp;
-}
-
-.browser-hint {
-    font-size: 11dp;
 }
 
 .wiki-link {

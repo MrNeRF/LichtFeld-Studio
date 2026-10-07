@@ -13,7 +13,6 @@
   </div>
 
   <div id="section-highlights" class="guide-section" data-if="show_highlights">
-    <p class="section-hint">@tr:getting_started.hint_highlights</p>
     <div class="video-grid">
       <button class="video-card" id="card-projects-gallery"
               data-url="https://www.youtube.com/watch?v=3TsppHhdZK8"
@@ -22,7 +21,6 @@
           <span class="play-icon">&#x25B6;</span>
         </div>
         <span class="card-title">@tr:getting_started.video_projects_gallery</span>
-        <span class="card-action">@tr:getting_started.watch_video</span>
       </button>
       <button class="video-card" id="card-codex"
               data-url="https://www.youtube.com/watch?v=fcQ4nofXg44"
@@ -31,7 +29,6 @@
           <span class="play-icon">&#x25B6;</span>
         </div>
         <span class="card-title">@tr:getting_started.video_codex</span>
-        <span class="card-action">@tr:getting_started.watch_video</span>
       </button>
       <button class="video-card" id="card-overview"
               data-url="https://www.youtube.com/watch?v=i-04z4_eqiU"
@@ -40,13 +37,11 @@
           <span class="play-icon">&#x25B6;</span>
         </div>
         <span class="card-title">@tr:getting_started.video_overview</span>
-        <span class="card-action">@tr:getting_started.watch_video</span>
       </button>
     </div>
   </div>
 
   <div id="section-training" class="guide-section" data-if="show_training">
-    <p class="section-hint">@tr:getting_started.hint_training</p>
     <div class="video-grid">
       <button class="video-card" id="card-intro"
               data-url="https://www.youtube.com/watch?v=b1Olu_IU1sM"
@@ -55,7 +50,6 @@
           <span class="play-icon">&#x25B6;</span>
         </div>
         <span class="card-title">@tr:getting_started.video_intro</span>
-        <span class="card-action">@tr:getting_started.watch_video</span>
       </button>
       <button class="video-card" id="card-masks"
               data-url="https://www.youtube.com/watch?v=956qR8N3Xk4"
@@ -64,7 +58,6 @@
           <span class="play-icon">&#x25B6;</span>
         </div>
         <span class="card-title">@tr:getting_started.video_masks</span>
-        <span class="card-action">@tr:getting_started.watch_video</span>
       </button>
       <button class="video-card" id="card-automotive"
               data-url="https://www.youtube.com/watch?v=FqYTKeI5K6I"
@@ -73,13 +66,11 @@
           <span class="play-icon">&#x25B6;</span>
         </div>
         <span class="card-title">@tr:getting_started.video_automotive</span>
-        <span class="card-action">@tr:getting_started.watch_video</span>
       </button>
     </div>
   </div>
 
   <div id="section-datasets" class="guide-section" data-if="show_datasets">
-    <p class="section-hint">@tr:getting_started.hint_datasets</p>
     <div class="video-grid">
       <button class="video-card" id="card-colmap"
               data-url="https://www.youtube.com/watch?v=-3TBbukYN00"
@@ -88,7 +79,6 @@
           <span class="play-icon">&#x25B6;</span>
         </div>
         <span class="card-title">@tr:getting_started.video_colmap</span>
-        <span class="card-action">@tr:getting_started.watch_video</span>
       </button>
       <button class="video-card" id="card-reality-scan"
               data-url="https://www.youtube.com/watch?v=JWmkhTlbDvg"
@@ -97,13 +87,11 @@
           <span class="play-icon">&#x25B6;</span>
         </div>
         <span class="card-title">@tr:getting_started.video_reality_scan</span>
-        <span class="card-action">@tr:getting_started.watch_video</span>
       </button>
     </div>
   </div>
 
   <div class="guide-footer">
-    <span class="browser-hint">@tr:getting_started.browser_hint</span>
     <button id="wiki-section" class="btn wiki-link"
             data-url="https://github.com/MrNeRF/LichtFeld-Studio/wiki"
             data-event-click="open_url">@tr:getting_started.documentation</button>

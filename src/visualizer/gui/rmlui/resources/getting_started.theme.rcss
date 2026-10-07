@@ -19,15 +19,6 @@
     color: @{text};
 }
 
-.section-hint,
-.browser-hint {
-    color: @{text_dim};
-}
-
-.card-action {
-    color: @{primary};
-}
-
 .guide-footer {
     border-top-color: @{border};
 }
