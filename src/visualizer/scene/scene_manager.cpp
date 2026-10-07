@@ -6067,6 +6067,16 @@ namespace lfs::vis {
             return result;
         }
 
+        if (graph_before && !plan->consolidated && plan->partial_slices.empty()) {
+            pushSceneGraphHistoryEntry(*this,
+                                       "Delete Node",
+                                       std::move(*graph_before),
+                                       {},
+                                       history_options);
+            transaction.commit();
+            return {};
+        }
+
         entry->captureAfter();
         op::pushSceneSnapshotIfChanged(std::move(entry));
         if (graph_before) {
