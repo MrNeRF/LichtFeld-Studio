@@ -41,10 +41,11 @@ function(lfs_add_gpu_program target name)
                 set(output "${directory}/${entry}.spv")
                 add_custom_command(OUTPUT "${output}" "${output}.json"
                     COMMAND "${LFS_GPU_SLANGC}" "${source}" ${defines} -entry "${entry}" -stage "${slang_stage}"
-                        -target spirv -profile glsl_460 -emit-spirv-directly -fvk-use-entrypoint-name
+                        -DLFS_GPU_VULKAN=1 -target spirv -profile glsl_460 -emit-spirv-directly -fvk-use-entrypoint-name
                         -fvk-use-scalar-layout -fp-mode precise -line-directive-mode none -o "${output}" -reflection-json "${output}.json"
                     DEPENDS "${source}" "${LFS_GPU_SLANGC}" ${PROGRAM_DEPENDS} VERBATIM)
                 list(APPEND outputs "${output}" "${output}.json")
+                set_property(GLOBAL APPEND PROPERTY LFS_GPU_PROGRAM_REFLECTIONS "${output}.json")
                 list(APPEND embed_args Vulkan "${cpp_stage}" "${entry}" "${output}" "${output}.json")
             endif()
             if(LFS_TENSOR_METAL)

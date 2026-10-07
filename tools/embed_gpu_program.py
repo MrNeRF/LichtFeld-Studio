@@ -25,6 +25,8 @@ def main():
         assert len(parameters) == 1, f"{entry}: expected one global parameter block, got {len(parameters)}"
         layout = parameters[0]["type"]["elementVarLayout"]
         parameter_bytes = layout["binding"]["size"]
+        if backend == "Vulkan":
+            source.append(f'static_assert({parameter_bytes} <= 256, "{entry}: Vulkan push constants exceed 256 bytes");')
         fields = layout["type"]["fields"]
         offsets = [f["binding"]["offset"] for f in fields if f["type"]["kind"] == "pointer"]
         assert all(f["type"]["kind"] in ("pointer", "scalar", "vector", "matrix") for f in fields), \

@@ -10,6 +10,16 @@ struct PointObject {
     uint4 flags;
 };
 
+struct PointParameters {
+    column_major float4x4 viewProjection;
+    column_major float4x4 view;
+    column_major float4x4 cropToLocal;
+    float4 cropMin;
+    float4 cropMax;
+    float4 voxelFocalOrtho;
+    uint4 counts;
+};
+
 struct Parameters {
     Ptr<float, Access.ReadWrite> positions;
     Ptr<float, Access.ReadWrite> colors;
@@ -21,8 +31,9 @@ struct Parameters {
     Ptr<uint8_t, Access.ReadWrite> deleted;
     Ptr<float4, Access.ReadWrite> depthRgba;
     Ptr<float, Access.ReadWrite> linearDepth;
-    // Flattened PointParameters: the tensor binding ABI intentionally permits
-    // no nested parameter structs. This remains the same 256-byte host layout.
+#ifdef LFS_GPU_VULKAN
+    Ptr<PointParameters, Access.Read> point;
+#else
     column_major float4x4 viewProjection;
     column_major float4x4 view;
     column_major float4x4 cropToLocal;
@@ -30,11 +41,18 @@ struct Parameters {
     float4 cropMax;
     float4 voxelFocalOrtho;
     uint4 counts;
+#endif
     uint2 extent;
     uint2 padding;
 };
 
 [[vk::push_constant]] ConstantBuffer<Parameters> p;
+
+#ifdef LFS_GPU_VULKAN
+#define POINT p.point[0]
+#else
+#define POINT p
+#endif
 
 static const float2 QUAD[6] = {
     float2(-1.0, -1.0), float2(1.0, -1.0), float2(1.0, 1.0),
@@ -63,14 +81,14 @@ PointVertex rejectedPoint() {
 PointVertex pointVertex(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID) {
     const uint source = instanceId;
     const float2 corner = QUAD[vertexId];
-    const uint flags = p.counts.z;
+    const uint flags = POINT.counts.z;
     if ((flags & 512u) != 0u && p.deleted[source] != 0u)
         return rejectedPoint();
 
     float3 world = float3(p.positions[source * 3u], p.positions[source * 3u + 1u], p.positions[source * 3u + 2u]);
-    if (p.counts.x != 0u) {
+    if (POINT.counts.x != 0u) {
         int node = (flags & 16u) != 0u ? p.transformIndices[source] : 0;
-        node = clamp(node, 0, int(p.counts.x) - 1);
+        node = clamp(node, 0, int(POINT.counts.x) - 1);
         PointObject object = p.objects[uint(node)];
         if (object.flags.x == 0u)
             return rejectedPoint();
@@ -80,11 +98,11 @@ PointVertex pointVertex(uint vertexId : SV_VertexID, uint instanceId : SV_Instan
 
     bool desaturate = false;
     if ((flags & 1u) != 0u) {
-        const float3 local = mul(p.cropToLocal, float4(world, 1.0)).xyz;
-        const float3 radius = max(abs(p.cropMin.xyz), float3(1.0e-8));
+        const float3 local = mul(POINT.cropToLocal, float4(world, 1.0)).xyz;
+        const float3 radius = max(abs(POINT.cropMin.xyz), float3(1.0e-8));
         const bool inside = (flags & 1024u) != 0u
                                 ? dot(local / radius, local / radius) <= 1.0
-                                : all(local >= p.cropMin.xyz) && all(local <= p.cropMax.xyz);
+                                : all(local >= POINT.cropMin.xyz) && all(local <= POINT.cropMax.xyz);
         const bool visible = (flags & 2u) != 0u ? !inside : inside;
         if (!visible) {
             if ((flags & 4u) == 0u)
@@ -93,16 +111,16 @@ PointVertex pointVertex(uint vertexId : SV_VertexID, uint instanceId : SV_Instan
         }
     }
 
-    const float4 viewPosition = mul(p.view, float4(world, 1.0));
-    float4 clip = mul(p.viewProjection, float4(world, 1.0));
+    const float4 viewPosition = mul(POINT.view, float4(world, 1.0));
+    float4 clip = mul(POINT.viewProjection, float4(world, 1.0));
     if (abs(clip.w) <= 1.0e-6 || ((flags & 8u) == 0u && -viewPosition.z < 1.0e-4))
         return rejectedPoint();
 
-    const float voxel = max(p.voxelFocalOrtho.x, 1.0e-5);
+    const float voxel = max(POINT.voxelFocalOrtho.x, 1.0e-5);
     const float radiusPixels = max(1.0, ceil((flags & 8u) != 0u
-        ? voxel * max(p.voxelFocalOrtho.z, 1.0e-5) * 0.5
-        : voxel * max(p.voxelFocalOrtho.y, 1.0) / max(-viewPosition.z, 1.0e-4)));
-    const float maxSize = float(p.counts.w);
+        ? voxel * max(POINT.voxelFocalOrtho.z, 1.0e-5) * 0.5
+        : voxel * max(POINT.voxelFocalOrtho.y, 1.0) / max(-viewPosition.z, 1.0e-4)));
+    const float maxSize = float(POINT.counts.w);
     float diameter = clamp(2.0 * radiusPixels, 1.0, maxSize);
 
     float3 color = saturate(float3(p.colors[source * 3u], p.colors[source * 3u + 1u], p.colors[source * 3u + 2u]));
@@ -166,12 +184,12 @@ void discardOutsidePoint(PointVertex input) {
 float4 pointColorFragment(PointVertex input) : SV_Target0 {
     discardOutsidePoint(input);
     float3 color = input.color;
-    if (p.voxelFocalOrtho.w != 0.0) {
-        const float hi = p.cropMax.w <= p.cropMin.w + 1.0e-5
-                             ? p.cropMin.w + 1.0
-                             : p.cropMax.w;
-        const float t = 1.0 - normalizedDepth(input.viewDepth, p.cropMin.w, hi);
-        color = (p.counts.z & 256u) != 0u ? float3(t) : depthPalette(t);
+    if (POINT.voxelFocalOrtho.w != 0.0) {
+        const float hi = POINT.cropMax.w <= POINT.cropMin.w + 1.0e-5
+                             ? POINT.cropMin.w + 1.0
+                             : POINT.cropMax.w;
+        const float t = 1.0 - normalizedDepth(input.viewDepth, POINT.cropMin.w, hi);
+        color = (POINT.counts.z & 256u) != 0u ? float3(t) : depthPalette(t);
     }
     return float4(color, 1.0);
 }

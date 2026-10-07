@@ -4,10 +4,13 @@
 
 #include "core/gpu_kernel_module.hpp"
 #include "core/tensor_backend.hpp"
-#include "tensor_scene_temporal_program.hpp"
+#include "tensor_scene_motion_program.hpp"
+#include "tensor_scene_resolve_program.hpp"
+#include "tensor_scene_samples_program.hpp"
 
 #include <cstring>
 #include <format>
+#include <vector>
 
 namespace lfs::rendering {
     namespace {
@@ -22,16 +25,36 @@ namespace lfs::rendering {
             }));
         }
 
-        struct alignas(16) DispatchParameters {
+        struct alignas(16) MotionParameters {
             std::uint64_t pointers[10]{};
             TensorSceneMotionParameters motion;
+        };
+        struct alignas(16) ResolveParameters {
+            std::uint64_t pointers[10]{};
             TensorSceneResolveParameters resolve;
+        };
+        struct alignas(16) SampleParameters {
+            std::uint64_t pointers[10]{};
             std::uint32_t count = 0, alignment[3]{}, padding[4]{};
         };
-        static_assert(offsetof(DispatchParameters, motion) == 80);
-        static_assert(offsetof(DispatchParameters, resolve) == 240);
-        static_assert(offsetof(DispatchParameters, count) == 352);
-        static_assert(sizeof(DispatchParameters) == 384);
+        static_assert(offsetof(MotionParameters, motion) == 80);
+        static_assert(offsetof(ResolveParameters, resolve) == 80);
+        static_assert(offsetof(SampleParameters, count) == 80);
+        static_assert(sizeof(MotionParameters) == 240);
+        static_assert(sizeof(ResolveParameters) == 192);
+        static_assert(sizeof(SampleParameters) == 112);
+
+        const std::vector<Module::Entry>& temporal_entries() {
+            static const auto entries = [] {
+                std::vector<Module::Entry> result;
+                for (const auto program : {tensor_scene_motion_program_entries(),
+                                           tensor_scene_resolve_program_entries(),
+                                           tensor_scene_samples_program_entries()})
+                    result.insert(result.end(), program.begin(), program.end());
+                return result;
+            }();
+            return entries;
+        }
     } // namespace
 
     struct TensorSceneTemporalKernels::Impl {
@@ -42,14 +65,14 @@ namespace lfs::rendering {
         lfs::Result<void> ensureModule() {
             if (module)
                 return {};
-            auto loaded = Module::load(tensor_scene_temporal_program_entries(), backend);
+            auto loaded = Module::load(temporal_entries(), backend);
             if (!loaded)
                 return lfs::Result<void>::failure(std::move(loaded).error());
             module = std::move(*loaded);
             return {};
         }
         std::size_t parameterBytes(const std::string_view function) const {
-            for (const auto& entry : tensor_scene_temporal_program_entries())
+            for (const auto& entry : temporal_entries())
                 if (entry.backend == backend && entry.name == function)
                     return entry.parameter_bytes;
             return 0;
@@ -79,7 +102,7 @@ namespace lfs::rendering {
         }
         if (auto loaded = impl_->ensureModule(); !loaded)
             return loaded;
-        DispatchParameters dispatch{.motion = parameters};
+        MotionParameters dispatch{.motion = parameters};
         const std::array bindings{
             Module::Binding{0, &depth},
             Module::Binding{8, &output, Module::Access::ReadWrite},
@@ -142,7 +165,7 @@ namespace lfs::rendering {
                                      core::DataType::Float32);
         if (auto loaded = impl_->ensureModule(); !loaded)
             return loaded;
-        DispatchParameters dispatch{.resolve = parameters};
+        ResolveParameters dispatch{.resolve = parameters};
         const std::array bindings{
             Module::Binding{0, nullptr},
             Module::Binding{8, nullptr},
@@ -182,7 +205,7 @@ namespace lfs::rendering {
                                      core::DataType::Float32);
         if (auto loaded = impl_->ensureModule(); !loaded)
             return loaded;
-        DispatchParameters dispatch{.resolve = parameters};
+        ResolveParameters dispatch{.resolve = parameters};
         const std::array bindings{
             Module::Binding{0, nullptr},
             Module::Binding{8, nullptr},
@@ -217,7 +240,7 @@ namespace lfs::rendering {
                                      core::Device::GPU, core::DataType::UInt8);
         if (auto loaded = impl_->ensureModule(); !loaded)
             return loaded;
-        const DispatchParameters dispatch{.count = static_cast<std::uint32_t>(samples.size())};
+        const SampleParameters dispatch{.count = static_cast<std::uint32_t>(samples.size())};
         const std::array bindings{
             Module::Binding{0, nullptr},
             Module::Binding{8, nullptr},
