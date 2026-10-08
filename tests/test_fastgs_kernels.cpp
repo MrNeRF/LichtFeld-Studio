@@ -313,10 +313,17 @@ protected:
 };
 
 namespace {
-    // CUDA/Vulkan identical-run controls varied by at most 4.177 bound / decoded-coordinate LSB
-    // (1/824 packed bytes): generic max 4.177/4.177, specialized max 1.027/1.027. Cross-path max
-    // was 4.177/4.177, within the generic same-path variation. The 5-bound-LSB and 5-coordinate-LSB
-    // tolerances below cover this codec variation.
+    float joint_adam_comparison_step(const float a_min, const float a_max,
+                                     const float b_min, const float b_max, const float qmax) {
+        const float codec_step = std::max(std::abs(a_max - a_min), std::abs(b_max - b_min)) / qmax;
+        const float magnitude = std::max({std::abs(a_min), std::abs(a_max), std::abs(b_min), std::abs(b_max)});
+        // Narrow or constant codec ranges cannot resolve less than one stored float step.
+        const float float_step = std::nextafter(magnitude, std::numeric_limits<float>::infinity()) - magnitude;
+        return std::max(codec_step, float_step);
+    }
+
+    // Allow five comparison steps for reduction-order roundoff. Stored float spacing
+    // bounds the effective precision when a codec range is narrow or constant.
     void expect_joint_adam_state_equivalent(const AdamParamState& reference,
                                             const AdamParamState& optimized) {
         ASSERT_EQ(reference.joint_bits, optimized.joint_bits);
@@ -342,9 +349,9 @@ namespace {
         const float* ob = opt_bounds.ptr<float>();
         for (size_t i = 0; i < ref_bounds.numel(); ++i) {
             const size_t axis = i % 4;
-            const float range = axis < 2 ? rb[(i / 4) * 4 + 1] - rb[(i / 4) * 4]
-                                         : rb[(i / 4) * 4 + 3] - rb[(i / 4) * 4 + 2];
-            EXPECT_NEAR(rb[i], ob[i], std::max(5.0f * range / qmax, 1.0e-6f));
+            const size_t lo = (i / 4) * 4 + (axis < 2 ? 0 : 2);
+            const float step = joint_adam_comparison_step(rb[lo], rb[lo + 1], ob[lo], ob[lo + 1], qmax);
+            EXPECT_NEAR(rb[i], ob[i], std::max(5.0f * step, 1.0e-6f));
         }
 
         auto ref_packed = reference.exp_avg.to(Device::CPU);
@@ -368,8 +375,8 @@ namespace {
                 joint_adam::Codec8::us_to_g1g2(ru, rs, rm, rv);
                 joint_adam::Codec8::us_to_g1g2(ou, os, om, ov);
             }
-            const float du = std::max(rb[1] - rb[0], ob[1] - ob[0]) / qmax * 5.0f;
-            const float ds = std::max(rb[3] - rb[2], ob[3] - ob[2]) / qmax * 5.0f;
+            const float du = joint_adam_comparison_step(rb[0], rb[1], ob[0], ob[1], qmax) * 5.0f;
+            const float ds = joint_adam_comparison_step(rb[2], rb[3], ob[2], ob[3], qmax) * 5.0f;
             const float sqrt_v = std::max(std::sqrt(std::max(rv, 0.0f)),
                                           std::sqrt(std::max(ov, 0.0f)));
             const float delta_sqrt_v = (sqrt_v + joint_adam::kEps) * ds;
@@ -420,9 +427,8 @@ namespace {
             for (size_t i = 0; i < ab.numel(); ++i) {
                 const size_t axis = i % 4;
                 const size_t base = (i / 4) * 4;
-                const float arange = axis < 2 ? av[base + 1] - av[base] : av[base + 3] - av[base + 2];
-                const float brange = axis < 2 ? bv[base + 1] - bv[base] : bv[base + 3] - bv[base + 2];
-                const float step = std::max(std::abs(arange), std::abs(brange)) / qmax;
+                const size_t lo = base + (axis < 2 ? 0 : 2);
+                const float step = joint_adam_comparison_step(av[lo], av[lo + 1], bv[lo], bv[lo + 1], qmax);
                 if (step > 0.0f)
                     result.max_bound_lsb = std::max(result.max_bound_lsb, std::abs(av[i] - bv[i]) / step);
             }
@@ -448,10 +454,10 @@ namespace {
                     joint_adam::Codec8::decode_us(bptr, cell, bv[bounds], bv[bounds + 1], bv[bounds + 2],
                                                   bv[bounds + 3], bu, bscale);
                 }
-                const float ustep = std::max(av[bounds + 1] - av[bounds], bv[bounds + 1] - bv[bounds]) / qmax;
-                const float sstep = std::max(av[bounds + 3] - av[bounds + 2],
-                                             bv[bounds + 3] - bv[bounds + 2]) /
-                                    qmax;
+                const float ustep = joint_adam_comparison_step(
+                    av[bounds], av[bounds + 1], bv[bounds], bv[bounds + 1], qmax);
+                const float sstep = joint_adam_comparison_step(
+                    av[bounds + 2], av[bounds + 3], bv[bounds + 2], bv[bounds + 3], qmax);
                 if (ustep > 0.0f)
                     result.max_coordinate_lsb = std::max(result.max_coordinate_lsb,
                                                          std::abs(au - bu) / ustep);
@@ -463,6 +469,31 @@ namespace {
         return result;
     }
 } // namespace
+
+TEST(JointAdamComparisonTest, WideRangesRetainCodecStep) {
+    for (const float qmax : {255.0f, 65535.0f}) {
+        EXPECT_EQ(joint_adam_comparison_step(-2.0f, 3.0f, -1.0f, 4.0f, qmax), 5.0f / qmax);
+    }
+}
+
+TEST(JointAdamComparisonTest, NearlyConstantRangesUseFloatSpacing) {
+    const float first = 1.0f;
+    const float second = std::nextafter(first, 2.0f);
+    const float third = std::nextafter(second, 2.0f);
+    for (const float qmax : {255.0f, 65535.0f}) {
+        const float step = joint_adam_comparison_step(first, second, second, third, qmax);
+        EXPECT_EQ(step, second - first);
+        EXPECT_LE((third - first) / step, 2.0f);
+    }
+}
+
+TEST(JointAdamComparisonTest, ConstantRangesDoNotHideDrift) {
+    for (const float qmax : {255.0f, 65535.0f}) {
+        const float step = joint_adam_comparison_step(1.0f, 1.0f, 2.0f, 2.0f, qmax);
+        ASSERT_GT(step, 0.0f);
+        EXPECT_GT(1.0f / step, 5.0f);
+    }
+}
 
 // Forward kernels
 TEST_F(FastGSKernelTest, Forward_Preprocess) {
@@ -477,12 +508,27 @@ TEST_F(FastGSKernelTest, OptimizerStateRunToRunDeterminismControl) {
         std::unique_ptr<AdamOptimizer> optimizer;
     };
     const size_t test_n = 1;
-    auto test_means = means_.slice(0, 0, test_n).contiguous();
-    auto test_sh0 = sh0_.slice(0, 0, test_n).contiguous();
-    auto test_scaling = scaling_.slice(0, 0, test_n).contiguous();
-    auto test_rotation = rotation_.slice(0, 0, test_n).contiguous();
-    auto test_opacity = opacity_.slice(0, 0, test_n).contiguous();
+    // Keep this control independent of other tests' random state. A spatially varying
+    // image gradient avoids cancellation of the position gradient under a uniform image sum.
+    auto test_means = Tensor::from_vector({0.17f, -0.21f, 1.5f}, {test_n, 3}, Device::CUDA);
+    auto test_sh0 = Tensor::from_vector({0.1f, 0.3f, 0.5f}, {test_n, 1, 3}, Device::CUDA);
+    auto test_scaling = Tensor::from_vector({-2.0f, -2.3f, -2.6f}, {test_n, 3}, Device::CUDA);
+    auto test_rotation = Tensor::from_vector({1.0f, 0.2f, -0.3f, 0.1f}, {test_n, 4}, Device::CUDA);
+    test_rotation = test_rotation / test_rotation.pow(2.0f).sum(-1, true).sqrt();
+    auto test_opacity = Tensor::full({test_n}, 0.2f, Device::CUDA);
     auto sh_rest = Tensor::full({test_n, 3, 3}, 0.01f, Device::CUDA);
+    std::vector<float> gradient(3 * H * W);
+    for (int channel = 0; channel < 3; ++channel) {
+        for (int y = 0; y < H; ++y) {
+            for (int x = 0; x < W; ++x) {
+                const float u = static_cast<float>(x) / W;
+                const float v = static_cast<float>(y) / H;
+                gradient[(channel * H + y) * W + x] =
+                    0.25f + 0.1f * channel + u * u + 0.37f * u * v + 0.5f * v * v;
+            }
+        }
+    }
+    const auto grad = Tensor::from_vector(gradient, {3, H, W}, Device::CUDA);
     auto run = [&](bool generic) {
         Run result;
         result.model = std::make_unique<SplatData>(1, test_means.clone(), test_sh0.clone(), sh_rest.clone(),
@@ -495,7 +541,6 @@ TEST_F(FastGSKernelTest, OptimizerStateRunToRunDeterminismControl) {
         auto forward_result = fast_rasterize_forward(*camera_, *result.model, bg_, 0, 0, 0, 0, false);
         if (!forward_result)
             throw std::runtime_error("FastGS forward failed in optimizer-state determinism control");
-        const auto grad = Tensor::ones_like(forward_result->first.image);
         fast_lfs::rasterization::set_force_generic_preprocess_for_testing(generic);
         fast_rasterize_backward(forward_result->second, grad, *result.model, *result.optimizer,
                                 {}, {}, DensificationType::None, 1, {});
@@ -514,7 +559,7 @@ TEST_F(FastGSKernelTest, OptimizerStateRunToRunDeterminismControl) {
     const auto specialized_diff = measure_joint_adam_state_difference(*specialized_a.optimizer,
                                                                       *specialized_b.optimizer);
     const auto cross_diff = measure_joint_adam_state_difference(*generic_a.optimizer, *specialized_a.optimizer);
-    std::cout << "Optimizer state variation (bound LSB, decoded coordinate LSB, packed bytes differing/total): "
+    std::cout << "Optimizer state variation (bound steps, decoded coordinate steps, packed bytes differing/total): "
               << "generic=" << generic_diff.max_bound_lsb << "," << generic_diff.max_coordinate_lsb << ","
               << generic_diff.different_packed_bytes << "/" << generic_diff.packed_bytes
               << " specialized=" << specialized_diff.max_bound_lsb << ","
