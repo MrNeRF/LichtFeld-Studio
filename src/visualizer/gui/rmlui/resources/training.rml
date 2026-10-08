@@ -193,12 +193,6 @@
                   data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
         </select>
       </div>
-      <div class="setting-row" data-for="row : pv_basic_depth_toggle_rows"
-           data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="depth_normal_disabled">
-        <span class="prop-label">{{row.label}}</span>
-        <input type="checkbox" data-checked="row.checked"
-               data-event-click="pv_value_change(row.id, !row.checked)" />
-      </div>
       <div class="setting-row" data-tooltip="training.tooltip.depth_loss_mode" data-if="dep_depth_loss &amp;&amp; !pv_search_active">
         <span class="prop-label">{{label_depth_loss_mode}}</span>
         <select data-value="depth_loss_mode_str">
@@ -219,7 +213,7 @@
         <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
       </div>
       <div class="setting-row" data-for="row : pv_basic_normal_toggle_rows"
-           data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="depth_normal_disabled">
+           data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />

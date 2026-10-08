@@ -752,7 +752,8 @@ namespace lfs::training {
             .min_track_length = effectiveMinTrackLengthForLoad(params),
             .validate_only = false,
             .load_masks = params.optimization.mask_mode != lfs::core::param::MaskMode::None,
-            .load_depths = params.optimization.depth_supervision_enabled(),
+            .load_depths = params.optimization.use_depth_loss &&
+                           params.optimization.depth_loss_weight > 0.0f,
             .load_normals = training_normal_priors_enabled(params.optimization) ||
                             (!params.optimization.gut && params.optimization.enable_eval),
             .normal_auto_generate = params.optimization.normal_auto_generate,
@@ -1142,7 +1143,8 @@ namespace lfs::training {
             .min_track_length = params.dataset.min_track_length,
             .validate_only = true,
             .load_masks = params.optimization.mask_mode != lfs::core::param::MaskMode::None,
-            .load_depths = params.optimization.depth_supervision_enabled(),
+            .load_depths = params.optimization.use_depth_loss &&
+                           params.optimization.depth_loss_weight > 0.0f,
             .load_normals = training_normal_priors_enabled(params.optimization),
             .normal_auto_generate = params.optimization.normal_auto_generate};
 

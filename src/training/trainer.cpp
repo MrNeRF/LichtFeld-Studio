@@ -8752,7 +8752,9 @@ namespace lfs::training {
                          params_.optimization.depth_loss_mode);
                 params_.optimization.use_depth_loss = false;
             }
-            aux_pipeline_config.load_depths = params_.optimization.depth_supervision_enabled();
+            aux_pipeline_config.load_depths =
+                params_.optimization.use_depth_loss &&
+                params_.optimization.depth_loss_weight > 0.0f;
             if (aux_pipeline_config.load_depths) {
                 size_t cameras_with_depth = 0;
                 for (const auto& cam : train_dataset_->get_cameras()) {

@@ -149,22 +149,14 @@ BASIC_RUNS = (
     _run(
         "basic_live_start",
         "mask_mode",
-    ),
-    _run(
-        "basic_depth_toggle",
         "use_depth_loss",
-        disabled_condition_id="depth_normal_disabled",
     ),
     _run(
         "basic_depth_weight",
         "depth_loss_weight",
         visibility_condition_id="dep_depth_loss",
     ),
-    _run(
-        "basic_normal_toggle",
-        "use_normal_loss",
-        disabled_condition_id="depth_normal_disabled",
-    ),
+    _run("basic_normal_toggle", "use_normal_loss"),
     _run(
         "basic_normal_weights",
         "normal_auto_generate",
