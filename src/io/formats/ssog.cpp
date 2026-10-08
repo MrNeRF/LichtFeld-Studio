@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "ssog.hpp"
+#include "core/file_extensions.hpp"
 #include "core/logger.hpp"
 #include "io/atomic_output.hpp"
 #include "io/splat_decimate.hpp"
@@ -631,7 +632,7 @@ namespace lfs::io {
 #else
             const auto pid = getpid();
 #endif
-            const bool bundled = out.extension() == ".ssog";
+            const bool bundled = core::has_extension(out, ".ssog");
             std::unique_ptr<ScopedAtomicOutputFile> atomic_output;
             std::unique_ptr<SogSink> archive;
             std::mutex archive_mutex;

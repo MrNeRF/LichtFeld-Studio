@@ -11,6 +11,7 @@
 #include "sogs.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/error_reporter.hpp"
+#include "core/file_extensions.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
@@ -1291,7 +1292,7 @@ namespace lfs::io {
                 license_bytes->reset();
             if (!std::filesystem::exists(path))
                 return make_error(ErrorCode::PATH_NOT_FOUND, "SOG file/directory does not exist", path);
-            if (path.extension() == ".sog") {
+            if (core::has_extension(path, ".sog") && !std::filesystem::is_directory(path)) {
                 auto result = read_sog_bundle(path, license_bytes);
                 if (!result)
                     return make_error(ErrorCode::DECODING_FAILED, result.error(), path);
