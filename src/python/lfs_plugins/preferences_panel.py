@@ -81,6 +81,7 @@ class PreferencesPanel(Panel):
         "scene_graph",
         "file_associations",
         "mcp",
+        "portal",
     )
 
     def __init__(self):

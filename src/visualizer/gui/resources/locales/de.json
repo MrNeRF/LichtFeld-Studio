@@ -916,6 +916,7 @@
     "use_default": "Standard verwenden",
     "title": "Einstellungen",
     "language": "Sprache:",
+    "language_title": "Sprache",
     "select_language": "Sprache auswählen",
     "interface": "Oberfläche",
     "file_associations": "Dateizuordnungen",
@@ -1521,7 +1522,7 @@
     "status_label": "Status: %s"
   },
   "input_settings": {
-    "active_profile": "Aktives Profil:",
+    "active_profile": "Aktives Profil",
     "save_current_profile": "Aktuelles Profil speichern",
     "reset_to_default": "Auf Standard zurücksetzen",
     "export": "Exportieren...",
@@ -1544,7 +1545,7 @@
     "scroll_wheel": "Mausrad scrollen...",
     "press_key_or_use_mouse": "Taste drücken oder Maus verwenden...",
     "click_again_double": "Nochmal klicken für Doppelklick...",
-    "tool_mode": "WERKZEUGMODUS",
+    "tool_mode": "Werkzeugmodus",
     "select_tool_mode": "Werkzeugmodus auswählen um Belegungen anzuzeigen/bearbeiten",
     "global_bindings_hint": "Globale Belegungen gelten überall, sofern nicht überschrieben",
     "tool_bindings_hint": "Werkzeugspezifische Belegungen überschreiben globale Belegungen",
@@ -2861,7 +2862,6 @@
   "portal.preferences.switched_off": "Verbunden, ausgeschaltet",
   "portal.preferences.not_connected": "Portal nicht verbunden",
   "portal.preferences.connected": "Portal verbunden",
-  "portal.preferences.status": "Status",
   "preferences.portal": "Portal",
   "portal.status.turn_on": "Portal einschalten",
   "portal.status.switched_off": "Portal verbunden, ausgeschaltet",

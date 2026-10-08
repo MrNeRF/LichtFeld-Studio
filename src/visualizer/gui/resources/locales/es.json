@@ -916,6 +916,7 @@
     "use_default": "Usar predeterminado",
     "title": "Preferencias",
     "language": "Idioma:",
+    "language_title": "Idioma",
     "select_language": "Seleccionar idioma",
     "interface": "Interfaz",
     "file_associations": "Asociaciones de archivos",
@@ -1521,7 +1522,7 @@
     "status_label": "Estado: %s"
   },
   "input_settings": {
-    "active_profile": "Perfil Activo:",
+    "active_profile": "Perfil Activo",
     "save_current_profile": "Guardar el Perfil Actual",
     "reset_to_default": "Restablecer a Predeterminado",
     "export": "Exportar...",
@@ -1544,7 +1545,7 @@
     "scroll_wheel": "Gira la rueda del ratón...",
     "press_key_or_use_mouse": "Pulsa una tecla o usa el ratón...",
     "click_again_double": "Haz clic de nuevo para el doble clic...",
-    "tool_mode": "MODO HERRAMIENTA",
+    "tool_mode": "Modo Herramienta",
     "select_tool_mode": "Selecciona el modo de herramienta para ver/editar las asignaciones",
     "global_bindings_hint": "Las asignaciones globales se aplican en todas partes salvo que se sobrescriban",
     "tool_bindings_hint": "Las asignaciones específicas de la herramienta sobrescriben las asignaciones globales",
@@ -2861,7 +2862,6 @@
   "portal.preferences.switched_off": "Conectado, desactivado",
   "portal.preferences.not_connected": "Portal no conectado",
   "portal.preferences.connected": "Portal conectado",
-  "portal.preferences.status": "Estado",
   "preferences.portal": "Portal",
   "portal.status.turn_on": "Activar Portal",
   "portal.status.switched_off": "Portal conectado, desactivado",

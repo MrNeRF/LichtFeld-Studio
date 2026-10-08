@@ -916,6 +916,7 @@
     "use_default": "Użyj domyślnego",
     "title": "Preferencje",
     "language": "Język:",
+    "language_title": "Język",
     "select_language": "Wybierz Język",
     "interface": "Interfejs",
     "file_associations": "Skojarzenia plików",
@@ -1521,7 +1522,7 @@
     "status_label": "Stan: %s"
   },
   "input_settings": {
-    "active_profile": "Aktywny Profil:",
+    "active_profile": "Aktywny Profil",
     "save_current_profile": "Zapisz Bieżący Profil",
     "reset_to_default": "Resetuj do Domyślnych",
     "export": "Eksportuj...",
@@ -1544,7 +1545,7 @@
     "scroll_wheel": "Przewiń kółkiem myszy...",
     "press_key_or_use_mouse": "Naciśnij klawisz lub użyj myszy...",
     "click_again_double": "Kliknij ponownie dla podwójnego kliknięcia...",
-    "tool_mode": "TRYB NARZĘDZIA",
+    "tool_mode": "Tryb Narzędzia",
     "select_tool_mode": "Wybierz tryb narzędzia, aby wyświetlić/edytować przypisania",
     "global_bindings_hint": "Przypisania globalne obowiązują wszędzie, chyba że zostaną nadpisane",
     "tool_bindings_hint": "Przypisania specyficzne dla narzędzi nadpisują przypisania globalne",
@@ -2861,7 +2862,6 @@
   "portal.preferences.switched_off": "Połączono, wyłączono",
   "portal.preferences.not_connected": "Portal niepołączono",
   "portal.preferences.connected": "Portal połączono",
-  "portal.preferences.status": "Stan",
   "preferences.portal": "Portal",
   "portal.status.turn_on": "Włącz Portal",
   "portal.status.switched_off": "Portal połączony, wyłączony",

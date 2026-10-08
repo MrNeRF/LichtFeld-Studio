@@ -585,6 +585,31 @@ def test_keymap_marks_conflicting_binding_rows(keymap_bindings_module):
     assert orbit_row["desc_class"] == "preferences-binding-desc preferences-conflict"
 
 
+def test_keymap_pending_capture_polls_until_the_key_arrives(keymap_bindings_module):
+    # Catches a dirty-policy panel that never notices the native capture finishing.
+    prefs, state = keymap_bindings_module
+    panel, model = _bind_panel(prefs)
+    section = panel._keymap
+    doc = _DocStub(with_conflict_overlay=True)
+    section.ensure_binding_rows()
+    section._rebinding_action = prefs.lf.keymap.Action.CAMERA_ORBIT
+    section._rebinding_mode = prefs.lf.keymap.ToolMode.GLOBAL
+    section._previous_trigger = None
+    state.capturing[0] = True
+
+    panel.on_update(doc)
+    assert model.handle.request_update_count == 1
+
+    state.capturing[0] = False
+    state.captured.append({"type": "key", "key": 85, "modifiers": 0})
+    panel.on_update(doc)
+    requests_after_capture = model.handle.request_update_count
+    panel.on_update(doc)
+
+    assert section._rebinding_action is None
+    assert model.handle.request_update_count == requests_after_capture
+
+
 def test_keymap_capture_conflict_prompts_to_replace(keymap_bindings_module):
     prefs, state = keymap_bindings_module
     panel, _model = _bind_panel(prefs)

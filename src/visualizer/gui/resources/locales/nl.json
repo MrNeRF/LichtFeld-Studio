@@ -916,6 +916,7 @@
     "use_default": "Standaard gebruiken",
     "title": "Voorkeuren",
     "language": "Taal:",
+    "language_title": "Taal",
     "select_language": "Selecteer Taal",
     "interface": "Interface",
     "file_associations": "Bestandskoppelingen",
@@ -1521,7 +1522,7 @@
     "status_label": "Status: %s"
   },
   "input_settings": {
-    "active_profile": "Actief Profiel:",
+    "active_profile": "Actief Profiel",
     "save_current_profile": "Huidig Profiel Opslaan",
     "reset_to_default": "Reset naar Standaard",
     "export": "Exporteren...",
@@ -1544,7 +1545,7 @@
     "scroll_wheel": "Scroll met het muiswiel...",
     "press_key_or_use_mouse": "Druk een toets of gebruik de muis...",
     "click_again_double": "Klik nogmaals voor dubbelklik...",
-    "tool_mode": "GEREEDSCHAP MODUS",
+    "tool_mode": "Gereedschapsmodus",
     "select_tool_mode": "Selecteer gereedschap modus om toewijzingen te bekijken/bewerken",
     "global_bindings_hint": "Globale toewijzingen gelden overal tenzij overschreven",
     "tool_bindings_hint": "Gereedschap-specifieke toewijzingen overschrijven globale toewijzingen",
@@ -2861,7 +2862,6 @@
   "portal.preferences.switched_off": "Verbonden, uitgeschakeld",
   "portal.preferences.not_connected": "Portal niet verbonden",
   "portal.preferences.connected": "Portal verbonden",
-  "portal.preferences.status": "Status",
   "preferences.portal": "Portal",
   "portal.status.turn_on": "Portal inschakelen",
   "portal.status.switched_off": "Portal verbonden, uitgeschakeld",

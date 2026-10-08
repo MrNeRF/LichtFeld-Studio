@@ -912,6 +912,7 @@
     "use_default": "Use default",
     "title": "Preferences",
     "language": "Language:",
+    "language_title": "Language",
     "select_language": "Select Language",
     "interface": "Interface",
     "file_associations": "File Associations",
@@ -1519,7 +1520,7 @@
     "status_label": "Status: %s"
   },
   "input_settings": {
-    "active_profile": "Active Profile:",
+    "active_profile": "Active Profile",
     "save_current_profile": "Save Current Profile",
     "reset_to_default": "Reset to Default",
     "export": "Export...",
@@ -1542,7 +1543,7 @@
     "scroll_wheel": "Scroll the mouse wheel...",
     "press_key_or_use_mouse": "Press a key or use the mouse...",
     "click_again_double": "Click again for double-click...",
-    "tool_mode": "TOOL MODE",
+    "tool_mode": "Tool Mode",
     "select_tool_mode": "Select tool mode to view/edit bindings",
     "global_bindings_hint": "Global bindings apply everywhere unless overridden",
     "tool_bindings_hint": "Tool-specific bindings override global bindings",
@@ -2820,7 +2821,6 @@
   "portal.preferences.switched_off": "Connected, switched off",
   "portal.preferences.not_connected": "Portal not connected",
   "portal.preferences.connected": "Portal connected",
-  "portal.preferences.status": "Status",
   "preferences.portal": "Portal",
   "portal.status.turn_on": "Turn on Portal",
   "portal.status.switched_off": "Portal connected, switched off",

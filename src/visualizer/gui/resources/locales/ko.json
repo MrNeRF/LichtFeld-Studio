@@ -916,6 +916,7 @@
     "use_default": "기본값 사용",
     "title": "환경설정",
     "language": "언어:",
+    "language_title": "언어",
     "select_language": "언어 선택",
     "interface": "인터페이스",
     "file_associations": "파일 연결",
@@ -1521,7 +1522,7 @@
     "status_label": "상태: %s"
   },
   "input_settings": {
-    "active_profile": "활성 프로필:",
+    "active_profile": "활성 프로필",
     "save_current_profile": "현재 프로필 저장",
     "reset_to_default": "기본값으로 재설정",
     "export": "내보내기...",
@@ -2861,7 +2862,6 @@
   "portal.preferences.switched_off": "연결됨, 꺼짐",
   "portal.preferences.not_connected": "Portal 연결 안 됨",
   "portal.preferences.connected": "Portal 연결됨",
-  "portal.preferences.status": "상태",
   "preferences.portal": "Portal",
   "portal.status.turn_on": "Portal 켜기",
   "portal.status.switched_off": "Portal 연결됨, 꺼짐",

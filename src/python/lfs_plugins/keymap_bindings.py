@@ -4,6 +4,8 @@
 
 import lichtfeld as lf
 
+from .rml_widgets import request_model_update
+
 
 class KeymapBindingsSection:
     """Retained key-binding editor bound onto the Preferences data model."""
@@ -340,6 +342,10 @@ class KeymapBindingsSection:
         if is_capturing != self._last_capturing:
             self._last_capturing = is_capturing
             self._dirty_model("is_capturing")
+
+        # The native capture ends without notifying dirty-policy panels, so keep polling until it does.
+        if self._rebinding_action is not None and self._handle:
+            request_model_update(self._handle)
 
     # ── Retained model updates ────────────────────────────────
 

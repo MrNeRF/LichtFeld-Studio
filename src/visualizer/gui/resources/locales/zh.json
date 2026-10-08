@@ -916,6 +916,7 @@
     "use_default": "使用默认值",
     "title": "偏好设置",
     "language": "语言：",
+    "language_title": "语言",
     "select_language": "选择语言",
     "interface": "界面",
     "file_associations": "文件关联",
@@ -1521,7 +1522,7 @@
     "status_label": "状态：%s"
   },
   "input_settings": {
-    "active_profile": "活动配置文件：",
+    "active_profile": "活动配置文件",
     "save_current_profile": "保存当前配置文件",
     "reset_to_default": "重置为默认",
     "export": "导出...",
@@ -2861,7 +2862,6 @@
   "portal.preferences.switched_off": "已连接，当前已关闭",
   "portal.preferences.not_connected": "Portal 未连接",
   "portal.preferences.connected": "Portal 已连接",
-  "portal.preferences.status": "状态",
   "preferences.portal": "Portal",
   "portal.status.turn_on": "开启 Portal",
   "portal.status.switched_off": "Portal 已连接，当前已关闭",

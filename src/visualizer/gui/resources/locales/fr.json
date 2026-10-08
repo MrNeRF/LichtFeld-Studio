@@ -916,6 +916,7 @@
     "use_default": "Utiliser la valeur par défaut",
     "title": "Préférences",
     "language": "Langue :",
+    "language_title": "Langue",
     "select_language": "Sélectionner la Langue",
     "interface": "Interface",
     "file_associations": "Associations de fichiers",
@@ -1521,7 +1522,7 @@
     "status_label": "Statut : %s"
   },
   "input_settings": {
-    "active_profile": "Profil Actif :",
+    "active_profile": "Profil Actif",
     "save_current_profile": "Sauvegarder le Profil Actuel",
     "reset_to_default": "Réinitialiser par Défaut",
     "export": "Exporter...",
@@ -1544,7 +1545,7 @@
     "scroll_wheel": "Faites défiler la molette...",
     "press_key_or_use_mouse": "Appuyez sur une touche ou utilisez la souris...",
     "click_again_double": "Cliquez à nouveau pour double-clic...",
-    "tool_mode": "MODE OUTIL",
+    "tool_mode": "Mode Outil",
     "select_tool_mode": "Sélectionnez le mode outil pour voir/éditer les liaisons",
     "global_bindings_hint": "Les liaisons globales s'appliquent partout sauf si remplacées",
     "tool_bindings_hint": "Les liaisons spécifiques aux outils remplacent les liaisons globales",
@@ -2861,7 +2862,6 @@
   "portal.preferences.switched_off": "Connecté, désactivé",
   "portal.preferences.not_connected": "Portal non connecté",
   "portal.preferences.connected": "Portal connecté",
-  "portal.preferences.status": "État",
   "preferences.portal": "Portal",
   "portal.status.turn_on": "Activer Portal",
   "portal.status.switched_off": "Portal connecté, désactivé",

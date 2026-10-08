@@ -916,6 +916,7 @@
     "use_default": "デフォルトを使用",
     "title": "環境設定",
     "language": "言語:",
+    "language_title": "言語",
     "select_language": "言語を選択",
     "interface": "インターフェース",
     "file_associations": "ファイルの関連付け",
@@ -1521,7 +1522,7 @@
     "status_label": "ステータス: %s"
   },
   "input_settings": {
-    "active_profile": "アクティブプロファイル:",
+    "active_profile": "アクティブプロファイル",
     "save_current_profile": "現在のプロファイルを保存",
     "reset_to_default": "デフォルトにリセット",
     "export": "エクスポート...",
@@ -2861,7 +2862,6 @@
   "portal.preferences.switched_off": "接続済み、オフ",
   "portal.preferences.not_connected": "Portal 未接続",
   "portal.preferences.connected": "Portal 接続済み",
-  "portal.preferences.status": "状態",
   "preferences.portal": "Portal",
   "portal.status.turn_on": "Portal をオンにする",
   "portal.status.switched_off": "Portal に接続済み、オフ",
