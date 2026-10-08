@@ -110,6 +110,38 @@ namespace lfs::vis::gui {
             float duration_after_;
         };
 
+        class KeyframeTimeUndoEntry final : public op::UndoEntry {
+        public:
+            KeyframeTimeUndoEntry(SequencerController& controller, std::weak_ptr<void> lifetime,
+                                  const sequencer::KeyframeId id, const float before, const float after)
+                : controller_(controller), lifetime_(std::move(lifetime)), generation_(controller.timelineGeneration()), id_(id), before_(before), after_(after) {}
+
+            void undo() override { apply(after_, before_); }
+            void redo() override { apply(before_, after_); }
+            [[nodiscard]] std::string name() const override { return "Edit Keyframe Time"; }
+            [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this); }
+
+        private:
+            void apply(const float expected, const float desired) {
+                if (lifetime_.expired() || controller_.timelineGeneration() != generation_)
+                    throw op::HistoryStaleEntryError("Sequencer timeline is no longer available");
+                const auto* keyframe = controller_.timeline().getKeyframeById(id_);
+                if (!keyframe || keyframe->is_loop_point || keyframe->time != expected)
+                    throw op::HistoryStaleEntryError("Keyframe time changed since the recorded edit");
+                controller_.setKeyframeTimeById(id_, desired);
+                lfs::core::events::state::KeyframeListChanged{
+                    .count = controller_.timeline().realKeyframeCount()}
+                    .emit();
+            }
+
+            SequencerController& controller_;
+            std::weak_ptr<void> lifetime_;
+            uint64_t generation_;
+            sequencer::KeyframeId id_;
+            float before_;
+            float after_;
+        };
+
         constexpr size_t MIN_PATH_RENDER_SAMPLES = 128;
         constexpr size_t MAX_PATH_RENDER_SAMPLES = 4096;
         constexpr float PATH_SAMPLES_PER_VIEWPORT_PIXEL = 2.0f;
@@ -345,10 +377,17 @@ namespace lfs::vis::gui {
                 history.push(std::make_unique<KeyframeChangeUndoEntry>(
                     controller_, history_lifetime_, keyframe, std::nullopt, duration_before));
         });
+        controller_.setKeyframeTimeCommitCallback([this](const sequencer::KeyframeId id,
+                                                         const float before, const float after) {
+            if (!op::undoHistory().isPlaybackActive())
+                op::undoHistory().push(std::make_unique<KeyframeTimeUndoEntry>(
+                    controller_, history_lifetime_, id, before, after));
+        });
     }
 
     SequencerUIManager::~SequencerUIManager() {
         controller_.setKeyframeRemovedCallback({});
+        controller_.setKeyframeTimeCommitCallback({});
         stopPlySequenceStreaming();
     }
 

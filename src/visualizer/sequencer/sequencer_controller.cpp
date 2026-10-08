@@ -363,11 +363,15 @@ namespace lfs::vis {
         if (!keyframe || keyframe->is_loop_point)
             return false;
 
+        const float time_before = keyframe->time;
+        pending_keyframe_time_edit_.reset();
         removeLoopKeyframe();
         const bool changed = timeline_.setKeyframeTimeById(id, new_time, true);
         rebuildLoopKeyframe();
         if (changed)
             markTimelineChanged();
+        if (changed && time_before != new_time && keyframe_time_commit_callback_)
+            keyframe_time_commit_callback_(id, time_before, new_time);
         return changed;
     }
 
@@ -376,10 +380,21 @@ namespace lfs::vis {
         if (!keyframe || keyframe->is_loop_point || keyframe->time == new_time)
             return false;
 
+        const float time_before = keyframe->time;
+        const bool continuing_edit = pending_keyframe_time_edit_ &&
+                                     pending_keyframe_time_edit_->id == id &&
+                                     pending_keyframe_time_edit_->revision == timeline_revision_;
         removeLoopKeyframe();
         const bool changed = timeline_.setKeyframeTimeById(id, new_time, false);
-        if (changed)
+        if (changed) {
             markTimelineChanged();
+            if (keyframe_time_commit_callback_) {
+                if (!continuing_edit)
+                    pending_keyframe_time_edit_ = PendingKeyframeTimeEdit{id, time_before, timeline_revision_};
+                else
+                    pending_keyframe_time_edit_->revision = timeline_revision_;
+            }
+        }
         return changed;
     }
 
@@ -388,9 +403,14 @@ namespace lfs::vis {
         if (!keyframe || keyframe->is_loop_point)
             return false;
 
+        const float time_after = keyframe->time;
+        const auto edit = std::exchange(pending_keyframe_time_edit_, std::nullopt);
+        const bool committed_edit = edit && edit->id == id && edit->revision == timeline_revision_;
         timeline_.sortKeyframes();
         rebuildLoopKeyframe();
         markTimelineChanged();
+        if (committed_edit && edit->time_before != time_after && keyframe_time_commit_callback_)
+            keyframe_time_commit_callback_(id, edit->time_before, time_after);
         return true;
     }
 
@@ -478,6 +498,8 @@ namespace lfs::vis {
     }
 
     void SequencerController::clear() {
+        ++timeline_generation_;
+        pending_keyframe_time_edit_.reset();
         stop();
         deselectKeyframe();
         ply_sequence_.reset();
@@ -499,6 +521,8 @@ namespace lfs::vis {
         const bool loaded = timeline_.loadFromJson(path);
         if (!loaded)
             return false;
+        ++timeline_generation_;
+        pending_keyframe_time_edit_.reset();
         rebuildLoopKeyframe();
         markTimelineChanged();
         return true;
@@ -510,6 +534,8 @@ namespace lfs::vis {
         deselectKeyframe();
         if (!timeline_.loadFromJson(json))
             return false;
+        ++timeline_generation_;
+        pending_keyframe_time_edit_.reset();
         rebuildLoopKeyframe();
         markTimelineChanged();
         return true;

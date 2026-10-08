@@ -79,6 +79,11 @@ namespace lfs::vis {
         [[nodiscard]] const sequencer::Timeline& timeline() const { return timeline_; }
         [[nodiscard]] uint64_t timelineRevision() const { return timeline_revision_; }
         [[nodiscard]] uint64_t selectionRevision() const { return selection_revision_; }
+        [[nodiscard]] uint64_t timelineGeneration() const { return timeline_generation_; }
+        using KeyframeTimeCommitCallback = std::function<void(sequencer::KeyframeId, float, float)>;
+        void setKeyframeTimeCommitCallback(KeyframeTimeCommitCallback callback) {
+            keyframe_time_commit_callback_ = std::move(callback);
+        }
 
         void play();
         void pause();
@@ -182,6 +187,14 @@ namespace lfs::vis {
         std::optional<sequencer::KeyframeId> selected_keyframe_id_;
         uint64_t timeline_revision_ = 0;
         uint64_t selection_revision_ = 0;
+        uint64_t timeline_generation_ = 0;
+        struct PendingKeyframeTimeEdit {
+            sequencer::KeyframeId id;
+            float time_before;
+            uint64_t revision;
+        };
+        std::optional<PendingKeyframeTimeEdit> pending_keyframe_time_edit_;
+        KeyframeTimeCommitCallback keyframe_time_commit_callback_;
     };
 
 } // namespace lfs::vis
