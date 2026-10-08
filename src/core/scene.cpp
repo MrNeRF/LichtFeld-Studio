@@ -1063,6 +1063,15 @@ namespace lfs::core {
             return result;
         }
 
+        // LOD-tree models draw flat here, so they contribute their leaves: interior nodes are
+        // hidden and opacity decoded, with rows kept for selection and transform indices.
+        std::vector<std::shared_ptr<const SplatData>> models;
+        models.reserve(selected_inputs.size());
+        for (const auto* input : selected_inputs) {
+            const auto& tree = input->model->lod_tree;
+            models.push_back(tree && tree->has_tree() ? make_lod_leaf_view(*input->model) : input->model);
+        }
+
         const cudaStream_t build_stream = getCurrentCUDAStream();
         const auto order_input = [build_stream](const Tensor& tensor) {
             if (tensor.is_valid() && tensor.device() == Device::CUDA) {
@@ -1073,8 +1082,8 @@ namespace lfs::core {
         std::vector<size_t> cached_sizes;
         cached_sizes.reserve(selected_inputs.size());
         ModelStats stats{};
-        for (const auto* input : selected_inputs) {
-            const auto& model = *input->model;
+        for (const auto& model_ptr : models) {
+            const auto& model = *model_ptr;
             order_input(model.means_raw());
             order_input(model.sh0_raw());
             order_input(model.shN_raw());
@@ -1096,7 +1105,7 @@ namespace lfs::core {
             stats.total_scene_scale += model.get_scene_scale();
         }
 
-        const Device device = selected_inputs[0]->model->means_raw().device();
+        const Device device = models[0]->means_raw().device();
         constexpr int SH0_COEFFS = 1;
         const auto dst_layout_rest = sh_rest_coefficients_for_degree(stats.max_sh_degree);
         const size_t shN_swizzled_floats =
@@ -1121,14 +1130,14 @@ namespace lfs::core {
         // its full float aggregate. Float-only inputs need no decode workspace.
         constexpr size_t band_size = 65536;
         uint32_t decode_rest = 0;
-        for (const auto* input : selected_inputs)
-            if (input->model->shN_value_quantized())
-                decode_rest = std::max(decode_rest, static_cast<uint32_t>(input->model->max_sh_coeffs_rest()));
+        for (const auto& model : models)
+            if (model->shN_value_quantized())
+                decode_rest = std::max(decode_rest, static_cast<uint32_t>(model->max_sh_coeffs_rest()));
         const size_t band_floats = sh_swizzled_float_count(std::min(total, band_size), dst_layout_rest);
         const size_t decode_floats = decode_rest ? sh_swizzled_float_count(std::min(total, band_size), decode_rest) : 0;
         const bool banded_q16 = band_floats + decode_floats < shN_swizzled_floats && allocator && sh_value_quant::enabled() && dst_layout_rest > 0 &&
-                                std::all_of(selected_inputs.begin(), selected_inputs.end(), [](const auto* input) {
-                                    const auto& model = *input->model;
+                                std::all_of(models.begin(), models.end(), [](const auto& model_ptr) {
+                                    const auto& model = *model_ptr;
                                     return !model.shN_raw().is_valid() || model.shN_raw().numel() == 0 ||
                                            model.shN_raw().dtype() == DataType::Float32 || model.shN_value_quantized();
                                 });
@@ -1149,8 +1158,8 @@ namespace lfs::core {
                 if (const auto status = cudaMemsetAsync(band.data_ptr(), 0, band_floats * sizeof(float), build_stream); status != cudaSuccess)
                     throw std::runtime_error(cudaGetErrorString(status));
                 size_t source_begin = 0;
-                for (const auto* input : selected_inputs) {
-                    const auto& model = *input->model;
+                for (const auto& model_ptr : models) {
+                    const auto& model = *model_ptr;
                     const size_t source_end = source_begin + model.size();
                     const size_t overlap_begin = std::max(begin, source_begin);
                     const size_t overlap_end = std::min(begin + count, source_end);
@@ -1201,19 +1210,16 @@ namespace lfs::core {
         Tensor rotation = alloc_param(TensorShape({total, 4}), total, "SplatData.rotation");
 
         const bool has_any_deleted = std::any_of(
-            selected_inputs.begin(), selected_inputs.end(),
-            [](const CombinedModelBuildInput* input) {
-                return input->model->has_deleted_mask();
-            });
+            models.begin(), models.end(),
+            [](const auto& model) { return model->has_deleted_mask(); });
         Tensor deleted = has_any_deleted
                              ? Tensor::zeros({total}, device, DataType::Bool)
                              : Tensor();
         std::vector<int> transform_indices_data(total);
 
         size_t offset = 0;
-        for (size_t i = 0; i < selected_inputs.size(); ++i) {
-            const auto& input = *selected_inputs[i];
-            const auto& model = *input.model;
+        for (size_t i = 0; i < models.size(); ++i) {
+            const auto& model = *models[i];
             const size_t size = cached_sizes[i];
             std::fill(transform_indices_data.begin() + offset,
                       transform_indices_data.begin() + offset + size,

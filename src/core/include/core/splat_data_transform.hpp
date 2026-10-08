@@ -8,6 +8,7 @@
 #include "core/export.hpp"
 #include <expected>
 #include <glm/glm.hpp>
+#include <memory>
 #include <string>
 
 namespace lfs::geometry {
@@ -103,5 +104,10 @@ namespace lfs::core {
     // Full-detail splats of a model with an LOD tree: the leaves that are not soft-deleted, with
     // LOD-encoded linear opacity converted back to logits. Fails when the leaves stream from disk.
     LFS_CORE_API lfs::Result<SplatData> extract_lod_leaves(const SplatData& splat_data);
+
+    // Flat render view of a model with an LOD tree: shares its tensors, hides the interior nodes
+    // through the deleted mask and converts LOD-encoded linear opacity to logits. Rows keep their
+    // order, so selection and transform indices stay valid.
+    LFS_CORE_API std::shared_ptr<SplatData> make_lod_leaf_view(const SplatData& splat_data);
 
 } // namespace lfs::core

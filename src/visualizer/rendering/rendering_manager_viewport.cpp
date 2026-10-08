@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "core/splat_data_transform.hpp"
 #include "model_renderability.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/viewport_request_builder.hpp"
@@ -13,6 +14,7 @@
 #include "training/training_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "vksplat_viewport_renderer.hpp"
+#include "vulkan_external_tensor.hpp"
 #include <algorithm>
 #include <cmath>
 #include <format>
@@ -420,7 +422,7 @@ namespace lfs::vis {
 
     std::expected<void, std::string> RenderingManager::renderDepthCaptureToPreviewSlotWithState(
         SceneManager* const scene_manager,
-        const lfs::core::SplatData& model,
+        const lfs::core::SplatData& source_model,
         SceneRenderState scene_state,
         const glm::mat3& rotation,
         const glm::vec3& position,
@@ -434,6 +436,11 @@ namespace lfs::vis {
         std::optional<float> ortho_scale_override) {
         if (width <= 0 || height <= 0) {
             return std::unexpected("invalid preview depth render dimensions");
+        }
+        const auto leaf_view = lodLeafRenderView(source_model);
+        const lfs::core::SplatData& model = leaf_view ? *leaf_view : source_model;
+        if (scene_state.combined_model == &source_model) {
+            scene_state.combined_model = &model;
         }
         if (!hasRenderableGaussians(&model)) {
             return std::unexpected("no renderable Gaussian model is available");
@@ -821,6 +828,48 @@ namespace lfs::vis {
         if (vksplat_viewport_renderer_) {
             vksplat_viewport_renderer_->releasePreviewResources();
         }
+        const std::lock_guard lock(lod_leaf_view_mutex_);
+        lod_leaf_view_.reset();
+        lod_leaf_view_source_ = nullptr;
+        lod_leaf_view_tree_ = nullptr;
+    }
+
+    void RenderingManager::releaseLodLeafRenderViewUnlessFor(const lfs::core::SplatData* const model) {
+        const std::lock_guard lock(lod_leaf_view_mutex_);
+        if (lod_leaf_view_ && lod_leaf_view_source_ != model) {
+            lod_leaf_view_.reset();
+            lod_leaf_view_source_ = nullptr;
+            lod_leaf_view_tree_ = nullptr;
+        }
+    }
+
+    std::shared_ptr<const lfs::core::SplatData> RenderingManager::lodLeafRenderView(
+        const lfs::core::SplatData& model) {
+        if (!model.lod_tree || !model.lod_tree->has_tree()) {
+            return nullptr;
+        }
+        const std::lock_guard lock(lod_leaf_view_mutex_);
+        const auto rows = static_cast<std::size_t>(model.size());
+        const auto deleted_version = model.deleted_mask_version();
+        if (!lod_leaf_view_ || lod_leaf_view_source_ != &model || lod_leaf_view_tree_ != model.lod_tree.get() ||
+            lod_leaf_view_rows_ != rows || lod_leaf_view_deleted_version_ != deleted_version) {
+            auto view = lfs::core::make_lod_leaf_view(model);
+            // The decoded opacity is a new tensor; the renderer only reads Vulkan-external storage.
+            if (view->opacity_raw().data_ptr() != model.opacity_raw().data_ptr()) {
+                if (const auto allocator = makeViewerSplatTensorAllocator()) {
+                    auto opacity = allocator(view->opacity_raw().shape(), rows,
+                                             lfs::core::DataType::Float32, "SplatData.opacity");
+                    opacity.copy_from(view->opacity_raw());
+                    view->opacity_raw() = std::move(opacity);
+                }
+            }
+            lod_leaf_view_ = std::move(view);
+            lod_leaf_view_source_ = &model;
+            lod_leaf_view_tree_ = model.lod_tree.get();
+            lod_leaf_view_rows_ = rows;
+            lod_leaf_view_deleted_version_ = deleted_version;
+        }
+        return lod_leaf_view_;
     }
 
     std::expected<lfs::core::Tensor, std::string> RenderingManager::renderExportImage(
@@ -974,7 +1023,7 @@ namespace lfs::vis {
 
     std::expected<void, std::string> RenderingManager::renderPreviewImageToPreviewSlotWithState(
         SceneManager* const scene_manager,
-        const lfs::core::SplatData& model,
+        const lfs::core::SplatData& source_model,
         SceneRenderState scene_state,
         const glm::mat3& rotation,
         const glm::vec3& position,
@@ -1000,10 +1049,12 @@ namespace lfs::vis {
         if (last_vulkan_context_->rendererTerminalState() != RendererTerminalState::Running) {
             return std::unexpected("renderer is unavailable after a GPU failure; restart LichtFeld Studio");
         }
+        const auto leaf_view = lodLeafRenderView(source_model);
+        const lfs::core::SplatData& model = leaf_view ? *leaf_view : source_model;
         if (!hasRenderableGaussians(&model)) {
             return std::unexpected("no renderable Gaussian model is available");
         }
-        if (!scene_state.combined_model) {
+        if (!scene_state.combined_model || scene_state.combined_model == &source_model) {
             scene_state.combined_model = &model;
         }
 

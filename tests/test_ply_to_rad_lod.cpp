@@ -819,3 +819,68 @@ TEST(RadLodLeaves, OutOfCoreModelRefusesToFlatten) {
                   {{&*partial, glm::mat4{1.0f}}}, lfs::core::Scene::MergeStorageMode::Clone),
               nullptr);
 }
+
+namespace {
+    std::size_t interior_node_count(const lfs::core::SplatLodTree& tree, const std::size_t rows) {
+        std::size_t interior = 0;
+        for (std::size_t i = 0; i < rows; ++i)
+            interior += tree.child_count_at(i) != 0;
+        return interior;
+    }
+
+    std::vector<float> sorted_visible_sigmoid_opacity(const lfs::core::SplatData& data) {
+        const auto opacity = data.get_opacity().cpu().to_vector();
+        const auto deleted = data.deleted().cpu().to(lfs::core::DataType::Float32).to_vector();
+        std::vector<float> visible;
+        for (std::size_t i = 0; i < opacity.size(); ++i)
+            if (deleted[i] == 0.0f)
+                visible.push_back(opacity[i]);
+        std::sort(visible.begin(), visible.end());
+        return visible;
+    }
+} // namespace
+
+// Catches flat rendering of an LOD model drawing its interior nodes or reading LOD-encoded linear
+// opacity as logits (the glow and blur of RAD files in multi-model scenes and offscreen renders).
+TEST(RadLodLeaves, LeafViewHidesInteriorNodesAndDecodesOpacity) {
+    const auto& f = kerstbol_rad();
+    ASSERT_TRUE(f.error.empty()) << f.error;
+    const auto& rad = *f.rad;
+    const auto rows = static_cast<std::size_t>(rad.size());
+
+    const auto view = lfs::core::make_lod_leaf_view(rad);
+    ASSERT_NE(view, nullptr);
+    EXPECT_EQ(view->lod_tree, nullptr);
+    ASSERT_EQ(static_cast<std::size_t>(view->size()), rows);
+    EXPECT_EQ(view->means_raw().data_ptr(), rad.means_raw().data_ptr());
+    ASSERT_TRUE(view->has_deleted_mask());
+    EXPECT_EQ(view->deleted_count(), interior_node_count(*rad.lod_tree, rows));
+    EXPECT_EQ(static_cast<std::size_t>(view->visible_count()), f.source_count);
+    EXPECT_LT(max_sorted_diff(sorted_visible_sigmoid_opacity(*view), f.source_opacity_sorted), kOpacityTolerance);
+}
+
+// Catches the multi-model render cache concatenating an LOD model's tree nodes as plain splats.
+TEST(RadLodLeaves, CombinedRenderModelShowsOnlyTheLeavesOfAnLodModel) {
+    const auto& f = kerstbol_rad();
+    ASSERT_TRUE(f.error.empty()) << f.error;
+    auto ply = lfs::io::load_ply(std::filesystem::path(TEST_DATA_DIR) / "kerstbol-isolated-rotated_137502.ply");
+    ASSERT_TRUE(ply.has_value()) << lfs::format_for_developer(ply.error());
+    auto rad = std::make_unique<lfs::core::SplatData>(load_rad_on_cuda(f.rad_path));
+    const auto rad_rows = static_cast<std::size_t>(rad->size());
+    const auto interior = interior_node_count(*rad->lod_tree, rad_rows);
+
+    lfs::core::Scene scene;
+    scene.addSplat("rad", std::move(rad));
+    scene.addSplat("ply", std::make_unique<lfs::core::SplatData>(std::move(ply->value)));
+    const auto* combined = scene.getCombinedModel();
+    ASSERT_NE(combined, nullptr);
+    ASSERT_EQ(static_cast<std::size_t>(combined->size()), rad_rows + f.source_count);
+    ASSERT_TRUE(combined->has_deleted_mask());
+    const auto deleted = combined->deleted().cpu().to(lfs::core::DataType::Float32).to_vector();
+    std::size_t hidden_rad = 0;
+    std::size_t hidden_ply = 0;
+    for (std::size_t i = 0; i < deleted.size(); ++i)
+        (i < rad_rows ? hidden_rad : hidden_ply) += deleted[i] != 0.0f;
+    EXPECT_EQ(hidden_rad, interior);
+    EXPECT_EQ(hidden_ply, 0u);
+}
