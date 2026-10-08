@@ -15060,6 +15060,44 @@ contract["check_selection_submode_follows_native_mode"](lf)
         write_dataset_project_without_checkpoint(
             project_path, dataset_path);
 
+        {
+            auto document = lfs::test::licht::require_result_ptr(
+                lfs::io::project::ProjectDocument::open(project_path));
+            const auto uuid = lfs::core::generate_uuid_v4();
+            ASSERT_TRUE(document->edit_scene_graph().upsert_node(
+                lfs::io::project::SceneNodeRecord{
+                    .uuid = uuid,
+                    .type = "pointcloud",
+                    .name = "Points",
+                    .child_order = 1,
+                    .payload = lfs::io::project::PayloadBinding{
+                        .fourcc = "PCLD",
+                        .instance_uuid = uuid,
+                        .source_kind = "ply"},
+                }));
+            ASSERT_TRUE(document->set_point_cloud(uuid, lfs::io::project::PointCloudPayload(
+                                                            lfs::test::licht::make_point_cloud(2))));
+            ASSERT_TRUE(document->edit_project().upsert_embed_decision(
+                lfs::io::project::EmbedDecision{
+                    .uuid = uuid,
+                    .node_uuid = uuid,
+                    .payload_fourcc = "PCLD",
+                    .decision = "embedded",
+                    .reason = "dirty tracking fixture"}));
+            ASSERT_TRUE(document->edit_project().upsert_embedded_payload_provenance(
+                lfs::io::project::EmbeddedPayloadProvenance{
+                    .uuid = uuid,
+                    .node_uuid = uuid,
+                    .fourcc = "PCLD",
+                    .import_locator = {.preferred = "assets/points.ply", .base = lfs::io::project::LocatorBase::Project},
+                    .import_fingerprint = lfs::test::licht::fingerprint(42),
+                    .content_xxh3_128 = {}}));
+            auto save_options = lfs::test::licht::deterministic_document_save_options(0x76000022, 2, 3);
+            save_options.commit.snapshot_uuid = {};
+            const auto saved = document->save(project_path, save_options);
+            ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+        }
+
         auto options = projectOptions();
         VisualizerImpl viewer(options);
         ASSERT_TRUE(viewer.getParameterManager()
@@ -15091,6 +15129,51 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(
             viewer.getTrainer()->getParams().optimization.iterations,
             1234);
+
+        // The training panel repeats image-count scaling when a restored
+        // untrained session becomes Ready. This is not a parameter edit.
+        ASSERT_TRUE(viewer.projectGetInfo());
+        EXPECT_FALSE(viewer.projectGetInfo()->dirty);
+        viewer.getParameterManager()->autoScaleSteps(viewer.getScene().getActiveCameraCount());
+        EXPECT_FALSE(viewer.getParameterManager()->isDirty());
+        EXPECT_FALSE(viewer.projectGetInfo()->dirty);
+        EXPECT_FALSE(viewer.project_lifecycle_->hasDirtyProject());
+
+        const auto close_prompts = std::make_shared<size_t>(0);
+        lfs::core::events::cmd::ShowExitConfirmation::when(
+            [close_prompts](const auto&) { ++*close_prompts; });
+        const auto expect_dirty_and_reopen = [&] {
+            EXPECT_TRUE(viewer.projectGetInfo()->dirty);
+            EXPECT_TRUE(viewer.project_lifecycle_->hasDirtyProject());
+            EXPECT_FALSE(viewer.projectOpen(project_path, ProjectSwitchDisposition::RequireClean));
+            const auto prompts_before = *close_prompts;
+            viewer.getWindowManager()->requestClose();
+            EXPECT_FALSE(viewer.allowclose());
+            EXPECT_EQ(*close_prompts, prompts_before + 1);
+            viewer.getGuiManager()->dismissExitConfirmation();
+            viewer.project_lifecycle_->resetCloseSaveAttempt();
+            ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                const auto session = viewer.projectTrainingSessionState();
+                return session.hydrated && !session.restoring;
+            }));
+            viewer.getParameterManager()->autoScaleSteps(viewer.getScene().getActiveCameraCount());
+            EXPECT_FALSE(viewer.projectGetInfo()->dirty);
+        };
+
+        viewer.getScene().addGroup("Scene edit");
+        expect_dirty_and_reopen();
+        viewer.getParameterManager()->modifyActiveParams([](auto& params) { ++params.iterations; });
+        expect_dirty_and_reopen();
+        viewer.getScene().setCameraTrainingEnabled("frame_0001.png", false);
+        expect_dirty_and_reopen();
+        auto* points = viewer.getScene().getMutableNode("Points");
+        ASSERT_NE(points, nullptr);
+        ASSERT_NE(points->point_cloud, nullptr);
+        points->point_cloud->means = points->point_cloud->means + 1.0f;
+        viewer.getScene().setPointCloudModified(true);
+        viewer.getScene().notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+        expect_dirty_and_reopen();
     }
 
     TEST_F(VisualizerImplResetTest,

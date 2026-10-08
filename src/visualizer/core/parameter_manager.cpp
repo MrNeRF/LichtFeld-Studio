@@ -30,15 +30,18 @@ namespace lfs::vis {
             });
         }
 
-        void apply_scaler_to_params(lfs::core::param::OptimizationParameters& p, const float new_scaler) {
+        bool apply_scaler_to_params(lfs::core::param::OptimizationParameters& p, const float new_scaler) {
             const bool enabled = p.steps_scaler > 0.0f;
             const float user_scaler = enabled ? p.steps_scaler / p.image_count_scaler : 1.0f;
             const float ratio = enabled ? new_scaler / p.image_count_scaler : new_scaler;
+            const float steps_scaler = user_scaler * new_scaler;
+            const bool changed = p.image_count_scaler != new_scaler || p.steps_scaler != steps_scaler;
             p.image_count_scaler = new_scaler;
-            p.steps_scaler = user_scaler * new_scaler;
+            p.steps_scaler = steps_scaler;
             if (std::abs(ratio - 1.0f) < 0.001f)
-                return;
+                return changed;
             p.scale_steps(ratio);
+            return true;
         }
     } // namespace
 
@@ -434,15 +437,19 @@ namespace lfs::vis {
                                      : static_cast<float>(image_count) / static_cast<float>(BASE_IMAGE_COUNT);
 
         std::lock_guard lock(params_mutex_);
+        bool changed = false;
         for (auto* params : {&mcmc_current_, &mrnf_current_, &igs_current_}) {
             if (cli_step_locked_strategy_ &&
                 lfs::core::param::canonical_strategy_name(params->strategy) == *cli_step_locked_strategy_) {
                 LOG_INFO("Auto-scale skipped for {}: step values set on the command line", *cli_step_locked_strategy_);
                 continue;
             }
-            apply_scaler_to_params(*params, new_scaler);
+            changed |= apply_scaler_to_params(*params, new_scaler);
         }
-        markDirty();
+        // The panel reapplies image scaling when a restored session becomes Ready.
+        // Preserve the clean baseline when all parameter values already match.
+        if (changed)
+            markDirty();
         LOG_INFO("Auto-scaled steps for {} images: scaler={:.2f}", image_count, new_scaler);
     }
 

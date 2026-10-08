@@ -12,6 +12,7 @@
 #include "training/training_manager.hpp"
 
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -711,6 +712,72 @@ namespace {
             .width = 1919,
             .height = 1080};
         EXPECT_NE(params.validate().find("render dimensions"), std::string::npos);
+    }
+
+    TEST(ParameterManagerTest, ImageScalingMatchesPreviousValuesAcrossStrategies) {
+        const auto reference = [](auto& params, const size_t count) {
+            const float scaler = count <= 300 ? 1.0f : static_cast<float>(count) / 300.0f;
+            const bool enabled = params.steps_scaler > 0.0f;
+            const float user_scaler = enabled ? params.steps_scaler / params.image_count_scaler : 1.0f;
+            const float ratio = enabled ? scaler / params.image_count_scaler : scaler;
+            params.image_count_scaler = scaler;
+            params.steps_scaler = user_scaler * scaler;
+            if (std::abs(ratio - 1.0f) >= 0.001f)
+                params.scale_steps(ratio);
+        };
+        for (const auto strategy : {"mcmc", "mrnf", "igs+"}) {
+            for (const float factor : {-1.0f, 0.0f, 0.5f, 1.0f, 1.1f, 2.0f}) {
+                for (const size_t count : {185u, 301u, 600u, 901u}) {
+                    SCOPED_TRACE(std::format("{} {} {}", strategy, factor, count));
+                    lfs::vis::ParameterManager manager;
+                    ASSERT_TRUE(manager.ensureLoaded());
+                    manager.setActiveStrategy(strategy);
+                    auto& params = manager.getActiveParams();
+                    params.steps_scaler = factor;
+                    params.image_count_scaler = 2.0f;
+                    auto expected = params;
+                    for (const size_t next : {count, count, size_t{300}, count}) {
+                        reference(expected, next);
+                        manager.autoScaleSteps(next);
+                        EXPECT_EQ(params.to_json(), expected.to_json());
+                        EXPECT_EQ(params.image_count_scaler, expected.image_count_scaler);
+                        EXPECT_EQ(params.steps_scaler, expected.steps_scaler);
+                    }
+                }
+            }
+        }
+    }
+
+    TEST(ParameterManagerTest, RestoredImageScalingKeepsCleanBaselineAndRealChangesDirty) {
+        for (const size_t camera_count : {185u, 300u, 600u, 901u}) {
+            SCOPED_TRACE(camera_count);
+            lfs::vis::ParameterManager source;
+            ASSERT_TRUE(source.ensureLoaded());
+            source.autoScaleSteps(camera_count);
+            const auto snapshot = source.capturePendingProjectState();
+            ASSERT_TRUE(snapshot);
+            lfs::vis::ParameterManager restored;
+            ASSERT_TRUE(restored.ensureLoaded());
+            ASSERT_TRUE(restored.restorePendingProjectState(*snapshot));
+            const auto serial = restored.dirtySerial();
+            const auto before = restored.getActiveParams().to_json();
+            restored.autoScaleSteps(camera_count);
+            EXPECT_EQ(restored.getActiveParams().to_json(), before);
+            EXPECT_FALSE(restored.isDirty());
+            EXPECT_EQ(restored.dirtySerial(), serial);
+
+            restored.modifyActiveParams([](auto& params) { ++params.iterations; });
+            EXPECT_TRUE(restored.isDirty());
+            const auto edited_serial = restored.dirtySerial();
+            restored.autoScaleSteps(camera_count);
+            EXPECT_TRUE(restored.isDirty());
+            EXPECT_EQ(restored.dirtySerial(), edited_serial);
+
+            ASSERT_TRUE(restored.restorePendingProjectState(*snapshot));
+            restored.autoScaleSteps(camera_count + 600);
+            EXPECT_TRUE(restored.isDirty());
+            EXPECT_GT(restored.dirtySerial(), edited_serial);
+        }
     }
 
     // Catches auto-scale replacing the user's factor instead of multiplying it.

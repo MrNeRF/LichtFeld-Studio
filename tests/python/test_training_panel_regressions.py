@@ -1873,3 +1873,47 @@ def test_show_save_pc_dialog_message_depends_on_project_binding(
         "training.save_pc.btn_start_without",
         "training.conflict.btn_cancel",
     ]
+
+
+@pytest.mark.parametrize(
+    "prop,initial,changed,method,args",
+    [
+        ("strategy", "mrnf", "mcmc", "_set_strategy", ()),
+        ("sh_degree", 3, 2, "_set_int_param", ("sh_degree",)),
+        ("depth_loss_mode", "ssi", "ssi-disparity", "_set_depth_loss_mode", ()),
+        ("lambda_dssim", 0.25, 0.5, "_set_slider_prop", ("lambda_dssim",)),
+    ],
+)
+def test_restored_control_echo_is_not_an_edit(
+    training_panel_module, monkeypatch, prop, initial, changed, method, args
+):
+    class Params:
+        def __init__(self):
+            object.__setattr__(self, "writes", [])
+            object.__setattr__(self, "gut", False)
+            object.__setattr__(self, prop, initial)
+
+        def __setattr__(self, name, value):
+            self.writes.append((name, value))
+            object.__setattr__(self, name, value)
+
+        def has_params(self):
+            return True
+
+        def set(self, name, value):
+            setattr(self, name, value)
+
+        def set_strategy(self, value):
+            self.strategy = value
+
+    params = Params()
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
+    panel = training_panel_module.TrainingPanel()
+    setter = getattr(panel, method)
+    setter(*args, initial)
+    assert params.writes == []
+    setter(*args, changed)
+    assert params.writes == [(prop, changed)]
+    assert getattr(params, prop) == changed
+    setter(*args, changed)
+    assert params.writes == [(prop, changed)]
