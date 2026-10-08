@@ -1547,3 +1547,135 @@ def test_retained_chart_ignores_selection_shortcuts_while_computing(histogram_pa
     panel._invert_current_mode_selection = lambda: pytest.fail("Cannot invert stale histogram data")
     panel._on_keydown(_KeyEventStub(KI_A, ctrl=True))
     panel._on_keydown(_KeyEventStub(KI_I, ctrl=True))
+
+
+@pytest.fixture
+def pending_range_panel(histogram_panel_module, lf, numpy, monkeypatch):
+    """Use real snapshot computation, but deliver it after input events deterministically."""
+    module = histogram_panel_module
+    panel = module.HistogramPanel()
+    panel._handle = _UpdateHandleStub()
+    panel._metric_id = "opacity"
+    panel._compare_metric_id = "scale_x"
+    values = numpy.array([0.1, 0.2, 0.4, 0.6, 0.8, 0.9], dtype=numpy.float32)
+    opacity = lf.Tensor.from_numpy(values)
+    scaling = lf.Tensor.from_numpy(numpy.repeat(values[:, None], 3, axis=1))
+    model = SimpleNamespace(num_points=len(values), get_opacity=lambda: opacity, get_scaling=lambda: scaling)
+    scene = SimpleNamespace(is_valid=lambda: True, combined_model=lambda: model, get_nodes=lambda: [])
+    monkeypatch.setattr(module.lf, "get_scene", lambda: scene)
+    monkeypatch.setattr(panel, "_scene_data_generation_value", lambda: 1)
+    monkeypatch.setattr(panel, "_scene_node_selection_signature", lambda: ())
+    monkeypatch.setattr(panel, "_clear_all_marks", lambda **_kwargs: None)
+    monkeypatch.setattr(panel, "_sync_panel_selection_from_scene", lambda: None)
+    queued = []
+    scheduled = []
+    panel._ui_scheduler = scheduled.append
+
+    def queue(scene, model, cache_key, scope_ids, **_kwargs):
+        panel._cancel_histogram_compute()
+        result = panel._compute_histogram_result(
+            scene, model, panel._metric_id, panel._histogram_bin_count,
+            panel._compare_metric_id, panel._compare_x_bin_count, panel._compare_y_bin_count,
+            (panel._custom_range_min_value, panel._custom_range_max_value),
+            (panel._compare_y_custom_range_min_value, panel._compare_y_custom_range_max_value),
+            scope_ids,
+        )
+        assert result["kind"] == "ok"
+        queued.append((panel._histogram_compute_token, cache_key, result))
+
+    monkeypatch.setattr(panel, "_queue_histogram_compute", queue)
+
+    def deliver():
+        panel._schedule_histogram_result(*queued.pop(0))
+        scheduled.pop(0)()
+
+    panel._refresh()
+    deliver()
+    panel._refresh_range_input_strings()
+    panel._refresh_compare_y_input_strings()
+    return panel, deliver
+
+
+@pytest.mark.parametrize("axis", ["primary", "compare_y"])
+@pytest.mark.parametrize("side,commits", [("min", ["0.35", "0.15"]), ("max", ["0.65", "0.85"])])
+@pytest.mark.parametrize("blur_before_result", [False, True])
+def test_range_commit_updates_field_after_delayed_result(pending_range_panel, axis, side, commits, blur_before_result):
+    panel, deliver = pending_range_panel
+    compare = axis == "compare_y"
+    setter = getattr(panel, f"_set_compare_y_range_{side}" if compare else f"_set_custom_range_{side}")
+    change = panel._on_compare_y_range_input_change if compare else panel._on_range_input_change
+    blur = panel._on_compare_y_range_input_blur if compare else panel._on_range_input_blur
+    string_attr = f"_compare_y_custom_range_{side}_str" if compare else f"_custom_range_{side}_str"
+    bound_attr = f"_compare_y_{side}" if compare else f"_primary_histogram_{side}"
+    constraint_attr = f"_compare_y_custom_range_{side}_value" if compare else f"_custom_range_{side}_value"
+    for text in commits:
+        old_bound = getattr(panel, bound_attr)
+        setter(text)
+        change(SimpleNamespace(get_bool_parameter=lambda name, default: False))
+        assert getattr(panel, bound_attr) == old_bound
+        change(SimpleNamespace(get_bool_parameter=lambda name, default: name == "linebreak"))
+        # RmlUi sends Return/change then blur before the worker result arrives.
+        if blur_before_result:
+            blur(None)
+        assert getattr(panel, constraint_attr) == float(text)
+        deliver()
+        assert getattr(panel, bound_attr) != old_bound
+        assert getattr(panel, string_attr) == panel._format_range_input(getattr(panel, bound_attr))
+        assert getattr(panel, constraint_attr) == float(text)  # Snapping only changes the display.
+
+
+@pytest.mark.parametrize("axis", ["primary", "compare_y"])
+@pytest.mark.parametrize("side", ["min", "max"])
+def test_pending_result_does_not_replace_uncommitted_range_text(pending_range_panel, axis, side):
+    panel, deliver = pending_range_panel
+    panel._histogram_cache.clear()
+    panel._refresh()
+    compare = axis == "compare_y"
+    setter = getattr(panel, f"_set_compare_y_range_{side}" if compare else f"_set_custom_range_{side}")
+    string_attr = f"_compare_y_custom_range_{side}_str" if compare else f"_custom_range_{side}_str"
+    setter("0.")
+    deliver()
+    assert getattr(panel, string_attr) == "0."
+
+
+@pytest.mark.parametrize("axis", ["primary", "compare_y"])
+@pytest.mark.parametrize("text", ["invalid", "nan", "0.95"])
+def test_invalid_range_commit_preserves_bounds(pending_range_panel, axis, text):
+    panel, _deliver = pending_range_panel
+    compare = axis == "compare_y"
+    prefix = "_compare_y_custom_range" if compare else "_custom_range"
+    old_strings = tuple(getattr(panel, f"{prefix}_{side}_str") for side in ("min", "max"))
+    # Primary opacity has natural bounds [0, 1]; compare uses the sample extent.
+    if not compare:
+        panel._custom_range_min_value = 0.1
+        panel._custom_range_max_value = 0.9
+    old_constraints = tuple(getattr(panel, f"{prefix}_{side}_value") for side in ("min", "max"))
+    setter = panel._set_compare_y_range_min if compare else panel._set_custom_range_min
+    commit = panel._commit_compare_y_range if compare else panel._commit_custom_range
+    setter(text)
+    commit()
+    assert tuple(getattr(panel, f"{prefix}_{side}_str") for side in ("min", "max")) == old_strings
+    assert tuple(getattr(panel, f"{prefix}_{side}_value") for side in ("min", "max")) == old_constraints
+    assert not panel._computing
+
+
+@pytest.mark.parametrize("axis", ["primary", "compare_y"])
+def test_range_reset_and_cached_commit_update_fields(pending_range_panel, axis):
+    panel, deliver = pending_range_panel
+    compare = axis == "compare_y"
+    prefix = "_compare_y_custom_range" if compare else "_custom_range"
+    setter = panel._set_compare_y_range_min if compare else panel._set_custom_range_min
+    commit = panel._commit_compare_y_range if compare else panel._commit_custom_range
+    reset = panel._on_reset_compare_range if compare else panel._on_reset_range
+    setter("0.35")
+    commit()
+    deliver()
+    setter("0.")  # Reset intentionally discards pending text.
+    reset(None, None, None)
+    assert getattr(panel, f"{prefix}_min_value") is None
+    assert getattr(panel, f"{prefix}_min_str") == "0.1"
+    setter("0.35")
+    commit()  # The same range is now in the result cache.
+    assert not panel._computing
+    assert getattr(panel, f"{prefix}_min_str") == "0.4"
+    assert getattr(panel, f"{prefix}_min_value") == 0.35
