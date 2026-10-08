@@ -36,6 +36,9 @@ TEST(FlipMetric, MatchesTheReferenceImplementationOnRealImages) {
     if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend()))
         GTEST_SKIP() << "Selected GPU backend not available";
     const auto dir = std::filesystem::path(TEST_DATA_DIR) / "bicycle" / "images_8";
+    if (!std::filesystem::is_regular_file(dir / "_DSC8679.JPG") ||
+        !std::filesystem::is_regular_file(dir / "_DSC8680.JPG"))
+        GTEST_SKIP() << "bicycle images_8 reference pair is absent: " << dir;
     const auto reference = load_chw(dir / "_DSC8679.JPG");
     const auto test = load_chw(dir / "_DSC8680.JPG");
     const auto error = lfs::training::flip_error_map(reference, test);
@@ -56,6 +59,9 @@ TEST(FlipMetric, NativeBackendsMatchCudaPerPixel) {
     if (!lfs::core::gpu_backend_available(GpuBackend::CUDA))
         GTEST_SKIP() << "CUDA reference unavailable";
     const auto dir = std::filesystem::path(TEST_DATA_DIR) / "bicycle" / "images_8";
+    if (!std::filesystem::is_regular_file(dir / "_DSC8679.JPG") ||
+        !std::filesystem::is_regular_file(dir / "_DSC8680.JPG"))
+        GTEST_SKIP() << "bicycle images_8 reference pair is absent: " << dir;
     const auto capture = [&](GpuBackend backend) {
         const lfs::test::DefaultGpuBackendForTesting scope(backend);
         EXPECT_TRUE(scope.switched());
