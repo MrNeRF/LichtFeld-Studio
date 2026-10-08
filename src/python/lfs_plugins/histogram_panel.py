@@ -3612,7 +3612,7 @@ class HistogramPanel(Panel):
         self._marked_bin_start = bin_index
         self._marked_bin_end = bin_index
         self._sync_marked_range(apply_scene=False, preview_scene=True)
-        event.stop_propagation()
+        # RmlUi only detects double-clicks after a propagating mousedown.
 
     @staticmethod
     def _wheel_zoom_magnitude(delta: float) -> float:
@@ -3670,7 +3670,7 @@ class HistogramPanel(Panel):
         self._compare_mark_start = (x_bin, y_bin)
         self._compare_mark_end = (x_bin, y_bin)
         self._sync_compare_mark(apply_scene=False, preview_scene=True)
-        event.stop_propagation()
+        # RmlUi only detects double-clicks after a propagating mousedown.
 
     def _on_compare_chart_mousescroll(self, event):
         if not self._show_compare_chart or not self._event_matches_histogram_zoom_binding(event):

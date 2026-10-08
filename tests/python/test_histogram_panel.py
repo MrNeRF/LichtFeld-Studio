@@ -1550,6 +1550,63 @@ def test_refresh_view_only_falls_back_when_cache_empty(histogram_panel_module, m
     assert rebind == []   # no cache -> falls through to the full (here: no-scene) path
 
 
+@pytest.mark.parametrize("compare", [False, True])
+@pytest.mark.parametrize("mode", ["replace", "add", "subtract"])
+def test_chart_mousedown_allows_native_doubleclick(histogram_panel_module, monkeypatch, compare, mode):
+    panel = histogram_panel_module.HistogramPanel()
+    focused, previews, refreshed = [], [], []
+    chart = SimpleNamespace(focus=lambda: focused.append(True))
+    panel._chart_el = panel._compare_chart_el = chart
+    panel._show_chart = panel._show_compare_chart = True
+    panel._hist_edges = [0.0, 1.0]
+    panel._custom_range_min_value, panel._custom_range_max_value = 0.2, 0.8
+    panel._compare_y_custom_range_min_value, panel._compare_y_custom_range_max_value = 0.3, 0.7
+    mask, bins = object(), {2}
+    monkeypatch.setattr(panel, "_current_selection_mask_for_source", lambda source: mask)
+    monkeypatch.setattr(panel, "_selected_histogram_bins_from_mask", lambda value: bins)
+    monkeypatch.setattr(panel, "_selected_compare_cells_from_mask", lambda value: bins)
+    monkeypatch.setattr(panel, "_bin_index_for_mouse_x", lambda x: 2)
+    monkeypatch.setattr(panel, "_compare_bin_indices_for_mouse", lambda x, y: (2, 3))
+    monkeypatch.setattr(panel, "_clear_compare_mark", lambda **kwargs: None)
+    monkeypatch.setattr(panel, "_clear_histogram_mark", lambda **kwargs: None)
+    monkeypatch.setattr(panel, "_sync_marked_range", lambda **kwargs: previews.append(kwargs))
+    monkeypatch.setattr(panel, "_sync_compare_mark", lambda **kwargs: previews.append(kwargs))
+    monkeypatch.setattr(panel, "_refresh_range_preserving_mark", lambda: refreshed.append(True))
+    down = panel._on_compare_chart_mousedown if compare else panel._on_chart_mousedown
+    doubleclick = panel._on_compare_chart_dblclick if compare else panel._on_chart_dblclick
+
+    event = _MouseEventStub(mouse_x=20.0, mouse_y=30.0, shift=mode == "add", ctrl=mode == "subtract")
+    down(event)
+
+    assert focused == [True]
+    assert previews == [{"apply_scene": False, "preview_scene": True}]
+    if compare:
+        assert panel._dragging_compare_mark
+        assert panel._compare_mark_start == panel._compare_mark_end == (2, 3)
+        assert panel._drag_compare_selection_mode == mode
+        assert panel._drag_compare_selection_base_mask is (None if mode == "replace" else mask)
+    else:
+        assert panel._dragging_mark
+        assert panel._marked_bin_start == panel._marked_bin_end == 2
+        assert panel._drag_selection_mode == mode
+        assert panel._drag_selection_base_mask is mask
+
+    # RmlUi Context::ProcessMouseButtonDown only detects dblclick when the
+    # mousedown dispatch propagates. Stopping it prevents the callback entirely.
+    assert not event.stopped
+    doubleclick(event)
+    assert panel._custom_range_min_value is None
+    assert panel._custom_range_max_value is None
+    if compare:
+        assert panel._compare_y_custom_range_min_value is None
+        assert panel._compare_y_custom_range_max_value is None
+    else:
+        assert panel._compare_y_custom_range_min_value == 0.3
+        assert panel._compare_y_custom_range_max_value == 0.7
+    assert refreshed == [True]
+    assert event.stopped
+
+
 def test_chart_dblclick_fits_and_clears_custom_range(histogram_panel_module, monkeypatch):
     panel = histogram_panel_module.HistogramPanel()
     panel._handle = _UpdateHandleStub()
