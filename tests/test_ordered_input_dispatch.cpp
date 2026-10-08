@@ -4,6 +4,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
+#include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "gui/bounds_gizmo.hpp"
 #include "gui/editor/python_editor.hpp"
@@ -2127,10 +2128,15 @@ namespace lfs::vis {
     protected:
         bool keepSceneHandlers() const override { return true; }
 
-        void checkMutation(const bool cached, const bool add_group, const bool from_menu = false) {
+        void checkMutation(const bool cached, const bool add_group, const bool from_menu = false,
+                           const bool point_cloud = false) {
             auto& scene_manager = *viewer_->getSceneManager();
             auto& scene = scene_manager.getScene();
-            const auto original = scene.addGroup("Original");
+            const auto original = point_cloud
+                                      ? scene.addPointCloud("Original", std::make_shared<core::PointCloud>(
+                                                                            core::Tensor::zeros({2, 3}, core::Device::CPU),
+                                                                            core::Tensor::ones({2, 3}, core::Device::CPU)))
+                                      : scene.addGroup("Original");
             gui::NativeScenePanel panel(&manager());
             gui::PanelDrawContext ctx;
             ctx.scene = &scene;
@@ -2227,6 +2233,12 @@ namespace lfs::vis {
     }
     TEST_F(ScenePanelRefreshTest, ContextMenuDuplicateRefreshesCachedTree) {
         checkMutation(true, false, true);
+    }
+    TEST_F(ScenePanelRefreshTest, ContextMenuPointCloudDuplicateRefreshesLiveTreeThenStaysIdle) {
+        checkMutation(false, false, true, true);
+    }
+    TEST_F(ScenePanelRefreshTest, ContextMenuPointCloudDuplicateRefreshesCachedTreeThenStaysIdle) {
+        checkMutation(true, false, true, true);
     }
     TEST_F(ScenePanelRefreshTest, ContextMenuAddGroupRefreshesCachedTree) {
         checkMutation(true, true, true);

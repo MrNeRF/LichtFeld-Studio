@@ -4740,6 +4740,16 @@ namespace lfs::core {
                         }
                     }
                 }
+            } else if (src_type == NodeType::POINTCLOUD && src->point_cloud) {
+                auto cloned = std::make_shared<PointCloud>(*src->point_cloud);
+                for (auto member : {&PointCloud::means, &PointCloud::colors, &PointCloud::normals,
+                                    &PointCloud::sh0, &PointCloud::shN, &PointCloud::opacity,
+                                    &PointCloud::scaling, &PointCloud::rotation}) {
+                    auto& tensor = cloned.get()->*member;
+                    if (tensor.is_valid())
+                        tensor = tensor.clone();
+                }
+                new_id = addPointCloud(new_name, std::move(cloned), parent_id);
             } else if (src_type == NodeType::MESH) {
                 const auto* src_for_mesh = getNodeById(src_id);
                 if (src_for_mesh && src_for_mesh->mesh) {

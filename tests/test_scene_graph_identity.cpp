@@ -6,6 +6,7 @@
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/path_utils.hpp"
+#include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
@@ -124,6 +125,86 @@ protected:
     std::unique_ptr<lfs::vis::SceneManager> scene_manager_;
     std::unique_ptr<lfs::vis::RenderingManager> rendering_manager_;
 };
+
+TEST_F(SceneGraphIdentityTest, DuplicatePointCloudCommandDeepCopiesPayloadAndSupportsUndo) {
+    auto& scene = scene_manager_->getScene();
+    const auto parent = scene.addGroup("parent");
+    auto cloud = std::make_shared<lfs::core::PointCloud>();
+    cloud->means = Tensor::from_vector({1.f, 2.f, 3.f, 4.f, 5.f, 6.f}, {2, 3}, Device::CPU);
+    cloud->colors = Tensor::full({2, 3}, 0.5f, Device::CPU);
+    cloud->normals = Tensor::full({2, 3}, 0.25f, Device::CPU);
+    cloud->sh0 = Tensor::full({2, 3, 1}, 0.125f, Device::CPU);
+    cloud->shN = Tensor::full({2, 3, 3}, 0.0625f, Device::CPU);
+    cloud->opacity = Tensor::full({2, 1}, 0.75f, Device::CPU);
+    cloud->scaling = Tensor::full({2, 3}, 0.375f, Device::CPU);
+    cloud->rotation = Tensor::full({2, 4}, 0.875f, Device::CPU);
+    cloud->attribute_names = {"custom"};
+    cloud->emit_zero_normals = true;
+    const auto source_id = scene.addPointCloud("cloud", cloud, parent);
+    auto* source = scene.getNodeById(source_id);
+    ASSERT_NE(source, nullptr);
+    glm::mat4 transform{1.f};
+    transform[3] = glm::vec4{2.f, -3.f, 4.f, 1.f};
+    scene.setNodeTransform(source_id, transform);
+    source->visible = false;
+    const auto source_uuid = source->uuid;
+
+    lfs::core::events::cmd::DuplicateNodeById{.node_id = source_id}.emit();
+    const auto* copy = scene.getNode("cloud_copy");
+    ASSERT_NE(copy, nullptr);
+    EXPECT_NE(copy->uuid, source_uuid);
+    EXPECT_EQ(copy->type, lfs::core::NodeType::POINTCLOUD);
+    EXPECT_EQ(copy->parent_id, parent);
+    EXPECT_EQ(scene.getNodeTransform(copy->id), transform);
+    EXPECT_FALSE(static_cast<bool>(copy->visible));
+    ASSERT_NE(copy->point_cloud, nullptr);
+    EXPECT_NE(copy->point_cloud.get(), cloud.get());
+    EXPECT_EQ(copy->point_cloud->attribute_names, cloud->attribute_names);
+    EXPECT_EQ(copy->point_cloud->emit_zero_normals, cloud->emit_zero_normals);
+    for (auto member : {&lfs::core::PointCloud::means, &lfs::core::PointCloud::colors,
+                        &lfs::core::PointCloud::normals, &lfs::core::PointCloud::sh0,
+                        &lfs::core::PointCloud::shN, &lfs::core::PointCloud::opacity,
+                        &lfs::core::PointCloud::scaling, &lfs::core::PointCloud::rotation}) {
+        const auto& original = cloud.get()->*member;
+        const auto& duplicate = copy->point_cloud.get()->*member;
+        EXPECT_EQ(duplicate.to_vector(), original.to_vector());
+        EXPECT_NE(duplicate.data_ptr(), original.data_ptr());
+    }
+    const auto copy_uuid = copy->uuid;
+    lfs::vis::op::undoHistory().undo();
+    EXPECT_EQ(scene.getNode("cloud_copy"), nullptr);
+    ASSERT_NE(scene.getNode("cloud"), nullptr);
+    EXPECT_EQ(scene.getNode("cloud")->point_cloud->means.to_vector(), cloud->means.to_vector());
+    lfs::vis::op::undoHistory().redo();
+    copy = scene.getNode("cloud_copy");
+    ASSERT_NE(copy, nullptr);
+    EXPECT_EQ(copy->uuid, copy_uuid);
+    ASSERT_NE(copy->point_cloud, nullptr);
+    EXPECT_EQ(copy->point_cloud->means.to_vector(), cloud->means.to_vector());
+    EXPECT_EQ(copy->point_cloud->emit_zero_normals, cloud->emit_zero_normals);
+    EXPECT_EQ(copy->point_cloud->attribute_names, cloud->attribute_names);
+}
+
+TEST_F(SceneGraphIdentityTest, DuplicateBasicPointCloudPreservesAbsentAttributesAndUniqueNames) {
+    auto& scene = scene_manager_->getScene();
+    auto cloud = std::make_shared<lfs::core::PointCloud>(
+        Tensor::zeros({2, 3}, Device::CPU), Tensor::ones({2, 3}, Device::CPU));
+    const auto id = scene.addPointCloud("cloud", cloud);
+    ASSERT_EQ(scene_manager_->duplicateNodeTree(id), "cloud_copy");
+    ASSERT_EQ(scene_manager_->duplicateNodeTree(id), "cloud_copy_2");
+    const auto* copy = scene.getNode("cloud_copy");
+    ASSERT_NE(copy, nullptr);
+    ASSERT_NE(copy->point_cloud, nullptr);
+    EXPECT_FALSE(copy->point_cloud->normals.is_valid());
+    EXPECT_FALSE(copy->point_cloud->sh0.is_valid());
+    EXPECT_FALSE(copy->point_cloud->shN.is_valid());
+    EXPECT_FALSE(copy->point_cloud->opacity.is_valid());
+    EXPECT_FALSE(copy->point_cloud->scaling.is_valid());
+    EXPECT_FALSE(copy->point_cloud->rotation.is_valid());
+    scene.getNodeById(id)->locked = true;
+    EXPECT_TRUE(scene_manager_->duplicateNodeTree(id).empty());
+    EXPECT_EQ(scene.getNode("cloud_copy_3"), nullptr);
+}
 
 // Locks the removed node's real event name and recursive subtree deletion; the underlying
 // use-after-free requires a lifetime sanitizer to detect directly.

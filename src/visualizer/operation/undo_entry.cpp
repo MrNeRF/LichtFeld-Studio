@@ -708,6 +708,7 @@ namespace lfs::vis::op {
             cloned->means = src.means.is_valid() ? src.means.clone() : src.means;
             cloned->colors = src.colors.is_valid() ? src.colors.clone() : src.colors;
             cloned->normals = src.normals.is_valid() ? src.normals.clone() : src.normals;
+            cloned->emit_zero_normals = src.emit_zero_normals;
             cloned->sh0 = src.sh0.is_valid() ? src.sh0.clone() : src.sh0;
             cloned->shN = src.shN.is_valid() ? src.shN.clone() : src.shN;
             cloned->opacity = src.opacity.is_valid() ? src.opacity.clone() : src.opacity;
