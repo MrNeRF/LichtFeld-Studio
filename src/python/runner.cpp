@@ -1859,7 +1859,7 @@ _repl_out.close()
         const GilAcquire gil;
 
         static constexpr const char* FORMAT_CODE = R"(
-def _lfs_format_code(code):
+def _lfs_format_code(code, comment_preamble):
     import importlib
     import re
     import textwrap
@@ -1885,7 +1885,7 @@ def _lfs_format_code(code):
             return True
         if stripped[:1] in ('"', "'", '(', '[', '{'):
             return True
-        if re.match(r'[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*\\s*[:=([{.]', stripped):
+        if re.match(r'[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\s*[:=([{.]', stripped):
             return True
         return False
 
@@ -2022,7 +2022,8 @@ def _lfs_format_code(code):
 
     # Convert tabs to spaces consistently
     cleaned = '\n'.join(line.replace('\t', '    ') for line in lines)
-    cleaned, _ = _comment_leading_preamble(cleaned)
+    if comment_preamble:
+        cleaned, _ = _comment_leading_preamble(cleaned)
 
     try:
         return (black.format_str(cleaned, mode=black.Mode()), None)
@@ -2067,7 +2068,9 @@ def _lfs_format_code(code):
             result.error = consume_python_error_detailed();
             return result;
         }
-        PyObject* const py_result = PyObject_CallFunctionObjArgs(format_func, py_code, nullptr);
+        // Strict input already compiled, so a leading line is code even when the preamble heuristic misses it.
+        PyObject* const comment_preamble = mode == PythonFormatMode::Cleanup ? Py_True : Py_False;
+        PyObject* const py_result = PyObject_CallFunctionObjArgs(format_func, py_code, comment_preamble, nullptr);
         Py_DECREF(py_code);
 
         if (!py_result) {

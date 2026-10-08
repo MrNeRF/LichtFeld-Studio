@@ -840,6 +840,27 @@ TEST_F(PythonIntegrationTest, CleanPythonCodeRepairsUnindentedFunctionBlock) {
     EXPECT_NE(result.code.find("    return safe or \"splat\""), std::string::npos);
 }
 
+// Catches Format commenting out valid leading statements that the preamble heuristic does not recognize.
+TEST_F(PythonIntegrationTest, FormatPythonCodeKeepsLeadingStatements) {
+    const auto result = lfs::python::format_python_code("x=[1,2 ,3];print( 'a' ,x)\nfirst, second = 1, 2\n");
+
+    if (formatterUnavailable(result)) {
+        GTEST_SKIP() << result.error;
+    }
+    ASSERT_TRUE(result.success) << result.error;
+    EXPECT_EQ(result.code, "x = [1, 2, 3]\nprint(\"a\", x)\nfirst, second = 1, 2\n");
+}
+
+TEST_F(PythonIntegrationTest, CleanPythonCodeCommentsProsePreambleButKeepsAssignment) {
+    const auto result = lfs::python::clean_python_code("Here is the script:\nscene = lf.get_scene()\n");
+
+    if (formatterUnavailable(result)) {
+        GTEST_SKIP() << result.error;
+    }
+    ASSERT_TRUE(result.success) << result.error;
+    EXPECT_EQ(result.code, "# Here is the script:\nscene = lf.get_scene()\n");
+}
+
 TEST_F(PythonIntegrationTest, FormatPythonCodeReportsSyntaxErrorWithoutUnexpectedResultFallback) {
     const auto result = lfs::python::format_python_code("import os\nif True print('x')\n");
 
