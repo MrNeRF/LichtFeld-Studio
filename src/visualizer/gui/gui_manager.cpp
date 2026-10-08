@@ -7260,14 +7260,7 @@ namespace lfs::vis::gui {
             }
             if (rml_modal_overlay_->hasPendingRenderWork()) {
                 LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render.modal_overlay", 0.25);
-                rml_modal_overlay_->render(panel_input.screen_w,
-                                           panel_input.screen_h,
-                                           panel_input.screen_x,
-                                           panel_input.screen_y,
-                                           viewport_layout_.pos.x,
-                                           viewport_layout_.pos.y,
-                                           viewport_layout_.size.x,
-                                           viewport_layout_.size.y);
+                rml_modal_overlay_->render(panel_input.screen_w, panel_input.screen_h);
             }
         }
 
