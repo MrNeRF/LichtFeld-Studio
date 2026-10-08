@@ -828,7 +828,7 @@ namespace lfs::core::image_codecs {
 #ifndef _WIN32
             if (hdr && target.sample_type == SampleType::Float32) {
                 const int descriptor = open(path.c_str(), O_RDONLY);
-                struct stat file_status {};
+                struct stat file_status{};
                 if (descriptor >= 0 && fstat(descriptor, &file_status) == 0 && file_status.st_size > 0 &&
                     file_status.st_size <= std::numeric_limits<int>::max()) {
                     const auto size = static_cast<std::size_t>(file_status.st_size);
@@ -1556,4 +1556,30 @@ namespace lfs::core::image_codecs {
         return success;
     }
 
+    bool write_image_u8(const std::filesystem::path& path, const std::uint8_t* data,
+                        const int width, const int height, const int channels, const int jpeg_quality,
+                        const std::optional<std::string>& comment, std::string& error, const bool jpeg_full_chroma) {
+        auto extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return std::tolower(c); });
+        if (extension == ".png")
+            return write_png(path, data, width, height, channels, 8, 6, comment, error);
+        if (extension == ".tif" || extension == ".tiff")
+            return write_tiff(path, data, width, height, channels, error);
+        if (extension == ".jpg" || extension == ".jpeg") {
+            if (channels != 4)
+                return write_jpeg(path, data, width, height, channels, jpeg_quality, comment, error, jpeg_full_chroma);
+            if (!data || width <= 0 || height <= 0 || width > JPEG_MAX_DIMENSION || height > JPEG_MAX_DIMENSION ||
+                static_cast<std::size_t>(width) > std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(height) / 4) {
+                error = "Unsupported JPEG layout";
+                return false;
+            }
+            const auto pixels = static_cast<std::size_t>(width) * height;
+            std::vector<std::uint8_t> rgb(pixels * 3);
+            for (std::size_t pixel = 0; pixel < pixels; ++pixel)
+                std::copy_n(data + pixel * 4, 3, rgb.data() + pixel * 3);
+            return write_jpeg(path, rgb.data(), width, height, 3, jpeg_quality, comment, error, jpeg_full_chroma);
+        }
+        error = "Unsupported image extension: " + extension;
+        return false;
+    }
 } // namespace lfs::core::image_codecs

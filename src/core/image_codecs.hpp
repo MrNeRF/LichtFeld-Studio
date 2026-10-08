@@ -76,4 +76,12 @@ namespace lfs::core::image_codecs {
     LFS_IMAGE_CODECS_API bool write_tiff(const std::filesystem::path& path, const std::uint8_t* data,
                                          int width, int height, int channels, std::string& error);
 
+    // Packed display bytes: preserve samples, PNG/TIFF alpha and legacy codec
+    // defaults. JPEG drops RGBA alpha; gray-alpha JPEG is unsupported. This is
+    // the existing direct-write policy, not a linear/EXR or atomic conversion.
+    LFS_IMAGE_CODECS_API bool write_image_u8(const std::filesystem::path& path, const std::uint8_t* data,
+                                             int width, int height, int channels, int jpeg_quality,
+                                             const std::optional<std::string>& comment, std::string& error,
+                                             bool jpeg_full_chroma = false);
+
 } // namespace lfs::core::image_codecs
