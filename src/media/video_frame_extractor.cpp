@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "media/video_frame_extractor.hpp"
+#include "core/atomic_file.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "decoded_video_frame_ffmpeg.hpp"
+#include "linear_frame.hpp"
 #include "media/file_frame_sink.hpp"
 #include "media/hdr_renderer.hpp"
 #include "media/hdr_tonemap.hpp"
@@ -45,6 +47,37 @@ namespace lfs::io {
         // Extraction runs off the UI thread and benefits from more parallel
         // HEVC decoding than the latency-sensitive preview path.
         constexpr int MAX_SW_DECODE_THREADS = 8;
+        template <size_t Bytes, int Rotation>
+        void rotatePackedPixels(const uint8_t* input, std::vector<uint8_t>& output, int width, int height) {
+            output.resize(static_cast<size_t>(width) * height * Bytes);
+            const int dst_width = Rotation == 180 ? width : height;
+            for (int y = 0; y < height; ++y)
+                for (int x = 0; x < width; ++x) {
+                    const int dx = Rotation == 180 ? width - 1 - x : Rotation == 90 ? height - 1 - y
+                                                                                    : y;
+                    const int dy = Rotation == 180 ? height - 1 - y : Rotation == 90 ? x
+                                                                                     : width - 1 - x;
+                    std::memcpy(output.data() + (static_cast<size_t>(dy) * dst_width + dx) * Bytes,
+                                input + (static_cast<size_t>(y) * width + x) * Bytes, Bytes);
+                }
+        }
+        template <size_t Bytes>
+        void rotatePackedFormat(const uint8_t* input, std::vector<uint8_t>& output, int width, int height, int rotation) {
+            if (rotation == 180)
+                rotatePackedPixels<Bytes, 180>(input, output, width, height);
+            else if (rotation == 90)
+                rotatePackedPixels<Bytes, 90>(input, output, width, height);
+            else
+                rotatePackedPixels<Bytes, 270>(input, output, width, height);
+        }
+        void rotatePacked(const uint8_t* input, std::vector<uint8_t>& output, int width, int height, int rotation, size_t bytes) {
+            // Dispatch outside the pixel loop so each copy has a fixed size and
+            // rotation arithmetic. In particular keep the RGB8 path inexpensive.
+            if (bytes == 3)
+                rotatePackedFormat<3>(input, output, width, height, rotation);
+            else
+                rotatePackedFormat<12>(input, output, width, height, rotation);
+        }
 
         [[nodiscard]] double elapsedSeconds(const std::chrono::steady_clock::time_point started) {
             return std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
@@ -740,11 +773,75 @@ namespace lfs::io {
         return out;
     }
 
+    bool isGeneratedFrameFilename(const std::filesystem::path& path, std::string_view pattern) {
+        auto extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (extension != ".png" && extension != ".jpg" && extension != ".jpeg" && extension != ".exr")
+            return false;
+        const auto stem = core::path_to_utf8(path.stem());
+        // Reuse the actual formatter, including padding, %% and legacy patterns.
+        for (size_t start = 0; start < stem.size(); ++start) {
+            int value = 0;
+            for (size_t end = start; end < stem.size() && std::isdigit(static_cast<unsigned char>(stem[end])); ++end) {
+                const int digit = stem[end] - '0';
+                if (value > (std::numeric_limits<int>::max() - digit) / 10)
+                    break;
+                value = value * 10 + digit;
+                if (value > 0 && formatFrameFilenameStem(pattern, value) == stem)
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    std::vector<std::filesystem::path> generatedExtractionFiles(
+        const std::filesystem::path& directory, std::string_view pattern, bool legacy_rgb) {
+        const auto metadata = directory / "extraction_metadata.json";
+        std::unordered_set<std::filesystem::path> previous;
+        if (std::filesystem::is_regular_file(std::filesystem::symlink_status(metadata))) {
+            std::ifstream stream(metadata, std::ios::binary);
+            const auto manifest = nlohmann::json::parse(stream, nullptr, false);
+            if (manifest.is_object() && manifest.contains("frames") && manifest["frames"].is_array()) {
+                for (const auto& frame : manifest["frames"]) {
+                    if (!frame.is_object() || !frame.contains("file") || !frame["file"].is_string())
+                        continue;
+                    const auto filename = core::utf8_to_path(frame["file"].get<std::string>());
+                    if (!filename.empty() && filename == filename.filename() &&
+                        filename.native().find(std::filesystem::path::value_type{}) == std::filesystem::path::string_type::npos)
+                        previous.insert(filename);
+                }
+            }
+        }
+        std::vector<std::filesystem::path> files;
+        for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+            if (!std::filesystem::is_regular_file(entry.symlink_status()))
+                continue;
+            auto extension = entry.path().extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            const bool image = extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".exr";
+            if (entry.path().filename() == "extraction_metadata.json" ||
+                (image && (previous.contains(entry.path().filename()) || isGeneratedFrameFilename(entry.path(), pattern) ||
+                           (legacy_rgb && extension != ".exr"))))
+                files.push_back(entry.path());
+        }
+        return files;
+    }
+
     class VideoFrameExtractor::Impl {
     public:
         bool extract(const Params& params, std::string& error, media::FrameSink* provided_sink = nullptr, bool legacy_file_policy = false) {
             outcome_ = ExtractionOutcome::Failed;
+            failure_.reset();
             error.clear();
+            const bool float_output = params.output_format == media::FramePixelFormat::RGBFloat32;
+            const size_t pixel_bytes = float_output ? 12 : 3;
+            if ((params.output_format != media::FramePixelFormat::RGB8 && !float_output) ||
+                (float_output && (!provided_sink || params.convert_hdr_to_sdr)) ||
+                (params.format == ImageFormat::EXR && !float_output)) {
+                failure_ = make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::IO, .detail = "EXR requires float samples; float extraction requires a CPU sink and the SDR profile", .detection = LFS_SOURCE_SITE_CURRENT()});
+                error = std::string(failure_->detail());
+                return false;
+            }
             const bool external_sink = provided_sink != nullptr;
             const bool custom_sink = external_sink && !legacy_file_policy;
             media::FileFrameSink file_sink({params.output_dir, params.filename_pattern,
@@ -865,7 +962,7 @@ namespace lfs::io {
                 // Decode Dolby Vision in software to preserve per-frame RPU metadata.
                 const AVCodec* codec = nullptr;
                 const char* hw_decoder_name = dv_profile > 0 || !media::detail::hasGpuJpegBackend() ? nullptr : get_hw_decoder_name(codec_id);
-                if (!custom_sink && params.allow_hardware_decode && hw_decoder_name) {
+                if (!custom_sink && !float_output && params.allow_hardware_decode && hw_decoder_name) {
                     codec = avcodec_find_decoder_by_name(hw_decoder_name);
                     if (codec) {
                         if (av_hwdevice_ctx_create(&hw_device_ctx, AV_HWDEVICE_TYPE_CUDA, nullptr,
@@ -883,7 +980,7 @@ namespace lfs::io {
                 }
 
 #if defined(__APPLE__)
-                if (!custom_sink && params.allow_hardware_decode && dv_profile == 0 && !codec) {
+                if (!custom_sink && !float_output && params.allow_hardware_decode && dv_profile == 0 && !codec) {
                     const AVCodec* const software_codec = avcodec_find_decoder(codec_id);
                     if (software_codec) {
                         for (int i = 0;; ++i) {
@@ -1019,7 +1116,27 @@ namespace lfs::io {
                 }
                 const int out_width = layout.width;
                 const int out_height = layout.height;
-                const std::size_t frame_size = layout.rgb_bytes;
+                if (float_output && (layout.rgb_bytes > std::numeric_limits<size_t>::max() / 4 || out_width > std::numeric_limits<int>::max() / 12)) {
+                    failure_ = make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = std::format("Float output layout exceeds address/stride limits (rgb_bytes={}, width={}, byte_stride_limit={})", layout.rgb_bytes, out_width, std::numeric_limits<int>::max()), .detection = LFS_SOURCE_SITE_CURRENT()});
+                    throw std::runtime_error(std::string(failure_->detail()));
+                }
+                const std::size_t frame_size = layout.rgb_bytes * (float_output ? 4 : 1);
+                std::unique_ptr<media::detail::LinearFrameConverter> linear_converter;
+                media::FrameColor output_color;
+                if (float_output) {
+                    if (dv_profile > 0 || video_stream->codecpar->color_trc == AVCOL_TRC_SMPTE2084 || video_stream->codecpar->color_trc == AVCOL_TRC_ARIB_STD_B67 ||
+                        video_stream->codecpar->color_trc == AVCOL_TRC_LOG || video_stream->codecpar->color_trc == AVCOL_TRC_LOG_SQRT) {
+                        failure_ = make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::IO, .detail = "HDR/Dolby Vision is outside the float SDR profile", .detection = LFS_SOURCE_SITE_CURRENT()});
+                        throw std::runtime_error(std::string(failure_->detail()));
+                    }
+                    linear_converter = std::make_unique<media::detail::LinearFrameConverter>(*video_stream->codecpar, params.input_color);
+                    const auto color = linear_converter->outputColor();
+                    if (!color) {
+                        failure_ = color.error();
+                        throw std::runtime_error(std::string(failure_->detail()));
+                    }
+                    output_color = *color;
+                }
                 const bool needs_scale =
                     out_width != src_width || out_height != src_height;
 
@@ -1135,8 +1252,8 @@ namespace lfs::io {
                 const bool swap_dimensions = params.rotation == 90 || params.rotation == 270;
                 session.output = {swap_dimensions ? out_height : out_width,
                                   swap_dimensions ? out_width : out_height,
-                                  static_cast<size_t>(swap_dimensions ? out_height : out_width) * 3,
-                                  media::FramePixelFormat::RGB8};
+                                  static_cast<size_t>(swap_dimensions ? out_height : out_width) * pixel_bytes,
+                                  params.output_format, output_color};
                 session.applied_rotation = params.rotation;
                 sink_started = true;
                 check_sink(sink.begin(session));
@@ -1194,7 +1311,15 @@ namespace lfs::io {
                 double jpeg_encode_seconds = 0.0;
                 bool used_gpu_encoding = false;
                 double jpeg_write_seconds = 0.0;
-                const auto convert_frame_to_rgb8 = [&](AVFrame* source) {
+                const auto convert_frame_to_output = [&](AVFrame* source) {
+                    if (float_output) {
+                        const auto converted = linear_converter->convert(*source, out_width, out_height, cpu_contiguous_buffer);
+                        if (!converted) {
+                            failure_ = converted.error();
+                            error = std::string(failure_->detail());
+                        }
+                        return static_cast<bool>(converted);
+                    }
                     if (convert_hdr_to_sdr) {
                         inheritStreamColorimetry(source, video_stream->codecpar, hdr_format);
                         if (!hdr_renderer)
@@ -1272,7 +1397,7 @@ namespace lfs::io {
                 } else if (params.format == ImageFormat::JPG) {
                     LOG_INFO("Using CPU JPEG encoding");
                 } else {
-                    LOG_INFO("Using CPU PNG encoding");
+                    LOG_INFO("Using CPU {} encoding", float_output ? "EXR" : "PNG");
                 }
 
                 int in_trim_frame_count = 0;
@@ -1291,6 +1416,10 @@ namespace lfs::io {
                         info.source_timestamp = media::Timestamp{ticks, {video_stream->time_base.num, video_stream->time_base.den}};
                         info.timestamp_origin = decoded->best_effort_timestamp != AV_NOPTS_VALUE ? media::TimestampOrigin::BestEffort : media::TimestampOrigin::Presentation;
                     }
+                    info.origin = media::FrameOrigin::Decoded;
+                    const auto* description = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(decoded->format));
+                    if (description && description->comp[0].depth > 0)
+                        info.source_component_depth = description->comp[0].depth;
                     info.decode_index = static_cast<uint64_t>(decoded_frame_count - 1);
                     info.relative_seconds = seconds;
                     info.legacy_source_frame = std::max(1, static_cast<int>(std::llround(seconds * video_fps)) + 1);
@@ -1299,8 +1428,8 @@ namespace lfs::io {
                 const auto emit_rgb = [&](int width, int height, const void* pixels, media::FrameInfo info, double score) {
                     info.delivery_index = accepted_frames;
                     info.sharpness_score = score;
-                    const size_t stride = static_cast<size_t>(width) * 3;
-                    check_sink(sink.write({{width, height, stride, media::FramePixelFormat::RGB8}, info, std::span<const uint8_t>(static_cast<const uint8_t*>(pixels), stride * height)}));
+                    const size_t stride = static_cast<size_t>(width) * pixel_bytes;
+                    check_sink(sink.write({{width, height, stride, params.output_format, output_color}, info, std::span<const uint8_t>(static_cast<const uint8_t*>(pixels), stride * height)}));
                     ++accepted_frames;
                 };
                 std::vector<void*> batch_gpu_ptrs;
@@ -1323,7 +1452,21 @@ namespace lfs::io {
                     double timestamp = 0.0;
                     int source_frame = 0;
                 };
-                std::vector<CandidateFrame> window_candidates;
+                std::optional<CandidateFrame> window_best;
+                const auto consider_window_frame = [&](const uint8_t* pixels, const media::FrameInfo& info,
+                                                       double score, double timestamp, int source_frame) {
+                    // max_element retains the first maximum, including equal scores.
+                    if (window_best && !(score > window_best->score))
+                        return;
+                    if (!window_best)
+                        window_best.emplace();
+                    window_best->rgb.assign(pixels, pixels + frame_size);
+                    window_best->info = info;
+                    window_best->score = score;
+                    window_best->timestamp = timestamp;
+                    window_best->source_frame = source_frame;
+                };
+                std::vector<uint8_t> scoring_proxy;
                 int current_window_idx = 0;
                 int window_skip_counter = 0;
                 int in_window_frame_count = 0;
@@ -1400,7 +1543,8 @@ namespace lfs::io {
                 auto generate_filename = [&](int frame_num) {
                     if (custom_sink)
                         return std::filesystem::path{};
-                    std::string ext = params.format == ImageFormat::PNG ? ".png" : ".jpg";
+                    std::string ext = params.format == ImageFormat::PNG ? ".png" : params.format == ImageFormat::EXR ? ".exr"
+                                                                                                                     : ".jpg";
                     return params.output_dir / (formatFrameFilenameStem(params.filename_pattern, frame_num) + ext);
                 };
 
@@ -1444,51 +1588,24 @@ namespace lfs::io {
                 };
 
                 auto flush_window = [&]() {
-                    if (window_candidates.empty())
+                    if (!window_best)
                         return;
-                    const auto best = std::max_element(
-                        window_candidates.begin(), window_candidates.end(),
-                        [](const CandidateFrame& a, const CandidateFrame& b) {
-                            return a.score < b.score;
-                        });
+                    const auto* best = &*window_best;
                     std::filesystem::path fname = generate_filename(best->source_frame);
                     if (!reserve_output_filename(fname, best->source_frame)) {
                         finish_selected_frame();
-                        window_candidates.clear();
+                        window_best.reset();
                         window_skip_counter = 0;
                         return;
                     }
-                    // Apply rotation to the best window frame before writing
+                    // Geometry preserves every component of RGB8 or float RGB.
                     int write_w = out_width;
                     int write_h = out_height;
                     const uint8_t* write_data = best->rgb.data();
                     if (params.rotation != 0) {
-                        rot_buf.resize(static_cast<size_t>(out_width) * out_height * 3);
-                        if (params.rotation == 180) {
-                            for (int y = 0; y < out_height; ++y)
-                                for (int x = 0; x < out_width; ++x) {
-                                    const int si = (y * out_width + x) * 3;
-                                    const int di = ((out_height - 1 - y) * out_width + (out_width - 1 - x)) * 3;
-                                    rot_buf[di + 0] = best->rgb[si + 0];
-                                    rot_buf[di + 1] = best->rgb[si + 1];
-                                    rot_buf[di + 2] = best->rgb[si + 2];
-                                }
-                        } else {
-                            const int dst_w = out_height;
-                            const int dst_h = out_width;
-                            for (int y = 0; y < out_height; ++y)
-                                for (int x = 0; x < out_width; ++x) {
-                                    const int si = (y * out_width + x) * 3;
-                                    const int di = (params.rotation == 90)
-                                                       ? (x * out_height + (out_height - 1 - y)) * 3
-                                                       : ((out_width - 1 - x) * out_height + y) * 3;
-                                    rot_buf[di + 0] = best->rgb[si + 0];
-                                    rot_buf[di + 1] = best->rgb[si + 1];
-                                    rot_buf[di + 2] = best->rgb[si + 2];
-                                }
-                            write_w = dst_w;
-                            write_h = dst_h;
-                        }
+                        rotatePacked(write_data, rot_buf, out_width, out_height, params.rotation, pixel_bytes);
+                        if (params.rotation == 90 || params.rotation == 270)
+                            std::swap(write_w, write_h);
                         write_data = rot_buf.data();
                     }
                     emit_rgb(write_w, write_h, write_data, best->info, best->score);
@@ -1498,7 +1615,7 @@ namespace lfs::io {
                                                 best->source_frame, best->score});
                     }
                     finish_selected_frame();
-                    window_candidates.clear();
+                    window_best.reset();
                     window_skip_counter = 0;
                 };
 
@@ -1533,14 +1650,7 @@ namespace lfs::io {
                             frame_score = computeSharpnessScore(
                                 cpu_contiguous_buffer, out_width, out_height, params.sharpness.algorithm);
                             if (params.sharpness.window_mode) {
-                                CandidateFrame cf;
-                                cf.rgb.assign(cpu_contiguous_buffer,
-                                              cpu_contiguous_buffer + frame_size);
-                                cf.info = current_info;
-                                cf.score = frame_score;
-                                cf.timestamp = current_frame_time;
-                                cf.source_frame = current_src_frame;
-                                window_candidates.push_back(std::move(cf));
+                                consider_window_frame(cpu_contiguous_buffer, current_info, frame_score, current_frame_time, current_src_frame);
                                 gpu_jpeg->finishHardware();
                                 return;
                             }
@@ -1589,7 +1699,7 @@ namespace lfs::io {
                             throw std::runtime_error(error);
                         }
 
-                        if (!convert_frame_to_rgb8(sw_frame)) {
+                        if (!convert_frame_to_output(sw_frame)) {
                             if (error.empty())
                                 error = "Failed to convert decoded video frame";
                             throw std::runtime_error(error);
@@ -1601,14 +1711,7 @@ namespace lfs::io {
                             frame_score = computeSharpnessScore(
                                 cpu_contiguous_buffer, out_width, out_height, params.sharpness.algorithm);
                             if (params.sharpness.window_mode) {
-                                CandidateFrame cf;
-                                cf.rgb.assign(cpu_contiguous_buffer,
-                                              cpu_contiguous_buffer + frame_size);
-                                cf.info = current_info;
-                                cf.score = frame_score;
-                                cf.timestamp = current_frame_time;
-                                cf.source_frame = current_src_frame;
-                                window_candidates.push_back(std::move(cf));
+                                consider_window_frame(cpu_contiguous_buffer, current_info, frame_score, current_frame_time, current_src_frame);
                                 return;
                             }
                             if (params.sharpness.threshold > 0.0 && frame_score < params.sharpness.threshold) {
@@ -1699,7 +1802,7 @@ namespace lfs::io {
 
                 auto process_frame_sw = [&](AVFrame* decoded_frame) {
                     throw_if_cancelled();
-                    if (!convert_frame_to_rgb8(decoded_frame)) {
+                    if (!convert_frame_to_output(decoded_frame)) {
                         if (error.empty())
                             error = "Failed to convert decoded video frame";
                         throw std::runtime_error(error);
@@ -1708,18 +1811,21 @@ namespace lfs::io {
                     // --- Sharpness evaluation (SW path) ---
                     double frame_score = 0.0;
                     if (params.sharpness.enabled) {
-                        frame_score = computeSharpnessScore(
-                            cpu_contiguous_buffer, out_width, out_height, params.sharpness.algorithm);
+                        const uint8_t* score_pixels = cpu_contiguous_buffer;
+                        if (float_output) {
+                            // Scoring proxy only. The master remains linear float, including window candidates.
+                            scoring_proxy.resize(layout.rgb_bytes);
+                            for (size_t i = 0; i < scoring_proxy.size(); ++i) {
+                                float value = 0;
+                                std::memcpy(&value, cpu_contiguous_buffer + i * sizeof(float), sizeof(float));
+                                scoring_proxy[i] = static_cast<uint8_t>(std::lround(std::clamp(value, 0.f, 1.f) * 255.f));
+                            }
+                            score_pixels = scoring_proxy.data();
+                        }
+                        frame_score = computeSharpnessScore(score_pixels, out_width, out_height, params.sharpness.algorithm);
 
                         if (params.sharpness.window_mode) {
-                            CandidateFrame cf;
-                            cf.rgb.assign(cpu_contiguous_buffer,
-                                          cpu_contiguous_buffer + frame_size);
-                            cf.info = current_info;
-                            cf.score = frame_score;
-                            cf.timestamp = current_frame_time;
-                            cf.source_frame = current_src_frame;
-                            window_candidates.push_back(std::move(cf));
+                            consider_window_frame(cpu_contiguous_buffer, current_info, frame_score, current_frame_time, current_src_frame);
                             return;
                         }
 
@@ -1743,34 +1849,10 @@ namespace lfs::io {
                     int sw_rot_w = out_width;
                     int sw_rot_h = out_height;
                     if (params.rotation != 0) {
-                        rot_buf.resize(static_cast<size_t>(out_width) * out_height * 3);
-                        if (params.rotation == 180) {
-                            for (int y = 0; y < out_height; ++y)
-                                for (int x = 0; x < out_width; ++x) {
-                                    const int si = (y * out_width + x) * 3;
-                                    const int di = ((out_height - 1 - y) * out_width + (out_width - 1 - x)) * 3;
-                                    rot_buf[di + 0] = cpu_contiguous_buffer[si + 0];
-                                    rot_buf[di + 1] = cpu_contiguous_buffer[si + 1];
-                                    rot_buf[di + 2] = cpu_contiguous_buffer[si + 2];
-                                }
-                        } else {
-                            const int dst_w = out_height;
-                            const int dst_h = out_width;
-                            for (int y = 0; y < out_height; ++y)
-                                for (int x = 0; x < out_width; ++x) {
-                                    const int si = (y * out_width + x) * 3;
-                                    const int di = (params.rotation == 90)
-                                                       ? (x * out_height + (out_height - 1 - y)) * 3 // CW
-                                                       : ((out_width - 1 - x) * out_height + y) * 3; // CCW
-                                    rot_buf[di + 0] = cpu_contiguous_buffer[si + 0];
-                                    rot_buf[di + 1] = cpu_contiguous_buffer[si + 1];
-                                    rot_buf[di + 2] = cpu_contiguous_buffer[si + 2];
-                                }
-                            sw_rot_w = dst_w;
-                            sw_rot_h = dst_h;
-                        }
-                        std::memcpy(cpu_contiguous_buffer, rot_buf.data(),
-                                    static_cast<size_t>(out_width) * out_height * 3);
+                        rotatePacked(cpu_contiguous_buffer, rot_buf, out_width, out_height, params.rotation, pixel_bytes);
+                        if (params.rotation == 90 || params.rotation == 270)
+                            std::swap(sw_rot_w, sw_rot_h);
+                        std::memcpy(cpu_contiguous_buffer, rot_buf.data(), frame_size);
                     }
                     // --- End rotation ---
 
@@ -2121,7 +2203,8 @@ namespace lfs::io {
                                     }},
                         };
                         root["output"] = {
-                            {"format", params.format == ImageFormat::PNG ? "png" : "jpg"},
+                            {"format", params.format == ImageFormat::PNG ? "png" : params.format == ImageFormat::EXR ? "exr"
+                                                                                                                     : "jpg"},
                             {"size", (params.rotation == 90 || params.rotation == 270)
                                          ? nlohmann::json{out_height, out_width}
                                          : nlohmann::json{out_width, out_height}},
@@ -2134,6 +2217,25 @@ namespace lfs::io {
                             {"hdr_to_sdr", convert_hdr_to_sdr},
                             {"jpeg_quality", params.jpg_quality},
                         };
+                        if (float_output) {
+                            root["output"]["bit_depth"] = params.exr_precision == media::ExrPrecision::Half ? 16 : 32;
+                            root["output"].erase("jpeg_quality");
+                            root["output"]["pixel_format"] = "linear_rgb_float32";
+                            root["output"]["color_space"] = output_color.primaries == media::ColorPrimaries::Bt709 ? "linear BT709, relative" : "linear BT2020, relative";
+                            root["output"]["compression"] = params.exr_compression == media::ExrCompression::ZIP ? "zip" : "none";
+                            root["output"]["alpha"] = "none";
+                            const int component_depth = input_bit_depth > 0 ? input_bit_depth : source_bit_depth;
+                            root["output"]["source_component_depth"] = component_depth > 0 ? nlohmann::json(component_depth) : nlohmann::json(nullptr);
+                            root["output"]["color_profile"] = "linear-sdr";
+                            root["output"]["input_transfer"] = linear_converter->inputTransfer() == media::ColorTransfer::Linear ? "linear" : linear_converter->inputTransfer() == media::ColorTransfer::Srgb ? "srgb"
+                                                                                                                                                                                                              : "bt709";
+                            if (linear_converter->inputTransfer() == media::ColorTransfer::Unspecified)
+                                root["output"]["input_transfer"] = nullptr;
+                            root["output"]["transfer_override"] = params.input_color.transfer != media::ColorTransfer::Unspecified;
+                            root["output"]["primaries_override"] = params.input_color.primaries != media::ColorPrimaries::Unspecified;
+                            root["output"]["resize_filter"] = "area reduction / bilinear enlargement in linear light";
+                            root["output"]["sharpness_domain"] = params.sharpness.enabled ? "clipped quantized linear RGB8 proxy" : "disabled";
+                        }
                         root["processing"] = {
                             {"decoder", {
                                             {"backend", saw_hardware_frame ? decoder_backend : "ffmpeg_software"},
@@ -2188,8 +2290,10 @@ namespace lfs::io {
                         root["output_size"] = (params.rotation == 90 || params.rotation == 270)
                                                   ? nlohmann::json{out_height, out_width}
                                                   : nlohmann::json{out_width, out_height};
-                        root["output_format"] = params.format == ImageFormat::PNG ? "png" : "jpg";
-                        root["output_quality"] = params.jpg_quality;
+                        root["output_format"] = params.format == ImageFormat::PNG ? "png" : params.format == ImageFormat::EXR ? "exr"
+                                                                                                                              : "jpg";
+                        if (!float_output)
+                            root["output_quality"] = params.jpg_quality;
                         root["filename_pattern"] = params.filename_pattern;
                         if (params.mode == ExtractionMode::FPS) {
                             root["extraction"]["mode"] = "fps";
@@ -2239,11 +2343,25 @@ namespace lfs::io {
 
                         const std::filesystem::path meta_path =
                             params.output_dir / "extraction_metadata.json";
-                        std::ofstream meta_file(meta_path, std::ios::binary);
-                        if (meta_file) {
-                            meta_file << root.dump(2);
+                        if (float_output) {
+                            media::ExrOutputOptions options;
+                            options.overwrite = params.overwrite_metadata;
+                            options.cancelled = params.cancel_requested;
+                            const auto result = core::writeTextFileAtomically(meta_path, root.dump(2), {.overwrite = options.overwrite, .durable = false, .create_directories = false, .cancelled = options.cancelled});
+                            if (!result) {
+                                failure_ = result.error();
+                                if (failure_->code() == ErrorCode::Cancelled)
+                                    throw ExtractionCancelled{};
+                                throw std::runtime_error(std::string(failure_->detail()));
+                            }
+                        } else {
+                            std::ofstream meta_file(meta_path, std::ios::binary);
+                            if (meta_file)
+                                meta_file << root.dump(2);
                         }
                     } catch (const std::exception& e) {
+                        if (float_output)
+                            throw;
                         LOG_WARN("Failed to write extraction metadata: {}", e.what());
                     }
                 }
@@ -2305,9 +2423,11 @@ namespace lfs::io {
         }
 
         [[nodiscard]] ExtractionOutcome lastOutcome() const { return outcome_; }
+        [[nodiscard]] std::optional<Error> lastError() const { return failure_; }
 
     private:
         ExtractionOutcome outcome_ = ExtractionOutcome::Failed;
+        std::optional<Error> failure_;
     };
 
     VideoFrameExtractor::VideoFrameExtractor() : impl_(new Impl()) {}
@@ -2324,6 +2444,8 @@ namespace lfs::io {
     bool VideoFrameExtractor::extractFilesToSink(const Params& params, media::FrameSink& sink, std::string& error) {
         return impl_->extract(params, error, &sink, true);
     }
+
+    std::optional<Error> VideoFrameExtractor::lastError() const { return impl_->lastError(); }
 
     ExtractionOutcome VideoFrameExtractor::lastOutcome() const {
         return impl_->lastOutcome();

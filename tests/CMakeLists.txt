@@ -193,7 +193,7 @@ if(BUILD_TESTS)
     endif()
     add_executable(gpu_program_contracts test_gpu_program.cpp test_gpu_bookkeeping.cpp)
     target_include_directories(gpu_program_contracts PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer)
-    target_link_libraries(gpu_program_contracts PRIVATE lfs_core GTest::gtest_main)
+    target_link_libraries(gpu_program_contracts PRIVATE lfs_core GTest::gtest)
     target_compile_features(gpu_program_contracts PRIVATE cxx_std_23)
     lfs_add_gpu_program(gpu_program_contracts program_contract SOURCE shaders/program_contract.slang
         COMPUTE transform VERTEX vertexMain FRAGMENT fragmentMain)
@@ -406,6 +406,7 @@ if(BUILD_UNICODE_TEST_ONLY)
         ${CMAKE_SOURCE_DIR}/src/core/memory_domain.cpp
         ${CMAKE_SOURCE_DIR}/src/core/nn/weight_file_open.cpp
         ${CMAKE_SOURCE_DIR}/src/core/user_paths.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/atomic_file.cpp
         ${CMAKE_SOURCE_DIR}/src/io/stb_image_impl.cpp
     )
 
@@ -566,6 +567,7 @@ set(LICHT_FORMAT_NON_WINDOWS_FILES
     test_project_inspector.cpp
     test_project_operations.cpp
     ${CMAKE_SOURCE_DIR}/src/core/user_paths.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/atomic_file.cpp
     ${CMAKE_SOURCE_DIR}/src/core/environment.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_inspector.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_operations.cpp

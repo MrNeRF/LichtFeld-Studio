@@ -4,6 +4,8 @@
 #include "core/crash_handler.hpp"
 #include "core/gpu_kernel_module.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_upload.hpp"
+#include "linear_video_program.hpp"
 #include "rgb_to_yuv_program.hpp"
 #include <algorithm>
 #include <climits>
@@ -11,6 +13,7 @@
 #include <format>
 #include <map>
 #include <mutex>
+#include <tbb/parallel_for.h>
 namespace lfs::core {
     namespace {
         using std::floor;
@@ -29,6 +32,7 @@ namespace lfs::core {
 
         struct ColorPrograms {
             std::map<GpuBackend, std::unique_ptr<GpuKernelModule>> modules;
+            std::map<GpuBackend, std::unique_ptr<GpuKernelModule>> linear_modules;
         };
         struct ColorRegistry {
             std::mutex mutex;
@@ -43,8 +47,10 @@ namespace lfs::core {
                 auto& registry = colorRegistry();
                 std::lock_guard lock(registry.mutex);
                 for (const auto& weak : registry.threads)
-                    if (auto programs = weak.lock())
+                    if (auto programs = weak.lock()) {
                         programs->modules.clear();
+                        programs->linear_modules.clear();
+                    }
                 registry.threads.clear();
             });
             return true;
@@ -61,6 +67,72 @@ namespace lfs::core {
             return *programs;
         }
     } // namespace
+    Result<Tensor> video_to_linear_rgb(const Tensor& bytes, const color::VideoColorParameters& color,
+                                       uint32_t width, uint32_t height) {
+        if (!bytes.is_valid() || bytes.dtype() != DataType::UInt8 || bytes.ndim() != 1 || !bytes.is_contiguous() ||
+            !width || !height || uint64_t(width) * height > UINT32_MAX / 3 ||
+            !color.width || !color.height || color.width > INT_MAX || color.height > INT_MAX ||
+            color.rgb > 1 || color.big_endian > 1 || color.transfer > 2)
+            return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::Tensor, .detail = std::format("Video conversion requires contiguous UInt8 storage and addressable positive extents (valid={}, shape={}, dtype={}, source={}x{}, output={}x{}, rgb={}, endian={}, transfer={})", bytes.is_valid(), bytes.shape().str(), static_cast<int>(bytes.dtype()), color.width, color.height, width, height, color.rgb, color.big_endian, color.transfer), .detection = LFS_SOURCE_SITE_CURRENT()});
+        for (size_t i = 0; i < 3; ++i) {
+            const auto& c = color.component[i];
+            const uint64_t sample_bytes = (uint64_t(c.depth) + c.shift + 7) / 8;
+            const uint64_t row_bytes = c.width ? uint64_t(c.width - 1) * c.step + sample_bytes : 0;
+            const uint64_t end = uint64_t(c.offset) + (c.height ? uint64_t(c.height - 1) * c.pitch : 0) + row_bytes;
+            if (!c.width || !c.height || c.width > color.width || c.height > color.height ||
+                (i == 0 && (c.width != color.width || c.height != color.height)) ||
+                (color.rgb && (c.width != color.width || c.height != color.height)) ||
+                !c.depth || c.depth > 16 || c.shift >= 32 || uint64_t(c.depth) + c.shift > 32 ||
+                c.step < sample_bytes || c.pitch < row_bytes || end > bytes.numel() || end > UINT32_MAX)
+                return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::Tensor, .detail = std::format("Video component must fit the input storage (component={}, extent={}x{}, offset={}, pitch={}, step={}, depth={}, shift={}, end={}, storage={})", i, c.width, c.height, c.offset, c.pitch, c.step, c.depth, c.shift, end, bytes.numel()), .detection = LFS_SOURCE_SITE_CURRENT()});
+        }
+        for (const float value : {color.chroma_x_scale, color.chroma_x_offset, color.chroma_y_scale, color.chroma_y_offset,
+                                  color.scale[0], color.scale[1], color.scale[2], color.bias[0], color.bias[1], color.bias[2],
+                                  color.decode[0], color.decode[1], color.decode[2], color.decode[3], color.decode[4], color.decode[5], color.decode[6], color.decode[7], color.decode[8]})
+            if (!std::isfinite(value))
+                return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::Tensor, .detail = std::format("Video conversion parameters must be finite (observed={})", value), .detection = LFS_SOURCE_SITE_CURRENT()});
+        auto output = Tensor::empty_like(bytes, {height, width, 3}, DataType::Float32);
+        if (const auto backend = gpu_backend_of(bytes)) {
+            if (gpu_process_teardown_started())
+                return make_error({.code = ErrorCode::FailedPrecondition, .domain = ErrorDomain::Tensor, .detail = "Video conversion cannot dispatch after GPU teardown (teardown_started=true)", .detection = LFS_SOURCE_SITE_CURRENT()});
+            auto& program = colorPrograms().linear_modules[*backend];
+            if (!program) {
+                auto loaded = GpuKernelModule::load(linear_video_program_entries(), *backend);
+                if (!loaded)
+                    return std::move(loaded).error();
+                program = std::move(*loaded);
+            }
+            auto constants = Tensor::empty_like(bytes, {sizeof(color)}, DataType::UInt8);
+            TensorUpload upload;
+            upload.enqueue(constants, std::as_bytes(std::span(&color, 1)), nullptr);
+            upload.wait();
+            struct Parameters {
+                uint64_t planes = 0, color = 0, output = 0;
+                uint32_t width, height;
+            } parameters{.width = width, .height = height};
+            const std::array bindings{GpuKernelModule::Binding{0, &bytes}, GpuKernelModule::Binding{8, &constants},
+                                      GpuKernelModule::Binding{16, &output, GpuKernelModule::Access::ReadWrite}};
+            auto result = program->dispatch({.function = "linearVideo", .arguments = {std::as_bytes(std::span(&parameters, 1)), bindings}, .groups = {GpuKernelModule::groups_for(width, 8), GpuKernelModule::groups_for(height, 8), 1}, .group = {8, 8, 1}});
+            if (!result)
+                return std::move(result).error();
+        } else {
+            struct Reader {
+                const uint8_t* data;
+                uint32_t load(uint32_t address) { return data[address]; }
+            };
+            color::VideoColorSampler<Reader> sampler{color, {bytes.ptr<uint8_t>()}};
+            auto* pixels = output.ptr<float>();
+            tbb::parallel_for(uint32_t(0), height, [&](uint32_t y) {
+                auto row_sampler = sampler;
+                for (uint32_t x = 0; x < width; ++x) {
+                    const auto value = row_sampler.resizedRgb(x, y, width, height);
+                    for (uint32_t c = 0; c < 3; ++c)
+                        pixels[(size_t(y) * width + x) * 3 + c] = value.channel[c];
+                }
+            });
+        }
+        return output;
+    }
     Result<void> rgb_to_yuv420p_into(const Tensor& source, Yuv420Planes& out) {
         if (auto valid = validateRgb(source); !valid)
             return valid;

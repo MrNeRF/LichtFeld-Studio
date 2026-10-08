@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "core/export.hpp"
+#include "media/decoded_video_frame.hpp"
 #include "media/media_probe.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -11,7 +12,26 @@
 #include <vector>
 
 namespace lfs::media {
-    enum class FramePixelFormat { RGB8 };
+    enum class FramePixelFormat { RGB8,
+                                  RGBFloat32,
+                                  RGBAFloat32 };
+    struct FrameColor {
+        ColorTransfer transfer = ColorTransfer::Unspecified;
+        ColorPrimaries primaries = ColorPrimaries::Unspecified;
+        AlphaMode alpha = AlphaMode::None;
+    };
+    [[nodiscard]] constexpr std::size_t pixelBytes(FramePixelFormat format) {
+        switch (format) {
+        case FramePixelFormat::RGB8: return 3;
+        case FramePixelFormat::RGBFloat32: return 12;
+        case FramePixelFormat::RGBAFloat32: return 16;
+        default: return 0;
+        }
+    }
+    enum class FrameOrigin { Unspecified,
+                             Decoded,
+                             Rendered,
+                             External };
     enum class TimestampOrigin { Missing,
                                  BestEffort,
                                  Presentation };
@@ -20,6 +40,7 @@ namespace lfs::media {
         int height = 0;
         std::size_t row_stride = 0;
         FramePixelFormat format = FramePixelFormat::RGB8;
+        FrameColor color;
     };
     struct FrameInfo {
         std::optional<Timestamp> source_timestamp;
@@ -30,6 +51,9 @@ namespace lfs::media {
         double relative_seconds = 0;
         int legacy_source_frame = 0;
         double sharpness_score = 0;
+        FrameOrigin origin = FrameOrigin::Unspecified;
+        std::optional<Timestamp> output_timestamp;
+        std::optional<int> source_component_depth;
     };
     // Read-only borrowed pixels, valid only during the synchronous sink callback.
     struct LFS_MEDIA_API FrameView {

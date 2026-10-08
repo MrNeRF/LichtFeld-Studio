@@ -166,13 +166,14 @@
             <select id="format-select" class="wide-select">
               <option value="png">@tr:video_extractor.format_png</option>
               <option value="jpeg">@tr:video_extractor.format_jpeg</option>
+              <option value="exr">@tr:video_extractor.format_exr</option>
             </select>
             <div id="quality-row" class="inline-control">
               <input id="quality-slider" class="value-slider" type="range" min="50" max="100" step="1" value="95" />
               <span id="quality-value" class="value-readout">95%</span>
             </div>
             <span style="flex:1; min-width:20dp;"></span>
-            <label class="toggle-label metadata-check">
+            <label id="metadata-option" class="toggle-label metadata-check">
               <input id="generate-metadata" type="checkbox" />
               <span>@tr:video_extractor.generate_metadata</span>
             </label>
@@ -180,6 +181,30 @@
               <input id="hdr-to-sdr" type="checkbox" />
               <span>@tr:video_extractor.convert_hdr_to_sdr</span>
             </label>
+          </div>
+          <div id="exr-options" style="display:none">
+            <div class="settings-row exr-row">
+              <div class="exr-field">
+                <span class="field-label exr-label">@tr:video_extractor.exr_precision</span>
+                <select id="exr-precision" class="wide-select"><option value="half">@tr:video_extractor.exr_half</option><option value="float">@tr:video_extractor.exr_float</option></select>
+              </div>
+              <div class="exr-field">
+                <span class="field-label exr-label">@tr:video_extractor.exr_compression</span>
+                <select id="exr-compression" class="wide-select"><option value="zip">ZIP</option><option value="none">@tr:video_extractor.exr_uncompressed</option></select>
+              </div>
+            </div>
+            <div class="settings-row exr-row">
+              <div class="exr-field">
+                <span class="field-label exr-label">@tr:video_extractor.input_transfer</span>
+                <select id="input-transfer" class="wide-select"><option value="auto">@tr:video_extractor.source_metadata</option><option value="linear">@tr:video_extractor.linear</option><option value="srgb">@tr:video_extractor.srgb</option><option value="bt709">@tr:video_extractor.bt709</option></select>
+              </div>
+              <div class="exr-field">
+                <span class="field-label exr-label">@tr:video_extractor.input_primaries</span>
+                <select id="input-primaries" class="wide-select"><option value="auto">@tr:video_extractor.source_metadata</option><option value="bt709">@tr:video_extractor.bt709</option><option value="bt2020">@tr:video_extractor.bt2020</option></select>
+              </div>
+            </div>
+            <p class="inline-note">@tr:video_extractor.exr_profile_hint</p>
+            <p id="exr-preflight" class="inline-warning" style="display:none"></p>
           </div>
         </div>
 

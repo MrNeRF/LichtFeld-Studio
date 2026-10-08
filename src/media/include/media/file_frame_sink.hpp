@@ -2,18 +2,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "core/export.hpp"
-#include "media/frame_sink.hpp"
+#include "media/image_output.hpp"
 #include <filesystem>
 #include <unordered_set>
+#include <vector>
 
 namespace lfs::media {
     enum class FrameFileFormat { PNG,
-                                 JPEG };
+                                 JPEG,
+                                 EXR };
     struct FileFrameSinkOptions {
         std::filesystem::path output_directory;
         std::string filename_pattern = "frame_%d";
         FrameFileFormat format = FrameFileFormat::PNG;
         int jpeg_quality = 95;
+        ExrOutputOptions exr;
+        // Previous extraction output (including metadata), only after success.
+        bool remove_stale_frames = false;
+        // The extractor owns metadata when it generates a new manifest.
+        bool preserve_metadata = false;
     };
     class LFS_MEDIA_API FileFrameSink final : public FrameSink {
     public:
@@ -27,5 +34,11 @@ namespace lfs::media {
         FileFrameSinkOptions options_;
         bool active_ = false;
         std::unordered_set<std::filesystem::path> filenames_;
+        struct ExistingFrame {
+            std::filesystem::path path;
+            std::filesystem::file_time_type modified;
+            std::uintmax_t size;
+        };
+        std::vector<ExistingFrame> existing_frames_;
     };
 } // namespace lfs::media

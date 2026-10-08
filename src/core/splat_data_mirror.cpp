@@ -135,7 +135,7 @@ namespace lfs::core {
                 program = std::move(*loaded);
             }
             const auto positions = means.contiguous();
-            const auto selected = selection_mask.ne(0).reshape({means.size(0)}).to(means.device()).to(DataType::Int32).contiguous();
+            const auto selected = selection_mask.ne(0).reshape(TensorShape{means.size(0)}).to(means.device()).to(DataType::Int32).contiguous();
             const auto blocks = static_cast<uint32_t>(std::min(size_t{256}, (means.size(0) + 255) / 256));
             auto partials = Tensor::empty({blocks, size_t{7}}, means.device());
             struct Params {
@@ -168,7 +168,7 @@ namespace lfs::core {
         // Keep the centroid accurate enough that rounding a reflection does not
         // repeatedly move its pivot. Divide in double before rounding once.
         const auto positions = means.cpu().contiguous();
-        const auto selected_cpu = selection_mask.cpu().ne(0).reshape({means.size(0)}).contiguous();
+        const auto selected_cpu = selection_mask.cpu().ne(0).reshape(TensorShape{means.size(0)}).contiguous();
         const auto* p = positions.ptr<float>();
         const auto* mask = selected_cpu.ptr<bool>();
         double sum[3]{};

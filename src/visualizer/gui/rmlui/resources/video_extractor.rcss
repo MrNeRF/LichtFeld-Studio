@@ -266,6 +266,22 @@ body {
     width: 58dp;
 }
 
+#exr-options .exr-row {
+    flex-wrap: wrap;
+    margin-top: 4dp;
+}
+
+#exr-options .exr-field {
+    display: flex;
+    align-items: center;
+    gap: 8dp;
+    flex-shrink: 0;
+}
+
+#exr-options .exr-label {
+    width: 144dp;
+}
+
 .time-input {
     width: 80dp;
     min-width: 80dp;

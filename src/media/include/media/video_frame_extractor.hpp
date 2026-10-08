@@ -10,8 +10,10 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "media/hdr_tonemap.hpp"
+#include "media/image_output.hpp"
 
 namespace lfs::media {
     class FrameSink;
@@ -21,6 +23,11 @@ namespace lfs::io {
 
     // Supports %d, %0Nd zero-padding, %% escaping, and legacy %000 zero-padding.
     [[nodiscard]] LFS_MEDIA_API std::string formatFrameFilenameStem(std::string_view pattern, int frame_number);
+    [[nodiscard]] LFS_MEDIA_API bool isGeneratedFrameFilename(const std::filesystem::path&, std::string_view pattern);
+    // Includes previous manifest-listed frames and metadata independently of
+    // the current pattern. PNG/JPEG retains the legacy extension-wide policy.
+    [[nodiscard]] LFS_MEDIA_API std::vector<std::filesystem::path> generatedExtractionFiles(
+        const std::filesystem::path& directory, std::string_view pattern, bool legacy_rgb);
     [[nodiscard]] LFS_MEDIA_API std::size_t calculateFpsSampleCount(double start_time, double end_time,
                                                                     double target_fps);
     [[nodiscard]] LFS_MEDIA_API double fpsSampleTime(double start_time, double end_time,
@@ -45,7 +52,8 @@ namespace lfs::io {
 
     enum class ImageFormat {
         PNG,
-        JPG
+        JPG,
+        EXR
     };
 
     enum class ResolutionMode {
@@ -107,6 +115,11 @@ namespace lfs::io {
             int rotation = 0; // 0, 90, 180, 270
             bool convert_hdr_to_sdr = false;
             bool allow_hardware_decode = true;
+            media::FramePixelFormat output_format = media::FramePixelFormat::RGB8;
+            media::FrameColor input_color;
+            media::ExrPrecision exr_precision = media::ExrPrecision::Half;
+            media::ExrCompression exr_compression = media::ExrCompression::ZIP;
+            bool overwrite_metadata = false;
         };
 
         struct ValidatedLayout {
@@ -125,6 +138,7 @@ namespace lfs::io {
         // CPU sink delivery with compatibility filename deduplication and schema-2 metadata.
         bool extractFilesToSink(const Params& params, media::FrameSink& sink, std::string& error);
         [[nodiscard]] ExtractionOutcome lastOutcome() const;
+        [[nodiscard]] std::optional<Error> lastError() const;
 
     private:
         class Impl;

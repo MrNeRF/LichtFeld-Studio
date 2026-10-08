@@ -1,0 +1,80 @@
+// SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Tensor-owned byte-plane sampling. SDR uses bilinear chroma and linear-light
+// area reduction; HDR retains its Lanczos LUT and intermediate FP16 contract.
+struct Reader {
+    Ptr<uint8_t, Access.Read> bytes;
+    uint load(uint address) { return bytes[address]; }
+};
+#include "../../include/core/video_color_math.h"
+
+float3 videoFp16(float3 v) {
+    uint3 h = f32tof16(v);
+    h = select(abs(f16tof32(h)) > abs(v), h - 1u, h);
+    return f16tof32(h);
+}
+int videoLanczosWeights(Ptr<float, Access.Read> lut, float position, out float w[6]) {
+    const float start = floor(position);
+    const float row = (position - start) * 255.0;
+    const float first = floor(row);
+    const uint row0 = uint(first) * 6u;
+    const uint row1 = uint(min(first + 1.0, 255.0)) * 6u;
+    for (int n = 0; n < 6; ++n)
+        w[n] = lerp(lut[row0 + uint(n)], lut[row1 + uint(n)], row - first);
+    return int(start) - 2;
+}
+struct VideoChromaSampler {
+    VideoColorSampler planes;
+    Ptr<float, Access.Read> lut;
+    uint width, height, sub_x, sub_y;
+    float4 mapping;
+    float2 normalization;
+    float2 load(int x, int y) {
+        return float2(planes.code(1u, x, y), planes.code(2u, x, y)) * normalization.x;
+    }
+    float2 vertical(int x, int y) {
+        const float position = float(y) * mapping.z + mapping.w;
+        float wy[6];
+        const int y0 = videoLanczosWeights(lut, position, wy);
+        float2 color = float2(0.0);
+        for (int j = 0; j < 6; ++j)
+            color += wy[j] * load(x, clamp(y0 + j, 0, int(height) - 1));
+        return normalization.y * color;
+    }
+    float2 sample(int2 pixel) {
+        const int2 size = int2(width, height);
+        const float2 position = float2(pixel) * mapping.xz + mapping.yw;
+        float wy[6], wx[6];
+        const int y0 = sub_y != 0u ? videoLanczosWeights(lut, position.y, wy) : pixel.y;
+        const int x0 = sub_x != 0u ? videoLanczosWeights(lut, position.x, wx) : pixel.x;
+        const int columns = sub_x != 0u ? 6 : 1;
+        float2 result = float2(0.0);
+        for (int i = 0; i < columns; ++i) {
+            const int x = clamp(x0 + i, 0, size.x - 1);
+            float2 column = float2(0.0);
+            if (sub_y != 0u) {
+                for (int j = 0; j < 6; ++j)
+                    column += wy[j] * load(x, clamp(y0 + j, 0, size.y - 1));
+                column *= normalization.y;
+                if (sub_x != 0u)
+                    column = videoFp16(float3(column, 0.0)).xy;
+            } else {
+                column = normalization.y * load(x, y0);
+            }
+            result += sub_x != 0u ? wx[i] * column : column;
+        }
+        return result;
+    }
+    float2 horizontal(Ptr<uint, Access.ReadWrite> vertical_image, int2 pixel) {
+        const float position = float(pixel.x) * mapping.x + mapping.y;
+        float wx[6];
+        const int x0 = videoLanczosWeights(lut, position, wx);
+        float2 color = float2(0.0);
+        for (int i = 0; i < 6; ++i) {
+            const int x = clamp(x0 + i, 0, int(width) - 1);
+            const uint packed = vertical_image[uint(pixel.y) * width + uint(x)];
+            color += wx[i] * f16tof32(uint2(packed & 0xffffu, packed >> 16u));
+        }
+        return color;
+    }
+};

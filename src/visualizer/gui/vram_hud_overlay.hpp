@@ -36,18 +36,18 @@ namespace lfs::vis::gui {
             lfs::vis::AppStore::PerfHud perf_hud;
         };
 
-        LFS_VIS_API VramHudOverlay();
-        LFS_VIS_API ~VramHudOverlay();
+        VramHudOverlay();
+        ~VramHudOverlay();
 
         VramHudOverlay(const VramHudOverlay&) = delete;
         VramHudOverlay& operator=(const VramHudOverlay&) = delete;
 
-        LFS_VIS_API void onDocumentLoaded(Rml::ElementDocument* document);
-        LFS_VIS_API void onDocumentDestroyed();
-        LFS_VIS_API void setViewportGeometry(float origin_x, float origin_y, float width, float height);
-        [[nodiscard]] LFS_VIS_API bool initializeGeometryAfterLayout();
+        void onDocumentLoaded(Rml::ElementDocument* document);
+        void onDocumentDestroyed();
+        void setViewportGeometry(float origin_x, float origin_y, float width, float height);
+        [[nodiscard]] bool initializeGeometryAfterLayout();
 
-        LFS_VIS_API void setState(State state);
+        void setState(State state);
         [[nodiscard]] bool isVisible() const noexcept { return state_.visible || state_.perf_hud.visible; }
         [[nodiscard]] bool needsAnimationFrame() const noexcept {
             return pointer_captured_;

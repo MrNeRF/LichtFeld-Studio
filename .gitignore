@@ -31,6 +31,7 @@ tests/data/nn/*
 !tests/data/clamped_colour_regression.ply.fixture
 *.pt
 *.py
+!tests/media/test_float_exr.py
 !scripts/lichtfeld_mcp_bridge.py
 !scripts/verify_video_orientation.py
 !scripts/prepare_media_fixtures.py

@@ -764,14 +764,14 @@ add_subdirectory(src/python)
 
 if(LFS_HIDDEN_SYMBOLS AND NOT WIN32)
     # Match the libraries using LFS_*_API DLL exports; leave static libraries alone.
-    set_target_properties(lfs_logger lfs_error lfs_image_codecs lfs_media lfs_core lfs_visualizer lfs_mcp PROPERTIES
+    set_target_properties(lfs_logger lfs_error lfs_file_io lfs_image_codecs lfs_media lfs_core lfs_visualizer lfs_mcp PROPERTIES
         CXX_VISIBILITY_PRESET hidden
         CUDA_VISIBILITY_PRESET hidden
         VISIBILITY_INLINES_HIDDEN ON
     )
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         # ELF shared links otherwise defer missing exports until Python imports the module.
-        foreach(_lfs_export_consumer IN ITEMS lfs_logger lfs_error lfs_image_codecs lfs_media lfs_core lfs_visualizer lfs_mcp lfs_py)
+        foreach(_lfs_export_consumer IN ITEMS lfs_logger lfs_error lfs_file_io lfs_image_codecs lfs_media lfs_core lfs_visualizer lfs_mcp lfs_py)
             target_link_options(${_lfs_export_consumer} PRIVATE "LINKER:--no-undefined")
         endforeach()
         # FFmpeg assembly uses direct references to archive-local data in the shared visualizer.
@@ -827,6 +827,7 @@ lfs_add_windows_version_resource(lfs_core "LichtFeld Studio core and tensor runt
 lfs_add_windows_version_resource(lfs_diagnostics "LichtFeld Studio diagnostics")
 lfs_add_windows_version_resource(lfs_logger "LichtFeld Studio logging")
 lfs_add_windows_version_resource(lfs_error "LichtFeld Studio shared errors")
+lfs_add_windows_version_resource(lfs_file_io "LichtFeld Studio atomic file I/O")
 lfs_add_windows_version_resource(lfs_image_codecs "LichtFeld Studio image codecs")
 lfs_add_windows_version_resource(lfs_media "LichtFeld Studio media ingest")
 if(TARGET media-ingest)
@@ -1319,7 +1320,7 @@ elseif(UNIX)
     set(_media_origin "$ORIGIN")
 endif()
 if(UNIX)
-    set_target_properties(lfs_error lfs_image_codecs lfs_media PROPERTIES
+    set_target_properties(lfs_error lfs_file_io lfs_image_codecs lfs_media PROPERTIES
         INSTALL_RPATH "${_media_origin};${_media_origin}/../lib")
     if(TARGET media-ingest)
         set_target_properties(media-ingest PROPERTIES
@@ -1528,7 +1529,7 @@ include(GNUInstallDirs)
 include(InstallRequiredSystemLibraries)
 
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(TARGETS lfs_core lfs_error lfs_image_codecs lfs_media
+install(TARGETS lfs_core lfs_error lfs_file_io lfs_image_codecs lfs_media
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )

@@ -4,6 +4,7 @@
 #include "core/export.hpp"
 #include "media/file_frame_sink.hpp"
 #include <functional>
+#include <string_view>
 
 namespace lfs::media {
     enum class SelectionMode { FPS,
@@ -49,6 +50,9 @@ namespace lfs::media {
         bool allow_hardware_decode = true;
         std::function<void(const IngestProgress&)> progress;
         std::function<bool()> cancelled;
+        FramePixelFormat output_format = FramePixelFormat::RGB8;
+        // Unspecified means use source metadata. Overrides are explicit assumptions.
+        FrameColor input_color;
     };
     struct FileExtraction {
         FileFrameSinkOptions files;
@@ -65,6 +69,10 @@ namespace lfs::media {
         bool jpeg = true;
         bool hardware_decode = false;
         bool hdr_to_sdr = false;
+        bool rgb_float_sdr = true;
+        bool exr = true;
+        // Stable capability description shared by CLI, Python and MCP.
+        std::string_view float_sdr_profile = "Integer RGB or planar/semiplanar YUV 8-16-bit, including subsampled chroma; Linear/sRGB/BT709 transfer; BT709/BT2020 primaries; explicit metadata or overrides; shared CPU reference and optional tensor backend; no HDR or alpha video";
     };
     struct CodecBuildInfo {
         std::string ffmpeg_version;

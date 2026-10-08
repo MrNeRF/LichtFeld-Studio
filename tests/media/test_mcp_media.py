@@ -72,6 +72,23 @@ class McpMedia(unittest.TestCase):
         self.assertEqual(types[-1], "media.extract.completed")
         self.assertTrue(all(event["data"]["job_id"] == "media.extract" for event in result["events"]))
 
+    def test_exr_job_and_schema_validation(self):
+        result, output = self.invoke(format="exr", exr_precision="float", exr_compression="none",
+                                     input_transfer="linear", input_primaries="bt709")
+        self.assertTrue(result["capabilities"]["exr"])
+        self.assertIn("subsampled chroma", result["capabilities"]["float_sdr_profile"])
+        self.assertTrue(result["start"]["success"])
+        self.assertEqual(result["job"]["status"], "finished")
+        self.assertEqual(len(list(output.glob("*.exr"))), 4)
+        metadata = json.loads((output / "extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(metadata["output"]["color_profile"], "linear-sdr")
+        for options in [{"format": "exr", "jpeg_quality": 95}, {"format": "png", "exr_precision": "half"},
+                        {"format": "exr", "input_transfer": "pq"}, {"format": "exr", "convert_hdr_to_sdr": True}]:
+            result, output = self.invoke(**options)
+            self.assertFalse(result["start"].get("success", False))
+            self.assertEqual(result["start"]["error"]["code"], "InvalidArgument")
+            self.assertFalse(output.exists())
+
     def test_cancel_retains_typed_error_and_terminal_event(self):
         result, output = self.invoke(cancel=True)
         self.assertEqual(result["job"]["status"], "cancelled")
@@ -91,7 +108,7 @@ class McpMedia(unittest.TestCase):
     def test_nested_schema_rejects_bad_types_enums_ranges_and_unknown_fields(self):
         for options in ({"selection": {"mode": "invalid"}}, {"geometry": {"width": 2**40}},
                         {"sharpness": {"enabled": "bad"}}, {"geometry": None},
-                        {"format": "exr"}, {"unexpected": True}):
+                        {"format": "tiff"}, {"unexpected": True}):
             with self.subTest(options=options):
                 result, output = self.invoke(**options)
                 self.assertEqual(result["start"]["error"]["code"], "InvalidArgument")

@@ -21,8 +21,9 @@ set_tests_properties(MediaFixturePreparation PROPERTIES
     ENVIRONMENT "LFS_MEDIA_TEST_FFMPEG=${LFS_MEDIA_TEST_FFMPEG};LFS_MEDIA_TEST_FFPROBE=${LFS_MEDIA_TEST_FFPROBE}")
 add_subdirectory(extractor)
 add_subdirectory(studio)
-add_custom_target(media_contracts DEPENDS
+add_custom_target(media_contracts DEPENDS media_linear_video_contracts
     media_extraction_runner media_shared_core_bridge media_test_bindings
+    media_public_image_output
     media-ingest media_mcp_runner LichtFeld-Studio lfs_visualizer lfs_py)
 if(TARGET media_studio_runner)
     add_dependencies(media_contracts media_studio_runner)

@@ -3,7 +3,13 @@
 #pragma once
 #include "core/error.hpp"
 #include "core/tensor.hpp"
+#include "core/video_color_math.h"
 namespace lfs::core {
+    // Packed UInt8 component storage -> contiguous HWC Float32 linear RGB.
+    // Output preserves the input device/backend; all component ranges are checked.
+    // Decode/resize share the sampler used by the HDR tensor tonemapper.
+    LFS_CORE_API Result<Tensor> video_to_linear_rgb(const Tensor& bytes, const color::VideoColorParameters&, uint32_t width, uint32_t height);
+
     struct Yuv420Planes {
         Tensor y, u, v;
     };

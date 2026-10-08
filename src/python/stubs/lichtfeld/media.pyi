@@ -29,6 +29,98 @@ class FrameFileFormat(enum.Enum):
 
     JPEG = 1
 
+    EXR = 2
+
+class ExrPrecision(enum.Enum):
+    Half = 0
+
+    Float = 1
+
+class ExrCompression(enum.Enum):
+    Uncompressed = 0
+
+    ZIP = 1
+
+class ColorTransfer(enum.Enum):
+    Unspecified = 2
+
+    Linear = 8
+
+    Srgb = 13
+
+    Bt709 = 1
+
+class ColorPrimaries(enum.Enum):
+    Unspecified = 2
+
+    Bt709 = 1
+
+    Bt2020 = 9
+
+class AlphaMode(enum.Enum):
+    NoAlpha = 3
+
+    Straight = 1
+
+    Premultiplied = 2
+
+class FrameOrigin(enum.Enum):
+    Unspecified = 0
+
+    Decoded = 1
+
+    Rendered = 2
+
+    External = 3
+
+class FrameColor:
+    def __init__(self) -> None: ...
+
+    @property
+    def transfer(self) -> ColorTransfer: ...
+
+    @transfer.setter
+    def transfer(self, arg: ColorTransfer, /) -> None: ...
+
+    @property
+    def primaries(self) -> ColorPrimaries: ...
+
+    @primaries.setter
+    def primaries(self, arg: ColorPrimaries, /) -> None: ...
+
+    @property
+    def alpha(self) -> AlphaMode: ...
+
+    @alpha.setter
+    def alpha(self, arg: AlphaMode, /) -> None: ...
+
+class ExrOutputOptions:
+    def __init__(self) -> None: ...
+
+    @property
+    def precision(self) -> ExrPrecision: ...
+
+    @precision.setter
+    def precision(self, arg: ExrPrecision, /) -> None: ...
+
+    @property
+    def compression(self) -> ExrCompression: ...
+
+    @compression.setter
+    def compression(self, arg: ExrCompression, /) -> None: ...
+
+    @property
+    def overwrite(self) -> bool: ...
+
+    @overwrite.setter
+    def overwrite(self, arg: bool, /) -> None: ...
+
+    @property
+    def provenance(self) -> str: ...
+
+    @provenance.setter
+    def provenance(self, arg: str, /) -> None: ...
+
 class StreamKind(enum.Enum):
     Video = 0
 
@@ -56,6 +148,10 @@ class ProbeDepth(enum.Enum):
 
 class FramePixelFormat(enum.Enum):
     RGB8 = 0
+
+    RGBFloat32 = 1
+
+    RGBAFloat32 = 2
 
 class TimestampOrigin(enum.Enum):
     Missing = 0
@@ -202,6 +298,18 @@ class IngestRequest:
     @allow_hardware_decode.setter
     def allow_hardware_decode(self, arg: bool, /) -> None: ...
 
+    @property
+    def output_format(self) -> FramePixelFormat: ...
+
+    @output_format.setter
+    def output_format(self, arg: FramePixelFormat, /) -> None: ...
+
+    @property
+    def input_color(self) -> FrameColor: ...
+
+    @input_color.setter
+    def input_color(self, arg: FrameColor, /) -> None: ...
+
 class FileFrameSinkOptions:
     def __init__(self) -> None: ...
 
@@ -229,6 +337,12 @@ class FileFrameSinkOptions:
     @jpeg_quality.setter
     def jpeg_quality(self, arg: int, /) -> None: ...
 
+    @property
+    def exr(self) -> ExrOutputOptions: ...
+
+    @exr.setter
+    def exr(self, arg: ExrOutputOptions, /) -> None: ...
+
 class FileExtraction:
     def __init__(self) -> None: ...
 
@@ -245,18 +359,34 @@ class FileExtraction:
     def write_metadata(self, arg: bool, /) -> None: ...
 
 class Rational:
+    def __init__(self) -> None: ...
+
     @property
     def numerator(self) -> int: ...
+
+    @numerator.setter
+    def numerator(self, arg: int, /) -> None: ...
 
     @property
     def denominator(self) -> int: ...
 
+    @denominator.setter
+    def denominator(self, arg: int, /) -> None: ...
+
 class Timestamp:
+    def __init__(self) -> None: ...
+
     @property
     def ticks(self) -> int: ...
 
+    @ticks.setter
+    def ticks(self, arg: int, /) -> None: ...
+
     @property
     def time_base(self) -> Rational: ...
+
+    @time_base.setter
+    def time_base(self, arg: Rational, /) -> None: ...
 
 class ColorDescription:
     @property
@@ -374,27 +504,71 @@ class FrameLayout:
     @property
     def format(self) -> FramePixelFormat: ...
 
+    @property
+    def color(self) -> FrameColor: ...
+
 class FrameInfo:
+    def __init__(self) -> None: ...
+
     @property
     def source_timestamp(self) -> Timestamp | None: ...
+
+    @source_timestamp.setter
+    def source_timestamp(self, arg: Timestamp | None) -> None: ...
 
     @property
     def timestamp_origin(self) -> TimestampOrigin: ...
 
+    @timestamp_origin.setter
+    def timestamp_origin(self, arg: TimestampOrigin, /) -> None: ...
+
     @property
     def decode_index(self) -> int: ...
+
+    @decode_index.setter
+    def decode_index(self, arg: int, /) -> None: ...
 
     @property
     def delivery_index(self) -> int: ...
 
+    @delivery_index.setter
+    def delivery_index(self, arg: int, /) -> None: ...
+
     @property
     def relative_seconds(self) -> float: ...
+
+    @relative_seconds.setter
+    def relative_seconds(self, arg: float, /) -> None: ...
 
     @property
     def legacy_source_frame(self) -> int: ...
 
+    @legacy_source_frame.setter
+    def legacy_source_frame(self, arg: int, /) -> None: ...
+
     @property
     def sharpness_score(self) -> float: ...
+
+    @sharpness_score.setter
+    def sharpness_score(self, arg: float, /) -> None: ...
+
+    @property
+    def origin(self) -> FrameOrigin: ...
+
+    @origin.setter
+    def origin(self, arg: FrameOrigin, /) -> None: ...
+
+    @property
+    def output_timestamp(self) -> Timestamp | None: ...
+
+    @output_timestamp.setter
+    def output_timestamp(self, arg: Timestamp | None) -> None: ...
+
+    @property
+    def source_component_depth(self) -> int | None: ...
+
+    @source_component_depth.setter
+    def source_component_depth(self, arg: int | None) -> None: ...
 
 class IngestProgress:
     @property
@@ -432,6 +606,15 @@ class IngestCapabilities:
     @property
     def hdr_to_sdr(self) -> bool: ...
 
+    @property
+    def rgb_float_sdr(self) -> bool: ...
+
+    @property
+    def exr(self) -> bool: ...
+
+    @property
+    def float_sdr_profile(self) -> str: ...
+
 class CodecBuildInfo:
     @property
     def ffmpeg_version(self) -> str: ...
@@ -443,6 +626,9 @@ class CodecBuildInfo:
     def ffmpeg_configuration(self) -> str: ...
 
 class FrameSurface:
+    @staticmethod
+    def from_bytes(width: int, height: int, format: FramePixelFormat, pixels: bytes, row_stride: int = 0, color: FrameColor = ..., info: FrameInfo = ...) -> FrameSurface: ...
+
     @property
     def layout(self) -> FrameLayout: ...
 
@@ -451,6 +637,10 @@ class FrameSurface:
 
     @property
     def pixels(self) -> bytes: ...
+
+class ImageOutput:
+    @staticmethod
+    def write_exr(path: str | os.PathLike, frame: FrameSurface, options: ExrOutputOptions = ..., cancelled: object | None = None) -> None: ...
 
 class MediaIngest:
     @staticmethod

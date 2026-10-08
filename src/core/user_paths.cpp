@@ -32,7 +32,6 @@ namespace lfs::core {
     namespace {
 
         std::atomic<std::uint64_t> g_temporary_file_sequence{0};
-        std::mutex g_atomic_write_mutex;
         std::mutex g_mcp_log_append_mutex;
 
         [[nodiscard]] std::uint64_t currentProcessId() noexcept {
@@ -93,117 +92,9 @@ namespace lfs::core {
                 code, std::move(user_message), std::move(detail), path));
         }
 
-        [[nodiscard]] lfs::Status writeTextAtomicallyImpl(
-            const std::filesystem::path& destination, const std::string& contents) {
-            const std::lock_guard write_lock(g_atomic_write_mutex);
-            std::error_code error;
-            auto directory = destination.parent_path();
-            if (directory.empty()) {
-                directory = std::filesystem::current_path(error);
-                if (error)
-                    return failStatus(
-                        lfs::ErrorCode::Unavailable,
-                        "The user settings location is unavailable.",
-                        std::format("Unable to resolve the current directory: {}", error.message()),
-                        destination);
-            }
-            std::filesystem::create_directories(directory, error);
-            if (error)
-                return failStatus(
-                    lfs::ErrorCode::PermissionDenied,
-                    "The user settings directory could not be created.",
-                    std::format("Unable to create directory '{}': {}",
-                                path_to_utf8(directory), error.message()),
-                    directory);
-
-            const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
-            const auto sequence = g_temporary_file_sequence.fetch_add(1, std::memory_order_relaxed);
-            const auto temporary = directory /
-                                   std::format("{}.tmp-{}-{}-{}", path_to_utf8(destination.filename()),
-                                               currentProcessId(), ticks, sequence);
-            {
-                // Atomic publication must preserve the caller's bytes exactly.
-                // Text mode rewrites LF to CRLF on Windows, which corrupts
-                // byte-oriented payloads such as captured log tails.
-                std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
-                if (!file)
-                    return failStatus(
-                        lfs::ErrorCode::PermissionDenied,
-                        "The user settings file could not be saved.",
-                        std::format("Unable to write temporary file '{}'", path_to_utf8(temporary)),
-                        temporary);
-                file.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-                file.close();
-                if (!file) {
-                    std::filesystem::remove(temporary, error);
-                    return failStatus(
-                        lfs::ErrorCode::DataLoss,
-                        "The user settings file could not be saved.",
-                        std::format("Unable to finish temporary file '{}'", path_to_utf8(temporary)),
-                        temporary);
-                }
-            }
-
-#ifdef _WIN32
-            if (!MoveFileExW(temporary.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-                const auto message = std::system_category().message(static_cast<int>(GetLastError()));
-                std::filesystem::remove(temporary, error);
-                return failStatus(
-                    lfs::ErrorCode::PermissionDenied,
-                    "The user settings file could not be replaced.",
-                    std::format("Unable to replace '{}' atomically: {}",
-                                path_to_utf8(destination), message),
-                    destination);
-            }
-#else
-            const int temporary_fd = ::open(temporary.c_str(), O_RDONLY);
-            if (temporary_fd < 0 || ::fsync(temporary_fd) != 0) {
-                const int sync_error = errno;
-                if (temporary_fd >= 0)
-                    ::close(temporary_fd);
-                std::filesystem::remove(temporary, error);
-                return failStatus(
-                    lfs::ErrorCode::DataLoss,
-                    "The user settings file could not be synchronized.",
-                    std::format("Unable to flush temporary file '{}': {}",
-                                path_to_utf8(temporary),
-                                std::system_category().message(sync_error)),
-                    temporary);
-            }
-            ::close(temporary_fd);
-
-            std::filesystem::rename(temporary, destination, error);
-            if (error) {
-                std::filesystem::remove(temporary, error);
-                return failStatus(
-                    lfs::ErrorCode::PermissionDenied,
-                    "The user settings file could not be replaced.",
-                    std::format("Unable to replace '{}' atomically: {}",
-                                path_to_utf8(destination), error.message()),
-                    destination);
-            }
-
-            const int directory_fd = ::open(directory.c_str(), O_RDONLY | O_DIRECTORY);
-            if (directory_fd < 0 || ::fsync(directory_fd) != 0) {
-                const int sync_error = errno;
-                if (directory_fd >= 0)
-                    ::close(directory_fd);
-                return failStatus(
-                    lfs::ErrorCode::DataLoss,
-                    "The user settings directory could not be synchronized.",
-                    std::format("Unable to flush directory '{}': {}",
-                                path_to_utf8(directory),
-                                std::system_category().message(sync_error)),
-                    directory);
-            }
-            ::close(directory_fd);
-#endif
-            return {};
-        }
-
         [[nodiscard]] lfs::Status writeJsonAtomically(
             const std::filesystem::path& destination, const json& value) {
-            return writeTextAtomicallyImpl(destination, value.dump(2) + '\n');
+            return writeTextFileAtomically(destination, value.dump(2) + '\n');
         }
 
         [[nodiscard]] lfs::Result<std::optional<std::filesystem::path>>
@@ -286,11 +177,6 @@ namespace lfs::core {
         }
 
     } // namespace
-
-    lfs::Status writeTextFileAtomically(
-        const std::filesystem::path& destination, const std::string& contents) {
-        return writeTextAtomicallyImpl(destination, contents);
-    }
 
     UserPaths::UserPaths(std::filesystem::path config_dir,
                          std::filesystem::path data_dir,

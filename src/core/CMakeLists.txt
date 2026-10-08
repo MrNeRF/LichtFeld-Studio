@@ -34,6 +34,7 @@ add_subdirectory(event_bridge)
 # Logger shared library (leaf dep, breaks lfs_core ↔ lfs_event_bridge cycle)
 add_subdirectory(logger)
 add_subdirectory(error)
+add_subdirectory(file_io)
 add_subdirectory(image_codecs)
 
 # Tensor C++ sources (merged from src/core/tensor/)
@@ -308,6 +309,8 @@ add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES} shared_image_ops.c
 include(${CMAKE_SOURCE_DIR}/cmake/GpuPrograms.cmake)
 target_sources(lfs_core PRIVATE tensor/tensor_vignette.cpp tensor/tensor_color.cpp)
 lfs_add_gpu_program(lfs_core rgb_to_yuv_program SOURCE tensor/programs/rgb_to_yuv.slang COMPUTE rgbToYuv420p DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tensor/programs/rgb_to_yuv_math.h")
+lfs_add_gpu_program(lfs_core linear_video_program SOURCE tensor/programs/linear_video.slang COMPUTE linearVideo
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tensor/programs/video_sampling.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/include/core/video_color_math.h" "${CMAKE_CURRENT_SOURCE_DIR}/include/core/color_transfer.h")
 lfs_add_gpu_program(lfs_core vignette_program SOURCE tensor/programs/vignette.slang COMPUTE vignette)
 lfs_add_gpu_program(lfs_core mirror_centroid_program SOURCE tensor/programs/mirror_centroid.slang COMPUTE mirrorCentroid DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/include/core/rounded_math.slangh")
 if(LFS_TENSOR_METAL)
@@ -408,6 +411,7 @@ target_link_libraries(lfs_core
     PUBLIC
         lfs_logger
         lfs_error
+        lfs_file_io
         lfs_image_codecs
         lfs_diagnostics
         lfs_event_bridge

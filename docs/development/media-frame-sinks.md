@@ -2,7 +2,7 @@
 
 ## Public contracts
 
-`media/frame_sink.hpp` defines synchronous CPU delivery in RGB8. The public
+`media/frame_sink.hpp` defines synchronous CPU delivery in RGB8 or float RGB/RGBA. The public
 contract uses owned C++ types and core `lfs::Result<void>`; no FFmpeg, CUDA,
 renderer or JSON types appear in it. It belongs to the shared `lfs_media` target
 used by Studio and root tests. Separate installed SDK packaging is deferred.
@@ -83,10 +83,11 @@ than silently overwriting. Other invalid configuration, lifecycle and codec
 failures receive InvalidArgument, FailedPrecondition or Unavailable as appropriate.
 Directory creation failures retain native filesystem status and UTF-8 path detail;
 permission denial receives PermissionDenied. Invalid views passed to either
-built-in write return InvalidArgument. FrameSurface validation itself throws.
+built-in write return InvalidArgument. FrameSurface validation returns a failed Result.
 The sink writes images only; it does not produce extractor schema-2 metadata.
 Completed files survive abort. This implementation does not add atomic image
-publication or clean up a partly written image after an underlying writer fails.
+publication or clean up a partly written PNG/JPEG image after an underlying writer fails.
+EXR uses the atomic independent image-output service; see [float/EXR contracts](media-linear-exr.md).
 
 ## Existing extractor integration
 

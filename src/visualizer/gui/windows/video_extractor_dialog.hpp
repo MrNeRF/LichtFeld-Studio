@@ -44,6 +44,9 @@ namespace lfs::gui {
         int frame_interval = 1;
         io::ImageFormat format = io::ImageFormat::PNG;
         int jpg_quality = 95;
+        media::ExrOutputOptions exr;
+        media::FrameColor input_color;
+        bool remove_stale_frames = false;
 
         double start_time = 0.0;
         double end_time = -1.0;
@@ -157,6 +160,10 @@ namespace lfs::gui {
         [[nodiscard]] bool hasDynamicState() const;
         [[nodiscard]] double trimDuration() const;
 
+        [[nodiscard]] std::string exrPreflightError() const;
+        std::optional<media::StreamDescription> source_description_;
+        std::string source_probe_error_;
+        Rml::Element* exr_preflight_el_ = nullptr;
         std::filesystem::path video_path_;
         std::filesystem::path output_dir_;
 
@@ -165,6 +172,10 @@ namespace lfs::gui {
         int frame_interval_ = 1;
 
         int format_selection_ = 0;
+        std::array<int, 4> exr_selections_{};
+        std::array<Rml::ElementFormControlSelect*, 4> exr_selects_{};
+        Rml::Element* exr_options_el_ = nullptr;
+        Rml::Element* metadata_option_el_ = nullptr;
         int jpg_quality_ = 95;
         int window_candidates_target_ = 10;
 

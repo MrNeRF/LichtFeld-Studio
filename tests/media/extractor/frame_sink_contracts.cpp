@@ -105,6 +105,52 @@ int runFrameSinkUnitContracts() {
         std::filesystem::remove(directory / ("jpeg_" + suffix + "_1.jpg"));
         std::filesystem::remove(expected);
     }
-    std::filesystem::remove(directory);
+    const auto seed = [&](const char* name) { std::ofstream(directory / name) << "existing"; };
+    seed("frame_5.png");
+    seed("frame_77.exr");
+    seed("photo.png");
+    seed("other_9.exr");
+    FileFrameSinkOptions replacement;
+    replacement.output_directory = directory;
+    replacement.remove_stale_frames = true;
+    FileFrameSink failed_replacement(replacement);
+    require(failed_replacement.begin({}).has_value(), "replacement snapshot begins");
+    failed_replacement.abort({SinkOutcome::Cancelled, 0, {}});
+    require(std::filesystem::exists(directory / "frame_5.png") && std::filesystem::exists(directory / "frame_77.exr"), "cancel preserves obsolete frames");
+    FileFrameSink successful_replacement(replacement);
+    require(successful_replacement.begin({}).has_value() && successful_replacement.write(file_view).has_value(), "replacement writes frame");
+    require(std::filesystem::exists(directory / "frame_77.exr"), "stale files survive until completion");
+    require(successful_replacement.complete({SinkOutcome::Completed, 1, {}}).has_value(), "replacement complete cleans stale frames");
+    require(!std::filesystem::exists(directory / "frame_5.png") && !std::filesystem::exists(directory / "frame_77.exr"), "obsolete generated PNG and EXR removed");
+    require(std::filesystem::exists(directory / "frame_1.png") && !std::filesystem::exists(directory / "photo.png") && std::filesystem::exists(directory / "other_9.exr"), "PNG replacement retains the legacy extension-wide policy");
+    seed("img_1.png");
+    seed("img_31.jpg");
+    std::ofstream(directory / "extraction_metadata.json") << R"({"frames":[{"file":"img_1.png"},{"file":"img_31.jpg"}]})";
+    FileFrameSink changed_pattern(replacement);
+    require(changed_pattern.begin({}).has_value() && changed_pattern.write(file_view).has_value(), "changed pattern extraction begins");
+    require(std::filesystem::exists(directory / "img_1.png"), "old pattern survives until success");
+    require(changed_pattern.complete({SinkOutcome::Completed, 1, {}}).has_value(), "changed pattern extraction completes");
+    require(!std::filesystem::exists(directory / "img_1.png") && !std::filesystem::exists(directory / "img_31.jpg") &&
+                !std::filesystem::exists(directory / "extraction_metadata.json"),
+            "old RGB pattern and stale metadata removed when metadata is off");
+    seed("old_3.exr");
+    seed("photo.png");
+    std::ofstream(directory / "extraction_metadata.json") << R"({"frames":[{"file":"old_3.exr"},{"file":"../outside.exr"}]})";
+    replacement.format = FrameFileFormat::EXR;
+    replacement.preserve_metadata = true;
+    std::vector<uint8_t> linear_pixels(12);
+    FrameView linear_view{{1, 1, 12, FramePixelFormat::RGBFloat32}, {}, linear_pixels};
+    linear_view.info.legacy_source_frame = 2;
+    linear_view.layout.color.transfer = ColorTransfer::Linear;
+    linear_view.layout.color.primaries = ColorPrimaries::Bt709;
+    FileFrameSink exr_replacement(replacement);
+    require(exr_replacement.begin({}).has_value() && exr_replacement.write(linear_view).has_value(), "EXR prior-manifest replacement begins");
+    // A regenerated manifest may have the same size and coarse filesystem
+    // timestamp. Its ownership must not depend on either changing.
+    require(exr_replacement.complete({SinkOutcome::Completed, 1, {}}).has_value(), "EXR prior-manifest replacement completes");
+    require(!std::filesystem::exists(directory / "old_3.exr") && std::filesystem::exists(directory / "photo.png") &&
+                std::filesystem::exists(directory / "other_9.exr") && std::filesystem::exists(directory / "extraction_metadata.json"),
+            "EXR cleans prior listed frames, keeps unrelated files and new metadata");
+    std::filesystem::remove_all(directory);
     return 0;
 }

@@ -716,6 +716,8 @@ namespace lichtfeld::Strings {
     } // namespace Axis
 
     namespace VideoExtractor {
+        inline constexpr const char* EXR_HDR_UNSUPPORTED = "video_extractor.exr_hdr_unsupported";
+        inline constexpr const char* SOURCE_METADATA_UNAVAILABLE = "video_extractor.source_metadata_unavailable";
         inline constexpr const char* TITLE = "video_extractor.title";
         inline constexpr const char* SELECT_PREVIEW = "video_extractor.select_preview";
         inline constexpr const char* STEP_BACKWARD = "video_extractor.step_backward";
