@@ -71,6 +71,35 @@ namespace lfs::vis::gui {
             return magic == kNgspMagic && version == 4 && num_points == expected_count && sh_degree <= 3;
         }
 
+        // Each gallery SSOG level halves the splats until the coarsest fits half of a phone's 1M performance budget.
+        constexpr std::uint64_t kGalleryCoarsestRows = 500'000;
+        constexpr int kGalleryMaxLodLevels = 8;
+        constexpr int kGalleryChunkCountK = 256;
+
+        [[nodiscard]] int galleryLodLevels(const std::uint64_t rows) noexcept {
+            int levels = 1;
+            while (levels < kGalleryMaxLodLevels && (rows >> (levels - 1)) > kGalleryCoarsestRows)
+                ++levels;
+            return levels;
+        }
+
+        // An SSOG copied unchanged must stream: every level filled, the coarsest within the phone budget, stored
+        // textures and no empty license.
+        [[nodiscard]] bool ssogEncodedAssetStreams(const lfs::io::project::LazyChunkValue& bytes,
+                                                   const std::uint64_t expected_count) {
+            const auto summary = io::summarize_ssog_archive(
+                bytes.size(), [&](const std::uint64_t offset, const std::span<std::byte> destination) {
+                    return bytes.read_at(offset, destination).has_value();
+                });
+            if (!summary)
+                return false;
+            const auto& counts = summary->counts;
+            return !counts.empty() && counts.front() == expected_count &&
+                   std::ranges::all_of(counts, [](const std::size_t count) { return count > 0; }) &&
+                   (counts.back() <= kGalleryCoarsestRows || counts.size() >= kGalleryMaxLodLevels) &&
+                   summary->webp_stored && !summary->empty_license;
+        }
+
         void throwIfCanceled(const std::function<bool()>& canceled, const char* message) {
             if (canceled && canceled())
                 throw std::runtime_error(message);
@@ -471,6 +500,9 @@ namespace lfs::vis::gui {
                 if (reused_kind == "spz" &&
                     !spzEncodedAssetLooksLikeV4(published.encoded->bytes, published.snapshot.row_count))
                     reused_kind.reset();
+                if (reused_kind == "ssog" &&
+                    !ssogEncodedAssetStreams(published.encoded->bytes, published.snapshot.row_count))
+                    reused_kind.reset();
             }
             const std::string extension = galleryPublicationExtension(request.format, reused_kind);
             std::uint64_t published_count = 0;
@@ -503,6 +535,8 @@ namespace lfs::vis::gui {
                                                .provenance = options.provenance})
                     : extension == "ssog"
                         ? io::save_ssog(*data, {.output_path = options.output_path,
+                                                .lod_levels = galleryLodLevels(published_count),
+                                                .chunk_count_k = kGalleryChunkCountK,
                                                 .progress_callback = options.progress_callback,
                                                 .provenance = options.provenance})
                     : extension == "spz"

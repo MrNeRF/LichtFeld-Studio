@@ -16,6 +16,7 @@
 #include <chrono>
 #include <climits>
 #include <cmath>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <fstream>
 #include <map>
@@ -27,6 +28,7 @@
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_invoke.h>
 #include <thread>
+#include <zlib.h>
 #ifdef _WIN32
 #include <process.h>
 #else
@@ -635,7 +637,7 @@ namespace lfs::io {
             std::mutex archive_mutex;
             if (bundled) {
                 atomic_output = std::make_unique<ScopedAtomicOutputFile>(out);
-                archive = make_sog_archive(atomic_output->temp_path());
+                archive = make_sog_archive(atomic_output->temp_path(), true);
                 if (auto opened = archive->open(); !opened)
                     return opened;
             }
@@ -997,5 +999,144 @@ namespace lfs::io {
         } catch (const Cancelled&) { return make_error(ErrorCode::CANCELLED, "Export cancelled by user", o.output_path); } catch (const std::exception& e) {
             return make_error(ErrorCode::ENCODING_FAILED, std::string("Failed to save SSOG: ") + e.what(), o.output_path);
         }
+    }
+
+    Result<SsogArchiveSummary> summarize_ssog_archive(const std::uint64_t size, const ByteRangeReader& read_at) {
+        const auto invalid = [](const char* what) {
+            return make_error(ErrorCode::INVALID_DATASET, std::string("Invalid SSOG archive: ") + what);
+        };
+        const auto read = [&](const std::uint64_t offset, const std::uint64_t length, std::vector<std::byte>& out) {
+            if (offset > size || length > size - offset)
+                return false;
+            out.resize(static_cast<std::size_t>(length));
+            return read_at(offset, out);
+        };
+        const auto le = [](const std::byte* p, const int bytes) {
+            std::uint64_t value = 0;
+            for (int i = bytes - 1; i >= 0; --i)
+                value = value << 8 | std::to_integer<std::uint64_t>(p[i]);
+            return value;
+        };
+        constexpr std::uint64_t kEndRecord = 22, kLocator = 20, kMaxDirectory = 64ull << 20, kMaxMeta = 16ull << 20;
+        if (size < kEndRecord)
+            return invalid("too small");
+        std::vector<std::byte> tail;
+        const auto tail_size = std::min<std::uint64_t>(size, kEndRecord + 0xFFFF + kLocator);
+        if (!read(size - tail_size, tail_size, tail))
+            return invalid("unreadable");
+        std::optional<std::size_t> end;
+        for (std::size_t i = tail.size() - kEndRecord + 1; i-- > 0;)
+            if (le(&tail[i], 4) == 0x06054b50) {
+                end = i;
+                break;
+            }
+        if (!end)
+            return invalid("no central directory");
+        std::uint64_t entries = le(&tail[*end + 10], 2), directory_size = le(&tail[*end + 12], 4),
+                      directory_offset = le(&tail[*end + 16], 4);
+        if (entries == 0xFFFF || directory_size == 0xFFFFFFFF || directory_offset == 0xFFFFFFFF) {
+            std::vector<std::byte> record;
+            if (*end < kLocator || le(&tail[*end - kLocator], 4) != 0x07064b50 ||
+                !read(le(&tail[*end - kLocator + 8], 8), 56, record) || le(record.data(), 4) != 0x06064b50)
+                return invalid("no ZIP64 directory");
+            entries = le(&record[32], 8);
+            directory_size = le(&record[40], 8);
+            directory_offset = le(&record[48], 8);
+        }
+        std::vector<std::byte> directory;
+        if (directory_size > kMaxDirectory || !read(directory_offset, directory_size, directory))
+            return invalid("central directory out of range");
+
+        struct Member {
+            std::uint64_t uncompressed = 0, compressed = 0, offset = 0;
+            std::uint64_t method = 0;
+        };
+        std::map<std::string, Member> members;
+        SsogArchiveSummary summary;
+        std::size_t at = 0;
+        for (std::uint64_t entry = 0; entry < entries; ++entry) {
+            if (at + 46 > directory.size() || le(&directory[at], 4) != 0x02014b50)
+                return invalid("damaged central directory");
+            const auto* header = &directory[at];
+            const auto name_length = le(header + 28, 2), extra_length = le(header + 30, 2), comment_length = le(header + 32, 2);
+            if (at + 46 + name_length + extra_length + comment_length > directory.size())
+                return invalid("damaged central directory");
+            Member member{le(header + 24, 4), le(header + 20, 4), le(header + 42, 4), le(header + 10, 2)};
+            // A ZIP64 extra field carries the saturated sizes and offset, in this order.
+            const auto extra_end = 46 + name_length + extra_length;
+            for (std::uint64_t x = 46 + name_length; x + 4 <= extra_end;) {
+                const auto id = le(header + x, 2), length = le(header + x + 2, 2);
+                if (x + 4 + length > extra_end)
+                    break;
+                if (id == 0x0001) {
+                    auto field = x + 4;
+                    for (auto* value : {&member.uncompressed, &member.compressed, &member.offset})
+                        if (*value == 0xFFFFFFFF && field + 8 <= x + 4 + length) {
+                            *value = le(header + field, 8);
+                            field += 8;
+                        }
+                }
+                x += 4 + length;
+            }
+            std::string name(reinterpret_cast<const char*>(header + 46), static_cast<std::size_t>(name_length));
+            at += static_cast<std::size_t>(46 + name_length + extra_length + comment_length);
+            if (name.ends_with(".webp") && member.method != 0)
+                summary.webp_stored = false;
+            members.insert_or_assign(std::move(name), member);
+        }
+
+        constexpr std::string_view kMeta = "lod-meta.json";
+        const std::string* meta_name = nullptr;
+        for (const auto& [name, member] : members)
+            if ((name == kMeta || name.ends_with(std::string("/").append(kMeta))) &&
+                (!meta_name || name.size() < meta_name->size()))
+                meta_name = &name;
+        if (!meta_name)
+            return invalid("no lod-meta.json");
+        const auto root = meta_name->substr(0, meta_name->size() - kMeta.size());
+        for (const auto& [name, member] : members)
+            if (name.starts_with(root) && name.find('/', root.size()) == std::string::npos &&
+                is_sog_license_member(std::string_view(name).substr(root.size())) && member.uncompressed == 0)
+                summary.empty_license = true;
+
+        const auto& meta = members.at(*meta_name);
+        std::vector<std::byte> local, packed;
+        if (meta.uncompressed > kMaxMeta || meta.compressed > kMaxMeta || !read(meta.offset, 30, local) ||
+            le(local.data(), 4) != 0x04034b50 ||
+            !read(meta.offset + 30 + le(&local[26], 2) + le(&local[28], 2), meta.compressed, packed))
+            return invalid("lod-meta.json unreadable");
+        std::string text(static_cast<std::size_t>(meta.uncompressed), '\0');
+        if (meta.method == 0) {
+            if (meta.compressed != meta.uncompressed)
+                return invalid("lod-meta.json size mismatch");
+            std::memcpy(text.data(), packed.data(), packed.size());
+        } else if (meta.method == 8) {
+            z_stream stream{};
+            if (inflateInit2(&stream, -MAX_WBITS) != Z_OK)
+                return invalid("lod-meta.json does not inflate");
+            stream.next_in = reinterpret_cast<Bytef*>(packed.data());
+            stream.avail_in = static_cast<uInt>(packed.size());
+            stream.next_out = reinterpret_cast<Bytef*>(text.data());
+            stream.avail_out = static_cast<uInt>(text.size());
+            const bool complete = inflate(&stream, Z_FINISH) == Z_STREAM_END && stream.total_out == text.size();
+            inflateEnd(&stream);
+            if (!complete)
+                return invalid("lod-meta.json does not inflate");
+        } else {
+            return invalid("lod-meta.json uses an unsupported compression");
+        }
+        const auto json = nlohmann::json::parse(text, nullptr, false);
+        if (json.is_discarded() || !json.is_object())
+            return invalid("lod-meta.json is not an object");
+        if (const auto counts = json.find("counts"); counts != json.end()) {
+            if (!counts->is_array())
+                return invalid("lod-meta.json counts");
+            for (const auto& count : *counts) {
+                if (!count.is_number_unsigned())
+                    return invalid("lod-meta.json counts");
+                summary.counts.push_back(count.get<std::size_t>());
+            }
+        }
+        return summary;
     }
 } // namespace lfs::io

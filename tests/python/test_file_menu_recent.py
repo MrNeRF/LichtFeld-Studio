@@ -116,6 +116,8 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     lf_stub.is_dataset_path = lambda _path: True
     lf_stub.read_checkpoint_header = lambda _path: object()
     lf_stub.read_checkpoint_params = lambda _path: object()
+    lf_stub.scene = SimpleNamespace(NodeType=SimpleNamespace(SPLAT="splat"))
+    lf_stub.get_scene = lambda: SimpleNamespace(get_nodes=lambda: [], is_node_effectively_visible=lambda _node: True)
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
     class Operator:

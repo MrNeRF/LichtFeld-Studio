@@ -20,14 +20,17 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <numeric>
 #include <random>
 #include <set>
+#include <span>
 #include <thread>
 
 namespace {
@@ -523,6 +526,71 @@ TEST(SsogFormat, BundleEntriesRoundtripAndRegistry) {
     auto loaded = registry->load(bundle);
     ASSERT_TRUE(loaded) << loaded.error().format();
     EXPECT_EQ(std::get<std::shared_ptr<SplatData>>(loaded->data)->size(), 2048);
+}
+
+namespace {
+    lfs::io::Result<SsogArchiveSummary> summarize_bytes(const std::string& bytes) {
+        return summarize_ssog_archive(bytes.size(), [&](const std::uint64_t offset, const std::span<std::byte> destination) {
+            if (offset > bytes.size() || destination.size() > bytes.size() - offset)
+                return false;
+            std::memcpy(destination.data(), bytes.data() + offset, destination.size());
+            return true;
+        });
+    }
+
+    std::string file_bytes(const fs::path& path) {
+        std::ifstream file(path, std::ios::binary);
+        return {std::istreambuf_iterator<char>(file), {}};
+    }
+} // namespace
+
+// A summary that misread counts or missed deflated members would let an unstreamable SSOG reach the gallery
+// unchanged. Our exporter stores every member, so lod-meta.json appears verbatim in the archive.
+TEST(SsogFormat, SummaryReadsLevelCountsAndStoredMembers) {
+    ScopedSsogDirectory dir;
+    const auto bundle = dir.path / "scene.ssog";
+    auto saved = save_ssog(synthetic(2048, 1), options(bundle, 3));
+    ASSERT_TRUE(saved) << saved.error().format();
+    const auto bytes = file_bytes(bundle);
+    const auto summary = summarize_bytes(bytes);
+    ASSERT_TRUE(summary) << summary.error().format();
+    EXPECT_EQ(summary->counts, (std::vector<std::size_t>{2048, 1024, 512}));
+    EXPECT_TRUE(summary->webp_stored);
+    EXPECT_FALSE(summary->empty_license);
+    EXPECT_NE(bytes.find("\"lodLevels\""), std::string::npos);
+}
+
+TEST(SsogFormat, SummaryFlagsDeflatedTexturesAndEmptyLicense) {
+    ScopedSsogDirectory dir;
+    const auto bundle = dir.path / "foreign.ssog";
+    {
+        std::unique_ptr<archive, decltype(&archive_write_free)> zip(archive_write_new(), archive_write_free);
+        ASSERT_EQ(archive_write_set_format_zip(zip.get()), ARCHIVE_OK);
+#ifdef _WIN32
+        ASSERT_EQ(archive_write_open_filename_w(zip.get(), bundle.wstring().c_str()), ARCHIVE_OK);
+#else
+        ASSERT_EQ(archive_write_open_filename(zip.get(), bundle.c_str()), ARCHIVE_OK);
+#endif
+        const auto add = [&](const char* name, const std::string& data) {
+            std::unique_ptr<archive_entry, decltype(&archive_entry_free)> entry(archive_entry_new(), archive_entry_free);
+            archive_entry_set_pathname(entry.get(), name);
+            archive_entry_set_size(entry.get(), static_cast<la_int64_t>(data.size()));
+            archive_entry_set_filetype(entry.get(), AE_IFREG);
+            archive_entry_set_perm(entry.get(), 0644);
+            ASSERT_EQ(archive_write_zip_set_compression_deflate(zip.get()), ARCHIVE_OK);
+            ASSERT_EQ(archive_write_header(zip.get(), entry.get()), ARCHIVE_OK);
+            ASSERT_EQ(archive_write_data(zip.get(), data.data(), data.size()), static_cast<la_ssize_t>(data.size()));
+        };
+        add("scene/lod-meta.json", R"({"counts":[5,3]})");
+        add("scene/0_0/means_l.webp", std::string(256, 'x'));
+        add("scene/LICENSE", "");
+        ASSERT_EQ(archive_write_close(zip.get()), ARCHIVE_OK);
+    }
+    const auto summary = summarize_bytes(file_bytes(bundle));
+    ASSERT_TRUE(summary) << summary.error().format();
+    EXPECT_EQ(summary->counts, (std::vector<std::size_t>{5, 3}));
+    EXPECT_FALSE(summary->webp_stored);
+    EXPECT_TRUE(summary->empty_license);
 }
 
 TEST(SsogFormat, BundleCancellationPreservesDestination) {

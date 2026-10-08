@@ -410,7 +410,7 @@ def test_resolve_mine_preserves_hdr_source_through_native_publish(gallery, monke
     monkeypatch.setattr(module.lf, 'get_render_settings', lambda: settings, raising=False)
     monkeypatch.setattr(module, 'restore_view', lambda _lf, selected, **kw:
         pytest.fail('Lost HDR source') if kw.get('environment_path') != '/saved.lfsenv' else None)
-    monkeypatch.setattr(panel, '_visible_splats', lambda: [SimpleNamespace(name='geometry')])
+    monkeypatch.setattr(panel, '_visible_splats', lambda: [SimpleNamespace(name='geometry', gaussian_count=1000)])
     monkeypatch.setattr(panel, '_save_current_project', lambda callback, **kwargs: callback())
     monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     monkeypatch.setattr(module.lf.ui, 'get_export_state', lambda: {'active': False}, raising=False)
@@ -644,7 +644,7 @@ def test_resolve_mine_chain_queues_prepared_upload_and_finishes_equal(gallery, t
     monkeypatch.setattr(module.lf.ui, 'clear_keyframes', lambda: None, raising=False)
     monkeypatch.setattr(module, 'restore_view', lambda lf, view, **kw: restore_camera_path(lf, view.get('cameraPath')))
     monkeypatch.setattr(panel, '_save_current_project', lambda callback, **kwargs: callback())
-    monkeypatch.setattr(panel, '_visible_splats', lambda: [SimpleNamespace(name='geometry')])
+    monkeypatch.setattr(panel, '_visible_splats', lambda: [SimpleNamespace(name='geometry', gaussian_count=1000)])
     monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     export_state = dict(active=False)
     monkeypatch.setattr(module.lf.ui, 'get_export_state', lambda: export_state, raising=False)

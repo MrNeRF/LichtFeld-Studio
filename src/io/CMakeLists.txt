@@ -408,7 +408,7 @@ target_link_libraries(lfs_io
         ${WEBP_DECODE_LIB}     # WebP for SOG decompression
         ${WEBP_ENCODE_LIB}     # WebP for SOG/HTML export
         ${ARCHIVE_LIB}         # LibArchive for SOG bundle support
-        ZLIB::ZLIB             # gzip/msgpack payloads inside NuRec USDZ
+        ZLIB::ZLIB             # gzip/msgpack payloads inside NuRec USDZ, deflated SSOG members
         $<IF:$<TARGET_EXISTS:libdeflate::libdeflate_shared>,libdeflate::libdeflate_shared,libdeflate::libdeflate_static> # fast DEFLATE for RAD
         zstd::libzstd          # .licht project container chunk compression
         OpenSSL::Crypto

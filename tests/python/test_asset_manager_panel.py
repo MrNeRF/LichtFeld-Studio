@@ -4042,6 +4042,7 @@ def test_file_menu_publish_review_prefills_unpublished_draft(panel_module, monke
     monkeypatch.setattr(asset_index, "AssetIndex", lambda: pytest.fail("File menu opened a second catalog"))
     monkeypatch.setattr(file_menu, "_project_has_path", lambda: True)
     monkeypatch.setattr(panel_module.lf, "project_poll_write", lambda: {"path": str(path)}, raising=False)
+    monkeypatch.setattr(panel_module.lf, "get_scene", lambda: SimpleNamespace(get_nodes=lambda: []), raising=False)
     monkeypatch.setattr(panel_module.lf, "io", SimpleNamespace(inspect_project_card=lambda _path: SimpleNamespace(
         project_uuid=project_id, title="File title", commit_uuid="saved", file_uuid="file", physical_file_size=1, has_preview=False
     )), raising=False)

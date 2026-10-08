@@ -14,6 +14,7 @@ from .gallery_view import restore_view
 from .portal_gallery import domain_tokens, UNSUPPORTED_PORTAL
 from .gallery_logging import failure as log_failure, safe_url, stage as log_stage
 from .gallery_messages import tr
+from .gallery_preferences import resolve_upload_format
 from . import gallery_preparation
 
 
@@ -598,6 +599,7 @@ class PublishSteps:
 
     def start_closed(self, asset, details, upload_format, *, update, publish_as_new, handoff=None):
         """Prepare saved content without consulting the current scene or view."""
+        upload_format = resolve_upload_format(upload_format, asset.get("publication", {}).get("estimatedPoints"))
         if upload_format not in ("studio", "sog", "ssog", "spz"):
             raise ValueError("Choose a supported upload format.")
         if "licht" not in self.model_state().get("source_formats", []):
@@ -673,9 +675,11 @@ class PublishSteps:
         linked = self.model_state()["links"].get(project_id)
         if linked and metadata.get("replaceSceneId") != linked["sceneId"] and not metadata.get("_publishAsNew"):
             raise ValueError("This project is linked to a gallery item. Select it to replace, or unlink before publishing a new item.")
-        nodes = [n.name for n in self.visible_splats()]
-        if not nodes:
+        splats = list(self.visible_splats())
+        if not splats:
             raise ValueError("There are no visible splats to upload.")
+        if upload_format == "auto":
+            upload_format = resolve_upload_format(upload_format, sum(node.gaussian_count for node in splats))
         self.preparation_failure = None
         try:
             size = Path(path).stat().st_size
@@ -697,6 +701,8 @@ class PublishSteps:
             self.start_live(metadata, upload_format, project_id=project_id)
 
     def start_live(self, metadata, upload_format, *, project_id=None, unlinked=False):
+        if upload_format == "auto":
+            upload_format = resolve_upload_format(upload_format, sum(node.gaussian_count for node in self.visible_splats()))
         if upload_format not in ("studio", "sog", "ssog", "spz"):
             raise ValueError("Choose a supported upload format.")
         if "licht" not in self.service.snapshot().get("source_formats", []):
@@ -774,9 +780,11 @@ class PublishSteps:
                 raise ValueError("The HDR background changed. Review the current view and try uploading again.")
         if self.patch_saved_update_port(metadata, project_id, path, update=update, expected_commit=expected_commit):
             return
-        nodes = [n.name for n in self.visible_splats()]
-        if not nodes:
+        splats = list(self.visible_splats())
+        if not splats:
             raise ValueError("There are no visible splats to upload.")
+        if upload_format == "auto":
+            upload_format = resolve_upload_format(upload_format, sum(node.gaussian_count for node in splats))
         if upload_format not in ("studio", "sog", "ssog", "spz"):
             raise ValueError("Choose a supported upload format.")
         if "licht" not in self.service.snapshot().get("source_formats", []):

@@ -599,15 +599,24 @@ def _can_publish_scene() -> bool:
     return _project_has_path() or bool(getattr(lf, "has_scene", lambda: False)())
 
 
+def _visible_splats() -> list:
+    scene = lf.get_scene()
+    return [node for node in scene.get_nodes()
+            if node.type == lf.scene.NodeType.SPLAT and scene.is_node_effectively_visible(node.id)]
+
+
+def _splat_publication(nodes) -> dict:
+    """What the gallery review estimates from; the SH degree is unknown without materializing geometry."""
+    return {"estimatedPoints": sum(node.gaussian_count for node in nodes)}
+
+
 def _open_unlinked_gallery_review() -> None:
     from .gallery_controller import get_gallery_controller
     from .gallery_file_panel import open_gallery_file_panel
     from .gallery_actions import gallery_quota
     from .gallery_messages import tr as gallery_tr
 
-    scene = lf.get_scene()
-    nodes = [node for node in scene.get_nodes()
-             if node.type == lf.scene.NodeType.SPLAT and scene.is_node_effectively_visible(node.id)]
+    nodes = _visible_splats()
     name = nodes[0].name if len(nodes) == 1 else lf.ui.tr("menu.file.untitled_scene")
     controller = get_gallery_controller()
     state = controller.snapshot()
@@ -615,7 +624,8 @@ def _open_unlinked_gallery_review() -> None:
     quota = (gallery_tr("quota.used", used=f"{used_bytes / 1e9:.1f}", quota=f"{quota_bytes / 1e9:g}")
              if quota_bytes is not None else "")
     asset = {"id": str(uuid.uuid4()), "path": "", "name": name, "exists": True,
-             "status": "AVAILABLE", "publication": {"visibleSplats": len(nodes)}}
+             "status": "AVAILABLE",
+             "publication": dict(_splat_publication(nodes), visibleSplats=len(nodes))}
     open_gallery_file_panel(controller=controller, asset=asset, scene=None, action="publish",
                             fields={"title": name, "description": "", "visibility": "private",
                                     "upload_format": controller.upload_format},
@@ -774,7 +784,7 @@ def _publish_current_project_to_gallery(*, refresh_once: bool = True) -> None:
             "has_preview": bool(card.has_preview),
             "exists": True,
             "status": "AVAILABLE",
-            "publication": {},
+            "publication": _splat_publication(_visible_splats()),
         }
         fields = {
             "title": str(linked_fields.get("title") or project_name),

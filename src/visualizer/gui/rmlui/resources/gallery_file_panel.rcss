@@ -13,6 +13,8 @@
 .gallery-file-content .btn { height: 24dp; padding: 0dp 8dp; line-height: 22dp; box-sizing: border-box; flex: 0 0 auto; width: auto; min-width: 64dp; max-width: 400dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gallery-file-content .btn span { display: inline; width: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gallery-cover-option { display: flex; align-items: center; gap: 8dp; }
+.gallery-phone-warning { display: flex; flex-direction: column; align-items: flex-start; gap: 8dp; flex-shrink: 0; }
+.gallery-phone-warning span { white-space: normal; }
 .gallery-cover-option input { flex-shrink: 0; margin: 0dp; }
 .gallery-cover-option span { flex: 1; }
 .gallery-choice-row { display: flex; align-items: center; gap: 16dp; padding: 8dp 0dp; border-bottom-width: 1dp; border-bottom-color: #45475a; min-height: 40dp; }
