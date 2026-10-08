@@ -9,16 +9,18 @@ namespace {
     using lfs::vis::gui::detail::appendRequiredExtension;
     using lfs::vis::gui::detail::saveDialogDefaultName;
 
-    TEST(FileDialogPathTest, PreservesSupportedExtensionsRegardlessOfCase) {
+    TEST(FileDialogPathTest, NormalizesSupportedExtensionCase) {
         for (const auto* extension : {".ply", ".sog", ".spz", ".ssog", ".rad", ".licht", ".json", ".glb"}) {
             std::string upper = extension;
             for (char& c : upper)
                 c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
             const auto path = std::filesystem::path("folder.with.dots") / ("cloud-context" + upper);
-            EXPECT_EQ(appendRequiredExtension(path, extension), path);
+            const auto expected = std::filesystem::path("folder.with.dots") / ("cloud-context" + std::string(extension));
+            EXPECT_EQ(appendRequiredExtension(path, extension), expected);
+            EXPECT_EQ(appendRequiredExtension(path, extension).extension(), extension);
             EXPECT_EQ(saveDialogDefaultName(path.string(), extension), "cloud-context");
         }
-        EXPECT_EQ(appendRequiredExtension("cloud.PlY", ".ply"), "cloud.PlY");
+        EXPECT_EQ(appendRequiredExtension("cloud.PlY", ".ply"), "cloud.ply");
     }
 
     TEST(FileDialogPathTest, PreservesExistingSaveBehavior) {

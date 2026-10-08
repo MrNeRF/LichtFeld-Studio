@@ -12,9 +12,15 @@ namespace lfs::vis::gui::detail {
     [[nodiscard]] inline std::filesystem::path appendRequiredExtension(
         std::filesystem::path path,
         const std::string_view extension) {
-        if (!path.empty() && !extension.empty() && !core::has_extension(path, extension)) {
-            path += std::string(extension);
+        if (path.empty() || extension.empty() || path.extension() == extension) {
+            return path;
         }
+        // Readers and writers compare suffixes exactly, so a suffix typed in
+        // another case is replaced by the canonical one instead of kept or doubled.
+        if (core::has_extension(path, extension)) {
+            path.replace_extension();
+        }
+        path += std::string(extension);
         return path;
     }
 

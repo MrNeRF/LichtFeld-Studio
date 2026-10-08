@@ -28,7 +28,7 @@ extern "C" nfdresult_t __wrap_NFD_SaveDialogU8_With_Impl(nfdversion_t, nfdu8char
     return dialog_result;
 }
 
-TEST(NativeSaveDialogTest, AllSaveDialogsPreserveSupportedSuffixes) {
+TEST(NativeSaveDialogTest, AllSaveDialogsWriteCanonicalSuffixes) {
     using namespace lfs::vis::gui;
     using Save = std::filesystem::path (*)(const std::string&, const std::filesystem::path&);
     const std::pair<Save, std::string> dialogs[] = {
@@ -56,14 +56,14 @@ TEST(NativeSaveDialogTest, AllSaveDialogsPreserveSupportedSuffixes) {
         for (const auto& suffix : {extension, upper, std::string{}, std::string{".unsupported"}}) {
             SCOPED_TRACE(extension + " / " + suffix);
             selected_path = "/tmp/cloud-context" + suffix;
-            const std::string expected_suffix = (suffix == extension || suffix == upper) ? suffix : suffix + extension;
+            const std::string expected_suffix = (suffix == extension || suffix == upper) ? extension : suffix + extension;
             const auto result = save("cloud-context" + suffix, {});
             EXPECT_EQ(lfs::core::path_to_utf8(result), "/tmp/cloud-context" + expected_suffix);
             EXPECT_EQ(suggested_name, "cloud-context" + ((suffix == extension || suffix == upper) ? std::string{} : suffix));
         }
     }
     selected_path = "/tmp/cloud-context.SSOG";
-    EXPECT_EQ(SaveSsogFileDialog("cloud-context.SSOG"), selected_path);
+    EXPECT_EQ(SaveSsogFileDialog("cloud-context.SSOG"), "/tmp/cloud-context.ssog");
     EXPECT_EQ(suggested_name, "cloud-context");
 }
 
