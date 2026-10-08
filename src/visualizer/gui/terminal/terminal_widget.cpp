@@ -280,8 +280,6 @@ namespace lfs::vis::terminal {
                 if (out.foreground == TRANSPARENT_COLOR)
                     out.foreground = BG_COLOR;
             }
-            if (out.foreground == TRANSPARENT_COLOR)
-                out.foreground = DEFAULT_FG;
         };
 
         for (int row = 0; row < rows_; ++row) {

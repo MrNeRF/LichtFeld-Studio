@@ -489,7 +489,6 @@ button.disabled {
     overflow: hidden;
     white-space: pre;
     font-family: "JetBrains Mono";
-    background-color: rgb(30, 30, 30);
 }
 
 .terminal-row {
