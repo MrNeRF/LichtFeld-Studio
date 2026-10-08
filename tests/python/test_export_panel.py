@@ -188,6 +188,21 @@ def test_export_panel_builds_format_and_model_records(export_panel_module):
     assert module.ExportPanel.update_interval_ms is None
 
 
+def test_export_panel_counts_only_splats_that_are_not_deleted(export_panel_module):
+    # Catches the model row showing the stored count after a soft delete, which the export drops.
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._handle = _HandleStub()
+    panel._selected_nodes = {"Tree"}
+    tree = _make_node(module.lf.scene.NodeType.SPLAT, "Tree", 128)
+    tree.splat_data = lambda: SimpleNamespace(visible_count=lambda: 96)
+    state.nodes = [tree]
+
+    panel._rebuild_model_records(state.nodes)
+
+    assert panel._handle.records["models"] == [{"name": "Tree", "selected": True, "count_text": "(96)"}]
+
+
 def test_export_panel_seeds_selection_from_scene_nodes(export_panel_module):
     module, _state = export_panel_module
     panel = module.ExportPanel()
