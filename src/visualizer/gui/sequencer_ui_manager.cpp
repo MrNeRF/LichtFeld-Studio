@@ -516,9 +516,7 @@ namespace lfs::vis::gui {
         });
 
         cmd::SequencerLoadPlySequence::when([this](const auto& event) {
-            if (event.fps > 0.0f)
-                ui_state_.sequence_fps = std::clamp(event.fps, MIN_SEQUENCE_FPS, MAX_SEQUENCE_FPS);
-            loadPlySequenceFromDirectory(lfs::core::utf8_to_path(event.directory));
+            (void)loadPlySequenceFromDirectory(lfs::core::utf8_to_path(event.directory), event.fps);
         });
 
         state::KeyframeListChanged::when([this](const auto&) {
@@ -1411,7 +1409,7 @@ namespace lfs::vis::gui {
         if (panel_->consumeLoadSequenceRequest()) {
             const auto path = gui::PickFolderDialog();
             if (!path.empty())
-                loadPlySequenceFromDirectory(path);
+                (void)loadPlySequenceFromDirectory(path);
         }
 
         if (panel_->consumeDockToggleRequest()) {
@@ -2112,15 +2110,25 @@ namespace lfs::vis::gui {
         draw_list.PopClipRect();
     }
 
-    void SequencerUIManager::loadPlySequenceFromDirectory(const std::filesystem::path& directory) {
+    lfs::Result<void> SequencerUIManager::loadPlySequenceFromDirectory(
+        const std::filesystem::path& directory, const float fps) {
+        const auto fail = [](const lfs::ErrorCode code, std::string message) {
+            return lfs::Result<void>::failure(lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::Sequencer,
+                .user_message = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT()}));
+        };
+        if (fps > 0.0f)
+            ui_state_.sequence_fps = std::clamp(fps, MIN_SEQUENCE_FPS, MAX_SEQUENCE_FPS);
         auto* const scene_manager = viewer_->getSceneManager();
         if (!scene_manager)
-            return;
+            return fail(lfs::ErrorCode::Unavailable, "Scene manager unavailable");
 
         std::error_code ec;
         if (!std::filesystem::is_directory(directory, ec)) {
             LOG_ERROR("PLY sequence path is not a directory: {}", lfs::core::path_to_utf8(directory));
-            return;
+            return fail(lfs::ErrorCode::InvalidArgument, std::format("PLY sequence path is not a directory: {}", lfs::core::path_to_utf8(directory)));
         }
         last_ply_sequence_frame_ = std::nullopt;
         loaded_ply_sequence_frames_.clear();
@@ -2131,14 +2139,14 @@ namespace lfs::vis::gui {
             LOG_ERROR("Failed to read PLY sequence directory {}: {}",
                       lfs::core::path_to_utf8(directory),
                       ec.message());
-            return;
+            return fail(lfs::ErrorCode::Unavailable, std::format("Failed to read PLY sequence directory: {}", ec.message()));
         }
         for (const auto& entry : entries) {
             if (ec) {
                 LOG_ERROR("Failed to read PLY sequence directory {}: {}",
                           lfs::core::path_to_utf8(directory),
                           ec.message());
-                return;
+                return fail(lfs::ErrorCode::Unavailable, std::format("Failed to read PLY sequence directory: {}", ec.message()));
             }
             if (!entry.is_regular_file(ec))
                 continue;
@@ -2152,14 +2160,14 @@ namespace lfs::vis::gui {
         std::sort(paths.begin(), paths.end());
         if (paths.empty()) {
             LOG_WARN("No PLY files found in sequence directory: {}", lfs::core::path_to_utf8(directory));
-            return;
+            return fail(lfs::ErrorCode::InvalidArgument, std::format("No PLY files found in sequence directory: {}", lfs::core::path_to_utf8(directory)));
         }
 
         // A PLY sequence replaces the scene. Each file gets a real scene-graph
         // child immediately; the heavy SplatData is streamed into those nodes.
         if (scene_manager->getContentType() != SceneManager::ContentType::Empty) {
             if (!scene_manager->clear())
-                return;
+                return fail(lfs::ErrorCode::Internal, "Failed to clear scene for PLY sequence");
         }
 
         const std::string sequence_prefix = lfs::core::path_to_utf8(directory.filename().empty()
@@ -2170,7 +2178,7 @@ namespace lfs::vis::gui {
         if (sequence_node.empty()) {
             LOG_ERROR("Failed to create PLY sequence node for {}",
                       lfs::core::path_to_utf8(directory));
-            return;
+            return fail(lfs::ErrorCode::Internal, "Failed to create PLY sequence node");
         }
 
         std::vector<std::filesystem::path> loaded_paths;
@@ -2185,7 +2193,7 @@ namespace lfs::vis::gui {
         const auto* sequence_scene_node = scene.getNode(sequence_node);
         if (!sequence_scene_node) {
             LOG_ERROR("Failed to resolve PLY sequence node '{}'", sequence_node);
-            return;
+            return fail(lfs::ErrorCode::Internal, "Failed to resolve PLY sequence node");
         }
         const core::NodeId sequence_id = sequence_scene_node->id;
         const core::Uuid sequence_uuid = sequence_scene_node->uuid;
@@ -2202,7 +2210,7 @@ namespace lfs::vis::gui {
                 LOG_ERROR("Failed to create PLY sequence frame placeholder '{}'", node_name);
                 if (!scene_manager->clear())
                     LOG_WARN("Failed to clear partial PLY sequence after placeholder failure");
-                return;
+                return fail(lfs::ErrorCode::Internal, "Failed to create PLY sequence frame placeholder");
             }
             const auto* frame_node = scene.getNodeById(frame_id);
             assert(frame_node);
@@ -2231,7 +2239,7 @@ namespace lfs::vis::gui {
             const auto resolved_node = resolvePlySequenceNode(scene, sequence->node_uuid, sequence->node_name);
             if (!resolved_node) {
                 LOG_ERROR("Cannot select PLY sequence container: {}", resolved_node.error().message);
-                return;
+                return fail(lfs::ErrorCode::Internal, std::format("Cannot select PLY sequence container: {}", resolved_node.error().message));
             }
             scene_manager->selectNode(*resolved_node);
             LOG_INFO("Registered PLY sequence '{}' with {} frames at {} fps",
@@ -2243,6 +2251,7 @@ namespace lfs::vis::gui {
         lfs::core::events::state::KeyframeListChanged{
             .count = controller_.timeline().realKeyframeCount()}
             .emit();
+        return {};
     }
 
     void SequencerUIManager::applyPlySequenceFrame() {

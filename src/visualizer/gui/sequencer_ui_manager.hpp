@@ -18,6 +18,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <core/error.hpp>
 #include <core/export.hpp>
 #include <cstdint>
 #include <deque>
@@ -57,6 +58,8 @@ namespace lfs::vis {
             void destroyGraphicsResources();
             void tickPlaybackBeforeSceneRender();
             [[nodiscard]] bool scrubToTime(float time, bool update_camera);
+            lfs::Result<void> loadPlySequenceFromDirectory(
+                const std::filesystem::path& directory, float fps = 0.0f);
 
             [[nodiscard]] SequencerController& controller() { return controller_; }
             [[nodiscard]] const SequencerController& controller() const { return controller_; }
@@ -83,7 +86,6 @@ namespace lfs::vis {
             void handleOverlayActions();
             void recordKeyframeAddition(std::optional<sequencer::Keyframe> before,
                                         sequencer::KeyframeId id, float duration_before);
-            void loadPlySequenceFromDirectory(const std::filesystem::path& directory);
             void applyPlySequenceFrame();
             void startPlySequenceStreaming(std::vector<std::filesystem::path> paths,
                                            lfs::io::SplatTensorAllocator allocator);

@@ -611,7 +611,8 @@ namespace lfs::app {
                         backend.set_visible(true);
                     if (!backend.load_ply_sequence)
                         return json{{"error", "load_ply_sequence backend unavailable"}};
-                    backend.load_ply_sequence(directory, fps);
+                    if (const auto loaded = backend.load_ply_sequence(directory, fps); !loaded)
+                        return json{{"error", loaded.error().user_message()}};
 
                     json result = sequencer_state_json(backend, **controller);
                     result["directory"] = directory;

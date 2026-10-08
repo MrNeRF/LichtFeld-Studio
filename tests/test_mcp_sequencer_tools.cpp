@@ -461,6 +461,54 @@ TEST_F(McpSequencerToolsTest, SetEasingAndDeleteResolveByIdAfterReorder) {
     EXPECT_EQ(delete_result["keyframes"][1]["id"], id_b);
 }
 
+TEST_F(McpSequencerToolsTest, RejectedPlySequenceLoadReportsErrorAndPreservesState) {
+    backend_.controller.setPlySequence("existing", "sequence", {"frame_0.ply", "frame_1.ply"},
+                                       {"frame_0", "frame_1"}, 24.0f);
+    backend_.controller.seek(1.0f / 24.0f);
+    const auto before = lfs::mcp::ToolRegistry::instance().call_tool("sequencer.get", json::object());
+    auto backend = backend_.tool_backend();
+    backend.load_ply_sequence = [](const std::string&, float) -> lfs::Result<void> {
+        return lfs::Result<void>::failure(lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::InvalidArgument,
+            .domain = lfs::ErrorDomain::IO,
+            .user_message = "PLY sequence path is not a directory",
+            .detection = LFS_SOURCE_SITE_CURRENT()}));
+    };
+    unregister_tools();
+    lfs::app::register_gui_sequencer_tools(lfs::mcp::ToolRegistry::instance(), &viewer_, backend);
+    for (const auto* directory : {"missing-a", "missing-b"}) {
+        const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+            "sequencer.load_ply_sequence", json{{"directory", directory}, {"show_sequencer", false}});
+        EXPECT_TRUE(result.contains("error"));
+        EXPECT_FALSE(result.value("success", false));
+        if (result.contains("error"))
+            EXPECT_EQ(result["error"]["message"], "PLY sequence path is not a directory");
+        EXPECT_EQ(lfs::mcp::ToolRegistry::instance().call_tool("sequencer.get", json::object()), before);
+    }
+}
+
+TEST_F(McpSequencerToolsTest, SuccessfulPlySequenceLoadPreservesResponseContract) {
+    auto backend = backend_.tool_backend();
+    backend.load_ply_sequence = [this](const std::string& directory, float fps) -> lfs::Result<void> {
+        backend_.controller.setPlySequence(directory, "sequence", {"frame_0.ply", "frame_1.ply"},
+                                           {"frame_0", "frame_1"}, fps);
+        return {};
+    };
+    unregister_tools();
+    lfs::app::register_gui_sequencer_tools(lfs::mcp::ToolRegistry::instance(), &viewer_, backend);
+    for (const float fps : {5.0f, 24.0f}) {
+        const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+            "sequencer.load_ply_sequence", json{{"directory", "frames"}, {"fps", fps}, {"show_sequencer", false}});
+        EXPECT_FALSE(result.contains("error"));
+        EXPECT_TRUE(result.value("success", false));
+        auto expected = lfs::mcp::ToolRegistry::instance().call_tool("sequencer.get", json::object());
+        expected["directory"] = "frames";
+        EXPECT_EQ(result, expected);
+        EXPECT_EQ(result["ply_sequence_fps"], fps);
+        EXPECT_EQ(result["ply_sequence_frame_count"], 2);
+    }
+}
+
 // Without an explicit time a keyframe lands at the playhead, and seeking is clamped to
 // the clip duration, so scripted paths could not place a keyframe past the clip end at
 // all -- successive adds collapsed onto the clamped playhead. Catches dropping the
