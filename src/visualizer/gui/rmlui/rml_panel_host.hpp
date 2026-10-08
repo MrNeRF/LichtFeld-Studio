@@ -92,6 +92,7 @@ namespace lfs::vis::gui {
         bool isDocumentLoaded() const { return document_ != nullptr; }
 
     private:
+        friend class lfs::vis::WindowInputDispatchTest;
         bool scheduledUpdateDue() const {
             return next_update_at_ && std::chrono::steady_clock::now() >= *next_update_at_;
         }
