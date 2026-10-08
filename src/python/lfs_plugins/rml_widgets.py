@@ -240,7 +240,6 @@ def _apply_section_visual_state(expanded, header_element=None, arrow_element=Non
         header_element.set_class("is-expanded", expanded)
         header_element.set_class("is-collapsed", not expanded)
     if arrow_element:
-        arrow_element.set_text(chr(0x25B6))
         arrow_element.set_class("is-expanded", expanded)
         arrow_element.set_class("is-collapsed", not expanded)
 

@@ -93,3 +93,31 @@ def test_repeated_collapses_register_one_finish_listener(widgets):
         widgets.animate_section_toggle(section, True)
 
     assert len(section.listeners["animationend"]) == 1
+
+
+class _ArrowStub:
+    def __init__(self):
+        self.classes = set()
+        self.text_writes = 0
+
+    def set_class(self, name, enabled):
+        if enabled:
+            self.classes.add(name)
+        else:
+            self.classes.discard(name)
+
+    def set_text(self, _text):
+        self.text_writes += 1
+
+
+def test_collapse_keeps_the_arrow_text_node(widgets):
+    # Catches rewriting the arrow glyph: the collapse finishes inside the RmlUi update,
+    # after layout, so a new text node would reach Render without a font face.
+    section = _SectionStub()
+    arrow = _ArrowStub()
+    widgets.animate_section_toggle(section, False, arrow)
+    section.end_animation("max-height")
+    widgets.animate_section_toggle(section, True, arrow)
+
+    assert arrow.text_writes == 0
+    assert arrow.classes == {"is-expanded"}
