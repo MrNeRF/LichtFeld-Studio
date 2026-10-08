@@ -19,6 +19,7 @@
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/training/training_state.hpp"
 #include <algorithm>
+#include <cmath>
 #include <nanobind/ndarray.h>
 #include <stdexcept>
 
@@ -596,9 +597,31 @@ namespace lfs::python {
 
         const auto& R_tensor = R.tensor();
         const auto& T_tensor = T.tensor();
+        if (!R_tensor.is_valid() || R_tensor.dtype() != core::DataType::Float32 || R_tensor.ndim() != 2 ||
+            R_tensor.size(0) != 3 || R_tensor.size(1) != 3)
+            throw nb::value_error("R must be a float32 tensor of shape [3, 3]");
+        if (!T_tensor.is_valid() || T_tensor.dtype() != core::DataType::Float32 || T_tensor.numel() != 3 ||
+            !(T_tensor.ndim() == 1 || (T_tensor.ndim() == 2 && T_tensor.size(1) == 1)))
+            throw nb::value_error("T must be a float32 tensor of shape [3] or [3, 1]");
+        const auto all_finite = [](const core::Tensor& tensor) {
+            const auto cpu = tensor.cpu().contiguous();
+            const auto* values = cpu.ptr<float>();
+            return std::all_of(values, values + cpu.numel(), [](const float value) { return std::isfinite(value); });
+        };
+        if (!all_finite(R_tensor))
+            throw nb::value_error("R must contain finite values");
+        if (!all_finite(T_tensor))
+            throw nb::value_error("T must contain finite values");
+        if (!std::isfinite(focal_x) || focal_x <= 0.0f || !std::isfinite(focal_y) || focal_y <= 0.0f)
+            throw nb::value_error("focal_x and focal_y must be finite and positive");
+        if (width <= 0 || height <= 0)
+            throw nb::value_error("width and height must be positive");
+
+        auto T_flat = T_tensor.ndim() == 2 ? T_tensor.reshape({3}) : T_tensor;
+
         auto camera = std::make_shared<lfs::core::Camera>(
-            R_tensor.is_valid() ? R_tensor.clone() : R_tensor,
-            T_tensor.is_valid() ? T_tensor.clone() : T_tensor,
+            R_tensor.clone(),
+            T_flat.clone(),
             focal_x, focal_y,
             static_cast<float>(width) / 2.0f, static_cast<float>(height) / 2.0f,
             lfs::core::Tensor{},

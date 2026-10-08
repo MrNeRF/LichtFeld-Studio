@@ -1174,34 +1174,28 @@ namespace {
         }
     }
 
-    TEST(CameraCreationSchemaTest, RejectsMalformedInputsBeforeDeviceWork) {
+    TEST(CameraCreationSchemaTest, ConstructorKeepsAcceptingLoaderInputs) {
+        // Dataset loaders build cameras through this constructor; normalizing missing
+        // distortion must never turn a previously loadable camera into an error.
         const auto rotation = Tensor::eye(3, Device::CPU);
-        const auto translation = Tensor::zeros({3}, Device::CPU);
-        const auto create = [&](const Tensor& r, const Tensor& t, const Tensor& radial,
-                                const Tensor& tangential, float fx = 50.0f, float fy = 50.0f,
-                                int width = 100, int height = 100) {
-            return lfs::core::Camera(r, t, fx, fy, 50.0f, 50.0f, radial, tangential,
+        const auto create = [&](const Tensor& t, const Tensor& radial, float fx, float fy, int width, int height) {
+            return lfs::core::Camera(rotation, t, fx, fy, 0.0f, 0.0f, radial, Tensor{},
                                      lfs::core::CameraModelType::PINHOLE, "camera",
                                      std::filesystem::path{}, std::filesystem::path{}, width, height, 0);
         };
-        EXPECT_THROW(create(Tensor::zeros({9}, Device::CPU), translation, {}, {}), std::invalid_argument);
-        EXPECT_THROW(create(Tensor::zeros({3, 3}, Device::CPU, DataType::Int32), translation, {}, {}), std::invalid_argument);
-        EXPECT_THROW(create(rotation, Tensor::zeros({1, 3}, Device::CPU), {}, {}), std::invalid_argument);
-        EXPECT_THROW(create(rotation, Tensor::zeros({3}, Device::CPU, DataType::Int32), {}, {}), std::invalid_argument);
-        for (const auto& invalid : {Tensor::zeros({1, 1}, Device::CPU),
-                                    Tensor::zeros({17}, Device::CPU),
-                                    Tensor::zeros({0}, Device::CPU, DataType::Int32),
-                                    Tensor::from_vector({std::numeric_limits<float>::infinity()}, {1}, Device::CPU)}) {
-            EXPECT_THROW(create(rotation, translation, invalid, {}), std::invalid_argument);
-            EXPECT_THROW(create(rotation, translation, {}, invalid), std::invalid_argument);
-        }
-        for (const float focal : {0.0f, -1.0f, std::numeric_limits<float>::infinity(),
-                                  std::numeric_limits<float>::quiet_NaN()}) {
-            EXPECT_THROW(create(rotation, translation, {}, {}, focal), std::invalid_argument);
-            EXPECT_THROW(create(rotation, translation, {}, {}, 50.0f, focal), std::invalid_argument);
-        }
-        EXPECT_THROW(create(rotation, translation, {}, {}, 50.0f, 50.0f, 0), std::invalid_argument);
-        EXPECT_THROW(create(rotation, translation, {}, {}, 50.0f, 50.0f, 100, -1), std::invalid_argument);
+        const auto t3 = Tensor::zeros({3}, Device::CPU);
+        const auto t31 = Tensor::zeros({3, 1}, Device::CPU);
+        const auto twelve = Tensor::zeros({12}, Device::CPU);
+        EXPECT_NO_THROW(create(t3, Tensor{}, 0.0f, 0.0f, 0, 0));
+        EXPECT_NO_THROW(create(t31, twelve, 525.0f, 525.0f, 640, 480));
+        const auto with_coefficients = create(t31, twelve, 525.0f, 525.0f, 640, 480);
+        EXPECT_EQ(with_coefficients.radial_distortion().numel(), 12u);
+        EXPECT_EQ(with_coefficients.T().shape(), t31.shape());
+        const auto without = create(t3, Tensor{}, 525.0f, 525.0f, 640, 480);
+        ASSERT_TRUE(without.radial_distortion().is_valid());
+        EXPECT_EQ(without.radial_distortion().dtype(), DataType::Float32);
+        EXPECT_EQ(without.radial_distortion().numel(), 0u);
+        EXPECT_EQ(without.tangential_distortion().numel(), 0u);
     }
 
     using lfs::core::Camera;

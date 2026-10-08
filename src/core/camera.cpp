@@ -15,7 +15,6 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
-#include <cmath>
 #include <cuda_runtime.h>
 #include <format>
 #include <stdexcept>
@@ -37,18 +36,12 @@ namespace lfs::core {
         // Copy rotation [0:3, 0:3] = R
         for (size_t i = 0; i < 3; ++i) {
             for (size_t j = 0; j < 3; ++j) {
-                if (!std::isfinite(R_acc(i, j))) {
-                    throw std::invalid_argument("Camera R must contain finite values");
-                }
                 w2c_acc(i, j) = R_acc(i, j);
             }
         }
 
         // Copy translation [0:3, 3] = t
         for (size_t i = 0; i < 3; ++i) {
-            if (!std::isfinite(t_acc(i))) {
-                throw std::invalid_argument("Camera T must contain finite values");
-            }
             w2c_acc(i, 3) = t_acc(i);
         }
 
@@ -104,48 +97,24 @@ namespace lfs::core {
           _image_width(camera_width),
           _image_height(camera_height) {
 
-        if (!R.is_valid() || R.dtype() != DataType::Float32 ||
-            R.shape() != TensorShape({3, 3})) {
-            throw std::invalid_argument("Camera R must be float32 with shape [3, 3]");
+        // Validate inputs
+        if (!R.is_valid() || R.numel() == 0) {
+            LOG_ERROR("Camera constructor: R tensor is invalid or empty");
+            throw std::runtime_error("Camera constructor: R tensor is invalid or empty");
         }
-        if (!T.is_valid() || T.dtype() != DataType::Float32 ||
-            (T.shape() != TensorShape({3}) && T.shape() != TensorShape({3, 1}))) {
-            throw std::invalid_argument("Camera T must be float32 with shape [3] or [3, 1]");
+        if (!T.is_valid() || T.numel() == 0) {
+            LOG_ERROR("Camera constructor: T tensor is invalid or empty");
+            throw std::runtime_error("Camera constructor: T tensor is invalid or empty");
         }
-        if (!std::isfinite(focal_x) || focal_x <= 0.0f ||
-            !std::isfinite(focal_y) || focal_y <= 0.0f) {
-            throw std::invalid_argument("Camera focal lengths must be finite and positive");
-        }
-        if (!std::isfinite(center_x) || !std::isfinite(center_y)) {
-            throw std::invalid_argument("Camera principal point must be finite");
-        }
-        if (camera_width <= 0 || camera_height <= 0) {
-            throw std::invalid_argument("Camera width and height must be positive");
-        }
-        const auto normalize_distortion = [](Tensor& distortion, const char* field) {
-            if (!distortion.is_valid()) {
-                distortion = Tensor::empty({0}, Device::CPU, DataType::Float32);
-                return;
-            }
-            if (distortion.dtype() != DataType::Float32 || distortion.ndim() != 1 || distortion.numel() > 16) {
-                throw std::invalid_argument(std::format("Camera {} must be float32 [0..16]", field));
-            }
-            if (distortion.numel() > 0) {
-                const auto cpu = distortion.cpu().contiguous();
-                const auto* values = cpu.ptr<float>();
-                if (!std::all_of(values, values + cpu.numel(), [](float value) { return std::isfinite(value); })) {
-                    throw std::invalid_argument(std::format("Camera {} must contain finite values", field));
-                }
-            }
-        };
-        normalize_distortion(_radial_distortion, "radial_distortion");
-        normalize_distortion(_tangential_distortion, "tangential_distortion");
-        if (_T.ndim() == 2) {
-            _T = _T.reshape({3});
-        }
+        // Cameras without lens distortion carry empty float32 coefficient tensors, as the
+        // project format requires. Coefficients passed by loaders are kept unchanged.
+        if (!_radial_distortion.is_valid())
+            _radial_distortion = Tensor::empty({0}, Device::CPU, DataType::Float32);
+        if (!_tangential_distortion.is_valid())
+            _tangential_distortion = Tensor::empty({0}, Device::CPU, DataType::Float32);
 
         // Compute world-to-view transform
-        _world_view_transform = world_to_view(_R, _T);
+        _world_view_transform = world_to_view(R, T);
 
         // Compute camera position: inverse of w2v gives c2w, position is c2w[:3, 3]
         // For transformation matrix [R|t], inverse is [R^T | -R^T*t]
