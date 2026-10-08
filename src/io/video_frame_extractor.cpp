@@ -832,9 +832,13 @@ namespace lfs::io {
                 // description already stored in container headers, avoiding a
                 // global probe of audio tracks which this workflow never uses.
                 int video_stream_idx = findUsableHeaderVideoStream(fmt_ctx);
+                // avformat_find_stream_info frees its per-stream probe state; a
+                // second call on the same context dereferences it. Probe at most once.
+                bool stream_info_probed = false;
                 if (video_stream_idx < 0) {
                     // Preserve compatibility with containers that need packet
                     // probing to expose their video dimensions or codec.
+                    stream_info_probed = true;
                     if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
                         error = "Failed to find stream info";
                         avformat_close_input(&fmt_ctx);
@@ -856,7 +860,7 @@ namespace lfs::io {
                 // header (notably PQ/HLG signalling). Probe only after every
                 // non-video stream is discarded, then rewind so decoding and
                 // frame selection remain deterministic.
-                if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
+                if (!stream_info_probed && avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
                     LOG_WARN("Could not complete video-only stream metadata probe; some source metadata may be unavailable");
                 }
                 av_seek_frame(fmt_ctx, video_stream_idx, 0, AVSEEK_FLAG_BACKWARD);

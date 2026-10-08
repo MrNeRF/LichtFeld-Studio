@@ -4,8 +4,14 @@
 
 #include "io/video/video_encoder.hpp"
 #include "io/video_frame_extractor.hpp"
+#include "io/video_player.hpp"
 
 #include <gtest/gtest.h>
+
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+}
 
 #include <cuda_runtime.h>
 #include <nlohmann/json.hpp>
@@ -274,4 +280,109 @@ TEST(VideoFrameExtractorOutputNaming, RepeatedSourceFramesAreWrittenOnce) {
     ASSERT_TRUE(metadata.contains("frames"));
     EXPECT_EQ(5u, metadata["frames"].size());
     EXPECT_EQ(5, metadata["performance"]["written_frames"].get<int>());
+}
+
+namespace {
+    // Writes a small CPU-encoded video whose container header may need packet probing to expose
+    // the video stream (MPEG-TS, or MPEG-4 Part 2 in MP4 with leading frames before an edit list).
+    bool writeProbedVideo(const std::filesystem::path& path, const char* const container,
+                          const AVCodecID codec_id, const int frame_count, const int leading_frames) {
+        AVFormatContext* format = nullptr;
+        const std::string path_utf8 = path.string();
+        if (avformat_alloc_output_context2(&format, nullptr, container, path_utf8.c_str()) < 0 || !format)
+            return false;
+        const AVCodec* const codec = avcodec_find_encoder(codec_id);
+        AVStream* const stream = codec ? avformat_new_stream(format, nullptr) : nullptr;
+        AVCodecContext* encoder = stream ? avcodec_alloc_context3(codec) : nullptr;
+        bool ok = encoder != nullptr;
+        if (ok) {
+            encoder->width = 64;
+            encoder->height = 48;
+            encoder->pix_fmt = AV_PIX_FMT_YUV420P;
+            encoder->time_base = AVRational{1, 25};
+            encoder->framerate = AVRational{25, 1};
+            encoder->gop_size = 10;
+            encoder->max_b_frames = 0;
+            if (format->oformat->flags & AVFMT_GLOBALHEADER)
+                encoder->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+            ok = avcodec_open2(encoder, codec, nullptr) >= 0 &&
+                 avcodec_parameters_from_context(stream->codecpar, encoder) >= 0;
+        }
+        if (ok) {
+            stream->time_base = encoder->time_base;
+            ok = avio_open(&format->pb, path_utf8.c_str(), AVIO_FLAG_WRITE) >= 0 &&
+                 avformat_write_header(format, nullptr) >= 0;
+        }
+        AVFrame* frame = av_frame_alloc();
+        AVPacket* packet = av_packet_alloc();
+        const auto drain = [&] {
+            while (avcodec_receive_packet(encoder, packet) == 0) {
+                av_packet_rescale_ts(packet, encoder->time_base, stream->time_base);
+                packet->stream_index = stream->index;
+                ok = av_interleaved_write_frame(format, packet) >= 0 && ok;
+            }
+        };
+        if (ok) {
+            frame->format = encoder->pix_fmt;
+            frame->width = encoder->width;
+            frame->height = encoder->height;
+            ok = av_frame_get_buffer(frame, 0) >= 0;
+        }
+        for (int index = 0; ok && index < frame_count; ++index) {
+            ok = av_frame_make_writable(frame) >= 0;
+            for (int y = 0; y < frame->height; ++y)
+                for (int x = 0; x < frame->width; ++x)
+                    frame->data[0][y * frame->linesize[0] + x] = static_cast<uint8_t>((x + y + index * 8) & 255);
+            for (int plane = 1; plane < 3; ++plane)
+                for (int y = 0; y < frame->height / 2; ++y)
+                    for (int x = 0; x < frame->width / 2; ++x)
+                        frame->data[plane][y * frame->linesize[plane] + x] = 128;
+            frame->pts = index - leading_frames;
+            ok = ok && avcodec_send_frame(encoder, frame) >= 0;
+            drain();
+        }
+        if (ok) {
+            avcodec_send_frame(encoder, nullptr);
+            drain();
+            ok = av_write_trailer(format) >= 0 && ok;
+        }
+        av_packet_free(&packet);
+        av_frame_free(&frame);
+        avcodec_free_context(&encoder);
+        if (format->pb)
+            avio_closep(&format->pb);
+        avformat_free_context(format);
+        return ok;
+    }
+} // namespace
+
+TEST(VideoStreamProbe, VideosThatNeedPacketProbingOpenAndExtract) {
+    struct Case {
+        const char* name;
+        const char* container;
+        AVCodecID codec;
+        int leading_frames;
+    };
+    for (const Case video : {Case{"source.ts", "mpegts", AV_CODEC_ID_MPEG2VIDEO, 0},
+                             Case{"source.mp4", "mp4", AV_CODEC_ID_MPEG4, 6}}) {
+        SCOPED_TRACE(video.name);
+        TempDir temp("probe");
+        const auto video_path = temp.path / video.name;
+        constexpr int frame_count = 40;
+        ASSERT_TRUE(writeProbedVideo(video_path, video.container, video.codec, frame_count, video.leading_frames));
+
+        lfs::io::VideoPlayer player;
+        ASSERT_TRUE(player.open(video_path));
+        EXPECT_GT(player.duration(), 0.0);
+
+        const auto output_dir = temp.path / "frames";
+        std::filesystem::create_directories(output_dir);
+        auto params = extractionParams(video_path, output_dir);
+        params.end_time = -1.0;
+        params.generate_metadata = false;
+        VideoFrameExtractor extractor;
+        std::string error;
+        ASSERT_TRUE(extractor.extract(params, error)) << error;
+        EXPECT_GT(countPngFiles(output_dir), 0u);
+    }
 }
