@@ -507,6 +507,15 @@ namespace lfs::vis {
                removeKeyframeById(*selected_keyframe_id_);
     }
 
+    void SequencerController::clearKeyframes() {
+        stop();
+        deselectKeyframe();
+        timeline_.clear();
+        if (const auto* sequence = plySequence())
+            timeline_.setClipDuration(sequence->duration());
+        markTimelineChanged();
+    }
+
     void SequencerController::clear() {
         ++timeline_generation_;
         pending_keyframe_time_edit_.reset();

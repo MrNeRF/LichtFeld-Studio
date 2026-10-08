@@ -762,7 +762,7 @@ namespace lfs::vis {
             },
             []() {
                 if (auto* gm = python::get_gui_manager()) {
-                    gm->sequencer().clear();
+                    gm->sequencer().clearKeyframes();
                     lfs::core::events::state::KeyframeListChanged{.count = 0}.emit();
                 }
             },

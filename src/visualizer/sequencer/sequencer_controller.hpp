@@ -122,6 +122,7 @@ namespace lfs::vis {
         void setKeyframeRemovedCallback(std::function<void(const sequencer::Keyframe&, float)> callback) {
             keyframe_removed_callback_ = std::move(callback);
         }
+        void clearKeyframes();
         void clear();
         bool saveToJson(const std::string& path) const;
         bool loadFromJson(const std::string& path);

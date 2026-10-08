@@ -166,7 +166,7 @@ namespace {
                 .set_keyframe_easing = [this](const size_t index, const int easing) { set_keyframe_easing(index, easing); },
                 .play_pause = [this]() { controller.togglePlayPause(); },
                 .clear = [this]() {
-                    controller.clear();
+                    controller.clearKeyframes();
                     sync_selected_index(); },
                 .save_path = [this](const std::string& path) { return controller.saveToJson(path); },
                 .load_path = [this](const std::string& path) {
@@ -531,6 +531,26 @@ TEST_F(McpSequencerToolsTest, SetEasingAndDeleteResolveByIdAfterReorder) {
     EXPECT_EQ(delete_result["keyframe_count"], 2);
     EXPECT_EQ(delete_result["keyframes"][0]["id"], id_c);
     EXPECT_EQ(delete_result["keyframes"][1]["id"], id_b);
+}
+
+TEST_F(McpSequencerToolsTest, ClearPreservesLoadedPlySequence) {
+    const auto uuid = lfs::core::generate_uuid_v4();
+    backend_.controller.setPlySequence("frames", "sequence", {"frame_0.ply", "frame_1.ply"},
+                                       {"frame_0", "frame_1"}, 5.0f, uuid);
+    backend_.add_manual_keyframe(0.0f, glm::vec3(0.0f));
+    backend_.add_manual_keyframe(1.0f, glm::vec3(1.0f));
+
+    for (int repeat = 0; repeat < 2; ++repeat) {
+        const auto result = lfs::mcp::ToolRegistry::instance().call_tool("sequencer.clear", json::object());
+        ASSERT_TRUE(result["success"].get<bool>());
+        EXPECT_EQ(result["keyframe_count"], 0);
+        EXPECT_TRUE(result["selected_keyframe_id"].is_null());
+        EXPECT_TRUE(result["has_ply_sequence"].get<bool>());
+        EXPECT_EQ(result["ply_sequence_frame_count"], 2);
+        EXPECT_EQ(result["ply_sequence_uuid"], uuid.to_string());
+        EXPECT_EQ(result["ply_sequence_node"], "sequence");
+        EXPECT_EQ(result["ply_sequence_fps"], 5.0f);
+    }
 }
 
 TEST_F(McpSequencerToolsTest, RejectedPlySequenceLoadReportsErrorAndPreservesState) {

@@ -1562,10 +1562,7 @@ namespace lfs::vis::gui {
         if (panel_->consumeClearRequest() &&
             (controller_.timeline().realKeyframeCount() > 0 || controller_.timeline().hasAnimationClip() ||
              controller_.hasPlySequence())) {
-            stopPlySequenceStreaming();
-            controller_.clear();
-            last_ply_sequence_frame_ = std::nullopt;
-            loaded_ply_sequence_frames_.clear();
+            controller_.clearKeyframes();
             lfs::core::events::state::KeyframeListChanged{.count = 0}.emit();
             LOG_INFO("Sequencer cleared");
         }
@@ -1662,10 +1659,7 @@ namespace lfs::vis::gui {
                                    if (action == "clear_confirm" &&
                                        (controller_.timeline().realKeyframeCount() > 0 || controller_.timeline().hasAnimationClip() ||
                                         controller_.hasPlySequence())) {
-                                       stopPlySequenceStreaming();
-                                       controller_.clear();
-                                       last_ply_sequence_frame_ = std::nullopt;
-                                       loaded_ply_sequence_frames_.clear();
+                                       controller_.clearKeyframes();
                                        lfs::core::events::state::KeyframeListChanged{.count = 0}.emit();
                                        LOG_INFO("Sequencer cleared");
                                    }

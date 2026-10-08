@@ -10,6 +10,7 @@
 #include "io/video/video_export_options.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
+#include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "scene/scene_manager.hpp"
 
@@ -114,6 +115,90 @@ namespace {
         lfs::test::licht::TemporaryDirectory temporary_{"sequencer-history"};
         std::optional<std::string> previous_home_;
     };
+
+    TEST_F(SequencerHistoryRegressionTest, ClearKeyframesPreservesPlySequence) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencer();
+        controller.setPlySequence("frames", "sequence",
+                                  {"frame_0.ply", "frame_1.ply", "frame_2.ply", "frame_3.ply"},
+                                  {"frame_0", "frame_1", "frame_2", "frame_3"}, 5.0f);
+        const auto* sequence = controller.plySequence();
+        ASSERT_NE(sequence, nullptr);
+        const auto* frames = sequence->frames.data();
+        for (int repeat = 0; repeat < 2; ++repeat) {
+            const auto id = controller.addKeyframe(makeKeyframe(0.0f));
+            controller.addKeyframe(makeKeyframe(1.0f));
+            controller.selectKeyframeById(id);
+            controller.play();
+            lfs::python::clear_keyframes();
+            EXPECT_EQ(controller.timeline().realKeyframeCount(), 0u);
+            EXPECT_FALSE(controller.hasSelection());
+            EXPECT_FALSE(controller.isPlaying());
+            ASSERT_TRUE(controller.hasPlySequence());
+            EXPECT_EQ(controller.plySequence(), sequence);
+            EXPECT_EQ(controller.plySequence()->frames.data(), frames);
+            EXPECT_EQ(sequence->directory, "frames");
+            EXPECT_EQ(sequence->node_name, "sequence");
+            EXPECT_EQ(sequence->frames.size(), 4u);
+            EXPECT_FLOAT_EQ(controller.plySequenceFps(), 5.0f);
+            EXPECT_FLOAT_EQ(controller.timeline().clipDuration(), 0.8f);
+            controller.seek(0.6f);
+            EXPECT_EQ(controller.currentPlySequenceFrameIndex(), 3u);
+            controller.play();
+            EXPECT_TRUE(controller.isPlaying());
+        }
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, ClearKeyframesLatency) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencer();
+        std::vector<double> samples;
+        for (int repeat = 0; repeat < 101; ++repeat) {
+            controller.setPlySequence("frames", "sequence", {"frame_0.ply", "frame_1.ply"},
+                                      {"frame_0", "frame_1"}, 5.0f);
+            controller.addKeyframe(makeKeyframe(0.0f));
+            controller.addKeyframe(makeKeyframe(1.0f));
+            const auto start = std::chrono::steady_clock::now();
+            lfs::python::clear_keyframes();
+            samples.push_back(std::chrono::duration<double, std::micro>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count());
+            ASSERT_EQ(controller.timeline().realKeyframeCount(), 0u);
+        }
+        std::sort(samples.begin(), samples.end());
+        RecordProperty("median_clear_us", std::to_string(samples[samples.size() / 2]));
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, ClearKeyframesWithoutSequenceKeepsResetBehavior) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencer();
+        const auto id = controller.addKeyframe(makeKeyframe(0.0f));
+        controller.addKeyframe(makeKeyframe(2.0f));
+        controller.timeline().ensureAnimationClip();
+        controller.selectKeyframeById(id);
+        controller.play();
+        lfs::python::clear_keyframes();
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 0u);
+        EXPECT_FALSE(controller.timeline().hasAnimationClip());
+        EXPECT_FALSE(controller.hasPlySequence());
+        EXPECT_FALSE(controller.hasSelection());
+        EXPECT_FALSE(controller.isPlaying());
+        EXPECT_FLOAT_EQ(controller.timeline().clipDuration(), lfs::sequencer::DEFAULT_CLIP_DURATION_SECONDS);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, SceneClearStillDropsKeysAndPlySequence) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencer();
+        controller.setPlySequence("frames", "sequence", {"frame_0.ply", "frame_1.ply"},
+                                  {"frame_0", "frame_1"}, 5.0f);
+        controller.addKeyframe(makeKeyframe(0.0f));
+        controller.play();
+        lfs::core::events::state::SceneCleared{}.emit();
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 0u);
+        EXPECT_FALSE(controller.hasPlySequence());
+        EXPECT_FALSE(controller.isPlaying());
+        EXPECT_FLOAT_EQ(controller.timeline().clipDuration(), lfs::sequencer::DEFAULT_CLIP_DURATION_SECONDS);
+    }
 
     TEST_F(SequencerHistoryRegressionTest, AddCommandParticipatesInSharedUndoHistory) {
         lfs::vis::VisualizerImpl viewer(options());
