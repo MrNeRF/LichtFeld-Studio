@@ -3841,6 +3841,15 @@ namespace lfs::vis {
         }
     }
 
+    bool SceneManager::canApplyCropToNode(const core::NodeId id) const {
+        const auto* node = scene_.getNodeById(id);
+        if (node && node->type == core::NodeType::SPLAT && scene_.isNodeEffectivelyLocked(id)) {
+            LOG_WARN("Cannot crop '{}': node is locked", node->name);
+            return false;
+        }
+        return true;
+    }
+
     void SceneManager::handleCropActivePly(const lfs::geometry::BoundingBox& crop_box, const bool inverse, const core::NodeId target_node_id) {
         std::vector<std::string> splat_node_names;
         std::vector<std::string> pointcloud_node_names;
@@ -3886,6 +3895,11 @@ namespace lfs::vis {
                     pointcloud_node_names.push_back(node->name);
                 }
             }
+        }
+
+        for (const auto& name : splat_node_names) {
+            if (!canApplyCropToNode(scene_.getNodeIdByName(name)))
+                return;
         }
 
         const auto crop_box_for_node = [this, &crop_box](const core::NodeId node_id) {
@@ -4076,6 +4090,11 @@ namespace lfs::vis {
                     pointcloud_node_names.push_back(node->name);
                 }
             }
+        }
+
+        for (const auto& name : splat_node_names) {
+            if (!canApplyCropToNode(scene_.getNodeIdByName(name)))
+                return;
         }
 
         const glm::mat4 inv_world = glm::inverse(world_transform);

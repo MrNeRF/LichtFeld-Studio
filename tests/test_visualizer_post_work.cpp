@@ -2038,6 +2038,76 @@ contract["test_selection_submode_follows_native_mode"](lf)
                   0u);
     }
 
+    TEST_F(VisualizerImplResetTest, CropApplyPreservesLockedTargetsAndHelpers) {
+        for (const bool ellipsoid : {false, true}) {
+            for (const bool active_tool : {false, true}) {
+                for (const std::string locked_name : {"", "target", "inner", "outer"}) {
+                    SCOPED_TRACE(std::to_string(ellipsoid) + ":" + std::to_string(active_tool) + ":" + locked_name);
+                    VisualizerImpl viewer(projectOptions());
+                    auto& scene = viewer.getScene();
+                    auto* manager = viewer.getSceneManager();
+                    const auto outer = scene.addGroup("outer");
+                    const auto inner = scene.addGroup("inner", outer);
+                    const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4), inner);
+                    const auto helper = ellipsoid ? scene.addEllipsoid("helper", target) : scene.addCropBox("helper", target);
+                    scene.setNodeTransform(helper, glm::mat4(1.0f));
+                    auto* volume = scene.getMutableNode("helper");
+                    if (ellipsoid) {
+                        volume->ellipsoid->radii = glm::vec3(0.5f);
+                        volume->ellipsoid->enabled = false;
+                    } else {
+                        volume->cropbox->min = glm::vec3(-0.5f);
+                        volume->cropbox->max = glm::vec3(0.5f);
+                        volume->cropbox->enabled = false;
+                    }
+                    manager->selectNode(target);
+                    auto& gizmo = viewer.getGuiManager()->gizmo();
+                    gizmo.setCropToolShape(ellipsoid ? "ellipsoid" : "box");
+                    ASSERT_TRUE(gizmo.ensureCropToolStateForRestore());
+                    UnifiedToolRegistry::instance().setActiveTool(active_tool ? "builtin.cropbox" : "");
+                    if (!locked_name.empty())
+                        scene.setNodeLocked(locked_name, true);
+                    op::undoHistory().clear();
+                    const auto before = scene.getNodeById(target)->model->means_raw().cpu().to_vector();
+                    if (active_tool)
+                        gizmo.applyActiveCropTool();
+                    else if (ellipsoid)
+                        lfs::core::events::cmd::ApplyEllipsoid{}.emit();
+                    else
+                        lfs::core::events::cmd::ApplyCropBox{}.emit();
+                    const auto* node = scene.getNodeById(target);
+                    ASSERT_NE(node, nullptr);
+                    EXPECT_EQ(node->model->means_raw().cpu().to_vector(), before);
+                    if (!locked_name.empty()) {
+                        EXPECT_EQ(node->model->visible_count(), 4u);
+                        EXPECT_FALSE(node->payload_diverged);
+                        EXPECT_EQ(op::undoHistory().undoCount(), 0u);
+                        const auto* retained = scene.getNodeById(helper);
+                        EXPECT_NE(retained, nullptr);
+                        if (retained) {
+                            EXPECT_EQ(retained->local_transform.get(), glm::mat4(1.0f));
+                            EXPECT_FALSE(ellipsoid ? retained->ellipsoid->enabled : retained->cropbox->enabled);
+                        }
+                    } else {
+                        EXPECT_EQ(node->model->visible_count(), 1u);
+                        EXPECT_EQ(scene.getNodeById(helper), nullptr);
+                        const auto count = op::undoHistory().undoCount();
+                        for (size_t i = 0; i < count; ++i)
+                            ASSERT_TRUE(op::undoHistory().undo().success);
+                        ASSERT_NE(scene.getNode("helper"), nullptr);
+                        EXPECT_EQ(scene.getNode("target")->model->visible_count(), 4u);
+                        for (size_t i = 0; i < count; ++i)
+                            ASSERT_TRUE(op::undoHistory().redo().success);
+                        EXPECT_EQ(scene.getNode("target")->model->visible_count(), 1u);
+                        EXPECT_EQ(scene.getNode("helper"), nullptr);
+                    }
+                    UnifiedToolRegistry::instance().setActiveTool("");
+                    op::undoHistory().clear();
+                }
+            }
+        }
+    }
+
     TEST_F(VisualizerImplResetTest, CropToolRejectsUnrepresentableParentTransformWithoutMutation) {
         VisualizerImpl viewer(projectOptions());
         ASSERT_NE(viewer.getGuiManager(), nullptr);

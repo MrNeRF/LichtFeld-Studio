@@ -3843,3 +3843,59 @@ TEST_F(UndoHistoryTest, ConsolidatedGaussianDeletionRespectsInheritedLocks) {
         lfs::vis::services().clear();
     }
 }
+
+TEST_F(UndoHistoryTest, CropCommandsRespectTargetLocks) {
+    for (const bool ellipsoid : {false, true}) {
+        for (const std::string route : {"explicit", "selected", "visible"}) {
+            for (const std::string locked_name : {"", "model", "inner", "outer"}) {
+                SCOPED_TRACE(std::to_string(ellipsoid) + ":" + route + ":" + locked_name);
+                lfs::vis::op::undoHistory().clear();
+                auto manager = std::make_unique<lfs::vis::SceneManager>();
+                lfs::vis::services().set(manager.get());
+                auto& scene = manager->getScene();
+                const auto outer = scene.addGroup("outer");
+                const auto inner = scene.addGroup("inner", outer);
+                const auto model = scene.addSplat("model", make_linear_test_splat(4), inner);
+                if (!locked_name.empty())
+                    scene.setNodeLocked(locked_name, true);
+                if (route == "selected")
+                    manager->selectNode(model);
+                const auto before = scene.getNodeById(model)->model->means_raw().cpu().to_vector();
+                const auto target = route == "explicit" ? model : lfs::core::NULL_NODE;
+                if (ellipsoid) {
+                    lfs::core::events::cmd::CropPLYEllipsoid{
+                        .world_transform = glm::mat4(1.0f),
+                        .radii = glm::vec3(0.5f),
+                        .inverse = false,
+                        .target_node_id = target}
+                        .emit();
+                } else {
+                    lfs::geometry::BoundingBox box;
+                    box.setBounds(glm::vec3(-0.5f), glm::vec3(0.5f));
+                    lfs::core::events::cmd::CropPLY{
+                        .crop_box = box,
+                        .inverse = false,
+                        .target_node_id = target}
+                        .emit();
+                }
+                const auto* node = scene.getNodeById(model);
+                ASSERT_NE(node, nullptr);
+                EXPECT_EQ(node->model->means_raw().cpu().to_vector(), before);
+                if (!locked_name.empty()) {
+                    EXPECT_EQ(node->model->visible_count(), 4u);
+                    EXPECT_FALSE(node->model->has_deleted_mask());
+                    EXPECT_FALSE(node->payload_diverged);
+                    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+                } else {
+                    EXPECT_EQ(deleted_mask_values(*node->model), (std::vector<bool>{false, true, true, true}));
+                    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+                    EXPECT_EQ(node->model->visible_count(), 4u);
+                    ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+                    EXPECT_EQ(deleted_mask_values(*node->model), (std::vector<bool>{false, true, true, true}));
+                }
+                lfs::vis::op::undoHistory().clear();
+                lfs::vis::services().clear();
+            }
+        }
+    }
+}
