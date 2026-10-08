@@ -3748,3 +3748,98 @@ TEST_F(UndoHistoryTest, SiblingReorderRestoresExactOrderBothWays) {
         lfs::core::event::bus().clear_all();
     }
 }
+
+TEST_F(UndoHistoryTest, GaussianDeletionRespectsInheritedLocks) {
+    for (const std::string path : {"partial", "whole", "cut"}) {
+        for (const std::string locked_name : {"", "model", "inner", "outer"}) {
+            SCOPED_TRACE(path + ":" + locked_name);
+            lfs::vis::op::undoHistory().clear();
+            auto manager = std::make_unique<lfs::vis::SceneManager>();
+            lfs::vis::services().set(manager.get());
+            auto& scene = manager->getScene();
+            const auto outer = scene.addGroup("outer");
+            const auto inner = scene.addGroup("inner", outer);
+            const auto model = scene.addSplat("model", make_linear_test_splat(4), inner);
+            scene.addCropBox("helper", model);
+            if (!locked_name.empty())
+                scene.setNodeLocked(locked_name, true);
+            scene.setSelectionMask(std::make_shared<Tensor>(
+                path == "whole" ? make_uint8_mask({1, 1, 1, 1}) : make_uint8_mask({1, 0, 0, 0})));
+            const auto before_selection = scene.getSelectionMask()->cpu().to_vector_uint8();
+            const auto before_means = scene.getNodeById(model)->model->means_raw().cpu().to_vector();
+            const auto history_count = lfs::vis::op::undoHistory().undoCount();
+            bool succeeded = false;
+            if (path == "cut") {
+                succeeded = manager->cutSelectedGaussians();
+            } else {
+                const auto result = manager->deleteSelectedGaussiansWithHistory();
+                succeeded = result.has_value();
+                if (!locked_name.empty() && !result)
+                    EXPECT_EQ(result.error(), "Cannot delete 'model': node is locked");
+            }
+            EXPECT_EQ(succeeded, locked_name.empty());
+            const auto* node = scene.getNodeById(model);
+            if (!locked_name.empty()) {
+                EXPECT_NE(node, nullptr);
+                if (!node) {
+                    lfs::vis::op::undoHistory().clear();
+                    lfs::vis::services().clear();
+                    continue;
+                }
+                EXPECT_EQ(node->model->visible_count(), 4u);
+                EXPECT_EQ(node->model->means_raw().cpu().to_vector(), before_means);
+                EXPECT_NE(scene.getNode("helper"), nullptr);
+                EXPECT_NE(scene.getSelectionMask(), nullptr);
+                if (scene.getSelectionMask())
+                    EXPECT_EQ(scene.getSelectionMask()->cpu().to_vector_uint8(), before_selection);
+                EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), history_count);
+            } else if (path == "whole") {
+                EXPECT_EQ(node, nullptr);
+                EXPECT_EQ(scene.getNode("helper"), nullptr);
+            } else {
+                ASSERT_NE(node, nullptr);
+                EXPECT_EQ(node->model->means_raw().cpu().to_vector(), before_means);
+                EXPECT_EQ(deleted_mask_values(*node->model), (std::vector<bool>{true, false, false, false}));
+                EXPECT_NE(scene.getNode("helper"), nullptr);
+            }
+            lfs::vis::op::undoHistory().clear();
+            lfs::vis::services().clear();
+        }
+    }
+}
+
+TEST_F(UndoHistoryTest, ConsolidatedGaussianDeletionRespectsInheritedLocks) {
+    for (const std::string locked_name : {"", "model", "inner", "outer"}) {
+        SCOPED_TRACE(locked_name);
+        lfs::vis::op::undoHistory().clear();
+        auto manager = std::make_unique<lfs::vis::SceneManager>();
+        lfs::vis::services().set(manager.get());
+        auto& scene = manager->getScene();
+        const auto outer = scene.addGroup("outer");
+        const auto inner = scene.addGroup("inner", outer);
+        scene.addSplat("model", make_linear_test_splat(4), inner);
+        scene.addSplat("other", make_linear_test_splat(1));
+        ASSERT_EQ(scene.consolidateNodeModels(), 2u);
+        ASSERT_TRUE(scene.isConsolidated());
+        if (!locked_name.empty())
+            scene.setNodeLocked(locked_name, true);
+        scene.setSelectionMask(std::make_shared<Tensor>(make_uint8_mask({1, 0, 0, 0, 0})));
+        const auto before = scene.getCombinedModel()->means_raw().cpu().to_vector();
+        const auto result = manager->deleteSelectedGaussiansWithHistory();
+        EXPECT_EQ(result.has_value(), locked_name.empty());
+        const auto* combined = scene.getCombinedModel();
+        ASSERT_NE(combined, nullptr);
+        EXPECT_EQ(combined->means_raw().cpu().to_vector(), before);
+        if (!locked_name.empty()) {
+            if (!result)
+                EXPECT_EQ(result.error(), "Cannot delete 'model': node is locked");
+            EXPECT_EQ(combined->visible_count(), 5u);
+            EXPECT_EQ(selection_mask_values(scene), (std::vector<uint8_t>{1, 0, 0, 0, 0}));
+            EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+        } else {
+            EXPECT_EQ(deleted_mask_values(*combined), (std::vector<bool>{true, false, false, false, false}));
+        }
+        lfs::vis::op::undoHistory().clear();
+        lfs::vis::services().clear();
+    }
+}
