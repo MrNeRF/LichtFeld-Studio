@@ -119,7 +119,7 @@ namespace {
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.012f);
         EXPECT_EQ(resolved<int>(defaults, "max_cap"), 5'000'000);
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "min_opacity"), 1.0f / 255.0f);
-        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_reg"), 0.003f);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_reg"), 0.0f);
         auto cap_adjusted = defaults;
         cap_adjusted.max_cap = 1'000'000;
         EXPECT_NEAR(resolved<float>(cap_adjusted, "grow_fraction"), 0.0758f, 1.0e-7f);
@@ -630,7 +630,7 @@ namespace {
         EXPECT_EQ(mcmc_result->max_cap, 1'000'000);
 
         const auto mrnf_path = eval_config_path("mrnf_optimization_params.json");
-        EXPECT_EQ(frozen_config_fingerprint(mrnf_path), 0xff1bdba9c3fd52dbULL);
+        EXPECT_EQ(frozen_config_fingerprint(mrnf_path), 0xc7841d999e460d68ULL);
         const auto mrnf_result = lfs::core::param::read_optim_params_from_json(mrnf_path);
         ASSERT_TRUE(mrnf_result.has_value()) << mrnf_result.error();
         EXPECT_FLOAT_EQ(mrnf_result->means_lr, 2e-05f);
@@ -638,6 +638,7 @@ namespace {
         EXPECT_EQ(mrnf_result->start_refine, 0u);
         EXPECT_EQ(mrnf_result->stop_refine, 28'500u);
         EXPECT_FLOAT_EQ(mrnf_result->min_opacity, 0.0039215689f);
+        EXPECT_FLOAT_EQ(mrnf_result->opacity_reg, 0.0f);
 
         const auto igs_path = eval_config_path("improvedGSplus_optimization_params.json");
         EXPECT_EQ(frozen_config_fingerprint(igs_path), 0xf86e40494df20d22ULL);
@@ -648,6 +649,23 @@ namespace {
         EXPECT_EQ(igs_result->refine_every, 500u);
         EXPECT_FLOAT_EQ(igs_result->tv_loss_weight, 5.0f);
         EXPECT_EQ(igs_result->strategy, "igs+");
+    }
+
+    // Projects and configs saved while 0.003 was the MRNF default store it explicitly. A migration
+    // not keyed on MRNF and that exact value would rewrite deliberate user values or other strategies.
+    TEST_F(TrainingParametersTest, StoredFormerMrnfOpacityRegDefaultLoadsAsOff) {
+        auto stored = OptimizationParameters::mrnf_defaults().to_json();
+        stored["opacity_reg"] = 0.003f;
+        EXPECT_FLOAT_EQ(OptimizationParameters::from_json(stored).opacity_reg, 0.0f);
+        stored["opacity_reg"] = 0.003;
+        EXPECT_FLOAT_EQ(OptimizationParameters::from_json(stored).opacity_reg, 0.0f);
+
+        stored["opacity_reg"] = 0.005f;
+        EXPECT_FLOAT_EQ(OptimizationParameters::from_json(stored).opacity_reg, 0.005f);
+
+        auto mcmc = OptimizationParameters::mcmc_defaults().to_json();
+        mcmc["opacity_reg"] = 0.003f;
+        EXPECT_FLOAT_EQ(OptimizationParameters::from_json(mcmc).opacity_reg, 0.003f);
     }
 
     TEST_F(TrainingParametersTest, MrnfRegularizationDefaultsAndSchedule) {

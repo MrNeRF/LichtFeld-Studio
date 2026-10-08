@@ -479,6 +479,14 @@ namespace lfs::core {
                         params.depth_loss_mode);
                     params.depth_loss_mode = "ssi";
                 }
+
+                constexpr float kFormerMrnfOpacityReg = 0.003f;
+                if (json.contains("opacity_reg") &&
+                    canonical_strategy_name(params.strategy) == kStrategyMRNF &&
+                    params.opacity_reg == kFormerMrnfOpacityReg) {
+                    LOG_INFO("Migrating the former MRNF opacity_reg default {} to 0", kFormerMrnfOpacityReg);
+                    params.opacity_reg = 0.0f;
+                }
             }
 
             void apply_dataset_json_overlay(DatasetConfig& dataset, const nlohmann::json& j) {
@@ -1180,7 +1188,7 @@ namespace lfs::core {
             p.refine_every = 163;
             p.scaling_lr = 0.00828016f;
             p.rotation_lr = 0.0015f;
-            p.opacity_reg = 0.003f;
+            p.opacity_reg = 0.0f;
             p.scale_reg = 0.01f;
             p.scale_reg_decay_power = 0.4f;
             p.erank_reg = 0.001f;

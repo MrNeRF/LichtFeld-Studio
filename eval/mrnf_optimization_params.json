@@ -14,7 +14,7 @@
   "start_refine": 0,
   "stop_refine": 28500,
   "sh_degree": 3,
-  "opacity_reg": 0.003,
+  "opacity_reg": 0.0,
   "scale_reg": 0.0,
   "init_opacity": 0.5,
   "init_scaling": 0.1,
