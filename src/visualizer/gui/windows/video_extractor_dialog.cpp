@@ -124,6 +124,10 @@ namespace lfs::gui {
             const std::string attr_name = cacheAttrName("control", "value");
             if (el->GetAttribute<Rml::String>(attr_name.c_str(), "") == value)
                 return false;
+            // A text field being typed in keeps its text; its blur writes the clamped value.
+            if (auto* const document = el->GetOwnerDocument();
+                document && document->GetFocusLeafNode() == el && el->GetAttribute<Rml::String>("type", "") == "text")
+                return false;
 
             if (auto* const input = dynamic_cast<Rml::ElementFormControlInput*>(el))
                 input->SetValue(value);
@@ -353,6 +357,7 @@ namespace lfs::gui {
         document_ = nullptr;
         clearElementCache();
         elements_cached_ = false;
+        preview_src_.clear();
         last_language_.clear();
         controls_dirty_ = true;
     }
@@ -1236,7 +1241,8 @@ namespace lfs::gui {
                                                : lfs::core::path_to_utf8(output_dir_);
         changed |= setCachedText(video_value_el_, video_display);
         changed |= setCachedText(output_value_el_, output_display);
-        changed |= setCachedProperty(select_hint_el_, "display", can_start ? "none" : "inline-block");
+        const bool inputs_missing = !player_->isOpen() || output_dir_.empty();
+        changed |= setCachedProperty(select_hint_el_, "display", inputs_missing ? "inline-block" : "none");
         changed |= setCachedText(select_hint_el_, LOC(VideoExtractor::SELECT_BOTH));
 
         if (changed)
@@ -1313,6 +1319,9 @@ namespace lfs::gui {
                 out_w = custom_width_;
                 out_h = custom_height_;
             }
+            // Frames are scaled first, then rotated.
+            if (rotation_deg_ == 90 || rotation_deg_ == 270)
+                std::swap(out_w, out_h);
         }
 
         changed |= setCachedText(output_resolution_el_,

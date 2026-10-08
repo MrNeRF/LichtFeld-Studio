@@ -877,7 +877,9 @@ progress fill {
     background-color: #313244;
 }
 
-.btn:disabled {
+/* <button> is no form control in RmlUi: its disabled attribute sets no :disabled. */
+.btn:disabled,
+.btn[disabled] {
     opacity: 0.5;
     cursor: default;
 }
