@@ -27,8 +27,9 @@ namespace lfs::vis {
 
     namespace {
         constexpr std::size_t kPreviewPixelStateBytesPerPixel = 4u * sizeof(float);
-        constexpr std::size_t kMaxNativePreviewPixelStateBytes =
-            (std::size_t{4} << 30) - (std::size_t{64} << 20);
+        // Large exports render in bands of at most this much per-pixel state. Rendering is cheap
+        // next to encoding, so small bands keep export VRAM flat at any output size.
+        constexpr std::size_t kMaxNativePreviewPixelStateBytes = std::size_t{256} << 20;
         constexpr float kMaxValidDepth = 1e9f;
         constexpr int kMinPreviewSubdivisionHeight = 512;
         constexpr int kPreviewTileHeightAlignment = HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT;
