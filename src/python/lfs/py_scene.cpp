@@ -596,14 +596,9 @@ namespace lfs::python {
 
         const auto& R_tensor = R.tensor();
         const auto& T_tensor = T.tensor();
-        assert(R_tensor.ndim() == 2 && R_tensor.size(0) == 3 && R_tensor.size(1) == 3);
-        assert(T_tensor.numel() == 3);
-
-        auto T_flat = T_tensor.ndim() == 2 ? T_tensor.reshape({3}) : T_tensor;
-
         auto camera = std::make_shared<lfs::core::Camera>(
-            R_tensor.clone(),
-            T_flat.clone(),
+            R_tensor.is_valid() ? R_tensor.clone() : R_tensor,
+            T_tensor.is_valid() ? T_tensor.clone() : T_tensor,
             focal_x, focal_y,
             static_cast<float>(width) / 2.0f, static_cast<float>(height) / 2.0f,
             lfs::core::Tensor{},
