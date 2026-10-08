@@ -2197,8 +2197,18 @@ namespace lfs::vis::gui {
             const bool should_persist = crop_tool_drag_changed_;
             crop_tool_drag_active_ = false;
             crop_tool_drag_changed_ = false;
-            if (should_persist)
+            if (should_persist) {
+                // Clamp local extents at commit, as for ellipsoids, without changing drag deltas.
+                for (int axis = 0; axis < 3; ++axis) {
+                    if (scale_result.total_scale[axis] != 1.0f &&
+                        crop_tool_box_max_[axis] - crop_tool_box_min_[axis] < MIN_GIZMO_SCALE) {
+                        const float center = (crop_tool_box_min_[axis] + crop_tool_box_max_[axis]) * 0.5f;
+                        crop_tool_box_min_[axis] = center - MIN_GIZMO_SCALE * 0.5f;
+                        crop_tool_box_max_[axis] = center + MIN_GIZMO_SCALE * 0.5f;
+                    }
+                }
                 (void)persistActiveCropToolToNode(false);
+            }
         }
 
         overlay_drawlist.PopClipRect();

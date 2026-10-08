@@ -1113,6 +1113,100 @@ namespace lfs::vis {
 
 #undef TRANSFORM_DRAG_CANCEL_TEST
 
+    TEST_F(WindowInputDispatchTest, CropScaleHandleKeepsLocalMinimumUnderNestedParents) {
+        auto& sm = *viewer_->getSceneManager();
+        auto& scene = sm.getScene();
+        auto& gizmo = gui_->gizmo();
+        auto& camera = viewer_->getViewport().camera;
+        camera.t = {0.0f, 0.0f, 12.0f};
+        camera.pivot = {0.0f, 0.0f, 0.0f};
+        camera.R = rendering::makeVisualizerLookAtRotation(camera.t, camera.pivot);
+        gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
+        const gui::ViewportLayout layout{.pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+        auto& frame = frameInput();
+        for (const bool nested : {false, true}) {
+            SCOPED_TRACE(nested);
+            const auto outer = scene.addGroup(nested ? "Outer" : "Root");
+            const auto inner = scene.addGroup(nested ? "Nested inner" : "Root inner", outer);
+            if (nested) {
+                auto transform = glm::rotate(glm::mat4(1.0f), 0.2f, glm::vec3(1, 0, 0));
+                transform = glm::rotate(transform, -0.12f, glm::vec3(0, 1, 0));
+                transform = glm::rotate(transform, 0.25f, glm::vec3(0, 0, 1));
+                scene.setNodeTransform(outer, glm::scale(transform, glm::vec3(1.25f, 0.82f, 1.1f)));
+            }
+            const auto model = scene.addSplat(nested ? "Nested model" : "Root model", lfs::test::licht::make_splat(3), inner);
+            const auto volume = scene.addCropBox(nested ? "Nested box" : "Root box", model);
+            core::CropBoxData data;
+            data.min = glm::vec3(-0.05f);
+            data.max = glm::vec3(0.05f);
+            if (!nested) {
+                data.min.y = -1e-5f;
+                data.max.y = 1e-5f;
+            }
+            scene.setCropBoxData(volume, data);
+            sm.changeContentType(SceneManager::ContentType::SplatFiles);
+            sm.selectNode(volume);
+            viewer_->getEditorContext().update(&sm, viewer_->getTrainerManager());
+            UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
+            gizmo.setCropToolShape("box");
+            gizmo.setOperation(gui::GizmoOperation::Scale);
+            gizmo.setTransformSpace(TransformSpace::World);
+            gizmo.updateToolState(ui, false);
+            for (int drag = 0; drag < 3; ++drag) {
+                frame.mouse_down[0] = frame.mouse_clicked[0] = frame.mouse_released[0] = false;
+                bool found = false;
+                for (int y = 105; y <= 195 && !found; ++y) {
+                    frame.mouse_x = 290.0f;
+                    frame.mouse_y = static_cast<float>(y);
+                    gizmo.renderCropBoxGizmo(ui, layout);
+                    found = gui::isScaleGizmoHovered();
+                }
+                ASSERT_TRUE(found);
+                const glm::vec2 start(frame.mouse_x, frame.mouse_y);
+                const auto drag_to = [&](const glm::vec2 end, const bool reverse = false) {
+                    frame.mouse_x = start.x;
+                    frame.mouse_y = start.y;
+                    frame.mouse_down[0] = frame.mouse_clicked[0] = true;
+                    gizmo.renderCropBoxGizmo(ui, layout);
+                    EXPECT_TRUE(gui::isScaleGizmoActive());
+                    frame.mouse_clicked[0] = false;
+                    if (reverse) {
+                        frame.mouse_x = start.x - 200.0f;
+                        gizmo.renderCropBoxGizmo(ui, layout);
+                    }
+                    frame.mouse_x = end.x;
+                    frame.mouse_y = end.y;
+                    gizmo.renderCropBoxGizmo(ui, layout);
+                    frame.mouse_down[0] = false;
+                    frame.mouse_released[0] = true;
+                    gizmo.renderCropBoxGizmo(ui, layout);
+                    frame.mouse_released[0] = false;
+                };
+                if (drag == 0 && !nested) {
+                    op::undoHistory().clear();
+                    drag_to(start + glm::vec2(24.0f, 0.0f), true);
+                    const auto grown = *scene.getNodeById(volume)->cropbox;
+                    EXPECT_EQ(grown.min, glm::vec3(-0.05f * 1.25f, data.min.y, data.min.z));
+                    EXPECT_EQ(grown.max, glm::vec3(0.05f * 1.25f, data.max.y, data.max.z));
+                    ASSERT_TRUE(op::undoHistory().undo().success);
+                    EXPECT_EQ(scene.getNodeById(volume)->cropbox->min, data.min);
+                    ASSERT_TRUE(op::undoHistory().redo().success);
+                    EXPECT_EQ(scene.getNodeById(volume)->cropbox->min, grown.min);
+                    ASSERT_TRUE(op::undoHistory().undo().success);
+                }
+                drag_to(start - glm::normalize(start - glm::vec2(200.0f, 150.0f)) * 200.0f);
+                const auto* node = scene.getNodeById(volume);
+                ASSERT_NE(node, nullptr);
+                const glm::vec3 half = (node->cropbox->max - node->cropbox->min) * 0.5f;
+                EXPECT_NEAR(half.x, 0.0005f, 1e-8f);
+                EXPECT_NEAR(half.y, nested ? 0.0005f : data.max.y, 1e-8f);
+                EXPECT_EQ(half.z, 0.05f);
+            }
+            gizmo.deactivateAllTools();
+            op::undoHistory().clear();
+        }
+    }
+
     // Catches gizmo hover that outlives the crop gizmo: the deleted volume's last hover
     // made every later viewport press look like a gizmo grab, so orbit never started.
     TEST_F(WindowInputDispatchTest, ApplyingCropWhileHoveringItsGizmoKeepsViewportOrbit) {
