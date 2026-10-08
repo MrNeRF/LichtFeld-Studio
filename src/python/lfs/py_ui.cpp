@@ -4968,9 +4968,13 @@ namespace lfs::python {
 
         m.def(
             "delete_keyframe",
-            [](size_t index) { lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = index}.emit(); },
+            [](size_t index) {
+                if (index == 0)
+                    throw nb::value_error("The first keyframe cannot be deleted");
+                lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = index}.emit();
+            },
             nb::arg("index"),
-            "Delete keyframe by index");
+            "Delete keyframe by index; raises ValueError for the protected first keyframe");
 
         m.def(
             "set_keyframe_easing",
