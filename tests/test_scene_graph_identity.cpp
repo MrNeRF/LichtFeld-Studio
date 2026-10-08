@@ -497,6 +497,102 @@ TEST_F(SceneGraphIdentityTest, MergeGroupByIdCommandCreatesNamedSplat) {
     EXPECT_EQ(scene.getNodeById(child_b_id), nullptr);
 }
 
+TEST_F(SceneGraphIdentityTest, MergeTrainingGroupKeepsRenderedModelThroughUndoRedo) {
+    auto& scene = scene_manager_->getScene();
+    const auto group = scene.addGroup("group");
+    const auto first = scene.addSplat("first", make_test_splat({0.f, 0.f, 0.f}), group);
+    scene.addSplat("second", make_test_splat({1.f, 0.f, 0.f, 2.f, 0.f, 0.f}), group);
+    scene.setTrainingModelNode(first);
+    const auto original_uuid = scene.getTrainingModelNodeUuid();
+    scene_manager_->changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+    ASSERT_NE(scene_manager_->getModelForRendering(), nullptr);
+
+    ASSERT_EQ(scene_manager_->mergeGroupNode(group), "group");
+    const auto check_rendered = [&] {
+        EXPECT_TRUE(scene.getTrainingModelNodeUuid().is_nil());
+        EXPECT_EQ(scene_manager_->getContentType(), lfs::vis::SceneManager::ContentType::SplatFiles);
+        const auto* model = scene_manager_->getModelForRendering();
+        EXPECT_NE(model, nullptr);
+        if (model)
+            EXPECT_EQ(model->size(), 3u);
+        const auto state = scene_manager_->buildRenderState();
+        EXPECT_EQ(state.combined_model, model);
+        EXPECT_GT(state.visible_splat_count, 0u);
+    };
+    check_rendered();
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_EQ(scene.getTrainingModelNodeUuid(), original_uuid);
+    EXPECT_EQ(scene_manager_->getContentType(), lfs::vis::SceneManager::ContentType::Dataset);
+    EXPECT_NE(scene_manager_->getModelForRendering(), nullptr);
+    ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+    check_rendered();
+}
+
+TEST_F(SceneGraphIdentityTest, CoreMergeRetiresTrainingModelRole) {
+    auto& scene = scene_manager_->getScene();
+    const auto group = scene.addGroup("group");
+    const auto first = scene.addSplat("first", make_test_splat({0.f, 0.f, 0.f}), group);
+    scene.addSplat("second", make_test_splat({1.f, 0.f, 0.f}), group);
+    scene.setTrainingModelNode(first);
+    ASSERT_EQ(scene.mergeGroup(group), "group");
+    EXPECT_TRUE(scene.getTrainingModelNodeUuid().is_nil());
+    ASSERT_NE(scene.getCombinedModel(), nullptr);
+    EXPECT_EQ(scene.getCombinedModel()->size(), 2u);
+}
+
+TEST_F(SceneGraphIdentityTest, MergeUnderTransformedParentPreservesWorldGeometry) {
+    for (const bool use_manager : {false, true}) {
+        SCOPED_TRACE(use_manager);
+        auto& scene = scene_manager_->getScene();
+        scene.clear();
+        lfs::vis::op::undoHistory().clear();
+        const auto parent = scene.addGroup("parent");
+        const auto group = scene.addGroup("group", parent);
+        const auto nested = scene.addGroup("nested", group);
+        const auto first = scene.addSplat("first", make_test_splat({1.f, 2.f, 3.f}), group);
+        const auto second = scene.addSplat("second", make_test_splat({4.f, 5.f, 6.f}), nested);
+        glm::mat4 parent_transform{1.f};
+        parent_transform[0] = glm::vec4{0.f, 2.f, 0.f, 0.f};
+        parent_transform[1] = glm::vec4{-3.f, 0.f, 0.f, 0.f};
+        parent_transform[3] = glm::vec4{10.f, 20.f, 30.f, 1.f};
+        scene.setNodeTransform(parent, parent_transform);
+        glm::mat4 group_transform{1.f};
+        group_transform[3][0] = 2.f;
+        scene.setNodeTransform(group, group_transform);
+        glm::mat4 nested_transform{1.f};
+        nested_transform[3][1] = 3.f;
+        scene.setNodeTransform(nested, nested_transform);
+        const std::vector<glm::vec4> expected{
+            scene.getWorldTransform(second) * glm::vec4{4.f, 5.f, 6.f, 1.f},
+            scene.getWorldTransform(first) * glm::vec4{1.f, 2.f, 3.f, 1.f}};
+        const auto merge = use_manager ? scene_manager_->mergeGroupNode(group) : scene.mergeGroup(group);
+        ASSERT_EQ(merge, "group");
+        const auto check_geometry = [&] {
+            const auto* merged = scene.getNode("group");
+            ASSERT_NE(merged, nullptr);
+            ASSERT_NE(merged->model, nullptr);
+            EXPECT_EQ(merged->parent_id, parent);
+            const auto points = merged->model->means_raw().cpu().to_vector();
+            ASSERT_EQ(points.size(), 6u);
+            for (size_t i = 0; i < expected.size(); ++i) {
+                const auto actual = scene.getWorldTransform(merged->id) *
+                                    glm::vec4{points[3 * i], points[3 * i + 1], points[3 * i + 2], 1.f};
+                for (int axis = 0; axis < 3; ++axis)
+                    EXPECT_NEAR(actual[axis], expected[i][axis], 1e-5f);
+            }
+        };
+        check_geometry();
+        if (use_manager) {
+            ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+            ASSERT_NE(scene.getNode("first"), nullptr);
+            ASSERT_NE(scene.getNode("second"), nullptr);
+            EXPECT_EQ(scene.getWorldTransform(scene.getNodeIdByName("first")) * glm::vec4(1.f, 2.f, 3.f, 1.f), expected[1]);
+            ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+            check_geometry();
+        }
+    }
+}
+
 // Catches nested merge retaining the outer group's node-owned name across its destruction.
 TEST_F(SceneGraphIdentityTest, MergeNestedGroupsKeepsOuterName) {
     auto& scene = scene_manager_->getScene();

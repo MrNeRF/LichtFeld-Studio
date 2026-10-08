@@ -2995,6 +2995,30 @@ TEST_F(UndoHistoryTest, MergeGroupNodeHandlesNameReferenceFromGroupNode) {
     EXPECT_EQ(scene.getTotalGaussianCount(), 3u);
 }
 
+TEST_F(UndoHistoryTest, MergeGroupHonorsTrainingRemovalPolicy) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+    lfs::vis::services().set(trainer_manager.get());
+    auto& scene = scene_manager->getScene();
+    const auto group = scene.addGroup("group");
+    const auto model = scene.addSplat("model", make_test_splat({0.f, 0.f, 0.f}), group);
+    const auto cameras = scene.addCameraGroup("cameras", lfs::core::NULL_NODE, 1);
+    scene.addCamera("image.png", cameras, make_test_camera("image.png", 1));
+    scene.setTrainingModelNode(model);
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+    trainer_manager->setScene(&scene);
+    trainer_manager->setTrainerFromCheckpoint(std::make_unique<lfs::training::Trainer>(scene), 0);
+    ASSERT_FALSE(trainer_manager->canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+    EXPECT_TRUE(scene_manager->mergeGroupNode(group).empty());
+    EXPECT_NE(scene.getNodeById(group), nullptr);
+    EXPECT_NE(scene.getNodeById(model), nullptr);
+    EXPECT_EQ(scene.getTrainingModelNodeId(), model);
+    EXPECT_FALSE(lfs::vis::op::undoHistory().canUndo());
+}
+
 TEST_F(UndoHistoryTest, DeleteResultHonorsTrainingRemovalPolicy) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();

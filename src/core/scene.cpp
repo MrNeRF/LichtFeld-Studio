@@ -4892,20 +4892,21 @@ namespace lfs::core {
         const bool group_visible = group_node->visible;
         bool contains_locked_node = false;
         std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>> splats;
-        const std::function<void(NodeId)> collect = [&](const NodeId id) {
+        const std::function<void(NodeId, const glm::mat4&)> collect = [&](const NodeId id, const glm::mat4& parent_transform) {
             const auto* const node = getNodeById(id);
             if (!node)
                 return;
+            const glm::mat4 transform = parent_transform * node->local_transform.get();
             contains_locked_node = contains_locked_node || static_cast<bool>(node->locked);
             if (node->type == NodeType::SPLAT && node->model) {
-                splats.emplace_back(node->model.get(), getWorldTransform(id));
+                splats.emplace_back(node->model.get(), transform);
             }
             for (const NodeId cid : node->children)
-                collect(cid);
+                collect(cid, transform);
         };
 
         const NodeId parent_id = group_node->parent_id;
-        collect(group_id);
+        collect(group_id, glm::mat4{1.f});
         if (contains_locked_node) {
             LOG_WARN("Cannot merge '{}': node is locked", group_name);
             return "";

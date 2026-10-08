@@ -15010,6 +15010,43 @@ contract["test_selection_submode_follows_native_mode"](lf)
             1234);
     }
 
+    TEST_F(VisualizerImplResetTest, EditableSplatWithDatasetNodeStaysVisibleAfterReopen) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        const auto path = temporary_.path / "editable-scene.licht";
+        write_splt_project(path, lfs::test::licht::make_splat(3), "Merged", nullptr, {});
+        {
+            auto document = lfs::test::licht::require_result_ptr(
+                lfs::io::project::ProjectDocument::open(path));
+            ASSERT_TRUE(document->edit_scene_graph().upsert_node(
+                lfs::io::project::SceneNodeRecord{
+                    .uuid = lfs::core::generate_uuid_v4(),
+                    .type = "dataset",
+                    .name = "Dataset",
+                    .child_order = 1,
+                }));
+            auto options = lfs::test::licht::deterministic_document_save_options(0x76000021, 2, 3);
+            options.commit.snapshot_uuid = {};
+            ASSERT_TRUE(document->save(path, options));
+        }
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        ASSERT_TRUE(viewer.projectOpen(path, ProjectSwitchDisposition::DiscardChanges));
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(waitUntil([&] {
+            viewer.pumpPostedWorkForProjectWrite();
+            const auto info = viewer.projectGetInfo();
+            return info && info->hydration_state == "complete";
+        }));
+        EXPECT_EQ(viewer.getSceneManager()->getContentType(), SceneManager::ContentType::SplatFiles);
+        EXPECT_TRUE(viewer.getScene().getTrainingModelNodeUuid().is_nil());
+        const auto* model = viewer.getSceneManager()->getModelForRendering();
+        ASSERT_NE(model, nullptr);
+        EXPECT_EQ(model->size(), 3u);
+        EXPECT_EQ(viewer.getSceneManager()->buildRenderState().combined_model, model);
+    }
+
     TEST_F(VisualizerImplResetTest,
            DatasetProjectWithoutCheckpointOpensReady) {
         if (!cuda_device_available()) {

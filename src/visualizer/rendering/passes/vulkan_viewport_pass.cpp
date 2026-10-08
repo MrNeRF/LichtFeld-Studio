@@ -229,6 +229,7 @@ namespace lfs::vis {
             VkDescriptorSet frustum_descriptor_set = VK_NULL_HANDLE;
             VkDescriptorSet shape_overlay_descriptor_set = VK_NULL_HANDLE;
             VkImageView bound_shape_overlay_depth_view = VK_NULL_HANDLE;
+            std::uint64_t bound_shape_overlay_depth_revision = 0;
         };
         std::vector<FrameResources> frame_resources;
 
@@ -1286,11 +1287,14 @@ namespace lfs::vis {
             return true;
         }
 
-        void bindShapeOverlayDepth(FrameResources& frame, VkImageView view) {
+        void bindShapeOverlayDepth(FrameResources& frame, VkImageView view,
+                                   const std::uint64_t binding_revision = 0) {
             if (view == VK_NULL_HANDLE) {
                 view = shape_overlay_dummy_depth_view;
             }
-            if (frame.bound_shape_overlay_depth_view == view) {
+            // A recreated depth image can reuse the same Vulkan handle.
+            if (frame.bound_shape_overlay_depth_view == view &&
+                frame.bound_shape_overlay_depth_revision == binding_revision) {
                 return;
             }
             VkDescriptorImageInfo di{};
@@ -1306,6 +1310,7 @@ namespace lfs::vis {
             w.pImageInfo = &di;
             vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
             frame.bound_shape_overlay_depth_view = view;
+            frame.bound_shape_overlay_depth_revision = binding_revision;
         }
 
         [[nodiscard]] bool createQuadBuffer() {
@@ -2699,7 +2704,8 @@ namespace lfs::vis {
                 0.0f, 0.0f};
             bindShapeOverlayDepth(
                 frame,
-                depth_available ? depth_blit_pass.depthView(params.frame_slot) : VK_NULL_HANDLE);
+                depth_available ? depth_blit_pass.depthView(params.frame_slot) : VK_NULL_HANDLE,
+                depth_available ? depth_blit_pass.depthBindingRevision(params.frame_slot) : 0);
 
             bindViewport(command_buffer, rect);
             bindQuad(command_buffer);

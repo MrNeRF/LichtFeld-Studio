@@ -57,6 +57,7 @@ namespace lfs::vis {
         // Bound after prepare(). Lets other passes sample the splat depth
         // surface without re-uploading it.
         [[nodiscard]] VkImageView depthView(std::size_t frame_slot) const;
+        [[nodiscard]] std::uint64_t depthBindingRevision(std::size_t frame_slot) const;
 
     private:
         struct Impl;

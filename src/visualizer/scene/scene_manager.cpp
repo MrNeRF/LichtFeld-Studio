@@ -4837,7 +4837,13 @@ namespace lfs::vis {
             return {};
         }
 
-        const auto history_options = sceneGraphCaptureOptions(true, false);
+        const auto removal_impact = classifyTrainingRemovalImpact(group_id);
+        if (const auto allowed = validateNodeRemoval(group_id, removal_impact); !allowed) {
+            LOG_WARN("Cannot merge '{}': {}", group_name, allowed.error());
+            return {};
+        }
+        const bool merges_training_model = removal_impact == TrainingRemovalImpact::TrainingModel;
+        const auto history_options = sceneGraphCaptureOptions(true, merges_training_model);
         const core::Uuid group_uuid = group->uuid;
         const core::NodeId parent_id = group->parent_id;
         const bool group_visible = group->visible;
@@ -4879,10 +4885,11 @@ namespace lfs::vis {
         std::vector<std::pair<const core::SplatData*, glm::mat4>> splats;
         cropped_splats.reserve(scene_.getNodes().size());
         splats.reserve(scene_.getNodes().size());
-        const std::function<void(core::NodeId)> collect_splats = [&](const core::NodeId id) {
+        const std::function<void(core::NodeId, const glm::mat4&)> collect_splats = [&](const core::NodeId id, const glm::mat4& parent_transform) {
             const auto* const node = scene_.getNodeById(id);
             if (!node)
                 return;
+            const glm::mat4 transform = parent_transform * node->local_transform.get();
             if (node->type == core::NodeType::SPLAT && node->model) {
                 auto model = std::make_unique<core::SplatData>(node->model->clone());
                 const glm::mat4 splat_world = scene_.getWorldTransform(id);
@@ -4904,12 +4911,12 @@ namespace lfs::vis {
                     }
                 }
                 cropped_splats.push_back(std::move(model));
-                splats.emplace_back(cropped_splats.back().get(), splat_world);
+                splats.emplace_back(cropped_splats.back().get(), transform);
             }
             for (const core::NodeId child_id : node->children)
-                collect_splats(child_id);
+                collect_splats(child_id, transform);
         };
-        collect_splats(group_id);
+        collect_splats(group_id, glm::mat4{1.f});
 
         auto merged_model = core::Scene::mergeSplatsWithTransforms(splats);
         if (!merged_model) {
@@ -4925,6 +4932,15 @@ namespace lfs::vis {
                 return {};
             }
             scene_.setCombinedModelAllocator(std::move(allocator));
+        }
+
+        if (merges_training_model) {
+            if (auto* trainer = services().trainerOrNull(); trainer && trainer->hasTrainer()) {
+                if (!trainer->clearTrainer()) {
+                    LOG_WARN("Cannot merge '{}' while its training worker is stopping", group_name);
+                    return {};
+                }
+            }
         }
 
         if (was_selected) {
@@ -4948,6 +4964,8 @@ namespace lfs::vis {
             if (merged_id != core::NULL_NODE) {
                 if (auto* merged = scene_.getNodeById(merged_id))
                     merged->visible.setQuiet(group_visible);
+                if (merges_training_model)
+                    changeContentType(ContentType::SplatFiles);
                 scene_.markPayloadDiverged(merged_id);
             }
         }
