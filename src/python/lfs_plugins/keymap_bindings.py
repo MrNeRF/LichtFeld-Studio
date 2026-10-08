@@ -189,7 +189,7 @@ class KeymapBindingsSection:
         except (ValueError, TypeError):
             return
         profiles = lf.keymap.get_available_profiles()
-        if 0 <= idx < len(profiles):
+        if 0 <= idx < len(profiles) and profiles[idx] != lf.keymap.get_current_profile():
             self._clear_pending_conflict()
             lf.keymap.load_profile(profiles[idx])
             self._last_state_key = None

@@ -482,6 +482,7 @@ namespace lfs::vis {
         VmaAllocator allocator_ = VK_NULL_HANDLE;
         VkPipelineCache pipeline_cache_ = VK_NULL_HANDLE;
         std::mutex pipeline_cache_mutex_;
+        std::size_t saved_pipeline_cache_hash_ = 0;
         VkQueue graphics_queue_ = VK_NULL_HANDLE;
         VkQueue present_queue_ = VK_NULL_HANDLE;
         uint32_t graphics_queue_family_ = 0;

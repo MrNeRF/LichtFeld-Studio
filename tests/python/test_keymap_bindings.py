@@ -507,6 +507,21 @@ def test_keymap_builds_profile_and_mode_records(keymap_bindings_module):
     ]
 
 
+def test_keymap_selecting_the_active_profile_does_not_reload_it(keymap_bindings_module):
+    # Catches the profile select reloading the active profile from disk when it binds.
+    prefs, state = keymap_bindings_module
+    panel, _model = _bind_panel(prefs)
+    section = panel._keymap
+    loads = []
+    sys.modules["lichtfeld"].keymap.load_profile = lambda name: (loads.append(name), state.current_profile.__setitem__(0, name))
+
+    section._set_profile_idx("0")
+    assert loads == []
+
+    section._set_profile_idx("1")
+    assert loads == ["Studio"]
+
+
 def test_keymap_builds_binding_rows_with_capture_state(keymap_bindings_module):
     prefs, state = keymap_bindings_module
     panel, _model = _bind_panel(prefs)

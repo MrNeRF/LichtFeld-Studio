@@ -72,8 +72,6 @@ namespace lfs::event {
             return false;
         }
 
-        LOG_INFO("Found {} language(s)", available_languages_.size());
-
         const bool has_default = std::find(available_languages_.begin(),
                                            available_languages_.end(),
                                            DEFAULT_LANGUAGE) != available_languages_.end();
@@ -211,9 +209,11 @@ namespace lfs::event {
         if (!loadLanguage(language_code))
             return false;
 
+        const bool changed = language_code != current_language_;
         current_language_ = language_code;
         language_generation_.fetch_add(1, std::memory_order_release);
-        LOG_INFO("Language set to: {}", language_code);
+        if (changed)
+            LOG_INFO("Language set to: {}", language_code);
         return true;
     }
 
@@ -236,7 +236,6 @@ namespace lfs::event {
     bool LocalizationManager::loadLanguage(const std::string& language_code) {
         if (language_code == DEFAULT_LANGUAGE && !fallback_strings_.empty()) {
             current_strings_.clear();
-            LOG_INFO("Loaded {} strings for language: {}", fallback_strings_.size(), language_code);
             return true;
         }
 
@@ -253,7 +252,6 @@ namespace lfs::event {
             return false;
 
         current_strings_ = std::move(new_strings);
-        LOG_INFO("Loaded {} strings for language: {}", current_strings_.size(), language_code);
         return true;
     }
 

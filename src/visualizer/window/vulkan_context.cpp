@@ -3983,9 +3983,6 @@ namespace lfs::vis {
             imported.device_address = vkGetBufferDeviceAddress(device_, &address_info);
         }
 
-        LOG_INFO("Exportable Vulkan chunks bound: bound={} committed={} MiB (no re-import)",
-                 imported.bound_chunks,
-                 block.committed_bytes >> 20);
         return true;
     }
 
@@ -5100,6 +5097,11 @@ namespace lfs::vis {
             result = vkGetPipelineCacheData(device_, pipeline_cache_, &cache_size, cache_data.data());
             if (result == VK_SUCCESS && cache_size > 0) {
                 cache_data.resize(cache_size);
+                const std::size_t cache_hash =
+                    std::hash<std::string_view>{}(std::string_view(cache_data.data(), cache_data.size()));
+                if (cache_hash == saved_pipeline_cache_hash_) {
+                    return;
+                }
                 std::error_code ec;
                 if (path) {
                     std::filesystem::create_directories(path->parent_path(), ec);
@@ -5126,6 +5128,7 @@ namespace lfs::vis {
                                 std::filesystem::rename(temporary_path, *path, rename_ec);
                             }
                             if (!rename_ec) {
+                                saved_pipeline_cache_hash_ = cache_hash;
                                 LOG_INFO("Saved Vulkan pipeline cache: {} ({} bytes)",
                                          lfs::core::path_to_utf8(*path),
                                          cache_data.size());
