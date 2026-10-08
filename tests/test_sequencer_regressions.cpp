@@ -415,6 +415,119 @@ namespace {
         RecordProperty("median_preview_ns", std::to_string(samples[samples.size() / 2]));
     }
 
+    TEST_F(SequencerHistoryRegressionTest, EasingCommandParticipatesInSharedUndoHistory) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f, {1.0f, 2.0f, 3.0f}, 73.0f));
+        const auto second = controller.addKeyframe(makeKeyframe(4.5f, {3.0f, 5.0f, 7.0f}, 45.0f));
+        controller.selectKeyframeById(second);
+        auto* clip = &controller.timeline().ensureAnimationClip();
+        controller.setLoopMode(LoopMode::LOOP);
+        const auto original = controller.saveToJson();
+        for (size_t index = 0; index < 2; ++index) {
+            for (int mode = 1; mode <= 3; ++mode) {
+                history.clear();
+                lfs::core::events::cmd::SequencerSetKeyframeEasing{.keyframe_index = index, .easing_type = mode}.emit();
+                const auto edited = controller.saveToJson();
+                ASSERT_NE(edited, original);
+                ASSERT_EQ(history.undoCount(), 1u);
+                EXPECT_EQ(history.undoName(), "Set Keyframe Easing");
+                for (int repetition = 0; repetition < 2; ++repetition) {
+                    ASSERT_TRUE(history.undo().success);
+                    EXPECT_EQ(controller.saveToJson(), original);
+                    EXPECT_EQ(history.undoCount(), 0u);
+                    ASSERT_TRUE(history.redo().success);
+                    EXPECT_EQ(controller.saveToJson(), edited);
+                    EXPECT_EQ(history.undoCount(), 1u);
+                }
+                ASSERT_TRUE(history.undo().success);
+                EXPECT_EQ(controller.timeline().animationClip(), clip);
+                EXPECT_EQ(controller.selectedKeyframeId(), second);
+                EXPECT_EQ(controller.loopMode(), LoopMode::LOOP);
+            }
+        }
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, EasingUndoPrecedesEarlierVisibilityChange) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        const auto key = controller.addKeyframe(makeKeyframe(0.0f));
+        auto* manager = viewer.getSceneManager();
+        const auto group = manager->getScene().addGroup("group");
+        manager->setNodeVisibility(group, false);
+        lfs::core::events::cmd::SequencerSetKeyframeEasing{.keyframe_index = 0, .easing_type = 1}.emit();
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_EQ(controller.timeline().getKeyframeById(key)->easing, EasingType::LINEAR);
+        EXPECT_FALSE(static_cast<bool>(manager->getScene().getNodeById(group)->visible));
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_TRUE(static_cast<bool>(manager->getScene().getNodeById(group)->visible));
+        ASSERT_TRUE(history.redo().success);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_EQ(controller.timeline().getKeyframeById(key)->easing, EasingType::EASE_IN);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, UnchangedAndInvalidEasingDoesNotCreateHistory) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        const auto key = controller.addKeyframe(makeKeyframe(0.0f));
+        const auto original = controller.saveToJson();
+        EXPECT_TRUE(controller.setKeyframeEasingById(key, EasingType::LINEAR));
+        EXPECT_FALSE(controller.setKeyframeEasingById(key, static_cast<EasingType>(99)));
+        EXPECT_FALSE(controller.setKeyframeEasingById(99999, EasingType::EASE_IN));
+        EXPECT_EQ(controller.saveToJson(), original);
+        EXPECT_EQ(history.undoCount(), 0u);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, EasingHistoryCannotOverwriteLaterKeyEdit) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        const auto key = controller.addKeyframe(makeKeyframe(0.0f));
+        ASSERT_TRUE(controller.setKeyframeEasingById(key, EasingType::EASE_IN));
+        ASSERT_EQ(history.undoCount(), 1u);
+        ASSERT_TRUE(controller.setKeyframeFocalLengthById(key, 73.0f));
+        const auto edited = controller.saveToJson();
+        EXPECT_FALSE(history.undo().success);
+        EXPECT_EQ(controller.saveToJson(), edited);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, EasingHistoryCannotAccessDestroyedSequencer) {
+        auto& history = lfs::vis::op::undoHistory();
+        {
+            lfs::vis::VisualizerImpl viewer(options());
+            auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+            const auto key = controller.addKeyframe(makeKeyframe(0.0f));
+            ASSERT_TRUE(controller.setKeyframeEasingById(key, EasingType::EASE_IN));
+            ASSERT_EQ(history.undoCount(), 1u);
+        }
+        EXPECT_FALSE(history.undo().success);
+        EXPECT_EQ(history.undoCount(), 0u);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, EasingCommandLatency) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f));
+        controller.addKeyframe(makeKeyframe(1.0f));
+        std::vector<double> samples;
+        for (int batch = 0; batch < 9; ++batch) {
+            history.clear();
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 50; ++i)
+                lfs::core::events::cmd::SequencerSetKeyframeEasing{.keyframe_index = 0, .easing_type = 1 + i % 2}.emit();
+            samples.push_back(std::chrono::duration<double, std::micro>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count() /
+                              50.0);
+        }
+        std::sort(samples.begin(), samples.end());
+        RecordProperty("median_easing_us", std::to_string(samples[samples.size() / 2]));
+    }
+
     TEST_F(SequencerHistoryRegressionTest, AddCommandLatency) {
         lfs::vis::VisualizerImpl viewer(options());
         auto& controller = viewer.getGuiManager()->sequencerUI().controller();

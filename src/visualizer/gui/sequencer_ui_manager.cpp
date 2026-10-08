@@ -142,6 +142,39 @@ namespace lfs::vis::gui {
             float after_;
         };
 
+        class KeyframeEasingUndoEntry final : public op::UndoEntry {
+        public:
+            KeyframeEasingUndoEntry(SequencerController& controller, std::weak_ptr<void> lifetime,
+                                    sequencer::Keyframe before, const sequencer::EasingType after)
+                : controller_(controller), lifetime_(std::move(lifetime)), before_(std::move(before)), after_(after) {}
+
+            void undo() override { apply(after_, before_.easing); }
+            void redo() override { apply(before_.easing, after_); }
+            [[nodiscard]] std::string name() const override { return "Set Keyframe Easing"; }
+            [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this); }
+
+        private:
+            void apply(const sequencer::EasingType expected, const sequencer::EasingType desired) {
+                if (lifetime_.expired())
+                    throw op::HistoryStaleEntryError("Sequencer is no longer available");
+                const auto* current = controller_.timeline().getKeyframeById(before_.id);
+                auto expected_key = before_;
+                expected_key.easing = expected;
+                if (!current || !sameKeyframe(*current, expected_key))
+                    throw op::HistoryStaleEntryError("Keyframe changed since the recorded easing edit");
+                if (!controller_.setKeyframeEasingById(before_.id, desired))
+                    throw op::HistoryStaleEntryError("Could not restore keyframe easing");
+                lfs::core::events::state::KeyframeListChanged{
+                    .count = controller_.timeline().realKeyframeCount()}
+                    .emit();
+            }
+
+            SequencerController& controller_;
+            std::weak_ptr<void> lifetime_;
+            sequencer::Keyframe before_;
+            sequencer::EasingType after_;
+        };
+
         constexpr size_t MIN_PATH_RENDER_SAMPLES = 128;
         constexpr size_t MAX_PATH_RENDER_SAMPLES = 4096;
         constexpr float PATH_SAMPLES_PER_VIEWPORT_PIXEL = 2.0f;
@@ -383,11 +416,19 @@ namespace lfs::vis::gui {
                 op::undoHistory().push(std::make_unique<KeyframeTimeUndoEntry>(
                     controller_, history_lifetime_, id, before, after));
         });
+        controller_.setKeyframeEasingChangedCallback([this](const sequencer::Keyframe& before, const sequencer::EasingType after) {
+            auto& history = op::undoHistory();
+            if (!history.isPlaybackActive())
+                history.push(std::make_unique<KeyframeEasingUndoEntry>(controller_, history_lifetime_, before, after));
+        });
     }
 
     SequencerUIManager::~SequencerUIManager() {
         controller_.setKeyframeRemovedCallback({});
         controller_.setKeyframeTimeCommitCallback({});
+        controller_.setKeyframeEasingChangedCallback({});
+
+        controller_.setKeyframeEasingChangedCallback({});
         stopPlySequenceStreaming();
     }
 

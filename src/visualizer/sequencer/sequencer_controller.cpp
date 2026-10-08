@@ -466,9 +466,12 @@ namespace lfs::vis {
         if (!keyframe || keyframe->is_loop_point)
             return false;
 
+        const auto before = keyframe_easing_changed_callback_ ? std::optional(*keyframe) : std::nullopt;
         const bool changed = timeline_.setKeyframeEasingById(id, easing);
         if (changed)
             markTimelineChanged();
+        if (changed && before && before->easing != easing)
+            keyframe_easing_changed_callback_(*before, easing);
         return changed;
     }
 

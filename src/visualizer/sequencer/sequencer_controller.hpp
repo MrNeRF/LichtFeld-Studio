@@ -114,6 +114,9 @@ namespace lfs::vis {
         bool setKeyframeFocalLengthById(sequencer::KeyframeId id, float focal_length_mm);
         bool setKeyframeEasing(size_t index, sequencer::EasingType easing);
         bool setKeyframeEasingById(sequencer::KeyframeId id, sequencer::EasingType easing);
+        void setKeyframeEasingChangedCallback(std::function<void(const sequencer::Keyframe&, sequencer::EasingType)> callback) {
+            keyframe_easing_changed_callback_ = std::move(callback);
+        }
         bool removeKeyframeById(sequencer::KeyframeId id);
         bool removeSelectedKeyframe();
         void setKeyframeRemovedCallback(std::function<void(const sequencer::Keyframe&, float)> callback) {
@@ -175,6 +178,8 @@ namespace lfs::vis {
         void markSelectionChanged();
 
         std::function<void(const sequencer::Keyframe&, float)> keyframe_removed_callback_;
+
+        std::function<void(const sequencer::Keyframe&, sequencer::EasingType)> keyframe_easing_changed_callback_;
         sequencer::Timeline timeline_;
         std::optional<PlySequenceClip> ply_sequence_;
         PlaybackState state_ = PlaybackState::STOPPED;
