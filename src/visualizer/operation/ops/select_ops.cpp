@@ -9,9 +9,25 @@
 #include "core/tensor.hpp"
 #include "scene/scene_manager.hpp"
 
+#include <optional>
+
 namespace lfs::vis::op {
 
     namespace {
+        // Rows held by a locked group other than the target group; bulk selection leaves them alone.
+        std::optional<lfs::core::Tensor> locked_rows(const lfs::core::Scene& scene,
+                                                     const lfs::core::Tensor& values,
+                                                     const uint8_t group_id) {
+            std::optional<lfs::core::Tensor> rows;
+            for (const auto& group : scene.getSelectionGroups()) {
+                if (!group.locked || group.id == group_id)
+                    continue;
+                auto in_group = values.eq(static_cast<float>(group.id));
+                rows = rows ? rows->logical_or(in_group) : std::move(in_group);
+            }
+            return rows;
+        }
+
         bool has_non_identity_transform(const std::vector<glm::mat4>& transforms) {
             for (const auto& transform : transforms) {
                 for (int column = 0; column < 4; ++column) {
@@ -68,6 +84,12 @@ namespace lfs::vis::op {
 
         auto mask = lfs::core::Tensor::full({count}, static_cast<float>(group_id),
                                             lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+        if (const auto existing = scene.getScene().getSelectionMask();
+            existing && existing->is_valid() && existing->numel() == count) {
+            const auto values = existing->cuda().to(lfs::core::DataType::UInt8);
+            if (const auto rows = locked_rows(scene.getScene(), values, group_id))
+                mask = values.where(*rows, mask);
+        }
         scene.getScene().setSelectionMask(std::make_shared<lfs::core::Tensor>(std::move(mask)));
 
         return OperationResult::success();
@@ -80,7 +102,7 @@ namespace lfs::vis::op {
     OperationResult SelectNone::execute(SceneManager& scene,
                                         const OperatorProperties& /*props*/,
                                         const std::any& /*input*/) {
-        scene.getScene().clearSelection();
+        scene.getScene().clearUnlockedSelection();
         return OperationResult::success();
     }
 
@@ -105,12 +127,14 @@ namespace lfs::vis::op {
             return OperationResult::failure("No model loaded");
         }
 
+        // Invert only the active group; rows of other groups keep their membership.
         auto group_id = scene.getScene().getActiveSelectionGroup();
-        auto is_selected = mask->gt(0.0f);
-        auto inverted = is_selected.logical_not();
+        const auto values = mask->cuda().to(lfs::core::DataType::UInt8);
+        const auto other_group = values.gt(0.0f).logical_and(values.eq(static_cast<float>(group_id)).logical_not());
+        const auto newly_active = values.eq(0.0f);
 
-        auto new_mask = lfs::core::Tensor::zeros({model->size()}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-        new_mask.masked_fill_(inverted, static_cast<float>(group_id));
+        auto new_mask = values.where(other_group, lfs::core::Tensor::zeros_like(values));
+        new_mask.masked_fill_(newly_active, static_cast<float>(group_id));
 
         scene.getScene().setSelectionMask(std::make_shared<lfs::core::Tensor>(std::move(new_mask)));
 

@@ -975,6 +975,34 @@ TEST_F(OperatorRegistryPropsTest, LegacySelectInvertUsesVisibleMaskWithHiddenSib
     EXPECT_EQ(selection_mask_values(scene_manager_->getScene()), (std::vector<uint8_t>{0, 0, 0, 1}));
 }
 
+// Catches the pipeline select ops (selection toolbar, scripting) overwriting rows of a locked group,
+// and Invert dropping other groups' rows.
+TEST_F(OperatorRegistryPropsTest, LegacySelectOpsLeaveLockedGroupRowsAlone) {
+    add_node("first");
+    add_node("second");
+    auto& scene = scene_manager_->getScene();
+    const uint8_t locked = scene.addSelectionGroup("Locked", {0.2f, 0.4f, 0.6f});
+    const uint8_t other = scene.addSelectionGroup("Other", {0.6f, 0.4f, 0.2f});
+    scene.setSelectionGroupLocked(locked, true);
+    scene.setActiveSelectionGroup(1);
+    const auto reset_mask = [&] {
+        scene.setSelectionMask(std::make_shared<Tensor>(make_uint8_mask({1, locked, other, 0})));
+    };
+    lfs::vis::op::OperatorProperties props;
+
+    reset_mask();
+    ASSERT_TRUE(lfs::vis::op::SelectAll{}.execute(*scene_manager_, props, {}).ok());
+    EXPECT_EQ(selection_mask_values(scene), (std::vector<uint8_t>{1, locked, 1, 1}));
+
+    reset_mask();
+    ASSERT_TRUE(lfs::vis::op::SelectInvert{}.execute(*scene_manager_, props, {}).ok());
+    EXPECT_EQ(selection_mask_values(scene), (std::vector<uint8_t>{0, locked, other, 1}));
+
+    reset_mask();
+    ASSERT_TRUE(lfs::vis::op::SelectNone{}.execute(*scene_manager_, props, {}).ok());
+    EXPECT_EQ(selection_mask_values(scene), (std::vector<uint8_t>{0, locked, 0, 0}));
+}
+
 TEST_F(OperatorRegistryPropsTest, ResolveCropBoxIdFindsAttachedChildForParentNodeAndSelection) {
     auto& scene = scene_manager_->getScene();
     const auto parent_id = scene.addGroup("crop_parent");
