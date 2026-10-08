@@ -154,7 +154,10 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           cmake --build build-macos-release --target lichtfeld_visualizer_tests --parallel 4
-          SDL_VIDEODRIVER=dummy ctest --test-dir build-macos-release -LE gpu \
+          # Camera pose setup in the mixed viewer suite uses the tensor backend.
+          icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
+          test -f "$icd"
+          VK_DRIVER_FILES="$icd" SDL_VIDEODRIVER=dummy ctest --test-dir build-macos-release -LE gpu \
             -E '^(lichtfeld_tests|VulkanDepthContracts)$' \
             --no-tests=error --output-on-failure
 
