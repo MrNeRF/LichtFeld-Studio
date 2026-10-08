@@ -5,6 +5,7 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/services.hpp"
+#include "core/tensor_backend.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
 #include "input/input_controller.hpp"
@@ -175,6 +176,12 @@ namespace lfs::vis {
     }
 
     TEST_F(OrthographicZoomTest, FrustumCacheAndGridRespectViewportScale) {
+        // Camera construction uploads its derived pose even when R/T are CPU tensors.
+        // Keep the four wheel/scale contracts above runnable without a GPU.
+        const auto backend = core::default_gpu_backend();
+        if (!core::gpu_backend_available(backend)) {
+            GTEST_SKIP() << "Camera pose requires GPU backend " << core::gpu_backend_name(backend);
+        }
         VisualizerImpl viewer(projectOptions());
         auto& viewport = viewer.getViewport();
         viewport.windowSize = {400, 200};
