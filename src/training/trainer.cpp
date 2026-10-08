@@ -5842,7 +5842,8 @@ namespace lfs::training {
 
     lfs::core::Tensor Trainer::get_edge_weight_map(
         const int camera_uid,
-        const lfs::core::Tensor& gt_image) {
+        const lfs::core::Tensor& gt_image,
+        const lfs::core::Tensor& photometric_mask) {
         LFS_ASSERT_MSG(gt_image.is_valid() && gt_image.device() == lfs::core::Device::CUDA &&
                            gt_image.ndim() == 3 && gt_image.shape()[0] >= 3,
                        "edge-weight input must be CUDA CHW image data");
@@ -5878,17 +5879,12 @@ namespace lfs::training {
             edge_map_buffer_ = lfs::core::Tensor::empty_exact(map_shape, lfs::core::DataType::Float32);
         }
         edge_map_buffer_.set_stream(stream);
-        if (gt_image.dtype() == lfs::core::DataType::UInt8) {
-            kernels::launch_fused_canny_edge_filter_chw(
-                gt_image.ptr<uint8_t>(), edge_map_buffer_.ptr<float>(),
-                static_cast<int>(height), static_cast<int>(width), stream);
-        } else {
-            kernels::launch_fused_canny_edge_filter_chw(
-                gt_image.ptr<float>(), edge_map_buffer_.ptr<float>(),
-                static_cast<int>(height), static_cast<int>(width), stream);
-        }
-        kernels::launch_normalize_by_positive_median(
-            edge_map_buffer_.ptr<float>(), height * width, stream);
+        kernels::compute_edge_weight_map(
+            gt_image, photometric_mask,
+            params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore
+                ? kernels::MaskPhotoMode::SegmentAndIgnore
+                : kernels::MaskPhotoMode::BinaryGt0,
+            edge_map_buffer_, stream);
 
         lfs::core::Tensor map;
         const bool cacheable = map_bytes <= EDGE_WEIGHT_CACHE_BUDGET_BYTES;
@@ -6481,7 +6477,25 @@ namespace lfs::training {
                     if (edge_score_scratch.is_valid() &&
                         edge_score_scratch.dtype() == lfs::core::DataType::Float32 &&
                         edge_score_scratch.numel() == static_cast<size_t>(model.size())) {
-                        edge_weight_map = get_edge_weight_map(cam->uid(), source_gt);
+                        const auto mask_mode = params_.optimization.mask_mode;
+                        const bool mask_excludes_pixels =
+                            (mask_mode == lfs::core::param::MaskMode::Segment ||
+                             mask_mode == lfs::core::param::MaskMode::Ignore ||
+                             mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) &&
+                            (cam->has_mask() || (params_.optimization.use_alpha_as_mask && cam->has_alpha()));
+                        lfs::core::Tensor photometric_mask;
+                        if (mask_excludes_pixels) {
+                            photometric_mask =
+                                !composite_target_alpha_ && pipelined_mask_.is_valid() && pipelined_mask_.numel() > 0
+                                    ? pipelined_mask_
+                                    : cam->load_and_get_mask(
+                                          params_.dataset.resize_factor,
+                                          params_.dataset.max_width,
+                                          params_.optimization.invert_masks,
+                                          params_.optimization.mask_threshold,
+                                          mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
+                        }
+                        edge_weight_map = get_edge_weight_map(cam->uid(), source_gt, photometric_mask);
                         edge_weight_scoring_active_ = true;
                     } else if (edge_weight_scoring_active_) {
                         clearEdgeWeightCache();

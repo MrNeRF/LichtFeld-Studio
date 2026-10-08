@@ -65,6 +65,24 @@ namespace lfs::training::kernels {
         MaskPhotoMode mode,
         cudaStream_t stream = nullptr);
 
+    /// Zero `values` [H,W] wherever the mask gives no photometric weight, with the
+    /// same per-mode reading as launch_fuse_photometric_mask_weight_*.
+    void launch_zero_where_photometric_weight_is_zero_u8(
+        float* values,
+        const uint8_t* mask,
+        int H,
+        int W,
+        MaskPhotoMode mode,
+        cudaStream_t stream = nullptr);
+
+    void launch_zero_where_photometric_weight_is_zero_f32(
+        float* values,
+        const float* mask,
+        int H,
+        int W,
+        MaskPhotoMode mode,
+        cudaStream_t stream = nullptr);
+
     /// Fuse band remap + (1-mask)^power + opacity penalty loss/grad into one pass.
     /// Writes grad_alpha[i] = effective_weight[i] * (scale / n)
     /// and loss_out[0] = mean(alpha * effective_weight) * scale
