@@ -1536,13 +1536,17 @@ namespace lfs::python {
             result["cull"] = settings->cull;
             result["freeze"] = settings->freeze;
             result["num_load_workers"] = settings->num_load_workers;
+            result["lod_base_distance"] = settings->lod_base_distance;
+            result["lod_multiplier"] = settings->lod_multiplier;
         }
         return result;
     }
 
     void set_tiles_settings(const std::optional<float> cache_fraction, const std::optional<float> max_sse,
                             const std::optional<bool> cull, const std::optional<bool> freeze,
-                            const std::optional<int> num_load_workers) {
+                            const std::optional<int> num_load_workers,
+                            const std::optional<float> lod_base_distance,
+                            const std::optional<float> lod_multiplier) {
         const bool applied = on_viewer_thread([&](vis::SceneManager& scene_manager) {
             auto& settings = scene_manager.tileStreamSettings();
             if (cache_fraction)
@@ -1555,6 +1559,11 @@ namespace lfs::python {
                 settings.freeze = *freeze;
             if (num_load_workers)
                 settings.num_load_workers = std::max(*num_load_workers, 0);
+            // PlayCanvas clamps these to 0.1 and 1.2.
+            if (lod_base_distance)
+                settings.lod_base_distance = std::max(*lod_base_distance, 0.1f);
+            if (lod_multiplier)
+                settings.lod_multiplier = std::max(*lod_multiplier, 1.2f);
             return true;
         });
         // Streamers apply settings on the next frame; draw one even when idle.
@@ -1587,6 +1596,7 @@ namespace lfs::python {
         result["build_ms"] = stats->build_ms;
         result["max_sse"] = stats->max_sse;
         result["load_workers"] = stats->load_workers;
+        result["distance_lod"] = stats->distance_lod;
         result["mode"] = "stream";
         return result;
     }
@@ -2153,15 +2163,21 @@ Args:
         m.def("get_lod_stats", &get_lod_stats,
               "Get LOD statistics: {enabled, selected, budget, levels:[{level, count}, ...]}");
         m.def("get_tiles_settings", &get_tiles_settings,
-              "Get 3D Tiles streaming settings: {cache_fraction, max_sse, cull, freeze, num_load_workers}");
+              "Get tile streaming settings: {cache_fraction, max_sse, cull, freeze, num_load_workers, "
+              "lod_base_distance, lod_multiplier}");
         m.def("set_tiles_settings", &set_tiles_settings, nb::arg("cache_fraction") = nb::none(),
               nb::arg("max_sse") = nb::none(), nb::arg("cull") = nb::none(), nb::arg("freeze") = nb::none(),
-              nb::arg("num_load_workers") = nb::none(),
-              "Update 3D Tiles streaming settings; omitted values keep their current setting");
+              nb::arg("num_load_workers") = nb::none(), nb::arg("lod_base_distance") = nb::none(),
+              nb::arg("lod_multiplier") = nb::none(),
+              "Update tile streaming settings (3D Tiles, streamed SOG); omitted values keep their current "
+              "setting. lod_base_distance and lod_multiplier set the distances at which streamed SOG levels "
+              "switch, like PlayCanvas lodBaseDistance / lodMultiplier");
         m.def("get_tiles_stats", &get_tiles_stats,
-              "Get statistics (incl. max_sse in use) of the streamed 3D Tiles node, or None when no tileset streams");
+              "Get statistics (incl. max_sse in use) of the streamed model (3D Tiles, streamed SOG), or None when "
+              "none streams");
         m.def("get_tiles_mode", &get_tiles_mode,
-              "How the loaded 3D Tiles node is shown: 'stream', 'flat', or None when no tileset is loaded");
+              "'stream' when a model streams (3D Tiles, streamed SOG), 'flat' when a 3D Tiles tileset loaded fully, "
+              "or None");
     }
 
 } // namespace lfs::python

@@ -7,6 +7,12 @@ from .layouts.menus import keymap_shortcut, menu_action, menu_separator, registe
 
 __lfs_menu_classes__ = ["ViewMenu"]
 
+_STREAMING_PANEL = "lfs.tiles3d"
+
+
+def _toggle_streaming_settings():
+    lf.ui.set_panel_enabled(_STREAMING_PANEL, not lf.ui.is_panel_enabled(_STREAMING_PANEL))
+
 
 def _tr_fallback(key: str, fallback: str) -> str:
     result = lf.ui.tr(key)
@@ -149,6 +155,14 @@ class ViewMenu:
                 lf.ui.toggle_vram_hud,
                 bool(getattr(lf.ui, "is_perf_hud_visible", lambda: False)()),
                 shortcut=keymap_shortcut(lf.keymap.Action.TOGGLE_PERFORMANCE_HUD),
+            ),
+            # Opened on demand only: it covers part of the 3D view, and only a streamed
+            # model (3D Tiles, streamed SOG) has settings to show.
+            menu_toggle(
+                tr("menu.view.streaming_settings"),
+                _toggle_streaming_settings,
+                lf.ui.is_panel_enabled(_STREAMING_PANEL),
+                enabled=lf.get_tiles_mode() == "stream",
             ),
             menu_action(_tr_fallback("image_preview.reset_view", "Reset View"), lf.reset_camera),
             menu_action(_tr_fallback("main_panel.console", "Console"), lf.ui.toggle_system_console),

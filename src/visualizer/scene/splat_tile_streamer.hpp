@@ -24,6 +24,9 @@ namespace lfs::vis {
         bool cull = true;            // false: select by distance only, keeping off-view tiles
         bool freeze = false;         // keep the current selection while the camera moves
         int num_load_workers = 0;    // tile decode/upload threads; 0 picks an automatic count
+        // Distance-selected sources (streamed SOG), as PlayCanvas lodBaseDistance / lodMultiplier.
+        float lod_base_distance = 5.0f;
+        float lod_multiplier = 3.0f;
     };
 
     // Automatic decode-worker count: enough to overlap read/decode/upload without
@@ -64,6 +67,7 @@ namespace lfs::vis {
         double build_ms = 0.0;        // last merge of the drawn tiles
         float max_sse = 0.0f;         // in use; above the setting while the view exceeds the cache
         std::size_t load_workers = 0; // tile decode/upload threads currently running
+        bool distance_lod = false;    // the source refines at the LOD distances
     };
 
     // Blocks until every retired streamer's workers have exited. Workers can be in the

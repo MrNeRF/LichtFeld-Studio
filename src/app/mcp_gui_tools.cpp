@@ -1943,7 +1943,7 @@ namespace lfs::app {
                 const auto* const node = scene.getNode(name);
                 if (node && scene_manager.isTileStreamNode(node->uuid))
                     return std::unexpected(std::format(
-                        "Node '{}' streams 3D Tiles and holds only the tiles drawn for the current view; "
+                        "Node '{}' streams and holds only the parts drawn for the current view; "
                         "it cannot be exported",
                         name));
                 if (node && node->type == core::NodeType::SPLAT && node->model) {

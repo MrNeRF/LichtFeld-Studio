@@ -591,8 +591,8 @@ namespace lfs::vis {
     }
 
     void SceneManager::updateTileStreams(const TileStreamCamera& camera, const std::function<void()>& wake) {
-        // A detached tileset keeps its path; when undo brings its node back (same uuid),
-        // streaming restarts from the tileset instead of leaving the restored cut editable.
+        // A detached streamed node keeps its path; when undo brings its node back (same
+        // uuid), streaming restarts from the file instead of leaving the restored cut editable.
         std::vector<std::pair<core::Uuid, std::shared_ptr<const io::SplatTileSource>>> reattach;
         std::vector<core::Uuid> unreadable;
         for (const auto& [uuid, path] : tile_stream_paths_) {
@@ -601,10 +601,10 @@ namespace lfs::vis {
             const auto* const node = scene_.getNodeByUuid(uuid);
             if (!node || node->type != core::NodeType::SPLAT || !node->model)
                 continue;
-            if (auto source = io::open_tiles3d(path)) {
+            if (auto source = io::open_splat_tile_source(path)) {
                 reattach.emplace_back(uuid, std::move(*source));
             } else {
-                LOG_WARN("3D Tiles: cannot resume streaming '{}': {}", node->name,
+                LOG_WARN("Tile streaming: cannot resume streaming '{}': {}", node->name,
                          lfs::format_for_developer(source.error()));
                 unreadable.push_back(uuid);
             }
@@ -638,7 +638,9 @@ namespace lfs::vis {
             const glm::mat4 model_to_world =
                 lfs::rendering::dataWorldTransformToVisualizerWorld(scene_.getWorldTransform(node->id));
             io::SplatTileView tile_view{.camera = glm::vec3(glm::inverse(camera.view * model_to_world)[3]),
-                                        .max_sse = settings.max_sse};
+                                        .max_sse = settings.max_sse,
+                                        .lod_base_distance = settings.lod_base_distance,
+                                        .lod_multiplier = settings.lod_multiplier};
             if (camera.equirectangular) {
                 // The image spans 180 degrees vertically and sees every direction: no culling.
                 tile_view.sse_per_error = camera.viewport_height / glm::pi<float>();
@@ -666,7 +668,7 @@ namespace lfs::vis {
                     tile_view.planes[4] = plane(glm::row(clip, 3) + glm::row(clip, 2));
             }
             if (auto model = it->second->update(tile_view, settings, wake)) {
-                LOG_DEBUG("3D Tiles: '{}' now shows {} splats", node->name, model->size());
+                LOG_DEBUG("Tile streaming: '{}' now shows {} splats", node->name, model->size());
                 tile_stream_models_[it->first] = model.get();
                 auto previous = scene_.swapNodeModel(node->name, std::move(model));
                 previous.reset();

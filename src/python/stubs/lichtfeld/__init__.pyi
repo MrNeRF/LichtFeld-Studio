@@ -1763,22 +1763,22 @@ def get_lod_stats() -> dict:
 
 def get_tiles_settings() -> dict:
     """
-    Get 3D Tiles streaming settings: {cache_fraction, max_sse, cull, freeze, num_load_workers}
+    Get tile streaming settings: {cache_fraction, max_sse, cull, freeze, num_load_workers, lod_base_distance, lod_multiplier}
     """
 
-def set_tiles_settings(cache_fraction: float | None = None, max_sse: float | None = None, cull: bool | None = None, freeze: bool | None = None, num_load_workers: int | None = None) -> None:
+def set_tiles_settings(cache_fraction: float | None = None, max_sse: float | None = None, cull: bool | None = None, freeze: bool | None = None, num_load_workers: int | None = None, lod_base_distance: float | None = None, lod_multiplier: float | None = None) -> None:
     """
-    Update 3D Tiles streaming settings; omitted values keep their current setting
+    Update tile streaming settings (3D Tiles, streamed SOG); omitted values keep their current setting. lod_base_distance and lod_multiplier set the distances at which streamed SOG levels switch, like PlayCanvas lodBaseDistance / lodMultiplier
     """
 
 def get_tiles_stats() -> dict | None:
     """
-    Get statistics (incl. max_sse in use) of the streamed 3D Tiles node, or None when no tileset streams
+    Get statistics (incl. max_sse in use) of the streamed model (3D Tiles, streamed SOG), or None when none streams
     """
 
 def get_tiles_mode() -> str | None:
     """
-    How the loaded 3D Tiles node is shown: 'stream', 'flat', or None when no tileset is loaded
+    'stream' when a model streams (3D Tiles, streamed SOG), 'flat' when a 3D Tiles tileset loaded fully, or None
     """
 
 def register_class(cls: object) -> None:

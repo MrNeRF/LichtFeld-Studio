@@ -180,7 +180,7 @@ namespace lfs::training {
                 const auto everything = [](std::uint32_t) { return true; };
                 const auto full = lfs::io::select_splat_tiles(
                     *init_result->tile_source, {.sse_per_error = 1.0f, .max_sse = 0.0f}, everything);
-                LOG_WARN("Tileset '{}' is too large to load at full detail; training starts from its "
+                LOG_WARN("Streamed model '{}' is too large to load at full detail; training starts from its "
                          "coarsest level ({} of {} splats)",
                          lfs::core::path_to_utf8(init_file.filename()), (*splat_ptr)->size(),
                          full.render_splats);

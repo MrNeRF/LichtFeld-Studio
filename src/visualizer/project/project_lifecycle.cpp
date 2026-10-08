@@ -293,8 +293,8 @@ namespace lfs::vis::project {
             return {};
         }
 
-        // Streamed 3D Tiles nodes are stored as REFS to their tileset; hydration reloads
-        // the tileset and keeps each tile source for the streamer attached after commit.
+        // Streamed nodes (3D Tiles, streamed SOG) are stored as REFS to their source file
+        // (tag "tiles3d" for both); hydration reloads it and keeps each tile source for the streamer attached after commit.
         struct Tiles3dHydration {
             struct Stream {
                 std::shared_ptr<lfs::io::SplatTileSource> source;
@@ -322,17 +322,17 @@ namespace lfs::vis::project {
                 const auto path = lfs::io::project::resolve_path_reference(references, root, *binding.reference_uuid);
                 if (!path) {
                     return fail<Model>(lfs::ErrorCode::NotFound,
-                                       "The 3D Tiles tileset of this project was not found.",
+                                       "The streamed model file of this project was not found.",
                                        binding.reference_uuid->to_string(), "REFS");
                 }
                 auto loaded = lfs::io::Loader::create()->load(*path, {.splat_tensor_allocator = allocator});
                 if (!loaded) {
-                    return fail<Model>(lfs::ErrorCode::DataLoss, "The 3D Tiles tileset could not be opened.",
+                    return fail<Model>(lfs::ErrorCode::DataLoss, "The streamed model file could not be opened.",
                                        loaded.error().format(), "REFS");
                 }
                 auto* const splat = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&loaded->data);
                 if (!splat || !*splat) {
-                    return fail<Model>(lfs::ErrorCode::DataLoss, "The 3D Tiles tileset has no splat data.",
+                    return fail<Model>(lfs::ErrorCode::DataLoss, "The streamed model file has no splat data.",
                                        lfs::core::path_to_utf8(*path), "REFS");
                 }
                 if (loaded->tile_source) {
@@ -6512,8 +6512,8 @@ namespace lfs::vis::project {
             if (!geometry) {
                 continue;
             }
-            // A streamed 3D Tiles node holds only the drawn tiles, so the project
-            // references its tileset instead of embedding the current cut.
+            // A streamed node holds only the drawn tiles, so the project references
+            // its source file instead of embedding the current cut.
             if (const auto tileset = manager->tileStreamPath(node->uuid)) {
                 std::optional<lfs::core::Uuid> previous;
                 if (const auto bound = bindings.find(node->uuid);
@@ -6536,7 +6536,7 @@ namespace lfs::vis::project {
                          .payload_fourcc = "REFS",
                          .decision = "external",
                          .reference_uuid = *reference,
-                         .reason = "streamed 3D Tiles tileset"});
+                         .reason = "streamed model file"});
                     !decision) {
                     return decision;
                 }

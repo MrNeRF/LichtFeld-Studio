@@ -37,6 +37,9 @@ namespace lfs::io {
         std::uint32_t child_count = 0;
         std::uint64_t splat_count = 0; // 0: no content
         int sh_degree = 0;
+        // Level of a distance-selected source (streamed SOG): the view's LOD distances set
+        // its error instead of geometric_error. -1: geometric_error applies.
+        int lod_level = -1;
 
         // Distance from `point` to the oriented box, 0 inside. A zero-length axis (a flat
         // box, e.g. a planar tile) still has a direction: the one perpendicular to the
@@ -89,6 +92,8 @@ namespace lfs::io {
         glm::dmat4 local_to_world{1.0};
         // Tile contents left out because they hold no supported splat data.
         std::size_t skipped_contents = 0;
+        // Tiles carry lod_level and refine at the view's LOD distances.
+        bool distance_lod = false;
     };
 
     struct SplatTileView {
@@ -98,7 +103,16 @@ namespace lfs::io {
                                            // orthographic: pixels per unit error at any distance
         float max_sse = 16.0f;             // pixels of error a tile may show before refining
         bool orthographic = false;         // screen-space error does not shrink with distance
+        // Distance-selected levels (PlayCanvas lodBaseDistance / lodMultiplier): level k is
+        // replaced by level k-1 nearer than base * multiplier^(k-1).
+        float lod_base_distance = 5.0f;
+        float lod_multiplier = 3.0f;
     };
+
+    // Geometric error of a distance-selected level: refines at the view's LOD distance
+    // under the default 16 px error for a 1080 px tall, 60 degree vertical view, so
+    // other views and error settings scale it like any tile (field-of-view compensation).
+    [[nodiscard]] LFS_IO_API float distance_lod_error(int level, const SplatTileView& view);
 
     struct SplatTileSelection {
         std::vector<std::uint32_t> render; // resident tiles to draw, never overlapping
@@ -133,5 +147,8 @@ namespace lfs::io {
     // Tiles are expressed relative to the root tile's frame.
     [[nodiscard]] LFS_IO_API lfs::Result<std::shared_ptr<SplatTileSource>>
     open_tiles3d(const std::filesystem::path& path);
+    // The tile source of any streamable file: a 3D Tiles tileset or a streamed SOG.
+    [[nodiscard]] LFS_IO_API lfs::Result<std::shared_ptr<SplatTileSource>>
+    open_splat_tile_source(const std::filesystem::path& path);
 
 } // namespace lfs::io

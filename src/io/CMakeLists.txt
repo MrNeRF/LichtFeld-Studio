@@ -218,6 +218,8 @@ add_library(lfs_io STATIC
         loaders/spz_loader.cpp
         loaders/tiles3d_loader.hpp
         loaders/tiles3d_loader.cpp
+        loaders/tile_source_load.hpp
+        loaders/tile_source_load.cpp
         loaders/usd_loader.hpp
         loaders/usd_loader.cpp
         loaders/rad_loader.hpp

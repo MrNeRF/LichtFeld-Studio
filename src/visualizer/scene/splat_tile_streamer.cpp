@@ -62,7 +62,7 @@ namespace lfs::vis {
                 workspace = core::sh_swizzled_float_count(splats, core::sh_rest_coefficients_for_degree(sh_degree)) *
                             sizeof(float);
             const core::OperationMemoryPlan plan{
-                .operation = "3D Tiles merge",
+                .operation = "tile stream merge",
                 .persistent_device_bytes = core::SplatExportableStorage::layoutBytes(splats, sh_degree),
                 .temporary_device_bytes = workspace};
             return core::MemoryPressureCoordinator::instance()
@@ -303,7 +303,8 @@ namespace lfs::vis {
                                  .build_ms = build_ms_,
                                  .max_sse = minimum_cut_ ? std::numeric_limits<float>::infinity()
                                                          : last_view_.max_sse * sse_factor_,
-                                 .load_workers = workers_.size()};
+                                 .load_workers = workers_.size(),
+                                 .distance_lod = source_->distance_lod};
         for (const auto tile : shown_set_)
             out.drawn_splats += tiles[tile].splat_count;
         for (const auto tile : wanted_)
@@ -356,7 +357,7 @@ namespace lfs::vis {
         // forget the cut so the next update asks again, a little coarser.
         const auto back_off_merge = [&] {
             if (++merge_failures_ >= kMaxMergeAttempts)
-                LOG_WARN("3D Tiles: {} merges failed in a row; waiting for the view or cache size to change",
+                LOG_WARN("Tile streaming: {} merges failed in a row; waiting for the view or cache size to change",
                          merge_failures_);
             requested_set_.clear();
             sse_factor_ = std::min(sse_factor_ * kMergeFailureSseStep, kMaxSseFactor);
@@ -396,7 +397,7 @@ namespace lfs::vis {
                 // The budget may be briefly exceeded while the old model is still drawn,
                 // but never beyond what the GPU can actually hold.
                 if (!merge_fits(tiles, set)) {
-                    LOG_DEBUG("3D Tiles: not enough free GPU memory to merge {} tiles", set.size());
+                    LOG_DEBUG("Tile streaming: not enough free GPU memory to merge {} tiles", set.size());
                     building_bytes_ = 0;
                     back_off_merge();
                     continue;
@@ -410,9 +411,9 @@ namespace lfs::vis {
                     merged = io::merge_splat_tiles(
                         *source_, set, [&](const std::uint32_t tile) { return pieces.at(tile).get(); }, allocator_);
                 } catch (const std::exception& e) {
-                    LOG_ERROR("3D Tiles: cannot prepare streamed model: {}", e.what());
+                    LOG_ERROR("Tile streaming: cannot prepare streamed model: {}", e.what());
                 } catch (...) {
-                    LOG_ERROR("3D Tiles: cannot prepare streamed model: unknown error");
+                    LOG_ERROR("Tile streaming: cannot prepare streamed model: unknown error");
                 }
                 pieces.clear();
                 const auto build_ms =
@@ -493,7 +494,7 @@ namespace lfs::vis {
                     return lfs::make_error(lfs::ErrorInit{
                         .code = lfs::ErrorCode::Internal,
                         .domain = lfs::ErrorDomain::Rendering,
-                        .detail = "Unknown failure while loading a 3D Tiles tile",
+                        .detail = "Unknown failure while loading a streamed tile",
                         .detection = LFS_SOURCE_SITE_CURRENT(),
                         .fields = lfs::SmallFields{}.add("tile", static_cast<std::uint64_t>(next)),
                     });
@@ -505,7 +506,7 @@ namespace lfs::vis {
             if (stop.stop_requested())
                 break; // retired while loading: drop the tile instead of caching it
             if (!loaded) {
-                LOG_ERROR("3D Tiles: tile {}: {}", next, lfs::format_for_developer(loaded.error()));
+                LOG_ERROR("Tile streaming: tile {}: {}", next, lfs::format_for_developer(loaded.error()));
                 failed_.insert(next);
                 continue;
             }

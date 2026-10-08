@@ -3,6 +3,7 @@
 #pragma once
 #include "io/exporter.hpp"
 #include "io/splat_path.hpp"
+#include "io/splat_tile_source.hpp"
 
 namespace lfs::io {
     Result<SplatData> load_ssog(
@@ -10,4 +11,7 @@ namespace lfs::io {
         std::optional<std::vector<uint8_t>>* license_bytes = nullptr);
     // Structural validation, including unit metadata ranges; does not decode textures or use CUDA.
     Result<void> validate_ssog(const std::filesystem::path&);
+    // The LOD tree as a tile source for view-dependent streaming; units decode on demand.
+    lfs::Result<std::shared_ptr<SplatTileSource>> open_ssog_tiles(
+        const std::filesystem::path&, std::optional<std::vector<uint8_t>>* license_bytes = nullptr);
 } // namespace lfs::io

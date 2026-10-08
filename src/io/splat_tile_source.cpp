@@ -6,6 +6,7 @@
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data_transform.hpp"
+#include "formats/ssog.hpp"
 #include <algorithm>
 
 namespace lfs::io {
@@ -29,10 +30,11 @@ namespace lfs::io {
                 const auto& tile = source.tiles()[index];
                 if (!visible(tile))
                     return true;
+                const float error = tile.lod_level < 0 ? tile.geometric_error
+                                                       : distance_lod_error(tile.lod_level, view);
                 const float sse = view.orthographic
-                                      ? tile.geometric_error * view.sse_per_error
-                                      : tile.geometric_error * view.sse_per_error /
-                                            std::max(tile.distance(view.camera), 1e-6f);
+                                      ? error * view.sse_per_error
+                                      : error * view.sse_per_error / std::max(tile.distance(view.camera), 1e-6f);
                 const bool has = tile.splat_count > 0;
                 const bool ready = has && resident(index);
                 if (has)
@@ -65,6 +67,21 @@ namespace lfs::io {
             }
         };
     } // namespace
+
+    lfs::Result<std::shared_ptr<SplatTileSource>> open_splat_tile_source(const std::filesystem::path& path) {
+        return is_ssog_path(path) ? open_ssog_tiles(path) : open_tiles3d(path);
+    }
+
+    float distance_lod_error(const int level, const SplatTileView& view) {
+        constexpr float kReferenceMaxSse = 16.0f;
+        constexpr float kReferenceSsePerError = 935.3074f; // 1080 / (2 tan 30 deg)
+        if (level <= 0)
+            return 0.0f;
+        // PlayCanvas clamps these to 0.1 and 1.2.
+        const float base = std::max(view.lod_base_distance, 0.1f);
+        const float multiplier = std::max(view.lod_multiplier, 1.2f);
+        return base * std::pow(multiplier, static_cast<float>(level - 1)) * kReferenceMaxSse / kReferenceSsePerError;
+    }
 
     SplatTileSelection select_splat_tiles(const SplatTileSource& source, const SplatTileView& view,
                                           const std::function<bool(std::uint32_t)>& resident) {

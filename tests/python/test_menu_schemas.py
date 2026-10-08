@@ -41,6 +41,7 @@ def _install_lichtfeld_stub(monkeypatch):
         "active_tool": "builtin.select",
         "panel_enabled": [],
         "panels": {},
+        "tiles_mode": None,
         "main_panel_active_tab": None,
     }
 
@@ -110,6 +111,7 @@ def _install_lichtfeld_stub(monkeypatch):
         toggle_vram_hud=lambda: state.__setitem__("vram_hud_toggled", True),
         is_perf_hud_visible=lambda: False,
         set_panel_enabled=lambda panel_id, enabled: state["panel_enabled"].append((panel_id, enabled)),
+        is_panel_enabled=lambda panel_id: (panel_id, True) in state["panel_enabled"],
         get_panel_object=lambda panel_id: state["panels"].get(panel_id),
         set_main_panel_active_tab=lambda panel_id: state.__setitem__("main_panel_active_tab", panel_id),
         is_windows_platform=lambda: False,
@@ -158,6 +160,7 @@ def _install_lichtfeld_stub(monkeypatch):
     lf_stub.ui = ui
     lf_stub.keymap = keymap
     lf_stub.reset_camera = lambda: None
+    lf_stub.get_tiles_mode = lambda: state["tiles_mode"]
     lf_stub.undo = SimpleNamespace(
         can_undo=lambda: True,
         can_redo=lambda: False,
@@ -344,14 +347,25 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert [item["label"] for item in theme_families[0]["items"]] == ["Dark", "Light"]
     assert [item["label"] for item in theme_families[1]["items"]] == ["Night", "Day"]
     assert view_items[1]["items"][1]["label"] == "100%"
-    # theme, ui_scale, separator, performance_hud, reset_view, console
+    # theme, ui_scale, separator, performance_hud, streaming_settings, reset_view, console
     assert view_items[3]["label"] == "tr:menu.view.performance_hud"
     assert view_items[3]["shortcut"] == "F10"
     view_items[3]["callback"]()
     assert state.get("vram_hud_toggled") is True
-    assert view_items[4]["label"] == "tr:image_preview.reset_view"
-    assert view_items[5]["label"] == "tr:main_panel.console"
-    view_items[5]["callback"]()
+    # The streaming settings window opens on demand, and only while a model streams.
+    assert view_items[4]["label"] == "tr:menu.view.streaming_settings"
+    assert view_items[4]["enabled"] is False
+    assert view_items[4]["selected"] is False
+    state["tiles_mode"] = "stream"
+    streaming_item = view_mod.ViewMenu().menu_items()[4]
+    assert streaming_item["enabled"] is True
+    streaming_item["callback"]()
+    assert state["panel_enabled"][-1] == ("lfs.tiles3d", True)
+    assert view_mod.ViewMenu().menu_items()[4]["selected"] is True
+    state["tiles_mode"] = None
+    assert view_items[5]["label"] == "tr:image_preview.reset_view"
+    assert view_items[6]["label"] == "tr:main_panel.console"
+    view_items[6]["callback"]()
     assert state["python_console_shown"] == 1
 
     keymap = sys.modules["lichtfeld"].keymap

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Debug window for view-dependent 3D Tiles streaming."""
+"""Debug window for view-dependent streaming of 3D Tiles tilesets and streamed SOG (SSOG)."""
 
 import lichtfeld as lf
 from .types import Panel
@@ -29,7 +29,7 @@ def _gib(value: int) -> str:
 
 @panel_class("tiles3d")
 class Tiles3dPanel(Panel):
-    """On-demand streaming controls and statistics for a 3D Tiles tileset."""
+    """On-demand streaming controls and statistics for a streamed model (3D Tiles or SSOG)."""
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("tiles3d")
@@ -39,23 +39,15 @@ class Tiles3dPanel(Panel):
         self._handle = model.get_handle()
 
     def poll(self, _context):
-        return lf.get_tiles_mode() is not None
+        # Only a streamed model has anything to set; a model loaded flat shows no window.
+        return lf.get_tiles_mode() == "stream"
 
     def draw(self, ui):
-        mode = lf.get_tiles_mode()
-        if mode is None:
-            return
-        mode_label = _tr("tiles3d.mode_stream") if mode == "stream" else _tr("tiles3d.mode_flat")
-        ui.label(_tr("tiles3d.mode", mode=mode_label))
-
         settings = lf.get_tiles_settings()
         stats = lf.get_tiles_stats()
         if not settings or stats is None:
-            # Loaded flat (no streaming): the mode line above is all there is to show.
-            ui.text_disabled(_tr("tiles3d.flat_help"))
             return
 
-        ui.separator()
         changed, value = ui.slider_float(_tr("tiles3d.cache_fraction"), settings["cache_fraction"], 0.0, 1.0)
         if changed:
             lf.set_tiles_settings(cache_fraction=value)
@@ -65,6 +57,20 @@ class Tiles3dPanel(Panel):
         if changed:
             lf.set_tiles_settings(max_sse=value)
         ui.text_disabled(_tr("tiles3d.max_sse_help"))
+
+        if stats.get("distance_lod"):
+            # Streamed SOG picks levels by distance, as PlayCanvas does.
+            # A distance in scene units spans rooms to cities, so it is typed rather than
+            # slid over a fixed range; the setter clamps it to PlayCanvas's minimum (0.1).
+            changed, value = ui.input_float(_tr("tiles3d.lod_base_distance"), settings["lod_base_distance"],
+                                            1.0, 10.0, "%.1f")
+            if changed:
+                lf.set_tiles_settings(lod_base_distance=value)
+            ui.text_disabled(_tr("tiles3d.lod_base_distance_help"))
+            changed, value = ui.slider_float(_tr("tiles3d.lod_multiplier"), settings["lod_multiplier"], 1.2, 10.0)
+            if changed:
+                lf.set_tiles_settings(lod_multiplier=value)
+            ui.text_disabled(_tr("tiles3d.lod_multiplier_help"))
 
         changed, value = ui.slider_int(_tr("tiles3d.num_load_workers"), settings["num_load_workers"], 0, 16)
         if changed:
