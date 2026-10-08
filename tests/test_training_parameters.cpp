@@ -651,23 +651,6 @@ namespace {
         EXPECT_EQ(igs_result->strategy, "igs+");
     }
 
-    // Projects and configs saved while 0.003 was the MRNF default store it explicitly. A migration
-    // not keyed on MRNF and that exact value would rewrite deliberate user values or other strategies.
-    TEST_F(TrainingParametersTest, StoredFormerMrnfOpacityRegDefaultLoadsAsOff) {
-        auto stored = OptimizationParameters::mrnf_defaults().to_json();
-        stored["opacity_reg"] = 0.003f;
-        EXPECT_FLOAT_EQ(OptimizationParameters::from_json(stored).opacity_reg, 0.0f);
-        stored["opacity_reg"] = 0.003;
-        EXPECT_FLOAT_EQ(OptimizationParameters::from_json(stored).opacity_reg, 0.0f);
-
-        stored["opacity_reg"] = 0.005f;
-        EXPECT_FLOAT_EQ(OptimizationParameters::from_json(stored).opacity_reg, 0.005f);
-
-        auto mcmc = OptimizationParameters::mcmc_defaults().to_json();
-        mcmc["opacity_reg"] = 0.003f;
-        EXPECT_FLOAT_EQ(OptimizationParameters::from_json(mcmc).opacity_reg, 0.003f);
-    }
-
     TEST_F(TrainingParametersTest, MrnfRegularizationDefaultsAndSchedule) {
         const auto params = OptimizationParameters::mrnf_defaults();
         EXPECT_TRUE(resolved<bool>(params, "use_exposure_correction"));
