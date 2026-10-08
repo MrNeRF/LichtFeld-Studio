@@ -20,6 +20,14 @@ def _rule(css: str, selector: str) -> str:
     return match.group(1)
 
 
+def _rules_with(css: str, selector: str) -> list[str]:
+    return [
+        body
+        for selectors, body in re.findall(r"([^{}]+)\{(.*?)\n\}", css, re.DOTALL)
+        if selector in (s.strip() for s in selectors.split(","))
+    ]
+
+
 def test_python_console_theme_overrides_toolbar_specificity():
     theme = _resource("python_console_panel.theme.rcss")
 
@@ -45,14 +53,16 @@ def test_python_console_keeps_original_semantic_controls_outside_theme_overrides
     assert "#python-console-toolbar .stop-button" not in theme
 
 
-def test_python_console_terminal_rendering_is_outside_theme_overrides():
+def test_python_console_terminals_take_their_colors_from_the_theme():
     base = _resource("python_console_panel.rcss")
     theme = _resource("python_console_panel.theme.rcss")
 
-    assert "#python-output-terminal" in base
-    assert "#python-repl-terminal" in base
-    assert "#python-output-terminal" not in theme
-    assert "#python-repl-terminal" not in theme
+    for terminal in ("#python-output-terminal", "#python-repl-terminal"):
+        base_rules = _rules_with(base, terminal)
+        theme_rules = _rules_with(theme, terminal)
+        assert any("font-family" in rule for rule in base_rules)
+        assert not any(re.search(r"(^|[\s;])(background-)?color:", rule) for rule in base_rules)
+        assert any("background-color: @{surface}" in rule and "color: @{text}" in rule for rule in theme_rules)
 
 
 def test_python_console_tabs_and_splitter_stay_compact():
