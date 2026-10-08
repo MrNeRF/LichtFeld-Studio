@@ -1117,7 +1117,7 @@ namespace {
         Scene scene;
         const auto camera = std::make_shared<lfs::core::Camera>(
             Tensor::eye(3, Device::CPU),
-            Tensor::from_vector({1.25f, -2.5f, 3.75f}, {3, 1}, Device::CPU),
+            Tensor::from_vector({1.25f, -2.5f, 3.75f}, {3}, Device::CPU),
             50.0f, 55.0f, 50.0f, 60.0f, Tensor{}, Tensor{},
             lfs::core::CameraModelType::PINHOLE, "camera", std::filesystem::path{},
             std::filesystem::path{}, 100, 120, 7);
@@ -1184,13 +1184,12 @@ namespace {
                                      std::filesystem::path{}, std::filesystem::path{}, width, height, 0);
         };
         const auto t3 = Tensor::zeros({3}, Device::CPU);
-        const auto t31 = Tensor::zeros({3, 1}, Device::CPU);
         const auto twelve = Tensor::zeros({12}, Device::CPU);
         EXPECT_NO_THROW(create(t3, Tensor{}, 0.0f, 0.0f, 0, 0));
-        EXPECT_NO_THROW(create(t31, twelve, 525.0f, 525.0f, 640, 480));
-        const auto with_coefficients = create(t31, twelve, 525.0f, 525.0f, 640, 480);
+        EXPECT_NO_THROW(create(t3, twelve, 525.0f, 525.0f, 640, 480));
+        const auto with_coefficients = create(t3, twelve, 525.0f, 525.0f, 640, 480);
         EXPECT_EQ(with_coefficients.radial_distortion().numel(), 12u);
-        EXPECT_EQ(with_coefficients.T().shape(), t31.shape());
+        EXPECT_EQ(with_coefficients.T().shape(), t3.shape());
         const auto without = create(t3, Tensor{}, 525.0f, 525.0f, 640, 480);
         ASSERT_TRUE(without.radial_distortion().is_valid());
         EXPECT_EQ(without.radial_distortion().dtype(), DataType::Float32);
