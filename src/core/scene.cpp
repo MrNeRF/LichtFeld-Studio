@@ -3897,6 +3897,77 @@ namespace lfs::core {
         notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
+    void Scene::clearUnlockedSelection() {
+        std::vector<uint8_t> locked_ids;
+        for (const auto& group : selection_groups_) {
+            if (group.locked)
+                locked_ids.push_back(group.id);
+        }
+        if (locked_ids.empty()) {
+            clearSelection();
+            return;
+        }
+
+        std::array<std::shared_ptr<lfs::core::Tensor>, 2>
+            selection_masks;
+        {
+            std::shared_lock lock(selection_mutex_);
+            selection_masks = {
+                selection_mask_,
+                point_cloud_selection_mask_,
+            };
+        }
+
+        std::array<std::shared_ptr<lfs::core::Tensor>, 2> kept_masks;
+        std::array<size_t, 2> kept_counts{};
+        for (std::size_t domain_index = 0;
+             domain_index < selection_masks.size();
+             ++domain_index) {
+            const auto& selection_mask =
+                selection_masks[domain_index];
+            if (!selection_mask || !selection_mask->is_valid()) {
+                continue;
+            }
+            const auto values = selection_mask->to(DataType::UInt8);
+            auto keep = values.eq(static_cast<float>(locked_ids.front()));
+            for (std::size_t i = 1; i < locked_ids.size(); ++i) {
+                keep = keep.logical_or(values.eq(static_cast<float>(locked_ids[i])));
+            }
+            kept_counts[domain_index] = keep.count_nonzero();
+            kept_masks[domain_index] =
+                std::make_shared<lfs::core::Tensor>(values.where(keep, Tensor::zeros_like(values)));
+        }
+
+        const size_t kept_count = kept_counts[0] + kept_counts[1];
+        if (kept_count == 0) {
+            clearSelection();
+            return;
+        }
+
+        {
+            std::unique_lock lock(selection_mutex_);
+            if (kept_masks[0])
+                selection_mask_ = kept_masks[0];
+            if (kept_masks[1])
+                point_cloud_selection_mask_ = kept_masks[1];
+            has_selection_ = kept_counts[0] > 0;
+            has_point_cloud_selection_ = kept_counts[1] > 0;
+            selected_count_ = kept_count;
+            selected_count_valid_ = true;
+        }
+
+        for (auto& group : selection_groups_) {
+            if (!group.locked)
+                group.count = 0;
+        }
+        selection_group_counts_dirty_ = true;
+        events::state::SelectionChanged{
+            .has_selection = true,
+            .count = static_cast<int>(std::min(kept_count, static_cast<size_t>(std::numeric_limits<int>::max())))}
+            .emit();
+        notifyMutation(MutationType::SELECTION_CHANGED);
+    }
+
     void Scene::resetSelectionState() {
         Transaction txn(*this);
         {

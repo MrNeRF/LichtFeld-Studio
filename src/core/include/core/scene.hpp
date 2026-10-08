@@ -629,6 +629,8 @@ namespace lfs::core {
         [[nodiscard]] bool selectionGroupCountsDirty() const { return selection_group_counts_dirty_; }
         void updateSelectionGroupCounts();
         void clearSelectionGroup(uint8_t id);
+        // Deselects every splat outside a locked group; clears everything when no group is locked.
+        void clearUnlockedSelection();
         void resetSelectionState();
 
         void setInitialPointCloud(std::shared_ptr<lfs::core::PointCloud> point_cloud);

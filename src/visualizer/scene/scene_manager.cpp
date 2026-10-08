@@ -6275,7 +6275,7 @@ namespace lfs::vis {
         entry->setSelectionChangeHint(true, true);
         entry->captureSelection();
 
-        scene_.clearSelection();
+        scene_.clearUnlockedSelection();
 
         entry->captureAfter();
         op::pushSceneSnapshotIfChanged(std::move(entry));

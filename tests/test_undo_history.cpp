@@ -30,6 +30,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <ranges>
 #include <stdexcept>
 #include <string>
@@ -3622,6 +3623,42 @@ TEST_F(UndoHistoryTest, SelectionSnapshotRestoresSelectionGroupsAndActiveGroup) 
     EXPECT_TRUE(redone_group->locked);
     EXPECT_EQ(scene_manager->getScene().getActiveSelectionGroup(), 1);
     EXPECT_TRUE(selection_mask_values(scene_manager->getScene()).empty());
+}
+
+// Catches a Deselect All that drops locked groups like the plain clearSelection() did.
+TEST_F(UndoHistoryTest, DeselectAllKeepsLockedGroupsAndUndoes) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    scene.addSplat("model", make_test_splat({0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 2.0f, 0.0f, 0.0f, 3.0f, 0.0f, 0.0f}));
+    const uint8_t locked_group = scene.addSelectionGroup("Locked", {0.2f, 0.4f, 0.6f});
+    scene.setSelectionGroupLocked(locked_group, true);
+    scene.setActiveSelectionGroup(1);
+    scene.setSelectionMask(std::make_shared<Tensor>(make_uint8_mask({1, locked_group, 1, 0})));
+
+    std::optional<lfs::core::events::state::SelectionChanged> selection_event;
+    const auto selection_handler = lfs::core::events::state::SelectionChanged::when(
+        [&](const auto& event) { selection_event = event; });
+    scene_manager->deselectAllGaussians();
+    lfs::event::EventBridge::instance().unsubscribe(
+        typeid(lfs::core::events::state::SelectionChanged), selection_handler);
+
+    ASSERT_TRUE(selection_event.has_value());
+    EXPECT_TRUE(selection_event->has_selection);
+    EXPECT_EQ(selection_event->count, 1);
+    EXPECT_TRUE(scene.hasSelection());
+    EXPECT_EQ(scene.selectedCount(), 1u);
+    EXPECT_EQ(selection_mask_values(scene), (std::vector<uint8_t>{0, locked_group, 0, 0}));
+
+    lfs::vis::op::undoHistory().undo();
+    EXPECT_EQ(selection_mask_values(scene), (std::vector<uint8_t>{1, locked_group, 1, 0}));
+
+    scene.setSelectionGroupLocked(locked_group, false);
+    scene_manager->deselectAllGaussians();
+    EXPECT_FALSE(scene.hasSelection());
 }
 
 TEST_F(UndoHistoryTest, MirrorCreatesOneExactUndoStepForSingleMultiAndGroupSelection) {
