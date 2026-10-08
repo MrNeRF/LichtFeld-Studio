@@ -211,6 +211,7 @@ namespace lfs::vis::op {
         void applyNodeMetadataSnapshotUnchecked(SceneManager& scene_manager,
                                                 const SceneGraphNodeMetadataSnapshot& target,
                                                 std::string current_name,
+                                                const int current_order_index,
                                                 const bool emit_reparent_event) {
             auto& scene = scene_manager.getScene();
 
@@ -251,9 +252,12 @@ namespace lfs::vis::op {
                     }
                 }
 
-                // moveNode returns false for a no-op (already at the target slot) as well as a
-                // genuine failure; the parent post-condition below is the authoritative check.
-                (void)scene.moveNode(node->id, desired_parent, target.order_index);
+                // History stores the final slot; moveNode accepts a slot before self-removal.
+                int insertion_index = target.order_index;
+                if (!parent_differs && current_order_index >= 0 && insertion_index > current_order_index)
+                    ++insertion_index;
+                // moveNode also returns false when the node is already at the target slot.
+                (void)scene.moveNode(node->id, desired_parent, insertion_index);
                 node = scene.getMutableNode(current_name);
                 if (!node || node->parent_id != desired_parent) {
                     throw std::runtime_error("Failed to reparent node '" + current_name + "'");
@@ -296,7 +300,7 @@ namespace lfs::vis::op {
             const auto before = captureNodeMetadataSnapshot(scene_manager, *current_node);
 
             try {
-                applyNodeMetadataSnapshotUnchecked(scene_manager, target, current_name, emit_reparent_event);
+                applyNodeMetadataSnapshotUnchecked(scene_manager, target, current_name, before.order_index, emit_reparent_event);
             } catch (const HistoryCorruptionError&) {
                 throw;
             } catch (...) {
@@ -305,7 +309,8 @@ namespace lfs::vis::op {
                     if (rollback_name.empty()) {
                         throw std::runtime_error("Rollback target node missing");
                     }
-                    applyNodeMetadataSnapshotUnchecked(scene_manager, before, rollback_name, false);
+                    const auto rollback_state = captureNodeMetadataSnapshot(scene_manager, *scene.getNode(rollback_name));
+                    applyNodeMetadataSnapshotUnchecked(scene_manager, before, rollback_name, rollback_state.order_index, false);
                 } catch (const std::exception& rollback_error) {
                     throw HistoryCorruptionError(
                         "Failed to rollback scene node metadata for '" + target.name + "': " +

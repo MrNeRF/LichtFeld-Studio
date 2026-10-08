@@ -3674,3 +3674,53 @@ TEST_F(UndoHistoryTest, MirrorPreservesUnselectedDeletedAndLockedNodes) {
     EXPECT_FALSE(manager.executeMirror(lfs::core::MirrorAxis::X));
     EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
 }
+
+TEST_F(UndoHistoryTest, SiblingReorderRestoresExactOrderBothWays) {
+    for (const bool nested : {false, true}) {
+        lfs::vis::SceneManager manager;
+        lfs::vis::services().set(&manager);
+        auto& scene = manager.getScene();
+        const auto parent = nested ? scene.addGroup("container") : lfs::core::NULL_NODE;
+        for (int i = 0; i < 5; ++i) {
+            const auto id = scene.addGroup("item_" + std::to_string(i), parent);
+            scene.setNodeTransform(id, glm::translate(glm::mat4(1.0f), glm::vec3(i, i * 2, -i)));
+            scene.addGroup("child_" + std::to_string(i), id);
+        }
+        const auto siblings = [&]() {
+            return nested ? scene.getNodeById(parent)->children : scene.getRootNodes();
+        };
+        for (int from = 0; from < 5; ++from) {
+            for (int to = 0; to < 5; ++to) {
+                if (from == to)
+                    continue;
+                SCOPED_TRACE(::testing::Message() << "nested=" << nested << " from=" << from << " to=" << to);
+                auto& history = lfs::vis::op::undoHistory();
+                history.clear();
+                const auto before = siblings();
+                const auto moved = before[from];
+                const auto local = scene.getNodeById(moved)->local_transform.get();
+                const auto world = scene.getWorldTransform(moved);
+                auto after = before;
+                after.erase(after.begin() + from);
+                after.insert(after.begin() + to, moved);
+                ASSERT_TRUE(manager.moveNode(moved, parent, to + (to > from ? 1 : 0)));
+                ASSERT_EQ(siblings(), after);
+                ASSERT_EQ(history.undoCount(), 1u);
+                for (int repeat = 0; repeat < 2; ++repeat) {
+                    ASSERT_TRUE(history.undo().success);
+                    EXPECT_EQ(siblings(), before);
+                    EXPECT_EQ(scene.getNodeById(moved)->local_transform.get(), local);
+                    EXPECT_EQ(scene.getWorldTransform(moved), world);
+                    ASSERT_TRUE(history.redo().success);
+                    EXPECT_EQ(siblings(), after);
+                    EXPECT_EQ(scene.getNodeById(moved)->local_transform.get(), local);
+                    EXPECT_EQ(scene.getWorldTransform(moved), world);
+                }
+            }
+        }
+        lfs::vis::op::undoHistory().clear();
+        lfs::vis::services().clear();
+        lfs::event::EventBridge::instance().clear_all();
+        lfs::core::event::bus().clear_all();
+    }
+}
