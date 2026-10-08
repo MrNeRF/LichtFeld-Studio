@@ -1783,8 +1783,10 @@ TEST_F(GsplatRasterizerTest, GeometryChannelsAndGradientsMatchEveryCameraModel) 
         const size_t w = 64, h = 48;
         auto R = Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, Device::CUDA);
         auto T = Tensor::zeros({3}, Device::CUDA);
+        const bool pinhole = model == lfs::core::CameraModelType::PINHOLE;
         Camera camera(R, T, 28.f, 28.f, w / 2.f, h / 2.f,
-                      Tensor::zeros({4}, Device::CPU), Tensor::zeros({4}, Device::CPU),
+                      Tensor::zeros({pinhole ? 3UL : 4UL}, Device::CPU),
+                      Tensor::zeros({pinhole ? 2UL : 4UL}, Device::CPU),
                       model, "geometry", "", {}, w, h, 0);
         auto means = Tensor::from_vector({.4f, .2f, 3.f}, {1, 3}, Device::CUDA);
         auto rotation = Tensor::from_vector({1.f, .1f, .2f, .05f}, {1, 4}, Device::CUDA);
