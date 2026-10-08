@@ -1826,8 +1826,8 @@ namespace lfs::vis {
         const auto script = std::format(R"PY(
 import runpy
 import lichtfeld as lf
-contract = runpy.run_path(r"{}/tests/python/test_ui_api_completeness.py")
-contract["test_selection_submode_follows_native_mode"](lf)
+contract = runpy.run_path(r"{}/tests/python/selection_submode_contract.py")
+contract["check_selection_submode_follows_native_mode"](lf)
 )PY",
                                         PROJECT_ROOT_PATH);
         const int result = PyRun_SimpleString(script.c_str());
