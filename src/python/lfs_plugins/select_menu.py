@@ -38,24 +38,14 @@ def _is_selection_tool_active():
         return False
 
 
-def _activate_select_tool():
-    from .tools import ToolRegistry
-
-    return ToolRegistry.set_active("builtin.select")
-
-
 def _open_selection_groups():
-    """Enable the Rendering child. Registration stays closed, so layout reset does not add a tab."""
+    """Show the group list in Rendering > Selection & Overlays."""
     try:
-        lf.ui.set_panel_enabled("lfs.selection_groups", True)
+        lf.ui.set_main_panel_active_tab("lfs.rendering")
+        rendering_panel = lf.ui.get_panel_object("lfs.rendering")
     except (AttributeError, RuntimeError, TypeError):
         return False
-    if _is_selection_tool_active():
-        return True
-    try:
-        return bool(_activate_select_tool())
-    except (AttributeError, RuntimeError, TypeError):
-        return False
+    return bool(rendering_panel and rendering_panel.reveal_selection_groups())
 
 
 @register_menu

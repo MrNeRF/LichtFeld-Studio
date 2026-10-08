@@ -45,14 +45,18 @@ def test_python_console_keeps_original_semantic_controls_outside_theme_overrides
     assert "#python-console-toolbar .stop-button" not in theme
 
 
-def test_python_console_terminal_rendering_is_outside_theme_overrides():
+def test_python_console_terminals_inherit_theme_surface_and_text():
     base = _resource("python_console_panel.rcss")
     theme = _resource("python_console_panel.theme.rcss")
 
     assert "#python-output-terminal" in base
     assert "#python-repl-terminal" in base
-    assert "#python-output-terminal" not in theme
-    assert "#python-repl-terminal" not in theme
+    terminal_theme = _rule(theme, "#python-editor-view,\n#python-output-terminal,\n#python-repl-terminal")
+    assert "background-color: @{surface}" in terminal_theme
+    assert "color: @{text}" in terminal_theme
+    terminal_base = _rule(base, "#python-output-terminal,\n#python-repl-terminal")
+    assert "background-color:" not in terminal_base
+    assert "color:" not in terminal_base
 
 
 def test_python_console_tabs_and_splitter_stay_compact():

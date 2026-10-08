@@ -967,6 +967,7 @@ namespace lfs::vis {
         };
         if (!render_lock_contended) {
             sample_model_under_lock();
+            releaseLodLeafRenderViewUnlessFor(model);
         }
         bool has_renderable_model = false;
         bool has_visible_gaussian_model = false;

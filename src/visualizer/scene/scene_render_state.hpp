@@ -21,6 +21,8 @@ namespace lfs::vis {
     // split view cannot hide a second full-scene GPU copy behind GUI work.
     struct SceneRenderStateOptions {
         bool metadata_only = false;
+        // Captures wait for an in-flight combined-model rebuild instead of drawing the previous scene.
+        bool current_geometry = false;
     };
 
     struct SceneRenderState {

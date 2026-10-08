@@ -5,9 +5,15 @@
 #include "core/splat_data_mirror.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/gpu_kernel_module.hpp"
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor_backend.hpp"
+#include "mirror_centroid_program.hpp"
+#include "splat_data_mirror_centroid.hpp"
+#include <limits>
+#include <map>
 #include <mutex>
 
 namespace lfs::core {
@@ -43,11 +49,13 @@ namespace lfs::core {
             Tensor quat_mult[3];
             Tensor sh_mult[3][3]; // [axis][degree 1-3] - no degree 0 (empty)
             Device device = Device::CPU;
+            GpuBackend backend = GpuBackend::CUDA;
             bool valid = false;
         };
 
         std::mutex g_cache_mutex;
         MirrorCache g_cache;
+        std::map<GpuBackend, std::unique_ptr<GpuKernelModule>> g_centroid_programs;
 
         void clear_mirror_cache() noexcept {
             // g_cache is a non-local static constructed before the
@@ -61,14 +69,16 @@ namespace lfs::core {
                     g_cache.sh_mult[a][d] = {};
                 }
             }
+            g_centroid_programs.clear();
             g_cache.valid = false;
             g_cache.device = Device::CPU;
         }
 
-        void ensure_cache(const Device device) {
+        void ensure_cache(const Device device, const GpuBackend backend) {
             std::lock_guard lock(g_cache_mutex);
 
-            if (g_cache.valid && g_cache.device == device)
+            if (g_cache.valid && g_cache.device == device &&
+                (device == Device::CPU || g_cache.backend == backend))
                 return;
 
             for (int a = 0; a < 3; ++a) {
@@ -87,6 +97,7 @@ namespace lfs::core {
                 }
             }
             g_cache.device = device;
+            g_cache.backend = backend;
             g_cache.valid = true;
         }
 
@@ -102,19 +113,77 @@ namespace lfs::core {
         if (!means.is_valid() || means.size(0) == 0)
             return glm::vec3(0.0f);
 
-        const auto selected = selection_mask.ne(0);
-        const int count = selected.sum_scalar();
+        const GpuBackendScope backend_scope(gpu_backend_of(means).value_or(default_gpu_backend()));
+#if LFS_HAS_CUDA
+        if (gpu_backend_of(means) == GpuBackend::CUDA) {
+            const auto selected = selection_mask.ne(0)
+                                      .reshape(TensorShape{means.size(0)})
+                                      .to(means.device())
+                                      .contiguous();
+            return detail::selected_centroid_cuda(means.contiguous(), selected);
+        }
+#endif
+
+        if (const auto backend = gpu_backend_of(means);
+            backend && means.size(0) <= std::numeric_limits<uint32_t>::max()) {
+            std::lock_guard lock(g_cache_mutex);
+            auto& program = g_centroid_programs[*backend];
+            if (!program) {
+                auto loaded = GpuKernelModule::load(mirror_centroid_program_entries(), *backend);
+                if (!loaded)
+                    throw lfs::Exception(std::move(loaded).error());
+                program = std::move(*loaded);
+            }
+            const auto positions = means.contiguous();
+            const auto selected = selection_mask.ne(0).reshape(TensorShape{means.size(0)}).to(means.device()).to(DataType::Int32).contiguous();
+            const auto blocks = static_cast<uint32_t>(std::min(size_t{256}, (means.size(0) + 255) / 256));
+            auto partials = Tensor::empty({blocks, size_t{7}}, means.device());
+            struct Params {
+                uint64_t means = 0, selected = 0, partials = 0;
+                uint32_t count, blocks;
+            } params{.count = static_cast<uint32_t>(means.size(0)), .blocks = blocks};
+            const std::array bindings{GpuKernelModule::Binding{0, &positions},
+                                      GpuKernelModule::Binding{8, &selected},
+                                      GpuKernelModule::Binding{16, &partials, GpuKernelModule::Access::ReadWrite}};
+            auto dispatched = program->dispatch({.function = "mirrorCentroid",
+                                                 .arguments = {std::as_bytes(std::span(&params, 1)), bindings},
+                                                 .groups = {blocks, 1, 1},
+                                                 .group = {256, 1, 1}});
+            if (!dispatched)
+                throw lfs::Exception(std::move(dispatched).error());
+            const auto cpu = partials.cpu();
+            const auto* values = cpu.ptr<float>();
+            double sum[3]{}, count = 0.0;
+            for (uint32_t block = 0; block < blocks; ++block) {
+                for (int axis = 0; axis < 3; ++axis)
+                    sum[axis] += static_cast<double>(values[block * 7 + axis * 2]) + values[block * 7 + axis * 2 + 1];
+                count += values[block * 7 + 6];
+            }
+            if (count == 0)
+                return glm::vec3(0.0f);
+            return {static_cast<float>(sum[0] / count), static_cast<float>(sum[1] / count),
+                    static_cast<float>(sum[2] / count)};
+        }
+
+        // Keep the centroid accurate enough that rounding a reflection does not
+        // repeatedly move its pivot. Divide in double before rounding once.
+        const auto positions = means.cpu().contiguous();
+        const auto selected_cpu = selection_mask.cpu().ne(0).reshape(TensorShape{means.size(0)}).contiguous();
+        const auto* p = positions.ptr<float>();
+        const auto* mask = selected_cpu.ptr<bool>();
+        double sum[3]{};
+        size_t count = 0;
+        for (size_t i = 0; i < means.size(0); ++i) {
+            if (!mask[i])
+                continue;
+            ++count;
+            for (int axis = 0; axis < 3; ++axis)
+                sum[axis] += p[i * 3 + axis];
+        }
         if (count == 0)
             return glm::vec3(0.0f);
-
-        // Masked sum on GPU, only transfer 3 floats
-        const auto mask_f = selected.to(DataType::Float32).unsqueeze(1);
-        const auto masked = means * mask_f;
-        const auto sum = masked.sum({0}, false).to(Device::CPU).contiguous();
-        const auto* s = static_cast<const float*>(sum.data_ptr());
-        const float inv = 1.0f / static_cast<float>(count);
-
-        return {s[0] * inv, s[1] * inv, s[2] * inv};
+        return {static_cast<float>(sum[0] / count), static_cast<float>(sum[1] / count),
+                static_cast<float>(sum[2] / count)};
     }
 
     void mirror_gaussians(SplatData& splat_data,
@@ -127,9 +196,11 @@ namespace lfs::core {
         if (!means.is_valid() || means.size(0) == 0)
             return;
 
+        const auto backend = gpu_backend_of(means).value_or(default_gpu_backend());
+        const GpuBackendScope backend_scope(backend);
         const int a = static_cast<int>(axis);
         const auto device = means.device();
-        ensure_cache(device);
+        ensure_cache(device, backend);
 
         const auto selected = selection_mask.ne(0);
         if (selected.sum_scalar() == 0)

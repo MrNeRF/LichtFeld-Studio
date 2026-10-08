@@ -6,6 +6,7 @@
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "gui/gallery_scene_publication.hpp"
+#include "io/exporter.hpp"
 #include "io/formats/sogs.hpp"
 #include "io/formats/spz.hpp"
 #include "io/project_document.hpp"
@@ -447,6 +448,79 @@ std::vector<std::byte> ngsp_v4_stub(const std::uint32_t count, const std::uint8_
     std::memcpy(bytes.data() + 32, &compressed, 8);
     std::memcpy(bytes.data() + 40, &uncompressed, 8);
     return bytes;
+}
+
+namespace {
+    lfs::io::SsogArchiveSummary summarize_file(const std::filesystem::path& path) {
+        const auto bytes = read_file_bytes(path);
+        const auto summary = lfs::io::summarize_ssog_archive(
+            bytes.size(), [&](const std::uint64_t offset, const std::span<std::byte> destination) {
+                if (offset > bytes.size() || destination.size() > bytes.size() - offset)
+                    return false;
+                std::memcpy(destination.data(), bytes.data() + offset, destination.size());
+                return true;
+            });
+        if (!summary)
+            throw std::runtime_error(summary.error().format());
+        return *summary;
+    }
+
+    std::vector<std::byte> ssog_bytes(const SplatData& data, const std::filesystem::path& path, const int levels) {
+        if (const auto saved = lfs::io::save_ssog(data, {.output_path = path, .lod_levels = levels}); !saved)
+            throw std::runtime_error(saved.error().format());
+        return read_file_bytes(path);
+    }
+} // namespace
+
+// A streamable SSOG copied unchanged keeps its bytes; re-encoding it would cost a full SSOG export.
+TEST(GalleryScenePublicationTest, StreamableSsogIsByteIdenticalAfterPublication) {
+    TemporaryDirectory temporary;
+    auto snapshot = cpu_snapshot();
+    const auto original = ssog_bytes(*snapshot.data, temporary.path / "source.ssog", 1);
+    auto request = base_request(temporary.path / "identical-ssog.scene", ExportFormat::GALLERY_SSOG);
+    request.nodes.push_back(GalleryScenePublishNode{
+        .snapshot = snapshot,
+        .name = "clean-ssog",
+        .encoded = owned_asset("ssog", original, fixed_uuid(31)),
+    });
+    writeGalleryScenePublication(request, {}, {});
+    EXPECT_EQ(read_file_bytes(request.path / "0.ssog"), original);
+}
+
+// A copied SSOG with an empty level would publish as not streamable; it must be encoded again instead.
+TEST(GalleryScenePublicationTest, SsogWithEmptyLevelIsReencodedBeforePublication) {
+    TemporaryDirectory temporary;
+    auto snapshot = cpu_snapshot();
+    const auto original = ssog_bytes(*snapshot.data, temporary.path / "source.ssog", 6);
+    ASSERT_EQ(summarize_file(temporary.path / "source.ssog").counts.back(), 0u);
+    auto request = base_request(temporary.path / "reencoded-ssog.scene", ExportFormat::GALLERY_SSOG);
+    request.nodes.push_back(GalleryScenePublishNode{
+        .snapshot = snapshot,
+        .name = "sparse-levels",
+        .encoded = owned_asset("ssog", original, fixed_uuid(32)),
+    });
+    writeGalleryScenePublication(request, {}, {});
+    const auto summary = summarize_file(request.path / "0.ssog");
+    EXPECT_EQ(summary.counts, std::vector<std::size_t>{snapshot.row_count});
+    EXPECT_TRUE(summary.webp_stored);
+}
+
+// Phones load the coarsest whole level: each gallery level halves the splats until it holds 500k or fewer.
+TEST(GalleryScenePublicationTest, GallerySsogHalvesUntilTheCoarsestLevelFitsPhones) {
+    TemporaryDirectory temporary;
+    Scene::SplatSnapshot snapshot;
+    snapshot.data = std::shared_ptr<SplatData>(make_splat(1'200'000).release());
+    snapshot.row_count = static_cast<std::size_t>(snapshot.data->size());
+    snapshot.active_sh_degree = snapshot.data->get_active_sh_degree();
+    auto request = base_request(temporary.path / "levels.scene", ExportFormat::GALLERY_SSOG);
+    request.nodes.push_back(GalleryScenePublishNode{.snapshot = snapshot, .name = "large"});
+    writeGalleryScenePublication(request, {}, {});
+    const auto summary = summarize_file(request.path / "0.ssog");
+    ASSERT_EQ(summary.counts.size(), 3u);
+    EXPECT_EQ(summary.counts.front(), snapshot.row_count);
+    EXPECT_LE(summary.counts.back(), 500'000u);
+    EXPECT_TRUE(summary.webp_stored);
+    EXPECT_FALSE(summary.empty_license);
 }
 
 TEST(GalleryScenePublicationTest, UnchangedSpzV4AssetIsByteIdenticalAfterPublication) {

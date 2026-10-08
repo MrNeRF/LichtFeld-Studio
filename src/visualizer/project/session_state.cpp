@@ -370,6 +370,17 @@ namespace lfs::vis::project {
                     return lfs::Result<void>{}; });
         }
 
+        // Written for earlier readers, which require the key; ignored when reading.
+        template <typename Owner>
+        JsonField<Owner> legacy_vec3_field(
+            const std::string_view name,
+            const glm::vec3 value) {
+            return JsonField<Owner>(
+                name,
+                [value](const Owner&) { return vec3_json(value); },
+                [](const Json&, Owner&, std::string_view, std::string_view) { return lfs::Result<void>{}; });
+        }
+
         template <typename Owner>
         JsonField<Owner> vec3_field(
             const std::string_view name,
@@ -829,7 +840,7 @@ namespace lfs::vis::project {
                                            [](ViewSettings& settings) {
                                                sanitizeDepthViewSettings(settings);
                                            })),
-                vec3_field("selection_color_committed", &RenderSettings::selection_color_committed),
+                legacy_vec3_field<RenderSettings>("selection_color_committed", {0.859f, 0.325f, 0.325f}),
                 vec3_field("selection_color_preview", &RenderSettings::selection_color_preview),
                 vec3_field("selection_color_center_marker", &RenderSettings::selection_color_center_marker),
                 required_field("depth_clip_enabled", &RenderSettings::depth_clip_enabled),
@@ -925,53 +936,13 @@ namespace lfs::vis::project {
             return fields;
         }
 
-        constexpr std::array<std::string_view, 32>
-            kViewOwnedRenderKeys = {
-                "focal_length_mm",
-                "hide_outside_depth_box",
-                "depth_filter_viz_mode",
-                "show_coord_axes",
-                "axes_size",
-                "axes_visibility",
-                "show_grid",
-                "grid_plane",
-                "grid_opacity",
-                "point_cloud_mode",
-                "voxel_size",
-                "show_rings",
-                "ring_width",
-                "show_center_markers",
-                "show_camera_frustums",
-                "camera_frustum_scale",
-                "show_pivot",
-                "split_view_mode",
-                "gt_comparison_mode",
-                "split_position",
-                "split_view_offset",
-                "equirectangular",
-                "orthographic",
-                "ortho_scale",
-                "depth_view",
-                "depth_view_min",
-                "depth_view_max",
-                "depth_visualization_mode",
-                "depth_filter_enabled",
-                "depth_filter_min",
-                "depth_filter_max",
-                "depth_filter_transform",
-        };
-
     } // namespace
 
     SessionJson renderSettingsToProjectJson(
         const RenderSettings& settings) {
-        auto json = fields_to_json(
-            settings, render_settings_fields());
-        // View-owned fields live on the screen's 3D views. New saves keep only
-        // the scene half here; old files still round-trip through FromProjectJson.
-        for (const auto key : kViewOwnedRenderKeys)
-            json.erase(std::string(key));
-        return json;
+        // Earlier readers require the view-owned keys here. The screen chapter
+        // also stores independent settings for each view.
+        return fields_to_json(settings, render_settings_fields());
     }
 
     lfs::Result<RenderSettings>
@@ -1371,8 +1342,8 @@ namespace lfs::vis::project {
                 return lfs::Status::failure(
                     std::move(settings).error());
 
-            // Older projects stored camera state here. New projects keep it
-            // with each 3D view in GUIL screen state.
+            // Camera state in GUIL owns independent views. VIEW also retains
+            // the legacy two-panel fallback for earlier readers.
             if (const auto cameras = root.find("panel_cameras");
                 cameras != root.end()) {
                 if (!cameras->is_array() || cameras->empty() || cameras->size() > 2) {
@@ -2143,6 +2114,25 @@ namespace lfs::vis::project {
                 {"filter_text", tree.filter_text},
             };
         }
+        // Keep the legacy layout space required by earlier readers alongside
+        // the authoritative independent screen layout.
+        auto retained_gui = chapter_root(result.gui_layout.dom(), "GUIL");
+        if (!retained_gui)
+            return std::move(retained_gui).error();
+        Json fixed_payload = find_space_payload(*retained_gui, "fixed_arrangement");
+        if (fixed_payload.empty()) {
+            auto default_gui = chapter_root(
+                lfs::io::project::default_session_chapter_dom(lfs::io::project::SessionJsonChapterKind::GuiLayout),
+                "GUIL");
+            if (!default_gui)
+                return std::move(default_gui).error();
+            fixed_payload = find_space_payload(*default_gui, "fixed_arrangement");
+        }
+        fixed_payload["sequencer_visible"] = gui_manager->isSequencerVisible();
+        fixed_payload["python_console_visible"] =
+            window_states.contains("python_console") && window_states.at("python_console");
+        fixed_payload["system_console_visible"] = screen_payload["system_console_visible"];
+        fixed_payload["scene_tree"] = screen_payload["scene_tree"];
         Json panels = Json::array();
         for (const auto& panel :
              gui::PanelRegistry::instance()
@@ -2217,6 +2207,11 @@ namespace lfs::vis::project {
                               {"spaces",
                                Json::array({
                                    {
+                                       {"type", "fixed_arrangement"},
+                                       {"version", 1},
+                                       {"opaque_payload", fixed_payload},
+                                   },
+                                   {
                                        {"type",
                                         "screen"},
                                        {"version", 1},
@@ -2250,41 +2245,6 @@ namespace lfs::vis::project {
             !merged) {
             return std::move(merged).error();
         }
-        if (auto layouts =
-                result.gui_layout.dom().get_json(
-                    "layouts");
-            layouts && layouts->is_array()) {
-            for (auto& layout : *layouts) {
-                auto areas = layout.find("areas");
-                if (areas == layout.end() ||
-                    !areas->is_array())
-                    continue;
-                for (auto& area : *areas) {
-                    auto spaces = area.find("spaces");
-                    if (spaces == area.end() ||
-                        !spaces->is_array())
-                        continue;
-                    Json kept = Json::array();
-                    for (const auto& space : *spaces) {
-                        if (space.is_object() &&
-                            space.value(
-                                "type",
-                                std::string{}) ==
-                                "fixed_arrangement")
-                            continue;
-                        kept.push_back(space);
-                    }
-                    *spaces = std::move(kept);
-                }
-            }
-            if (auto set =
-                    result.gui_layout.dom().set_json(
-                        "layouts", *layouts);
-                !set) {
-                return std::move(set).error();
-            }
-        }
-
         if (const auto* console =
                 gui::panels::PythonConsoleState::
                     tryGetInstance()) {
@@ -2479,6 +2439,19 @@ namespace lfs::vis::project {
                         retained_uuid->to_string();
             }
         }
+        // Earlier readers require both panel cameras. GUIL retains every
+        // independent view; these entries provide their two-panel fallback.
+        const auto legacy_cameras = viewer.screens().read([](const screen::Screen& screen) {
+            const auto views = screen.views();
+            const auto* primary = screen.view(views.front());
+            const auto* secondary = screen.view(views.size() > 1 ? views[1] : views.front());
+            return Json::array({
+                panelCameraProjectStateToJson(
+                    "primary", capturePanelCameraProjectState(primary->camera, primary->settings.ortho_scale)),
+                panelCameraProjectStateToJson(
+                    "secondary", capturePanelCameraProjectState(secondary->camera, secondary->settings.ortho_scale)),
+            });
+        });
         const Json view_known{
             {"version", 1},
             // Opening a browser-authored camera resolves its long-axis FOV
@@ -2486,6 +2459,7 @@ namespace lfs::vis::project {
             {"long_axis_fov_degrees", nullptr},
             {"render_settings",
              std::move(project_render_settings)},
+            {"panel_cameras", legacy_cameras},
             {"navigation",
              {
                  {"mode",
@@ -2575,20 +2549,6 @@ namespace lfs::vis::project {
                     view_known);
             !merged) {
             return std::move(merged).error();
-        }
-        (void)result.view.dom().remove("panel_cameras");
-        if (auto settings =
-                result.view.dom().get_json(
-                    "render_settings");
-            settings && settings->is_object()) {
-            for (const auto key : kViewOwnedRenderKeys)
-                settings->erase(std::string(key));
-            if (auto set =
-                    result.view.dom().set_json(
-                        "render_settings", *settings);
-                !set) {
-                return std::move(set).error();
-            }
         }
         if (auto merged_bookmarks =
                 result.view.dom().get_json(

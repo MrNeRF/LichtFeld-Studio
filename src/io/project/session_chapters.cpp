@@ -100,6 +100,53 @@ namespace lfs::io::project {
             });
         }
 
+        Json rotation_matrix(const glm::mat3& rotation) {
+            return Json::array({
+                rotation[0][0],
+                rotation[0][1],
+                rotation[0][2],
+                rotation[1][0],
+                rotation[1][1],
+                rotation[1][2],
+                rotation[2][0],
+                rotation[2][1],
+                rotation[2][2],
+            });
+        }
+
+        Json default_camera_look_at_rotation() {
+            // Same look-at as Viewport::CameraMotion (from t toward origin).
+            return rotation_matrix(
+                lfs::rendering::makeVisualizerLookAtRotation(
+                    glm::vec3(-5.657f, 3.0f, -5.657f),
+                    glm::vec3(0.0f, 0.0f, 0.0f)));
+        }
+
+        Json default_panel_camera(
+            const std::string_view panel) {
+            const Json look_at =
+                default_camera_look_at_rotation();
+            return Json{
+                {"panel", panel},
+                {"R", look_at},
+                {"t", vec3(-5.657, 3.0, -5.657)},
+                {"pivot", vec3(0.0, 0.0, 0.0)},
+                {"home_R", look_at},
+                {"home_t", vec3(-5.657, 3.0, -5.657)},
+                {"home_pivot", vec3(0.0, 0.0, 0.0)},
+                {"home_saved", true},
+                {"zoom_speed", 11.0},
+                {"max_zoom_speed", 100.0},
+                {"rotate_speed", 0.001},
+                {"centre_speed", 0.002},
+                {"roll_speed", 0.01},
+                {"translate_speed", 0.0005},
+                {"wasd_speed", 10.0},
+                {"max_wasd_speed", 100.0},
+                {"ortho_scale", nullptr},
+            };
+        }
+
         Json default_render_settings() {
             return Json{
                 {"focal_length_mm", 50.0},
@@ -294,6 +341,11 @@ namespace lfs::io::project {
                 {"version", 1},
                 {"render_settings",
                  default_render_settings()},
+                {"panel_cameras",
+                 Json::array({
+                     default_panel_camera("primary"),
+                     default_panel_camera("secondary"),
+                 })},
                 {"navigation",
                  {
                      {"mode", "orbit"},

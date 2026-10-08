@@ -420,6 +420,7 @@ namespace lfs::core {
         [[nodiscard]] const lfs::core::MeshData* effectiveMesh(const SceneNode& node) const;
 
         [[nodiscard]] bool isNodeEffectivelyVisible(NodeId id) const;
+        [[nodiscard]] bool isNodeEffectivelyLocked(NodeId id) const;
         [[nodiscard]] glm::vec3 getNodeBoundsCenter(NodeId id) const;
         [[nodiscard]] bool getNodeBounds(NodeId id, glm::vec3& out_min, glm::vec3& out_max) const;
 
@@ -459,6 +460,9 @@ namespace lfs::core {
         [[nodiscard]] std::vector<RenderableEllipsoid> getRenderableEllipsoids() const;
 
         const lfs::core::SplatData* getCombinedModel() const;
+        // Like getCombinedModel, but never serves the previous geometry while a worker rebuilds it:
+        // waits for that build, then rebuilds synchronously if the scene changed again. For captures.
+        const lfs::core::SplatData* getCurrentCombinedModel() const;
         // True when a combined or single-node alias is already installed.
         // Does not poll the worker or start a rebuild.
         [[nodiscard]] bool hasPreparedCombinedModel() const;
@@ -659,6 +663,8 @@ namespace lfs::core {
         [[nodiscard]] bool selectionGroupCountsDirty() const { return selection_group_counts_dirty_; }
         void updateSelectionGroupCounts();
         void clearSelectionGroup(uint8_t id);
+        // Deselects every splat outside a locked group; clears everything when no group is locked.
+        void clearUnlockedSelection();
         void resetSelectionState();
 
         void setInitialPointCloud(std::shared_ptr<lfs::core::PointCloud> point_cloud);
@@ -747,7 +753,6 @@ namespace lfs::core {
             invalidateBounds();
             model_cache_valid_.store(false, std::memory_order_release);
             transform_cache_valid_.store(false, std::memory_order_release);
-            cached_transform_indices_.reset();
             cached_visible_selection_indices_.reset();
             invalidateVisibleSelectionMaskCache();
             publishRenderInvalidation();
@@ -921,6 +926,9 @@ namespace lfs::core {
         [[nodiscard]] std::unique_ptr<lfs::core::SplatData>
         retireCombinedModelIfInFlight(
             std::unique_ptr<lfs::core::SplatData> model) const;
+        // Slot layout of the geometry getCombinedModel() keeps serving while a worker rebuild is
+        // pending; empty when the served geometry already matches the visible nodes.
+        [[nodiscard]] std::vector<NodeId> pendingRebuildSlotIds() const;
         void rebuildTransformCacheIfNeeded() const;
         void updateWorldTransform(const SceneNode& node) const;
         void removeNodeInternal(NodeId id, bool keep_children);

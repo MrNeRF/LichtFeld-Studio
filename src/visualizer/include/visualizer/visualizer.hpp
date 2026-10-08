@@ -77,11 +77,14 @@ namespace lfs::vis {
     struct RuntimeServiceControls {
         std::function<bool()> toggle_mcp_enabled;
         std::function<bool()> toggle_mcp_binding;
+        std::optional<int> mcp_port_override;
     };
 
     LFS_VIS_API void setRuntimeServiceControls(RuntimeServiceControls controls);
     LFS_VIS_API bool toggleMcpRuntimeEnabled();
     LFS_VIS_API bool toggleMcpRuntimeBinding();
+    // Port from the command line; it wins over the saved preference for this session.
+    [[nodiscard]] LFS_VIS_API std::optional<int> mcpPortOverride();
 
     struct LFS_VIS_API ProjectPayloadInfo {
         std::string chapter;

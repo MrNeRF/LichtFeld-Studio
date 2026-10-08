@@ -35,6 +35,7 @@ def _install_lf_stub(monkeypatch):
         # native call would. _apply_depth_window catches and reports it.
         window_write_error=False,
         stage_calls=[],
+        command_calls=[],
         undo_available=True,
         redo_available=True,
         undo_calls=0,
@@ -65,6 +66,9 @@ def _install_lf_stub(monkeypatch):
         get_active_submode=lambda: state.active_submode,
         message_dialog=lambda *_args, **_kwargs: None,
         get_split_view_mode=lambda: state.split_view_mode,
+        select_all_gaussians=lambda: state.command_calls.append("select_all"),
+        invert_gaussian_selection=lambda: state.command_calls.append("invert"),
+        deselect_all_gaussians=lambda: state.command_calls.append("deselect_all"),
     )
     lf_stub.has_scene = lambda: state.has_scene
     lf_stub.get_scene = lambda: _SceneStub() if state.has_scene else None
@@ -140,11 +144,6 @@ def _install_lf_stub(monkeypatch):
     )
     lf_stub.pipeline = SimpleNamespace(
         edit=SimpleNamespace(delete_=lambda: _StageStub("edit.delete")),
-        select=SimpleNamespace(
-            all=lambda: _StageStub("select.all"),
-            invert=lambda: _StageStub("select.invert"),
-            none=lambda: _StageStub("select.none"),
-        ),
     )
     def _undo():
         state.undo_calls += 1
@@ -628,7 +627,8 @@ def test_selection_depth_text_invalid_commit_reverts(selection_controls_module):
     assert state.depth_calls == []
 
 
-def test_selection_actions_use_undoable_pipeline_and_history(selection_controls_module):
+# Catches toolbar buttons that bypass the Select menu commands, which honor group locks and filters.
+def test_selection_actions_use_the_select_menu_commands_and_history(selection_controls_module):
     module, state = selection_controls_module
     panel = module.SelectionControlsController()
     model = _DataModelStub()
@@ -642,7 +642,8 @@ def test_selection_actions_use_undoable_pipeline_and_history(selection_controls_
     model.bound_events["selection_action"](None, None, ["undo"])
     model.bound_events["selection_action"](None, None, ["redo"])
 
-    assert state.stage_calls == ["edit.delete", "select.all", "select.invert", "select.none"]
+    assert state.stage_calls == ["edit.delete"]
+    assert state.command_calls == ["select_all", "invert", "deselect_all"]
     assert state.undo_calls == 1
     assert state.redo_calls == 1
 

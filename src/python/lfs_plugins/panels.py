@@ -46,14 +46,6 @@ PANEL_SPECS = {
         "FILL", (0, 0), options=(), update_policy="dirty",
         start_enabled=True,
     ),
-    "selection_groups": _PanelSpec(
-        "lfs_plugins.selection_groups", "SelectionGroupsPanel",
-        "lfs.selection_groups", "Selection Groups", "MAIN_PANEL_TAB", 110,
-        "rmlui/selection_groups.rml", "CONTENT", (0, 0),
-        options=("DEFAULT_CLOSED",), update_policy="dirty", has_poll=True,
-        parent="lfs.rendering",
-        start_enabled=True,
-    ),
     "startup_recent": _PanelSpec(
         "lfs_plugins.startup_recent_panel", "StartupRecentPanel",
         "lfs.startup_recent", "Recent Projects", "FLOATING", 5,
@@ -285,9 +277,6 @@ def _build_builtin_panel_steps(lf):
         _register_lazy_panel(lf, "new_project")
         _register_lazy_panel(lf, "resume_checkpoint")
 
-    def selection_groups():
-        _register_lazy_panel(lf, "selection_groups")
-
     def operators():
         from . import operators as operators_mod
 
@@ -384,7 +373,6 @@ def _build_builtin_panel_steps(lf):
         ("rendering_panel", rendering_panel),
         ("training_panel", training_panel),
         ("import_panels", import_panels),
-        ("selection_groups", selection_groups),
         ("operators", operators),
         ("sequencer_ops", sequencer_ops),
         ("tools", tools),

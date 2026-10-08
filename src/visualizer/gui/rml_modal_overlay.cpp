@@ -620,9 +620,7 @@ namespace lfs::vis::gui {
         }
     }
 
-    void RmlModalOverlay::render(int screen_w, int screen_h,
-                                 float screen_x, float screen_y,
-                                 float vp_x, float vp_y, float vp_w, float vp_h) {
+    void RmlModalOverlay::render(int screen_w, int screen_h) {
         bool has_pending;
         {
             std::lock_guard lock(queue_mutex_);
@@ -684,10 +682,8 @@ namespace lfs::vis::gui {
             LOG_TIMER("gui_render.menu_context_modal_render.modal_overlay.position");
             const float dialog_w = el_dialog_->GetOffsetWidth();
             const float dialog_h = el_dialog_->GetOffsetHeight();
-            const float vp_cx = (vp_x - screen_x) + vp_w * 0.5f;
-            const float vp_cy = (vp_y - screen_y) + vp_h * 0.5f;
-            const float dialog_left = std::clamp(vp_cx - dialog_w * 0.5f, 0.0f, std::max(0.0f, w - dialog_w));
-            const float dialog_top = std::clamp(vp_cy - dialog_h * 0.5f, 0.0f, std::max(0.0f, h - dialog_h));
+            const float dialog_left = std::max(0.0f, (static_cast<float>(w) - dialog_w) * 0.5f);
+            const float dialog_top = std::max(0.0f, (static_cast<float>(h) - dialog_h) * 0.5f);
             if (!dialog_position_valid_ || std::abs(dialog_left - last_dialog_left_) > 0.5f ||
                 std::abs(dialog_top - last_dialog_top_) > 0.5f) {
                 el_dialog_->SetProperty("left", std::format("{}px", dialog_left));

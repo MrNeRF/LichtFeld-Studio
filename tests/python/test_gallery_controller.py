@@ -1052,10 +1052,10 @@ def test_local_file_problem_prefers_project_error(gallery):
 
     assert facts["reason"] == "permission denied"
 
-def test_upload_format_persists_and_defaults_to_ssog(gallery, tmp_path):
+def test_upload_format_persists_and_defaults_to_auto(gallery, tmp_path):
     panel, _, _ = gallery
     panel.service.root = tmp_path
-    assert panel.upload_format == 'ssog'
+    assert panel.upload_format == 'auto'
     panel.upload_format = 'sog'
     assert panel.upload_format == 'sog'
     with pytest.raises(ValueError):

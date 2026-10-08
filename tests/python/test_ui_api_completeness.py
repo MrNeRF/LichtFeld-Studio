@@ -7,6 +7,8 @@ import ctypes.util
 
 import pytest
 
+from selection_submode_contract import check_selection_submode_follows_native_mode
+
 
 @pytest.mark.integration
 def test_draw_hook_receives_overlay_capable_layout(lf):
@@ -209,12 +211,4 @@ def test_selection_submode_follows_native_mode(lf):
     # Headless imports have no native viewer to receive selection events.
     if lf.get_scene() is None:
         pytest.skip("requires a native viewer (also run by SelectionSubmodeTest)")
-    original = lf.ui.get_selection_submode()
-    modes = ("centers", "rectangle", "polygon", "lasso", "rings", "color", "box", "sphere")
-    try:
-        for expected, mode in enumerate(modes):
-            lf.ui.set_selection_mode(mode)
-            assert lf.ui.get_selection_submode() == expected
-            assert lf.ui.context().selection_submode == expected
-    finally:
-        lf.ui.set_selection_mode(modes[original])
+    check_selection_submode_follows_native_mode(lf)

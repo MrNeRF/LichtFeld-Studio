@@ -85,7 +85,7 @@ body.docked-panel {
 /* ── Scrollbars ─────────────────────────────────────────── */
 
 scrollbarvertical {
-    width: 12dp;
+    width: 4dp;
 }
 
 scrollbarvertical slidertrack {
@@ -95,7 +95,7 @@ scrollbarvertical slidertrack {
 
 scrollbarvertical sliderbar {
     background-color: rgba(108, 112, 134, 160);
-    min-height: 16dp;
+    min-height: 12dp;
     border-radius: 6dp;
     transition: background-color 0.12s quadratic-out;
 }
@@ -105,7 +105,7 @@ scrollbarvertical sliderbar:hover {
 }
 
 scrollbarhorizontal {
-    height: 12dp;
+    height: 4dp;
 }
 
 scrollbarhorizontal slidertrack {
@@ -115,7 +115,7 @@ scrollbarhorizontal slidertrack {
 
 scrollbarhorizontal sliderbar {
     background-color: rgba(108, 112, 134, 160);
-    min-width: 16dp;
+    min-width: 12dp;
     border-radius: 6dp;
     transition: background-color 0.12s quadratic-out;
 }
@@ -877,7 +877,9 @@ progress fill {
     background-color: #313244;
 }
 
-.btn:disabled {
+/* <button> is no form control in RmlUi: its disabled attribute sets no :disabled. */
+.btn:disabled,
+.btn[disabled] {
     opacity: 0.5;
     cursor: default;
 }
@@ -1097,6 +1099,11 @@ color-picker {
     width: 200dp;
     height: 160dp;
     display: block;
+}
+
+/* An absolute popup shrinks to its content; the full-width RGB row would otherwise stretch it. */
+.color-picker-popup {
+    width: 200dp;
 }
 
 crf-curve {

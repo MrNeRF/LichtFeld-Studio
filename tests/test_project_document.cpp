@@ -1143,6 +1143,89 @@ namespace {
             std::filesystem::path{}, size, size, uid);
     }
 
+    class CameraCreationSchemaTest : public lfs::test::CudaDeviceTest {};
+
+    TEST_F(CameraCreationSchemaTest, MissingDistortionCapturesAndHydratesExactly) {
+        Scene scene;
+        const auto camera = std::make_shared<lfs::core::Camera>(
+            Tensor::eye(3, Device::CPU),
+            Tensor::from_vector({1.25f, -2.5f, 3.75f}, {3}, Device::CPU),
+            50.0f, 55.0f, 50.0f, 60.0f, Tensor{}, Tensor{},
+            lfs::core::CameraModelType::PINHOLE, "camera", std::filesystem::path{},
+            std::filesystem::path{}, 100, 120, 7);
+        for (const auto& distortion : {camera->radial_distortion(), camera->tangential_distortion()}) {
+            ASSERT_TRUE(distortion.is_valid());
+            EXPECT_EQ(distortion.dtype(), DataType::Float32);
+            EXPECT_EQ(distortion.ndim(), 1u);
+            EXPECT_EQ(distortion.numel(), 0u);
+        }
+        ASSERT_NE(scene.addCamera("camera", scene.addGroup("Cameras"), camera), lfs::core::NULL_NODE);
+        auto chapter = capture_scene_graph(scene, ScenePayloadBindings{});
+        ASSERT_TRUE(chapter) << lfs::format_for_developer(chapter.error());
+        Scene restored;
+        ASSERT_TRUE(hydrate_scene_graph(*chapter, restored, ScenePayloadResolver{}));
+        const auto* node = restored.getNode("camera");
+        ASSERT_NE(node, nullptr);
+        ASSERT_NE(node->camera, nullptr);
+        EXPECT_EQ(node->camera->R().to_vector(), camera->R().to_vector());
+        EXPECT_EQ(node->camera->T().to_vector(), camera->T().to_vector());
+        EXPECT_EQ(node->camera->focal_x(), camera->focal_x());
+        EXPECT_EQ(node->camera->focal_y(), camera->focal_y());
+        EXPECT_EQ(node->camera->camera_width(), camera->camera_width());
+        EXPECT_EQ(node->camera->camera_height(), camera->camera_height());
+        EXPECT_EQ(node->camera->uid(), camera->uid());
+        EXPECT_TRUE(capture_scene_graph(restored, ScenePayloadBindings{}));
+    }
+
+    TEST_F(CameraCreationSchemaTest, ExistingCalibrationAndCreationTiming) {
+        const auto r = Tensor::eye(3, Device::CPU);
+        const auto t = Tensor::from_vector({1.25f, -2.5f, 3.75f}, {3}, Device::CPU);
+        const auto radial = Tensor::from_vector({0.125f, -0.25f}, {2}, Device::CPU);
+        const auto tangential = Tensor::from_vector({0.03125f, -0.0625f}, {2}, Device::CPU);
+        for (int sample = 0; sample < 6; ++sample) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int iteration = 0; iteration < 200; ++iteration) {
+                lfs::core::Camera camera(r, t, 50.0f, 55.0f, 49.0f, 59.0f, radial, tangential,
+                                         lfs::core::CameraModelType::PINHOLE, "camera",
+                                         std::filesystem::path{}, std::filesystem::path{}, 100, 120, 7);
+                EXPECT_EQ(camera.R().to_vector(), r.to_vector());
+                EXPECT_EQ(camera.T().to_vector(), t.to_vector());
+                EXPECT_EQ(camera.radial_distortion().to_vector(), radial.to_vector());
+                EXPECT_EQ(camera.tangential_distortion().to_vector(), tangential.to_vector());
+                EXPECT_EQ(camera.center_x(), 49.0f);
+                EXPECT_EQ(camera.center_y(), 59.0f);
+            }
+            const double micros = std::chrono::duration<double, std::micro>(
+                                      std::chrono::steady_clock::now() - start)
+                                      .count() /
+                                  200;
+            std::cout << "camera_creation_us sample=" << sample << " value=" << micros << '\n';
+        }
+    }
+
+    TEST_F(CameraCreationSchemaTest, ConstructorKeepsAcceptingLoaderInputs) {
+        // Dataset loaders build cameras through this constructor; normalizing missing
+        // distortion must never turn a previously loadable camera into an error.
+        const auto rotation = Tensor::eye(3, Device::CPU);
+        const auto create = [&](const Tensor& t, const Tensor& radial, float fx, float fy, int width, int height) {
+            return lfs::core::Camera(rotation, t, fx, fy, 0.0f, 0.0f, radial, Tensor{},
+                                     lfs::core::CameraModelType::PINHOLE, "camera",
+                                     std::filesystem::path{}, std::filesystem::path{}, width, height, 0);
+        };
+        const auto t3 = Tensor::zeros({3}, Device::CPU);
+        const auto twelve = Tensor::zeros({12}, Device::CPU);
+        EXPECT_NO_THROW(create(t3, Tensor{}, 0.0f, 0.0f, 0, 0));
+        EXPECT_NO_THROW(create(t3, twelve, 525.0f, 525.0f, 640, 480));
+        const auto with_coefficients = create(t3, twelve, 525.0f, 525.0f, 640, 480);
+        EXPECT_EQ(with_coefficients.radial_distortion().numel(), 12u);
+        EXPECT_EQ(with_coefficients.T().shape(), t3.shape());
+        const auto without = create(t3, Tensor{}, 525.0f, 525.0f, 640, 480);
+        ASSERT_TRUE(without.radial_distortion().is_valid());
+        EXPECT_EQ(without.radial_distortion().dtype(), DataType::Float32);
+        EXPECT_EQ(without.radial_distortion().numel(), 0u);
+        EXPECT_EQ(without.tangential_distortion().numel(), 0u);
+    }
+
     using lfs::core::Camera;
     using lfs::io::project::SfmObservationTable;
 

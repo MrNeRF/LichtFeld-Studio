@@ -809,8 +809,6 @@ namespace lfs::python {
         add_float(&Proxy::voxel_size, "voxel_size", "Point Size", "Point size in point cloud mode", 0.01, 0.001, 0.1);
 
         // Selection Colors
-        add_color3(&Proxy::selection_color_committed, "selection_color_committed", "Committed",
-                   "Committed selection color", {0.859, 0.325, 0.325});
         add_color3(&Proxy::selection_color_preview, "selection_color_preview", "Preview", "Preview selection color",
                    {0.0, 0.871, 0.298});
         add_color3(&Proxy::selection_color_center_marker, "selection_color_center_marker", "Center Marker",

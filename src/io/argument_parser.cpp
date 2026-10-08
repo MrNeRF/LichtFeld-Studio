@@ -75,10 +75,10 @@ namespace lfs::io::args {
                                    "; values: none, segment, ignore, segment_and_ignore, alpha_consistent"},
             OptimizationCliBinding{"--invert-masks", "invert_masks", Bool},
             OptimizationCliBinding{"--no-alpha-as-mask", "use_alpha_as_mask", Bool, true},
-            OptimizationCliBinding{"--use-depth-loss", "use_depth_loss", Bool},
+            OptimizationCliBinding{"--use-depth-loss", "use_depth_loss", Bool, false, "; not available with --gut"},
             OptimizationCliBinding{"--depth-loss-weight", "depth_loss_weight", Float},
             OptimizationCliBinding{"--depth-loss-mode", "depth_loss_mode", String},
-            OptimizationCliBinding{"--use-normal-loss", "use_normal_loss", Bool},
+            OptimizationCliBinding{"--use-normal-loss", "use_normal_loss", Bool, false, "; not available with --gut"},
             OptimizationCliBinding{"--no-normal-auto-generate", "normal_auto_generate", Bool, true},
             OptimizationCliBinding{"--normal-loss-weight", "normal_loss_weight", Float},
             OptimizationCliBinding{"--normal-consistency-weight", "normal_consistency_weight", Float},
@@ -2097,6 +2097,8 @@ lfs::io::args::parse_args_and_params(int argc, const char* const argv[]) {
         return std::unexpected("--eval-flip needs --eval or --eval-all; without them no evaluation runs");
     if (flag_given("--eval-mask-invert") && !flag_given("--eval-mask"))
         return std::unexpected("--eval-mask-invert needs --eval-mask");
+    if (params->optimization.gut && (flag_given("--use-depth-loss") || flag_given("--use-normal-loss")))
+        return std::unexpected("Depth Loss (--use-depth-loss) and Normal Loss (--use-normal-loss) are not available with --gut: the 3DGUT rasterizer renders no depth or normals; use a 3DGS rasterizer");
     if (params->optimization.eval_all && flag_given("--test-every"))
         return std::unexpected("--test-every selects held-out images; --eval-all trains on every image and evaluates all of them");
     apply_ppisp_defaults(*params);

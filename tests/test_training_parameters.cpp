@@ -619,6 +619,18 @@ namespace {
         EXPECT_NE(params.validate().find("normal_end_fraction"), std::string::npos);
     }
 
+    // Catches depth maps loaded and anchors fitted for a GUT run, whose rasterizer renders no depth.
+    TEST_F(TrainingParametersTest, GutHasNoDepthSupervision) {
+        OptimizationParameters params;
+        params.use_depth_loss = true;
+        EXPECT_TRUE(params.depth_supervision_enabled());
+        params.gut = true;
+        EXPECT_FALSE(params.depth_supervision_enabled());
+        params.gut = false;
+        params.depth_loss_weight = 0.0f;
+        EXPECT_FALSE(params.depth_supervision_enabled());
+    }
+
     TEST_F(TrainingParametersTest, NormalSupervisionActiveRespectsStartEndAndStepsScaler) {
         OptimizationParameters params;
         params.use_normal_loss = true;

@@ -326,6 +326,8 @@ namespace lfs::python {
             return property().getattr(name);
         }
         void set(const std::string& name, nb::object value) {
+            if (name == "local_transform" && scene_->isNodeEffectivelyLocked(node().id))
+                return;
             property().setattr(name, value);
         }
 

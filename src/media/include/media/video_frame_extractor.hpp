@@ -35,6 +35,15 @@ namespace lfs::io {
     [[nodiscard]] LFS_MEDIA_API bool frameCoversSampleTime(double frame_time, double frame_duration,
                                                            double sample_time);
     [[nodiscard]] LFS_MEDIA_API bool shouldFillRetainedFpsTail(bool reached_eof, bool reached_end);
+    // End time to request for a trim range edited against the preview player's duration. An end
+    // at the player's (float) duration can mean "to the end of the video" (-1) for an automatic
+    // interval range. Timed sampling and explicit user bounds retain their numeric endpoint.
+    [[nodiscard]] inline double extractionEndTime(const float trim_end, const double player_duration,
+                                                  const bool allow_stream_end = true) {
+        return trim_end < 0.0f || (allow_stream_end && trim_end >= static_cast<float>(player_duration))
+                   ? -1.0
+                   : static_cast<double>(trim_end);
+    }
 
     enum class ExtractionMode {
         FPS,     // Extract at specific FPS

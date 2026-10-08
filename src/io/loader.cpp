@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/loader.hpp"
+#include "core/file_extensions.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "io/filesystem_utils.hpp"
@@ -44,7 +45,7 @@ namespace lfs::io {
                     return true;
 
                 // Check for SOG files
-                if (path.extension() == ".sog" || path.extension() == ".SOG") {
+                if (core::has_extension(path, ".sog")) {
                     LOG_TRACE("SOG file detected: {}", lfs::core::path_to_utf8(path));
                     return true;
                 }

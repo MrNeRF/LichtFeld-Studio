@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cctype>
 #include <csetjmp>
@@ -27,6 +28,8 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <thread>
+#include <vector>
 
 #ifndef _WIN32
 #include <fcntl.h>
@@ -1272,6 +1275,187 @@ namespace lfs::core::image_codecs {
         return success;
     }
 
+    namespace {
+        // Large 8-bit images: filter and deflate horizontal stripes on all cores. Each stripe ends
+        // on a byte-aligned sync flush, so the stripes concatenate into one zlib stream (as pigz does).
+        constexpr std::size_t kParallelPngMinPixels = std::size_t{1} << 20;
+
+        void append_u32(std::vector<std::uint8_t>& out, const std::uint32_t value) {
+            out.push_back(static_cast<std::uint8_t>(value >> 24));
+            out.push_back(static_cast<std::uint8_t>(value >> 16));
+            out.push_back(static_cast<std::uint8_t>(value >> 8));
+            out.push_back(static_cast<std::uint8_t>(value));
+        }
+
+        bool write_png_chunk(std::FILE* file, const char* type, const std::uint8_t* data, const std::size_t size) {
+            std::vector<std::uint8_t> header;
+            append_u32(header, static_cast<std::uint32_t>(size));
+            header.insert(header.end(), type, type + 4);
+            uLong crc = crc32(0L, reinterpret_cast<const Bytef*>(type), 4);
+            if (size > 0)
+                crc = crc32_z(crc, data, size);
+            std::vector<std::uint8_t> trailer;
+            append_u32(trailer, static_cast<std::uint32_t>(crc));
+            return std::fwrite(header.data(), 1, header.size(), file) == header.size() &&
+                   (size == 0 || std::fwrite(data, 1, size, file) == size) &&
+                   std::fwrite(trailer.data(), 1, trailer.size(), file) == trailer.size();
+        }
+
+        std::uint8_t paeth_predictor(const int a, const int b, const int c) {
+            const int p = a + b - c;
+            const int pa = std::abs(p - a);
+            const int pb = std::abs(p - b);
+            const int pc = std::abs(p - c);
+            if (pa <= pb && pa <= pc)
+                return static_cast<std::uint8_t>(a);
+            return static_cast<std::uint8_t>(pb <= pc ? b : c);
+        }
+
+        // libpng's default choice: the filter whose residuals have the smallest absolute sum.
+        void filter_png_row(const std::uint8_t* row, const std::uint8_t* prev, const std::size_t row_bytes,
+                            const std::size_t bpp, std::uint8_t* out,
+                            std::array<std::vector<std::uint8_t>, 5>& candidates) {
+            std::array<std::uint64_t, 5> sums{};
+            for (std::size_t i = 0; i < row_bytes; ++i) {
+                const int x = row[i];
+                const int a = i >= bpp ? row[i - bpp] : 0;
+                const int b = prev ? prev[i] : 0;
+                const int c = prev && i >= bpp ? prev[i - bpp] : 0;
+                const std::array<std::uint8_t, 5> residual = {
+                    static_cast<std::uint8_t>(x),
+                    static_cast<std::uint8_t>(x - a),
+                    static_cast<std::uint8_t>(x - b),
+                    static_cast<std::uint8_t>(x - ((a + b) >> 1)),
+                    static_cast<std::uint8_t>(x - paeth_predictor(a, b, c)),
+                };
+                for (std::size_t f = 0; f < residual.size(); ++f) {
+                    candidates[f][i] = residual[f];
+                    sums[f] += static_cast<std::uint64_t>(std::abs(static_cast<int>(static_cast<std::int8_t>(residual[f]))));
+                }
+            }
+            const auto best = static_cast<std::size_t>(std::min_element(sums.begin(), sums.end()) - sums.begin());
+            out[0] = static_cast<std::uint8_t>(best);
+            std::memcpy(out + 1, candidates[best].data(), row_bytes);
+        }
+
+        struct PngStripe {
+            std::vector<std::uint8_t> deflated;
+            uLong adler = 1;
+            std::size_t filtered_bytes = 0;
+            bool ok = false;
+        };
+
+        void encode_png_stripe(const std::uint8_t* pixels, const int width, const int channels, const int y_begin,
+                               const int y_end, const bool last, const int level, PngStripe& stripe) {
+            const auto row_bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(channels);
+            const auto rows = static_cast<std::size_t>(y_end - y_begin);
+            std::vector<std::uint8_t> filtered(rows * (row_bytes + 1));
+            std::array<std::vector<std::uint8_t>, 5> candidates;
+            for (auto& candidate : candidates)
+                candidate.resize(row_bytes);
+            for (int y = y_begin; y < y_end; ++y) {
+                const auto* row = pixels + static_cast<std::size_t>(y) * row_bytes;
+                const auto* prev = y > 0 ? row - row_bytes : nullptr;
+                filter_png_row(row, prev, row_bytes, static_cast<std::size_t>(channels),
+                               filtered.data() + static_cast<std::size_t>(y - y_begin) * (row_bytes + 1), candidates);
+            }
+
+            z_stream stream{};
+            if (deflateInit2(&stream, level, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK)
+                return;
+            stripe.deflated.resize(deflateBound(&stream, static_cast<uLong>(filtered.size())) + 64);
+            stream.next_in = filtered.data();
+            stream.avail_in = static_cast<uInt>(filtered.size());
+            stream.next_out = stripe.deflated.data();
+            stream.avail_out = static_cast<uInt>(stripe.deflated.size());
+            const int status = deflate(&stream, last ? Z_FINISH : Z_SYNC_FLUSH);
+            const bool done = last ? status == Z_STREAM_END : (status == Z_OK && stream.avail_in == 0);
+            stripe.deflated.resize(stream.total_out);
+            deflateEnd(&stream);
+            stripe.adler = adler32_z(1L, filtered.data(), filtered.size());
+            stripe.filtered_bytes = filtered.size();
+            stripe.ok = done;
+        }
+
+        bool write_png_parallel(const std::filesystem::path& path, const std::uint8_t* pixels, const int width,
+                                const int height, const int channels, const int compression_level,
+                                const std::optional<std::string>& comment, std::string& error) {
+            const auto row_bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(channels);
+            const unsigned threads = std::max(1u, std::thread::hardware_concurrency());
+            // About 8 MiB of pixels per stripe keeps every core busy without hurting the ratio.
+            const int stripe_rows = std::max(16, static_cast<int>((std::size_t{8} << 20) / std::max<std::size_t>(row_bytes, 1)));
+            const int stripe_count = (height + stripe_rows - 1) / stripe_rows;
+            const int level = std::clamp(compression_level, 0, 9);
+
+            std::vector<PngStripe> stripes(static_cast<std::size_t>(stripe_count));
+            std::atomic<int> next{0};
+            const auto worker = [&] {
+                for (int s = next.fetch_add(1); s < stripe_count; s = next.fetch_add(1)) {
+                    const int y_begin = s * stripe_rows;
+                    const int y_end = std::min(height, y_begin + stripe_rows);
+                    encode_png_stripe(pixels, width, channels, y_begin, y_end, s == stripe_count - 1, level,
+                                      stripes[static_cast<std::size_t>(s)]);
+                }
+            };
+            std::vector<std::thread> pool;
+            const unsigned pool_size = std::min<unsigned>(threads, static_cast<unsigned>(stripe_count));
+            pool.reserve(pool_size);
+            for (unsigned t = 1; t < pool_size; ++t)
+                pool.emplace_back(worker);
+            worker();
+            for (auto& thread : pool)
+                thread.join();
+            if (std::any_of(stripes.begin(), stripes.end(), [](const PngStripe& stripe) { return !stripe.ok; })) {
+                error = "PNG deflate failed";
+                return false;
+            }
+
+            uLong adler = stripes.front().adler;
+            for (std::size_t s = 1; s < stripes.size(); ++s)
+                adler = adler32_combine(adler, stripes[s].adler, static_cast<z_off_t>(stripes[s].filtered_bytes));
+
+            std::FILE* file = open_output_file(path);
+            if (!file) {
+                error = "Could not open PNG output " + path_to_utf8(path);
+                return false;
+            }
+            static constexpr std::array<std::uint8_t, 8> signature = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+            std::vector<std::uint8_t> ihdr;
+            append_u32(ihdr, static_cast<std::uint32_t>(width));
+            append_u32(ihdr, static_cast<std::uint32_t>(height));
+            const std::uint8_t color_type = channels == 1 ? 0 : channels == 2 ? 4
+                                                            : channels == 3   ? 2
+                                                                              : 6;
+            ihdr.insert(ihdr.end(), {8, color_type, 0, 0, 0});
+            bool ok = std::fwrite(signature.data(), 1, signature.size(), file) == signature.size() &&
+                      write_png_chunk(file, "IHDR", ihdr.data(), ihdr.size());
+            if (ok && comment && !comment->empty()) {
+                std::vector<std::uint8_t> text = {'C', 'o', 'm', 'm', 'e', 'n', 't', 0};
+                text.insert(text.end(), comment->begin(), comment->end());
+                ok = write_png_chunk(file, "tEXt", text.data(), text.size());
+            }
+            const std::uint8_t level_bits = level < 2 ? 0 : level < 6 ? 1
+                                                        : level == 6  ? 2
+                                                                      : 3;
+            std::uint8_t zlib_header[2] = {0x78, static_cast<std::uint8_t>(level_bits << 6)};
+            zlib_header[1] = static_cast<std::uint8_t>(zlib_header[1] + (31 - (zlib_header[0] * 256 + zlib_header[1]) % 31));
+            ok = ok && write_png_chunk(file, "IDAT", zlib_header, sizeof(zlib_header));
+            for (const auto& stripe : stripes) {
+                if (!ok)
+                    break;
+                ok = write_png_chunk(file, "IDAT", stripe.deflated.data(), stripe.deflated.size());
+            }
+            std::vector<std::uint8_t> checksum;
+            append_u32(checksum, static_cast<std::uint32_t>(adler));
+            ok = ok && write_png_chunk(file, "IDAT", checksum.data(), checksum.size()) &&
+                 write_png_chunk(file, "IEND", nullptr, 0);
+            const bool closed = std::fclose(file) == 0;
+            if (!ok || !closed)
+                error = "Could not write PNG output " + path_to_utf8(path);
+            return ok && closed;
+        }
+    } // namespace
+
     bool write_png(const std::filesystem::path& path, const void* data,
                    const int width, const int height, const int channels, const int bit_depth,
                    const int compression_level, const std::optional<std::string>& comment,
@@ -1279,6 +1463,10 @@ namespace lfs::core::image_codecs {
         if (!data || width <= 0 || height <= 0 || channels < 1 || channels > 4 || (bit_depth != 8 && bit_depth != 16)) {
             error = "Unsupported PNG layout";
             return false;
+        }
+        if (bit_depth == 8 && static_cast<std::size_t>(width) * static_cast<std::size_t>(height) >= kParallelPngMinPixels) {
+            return write_png_parallel(path, static_cast<const std::uint8_t*>(data), width, height, channels,
+                                      compression_level, comment, error);
         }
         png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
         png_infop info = png ? png_create_info_struct(png) : nullptr;

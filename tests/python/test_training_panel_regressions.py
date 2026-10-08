@@ -1875,9 +1875,8 @@ def test_training_panel_keeps_controls_and_search_outside_scroll_region():
     assert "background-color: transparent" in rcss
     assert "border-width: 0" in rcss
     assert "overflow-y: auto" in rcss
-    assert ".training-scroll-region scrollbarvertical" in rcss
+    assert ".training-scroll-region scrollbarvertical" not in rcss
     assert "padding-bottom: 6dp" in rcss
-    assert "width: 4dp" in rcss
     assert "height_mode = lf.ui.PanelHeightMode.FILL" in panel_source
 
 
@@ -1898,6 +1897,40 @@ def test_set_bool_prop_hasattr_guard(training_panel_module, monkeypatch):
 
     panel._set_bool_prop("nonexistent_property", True)
     assert not hasattr(params, "nonexistent_property")
+
+
+def test_gut_excludes_depth_and_normal_loss(training_panel_module, monkeypatch):
+    """GUT renders no depth or normals: enabling it clears both losses and neither can be enabled under it."""
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+    params = _ParamsStub()
+    params.gut = False
+    params.use_depth_loss = True
+    params.use_normal_loss = True
+    dataset = _DatasetStub()
+
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(
+            optimization_params=lambda: params,
+            dataset_params=lambda: dataset,
+            get_render_settings=lambda: None,
+        ),
+    )
+
+    assert panel._set_bool_prop("gut", True)
+    assert params.gut
+    assert not params.use_depth_loss
+    assert not params.use_normal_loss
+    assert not panel._set_bool_prop("use_depth_loss", True)
+    assert not panel._set_bool_prop("use_normal_loss", True)
+    assert not params.use_depth_loss
+    assert not params.use_normal_loss
+
+    assert panel._set_bool_prop("gut", False)
+    assert panel._set_bool_prop("use_depth_loss", True)
+    assert params.use_depth_loss
 
 
 def test_browse_background_image_uses_current_image_dialog(training_panel_module, monkeypatch):
@@ -2817,3 +2850,47 @@ def test_error_details_do_not_participate_in_toolbar_layout():
     assert len(error_actions.findall(".//button")) == 2
     assert toolbar.find(".//*[@class='training-status-badge is-error']") is None
     assert controls.find(".//*[@class='training-status-badge is-error']") is not None
+
+
+@pytest.mark.parametrize(
+    "prop,initial,changed,method,args",
+    [
+        ("strategy", "mrnf", "mcmc", "_set_strategy", ()),
+        ("sh_degree", 3, 2, "_set_int_param", ("sh_degree",)),
+        ("depth_loss_mode", "ssi", "ssi-disparity", "_set_depth_loss_mode", ()),
+        ("lambda_dssim", 0.25, 0.5, "_set_slider_prop", ("lambda_dssim",)),
+    ],
+)
+def test_restored_control_echo_is_not_an_edit(
+    training_panel_module, monkeypatch, prop, initial, changed, method, args
+):
+    class Params:
+        def __init__(self):
+            object.__setattr__(self, "writes", [])
+            object.__setattr__(self, "gut", False)
+            object.__setattr__(self, prop, initial)
+
+        def __setattr__(self, name, value):
+            self.writes.append((name, value))
+            object.__setattr__(self, name, value)
+
+        def has_params(self):
+            return True
+
+        def set(self, name, value):
+            setattr(self, name, value)
+
+        def set_strategy(self, value):
+            self.strategy = value
+
+    params = Params()
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
+    panel = training_panel_module.TrainingPanel()
+    setter = getattr(panel, method)
+    setter(*args, initial)
+    assert params.writes == []
+    setter(*args, changed)
+    assert params.writes == [(prop, changed)]
+    assert getattr(params, prop) == changed
+    setter(*args, changed)
+    assert params.writes == [(prop, changed)]

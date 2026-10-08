@@ -137,7 +137,6 @@ namespace lfs::vis {
         float depth_view_min = lfs::rendering::DEFAULT_DEPTH_VIEW_MIN;
         float depth_view_max = lfs::rendering::DEFAULT_DEPTH_VIEW_MAX;
         int depth_visualization_mode = 0;
-        std::array<float, 3> selection_color_committed{0.859f, 0.325f, 0.325f};
         std::array<float, 3> selection_color_preview{0.0f, 0.871f, 0.298f};
         std::array<float, 3> selection_color_center_marker{0.0f, 0.604f, 0.733f};
         bool depth_clip_enabled = false;

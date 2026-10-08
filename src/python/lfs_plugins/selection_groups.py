@@ -1,219 +1,91 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Selection Groups Panel - data-model-driven RmlUI implementation."""
+"""Selection group list in the Rendering panel's Selection & Overlays section."""
 
 import lichtfeld as lf
 
-from . import rml_widgets
-from .panels import panel_class
-from .types import Panel
-from .ui import RuntimeState, PanelStateBinding
+from .ui import RuntimeState
 
-SELECTION_GROUPS_MODEL = "selection_groups"
-__lfs_panel_classes__ = ["SelectionGroupsPanel"]
-__lfs_panel_ids__ = ["lfs.selection_groups"]
+GROUPS_LIST_ID = "selection-groups-list"
 
 
-def __lfs_after_reload__(runtime):
-    runtime.ui.set_panel_parent("lfs.selection_groups", "lfs.rendering")
+class SelectionGroupsSection:
+    """Binds the selection group list into a host panel's data model.
 
+    The host owns the color picker; ``show_color_picker(gid, event)`` opens it for a group.
+    """
 
-@panel_class("selection_groups")
-class SelectionGroupsPanel(Panel):
-    id = "lfs.selection_groups"
-    label = "Selection Groups"
-    parent = "lfs.rendering"
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    order = 110
-    template = "rmlui/selection_groups.rml"
-    height_mode = lf.ui.PanelHeightMode.CONTENT
-    update_policy = "dirty"
-
-    def __init__(self):
-        self.doc = None
+    def __init__(self, show_color_picker):
+        self._show_color_picker = show_color_picker
         self._handle = None
-        self._collapsed = True
-        self._prev_group_hash = None
-        self._color_edit_group_id = None
-        self._picker_click_handled = False
         self._has_groups = False
+        self._prev_group_hash = None
         self._last_scene_generation = None
         self._last_selection_generation = None
-        self._last_visible = None
-        self._reactive_binding = PanelStateBinding()
 
-    def capture_chrome(self):
-        return {"collapsed": bool(self._collapsed)}
+    def bind(self, model):
+        model.bind_func("label_selection_groups", lambda: lf.ui.tr("main_panel.selection_groups"))
+        model.bind_func("label_add_selection_group", lambda: lf.ui.tr("main_panel.add_group"))
+        model.bind_func("label_no_selection_groups", lambda: lf.ui.tr("main_panel.no_selection_groups"))
+        model.bind_func("show_no_selection_groups", lambda: not self._has_groups)
+        model.bind_record_list("selection_groups")
+        model.bind_event("selection_group_add", self._on_add_group)
 
-    def apply_chrome(self, payload):
-        self._collapsed = True
-        if isinstance(payload, dict) and "collapsed" in payload:
-            self._collapsed = bool(payload.get("collapsed"))
-        if self._handle:
-            self._handle.dirty_all()
+    def attach(self, handle):
+        self._handle = handle
 
-    @classmethod
-    def poll(cls, context):
-        del context
-        return lf.ui.get_active_tool() == "builtin.select" and lf.get_scene() is not None
-
-    def on_bind_model(self, ctx):
-        model = ctx.create_data_model(SELECTION_GROUPS_MODEL)
-        if model is None:
-            return
-
-        model.bind_func("panel_label", lambda: "@tr:main_panel.selection_groups")
-        model.bind_func("show_empty_message", lambda: not self._has_groups)
-        model.bind_record_list("groups")
-        self._handle = model.get_handle()
-
-    def on_mount(self, doc):
-        super().on_mount(doc)
-        self.doc = doc
-
-        header = doc.get_element_by_id("hdr-groups")
-        if header:
-            header.add_event_listener("click", self._on_toggle_section)
-
-        btn = doc.get_element_by_id("btn-add-group")
-        if btn:
-            btn.add_event_listener("click", self._on_add_group)
-
-        container = doc.get_element_by_id("groups-list")
+    def mount(self, doc):
+        container = doc.get_element_by_id(GROUPS_LIST_ID)
         if container:
             container.add_event_listener("click", self._on_group_click)
             container.add_event_listener("mousedown", self._on_group_mousedown)
+        self.invalidate()
 
-        self._popup_el = doc.get_element_by_id("color-picker-popup")
-        if self._popup_el:
-            self._popup_el.add_event_listener("click", self._on_popup_click)
+    def unmount(self):
+        self._handle = None
 
-        self._picker_el = doc.get_element_by_id("color-picker-el")
-        if self._picker_el:
-            self._picker_el.add_event_listener("change", self._on_picker_change)
-
-        body = doc.get_element_by_id("body")
-        if body:
-            body.add_event_listener("click", self._on_body_click)
-
-        section = doc.get_element_by_id("groups-section")
-        arrow = doc.get_element_by_id("arrow-groups")
-        if section:
-            from . import rml_widgets as w
-            w.sync_section_state(section, not self._collapsed, header, arrow)
-
-        self._sync_panel_state(doc, force=True)
-        self._subscribe_reactive_state()
-
-    def _subscribe_reactive_state(self):
-        if self._reactive_binding.active:
-            return
-
-        native_signals = (
-            RuntimeState.scene_generation,
-            RuntimeState.selection_generation,
-            RuntimeState.active_tool,
-        )
-        self._reactive_binding.set_handle(self._handle).watch(
-            *native_signals,
-            refresh=self._refresh_reactive_state,
-        )
-
-    def _unsubscribe_reactive_state(self):
-        self._reactive_binding.close()
-
-    def _refresh_reactive_state(self):
-        if self.doc is None:
-            return None
-        return self._sync_panel_state(self.doc, force=False)
-
-    def on_update(self, doc):
-        return self._sync_panel_state(doc, force=False)
-
-    def _sync_panel_state(self, doc, force=False):
-        dirty = False
-        visible = lf.ui.get_active_tool() == "builtin.select" and lf.get_scene() is not None
-        visibility_changed = force or visible != self._last_visible
-        wrap = doc.get_element_by_id("content-wrap")
-        if wrap and visibility_changed:
-            wrap.set_class("hidden", not visible)
-        if visibility_changed:
-            dirty = True
-        self._last_visible = visible
-        if not visible:
-            return dirty
-
-        scene_generation = RuntimeState.scene_generation.value
-        selection_generation = RuntimeState.selection_generation.value
-        if (
-            not force
-            and self._prev_group_hash is not None
-            and scene_generation == self._last_scene_generation
-            and selection_generation == self._last_selection_generation
-        ):
-            return dirty
-
-        first_update = (
-            self._last_scene_generation is None
-            or self._last_selection_generation is None
-        )
-        recompute_counts = (
-            force
-            or first_update
-            or scene_generation != self._last_scene_generation
-            or selection_generation != self._last_selection_generation
-        )
-        self._last_scene_generation = scene_generation
-        self._last_selection_generation = selection_generation
-        groups_changed = self._rebuild_groups(recompute_counts=recompute_counts)
-        return dirty or groups_changed
-
-    def on_scene_changed(self, doc):
-        del doc
+    def invalidate(self):
         self._prev_group_hash = None
         self._last_scene_generation = None
         self._last_selection_generation = None
-        return True
 
-    def on_unmount(self, doc):
-        self._unsubscribe_reactive_state()
-        doc.remove_data_model(SELECTION_GROUPS_MODEL)
-        self._handle = None
-        self.doc = None
+    def sync(self, visible=True):
+        # Counting copies the selection mask to the host, so a hidden list stays stale until shown.
+        if not visible:
+            self.invalidate()
+            return False
+        scene_generation = RuntimeState.scene_generation.value
+        selection_generation = RuntimeState.selection_generation.value
+        if (
+            self._prev_group_hash is not None
+            and scene_generation == self._last_scene_generation
+            and selection_generation == self._last_selection_generation
+        ):
+            return False
+        self._last_scene_generation = scene_generation
+        self._last_selection_generation = selection_generation
+        return self._rebuild_groups()
+
+    def group_color(self, gid):
+        scene = lf.get_scene()
+        group = _find_group(scene, gid) if scene else None
+        return tuple(group.color) if group else None
+
+    def set_group_color(self, gid, color):
+        scene = lf.get_scene()
+        if scene:
+            scene.set_selection_group_color(gid, color)
+            self._mark_groups_changed()
 
     def _mark_groups_changed(self):
         self._prev_group_hash = None
-        if self.doc is not None:
-            self._sync_panel_state(self.doc, force=True)
-        elif self._handle:
-            self._rebuild_groups(recompute_counts=True)
-            self._handle.dirty_all()
+        self._rebuild_groups()
 
-    def _on_toggle_section(self, event):
-        del event
-        self._collapsed = not self._collapsed
-        header = self.doc.get_element_by_id("hdr-groups")
-        section = self.doc.get_element_by_id("groups-section")
-        arrow = self.doc.get_element_by_id("arrow-groups")
-        if section:
-            from . import rml_widgets as w
-            w.animate_section_toggle(section, not self._collapsed, arrow, header_element=header)
-
-    def _on_add_group(self, event):
-        del event
+    def _on_add_group(self, _handle=None, _event=None, _args=None):
         scene = lf.get_scene()
         if scene:
             scene.add_selection_group("", (0.0, 0.0, 0.0))
             self._mark_groups_changed()
-
-    def _compute_group_hash(self, scene):
-        groups = scene.selection_groups()
-        active_id = scene.active_selection_group
-        parts = []
-        for group in groups:
-            r, g, b = group.color
-            parts.append(f"{group.id}:{group.name}:{group.count}:{group.locked}:{r:.2f}:{g:.2f}:{b:.2f}")
-        return f"{active_id}|{'|'.join(parts)}"
 
     def _set_has_groups(self, has_groups):
         has_groups = bool(has_groups)
@@ -221,16 +93,22 @@ class SelectionGroupsPanel(Panel):
             return
         self._has_groups = has_groups
         if self._handle:
-            self._handle.dirty("show_empty_message")
+            self._handle.dirty("show_no_selection_groups")
 
-    def _rebuild_groups(self, recompute_counts=True):
+    def _rebuild_groups(self):
         scene = lf.get_scene()
-        if not scene or not self._handle:
+        if not self._handle:
             return False
+        if not scene:
+            if self._prev_group_hash == "":
+                return False
+            self._prev_group_hash = ""
+            self._set_has_groups(False)
+            self._handle.update_record_list("selection_groups", [])
+            return True
 
-        if recompute_counts:
-            scene.update_selection_group_counts()
-        group_hash = self._compute_group_hash(scene)
+        scene.update_selection_group_counts()
+        group_hash = _compute_group_hash(scene)
         if group_hash == self._prev_group_hash:
             return False
         self._prev_group_hash = group_hash
@@ -250,23 +128,14 @@ class SelectionGroupsPanel(Panel):
                 "label": f"{group.name} ({group.count:,})",
             })
 
-        self._handle.update_record_list("groups", records)
+        self._handle.update_record_list("selection_groups", records)
         return True
-
-    def _find_action_element(self, element):
-        while element is not None:
-            action = element.get_attribute("data-action")
-            if action:
-                gid = element.get_attribute("data-gid", "-1")
-                return action, int(gid)
-            element = element.parent()
-        return None, None
 
     def _on_group_click(self, event):
         target = event.target()
         if target is None:
             return
-        action, gid = self._find_action_element(target)
+        action, gid = _find_action_element(target)
         if action is None or gid < 0:
             return
 
@@ -275,8 +144,7 @@ class SelectionGroupsPanel(Panel):
             return
 
         if action == "lock":
-            groups = scene.selection_groups()
-            group = next((g for g in groups if g.id == gid), None)
+            group = _find_group(scene, gid)
             if group:
                 scene.set_selection_group_locked(gid, not group.locked)
                 self._mark_groups_changed()
@@ -286,73 +154,20 @@ class SelectionGroupsPanel(Panel):
             scene.active_selection_group = gid
             self._mark_groups_changed()
 
-    def _show_color_picker(self, gid, event):
-        if self._color_edit_group_id == gid:
-            self._hide_picker()
-            return
-
-        self._picker_click_handled = True
-        self._color_edit_group_id = gid
-
-        scene = lf.get_scene()
-        if not scene:
-            return
-        groups = scene.selection_groups()
-        group = next((g for g in groups if g.id == gid), None)
-        if not group or not self._picker_el or not self._popup_el:
-            return
-
-        r, g, b = group.color
-        self._picker_el.set_attribute("red", str(float(r)))
-        self._picker_el.set_attribute("green", str(float(g)))
-        self._picker_el.set_attribute("blue", str(float(b)))
-
-        mx = int(float(event.get_parameter("mouse_x", "0")))
-        my = int(float(event.get_parameter("mouse_y", "0")))
-        left = max(0, mx - 210)
-        self._popup_el.set_property("left", f"{left}px")
-        self._popup_el.set_property("top", f"{my + 2}px")
-        self._popup_el.set_class("visible", True)
-
-    def _hide_picker(self):
-        if self._popup_el:
-            self._popup_el.set_class("visible", False)
-        self._color_edit_group_id = None
-
-    def _on_picker_change(self, event):
-        if self._color_edit_group_id is None:
-            return
-        scene = lf.get_scene()
-        if not scene:
-            return
-
-        r = float(event.get_parameter("red", "0"))
-        g = float(event.get_parameter("green", "0"))
-        b = float(event.get_parameter("blue", "0"))
-        scene.set_selection_group_color(self._color_edit_group_id, (r, g, b))
-        self._mark_groups_changed()
-
-    def _on_popup_click(self, event):
-        event.stop_propagation()
-
     def _on_group_mousedown(self, event):
         if int(event.get_parameter("button", "0")) != 1:
             return
         target = event.target()
         if target is None:
             return
-        _, gid = self._find_action_element(target)
+        _, gid = _find_action_element(target)
         if gid is None or gid < 0:
             return
-        self._show_context_menu(gid, event)
+        self._show_context_menu(gid)
 
-    def _show_context_menu(self, gid, event):
-        del event
+    def _show_context_menu(self, gid):
         scene = lf.get_scene()
-        if not scene:
-            return
-        groups = scene.selection_groups()
-        group = next((g for g in groups if g.id == gid), None)
+        group = _find_group(scene, gid) if scene else None
         if not group:
             return
 
@@ -377,8 +192,7 @@ class SelectionGroupsPanel(Panel):
             return
 
         if action == "lock":
-            groups = scene.selection_groups()
-            group = next((g for g in groups if g.id == gid), None)
+            group = _find_group(scene, gid)
             if group:
                 scene.set_selection_group_locked(gid, not group.locked)
         elif action == "clear":
@@ -387,18 +201,23 @@ class SelectionGroupsPanel(Panel):
             scene.remove_selection_group(gid)
         self._mark_groups_changed()
 
-    def _on_body_click(self, event):
-        del event
-        if self._picker_click_handled:
-            self._picker_click_handled = False
-            return
-        self._hide_picker()
+
+def _find_group(scene, gid):
+    return next((g for g in scene.selection_groups() if g.id == gid), None)
 
 
-def register():
-    lf.register_class(SelectionGroupsPanel)
-    lf.ui.set_panel_parent("lfs.selection_groups", "lfs.rendering")
+def _compute_group_hash(scene):
+    parts = []
+    for group in scene.selection_groups():
+        r, g, b = group.color
+        parts.append(f"{group.id}:{group.name}:{group.count}:{group.locked}:{r:.2f}:{g:.2f}:{b:.2f}")
+    return f"{scene.active_selection_group}|{'|'.join(parts)}"
 
 
-def unregister():
-    lf.ui.set_panel_enabled("lfs.selection_groups", False)
+def _find_action_element(element):
+    while element is not None:
+        action = element.get_attribute("data-action")
+        if action:
+            return action, int(element.get_attribute("data-gid", "-1"))
+        element = element.parent()
+    return None, None

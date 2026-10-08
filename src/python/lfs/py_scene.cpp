@@ -20,6 +20,7 @@
 #include "visualizer/rendering/graphics_external_tensor.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include <algorithm>
+#include <cmath>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <stdexcept>
@@ -550,6 +551,8 @@ namespace lfs::python {
         assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
         assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
         assert(pts.shape()[0] == cols.shape()[0]);
+        if (cols.dtype() != core::DataType::UInt8 && cols.dtype() != core::DataType::Float32)
+            throw nb::value_error("colors must have dtype uint8 or float32");
 
         auto pc = std::make_shared<core::PointCloud>(pts.to(core::Device::GPU), cols.to(core::Device::GPU));
         const int32_t node_id = scene_->addPointCloud(name, std::move(pc), parent);
@@ -593,7 +596,8 @@ namespace lfs::python {
 
         if (colors && colors->tensor().is_valid()) {
             const auto& c = colors->tensor();
-            assert(c.shape().rank() == 2 && c.shape()[0] == verts.shape()[0]);
+            if (c.ndim() != 2 || c.size(0) != verts.size(0) || c.size(1) != 4)
+                throw nb::value_error("colors must have shape [N, 4] matching vertices");
             mesh->colors = c.to(core::DataType::Float32).to(core::Device::CPU);
         }
 
@@ -666,8 +670,25 @@ namespace lfs::python {
 
         const auto& R_tensor = R.tensor();
         const auto& T_tensor = T.tensor();
-        assert(R_tensor.ndim() == 2 && R_tensor.size(0) == 3 && R_tensor.size(1) == 3);
-        assert(T_tensor.numel() == 3);
+        if (!R_tensor.is_valid() || R_tensor.dtype() != core::DataType::Float32 || R_tensor.ndim() != 2 ||
+            R_tensor.size(0) != 3 || R_tensor.size(1) != 3)
+            throw nb::value_error("R must be a float32 tensor of shape [3, 3]");
+        if (!T_tensor.is_valid() || T_tensor.dtype() != core::DataType::Float32 || T_tensor.numel() != 3 ||
+            !(T_tensor.ndim() == 1 || (T_tensor.ndim() == 2 && T_tensor.size(1) == 1)))
+            throw nb::value_error("T must be a float32 tensor of shape [3] or [3, 1]");
+        const auto all_finite = [](const core::Tensor& tensor) {
+            const auto cpu = tensor.cpu().contiguous();
+            const auto* values = cpu.ptr<float>();
+            return std::all_of(values, values + cpu.numel(), [](const float value) { return std::isfinite(value); });
+        };
+        if (!all_finite(R_tensor))
+            throw nb::value_error("R must contain finite values");
+        if (!all_finite(T_tensor))
+            throw nb::value_error("T must contain finite values");
+        if (!std::isfinite(focal_x) || focal_x <= 0.0f || !std::isfinite(focal_y) || focal_y <= 0.0f)
+            throw nb::value_error("focal_x and focal_y must be finite and positive");
+        if (width <= 0 || height <= 0)
+            throw nb::value_error("width and height must be positive");
 
         auto T_flat = T_tensor.ndim() == 2 ? T_tensor.reshape({3}) : T_tensor;
 
@@ -1399,7 +1420,7 @@ Returns:
                  nb::arg("points"),
                  nb::arg("colors"),
                  nb::arg("parent") = core::NULL_NODE,
-                 "Add a point cloud node from tensor data [N,3] positions and colors")
+                 "Add a point cloud node from [N,3] positions and uint8 or float32 colors; other color dtypes raise ValueError")
             .def("add_mesh", &PyScene::add_mesh,
                  nb::arg("name"),
                  nb::arg("vertices"),
@@ -1407,7 +1428,7 @@ Returns:
                  nb::arg("colors") = nb::none(),
                  nb::arg("normals") = nb::none(),
                  nb::arg("parent") = core::NULL_NODE,
-                 "Add a mesh node from [V,3] vertices, [F,3] face indices, optional [V,4] colors and [V,3] normals")
+                 "Add a mesh node from [V,3] vertices, [F,3] face indices, optional [V,4] colors and [V,3] normals; invalid color shapes raise ValueError")
             .def("add_camera_group", &PyScene::add_camera_group,
                  nb::arg("name"),
                  nb::arg("parent"),

@@ -77,11 +77,6 @@ body {
     height: 100%;
 }
 
-/* Overflowing header items scroll; keep the bar from covering them. */
-.header-items scrollbarhorizontal {
-    height: 3dp;
-}
-
 .header-right {
     display: flex;
     flex: 0 0 auto;

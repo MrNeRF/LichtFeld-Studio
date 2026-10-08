@@ -127,6 +127,10 @@ namespace lfs::gui {
             const std::string attr_name = cacheAttrName("control", "value");
             if (el->GetAttribute<Rml::String>(attr_name.c_str(), "") == value)
                 return false;
+            // A text field being typed in keeps its text; its blur writes the clamped value.
+            if (auto* const document = el->GetOwnerDocument();
+                document && document->GetFocusLeafNode() == el && el->GetAttribute<Rml::String>("type", "") == "text")
+                return false;
 
             if (auto* const input = dynamic_cast<Rml::ElementFormControlInput*>(el))
                 input->SetValue(value);
@@ -357,6 +361,7 @@ namespace lfs::gui {
         document_ = nullptr;
         clearElementCache();
         elements_cached_ = false;
+        preview_src_.clear();
         last_language_.clear();
         controls_dirty_ = true;
     }
@@ -515,6 +520,7 @@ namespace lfs::gui {
             source_probe_error_ = std::string(description.error().detail());
         trim_start_ = 0.0f;
         trim_end_ = static_cast<float>(player_->duration());
+        trim_end_is_auto_ = true;
         custom_width_ = std::max(16, player_->sourceWidth());
         custom_height_ = std::max(16, player_->sourceHeight());
         rotation_deg_ = player_->rotation();
@@ -1291,7 +1297,8 @@ namespace lfs::gui {
                                                : lfs::core::path_to_utf8(output_dir_);
         changed |= setCachedText(video_value_el_, video_display);
         changed |= setCachedText(output_value_el_, output_display);
-        changed |= setCachedProperty(select_hint_el_, "display", can_start ? "none" : "inline-block");
+        const bool inputs_missing = !player_->isOpen() || output_dir_.empty();
+        changed |= setCachedProperty(select_hint_el_, "display", inputs_missing || !preflight.empty() ? "inline-block" : "none");
         changed |= setCachedText(select_hint_el_, preflight.empty() ? LOC(VideoExtractor::SELECT_BOTH) : preflight);
 
         if (changed)
@@ -1368,6 +1375,9 @@ namespace lfs::gui {
                 out_w = custom_width_;
                 out_h = custom_height_;
             }
+            // Frames are scaled first, then rotated.
+            if (rotation_deg_ == 90 || rotation_deg_ == 270)
+                std::swap(out_w, out_h);
         }
 
         changed |= setCachedText(output_resolution_el_,
@@ -1415,7 +1425,7 @@ namespace lfs::gui {
 
         if (event_id == Rml::EventId::Change || event_id == Rml::EventId::Blur ||
             event.GetType() == "input") {
-            handleChange(id);
+            handleChange(id, event_id != Rml::EventId::Blur);
             event.StopPropagation();
         }
     }
@@ -1454,12 +1464,14 @@ namespace lfs::gui {
             controls_dirty_ = true;
             markContentDirty();
         } else if (id == "btn-trim-end-set" && player_->isOpen()) {
+            trim_end_is_auto_ = false;
             trim_end_ = std::clamp(static_cast<float>(player_->currentTime()),
                                    trim_start_ + MIN_TRIM_SECONDS,
                                    static_cast<float>(player_->duration()));
             controls_dirty_ = true;
             markContentDirty();
         } else if (id == "btn-trim-reset" && player_->isOpen()) {
+            trim_end_is_auto_ = true;
             trim_start_ = 0.0f;
             trim_end_ = static_cast<float>(player_->duration());
             controls_dirty_ = true;
@@ -1516,7 +1528,7 @@ namespace lfs::gui {
         }
     }
 
-    void VideoExtractorDialog::handleChange(const std::string& id) {
+    void VideoExtractorDialog::handleChange(const std::string& id, const bool explicit_edit) {
         Rml::Element* changed_control = nullptr;
 
         if (id == "mode-select") {
@@ -1580,9 +1592,11 @@ namespace lfs::gui {
             applyTextInput(id);
             if (id == "trim-start-input")
                 changed_control = trim_start_input_el_;
-            else if (id == "trim-end-input")
+            else if (id == "trim-end-input") {
+                if (explicit_edit)
+                    trim_end_is_auto_ = false;
                 changed_control = trim_end_input_el_;
-            else if (id == "custom-width-input")
+            } else if (id == "custom-width-input")
                 changed_control = custom_width_input_el_;
             else if (id == "custom-height-input")
                 changed_control = custom_height_input_el_;
@@ -1662,8 +1676,10 @@ namespace lfs::gui {
 
         if (target == TimelineDragTarget::TrimStart)
             trim_start_ = std::clamp(time, 0.0f, trim_end_ - MIN_TRIM_SECONDS);
-        else if (target == TimelineDragTarget::TrimEnd)
+        else if (target == TimelineDragTarget::TrimEnd) {
+            trim_end_is_auto_ = false;
             trim_end_ = std::clamp(time, trim_start_ + MIN_TRIM_SECONDS, duration);
+        }
 
         controls_dirty_ = true;
         markContentDirty();
@@ -1715,7 +1731,6 @@ namespace lfs::gui {
         }
         params.jpg_quality = jpg_quality_;
         params.start_time = static_cast<double>(trim_start_);
-        params.end_time = static_cast<double>(trim_end_);
         static constexpr std::array<io::ResolutionMode, 3> RES_MODES{
             io::ResolutionMode::Original,
             io::ResolutionMode::Scale,
@@ -1734,6 +1749,10 @@ namespace lfs::gui {
             params.sharpness_algorithm = ALGO_MAP[std::clamp(sharpness_algorithm_select_el_->GetSelection(), 0, 2)];
         }
         params.sharpness_window_mode = sharpness_mode_select_el_ && sharpness_mode_select_el_->GetSelection() == 1;
+        params.end_time = io::extractionEndTime(
+            trim_end_, player_->duration(),
+            trim_end_is_auto_ && params.mode == io::ExtractionMode::INTERVAL &&
+                !(params.sharpness_enabled && params.sharpness_window_mode));
         params.window_candidates_target = window_candidates_target_;
         params.sharpness_threshold = static_cast<double>(readIntValue(sharpness_threshold_slider_el_, 10));
         params.generate_metadata = generate_metadata_el_ && generate_metadata_el_->HasAttribute("checked");

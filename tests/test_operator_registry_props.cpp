@@ -30,9 +30,11 @@
 #include "visualizer/scene_coordinate_utils.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <memory>
 #include <vector>
 
@@ -964,6 +966,34 @@ TEST_F(OperatorRegistryPropsTest, LegacySelectInvertUsesVisibleMaskWithHiddenSib
     EXPECT_EQ(selection_mask_values(scene_manager_->getScene()), (std::vector<uint8_t>{0, 0, 0, 1}));
 }
 
+// Catches the pipeline select ops (selection toolbar, scripting) overwriting rows of a locked group,
+// and Invert dropping other groups' rows.
+TEST_F(OperatorRegistryPropsTest, LegacySelectOpsLeaveLockedGroupRowsAlone) {
+    add_node("first");
+    add_node("second");
+    auto& scene = scene_manager_->getScene();
+    const uint8_t locked = scene.addSelectionGroup("Locked", {0.2f, 0.4f, 0.6f});
+    const uint8_t other = scene.addSelectionGroup("Other", {0.6f, 0.4f, 0.2f});
+    scene.setSelectionGroupLocked(locked, true);
+    scene.setActiveSelectionGroup(1);
+    const auto reset_mask = [&] {
+        scene.setSelectionMask(std::make_shared<Tensor>(make_uint8_mask({1, locked, other, 0})));
+    };
+    lfs::vis::op::OperatorProperties props;
+
+    reset_mask();
+    ASSERT_TRUE(lfs::vis::op::SelectAll{}.execute(*scene_manager_, props, {}).ok());
+    EXPECT_EQ(selection_mask_values(scene), (std::vector<uint8_t>{1, locked, 1, 1}));
+
+    reset_mask();
+    ASSERT_TRUE(lfs::vis::op::SelectInvert{}.execute(*scene_manager_, props, {}).ok());
+    EXPECT_EQ(selection_mask_values(scene), (std::vector<uint8_t>{0, locked, other, 1}));
+
+    reset_mask();
+    ASSERT_TRUE(lfs::vis::op::SelectNone{}.execute(*scene_manager_, props, {}).ok());
+    EXPECT_EQ(selection_mask_values(scene), (std::vector<uint8_t>{0, locked, 0, 0}));
+}
+
 TEST_F(OperatorRegistryPropsTest, ResolveCropBoxIdFindsAttachedChildForParentNodeAndSelection) {
     auto& scene = scene_manager_->getScene();
     const auto parent_id = scene.addGroup("crop_parent");
@@ -1206,4 +1236,77 @@ TEST_F(OperatorRegistryPropsTest, CallbackModalCanSelfUnregisterWithoutDoubleCan
 
     EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent({}), lfs::vis::op::OperatorResult::CANCELLED);
     EXPECT_EQ(cancel_count, 1);
+}
+
+TEST_F(OperatorRegistryPropsTest, LockedAncestorBlocksEveryTransformEntryPoint) {
+    auto& scene = scene_manager_->getScene();
+    const auto parent = scene.addGroup("parent");
+    const auto nested = scene.addGroup("nested", parent);
+    const auto child = scene.addSplat("child", make_test_splat({0, 0, 0, 1, 2, 3}), nested);
+    scene_manager_->selectNodes({"child"});
+    const auto original = scene.getNodeTransform(child);
+    const auto changed = glm::translate(original, glm::vec3(1, 2, 3));
+    scene.setNodeLocked("parent", true);
+    EXPECT_FALSE(static_cast<bool>(scene.getNodeById(child)->locked));
+    scene.setNodeTransform(child, changed);
+    EXPECT_EQ(scene.getNodeTransform(child), original);
+    EXPECT_FALSE(scene_manager_->setNodeTransform("child", changed));
+    EXPECT_FALSE(lfs::vis::cap::setTransformMatrix(*scene_manager_, {"child"}, changed, "test.transform"));
+    EXPECT_FALSE(lfs::vis::cap::translateNodes(*scene_manager_, {"child"}, glm::vec3(1), "test.translate"));
+    EXPECT_FALSE(lfs::vis::cap::rotateNodes(*scene_manager_, {"child"}, glm::vec3(10), "test.rotate"));
+    EXPECT_FALSE(lfs::vis::cap::scaleNodes(*scene_manager_, {"child"}, glm::vec3(2), "test.scale"));
+    EXPECT_FALSE(lfs::vis::cap::resolveEditableTransformSelection(*scene_manager_, std::nullopt));
+    lfs::vis::EditorContext editor;
+    editor.update(scene_manager_.get(), nullptr);
+    EXPECT_FALSE(editor.canTransformSelectedNode());
+    for (const auto tool : {lfs::vis::ToolType::Translate, lfs::vis::ToolType::Rotate, lfs::vis::ToolType::Scale})
+        EXPECT_FALSE(editor.isToolAvailable(tool));
+    EXPECT_EQ(scene.getNodeTransform(child), original);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+
+    scene.setNodeLocked("parent", false);
+    lfs::vis::EditorContext unlocked_editor;
+    unlocked_editor.update(scene_manager_.get(), nullptr);
+    EXPECT_TRUE(unlocked_editor.canTransformSelectedNode());
+    EXPECT_TRUE(scene_manager_->setNodeTransform("child", changed));
+    EXPECT_EQ(scene.getNodeTransform(child), changed);
+}
+
+TEST_F(OperatorRegistryPropsTest, UnlockedTransformMatchesReferenceAndCost) {
+    auto& scene = scene_manager_->getScene();
+    const auto root = scene.addGroup("root");
+    const auto parent = scene.addGroup("parent", root);
+    const auto child = scene.addGroup("child", parent);
+    std::vector<double> reference_times, current_times;
+    const auto run = [&](bool reference) {
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < 20000; ++i) {
+            const auto matrix = glm::translate(glm::mat4(1), glm::vec3(float(i % 2), 0, 0));
+            if (reference) {
+                auto* node = scene.getNodeById(child);
+                if (node && !static_cast<bool>(node->locked)) {
+                    node->local_transform.set(matrix, false);
+                    scene.invalidateTransformCache();
+                }
+            } else {
+                scene.setNodeTransform(child, matrix);
+            }
+        }
+        return std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - start).count() / 20000;
+    };
+    for (int repeat = 0; repeat < 9; ++repeat) {
+        if (repeat % 2) {
+            current_times.push_back(run(false));
+            reference_times.push_back(run(true));
+        } else {
+            reference_times.push_back(run(true));
+            current_times.push_back(run(false));
+        }
+        EXPECT_EQ(scene.getNodeTransform(child), glm::translate(glm::mat4(1), glm::vec3(1, 0, 0)));
+    }
+    std::sort(reference_times.begin(), reference_times.end());
+    std::sort(current_times.begin(), current_times.end());
+    std::cout << "Unlocked transform ns/update: reference=" << reference_times[4]
+              << " current=" << current_times[4] << '\n';
+    EXPECT_LT(current_times[4], reference_times[4] * 2.0);
 }

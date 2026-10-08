@@ -27,6 +27,9 @@ class _BindingModelStub:
     def bind_event(self, _name, _handler):
         pass
 
+    def bind_record_list(self, _name):
+        pass
+
     def get_handle(self):
         return self.handle
 

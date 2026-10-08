@@ -1837,8 +1837,8 @@ namespace lfs::vis {
         const auto script = std::format(R"PY(
 import runpy
 import lichtfeld as lf
-contract = runpy.run_path(r"{}/tests/python/test_ui_api_completeness.py")
-contract["test_selection_submode_follows_native_mode"](lf)
+contract = runpy.run_path(r"{}/tests/python/selection_submode_contract.py")
+contract["check_selection_submode_follows_native_mode"](lf)
 )PY",
                                         PROJECT_ROOT_PATH);
         const int result = PyRun_SimpleString(script.c_str());
@@ -2043,6 +2043,76 @@ contract["test_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(lfs::event::EventBridge::instance().handler_count(
                       typeid(lfs::core::events::cmd::ResetTraining)),
                   0u);
+    }
+
+    TEST_F(VisualizerImplResetTest, CropApplyPreservesLockedTargetsAndHelpers) {
+        for (const bool ellipsoid : {false, true}) {
+            for (const bool active_tool : {false, true}) {
+                for (const std::string locked_name : {"", "target", "inner", "outer"}) {
+                    SCOPED_TRACE(std::to_string(ellipsoid) + ":" + std::to_string(active_tool) + ":" + locked_name);
+                    VisualizerImpl viewer(projectOptions());
+                    auto& scene = viewer.getScene();
+                    auto* manager = viewer.getSceneManager();
+                    const auto outer = scene.addGroup("outer");
+                    const auto inner = scene.addGroup("inner", outer);
+                    const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4), inner);
+                    const auto helper = ellipsoid ? scene.addEllipsoid("helper", target) : scene.addCropBox("helper", target);
+                    scene.setNodeTransform(helper, glm::mat4(1.0f));
+                    auto* volume = scene.getMutableNode("helper");
+                    if (ellipsoid) {
+                        volume->ellipsoid->radii = glm::vec3(0.5f);
+                        volume->ellipsoid->enabled = false;
+                    } else {
+                        volume->cropbox->min = glm::vec3(-0.5f);
+                        volume->cropbox->max = glm::vec3(0.5f);
+                        volume->cropbox->enabled = false;
+                    }
+                    manager->selectNode(target);
+                    auto& gizmo = viewer.getGuiManager()->gizmo();
+                    gizmo.setCropToolShape(ellipsoid ? "ellipsoid" : "box");
+                    ASSERT_TRUE(gizmo.ensureCropToolStateForRestore());
+                    UnifiedToolRegistry::instance().setActiveTool(active_tool ? "builtin.cropbox" : "");
+                    if (!locked_name.empty())
+                        scene.setNodeLocked(locked_name, true);
+                    op::undoHistory().clear();
+                    const auto before = scene.getNodeById(target)->model->means_raw().cpu().to_vector();
+                    if (active_tool)
+                        gizmo.applyActiveCropTool();
+                    else if (ellipsoid)
+                        lfs::core::events::cmd::ApplyEllipsoid{}.emit();
+                    else
+                        lfs::core::events::cmd::ApplyCropBox{}.emit();
+                    const auto* node = scene.getNodeById(target);
+                    ASSERT_NE(node, nullptr);
+                    EXPECT_EQ(node->model->means_raw().cpu().to_vector(), before);
+                    if (!locked_name.empty()) {
+                        EXPECT_EQ(node->model->visible_count(), 4u);
+                        EXPECT_FALSE(node->payload_diverged);
+                        EXPECT_EQ(op::undoHistory().undoCount(), 0u);
+                        const auto* retained = scene.getNodeById(helper);
+                        EXPECT_NE(retained, nullptr);
+                        if (retained) {
+                            EXPECT_EQ(retained->local_transform.get(), glm::mat4(1.0f));
+                            EXPECT_FALSE(ellipsoid ? retained->ellipsoid->enabled : retained->cropbox->enabled);
+                        }
+                    } else {
+                        EXPECT_EQ(node->model->visible_count(), 1u);
+                        EXPECT_EQ(scene.getNodeById(helper), nullptr);
+                        const auto count = op::undoHistory().undoCount();
+                        for (size_t i = 0; i < count; ++i)
+                            ASSERT_TRUE(op::undoHistory().undo().success);
+                        ASSERT_NE(scene.getNode("helper"), nullptr);
+                        EXPECT_EQ(scene.getNode("target")->model->visible_count(), 4u);
+                        for (size_t i = 0; i < count; ++i)
+                            ASSERT_TRUE(op::undoHistory().redo().success);
+                        EXPECT_EQ(scene.getNode("target")->model->visible_count(), 1u);
+                        EXPECT_EQ(scene.getNode("helper"), nullptr);
+                    }
+                    UnifiedToolRegistry::instance().setActiveTool("");
+                    op::undoHistory().clear();
+                }
+            }
+        }
     }
 
     TEST_F(VisualizerImplResetTest, CropToolRejectsUnrepresentableParentTransformWithoutMutation) {
@@ -15003,6 +15073,42 @@ contract["test_selection_submode_follows_native_mode"](lf)
             1234);
     }
 
+    TEST_F(VisualizerImplResetTest, EditableSplatWithDatasetNodeStaysVisibleAfterReopen) {
+        LFS_CUDA_BACKEND_OR_RETURN();
+        const auto path = temporary_.path / "editable-scene.licht";
+        write_splt_project(path, lfs::test::licht::make_splat(3), "Merged", nullptr, {});
+        {
+            auto document = lfs::test::licht::require_result_ptr(
+                lfs::io::project::ProjectDocument::open(path));
+            ASSERT_TRUE(document->edit_scene_graph().upsert_node(
+                lfs::io::project::SceneNodeRecord{
+                    .uuid = lfs::core::generate_uuid_v4(),
+                    .type = "dataset",
+                    .name = "Dataset",
+                    .child_order = 1,
+                }));
+            auto options = lfs::test::licht::deterministic_document_save_options(0x76000021, 2, 3);
+            options.commit.snapshot_uuid = {};
+            ASSERT_TRUE(document->save(path, options));
+        }
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        ASSERT_TRUE(viewer.projectOpen(path, ProjectSwitchDisposition::DiscardChanges));
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(waitUntil([&] {
+            viewer.pumpPostedWorkForProjectWrite();
+            const auto info = viewer.projectGetInfo();
+            return info && info->hydration_state == "complete";
+        }));
+        EXPECT_EQ(viewer.getSceneManager()->getContentType(), SceneManager::ContentType::SplatFiles);
+        EXPECT_TRUE(viewer.getScene().getTrainingModelNodeUuid().is_nil());
+        const auto* model = viewer.getSceneManager()->getModelForRendering();
+        ASSERT_NE(model, nullptr);
+        EXPECT_EQ(model->size(), 3u);
+        EXPECT_EQ(viewer.getSceneManager()->buildRenderState().combined_model, model);
+    }
+
     TEST_F(VisualizerImplResetTest,
            DatasetProjectWithoutCheckpointOpensReady) {
         LFS_CUDA_BACKEND_OR_RETURN();
@@ -15013,6 +15119,44 @@ contract["test_selection_submode_follows_native_mode"](lf)
         write_minimal_transforms_dataset(dataset_path);
         write_dataset_project_without_checkpoint(
             project_path, dataset_path);
+
+        {
+            auto document = lfs::test::licht::require_result_ptr(
+                lfs::io::project::ProjectDocument::open(project_path));
+            const auto uuid = lfs::core::generate_uuid_v4();
+            ASSERT_TRUE(document->edit_scene_graph().upsert_node(
+                lfs::io::project::SceneNodeRecord{
+                    .uuid = uuid,
+                    .type = "pointcloud",
+                    .name = "Points",
+                    .child_order = 1,
+                    .payload = lfs::io::project::PayloadBinding{
+                        .fourcc = "PCLD",
+                        .instance_uuid = uuid,
+                        .source_kind = "ply"},
+                }));
+            ASSERT_TRUE(document->set_point_cloud(uuid, lfs::io::project::PointCloudPayload(
+                                                            lfs::test::licht::make_point_cloud(2))));
+            ASSERT_TRUE(document->edit_project().upsert_embed_decision(
+                lfs::io::project::EmbedDecision{
+                    .uuid = uuid,
+                    .node_uuid = uuid,
+                    .payload_fourcc = "PCLD",
+                    .decision = "embedded",
+                    .reason = "dirty tracking fixture"}));
+            ASSERT_TRUE(document->edit_project().upsert_embedded_payload_provenance(
+                lfs::io::project::EmbeddedPayloadProvenance{
+                    .uuid = uuid,
+                    .node_uuid = uuid,
+                    .fourcc = "PCLD",
+                    .import_locator = {.preferred = "assets/points.ply", .base = lfs::io::project::LocatorBase::Project},
+                    .import_fingerprint = lfs::test::licht::fingerprint(42),
+                    .content_xxh3_128 = {}}));
+            auto save_options = lfs::test::licht::deterministic_document_save_options(0x76000022, 2, 3);
+            save_options.commit.snapshot_uuid = {};
+            const auto saved = document->save(project_path, save_options);
+            ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+        }
 
         auto options = projectOptions();
         VisualizerImpl viewer(options);
@@ -15045,6 +15189,51 @@ contract["test_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(
             viewer.getTrainer()->getParams().optimization.iterations,
             1234);
+
+        // The training panel repeats image-count scaling when a restored
+        // untrained session becomes Ready. This is not a parameter edit.
+        ASSERT_TRUE(viewer.projectGetInfo());
+        EXPECT_FALSE(viewer.projectGetInfo()->dirty);
+        viewer.getParameterManager()->autoScaleSteps(viewer.getScene().getActiveCameraCount());
+        EXPECT_FALSE(viewer.getParameterManager()->isDirty());
+        EXPECT_FALSE(viewer.projectGetInfo()->dirty);
+        EXPECT_FALSE(viewer.project_lifecycle_->hasDirtyProject());
+
+        const auto close_prompts = std::make_shared<size_t>(0);
+        lfs::core::events::cmd::ShowExitConfirmation::when(
+            [close_prompts](const auto&) { ++*close_prompts; });
+        const auto expect_dirty_and_reopen = [&] {
+            EXPECT_TRUE(viewer.projectGetInfo()->dirty);
+            EXPECT_TRUE(viewer.project_lifecycle_->hasDirtyProject());
+            EXPECT_FALSE(viewer.projectOpen(project_path, ProjectSwitchDisposition::RequireClean));
+            const auto prompts_before = *close_prompts;
+            viewer.getWindowManager()->requestClose();
+            EXPECT_FALSE(viewer.allowclose());
+            EXPECT_EQ(*close_prompts, prompts_before + 1);
+            viewer.getGuiManager()->dismissExitConfirmation();
+            viewer.project_lifecycle_->resetCloseSaveAttempt();
+            ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                const auto session = viewer.projectTrainingSessionState();
+                return session.hydrated && !session.restoring;
+            }));
+            viewer.getParameterManager()->autoScaleSteps(viewer.getScene().getActiveCameraCount());
+            EXPECT_FALSE(viewer.projectGetInfo()->dirty);
+        };
+
+        viewer.getScene().addGroup("Scene edit");
+        expect_dirty_and_reopen();
+        viewer.getParameterManager()->modifyActiveParams([](auto& params) { ++params.iterations; });
+        expect_dirty_and_reopen();
+        viewer.getScene().setCameraTrainingEnabled("frame_0001.png", false);
+        expect_dirty_and_reopen();
+        auto* points = viewer.getScene().getMutableNode("Points");
+        ASSERT_NE(points, nullptr);
+        ASSERT_NE(points->point_cloud, nullptr);
+        points->point_cloud->means = points->point_cloud->means + 1.0f;
+        viewer.getScene().setPointCloudModified(true);
+        viewer.getScene().notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+        expect_dirty_and_reopen();
     }
 
     TEST_F(VisualizerImplResetTest,

@@ -498,7 +498,8 @@ namespace lfs::training {
         // Returns empty tensor if no background image is set
         lfs::core::Tensor get_background_image_for_camera(int width, int height);
         void clearBackgroundImageCache();
-        lfs::core::Tensor get_edge_weight_map(int camera_uid, const lfs::core::Tensor& gt_image);
+        lfs::core::Tensor get_edge_weight_map(int camera_uid, const lfs::core::Tensor& gt_image,
+                                              const lfs::core::Tensor& photometric_mask);
         void clearEdgeWeightCache();
         core::Tensor get_thin_structure_map(int camera_uid, const core::Tensor& image, float weight);
         void clear_thin_structure_cache();

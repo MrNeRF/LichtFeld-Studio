@@ -63,7 +63,7 @@ namespace lfs::core {
         // Set rotation and translation parts
         auto w2c_cpu = w2c.cpu();
         auto R_cpu = R.cpu();
-        auto t_cpu = t.cpu();
+        auto t_cpu = t.cpu().reshape({3});
 
         auto w2c_acc = w2c_cpu.accessor<float, 2>();
         auto R_acc = R_cpu.accessor<float, 2>();
@@ -142,6 +142,12 @@ namespace lfs::core {
             LOG_ERROR("Camera constructor: T tensor is invalid or empty");
             throw std::runtime_error("Camera constructor: T tensor is invalid or empty");
         }
+        // Cameras without lens distortion carry empty float32 coefficient tensors, as the
+        // project format requires. Coefficients passed by loaders are kept unchanged.
+        if (!_radial_distortion.is_valid())
+            _radial_distortion = Tensor::empty({0}, Device::CPU, DataType::Float32);
+        if (!_tangential_distortion.is_valid())
+            _tangential_distortion = Tensor::empty({0}, Device::CPU, DataType::Float32);
 
         // Compute world-to-view transform
         _world_view_transform = world_to_view(R, T);

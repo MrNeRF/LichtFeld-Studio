@@ -43,6 +43,12 @@ namespace lfs::training::losses {
         bool segment_and_ignore,
         bool require_float = false);
 
+    /// Canny edge guidance excludes masked pixels before positive-median normalization.
+    void compute_edge_weight_map(const lfs::core::Tensor& image,
+                                 const lfs::core::Tensor& mask,
+                                 bool segment_and_ignore,
+                                 lfs::core::Tensor& edges);
+
     /// Fuse Segment / SegmentAndIgnore opacity-penalty band + pow + mean/grad.
     [[nodiscard]] MaskOpacityPenalty fuse_mask_opacity_penalty(
         MaskPreprocessWorkspace& ws,

@@ -11,10 +11,12 @@
 #include "training/kernels/grad_alpha.hpp"
 #include "training/kernels/image_kernels.hpp"
 #include "training/kernels/roi_weight_map.hpp"
+#include "training/losses/mask_loss.hpp"
 
 #include <glm/gtc/type_ptr.hpp>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <optional>
 #include <vector>
 
@@ -193,6 +195,39 @@ TEST_F(TrainingImageOpsBytes, NormalizeScalarAndSkip) {
             EXPECT_NE(bytes(actual), before);
         } else {
             EXPECT_EQ(bytes(actual), before);
+        }
+    }
+}
+
+TEST(TrainingImageEdgeMask, ExcludesPixelsBeforeNormalizingOnSelectedBackend) {
+    constexpr size_t h = 35, w = 37;
+    const auto image = pattern({3, h, w});
+    const auto& ops = lfs::training::training_ops(lfs::core::default_gpu_backend());
+    for (const auto dtype : {DataType::Float32, DataType::UInt8}) {
+        for (const bool band : {false, true}) {
+            std::vector<float> mask_values(h * w);
+            for (size_t i = 0; i < mask_values.size(); ++i)
+                mask_values[i] = i % 3 == 0 ? 0.f : (i % 3 == 1 ? 128.f : 255.f);
+            auto mask = Tensor::from_vector(mask_values, {h, w}, Device::GPU);
+            mask = dtype == DataType::UInt8 ? mask.to(dtype) : mask / 255.f;
+            auto raw = Tensor::zeros({h, w}, Device::GPU);
+            ops.training_image->canny(image, raw);
+            auto expected = raw.cpu().to_vector();
+            std::vector<float> positive;
+            for (size_t i = 0; i < expected.size(); ++i) {
+                if (mask_values[i] == 0.f || (band && mask_values[i] <= 250.f))
+                    expected[i] = 0.f;
+                if (expected[i] > 0.f)
+                    positive.push_back(expected[i]);
+            }
+            ASSERT_FALSE(positive.empty());
+            std::sort(positive.begin(), positive.end());
+            const float median = positive[positive.size() / 2];
+            auto actual = Tensor::zeros({h, w}, Device::GPU);
+            lfs::training::losses::compute_edge_weight_map(image, mask, band, actual);
+            const auto values = actual.cpu().to_vector();
+            for (size_t i = 0; i < values.size(); ++i)
+                EXPECT_NEAR(values[i], expected[i] / median, 1e-5f) << i;
         }
     }
 }

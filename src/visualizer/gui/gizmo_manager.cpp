@@ -1025,6 +1025,9 @@ namespace lfs::vis::gui {
         if (!sm)
             return;
 
+        if (!sm->canApplyCropToNode(crop_tool_target_node_id_))
+            return;
+
         if (!persistActiveCropToolToNode(true))
             return;
 
@@ -1233,6 +1236,9 @@ namespace lfs::vis::gui {
             if (!cropbox_node || !cropbox_node->cropbox)
                 return;
 
+            if (!sm->canApplyCropToNode(cropbox_node->parent_id))
+                return;
+
             cap::CropBoxUpdate update;
             update.has_use = true;
             update.use = true;
@@ -1276,6 +1282,9 @@ namespace lfs::vis::gui {
 
             const auto* ellipsoid_node = sm->getScene().getNodeById(ellipsoid_id);
             if (!ellipsoid_node || !ellipsoid_node->ellipsoid)
+                return;
+
+            if (!sm->canApplyCropToNode(ellipsoid_node->parent_id))
                 return;
 
             cap::EllipsoidUpdate update;
@@ -2601,8 +2610,18 @@ namespace lfs::vis::gui {
             const bool should_persist = crop_tool_drag_changed_;
             crop_tool_drag_active_ = false;
             crop_tool_drag_changed_ = false;
-            if (should_persist)
+            if (should_persist) {
+                // Clamp local extents at commit, as for ellipsoids, without changing drag deltas.
+                for (int axis = 0; axis < 3; ++axis) {
+                    if (scale_result.total_scale[axis] != 1.0f &&
+                        crop_tool_box_max_[axis] - crop_tool_box_min_[axis] < MIN_GIZMO_SCALE) {
+                        const float center = (crop_tool_box_min_[axis] + crop_tool_box_max_[axis]) * 0.5f;
+                        crop_tool_box_min_[axis] = center - MIN_GIZMO_SCALE * 0.5f;
+                        crop_tool_box_max_[axis] = center + MIN_GIZMO_SCALE * 0.5f;
+                    }
+                }
                 (void)persistActiveCropToolToNode(false);
+            }
         }
 
         overlay_drawlist.PopClipRect();

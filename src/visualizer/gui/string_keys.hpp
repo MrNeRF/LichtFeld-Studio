@@ -398,7 +398,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* PPISP_CRF_TOE = "main_panel.ppisp_crf_toe";
         inline constexpr const char* PPISP_CRF_SHOULDER = "main_panel.ppisp_crf_shoulder";
         inline constexpr const char* RENDER_SCALE = "main_panel.render_scale";
-        inline constexpr const char* COMMITTED = "main_panel.committed";
         inline constexpr const char* PREVIEW = "main_panel.preview";
         inline constexpr const char* CENTER_MARKER = "main_panel.center_marker";
         inline constexpr const char* SELECTION_GROUPS = "main_panel.selection_groups";
@@ -920,6 +919,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* TASK_FAILED_DETAIL = "runtime.task_failed_detail";
         inline constexpr const char* EXPORT_CANCELLED = "runtime.export_cancelled";
         inline constexpr const char* NO_SPLAT_DATA = "runtime.no_splat_data";
+        inline constexpr const char* EXPORT_STREAMED_LOD = "runtime.export_streamed_lod";
         inline constexpr const char* VIDEO_ENCODER_UNAVAILABLE = "runtime.video_encoder_unavailable";
         inline constexpr const char* SCENE_MANAGER_UNAVAILABLE = "runtime.scene_manager_unavailable";
         inline constexpr const char* NO_MODEL_SELECTED = "runtime.no_model_selected";

@@ -211,6 +211,7 @@ namespace lfs::vis::op {
         void applyNodeMetadataSnapshotUnchecked(SceneManager& scene_manager,
                                                 const SceneGraphNodeMetadataSnapshot& target,
                                                 std::string current_name,
+                                                const int current_order_index,
                                                 const bool emit_reparent_event) {
             auto& scene = scene_manager.getScene();
 
@@ -251,9 +252,12 @@ namespace lfs::vis::op {
                     }
                 }
 
-                // moveNode returns false for a no-op (already at the target slot) as well as a
-                // genuine failure; the parent post-condition below is the authoritative check.
-                (void)scene.moveNode(node->id, desired_parent, target.order_index);
+                // History stores the final slot; moveNode accepts a slot before self-removal.
+                int insertion_index = target.order_index;
+                if (!parent_differs && current_order_index >= 0 && insertion_index > current_order_index)
+                    ++insertion_index;
+                // moveNode also returns false when the node is already at the target slot.
+                (void)scene.moveNode(node->id, desired_parent, insertion_index);
                 node = scene.getMutableNode(current_name);
                 if (!node || node->parent_id != desired_parent) {
                     throw std::runtime_error("Failed to reparent node '" + current_name + "'");
@@ -296,7 +300,7 @@ namespace lfs::vis::op {
             const auto before = captureNodeMetadataSnapshot(scene_manager, *current_node);
 
             try {
-                applyNodeMetadataSnapshotUnchecked(scene_manager, target, current_name, emit_reparent_event);
+                applyNodeMetadataSnapshotUnchecked(scene_manager, target, current_name, before.order_index, emit_reparent_event);
             } catch (const HistoryCorruptionError&) {
                 throw;
             } catch (...) {
@@ -305,7 +309,8 @@ namespace lfs::vis::op {
                     if (rollback_name.empty()) {
                         throw std::runtime_error("Rollback target node missing");
                     }
-                    applyNodeMetadataSnapshotUnchecked(scene_manager, before, rollback_name, false);
+                    const auto rollback_state = captureNodeMetadataSnapshot(scene_manager, *scene.getNode(rollback_name));
+                    applyNodeMetadataSnapshotUnchecked(scene_manager, before, rollback_name, rollback_state.order_index, false);
                 } catch (const std::exception& rollback_error) {
                     throw HistoryCorruptionError(
                         "Failed to rollback scene node metadata for '" + target.name + "': " +
@@ -708,6 +713,7 @@ namespace lfs::vis::op {
             cloned->means = src.means.is_valid() ? src.means.clone() : src.means;
             cloned->colors = src.colors.is_valid() ? src.colors.clone() : src.colors;
             cloned->normals = src.normals.is_valid() ? src.normals.clone() : src.normals;
+            cloned->emit_zero_normals = src.emit_zero_normals;
             cloned->sh0 = src.sh0.is_valid() ? src.sh0.clone() : src.sh0;
             cloned->shN = src.shN.is_valid() ? src.shN.clone() : src.shN;
             cloned->opacity = src.opacity.is_valid() ? src.opacity.clone() : src.opacity;
@@ -1583,15 +1589,22 @@ namespace lfs::vis::op {
                     existing->depth_path.clear();
                 }
                 if (existing->parent_id != desired_parent) {
-                    const bool was_locked = existing->locked;
-                    existing->locked.setQuiet(false);
-                    (void)scene.moveNode(existing->id, desired_parent, -1);
-                    existing->locked.setQuiet(was_locked);
-                    existing = scene.getNodeByUuid(snapshot.uuid);
-                    if (!existing || existing->parent_id != desired_parent) {
-                        throw HistoryCorruptionError(
-                            "Failed to reparent existing scene node '" + snapshot.name + "'");
+                    const auto* destination = scene.getNodeById(desired_parent);
+                    if (destination && !lfs::core::isSceneNodeParentCompatible(destination->type, snapshot.type)) {
+                        throw HistoryCorruptionError("Cannot restore parent for scene node '" + snapshot.name + "'");
                     }
+                    for (const auto* ancestor = destination; ancestor; ancestor = scene.getNodeById(ancestor->parent_id)) {
+                        if (ancestor->id == existing->id)
+                            throw HistoryCorruptionError("Cannot restore cyclic parentage for scene node '" + snapshot.name + "'");
+                    }
+                    // History owns the destination local pose; replay must not invert
+                    // a possibly singular parent transform to recompute it.
+                    if (auto* parent = scene.getNodeById(existing->parent_id))
+                        std::erase(parent->children, existing->id);
+                    existing->parent_id = desired_parent;
+                    if (auto* parent = scene.getNodeById(desired_parent))
+                        parent->children.push_back(existing->id);
+                    scene.notifyMutation(lfs::core::Scene::MutationType::NODE_REPARENTED);
                 }
 
                 existing->local_transform.setQuiet(snapshot.local_transform);

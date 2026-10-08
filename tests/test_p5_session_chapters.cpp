@@ -22,6 +22,7 @@
 #include "gui/sequencer_ui_state.hpp"
 #include "input/input_controller.hpp"
 #include "io/project_document.hpp"
+#include "io/session_chapters.hpp"
 #include "io/video/video_export_options.hpp"
 #include "licht_matrix_test_data.hpp"
 #include "licht_test_support.hpp"
@@ -887,6 +888,122 @@ namespace {
         EXPECT_FALSE(captured.ortho_extent_world.has_value());
         captured = capturePanelCameraProjectState(invalid, std::nullopt);
         EXPECT_FALSE(captured.ortho_extent_world.has_value());
+    }
+
+    TEST(P5SessionChapterTest, DefaultViewKeepsBothPanelCamerasForEarlierReaders) {
+        const auto cameras =
+            lfs::io::project::default_session_chapter_dom(lfs::io::project::SessionJsonChapterKind::View)
+                .get_json("panel_cameras");
+        ASSERT_TRUE(cameras);
+        ASSERT_EQ(cameras->size(), 2u);
+        EXPECT_EQ((*cameras)[0]["panel"], "primary");
+        EXPECT_EQ((*cameras)[1]["panel"], "secondary");
+        for (const auto& camera : *cameras)
+            EXPECT_TRUE(panelCameraProjectStateFromJson(camera));
+    }
+
+    TEST(P5SessionChapterTest, ViewRenderSettingsKeepEveryKeyEarlierReadersRequire) {
+        // Every VIEW render-settings key earlier readers require; a project written without one
+        // of them does not open there. Removed settings keep being written.
+        static constexpr std::array<std::string_view, 76> earlier_reader_keys{
+            "focal_length_mm",
+            "scaling_modifier",
+            "antialiasing",
+            "mip_filter",
+            "sh_degree",
+            "render_scale",
+            "camera_metrics_mode",
+            "show_crop_box",
+            "use_crop_box",
+            "show_ellipsoid",
+            "use_ellipsoid",
+            "desaturate_unselected",
+            "desaturate_cropping",
+            "hide_outside_depth_box",
+            "crop_filter_for_selection",
+            "apply_appearance_correction",
+            "ppisp_mode",
+            "background_color",
+            "environment_mode",
+            "environment_exposure",
+            "environment_rotation_degrees",
+            "show_coord_axes",
+            "axes_size",
+            "show_grid",
+            "grid_plane",
+            "grid_opacity",
+            "point_cloud_mode",
+            "voxel_size",
+            "show_rings",
+            "ring_width",
+            "show_center_markers",
+            "show_camera_frustums",
+            "camera_frustum_scale",
+            "train_camera_color",
+            "eval_camera_color",
+            "show_pivot",
+            "split_view_mode",
+            "gt_comparison_mode",
+            "split_position",
+            "split_view_offset",
+            "equirectangular",
+            "orthographic",
+            "ortho_scale",
+            "depth_view",
+            "depth_view_min",
+            "depth_view_max",
+            "depth_visualization_mode",
+            "selection_color_committed",
+            "selection_color_preview",
+            "selection_color_center_marker",
+            "depth_clip_enabled",
+            "depth_clip_far",
+            "mesh_wireframe",
+            "mesh_wireframe_color",
+            "mesh_wireframe_width",
+            "mesh_light_dir",
+            "mesh_light_intensity",
+            "mesh_ambient",
+            "mesh_backface_culling",
+            "mesh_shadow_enabled",
+            "mesh_shadow_resolution",
+            "depth_filter_enabled",
+            "depth_filter_min",
+            "depth_filter_max",
+            "lod_enabled",
+            "lod_auto_enable_rad",
+            "lod_max_splats",
+            "lod_render_scale",
+            "lod_behind_camera_penalty",
+            "lod_cone_foveation",
+            "lod_cone_inner_degrees",
+            "lod_cone_outer_degrees",
+            "lod_page_pool_splats",
+            "lod_pool_vram_fraction",
+            "lod_fade_frames",
+            "lod_debug_colors",
+        };
+        const auto written = renderSettingsToProjectJson(lfs::vis::RenderSettings{});
+        const auto default_view =
+            lfs::io::project::default_session_chapter_dom(lfs::io::project::SessionJsonChapterKind::View)
+                .get_json("render_settings");
+        ASSERT_TRUE(default_view);
+        for (const auto key : earlier_reader_keys) {
+            EXPECT_TRUE(written.contains(std::string(key))) << key;
+            EXPECT_TRUE(default_view->contains(std::string(key))) << key;
+        }
+
+        const auto& committed = written.at("selection_color_committed");
+        ASSERT_TRUE(committed.is_array());
+        ASSERT_EQ(committed.size(), 3u);
+        EXPECT_FLOAT_EQ(committed[0].get<float>(), 0.859f);
+        EXPECT_FLOAT_EQ(committed[1].get<float>(), 0.325f);
+        EXPECT_FLOAT_EQ(committed[2].get<float>(), 0.325f);
+
+        auto without_removed = written;
+        without_removed.erase("selection_color_committed");
+        EXPECT_TRUE(renderSettingsFromProjectJson(without_removed));
+        EXPECT_TRUE(renderSettingsFromProjectJson(written));
     }
 
     TEST(P5SessionChapterTest,
@@ -2225,7 +2342,6 @@ namespace {
         expect_bool(render, "/orthographic", true);
         expect_bool(render, "/depth_view", true);
         prove("VIEW-198");
-        expect_json(render, "/selection_color_committed", Json::array({0.11f, 0.22f, 0.33f}));
         expect_bool(render, "/depth_clip_enabled", true);
         expect_float(render, "/depth_clip_far", 34.0f);
         prove("VIEW-199");
@@ -2641,6 +2757,25 @@ namespace {
         const Json screen_json = find_space_payload_for_test(gui, "screen");
         ASSERT_TRUE(screen_json.contains("layout"));
         ASSERT_TRUE(screen_json.contains("areas"));
+        const Json fixed = find_space_payload_for_test(gui, "fixed_arrangement");
+        EXPECT_TRUE(fixed.contains("right_panel_width"));
+        EXPECT_TRUE(fixed.contains("sequencer_visible"));
+        EXPECT_EQ(fixed["scene_tree"], screen_json["scene_tree"]);
+        EXPECT_FALSE(find_space_payload_for_test(gui, "panel_registry").empty());
+        EXPECT_FALSE(find_space_payload_for_test(gui, "python_console").empty());
+
+        auto screen_only = captured;
+        Json screen_only_gui = gui;
+        auto& spaces = screen_only_gui["layouts"][0]["areas"][0]["spaces"];
+        for (auto it = spaces.begin(); it != spaces.end();) {
+            if (it->value("type", std::string{}) == "fixed_arrangement")
+                it = spaces.erase(it);
+            else
+                ++it;
+        }
+        screen_only.gui_layout = require_result(GuiLayoutChapter::parse(screen_only_gui.dump()));
+        const auto recaptured = require_result(captureGuiSession(viewer, screen_only, {}));
+        EXPECT_FALSE(find_space_payload_for_test(json_root(recaptured.gui_layout.dom()), "fixed_arrangement").empty());
         EXPECT_EQ(screen_json["properties"]["active_tab"], "lfs.training");
         EXPECT_FLOAT_EQ(screen_json["properties"]["scroll"].get<float>(), 0.375f);
         int view_count = 0;
@@ -2651,8 +2786,13 @@ namespace {
         EXPECT_EQ(view_count, 2);
 
         const Json view_json = json_root(captured.view.dom());
-        EXPECT_FALSE(view_json.contains("panel_cameras"));
-        EXPECT_FALSE(view_json["render_settings"].contains("focal_length_mm"));
+        ASSERT_TRUE(view_json.contains("panel_cameras"));
+        ASSERT_EQ(view_json["panel_cameras"].size(), 2u);
+        EXPECT_EQ(view_json["panel_cameras"][0]["panel"], "primary");
+        EXPECT_EQ(view_json["panel_cameras"][1]["panel"], "secondary");
+        EXPECT_EQ(view_json["panel_cameras"][0]["t"], Json::array({1.0f, 2.0f, 3.0f}));
+        EXPECT_EQ(view_json["panel_cameras"][1]["t"], Json::array({9.0f, 8.0f, 7.0f}));
+        EXPECT_TRUE(view_json["render_settings"].contains("focal_length_mm"));
         EXPECT_TRUE(view_json["render_settings"].contains("antialiasing"));
 
         viewer.screens().resetToDefault();

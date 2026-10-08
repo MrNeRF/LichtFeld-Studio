@@ -63,6 +63,7 @@ namespace lfs::core {
     class Camera;
     class Scene;
     class SplatData;
+    struct SplatLodTree;
     class Tensor;
 } // namespace lfs::core
 
@@ -977,6 +978,16 @@ namespace lfs::vis {
         std::unique_ptr<PointSceneRenderer> point_scene_renderer_;
         std::unique_ptr<SparkLodController> lod_controller_;
         const lfs::core::SplatData* lod_controller_model_ = nullptr;
+        // Offscreen renders have no LOD cut, so an LOD-tree model draws through its leaf view.
+        [[nodiscard]] std::shared_ptr<const lfs::core::SplatData> lodLeafRenderView(const lfs::core::SplatData& model);
+        // The view shares its source's tensors; keep it only while that model is still rendered.
+        void releaseLodLeafRenderViewUnlessFor(const lfs::core::SplatData* model);
+        std::mutex lod_leaf_view_mutex_;
+        const lfs::core::SplatData* lod_leaf_view_source_ = nullptr;
+        const lfs::core::SplatLodTree* lod_leaf_view_tree_ = nullptr;
+        std::size_t lod_leaf_view_rows_ = 0;
+        std::uint64_t lod_leaf_view_deleted_version_ = 0;
+        std::shared_ptr<const lfs::core::SplatData> lod_leaf_view_;
         bool lod_controller_needs_sync_traversal_ = false;
         std::uint64_t lod_controller_page_map_generation_ = 0;
         // Cached SH0→RGB derivation for the point-cloud path. Refreshed only when

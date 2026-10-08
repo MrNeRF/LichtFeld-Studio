@@ -161,6 +161,11 @@ namespace lfs::core {
             return dev;
         }
 
+        // Development: test binaries one level below the build dir (build/tests/)
+        if (const auto dev = exe_dir.parent_path() / "src" / "python"; module_exists(dev)) {
+            return dev;
+        }
+
         // Fallback: module in same directory as exe (Windows dev builds)
         if (module_exists(exe_dir)) {
             return exe_dir;

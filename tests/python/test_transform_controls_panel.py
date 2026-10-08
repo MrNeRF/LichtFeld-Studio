@@ -193,6 +193,8 @@ def _install_lf_stub(monkeypatch):
     lf_stub.ops = SimpleNamespace(
         invoke=lambda operator_id, **kwargs: state.op_calls.append((operator_id, kwargs))
     )
+    lf_stub.can_transform_selection = lambda: getattr(state, "editable", True)
+    lf_stub.commit_node_transforms = lambda **kwargs: lf_stub.ops.invoke("transform.apply_batch", **kwargs)
     lf_stub.get_selected_node_names = lambda: list(state.selected_names)
     lf_stub.get_selection_visualizer_world_center = lambda: (
         list(state.selection_visualizer_world_center)
@@ -205,11 +207,11 @@ def _install_lf_stub(monkeypatch):
     lf_stub.get_node_transform = lambda name: state.local_transforms.get(name)
     lf_stub.get_node_visualizer_world_transform = lambda name: state.visualizer_world_transforms.get(name)
 
-    def _set_node_transform(name, matrix):
+    def _set_node_transform(name, matrix, *, record_history=True):
         state.set_local_calls.append((name, list(matrix)))
         state.local_transforms[name] = list(matrix)
 
-    def _set_node_visualizer_world_transform(name, matrix):
+    def _set_node_visualizer_world_transform(name, matrix, *, record_history=True):
         state.set_visualizer_world_calls.append((name, list(matrix)))
         state.visualizer_world_transforms[name] = list(matrix)
 
@@ -870,6 +872,7 @@ def test_transform_controls_keeps_other_numeric_bindings_live_while_focused(tran
         "transform_scale_u_str",
         "transform_reset_label",
         "transform_bake_label",
+        "transform_editable",
         "transform_show_translate",
         "transform_show_rotate",
         "transform_show_scale",
@@ -958,3 +961,150 @@ def test_transform_controls_bake_commits_active_edit(transform_controls_module):
         )
     ]
     assert panel._state.editing_active is False
+
+
+def test_transform_controls_locked_selection_is_read_only(transform_controls_module):
+    module, state = transform_controls_module
+    panel = module.TransformControlsController()
+    model = _DataModelStub()
+    panel.bind_model(model)
+    doc = _DocumentStub()
+    state.editable = False
+    panel.update(doc)
+    assert model.bound_funcs["transform_editable"]() is False
+    before = dict(state.local_transforms)
+    panel._set_value("pos", 0, "4.0")
+    panel._set_uniform_scale("2.0")
+    assert state.local_transforms == before
+    assert not panel._state.editing_active
+    state.editable = True
+    panel.update(doc)
+    assert model.bound_funcs["transform_editable"]() is True
+
+
+@pytest.fixture
+def history_panel(transform_controls_module):
+    module, state = transform_controls_module
+    history = []
+
+    def write(name, matrix, *, record_history=True):
+        before = list(state.local_transforms[name])
+        state.local_transforms[name] = list(matrix)
+        state.visualizer_world_transforms[name] = list(matrix)
+        if record_history and before != list(matrix):
+            history.append(({name: before}, {name: list(matrix)}))
+
+    def invoke(operator_id, **kwargs):
+        assert operator_id == "transform.apply_batch"
+        before = dict(zip(kwargs["node_names"], kwargs["old_transforms"]))
+        after = {name: list(state.local_transforms[name]) for name in before}
+        if before != after:
+            history.append((before, after))
+
+    module.lf.set_node_transform = write
+    module.lf.set_node_visualizer_world_transform = write
+    module.lf.ops.invoke = invoke
+    panel = module.TransformControlsController()
+    return panel, state, history
+
+
+@pytest.mark.parametrize("count", [1, 2])
+@pytest.mark.parametrize("space", [0, 1])
+@pytest.mark.parametrize("tool,group", [("translate", "pos"), ("rotate", "rot"), ("scale", "scale")])
+def test_numeric_edit_records_one_history_entry(history_panel, count, space, tool, group):
+    panel, state, history = history_panel
+    panel._selected = [f"node_{i}" for i in range(count)]
+    panel._transform_space = space
+    panel._active_tool = "builtin." + tool
+    for name in panel._selected:
+        state.local_transforms[name] = _translation_matrix(.1, 0, 0)
+        state.visualizer_world_transforms[name] = _translation_matrix(.1, 0, 0)
+    state.selection_visualizer_world_center = [.1, 0, 0]
+    before = {name: list(matrix) for name, matrix in state.local_transforms.items()}
+    if count == 1:
+        panel._update_single_node()
+    else:
+        panel._update_multi_selection()
+    event = SimpleNamespace(current_target=lambda: None)
+    prop = f"transform_{group}_x_str"
+    panel._on_input_focus(event, prop)
+    for value in ("0", "0.", "0.2", "0.25", "0.250"):
+        panel._set_value(group, 0, value)
+    final = {name: list(matrix) for name, matrix in state.local_transforms.items()}
+    assert final != before
+    panel._on_input_blur(event, prop)
+    assert len(history) == 1
+    assert history[0] == (before, final)
+
+
+def test_numeric_cancel_restores_value_without_history(history_panel):
+    panel, state, history = history_panel
+    panel._selected = ["target"]
+    panel._active_tool = "builtin.translate"
+    before = _translation_matrix(.1, 0, 0)
+    state.local_transforms["target"] = before.copy()
+    state.visualizer_world_transforms["target"] = before.copy()
+    panel._update_single_node()
+    panel._set_value("pos", 0, "0.25")
+    panel._cancel_active_edit()
+    assert state.local_transforms["target"] == before
+    assert history == []
+
+
+def test_numeric_step_gestures_have_separate_history_entries(history_panel):
+    panel, state, history = history_panel
+    panel._selected = ["target"]
+    panel._active_tool = "builtin.translate"
+    state.local_transforms["target"] = _translation_matrix(.1, 0, 0)
+    state.visualizer_world_transforms["target"] = _translation_matrix(.1, 0, 0)
+    panel._update_single_node()
+    for gesture in range(2):
+        before = list(state.local_transforms["target"])
+        panel._on_num_step(None, None, ["pos_x", 1])
+        panel._apply_step("pos_x", 1)
+        final = list(state.local_transforms["target"])
+        panel._on_step_mouseup(None)
+        assert len(history) == gesture + 1
+        assert history[-1] == ({"target": before}, {"target": final})
+
+
+def test_numeric_enter_commits_and_starts_a_new_edit(history_panel):
+    panel, state, history = history_panel
+    panel._selected = ["target"]
+    panel._active_tool = "builtin.translate"
+    state.local_transforms["target"] = _translation_matrix(.1, 0, 0)
+    state.visualizer_world_transforms["target"] = _translation_matrix(.1, 0, 0)
+    panel._update_single_node()
+    event = SimpleNamespace(current_target=lambda: None, get_bool_parameter=lambda *_: True)
+    panel._on_input_focus(event, "transform_pos_x_str")
+    panel._set_value("pos", 0, ".25")
+    panel._on_input_change(event)
+    first = list(state.local_transforms["target"])
+    panel._set_value("pos", 0, ".5")
+    panel._on_input_change(event)
+    panel._on_input_blur(event, "transform_pos_x_str")
+    assert len(history) == 2
+    assert history[1][0] == {"target": first}
+
+
+def test_numeric_noop_preserves_history(history_panel):
+    panel, state, history = history_panel
+    panel._selected = ["target"]
+    panel._active_tool = "builtin.translate"
+    state.local_transforms["target"] = _translation_matrix(.1, 0, 0)
+    state.visualizer_world_transforms["target"] = _translation_matrix(.1, 0, 0)
+    panel._update_single_node()
+    panel._set_value("pos", 0, ".1")
+    panel._commit_active_edit()
+    assert history == []
+
+
+def test_numeric_reset_is_one_undo_step(history_panel):
+    panel, state, history = history_panel
+    panel._selected = ["target"]
+    panel._active_tool = "builtin.translate"
+    before = _translation_matrix(.1, 0, 0)
+    state.local_transforms["target"] = before.copy()
+    state.visualizer_world_transforms["target"] = before.copy()
+    panel._reset_single_transform()
+    assert history == [({"target": before}, {"target": _translation_matrix(0, 0, 0)})]

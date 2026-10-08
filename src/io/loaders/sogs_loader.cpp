@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "sogs_loader.hpp"
+#include "core/file_extensions.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
@@ -46,7 +47,7 @@ namespace lfs::io {
             bool valid = false;
 
             // Check if it's a .sog bundle
-            if (path.extension() == ".sog" && std::filesystem::is_regular_file(path)) {
+            if (core::has_extension(path, ".sog") && std::filesystem::is_regular_file(path)) {
                 // Basic validation - check if it's a valid archive
                 std::ifstream file;
                 if (lfs::core::open_file_for_read(path, std::ios::binary, file)) {
@@ -132,7 +133,7 @@ namespace lfs::io {
         }
 
         // Check for .sog bundle file
-        if (path.extension() == ".sog" && std::filesystem::is_regular_file(path)) {
+        if (core::has_extension(path, ".sog") && std::filesystem::is_regular_file(path)) {
             return true;
         }
 

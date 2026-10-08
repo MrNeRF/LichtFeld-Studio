@@ -10,6 +10,7 @@ import lichtfeld as lf
 from . import rml_widgets as w
 from .panels import panel_class
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
+from .selection_groups import GROUPS_LIST_ID, SelectionGroupsSection
 from .types import Panel
 from .ui import RuntimeState, PanelStateBinding, native_value as _native_store_value
 
@@ -163,7 +164,7 @@ BACKGROUND_COLOR_PROP = "background_color"
 
 COLOR_PROPS = [
     BACKGROUND_COLOR_PROP,
-    "selection_color_committed", "selection_color_preview",
+    "selection_color_preview",
     "selection_color_center_marker",
     "mesh_wireframe_color",
 ]
@@ -205,7 +206,6 @@ LOCALE_KEY = {
     "sh_degree": "main_panel.sh_degree",
     "grid_plane": "main_panel.plane",
     "background_color": "main_panel.color",
-    "selection_color_committed": "main_panel.committed",
     "selection_color_preview": "main_panel.preview",
     "selection_color_center_marker": "main_panel.center_marker",
     "mesh_wireframe": "main_panel.mesh_wireframe",
@@ -300,6 +300,8 @@ class RenderingPanel(Panel):
     def __init__(self):
         self._handle = None
         self._color_edit_prop = None
+        self._color_edit_group = None
+        self._selection_groups = SelectionGroupsSection(self._show_group_color_picker)
         self._collapsed = set(RENDERING_INITIALLY_COLLAPSED)
         self._popup_el = None
         self._doc = None
@@ -384,6 +386,7 @@ class RenderingPanel(Panel):
             el.add_event_listener("blur", self._on_color_text_blur)
         self._refresh_simplify_source(force=True)
         self._scrub_fields.mount(doc)
+        self._selection_groups.mount(doc)
         self._sync_section_states()
         self._subscribe_reactive_state()
         self._request_reactive_update()
@@ -602,15 +605,9 @@ class RenderingPanel(Panel):
 
         model.bind_func("fov_display", self._compute_fov)
 
-        model.bind_func("picker_r",
-                         lambda: float(getattr(s(), self._color_edit_prop, (0, 0, 0))[0])
-                         if self._color_edit_prop and s() else 0.0)
-        model.bind_func("picker_g",
-                         lambda: float(getattr(s(), self._color_edit_prop, (0, 0, 0))[1])
-                         if self._color_edit_prop and s() else 0.0)
-        model.bind_func("picker_b",
-                         lambda: float(getattr(s(), self._color_edit_prop, (0, 0, 0))[2])
-                         if self._color_edit_prop and s() else 0.0)
+        model.bind_func("picker_r", lambda: float(self._picker_color()[0]))
+        model.bind_func("picker_g", lambda: float(self._picker_color()[1]))
+        model.bind_func("picker_b", lambda: float(self._picker_color()[2]))
         model.bind_func(
             "editing_background_color",
             lambda: self._color_edit_prop == BACKGROUND_COLOR_PROP,
@@ -665,8 +662,10 @@ class RenderingPanel(Panel):
         model.bind_event("toggle_console",
                          lambda h, e, a: lf.ui.toggle_system_console())
         model.bind_event("browse_environment_map", self._on_browse_environment_map)
+        self._selection_groups.bind(model)
 
         self._handle = model.get_handle()
+        self._selection_groups.attach(self._handle)
 
     def on_update(self, doc):
         s = lf.get_render_settings()
@@ -696,6 +695,7 @@ class RenderingPanel(Panel):
         dirty |= self._refresh_simplify_source(force=False)
         dirty |= self._sync_simplify_task_state(force=False)
         dirty |= self._scrub_fields.sync_all()
+        dirty |= self._selection_groups.sync(visible=self._selection_section_expanded())
         return dirty
 
     def _environment_state_snapshot(self):
@@ -906,10 +906,13 @@ class RenderingPanel(Panel):
         dirty = False
         dirty |= self._refresh_simplify_source(force=False)
         dirty |= self._sync_simplify_task_state(force=False)
+        self._selection_groups.invalidate()
+        dirty |= self._selection_groups.sync(visible=self._selection_section_expanded())
         return dirty
 
     def on_unmount(self, doc):
         self._unsubscribe_reactive_state()
+        self._selection_groups.unmount()
         doc.remove_data_model("rendering")
         self._handle = None
         self._popup_el = None
@@ -1139,34 +1142,81 @@ class RenderingPanel(Panel):
         header, arrow, content = self._get_section_elements(name)
         if content:
             w.animate_section_toggle(content, expanding, arrow, header_element=header)
+        if name == "selection" and expanding:
+            self._selection_groups.sync()
 
-    def _on_color_click(self, handle, event, args):
-        if not args or not self._popup_el:
-            return
+    def _selection_section_expanded(self):
+        return "selection" not in self._collapsed
+
+    def reveal_selection_groups(self):
+        """Expand Selection & Overlays and scroll the group list into view."""
+        if not self._selection_section_expanded():
+            self._collapsed.discard("selection")
+            self._sync_section_states()
+            self._selection_groups.sync()
+        groups_list = self._doc.get_element_by_id(GROUPS_LIST_ID) if self._doc else None
+        if groups_list:
+            groups_list.scroll_into_view(False)
+        return True
+
+    def _picker_color(self):
+        if self._color_edit_group is not None:
+            return self._selection_groups.group_color(self._color_edit_group) or (0.0, 0.0, 0.0)
+        s = lf.get_render_settings()
+        if not self._color_edit_prop or not s:
+            return (0.0, 0.0, 0.0)
+        return getattr(s, self._color_edit_prop, (0.0, 0.0, 0.0))
+
+    def _open_picker(self, event):
         self._picker_click_handled = True
-        prop_id = str(args[0])
-        if self._color_edit_prop == prop_id:
-            self._hide_picker()
-            return
-        self._color_edit_prop = prop_id
         mx = int(float(event.get_parameter("mouse_x", "0")))
         my = int(float(event.get_parameter("mouse_y", "0")))
         left = max(0, mx - 210)
         self._popup_el.set_property("left", f"{left}px")
         self._popup_el.set_property("top", f"{my + 2}px")
         self._popup_el.set_class("visible", True)
-        handle.dirty("picker_r")
-        handle.dirty("picker_g")
-        handle.dirty("picker_b")
-        handle.dirty("editing_background_color")
+        if self._handle:
+            self._handle.dirty("picker_r")
+            self._handle.dirty("picker_g")
+            self._handle.dirty("picker_b")
+            self._handle.dirty("editing_background_color")
+
+    def _on_color_click(self, handle, event, args):
+        del handle
+        if not args or not self._popup_el:
+            return
+        prop_id = str(args[0])
+        if self._color_edit_prop == prop_id:
+            self._picker_click_handled = True
+            self._hide_picker()
+            return
+        self._color_edit_group = None
+        self._color_edit_prop = prop_id
+        self._open_picker(event)
+
+    def _show_group_color_picker(self, gid, event):
+        if not self._popup_el:
+            return
+        if self._color_edit_group == gid:
+            self._picker_click_handled = True
+            self._hide_picker()
+            return
+        self._color_edit_prop = None
+        self._color_edit_group = gid
+        self._open_picker(event)
 
     def _on_picker_change(self, handle, event, args):
-        s = lf.get_render_settings()
-        if not s or not event or not self._color_edit_prop:
+        if not event:
             return
         r = float(event.get_parameter("red", "0"))
         g = float(event.get_parameter("green", "0"))
         b = float(event.get_parameter("blue", "0"))
+        if self._color_edit_group is not None:
+            self._selection_groups.set_group_color(self._color_edit_group, (r, g, b))
+            return
+        s = lf.get_render_settings()
+        if not s or not self._color_edit_prop:
+            return
         prop = self._color_edit_prop
         setattr(s, prop, w.normalize_color((r, g, b)))
         self._dirty_color_bindings(prop, handle)
@@ -1196,6 +1246,7 @@ class RenderingPanel(Panel):
 
     def _hide_picker(self):
         self._color_edit_prop = None
+        self._color_edit_group = None
         if self._popup_el:
             self._popup_el.set_class("visible", False)
         if self._handle:

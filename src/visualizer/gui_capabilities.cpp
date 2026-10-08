@@ -514,7 +514,7 @@ namespace lfs::vis::cap {
                     continue;
                 }
 
-                if (static_cast<bool>(node->locked)) {
+                if (scene_manager.getScene().isNodeEffectivelyLocked(node->id)) {
                     selection.found_locked = true;
                     continue;
                 }
@@ -960,7 +960,7 @@ namespace lfs::vis::cap {
             const auto* node = scene_manager.getScene().getNode(name);
             if (!node)
                 return std::unexpected(std::format("Cannot transform '{}': node not found", name));
-            if (static_cast<bool>(node->locked))
+            if (scene_manager.getScene().isNodeEffectivelyLocked(node->id))
                 return std::unexpected(std::format("Cannot transform '{}': node is locked", name));
         }
 
@@ -1044,7 +1044,7 @@ namespace lfs::vis::cap {
                 const auto* const node = scene_manager.getScene().getNode(name);
                 if (!node)
                     return std::unexpected("Node not found: " + name);
-                if (static_cast<bool>(node->locked))
+                if (scene_manager.getScene().isNodeEffectivelyLocked(node->id))
                     return std::unexpected("Cannot transform '" + name + "': node is locked");
             }
             return {};
@@ -1087,7 +1087,7 @@ namespace lfs::vis::cap {
             const auto* const node = scene.getNode(name);
             if (!node)
                 return std::unexpected("Node not found: " + name);
-            if (!isTransformableNodeType(node->type) || static_cast<bool>(node->locked) || !has_bakeable_payload(*node))
+            if (!isTransformableNodeType(node->type) || scene_manager.getScene().isNodeEffectivelyLocked(node->id) || !has_bakeable_payload(*node))
                 continue;
 
             const glm::mat4 local_transform = node->local_transform.get();
@@ -1749,6 +1749,8 @@ namespace lfs::vis::cap {
             const glm::vec3 center = (min_bounds + max_bounds) * 0.5f;
             const glm::vec3 half_size = (max_bounds - min_bounds) * 0.5f;
             data.radii = half_size * CIRCUMSCRIBE_FACTOR;
+            data.radii = glm::mix(data.radii, glm::vec3(kCropVolumeMinExtent),
+                                  glm::lessThanEqual(data.radii, glm::vec3(0.0f)));
             scene.setNodeTransform(created_ellipsoid_name, glm::translate(glm::mat4(1.0f), center));
         }
         data.enabled = true;

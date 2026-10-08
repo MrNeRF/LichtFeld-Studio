@@ -90,6 +90,7 @@ body.floating-panel {
 
 .preferences-setting-hint {
     margin-top: 3dp;
+    word-break: break-word;
 }
 
 .preferences-project-location .preferences-row {

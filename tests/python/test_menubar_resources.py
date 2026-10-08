@@ -14,6 +14,49 @@ def _rule_body(rcss: str, selector: str) -> str:
     return rcss.split(f"{selector} {{", 1)[1].split("}", 1)[0]
 
 
+def _theme_size_values(node, key):
+    if isinstance(node, dict):
+        for name, value in node.items():
+            if name == key:
+                yield value
+            else:
+                yield from _theme_size_values(value, key)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _theme_size_values(value, key)
+
+
+def test_every_scrollbar_uses_the_theme_size():
+    # Catches a panel or theme drifting back to its own scrollbar width.
+    themes_dir = PROJECT_ROOT / "src" / "visualizer" / "gui" / "assets" / "themes"
+    for theme_path in themes_dir.glob("*.json"):
+        theme = json.loads(theme_path.read_text(encoding="utf-8"))
+        assert set(_theme_size_values(theme, "scrollbar_size")) <= {4.0}, theme_path.name
+        assert set(_theme_size_values(theme, "grab_min_size")) <= {12.0}, theme_path.name
+
+    resources_dir = PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    rule = re.compile(r"([^{}]*scrollbar(?:vertical|horizontal)[^{}]*)\{([^}]*)\}")
+    for rcss_path in resources_dir.glob("*.rcss"):
+        if rcss_path.name.startswith("components"):
+            continue
+        for selector, body in rule.findall(rcss_path.read_text(encoding="utf-8")):
+            assert not re.search(r"\b(?:width|height|min-width|min-height):", body), (
+                f"{rcss_path.name}: {selector.strip()}"
+            )
+
+
+def test_narrow_tab_and_tool_bars_wrap_instead_of_clipping():
+    # Catches the HUD tabs overlapping and the console toolbar cutting off actions at large UI scales.
+    resources_dir = PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    overlay_rcss = (resources_dir / "viewport_overlay.rcss").read_text(encoding="utf-8")
+    assert "flex-wrap: wrap;" in _rule_body(overlay_rcss, ".vram-hud-tabs")
+    assert "flex: 1 0 auto;" in _rule_body(overlay_rcss, ".vram-hud-tab")
+
+    console_rcss = (resources_dir / "python_console_panel.rcss").read_text(encoding="utf-8")
+    assert "flex-wrap: wrap;" in _rule_body(console_rcss, ".toolbar-actions")
+    assert not re.search(r"(?<![-\w])height:", _rule_body(console_rcss, "#python-console-toolbar"))
+
+
 def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
     rml = (
         PROJECT_ROOT
@@ -964,10 +1007,7 @@ def test_scene_tree_multi_selection_actions_are_fixed_below_the_scroll_view():
     assert "justify-content: center;" in button_rule
     assert "box-sizing: border-box;" in button_rule
     assert "padding: 0;" in button_rule
-    tree_scrollbar_rule = _rule_body(scene_rcss, "scene-graph scrollbarvertical")
-    assert "width: 4dp;" in tree_scrollbar_rule
-    tree_slider_rule = _rule_body(scene_rcss, "scene-graph scrollbarvertical sliderbar")
-    assert "min-height: 12dp;" in tree_slider_rule
+    assert "scene-graph scrollbarvertical" not in scene_rcss
     assert "state.count > 0" in scene_panel
     assert "!state.all_training_compatible" in scene_panel
     assert "!state.all_delete_enabled" in scene_panel

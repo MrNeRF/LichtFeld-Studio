@@ -53,7 +53,9 @@ namespace lfs::io {
     // Bounded entry access shared by directory and bundle readers.
     using SogEntryReader = std::function<Result<std::vector<uint8_t>>(const std::string&, size_t)>;
     Result<SogDirectoryReconstruct> prepare_sog_entries(const SogEntryReader&, const std::string& prefix);
-    std::unique_ptr<SogSink> make_sog_archive(const std::filesystem::path&);
+    // WebP members are always stored; store_every_member also stores the JSON members, so a streaming server can
+    // hand out any member as an exact byte range of the archive.
+    std::unique_ptr<SogSink> make_sog_archive(const std::filesystem::path&, bool store_every_member = false);
 
     // Internal: Loading function (not in public API)
     Result<SplatData> load_sog(const std::filesystem::path& filepath,

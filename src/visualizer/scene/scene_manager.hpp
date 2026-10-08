@@ -64,6 +64,7 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool canClearScene() const;
+        [[nodiscard]] bool canApplyCropToNode(core::NodeId id) const;
 
         bool hasDataset() const {
             std::lock_guard<std::mutex> lock(state_mutex_);

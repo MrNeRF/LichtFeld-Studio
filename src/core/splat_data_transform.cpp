@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <format>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <limits>
@@ -1192,6 +1193,9 @@ namespace lfs::core {
         const bool resident_output = splat_data._shN.is_valid() && splat_data._shN.device() == Device::GPU;
         const bool quantized_output = resident_output && sh_value_quant::enabled();
         if (splat_data._shN.is_valid() && splat_data._shN.numel() && layout_rest) {
+            // CPU geometry can retain GPU SH storage; gather on the SH device.
+            const GpuBackendScope sh_scope(gpu_backend_of(splat_data._shN).value_or(default_gpu_backend()));
+            const auto sh_indices = indices.to(splat_data._shN.device());
             const auto format = quantized_output ? ShFormat::Q16 : resident_output ? ShFormat::Float32
                                                                                    : ShFormat::Canonical;
             const auto shape = resident_output ? TensorShape({quantized_output ? sh_value_quant::sh_value_u16_count(count, layout_rest)
@@ -1202,7 +1206,7 @@ namespace lfs::core {
                 selected_bounds = Tensor::empty({sh_value_quant::n_bounds_for_prims(count) * 2}, splat_data._shN.device());
             sh_codec(splat_data._shN, shN_selected,
                      {.source_format = sh_storage_format(splat_data._shN, splat_data._shN_value_bounds), .destination_format = format, .source_rows = size_t(splat_data.size()), .destination_rows = size_t(count), .count = size_t(count), .source_rest = layout_rest, .destination_rest = layout_rest},
-                     &indices, splat_data.shN_value_quantized() ? &splat_data._shN_value_bounds : nullptr,
+                     &sh_indices, splat_data.shN_value_quantized() ? &splat_data._shN_value_bounds : nullptr,
                      quantized_output ? &selected_bounds : nullptr);
         }
 
@@ -1224,6 +1228,74 @@ namespace lfs::core {
 
         (void)result.apply_shN_value_quant();
         return result;
+    }
+
+    lfs::Result<SplatData> extract_lod_leaves(const SplatData& splat_data) {
+        LFS_ASSERT(splat_data.lod_tree && splat_data.lod_tree->has_tree());
+        const SplatLodTree& tree = *splat_data.lod_tree;
+        const size_t node_count = tree.total_nodes();
+        if (splat_data.size() < node_count) {
+            return lfs::make_error({.code = lfs::ErrorCode::FailedPrecondition,
+                                    .domain = lfs::ErrorDomain::Tensor,
+                                    .detail = std::format("only {} of {} LOD nodes are in memory; the full-detail splats stream from disk",
+                                                          splat_data.size(), node_count),
+                                    .detection = LFS_SOURCE_SITE_CURRENT()});
+        }
+        LFS_ASSERT(splat_data.size() == node_count);
+
+        std::vector<bool> is_leaf(node_count);
+        for (size_t i = 0; i < node_count; ++i) {
+            is_leaf[i] = tree.child_count_at(i) == 0;
+        }
+        const GpuBackendScope backend_scope(gpu_backend_of(splat_data.means_raw()).value_or(default_gpu_backend()));
+        Tensor keep = Tensor::from_vector(is_leaf, {node_count}, splat_data.means_raw().device());
+        if (splat_data.has_deleted_mask()) {
+            keep = keep.logical_and(splat_data.deleted().logical_not());
+        }
+
+        SplatData leaves = extract_by_mask(splat_data, keep);
+        leaves.lod_tree.reset();
+        if (tree.lod_opacity_encoded && leaves.size() > 0) {
+            leaves.opacity_raw() = leaves.opacity_raw().logit();
+        }
+        return leaves;
+    }
+
+    std::shared_ptr<SplatData> make_lod_leaf_view(const SplatData& splat_data) {
+        LFS_ASSERT(splat_data.lod_tree && splat_data.lod_tree->has_tree());
+        const SplatLodTree& tree = *splat_data.lod_tree;
+        const size_t rows = splat_data.size();
+        LFS_ASSERT(rows <= tree.total_nodes());
+        const GpuBackendScope backend_scope(gpu_backend_of(splat_data.means_raw()).value_or(default_gpu_backend()));
+
+        auto view = std::make_shared<SplatData>(
+            splat_data.get_max_sh_degree(),
+            splat_data.means_raw(),
+            splat_data.sh0_raw(),
+            splat_data.shN_raw().is_valid() ? splat_data.shN_raw() : Tensor{},
+            splat_data.scaling_raw(),
+            splat_data.rotation_raw(),
+            tree.lod_opacity_encoded ? splat_data.opacity_raw().logit() : splat_data.opacity_raw(),
+            splat_data.get_scene_scale(),
+            SplatData::ShNLayout::Swizzled);
+        view->set_active_sh_degree(
+            splat_data.get_active_sh_degree(),
+            splat_data.shN_value_quantized() && splat_data.shN_value_bounds().is_valid()
+                ? splat_data.shN_value_bounds()
+                : Tensor{});
+
+        std::vector<bool> interior(rows);
+        for (size_t i = 0; i < rows; ++i) {
+            interior[i] = tree.child_count_at(i) != 0;
+        }
+        Tensor hidden = Tensor::from_vector(interior, {rows}, splat_data.means_raw().device());
+        if (splat_data.has_deleted_mask()) {
+            hidden = hidden.logical_or(splat_data.deleted());
+        }
+        view->deleted() = std::move(hidden);
+        view->notify_deleted_mask_changed();
+        view->refresh_deleted_count();
+        return view;
     }
 
 } // namespace lfs::core

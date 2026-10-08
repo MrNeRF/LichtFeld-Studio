@@ -1231,3 +1231,53 @@ def test_training_rml_mounts_every_run_with_writable_records():
     assert 'data-event-click="pv_search_clear"' in rml
     assert 'id="sec-advanced-registry"' in rml
     assert rml.index('id="sec-save-steps"') < rml.index('id="sec-advanced-registry"')
+
+
+@pytest.mark.parametrize("saved_mode", [0, 1])
+def test_select_creation_echo_keeps_restored_values_clean(saved_mode):
+    params = {"mode": saved_mode}
+    writes = []
+    queued = []
+
+    def write(prop, value):
+        writes.append((prop, value))
+        params[prop] = value
+        return True
+
+    row = {
+        "id": "mode",
+        "kind": "select",
+        "label_key": "",
+        "tooltip_key": "",
+        "precision": None,
+        "step": 1,
+        "min": None,
+        "max": None,
+        "is_int": False,
+        "name": "Mode",
+        "items": [
+            {"name": "Zero", "value": 0, "locale_key": "", "tooltip_key": ""},
+            {"name": "One", "value": 1, "locale_key": "", "tooltip_key": ""},
+        ],
+    }
+    binding = property_view.SectionBinding(
+        "restored", [row], lambda: params, {}, queued.append, value_setter=write
+    )
+    assert binding.set_value("mode", str(saved_mode)) is True
+    assert writes == []
+    assert queued == []
+
+    # A user selection still reaches the real setter and publishes the row.
+    changed = 1 - saved_mode
+    assert binding.set_value("mode", str(changed)) is True
+    assert writes == [("mode", changed)]
+    assert params["mode"] == changed
+    assert queued == [binding]
+
+    # The ensuing model echo must not create another parameter edit.
+    assert binding.set_value("mode", str(changed)) is True
+    assert writes == [("mode", changed)]
+    assert queued == [binding]
+    assert binding.set_value("mode", "invalid") is False
+    assert binding.set_value("mode", 2) is False
+    assert writes == [("mode", changed)]

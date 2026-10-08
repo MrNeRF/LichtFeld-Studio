@@ -5,10 +5,14 @@ import json
 import threading
 from pathlib import Path
 
-DEFAULTS = dict(uploadFormat="ssog", posterCacheMiB=64)
-# Earlier builds wrote the then-default "sog" back on every start, so an
-# unversioned "sog" records no user choice and yields the current default.
-VERSION = 2
+UPLOAD_FORMATS = ("auto", "studio", "sog", "ssog", "spz")
+DEFAULTS = dict(uploadFormat="auto", posterCacheMiB=64)
+# Earlier builds wrote their default ("sog", later "ssog") back with every
+# change, so either format from an older file records no user choice and
+# yields the current default.
+VERSION = 3
+# Phones hold at most 2M splats, so larger scenes need LOD levels.
+AUTO_SSOG_ABOVE = 2_000_000
 _lock = threading.RLock()
 
 
@@ -29,7 +33,7 @@ def read_preferences(root=None):
                     result[key] = _validate(key, raw[key])
                 except (ValueError, TypeError):
                     pass
-        if raw.get("version") != VERSION and result["uploadFormat"] == "sog":
+        if raw.get("version") != VERSION and result["uploadFormat"] in ("sog", "ssog"):
             result["uploadFormat"] = DEFAULTS["uploadFormat"]
     except (OSError, ValueError, TypeError, AttributeError):
         pass
@@ -38,7 +42,7 @@ def read_preferences(root=None):
 
 def _validate(key, value):
     if key == "uploadFormat":
-        if value not in ("studio", "sog", "ssog", "spz"):
+        if value not in UPLOAD_FORMATS:
             raise ValueError("Unsupported upload format")
         return value
     if key != "posterCacheMiB" or isinstance(value, bool):
@@ -47,6 +51,13 @@ def _validate(key, value):
     if str(number) != str(value) or not 1 <= number <= 4096:
         raise ValueError("Gallery preference is outside its supported range")
     return number
+
+
+def resolve_upload_format(upload_format, splat_count):
+    """The format to publish: auto picks SSOG above the phone budget, and when the count is unknown."""
+    if upload_format != "auto":
+        return upload_format
+    return "sog" if type(splat_count) is int and 0 < splat_count <= AUTO_SSOG_ABOVE else "ssog"
 
 
 def set_preference(key, value, root=None):

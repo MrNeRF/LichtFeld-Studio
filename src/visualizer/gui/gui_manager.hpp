@@ -159,6 +159,7 @@ namespace lfs::vis {
             [[nodiscard]] const GizmoManager& gizmo() const { return gizmo_manager_; }
             [[nodiscard]] bool isSequencerVisible() const { return sequencer_visible_; }
             void setSequencerVisible(bool visible);
+            void focusMainPanelTab(std::string panel_id) { focus_panel_name_ = std::move(panel_id); }
             [[nodiscard]] GlobalContextMenu& globalContextMenu() { return *global_context_menu_; }
             [[nodiscard]] ScreenHost& screenHost() { return screen_host_; }
             [[nodiscard]] const ScreenHost& screenHost() const { return screen_host_; }

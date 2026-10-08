@@ -142,7 +142,7 @@ namespace lfs::vis {
                 if (!target)
                     continue;
 
-                const bool locked = static_cast<bool>(target->locked);
+                const bool locked = scene.isNodeEffectivelyLocked(target->id);
                 const bool transformable = cap::isTransformableNodeType(target->type);
                 if (!transformable) {
                     found_untransformable = true;
@@ -152,10 +152,19 @@ namespace lfs::vis {
                     has_editable_transform_target = true;
                 }
 
-                if (target->type == core::NodeType::SPLAT) {
-                    if (!locked)
-                        has_editable_splat_selection_ = true;
-                }
+                const auto inspect_splats = [&](const core::SceneNode& current, const bool ancestor_locked,
+                                                const auto& self) -> void {
+                    const bool current_locked = ancestor_locked || static_cast<bool>(current.locked);
+                    if (current.type == core::NodeType::SPLAT) {
+                        if (!current_locked && current.model)
+                            has_editable_splat_selection_ = true;
+                    } else {
+                        for (const auto child_id : current.children)
+                            if (const auto* child = scene.getNodeById(child_id))
+                                self(*child, current_locked, self);
+                    }
+                };
+                inspect_splats(*target, locked, inspect_splats);
 
                 if (cap::isAlignTransformTargetType(target->type)) {
                     if (!locked) {

@@ -687,6 +687,15 @@ namespace lfs::python {
             "Get all main panel tabs as typed panel summaries");
 
         m.def(
+            "set_main_panel_active_tab", [](const std::string& panel_id) {
+                invoke_on_viewer([panel_id] {
+                    if (auto* const gui_manager = get_gui_manager())
+                        gui_manager->focusMainPanelTab(panel_id);
+                });
+            },
+            nb::arg("panel_id"), "Activate a main panel tab by panel id");
+
+        m.def(
             "get_panel", [](const std::string& panel_id) {
                 return invoke_on_viewer(
                     [panel_id] {

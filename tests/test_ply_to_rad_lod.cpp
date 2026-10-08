@@ -3,9 +3,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/environment.hpp"
+#include "core/error.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/tensor_backend.hpp"
+#include "io/formats/ply.hpp"
 #include "io/formats/rad.hpp"
 #include "io/ply_to_rad_lod.hpp"
 #include "rendering/vksplat_viewport_renderer.hpp"
@@ -21,6 +24,8 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <glm/gtc/matrix_transform.hpp>
+#include <optional>
 #include <random>
 #include <string>
 #include <vector>
@@ -721,4 +726,269 @@ TEST(PlyToRadLod, BorrowedSingleNodeMergePreservesRadLodOnReexport) {
     EXPECT_EQ(reexported->lod_tree->total_nodes(), source_nodes);
 
     std::filesystem::remove_all(temp_dir);
+}
+
+namespace {
+
+    // A real model saved as RAD and loaded back: the loaded data holds the LOD tree's interior
+    // nodes plus the saved splats as leaves, with LOD-encoded linear opacity.
+    struct KerstbolRad {
+        std::filesystem::path dir;
+        std::filesystem::path rad_path;
+        std::size_t source_count = 0;
+        std::vector<float> source_opacity_sorted;
+        std::array<double, 3> source_mean{};
+        std::optional<lfs::core::SplatData> rad;
+        std::string error;
+    };
+
+    std::vector<float> sorted_sigmoid_opacity(const lfs::core::SplatData& data) {
+        auto values = data.get_opacity().cpu().to_vector();
+        std::sort(values.begin(), values.end());
+        return values;
+    }
+
+    std::array<double, 3> mean_position(const lfs::core::SplatData& data) {
+        const auto means = data.means_raw().cpu().to_vector();
+        std::array<double, 3> sum{};
+        for (std::size_t i = 0; i < means.size(); ++i)
+            sum[i % 3] += means[i];
+        const double n = static_cast<double>(means.size() / 3);
+        return {sum[0] / n, sum[1] / n, sum[2] / n};
+    }
+
+    lfs::core::SplatData load_rad_on_gpu(const std::filesystem::path& path) {
+        auto loaded = lfs::io::load_rad(path);
+        EXPECT_TRUE(loaded.has_value()) << loaded.error();
+        auto& data = *loaded;
+        data.means_raw() = data.means_raw().to(lfs::core::Device::GPU);
+        data.sh0_raw() = data.sh0_raw().to(lfs::core::Device::GPU);
+        if (data.shN_raw().is_valid() && data.shN_raw().numel() > 0)
+            data.shN_raw() = data.shN_raw().to(lfs::core::Device::GPU);
+        data.scaling_raw() = data.scaling_raw().to(lfs::core::Device::GPU);
+        data.rotation_raw() = data.rotation_raw().to(lfs::core::Device::GPU);
+        data.opacity_raw() = data.opacity_raw().to(lfs::core::Device::GPU);
+        return std::move(data);
+    }
+
+    const KerstbolRad& kerstbol_rad() {
+        static const KerstbolRad fixture = [] {
+            KerstbolRad f;
+            f.dir = std::filesystem::temp_directory_path() / "rad_lod_leaves_kerstbol";
+            std::filesystem::remove_all(f.dir);
+            std::filesystem::create_directories(f.dir);
+            f.rad_path = f.dir / "kerstbol.rad";
+
+            auto ply = lfs::io::load_ply(std::filesystem::path(TEST_DATA_DIR) / "kerstbol-isolated-rotated_137502.ply");
+            if (!ply) {
+                f.error = lfs::format_for_developer(ply.error());
+                return f;
+            }
+            const auto& source = ply->value;
+            f.source_count = source.size();
+            f.source_opacity_sorted = sorted_sigmoid_opacity(source);
+            f.source_mean = mean_position(source);
+            if (auto saved = lfs::io::save_rad(source, lfs::io::RadSaveOptions{.output_path = f.rad_path}); !saved) {
+                f.error = saved.error().message;
+                return f;
+            }
+            f.rad = load_rad_on_gpu(f.rad_path);
+            return f;
+        }();
+        return fixture;
+    }
+
+    float max_sorted_diff(const std::vector<float>& a, const std::vector<float>& b) {
+        EXPECT_EQ(a.size(), b.size());
+        float diff = 0.0f;
+        for (std::size_t i = 0; i < std::min(a.size(), b.size()); ++i)
+            diff = std::max(diff, std::abs(a[i] - b[i]));
+        return diff;
+    }
+
+    // RAD stores LOD alpha in 8 bits over 0..2; a sigmoid of the raw linear value would sit at 0.5 or above.
+    constexpr float kOpacityTolerance = 0.01f;
+
+    void expect_matches_source(const lfs::core::SplatData& flat, const KerstbolRad& f) {
+        EXPECT_EQ(flat.lod_tree, nullptr);
+        ASSERT_EQ(flat.size(), f.source_count);
+        EXPECT_LT(max_sorted_diff(sorted_sigmoid_opacity(flat), f.source_opacity_sorted), kOpacityTolerance);
+        const auto mean = mean_position(flat);
+        for (int axis = 0; axis < 3; ++axis)
+            EXPECT_NEAR(mean[axis], f.source_mean[axis], 5e-3);
+    }
+
+} // namespace
+
+// Catches flattening that keeps interior LOD nodes (count) or leaves LOD-encoded linear opacity
+// in the logit slot (every splat at least half opaque).
+TEST(RadLodLeaves, ExtractLodLeavesRestoresTheSavedSplats) {
+    const auto& f = kerstbol_rad();
+    ASSERT_TRUE(f.error.empty()) << f.error;
+    ASSERT_TRUE(f.rad->lod_tree && f.rad->lod_tree->has_tree());
+    ASSERT_TRUE(f.rad->lod_tree->lod_opacity_encoded);
+    ASSERT_GT(static_cast<std::size_t>(f.rad->size()), f.source_count);
+
+    auto leaves = lfs::core::extract_lod_leaves(*f.rad);
+    ASSERT_TRUE(leaves.has_value()) << lfs::format_for_developer(leaves.error());
+    expect_matches_source(*leaves, f);
+
+    auto host_loaded = lfs::io::load_rad(f.rad_path);
+    ASSERT_TRUE(host_loaded.has_value()) << host_loaded.error();
+    ASSERT_EQ(host_loaded->means_raw().device(), lfs::core::Device::CPU);
+    auto host_leaves = lfs::core::extract_lod_leaves(*host_loaded);
+    ASSERT_TRUE(host_leaves.has_value()) << lfs::format_for_developer(host_leaves.error());
+    expect_matches_source(*host_leaves, f);
+    EXPECT_EQ(host_leaves->means_raw().device(), lfs::core::Device::CPU);
+    EXPECT_EQ(host_leaves->shN_raw().device(), host_loaded->shN_raw().device());
+    EXPECT_EQ(host_leaves->shN_canonical().cpu().to_vector(), leaves->shN_canonical().cpu().to_vector());
+}
+
+// Catches merges that drop the tree but keep its interior nodes: clone, transformed and
+// multi-source results must hold the saved splats only; the identity borrow keeps the tree.
+TEST(RadLodLeaves, FlatMergesContainOnlyTheSavedSplats) {
+    const auto& f = kerstbol_rad();
+    ASSERT_TRUE(f.error.empty()) << f.error;
+    using Mode = lfs::core::Scene::MergeStorageMode;
+    const glm::mat4 identity{1.0f};
+
+    auto cloned = lfs::core::Scene::mergeSplatsWithTransforms({{&*f.rad, identity}}, Mode::Clone);
+    ASSERT_NE(cloned, nullptr);
+    expect_matches_source(*cloned, f);
+
+    const glm::mat4 shifted = glm::translate(identity, glm::vec3(2.0f, 0.0f, 0.0f));
+    auto transformed = lfs::core::Scene::mergeSplatsWithTransforms({{&*f.rad, shifted}}, Mode::BorrowSingleIdentity);
+    ASSERT_NE(transformed, nullptr);
+    EXPECT_EQ(transformed->lod_tree, nullptr);
+    EXPECT_EQ(static_cast<std::size_t>(transformed->size()), f.source_count);
+    EXPECT_NEAR(mean_position(*transformed)[0], f.source_mean[0] + 2.0, 5e-3);
+
+    auto pair = lfs::core::Scene::mergeSplatsWithTransforms({{&*f.rad, identity}, {&*f.rad, shifted}}, Mode::Clone);
+    ASSERT_NE(pair, nullptr);
+    EXPECT_EQ(static_cast<std::size_t>(pair->size()), 2 * f.source_count);
+
+    auto borrowed = lfs::core::Scene::mergeSplatsWithTransforms({{&*f.rad, identity}}, Mode::BorrowSingleIdentity);
+    ASSERT_NE(borrowed, nullptr);
+    ASSERT_TRUE(borrowed->lod_tree && borrowed->lod_tree->has_tree());
+    EXPECT_EQ(borrowed->size(), f.rad->size());
+}
+
+// Catches flattening that ignores the soft-delete mask on an LOD model.
+TEST(RadLodLeaves, SoftDeletedLeavesStayOutOfFlatMerges) {
+    const auto& f = kerstbol_rad();
+    ASSERT_TRUE(f.error.empty()) << f.error;
+    auto rad = load_rad_on_gpu(f.rad_path);
+    const auto& tree = *rad.lod_tree;
+    const std::size_t node_count = tree.total_nodes();
+
+    constexpr std::size_t kDeleted = 1000;
+    std::vector<bool> deleted(node_count, false);
+    std::size_t marked = 0;
+    for (std::size_t i = 0; i < node_count && marked < kDeleted; ++i) {
+        if (tree.child_count_at(i) == 0) {
+            deleted[i] = true;
+            ++marked;
+        }
+    }
+    ASSERT_EQ(marked, kDeleted);
+    rad.deleted() = lfs::core::Tensor::from_vector(deleted, {node_count}, lfs::core::Device::GPU);
+
+    auto merged = lfs::core::Scene::mergeSplatsWithTransforms(
+        {{&rad, glm::mat4{1.0f}}}, lfs::core::Scene::MergeStorageMode::BorrowSingleIdentity);
+    ASSERT_NE(merged, nullptr);
+    EXPECT_EQ(merged->lod_tree, nullptr);
+    EXPECT_EQ(static_cast<std::size_t>(merged->size()), f.source_count - kDeleted);
+}
+
+// Catches a scene snapshot (gallery publish, worker-side export) handing out the whole LOD tree.
+TEST(RadLodLeaves, SceneSnapshotMaterializesTheSavedSplats) {
+    const auto& f = kerstbol_rad();
+    ASSERT_TRUE(f.error.empty()) << f.error;
+    lfs::core::Scene::SplatSnapshot snapshot;
+    snapshot.data = std::make_shared<lfs::core::SplatData>(load_rad_on_gpu(f.rad_path));
+    snapshot.row_count = static_cast<std::size_t>(snapshot.data->size());
+    snapshot.active_sh_degree = snapshot.data->get_active_sh_degree();
+
+    const auto materialized = snapshot.materialize();
+    ASSERT_NE(materialized, nullptr);
+    expect_matches_source(*materialized, f);
+}
+
+// Catches flattening a model whose leaves stream from disk, which would export the coarse prefix.
+TEST(RadLodLeaves, OutOfCoreModelRefusesToFlatten) {
+    const auto& f = kerstbol_rad();
+    ASSERT_TRUE(f.error.empty()) << f.error;
+    auto partial = lfs::io::load_rad(f.rad_path, {.out_of_core = true, .preview_splats = 65'536});
+    ASSERT_TRUE(partial.has_value()) << partial.error();
+    ASSERT_LT(static_cast<std::size_t>(partial->size()), partial->lod_tree->total_nodes());
+
+    EXPECT_FALSE(lfs::core::extract_lod_leaves(*partial).has_value());
+    EXPECT_EQ(lfs::core::Scene::mergeSplatsWithTransforms(
+                  {{&*partial, glm::mat4{1.0f}}}, lfs::core::Scene::MergeStorageMode::Clone),
+              nullptr);
+}
+
+namespace {
+    std::size_t interior_node_count(const lfs::core::SplatLodTree& tree, const std::size_t rows) {
+        std::size_t interior = 0;
+        for (std::size_t i = 0; i < rows; ++i)
+            interior += tree.child_count_at(i) != 0;
+        return interior;
+    }
+
+    std::vector<float> sorted_visible_sigmoid_opacity(const lfs::core::SplatData& data) {
+        const auto opacity = data.get_opacity().cpu().to_vector();
+        const auto deleted = data.deleted().cpu().to(lfs::core::DataType::Float32).to_vector();
+        std::vector<float> visible;
+        for (std::size_t i = 0; i < opacity.size(); ++i)
+            if (deleted[i] == 0.0f)
+                visible.push_back(opacity[i]);
+        std::sort(visible.begin(), visible.end());
+        return visible;
+    }
+} // namespace
+
+// Catches flat rendering of an LOD model drawing its interior nodes or reading LOD-encoded linear
+// opacity as logits (the glow and blur of RAD files in multi-model scenes and offscreen renders).
+TEST(RadLodLeaves, LeafViewHidesInteriorNodesAndDecodesOpacity) {
+    const auto& f = kerstbol_rad();
+    ASSERT_TRUE(f.error.empty()) << f.error;
+    const auto& rad = *f.rad;
+    const auto rows = static_cast<std::size_t>(rad.size());
+
+    const auto view = lfs::core::make_lod_leaf_view(rad);
+    ASSERT_NE(view, nullptr);
+    EXPECT_EQ(view->lod_tree, nullptr);
+    ASSERT_EQ(static_cast<std::size_t>(view->size()), rows);
+    EXPECT_EQ(view->means_raw().data_ptr(), rad.means_raw().data_ptr());
+    ASSERT_TRUE(view->has_deleted_mask());
+    EXPECT_EQ(view->deleted_count(), interior_node_count(*rad.lod_tree, rows));
+    EXPECT_EQ(static_cast<std::size_t>(view->visible_count()), f.source_count);
+    EXPECT_LT(max_sorted_diff(sorted_visible_sigmoid_opacity(*view), f.source_opacity_sorted), kOpacityTolerance);
+}
+
+// Catches the multi-model render cache concatenating an LOD model's tree nodes as plain splats.
+TEST(RadLodLeaves, CombinedRenderModelShowsOnlyTheLeavesOfAnLodModel) {
+    const auto& f = kerstbol_rad();
+    ASSERT_TRUE(f.error.empty()) << f.error;
+    auto ply = lfs::io::load_ply(std::filesystem::path(TEST_DATA_DIR) / "kerstbol-isolated-rotated_137502.ply");
+    ASSERT_TRUE(ply.has_value()) << lfs::format_for_developer(ply.error());
+    auto rad = std::make_unique<lfs::core::SplatData>(load_rad_on_gpu(f.rad_path));
+    const auto rad_rows = static_cast<std::size_t>(rad->size());
+    const auto interior = interior_node_count(*rad->lod_tree, rad_rows);
+
+    lfs::core::Scene scene;
+    scene.addSplat("rad", std::move(rad));
+    scene.addSplat("ply", std::make_unique<lfs::core::SplatData>(std::move(ply->value)));
+    const auto* combined = scene.getCombinedModel();
+    ASSERT_NE(combined, nullptr);
+    ASSERT_EQ(static_cast<std::size_t>(combined->size()), rad_rows + f.source_count);
+    ASSERT_TRUE(combined->has_deleted_mask());
+    const auto deleted = combined->deleted().cpu().to(lfs::core::DataType::Float32).to_vector();
+    std::size_t hidden_rad = 0;
+    std::size_t hidden_ply = 0;
+    for (std::size_t i = 0; i < deleted.size(); ++i)
+        (i < rad_rows ? hidden_rad : hidden_ply) += deleted[i] != 0.0f;
+    EXPECT_EQ(hidden_rad, interior);
+    EXPECT_EQ(hidden_ply, 0u);
 }

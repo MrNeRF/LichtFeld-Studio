@@ -417,6 +417,9 @@ def is_panel_enabled(panel_id: str) -> bool:
 def get_main_panel_tabs() -> list[PanelSummary]:
     """Get all main panel tabs as typed panel summaries"""
 
+def set_main_panel_active_tab(panel_id: str) -> None:
+    """Activate a main panel tab by panel id"""
+
 def get_panel(panel_id: str) -> PanelInfo | None:
     """Get typed panel info by id (None if not found)"""
 
@@ -2828,6 +2831,9 @@ def get_mcp_access_token() -> str:
 
 def set_mcp_preferences(enabled: bool, expose_network: bool, port: int, request_logging: bool = False) -> bool:
     """Persist and immediately apply MCP HTTP server preferences"""
+
+def get_mcp_port_override() -> int | None:
+    """Get the MCP port set on the command line for this session, or None"""
 
 def get_project_location() -> str:
     """Get the effective project location."""

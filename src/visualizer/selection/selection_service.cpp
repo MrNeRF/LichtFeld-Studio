@@ -1287,6 +1287,14 @@ namespace lfs::vis {
         }
         const SelectionProjectionContext& projection_context = *projection_snapshot;
         const auto filters = defaultFilterState();
+        if (camera_index < 0 && projection_context.viewer_layout) {
+            const auto info = viewportInfoFromLayout(*projection_context.viewer_layout);
+            const glm::vec2 origin(info.x, info.y);
+            core::Tensor selection;
+            if (!buildBrushSelection({origin + glm::vec2(x, y)}, radius, selection, projection_context, true))
+                return {false, 0, "No screen positions"};
+            return commitSelection(selection, mode, effectiveNodeMask(true), filters, projection_context, "selection.brush");
+        }
         const std::vector<glm::vec4> primitives{{x, y, radius * radius, 0.0f}};
         if (const auto frame_view = frameViewFromProjectionContext(projection_context)) {
             if (auto selection = tryBuildVksplatSelectionMask(
@@ -1320,6 +1328,14 @@ namespace lfs::vis {
         }
         const SelectionProjectionContext& projection_context = *projection_snapshot;
         const auto filters = defaultFilterState();
+        if (camera_index < 0 && projection_context.viewer_layout) {
+            const auto info = viewportInfoFromLayout(*projection_context.viewer_layout);
+            const glm::vec2 origin(info.x, info.y);
+            core::Tensor selection;
+            if (!buildRectangleSelection(origin + glm::vec2(x0, y0), origin + glm::vec2(x1, y1), selection, projection_context, true))
+                return {false, 0, "No screen positions"};
+            return commitSelection(selection, mode, effectiveNodeMask(true), filters, projection_context, "selection.rect");
+        }
         const std::vector<glm::vec4> primitives{{
             std::min(x0, x1),
             std::min(y0, y1),
@@ -1371,6 +1387,18 @@ namespace lfs::vis {
         const SelectionProjectionContext& projection_context = *projection_snapshot;
 
         const auto filters = defaultFilterState();
+        if (camera_index < 0 && projection_context.viewer_layout) {
+            const auto info = viewportInfoFromLayout(*projection_context.viewer_layout);
+            const glm::vec2 origin(info.x, info.y);
+            core::Tensor selection;
+            std::vector<glm::vec2> points;
+            points.reserve(vertices.size());
+            for (const auto& vertex : vertices)
+                points.push_back(origin + vertex);
+            if (!buildPolygonSelection(points, selection, projection_context, true))
+                return {false, 0, "No screen positions"};
+            return commitSelection(selection, mode, effectiveNodeMask(true), filters, projection_context, "selection.polygon");
+        }
 
         if (const auto frame_view = frameViewFromProjectionContext(projection_context)) {
             if (auto selection = tryBuildVksplatPolygonSelectionMask(
@@ -3290,7 +3318,7 @@ namespace lfs::vis {
     }
 
     core::Tensor& SelectionService::resetBoolScratchBuffer(core::Tensor& buffer, const size_t size,
-                                                           const core::Tensor* const affinity) {
+                                                           const core::Tensor* const affinity) const {
         const auto backend = resolveGpuBackend(affinity);
         const bool needs_realloc = !buffer.is_valid() ||
                                    buffer.device() != core::Device::GPU ||
@@ -3514,7 +3542,7 @@ namespace lfs::vis {
 
     bool SelectionService::buildBrushSelection(const std::vector<glm::vec2>& points, const float radius,
                                                core::Tensor& selection_out,
-                                               const SelectionProjectionContext& projection_context) const {
+                                               const SelectionProjectionContext& projection_context, const bool command) const {
         LOG_TIMER("SelectionService::buildBrushSelection");
         if (points.empty() || !projection_context.viewer_layout) {
             return false;
@@ -3534,16 +3562,20 @@ namespace lfs::vis {
                 if (auto selection = tryBuildVksplatSelectionMask(
                         scene_manager_, rendering_manager_, *frame_view, projection_context.equirectangular,
                         RenderingManager::VksplatSelectionMaskShape::Brush, primitives);
-                    selection && copySelectionIfSameSize(*selection, selection_out)) {
+                    selection && (command ? (selection_out = std::move(*selection), true)
+                                          : copySelectionIfSameSize(*selection, selection_out))) {
                     return true;
                 }
             }
         }
 
         const auto screen_positions = renderScreenPositionsForProjectionContext(projection_context);
-        if (!screen_positions || !screen_positions->is_valid() || screen_positions->size(0) != selection_out.numel()) {
+        if (!screen_positions || !screen_positions->is_valid())
             return false;
-        }
+        if (command)
+            selection_out = resetBoolScratchBuffer(command_selection_buffer_, screen_positions->size(0), screen_positions.get());
+        else if (screen_positions->size(0) != selection_out.numel())
+            return false;
 
         const float scale_x = static_cast<float>(info.render_width) / info.width;
         const float scaled_radius = radius * scale_x;
@@ -3576,7 +3608,7 @@ namespace lfs::vis {
 
     bool SelectionService::buildRectangleSelection(const glm::vec2 start, const glm::vec2 end,
                                                    core::Tensor& selection_out,
-                                                   const SelectionProjectionContext& projection_context) const {
+                                                   const SelectionProjectionContext& projection_context, const bool command) const {
         LOG_TIMER("SelectionService::buildRectangleSelection");
         if (!scene_manager_ || !rendering_manager_ || !projection_context.viewer_layout) {
             return false;
@@ -3596,16 +3628,20 @@ namespace lfs::vis {
                 if (auto selection = tryBuildVksplatSelectionMask(
                         scene_manager_, rendering_manager_, *frame_view, projection_context.equirectangular,
                         RenderingManager::VksplatSelectionMaskShape::Rectangle, primitives);
-                    selection && copySelectionIfSameSize(*selection, selection_out)) {
+                    selection && (command ? (selection_out = std::move(*selection), true)
+                                          : copySelectionIfSameSize(*selection, selection_out))) {
                     return true;
                 }
             }
         }
 
         const auto screen_positions = renderScreenPositionsForProjectionContext(projection_context);
-        if (!screen_positions || !screen_positions->is_valid() || screen_positions->size(0) != selection_out.numel()) {
+        if (!screen_positions || !screen_positions->is_valid())
             return false;
-        }
+        if (command)
+            selection_out = resetBoolScratchBuffer(command_selection_buffer_, screen_positions->size(0), screen_positions.get());
+        else if (screen_positions->size(0) != selection_out.numel())
+            return false;
 
         rendering::rect_select_tensor(*screen_positions,
                                       std::min(render_start.x, render_end.x),
@@ -3618,7 +3654,7 @@ namespace lfs::vis {
 
     bool SelectionService::buildPolygonSelection(const std::vector<glm::vec2>& points,
                                                  core::Tensor& selection_out,
-                                                 const SelectionProjectionContext& projection_context) const {
+                                                 const SelectionProjectionContext& projection_context, const bool command) const {
         LOG_TIMER("SelectionService::buildPolygonSelection");
         if (points.size() < 3 || !projection_context.viewer_layout) {
             return false;
@@ -3639,16 +3675,20 @@ namespace lfs::vis {
             if (const auto frame_view = frameViewFromProjectionContext(projection_context)) {
                 if (auto selection = tryBuildVksplatPolygonSelectionMask(
                         scene_manager_, rendering_manager_, *frame_view, projection_context.equirectangular, render_points);
-                    selection && copySelectionIfSameSize(*selection, selection_out)) {
+                    selection && (command ? (selection_out = std::move(*selection), true)
+                                          : copySelectionIfSameSize(*selection, selection_out))) {
                     return true;
                 }
             }
         }
 
         const auto screen_positions = renderScreenPositionsForProjectionContext(projection_context);
-        if (!screen_positions || !screen_positions->is_valid() || screen_positions->size(0) != selection_out.numel()) {
+        if (!screen_positions || !screen_positions->is_valid())
             return false;
-        }
+        if (command)
+            selection_out = resetBoolScratchBuffer(command_selection_buffer_, screen_positions->size(0), screen_positions.get());
+        else if (screen_positions->size(0) != selection_out.numel())
+            return false;
 
         auto& polygon = uploadFloat2PointsToBuffer(
             render_points, polygon_vertex_host_buffer_, polygon_vertex_device_buffer_, screen_positions.get());

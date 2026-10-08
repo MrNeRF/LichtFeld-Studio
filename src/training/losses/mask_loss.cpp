@@ -87,6 +87,24 @@ namespace lfs::training::losses {
         return ws.photometric_weight;
     }
 
+    void compute_edge_weight_map(const lfs::core::Tensor& image,
+                                 const lfs::core::Tensor& mask,
+                                 const bool segment_and_ignore,
+                                 lfs::core::Tensor& edges) {
+        const auto& ops = training_ops(core::default_gpu_backend());
+        ops.training_image->canny(image, edges);
+        if (mask.is_valid() && mask.numel() > 0) {
+            const auto mask_2d = mask.ndim() == 3 ? mask.squeeze(0) : mask;
+            LFS_ASSERT_MSG(mask_2d.shape() == edges.shape(), "edge mask must match the image");
+            auto weight = core::Tensor::empty(edges.shape(), core::Device::GPU, core::DataType::Float32);
+            ops.masks->photometric_weight(mask_2d, {}, weight,
+                                          segment_and_ignore ? gpu_ops::MaskPhotoMode::SegmentAndIgnore
+                                                             : gpu_ops::MaskPhotoMode::BinaryGt0);
+            edges = edges * weight.gt(0.0f).to(core::DataType::Float32);
+        }
+        ops.refine->normalize_positive_median(edges);
+    }
+
     MaskOpacityPenalty fuse_mask_opacity_penalty(
         MaskPreprocessWorkspace& ws,
         const lfs::core::Tensor& alpha,

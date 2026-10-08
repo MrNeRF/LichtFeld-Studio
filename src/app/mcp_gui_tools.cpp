@@ -516,14 +516,16 @@ namespace lfs::app {
             return static_cast<int64_t>(scene_manager.getScene().selectedCount());
         }
 
-        json node_summary_json(const core::Scene& scene, const core::SceneNode& node) {
+        json node_summary_json(const core::Scene& scene, const core::SceneNode& node,
+                               SceneNodeCounts* counts = nullptr) {
+            SceneNodeCounts local_counts(scene);
             json result{
                 {"name", node.name},
                 {"uuid", node.uuid.to_string()},
                 {"type", node_type_to_string(node.type)},
                 {"visible", static_cast<bool>(node.visible)},
                 {"locked", static_cast<bool>(node.locked)},
-                {"gaussian_count", node.gaussian_count.load(std::memory_order_acquire)},
+                {"gaussian_count", (counts ? *counts : local_counts).get(node)},
             };
 
             if (node.parent_id != core::NULL_NODE) {
@@ -1135,7 +1137,6 @@ namespace lfs::app {
                                  {"depth_view_min", settings.depth_view_min},
                                  {"depth_view_max", settings.depth_view_max},
                                  {"depth_visualization_mode", static_cast<int>(settings.depth_visualization_mode)},
-                                 {"selection_color_committed", json::array({settings.selection_color_committed[0], settings.selection_color_committed[1], settings.selection_color_committed[2]})},
                                  {"selection_color_preview", json::array({settings.selection_color_preview[0], settings.selection_color_preview[1], settings.selection_color_preview[2]})},
                                  {"selection_color_center_marker", json::array({settings.selection_color_center_marker[0], settings.selection_color_center_marker[1], settings.selection_color_center_marker[2]})},
                                  {"depth_clip_enabled", settings.depth_clip_enabled},
@@ -1362,8 +1363,6 @@ namespace lfs::app {
             if (auto result = set_vec3("train_camera_color", settings.train_camera_color); !result)
                 return result;
             if (auto result = set_vec3("eval_camera_color", settings.eval_camera_color); !result)
-                return result;
-            if (auto result = set_vec3("selection_color_committed", settings.selection_color_committed); !result)
                 return result;
             if (auto result = set_vec3("selection_color_preview", settings.selection_color_preview); !result)
                 return result;
@@ -1895,7 +1894,8 @@ namespace lfs::app {
         }
 
         BorrowExportPlan make_borrow_single_identity_export_plan(const vis::SceneManager& scene_manager,
-                                                                 const std::vector<std::string>& node_names) {
+                                                                 const std::vector<std::string>& node_names,
+                                                                 const core::ExportFormat format) {
             BorrowExportPlan plan;
             if (node_names.size() != 1)
                 return plan;
@@ -1906,6 +1906,10 @@ namespace lfs::app {
                 return plan;
 
             if (node->model->has_deleted_mask())
+                return plan;
+
+            // Only RAD stores an LOD tree; other formats need the merge to flatten it to its leaves.
+            if (format != core::ExportFormat::RAD && node->model->lod_tree && node->model->lod_tree->has_tree())
                 return plan;
 
 #if LFS_BUILD_TRAINER
@@ -1943,6 +1947,11 @@ namespace lfs::app {
                         "it cannot be exported",
                         name));
                 if (node && node->type == core::NodeType::SPLAT && node->model) {
+                    if (const auto& tree = node->model->lod_tree;
+                        tree && tree->has_tree() && node->model->size() < tree->total_nodes()) {
+                        return std::unexpected(std::format(
+                            "Cannot export '{}': the model is too large to fit in memory and streams from disk", name));
+                    }
                     const auto evaluated = apply_modifiers ? node->evaluated_model : nullptr;
                     splats.emplace_back(evaluated ? evaluated.get() : node->model.get(),
                                         vis::scene_coords::nodeDataWorldTransform(scene, node->id));
@@ -1954,7 +1963,7 @@ namespace lfs::app {
             if (splats.empty())
                 return std::unexpected("The requested node set does not contain any splat nodes");
 
-            auto borrow_plan = make_borrow_single_identity_export_plan(scene_manager, node_names);
+            auto borrow_plan = make_borrow_single_identity_export_plan(scene_manager, node_names, format);
             if (!evaluated_owners.empty()) {
                 borrow_plan.storage_mode = core::Scene::MergeStorageMode::Clone;
                 borrow_plan.model_lock.reset();
@@ -3872,10 +3881,11 @@ namespace lfs::app {
 
                     core::events::cmd::DuplicateNodeById{.node_id = node->id}.emit();
 
+                    SceneNodeCounts counts(scene);
                     json nodes = json::array();
                     for (const auto* const node : scene.getNodes()) {
                         if (node && !before.contains(node->name))
-                            nodes.push_back(node_summary_json(scene, *node));
+                            nodes.push_back(node_summary_json(scene, *node, &counts));
                     }
 
                     if (nodes.empty())
@@ -4637,6 +4647,7 @@ namespace lfs::app {
                         return json{{"error", "Scene manager not initialized"}};
 
                     const auto& scene = scene_manager->getScene();
+                    SceneNodeCounts counts(scene);
                     json nodes = json::array();
                     for (const auto* const node : scene.getNodes()) {
                         if (!node)
@@ -4658,7 +4669,7 @@ namespace lfs::app {
                                 break;
                             }
                         }
-                        nodes.push_back(node_summary_json(scene, *node));
+                        nodes.push_back(node_summary_json(scene, *node, &counts));
                     }
 
                     return json{{"success", true}, {"count", nodes.size()}, {"nodes", nodes}};
@@ -4677,10 +4688,11 @@ namespace lfs::app {
                         return json{{"error", "Scene manager not initialized"}};
 
                     const auto& scene = scene_manager->getScene();
+                    SceneNodeCounts counts(scene);
                     json nodes = json::array();
                     for (const auto& name : scene_manager->getSelectedNodeNames()) {
                         if (const auto* const node = scene.getNode(name))
-                            nodes.push_back(node_summary_json(scene, *node));
+                            nodes.push_back(node_summary_json(scene, *node, &counts));
                     }
 
                     return json{{"success", true}, {"count", nodes.size()}, {"nodes", nodes}};
@@ -4714,10 +4726,11 @@ namespace lfs::app {
                     if (auto result = vis::cap::selectNode(*scene_manager, name, mode); !result)
                         return json{{"error", result.error()}};
 
+                    SceneNodeCounts counts(scene_manager->getScene());
                     json nodes = json::array();
                     for (const auto& selected_name : scene_manager->getSelectedNodeNames()) {
                         if (const auto* const node = scene_manager->getScene().getNode(selected_name))
-                            nodes.push_back(node_summary_json(scene_manager->getScene(), *node));
+                            nodes.push_back(node_summary_json(scene_manager->getScene(), *node, &counts));
                     }
 
                     return json{{"success", true}, {"count", nodes.size()}, {"nodes", nodes}};
@@ -6226,11 +6239,12 @@ namespace lfs::app {
                         return std::unexpected("Scene manager not initialized");
 
                     const auto& scene = scene_manager->getScene();
+                    SceneNodeCounts counts(scene);
                     json nodes = json::array();
                     for (const auto* const node : scene.getNodes()) {
                         if (!node)
                             continue;
-                        nodes.push_back(node_summary_json(scene, *node));
+                        nodes.push_back(node_summary_json(scene, *node, &counts));
                     }
 
                     return single_json_resource(uri, json{{"count", nodes.size()}, {"nodes", std::move(nodes)}});
@@ -6250,10 +6264,11 @@ namespace lfs::app {
                         return std::unexpected("Scene manager not initialized");
 
                     const auto& scene = scene_manager->getScene();
+                    SceneNodeCounts counts(scene);
                     json nodes = json::array();
                     for (const auto& name : scene_manager->getSelectedNodeNames()) {
                         if (const auto* const node = scene.getNode(name))
-                            nodes.push_back(node_summary_json(scene, *node));
+                            nodes.push_back(node_summary_json(scene, *node, &counts));
                     }
 
                     return single_json_resource(uri, json{{"count", nodes.size()}, {"nodes", std::move(nodes)}});

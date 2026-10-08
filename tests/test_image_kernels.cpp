@@ -123,6 +123,35 @@ namespace {
         }
         return {};
     }
+
+    // A real training photo as normalized float CHW on CUDA, or an invalid tensor when unavailable.
+    Tensor first_dataset_image_float() {
+        const auto path = first_dataset_jpeg();
+        if (path.empty())
+            return {};
+        std::ifstream file(path, std::ios::binary);
+        const std::vector<uint8_t> jpeg{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+        if (jpeg.empty())
+            return {};
+        std::unique_ptr<lfs::io::NvCodecImageLoader> loader;
+        try {
+            loader = std::make_unique<lfs::io::NvCodecImageLoader>(lfs::io::NvCodecImageLoader::Options{});
+        } catch (const std::exception&) {
+            return {};
+        }
+        const auto decoded = loader->decode_jpeg_batch_from_spans({{jpeg.data(), jpeg.size()}}, nullptr, true, true);
+        if (decoded.size() != 1 || decoded[0].ndim() != 3 || decoded[0].shape()[0] != 3)
+            return {};
+        return decoded[0].to(DataType::Float32) / 255.0f;
+    }
+
+    std::vector<float> edge_weight_map(const Tensor& image, const Tensor& mask,
+                                       const lfs::gpu_ops::MaskPhotoMode mode = lfs::gpu_ops::MaskPhotoMode::BinaryGt0) {
+        auto edges = Tensor::zeros({image.shape()[1], image.shape()[2]}, Device::GPU, DataType::Float32);
+        compute_edge_weight_map(image, mask, mode, edges, nullptr);
+        EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        return edges.cpu().to_vector();
+    }
 } // namespace
 
 // Production input: the Canny edge map of a real training image. A radix select
@@ -150,7 +179,7 @@ TEST_F(ImageKernelsTest, EdgeWeightPositiveMedianMatchesSortOnRealImage) {
     const int H = static_cast<int>(image.shape()[1]);
     const int W = static_cast<int>(image.shape()[2]);
 
-    auto edges = Tensor::zeros({static_cast<size_t>(H), static_cast<size_t>(W)}, Device::CUDA, DataType::Float32);
+    auto edges = Tensor::zeros({static_cast<size_t>(H), static_cast<size_t>(W)}, Device::GPU, DataType::Float32);
     launch_fused_canny_edge_filter_chw(image.ptr<uint8_t>(), edges.ptr<float>(), H, W);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     const auto raw = edges.cpu().to_vector();
@@ -206,7 +235,7 @@ TEST_F(ImageKernelsTest, LanczosInterleavedChannelsMatchPerPlaneGrayscale) {
         const auto hwc = Tensor::from_blob(
                              source.data(), TensorShape({SOURCE_HEIGHT, SOURCE_WIDTH, static_cast<size_t>(channels)}),
                              Device::CPU, DataType::Float32)
-                             .to(Device::CUDA);
+                             .to(Device::GPU);
 
         const auto interleaved = lanczos_resize(hwc, OUTPUT_HEIGHT, OUTPUT_WIDTH, 2, nullptr);
         ASSERT_TRUE(interleaved.is_valid());
@@ -219,7 +248,7 @@ TEST_F(ImageKernelsTest, LanczosInterleavedChannelsMatchPerPlaneGrayscale) {
                 plane_values[pixel] = source[pixel * channels + channel];
             const auto plane = Tensor::from_blob(plane_values.data(), TensorShape({SOURCE_HEIGHT, SOURCE_WIDTH}),
                                                  Device::CPU, DataType::Float32)
-                                   .to(Device::CUDA);
+                                   .to(Device::GPU);
             const auto expected = lanczos_resize_grayscale(plane, OUTPUT_HEIGHT, OUTPUT_WIDTH, 2, nullptr).cpu().to_vector();
             const size_t offset = static_cast<size_t>(channel) * OUTPUT_WIDTH * OUTPUT_HEIGHT;
             for (size_t index = 0; index < expected.size(); ++index)
@@ -243,13 +272,13 @@ TEST_F(ImageKernelsTest, CompositeOverBackgroundShowsBackgroundWhereTransparent)
     std::vector<float> backdrop(12);
     for (size_t i = 0; i < backdrop.size(); ++i)
         backdrop[i] = 0.05f * static_cast<float>(i);
-    const auto rgb_gpu = Tensor::from_vector(rgb, {3, 2, 2}, Device::CUDA);
-    const auto alpha_gpu = Tensor::from_vector(alpha, {2, 2}, Device::CUDA);
+    const auto rgb_gpu = Tensor::from_vector(rgb, {3, 2, 2}, Device::GPU);
+    const auto alpha_gpu = Tensor::from_vector(alpha, {2, 2}, Device::GPU);
 
-    const auto solid = lfs::training::composite_over_background(rgb_gpu, alpha_gpu, Tensor::from_vector(color, {3}, Device::CUDA))
+    const auto solid = lfs::training::composite_over_background(rgb_gpu, alpha_gpu, Tensor::from_vector(color, {3}, Device::GPU))
                            .cpu()
                            .to_vector();
-    const auto image = lfs::training::composite_over_background(rgb_gpu, alpha_gpu, Tensor::from_vector(backdrop, {3, 2, 2}, Device::CUDA))
+    const auto image = lfs::training::composite_over_background(rgb_gpu, alpha_gpu, Tensor::from_vector(backdrop, {3, 2, 2}, Device::GPU))
                            .cpu()
                            .to_vector();
     for (size_t c = 0; c < 3; ++c)
@@ -262,11 +291,119 @@ TEST_F(ImageKernelsTest, CompositeOverBackgroundShowsBackgroundWhereTransparent)
     std::vector<uint8_t> bytes(rgb.size());
     for (size_t i = 0; i < rgb.size(); ++i)
         bytes[i] = static_cast<uint8_t>(std::lround(rgb[i] * 255.0f));
-    auto bytes_gpu = Tensor::empty({3, 2, 2}, Device::CUDA, DataType::UInt8);
+    auto bytes_gpu = Tensor::empty({3, 2, 2}, Device::GPU, DataType::UInt8);
     ASSERT_EQ(cudaMemcpy(bytes_gpu.ptr<uint8_t>(), bytes.data(), bytes.size(), cudaMemcpyHostToDevice), cudaSuccess);
-    const auto from_bytes = lfs::training::composite_over_background(bytes_gpu, alpha_gpu, Tensor::from_vector(color, {3}, Device::CUDA))
+    const auto from_bytes = lfs::training::composite_over_background(bytes_gpu, alpha_gpu, Tensor::from_vector(color, {3}, Device::GPU))
                                 .cpu()
                                 .to_vector();
     for (size_t i = 0; i < from_bytes.size(); ++i)
         EXPECT_NEAR(from_bytes[i], bytes[i] / 255.0f * alpha[i % 4] + color[i / 4] * (1.0f - alpha[i % 4]), 1e-6f) << i;
+}
+
+// Issue #3053. Catches edge guidance whose positive-median normalization still sees pixels the
+// Ignore mask excludes: repainting only excluded pixels, beyond the Canny footprint, must leave
+// every retained value bit-identical, and excluded pixels must carry no guidance.
+TEST_F(ImageKernelsTest, EdgeWeightMapIgnoresPixelsOutsideTheMask) {
+    const auto image = first_dataset_image_float();
+    if (!image.is_valid()) {
+        GTEST_SKIP() << "no decodable images_4 JPEG under data/";
+    }
+    const size_t H = image.shape()[1];
+    const size_t W = image.shape()[2];
+    const size_t keep_columns = W / 2;
+    constexpr size_t kMargin = 16;
+
+    std::vector<bool> keep(H * W);
+    for (size_t y = 0; y < H; ++y)
+        for (size_t x = 0; x < W; ++x)
+            keep[y * W + x] = x < keep_columns;
+    const auto mask = Tensor::from_vector(keep, {H, W}, Device::GPU);
+
+    auto pixels = image.cpu().to_vector();
+    for (size_t c = 0; c < 3; ++c)
+        for (size_t y = 0; y < H; ++y)
+            for (size_t x = keep_columns + kMargin; x < W; ++x)
+                pixels[(c * H + y) * W + x] = ((x / 4 + y / 4) % 2) ? 1.0f : 0.0f;
+    const auto repainted = Tensor::from_vector(pixels, {size_t{3}, H, W}, Device::GPU);
+
+    const auto original = edge_weight_map(image, mask);
+    const auto changed = edge_weight_map(repainted, mask);
+    size_t retained_edges = 0;
+    size_t retained_mismatches = 0;
+    size_t excluded_nonzero = 0;
+    for (size_t i = 0; i < keep.size(); ++i) {
+        if (keep[i]) {
+            retained_edges += original[i] > 0.0f;
+            retained_mismatches += original[i] != changed[i];
+        } else {
+            excluded_nonzero += original[i] != 0.0f || changed[i] != 0.0f;
+        }
+    }
+    ASSERT_GT(retained_edges, 1000u) << "a real photo must have edges in the kept half";
+    EXPECT_EQ(retained_mismatches, 0u);
+    EXPECT_EQ(excluded_nonzero, 0u);
+
+    const auto unmasked_original = edge_weight_map(image, {});
+    const auto unmasked_changed = edge_weight_map(repainted, {});
+    size_t unmasked_moved = 0;
+    for (size_t i = 0; i < keep.size(); ++i)
+        unmasked_moved += keep[i] && unmasked_original[i] != unmasked_changed[i];
+    EXPECT_GT(unmasked_moved, 1000u) << "the repaint must move unmasked normalization, or this test proves nothing";
+}
+
+TEST_F(ImageKernelsTest, EdgeWeightMapKeepsAllKeptMaskAndZeroesEmptyMask) {
+    const auto image = first_dataset_image_float();
+    if (!image.is_valid()) {
+        GTEST_SKIP() << "no decodable images_4 JPEG under data/";
+    }
+    const size_t H = image.shape()[1];
+    const size_t W = image.shape()[2];
+
+    const auto unmasked = edge_weight_map(image, {});
+    EXPECT_EQ(edge_weight_map(image, Tensor::from_vector(std::vector<bool>(H * W, true), {H, W}, Device::GPU)),
+              unmasked);
+
+    const auto empty = edge_weight_map(image, Tensor::from_vector(std::vector<bool>(H * W, false), {H, W}, Device::GPU));
+    EXPECT_TRUE(std::ranges::all_of(empty, [](const float v) { return v == 0.0f; }));
+}
+
+// Catches the SegmentAndIgnore segment band feeding edge guidance: only the keep band carries
+// photometric weight, while Segment and Ignore keep every nonzero mask value.
+TEST_F(ImageKernelsTest, EdgeWeightMapUsesOnlyTheSegmentAndIgnoreKeepBand) {
+    const auto image = first_dataset_image_float();
+    if (!image.is_valid()) {
+        GTEST_SKIP() << "no decodable images_4 JPEG under data/";
+    }
+    const size_t H = image.shape()[1];
+    const size_t W = image.shape()[2];
+    std::vector<float> bands(H * W);
+    for (size_t y = 0; y < H; ++y)
+        for (size_t x = 0; x < W; ++x)
+            bands[y * W + x] = x < W / 3 ? 1.0f : (x < 2 * W / 3 ? 200.0f / 255.0f : 0.0f);
+    const auto mask = Tensor::from_vector(bands, {H, W}, Device::GPU);
+
+    const auto band_edges = edge_weight_map(image, mask, lfs::gpu_ops::MaskPhotoMode::SegmentAndIgnore);
+    const auto binary_edges = edge_weight_map(image, mask, lfs::gpu_ops::MaskPhotoMode::BinaryGt0);
+    size_t keep_band_edges = 0;
+    size_t band_outside_keep = 0;
+    size_t binary_segment_edges = 0;
+    size_t binary_ignore_edges = 0;
+    for (size_t y = 0; y < H; ++y) {
+        for (size_t x = 0; x < W; ++x) {
+            const size_t i = y * W + x;
+            if (x < W / 3) {
+                keep_band_edges += band_edges[i] > 0.0f;
+            } else {
+                band_outside_keep += band_edges[i] != 0.0f;
+                if (x < 2 * W / 3)
+                    binary_segment_edges += binary_edges[i] > 0.0f;
+                else
+                    binary_ignore_edges += binary_edges[i] != 0.0f;
+            }
+        }
+    }
+    EXPECT_GT(keep_band_edges, 500u);
+    EXPECT_EQ(band_outside_keep, 0u);
+    EXPECT_GT(binary_segment_edges, 500u);
+    EXPECT_EQ(binary_ignore_edges, 0u);
 }

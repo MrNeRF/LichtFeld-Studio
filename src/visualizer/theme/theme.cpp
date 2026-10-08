@@ -872,7 +872,6 @@ namespace lfs::vis {
 
                 syncThemePresetName(preset);
                 preset.mtime = std::filesystem::last_write_time(preset.path);
-                LOG_INFO("Loaded {} theme from {}", preset.id, lfs::core::path_to_utf8(preset.path));
             } catch (...) {
                 preset.path.clear();
             }

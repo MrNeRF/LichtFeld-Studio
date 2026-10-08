@@ -254,6 +254,29 @@ if(APPLE AND (BUILD_VISUALIZER_TESTS OR BUILD_TESTS))
         LABELS "cpu;macos" TIMEOUT 30 ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 endif()
 
+# Save-path policy and the production native-dialog adapter, without opening an OS picker.
+add_executable(lichtfeld_file_dialog_tests test_file_dialog_path.cpp)
+target_compile_features(lichtfeld_file_dialog_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_file_dialog_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/visualizer
+)
+target_link_libraries(lichtfeld_file_dialog_tests PRIVATE GTest::gtest_main)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET lfs_visualizer AND TARGET PkgConfig::LFS_GTK3)
+    target_sources(lichtfeld_file_dialog_tests PRIVATE
+        test_native_save_dialog.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/gui/utils/native_file_dialog.cpp
+    )
+    target_link_libraries(lichtfeld_file_dialog_tests PRIVATE
+        lfs_io lfs_logger SDL3::SDL3 nfd::nfd PkgConfig::LFS_GTK3
+    )
+    target_link_options(lichtfeld_file_dialog_tests PRIVATE
+        "-Wl,--wrap=NFD_Init" "-Wl,--wrap=NFD_Quit" "-Wl,--wrap=NFD_SaveDialogU8_With_Impl"
+    )
+endif()
+add_test(NAME lichtfeld.file_dialog_paths COMMAND lichtfeld_file_dialog_tests)
+set_tests_properties(lichtfeld.file_dialog_paths PROPERTIES LABELS "fast;cpu;io" TIMEOUT 30)
+
 # =============================================================================
 # CPU-only visualizer tests (no LibTorch)
 # =============================================================================
@@ -313,6 +336,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         lfs_python_runtime
         GTest::gtest_main
         Zep::Zep
+        SDL3::SDL3
     )
     if(APPLE)
         # On macOS the visualizer resolves CPython from the host process. The app
@@ -961,6 +985,7 @@ set(TEST_FILES
     test_splat_affine_transform.cpp
     test_splat_sh_affine.cpp
     test_splat_data_clone.cpp
+    test_splat_data_mirror.cpp
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp
     test_tensor_integer_and_reduce_policy.cpp
@@ -1334,6 +1359,7 @@ list(APPEND TEST_FILES test_splat_sh_tensor_layout.cpp)
 list(APPEND TEST_FILES test_tensor_device_runtime.cpp)
 list(APPEND TEST_FILES test_octree_lod.cpp)
 list(APPEND TEST_FILES test_ply_to_rad_lod.cpp)
+list(APPEND TEST_FILES test_png_parallel_writer.cpp)
 list(APPEND TEST_FILES test_rad_gpu_encode.cpp)
 list(APPEND TEST_FILES test_rad_meta_sidecar.cpp)
 list(APPEND TEST_FILES test_rad_spark_paging.cpp)
@@ -1786,6 +1812,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_localization.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_system.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_templates.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rml_section_toggle.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_validator.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preferences_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_registry.py

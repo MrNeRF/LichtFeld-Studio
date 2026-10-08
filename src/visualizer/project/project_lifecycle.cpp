@@ -2149,12 +2149,16 @@ namespace lfs::vis::project {
             if (!scene.hasNodes()) {
                 return SceneManager::ContentType::Empty;
             }
-            if (std::ranges::any_of(
-                    scene.getNodes(), [](const auto* node) {
-                        return node &&
-                               node->type ==
-                                   lfs::core::NodeType::DATASET;
-                    })) {
+            const bool has_editable_splats = scene.getTrainingModelNodeUuid().is_nil() &&
+                                             std::ranges::any_of(scene.getNodes(), [](const auto* node) {
+                                                 return node && node->type == lfs::core::NodeType::SPLAT;
+                                             });
+            if (!has_editable_splats && std::ranges::any_of(
+                                            scene.getNodes(), [](const auto* node) {
+                                                return node &&
+                                                       node->type ==
+                                                           lfs::core::NodeType::DATASET;
+                                            })) {
                 return SceneManager::ContentType::Dataset;
             }
             return SceneManager::ContentType::SplatFiles;

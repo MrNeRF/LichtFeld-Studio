@@ -56,11 +56,11 @@
         </div>
         <div class="section-header text-accent" data-class-is-expanded="language_expanded" data-event-click="toggle_section('language')">
           <span class="section-arrow text-accent" data-class-is-expanded="language_expanded">&#x25B6;</span>
-          <span class="text-accent">@tr:preferences.language</span>
+          <span class="text-accent">@tr:preferences.language_title</span>
         </div>
         <div class="section-content" data-if="language_expanded">
           <div class="preferences-row">
-            <span class="preferences-label">@tr:preferences.language</span>
+            <span class="preferences-label">@tr:preferences.language_title</span>
             <select class="preferences-select" data-value="language_idx">
               <option data-for="language : languages" data-attr-value="language.index">{{ language.label }}</option>
             </select>
@@ -136,16 +136,19 @@
         </div>
         <div class="section-content" data-if="gallery_expanded">
           <div class="preferences-row"><span class="preferences-label">@tr:preferences.gallery.format</span>
-            <select class="preferences-select" data-value="gallery_uploadFormat"><option value="studio">@tr:projects.gallery.format.studio</option><option value="sog">SOG</option><option value="ssog">@tr:projects.gallery.format.ssog</option><option value="spz">SPZ</option></select></div>
+            <select class="preferences-select" data-value="gallery_uploadFormat"><option value="auto">@tr:projects.gallery.format.auto</option><option value="studio">@tr:projects.gallery.format.studio</option><option value="sog">@tr:projects.gallery.format.sog</option><option value="ssog">@tr:projects.gallery.format.ssog</option><option value="spz">@tr:projects.gallery.format.spz</option></select></div>
           <div class="preferences-row"><span class="preferences-label">@tr:preferences.gallery.cache</span><input class="preferences-select" type="text" data-value="gallery_posterCacheMiB" /></div>
           <span class="preferences-description">{{gallery_preferences_error}}</span>
         </div>
       </div>
 
       <div class="preferences-section" data-if="show_portal">
-        <div class="section-header text-accent"><span>@tr:preferences.portal</span></div>
-        <div class="section-content">
-          <div class="preferences-row"><span class="preferences-label">@tr:portal.preferences.status</span><span class="preferences-description">{{portal_connection_status}}</span></div>
+        <div class="section-header text-accent" data-class-is-expanded="portal_expanded" data-event-click="toggle_section('portal')">
+          <span class="section-arrow text-accent" data-class-is-expanded="portal_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.portal</span>
+        </div>
+        <div class="section-content" data-if="portal_expanded">
+          <div class="preferences-row"><span class="preferences-description">{{portal_connection_status}}</span></div>
           <div class="preferences-row" data-if="portal_disconnect_visible"><span class="preferences-label">@tr:portal.preferences.connected_since</span><span class="preferences-description">{{portal_connection_since}}</span></div>
           <div class="preferences-inline-actions">
             <button class="btn btn--primary" data-if="portal_connect_visible" data-event-click="portal_connect">@tr:portal.status.connect</button>
@@ -446,6 +449,7 @@
               <button class="btn btn--primary preferences-port-confirm" data-event-click="confirm_mcp_port" data-attrif-disabled="mcp_safe_mode" data-class-disabled="mcp_safe_mode">@tr:common.ok</button>
             </div>
           </div>
+          <span class="preferences-description preferences-setting-hint" data-if="mcp_port_override_visible">{{ mcp_port_override_text }}</span>
           <div class="preferences-row preferences-checkbox-row">
             <span class="preferences-label">@tr:preferences.mcp_request_logging</span>
             <input type="checkbox" data-checked="mcp_request_logging" data-attrif-disabled="mcp_safe_mode" />

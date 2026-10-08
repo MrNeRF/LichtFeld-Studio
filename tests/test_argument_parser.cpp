@@ -2595,6 +2595,25 @@ TEST(ArgumentParserTest, EvaluationFlagsOverrideTheConfigFile) {
     EXPECT_EQ(restored.dataset.test_every, 2);
 }
 
+// A parser that let --gut through with a depth or normal loss would train with supervision the 3DGUT
+// rasterizer cannot render; without --gut both flags must still parse.
+TEST(ArgumentParserTest, GutRejectsDepthAndNormalLoss) {
+    const auto data_path = make_test_path("lfs_arg_parser_gut_supervision_data");
+    const auto output_path = make_test_path("lfs_arg_parser_gut_supervision_output");
+
+    for (const char* loss : {"--use-depth-loss", "--use-normal-loss"}) {
+        const char* with_gut[] = {"LichtFeld-Studio", "-d", data_path.c_str(), "-o", output_path.c_str(), "--gut", loss};
+        const auto rejected = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(with_gut)), with_gut);
+        ASSERT_FALSE(rejected.has_value()) << loss;
+        EXPECT_NE(rejected.error().find("not available with --gut"), std::string::npos) << rejected.error();
+
+        const char* without_gut[] = {"LichtFeld-Studio", "-d", data_path.c_str(), "-o", output_path.c_str(), loss};
+        const auto accepted =
+            lfs::io::args::parse_args_and_params(static_cast<int>(std::size(without_gut)), without_gut);
+        ASSERT_TRUE(accepted.has_value()) << loss << ": " << accepted.error();
+    }
+}
+
 TEST(ArgumentParserTest, EvalStepsWithoutEvaluationStopTheRun) {
     const auto data_path = make_test_path("lfs_arg_parser_eval_steps_no_eval_data");
     const auto output_path = make_test_path("lfs_arg_parser_eval_steps_no_eval_output");

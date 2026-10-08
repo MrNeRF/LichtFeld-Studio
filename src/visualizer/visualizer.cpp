@@ -45,6 +45,11 @@ namespace lfs::vis {
         return true;
     }
 
+    std::optional<int> mcpPortOverride() {
+        std::lock_guard lock(g_runtime_service_controls_mutex);
+        return g_runtime_service_controls.mcp_port_override;
+    }
+
     std::unique_ptr<Visualizer> Visualizer::create(const ViewerOptions& options) {
         configureSceneUpscalerPluginLoading(!options.safe_mode);
         return std::make_unique<VisualizerImpl>(options);

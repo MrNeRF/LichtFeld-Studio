@@ -801,81 +801,81 @@
                     <div class="viewport-transform-group" data-if="transform_show_translate" data-tooltip="tooltip.transform_position">
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_position_axis">
                             <span class="viewport-transform-axis-label">X</span>
-                            <input type="text" class="number-input" id="transform-pos-x" data-value="transform_pos_x_str" />
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('pos_x', -1)">-</button>
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('pos_x', 1)">+</button>
+                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-pos-x" data-value="transform_pos_x_str" />
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('pos_x', -1)">-</button>
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('pos_x', 1)">+</button>
                         </div>
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_position_axis">
                             <span class="viewport-transform-axis-label">Y</span>
-                            <input type="text" class="number-input" id="transform-pos-y" data-value="transform_pos_y_str" />
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('pos_y', -1)">-</button>
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('pos_y', 1)">+</button>
+                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-pos-y" data-value="transform_pos_y_str" />
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('pos_y', -1)">-</button>
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('pos_y', 1)">+</button>
                         </div>
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_position_axis">
                             <span class="viewport-transform-axis-label">Z</span>
-                            <input type="text" class="number-input" id="transform-pos-z" data-value="transform_pos_z_str" />
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('pos_z', -1)">-</button>
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('pos_z', 1)">+</button>
+                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-pos-z" data-value="transform_pos_z_str" />
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('pos_z', -1)">-</button>
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('pos_z', 1)">+</button>
                         </div>
                     </div>
 
                     <div class="viewport-transform-group" data-if="transform_show_rotate" data-tooltip="tooltip.transform_rotation">
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_rotation_axis">
                             <span class="viewport-transform-axis-label">X</span>
-                            <input type="text" class="number-input" id="transform-rot-x" data-value="transform_rot_x_str" />
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('rot_x', -1)">-</button>
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('rot_x', 1)">+</button>
+                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-rot-x" data-value="transform_rot_x_str" />
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('rot_x', -1)">-</button>
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('rot_x', 1)">+</button>
                         </div>
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_rotation_axis">
                             <span class="viewport-transform-axis-label">Y</span>
-                            <input type="text" class="number-input" id="transform-rot-y" data-value="transform_rot_y_str" />
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('rot_y', -1)">-</button>
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('rot_y', 1)">+</button>
+                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-rot-y" data-value="transform_rot_y_str" />
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('rot_y', -1)">-</button>
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('rot_y', 1)">+</button>
                         </div>
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_rotation_axis">
                             <span class="viewport-transform-axis-label">Z</span>
-                            <input type="text" class="number-input" id="transform-rot-z" data-value="transform_rot_z_str" />
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('rot_z', -1)">-</button>
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('rot_z', 1)">+</button>
+                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-rot-z" data-value="transform_rot_z_str" />
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('rot_z', -1)">-</button>
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('rot_z', 1)">+</button>
                         </div>
                     </div>
 
                     <div class="viewport-transform-group" data-if="transform_show_scale" data-tooltip="tooltip.transform_scale">
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_scale_uniform">
                             <span class="viewport-transform-axis-label">U</span>
-                            <input type="text" class="number-input" id="transform-scale-u" data-value="transform_scale_u_str" />
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_u', -1)">-</button>
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_u', 1)">+</button>
+                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-scale-u" data-value="transform_scale_u_str" />
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('scale_u', -1)">-</button>
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('scale_u', 1)">+</button>
                         </div>
                         <div class="viewport-transform-axis viewport-transform-axis--split" data-tooltip="tooltip.transform_scale_axis">
                             <span class="viewport-transform-axis-label">X</span>
-                            <input type="text" class="number-input" id="transform-scale-x" data-value="transform_scale_x_str" />
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_x', -1)">-</button>
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_x', 1)">+</button>
+                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-scale-x" data-value="transform_scale_x_str" />
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('scale_x', -1)">-</button>
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('scale_x', 1)">+</button>
                         </div>
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_scale_axis">
                             <span class="viewport-transform-axis-label">Y</span>
-                            <input type="text" class="number-input" id="transform-scale-y" data-value="transform_scale_y_str" />
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_y', -1)">-</button>
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_y', 1)">+</button>
+                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-scale-y" data-value="transform_scale_y_str" />
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('scale_y', -1)">-</button>
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('scale_y', 1)">+</button>
                         </div>
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_scale_axis">
                             <span class="viewport-transform-axis-label">Z</span>
-                            <input type="text" class="number-input" id="transform-scale-z" data-value="transform_scale_z_str" />
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_z', -1)">-</button>
-                            <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_z', 1)">+</button>
+                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-scale-z" data-value="transform_scale_z_str" />
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('scale_z', -1)">-</button>
+                            <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('scale_z', 1)">+</button>
                         </div>
                     </div>
                 </div>
 
                 <div class="viewport-transform-actions" data-if="transform_show_actions">
-                    <button class="icon-btn viewport-transform-action"
+                    <button data-attrif-disabled="!transform_editable" class="icon-btn viewport-transform-action"
                             data-tooltip="tooltip.transform_bake"
                             data-attr-title="transform_bake_label"
                             data-event-click="transform_action('bake')">
                         <img src="../icon/check.png" />
                     </button>
-                    <button class="icon-btn viewport-transform-action"
+                    <button data-attrif-disabled="!transform_editable" class="icon-btn viewport-transform-action"
                             data-tooltip="tooltip.transform_reset"
                             data-attr-title="transform_reset_label"
                             data-event-click="transform_action('reset')">

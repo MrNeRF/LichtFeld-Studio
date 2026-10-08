@@ -853,6 +853,21 @@ class SectionBinding:
                 return False
             if value not in {int(item["value"]) for item in row["items"]}:
                 return False
+            try:
+                current = int(_params_value(self._params(), prop_id))
+            except (
+                AttributeError,
+                KeyError,
+                OverflowError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ):
+                return False
+            # Rebuilding a restored row can echo its existing selection.
+            # Only a different value is a parameter edit.
+            if value == current:
+                return True
         else:
             return False
         updated = self._write_value(prop_id, value)

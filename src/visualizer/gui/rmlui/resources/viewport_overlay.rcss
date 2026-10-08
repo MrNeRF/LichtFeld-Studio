@@ -1634,12 +1634,16 @@ body {
 
 .vram-hud-tabs {
     display: flex;
+    flex-wrap: wrap;
     gap: 0dp;
     border-bottom-width: 1dp;
 }
 
+/* Content-sized tabs wrap onto a second row in a narrow HUD instead of overlapping. */
 .vram-hud-tab {
-    flex: 1;
+    flex: 1 0 auto;
+    padding: 0 6dp;
+    white-space: nowrap;
     height: 24dp;
     font-size: 11dp;
     text-align: center;

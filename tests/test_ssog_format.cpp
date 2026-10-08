@@ -20,14 +20,17 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <numeric>
 #include <random>
 #include <set>
+#include <span>
 #include <thread>
 
 namespace {
@@ -453,7 +456,7 @@ TEST(SsogFormat, CpuLeafMortonMatchesCudaIncludingStableTies) {
             std::vector<int> rows(n);
             std::iota(rows.begin(), rows.end(), 0);
             sort_ssog_leaf(positions.ptr<float>(), rows);
-            auto gpu = lfs::core::morton_sort_indices(positions.cuda()).cpu();
+            auto gpu = lfs::core::morton_sort_indices(positions.gpu()).cpu();
             ASSERT_TRUE(gpu.is_valid());
             EXPECT_TRUE(std::equal(rows.begin(), rows.end(), gpu.ptr<int>())) << "n=" << n << " mode=" << mode;
         }
@@ -523,6 +526,71 @@ TEST(SsogFormat, BundleEntriesRoundtripAndRegistry) {
     auto loaded = registry->load(bundle);
     ASSERT_TRUE(loaded) << loaded.error().format();
     EXPECT_EQ(std::get<std::shared_ptr<SplatData>>(loaded->data)->size(), 2048);
+}
+
+namespace {
+    lfs::io::Result<SsogArchiveSummary> summarize_bytes(const std::string& bytes) {
+        return summarize_ssog_archive(bytes.size(), [&](const std::uint64_t offset, const std::span<std::byte> destination) {
+            if (offset > bytes.size() || destination.size() > bytes.size() - offset)
+                return false;
+            std::memcpy(destination.data(), bytes.data() + offset, destination.size());
+            return true;
+        });
+    }
+
+    std::string file_bytes(const fs::path& path) {
+        std::ifstream file(path, std::ios::binary);
+        return {std::istreambuf_iterator<char>(file), {}};
+    }
+} // namespace
+
+// A summary that misread counts or missed deflated members would let an unstreamable SSOG reach the gallery
+// unchanged. Our exporter stores every member, so lod-meta.json appears verbatim in the archive.
+TEST(SsogFormat, SummaryReadsLevelCountsAndStoredMembers) {
+    ScopedSsogDirectory dir;
+    const auto bundle = dir.path / "scene.ssog";
+    auto saved = save_ssog(synthetic(2048, 1), options(bundle, 3));
+    ASSERT_TRUE(saved) << saved.error().format();
+    const auto bytes = file_bytes(bundle);
+    const auto summary = summarize_bytes(bytes);
+    ASSERT_TRUE(summary) << summary.error().format();
+    EXPECT_EQ(summary->counts, (std::vector<std::size_t>{2048, 1024, 512}));
+    EXPECT_TRUE(summary->webp_stored);
+    EXPECT_FALSE(summary->empty_license);
+    EXPECT_NE(bytes.find("\"lodLevels\""), std::string::npos);
+}
+
+TEST(SsogFormat, SummaryFlagsDeflatedTexturesAndEmptyLicense) {
+    ScopedSsogDirectory dir;
+    const auto bundle = dir.path / "foreign.ssog";
+    {
+        std::unique_ptr<archive, decltype(&archive_write_free)> zip(archive_write_new(), archive_write_free);
+        ASSERT_EQ(archive_write_set_format_zip(zip.get()), ARCHIVE_OK);
+#ifdef _WIN32
+        ASSERT_EQ(archive_write_open_filename_w(zip.get(), bundle.wstring().c_str()), ARCHIVE_OK);
+#else
+        ASSERT_EQ(archive_write_open_filename(zip.get(), bundle.c_str()), ARCHIVE_OK);
+#endif
+        const auto add = [&](const char* name, const std::string& data) {
+            std::unique_ptr<archive_entry, decltype(&archive_entry_free)> entry(archive_entry_new(), archive_entry_free);
+            archive_entry_set_pathname(entry.get(), name);
+            archive_entry_set_size(entry.get(), static_cast<la_int64_t>(data.size()));
+            archive_entry_set_filetype(entry.get(), AE_IFREG);
+            archive_entry_set_perm(entry.get(), 0644);
+            ASSERT_EQ(archive_write_zip_set_compression_deflate(zip.get()), ARCHIVE_OK);
+            ASSERT_EQ(archive_write_header(zip.get(), entry.get()), ARCHIVE_OK);
+            ASSERT_EQ(archive_write_data(zip.get(), data.data(), data.size()), static_cast<la_ssize_t>(data.size()));
+        };
+        add("scene/lod-meta.json", R"({"counts":[5,3]})");
+        add("scene/0_0/means_l.webp", std::string(256, 'x'));
+        add("scene/LICENSE", "");
+        ASSERT_EQ(archive_write_close(zip.get()), ARCHIVE_OK);
+    }
+    const auto summary = summarize_bytes(file_bytes(bundle));
+    ASSERT_TRUE(summary) << summary.error().format();
+    EXPECT_EQ(summary->counts, (std::vector<std::size_t>{5, 3}));
+    EXPECT_FALSE(summary->webp_stored);
+    EXPECT_TRUE(summary->empty_license);
 }
 
 TEST(SsogFormat, BundleCancellationPreservesDestination) {
@@ -793,5 +861,85 @@ TEST(SsogFormat, ConverterPreservesUnicodeOutputNames) {
                                 std::string(name) + ".ssog");
         EXPECT_TRUE(fs::is_regular_file(output));
         ASSERT_TRUE(load_ssog(output));
+    }
+}
+
+namespace {
+    void expect_identical_splats(const SplatData& actual, const SplatData& expected) {
+        ASSERT_EQ(actual.size(), expected.size());
+        EXPECT_EQ(actual.means_raw().cpu().to_vector(), expected.means_raw().cpu().to_vector());
+        EXPECT_EQ(actual.scaling_raw().cpu().to_vector(), expected.scaling_raw().cpu().to_vector());
+        EXPECT_EQ(actual.rotation_raw().cpu().to_vector(), expected.rotation_raw().cpu().to_vector());
+        EXPECT_EQ(actual.opacity_raw().cpu().to_vector(), expected.opacity_raw().cpu().to_vector());
+        EXPECT_EQ(actual.sh0_raw().cpu().to_vector(), expected.sh0_raw().cpu().to_vector());
+    }
+} // namespace
+
+TEST(SsogFormat, BundleReadersAcceptSuffixCaseWithoutChangingRows) {
+    ScopedSsogDirectory dir;
+    auto source = synthetic(32, 0);
+    for (const bool ssog : {false, true}) {
+        const auto lower = dir.path / (ssog ? "lower.ssog" : "lower.sog");
+        auto saved = ssog ? save_ssog(source, options(lower)) : save_sog(source, {.output_path = lower});
+        ASSERT_TRUE(saved) << saved.error().format();
+        auto reference = ssog ? load_ssog(lower) : load_sog(lower);
+        ASSERT_TRUE(reference) << reference.error().format();
+        for (const auto suffix : ssog ? std::vector<std::string>{".ssog", ".SSOG", ".SsOg"}
+                                      : std::vector<std::string>{".sog", ".SOG", ".SoG"}) {
+            SCOPED_TRACE(suffix);
+            const auto path = dir.path / ("copy" + suffix);
+            fs::copy_file(lower, path);
+            if (ssog)
+                EXPECT_TRUE(is_ssog_path(path));
+            auto loader = Loader::create();
+            EXPECT_TRUE(loader->canLoad(path));
+            auto validated = loader->load(path, {.validate_only = true});
+            EXPECT_TRUE(validated) << validated.error().format();
+            auto loaded = loader->load(path);
+            EXPECT_TRUE(loaded) << loaded.error().format();
+            if (loaded)
+                expect_identical_splats(*std::get<std::shared_ptr<SplatData>>(loaded->data), *reference);
+            auto direct = ssog ? load_ssog(path) : load_sog(path);
+            EXPECT_TRUE(direct) << direct.error().format();
+            if (direct)
+                expect_identical_splats(*direct, *reference);
+        }
+    }
+}
+
+TEST(SsogFormat, BundleWriterAcceptsSuffixCaseWithoutChangingRows) {
+    ScopedSsogDirectory dir;
+    auto source = synthetic(32, 0);
+    const auto lower = dir.path / "reference.ssog";
+    ASSERT_TRUE(save_ssog(source, options(lower)));
+    auto reference = load_ssog(lower);
+    ASSERT_TRUE(reference);
+    for (const auto* suffix : {".ssog", ".SSOG", ".SsOg"}) {
+        SCOPED_TRACE(suffix);
+        const auto path = dir.path / (std::string("cloud") + suffix);
+        auto saved = save_ssog(source, options(path));
+        ASSERT_TRUE(saved) << saved.error().format();
+        EXPECT_TRUE(fs::is_regular_file(path));
+        auto loaded = load_ssog(path);
+        ASSERT_TRUE(loaded) << loaded.error().format();
+        expect_identical_splats(*loaded, *reference);
+    }
+}
+
+TEST(SsogFormat, SogDirectoriesWithUppercaseSuffixRemainLoadable) {
+    ScopedSsogDirectory dir;
+    auto source = synthetic(32, 0);
+    for (const auto* name : {"directory", "directory.SOG", "directory.SoG"}) {
+        SCOPED_TRACE(name);
+        const auto path = dir.path / name;
+        SogEncodeOptions encode_options;
+        encode_options.output_path = path;
+        auto saved = encode_sog_directory(source, encode_options);
+        ASSERT_TRUE(saved) << saved.error().format();
+        auto direct = load_sog(path);
+        ASSERT_TRUE(direct) << direct.error().format();
+        auto loaded = Loader::create()->load(path);
+        ASSERT_TRUE(loaded) << loaded.error().format();
+        expect_identical_splats(*std::get<std::shared_ptr<SplatData>>(loaded->data), *direct);
     }
 }

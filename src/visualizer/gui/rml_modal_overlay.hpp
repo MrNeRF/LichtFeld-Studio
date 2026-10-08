@@ -67,9 +67,7 @@ namespace lfs::vis::gui {
         void enqueue(lfs::core::ModalRequest request);
         void activatePending();
         void processInput(const PanelInputState& input);
-        void render(int screen_w, int screen_h,
-                    float screen_x, float screen_y,
-                    float vp_x, float vp_y, float vp_w, float vp_h);
+        void render(int screen_w, int screen_h);
         void reloadResources();
         void preload();
 

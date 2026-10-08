@@ -72,6 +72,7 @@ namespace lfs::vis {
             VkDescriptorSet set = VK_NULL_HANDLE;
             VkImageView bound_view = VK_NULL_HANDLE;
             std::uint64_t bound_generation = 0;
+            std::uint64_t binding_revision = 0;
         };
         std::vector<FrameDescriptor> frame_descriptors;
         VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
@@ -922,6 +923,7 @@ namespace lfs::vis {
             vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
             descriptor.bound_view = view;
             descriptor.bound_generation = generation;
+            ++descriptor.binding_revision;
         }
 
         void prepare(const VulkanDepthBlitParams& params, const std::size_t frame_slot) {
@@ -1039,6 +1041,10 @@ namespace lfs::vis {
 
     VkImageView VulkanDepthBlitPass::depthView(const std::size_t frame_slot) const {
         return impl_ ? impl_->descriptorForFrame(frame_slot).bound_view : VK_NULL_HANDLE;
+    }
+
+    std::uint64_t VulkanDepthBlitPass::depthBindingRevision(const std::size_t frame_slot) const {
+        return impl_ ? impl_->descriptorForFrame(frame_slot).binding_revision : 0;
     }
 
 } // namespace lfs::vis
