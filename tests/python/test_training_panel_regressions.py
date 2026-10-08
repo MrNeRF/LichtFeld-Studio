@@ -949,9 +949,8 @@ def test_training_panel_keeps_controls_and_search_outside_scroll_region():
     assert "background-color: transparent" in rcss
     assert "border-width: 0" in rcss
     assert "overflow-y: auto" in rcss
-    assert ".training-scroll-region scrollbarvertical" in rcss
+    assert ".training-scroll-region scrollbarvertical" not in rcss
     assert "padding-bottom: 6dp" in rcss
-    assert "width: 4dp" in rcss
     assert "height_mode = lf.ui.PanelHeightMode.FILL" in panel_source
 
 

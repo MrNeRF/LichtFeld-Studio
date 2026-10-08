@@ -94,15 +94,6 @@ body {
     padding-right: 4dp;
 }
 
-/* A narrow scrollbar in its own gutter: the padding keeps it clear of the controls at every UI scale. */
-.training-scroll-region scrollbarvertical {
-    width: 4dp;
-}
-
-.training-scroll-region scrollbarvertical sliderbar {
-    min-height: 12dp;
-}
-
 .training-telemetry {
     min-width: 0;
     flex-shrink: 0;
