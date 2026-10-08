@@ -8,6 +8,8 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include <algorithm>
+#include <cctype>
 #include <cuda_runtime.h>
 #include <format>
 
@@ -54,6 +56,12 @@ namespace lfs::io::video {
                 return std::unexpected("Encoder is already open");
             if (const auto validation = validateVideoEncodingOptions(opts); !validation)
                 return std::unexpected(validation.error());
+
+            auto extension = core::path_to_utf8(path.extension());
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (!extension.empty() && extension != ".mp4")
+                return std::unexpected("Video export supports only MP4 (.mp4); unsupported filename extension");
 
             const size_t width = static_cast<size_t>(opts.width);
             const size_t height = static_cast<size_t>(opts.height);

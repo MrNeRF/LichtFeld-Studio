@@ -11,7 +11,11 @@
 #include "scene/scene_manager.hpp"
 #include "visualizer/gui_capabilities.hpp"
 
+#include <cuda_runtime.h>
+
+#include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <limits>
@@ -293,4 +297,74 @@ TEST(VideoEncoderValidationTest, RejectsUnsafeOptionsBeforeCodecInitialization) 
     ASSERT_FALSE(result.has_value());
     EXPECT_NE(result.error().find("pixel budget"), std::string::npos);
     EXPECT_FALSE(encoder.isOpen());
+}
+
+namespace {
+    struct VideoOutputDirectory {
+        std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                     ("lfs-video-extension-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        VideoOutputDirectory() { std::filesystem::create_directories(path); }
+        ~VideoOutputDirectory() {
+            std::error_code ec;
+            std::filesystem::remove_all(path, ec);
+        }
+    };
+} // namespace
+
+TEST(VideoEncoderValidationTest, RejectsConflictingExtensionsWithoutTouchingDestination) {
+    VideoOutputDirectory directory;
+    const auto options = lfs::io::video::VideoExportOptions{
+        .preset = lfs::io::video::VideoPreset::CUSTOM,
+        .width = 160,
+        .height = 90,
+        .framerate = 2,
+        .crf = 20,
+    };
+    for (const auto* suffix : {".mkv", ".mov", ".webm", ".avi", ".mp4.webm"}) {
+        for (const bool exists : {false, true}) {
+            SCOPED_TRACE(::testing::Message() << suffix << " exists=" << exists);
+            const auto path = directory.path / (std::string(exists ? "existing" : "new") + suffix);
+            if (exists)
+                std::ofstream(path, std::ios::binary) << "original contents";
+            lfs::io::video::VideoEncoder encoder;
+            const auto result = encoder.open(path, options);
+            EXPECT_FALSE(result.has_value());
+            EXPECT_FALSE(encoder.isOpen());
+            if (!result)
+                EXPECT_NE(result.error().find("MP4"), std::string::npos);
+            else
+                EXPECT_TRUE(encoder.close());
+            if (exists) {
+                std::ifstream file(path, std::ios::binary);
+                const std::string contents{std::istreambuf_iterator<char>(file), {}};
+                EXPECT_EQ(contents, "original contents");
+            } else {
+                EXPECT_FALSE(std::filesystem::exists(path));
+            }
+        }
+    }
+}
+
+TEST(VideoEncoderValidationTest, AcceptsMp4CaseVariantsAndExtensionlessNames) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0)
+        GTEST_SKIP() << "CUDA device required to initialize the video encoder";
+
+    VideoOutputDirectory directory;
+    const auto options = lfs::io::video::VideoExportOptions{
+        .preset = lfs::io::video::VideoPreset::CUSTOM,
+        .width = 160,
+        .height = 90,
+        .framerate = 2,
+        .crf = 20,
+    };
+    for (const auto* name : {"video.mp4", "video.MP4", "video.mP4", "video"}) {
+        SCOPED_TRACE(name);
+        lfs::io::video::VideoEncoder encoder;
+        const auto result = encoder.open(directory.path / name, options);
+        ASSERT_TRUE(result.has_value()) << result.error();
+        EXPECT_TRUE(encoder.isOpen());
+        EXPECT_TRUE(encoder.close());
+        EXPECT_TRUE(std::filesystem::is_regular_file(directory.path / name));
+    }
 }
