@@ -305,6 +305,65 @@ def test_histogram_metrics_include_positions_volume_anisotropy_and_erank(histogr
     assert {"position_x", "position_y", "position_z", "volume", "anisotropy", "erank", "world_distance"} <= metric_ids
 
 
+@pytest.mark.parametrize("include_nonfinite", [False, True])
+def test_erank_auto_range_keeps_rounded_boundary_samples(histogram_panel_module, lf, numpy, include_nonfinite):
+    # Float32 entropy can put finite effective ranks just outside the ideal [1, 3] domain.
+    values = numpy.array([0.9999997615814209, 1.0, 2.0, 3.0, 3.000000238418579], dtype=numpy.float32)
+    if include_nonfinite:
+        values = numpy.concatenate((values, numpy.array([numpy.nan, numpy.inf, -numpy.inf], dtype=numpy.float32)))
+    finite = numpy.isfinite(values)
+    tensor = lf.Tensor.from_numpy(values)
+    panel = histogram_panel_module.HistogramPanel()
+    result = panel._build_series_result(tensor, tensor.isfinite(), "erank", 56, (None, None), None)
+
+    assert sum(result["counts"]) == int(finite.sum())
+    assert result["auto_min"] == float(values[finite].min())
+    assert result["auto_max"] == float(values[finite].max())
+    numpy.testing.assert_array_equal(result["bin_indices"].numpy() >= 0, finite)
+    numpy.testing.assert_array_equal(result["values"].numpy(), values)
+
+    # Both axes and selection indices must use the same automatic bounds as the 1D chart.
+    compare = panel._build_compare_result(
+        tensor, tensor, tensor.isfinite(), "erank", "erank", 20, 20,
+        (None, None), (None, None), None,
+    )
+    assert numpy.asarray(compare["counts"]).sum() == int(finite.sum())
+    numpy.testing.assert_array_equal(compare["x_bin_indices"].numpy() >= 0, finite)
+    numpy.testing.assert_array_equal(compare["y_bin_indices"].numpy() >= 0, finite)
+
+
+def test_erank_in_domain_and_explicit_ranges_keep_existing_bins(histogram_panel_module, lf, numpy):
+    panel = histogram_panel_module.HistogramPanel()
+    values = numpy.array([1.0, 1.125, 1.5, 2.0, 2.5, 2.875, 3.0], dtype=numpy.float32)
+    tensor = lf.Tensor.from_numpy(values)
+    assert panel._histogram_bounds(tensor, "erank") == (1.0, 3.0)
+    result = panel._build_series_result(tensor, tensor.isfinite(), "erank", 8, (None, None), None)
+    expected, _ = numpy.histogram(values, bins=8, range=(1.0, 3.0))
+    assert result["counts"] == expected.tolist()
+
+    # Explicit user limits continue to exclude values outside the requested range.
+    boundary_values = numpy.array([0.9999997615814209, 1.0, 2.0, 3.0, 3.000000238418579], dtype=numpy.float32)
+    boundary = lf.Tensor.from_numpy(boundary_values)
+    explicit = panel._build_series_result(boundary, boundary.isfinite(), "erank", 8, (1.0, 3.0), None)
+    assert sum(explicit["counts"]) == 3
+    assert explicit["histogram_min"] == 1.0
+    assert explicit["histogram_max"] == 3.0
+    compare = panel._build_compare_result(
+        boundary, boundary, boundary.isfinite(), "erank", "erank", 8, 8,
+        (1.0, 3.0), (1.0, 3.0), None,
+    )
+    assert numpy.asarray(compare["counts"]).sum() == 3
+
+
+@pytest.mark.parametrize("values", [[1.0], [2.0, 2.0], [3.0], [1.125, 1.5, 2.875]])
+@pytest.mark.parametrize("bounds", [(1.0, 3.0), (1.5, 2.0), (2.9, 3.0), (2.0, 1.0)])
+def test_cached_erank_extent_preserves_range_snapping(histogram_panel_module, lf, numpy, values, bounds):
+    tensor = lf.Tensor.from_numpy(numpy.array(values, dtype=numpy.float32))
+    snap = histogram_panel_module.HistogramPanel._snap_bounds_to_data
+    # The uncached path retains the previous mask/gather/reduce implementation.
+    assert snap(tensor, *bounds, (min(values), max(values))) == snap(tensor, *bounds)
+
+
 def test_histogram_world_distance_metric_measures_from_origin(histogram_panel_module, lf, numpy):
     panel = histogram_panel_module.HistogramPanel()
     # Two Gaussians at local positions (1,0,0) and (0,3,4).

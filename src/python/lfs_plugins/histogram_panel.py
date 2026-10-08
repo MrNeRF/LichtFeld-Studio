@@ -596,10 +596,13 @@ class HistogramPanel(Panel):
         finite_values: lf.Tensor,
         range_min: float,
         range_max: float,
+        data_bounds: tuple[float, float] | None = None,
     ) -> tuple[float, float]:
         """Tighten [range_min, range_max] to the actual extent of values inside it."""
         if not math.isfinite(range_min) or not math.isfinite(range_max) or range_max <= range_min:
             return range_min, range_max
+        if data_bounds is not None and range_min <= data_bounds[0] and range_max >= data_bounds[1]:
+            return data_bounds if data_bounds[1] > data_bounds[0] else (range_min, range_max)
         in_range = (finite_values >= range_min) & (finite_values <= range_max)
         if not bool(in_range.any().item()):
             return range_min, range_max
@@ -1439,11 +1442,13 @@ class HistogramPanel(Panel):
         if self._histogram_compute_cancelled(cancel_event):
             return {"kind": "cancelled"}
         sorted_values, _ = valid_values.sort()
-        auto_min, auto_max = self._histogram_bounds(valid_values, metric_id)
+        data_bounds = (float(sorted_values[0].item()), float(sorted_values[-1].item()))
+        erank_bounds = data_bounds if metric_id == "erank" else None
+        auto_min, auto_max = self._histogram_bounds(valid_values, metric_id, erank_bounds)
         if self._histogram_compute_cancelled(cancel_event):
             return {"kind": "cancelled"}
         histogram_min, histogram_max = HistogramPanel._resolve_and_snap_bounds(
-            valid_values, auto_min, auto_max, custom_range
+            valid_values, auto_min, auto_max, custom_range, erank_bounds
         )
         valid_bin_indices = self._bin_indices_for_values(
             valid_values, histogram_min, histogram_max, int(bin_count)
@@ -1468,8 +1473,8 @@ class HistogramPanel(Panel):
             "valid_values": valid_values,
             "finite_values_cpu": valid_values,
             "sorted_values": sorted_values,
-            "min_value": float(sorted_values[0].item()),
-            "max_value": float(sorted_values[-1].item()),
+            "min_value": data_bounds[0],
+            "max_value": data_bounds[1],
             "mean_value": float(valid_values.mean().item()),
             "median_value": self._percentile_from_sorted(sorted_values, 50.0),
             "p95_value": self._percentile_from_sorted(sorted_values, 95.0),
@@ -1506,12 +1511,14 @@ class HistogramPanel(Panel):
             return {"kind": "empty"}
         if self._histogram_compute_cancelled(cancel_event):
             return {"kind": "cancelled"}
-        x_auto_min, x_auto_max = self._histogram_bounds(x_valid, x_metric_id)
-        y_auto_min, y_auto_max = self._histogram_bounds(y_valid, y_metric_id)
+        x_bounds = (x_valid.min_scalar(), x_valid.max_scalar()) if x_metric_id == "erank" else None
+        y_bounds = (y_valid.min_scalar(), y_valid.max_scalar()) if y_metric_id == "erank" else None
+        x_auto_min, x_auto_max = self._histogram_bounds(x_valid, x_metric_id, x_bounds)
+        y_auto_min, y_auto_max = self._histogram_bounds(y_valid, y_metric_id, y_bounds)
         if self._histogram_compute_cancelled(cancel_event):
             return {"kind": "cancelled"}
-        x_min, x_max = HistogramPanel._resolve_and_snap_bounds(x_valid, x_auto_min, x_auto_max, custom_range)
-        y_min, y_max = HistogramPanel._resolve_and_snap_bounds(y_valid, y_auto_min, y_auto_max, y_custom_range)
+        x_min, x_max = HistogramPanel._resolve_and_snap_bounds(x_valid, x_auto_min, x_auto_max, custom_range, x_bounds)
+        y_min, y_max = HistogramPanel._resolve_and_snap_bounds(y_valid, y_auto_min, y_auto_max, y_custom_range, y_bounds)
         x_bin_indices = self._build_selection_bin_indices(
             x_cpu, mask_cpu, x_min, x_max, int(x_bin_count)
         )
@@ -2393,7 +2400,12 @@ class HistogramPanel(Panel):
         entropy = -(probabilities * (probabilities + 1e-12).log()).sum(1)
         return entropy.exp().reshape([-1])
 
-    def _histogram_bounds(self, values: lf.Tensor, metric_id: str | None = None) -> tuple[float, float]:
+    def _histogram_bounds(
+        self,
+        values: lf.Tensor,
+        metric_id: str | None = None,
+        data_bounds: tuple[float, float] | None = None,
+    ) -> tuple[float, float]:
         metric_id = self._metric_id if metric_id is None else metric_id
         if metric_id == "opacity":
             return 0.0, 1.0
@@ -2408,7 +2420,10 @@ class HistogramPanel(Panel):
                 return lo, lo + 1e-3
             return lo, hi
         if metric_id == "erank":
-            return 1.0, 3.0
+            # Entropy roundoff can put finite ranks just outside the ideal [1, 3] domain.
+            # Include those samples in automatic ranges without changing the metric values.
+            lo, hi = data_bounds if data_bounds is not None else (values.min_scalar(), values.max_scalar())
+            return min(1.0, lo), max(3.0, hi)
 
         lo = values.min_scalar()
         hi = values.max_scalar()
@@ -2427,12 +2442,13 @@ class HistogramPanel(Panel):
         auto_min: float,
         auto_max: float,
         custom_range: tuple[float | None, float | None],
+        data_bounds: tuple[float, float] | None = None,
     ) -> tuple[float, float]:
         lo = custom_range[0] if custom_range[0] is not None else auto_min
         hi = custom_range[1] if custom_range[1] is not None else auto_max
         if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
             lo, hi = auto_min, auto_max
-        return HistogramPanel._snap_bounds_to_data(values, lo, hi)
+        return HistogramPanel._snap_bounds_to_data(values, lo, hi, data_bounds)
 
     def _build_histogram(
         self,
@@ -2723,8 +2739,10 @@ class HistogramPanel(Panel):
         self._compare_valid_y_values = y_valid
         self._compare_x_finite_cpu = x_finite
         self._compare_y_finite_cpu = y_finite
-        self._compare_x_auto_min, self._compare_x_auto_max = self._histogram_bounds(x_finite, self._metric_id)
-        self._compare_y_auto_min, self._compare_y_auto_max = self._histogram_bounds(y_finite, self._compare_metric_id)
+        x_bounds = (x_finite.min_scalar(), x_finite.max_scalar()) if self._metric_id == "erank" else None
+        y_bounds = (y_finite.min_scalar(), y_finite.max_scalar()) if self._compare_metric_id == "erank" else None
+        self._compare_x_auto_min, self._compare_x_auto_max = self._histogram_bounds(x_finite, self._metric_id, x_bounds)
+        self._compare_y_auto_min, self._compare_y_auto_max = self._histogram_bounds(y_finite, self._compare_metric_id, y_bounds)
         self._compare_summary_text = _trf(
             "histogram.compare.summary",
             "{x_metric} vs {y_metric} across {count} Gaussians",
@@ -2734,9 +2752,9 @@ class HistogramPanel(Panel):
         )
         self._compare_x_metric_label = METRIC_BY_ID[self._metric_id].label()
         self._compare_y_metric_label = METRIC_BY_ID[self._compare_metric_id].label()
-        self._rebind_compare_from_cache()
+        self._rebind_compare_from_cache(x_bounds, y_bounds)
 
-    def _rebind_compare_from_cache(self):
+    def _rebind_compare_from_cache(self, x_bounds=None, y_bounds=None):
         """Re-resolve compare X/Y ranges and rebuild the heatmap from cached values."""
         x_finite = self._compare_x_finite_cpu
         y_finite = self._compare_y_finite_cpu
@@ -2745,9 +2763,9 @@ class HistogramPanel(Panel):
         # Mirror the primary axis range-of-interest on the compare X axis so the 2D
         # heatmap stays consistent with the 1D histogram.
         x_range_min, x_range_max = self._resolve_active_bounds(self._compare_x_auto_min, self._compare_x_auto_max)
-        x_min, x_max = self._snap_bounds_to_data(x_finite, x_range_min, x_range_max)
+        x_min, x_max = self._snap_bounds_to_data(x_finite, x_range_min, x_range_max, x_bounds)
         y_range_min, y_range_max = self._resolve_compare_y_bounds(self._compare_y_auto_min, self._compare_y_auto_max)
-        y_min, y_max = self._snap_bounds_to_data(y_finite, y_range_min, y_range_max)
+        y_min, y_max = self._snap_bounds_to_data(y_finite, y_range_min, y_range_max, y_bounds)
         self._compare_y_custom_range_min_str = self._format_range_input(y_min)
         self._compare_y_custom_range_max_str = self._format_range_input(y_max)
         self._compare_x_min = x_min
