@@ -162,6 +162,7 @@ class _Handle:
 class _BindingModel:
     def __init__(self):
         self.func_bindings = {}
+        self.event_bindings = {}
         self.handle = _Handle()
 
     def bind(self, name, getter, setter=None):
@@ -171,7 +172,7 @@ class _BindingModel:
         self.func_bindings[name] = getter
 
     def bind_event(self, name, handler):
-        return None
+        self.event_bindings[name] = handler
 
     def bind_record_list(self, name):
         return None
@@ -814,12 +815,12 @@ def test_dom_right_click_uses_shared_app_context_menu(panel_module):
     assert menu["position"] == (120.0, 220.0)
     assert [item["action"] for item in menu["items"]] == [
         "load",
-        "inspector",
-        "gallery:publish",
         "project:rename",
+        "inspector",
         "show_in_folder",
         "remove",
         "trash",
+        "gallery:publish",
     ]
     assert event.stopped is True
 
@@ -846,14 +847,30 @@ def test_context_menu_opens_inspector_for_local_project(panel_module, status, ha
     actions = [entry["action"] for entry in menu["items"]]
     assert "project:contents" not in actions
     assert actions.count("inspector") == 1
-    expected_prefix = ["load", "inspector"] if status == "AVAILABLE" else ["inspector"]
+    expected_prefix = (
+        [
+            "load",
+            "project:rename",
+            *( ["project:update_thumbnail"] if has_details else [] ),
+            "inspector",
+        ]
+        if status == "AVAILABLE"
+        else ["inspector"]
+    )
     assert actions[:len(expected_prefix)] == expected_prefix
     assert ("project:rename" in actions) == (status == "AVAILABLE")
     assert not menu["items"][0].get("separator_before", False)
     assert not item.get("separator_before", False)
-    for entry in menu["items"]:
-        if entry["action"] in ("show_in_folder", "trash") or entry["action"].startswith("gallery:"):
-            assert entry["separator_before"] is True
+    assert next(item for item in menu["items"] if item["action"] == "show_in_folder")["separator_before"] is True
+    group_three = next(
+        (item for item in menu["items"] if item["action"] == "project:export_as"),
+        next(
+            (item for item in menu["items"] if item["action"].startswith("gallery:")),
+            None,
+        ),
+    )
+    if group_three is not None:
+        assert group_three["separator_before"] is True
     menu["on_action"](item["action"])
 
     assert panel._selected_asset_ids == {asset["id"]}
@@ -952,7 +969,8 @@ def test_real_folder_menu_reveals_or_removes_mapping(panel_module, monkeypatch):
     menu["on_action"]("remove")
     assert calls == [("projects",)]
 
-def test_open_project_verifies_then_uses_project_lifecycle(panel_module):
+@pytest.mark.parametrize("last_error", ["", "Previous catalog operation failed"])
+def test_open_project_verifies_then_uses_project_lifecycle(panel_module, last_error):
     panel = panel_module.AssetManagerPanel()
     asset = _project()
     project = SimpleNamespace(to_dict=lambda: asset)
@@ -960,14 +978,125 @@ def test_open_project_verifies_then_uses_project_lifecycle(panel_module):
     panel._asset_index = _index(
         assets={asset["id"]: asset},
         verify_asset=lambda project_id: project if project_id == asset["id"] else None,
+        last_error=last_error,
     )
 
     panel._load_asset(asset["id"])
 
+    assert _wait_until(lambda: bool(panel_module.lf._test_state.opened))
     assert panel_module.lf._test_state.opened == [
         (asset["path"], True, False, True)
     ]
     assert panel.get_selected_asset_id() == asset["id"]
+
+def test_open_project_returns_while_verification_is_blocked(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    entered, release, returned = threading.Event(), threading.Event(), threading.Event()
+    scheduled = []
+    monkeypatch.setattr(panel_module.lf.ui, "schedule_on_ui_thread", scheduled.append)
+
+    def verify(_asset_id):
+        entered.set()
+        assert release.wait(5)
+        return SimpleNamespace(to_dict=lambda: asset)
+
+    panel._asset_index = _index(assets={asset["id"]: asset}, verify_asset=verify)
+    panel._folder_scan_cancel = threading.Event()
+    panel._catalog_verify_cancel = threading.Event()
+    panel._folder_scan_rerun_pending = True
+
+    def open_on_ui():
+        panel._load_asset(asset["id"])
+        returned.set()
+
+    caller = threading.Thread(target=open_on_ui)
+    caller.start()
+    try:
+        assert entered.wait(2)
+        assert returned.wait(1), "Project opening blocked the UI on catalog verification"
+        assert panel._folder_scan_cancel.is_set()
+        assert panel._catalog_verify_cancel.is_set()
+        assert not panel._folder_scan_rerun_pending
+        assert panel_module.lf._test_state.opened == []
+    finally:
+        release.set()
+        caller.join(5)
+    assert _wait_until(lambda: bool(scheduled))
+    for callback in scheduled:
+        callback()
+    assert panel_module.lf._test_state.opened == [(asset["path"], True, False, True)]
+
+@pytest.mark.parametrize("active_worker", ["_folder_scan_active", "_catalog_verify_active"])
+def test_project_save_poll_defers_catalog_access_during_scan(panel_module, active_worker):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    project = SimpleNamespace(id=asset["id"])
+    accesses = []
+
+    def find(_path):
+        assert not getattr(panel, active_worker), "UI poll waited on the busy catalog"
+        accesses.append("find")
+        return project
+
+    panel._asset_index = _index(
+        assets={asset["id"]: asset}, find_asset_by_path=find,
+        verify_asset=lambda _id: accesses.append("verify") or project,
+    )
+    panel_module.lf.project_poll_write = lambda: {
+        "path": asset["path"], "generation": asset["generation"] + 1, "running": False,
+    }
+    setattr(panel, active_worker, True)
+    assert panel._refresh_after_project_write() is False
+    assert accesses == []
+    setattr(panel, active_worker, False)
+    assert panel._refresh_after_project_write() is True
+    assert accesses == ["find", "verify"]
+
+@pytest.mark.parametrize("invalidate", ["new_request", "unmount"])
+def test_open_project_ignores_stale_verification(panel_module, monkeypatch, invalidate):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    scheduled = []
+    monkeypatch.setattr(panel_module.lf.ui, "schedule_on_ui_thread", scheduled.append)
+    panel._asset_index = _index(
+        assets={asset["id"]: asset},
+        verify_asset=lambda _id: SimpleNamespace(to_dict=lambda: asset),
+    )
+    panel._load_asset(asset["id"])
+    assert _wait_until(lambda: len(scheduled) == 1)
+    if invalidate == "unmount":
+        panel.on_unmount(None)
+    else:
+        panel._load_asset(asset["id"])
+        assert _wait_until(lambda: len(scheduled) == 2)
+    scheduled[0]()
+    assert panel_module.lf._test_state.opened == []
+    if invalidate == "new_request":
+        scheduled[1]()
+        assert panel_module.lf._test_state.opened == [(asset["path"], True, False, True)]
+
+@pytest.mark.parametrize("result", ["missing", "unavailable", "error"])
+def test_open_project_rejects_failed_verification(panel_module, monkeypatch, result):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project(available=False, exists=False, status="MISSING")
+    scheduled, refreshed = [], []
+    monkeypatch.setattr(panel_module.lf.ui, "schedule_on_ui_thread", scheduled.append)
+    panel.refresh_catalog = lambda **kwargs: refreshed.append(kwargs)
+
+    def verify(_id):
+        if result == "error":
+            raise OSError("Cannot read project")
+        return None if result == "missing" else SimpleNamespace(to_dict=lambda: asset)
+
+    panel._asset_index = _index(assets={asset["id"]: asset}, verify_asset=verify)
+    panel._load_asset(asset["id"])
+    assert _wait_until(lambda: bool(scheduled))
+    scheduled[0]()
+    assert panel_module.lf._test_state.opened == []
+    assert bool(refreshed) == (result == "unavailable")
+    if result == "error":
+        assert panel._catalog_notice == "Cannot read project"
 
 def test_gallery_overlay_has_no_projects_details_button(panel_module):
     from lfs_plugins.gallery_transfer_overlay import GalleryTransferOverlay
@@ -1052,6 +1181,7 @@ def test_open_project_confirms_before_discarding_unsaved_changes(panel_module):
 
     panel._load_asset(asset["id"])
 
+    assert _wait_until(lambda: bool(state.confirm_dialogs))
     assert state.opened == []
     assert len(state.confirm_dialogs) == 1
     title, _message, buttons, callback = state.confirm_dialogs[0]
@@ -1123,6 +1253,15 @@ def test_folder_counts_match_search_results(panel_module):
 
     assert len(panel.get_filtered_assets()) == 1
     assert panel.get_folder_list()[0]["project_count"] == 1
+
+def test_search_matches_project_display_title(panel_module):
+    asset = _project(name="Original file name", display_name="Local Revision Test")
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={asset["id"]: asset})
+
+    for query in ("Local Revision Test", "Revision", "Original file name", "bicycle project.licht"):
+        panel._search_query = query
+        assert [row["id"] for row in panel.get_filtered_assets()] == [asset["id"]]
 
 def test_search_matches_path_and_type(panel_module):
     asset = _project(type="capture")
@@ -1450,11 +1589,13 @@ def test_recent_only_project_uses_native_inspection_without_joining_library(
     menu = panel_module.lf._test_state.context_menus[-1]
     assert [item["action"] for item in menu["items"]] == [
         "load",
-        "show_in_folder",
-        "inspector",
-        "project:export_as",
-        "project:update_thumbnail",
         "project:rename",
+        "project:update_thumbnail",
+        "inspector",
+        "project:clean",
+        "project:compact_content",
+        "show_in_folder",
+        "project:export_as",
     ]
     assert [item["label"] for item in menu["items"] if item["action"] == "inspector"] == [
         "projects.inspector.title"
@@ -1763,6 +1904,7 @@ def test_card_rename_writes_project_title_and_library_name(panel_module, monkeyp
     )
     def run_operation(_id, _title, operation, **kwargs):
         assert kwargs.get("closed_file", True) is True
+        assert kwargs.get("reverify_asset") is True
         operation(lambda *_args: None, lambda: False)
         kwargs["after"]()
 
@@ -3172,14 +3314,33 @@ def test_use_found_location_relinks_selected_asset(panel_module):
 def test_context_menu_shows_use_found_location_only_with_candidate(panel_module):
     panel = panel_module.AssetManagerPanel()
     asset = _project()
-    assert [item["action"] for item in panel._asset_context_menu_items(asset)] == [
+    panel._inspection_by_asset[asset["id"]] = {"details": object()}
+    items = panel._asset_context_menu_items(asset)
+    assert [item["action"] for item in items] == [
         "load",
-        "inspector",
-        "gallery:publish",
         "project:rename",
+        "project:update_thumbnail",
+        "inspector",
+        "project:clean",
+        "project:compact_content",
         "show_in_folder",
         "remove",
         "trash",
+        "project:export_as",
+        "gallery:publish",
+    ]
+    assert [item.get("separator_before", False) for item in items] == [
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        True,
+        False,
+        False,
+        True,
+        False,
     ]
 
     asset["relocation_candidate"] = "/tmp/found.licht"
@@ -3881,6 +4042,7 @@ def test_file_menu_publish_review_prefills_unpublished_draft(panel_module, monke
     monkeypatch.setattr(asset_index, "AssetIndex", lambda: pytest.fail("File menu opened a second catalog"))
     monkeypatch.setattr(file_menu, "_project_has_path", lambda: True)
     monkeypatch.setattr(panel_module.lf, "project_poll_write", lambda: {"path": str(path)}, raising=False)
+    monkeypatch.setattr(panel_module.lf, "get_scene", lambda: SimpleNamespace(get_nodes=lambda: []), raising=False)
     monkeypatch.setattr(panel_module.lf, "io", SimpleNamespace(inspect_project_card=lambda _path: SimpleNamespace(
         project_uuid=project_id, title="File title", commit_uuid="saved", file_uuid="file", physical_file_size=1, has_preview=False
     )), raising=False)
@@ -3894,6 +4056,84 @@ def test_file_menu_publish_review_prefills_unpublished_draft(panel_module, monke
 
     assert reviews[0]["fields"]["title"] == ("Prepared title" if panel_available else "File title")
     assert reviews[0]["fields"]["description"] == ("Prepared text" if panel_available else "")
+
+
+def test_publish_review_keeps_the_entered_details_for_the_next_attempt(panel_module, monkeypatch, tmp_path):
+    # A failed upload is retried from a fresh review, which must offer the typed details, not the project name.
+    from lfs_plugins import gallery_file_panel
+    from lfs_plugins.asset_index import AssetIndex
+
+    project_id = str(uuid.uuid4())
+    project_path = tmp_path / "project-a.licht"
+    project_path.write_bytes(b"local project")
+    catalog = tmp_path / "library.json"
+    catalog.write_text(json.dumps({
+        "schema_version": 6,
+        "folders": {"default": {"path": str(tmp_path)}},
+        "projects": {project_id: {"path": str(project_path), "folder_id": "default", "name": "project-a", "name_origin": "user"}},
+    }))
+    index = AssetIndex(library_path=catalog, default_folder_path=tmp_path)
+    assert index.load()
+    monkeypatch.setattr(index, "_inspect_path", lambda _path, *_args: SimpleNamespace(project_uuid=project_id))
+    library = panel_module.AssetManagerPanel()
+    library._asset_index = index
+    library._gallery_state = {"links": {}, "scenes": []}
+    monkeypatch.setattr(library, "refresh_catalog", lambda **kwargs: None)
+    state = {"identity": "account", "signed_in": True, "links": {}}
+    published = []
+    controller = SimpleNamespace(
+        service=SimpleNamespace(identity=lambda: "account"), upload_format="sog", snapshot=lambda: state,
+        subscribe=lambda changed: (changed(state), lambda: None)[1],
+        publish_asset=lambda asset, details, upload_format, **kwargs: published.append(details))
+    monkeypatch.setattr(panel_module.lf.ui, "get_panel_object",
+                        lambda panel_id: library if panel_id == "lfs.asset_manager" else None, raising=False)
+    monkeypatch.setattr(panel_module.lf.ui, "set_panel_enabled", lambda *_args: None, raising=False)
+    monkeypatch.setattr(panel_module.lf.ui, "request_redraw", lambda: None, raising=False)
+    monkeypatch.setattr(panel_module.lf, "project_poll_write", lambda: {"path": ""}, raising=False)
+    review = gallery_file_panel.GalleryFilePanel()
+    review.show(controller=controller, asset=index.get_asset_dict(project_id), scene=None, action="publish",
+                fields={"title": "project-a", "description": "", "upload_format": "sog"})
+    review._set("title", "Playground")
+    review._set("description", "Small training of a playground")
+    review._submit()
+
+    assert published[0]["title"] == "Playground"
+    assert library._gallery_details(index.get_asset_dict(project_id)) == {
+        "title": "Playground", "description": "Small training of a playground"}
+
+
+def test_missing_filter_removes_the_shown_missing_entries_only(panel_module, monkeypatch, tmp_path):
+    from lfs_plugins.asset_index import AssetIndex
+
+    present_id, missing_id, other_missing_id = (str(uuid.uuid4()) for _ in range(3))
+    present = tmp_path / "present.licht"
+    present.write_bytes(b"local project")
+    catalog = tmp_path / "library.json"
+    catalog.write_text(json.dumps({
+        "schema_version": 6,
+        "folders": {"default": {"path": str(tmp_path)}},
+        "projects": {
+            present_id: {"path": str(present), "folder_id": "default", "name": "present", "name_origin": "user"},
+            missing_id: {"path": str(tmp_path / "archived.licht"), "folder_id": "default", "name": "archived", "name_origin": "user"},
+            other_missing_id: {"path": str(tmp_path / "deleted.licht"), "folder_id": "default", "name": "deleted", "name_origin": "user"},
+        },
+    }))
+    index = AssetIndex(library_path=catalog, default_folder_path=tmp_path)
+    assert index.load()
+    index.reconcile_all()
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = index
+    monkeypatch.setattr(panel, "refresh_catalog", lambda **kwargs: None)
+    assert not panel.get_can_clean_missing()
+    panel._active_filter = "missing"
+    panel._search_query = "arch"
+    assert panel.get_can_clean_missing()
+
+    panel.on_clean_missing()
+
+    remaining = json.loads(catalog.read_text())["projects"]
+    assert set(remaining) == {present_id, other_missing_id}
+    assert present.read_bytes() == b"local project"
 
 
 def test_gallery_union_has_one_linked_pair_and_remote_projection(panel_module):
@@ -4064,7 +4304,7 @@ def test_gallery_attention_scope_and_state_specific_context_menu(panel_module):
     panel._select_folder_id('__gallery_attention__')
     assert [r['id'] for r in panel._filtered_assets()] == [local['id']]
     actions = [i['action'] for i in panel._asset_context_menu_items(local)]
-    assert actions[0:3] == ['load','inspector','gallery:resolve']
+    assert actions[0:3] == ['load', 'project:rename', 'inspector']
     assert 'gallery:update' not in actions and 'gallery:publish' not in actions
     remote_actions=[i['action'] for i in panel._asset_context_menu_items(panel._asset_dict('remote:remote-only'))]
     assert remote_actions == ['gallery:pull','gallery:pull_open','gallery:open','gallery:copy','gallery:remove']
@@ -4824,7 +5064,7 @@ def test_open_in_portal_uses_the_scene_login_destination(panel_module, visibilit
 
 @pytest.mark.parametrize(
     ("layout", "content_width", "expected_width"),
-    [("medium", 800.0, 308.0), ("narrow", 600.0, 240.0)],
+    [("medium", 800.0, 292.0), ("narrow", 600.0, 240.0)],
 )
 def test_info_poster_is_inserted_updated_and_released(
     panel_module, tmp_path, layout, content_width, expected_width
@@ -5354,3 +5594,166 @@ def test_thumbnail_training_rejection_shows_short_user_message(panel_module):
     panel_module.lf.project_set_preview = rejected
     with pytest.raises(RuntimeError, match=r"^Stop training before updating the project thumbnail\.$"):
         panel_module.AssetManagerPanel._apply_active_project_preview("/tmp/test.licht", "target", _MIN_PNG)
+
+
+@pytest.mark.parametrize("status", ["MISSING", "IDENTITY_MISMATCH", "UNREADABLE", "UNSUPPORTED_NEWER", "REPAIR_ONLY"])
+def test_project_maintenance_is_unavailable_for_unwritable_projects(panel_module, status):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project(status=status)
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    panel._inspection_by_asset[asset["id"]] = {"details": object()}
+    actions = {item["action"] for item in panel._asset_context_menu_items(asset)}
+    assert not actions.intersection({"project:clean", "project:compact_content"})
+    panel._set_asset_selection({asset["id"]}, cursor=asset["id"], anchor=asset["id"])
+    panel.open_project_operation(None, None, ["compact_content"])
+    assert not panel._dialog_kind
+
+
+def test_context_cleanup_targets_selected_file_and_uses_guarded_operation(panel_module, monkeypatch):
+    from lfs_plugins import project_cleanup
+
+    panel = panel_module.AssetManagerPanel()
+    asset = _project(path="/projects/closed.licht")
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    panel._inspection_by_asset[asset["id"]] = {"details": object()}
+    opened = []
+    operations = []
+    monkeypatch.setattr(project_cleanup, "open_project_cleanup", lambda *args: opened.append(args))
+    panel._start_project_operation = lambda *args, **kwargs: operations.append((args, kwargs)) or True
+    panel._handle_asset_context_action("project:clean", asset["id"])
+    assert len(opened) == 1
+    path, run_closed, refresh = opened[0]
+    assert path == asset["path"]
+    operation, complete = lambda *_: None, lambda _: None
+    run_closed(operation, complete, expected_commit_uuid="preview-commit")
+    args, kwargs = operations[0]
+    assert args == (asset["id"], "project_cleanup.title", operation)
+    assert kwargs["on_finished"] is complete
+    assert kwargs["operation_kind"] == "clean"
+    assert kwargs["expected_commit_uuid"] == "preview-commit"
+    assert panel_module.lf._test_state.opened == []
+    asset["path"] = "/projects/relinked.licht"
+    with pytest.raises(RuntimeError, match="project_cleanup.changed"):
+        run_closed(operation, complete, expected_commit_uuid="preview-commit")
+    assert len(operations) == 1
+
+
+def test_context_compact_requires_confirmation_and_uses_selected_file(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project(path="/projects/closed.licht")
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    panel._inspection_by_asset[asset["id"]] = {"details": object()}
+    operations = []
+    calls = []
+    monkeypatch.setattr(panel_module.lf.ui, "form_dialog", lambda *_args, **_kwargs: True, raising=False)
+    panel._start_project_operation = lambda *args, **kwargs: operations.append(args) or True
+    panel_module.lf.io = SimpleNamespace(compact_project_file=lambda *args: calls.append(args))
+    panel._handle_asset_context_action("project:compact_content", asset["id"])
+    assert panel._dialog_kind == "compact_content"
+    assert operations == []
+    panel.confirm_project_dialog()
+    operations[0][2](None, lambda: False)
+    assert calls[0][0] == asset["path"]
+    assert panel_module.lf._test_state.opened == []
+
+
+@pytest.mark.parametrize("recent_only", [False, True])
+@pytest.mark.parametrize("change", ["none", "save_after_preview", "replaced_project"])
+def test_preview_operation_guards_confirmed_commit_and_identity(
+    panel_module, monkeypatch, tmp_path, recent_only, change
+):
+    from lfs_plugins import project_operations
+
+    path = tmp_path / "selected.licht"
+    path.write_bytes(b"unchanged project")
+    project_id = str(uuid.uuid4())
+    cached = SimpleNamespace(project_uuid=project_id, commit_uuid="old-catalog-commit")
+    current = SimpleNamespace(project_uuid=project_id, commit_uuid="preview-commit")
+    if change == "save_after_preview":
+        current.commit_uuid = "newer-unconfirmed-commit"
+    elif change == "replaced_project":
+        current.project_uuid = str(uuid.uuid4())
+    calls, completed = [], []
+
+    def guard(_path, identity, commit, operation):
+        calls.append((identity, commit))
+        if identity != current.project_uuid or commit != current.commit_uuid:
+            raise RuntimeError("The project changed")
+        return operation()
+
+    io = SimpleNamespace(inspect_project_card=lambda _path: current,
+        run_project_operation=guard,
+        backup_project_file=lambda _path: calls.append("backup") or str(tmp_path / "backup.licht"))
+    store = project_operations.ProjectOperations(io, tmp_path / "records")
+    monkeypatch.setattr(project_operations, "ProjectOperations", lambda _io: store)
+    monkeypatch.setattr(panel_module.lf, "io", io, raising=False)
+    monkeypatch.setattr(panel_module.threading, "Thread",
+        lambda target, **kwargs: SimpleNamespace(start=target))
+    panel = panel_module.AssetManagerPanel()
+    asset_id = "recent:preview" if recent_only else project_id
+    asset = dict(id=asset_id, project_uuid=project_id, commit_uuid=cached.commit_uuid,
+        path=str(path), name="Selected", status="AVAILABLE", recent_only=recent_only)
+    panel._asset_dict = lambda identifier: asset if identifier == asset_id else None
+    panel._inspection_by_asset[asset_id] = dict(card=cached, details=SimpleNamespace(card=cached))
+    panel._inspect_contents = lambda _path: {}
+    assert panel._start_project_operation(asset_id, "Clean", lambda *_: calls.append("clean"),
+        expected_commit_uuid="preview-commit", on_finished=completed.append)
+    assert calls[0] == (project_id, "preview-commit")
+    assert asset["commit_uuid"] == "old-catalog-commit"
+    assert cached.commit_uuid == "old-catalog-commit"
+    if change == "none":
+        assert calls[1:] == ["backup", "clean"]
+        assert completed == [None]
+    else:
+        assert len(calls) == 1
+        assert len(completed) == 1 and isinstance(completed[0], Exception)
+        assert path.read_bytes() == b"unchanged project"
+
+
+def _gallery_control(panel, predicate):
+    """Resolve visibility and click dispatch from the shipped RML and model."""
+    import xml.etree.ElementTree as ET
+    path = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml"
+    root = ET.fromstring(path.read_text())
+    buttons = [element for element in root.iter("button")
+               if element.get("data-if") == predicate]
+    assert len(buttons) == 1, f"missing Gallery control: {predicate}"
+    button = buttons[0]
+    model = _BindingModel()
+    panel.on_bind_model(_BindingContext(model))
+    event = button.attrib["data-event-click"]
+    assert event in model.event_bindings
+    return model.func_bindings[predicate](), lambda: model.event_bindings[event](model.handle, None, [])
+
+
+def test_gallery_undo_control_dispatches_restore_and_hides_during_operation(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    calls = []
+    panel._gallery_controller = SimpleNamespace(undo_pull=lambda: calls.append("restore"))
+    state = dict(panel._gallery_state, undoPull={"backup": "/backup", "attempt": 0})
+    panel._gallery_changed(state)
+    visible, click = _gallery_control(panel, "gallery_has_undo")
+    assert visible
+    click()
+    assert calls == ["restore"]
+    panel._gallery_changed(dict(state, undoPull={"backup": "/backup", "operation": "restoring"}))
+    assert not _gallery_control(panel, "gallery_has_undo")[0]
+    panel._gallery_changed(dict(state, undoPull={"backup": "/backup", "attempt": 1, "error": "retry"}))
+    visible, click = _gallery_control(panel, "gallery_has_undo")
+    assert visible
+    click()
+    assert calls == ["restore", "restore"]
+
+
+def test_gallery_missing_backup_control_opens_recovery(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    calls = []
+    panel._gallery_controller = SimpleNamespace(undo_pull=lambda: None, command=calls.append)
+    assert not _gallery_control(panel, "gallery_has_recovery")[0]
+    panel._gallery_changed(dict(panel._gallery_state, undoPull={
+        "backup": "/backup", "attempt": 1, "backupMissing": True, "error": "gone"}))
+    assert not _gallery_control(panel, "gallery_has_undo")[0]
+    visible, click = _gallery_control(panel, "gallery_has_recovery")
+    assert visible
+    click()
+    assert calls == ["show_recovery_folder"]

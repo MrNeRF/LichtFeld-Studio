@@ -78,7 +78,7 @@ namespace lfs::io {
             return mat;
         }
 
-        MeshData convert_ai_mesh(const aiMesh* ai_mesh) {
+        MeshData convert_ai_mesh(const aiMesh* ai_mesh, const bool geometry_only) {
             assert(ai_mesh);
             const int nv = static_cast<int>(ai_mesh->mNumVertices);
             assert(nv > 0);
@@ -119,7 +119,7 @@ namespace lfs::io {
 
             MeshData mesh(std::move(vertices), std::move(indices));
 
-            if (ai_mesh->HasNormals()) {
+            if (!geometry_only && ai_mesh->HasNormals()) {
                 mesh.normals = Tensor::empty({static_cast<size_t>(nv), size_t{3}}, Device::CPU, DataType::Float32);
                 auto nacc = mesh.normals.accessor<float, 2>();
                 for (int i = 0; i < nv; ++i) {
@@ -130,7 +130,7 @@ namespace lfs::io {
                 }
             }
 
-            if (ai_mesh->HasTangentsAndBitangents()) {
+            if (!geometry_only && ai_mesh->HasTangentsAndBitangents()) {
                 mesh.tangents = Tensor::empty({static_cast<size_t>(nv), size_t{4}}, Device::CPU, DataType::Float32);
                 auto tacc = mesh.tangents.accessor<float, 2>();
                 for (int i = 0; i < nv; ++i) {
@@ -149,7 +149,7 @@ namespace lfs::io {
                 }
             }
 
-            if (ai_mesh->HasTextureCoords(0)) {
+            if (!geometry_only && ai_mesh->HasTextureCoords(0)) {
                 mesh.texcoords = Tensor::empty({static_cast<size_t>(nv), size_t{2}}, Device::CPU, DataType::Float32);
                 auto tcacc = mesh.texcoords.accessor<float, 2>();
                 for (int i = 0; i < nv; ++i) {
@@ -159,7 +159,7 @@ namespace lfs::io {
                 }
             }
 
-            if (ai_mesh->HasVertexColors(0)) {
+            if (!geometry_only && ai_mesh->HasVertexColors(0)) {
                 mesh.colors = Tensor::empty({static_cast<size_t>(nv), size_t{4}}, Device::CPU, DataType::Float32);
                 auto cacc = mesh.colors.accessor<float, 2>();
                 for (int i = 0; i < nv; ++i) {
@@ -335,9 +335,15 @@ namespace lfs::io {
             aiProcess_JoinIdenticalVertices |
             aiProcess_FlipUVs |
             aiProcess_SortByPType;
+        constexpr unsigned int GEOMETRY_IMPORT_FLAGS =
+            aiProcess_Triangulate |
+            aiProcess_JoinIdenticalVertices |
+            aiProcess_PreTransformVertices |
+            aiProcess_SortByPType;
 
         Assimp::Importer importer;
-        const aiScene* scene = importer.ReadFile(path_str, IMPORT_FLAGS);
+        const aiScene* scene = importer.ReadFile(
+            path_str, options.mesh_geometry_only ? GEOMETRY_IMPORT_FLAGS : IMPORT_FLAGS);
 
         if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
             return make_error(ErrorCode::CORRUPTED_DATA,
@@ -365,7 +371,7 @@ namespace lfs::io {
         sub_meshes.reserve(scene->mNumMeshes);
         mesh_material_indices.reserve(scene->mNumMeshes);
         for (unsigned int i = 0; i < scene->mNumMeshes; ++i) {
-            sub_meshes.push_back(convert_ai_mesh(scene->mMeshes[i]));
+            sub_meshes.push_back(convert_ai_mesh(scene->mMeshes[i], options.mesh_geometry_only));
             mesh_material_indices.push_back(scene->mMeshes[i]->mMaterialIndex);
             LOG_DEBUG("  mesh[{}]: {} verts, {} faces, material_index={}",
                       i, scene->mMeshes[i]->mNumVertices, scene->mMeshes[i]->mNumFaces,
@@ -417,7 +423,7 @@ namespace lfs::io {
             return 0;
         };
 
-        for (size_t mi = 0; mi < materials.size(); ++mi) {
+        for (size_t mi = 0; mi < materials.size() && !options.mesh_geometry_only; ++mi) {
             auto& mat = materials[mi];
             mat.albedo_tex = load_texture(mat.albedo_tex_path);
             mat.normal_tex = load_texture(mat.normal_tex_path);
@@ -434,7 +440,7 @@ namespace lfs::io {
         mesh_data->materials = std::move(materials);
         mesh_data->texture_images = std::move(texture_images);
 
-        if (!mesh_data->has_normals()) {
+        if (!options.mesh_geometry_only && !mesh_data->has_normals()) {
             mesh_data->compute_normals();
         }
 

@@ -7,7 +7,9 @@ body {
     background-color: @{background};
 }
 
-#python-editor-view {
+#python-editor-view,
+#python-output-terminal,
+#python-repl-terminal {
     background-color: @{surface};
     color: @{text};
 }

@@ -925,6 +925,7 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
     ]
     assert controller.snapshot()["crop_enable_buttons"][0]["selected"] is False
 
+    assert "preparing" in module._TOOLBAR_HIDDEN_STATES
     for trainer_state in module._TOOLBAR_HIDDEN_STATES:
         module.RuntimeState.trainer_state.value = trainer_state
         snapshot = controller.snapshot()

@@ -19,6 +19,8 @@ namespace lfs::vis {
     struct VulkanDepthBlitParams {
         std::shared_ptr<const lfs::core::Tensor> depth; // [1, H, W] CUDA float
         bool depth_is_ndc = false;
+        // Clip-z/clip-w coefficients for converting NDC depth to positive view depth.
+        glm::vec4 ndc_to_view_coeffs{0.0f};
         bool flip_y = false;
         float near_plane = 0.1f;
         float far_plane = 1000.0f;
@@ -55,6 +57,7 @@ namespace lfs::vis {
         // Bound after prepare(). Lets other passes sample the splat depth
         // surface without re-uploading it.
         [[nodiscard]] VkImageView depthView(std::size_t frame_slot) const;
+        [[nodiscard]] std::uint64_t depthBindingRevision(std::size_t frame_slot) const;
 
     private:
         struct Impl;

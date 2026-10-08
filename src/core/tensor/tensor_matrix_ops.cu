@@ -3,6 +3,7 @@
 
 #include "core/cuda_error.hpp"
 #include "internal/tensor_ops.hpp"
+#include <algorithm>
 #include <cuda_runtime.h>
 
 namespace lfs::core::tensor_ops {
@@ -302,6 +303,33 @@ namespace lfs::core::tensor_ops {
             C_b[row * n + col] = sum;
     }
 
+    // Narrow products ([M, K] x [K, N] with K, N <= 16), such as colour transforms: one thread per row
+    // with B in shared memory, instead of 16x16 tiles that leave most of each block idle.
+    constexpr int kNarrowGemm = 16;
+
+    __global__ void sgemm_narrow_kernel(const float* __restrict__ a, const float* __restrict__ b,
+                                        float* __restrict__ c, const size_t m, const int n, const int k) {
+        __shared__ float shared_b[kNarrowGemm * kNarrowGemm];
+        for (int i = threadIdx.x; i < k * n; i += blockDim.x)
+            shared_b[i] = b[i];
+        __syncthreads();
+        for (size_t row = blockIdx.x * static_cast<size_t>(blockDim.x) + threadIdx.x; row < m;
+             row += static_cast<size_t>(gridDim.x) * blockDim.x) {
+            float x[kNarrowGemm];
+#pragma unroll
+            for (int j = 0; j < kNarrowGemm; ++j)
+                x[j] = j < k ? a[row * k + j] : 0.0f;
+            for (int col = 0; col < n; ++col) {
+                float sum = 0.0f;
+#pragma unroll
+                for (int j = 0; j < kNarrowGemm; ++j)
+                    if (j < k)
+                        sum += x[j] * shared_b[j * n + col];
+                c[row * n + col] = sum;
+            }
+        }
+    }
+
     // Utility kernels
     __global__ void eye_kernel(float* data, size_t m, size_t n) {
         int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -341,7 +369,14 @@ namespace lfs::core::tensor_ops {
     }
 
     void launch_sgemm(const float* a, const float* b, float* c, size_t m, size_t n, size_t k, cudaStream_t stream) {
-        if (m >= 16 && n >= 64 && k >= 8) {
+        if (n <= kNarrowGemm && k <= kNarrowGemm) {
+            if (m == 0 || n == 0)
+                return;
+            constexpr int block = 256;
+            const auto grid = static_cast<unsigned>(std::min<size_t>((m + block - 1) / block, size_t{1} << 20));
+            sgemm_narrow_kernel<<<grid, block, 0, stream>>>(a, b, c, m, static_cast<int>(n), static_cast<int>(k));
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.matrix.sgemm_narrow");
+        } else if (m >= 16 && n >= 64 && k >= 8) {
             constexpr int BM = 64, BN = 64, BK = 8, TM = 4, TN = 4;
             dim3 block(BN / TN, BM / TM);
             const size_t max_rows_per_launch = MAX_GRID_Y_DIM * static_cast<size_t>(BM);

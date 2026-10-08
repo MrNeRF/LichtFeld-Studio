@@ -39,11 +39,11 @@ namespace lfs::python {
 
         PyMeshData to_device(const std::string& device) const;
 
-        void set_vertices(const PyTensor& t) { data_->vertices = t.tensor(); }
-        void set_normals(const PyTensor& t) { data_->normals = t.tensor(); }
-        void set_indices(const PyTensor& t) { data_->indices = t.tensor(); }
-        void set_texcoords(const PyTensor& t) { data_->texcoords = t.tensor(); }
-        void set_colors(const PyTensor& t) { data_->colors = t.tensor(); }
+        void set_vertices(const PyTensor& t);
+        void set_normals(const PyTensor& t);
+        void set_indices(const PyTensor& t);
+        void set_texcoords(const PyTensor& t);
+        void set_colors(const PyTensor& t);
 
         std::shared_ptr<core::MeshData> data() const { return data_; }
 

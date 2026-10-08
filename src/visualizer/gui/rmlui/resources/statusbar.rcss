@@ -385,6 +385,8 @@ body {
 
 #fps-value {
     margin-left: 16dp;
+    min-width: 128dp;
+    text-align: right;
 }
 
 #fps-label {
@@ -499,15 +501,31 @@ body.fit-9 #status-message-section {
     overflow: hidden;
 }
 
+body.fit-9 #status-left {
+    display: none;
+}
+
 body.fit-9 #status-right {
-    flex-shrink: 1;
+    flex: 1 1 0px;
+    margin-left: 4dp;
     min-width: 0;
     overflow: hidden;
 }
 
 body.fit-9 #gpu-mem {
-    flex-shrink: 1;
+    flex: 1 1 0px;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
 }
+/* Metric values keep a minimum width so changing digits do not move their neighbours. */
+#loss-value { min-width: 44dp; }
+#gaussians-value { min-width: 80dp; }
+#step-value { min-width: 100dp; }
+#time-value, #eta-value { min-width: 60dp; }
+
+#mcp-compact { display: none; }
+body.fit-8 #mcp-summary { display: none; }
+body.fit-8 #mcp-compact { display: block; }
+body.fit-8 #mcp-chip { margin-right: 4dp; padding: 0 3dp; }
+body.fit-8 #fps-value { margin-left: 6dp; min-width: 110dp; }

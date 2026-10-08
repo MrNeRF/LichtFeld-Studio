@@ -120,23 +120,31 @@ namespace lfs::vis {
 
         // Check if continuous input is active (WASD keys or camera drag)
         [[nodiscard]] bool isContinuousInputActive() const {
+            return isCameraDragging() || needsCameraAnimationFrame();
+        }
+        [[nodiscard]] bool isCameraDragging() const {
+            return drag_mode_ == DragMode::Orbit || drag_mode_ == DragMode::Pan ||
+                   drag_mode_ == DragMode::Rotate;
+        }
+        // A held pointer gesture only changes the camera when motion arrives.
+        // Stored drag velocity is not an animation until the button is released.
+        [[nodiscard]] bool needsCameraAnimationFrame() const {
             const bool movement_active = keys_movement_[0] || keys_movement_[1] || keys_movement_[2] ||
                                          keys_movement_[3] || keys_movement_[4] || keys_movement_[5];
-            const bool camera_drag = drag_mode_ == DragMode::Orbit ||
-                                     drag_mode_ == DragMode::Pan ||
-                                     drag_mode_ == DragMode::Rotate;
             auto& keyboard_camera = activeKeyboardViewport().camera;
             const bool orbit_coasting =
-                orbit_coast_viewport_ && orbit_coast_viewport_->camera.hasOrbitMomentum();
+                drag_mode_ != DragMode::Orbit && orbit_coast_viewport_ &&
+                orbit_coast_viewport_->camera.hasOrbitMomentum();
             const bool pan_coasting =
-                pan_coast_viewport_ && pan_coast_viewport_->camera.hasPanMomentum();
+                drag_mode_ != DragMode::Pan && pan_coast_viewport_ &&
+                pan_coast_viewport_->camera.hasPanMomentum();
             const bool wasd_coasting =
                 (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasWasdMomentum()) ||
                 keyboard_camera.hasWasdMomentum();
             const bool drone_settling =
                 (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasDroneMotion()) ||
                 keyboard_camera.hasDroneMotion();
-            return movement_active || camera_drag || orbit_coasting || pan_coasting ||
+            return movement_active || orbit_coasting || pan_coasting ||
                    keyboard_camera.isGliding() || wasd_coasting || drone_settling;
         }
         [[nodiscard]] bool isCameraNavigating() const {
@@ -159,7 +167,7 @@ namespace lfs::vis {
         void handleMouseMove(double x, double y);
         void handleScroll(double xoff, double yoff);
         void handleKey(int key, int action, int mods);
-        void handleKey(int physical_key, int logical_key, int scancode, int action, int mods);
+        void handleKey(int physical_key, int logical_key, int scancode, int action, int mods, bool owned_release = false, bool gui_consumed = false);
         void handleFileDrop(const std::vector<std::string>& paths);
         void onWindowFocusLost();
         bool focusSelection();
@@ -204,6 +212,7 @@ namespace lfs::vis {
         [[nodiscard]] SplitViewPanelId splitPanelForScreenX(double x) const;
         [[nodiscard]] std::optional<PanelInteractionState> resolvePanelInteraction(double x, double y);
         void focusSplitPanel(SplitViewPanelId panel);
+        void resetSplitPanelFocus();
         [[nodiscard]] Viewport& activeKeyboardViewport();
         [[nodiscard]] const Viewport& activeKeyboardViewport() const;
         glm::vec3 unprojectScreenPoint(double x, double y, float fallback_distance = 5.0f) const;
@@ -260,12 +269,13 @@ namespace lfs::vis {
         double splitter_start_x_ = 0.0;
         Viewport* drag_viewport_ = nullptr;
         Viewport* orbit_coast_viewport_ = nullptr;
+        std::chrono::steady_clock::time_point drag_momentum_updated_at_ = std::chrono::steady_clock::now();
+        void decayHeldDragMomentum();
         Viewport* pan_coast_viewport_ = nullptr;
         Viewport* wasd_momentum_viewport_ = nullptr;
 
-        // Cached whole-scene radius (half the bounds diagonal) that scales WASD
-        // speed and caps pan distance by splat size; 0 means "recompute" (after scene
-        // load/clear).
+        // Cached whole-scene radius (half the bounds diagonal) that caps pan
+        // distance by splat size; 0 means "recompute" (after scene load/clear).
         float scene_extent_ = 0.0f;
         // One-shot guard: the depth-view range is seeded from the trimmed scene
         // radius the first frame the extent is known after a load, then left to

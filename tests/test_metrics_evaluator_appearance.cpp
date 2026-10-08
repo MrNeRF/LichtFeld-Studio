@@ -174,7 +174,7 @@ TEST_F(MetricsEvaluatorAppearanceTest, HookRunsOncePerFrameBeforeClampAndSavesCo
     // Without the post-hook clamp, PSNR against 1 would be 0 dB.
     EXPECT_NEAR(metrics.psnr, 100.0f, 0.5f);
 
-    const auto saved = root.path() / "eval_step_7" / "0.png";
+    const auto saved = root.path() / "eval_step_7" / "a.png";
     ASSERT_TRUE(std::filesystem::exists(saved));
     auto [data, width, height, channels] = lfs::core::load_image(saved);
     ASSERT_NE(data, nullptr);

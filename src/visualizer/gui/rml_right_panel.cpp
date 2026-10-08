@@ -411,6 +411,8 @@ namespace lfs::vis::gui {
     }
 
     void RmlRightPanel::processInput(const RightPanelLayout& layout, const PanelInputState& input) {
+        if (rml_manager_ && rml_context_ && rml_manager_->routeInput(rml_context_, input, [this, layout](const PanelInputState& event) { processInput(layout, event); }))
+            return;
         const CursorRequest previous_cursor_request = cursor_request_;
         wants_input_ = false;
         wants_keyboard_ = false;
@@ -439,9 +441,7 @@ namespace lfs::vis::gui {
         const bool pointer_down =
             input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2];
         const bool keyboard_event =
-            !input.keys_pressed.empty() || !input.keys_released.empty() ||
-            !input.keys_repeated.empty() || !input.text_codepoints.empty() ||
-            !input.text_inputs.empty() || input.has_text_editing;
+            !input.keys_pressed.empty() || !input.input_events.empty();
         auto* const focused_before = rml_context_->GetFocusElement();
         if (pointer_event || keyboard_event)
             last_blurred_focus_ = nullptr;
@@ -594,20 +594,8 @@ namespace lfs::vis::gui {
 
         if (rml_input::hasFocusedKeyboardTarget(rml_context_->GetFocusElement()) &&
             !input.viewport_keyboard_focus) {
-            for (const int sc : input.keys_pressed) {
-                const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                if (rml_key != Rml::Input::KI_UNKNOWN) {
-                    rml_context_->ProcessKeyDown(rml_key, mods);
-                    input_dirty_ = true;
-                }
-            }
-            for (const int sc : input.keys_released) {
-                const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                if (rml_key != Rml::Input::KI_UNKNOWN) {
-                    rml_context_->ProcessKeyUp(rml_key, mods);
-                    input_dirty_ = true;
-                }
-            }
+            for (const auto& event : input.input_events)
+                input_dirty_ |= rml_input::processKeyboardEvent(*rml_context_, event, rml_manager_->getTextInputHandler());
         }
 
         auto* focused = rml_context_->GetFocusElement();
@@ -642,7 +630,8 @@ namespace lfs::vis::gui {
         if (w <= 0 || h <= 0)
             return;
 
-        const bool dims_changed = (w != last_fbo_w_ || h != last_fbo_h_);
+        const float dp_ratio = rml_manager_->getDpRatio();
+        const bool dims_changed = (w != last_fbo_w_ || h != last_fbo_h_ || dp_ratio != last_dp_ratio_);
         const bool layout_changed = (layout.scene_h != last_scene_h_ ||
                                      layout.splitter_h != last_splitter_h_);
         const bool tabs_changed = syncTabData(tabs, active_tab);
@@ -651,7 +640,6 @@ namespace lfs::vis::gui {
                                   tabs_changed || dims_changed || input_dirty_;
 
         if (needs_render) {
-            const float dp_ratio = rml_manager_->getDpRatio();
             const float tab_bar_h = PanelLayoutManager::TAB_BAR_H * dp_ratio;
 
             if (resize_handle_el_) {
@@ -702,6 +690,7 @@ namespace lfs::vis::gui {
                 }
             }
 
+            last_dp_ratio_ = dp_ratio;
             last_fbo_w_ = w;
             last_fbo_h_ = h;
             last_scene_h_ = layout.scene_h;

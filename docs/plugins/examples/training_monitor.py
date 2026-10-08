@@ -49,7 +49,7 @@ class TrainingMonitorPanel(lf.ui.Panel):
 
     @classmethod
     def poll(cls, context) -> bool:
-        return RuntimeState.has_trainer.value
+        return context.has_trainer
 
     def draw(self, ui):
         state = RuntimeState.trainer_state.value
@@ -105,13 +105,13 @@ class TrainingMonitorPanel(lf.ui.Panel):
             if ui.button("Resume", (-1, 0)):
                 lf.resume_training()
 
-        if ui.button("Save Checkpoint", (-1, 0)):
+        if ui.button("Save Project", (-1, 0)):
             lf.project_save()
-            lf.log.info("Checkpoint saved manually")
+            lf.log.info("Project save requested")
 
 
 _classes = [TrainingMonitorPanel]
-_post_step_handler = None
+_training_hooks = None
 
 
 def _on_post_step(_hook):
@@ -124,15 +124,19 @@ def _on_post_step(_hook):
 
 
 def on_load():
-    global _post_step_handler
+    global _training_hooks
     for cls in _classes:
         lf.register_class(cls)
-    _post_step_handler = _on_post_step
-    lf.on_post_step(_post_step_handler)
+    _training_hooks = lf.ControlSession()
+    _training_hooks.on_post_step(_on_post_step)
     lf.log.info("Training monitor loaded")
 
 
 def on_unload():
+    global _training_hooks
+    if _training_hooks is not None:
+        _training_hooks.clear()
+        _training_hooks = None
     for cls in reversed(_classes):
         lf.unregister_class(cls)
     lf.log.info("Training monitor unloaded")

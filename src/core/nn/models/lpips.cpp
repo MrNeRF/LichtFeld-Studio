@@ -10,6 +10,7 @@
 #include "nn_kernels.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -181,7 +182,7 @@ namespace lfs::core::nn::models {
         return tile;
     }
 
-    std::size_t Lpips::estimated_peak_bytes(const int height, const int width) const {
+    std::size_t Lpips::estimated_peak_bytes(const int height, const int width, const bool masked) const {
         const auto tile = tile_size_for(height, width);
         if (tile == 0)
             return 0;
@@ -189,13 +190,22 @@ namespace lfs::core::nn::models {
         const std::size_t tile_w = std::min<std::size_t>(static_cast<std::size_t>(width), tile);
         const std::size_t crop_h = std::min<std::size_t>(static_cast<std::size_t>(height), tile_h + 2 * kTileHalo);
         const std::size_t crop_w = std::min<std::size_t>(static_cast<std::size_t>(width), tile_w + 2 * kTileHalo);
+        // A masked call also holds the float mask, its clamped full-resolution weights and one pooled map per block.
+        std::size_t mask_bytes = 0;
+        if (masked) {
+            const auto mask_pixels = static_cast<std::size_t>(height) * static_cast<std::size_t>(width);
+            mask_bytes = 2 * SizeBucketedPool::get_bucket_size(mask_pixels * sizeof(float));
+            for (int block = 1; block < kBlocks; ++block)
+                mask_bytes += SizeBucketedPool::get_bucket_size(
+                    static_cast<std::size_t>(height >> block) * static_cast<std::size_t>(width >> block) * sizeof(float));
+        }
         if (compute_ == DataType::Float32)
-            return crop_h * crop_w * kExactBytesPerPixel;
+            return crop_h * crop_w * kExactBytesPerPixel + mask_bytes;
 
         // Count new allocations, including pool rounding. Existing buffers are
         // already reflected in cudaMemGetInfo; they need no second reservation.
         constexpr std::size_t driver_reserve = 64ULL * 1024 * 1024;
-        std::size_t bytes = driver_reserve;
+        std::size_t bytes = driver_reserve + mask_bytes;
         const auto feature_elems = 64 * crop_h * crop_w;
         for (const auto& buffer : fast_features_) {
             if (!buffer.is_valid() || buffer.numel() < feature_elems)
@@ -293,6 +303,36 @@ namespace lfs::core::nn::models {
         return run(pred, target, scaling.value_or(scaling_), nullptr);
     }
 
+    lfs::Result<float> Lpips::forward(const Tensor& pred, const Tensor& target, const Tensor& mask,
+                                      std::optional<InputScaling> scaling) {
+        if (auto error = validate_pair(pred, target))
+            return std::move(*error);
+        const auto height = pred.shape()[pred.ndim() - 2];
+        const auto width = pred.shape()[pred.ndim() - 1];
+        if (!mask.is_valid() || mask.device() != Device::CUDA || mask.ndim() != 2 ||
+            mask.shape()[0] != height || mask.shape()[1] != width)
+            return lpips_error(lfs::ErrorCode::InvalidArgument,
+                               "LPIPS mask must be a CUDA [H,W] tensor matching the images");
+
+        const lfs::core::CUDAStreamGuard stream_guard(pred.stream());
+        mask.sync_to_stream(pred.stream());
+        MaskWeights weights;
+        weights.maps[0] = mask.to(DataType::Float32).clamp(0.0f, 1.0f).contiguous();
+        for (int stage = 1; stage < kBlocks; ++stage) {
+            const auto& finer = weights.maps[static_cast<std::size_t>(stage - 1)];
+            weights.maps[static_cast<std::size_t>(stage)] =
+                avg_pool2d(finer.unsqueeze(0).unsqueeze(0), 2, 2, 2, 2, 0, 0).squeeze(0).squeeze(0).contiguous();
+        }
+        for (int stage = 0; stage < kBlocks; ++stage) {
+            const auto& map = weights.maps[static_cast<std::size_t>(stage)];
+            assert(map.shape()[0] == height >> stage && map.shape()[1] == width >> stage);
+            weights.sums[static_cast<std::size_t>(stage)] = map.sum().item<float>();
+            if (!(weights.sums[static_cast<std::size_t>(stage)] > 0.0))
+                return lpips_error(lfs::ErrorCode::InvalidArgument, "LPIPS mask covers no pixel");
+        }
+        return run(pred, target, scaling.value_or(scaling_), nullptr, &weights);
+    }
+
     lfs::Result<LpipsTaps> Lpips::forward_with_taps(const Tensor& pred, const Tensor& target,
                                                     std::optional<InputScaling> scaling) {
         LpipsTaps taps;
@@ -303,17 +343,18 @@ namespace lfs::core::nn::models {
     }
 
     lfs::Result<float> Lpips::run(const Tensor& pred, const Tensor& target,
-                                  const InputScaling scaling, LpipsTaps* taps) {
+                                  const InputScaling scaling, LpipsTaps* taps,
+                                  const MaskWeights* mask) {
         if (taps == nullptr && pred.is_valid() && target.is_valid() &&
             (pred.ndim() == 3 || pred.ndim() == 4) && pred.shape() == target.shape()) {
             const int height = static_cast<int>(pred.shape()[pred.ndim() - 2]);
             const int width = static_cast<int>(pred.shape()[pred.ndim() - 1]);
             if (compute_ == DataType::Float16)
-                return run_fast(pred, target, scaling);
+                return run_fast(pred, target, scaling, mask);
             if (tile_size_for(height, width) < static_cast<std::size_t>(std::max(height, width)))
-                return run_tiled(pred, target, scaling);
+                return run_tiled(pred, target, scaling, mask);
         }
-        return run_untiled(pred, target, scaling, taps);
+        return run_untiled(pred, target, scaling, taps, mask);
     }
 
     std::optional<lfs::Error> Lpips::validate_pair(const Tensor& pred, const Tensor& target) const {
@@ -345,7 +386,7 @@ namespace lfs::core::nn::models {
     }
 
     lfs::Result<float> Lpips::run_fast(const Tensor& pred, const Tensor& target,
-                                       const InputScaling scaling) {
+                                       const InputScaling scaling, const MaskWeights* mask) {
         if (auto error = validate_pair(pred, target))
             return std::move(*error);
         Tensor x_in = as_batch(pred).contiguous();
@@ -501,7 +542,9 @@ namespace lfs::core::nn::models {
                         cur[0], cur[1], w(std::format("lin{}.weight", stage)).data_ptr(),
                         scores + stage, last ? nullptr : next[0], last ? nullptr : next[1], 1,
                         channels, cur_h, cur_w, interior_y0, interior_y1, interior_x0, interior_x1,
-                        1.0f / (static_cast<float>(feature_h) * static_cast<float>(feature_w)), stream);
+                        mask ? 1.0f : 1.0f / (static_cast<float>(feature_h) * static_cast<float>(feature_w)),
+                        mask ? mask->maps[static_cast<std::size_t>(stage)].ptr<float>() : nullptr,
+                        feature_w, cy0 / factor, cx0 / factor, stream);
                     if (!last) {
                         std::swap(cur[0], next[0]);
                         std::swap(cur[1], next[1]);
@@ -517,15 +560,17 @@ namespace lfs::core::nn::models {
                                        cudaMemcpyDeviceToHost, stream));
         LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
         float total = 0.0f;
-        for (const float value : values)
-            total += value;
+        for (int stage = 0; stage < kBlocks; ++stage) {
+            const float value = values[static_cast<std::size_t>(stage)];
+            total += mask ? static_cast<float>(value / mask->sums[static_cast<std::size_t>(stage)]) : value;
+        }
         if (!std::isfinite(total))
             return lpips_error(lfs::ErrorCode::Internal, "LPIPS produced a non-finite value");
         return total;
     }
 
     lfs::Result<float> Lpips::run_tiled(const Tensor& pred, const Tensor& target,
-                                        const InputScaling scaling) {
+                                        const InputScaling scaling, const MaskWeights* mask) {
         if (pred.ndim() != 3 && pred.ndim() != 4)
             return lpips_error(lfs::ErrorCode::InvalidArgument, "LPIPS tiled inputs must be rank 3 or 4");
         const int height = static_cast<int>(pred.shape()[pred.ndim() - 2]);
@@ -558,12 +603,12 @@ namespace lfs::core::nn::models {
                 const auto pred_tile = crop(pred, cy0, cy1, cx0, cx1);
 
                 LpipsTaps target_taps;
-                auto target_result = run_untiled(target_tile, target_tile, scaling, &target_taps);
+                auto target_result = run_untiled(target_tile, target_tile, scaling, &target_taps, nullptr);
                 if (!target_result)
                     return std::move(target_result.error());
                 release_activations();
                 LpipsTaps pred_taps;
-                auto pred_result = run_untiled(pred_tile, pred_tile, scaling, &pred_taps);
+                auto pred_result = run_untiled(pred_tile, pred_tile, scaling, &pred_taps, nullptr);
                 if (!pred_result)
                     return std::move(pred_result.error());
                 release_activations();
@@ -596,7 +641,18 @@ namespace lfs::core::nn::models {
                     const auto score = conv(difference, linear_weight);
                     const auto region_count = static_cast<std::size_t>(ly1 - ly0) *
                                               static_cast<std::size_t>(lx1 - lx0);
-                    weighted[block] += static_cast<double>(score.mean().item<float>()) * region_count;
+                    if (mask) {
+                        const auto region_weights =
+                            mask->maps[static_cast<std::size_t>(block)]
+                                .slice(0, static_cast<std::size_t>(gy0), static_cast<std::size_t>(gy1))
+                                .slice(1, static_cast<std::size_t>(gx0), static_cast<std::size_t>(gx1))
+                                .contiguous()
+                                .unsqueeze(0)
+                                .unsqueeze(0);
+                        weighted[block] += static_cast<double>(score.mul(region_weights).sum().item<float>());
+                    } else {
+                        weighted[block] += static_cast<double>(score.mean().item<float>()) * region_count;
+                    }
                     counts[block] += region_count;
                 }
                 target_taps = LpipsTaps{};
@@ -609,13 +665,15 @@ namespace lfs::core::nn::models {
                                      static_cast<std::size_t>(full_dim(width, block));
             if (counts[block] != denominator)
                 return lpips_error(lfs::ErrorCode::Internal, "LPIPS tiled coverage is incomplete");
-            total += weighted[block] / static_cast<double>(denominator);
+            total += weighted[block] /
+                     (mask ? mask->sums[static_cast<std::size_t>(block)] : static_cast<double>(denominator));
         }
         return static_cast<float>(total);
     }
 
     lfs::Result<float> Lpips::run_untiled(const Tensor& pred, const Tensor& target,
-                                          const InputScaling scaling, LpipsTaps* taps) {
+                                          const InputScaling scaling, LpipsTaps* taps,
+                                          const MaskWeights* mask) {
         if (auto error = validate_pair(pred, target))
             return std::move(*error);
 
@@ -698,8 +756,15 @@ namespace lfs::core::nn::models {
                     auto diff = normalized_x_hold_.sub(normalized_y_hold_);
                     diff = diff.mul(diff);
                     auto score = conv(diff, std::format("lin{}.weight", layer));
-                    values[static_cast<std::size_t>(layer)] =
-                        score.mean().to(DataType::Float32).item<float>();
+                    const auto stage = static_cast<std::size_t>(layer);
+                    values[stage] =
+                        mask ? static_cast<float>(
+                                   score.to(DataType::Float32)
+                                       .mul(mask->maps[stage].unsqueeze(0).unsqueeze(0))
+                                       .sum()
+                                       .item<float>() /
+                                   mask->sums[stage])
+                             : score.mean().to(DataType::Float32).item<float>();
                     if (taps) {
                         taps->normalized_features[static_cast<std::size_t>(layer)] =
                             std::move(normalized_x_snapshot);

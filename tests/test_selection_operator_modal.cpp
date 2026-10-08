@@ -449,8 +449,7 @@ TEST_F(SelectionOperatorModalTest, PolygonIgnoresDockClicksAndContinuesInViewpor
     using namespace lfs::vis;
     auto& registry = op::operators();
     registry.setSceneManager(scene_manager_.get());
-    registry.registerOperator(op::BuiltinOp::SelectionStroke, SelectionStrokeOperator::DESCRIPTOR,
-                              [] { return std::make_unique<SelectionStrokeOperator>(); });
+    op::registerSelectionOperators();
     Viewport viewport(100, 100);
     input::InputBindings::setPersistenceEnabled(false);
     InputController controller(nullptr, viewport);

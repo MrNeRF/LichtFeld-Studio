@@ -56,14 +56,23 @@ namespace lfs::training {
             return dst;
         };
         fused_adam.enabled = optimizer_fused.enabled;
+        fused_adam.rendered_count = fused_extra_gradients.rendered_count;
         fused_adam.beta1 = optimizer_fused.beta1;
         fused_adam.beta2 = optimizer_fused.beta2;
         fused_adam.eps = optimizer_fused.eps;
         fused_adam.scale_reg_weight = fused_extra_gradients.scale_reg_weight;
+        fused_adam.scale_reg_log = fused_extra_gradients.scale_reg_log;
+        fused_adam.scale_reg_normalizer = fused_extra_gradients.scale_reg_normalizer;
+        fused_adam.erank_reg_weight = fused_extra_gradients.erank_reg_weight;
+        fused_adam.dc_reg_weight = fused_extra_gradients.dc_reg_weight;
+        fused_adam.sh_rest_reg_weight = fused_extra_gradients.sh_rest_reg_weight;
         fused_adam.flatten_reg_weight = fused_extra_gradients.flatten_reg_weight;
         fused_adam.opacity_reg_weight = fused_extra_gradients.opacity_reg_weight;
         fused_adam.scale_reg_loss_out = fused_extra_gradients.scale_reg_loss_out;
         fused_adam.opacity_reg_loss_out = fused_extra_gradients.opacity_reg_loss_out;
+        fused_adam.erank_reg_loss_out = fused_extra_gradients.erank_reg_loss_out;
+        fused_adam.sh_rest_reg_loss_out = fused_extra_gradients.sh_rest_reg_loss_out;
+        fused_adam.dc_reg_loss_out = fused_extra_gradients.dc_reg_loss_out;
         fused_adam.sparsity_opa_sigmoid = fused_extra_gradients.sparsity_opa_sigmoid;
         fused_adam.sparsity_z = fused_extra_gradients.sparsity_z;
         fused_adam.sparsity_u = fused_extra_gradients.sparsity_u;
@@ -78,8 +87,6 @@ namespace lfs::training {
         fused_adam.shN = convert_param(optimizer_fused.shN);
         fused_adam.per_splat_mean_step = optimizer_fused.per_splat_mean_step;
         fused_adam.mean_step_median_extent = optimizer_fused.mean_step_median_extent;
-        fused_adam.mean_step_r_min = optimizer_fused.mean_step_r_min;
-        fused_adam.mean_step_r_max = optimizer_fused.mean_step_r_max;
         // The kernel compares an unsigned row index with this count. Reject
         // nonpositive counts and limit the mask to live mean rows.
         if (optimizer_fused.mean_step_far_mask != nullptr &&
@@ -357,7 +364,9 @@ namespace lfs::training {
         bool mip_filter,
         const core::Tensor& bg_image,
         bool render_normal,
-        bool render_depth) {
+        bool render_depth,
+        float dilation_scale,
+        bool update_screen_share) {
         // Get camera parameters
         const int full_width = viewpoint_camera.image_width();
         const int full_height = viewpoint_camera.image_height();
@@ -514,11 +523,12 @@ namespace lfs::training {
                 shN_bounds_ptr,
                 shN_n_cells,
                 shN_bits,
-                (gaussian_model._max_screen_share.is_valid() &&
+                (update_screen_share && gaussian_model._max_screen_share.is_valid() &&
                  gaussian_model._max_screen_share.ndim() == 1 &&
                  gaussian_model._max_screen_share.numel() >= static_cast<size_t>(n_primitives))
                     ? gaussian_model._max_screen_share.ptr<float>()
-                    : nullptr);
+                    : nullptr,
+                dilation_scale);
         } catch (const std::exception& e) {
             // Dump all input data for debugging
             dump_crash_data(
@@ -842,8 +852,6 @@ namespace lfs::training {
             bwd_shN_bounds_ptr,
             bwd_shN_n_cells,
             bwd_shN_bits,
-            fused_adam.mean_step_far_mask,
-            fused_adam.mean_step_far_mask_n,
             fused_extra_gradients.edge_weight_map,
             fused_extra_gradients.edge_score_out);
 

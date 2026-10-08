@@ -39,8 +39,8 @@ namespace gsplat_lfs {
         }
         template <bool Backward>
         __global__ void features_kernel(const float* means, const float* quats, const float* scales,
-                                        const float* views, const float* rgb, float* features,
-                                        const float* gf, float* grgb, float* gm, float* gq,
+                                        const float* views, float* features,
+                                        const float* gf, float* gm, float* gq,
                                         uint32_t N, uint32_t C, uint32_t channels, CameraModelType model) {
             const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
             if (i >= N * C)
@@ -53,16 +53,10 @@ namespace gsplat_lfs {
             const float depth = radial ? length(p) : p.z;
             const uint32_t d = channels == 1 ? 0 : 3;
             if constexpr (!Backward) {
-                for (uint32_t c = 0; c < channels; ++c)
-                    features[i * channels + c] = 0;
-                if (channels > 1)
-                    for (int c = 0; c < 3; ++c)
-                        features[i * channels + c] = rgb[3 * i + c];
                 features[i * channels + d] = depth;
+                if (channels == 8)
+                    features[i * channels + 7] = 0;
             } else {
-                if (channels > 1)
-                    for (int c = 0; c < 3; ++c)
-                        grgb[3 * i + c] = gf[i * channels + c];
                 const vec3 dp = radial ? p / fmaxf(depth, 1.e-12f) : vec3(0, 0, 1);
                 const vec3 grad = transpose(V) * dp * gf[i * channels + d];
                 for (int c = 0; c < 3; ++c)
@@ -96,19 +90,19 @@ namespace gsplat_lfs {
         }
     } // namespace
     void geometry_features_fwd(const float* m, const float* q, const float* s, const float* v,
-                               const float* rgb, float* f, uint32_t N, uint32_t C, uint32_t channels,
+                               float* f, uint32_t N, uint32_t C, uint32_t channels,
                                CameraModelType model, cudaStream_t stream) {
         if (!N || !C)
             return;
-        features_kernel<false><<<(N * C + 255) / 256, 256, 0, stream>>>(m, q, s, v, rgb, f, nullptr, nullptr, nullptr, nullptr, N, C, channels, model);
+        features_kernel<false><<<(N * C + 255) / 256, 256, 0, stream>>>(m, q, s, v, f, nullptr, nullptr, nullptr, N, C, channels, model);
         LFS_CUDA_LAUNCH_CHECK(stream, "gut.geometry.forward");
     }
     void geometry_features_bwd(const float* m, const float* q, const float* s, const float* v,
-                               const float* gf, float* grgb, float* gm, float* gq,
+                               const float* gf, float* gm, float* gq,
                                uint32_t N, uint32_t C, uint32_t channels, CameraModelType model, cudaStream_t stream) {
         if (!N || !C)
             return;
-        features_kernel<true><<<(N * C + 255) / 256, 256, 0, stream>>>(m, q, s, v, nullptr, nullptr, gf, grgb, gm, gq, N, C, channels, model);
+        features_kernel<true><<<(N * C + 255) / 256, 256, 0, stream>>>(m, q, s, v, nullptr, gf, gm, gq, N, C, channels, model);
         LFS_CUDA_LAUNCH_CHECK(stream, "gut.geometry.backward");
     }
     void flatten_scale_grad(const float* s, float* gs, uint32_t N, float weight, cudaStream_t stream) {

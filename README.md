@@ -23,7 +23,7 @@ LichtFeld Studio lets you train new scenes from COLMAP datasets, resume checkpoi
 
 [**Download Windows (Portal)**](https://portal.lichtfeld.io/) •
 [**Build From Source**](docs/building_and_distribution.md) •
-[**Plugin System**](docs/plugin-system.md) •
+[**Python API and Plugins**](docs/plugins/README.md) •
 [**MCP Guide**](docs/docs/development/mcp/index.md) •
 [**Support Development**](#support-development) •
 [**Join Discord**](https://discord.gg/TbxJST2BbC)
@@ -113,7 +113,7 @@ Current project notes:
 - [Project Wiki](https://github.com/MrNeRF/LichtFeld-Studio/wiki/)
 - [FAQ](https://github.com/MrNeRF/LichtFeld-Studio/wiki/Frequently-Asked-Questions)
 - [Source Build Guide](docs/building_and_distribution.md)
-- [Plugin System](docs/plugin-system.md)
+- [Python API and Plugins](docs/plugins/README.md)
 - [Plugin Developer Guide](docs/plugins/getting-started.md)
 - [MCP Guide](docs/docs/development/mcp/index.md)
 - [Plugin Examples](docs/plugins/examples/README.md)
@@ -142,7 +142,10 @@ Getting started:
 
 <p>
   <a href="https://www.core11.eu/">
-    <img src="docs/media/core11_multi.svg" alt="Core 11" height="60">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/media/core11-dark.svg">
+      <img src="docs/media/core11.svg" alt="Core 11" height="60">
+    </picture>
   </a>
 </p>
 
@@ -152,7 +155,7 @@ Getting started:
   <a href="https://web.volinga.ai/">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/media/volinga-dark.svg">
-      <img src="docs/media/volinga.svg" alt="Volinga" height="108">
+      <img src="docs/media/volinga.svg" alt="Volinga" height="50">
     </picture>
   </a>
 </p>
@@ -160,14 +163,14 @@ Getting started:
 <br>
 
 <p>
+  <sub>Hardware sponsor</sub>
+  <br>
   <a href="https://www.tersus-gnss.com/">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/media/tersus-dark.svg">
-      <img src="docs/media/tersus.svg" alt="Tersus GNSS" height="80">
+      <img src="docs/media/tersus.svg" alt="Tersus GNSS" height="120">
     </picture>
   </a>
-  <br>
-  <sub>Hardware sponsor</sub>
 </p>
 
 </div>

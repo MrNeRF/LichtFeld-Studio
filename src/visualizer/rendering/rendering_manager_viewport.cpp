@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "core/splat_data_transform.hpp"
+#include "mesh_offscreen_renderer.hpp"
 #include "model_renderability.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/viewport_request_builder.hpp"
@@ -13,9 +15,13 @@
 #include "training/training_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "vksplat_viewport_renderer.hpp"
+#include "vulkan_external_tensor.hpp"
 #include <algorithm>
+#include <cassert>
 #include <cmath>
+#include <cstring>
 #include <format>
+#include <limits>
 #include <shared_mutex>
 #include <string_view>
 #include <utility>
@@ -25,8 +31,9 @@ namespace lfs::vis {
 
     namespace {
         constexpr std::size_t kPreviewPixelStateBytesPerPixel = 4u * sizeof(float);
-        constexpr std::size_t kMaxNativePreviewPixelStateBytes =
-            (std::size_t{4} << 30) - (std::size_t{64} << 20);
+        // Large exports render in bands of at most this much per-pixel state. Rendering is cheap
+        // next to encoding, so small bands keep export VRAM flat at any output size.
+        constexpr std::size_t kMaxNativePreviewPixelStateBytes = std::size_t{256} << 20;
         constexpr float kMaxValidDepth = 1e9f;
         constexpr int kMinPreviewSubdivisionHeight = 512;
         constexpr int kPreviewTileHeightAlignment = HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT;
@@ -110,6 +117,92 @@ namespace lfs::vis {
                 .center_x = static_cast<float>(full_width) * 0.5f,
                 .center_y = static_cast<float>(full_height) * 0.5f,
             };
+        }
+
+        // Mesh layers carry float RGBA and depth per pixel; small bands keep them cheap.
+        constexpr std::size_t kMaxExportMeshBandPixels = std::size_t{1} << 22;
+
+        struct PixelRect {
+            glm::ivec2 origin{0};
+            glm::ivec2 size{0};
+        };
+
+        // Projected vertices bound every triangle unless one crosses the camera plane.
+        [[nodiscard]] PixelRect meshScreenRect(const std::vector<VulkanMeshDrawItem>& items,
+                                               const glm::mat4& view_projection,
+                                               const glm::ivec2 image_size,
+                                               const int margin) {
+            glm::vec2 ndc_min(std::numeric_limits<float>::max());
+            glm::vec2 ndc_max(std::numeric_limits<float>::lowest());
+            for (const auto& item : items) {
+                const auto vertices = item.mesh->vertices.cpu().contiguous();
+                assert(vertices.ndim() == 2 && vertices.size(1) == 3);
+                const float* const xyz = vertices.ptr<float>();
+                const glm::mat4 mvp = view_projection * item.model;
+                for (std::size_t i = 0; i < vertices.size(0); ++i) {
+                    const glm::vec4 clip = mvp * glm::vec4(xyz[3 * i], xyz[3 * i + 1], xyz[3 * i + 2], 1.0f);
+                    if (clip.w <= 1e-6f) {
+                        return {{0, 0}, image_size};
+                    }
+                    const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+                    ndc_min = glm::min(ndc_min, ndc);
+                    ndc_max = glm::max(ndc_max, ndc);
+                }
+            }
+            if (ndc_min.x > ndc_max.x) {
+                return {};
+            }
+            const auto pixel = [margin](const double position, const int extent, const bool upper) {
+                const double edge = upper ? std::ceil(position * extent) + margin : std::floor(position * extent) - margin;
+                return static_cast<int>(std::clamp(edge, 0.0, static_cast<double>(extent)));
+            };
+            const glm::ivec2 begin{pixel((ndc_min.x + 1.0) * 0.5, image_size.x, false),
+                                   pixel((1.0 - ndc_max.y) * 0.5, image_size.y, false)};
+            const glm::ivec2 end{pixel((ndc_max.x + 1.0) * 0.5, image_size.x, true),
+                                 pixel((1.0 - ndc_min.y) * 0.5, image_size.y, true)};
+            if (end.x <= begin.x || end.y <= begin.y) {
+                return {};
+            }
+            return {begin, end - begin};
+        }
+
+        [[nodiscard]] lfs::Error meshExportError(std::string detail) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Internal,
+                .domain = lfs::ErrorDomain::Rendering,
+                .detail = std::move(detail),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+
+        // The image an export starts from when no splat is visible: background color, or zero alpha
+        // for transparent and environment exports.
+        [[nodiscard]] lfs::core::Tensor emptyExportImage(const int width,
+                                                         const int height,
+                                                         const ExportPostProcessMode mode,
+                                                         const glm::vec3& background_color) {
+            if (mode != ExportPostProcessMode::Opaque) {
+                return lfs::core::Tensor::zeros(
+                    {static_cast<size_t>(height), static_cast<size_t>(width), size_t{4}},
+                    lfs::core::Device::CPU,
+                    lfs::core::DataType::UInt8);
+            }
+            auto image = lfs::core::Tensor::empty(
+                {static_cast<size_t>(height), static_cast<size_t>(width), size_t{3}},
+                lfs::core::Device::CPU,
+                lfs::core::DataType::UInt8);
+            if (!image.is_valid()) {
+                return image;
+            }
+            std::vector<std::uint8_t> row(static_cast<std::size_t>(width) * 3);
+            for (std::size_t x = 0; x < row.size(); ++x) {
+                row[x] = static_cast<std::uint8_t>(std::clamp(background_color[x % 3], 0.0f, 1.0f) * 255.0f + 0.5f);
+            }
+            auto* const pixels = image.ptr<std::uint8_t>();
+            for (std::size_t y = 0; y < static_cast<std::size_t>(height); ++y) {
+                std::memcpy(pixels + y * row.size(), row.data(), row.size());
+            }
+            return image;
         }
 
     } // namespace
@@ -334,7 +427,7 @@ namespace lfs::vis {
 
         if (hover_changed) {
             LOG_DEBUG("Camera hover changed: {} -> {}", previous_hovered_camera, hovered_camera);
-            markDirty(DirtyFlag::OVERLAY);
+            markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
         }
 
         return hovered_camera;
@@ -378,7 +471,7 @@ namespace lfs::vis {
             return {};
         }
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
-        auto render_state = scene_manager ? scene_manager->buildRenderState() : SceneRenderState{};
+        auto render_state = scene_manager ? scene_manager->buildRenderState({.current_geometry = true}) : SceneRenderState{};
         const auto* const model = render_state.combined_model;
         if (!hasRenderableGaussians(model)) {
             return {};
@@ -420,7 +513,7 @@ namespace lfs::vis {
 
     std::expected<void, std::string> RenderingManager::renderDepthCaptureToPreviewSlotWithState(
         SceneManager* const scene_manager,
-        const lfs::core::SplatData& model,
+        const lfs::core::SplatData& source_model,
         SceneRenderState scene_state,
         const glm::mat3& rotation,
         const glm::vec3& position,
@@ -434,6 +527,11 @@ namespace lfs::vis {
         std::optional<float> ortho_scale_override) {
         if (width <= 0 || height <= 0) {
             return std::unexpected("invalid preview depth render dimensions");
+        }
+        const auto leaf_view = lodLeafRenderView(source_model);
+        const lfs::core::SplatData& model = leaf_view ? *leaf_view : source_model;
+        if (scene_state.combined_model == &source_model) {
+            scene_state.combined_model = &model;
         }
         if (!hasRenderableGaussians(&model)) {
             return std::unexpected("no renderable Gaussian model is available");
@@ -491,7 +589,7 @@ namespace lfs::vis {
             return result;
         }
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
-        auto render_state = scene_manager ? scene_manager->buildRenderState() : SceneRenderState{};
+        auto render_state = scene_manager ? scene_manager->buildRenderState({.current_geometry = true}) : SceneRenderState{};
         const auto* const model = render_state.combined_model;
         if (!hasRenderableGaussians(model)) {
             return result;
@@ -578,7 +676,7 @@ namespace lfs::vis {
         const float rasterization_scale = exportRasterizationScale(height, reference_height);
         ortho_scale_override = exportOrthoScale(ortho_scale_override, height, reference_height);
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
-        auto render_state = scene_manager ? scene_manager->buildRenderState() : SceneRenderState{};
+        auto render_state = scene_manager ? scene_manager->buildRenderState({.current_geometry = true}) : SceneRenderState{};
         const auto* const model = render_state.combined_model;
         if (!hasRenderableGaussians(model)) {
             return {};
@@ -635,7 +733,7 @@ namespace lfs::vis {
         const float rasterization_scale = exportRasterizationScale(height, reference_height);
         ortho_scale_override = exportOrthoScale(ortho_scale_override, height, reference_height);
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
-        auto render_state = scene_manager ? scene_manager->buildRenderState() : SceneRenderState{};
+        auto render_state = scene_manager ? scene_manager->buildRenderState({.current_geometry = true}) : SceneRenderState{};
         const auto* const model = render_state.combined_model;
         if (!hasRenderableGaussians(model)) {
             return {};
@@ -821,6 +919,48 @@ namespace lfs::vis {
         if (vksplat_viewport_renderer_) {
             vksplat_viewport_renderer_->releasePreviewResources();
         }
+        const std::lock_guard lock(lod_leaf_view_mutex_);
+        lod_leaf_view_.reset();
+        lod_leaf_view_source_ = nullptr;
+        lod_leaf_view_tree_ = nullptr;
+    }
+
+    void RenderingManager::releaseLodLeafRenderViewUnlessFor(const lfs::core::SplatData* const model) {
+        const std::lock_guard lock(lod_leaf_view_mutex_);
+        if (lod_leaf_view_ && lod_leaf_view_source_ != model) {
+            lod_leaf_view_.reset();
+            lod_leaf_view_source_ = nullptr;
+            lod_leaf_view_tree_ = nullptr;
+        }
+    }
+
+    std::shared_ptr<const lfs::core::SplatData> RenderingManager::lodLeafRenderView(
+        const lfs::core::SplatData& model) {
+        if (!model.lod_tree || !model.lod_tree->has_tree()) {
+            return nullptr;
+        }
+        const std::lock_guard lock(lod_leaf_view_mutex_);
+        const auto rows = static_cast<std::size_t>(model.size());
+        const auto deleted_version = model.deleted_mask_version();
+        if (!lod_leaf_view_ || lod_leaf_view_source_ != &model || lod_leaf_view_tree_ != model.lod_tree.get() ||
+            lod_leaf_view_rows_ != rows || lod_leaf_view_deleted_version_ != deleted_version) {
+            auto view = lfs::core::make_lod_leaf_view(model);
+            // The decoded opacity is a new tensor; the renderer only reads Vulkan-external storage.
+            if (view->opacity_raw().data_ptr() != model.opacity_raw().data_ptr()) {
+                if (const auto allocator = makeViewerSplatTensorAllocator()) {
+                    auto opacity = allocator(view->opacity_raw().shape(), rows,
+                                             lfs::core::DataType::Float32, "SplatData.opacity");
+                    opacity.copy_from(view->opacity_raw());
+                    view->opacity_raw() = std::move(opacity);
+                }
+            }
+            lod_leaf_view_ = std::move(view);
+            lod_leaf_view_source_ = &model;
+            lod_leaf_view_tree_ = model.lod_tree.get();
+            lod_leaf_view_rows_ = rows;
+            lod_leaf_view_deleted_version_ = deleted_version;
+        }
+        return lod_leaf_view_;
     }
 
     std::expected<lfs::core::Tensor, std::string> RenderingManager::renderExportImage(
@@ -857,33 +997,174 @@ namespace lfs::vis {
         }
         releasePreviewImageResources();
 
+        const auto settings = getSettings();
         lfs::core::Tensor image;
         if (rendered && rendered->is_valid()) {
             image = std::move(*rendered);
-        } else if (request.mode == ExportPostProcessMode::EnvironmentComposite) {
-            // No renderable Gaussians: export the environment background alone
-            // (zero alpha composites to pure environment), matching the video
-            // export path's empty-primary-frame behavior.
-            image = lfs::core::Tensor::zeros(
-                {static_cast<size_t>(request.height), static_cast<size_t>(request.width), size_t{4}},
-                lfs::core::Device::CPU,
-                lfs::core::DataType::UInt8);
+        } else if (request.mode == ExportPostProcessMode::EnvironmentComposite ||
+                   (scene_manager && !scene_manager->getScene().getVisibleMeshes().empty())) {
+            // No renderable Gaussians: the environment alone (zero alpha composites
+            // to pure environment, as in the video export) or the background, with
+            // the meshes composited on top below.
+            image = emptyExportImage(request.width, request.height, request.mode, settings.background_color);
             if (!image.is_valid()) {
-                return std::unexpected("export failed to allocate the environment-only image");
+                return std::unexpected("export failed to allocate the background image");
             }
         } else {
             return std::unexpected("export render produced no image");
         }
 
-        const auto settings = getSettings();
         const ExportPostProcessView view{
             .rotation = request.rotation,
             .focal_length_mm = request.focal_length_mm,
             .equirectangular_view = settings.equirectangular,
             .controller_predict_size = frame_lifecycle_service_.lastViewportSize(),
         };
-        return applyExportPostProcess(
+        auto processed = applyExportPostProcess(
             std::move(image), scene_manager, settings, getCurrentCameraId(), request.mode, view);
+        if (!processed) {
+            return processed;
+        }
+        // Meshes go on last: the viewport draws them after appearance correction and environment.
+        auto meshes = compositeExportMeshes(scene_manager, request, *processed);
+        releasePreviewImageResources();
+        if (!meshes) {
+            return std::unexpected(lfs::format_for_developer(meshes.error()));
+        }
+        return processed;
+    }
+
+    lfs::Status RenderingManager::compositeExportMeshes(
+        SceneManager* const scene_manager,
+        const ExportImageRequest& request,
+        lfs::core::Tensor& image) {
+        if (!scene_manager || !last_vulkan_context_) {
+            return {};
+        }
+        const int width = request.width;
+        const int height = request.height;
+        assert(image.is_valid() && image.device() == lfs::core::Device::CPU &&
+               image.dtype() == lfs::core::DataType::UInt8 && image.ndim() == 3 && image.is_contiguous());
+        assert(static_cast<int>(image.size(0)) == height && static_cast<int>(image.size(1)) == width);
+        assert(image.size(2) == 3 || image.size(2) == 4);
+
+        auto render_lock = acquireLiveModelRenderLock(scene_manager);
+        auto render_state = scene_manager->buildRenderState({.current_geometry = true});
+        const auto settings = getSettings();
+        const float rasterization_scale = exportRasterizationScale(height, request.reference_height);
+        const auto ortho_scale = exportOrthoScale(request.ortho_scale_override, height, request.reference_height);
+        const lfs::rendering::ViewportData view{
+            .rotation = request.rotation,
+            .translation = request.translation,
+            .size = {width, height},
+            .focal_length_mm = std::clamp(request.focal_length_mm,
+                                          lfs::rendering::MIN_FOCAL_LENGTH_MM,
+                                          lfs::rendering::MAX_FOCAL_LENGTH_MM),
+            .orthographic = request.orthographic_override.value_or(settings.orthographic),
+            .ortho_scale = ortho_scale && std::isfinite(*ortho_scale) && *ortho_scale > 0.0f ? *ortho_scale
+                                                                                             : settings.ortho_scale,
+        };
+        VulkanMeshPassParams mesh_params{
+            .view_projection = {},
+            .camera_position = view.translation,
+            .items = buildViewportMeshDrawItems(render_state, settings, view.translation),
+        };
+        if (mesh_params.items.empty()) {
+            return {};
+        }
+        for (auto& item : mesh_params.items) {
+            item.wireframe_width *= rasterization_scale;
+        }
+        const glm::mat4 projection = view.getProjectionMatrix();
+        const glm::mat4 view_matrix = view.getViewMatrix();
+        const int line_margin = static_cast<int>(std::ceil(settings.mesh_wireframe_width * rasterization_scale)) + 1;
+        const auto mesh_rect = meshScreenRect(mesh_params.items, projection * view_matrix, {width, height}, line_margin);
+        if (mesh_rect.size.x <= 0 || mesh_rect.size.y <= 0) {
+            return {};
+        }
+        const int rows_begin = mesh_rect.origin.y;
+        const int rows_end = mesh_rect.origin.y + mesh_rect.size.y;
+
+        const auto* const model = render_state.combined_model;
+        const bool has_splats = hasRenderableGaussians(model);
+        const auto intrinsics = previewTileIntrinsics(width, height, request.focal_length_mm);
+        const int mesh_rows_limit =
+            std::max(1, static_cast<int>(kMaxExportMeshBandPixels / static_cast<std::size_t>(mesh_rect.size.x)));
+        MeshOffscreenRenderer mesh_renderer;
+        lfs::core::Tensor splat_depth;
+        int band_height_limit = previewTileHeightForWidth(width);
+        for (int band_y = rows_begin / kPreviewTileHeightAlignment * kPreviewTileHeightAlignment;
+             band_y < rows_end;) {
+            const int aligned_rows_left = (rows_end - band_y + kPreviewTileHeightAlignment - 1) /
+                                          kPreviewTileHeightAlignment * kPreviewTileHeightAlignment;
+            int band_height = std::min({band_height_limit, height - band_y, aligned_rows_left});
+            if (has_splats) {
+                while (true) {
+                    auto rendered = renderPreviewImageToPreviewSlotWithState(
+                        scene_manager,
+                        *model,
+                        render_state,
+                        request.rotation,
+                        request.translation,
+                        request.focal_length_mm,
+                        width,
+                        band_height,
+                        render_lock.has_value(),
+                        intrinsics,
+                        {0, band_y},
+                        {width, height},
+                        request.orthographic_override,
+                        ortho_scale,
+                        std::nullopt,
+                        std::nullopt,
+                        rasterization_scale,
+                        true);
+                    if (rendered) {
+                        break;
+                    }
+                    if (!isTileInstanceOverflow(rendered.error()) || band_height <= kMinPreviewSubdivisionHeight) {
+                        return lfs::Status::failure(meshExportError(std::format("mesh export depth render failed: {}", rendered.error())));
+                    }
+                    band_height = std::max(kMinPreviewSubdivisionHeight,
+                                           (band_height / 2) / kPreviewTileHeightAlignment * kPreviewTileHeightAlignment);
+                    band_height_limit = band_height;
+                }
+                splat_depth = lfs::core::Tensor::empty(
+                    {static_cast<std::size_t>(band_height), static_cast<std::size_t>(width)},
+                    lfs::core::Device::CPU,
+                    lfs::core::DataType::Float32);
+                auto ticket = vksplat_viewport_renderer_->submitReadOutputDepthImageTicket(
+                    *last_vulkan_context_, VksplatViewportRenderer::OutputSlot::Preview, splat_depth);
+                if (!ticket) {
+                    return lfs::Status::failure(meshExportError(std::format("mesh export depth readback failed: {}", ticket.error())));
+                }
+                if (auto waited = vksplat_viewport_renderer_->waitReadbackTicket(*ticket); !waited) {
+                    return lfs::Status::failure(meshExportError(std::format("mesh export depth readback failed: {}", waited.error())));
+                }
+            }
+            const int mesh_end = std::min(band_y + band_height, rows_end);
+            for (int mesh_y = std::max(band_y, rows_begin); mesh_y < mesh_end;) {
+                const int mesh_rows = std::min(mesh_rows_limit, mesh_end - mesh_y);
+                const glm::ivec2 origin{mesh_rect.origin.x, mesh_y};
+                const glm::ivec2 size{mesh_rect.size.x, mesh_rows};
+                mesh_params.view_projection =
+                    cropProjectionToRect(projection, {width, height}, origin, size) * view_matrix;
+                auto layer = mesh_renderer.render(*last_vulkan_context_, mesh_params, projection, size.x, size.y);
+                if (!layer) {
+                    return lfs::Status::failure(meshExportError(std::format("mesh export render failed: {}", layer.error())));
+                }
+                compositeMeshLayer(
+                    *layer,
+                    has_splats ? splat_depth.ptr<float>() + static_cast<std::size_t>(mesh_y - band_y) * width + origin.x
+                               : nullptr,
+                    static_cast<std::size_t>(width),
+                    image,
+                    origin);
+                mesh_y += mesh_rows;
+            }
+            band_y += band_height;
+        }
+        return {};
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageWithState(
@@ -974,7 +1255,7 @@ namespace lfs::vis {
 
     std::expected<void, std::string> RenderingManager::renderPreviewImageToPreviewSlotWithState(
         SceneManager* const scene_manager,
-        const lfs::core::SplatData& model,
+        const lfs::core::SplatData& source_model,
         SceneRenderState scene_state,
         const glm::mat3& rotation,
         const glm::vec3& position,
@@ -1000,10 +1281,12 @@ namespace lfs::vis {
         if (last_vulkan_context_->rendererTerminalState() != RendererTerminalState::Running) {
             return std::unexpected("renderer is unavailable after a GPU failure; restart LichtFeld Studio");
         }
+        const auto leaf_view = lodLeafRenderView(source_model);
+        const lfs::core::SplatData& model = leaf_view ? *leaf_view : source_model;
         if (!hasRenderableGaussians(&model)) {
             return std::unexpected("no renderable Gaussian model is available");
         }
-        if (!scene_state.combined_model) {
+        if (!scene_state.combined_model || scene_state.combined_model == &source_model) {
             scene_state.combined_model = &model;
         }
 
@@ -1217,13 +1500,13 @@ namespace lfs::vis {
     }
 
     float RenderingManager::getDepthAtPixel(const int x, const int y,
-                                            const std::optional<SplitViewPanelId> panel) const {
+                                            const std::optional<SplitViewPanelId> panel, const bool nonblocking) const {
         const float cached_depth = viewport_artifact_service_.sampleLinearDepthAt(
             x,
             y,
             frame_lifecycle_service_.lastViewportSize(),
-            panel);
-        if (cached_depth > 0.0f) {
+            panel, nonblocking);
+        if (cached_depth > 0.0f || viewport_artifact_service_.hasDepthSampler()) {
             return cached_depth;
         }
 

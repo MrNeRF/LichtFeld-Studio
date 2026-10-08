@@ -260,10 +260,8 @@ namespace {
 
 } // namespace
 
-RenderInterface_VK::RenderInterface_VK() : m_is_transform_enabled{false},
-                                           m_is_apply_to_regular_geometry_stencil{false},
+RenderInterface_VK::RenderInterface_VK() : m_is_apply_to_regular_geometry_stencil{false},
                                            m_is_clip_mask_enabled{false},
-                                           m_is_transformed_scissor_enabled{false},
                                            m_is_use_scissor_specified{false},
                                            m_is_use_stencil_pipeline{false},
                                            m_width{},
@@ -369,26 +367,34 @@ Rml::CompiledGeometryHandle RenderInterface_VK::CompileGeometry(Rml::Span<const 
                        "you can't have here an invalid pointer of VkDescriptorSet. Two reason might be. 1. - you didn't allocate it "
                        "at all or 2. - Somehing is wrong with allocation and somehow it was corrupted by something.");
 
-    auto* p_geometry_handle = new geometry_handle_t{};
+    auto geometry_handle = std::make_unique<geometry_handle_t>();
+    auto* p_geometry_handle = geometry_handle.get();
 
     uint32_t* pCopyDataToBuffer = nullptr;
     const void* pData = reinterpret_cast<const void*>(vertices.data());
 
     bool status = m_memory_pool.Alloc_VertexBuffer((uint32_t)vertices.size(), sizeof(Rml::Vertex), reinterpret_cast<void**>(&pCopyDataToBuffer),
                                                    &p_geometry_handle->m_p_vertex, &p_geometry_handle->m_p_vertex_allocation);
-    RMLUI_VK_ASSERTMSG(status, "failed to AllocVertexBuffer");
+    if (!status) {
+        Rml::Log::Message(Rml::Log::LT_ERROR, "RmlUi vertex buffer allocation failed");
+        return {};
+    }
 
     memcpy(pCopyDataToBuffer, pData, sizeof(Rml::Vertex) * vertices.size());
 
     status = m_memory_pool.Alloc_IndexBuffer((uint32_t)indices.size(), sizeof(int), reinterpret_cast<void**>(&pCopyDataToBuffer),
                                              &p_geometry_handle->m_p_index, &p_geometry_handle->m_p_index_allocation);
-    RMLUI_VK_ASSERTMSG(status, "failed to AllocIndexBuffer");
+    if (!status) {
+        m_memory_pool.Free_Allocation(p_geometry_handle->m_p_vertex_allocation);
+        Rml::Log::Message(Rml::Log::LT_ERROR, "RmlUi index buffer allocation failed");
+        return {};
+    }
 
     memcpy(pCopyDataToBuffer, indices.data(), sizeof(int) * indices.size());
 
     p_geometry_handle->m_num_indices = (int)indices.size();
 
-    return Rml::CompiledGeometryHandle(p_geometry_handle);
+    return Rml::CompiledGeometryHandle(geometry_handle.release());
 }
 
 void RenderInterface_VK::RenderGeometry(Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation, Rml::TextureHandle texture) {
@@ -438,12 +444,30 @@ void RenderInterface_VK::RenderGeometry(Rml::CompiledGeometryHandle geometry, Rm
 
     shader_vertex_user_data_t* p_data = nullptr;
     VkDescriptorBufferInfo shader_buffer = {};
-    VmaVirtualAllocation shader_allocation = {};
+    pool_allocation_t shader_allocation = {};
     // Dynamic uniform offsets are consumed when the recorded command buffer executes, so keep
     // per-draw transform data alive until the owning frame slot's fence has completed.
     bool status = m_memory_pool.Alloc_GeneralBuffer(sizeof(m_user_data_for_vertex_shader), reinterpret_cast<void**>(&p_data),
                                                     &shader_buffer, &shader_allocation);
-    RMLUI_VK_ASSERTMSG(status, "failed to allocate VkDescriptorBufferInfo for uniform data to shaders");
+    if (!status) {
+        Rml::Log::Message(Rml::Log::LT_ERROR, "RmlUi uniform buffer allocation failed; skipping draw");
+        return;
+    }
+    // Each page keeps its own descriptor: previously recorded draws may still use
+    // an older page, so neither its buffer nor descriptor may be replaced.
+    auto& shader_pool = *shader_allocation.owner;
+    if (!shader_pool.m_shader_descriptor_set) {
+        if (!m_manager_descriptors.Alloc_Descriptor(m_p_device, &m_p_descriptor_set_layout_vertex_transform,
+                                                    &shader_pool.m_shader_descriptor_set)) {
+            m_memory_pool.Free_Allocation(shader_allocation);
+            Rml::Log::Message(Rml::Log::LT_ERROR, "RmlUi uniform descriptor allocation failed; skipping draw");
+            return;
+        }
+        shader_pool.SetDescriptorSet(1, sizeof(shader_vertex_user_data_t), VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                                     shader_pool.m_shader_descriptor_set);
+        m_overflow_shader_descriptor_sets.push_back(shader_pool.m_shader_descriptor_set);
+    }
+    p_current_descriptor_set = shader_pool.m_shader_descriptor_set;
     m_transient_shader_allocations_by_frame[ActiveResourceSlot()].push_back(shader_allocation);
 
     if (p_data) {
@@ -514,8 +538,6 @@ void RenderInterface_VK::EnableScissorRegion(bool enable) {
     m_is_use_scissor_specified = enable;
 
     if (m_is_use_scissor_specified == false) {
-        m_is_transformed_scissor_enabled = false;
-        m_is_apply_to_regular_geometry_stencil = m_is_clip_mask_enabled;
         m_scissor = ClampToCacheCaptureArea(ContextClipScissor());
         vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor);
     }
@@ -537,96 +559,36 @@ void RenderInterface_VK::SetScissorRegion(Rml::Rectanglei region) {
             static_cast<uint32_t>(std::max(0, requested_bottom - requested_top)),
         };
 
-        if (m_is_transform_enabled) {
-            Rml::Vertex vertices[4];
-
-            vertices[0].position = Rml::Vector2f(region.TopLeft());
-            vertices[1].position = Rml::Vector2f(region.TopRight());
-            vertices[2].position = Rml::Vector2f(region.BottomRight());
-            vertices[3].position = Rml::Vector2f(region.BottomLeft());
-
-            int indices[6] = {0, 2, 1, 0, 3, 2};
-
-            m_is_use_stencil_pipeline = true;
-            m_scissor = ClampToCacheCaptureArea(ContextClipScissor());
-            vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor);
+        // Enclose the translated rect; fractional panel offsets otherwise clip text edges.
+        const int left = Rml::Math::Clamp(requested_left, 0, m_width);
+        const int top = Rml::Math::Clamp(requested_top, 0, m_height);
+        const int right = Rml::Math::Clamp(requested_right, 0, m_width);
+        const int bottom = Rml::Math::Clamp(requested_bottom, 0, m_height);
+        m_scissor.offset.x = left;
+        m_scissor.offset.y = top;
+        m_scissor.extent.width = static_cast<uint32_t>(std::max(0, right - left));
+        m_scissor.extent.height = static_cast<uint32_t>(std::max(0, bottom - top));
+        m_scissor = ClampToCacheCaptureArea(IntersectContextClip(m_scissor));
 
 #ifdef RMLUI_VK_DEBUG
-            VkDebugUtilsLabelEXT info{};
-            info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
-            info.color[0] = 1.0f;
-            info.color[1] = 1.0f;
-            info.color[2] = 0.0f;
-            info.color[3] = 1.0f;
-            info.pLabelName = "SetScissorRegion (generated region)";
+        VkDebugUtilsLabelEXT info{};
+        info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+        info.color[0] = 1.0f;
+        info.color[1] = 0.0f;
+        info.color[2] = 0.0f;
+        info.color[3] = 1.0f;
+        info.pLabelName = "SetScissorRegion (offset)";
 
-            InsertDebugUtilsLabel(m_p_device, m_p_current_command_buffer, info);
+        InsertDebugUtilsLabel(m_p_device, m_p_current_command_buffer, info);
 #endif
 
-            VkClearDepthStencilValue info_clear_color{};
-
-            info_clear_color.depth = 1.0f;
-            info_clear_color.stencil = 0;
-
-            VkClearAttachment clear_attachment = {};
-            clear_attachment.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-            clear_attachment.clearValue.depthStencil = info_clear_color;
-            clear_attachment.colorAttachment = 1;
-
-            VkClearRect clear_rect = {};
-            clear_rect.layerCount = 1;
-            clear_rect.rect = ClampToCacheCaptureArea(VkRect2D{
-                {0, 0},
-                {static_cast<uint32_t>(m_width), static_cast<uint32_t>(m_height)},
-            });
-
-            vkCmdClearAttachments(m_p_current_command_buffer, 1, &clear_attachment, 1, &clear_rect);
-
-            if (Rml::CompiledGeometryHandle handle = CompileGeometry({vertices, 4}, {indices, 6})) {
-                RenderGeometry(handle, {}, {});
-                ReleaseGeometry(handle);
-            }
-
-            m_is_use_stencil_pipeline = false;
-
-            m_is_transformed_scissor_enabled = true;
-            m_is_apply_to_regular_geometry_stencil = true;
-            m_scissor = ClampToCacheCaptureArea(ContextClipScissor());
-            vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor);
-        } else {
-            m_is_transformed_scissor_enabled = false;
-            m_is_apply_to_regular_geometry_stencil = m_is_clip_mask_enabled;
-            // Enclose the translated rect; fractional panel offsets otherwise clip text edges.
-            const int left = Rml::Math::Clamp(requested_left, 0, m_width);
-            const int top = Rml::Math::Clamp(requested_top, 0, m_height);
-            const int right = Rml::Math::Clamp(requested_right, 0, m_width);
-            const int bottom = Rml::Math::Clamp(requested_bottom, 0, m_height);
-            m_scissor.offset.x = left;
-            m_scissor.offset.y = top;
-            m_scissor.extent.width = static_cast<uint32_t>(std::max(0, right - left));
-            m_scissor.extent.height = static_cast<uint32_t>(std::max(0, bottom - top));
-            m_scissor = ClampToCacheCaptureArea(IntersectContextClip(m_scissor));
-
-#ifdef RMLUI_VK_DEBUG
-            VkDebugUtilsLabelEXT info{};
-            info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
-            info.color[0] = 1.0f;
-            info.color[1] = 0.0f;
-            info.color[2] = 0.0f;
-            info.color[3] = 1.0f;
-            info.pLabelName = "SetScissorRegion (offset)";
-
-            InsertDebugUtilsLabel(m_p_device, m_p_current_command_buffer, info);
-#endif
-
-            vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor);
-        }
+        vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor);
     }
 }
 
 void RenderInterface_VK::EnableClipMask(bool enable) {
     m_is_clip_mask_enabled = enable;
-    m_is_apply_to_regular_geometry_stencil = m_is_clip_mask_enabled || m_is_transformed_scissor_enabled;
+    m_is_apply_to_regular_geometry_stencil = m_is_clip_mask_enabled;
 }
 
 void RenderInterface_VK::RenderToClipMask(Rml::ClipMaskOperation operation, Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation) {
@@ -1259,9 +1221,11 @@ RenderInterface_VK::async_preview_result_t RenderInterface_VK::DecodePreviewText
         if (embedded_project_preview) {
             auto reader = lfs::io::project::ProjectReader::open(path);
             if (!reader) {
-                LOG_WARN("Failed to inspect embedded project preview '{}': {}",
-                         lfs::core::path_to_utf8(path),
-                         lfs::format_for_developer(reader.error()));
+                // A catalog entry can outlive its file until the catalog marks it missing.
+                if (reader.error().code() != lfs::ErrorCode::NotFound)
+                    LOG_WARN("Failed to inspect embedded project preview '{}': {}",
+                             lfs::core::path_to_utf8(path),
+                             lfs::format_for_developer(reader.error()));
                 return result;
             }
             auto preview = reader->read_preview();
@@ -1650,7 +1614,6 @@ void RenderInterface_VK::ReleaseTexture(Rml::TextureHandle texture_handle) {
 }
 
 void RenderInterface_VK::SetTransform(const Rml::Matrix4f* transform) {
-    m_is_transform_enabled = (transform != nullptr);
     m_rml_transform = transform ? *transform : Rml::Matrix4f::Identity();
     ApplyTransformState();
 }
@@ -1754,7 +1717,6 @@ void RenderInterface_VK::RenderTextureQuad(Rml::TextureHandle texture, const flo
         m_texture_quad_h = h;
     }
 
-    const bool transform_enabled = m_is_transform_enabled;
     const shader_vertex_user_data_t user_data = m_user_data_for_vertex_shader;
     const Rml::Matrix4f rml_transform = m_rml_transform;
     const Rml::Matrix4f context_transform = m_context_transform;
@@ -1763,7 +1725,6 @@ void RenderInterface_VK::RenderTextureQuad(Rml::TextureHandle texture, const flo
     if (m_texture_quad_geometry) {
         RenderGeometry(m_texture_quad_geometry, {}, texture);
     }
-    m_is_transform_enabled = transform_enabled;
     m_user_data_for_vertex_shader = user_data;
     m_rml_transform = rml_transform;
     m_context_transform = context_transform;
@@ -1950,7 +1911,6 @@ void RenderInterface_VK::RenderFrostedGlassQuad(texture_data_t& texture) {
         m_frosted_glass_quad_height = m_height;
     }
 
-    const bool transform_enabled = m_is_transform_enabled;
     const shader_vertex_user_data_t user_data = m_user_data_for_vertex_shader;
     const Rml::Matrix4f rml_transform = m_rml_transform;
     const Rml::Matrix4f context_transform = m_context_transform;
@@ -1960,7 +1920,6 @@ void RenderInterface_VK::RenderFrostedGlassQuad(texture_data_t& texture) {
         RenderGeometry(m_frosted_glass_quad_geometry,
                        {}, reinterpret_cast<Rml::TextureHandle>(&texture));
     }
-    m_is_transform_enabled = transform_enabled;
     m_user_data_for_vertex_shader = user_data;
     m_rml_transform = rml_transform;
     m_context_transform = context_transform;
@@ -2082,7 +2041,7 @@ void RenderInterface_VK::ShutdownExternal() {
         return;
 
     if (m_p_device)
-        vkDeviceWaitIdle(m_p_device);
+        lfs::rendering::vk_device_wait_idle_synced(m_p_device);
 
     StopPreviewWorkerPool();
     m_async_preview_textures.clear();
@@ -2142,7 +2101,6 @@ void RenderInterface_VK::BeginExternalFrame(const VkCommandBuffer command_buffer
     m_active_layer = {};
     m_render_layer_stack_size = 0;
     m_is_clip_mask_enabled = false;
-    m_is_transformed_scissor_enabled = false;
     m_is_use_scissor_specified = false;
     m_is_use_stencil_pipeline = false;
     m_is_apply_to_regular_geometry_stencil = false;
@@ -2173,7 +2131,6 @@ void RenderInterface_VK::ResetContextRenderState() {
         return;
 
     m_is_clip_mask_enabled = false;
-    m_is_transformed_scissor_enabled = false;
     m_is_use_scissor_specified = false;
     m_is_use_stencil_pipeline = false;
     m_is_apply_to_regular_geometry_stencil = false;
@@ -2232,6 +2189,10 @@ void RenderInterface_VK::Destroy_Resources() noexcept {
     if (m_p_descriptor_set) {
         m_manager_descriptors.Free_Descriptors(m_p_device, &m_p_descriptor_set);
     }
+
+    for (auto& descriptor : m_overflow_shader_descriptor_sets)
+        m_manager_descriptors.Free_Descriptors(m_p_device, &descriptor);
+    m_overflow_shader_descriptor_sets.clear();
 
     vkDestroyDescriptorSetLayout(m_p_device, m_p_descriptor_set_layout_vertex_transform, nullptr);
     vkDestroyDescriptorSetLayout(m_p_device, m_p_descriptor_set_layout_texture, nullptr);
@@ -2350,6 +2311,7 @@ void RenderInterface_VK::CreateDescriptorSets() noexcept {
 
     m_manager_descriptors.Alloc_Descriptor(m_p_device, &m_p_descriptor_set_layout_vertex_transform, &m_p_descriptor_set);
     m_memory_pool.SetDescriptorSet(1, sizeof(shader_vertex_user_data_t), VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, m_p_descriptor_set);
+    m_memory_pool.m_shader_descriptor_set = m_p_descriptor_set;
 }
 
 void RenderInterface_VK::CreateSamplers() noexcept {
@@ -2711,7 +2673,7 @@ uint32_t RenderInterface_VK::ActiveResourceSlot() const noexcept {
 
 void RenderInterface_VK::FreeTransientShaderAllocations(const uint32_t resource_slot) noexcept {
     auto& allocations = m_transient_shader_allocations_by_frame[resource_slot % kSwapchainBackBufferCount];
-    for (VmaVirtualAllocation allocation : allocations)
+    for (auto allocation : allocations)
         m_memory_pool.Free_Allocation(allocation);
     allocations.clear();
 }
@@ -3071,7 +3033,7 @@ void RenderInterface_VK::ResetDynamicRenderState() {
     if (!m_p_current_command_buffer)
         return;
     vkCmdSetViewport(m_p_current_command_buffer, 0, 1, &m_viewport);
-    VkRect2D scissor = (m_is_use_scissor_specified && !m_is_transformed_scissor_enabled) ? m_scissor : ContextClipScissor();
+    VkRect2D scissor = m_is_use_scissor_specified ? m_scissor : ContextClipScissor();
     scissor = ClampToCacheCaptureArea(IntersectContextClip(scissor));
     vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &scissor);
     vkCmdSetStencilReference(m_p_current_command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, 1);
@@ -3273,14 +3235,12 @@ void RenderInterface_VK::RenderFullscreenTexture(texture_data_t& texture, Rml::B
 
     int indices[6] = {0, 1, 2, 0, 2, 3};
 
-    const bool transform_enabled = m_is_transform_enabled;
     const Rml::Matrix4f transform = m_user_data_for_vertex_shader.m_transform;
     SetTransform(nullptr);
     if (Rml::CompiledGeometryHandle handle = CompileGeometry({vertices, 4}, {indices, 6})) {
         RenderGeometry(handle, {}, reinterpret_cast<Rml::TextureHandle>(&texture));
         ReleaseGeometry(handle);
     }
-    m_is_transform_enabled = transform_enabled;
     m_user_data_for_vertex_shader.m_transform = transform;
 }
 
@@ -3332,7 +3292,7 @@ RenderInterface_VK::MemoryPool::MemoryPool() : m_memory_total_size{},
 
 RenderInterface_VK::MemoryPool::~MemoryPool() {}
 
-void RenderInterface_VK::MemoryPool::Initialize(VkDeviceSize byte_size, VkDeviceSize device_min_uniform_alignment, VmaAllocator p_allocator,
+bool RenderInterface_VK::MemoryPool::Initialize(VkDeviceSize byte_size, VkDeviceSize device_min_uniform_alignment, VmaAllocator p_allocator,
                                                 VkDevice p_device) noexcept {
     RMLUI_VK_ASSERTMSG(byte_size > 0, "size must be valid");
     RMLUI_VK_ASSERTMSG(device_min_uniform_alignment > 0, "uniform alignment must be valid");
@@ -3366,13 +3326,14 @@ void RenderInterface_VK::MemoryPool::Initialize(VkDeviceSize byte_size, VkDevice
 
     auto status = vmaCreateBuffer(m_p_vk_allocator, &info, &info_alloc, &m_p_buffer, &m_p_buffer_alloc, &info_stats);
 
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaCreateBuffer");
-    if (status == VkResult::VK_SUCCESS && m_p_buffer_alloc != VK_NULL_HANDLE) {
+    if (status != VK_SUCCESS)
+        return false;
+    if (m_p_buffer_alloc != VK_NULL_HANDLE) {
         vmaSetAllocationName(m_p_vk_allocator,
                              m_p_buffer_alloc,
                              "RmlUi geometry memory pool");
         RecordRmlUiVram("vulkan.rmlui.geometry_pool",
-                        "vertex_index_uniform",
+                        std::format("vertex_index_uniform@{}", static_cast<const void*>(this)),
                         info_stats.size);
     }
 
@@ -3381,7 +3342,10 @@ void RenderInterface_VK::MemoryPool::Initialize(VkDeviceSize byte_size, VkDevice
 
     status = vmaCreateVirtualBlock(&info_virtual_block, &m_p_block);
 
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaCreateVirtualBlock");
+    if (status != VK_SUCCESS) {
+        Shutdown();
+        return false;
+    }
 
 #ifdef RMLUI_VK_DEBUG
     Rml::Log::Message(Rml::Log::LT_DEBUG, "[Vulkan][Debug] Allocated memory pool [%s]", FormatByteSize(info_stats.size).c_str());
@@ -3389,7 +3353,11 @@ void RenderInterface_VK::MemoryPool::Initialize(VkDeviceSize byte_size, VkDevice
 
     status = vmaMapMemory(m_p_vk_allocator, m_p_buffer_alloc, (void**)&m_p_data);
 
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaMapMemory");
+    if (status != VK_SUCCESS) {
+        Shutdown();
+        return false;
+    }
+    return true;
 }
 
 void RenderInterface_VK::MemoryPool::Shutdown() noexcept {
@@ -3401,18 +3369,30 @@ void RenderInterface_VK::MemoryPool::Shutdown() noexcept {
     Rml::Log::Message(Rml::Log::LT_DEBUG, "[Vulkan][Debug] Destroyed memory pool [%s]", FormatByteSize(m_memory_total_size).c_str());
 #endif
 
-    vmaUnmapMemory(m_p_vk_allocator, m_p_buffer_alloc);
-    vmaDestroyVirtualBlock(m_p_block);
-    RecordRmlUiVram("vulkan.rmlui.geometry_pool", "vertex_index_uniform", 0);
-    vmaDestroyBuffer(m_p_vk_allocator, m_p_buffer, m_p_buffer_alloc);
+    if (m_overflow) {
+        m_overflow->Shutdown();
+        m_overflow.reset();
+    }
+    if (m_p_data)
+        vmaUnmapMemory(m_p_vk_allocator, m_p_buffer_alloc);
+    if (m_p_block)
+        vmaDestroyVirtualBlock(m_p_block);
+    RecordRmlUiVram("vulkan.rmlui.geometry_pool", std::format("vertex_index_uniform@{}", static_cast<const void*>(this)), 0);
+    if (m_p_buffer)
+        vmaDestroyBuffer(m_p_vk_allocator, m_p_buffer, m_p_buffer_alloc);
+    m_p_data = nullptr;
+    m_p_block = VK_NULL_HANDLE;
+    m_p_buffer = VK_NULL_HANDLE;
+    m_p_buffer_alloc = VK_NULL_HANDLE;
+    m_shader_descriptor_set = VK_NULL_HANDLE;
 }
 
 bool RenderInterface_VK::MemoryPool::Alloc_GeneralBuffer(VkDeviceSize size, void** p_data, VkDescriptorBufferInfo* p_out,
-                                                         VmaVirtualAllocation* p_alloc) noexcept {
+                                                         pool_allocation_t* p_alloc) noexcept {
     RMLUI_VK_ASSERTMSG(p_out, "you must pass a valid pointer");
     RMLUI_VK_ASSERTMSG(m_p_buffer, "you must have a valid VkBuffer");
 
-    RMLUI_VK_ASSERTMSG(*p_alloc == nullptr,
+    RMLUI_VK_ASSERTMSG(!*p_alloc,
                        "you can't pass a VALID object, because it is for initialization. So it means you passed the already allocated "
                        "VmaVirtualAllocation and it means you did something wrong, like you wanted to allocate into the same object...");
 
@@ -3424,9 +3404,23 @@ bool RenderInterface_VK::MemoryPool::Alloc_GeneralBuffer(VkDeviceSize size, void
     info.size = size;
     info.alignment = m_device_min_uniform_alignment;
 
-    auto status = vmaVirtualAllocate(m_p_block, &info, p_alloc, &offset_memory);
-
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaVirtualAllocate");
+    *p_data = nullptr;
+    *p_out = {};
+    VmaVirtualAllocation allocation{};
+    const auto status = vmaVirtualAllocate(m_p_block, &info, &allocation, &offset_memory);
+    if (status != VK_SUCCESS) {
+        // Keep all live pages stable, including geometry referenced by frames in
+        // flight. Reuse their free ranges before growing; never copy the pool.
+        if (!m_overflow) {
+            auto overflow = std::make_unique<MemoryPool>();
+            if (!overflow->Initialize(std::max(m_memory_total_size, size), m_device_min_uniform_alignment,
+                                      m_p_vk_allocator, m_p_device))
+                return false;
+            m_overflow = std::move(overflow);
+        }
+        return m_overflow->Alloc_GeneralBuffer(size, p_data, p_out, p_alloc);
+    }
+    *p_alloc = {this, allocation};
 
     *p_data = (void*)(m_p_data + offset_memory);
 
@@ -3438,13 +3432,13 @@ bool RenderInterface_VK::MemoryPool::Alloc_GeneralBuffer(VkDeviceSize size, void
 }
 
 bool RenderInterface_VK::MemoryPool::Alloc_VertexBuffer(uint32_t number_of_elements, uint32_t stride_in_bytes, void** p_data,
-                                                        VkDescriptorBufferInfo* p_out, VmaVirtualAllocation* p_alloc) noexcept {
-    return Alloc_GeneralBuffer(number_of_elements * stride_in_bytes, p_data, p_out, p_alloc);
+                                                        VkDescriptorBufferInfo* p_out, pool_allocation_t* p_alloc) noexcept {
+    return Alloc_GeneralBuffer(VkDeviceSize{number_of_elements} * stride_in_bytes, p_data, p_out, p_alloc);
 }
 
 bool RenderInterface_VK::MemoryPool::Alloc_IndexBuffer(uint32_t number_of_elements, uint32_t stride_in_bytes, void** p_data,
-                                                       VkDescriptorBufferInfo* p_out, VmaVirtualAllocation* p_alloc) noexcept {
-    return Alloc_GeneralBuffer(number_of_elements * stride_in_bytes, p_data, p_out, p_alloc);
+                                                       VkDescriptorBufferInfo* p_out, pool_allocation_t* p_alloc) noexcept {
+    return Alloc_GeneralBuffer(VkDeviceSize{number_of_elements} * stride_in_bytes, p_data, p_out, p_alloc);
 }
 
 void RenderInterface_VK::MemoryPool::SetDescriptorSet(uint32_t binding_index, uint32_t size, VkDescriptorType descriptor_type,
@@ -3522,9 +3516,9 @@ void RenderInterface_VK::MemoryPool::SetDescriptorSet(uint32_t binding_index, Vk
     vkUpdateDescriptorSets(m_p_device, 1, &info_write, 0, nullptr);
 }
 
-void RenderInterface_VK::MemoryPool::Free_Allocation(VmaVirtualAllocation allocation) noexcept {
+void RenderInterface_VK::MemoryPool::Free_Allocation(pool_allocation_t allocation) noexcept {
     if (allocation)
-        vmaVirtualFree(m_p_block, allocation);
+        vmaVirtualFree(allocation.owner->m_p_block, allocation.handle);
 }
 
 void RenderInterface_VK::MemoryPool::Free_GeometryHandle(geometry_handle_t* p_valid_geometry_handle) noexcept {
@@ -3546,9 +3540,9 @@ void RenderInterface_VK::MemoryPool::Free_GeometryHandle(geometry_handle_t* p_va
     Free_Allocation(p_valid_geometry_handle->m_p_index_allocation);
     Free_Allocation(p_valid_geometry_handle->m_p_shader_allocation);
 
-    p_valid_geometry_handle->m_p_vertex_allocation = nullptr;
-    p_valid_geometry_handle->m_p_shader_allocation = nullptr;
-    p_valid_geometry_handle->m_p_index_allocation = nullptr;
+    p_valid_geometry_handle->m_p_vertex_allocation = {};
+    p_valid_geometry_handle->m_p_shader_allocation = {};
+    p_valid_geometry_handle->m_p_index_allocation = {};
     p_valid_geometry_handle->m_num_indices = 0;
 }
 
@@ -3562,7 +3556,7 @@ void RenderInterface_VK::MemoryPool::Free_GeometryHandle_ShaderDataOnly(geometry
     RMLUI_VK_ASSERTMSG(m_p_block, "you have to allocate the virtual block before do this operation...");
 
     Free_Allocation(p_valid_geometry_handle->m_p_shader_allocation);
-    p_valid_geometry_handle->m_p_shader_allocation = nullptr;
+    p_valid_geometry_handle->m_p_shader_allocation = {};
 }
 
 #include <vk_mem_alloc.h>

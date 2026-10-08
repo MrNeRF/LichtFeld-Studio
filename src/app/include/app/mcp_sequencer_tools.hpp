@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "core/error.hpp"
+
 #include <cstddef>
 #include <expected>
 #include <functional>
@@ -41,7 +43,7 @@ namespace lfs::app {
         std::function<bool(const std::string&)> save_path;
         std::function<bool(const std::string&)> load_path;
         std::function<void(float)> set_playback_speed;
-        std::function<void(const std::string&, float)> load_ply_sequence;
+        std::function<lfs::Result<void>(const std::string&, float)> load_ply_sequence;
         std::function<bool(float, bool)> scrub_to_time;
         std::function<std::string()> ply_sequence_status;
     };

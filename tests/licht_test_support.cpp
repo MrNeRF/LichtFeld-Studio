@@ -142,7 +142,6 @@ namespace lfs::test::licht {
         "split_view_mode":3,"gt_comparison_mode":2,"split_position":0.37,"split_view_offset":5,
         "raster_backend":"3dgut","equirectangular":true,"orthographic":true,"ortho_scale":77.0,
         "depth_view":true,"depth_view_min":0.5,"depth_view_max":55.0,"depth_visualization_mode":0,
-        "selection_color_committed":[0.11,0.22,0.33],
         "selection_color_preview":[0.44,0.55,0.66],
         "selection_color_center_marker":[0.77,0.88,0.99],
         "depth_clip_enabled":true,"depth_clip_far":34.0,"mesh_wireframe":true,
@@ -164,7 +163,6 @@ namespace lfs::test::licht {
         render["ppisp_overrides"]["wb_temperature"] = 0.2f;
         render["ppisp_overrides"]["gamma_multiplier"] = 1.3f;
         render["background_color"] = {0.1f, 0.2f, 0.3f};
-        render["selection_color_committed"] = {0.11f, 0.22f, 0.33f};
         render["environment_reference_uuid"] = core::generate_uuid_v4().to_string();
         render.erase("gut");
 
@@ -421,6 +419,7 @@ namespace lfs::test::licht {
                 .gut = strategy != lfs::core::param::kStrategyIGSPlus,
                 .undistort = true,
                 .steps_scaler = 1.2f + delta,
+                .image_count_scaler = 1.1f + delta,
                 .growth_grad_threshold = 0.023f + delta,
                 .grow_fraction = 0.24f + delta,
                 .grow_until_iter = 12'000 + tag,

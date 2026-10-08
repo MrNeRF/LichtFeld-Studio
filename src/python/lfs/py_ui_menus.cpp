@@ -447,8 +447,6 @@ namespace lfs::python {
             }
 
             sort_by_order(menu_classes_);
-
-            LOG_INFO("Synced {} menus from Python registry", menu_classes_.size());
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to sync menus from Python: {}", e.what());
         }

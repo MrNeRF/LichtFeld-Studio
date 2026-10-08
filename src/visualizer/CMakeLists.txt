@@ -6,8 +6,8 @@
 include(${CMAKE_SOURCE_DIR}/cmake/FetchLibvterm.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/CompileShaders.cmake)
 
-# SHARED on Windows to avoid singleton duplication across .exe/.pyd boundary
-if(WIN32)
+# SHARED on Windows, or when checking the same DLL export boundary on Linux.
+if(WIN32 OR LFS_HIDDEN_SYMBOLS)
     set(LFS_VIS_LIB_TYPE SHARED)
 else()
     set(LFS_VIS_LIB_TYPE STATIC)

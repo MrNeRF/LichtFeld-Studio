@@ -23,8 +23,10 @@
 #include "io/project_document.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "normal_auto_generate.hpp"
+#include "strategies/strategy_utils.hpp"
 #include "trainer.hpp"
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <exception>
@@ -111,10 +113,7 @@ namespace lfs::training {
                 LOG_INFO("Adjusted training model SH degree: {} -> {}", before, splat.get_max_sh_degree());
             }
             if (splat.get_max_sh_degree() > 0 && splat.get_active_sh_degree() != 0) {
-                const int active_before = splat.get_active_sh_degree();
                 splat.set_active_sh_degree(0);
-                LOG_INFO("Training SH schedule active degree: {} -> 0 (max {})",
-                         active_before, splat.get_max_sh_degree());
             }
         }
 
@@ -296,9 +295,6 @@ namespace lfs::training {
                 centerInitializationMeans(point_cloud->means, scene.getTrainingDataOrigin());
             } else if (data.point_cloud && data.point_cloud->size() > 0) {
                 point_cloud = data.point_cloud;
-                if (verbose) {
-                    LOG_INFO("Adding {} points to scene", point_cloud->size());
-                }
             } else {
                 if (verbose) {
                     LOG_INFO("No point cloud, using random initialization");
@@ -312,6 +308,11 @@ namespace lfs::training {
             scene.setInitialPointCloud(point_cloud);
             scene.addPointCloud("PointCloud", point_cloud, dataset_id);
             return {};
+        }
+
+        bool evalMaskNeedsInitialPoints(const lfs::core::param::TrainingParameters& params) {
+            return params.optimization.enable_eval &&
+                   lfs::core::param::is_eval_mask_points(params.optimization.eval_mask);
         }
 
         TrainingModelGraphInstall makeGraphInstall(const TrainingModelGraphCapture& context,
@@ -365,10 +366,8 @@ namespace lfs::training {
                      lfs::core::path_to_utf8(init_file.filename()),
                      model->get_max_sh_degree());
 
-            TrainingModelGraphCapture context =
-                graph_capture ? *graph_capture : captureTrainingModelGraph(scene);
-            context.has_preserved_cropbox = false;
-            return makeGraphInstall(context, std::move(model));
+            return makeGraphInstall(graph_capture ? *graph_capture : captureTrainingModelGraph(scene),
+                                    std::move(model));
         }
 
         std::expected<std::unique_ptr<lfs::core::SplatData>, std::string> loadAddedSplat(
@@ -401,7 +400,7 @@ namespace lfs::training {
             const lfs::core::param::TrainingParameters& params,
             lfs::core::SplatData& model,
             const glm::vec3& dataset_origin) {
-            if (params.add_splat_paths.empty()) {
+            if (params.add_splat_paths.empty() || params.add_splats_applied) {
                 return {};
             }
 
@@ -721,13 +720,6 @@ namespace lfs::training {
                     (void)lfs::training::sh_value::apply_shN_value_quant(model);
                 }
                 lfs::core::Tensor::trim_memory_pool();
-
-                LOG_INFO("Migrated training SplatData tensors to Vulkan-external storage "
-                         "(gaussians={}, capacity={}, shN_q16={}, shN_capacity_cells={})",
-                         n,
-                         model.means_raw().capacity(),
-                         model.shN_value_quantized(),
-                         model.shN_raw().is_valid() ? model.shN_raw().capacity() : 0);
             } catch (const std::exception& e) {
                 return std::unexpected(std::format(
                     "Failed to migrate training SplatData to Vulkan-external storage: {}",
@@ -760,8 +752,7 @@ namespace lfs::training {
             .min_track_length = effectiveMinTrackLengthForLoad(params),
             .validate_only = false,
             .load_masks = params.optimization.mask_mode != lfs::core::param::MaskMode::None,
-            .load_depths = params.optimization.use_depth_loss &&
-                           params.optimization.depth_loss_weight > 0.0f,
+            .load_depths = params.optimization.depth_supervision_enabled(),
             .load_normals = training_normal_priors_enabled(params.optimization) ||
                             (!params.optimization.gut && params.optimization.enable_eval),
             .normal_auto_generate = params.optimization.normal_auto_generate,
@@ -780,8 +771,6 @@ namespace lfs::training {
         if (!load_result) {
             return std::unexpected(std::format("Failed to load dataset: {}", load_result.error().format()));
         }
-
-        LOG_INFO("Dataset loaded successfully using {} loader", load_result->loader_used);
 
         return std::visit([&](auto&& data) -> std::expected<void, std::string> {
             using T = std::decay_t<decltype(data)>;
@@ -886,6 +875,31 @@ namespace lfs::training {
                           load_result->data);
     }
 
+    lfs::Result<std::shared_ptr<lfs::core::PointCloud>> loadInitialPointCloud(
+        const lfs::core::param::TrainingParameters& params, const glm::vec3& training_origin) {
+        if (params.init_path.has_value() && !params.init_path->empty()) {
+            auto loaded = loadInitReplacementPointCloud(lfs::core::utf8_to_path(*params.init_path));
+            if (loaded)
+                centerInitializationMeans((*loaded)->means, training_origin);
+            return loaded;
+        }
+
+        const lfs::io::LoadOptions load_options{
+            .resize_factor = params.dataset.resize_factor,
+            .max_width = params.dataset.max_width,
+            .images_folder = params.dataset.images,
+            .min_track_length = effectiveMinTrackLengthForLoad(params),
+            .centralize = parse_centralize(params.dataset.centralize_dataset)};
+        const auto data_path = lfs::core::path_to_utf8(params.dataset.data_path);
+        auto load_result = lfs::io::Loader::create()->load(params.dataset.data_path, load_options);
+        if (!load_result)
+            return initFileError(std::format("Failed to load '{}': {}", data_path, load_result.error().format()));
+        const auto* loaded = std::get_if<lfs::io::LoadedScene>(&load_result->data);
+        if (!loaded || !loaded->point_cloud || loaded->point_cloud->size() <= 0)
+            return initFileError(std::format("'{}' has no sparse points and no --init file was given", data_path));
+        return loaded->point_cloud;
+    }
+
     TrainingModelGraphCapture captureTrainingModelGraph(lfs::core::Scene& scene) {
         TrainingModelGraphCapture context;
         context.training_model = scene.getTrainingModel();
@@ -966,6 +980,7 @@ namespace lfs::training {
                     !result) {
                     return std::unexpected(std::move(result.error()));
                 }
+                loaded->keep_initial_point_cloud = evalMaskNeedsInitialPoints(params);
                 return std::optional<TrainingModelGraphInstall>{std::move(*loaded)};
             }
         }
@@ -1061,8 +1076,9 @@ namespace lfs::training {
         } else {
             LOG_INFO("Created training model with {} gaussians", model->size());
         }
-        return std::optional<TrainingModelGraphInstall>{
-            makeGraphInstall(context, std::move(model))};
+        auto install = makeGraphInstall(context, std::move(model));
+        install.keep_initial_point_cloud = evalMaskNeedsInitialPoints(params);
+        return std::optional<TrainingModelGraphInstall>{std::move(install)};
     }
 
     std::expected<void, std::string> installTrainingModel(
@@ -1074,7 +1090,10 @@ namespace lfs::training {
 
         if (install.point_cloud_node_id != lfs::core::NULL_NODE) {
             if (const auto* pc_node = scene.getNodeById(install.point_cloud_node_id)) {
+                auto initial_point_cloud = install.keep_initial_point_cloud ? scene.getInitialPointCloud() : nullptr;
                 scene.removeNode(pc_node->name, false);
+                if (initial_point_cloud)
+                    scene.setInitialPointCloud(std::move(initial_point_cloud));
             }
         }
 
@@ -1123,8 +1142,7 @@ namespace lfs::training {
             .min_track_length = params.dataset.min_track_length,
             .validate_only = true,
             .load_masks = params.optimization.mask_mode != lfs::core::param::MaskMode::None,
-            .load_depths = params.optimization.use_depth_loss &&
-                           params.optimization.depth_loss_weight > 0.0f,
+            .load_depths = params.optimization.depth_supervision_enabled(),
             .load_normals = training_normal_priors_enabled(params.optimization),
             .normal_auto_generate = params.optimization.normal_auto_generate};
 
@@ -1252,6 +1270,21 @@ namespace lfs::training {
         }
 
         auto trainer = std::make_unique<Trainer>(scene);
+        auto source_nodes = document.scene_graph().nodes();
+        if (!source_nodes) {
+            return std::unexpected(std::format(
+                "Failed to read project scene graph for snapshot bindings: {}",
+                lfs::format_for_developer(source_nodes.error())));
+        }
+        lfs::io::project::ScenePayloadBindings snapshot_bindings;
+        const auto training_uuid = scene.getTrainingModelNodeUuid();
+        for (const auto& node : *source_nodes) {
+            if (node.uuid != training_uuid && node.payload) {
+                snapshot_bindings.emplace(node.uuid, *node.payload);
+            }
+        }
+        trainer->set_project_snapshot_payload_bindings(
+            std::move(snapshot_bindings));
         if (recovery_session) {
             trainer->set_recovery_session(*recovery_session);
         }
@@ -1399,12 +1432,42 @@ namespace lfs::training {
         }
     } // namespace
 
-    void export_final_splats(const Trainer& trainer,
-                             const lfs::core::param::TrainingParameters& params) {
-        if (params.export_formats.empty()) {
-            return;
+    lfs::Result<std::optional<lfs::core::SplatData>> exclude_frozen_rows(const lfs::core::SplatData& model) {
+        if (!model.has_frozen_ranges())
+            return std::optional<lfs::core::SplatData>{};
+        const auto rows = static_cast<size_t>(model.size());
+        auto keep = make_frozen_mask(model, rows, model.means().device()).logical_not();
+        assert(keep.ndim() == 1 && keep.numel() == rows);
+        if (model.deleted_mask_matches_size())
+            keep = keep.logical_and(model.deleted().logical_not());
+        auto kept = lfs::core::extract_by_mask(model, keep);
+        if (kept.size() == 0) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = "Final export failed: every row is a frozen added splat.",
+                .detail = "--exclude-export leaves no rows to export",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
         }
-        const auto& model = trainer.get_strategy().get_model();
+        return std::optional<lfs::core::SplatData>{std::move(kept)};
+    }
+
+    lfs::Status export_final_splats(const Trainer& trainer,
+                                    const lfs::core::param::TrainingParameters& params) {
+        if (params.export_formats.empty()) {
+            return {};
+        }
+        const auto& trained = trainer.get_strategy().get_model();
+        std::optional<lfs::core::SplatData> without_frozen;
+        if (params.exclude_frozen_add_splats_from_export ||
+            trainer.getParams().exclude_frozen_add_splats_from_export) {
+            auto kept = exclude_frozen_rows(trained);
+            if (!kept)
+                return lfs::Status::failure(std::move(kept).error());
+            without_frozen = std::move(*kept);
+        }
+        const auto& model = without_frozen ? *without_frozen : trained;
         const std::filesystem::path out_dir = params.dataset.output_path;
         const std::string stem = params.dataset.output_name.empty()
                                      ? std::format("splat_{}", trainer.get_current_iteration())
@@ -1418,15 +1481,32 @@ namespace lfs::training {
             stamp.strategy = params.optimization.strategy;
         }
 
+        std::string failed;
         for (const auto format : params.export_formats) {
             const std::filesystem::path path = out_dir / (stem + final_export_extension(format));
-            if (const auto result = save_final_splat(model, path, format, stamp, params); !result) {
-                LOG_ERROR("Failed to export final splat to {}: {}",
-                          lfs::core::path_to_utf8(path), result.error().message);
-            } else {
-                LOG_INFO("Exported final splat: {}", lfs::core::path_to_utf8(path));
+            const std::string file = lfs::core::path_to_utf8(path);
+            try {
+                if (const auto result = save_final_splat(model, path, format, stamp, params); !result) {
+                    LOG_ERROR("Failed to export final splat to {}: {}", file, result.error().message);
+                    failed += failed.empty() ? file : ", " + file;
+                    continue;
+                }
+                LOG_INFO("Exported final splat: {}", file);
+            } catch (const std::exception& e) {
+                LOG_ERROR("Failed to export final splat to {}: {}", file, e.what());
+                failed += failed.empty() ? file : ", " + file;
             }
         }
+        if (failed.empty()) {
+            return {};
+        }
+        return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::Internal,
+            .domain = lfs::ErrorDomain::IO,
+            .user_message = "Final export failed.",
+            .detail = std::format("Final export failed for {}", failed),
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        }));
     }
 
 } // namespace lfs::training

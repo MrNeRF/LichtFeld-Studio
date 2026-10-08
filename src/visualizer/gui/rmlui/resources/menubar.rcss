@@ -102,7 +102,7 @@ body {
 }
 
 #menu-toolbar.hidden {
-    display: none;
+    visibility: hidden;
 }
 
 .menu-portal-connection {
@@ -483,4 +483,24 @@ body {
 
 .submenu-container.open > .submenu-popup {
     display: flex;
+}
+
+/* Keep menus and native window controls reachable in narrow windows. */
+body.compact #brand-logo,
+body.compact .menu-window-utility-btn,
+body.compact .menu-window-separator,
+body.compact #menu-portal-connection span {
+    display: none;
+}
+body.compact .menu-label {
+    padding-left: 3dp;
+    padding-right: 3dp;
+}
+body.compact .menu-window-btn {
+    width: 24dp;
+    min-width: 24dp;
+}
+body.compact #menu-portal-connection {
+    padding: 0 2dp;
+    margin: 0;
 }

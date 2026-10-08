@@ -53,6 +53,15 @@ namespace lfs::vis {
         pool_.trimAged(destroy);
     }
 
+    bool OutputImagePool::retain(const std::uint64_t serial) {
+        return pool_.retain(serial);
+    }
+
+    void OutputImagePool::releaseRetained(const std::uint64_t serial,
+                                          const std::uint64_t consumer_serial) {
+        pool_.releaseRetained(serial, consumer_serial);
+    }
+
     std::size_t OutputImagePool::idleBytes() const {
         return pool_.idleBytes();
     }

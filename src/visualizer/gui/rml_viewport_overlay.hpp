@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/vram_hud_overlay.hpp"
@@ -27,13 +29,14 @@ namespace Rml {
 } // namespace Rml
 
 namespace lfs::vis {
+    class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
     struct Theme;
-}
+} // namespace lfs::vis
 namespace lfs::vis::gui {
 
     struct PanelInputState;
 
-    class RmlViewportOverlay {
+    class LFS_VIS_API RmlViewportOverlay {
     public:
         struct GTMetricsOverlayState {
             bool visible = false;
@@ -103,19 +106,20 @@ namespace lfs::vis::gui {
         void render();
         void renderCached();
         void renderFrostedGlass();
-        void processInput(const PanelInputState& input);
+        void processInput(const PanelInputState& input, std::function<bool(float, float)> pointer_blocker = {});
         bool wantsInput() const { return wants_input_; }
         [[nodiscard]] bool needsAnimationFrame() const {
             return render_needed_ || document_sync_dirty_ || animation_active_ || tooltip_.revealDue() ||
                    toolbar_drag_active_ ||
                    (vram_hud_ && vram_hud_->needsAnimationFrame());
         }
-        // Finite RmlUi scheduled update delay (seconds) when > 0; nullopt for
-        // continuous demand (0) or idle (infinity).
+        // Next finite RmlUi or passive document-hook deadline in seconds.
+        // Continuous RmlUi demand is reported by needsAnimationFrame().
         [[nodiscard]] std::optional<double> nextScheduledUpdateDelay() const;
         [[nodiscard]] bool blocksPointer(double screen_x, double screen_y) const;
 
     private:
+        friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
         struct ToolbarDragListener final : Rml::EventListener {
             RmlViewportOverlay* owner = nullptr;
             void ProcessEvent(Rml::Event& event) override;
@@ -243,8 +247,6 @@ namespace lfs::vis::gui {
         std::optional<lfs::vis::AppStore::CameraMetrics> camera_metrics_;
         lfs::core::reactive::SubscriptionToken gt_metrics_config_subscription_;
         lfs::core::reactive::SubscriptionToken camera_metrics_subscription_;
-        lfs::core::reactive::SubscriptionToken vram_hud_subscription_;
-        lfs::core::reactive::SubscriptionToken perf_hud_subscription_;
         std::vector<lfs::core::reactive::SubscriptionToken> document_sync_subscriptions_;
         std::unique_ptr<VramHudOverlay> vram_hud_;
         RmlTooltipController tooltip_;

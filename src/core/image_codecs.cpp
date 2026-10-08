@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "image_codecs.hpp"
+#include "image_exr.hpp"
 
 #include "core/path_utils.hpp"
 
@@ -11,12 +12,12 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 #include <tiffio.h>
-#include <tinyexr.h>
 #include <webp/decode.h>
 #include <zlib.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cctype>
 #include <csetjmp>
@@ -27,6 +28,8 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <thread>
+#include <vector>
 
 #ifndef _WIN32
 #include <fcntl.h>
@@ -186,6 +189,25 @@ namespace lfs::core::image_codecs {
             context->offset += size;
         }
 
+        bool read_png_pixels(png_structp png, png_infop info, png_bytepp rows) {
+            // Catch libpng errors in a frame with no C++ owners. Jumping to the
+            // header reader's guard would bypass the caller's row-vector destructor.
+            if (setjmp(png_jmpbuf(png)))
+                return false;
+            png_read_image(png, rows);
+            png_read_end(png, info);
+            return true;
+        }
+
+        bool write_png_pixels(png_structp png, png_infop info, png_bytepp rows) {
+            // Keep the caller's row buffer alive when libpng reports an I/O error.
+            if (setjmp(png_jmpbuf(png)))
+                return false;
+            png_write_image(png, rows);
+            png_write_end(png, info);
+            return true;
+        }
+
         bool configure_png_target(png_structp png, png_infop info, DecodeTarget& target,
                                   Probe& result, std::string& error) {
             png_uint_32 width = 0;
@@ -233,8 +255,10 @@ namespace lfs::core::image_codecs {
             std::vector<png_bytep> rows(height);
             for (png_uint_32 y = 0; y < height; ++y)
                 rows[y] = static_cast<png_bytep>(target.data) + static_cast<std::size_t>(y) * decoded_row_bytes;
-            png_read_image(png, rows.data());
-            png_read_end(png, info);
+            if (!read_png_pixels(png, info, rows.data())) {
+                error = "PNG decode failed";
+                return false;
+            }
             if (compact_gray) {
                 auto* output = static_cast<std::uint16_t*>(target.data);
                 const auto* gray = output;
@@ -377,10 +401,11 @@ namespace lfs::core::image_codecs {
             std::vector<png_bytep> rows(height);
             for (png_uint_32 y = 0; y < height; ++y)
                 rows[y] = result.data.data() + static_cast<std::size_t>(y) * row_bytes;
-            png_read_image(png, rows.data());
-            png_read_end(png, info);
+            const bool success = read_png_pixels(png, info, rows.data());
             png_destroy_read_struct(&png, &info, nullptr);
-            return true;
+            if (!success)
+                error = "PNG decode failed";
+            return success;
         }
 
         struct JpegError {
@@ -433,15 +458,9 @@ namespace lfs::core::image_codecs {
             }
             cinfo.out_color_space = target.channels == 1 ? JCS_GRAYSCALE : JCS_RGB;
             if (target.max_width > 0) {
-                const auto max_dimension = std::max(cinfo.image_width, cinfo.image_height);
-                for (const unsigned int denominator : {1u, 2u, 4u, 8u}) {
-                    if ((max_dimension + denominator - 1) / denominator <=
-                        static_cast<unsigned int>(target.max_width)) {
-                        cinfo.scale_num = 1;
-                        cinfo.scale_denom = denominator;
-                        break;
-                    }
-                }
+                cinfo.scale_num = 1;
+                cinfo.scale_denom = jpeg_scale_denominator(std::max(cinfo.image_width, cinfo.image_height),
+                                                           static_cast<unsigned>(target.max_width));
             }
             jpeg_start_decompress(&cinfo);
             if (cinfo.output_components != target.channels) {
@@ -955,30 +974,6 @@ namespace lfs::core::image_codecs {
             return true;
         }
 
-        bool decode_exr(const std::filesystem::path& path, Image& result, std::string& error) {
-            float* decoded = nullptr;
-            int width = 0;
-            int height = 0;
-            const auto path_utf8 = path_to_utf8(path);
-            const char* exr_error = nullptr;
-            const int status = LoadEXR(&decoded, &width, &height, path_utf8.c_str(), &exr_error);
-            if (status != TINYEXR_SUCCESS || !decoded) {
-                set_error(error, "EXR decode failed", exr_error);
-                if (exr_error)
-                    FreeEXRErrorMessage(exr_error);
-                return false;
-            }
-            result.width = width;
-            result.height = height;
-            result.channels = 4;
-            result.sample_type = SampleType::Float32;
-            const auto bytes = static_cast<std::size_t>(width) * height * 4 * sizeof(float);
-            result.data.resize(bytes);
-            std::memcpy(result.data.data(), decoded, bytes);
-            free(decoded);
-            return true;
-        }
-
     } // namespace
 
     bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target,
@@ -1016,6 +1011,8 @@ namespace lfs::core::image_codecs {
 
     bool probe(const std::filesystem::path& path, Probe& result, std::string& error) {
         const auto extension = lower_extension(path);
+        if (extension == ".exr")
+            return probe_exr(path, result, error);
         if (extension == ".jpg" || extension == ".jpeg")
             return probe_jpeg_file(path, result, error);
         if (extension == ".png")
@@ -1050,10 +1047,8 @@ namespace lfs::core::image_codecs {
         std::vector<std::uint8_t> prefix;
         if (!read_prefix(path, prefix, error))
             return false;
-        if (is_exr(prefix)) {
-            error = "EXR dimensions require codec decode";
-            return false;
-        }
+        if (is_exr(prefix))
+            return probe_exr(path, result, error);
         if (is_tiff(prefix) || extension == ".tif" || extension == ".tiff") {
             TIFF* tiff = open_tiff(path, "r", error);
             if (!tiff)
@@ -1206,57 +1201,268 @@ namespace lfs::core::image_codecs {
         return decode_jpeg_bytes(data, size, result, error);
     }
 
+    namespace {
+        struct JpegEncodeState {
+            jpeg_compress_struct codec{};
+            JpegError error{};
+            std::FILE* file = nullptr;
+            bool created = false;
+            ~JpegEncodeState() {
+                if (created)
+                    jpeg_destroy_compress(&codec);
+                if (file)
+                    std::fclose(file);
+            }
+        };
+
+        // The jump stays inside a scalar-only frame; ownership lives in the caller.
+        bool encode_jpeg(JpegEncodeState* state, const std::uint8_t* data,
+                         int width, int height, int channels, int quality,
+                         const char* comment, std::size_t comment_size, bool full_chroma) {
+            state->codec.err = jpeg_std_error(&state->error.base);
+            state->error.base.error_exit = jpeg_error_exit;
+            if (setjmp(state->error.jump)) {
+                return false;
+            }
+            state->created = true;
+            jpeg_create_compress(&state->codec);
+            jpeg_stdio_dest(&state->codec, state->file);
+            state->codec.image_width = width;
+            state->codec.image_height = height;
+            state->codec.input_components = channels;
+            state->codec.in_color_space = channels == 1 ? JCS_GRAYSCALE : JCS_RGB;
+            jpeg_set_defaults(&state->codec);
+            if (full_chroma && channels == 3) {
+                state->codec.comp_info[0].h_samp_factor = 1;
+                state->codec.comp_info[0].v_samp_factor = 1;
+            }
+            jpeg_set_quality(&state->codec, std::clamp(quality, 1, 100), TRUE);
+            jpeg_start_compress(&state->codec, TRUE);
+            if (comment_size != 0) {
+                jpeg_write_marker(&state->codec, JPEG_COM, reinterpret_cast<const JOCTET*>(comment),
+                                  static_cast<unsigned int>(std::min<std::size_t>(comment_size, 65533)));
+            }
+            while (state->codec.next_scanline < state->codec.image_height) {
+                JSAMPROW row = const_cast<JSAMPROW>(data + static_cast<std::size_t>(state->codec.next_scanline) * static_cast<std::size_t>(width) * static_cast<std::size_t>(channels));
+                jpeg_write_scanlines(&state->codec, &row, 1);
+            }
+            jpeg_finish_compress(&state->codec);
+            return true;
+        }
+    } // namespace
+
     bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,
                     const int width, const int height, const int channels, const int quality,
                     const std::optional<std::string>& comment, std::string& error) {
-        if (!data || width <= 0 || height <= 0 || (channels != 1 && channels != 3)) {
+        return write_jpeg(path, data, width, height, channels, quality, comment, error, false);
+    }
+
+    bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,
+                    const int width, const int height, const int channels, const int quality,
+                    const std::optional<std::string>& comment, std::string& error, const bool full_chroma) {
+        if (!data || width <= 0 || height <= 0 || width > JPEG_MAX_DIMENSION || height > JPEG_MAX_DIMENSION ||
+            (channels != 1 && channels != 3)) {
             error = "Unsupported JPEG layout";
             return false;
         }
-        jpeg_compress_struct cinfo{};
-        JpegError jerror;
-        cinfo.err = jpeg_std_error(&jerror.base);
-        jerror.base.error_exit = jpeg_error_exit;
-        if (setjmp(jerror.jump)) {
-            jpeg_destroy_compress(&cinfo);
-            set_error(error, "JPEG encode failed", jerror.message);
-            return false;
-        }
-        jpeg_create_compress(&cinfo);
-        unsigned char* output = nullptr;
-        unsigned long output_size = 0;
-        jpeg_mem_dest(&cinfo, &output, &output_size);
-        cinfo.image_width = width;
-        cinfo.image_height = height;
-        cinfo.input_components = channels;
-        cinfo.in_color_space = channels == 1 ? JCS_GRAYSCALE : JCS_RGB;
-        jpeg_set_defaults(&cinfo);
-        jpeg_set_quality(&cinfo, std::clamp(quality, 1, 100), TRUE);
-        jpeg_start_compress(&cinfo, TRUE);
-        if (comment && !comment->empty()) {
-            const auto length = std::min<std::size_t>(comment->size(), 65533);
-            jpeg_write_marker(&cinfo, JPEG_COM, reinterpret_cast<const JOCTET*>(comment->data()), length);
-        }
-        while (cinfo.next_scanline < cinfo.image_height) {
-            JSAMPROW row = const_cast<JSAMPROW>(data + static_cast<std::size_t>(cinfo.next_scanline) * width * channels);
-            jpeg_write_scanlines(&cinfo, &row, 1);
-        }
-        jpeg_finish_compress(&cinfo);
-        std::ofstream file(path, std::ios::binary);
-        if (!file) {
-            free(output);
-            jpeg_destroy_compress(&cinfo);
+        auto state = std::make_unique<JpegEncodeState>();
+        state->file = open_output_file(path);
+        if (!state->file) {
             error = "Could not open JPEG output " + path_to_utf8(path);
             return false;
         }
-        file.write(reinterpret_cast<const char*>(output), static_cast<std::streamsize>(output_size));
-        const bool success = static_cast<bool>(file);
-        free(output);
-        jpeg_destroy_compress(&cinfo);
+        if (!encode_jpeg(state.get(), data, width, height, channels, quality,
+                         comment ? comment->data() : nullptr, comment ? comment->size() : 0, full_chroma)) {
+            set_error(error, "JPEG encode failed", state->error.message);
+            return false;
+        }
+        const bool success = std::fclose(state->file) == 0;
+        state->file = nullptr;
         if (!success)
             error = "Could not write JPEG output " + path_to_utf8(path);
         return success;
     }
+
+    namespace {
+        // Large 8-bit images: filter and deflate horizontal stripes on all cores. Each stripe ends
+        // on a byte-aligned sync flush, so the stripes concatenate into one zlib stream (as pigz does).
+        constexpr std::size_t kParallelPngMinPixels = std::size_t{1} << 20;
+
+        void append_u32(std::vector<std::uint8_t>& out, const std::uint32_t value) {
+            out.push_back(static_cast<std::uint8_t>(value >> 24));
+            out.push_back(static_cast<std::uint8_t>(value >> 16));
+            out.push_back(static_cast<std::uint8_t>(value >> 8));
+            out.push_back(static_cast<std::uint8_t>(value));
+        }
+
+        bool write_png_chunk(std::FILE* file, const char* type, const std::uint8_t* data, const std::size_t size) {
+            std::vector<std::uint8_t> header;
+            append_u32(header, static_cast<std::uint32_t>(size));
+            header.insert(header.end(), type, type + 4);
+            uLong crc = crc32(0L, reinterpret_cast<const Bytef*>(type), 4);
+            if (size > 0)
+                crc = crc32_z(crc, data, size);
+            std::vector<std::uint8_t> trailer;
+            append_u32(trailer, static_cast<std::uint32_t>(crc));
+            return std::fwrite(header.data(), 1, header.size(), file) == header.size() &&
+                   (size == 0 || std::fwrite(data, 1, size, file) == size) &&
+                   std::fwrite(trailer.data(), 1, trailer.size(), file) == trailer.size();
+        }
+
+        std::uint8_t paeth_predictor(const int a, const int b, const int c) {
+            const int p = a + b - c;
+            const int pa = std::abs(p - a);
+            const int pb = std::abs(p - b);
+            const int pc = std::abs(p - c);
+            if (pa <= pb && pa <= pc)
+                return static_cast<std::uint8_t>(a);
+            return static_cast<std::uint8_t>(pb <= pc ? b : c);
+        }
+
+        // libpng's default choice: the filter whose residuals have the smallest absolute sum.
+        void filter_png_row(const std::uint8_t* row, const std::uint8_t* prev, const std::size_t row_bytes,
+                            const std::size_t bpp, std::uint8_t* out,
+                            std::array<std::vector<std::uint8_t>, 5>& candidates) {
+            std::array<std::uint64_t, 5> sums{};
+            for (std::size_t i = 0; i < row_bytes; ++i) {
+                const int x = row[i];
+                const int a = i >= bpp ? row[i - bpp] : 0;
+                const int b = prev ? prev[i] : 0;
+                const int c = prev && i >= bpp ? prev[i - bpp] : 0;
+                const std::array<std::uint8_t, 5> residual = {
+                    static_cast<std::uint8_t>(x),
+                    static_cast<std::uint8_t>(x - a),
+                    static_cast<std::uint8_t>(x - b),
+                    static_cast<std::uint8_t>(x - ((a + b) >> 1)),
+                    static_cast<std::uint8_t>(x - paeth_predictor(a, b, c)),
+                };
+                for (std::size_t f = 0; f < residual.size(); ++f) {
+                    candidates[f][i] = residual[f];
+                    sums[f] += static_cast<std::uint64_t>(std::abs(static_cast<int>(static_cast<std::int8_t>(residual[f]))));
+                }
+            }
+            const auto best = static_cast<std::size_t>(std::min_element(sums.begin(), sums.end()) - sums.begin());
+            out[0] = static_cast<std::uint8_t>(best);
+            std::memcpy(out + 1, candidates[best].data(), row_bytes);
+        }
+
+        struct PngStripe {
+            std::vector<std::uint8_t> deflated;
+            uLong adler = 1;
+            std::size_t filtered_bytes = 0;
+            bool ok = false;
+        };
+
+        void encode_png_stripe(const std::uint8_t* pixels, const int width, const int channels, const int y_begin,
+                               const int y_end, const bool last, const int level, PngStripe& stripe) {
+            const auto row_bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(channels);
+            const auto rows = static_cast<std::size_t>(y_end - y_begin);
+            std::vector<std::uint8_t> filtered(rows * (row_bytes + 1));
+            std::array<std::vector<std::uint8_t>, 5> candidates;
+            for (auto& candidate : candidates)
+                candidate.resize(row_bytes);
+            for (int y = y_begin; y < y_end; ++y) {
+                const auto* row = pixels + static_cast<std::size_t>(y) * row_bytes;
+                const auto* prev = y > 0 ? row - row_bytes : nullptr;
+                filter_png_row(row, prev, row_bytes, static_cast<std::size_t>(channels),
+                               filtered.data() + static_cast<std::size_t>(y - y_begin) * (row_bytes + 1), candidates);
+            }
+
+            z_stream stream{};
+            if (deflateInit2(&stream, level, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK)
+                return;
+            stripe.deflated.resize(deflateBound(&stream, static_cast<uLong>(filtered.size())) + 64);
+            stream.next_in = filtered.data();
+            stream.avail_in = static_cast<uInt>(filtered.size());
+            stream.next_out = stripe.deflated.data();
+            stream.avail_out = static_cast<uInt>(stripe.deflated.size());
+            const int status = deflate(&stream, last ? Z_FINISH : Z_SYNC_FLUSH);
+            const bool done = last ? status == Z_STREAM_END : (status == Z_OK && stream.avail_in == 0);
+            stripe.deflated.resize(stream.total_out);
+            deflateEnd(&stream);
+            stripe.adler = adler32_z(1L, filtered.data(), filtered.size());
+            stripe.filtered_bytes = filtered.size();
+            stripe.ok = done;
+        }
+
+        bool write_png_parallel(const std::filesystem::path& path, const std::uint8_t* pixels, const int width,
+                                const int height, const int channels, const int compression_level,
+                                const std::optional<std::string>& comment, std::string& error) {
+            const auto row_bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(channels);
+            const unsigned threads = std::max(1u, std::thread::hardware_concurrency());
+            // About 8 MiB of pixels per stripe keeps every core busy without hurting the ratio.
+            const int stripe_rows = std::max(16, static_cast<int>((std::size_t{8} << 20) / std::max<std::size_t>(row_bytes, 1)));
+            const int stripe_count = (height + stripe_rows - 1) / stripe_rows;
+            const int level = std::clamp(compression_level, 0, 9);
+
+            std::vector<PngStripe> stripes(static_cast<std::size_t>(stripe_count));
+            std::atomic<int> next{0};
+            const auto worker = [&] {
+                for (int s = next.fetch_add(1); s < stripe_count; s = next.fetch_add(1)) {
+                    const int y_begin = s * stripe_rows;
+                    const int y_end = std::min(height, y_begin + stripe_rows);
+                    encode_png_stripe(pixels, width, channels, y_begin, y_end, s == stripe_count - 1, level,
+                                      stripes[static_cast<std::size_t>(s)]);
+                }
+            };
+            std::vector<std::thread> pool;
+            const unsigned pool_size = std::min<unsigned>(threads, static_cast<unsigned>(stripe_count));
+            pool.reserve(pool_size);
+            for (unsigned t = 1; t < pool_size; ++t)
+                pool.emplace_back(worker);
+            worker();
+            for (auto& thread : pool)
+                thread.join();
+            if (std::any_of(stripes.begin(), stripes.end(), [](const PngStripe& stripe) { return !stripe.ok; })) {
+                error = "PNG deflate failed";
+                return false;
+            }
+
+            uLong adler = stripes.front().adler;
+            for (std::size_t s = 1; s < stripes.size(); ++s)
+                adler = adler32_combine(adler, stripes[s].adler, static_cast<z_off_t>(stripes[s].filtered_bytes));
+
+            std::FILE* file = open_output_file(path);
+            if (!file) {
+                error = "Could not open PNG output " + path_to_utf8(path);
+                return false;
+            }
+            static constexpr std::array<std::uint8_t, 8> signature = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+            std::vector<std::uint8_t> ihdr;
+            append_u32(ihdr, static_cast<std::uint32_t>(width));
+            append_u32(ihdr, static_cast<std::uint32_t>(height));
+            const std::uint8_t color_type = channels == 1 ? 0 : channels == 2 ? 4
+                                                            : channels == 3   ? 2
+                                                                              : 6;
+            ihdr.insert(ihdr.end(), {8, color_type, 0, 0, 0});
+            bool ok = std::fwrite(signature.data(), 1, signature.size(), file) == signature.size() &&
+                      write_png_chunk(file, "IHDR", ihdr.data(), ihdr.size());
+            if (ok && comment && !comment->empty()) {
+                std::vector<std::uint8_t> text = {'C', 'o', 'm', 'm', 'e', 'n', 't', 0};
+                text.insert(text.end(), comment->begin(), comment->end());
+                ok = write_png_chunk(file, "tEXt", text.data(), text.size());
+            }
+            const std::uint8_t level_bits = level < 2 ? 0 : level < 6 ? 1
+                                                        : level == 6  ? 2
+                                                                      : 3;
+            std::uint8_t zlib_header[2] = {0x78, static_cast<std::uint8_t>(level_bits << 6)};
+            zlib_header[1] = static_cast<std::uint8_t>(zlib_header[1] + (31 - (zlib_header[0] * 256 + zlib_header[1]) % 31));
+            ok = ok && write_png_chunk(file, "IDAT", zlib_header, sizeof(zlib_header));
+            for (const auto& stripe : stripes) {
+                if (!ok)
+                    break;
+                ok = write_png_chunk(file, "IDAT", stripe.deflated.data(), stripe.deflated.size());
+            }
+            std::vector<std::uint8_t> checksum;
+            append_u32(checksum, static_cast<std::uint32_t>(adler));
+            ok = ok && write_png_chunk(file, "IDAT", checksum.data(), checksum.size()) &&
+                 write_png_chunk(file, "IEND", nullptr, 0);
+            const bool closed = std::fclose(file) == 0;
+            if (!ok || !closed)
+                error = "Could not write PNG output " + path_to_utf8(path);
+            return ok && closed;
+        }
+    } // namespace
 
     bool write_png(const std::filesystem::path& path, const void* data,
                    const int width, const int height, const int channels, const int bit_depth,
@@ -1266,6 +1472,10 @@ namespace lfs::core::image_codecs {
             error = "Unsupported PNG layout";
             return false;
         }
+        if (bit_depth == 8 && static_cast<std::size_t>(width) * static_cast<std::size_t>(height) >= kParallelPngMinPixels) {
+            return write_png_parallel(path, static_cast<const std::uint8_t*>(data), width, height, channels,
+                                      compression_level, comment, error);
+        }
         png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
         png_infop info = png ? png_create_info_struct(png) : nullptr;
         if (!png || !info) {
@@ -1273,18 +1483,16 @@ namespace lfs::core::image_codecs {
             error = "Could not allocate PNG encoder";
             return false;
         }
-        std::FILE* file = nullptr;
-        if (setjmp(png_jmpbuf(png))) {
-            if (file)
-                std::fclose(file);
-            png_destroy_write_struct(&png, &info);
-            error = "PNG encode failed";
-            return false;
-        }
-        file = open_output_file(path);
+        std::FILE* file = open_output_file(path);
         if (!file) {
             png_destroy_write_struct(&png, &info);
             error = "Could not open PNG output " + path_to_utf8(path);
+            return false;
+        }
+        if (setjmp(png_jmpbuf(png))) {
+            std::fclose(file);
+            png_destroy_write_struct(&png, &info);
+            error = "PNG encode failed";
             return false;
         }
         png_init_io(png, file);
@@ -1312,13 +1520,14 @@ namespace lfs::core::image_codecs {
         auto* bytes = static_cast<png_bytep>(const_cast<void*>(data));
         for (int y = 0; y < height; ++y)
             rows[y] = bytes + static_cast<std::size_t>(y) * row_bytes;
-        png_write_image(png, rows.data());
-        png_write_end(png, info);
+        const bool encoded = write_png_pixels(png, info, rows.data());
         png_destroy_write_struct(&png, &info);
-        const bool success = std::fclose(file) == 0;
-        if (!success)
+        const bool closed = std::fclose(file) == 0;
+        if (!encoded)
+            error = "PNG encode failed";
+        else if (!closed)
             error = "Could not write PNG output " + path_to_utf8(path);
-        return success;
+        return encoded && closed;
     }
 
     bool write_tiff(const std::filesystem::path& path, const std::uint8_t* data,

@@ -249,6 +249,28 @@ TEST(DensifyEvents4x, SelectMedianMatchesRadixSortOrder) {
     }
 }
 
+TEST(DensifyEvents4x, MedianSelectionMatchesReferenceAcrossDigitBoundaries) {
+    // Place the selected bin on either side of warp, block and radix boundaries.
+    for (const uint32_t shift : {0u, 10u, 21u}) {
+        for (const uint32_t digit : {0u, 1u, 31u, 32u, 255u, 256u, 1023u, 1024u, 2047u}) {
+            const uint32_t key = digit << shift;
+            std::vector<float> values;
+            for (int delta = -19; delta <= 19; ++delta) {
+                const uint32_t ordered = key + static_cast<uint32_t>(delta);
+                const uint32_t bits = (ordered & 0x80000000u) ? (ordered & 0x7fffffffu) : ~ordered;
+                float value;
+                std::memcpy(&value, &bits, sizeof(value));
+                values.insert(values.end(), 17, value);
+            }
+            auto tensor = Tensor::from_vector(values, TensorShape({values.size()}), Device::CUDA);
+            std::ranges::sort(values, {}, radix_order_key);
+            EXPECT_EQ(radix_order_key(kernels::launch_select_median(tensor.ptr<float>(), tensor.numel(), nullptr)),
+                      radix_order_key(values[values.size() / 2]))
+                << "shift=" << shift << " digit=" << digit;
+        }
+    }
+}
+
 TEST(DensifyEvents4x, PositiveMedianNormalizeZerosWhenNoPositives) {
     std::vector<float> data = {0.f, -1.f, 0.f, -2.f};
     auto t = Tensor::from_vector(data, TensorShape({data.size()}), Device::CUDA);

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vulkan_mesh_pass.hpp"
+#include <algorithm>
 
 #include "core/logger.hpp"
 #include "core/material.hpp"
@@ -88,7 +89,7 @@ namespace lfs::vis {
             float camera_pos[4];
             float light_dir[4]; // xyz, w unused
             float params[4];    // x = intensity, y = ambient, z = shadow_enabled
-            float selection[4]; // x = emphasized, y = dim others, z = flash intensity
+            float selection[4]; // x = emphasized, y = dim others, zw = reserved
             float light_vp[16]; // light view-projection (column-major) for shadow sampling
         };
         static_assert(sizeof(LightUbo) == 128, "LightUbo layout");
@@ -2255,7 +2256,7 @@ namespace lfs::vis {
             ubo.params[3] = 0.0f;
             ubo.selection[0] = item.is_emphasized ? 1.0f : 0.0f;
             ubo.selection[1] = item.dim_non_emphasized ? 1.0f : 0.0f;
-            ubo.selection[2] = item.flash_intensity;
+            ubo.selection[2] = 0.0f;
             ubo.selection[3] = 0.0f;
             std::memcpy(ubo.light_vp, &light_vp[0][0], sizeof(ubo.light_vp));
             return writeBuffer(resources.allocation, &ubo, sizeof(ubo));
@@ -2674,6 +2675,18 @@ namespace lfs::vis {
         if (!impl_)
             return;
         impl_->prepare(params);
+    }
+
+    void VulkanMeshPass::discardImport(uint64_t mesh_id) {
+        if (!impl_)
+            return;
+        const auto it = impl_->mesh_cache.find(mesh_id);
+        if (it == impl_->mesh_cache.end())
+            return;
+        if (!impl_->context->waitForSubmittedFrames())
+            throw std::runtime_error("Could not retire failed mesh import");
+        impl_->destroyMesh(it->second);
+        impl_->mesh_cache.erase(it);
     }
 
     void VulkanMeshPass::record(VkCommandBuffer command_buffer, VkRect2D viewport_rect,

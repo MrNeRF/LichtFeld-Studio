@@ -392,6 +392,8 @@ namespace lfs::io::project {
         // camera objects; parsers default this to true.
         bool has_image = true;
         std::string split = "train";
+        // Observations of this camera node in the project's SFMO chapter.
+        std::uint64_t sfm_observation_count = 0;
 
         friend bool operator==(const CameraRecord&, const CameraRecord&) = default;
     };
@@ -470,6 +472,8 @@ namespace lfs::io::project {
                                    const ReferenceBindings&) = default;
         };
 
+        // Preserve CLI step locks across in-process replace-load, never in PRMS.
+        std::optional<std::string> cli_step_locked_strategy;
         std::string active_strategy = std::string(lfs::core::param::kStrategyMRNF);
         lfs::core::param::OptimizationParameters mcmc_session;
         lfs::core::param::OptimizationParameters mrnf_session;

@@ -263,9 +263,7 @@ namespace lfs::training {
         if (!enable) {
             phase_active_iter_ = 0;
         }
-        if (warmup > 0) {
-            g_perf_bench_warmup.store(warmup, std::memory_order_relaxed);
-        }
+        g_perf_bench_warmup.store(warmup, std::memory_order_relaxed);
         // Prefer main.cpp's early device baseline (post primary-context, pre-model).
         // Fall back to a configure-time sample when the profiler baseline is unset
         // (unit tests / non-main entry points).

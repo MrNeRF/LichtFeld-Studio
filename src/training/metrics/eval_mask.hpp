@@ -7,7 +7,9 @@
 #include "core/camera.hpp"
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
+#include "eval_mask_kernels.cuh"
 
+#include <cuda_runtime.h>
 #include <expected>
 #include <string>
 
@@ -19,6 +21,8 @@ namespace lfs::training {
         bool invert_masks = false;
         float mask_threshold = 0.5f;
         lfs::core::param::MaskMode mask_mode = lfs::core::param::MaskMode::None;
+        bool apply_undistortion = true;
+        bool replace_gt_image = true;
     };
 
     struct LoadedMetricsMask {
@@ -59,6 +63,12 @@ namespace lfs::training {
 
     /// Interactive / eval RGBA-alpha loader. Skips mask_threshold in SegmentAndIgnore.
     [[nodiscard]] std::expected<LoadedMetricsMask, std::string> load_alpha_masked_metrics_inputs(
+        const lfs::core::Camera& camera,
+        const MetricsMaskLoadConfig& config);
+
+    /// Soft Float32 [H, W] alpha of an RGBA camera image at the evaluation size, undistorted like the
+    /// training alpha. Throws when the image cannot be decoded.
+    [[nodiscard]] lfs::core::Tensor load_eval_alpha(
         const lfs::core::Camera& camera,
         const MetricsMaskLoadConfig& config);
 

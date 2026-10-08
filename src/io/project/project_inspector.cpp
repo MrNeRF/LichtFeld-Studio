@@ -514,6 +514,7 @@ namespace lfs::io::project {
         bool needs_full_read(const ChunkInfo& row) noexcept {
             return (row.flags & TENSOR_PAYLOAD) != 0 ||
                    row.key.fourcc == FOURCC_CKPT ||
+                   row.key.fourcc == FOURCC_SFMO ||
                    row.key.fourcc == FOURCC_DSRC ||
                    row.key.fourcc == FOURCC_SPLT ||
                    row.key.fourcc == FOURCC_PCLD ||
@@ -1007,6 +1008,10 @@ namespace lfs::io::project {
                 for (const auto& entry : (**embedded).entries) {
                     if (entry.kind == "image") {
                         ++result.parameters.embedded_images;
+                    } else if (entry.kind == "mask") {
+                        ++result.parameters.embedded_masks;
+                    } else if (entry.kind == "depth") {
+                        ++result.parameters.embedded_depths;
                     } else if (entry.kind == "normal") {
                         ++result.parameters.embedded_normals;
                     } else if (entry.kind == "sparse") {

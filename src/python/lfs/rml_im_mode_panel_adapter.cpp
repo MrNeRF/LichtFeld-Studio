@@ -58,12 +58,24 @@ namespace lfs::vis::gui {
     }
 
     RmlImModePanelAdapter::~RmlImModePanelAdapter() {
+        const bool has_gil = lfs::python::can_acquire_gil();
+        std::optional<lfs::python::GilAcquire> gil;
+        if (has_gil)
+            gil.emplace();
+
         layout_.release_elements();
         if (host_) {
             const auto& ops = lfs::python::get_rml_panel_host_ops();
             assert(ops.destroy);
             ops.destroy(host_);
+            host_ = nullptr;
         }
+
+        // Panel adapters are released by the graphics-thread cleanup queue.
+        // Drop the Python instance while that thread holds the GIL so its
+        // final decref cannot touch interpreter state without a thread state.
+        if (has_gil)
+            panel_instance_ = nb::object();
     }
 
     void RmlImModePanelAdapter::ensureHost() {
@@ -327,7 +339,12 @@ namespace lfs::vis::gui {
         if (lfs::python::bridge().prepare_ui)
             lfs::python::bridge().prepare_ui();
         const lfs::python::GilAcquire gil;
-        return nb::cast<bool>(panel_instance_.attr("poll")(lfs::python::get_app_context()));
+        try {
+            return nb::cast<bool>(panel_instance_.attr("poll")(lfs::python::get_app_context()));
+        } catch (const std::exception& e) {
+            LOG_ERROR("Panel poll error: {}", e.what());
+            return false;
+        }
     }
 
     std::string RmlImModePanelAdapter::captureChromeJson() const {

@@ -58,6 +58,13 @@ namespace lfs::vis {
 
     void DataLoadingService::handleLoadFileCommand(
         const lfs::core::events::cmd::LoadFile& cmd) {
+        // Resolve replacement only when this batch reaches the front. An earlier
+        // import may still be establishing the first scene node.
+        if (cmd.user_batch && cmd.paths.size() > 1 && !cmd.is_dataset && viewer_ && viewer_->getGuiManager() &&
+            viewer_->getGuiManager()->asyncTasks().isImporting()) {
+            pending_imports_.push_back(cmd);
+            return;
+        }
         if (viewer_ && viewer_->preflightLoadFileWipe(cmd)) {
             return;
         }
@@ -68,14 +75,29 @@ namespace lfs::vis {
             return;
         }
 
+        bool project_hydrating = false;
+        if (viewer_) {
+            const auto project_info = viewer_->projectGetInfo();
+            project_hydrating = project_info &&
+                                project_info->hydration_state ==
+                                    "hydrating";
+        }
+        const bool additive_during_hydration =
+            project_hydrating &&
+            scene_manager_->getContentType() !=
+                SceneManager::ContentType::Dataset;
+
         // Checkpoint files get special handling - redirect to training resume flow
         if (isCheckpointFile(cmd.path)) {
             handleLoadCheckpointForTrainingCommand(cmd.path, {}, {});
             return;
         }
 
+        // An additive load during hydration joins the project being opened; an
+        // explicit replacement still clears it.
         const bool replace_scene =
-            viewer_ ? viewer_->loadFileWouldReplaceScene(false, cmd.replace)
+            viewer_ ? ((cmd.replace || !additive_during_hydration) &&
+                       viewer_->loadFileWouldReplaceScene(false, cmd.replace))
                     : (cmd.replace ||
                        scene_manager_->getContentType() ==
                            SceneManager::ContentType::Dataset);
@@ -93,25 +115,32 @@ namespace lfs::vis {
         }
 
         try {
-            if (!cmd.replace &&
-                scene_manager_->getContentType() == SceneManager::ContentType::SplatFiles) {
-                const std::string name = lfs::io::splat_import_name(cmd.path);
-                if (!viewer_ || !viewer_->getGuiManager() ||
-                    !viewer_->getGuiManager()->asyncTasks().startSplatLoad({cmd.path}, false, {name})) {
-                    throw std::runtime_error("Import already in progress");
-                }
-                return;
-            }
-
-            // First import into an empty scene must take the full load path so SceneLoaded,
-            // application-scene binding, and UI state all refresh together.
+            const auto paths = cmd.paths.empty()
+                                   ? std::vector<std::filesystem::path>{cmd.path}
+                                   : cmd.paths;
+            // The first successful file binds the application scene. Subsequent
+            // files in this batch and later queued batches append to it.
+            const bool replace_first =
+                cmd.replace ||
+                (!additive_during_hydration &&
+                 scene_manager_->getContentType() !=
+                     SceneManager::ContentType::SplatFiles);
             if (!viewer_ || !viewer_->getGuiManager() ||
-                !viewer_->getGuiManager()->asyncTasks().startSplatLoad({cmd.path}, true)) {
+                !viewer_->getGuiManager()->asyncTasks().startSplatLoad(paths, replace_first, {}, {}, std::nullopt, cmd.user_batch && paths.size() > 1)) {
                 throw std::runtime_error("Import already in progress");
             }
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to load {}: {}", lfs::core::path_to_utf8(cmd.path), e.what());
             lfs::core::events::state::SplatFileLoadFailed{.path = cmd.path, .error = e.what()}.emit();
+        }
+    }
+
+    void DataLoadingService::processPendingImports() {
+        while (!pending_imports_.empty() && viewer_ && viewer_->getGuiManager() &&
+               !viewer_->getGuiManager()->asyncTasks().isImporting()) {
+            auto command = std::move(pending_imports_.front());
+            pending_imports_.pop_front();
+            handleLoadFileCommand(command);
         }
     }
 

@@ -38,6 +38,11 @@ namespace lfs::training::kernels {
      */
     __device__ inline void quat_to_rotmat(const float* q, float* R) {
         float w = q[0], x = q[1], y = q[2], z = q[3];
+        const float inverse_norm = fminf(rsqrtf(w * w + x * x + y * y + z * z), 1e12f);
+        w *= inverse_norm;
+        x *= inverse_norm;
+        y *= inverse_norm;
+        z *= inverse_norm;
 
         // R = [[1-2(y²+z²), 2(xy-wz), 2(xz+wy)],
         //      [2(xy+wz), 1-2(x²+z²), 2(yz-wx)],
@@ -547,41 +552,61 @@ namespace lfs::training::kernels {
             }
         }
 
-        // One thread walks the digit histogram; kBins steps are negligible
-        // next to the histogram passes and keep the pick deterministic.
+        // Scan contiguous groups of bins in parallel. Integer prefix sums keep
+        // the exact rank/tie ordering without any input-sized scratch storage.
         template <int kPass>
         __global__ void pick_kernel(const bool positive_only,
                                     const size_t n,
                                     State* __restrict__ state,
                                     unsigned int* __restrict__ hist) {
-            if (threadIdx.x != 0 || blockIdx.x != 0) {
-                return;
-            }
-            if constexpr (kPass == 0) {
-                if (!positive_only) {
-                    state->total = static_cast<unsigned int>(n);
-                }
-                state->rank = state->total / 2u;
-                state->prefix = 0u;
-            }
             constexpr int bins = 1 << digit_bits(kPass);
-            unsigned int below = 0u;
-            int digit = bins - 1;
-            for (int b = 0; b < bins; ++b) {
-                const unsigned int count = hist[b];
-                if (state->rank < below + count) {
-                    digit = b;
-                    break;
+            constexpr int items = bins / kThreads;
+            using Scan = cub::BlockScan<unsigned int, kThreads>;
+            __shared__ typename Scan::TempStorage scan_storage;
+            // Publish an immutable snapshot: the winning thread writes the
+            // global state for the next pass, never the rank being scanned.
+            __shared__ unsigned int rank, prefix;
+            if (threadIdx.x == 0) {
+                if constexpr (kPass == 0) {
+                    if (!positive_only) {
+                        state->total = static_cast<unsigned int>(n);
+                    }
+                    rank = state->total / 2u;
+                    prefix = 0u;
+                } else {
+                    rank = state->rank;
+                    prefix = state->prefix;
                 }
-                below += count;
             }
-            for (int b = 0; b < kBins; ++b) {
+            __syncthreads();
+            unsigned int counts[items], below[items];
+#pragma unroll
+            for (int i = 0; i < items; ++i) {
+                counts[i] = hist[threadIdx.x * items + i];
+            }
+            Scan(scan_storage).ExclusiveSum(counts, below);
+            // All histogram loads and state reads must finish before either
+            // buffer is overwritten by the selected lane.
+            __syncthreads();
+            for (int b = threadIdx.x; b < kBins; b += kThreads) {
                 hist[b] = 0u;
             }
-            state->prefix |= static_cast<unsigned int>(digit) << digit_shift(kPass);
-            state->rank -= below;
+#pragma unroll
+            for (int i = 0; i < items; ++i) {
+                if (rank >= below[i] && rank - below[i] < counts[i]) {
+                    const unsigned int digit = threadIdx.x * items + i;
+                    const unsigned int selected = prefix | (digit << digit_shift(kPass));
+                    state->prefix = selected;
+                    state->rank = rank - below[i];
+                    if constexpr (kPass == 2) {
+                        state->value = key_value(selected);
+                    }
+                }
+            }
             if constexpr (kPass == 2) {
-                state->value = state->total == 0u ? 0.0f : key_value(state->prefix);
+                if (threadIdx.x == 0 && state->total == 0u) {
+                    state->value = 0.0f;
+                }
             }
         }
 
@@ -591,15 +616,15 @@ namespace lfs::training::kernels {
                 (n + static_cast<size_t>(kThreads) * 16 - 1) / (static_cast<size_t>(kThreads) * 16), 1, 512));
             histogram_kernel<kPositiveOnly, 0><<<blocks, kThreads, 0, stream>>>(values, n, state, hist);
             LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.histogram0");
-            pick_kernel<0><<<1, 32, 0, stream>>>(kPositiveOnly, n, state, hist);
+            pick_kernel<0><<<1, kThreads, 0, stream>>>(kPositiveOnly, n, state, hist);
             LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.pick0");
             histogram_kernel<kPositiveOnly, 1><<<blocks, kThreads, 0, stream>>>(values, n, state, hist);
             LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.histogram1");
-            pick_kernel<1><<<1, 32, 0, stream>>>(kPositiveOnly, n, state, hist);
+            pick_kernel<1><<<1, kThreads, 0, stream>>>(kPositiveOnly, n, state, hist);
             LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.pick1");
             histogram_kernel<kPositiveOnly, 2><<<blocks, kThreads, 0, stream>>>(values, n, state, hist);
             LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.histogram2");
-            pick_kernel<2><<<1, 32, 0, stream>>>(kPositiveOnly, n, state, hist);
+            pick_kernel<2><<<1, kThreads, 0, stream>>>(kPositiveOnly, n, state, hist);
             LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.pick2");
         }
 
@@ -719,25 +744,6 @@ namespace lfs::training::kernels {
             const unsigned int axis = get_max_value_index(scale).x;
             log_scales[i * 3 + axis] -= delta;
         }
-
-        __global__ void oversize_split_scores_kernel(
-            const float* __restrict__ error_score,
-            const float* __restrict__ max_share,
-            const bool* __restrict__ frozen_mask,
-            size_t frozen_n,
-            float* __restrict__ out_scores,
-            float limit,
-            size_t n) {
-            const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-            if (i >= n)
-                return;
-            if (frozen_mask != nullptr && i < frozen_n && frozen_mask[i]) {
-                out_scores[i] = 0.0f;
-                return;
-            }
-            out_scores[i] = lfs::training::oversize_split_score(
-                error_score[i], max_share[i], limit);
-        }
     } // namespace
 
     void launch_clip_log_scale_by_screen_share(
@@ -758,27 +764,6 @@ namespace lfs::training::kernels {
         clip_log_scale_by_screen_share_kernel<<<blocks, kBlock, 0, stream>>>(
             log_scales, max_share, frozen_mask, frozen_n, limit, n);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.clip_screen_share");
-    }
-
-    void launch_oversize_split_scores(
-        const float* error_score,
-        const float* max_share,
-        const bool* frozen_mask,
-        size_t frozen_n,
-        float* out_scores,
-        float limit,
-        size_t n,
-        cudaStream_t stream) {
-        LFS_ASSERT_MSG(error_score != nullptr && max_share != nullptr && out_scores != nullptr,
-                       "oversize-split scores require error, max_share, and output");
-        if (n == 0)
-            return;
-        stream = lfs::resolve_stream(stream);
-        constexpr int kBlock = 256;
-        const int blocks = static_cast<int>((n + kBlock - 1) / kBlock);
-        oversize_split_scores_kernel<<<blocks, kBlock, 0, stream>>>(
-            error_score, max_share, frozen_mask, frozen_n, out_scores, limit, n);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.oversize_split_scores");
     }
 
 } // namespace lfs::training::kernels

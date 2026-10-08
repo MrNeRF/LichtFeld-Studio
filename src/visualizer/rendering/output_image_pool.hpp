@@ -8,6 +8,7 @@
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_result.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -208,6 +209,9 @@ namespace lfs::vis {
                 if (entry.state != State::Retired) {
                     continue;
                 }
+                if (entry.retain_count != 0) {
+                    continue;
+                }
                 const Payload& payload_ref = *entry.payload;
                 const bool prod_ok =
                     !producer_done || producer_done(payload_ref, entry.producer_value);
@@ -241,6 +245,30 @@ namespace lfs::vis {
                 entries_.erase(it);
             }
             free_serials_.clear();
+        }
+
+        // Published images may be sampled again after existing submissions retire.
+        // Keep them out of the free list until publication ends.
+        [[nodiscard]] bool retain(const std::uint64_t serial) {
+            const auto it = entries_.find(serial);
+            if (it == entries_.end() || it->second.state == State::Free) {
+                return false;
+            }
+            ++it->second.retain_count;
+            return true;
+        }
+
+        void releaseRetained(const std::uint64_t serial, const std::uint64_t consumer_serial) {
+            const auto it = entries_.find(serial);
+            if (it == entries_.end() || it->second.retain_count == 0) {
+                misuse_flagged_ = true;
+                LFS_VK_DEBUG_ASSERT(false,
+                                    "GpuResourcePool::releaseRetained: unretained serial {}",
+                                    serial);
+                return;
+            }
+            --it->second.retain_count;
+            it->second.consumer_serial = std::max(it->second.consumer_serial, consumer_serial);
         }
 
         // Destroy free entries idle for more than kIdleTrimTicks drain ticks.
@@ -313,6 +341,7 @@ namespace lfs::vis {
             std::uint64_t producer_value = 0;
             std::uint64_t consumer_serial = 0;
             std::uint64_t free_since_tick = 0;
+            std::size_t retain_count = 0;
             State state = State::Live;
             bool evict = false;
         };
@@ -371,6 +400,9 @@ namespace lfs::vis {
 
         void trimIdle(const DestroyFn& destroy);
         void trimAged(const DestroyFn& destroy);
+
+        [[nodiscard]] bool retain(std::uint64_t serial);
+        void releaseRetained(std::uint64_t serial, std::uint64_t consumer_serial);
 
         [[nodiscard]] std::size_t idleBytes() const;
         [[nodiscard]] std::size_t liveCount() const;

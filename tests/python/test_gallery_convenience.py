@@ -31,6 +31,62 @@ def test_gallery_preferences_preserve_each_other_and_old_format(tmp_path):
     set_preference('uploadFormat', 'ssog', tmp_path)
     assert read_preferences(tmp_path) == dict(uploadFormat='ssog', posterCacheMiB=128)
 
+def test_gallery_upload_format_defaults_to_auto_and_releases_earlier_defaults(tmp_path):
+    # Catches earlier writebacks: installs stored the default "sog", later "ssog", without a user choice.
+    from lfs_plugins.gallery_preferences import read_preferences, set_preference
+    assert read_preferences(tmp_path)['uploadFormat'] == 'auto'
+    (tmp_path / 'preferences.json').write_text('{"uploadFormat":"sog","posterCacheMiB":64}')
+    assert read_preferences(tmp_path)['uploadFormat'] == 'auto'
+    (tmp_path / 'preferences.json').write_text('{"uploadFormat":"ssog","posterCacheMiB":64,"version":2}')
+    assert read_preferences(tmp_path)['uploadFormat'] == 'auto'
+    set_preference('uploadFormat', 'sog', tmp_path)
+    assert read_preferences(tmp_path)['uploadFormat'] == 'sog'
+    set_preference('uploadFormat', 'ssog', tmp_path)
+    assert read_preferences(tmp_path)['uploadFormat'] == 'ssog'
+
+def test_auto_upload_format_picks_ssog_above_the_phone_budget():
+    # Catches auto publishing SOG for scenes phones cannot hold whole, or SSOG for scenes that fit.
+    from lfs_plugins.gallery_preferences import resolve_upload_format
+    assert resolve_upload_format('auto', 2_000_000) == 'sog'
+    assert resolve_upload_format('auto', 2_000_001) == 'ssog'
+    assert resolve_upload_format('auto', None) == 'ssog'
+    assert resolve_upload_format('sog', 9_350_000) == 'sog'
+
+def test_gallery_ssog_levels_and_estimate_follow_the_scene_size(panel_module):
+    # Catches levels that drift from the exporter's rule, and estimates beyond 10% of real exports of these scenes.
+    from lfs_plugins.gallery_file_panel import estimate_upload_size, gallery_lod_levels
+    counts = (500_000, 500_001, 2_500_000, 9_350_000, 40_000_000, 100_000_000)
+    assert [gallery_lod_levels(count) for count in counts] == [1, 2, 4, 6, 8, 8]
+    measured = {(3_500_000, 3, 'sog'): 38.0e6, (3_500_000, 3, 'ssog'): 144.6e6,
+                (5_000_000, 0, 'sog'): 53.3e6, (5_000_000, 0, 'ssog'): 121.4e6}
+    for (count, degree, upload_format), size in measured.items():
+        estimate = estimate_upload_size(dict(estimatedPoints=count, shDegree=degree), upload_format)
+        assert abs(estimate - size) <= 0.1 * size, (count, degree, upload_format, estimate)
+
+def test_phone_warning_offers_ssog_for_large_scenes_in_other_formats(panel_module, monkeypatch):
+    # Catches a warning that blocks SSOG or auto publishes, or stays silent for an SOG phones cannot open.
+    import lichtfeld
+    from lfs_plugins.gallery_file_panel import GalleryFilePanel
+    monkeypatch.setattr(lichtfeld.ui, 'request_redraw', lambda: None, raising=False)
+    panel = GalleryFilePanel.__new__(GalleryFilePanel)
+    panel._handle, panel._error = None, ''
+    panel._review = dict(asset=dict(publication=dict(estimatedPoints=9_350_000)))
+    panel._fields = dict(upload_format='sog')
+    assert panel._phone_warning()
+    panel._set('upload_format', 'ssog')
+    assert panel._fields['upload_format'] == 'ssog' and not panel._phone_warning()
+    panel._fields['upload_format'] = 'auto'
+    assert panel._resolved_format() == 'ssog' and not panel._phone_warning()
+    panel._fields['upload_format'] = 'spz'
+    panel._review['asset']['publication']['estimatedPoints'] = 3_000_000
+    assert not panel._phone_warning()
+
+def test_gallery_preference_writeback_of_current_value_does_not_pin_it(tmp_path):
+    from lfs_plugins.gallery_preferences import set_preference
+    set_preference('uploadFormat', 'auto', tmp_path)
+    set_preference('posterCacheMiB', 64, tmp_path)
+    assert not (tmp_path / 'preferences.json').exists()
+
 @pytest.mark.parametrize('key,value', [('posterCacheMiB', 0), ('posterCacheMiB', 4097),
      ('askBeforePublic', 'false'), ('uploadFormat', 'bad')])
 def test_gallery_preferences_reject_invalid_values(tmp_path, key, value):

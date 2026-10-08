@@ -81,7 +81,8 @@
     </div>
     <div id="status-right">
         <div id="mcp-chip" data-attr-title="mcp_tooltip" data-style-color="mcp_color" data-class-expanded="mcp_details_expanded">
-            <span>{{ mcp_summary }}</span>
+            <span id="mcp-summary">{{ mcp_summary }}</span>
+            <span id="mcp-compact">@tr:status_bar.mcp_name</span>
             <div id="mcp-popup" class="hidden" data-class-hidden="!mcp_details_expanded">
                 <div id="mcp-popup-header">
                     <div id="mcp-popup-title" data-style-color="mcp_color">{{ mcp_summary }}</div>

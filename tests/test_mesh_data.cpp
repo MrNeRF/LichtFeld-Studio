@@ -3,6 +3,7 @@
 
 #include "core/mesh_data.hpp"
 #include "rendering/mesh2splat.hpp"
+#include <cstdlib>
 #include <gtest/gtest.h>
 #include <map>
 #include <memory>
@@ -213,6 +214,21 @@ TEST_F(MeshDataTest, Mesh2SplatCpuTensorConverterProducesSplatData) {
     EXPECT_EQ((*result)->opacity_raw().size(1), size_t{1});
 }
 
+// Catches the converter's Vulkan device being destroyed by an exit handler after the driver has already shut
+// down, which crashed every process that converted a mesh when it exited.
+TEST_F(MeshDataTest, ProcessExitsCleanlyAfterMesh2Splat) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    const auto mesh = make_triangle();
+    EXPECT_EXIT(
+        {
+            Mesh2SplatOptions options;
+            options.resolution_target = Mesh2SplatOptions::kMinResolution;
+            const auto result = lfs::rendering::mesh_to_splat(mesh, options);
+            std::exit(result.has_value() ? 0 : 1);
+        },
+        ::testing::ExitedWithCode(0), "");
+}
+
 // Catches renderer GPU caches keyed on the MeshData address. Destroying a mesh and
 // creating another reuses the same heap chunk almost every time, and generation()
 // restarts at 0 on the new object, so an address-keyed cache scores a false hit and
@@ -252,6 +268,20 @@ TEST_F(MeshDataTest, MoveAssignmentTakesAFreshId) {
     EXPECT_EQ(target.vertex_count(), 4);
     EXPECT_NE(target.id(), target_id) << "replaced contents kept the old identity";
     EXPECT_NE(target.id(), source_id);
+}
+
+TEST_F(MeshDataTest, MoveAssignmentRebindsTensorMembersThatAreViews) {
+    auto target = make_triangle();
+    auto target_storage = Tensor::zeros({3, 3}, Device::CPU);
+    target.vertices = target_storage;
+    target.vertices = target_storage.slice(0, 0, 3);
+    auto source = make_triangle();
+    source.vertices.fill_(17.0f);
+
+    target = std::move(source);
+
+    EXPECT_EQ(target_storage.to_vector(), std::vector<float>(9, 0.0f));
+    EXPECT_EQ(target.vertices.to_vector(), std::vector<float>(9, 17.0f));
 }
 
 TEST_F(MeshDataTest, DeviceCopyGetsItsOwnId) {

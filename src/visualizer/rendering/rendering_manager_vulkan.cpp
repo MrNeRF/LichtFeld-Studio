@@ -23,6 +23,7 @@
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include "viewport_appearance_correction.hpp"
+#include "viewport_interop_service.hpp"
 #include "viewport_region_utils.hpp"
 #include "viewport_request_builder.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
@@ -37,6 +38,7 @@
 #include <expected>
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <optional>
 #include <shared_mutex>
 #include <stdexcept>
@@ -611,7 +613,7 @@ namespace lfs::vis {
                          },
                          .focal_length_mm = settings.focal_length_mm,
                          .orthographic = settings.orthographic,
-                         .ortho_scale = settings.ortho_scale},
+                         .ortho_scale = viewport->ortho_scale_override.value_or(settings.ortho_scale)},
                     .viewport_pos = {screen_viewport_pos.x + offset_x, screen_viewport_pos.y},
                     .viewport_size = {width, screen_viewport_size.y},
                 });
@@ -639,7 +641,7 @@ namespace lfs::vis {
         // demand when captureViewportImage() is called, never per-frame. Mirrors the
         // pixel-for-pixel result of the Vulkan split_view.frag shader so screenshots
         // match what the user sees on screen.
-        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> composeSplitViewCpu(
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> composeSplitViewCpuImpl(
             const VulkanSplitViewParams& params,
             const glm::ivec2& output_size) {
             const auto load_panel = [](const std::shared_ptr<const lfs::core::Tensor>& image)
@@ -844,7 +846,9 @@ namespace lfs::vis {
                  static_cast<std::size_t>(height),
                  static_cast<std::size_t>(width)},
                 lfs::core::Device::CPU);
-            return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+            // The composite is already in screen order. HWC is the upright
+            // capture contract; CHW readbacks are flipped by Python consumers.
+            return std::make_shared<lfs::core::Tensor>(tensor.permute({1, 2, 0}).contiguous());
         }
 
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeViewportCaptureImageHwc(
@@ -939,44 +943,7 @@ namespace lfs::vis {
             const auto vp_data = frame_ctx.makeViewportData();
             frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
             frame.camera_position = vp_data.translation;
-            frame.items.reserve(frame_ctx.scene_state.meshes.size());
-
-            const bool any_selected_mesh = std::any_of(
-                frame_ctx.scene_state.meshes.begin(),
-                frame_ctx.scene_state.meshes.end(),
-                [](const auto& mesh) { return mesh.is_selected; });
-            const bool any_selected_node = std::any_of(
-                frame_ctx.scene_state.selected_node_mask.begin(),
-                frame_ctx.scene_state.selected_node_mask.end(),
-                [](const bool selected) { return selected; });
-            const bool dim_non_emphasized =
-                settings.desaturate_unselected && (any_selected_mesh || any_selected_node);
-
-            const glm::vec3 headlight_dir = glm::length(vp_data.translation) > 1e-6f
-                                                ? glm::normalize(vp_data.translation)
-                                                : settings.mesh_light_dir;
-
-            for (const auto& mesh : frame_ctx.scene_state.meshes) {
-                if (!mesh.mesh) {
-                    continue;
-                }
-                lfs::vis::VulkanMeshDrawItem item{};
-                item.mesh = mesh.mesh;
-                item.model = mesh.transform;
-                item.light_dir = headlight_dir;
-                item.light_intensity = settings.mesh_light_intensity;
-                item.ambient = settings.mesh_ambient;
-                item.backface_culling = settings.mesh_backface_culling;
-                item.is_emphasized = mesh.is_selected;
-                item.dim_non_emphasized = dim_non_emphasized;
-                item.flash_intensity = frame_ctx.selection_flash_intensity;
-                item.wireframe_overlay = settings.mesh_wireframe;
-                item.wireframe_color = settings.mesh_wireframe_color;
-                item.wireframe_width = settings.mesh_wireframe_width;
-                item.shadow_enabled = settings.mesh_shadow_enabled;
-                item.shadow_map_resolution = settings.mesh_shadow_resolution;
-                frame.items.push_back(item);
-            }
+            frame.items = buildViewportMeshDrawItems(frame_ctx.scene_state, settings, vp_data.translation);
 
             const auto frame_view = frame_ctx.makeFrameView();
             frame.environment.enabled = environmentBackgroundEnabled(settings);
@@ -1003,6 +970,11 @@ namespace lfs::vis {
             return frame;
         }
     } // namespace
+
+    std::shared_ptr<lfs::core::Tensor> RenderingManager::composeSplitViewCpu(
+        const VulkanSplitViewParams& params, const glm::ivec2& output_size) {
+        return composeSplitViewCpuImpl(params, output_size);
+    }
 
     bool RenderingManager::gtRequestMatches(const GTComparisonImageJobRequest& lhs,
                                             const GTComparisonImageJobRequest& rhs) {
@@ -1392,14 +1364,18 @@ namespace lfs::vis {
                         // per-preview-size re-encode caches.
                         lfs::io::LoadParams params;
                         params.resize_factor = -1;
-                        params.max_width = request.preview_max_dimension;
+                        params.max_width = request.undistort_requested
+                                               ? 0
+                                               : request.preview_max_dimension;
                         params.cuda_stream = worker_stream;
                         params.output_uint8 = true;
                         gt_tensor = request.image_loader->load_image_immediate(request.image_path, params);
                     } else {
                         gt_tensor = lfs::core::load_image_cached({.path = request.image_path,
                                                                   .resize_factor = -1,
-                                                                  .max_width = request.preview_max_dimension,
+                                                                  .max_width = request.undistort_requested
+                                                                                   ? 0
+                                                                                   : request.preview_max_dimension,
                                                                   .stream = worker_stream,
                                                                   .output_uint8 = true,
                                                                   .skip_blob_cache = true});
@@ -1422,12 +1398,14 @@ namespace lfs::vis {
                                         gt_tensor.set_stream(worker_stream);
                                     }
                                 }
-                                const auto scaled = lfs::core::scale_undistort_params(
+                                const auto scaled = lfs::core::prepare_undistort_params(
                                     request.undistort_params,
                                     lfs::rendering::imageWidth(gt_tensor, gt_layout),
                                     lfs::rendering::imageHeight(gt_tensor, gt_layout),
+                                    1,
                                     request.preview_max_dimension);
-                                gt_tensor = lfs::core::undistort_image(gt_tensor, scaled, worker_stream);
+                                gt_tensor = lfs::core::undistort_image(
+                                    gt_tensor.clamp(0.0f, 1.0f).contiguous(), scaled, worker_stream);
                             }
                             gt_tensor = lfs::rendering::flipImageVertical(gt_tensor, gt_layout);
                             // Static GT display images must be decoupled from the CUDA pool
@@ -1443,12 +1421,13 @@ namespace lfs::vis {
                             -1, request.preview_max_dimension);
                         if (depth.is_valid() && depth.ndim() == 2) {
                             if (request.undistort_requested) {
-                                const auto scaled = lfs::core::scale_undistort_params(
+                                const auto scaled = lfs::core::prepare_undistort_params(
                                     request.undistort_params,
                                     static_cast<int>(depth.shape()[1]),
                                     static_cast<int>(depth.shape()[0]),
+                                    1,
                                     request.preview_max_dimension);
-                                depth = lfs::core::undistort_mask(depth, scaled, worker_stream);
+                                depth = lfs::core::undistort_depth_area(depth, scaled, worker_stream);
                             }
                             image = makeDepthDisplayTensor(
                                 depth, request.depth_visualization_mode, request.background_color);
@@ -1466,12 +1445,13 @@ namespace lfs::vis {
                             const auto normal_layout = lfs::rendering::detectImageLayout(normal);
                             if (request.undistort_requested &&
                                 normal_layout != lfs::rendering::ImageLayout::Unknown) {
-                                const auto scaled = lfs::core::scale_undistort_params(
+                                const auto scaled = lfs::core::prepare_undistort_params(
                                     request.undistort_params,
                                     lfs::rendering::imageWidth(normal, normal_layout),
                                     lfs::rendering::imageHeight(normal, normal_layout),
+                                    1,
                                     request.preview_max_dimension);
-                                normal = lfs::core::undistort_image(normal, scaled, worker_stream);
+                                normal = lfs::core::undistort_normal_area(normal, scaled, worker_stream);
                             }
                             image = makeNormalDisplayTensor(normal);
                             image = resizeChwDisplayTensor(image, request.image_size);
@@ -1544,7 +1524,7 @@ namespace lfs::vis {
             }
 
             if (applied) {
-                markDirty(DirtyFlag::SPLIT_VIEW);
+                markDirty(DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);
             }
         }
     }
@@ -1631,23 +1611,59 @@ namespace lfs::vis {
     // parks instead, so the idle preview draws only once its render can proceed.
     void RenderingManager::queueSharedScratchRetry(const DirtyMask retry_dirty) {
         if ((retry_dirty & ~DirtyFlag::SPLATS) == 0) {
+            // A parked preview is an active waiter polled every 4 ms. Preserve
+            // its reservation; only camera retries drop the standing lease.
+            if (retry_dirty != 0 && vksplat_viewport_renderer_)
+                vksplat_viewport_renderer_->requestArenaHandoff();
             parked_arena_retry_ |= retry_dirty;
             return;
         }
         dirty_mask_.fetch_or(retry_dirty, std::memory_order_relaxed);
     }
 
-    void RenderingManager::pollTrainingRefresh(const bool is_training) {
+    // The configured preview rate is an upper bound; the measured viewer turn
+    // stretches the interval so training keeps kIdlePreviewTrainingShare.
+    float RenderingManager::trainingRefreshIntervalSec() const {
+        const auto* const arena = lfs::core::GlobalArenaManager::instance().try_get_arena();
+        const auto stats = arena ? arena->turn_stats() : lfs::core::RasterizerMemoryArena::TurnStats{};
+        const double viewer_turn_ms = stats.viewer_turn_ms + stats.viewer_record_ms;
+        // Recording holds the arena too; include it in the idle training budget.
+        // The budget helper gives training's rest time. The refresh period also
+        // includes the viewer turn itself.
+        return static_cast<float>(std::max<double>(
+            FramerateSettings{}.training_frame_refresh_time_sec,
+            idlePreviewIntervalSec(viewer_turn_ms) + viewer_turn_ms * 1e-3));
+    }
+
+    void RenderingManager::pollTrainingRefresh(const bool is_training, const int current_iteration) {
         if (const DirtyMask training_dirty = frame_lifecycle_service_.handleTrainingRefresh(
-                is_training, framerate_controller_.getSettings().training_frame_refresh_time_sec);
+                is_training, trainingRefreshIntervalSec());
             training_dirty) {
-            markDirty(training_dirty);
+            if (!is_training) {
+                has_training_preview_iteration_ = false;
+            } else if (has_training_preview_iteration_ &&
+                       current_iteration <= last_training_preview_iteration_) {
+                frame_demand_ledger_.countSkippedPreview();
+                return;
+            }
+            if (is_training) {
+                last_training_preview_iteration_ = current_iteration;
+                has_training_preview_iteration_ = true;
+            }
+            markDirty(training_dirty, lfs::vis::FrameReason::TrainingPreview);
         }
     }
 
     double RenderingManager::secondsUntilTrainingRefresh() const {
-        return frame_lifecycle_service_.secondsUntilTrainingRefresh(
-            framerate_controller_.getSettings().training_frame_refresh_time_sec);
+        return frame_lifecycle_service_.secondsUntilTrainingRefresh(trainingRefreshIntervalSec());
+    }
+
+    double RenderingManager::secondsUntilCameraSettle() const {
+        if (!camera_settle_pending_) {
+            return std::numeric_limits<double>::infinity();
+        }
+        const auto remaining = camera_settle_deadline_ - std::chrono::steady_clock::now();
+        return std::max(0.0, std::chrono::duration<double>(remaining).count());
     }
 
     void RenderingManager::pollParkedArenaRetry() {
@@ -1656,6 +1672,118 @@ namespace lfs::vis {
             return;
         }
         dirty_mask_.fetch_or(std::exchange(parked_arena_retry_, 0), std::memory_order_relaxed);
+    }
+
+    void RenderingManager::beginImportRenderCheck(const uint64_t generation) {
+        import_render_check_ = true;
+        import_render_generation_ = generation;
+        import_render_frames_ = 0;
+        import_render_result_.reset();
+        markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
+    }
+
+    bool RenderingManager::importUsesCombinedModel() const {
+        std::lock_guard lock(settings_mutex_);
+        return !splitViewUsesPLYComparison(settings_.split_view_mode);
+    }
+
+    std::optional<std::string> RenderingManager::pollImportRenderCheck(
+        const RenderContext& context, const std::function<void()>& prepare_viewport) {
+        if (importUsesCombinedModel())
+            return prepareImportRenderCheck(context, prepare_viewport);
+
+        // Comparison validation must not leave its provisional pair published. Keep
+        // the displayed renderer and capture alive while a private renderer
+        // exercises the new pair, then retire that renderer before acknowledgement.
+        auto state = std::tie(vksplat_viewport_renderer_, viewport_interop_, viewport_artifact_service_,
+                              vulkan_viewport_image_, vulkan_viewport_image_generation_, vulkan_external_viewport_image_,
+                              vulkan_external_viewport_image_view_, vulkan_external_viewport_image_layout_,
+                              vulkan_external_viewport_image_generation_, vulkan_viewport_image_size_,
+                              vulkan_viewport_image_alloc_size_, vulkan_viewport_coordinate_size_, vulkan_viewport_image_flip_y_,
+                              vulkan_gt_comparison_content_size_, split_view_image_generation_, split_left_image_generation_,
+                              split_right_image_generation_, split_left_source_, split_left_source_size_, split_left_source_camera_uid_,
+                              split_left_source_undistorted_, split_right_source_size_, gt_async_held_display_,
+                              vksplat_stale_frame_guard_, parked_arena_retry_, last_logged_vksplat_render_error_,
+                              viewport_projection_generation_, vksplat_idle_since_,
+                              camera_settle_pending_, camera_settle_deadline_, navigation_pose_valid_,
+                              last_navigation_rotation_, last_navigation_translation_);
+        auto saved = std::apply([](auto&... values) { return std::tuple{std::move(values)...}; }, state);
+        auto frame = getVulkanMeshFrame();
+        const auto info = split_view_service_.getInfo();
+        auto restore = [&](void*) {
+            clearVulkanMeshFrame();
+            viewport_artifact_service_.clearViewportOutput();
+            shutdownViewportInterop(context.vulkan_context);
+            vksplat_viewport_renderer_.reset(); // Retires submits and releases validation scratch.
+            state = std::move(saved);
+            setVulkanMeshFrame(std::move(frame));
+            FrameResources resources;
+            resources.split_view_executed = info.enabled;
+            resources.split_info = info;
+            split_view_service_.updateInfo(resources);
+            cancelImportRenderCheck();
+        };
+        const std::unique_ptr<void, decltype(restore)> guard(this, restore);
+        // Keep the presented images, but do not duplicate the displayed pair's
+        // input/scratch allocations while probing a different pair.
+        if (auto& displayed_renderer = std::get<0>(saved))
+            displayed_renderer->releaseSceneResources();
+        viewport_interop_ = std::make_unique<ViewportInteropService>();
+        return prepareImportRenderCheck(context, prepare_viewport);
+    }
+
+    std::optional<std::string> RenderingManager::prepareImportRenderCheck(
+        const RenderContext& context, const std::function<void()>& prepare_viewport) {
+        const auto generation = context.scene_manager->getScene().renderGeneration();
+        beginImportRenderCheck(generation);
+        import_render_preparing_ = true;
+        auto viewport = context.viewport;
+        // Offscreen submits use the last real viewport extent while minimized;
+        // no swapchain acquisition or presentation is needed to allocate slots.
+        auto size = last_nonzero_viewport_size_;
+        if (size.x <= 0 || size.y <= 0)
+            size = glm::max(viewport.frameBufferSize, glm::ivec2{1});
+        viewport.frameBufferSize = size;
+        viewport.windowSize = size;
+        const RenderContext preparation{
+            .viewport = viewport,
+            .settings = context.settings,
+            .scene_manager = context.scene_manager,
+            .vulkan_context = context.vulkan_context,
+            .preparing_import = true,
+            .provisional_import_node = context.provisional_import_node};
+        try {
+            for (unsigned slot = 0; slot < OutputSlotRing::kFrameRingSize && !import_render_result_; ++slot) {
+                markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
+                static_cast<void>(renderVulkanFrame(preparation));
+            }
+        } catch (const std::exception& error) {
+            LOG_ERROR("Import render preparation failed: {}", error.what());
+            import_render_result_ = error.what();
+        }
+        import_render_preparing_ = false;
+        if (import_render_result_ && import_render_result_->empty() && prepare_viewport)
+            prepare_viewport();
+        return import_render_result_;
+    }
+
+    void RenderingManager::cancelImportRenderCheck() {
+        if (import_render_check_)
+            markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange); // Publish the prepared scene through the normal viewport pass.
+        import_render_check_ = false;
+        import_render_result_.reset();
+    }
+
+    void RenderingManager::noteImportRenderFrame(const uint64_t generation, std::string error) {
+        if (!import_render_preparing_ || !import_render_check_ || import_render_result_ || generation != import_render_generation_)
+            return;
+        if (!error.empty())
+            import_render_result_ = std::move(error);
+        // Exercise the normal allocations in every rotating frame slot.
+        else if (++import_render_frames_ == OutputSlotRing::kFrameRingSize)
+            import_render_result_ = std::string{};
+        else
+            markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
     }
 
     RenderingManager::VulkanFrameResult RenderingManager::renderVulkanFrame(const RenderContext& context) {
@@ -1670,10 +1798,21 @@ namespace lfs::vis {
             lfs::core::GlobalArenaManager::instance().clear_external_backing();
             vksplat_viewport_renderer_->releaseScratchOnIdle(true);
         }
-        const RenderSettings frame_settings = [this] {
+        RenderSettings frame_settings = [this] {
             std::lock_guard lock(settings_mutex_);
             return settings_;
         }();
+        if (context.preparing_import && splitViewUsesPLYComparison(frame_settings.split_view_mode) && context.scene_manager) {
+            const auto nodes = context.scene_manager->getScene().getVisibleSplatNodeSlots();
+            for (size_t index = 0; index < nodes.size(); ++index) {
+                if (nodes[index].node && nodes[index].node->uuid == context.provisional_import_node) {
+                    frame_settings.split_view_offset = plyComparisonImportOffset(nodes.size(), frame_settings.split_view_offset, index);
+                    LOG_DEBUG("Validating provisional comparison model '{}'", nodes[index].node->name);
+                    break;
+                }
+            }
+        }
+
         SceneManager* const scene_manager = context.scene_manager;
         auto* const trainer_manager = scene_manager ? scene_manager->getTrainerManager() : nullptr;
         const bool is_training = scene_manager && scene_manager->hasDataset() &&
@@ -1696,12 +1835,12 @@ namespace lfs::vis {
             // emitted only after the trainer's B3 cleanup has detached its
             // arena backing, so this also drops the viewer's final import.
             vksplat_viewport_renderer_->releaseScratchOnIdle(true);
-            vksplat_idle_frame_count_ = 0;
+            vksplat_idle_since_ = {};
         }
 
         const auto framebuffer_region =
-            resolveFramebufferViewportRegion(context.viewport, context.logical_screen_size, context.viewport_region);
-        if (framebuffer_region.valid()) {
+            resolveFramebufferViewportRegion(context.viewport, context.screen_size_px, context.viewport_region);
+        if (framebuffer_region.valid() && !context.preparing_import) {
             // resolveFramebufferViewportRegion reports a GL bottom-left origin; window
             // readbacks are top-left, so store the flipped form callers actually crop with.
             framebuffer_viewport_rect_ = {
@@ -1716,8 +1855,7 @@ namespace lfs::vis {
         // Minimized / zero-extent: no presentable viewport work. Never hold a
         // resize training pause, never start model reads, and never publish
         // new viewer borrows — the trainer continues headless on the existing
-        // handshake fences only. Restore re-enters the normal frame path
-        // (first frame may block once for a stable model, same as cold start).
+        // handshake fences only. Restore re-enters the normal frame path.
         if (current_size.x <= 0 || current_size.y <= 0) {
             if (vksplat_viewport_renderer_) {
                 vksplat_viewport_renderer_->setLiveSubmitCallback({});
@@ -1728,6 +1866,8 @@ namespace lfs::vis {
                     .size = vulkan_viewport_image_size_,
                     .flip_y = vulkan_viewport_image_flip_y_};
         }
+        if (!context.preparing_import)
+            last_nonzero_viewport_size_ = current_size;
         initialized_ = true;
 
         std::optional<lfs::core::CUDAStreamGuard> frame_stream_guard;
@@ -1767,9 +1907,10 @@ namespace lfs::vis {
         };
         const auto defer_shared_scratch = [this](const std::string& reason) {
             if (reason.find("arena is busy") != std::string::npos) {
-                if (vksplat_viewport_renderer_) {
-                    vksplat_viewport_renderer_->requestArenaHandoff();
-                }
+                // No standing reservation: the retry on the next frame waits
+                // for its window actively (waitForArenaHandoff) and a parked
+                // preview polls. Reserving here held training out for the
+                // whole GUI round trip after every failed attempt.
                 (void)vksplat_stale_frame_guard_.onDeferral(
                     StaleFrameGuard::DeferralKind::ArenaContention);
                 return;
@@ -1870,13 +2011,14 @@ namespace lfs::vis {
             frame_settings,
             screen_viewport_pos,
             screen_viewport_size);
-        viewport_interaction_context_.updatePickContext(interaction_panels);
+        if (!context.preparing_import)
+            viewport_interaction_context_.updatePickContext(interaction_panels);
 
         const auto resize_result = frame_lifecycle_service_.handleViewportResize(current_size);
         if (resize_result.dirty) {
-            markDirty(resize_result.dirty);
+            markDirty(resize_result.dirty, lfs::vis::FrameReason::SceneChange);
         }
-        const bool resize_deferring = frame_lifecycle_service_.isResizeDeferring();
+        const bool resize_deferring = !context.preparing_import && frame_lifecycle_service_.isResizeDeferring();
         const auto requested_upscaler = sceneUpscalerBackendFromId(frame_settings.scene_upscaler)
                                             .value_or(SceneUpscalerBackend::Native);
         const auto reported_upscaler = sceneUpscalerRuntimeSelection();
@@ -1888,7 +2030,7 @@ namespace lfs::vis {
             frame_settings.render_scale,
             frame_settings.scene_upscaler_scale,
             spatial_runtime_ready);
-        if (resize_result.use_interactive_render_scale) {
+        if (!context.preparing_import && resize_result.use_interactive_render_scale) {
             scale = std::min(scale, kInteractiveResizeRenderScale);
         }
         // Only unresolved viewer allocation failures lease a reduced preview.
@@ -1924,7 +2066,9 @@ namespace lfs::vis {
             (pending_dirty & ~DirtyFlag::SPLIT_POSITION) == 0;
         const bool split_position_requires_panel_rerender =
             split_view_service_.isIndependentDualActive(frame_settings);
-        if ((pending_dirty & DirtyFlag::SPLIT_POSITION) != 0 &&
+        // Import validation must execute panel allocations, not reuse the
+        // splitter's cached image while other dirty work remains deferred.
+        if (!context.preparing_import && (pending_dirty & DirtyFlag::SPLIT_POSITION) != 0 &&
             !split_position_requires_panel_rerender &&
             vulkan_viewport_image_size_ == render_size &&
             has_cached_split_view_output() &&
@@ -1939,21 +2083,64 @@ namespace lfs::vis {
         // recreate waits ring watermarks only). pauseTrainingTemporary is not
         // used on this path — other interactive wait sites keep it.
 
+        const auto now = std::chrono::steady_clock::now();
+        const bool camera_changed = !navigation_pose_valid_ ||
+                                    last_navigation_rotation_ != context.viewport.camera.R ||
+                                    last_navigation_translation_ != context.viewport.camera.t;
+        last_navigation_rotation_ = context.viewport.camera.R;
+        last_navigation_translation_ = context.viewport.camera.t;
+        navigation_pose_valid_ = true;
+        auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena();
+        const double viewer_turn_ms = arena ? arena->turn_stats().viewer_turn_ms : 0.0;
+        const bool rest_only = is_training && navigationRendersOnlyAtRest(viewer_turn_ms);
+        if (rest_only && camera_changed) {
+            camera_settle_pending_ = true;
+            camera_settle_deadline_ = now + kCameraSettle;
+        }
+        if (rest_only && camera_settle_pending_ && now < camera_settle_deadline_ &&
+            (vulkan_external_viewport_image_ != VK_NULL_HANDLE || vulkan_viewport_image_)) {
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                LOG_WARN("Viewer frames take {:.0f} ms on the GPU (interactive budget {:.0f} ms): "
+                         "the viewport updates when the camera rests; GPU memory is probably oversubscribed",
+                         viewer_turn_ms, kInteractiveViewerBudgetMs);
+            }
+            if (arena)
+                arena->cancel_viewer_prediction();
+            // Retain CAMERA until the settle wakeup; never reserve scratch while
+            // deferring. New input, rather than this retry, extends the deadline.
+            dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
+            if (vksplat_viewport_renderer_)
+                vksplat_viewport_renderer_->cancelArenaHandoff();
+            return cached_frame_result();
+        }
+        camera_settle_pending_ = false;
+        if (arena) {
+            if (is_training && (dirty_mask_.load(std::memory_order_relaxed) & DirtyFlag::CAMERA) != 0)
+                arena->prepare_viewer_frame();
+            else
+                arena->cancel_viewer_prediction();
+        }
+
         // Training previews never wait for a step-boundary read, including
         // discrete layout resizes. On contention, retain the previous matching
         // frame and retry on the next cadence tick; the GUI commits a staged
         // layout only after matches_viewport_extent reports a fresh output.
-        // First frame / no cache still falls back to one blocking acquire below.
+        // This also applies without a cached frame: model growth can hold the
+        // exclusive lock while waiting for chunk binding on this viewer thread.
         const bool training_try_lock = is_training;
         if (is_training && vksplat_viewport_renderer_ &&
-            (dirty_mask_.load(std::memory_order_relaxed) & DirtyFlag::CAMERA) != 0) {
-            // No lock is held yet, so a refining trainer can still take the exclusive one.
+            (dirty_mask_.load(std::memory_order_relaxed) & ~DirtyFlag::SPLATS) != 0) {
+            // Explicit edits (camera, selection, visibility, settings) actively wait
+            // for a fresh frame. Only passive SPLATS refreshes park. No model
+            // lock is held, so a refining trainer can take the exclusive one.
             (void)vksplat_viewport_renderer_->waitForArenaHandoff(kNavigationArenaWait);
         }
         auto render_lock = acquireLiveModelRenderLock(scene_manager, training_try_lock);
-        bool render_lock_contended = training_try_lock && !render_lock.has_value() &&
-                                     scene_manager && scene_manager->getTrainerManager() &&
-                                     scene_manager->getTrainerManager()->getTrainer();
+        const bool render_lock_contended = training_try_lock && !render_lock.has_value() &&
+                                           scene_manager && scene_manager->getTrainerManager() &&
+                                           scene_manager->getTrainerManager()->getTrainer();
 
         const lfs::core::SplatData* model = nullptr;
         SceneRenderState scene_state;
@@ -1997,6 +2184,7 @@ namespace lfs::vis {
         };
         if (!render_lock_contended) {
             sample_model_under_lock();
+            releaseLodLeafRenderViewUnlessFor(model);
         }
         bool has_renderable_model = false;
         bool has_visible_gaussian_model = false;
@@ -2033,8 +2221,8 @@ namespace lfs::vis {
                 has_visible_gaussian_model || has_point_cloud || has_meshes || has_environment;
         };
         refresh_content_flags();
-        size_t model_ptr = comparison_identity != 0 ? comparison_identity
-                                                    : reinterpret_cast<size_t>(model);
+        const size_t model_ptr = comparison_identity != 0 ? comparison_identity
+                                                          : reinterpret_cast<size_t>(model);
         // Edit-mode handoff moves the same SplatData into a scene node. Its
         // address does not change, but the trainer's GPU handshake is gone.
         // Use dataset ownership, not Running/Paused, so completion alone does
@@ -2082,7 +2270,7 @@ namespace lfs::vis {
                     }
                 }
                 viewport_artifact_service_.clearViewportOutput();
-                markDirty(DirtyFlag::ALL);
+                markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
             }
         } // !render_lock_contended model-change tracking
 
@@ -2146,46 +2334,35 @@ namespace lfs::vis {
                  has_meshes,
                  has_environment,
                  render_lock_contended);
-        // Step-boundary contention during densify: retain last splat image, re-queue
-        // dirty so the next cadence tick retries after the exclusive lock drops.
-        if (render_lock_contended && (has_cached_viewport_output || training_initializing)) {
+        // On contention, retain any previous output and re-queue dirty so the
+        // next cadence tick retries after the exclusive lock drops.
+        if (render_lock_contended) {
             if (frame_dirty != 0) {
                 dirty_mask_.fetch_or(frame_dirty, std::memory_order_relaxed);
             }
-            LOG_PERF("renderVulkanFrame: {} lock contended (retaining cached splat)",
+            LOG_PERF("renderVulkanFrame: {} lock contended (deferring preview)",
                      training_initializing ? "training initialization" : "step-boundary");
             render_lock.reset();
             return cached_frame_result();
-        }
-        if (render_lock_contended && !has_cached_viewport_output) {
-            // A normal running-training cold start may block once for a stable
-            // first frame. Starting is handled above and never waits for the
-            // initialization worker, even when no previous frame exists.
-            render_lock = acquireLiveModelRenderLock(scene_manager, /*try_lock=*/false);
-            render_lock_contended = !render_lock.has_value();
-            if (render_lock) {
-                sample_model_under_lock();
-                refresh_content_flags();
-                model_ptr = reinterpret_cast<size_t>(model);
-                (void)frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_, model_source);
-            }
         }
         // Scene state is authoritative here (contended frames returned above): nothing
         // visible must clear the viewport even when a cached frame exists — a consolidated
         // multi-splat scene keeps the same combined-model pointer when every node is
         // hidden, so model-change tracking never clears the stale image.
         if (!has_render_content) {
+            if (scene_manager)
+                noteImportRenderFrame(scene_manager->getScene().renderGeneration());
             clearVulkanViewportImageState();
             vulkan_viewport_coordinate_size_ = current_size;
             last_logged_vksplat_render_error_.clear();
             viewport_artifact_service_.clearViewportOutput();
             clearVulkanMeshFrame();
             render_lock.reset();
-            return {.matches_viewport_extent = true};
+            return {.matches_viewport_extent = true, .rendered = true};
         }
 
         const DirtyMask split_deferred_dirty = frame_dirty & ~DirtyFlag::SPLIT_POSITION;
-        if ((frame_dirty & DirtyFlag::SPLIT_POSITION) != 0 &&
+        if (!context.preparing_import && (frame_dirty & DirtyFlag::SPLIT_POSITION) != 0 &&
             !split_position_requires_panel_rerender &&
             has_cached_viewport_output &&
             update_cached_split_position(split_deferred_dirty != 0)) {
@@ -2348,8 +2525,6 @@ namespace lfs::vis {
             }
         } viewer_borrow_publisher{live_trainer, vksplat_viewport_renderer_.get()};
 
-        framerate_controller_.beginFrame();
-
         const FrameContext frame_ctx{
             .viewport = context.viewport,
             .viewport_region = context.viewport_region,
@@ -2362,12 +2537,12 @@ namespace lfs::vis {
             .viewport_pos = {0, 0},
             .frame_dirty = frame_dirty,
             .training_active = is_training,
+            .gaussian_selection_visible = gaussian_selection_visible_,
             .cursor_preview = viewport_overlay_service_.cursorPreview(),
             .gizmo = viewport_overlay_service_.makeFrameGizmoState(),
             .hovered_camera_id = camera_interaction_service_.hoveredCameraId(),
             .current_camera_id = camera_interaction_service_.currentCameraId(),
             .hovered_gaussian_id = viewport_overlay_service_.hoveredGaussianId(),
-            .selection_flash_intensity = getSelectionFlashIntensity(),
             .view_panels = {}};
 
         std::shared_ptr<lfs::core::Tensor> rendered_image;
@@ -2845,7 +3020,7 @@ namespace lfs::vis {
                                                                              .image_loader = image_loader});
                             gt_image = lookup.image;
                             if (lookup.status == GTComparisonImageStatus::Loading) {
-                                markDirty(DirtyFlag::SPLIT_VIEW);
+                                markDirty(DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);
                                 if (lookup.stale_image && !lookup.grace_elapsed) {
                                     gt_image = lookup.stale_image;
                                 } else {
@@ -2924,7 +3099,7 @@ namespace lfs::vis {
                                                                              .image_loader = {}});
                             gt_image = lookup.image;
                             if (lookup.status == GTComparisonImageStatus::Loading) {
-                                markDirty(DirtyFlag::SPLIT_VIEW);
+                                markDirty(DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);
                                 gt_loading = true;
                                 if (lookup.stale_image && !lookup.grace_elapsed) {
                                     gt_image = lookup.stale_image;
@@ -2956,7 +3131,7 @@ namespace lfs::vis {
                                                                              .image_loader = {}});
                             gt_image = lookup.image;
                             if (lookup.status == GTComparisonImageStatus::Loading) {
-                                markDirty(DirtyFlag::SPLIT_VIEW);
+                                markDirty(DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);
                                 gt_loading = true;
                                 if (lookup.stale_image && !lookup.grace_elapsed) {
                                     gt_image = lookup.stale_image;
@@ -3559,8 +3734,7 @@ namespace lfs::vis {
         if (split_view_service_.isActive(frame_settings) && !pending_split_view.enabled &&
             synchronize_vksplat_input_upload && has_cached_viewport_output &&
             isRetryableSharedScratchUnavailable(render_error)) {
-            dirty_mask_.fetch_or(frame_dirty != 0 ? frame_dirty : DirtyFlag::SPLATS,
-                                 std::memory_order_relaxed);
+            queueSharedScratchRetry(vksplatSharedScratchRetryDirty(frame_dirty));
             defer_shared_scratch(render_error);
             render_lock.reset();
             LOG_DEBUG("Split-view shared scratch unavailable ({}); returning cached split image",
@@ -3775,6 +3949,16 @@ namespace lfs::vis {
                     },
                     metadata,
                     render_result->size);
+                viewport_artifact_service_.setDepthSampler(
+                    [this, size = render_result->size](
+                        int x, int y, std::optional<SplitViewPanelId>, bool nonblocking) {
+                        if (!point_cloud_vulkan_renderer_ || !last_vulkan_context_)
+                            return -1.0f;
+                        return point_cloud_vulkan_renderer_->sampleDepthAtPixel(
+                                                               *last_vulkan_context_,
+                                                               {.pixel = {x, y}, .source_size = size, .nonblocking = nonblocking})
+                            .value_or(-1.0f);
+                    });
 
                 if (resize_result.completed) {
                     lfs::core::Tensor::trim_memory_pool();
@@ -3793,6 +3977,9 @@ namespace lfs::vis {
                         mesh_frame.depth_blit.external_image_view = render_result->depth_image_view;
                         mesh_frame.depth_blit.external_image_generation = render_result->depth_generation;
                         mesh_frame.depth_blit.depth_is_ndc = true;
+                        mesh_frame.depth_blit.ndc_to_view_coeffs = {
+                            projection[2][2], projection[3][2],
+                            projection[2][3], projection[3][3]};
                         mesh_frame.depth_blit.flip_y = render_result->flip_y;
                     }
                     setVulkanMeshFrame(std::move(mesh_frame));
@@ -3809,9 +3996,12 @@ namespace lfs::vis {
                     .external_image_generation = vulkan_external_viewport_image_generation_,
                     .size = vulkan_viewport_image_size_,
                     .flip_y = vulkan_viewport_image_flip_y_,
-                    .matches_viewport_extent = true};
+                    .matches_viewport_extent = true,
+                    .rendered = true};
             };
             if (auto vk_result = try_vulkan(); vk_result) {
+                if (scene_manager && vk_result->matches_viewport_extent)
+                    noteImportRenderFrame(scene_manager->getScene().renderGeneration(), render_error);
                 return *vk_result;
             }
 
@@ -4041,6 +4231,11 @@ namespace lfs::vis {
                         vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
                     }
                     const auto publish_vksplat_result = [&](const VksplatViewportRenderer::RenderResult& render_result) -> VulkanFrameResult {
+                        // Passive previews already advanced the refresh clock
+                        // when requested. Resetting it again after a parked
+                        // retry adds that delay to every subsequent interval.
+                        if (is_training && (frame_dirty & ~DirtyFlag::SPLATS) != 0)
+                            frame_lifecycle_service_.restartTrainingRefresh();
                         vksplat_stale_frame_guard_.onSuccess();
                         render_lock.reset();
                         note_lod_page_generation(render_result.lod_page_generation);
@@ -4197,7 +4392,8 @@ namespace lfs::vis {
                                             .image_generation = vulkan_viewport_image_generation_,
                                             .size = vulkan_viewport_image_size_,
                                             .flip_y = vulkan_viewport_image_flip_y_,
-                                            .matches_viewport_extent = true};
+                                            .matches_viewport_extent = true,
+                                            .rendered = true};
                                 }
                                 LOG_WARN("VkSplat PPISP correction produced no valid viewport image; falling back to uncorrected external image");
                             } else {
@@ -4284,7 +4480,8 @@ namespace lfs::vis {
                                 .size = vulkan_viewport_image_size_,
                                 .alloc_size = vulkan_viewport_image_alloc_size_,
                                 .flip_y = vulkan_viewport_image_flip_y_,
-                                .matches_viewport_extent = true};
+                                .matches_viewport_extent = true,
+                                .rendered = true};
                     };
 
                     const DirtyMask non_overlay_dirty = frame_dirty & ~DirtyFlag::SELECTION;
@@ -4338,6 +4535,7 @@ namespace lfs::vis {
                         lfs::core::Tensor::trim_memory_pool();
                     }
                     if (render_result) {
+                        noteImportRenderFrame(scene_manager->getScene().renderGeneration(), render_error);
                         last_logged_vksplat_render_error_.clear();
                         return publish_vksplat_result(*render_result);
                     }
@@ -4587,6 +4785,9 @@ namespace lfs::vis {
             if (!pending_split_view.enabled) {
                 release_inactive_split_outputs();
             }
+            if (scene_manager)
+                noteImportRenderFrame(scene_manager->getScene().renderGeneration(), render_error);
+            result.rendered = true;
             return result;
         }
 
@@ -4632,6 +4833,7 @@ namespace lfs::vis {
                 lfs::rendering::isVkSplatBackend(frame_settings.raster_backend)) {
                 const std::string degraded_error =
                     render_error.empty() ? "missing image payload" : render_error;
+                noteImportRenderFrame(scene_manager->getScene().renderGeneration(), degraded_error);
                 if (last_logged_vksplat_render_error_ != degraded_error) {
                     last_logged_vksplat_render_error_ = degraded_error;
                     LOG_ERROR("VkSplat entered degraded mode; retaining the last good viewport image: {}",
@@ -4651,6 +4853,9 @@ namespace lfs::vis {
                 return {};
             }
 
+            if (scene_manager)
+                noteImportRenderFrame(scene_manager->getScene().renderGeneration(),
+                                      render_error.empty() ? "missing image payload" : render_error);
             LOG_ERROR("Failed to render Vulkan viewport image: {}",
                       render_error.empty() ? "missing image payload" : render_error);
             clearVulkanViewportImageState();
@@ -4687,6 +4892,8 @@ namespace lfs::vis {
             lfs::core::Tensor::trim_memory_pool();
         }
 
+        if (scene_manager)
+            noteImportRenderFrame(scene_manager->getScene().renderGeneration(), render_error);
         queueCameraMetricsRefreshIfStale(scene_manager);
         viewport_interaction_context_.scene_manager = scene_manager;
         FrameResources split_info_resources;
@@ -4700,7 +4907,8 @@ namespace lfs::vis {
                 .image_generation = vulkan_viewport_image_generation_,
                 .size = vulkan_viewport_image_size_,
                 .flip_y = vulkan_viewport_image_flip_y_,
-                .matches_viewport_extent = true};
+                .matches_viewport_extent = true,
+                .rendered = true};
     }
 
     std::expected<void, std::string> RenderingManager::ensureVksplatTrainingSharedScratchReady(

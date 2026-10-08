@@ -686,10 +686,12 @@ namespace gsplat_lfs {
 #pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k) {
                 float bg_val;
-                if (bg_images != nullptr) {
+                if (bg_images != nullptr && k < 3u) {
                     bg_val = bg_images[k * image_height * image_width + pix_id];
-                } else {
+                } else if (backgrounds != nullptr && k < 3u) {
                     bg_val = backgrounds[k];
+                } else {
+                    bg_val = 0.0f;
                 }
                 bg_accum += bg_val * v_render_c[k];
             }

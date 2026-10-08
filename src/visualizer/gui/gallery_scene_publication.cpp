@@ -71,6 +71,35 @@ namespace lfs::vis::gui {
             return magic == kNgspMagic && version == 4 && num_points == expected_count && sh_degree <= 3;
         }
 
+        // Each gallery SSOG level halves the splats until the coarsest fits half of a phone's 1M performance budget.
+        constexpr std::uint64_t kGalleryCoarsestRows = 500'000;
+        constexpr int kGalleryMaxLodLevels = 8;
+        constexpr int kGalleryChunkCountK = 256;
+
+        [[nodiscard]] int galleryLodLevels(const std::uint64_t rows) noexcept {
+            int levels = 1;
+            while (levels < kGalleryMaxLodLevels && (rows >> (levels - 1)) > kGalleryCoarsestRows)
+                ++levels;
+            return levels;
+        }
+
+        // An SSOG copied unchanged must stream: every level filled, the coarsest within the phone budget, stored
+        // textures and no empty license.
+        [[nodiscard]] bool ssogEncodedAssetStreams(const lfs::io::project::LazyChunkValue& bytes,
+                                                   const std::uint64_t expected_count) {
+            const auto summary = io::summarize_ssog_archive(
+                bytes.size(), [&](const std::uint64_t offset, const std::span<std::byte> destination) {
+                    return bytes.read_at(offset, destination).has_value();
+                });
+            if (!summary)
+                return false;
+            const auto& counts = summary->counts;
+            return !counts.empty() && counts.front() == expected_count &&
+                   std::ranges::all_of(counts, [](const std::size_t count) { return count > 0; }) &&
+                   (counts.back() <= kGalleryCoarsestRows || counts.size() >= kGalleryMaxLodLevels) &&
+                   summary->webp_stored && !summary->empty_license;
+        }
+
         void throwIfCanceled(const std::function<bool()>& canceled, const char* message) {
             if (canceled && canceled())
                 throw std::runtime_error(message);
@@ -326,24 +355,30 @@ namespace lfs::vis::gui {
             throw std::runtime_error("gallery_project_not_supported: " + std::string(settings.error().user_message()));
         if (settings->environment_mode == EnvironmentBackgroundMode::Equirectangular) {
             const auto ref = document->view().dom().get<std::string>("render_settings.environment_reference_uuid");
+            const auto builtin = document->view().dom().get<std::string>("render_settings.environment_builtin");
             const auto references = document->references().records();
-            bool found = false;
             if (ref && references) {
                 for (const auto& reference : *references) {
                     if (reference.uuid.to_string() != *ref || reference.kind != "environment_map")
                         continue;
-                    if (!document->find_dataset_source(reference.uuid))
-                        break;
-                    auto path = document->materialize_embedded_asset(reference.uuid, "lfsenv");
-                    if (!path)
-                        throw std::runtime_error(std::string(path.error().user_message()));
-                    publication.environment_source = *path;
-                    found = true;
+                    if (document->find_dataset_source(reference.uuid)) {
+                        auto path = document->materialize_embedded_asset(reference.uuid, "lfsenv");
+                        if (!path)
+                            throw std::runtime_error(std::string(path.error().user_message()));
+                        publication.environment_source = *path;
+                    } else if (const auto path = pj::resolve_path_reference(document->references(),
+                                                                            source.source_path.parent_path(),
+                                                                            reference.uuid);
+                               path && std::filesystem::is_regular_file(*path)) {
+                        publication.environment_source = *path;
+                    }
                     break;
                 }
+            } else if (builtin) {
+                publication.environment_source = *builtin;
             }
-            if (!found)
-                throw std::runtime_error("gallery_project_payload_unavailable: The HDR background is external or missing. Open the project to publish it.");
+            if (publication.environment_source.empty())
+                throw std::runtime_error("gallery_project_hdr_unavailable: The HDR background file is missing.");
         }
         verifyGalleryProjectCommit(source.source_path, commit_uuid);
     }
@@ -465,6 +500,9 @@ namespace lfs::vis::gui {
                 if (reused_kind == "spz" &&
                     !spzEncodedAssetLooksLikeV4(published.encoded->bytes, published.snapshot.row_count))
                     reused_kind.reset();
+                if (reused_kind == "ssog" &&
+                    !ssogEncodedAssetStreams(published.encoded->bytes, published.snapshot.row_count))
+                    reused_kind.reset();
             }
             const std::string extension = galleryPublicationExtension(request.format, reused_kind);
             std::uint64_t published_count = 0;
@@ -497,6 +535,8 @@ namespace lfs::vis::gui {
                                                .provenance = options.provenance})
                     : extension == "ssog"
                         ? io::save_ssog(*data, {.output_path = options.output_path,
+                                                .lod_levels = galleryLodLevels(published_count),
+                                                .chunk_count_k = kGalleryChunkCountK,
                                                 .progress_callback = options.progress_callback,
                                                 .provenance = options.provenance})
                     : extension == "spz"

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <execution>
+#include <limits>
 #include <numeric>
 
 namespace lfs::core {
@@ -260,7 +261,7 @@ namespace lfs::core {
 
         LFS_ASSERT_MSG(dim < shape_.rank(),
                        std::format("slice dimension {} is out of range for rank {}", dim, shape_.rank()));
-        LFS_ASSERT_MSG(start < end && end <= shape_[dim],
+        LFS_ASSERT_MSG(start <= end && end <= shape_[dim],
                        std::format("slice range [{}, {}) is invalid for dimension {} of size {}",
                                    start, end, dim, shape_[dim]));
 
@@ -298,11 +299,13 @@ namespace lfs::core {
         view.is_view_ = true;
         view.id_ = profiling_enabled_ ? next_id_++ : 0; // Only increment ID when profiling
 
-        // Adjust offset to point to slice start (in elements)
-        view.storage_offset_ = storage_offset_ + start * strides_[dim];
-
         // Adjust shape for the sliced dimension
         view.shape_ = TensorShape(new_dims);
+
+        // Empty views keep a valid offset, including chained endpoint slices.
+        view.storage_offset_ = view.numel() == 0
+                                   ? storage_offset_
+                                   : storage_offset_ + start * strides_[dim];
 
         // Check if strides match the new shape's expected contiguous layout
         // A sliced tensor is contiguous if its strides match row-major order for its shape
@@ -318,6 +321,50 @@ namespace lfs::core {
         view.is_contiguous_ = still_contiguous;
         propagate_view_meta(view);
 
+        return view;
+    }
+
+    Tensor Tensor::slice(size_t dim, size_t start, size_t end, size_t step) const {
+        LFS_ASSERT_MSG(step > 0,
+                       "slice step must be positive");
+        if (step == 1) {
+            return slice(dim, start, end);
+        }
+
+        Tensor base = slice(dim, start, end);
+        const size_t extent = end - start;
+        const size_t count = extent / step + (extent % step != 0);
+        auto dims = base.shape_.dims();
+        dims[dim] = count;
+        auto strides = base.strides_;
+        if (count > 1 && strides[dim] != 0) {
+            LFS_ASSERT_MSG(step <= std::numeric_limits<size_t>::max() / strides[dim],
+                           "slice stride overflows size_t");
+            strides[dim] *= step;
+        }
+
+        base.materialize_if_deferred();
+        Tensor view;
+        view.data_ = base.data_;
+        view.data_owner_ = base.data_owner_;
+        view.shape_ = TensorShape(dims);
+        view.strides_ = strides;
+        view.storage_offset_ = base.storage_offset_;
+        view.device_ = base.device_;
+        view.dtype_ = base.dtype_;
+        view.is_view_ = true;
+        view.id_ = profiling_enabled_ ? next_id_++ : 0;
+
+        size_t expected_stride = 1;
+        view.is_contiguous_ = true;
+        for (int dimension = static_cast<int>(view.shape_.rank()) - 1; dimension >= 0; --dimension) {
+            if (view.strides_[static_cast<size_t>(dimension)] != expected_stride) {
+                view.is_contiguous_ = false;
+                break;
+            }
+            expected_stride *= view.shape_[static_cast<size_t>(dimension)];
+        }
+        propagate_view_meta(view);
         return view;
     }
 

@@ -1,0 +1,21 @@
+diff --git a/Include/RmlUi/Core/ObserverPtr.h b/Include/RmlUi/Core/ObserverPtr.h
+--- a/Include/RmlUi/Core/ObserverPtr.h
++++ b/Include/RmlUi/Core/ObserverPtr.h
+@@ -44,7 +44,7 @@ class EnableObserverPtr;
+  */
+ 
+ template <typename T>
+-class RMLUICORE_API ObserverPtr {
++class ObserverPtr {
+ public:
+ 	ObserverPtr() noexcept : block(nullptr) {}
+ 	ObserverPtr(std::nullptr_t) noexcept : block(nullptr) {}
+@@ -130,7 +130,7 @@ private:
+ };
+ 
+ template <typename T>
+-class RMLUICORE_API EnableObserverPtr {
++class EnableObserverPtr {
+ public:
+ 	ObserverPtr<T> GetObserverPtr()
+ 	{

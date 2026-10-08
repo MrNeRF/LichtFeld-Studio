@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "preferences.hpp"
+#include <algorithm>
+#include <cmath>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -131,6 +133,13 @@ enum class OperatorResult { Finished,
 
 namespace {
 
+    thread_local int python_run_depth = 0;
+
+    struct ScopedPythonRunDepth {
+        ScopedPythonRunDepth() { ++python_run_depth; }
+        ~ScopedPythonRunDepth() { --python_run_depth; }
+    };
+
     using lfs::training::Command;
     using lfs::training::CommandCenter;
     using lfs::training::CommandTarget;
@@ -170,12 +179,29 @@ namespace {
         return lfs::core::utf8_to_path(value);
     }
 
-    std::expected<void, std::string> post_clear_scene_to_viewer(lfs::vis::Visualizer& viewer) {
+    lfs::Result<void> post_clear_scene_to_viewer(lfs::vis::Visualizer& viewer) {
+        const auto clear = [&viewer]() -> lfs::Result<void> {
+            return lfs::from_legacy_expected<void>(
+                viewer.clearScene(),
+                lfs::LegacyErrorContext{
+                    .code = lfs::ErrorCode::FailedPrecondition,
+                    .domain = lfs::ErrorDomain::Rendering,
+                    .operation = "clearScene",
+                    .source = LFS_SOURCE_SITE_CURRENT(),
+                });
+        };
+        const auto shutdown_error = lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::Cancelled,
+            .domain = lfs::ErrorDomain::Python,
+            .severity = lfs::Severity::Warning,
+            .detail = "Viewer is shutting down",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        });
         if (viewer.isOnViewerThread()) {
             if (!viewer.acceptsPostedWork()) {
-                return std::unexpected("Viewer is shutting down");
+                return lfs::Result<void>::failure(shutdown_error);
             }
-            return viewer.clearScene();
+            return clear();
         }
 
         const lfs::core::TaskContext context{
@@ -185,32 +211,7 @@ namespace {
             .site = LFS_SOURCE_SITE_CURRENT(),
         };
 
-        lfs::Result<void> result = lfs::vis::post_guarded_and_wait<void>(
-            viewer, context,
-            [&viewer]() -> lfs::Result<void> {
-                return lfs::from_legacy_expected<void>(
-                    viewer.clearScene(),
-                    lfs::LegacyErrorContext{
-                        .code = lfs::ErrorCode::Internal,
-                        .domain = lfs::ErrorDomain::Rendering,
-                        .operation = "clearScene",
-                        .source = LFS_SOURCE_SITE_CURRENT(),
-                    });
-            },
-            lfs::make_error(lfs::ErrorInit{
-                .code = lfs::ErrorCode::Cancelled,
-                .domain = lfs::ErrorDomain::Python,
-                .severity = lfs::Severity::Warning,
-                .detail = "Viewer is shutting down",
-                .detection = LFS_SOURCE_SITE_CURRENT(),
-            }));
-
-        if (!result) {
-            const auto& error = result.error();
-            return std::unexpected(std::string(
-                error.user_message().empty() ? error.detail() : error.user_message()));
-        }
-        return {};
+        return lfs::vis::post_guarded_and_wait<void>(viewer, context, clear, shutdown_error);
     }
 
     lfs::Result<lfs::vis::ProjectOpenOutcome>
@@ -448,14 +449,19 @@ namespace {
         return started;
     }
 
-    std::expected<void, std::string> clear_scene_from_python() {
+    lfs::Result<void> clear_scene_from_python() {
         if (auto* const viewer = lfs::python::get_visualizer()) {
             return post_clear_scene_to_viewer(*viewer);
         }
 
         auto* const scene_manager = lfs::python::get_scene_manager();
         if (!scene_manager) {
-            return std::unexpected("No scene manager available");
+            return lfs::Result<void>::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Unavailable,
+                .domain = lfs::ErrorDomain::Python,
+                .detail = "No scene manager available",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
         }
 
         if (scene_manager->clear()) {
@@ -466,11 +472,20 @@ namespace {
             trainer_manager &&
             scene_manager->getContentType() == lfs::vis::SceneManager::ContentType::Dataset &&
             !trainer_manager->canPerform(lfs::vis::TrainingAction::ClearScene)) {
-            return std::unexpected(
-                std::string(trainer_manager->getActionBlockedReason(lfs::vis::TrainingAction::ClearScene)));
+            return lfs::Result<void>::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::Python,
+                .detail = std::string(trainer_manager->getActionBlockedReason(lfs::vis::TrainingAction::ClearScene)),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
         }
 
-        return std::unexpected("Scene clear request was rejected");
+        return lfs::Result<void>::failure(lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::FailedPrecondition,
+            .domain = lfs::ErrorDomain::Python,
+            .detail = "Scene clear request was rejected",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        }));
     }
 
     CommandCenter* get_command_center_opt() {
@@ -860,6 +875,10 @@ namespace {
     }
 
 } // namespace
+
+lfs::Result<void> lfs::python::clear_application_scene() {
+    return clear_scene_from_python();
+}
 
 NB_MODULE(lichtfeld, m) {
     m.doc() = "LichtFeld Python control module for Gaussian splatting";
@@ -1317,6 +1336,32 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("path") = "",
         nb::arg("wait") = false,
         "Save the active project to a new .licht path");
+    m.def(
+        "project_save_as_for_training_start",
+        [](const std::string& path, bool wait) {
+            nb::gil_scoped_release release;
+            const auto project_path =
+                python_utf8_path(path);
+            emit_project_cmd_marshaled(
+                "python.project_save_as_for_training_start",
+                [project_path] {
+                    lfs::core::events::cmd::ProjectSaveAs{
+                        .path = project_path,
+                        .fresh_training_start = true}
+                        .emit();
+                });
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return false;
+            }
+            return consume_project_save_started_and_wait(
+                viewer, wait,
+                "python.project_save_as_for_training_start.wait");
+        },
+        nb::arg("path") = "",
+        nb::arg("wait") = false,
+        "Save a clean project for a new training run");
     m.def(
         "project_get_license", []() -> std::optional<nb::dict> {
             auto* const viewer = lfs::python::get_visualizer();
@@ -1862,9 +1907,7 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "clear_scene", []() {
             nb::gil_scoped_release release;
-            if (auto result = clear_scene_from_python(); !result) {
-                throw std::runtime_error(std::format("clear_scene failed: {}", result.error()));
-            }
+            lfs::python::unwrap(lfs::python::clear_application_scene());
         },
         "Remove all nodes from the scene");
     m.def(
@@ -1914,6 +1957,30 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("discard_changes") = false,
         nb::arg("replace") = false,
         "Load a file (PLY, checkpoint) or dataset into the scene.");
+
+    m.def(
+        "load_files",
+        [](const std::vector<std::string>& paths, bool stop_training,
+           bool discard_changes, bool replace, bool user_batch) {
+            if (paths.empty())
+                throw std::invalid_argument("No files were provided");
+            lfs::core::events::cmd::LoadFile command{
+                .path = python_utf8_path(paths.front()),
+                .is_dataset = false,
+                .stop_training = stop_training,
+                .discard_changes = discard_changes,
+                .replace = replace,
+                .user_batch = user_batch && paths.size() > 1};
+            for (const auto& path : paths)
+                command.paths.push_back(python_utf8_path(path));
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled("python.load_files",
+                                       [command = std::move(command)] { command.emit(); });
+        },
+        nb::arg("paths"), nb::arg("stop_training") = false,
+        nb::arg("discard_changes") = false, nb::arg("replace") = false,
+        nb::arg("_user_batch") = false,
+        "Import splat and mesh files as one ordered batch.");
 
     m.def(
         "load_config_file",
@@ -2133,8 +2200,11 @@ NB_MODULE(lichtfeld, m) {
                 throw std::runtime_error("No parameter manager available");
             }
             lfs::core::param::TrainingParameters params;
-            params.dataset = param_manager->getDatasetConfig();
-            params.optimization = param_manager->copyActiveParams();
+            if (auto* const trainer_manager = lfs::python::get_trainer_manager()) {
+                params = trainer_manager->getEditableTrainingParams(*param_manager);
+            } else {
+                params = param_manager->createForDataset({}, {});
+            }
             if (const auto result = lfs::core::param::save_training_parameters_to_json(params, output_path); !result) {
                 throw std::runtime_error("Failed to save config: " + result.error());
             }
@@ -2626,21 +2696,49 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("name"), "Get node visualizer-world transform matrix (16 floats, column-major)");
 
     m.def(
-        "set_node_transform", [](const std::string& name, const std::vector<float>& mat) {
+        "commit_node_transforms", [](const std::vector<std::string>& names, const std::vector<std::vector<float>>& before) {
+            auto* sm = lfs::python::get_scene_manager();
+            if (!sm || names.empty())
+                return;
+            if (names.size() != before.size())
+                throw nb::value_error("Expected one transform per node");
+            std::vector<glm::mat4> transforms;
+            transforms.reserve(before.size());
+            for (const auto& matrix : before) {
+                if (matrix.size() != 16)
+                    throw nb::value_error("Expected 16 floats per transform");
+                glm::mat4 transform;
+                std::memcpy(&transform[0][0], matrix.data(), 16 * sizeof(float));
+                transforms.push_back(transform);
+            }
+            auto entry = std::make_unique<lfs::vis::op::SceneSnapshot>(*sm, "transform.batch");
+            if (!entry->captureTransformsBefore(names, transforms))
+                return;
+            entry->captureAfter();
+            lfs::vis::op::pushSceneSnapshotIfChanged(std::move(entry));
+        },
+        nb::arg("node_names"), nb::arg("old_transforms"), "Record a completed preview edit as one undo step using its original local transforms");
+
+    m.def(
+        "set_node_transform", [](const std::string& name, const std::vector<float>& mat, const bool record_history) {
             auto* sm = lfs::python::get_scene_manager();
             if (!sm || mat.size() != 16)
                 return;
             glm::mat4 transform;
             std::memcpy(&transform[0][0], mat.data(), 16 * sizeof(float));
+            if (!record_history) {
+                sm->setNodeTransform(name, transform);
+                return;
+            }
             if (auto result = lfs::vis::cap::setTransformMatrix(*sm, {name}, transform, "python.set_node_transform"); !result) {
                 LOG_WARN("set_node_transform fell back to direct update for '{}': {}", name, result.error());
                 sm->setNodeTransform(name, transform);
             }
         },
-        nb::arg("name"), nb::arg("matrix"), "Set node transform matrix (16 floats, column-major)");
+        nb::arg("name"), nb::arg("matrix"), nb::kw_only(), nb::arg("record_history") = true, "Set node transform matrix (16 floats, column-major). Disable record_history for previews committed with commit_node_transforms.");
 
     m.def(
-        "set_node_visualizer_world_transform", [](const std::string& name, const std::vector<float>& mat) {
+        "set_node_visualizer_world_transform", [](const std::string& name, const std::vector<float>& mat, const bool record_history) {
             auto* sm = lfs::python::get_scene_manager();
             if (!sm || mat.size() != 16)
                 return;
@@ -2650,9 +2748,18 @@ NB_MODULE(lichtfeld, m) {
 
             const auto local_transform =
                 lfs::vis::scene_coords::nodeLocalTransformFromVisualizerWorld(sm->getScene(), name, visualizer_world_transform);
-            if (!local_transform)
-                return;
+            if (!local_transform) {
+                if (!sm->getScene().getNode(name))
+                    throw std::runtime_error("set_node_visualizer_world_transform: node not found: " + name);
+                throw std::runtime_error(
+                    "set_node_visualizer_world_transform: parent transform cannot preserve a finite world transform: " +
+                    name);
+            }
 
+            if (!record_history) {
+                sm->setNodeTransform(name, *local_transform);
+                return;
+            }
             if (auto result = lfs::vis::cap::setTransformMatrix(
                     *sm, {name}, *local_transform, "python.set_node_visualizer_world_transform");
                 !result) {
@@ -2660,7 +2767,7 @@ NB_MODULE(lichtfeld, m) {
                 sm->setNodeTransform(name, *local_transform);
             }
         },
-        nb::arg("name"), nb::arg("matrix"), "Set node visualizer-world transform matrix (16 floats, column-major)");
+        nb::arg("name"), nb::arg("matrix"), nb::kw_only(), nb::arg("record_history") = true, "Set node visualizer-world transform matrix (16 floats, column-major). Disable record_history for previews committed with commit_node_transforms.");
 
     m.def(
         "bake_selected_node_transforms", []() -> size_t {
@@ -3311,16 +3418,35 @@ NB_MODULE(lichtfeld, m) {
 
             nb::module_ sys = nb::module_::import_("sys");
             nb::list sys_path = nb::cast<nb::list>(sys.attr("path"));
+            nb::object builtins = nb::module_::import_("builtins");
+            const bool nested_run = python_run_depth > 0;
+            const nb::object previous_file = nested_run ? builtins.attr("__file__") : nb::none();
+            const nb::list previous_sys_path = nested_run
+                                                   ? nb::cast<nb::list>(sys_path.attr("copy")())
+                                                   : nb::list();
+            const ScopedPythonRunDepth run_depth;
             nb::str parent_str(parent.c_str());
             if (!nb::cast<bool>(sys_path.attr("__contains__")(parent_str))) {
                 sys_path.attr("insert")(0, parent_str);
             }
-
-            nb::object builtins = nb::module_::import_("builtins");
             builtins.attr("__file__") = nb::str(abs_path.c_str());
 
             nb::object py_exec = builtins.attr("exec");
-            py_exec(code);
+            const auto restore_nested_context = [&] {
+                if (!nested_run)
+                    return;
+                sys.attr("path") = sys_path;
+                sys_path.attr("clear")();
+                sys_path.attr("extend")(previous_sys_path);
+                builtins.attr("__file__") = previous_file;
+            };
+            try {
+                py_exec(code);
+            } catch (...) {
+                restore_nested_context();
+                throw;
+            }
+            restore_nested_context();
 
             LOG_INFO("Executed script: {}", path);
         },
@@ -3395,24 +3521,36 @@ NB_MODULE(lichtfeld, m) {
         },
         "Print the scene graph tree");
 
-    // Frame callback for animations
-    m.def(
-        "on_frame", [](nb::callable cb) {
-            const auto callback = make_safe_py_callback(nb::cast<nb::object>(cb));
-            lfs::python::set_frame_callback([callback](float dt) {
-                try {
-                    (*callback)(dt);
-                } catch (nb::python_error& e) {
-                    (void)lfs::python::contain_python_callback(e, lfs::python::PyCallbackPolicy::DisableAndReport);
-                    lfs::python::clear_frame_callback();
-                } catch (const std::exception& e) {
-                    (void)lfs::python::contain_cxx_callback(e.what(), lfs::python::PyCallbackPolicy::DisableAndReport);
-                    lfs::python::clear_frame_callback();
-                }
-            });
-            LOG_INFO("Frame callback registered");
+    // Frame callback for animations. Legacy registrations without an explicit
+    // duration expire after ten seconds and emit a single process-wide warning.
+    const auto register_frame_callback = [](nb::callable cb, nb::object duration_s) {
+        std::optional<double> duration;
+        if (!duration_s.is_none()) {
+            duration = nb::cast<double>(duration_s);
+            if (!std::isfinite(*duration) || *duration <= 0.0)
+                throw nb::value_error("duration_s must be a positive finite number");
+        }
+        const auto callback = make_safe_py_callback(nb::cast<nb::object>(cb));
+        lfs::python::set_frame_callback([callback](float dt) {
+            try {
+                (*callback)(dt);
+            } catch (nb::python_error& e) {
+                (void)lfs::python::contain_python_callback(e, lfs::python::PyCallbackPolicy::DisableAndReport);
+                lfs::python::clear_frame_callback();
+            } catch (const std::exception& e) {
+                (void)lfs::python::contain_cxx_callback(e.what(), lfs::python::PyCallbackPolicy::DisableAndReport);
+                lfs::python::clear_frame_callback();
+            }
         },
-        nb::arg("callback"), "Register a callback to be called each frame with delta time (seconds)");
+                                        duration);
+        LOG_INFO("Frame callback registered");
+    };
+    m.def("on_frame", register_frame_callback,
+          nb::arg("callback"), nb::arg("duration_s") = nb::none(),
+          "Register a frame callback with an optional positive lifetime in seconds (defaults to 10 seconds).");
+    m.def("set_frame_callback", register_frame_callback,
+          nb::arg("callback"), nb::arg("duration_s") = nb::none(),
+          "Register a frame callback with an optional positive lifetime in seconds (defaults to 10 seconds).");
 
     m.def(
         "stop_animation", []() {
@@ -3453,7 +3591,9 @@ NB_MODULE(lichtfeld, m) {
                 throw std::runtime_error("Only 'jet' colormap is currently supported");
             }
             const auto& t = values.tensor();
-            assert(t.shape().rank() == 1);
+            if (t.shape().rank() != 1) {
+                throw std::invalid_argument("values must have rank 1");
+            }
 
             auto v = t.clamp(0.0f, 1.0f);
 

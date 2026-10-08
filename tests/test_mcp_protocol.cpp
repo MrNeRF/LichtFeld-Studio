@@ -14,6 +14,7 @@
 #include "mcp/mcp_protocol.hpp"
 #include "mcp/mcp_server.hpp"
 #include "mcp/mcp_tools.hpp"
+#include "mcp/render_capture_utils.hpp"
 
 #include <httplib/httplib.h>
 
@@ -698,6 +699,24 @@ namespace lfs::mcp {
         const auto failure = server.handle_request(JsonRpcRequest{.id = int64_t{7}, .method = "unknown/method"});
         EXPECT_EQ(failure.id, RequestId(int64_t{7}));
         EXPECT_EQ(json::parse(serialize_response(failure))["id"], 7);
+    }
+
+    TEST(McpProtocolTest, FractionalRequestIdsAreEchoedOnSuccess) {
+        McpServer server;
+        ASSERT_TRUE(server.handle_request(
+                              JsonRpcRequest{.id = int64_t{1}, .method = "initialize"})
+                        .result.has_value());
+        for (const auto request_text : {
+                 R"({"jsonrpc":"2.0","id":3.14159,"method":"ping"})",
+                 R"({"jsonrpc":"2.0","id":2.5,"method":"ping"})"}) {
+            const auto request_json = json::parse(request_text);
+            const auto expected_id = request_json.at("id");
+            const auto request = parse_request(request_text);
+            const auto response = server.handle_request(request);
+            ASSERT_TRUE(response.result.has_value());
+            EXPECT_FALSE(response.error.has_value());
+            EXPECT_EQ(json::parse(serialize_response(response)).at("id"), expected_id);
+        }
     }
 
     TEST(McpProtocolTest, RequestIdStringEchoedOnSuccessAndErrorPaths) {
@@ -1454,6 +1473,96 @@ namespace lfs::mcp {
         EXPECT_EQ(handler_calls, 2);
         EXPECT_EQ(last_arguments["label"], "5") << "a number for a string parameter was not spelled as text";
         EXPECT_EQ(last_arguments["count"], 7) << "a numeric string for an integer parameter was not converted";
+    }
+
+    TEST(McpProtocolTest, OptionalBooleanNullIsRejectedBeforeTheHandler) {
+        static constexpr const char* tool_name = "test.optional_bool";
+        ScopedToolRegistration cleanup(tool_name);
+        int handler_calls = 0;
+        ToolRegistry::instance().register_tool(
+            McpTool{
+                .name = tool_name,
+                .description = "Optional boolean parameter",
+                .input_schema = {.type = "object",
+                                 .properties = json{{"include_poll", {{"type", "boolean"}}}},
+                                 .required = {}},
+                .metadata = McpToolMetadata{.category = "test", .kind = "query"}},
+            [&](const json&) -> json {
+                ++handler_calls;
+                return json{{"success", true}};
+            });
+
+        const auto result = ToolRegistry::instance().call_tool(
+            tool_name, json{{"include_poll", nullptr}});
+        const auto error = result.value("error", json::object());
+        EXPECT_EQ(error.value("code", std::string{}), "InvalidArgument");
+        EXPECT_EQ(error.value("details", json::object())
+                      .value("parameter", std::string{}),
+                  "include_poll");
+        EXPECT_EQ(handler_calls, 0);
+    }
+
+    TEST(McpProtocolTest, ArrayShapesAndNumericBoundsAreValidatedBeforeTheHandler) {
+        static constexpr const char* tool_name = "test.schema_bounds";
+        ScopedToolRegistration cleanup(tool_name);
+        int handler_calls = 0;
+        ToolRegistry::instance().register_tool(
+            McpTool{
+                .name = tool_name,
+                .description = "Nested argument validation",
+                .input_schema = {.type = "object",
+                                 .properties = json{{"points", {{"type", "array"}, {"minItems", 3}, {"items", {{"type", "array"}, {"minItems", 2}, {"maxItems", 2}, {"items", {{"type", "number"}}}}}}},
+                                                    {"size", {{"type", "integer"}, {"minimum", 1}, {"maximum", 16}}},
+                                                    {"speed", {{"type", "number"}, {"exclusiveMinimum", 0}}},
+                                                    {"ratio", {{"type", "number"}, {"exclusiveMaximum", 1}}}},
+                                 .required = {}},
+                .metadata = McpToolMetadata{.category = "test", .kind = "command"}},
+            [&](const json&) -> json { ++handler_calls; return json{{"success", true}}; });
+
+        auto& registry = ToolRegistry::instance();
+        const auto short_point = registry.call_tool(tool_name, json{{"points", json::parse("[[1],[2,3],[4,5]]")}});
+        EXPECT_EQ(short_point["error"]["code"], "InvalidArgument");
+        EXPECT_EQ(short_point["error_message"], "Parameter 'points[0]' must have at least 2 items (got 1)");
+        const auto invalid_number = registry.call_tool(tool_name, json{{"points", json::parse("[[1,2],[3,4],[5,6]]")}, {"size", 17}});
+        EXPECT_EQ(invalid_number["error"]["code"], "InvalidArgument");
+        EXPECT_EQ(invalid_number["error"]["details"]["parameter"], "size");
+        EXPECT_EQ(registry.call_tool(tool_name, json{{"points", json::parse("[[1,2],[3,4],[5,6]]")},
+                                                     {"size", 3},
+                                                     {"speed", 0}})["error"]["code"],
+                  "InvalidArgument");
+        EXPECT_EQ(registry.call_tool(tool_name, json{{"points", json::parse("[[1,2],[3,4],[5,6]]")},
+                                                     {"size", 3},
+                                                     {"ratio", 1}})["error"]["code"],
+                  "InvalidArgument");
+        EXPECT_EQ(handler_calls, 0);
+        EXPECT_EQ(registry.call_tool(tool_name, json{{"points", json::parse("[[1,2],[3,4],[5,6]]")}, {"size", "16"}})["success"], true);
+        EXPECT_EQ(handler_calls, 1);
+    }
+
+    TEST(McpProtocolTest, HandlerInvalidArgumentReceivesTheCallOperationId) {
+        static constexpr const char* tool_name = "test.handler_invalid_argument";
+        ScopedToolRegistration cleanup(tool_name);
+        ToolRegistry::instance().register_tool(
+            McpTool{.name = tool_name,
+                    .description = "Handler-side parameter check",
+                    .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                    .metadata = McpToolMetadata{.category = "test", .kind = "command"}},
+            [](const json&) -> json { return invalid_argument_result("Invalid view", "eye"); });
+        const auto operation_id = lfs::OperationId::generate();
+        const auto result = ToolRegistry::instance().call_tool(tool_name, json::object(), operation_id);
+        EXPECT_EQ(result["error"]["code"], "InvalidArgument");
+        EXPECT_EQ(result["error"]["details"]["parameter"], "eye");
+        EXPECT_EQ(result["error"]["operation_id"], operation_id.value());
+    }
+
+    TEST(McpProtocolTest, CaptureEncoderRejectsOversizedDimensionsBeforeResizing) {
+        const std::vector<std::uint8_t> pixels(4 * 4 * 4, 0);
+        const auto oversized = encode_pixels_to_base64(pixels.data(), 4, 4, 4, 65536, 65536);
+        EXPECT_FALSE(oversized);
+        EXPECT_NE(oversized.error().find("supported limit"), std::string::npos);
+        EXPECT_FALSE(detail::resolve_capture_size(1600, 900, -1, 0));
+        const auto derived = detail::resolve_capture_size(1600, 900, 0, 16384);
+        EXPECT_FALSE(derived);
     }
 
     TEST(McpProtocolTest, TypedEnvelopeHandlerResultIsPassedThroughWithMirror) {

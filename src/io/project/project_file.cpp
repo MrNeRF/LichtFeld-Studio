@@ -7,6 +7,7 @@
 #include "project_container_internal.hpp"
 
 #include "core/path_utils.hpp"
+#include "core/resource_messages.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -189,6 +190,25 @@ namespace lfs::io::project::detail {
         return active_identity ? active_identity->validate() : lfs::Result<void>{};
     }
 
+    bool native_disk_full(const std::int64_t error) noexcept {
+#ifdef _WIN32
+        return error == ERROR_DISK_FULL || error == ERROR_HANDLE_DISK_FULL;
+#else
+        return error == ENOSPC || error == EDQUOT;
+#endif
+    }
+
+    bool disk_full(const std::error_code& error) noexcept {
+        if (error == std::errc::no_space_on_device)
+            return true;
+#ifdef _WIN32
+        return error.category() == std::system_category() && native_disk_full(error.value());
+#else
+        return (error.category() == std::system_category() || error.category() == std::generic_category()) &&
+               native_disk_full(error.value());
+#endif
+    }
+
     namespace {
 
         lfs::ErrorCode native_error_code(const int error, const bool writing) noexcept {
@@ -350,6 +370,8 @@ namespace lfs::io::project::detail {
         const std::filesystem::path& path, const std::optional<std::uint64_t> offset,
         const std::string_view field, const std::optional<std::int64_t> native_code,
         const std::string_view native_name) {
+        if (native_code.has_value() && native_disk_full(*native_code))
+            user_message = lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE;
         lfs::SmallFields fields;
         if (!path.empty()) {
             fields.add("path", lfs::core::path_to_utf8(path));
@@ -1034,7 +1056,7 @@ namespace lfs::io::project::detail {
                 .code = lfs::ErrorCode::ResourceExhausted,
                 .domain = lfs::ErrorDomain::IO,
                 .operation_id = {},
-                .user_message = "There is not enough disk space to save the project.",
+                .user_message = lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE,
                 .detail = std::format("preflight requires {} bytes, volume reports {} available",
                                       required_bytes, space.available),
                 .detection = LFS_SOURCE_SITE_CURRENT(),

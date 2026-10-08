@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "rendering/rendering.hpp"
@@ -115,6 +116,15 @@ namespace lfs::vis {
             SplitRight = 2,
         };
 
+        // Nonblocking sampling returns this while the GPU snapshot is in flight.
+        static constexpr float kDepthSamplePending = -2.0f;
+        struct DepthSampleRequest {
+            glm::ivec2 pixel{0, 0};
+            glm::ivec2 source_size{0, 0};
+            OutputSlot output_slot = OutputSlot::Main;
+            bool nonblocking = false;
+        };
+
         PointCloudVulkanRenderer();
         ~PointCloudVulkanRenderer();
 
@@ -128,6 +138,10 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main);
+
+        [[nodiscard]] lfs::Result<float> sampleDepthAtPixel(
+            VulkanContext& context, const DepthSampleRequest& request);
+        [[nodiscard]] bool takeRefinementRequest();
 
         void reset();
 

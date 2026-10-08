@@ -68,7 +68,7 @@ class BuiltinTool(enum.Enum):
 
     Align = 5
 
-class OperatorFlags(enum.Enum):
+class OperatorFlags(enum.Flag):
     NONE = 0
 
     REGISTER = 1
@@ -82,10 +82,6 @@ class OperatorFlags(enum.Enum):
     MODAL = 16
 
     BLOCKING = 32
-
-    def __or__(self, arg: OperatorFlags, /) -> OperatorFlags: ...
-
-    def __and__(self, arg: OperatorFlags, /) -> OperatorFlags: ...
 
 class OperatorDescriptor:
     def __init__(self) -> None: ...

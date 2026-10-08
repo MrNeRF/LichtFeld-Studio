@@ -4,12 +4,14 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "diagnostics/vram_timeline.hpp"
 #include "visualizer/app_store.hpp"
 
 #include <RmlUi/Core/EventListener.h>
+#include <RmlUi/Core/Types.h>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -26,7 +28,7 @@ namespace Rml {
 namespace lfs::vis::gui {
     class VramTimelineElement;
 
-    class VramHudOverlay {
+    class LFS_VIS_API VramHudOverlay {
     public:
         struct State {
             bool visible = false;
@@ -42,11 +44,13 @@ namespace lfs::vis::gui {
 
         void onDocumentLoaded(Rml::ElementDocument* document);
         void onDocumentDestroyed();
+        void setViewportGeometry(float origin_x, float origin_y, float width, float height);
+        [[nodiscard]] bool initializeGeometryAfterLayout();
 
         void setState(State state);
         [[nodiscard]] bool isVisible() const noexcept { return state_.visible || state_.perf_hud.visible; }
         [[nodiscard]] bool needsAnimationFrame() const noexcept {
-            return pointer_captured_ || sparkline_tick_due();
+            return pointer_captured_;
         }
         [[nodiscard]] bool isCapturingPointer() const noexcept { return pointer_captured_; }
 
@@ -139,8 +143,12 @@ namespace lfs::vis::gui {
         bool ledger_default_collapse_applied_ = false;
 
         Rml::ElementDocument* document_ = nullptr;
+        Rml::Vector2f viewport_origin_{};
+        Rml::Vector2f viewport_size_{};
+        bool has_viewport_geometry_ = false;
         Rml::Element* root_ = nullptr;
         Rml::Element* perf_strip_ = nullptr;
+        Rml::Element* perf_strip_header_ = nullptr;
         Rml::Element* perf_card_ = nullptr;
         Rml::Element* perf_rate_ = nullptr;
         Rml::Element* perf_vram_process_ = nullptr;
@@ -331,6 +339,7 @@ namespace lfs::vis::gui {
         AnnoFilterClearListener anno_filter_clear_listener_;
         TimelineListener timeline_listener_;
         bool listeners_attached_ = false;
+        bool geometry_initialized_ = false;
 
         float pos_x_ = -1.0f;
         float pos_y_ = -1.0f;
@@ -343,6 +352,7 @@ namespace lfs::vis::gui {
         float drag_start_size_w_ = 0.0f;
         float drag_start_size_h_ = 0.0f;
         bool dragging_header_ = false;
+        bool header_drag_moved_ = false;
         bool dragging_resize_ = false;
         bool pointer_captured_ = false;
         bool geometry_dirty_ = false;

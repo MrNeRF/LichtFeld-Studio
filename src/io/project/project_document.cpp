@@ -4,9 +4,11 @@
  */
 
 #include "io/project_document.hpp"
+#include "io/sfm_observation_chapter.hpp"
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/resource_messages.hpp"
 #include "core/user_paths.hpp"
 #include "io/loader.hpp"
 #include "io/project_recovery.hpp"
@@ -177,7 +179,7 @@ namespace lfs::io::project {
 
         bool is_lazy_binary_fourcc(const Fourcc fourcc) noexcept {
             return fourcc == FOURCC_CKPT || fourcc == FOURCC_PPIS ||
-                   fourcc == FOURCC_DSRC;
+                   fourcc == FOURCC_DSRC || fourcc == FOURCC_SFMO;
         }
 
         bool is_singleton_fourcc(const Fourcc fourcc) noexcept {
@@ -914,6 +916,7 @@ namespace lfs::io::project {
         std::unordered_map<lfs::core::Uuid, LazyChunkValue> checkpoints;
         std::unordered_map<lfs::core::Uuid, LazyChunkValue> ppisp_payloads;
         std::unordered_map<lfs::core::Uuid, LazyChunkValue> dataset_sources;
+        std::unordered_map<lfs::core::Uuid, LazyChunkValue> sfm_observations;
 
         std::optional<std::filesystem::path> source_path;
         std::shared_ptr<ProjectReader> source_reader;
@@ -941,6 +944,17 @@ namespace lfs::io::project {
         void mark(const Fourcc fourcc) {
             dirty.insert(key(fourcc));
             ++dirty_epoch;
+        }
+
+        [[nodiscard]] std::shared_ptr<const SfmObservationChapterSource> sfm_observation_source() const {
+            if (sfm_observations.empty())
+                return {};
+            auto source = SfmObservationChapterSource::open(sfm_observations.begin()->second);
+            if (!source) {
+                LOG_WARN("SfM observations unavailable: {}", lfs::format_for_developer(source.error()));
+                return {};
+            }
+            return std::move(*source);
         }
 
         void mark(const Fourcc fourcc, const lfs::core::Uuid& instance_uuid) {
@@ -1603,6 +1617,18 @@ namespace lfs::io::project {
                         "PPIS.header");
                 }
             }
+            if (sfm_observations.size() > 1) {
+                return fail<void>(
+                    lfs::ErrorCode::DataLoss,
+                    "The project contains multiple SfM observation chapters.",
+                    "Only one SFMO payload is supported",
+                    "SFMO");
+            }
+            for (const auto& [uuid, payload] : sfm_observations) {
+                if (auto index = read_sfm_observation_index(payload); !index) {
+                    return lfs::Result<void>::failure(std::move(index).error());
+                }
+            }
             const auto geometry_at =
                 std::chrono::steady_clock::now();
             if (bound_checkpoint) {
@@ -1677,6 +1703,8 @@ namespace lfs::io::project {
                 refreshed_ppisp;
             std::unordered_map<lfs::core::Uuid, LazyChunkValue>
                 refreshed_dataset_sources;
+            std::unordered_map<lfs::core::Uuid, LazyChunkValue>
+                refreshed_sfm_observations;
             for (const auto& row : shared_reader->chunks()) {
                 if (!row.is_live()) {
                     continue;
@@ -1698,6 +1726,8 @@ namespace lfs::io::project {
                             ? refreshed_checkpoints
                         : row.key.fourcc == FOURCC_PPIS
                             ? refreshed_ppisp
+                        : row.key.fourcc == FOURCC_SFMO
+                            ? refreshed_sfm_observations
                             : refreshed_dataset_sources;
                     destination.emplace(
                         row.key.instance_uuid,
@@ -1737,9 +1767,17 @@ namespace lfs::io::project {
                     .instance_uuid = uuid,
                 });
             }
+            for (const auto& [uuid, ignored] : refreshed_sfm_observations) {
+                (void)ignored;
+                lazy_source_keys.insert(ChunkKey{
+                    .fourcc = FOURCC_SFMO,
+                    .instance_uuid = uuid,
+                });
+            }
             checkpoints = std::move(refreshed_checkpoints);
             ppisp_payloads = std::move(refreshed_ppisp);
             dataset_sources = std::move(refreshed_dataset_sources);
+            sfm_observations = std::move(refreshed_sfm_observations);
             dirty.clear();
             source_path = path;
             source_reader = std::move(shared_reader);
@@ -1767,6 +1805,8 @@ namespace lfs::io::project {
                 staged_ppisp;
             std::unordered_map<lfs::core::Uuid, LazyChunkValue>
                 staged_dataset_sources;
+            std::unordered_map<lfs::core::Uuid, LazyChunkValue>
+                staged_sfm_observations;
             std::set<ChunkKey, ChunkKeyLess> lazy_tombstones;
             std::set<ChunkKey, ChunkKeyLess> disk_lazy_keys;
             const auto stage_preserved_lazy =
@@ -1820,6 +1860,11 @@ namespace lfs::io::project {
                 !staged) {
                 return staged;
             }
+            if (auto staged = stage_preserved_lazy(
+                    sfm_observations, staged_sfm_observations, FOURCC_SFMO);
+                !staged) {
+                return staged;
+            }
             for (const auto& row : shared_reader->chunks()) {
                 if (!row.is_live()) {
                     continue;
@@ -1837,6 +1882,8 @@ namespace lfs::io::project {
                             ? staged_checkpoints
                         : row.key.fourcc == FOURCC_PPIS
                             ? staged_ppisp
+                        : row.key.fourcc == FOURCC_SFMO
+                            ? staged_sfm_observations
                             : staged_dataset_sources;
                     if (lazy_tombstones.contains(row.key) ||
                         destination.contains(row.key.instance_uuid)) {
@@ -1876,6 +1923,7 @@ namespace lfs::io::project {
             checkpoints = std::move(staged_checkpoints);
             ppisp_payloads = std::move(staged_ppisp);
             dataset_sources = std::move(staged_dataset_sources);
+            sfm_observations = std::move(staged_sfm_observations);
             source_path = path;
             source_reader = std::move(shared_reader);
             generation = source_reader->commit().generation;
@@ -2059,6 +2107,8 @@ namespace lfs::io::project {
                         ? impl->checkpoints
                     : row.key.fourcc == FOURCC_PPIS
                         ? impl->ppisp_payloads
+                    : row.key.fourcc == FOURCC_SFMO
+                        ? impl->sfm_observations
                         : impl->dataset_sources;
                 if (!destination
                          .emplace(
@@ -2506,6 +2556,11 @@ namespace lfs::io::project {
                 (void)ignored;
                 names.insert("PPIS");
             }
+            for (const auto& [uuid, ignored] : impl_->sfm_observations) {
+                (void)uuid;
+                (void)ignored;
+                names.insert("SFMO");
+            }
         } else {
             for (const auto& key : impl_->dirty) {
                 names.insert(key.fourcc.to_string());
@@ -2870,9 +2925,11 @@ namespace lfs::io::project {
 
     lfs::Result<ProjectDocumentSaveReport>
     ProjectDocument::embed_dataset_batch(
-        const EmbeddedDatasetManifest& manifest,
+        EmbeddedDatasetManifest manifest,
         const std::span<const DatasetEmbedSource> sources,
-        const ProjectDocumentSaveOptions& options) {
+        const ProjectDocumentSaveOptions& options,
+        std::function<void(float, const std::string&)> progress,
+        std::function<bool()> cancel) {
         if (!impl_->source_path || !impl_->source_reader) {
             return fail<ProjectDocumentSaveReport>(
                 lfs::ErrorCode::FailedPrecondition,
@@ -2894,10 +2951,20 @@ namespace lfs::io::project {
             !updated) {
             return std::move(updated).error();
         }
+        std::unordered_set<lfs::core::Uuid> superseded_dataset_uuids;
+        if (auto previous = impl_->parameters.embedded_dataset(); previous && *previous) {
+            for (const auto& entry : (*previous)->entries) {
+                if (std::ranges::none_of(manifest.entries, [&](const auto& replacement) {
+                        return replacement.chunk_uuid == entry.chunk_uuid;
+                    })) {
+                    superseded_dataset_uuids.insert(entry.chunk_uuid);
+                }
+            }
+        }
         const auto parameters_key = singleton_key(FOURCC_PRMS, impl_->project_uuid);
-        const auto parameters_bytes = staged_parameters->to_bytes();
+        const auto planned_parameters_bytes = staged_parameters->to_bytes();
         std::unordered_map<lfs::core::Uuid, const DatasetEmbedSource*> sources_by_uuid;
-        std::uint64_t planned_bytes = parameters_bytes.size();
+        std::uint64_t planned_bytes = planned_parameters_bytes.size();
         for (const auto& source : sources) {
             if (source.entry.chunk_uuid.is_nil() || source.source_path.empty()) {
                 return fail<ProjectDocumentSaveReport>(
@@ -3002,16 +3069,21 @@ namespace lfs::io::project {
             }
         }
         desired.insert(parameters_key);
-        for (const auto& row : impl_->source_reader->chunks()) {
-            if (row.is_live() && row.key.fourcc == FOURCC_DSRC) {
-                desired.erase(row.key);
-            }
+        for (const auto& uuid : superseded_dataset_uuids) {
+            desired.erase(ChunkKey{FOURCC_DSRC, uuid});
         }
         for (const auto& entry : manifest.entries) {
             desired.insert(ChunkKey{FOURCC_DSRC, entry.chunk_uuid});
         }
         for (const auto& row : impl_->source_reader->chunks()) {
             if (!row.is_live() || row.key == parameters_key) {
+                continue;
+            }
+            if (row.key.fourcc == FOURCC_DSRC &&
+                superseded_dataset_uuids.contains(row.key.instance_uuid)) {
+                if (auto erased = writer.erase(row.key); !erased) {
+                    return std::move(erased).error();
+                }
                 continue;
             }
             const auto found = impl_->source_rows.find(row.key);
@@ -3041,15 +3113,26 @@ namespace lfs::io::project {
                 }
             }
         }
-        if (auto written = writer.write_chunk(
-                parameters_key, parameters_bytes, json_options());
-            !written) {
-            return std::move(written).error();
+        std::uint64_t copied_bytes = 0;
+        std::unordered_map<lfs::core::Uuid, std::size_t> manifest_index;
+        manifest_index.reserve(manifest.entries.size());
+        for (std::size_t index = 0; index < manifest.entries.size(); ++index) {
+            manifest_index.emplace(manifest.entries[index].chunk_uuid, index);
         }
         for (const auto& source : sources) {
+            if (cancel && cancel()) {
+                return fail<ProjectDocumentSaveReport>(
+                    lfs::ErrorCode::Cancelled,
+                    "Dataset embedding was canceled.",
+                    "the caller canceled while writing dataset chunks",
+                    "project.dataset_embed");
+            }
             const ChunkKey key{FOURCC_DSRC, source.entry.chunk_uuid};
-            const bool materialize = source.entry.kind == "sparse" ||
-                                     source.entry.kind == "meta";
+            constexpr std::uint64_t MAX_COMPRESSED_DATASET_FILE_BYTES =
+                16ull * 1024 * 1024;
+            const bool materialize =
+                (source.entry.kind == "sparse" || source.entry.kind == "meta") &&
+                source.entry.bytes <= MAX_COMPRESSED_DATASET_FILE_BYTES;
             if (materialize) {
                 std::ifstream input(source.source_path, std::ios::binary);
                 if (!input) {
@@ -3077,8 +3160,7 @@ namespace lfs::io::project {
                         "project.dataset_embed");
                 }
                 Hash128Stream hasher;
-                if (!hasher.update(bytes) || !hasher.valid() ||
-                    hasher.digest() != source.entry.xxh3_128) {
+                if (!hasher.update(bytes) || !hasher.valid()) {
                     return fail<ProjectDocumentSaveReport>(
                         lfs::ErrorCode::DataLoss,
                         "An embedded dataset source changed while it was being copied.",
@@ -3094,6 +3176,19 @@ namespace lfs::io::project {
                         });
                     !written) {
                     return std::move(written).error();
+                }
+                const auto entry = manifest_index.find(source.entry.chunk_uuid);
+                if (entry == manifest_index.end()) {
+                    return fail<ProjectDocumentSaveReport>(
+                        lfs::ErrorCode::DataLoss,
+                        "The embedded dataset manifest references a missing chunk.",
+                        source.entry.chunk_uuid.to_string(), "project.dataset_embed");
+                }
+                manifest.entries[entry->second].xxh3_128 = hasher.digest();
+                copied_bytes += source.entry.bytes;
+                if (progress) {
+                    progress(planned_bytes == 0 ? 0.9F : 0.1F + 0.75F * static_cast<float>(copied_bytes) / static_cast<float>(planned_bytes),
+                             "Writing dataset chunks (hashing)");
                 }
                 continue;
             }
@@ -3116,7 +3211,8 @@ namespace lfs::io::project {
                     "project.dataset_embed");
             }
             Hash128Stream hasher;
-            std::vector<char> buffer(1024 * 1024);
+            std::vector<char> buffer(4 * 1024 * 1024);
+            std::uint64_t file_bytes = 0;
             while (input) {
                 input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
                 const auto count = input.gcount();
@@ -3134,8 +3230,21 @@ namespace lfs::io::project {
                         "project.dataset_embed");
                 }
                 stream.value()->write(buffer.data(), count);
+                file_bytes += static_cast<std::uint64_t>(count);
+                if (progress) {
+                    progress(0.1F + 0.75F * static_cast<float>(copied_bytes + file_bytes) /
+                                        static_cast<float>(std::max<std::uint64_t>(1, planned_bytes)),
+                             "Writing dataset chunks (hashing)");
+                }
+                if (cancel && cancel()) {
+                    return fail<ProjectDocumentSaveReport>(
+                        lfs::ErrorCode::Cancelled,
+                        "Dataset embedding was canceled.",
+                        "the caller canceled while writing dataset chunks",
+                        "project.dataset_embed");
+                }
             }
-            if (!input.eof() || !hasher.valid() || hasher.digest() != source.entry.xxh3_128) {
+            if (!input.eof() || !hasher.valid()) {
                 return fail<ProjectDocumentSaveReport>(
                     lfs::ErrorCode::DataLoss,
                     "An embedded dataset source changed while it was being copied.",
@@ -3145,6 +3254,38 @@ namespace lfs::io::project {
             if (auto ended = writer.end_chunk(); !ended) {
                 return std::move(ended).error();
             }
+            const auto entry = manifest_index.find(source.entry.chunk_uuid);
+            if (entry == manifest_index.end()) {
+                return fail<ProjectDocumentSaveReport>(
+                    lfs::ErrorCode::DataLoss,
+                    "The embedded dataset manifest references a missing chunk.",
+                    source.entry.chunk_uuid.to_string(), "project.dataset_embed");
+            }
+            manifest.entries[entry->second].xxh3_128 = hasher.digest();
+            copied_bytes += source.entry.bytes;
+        }
+        if (progress) {
+            progress(0.9F, "Saving dataset manifest");
+        }
+        if (auto updated = staged_parameters->set_embedded_dataset(manifest);
+            !updated) {
+            return std::move(updated).error();
+        }
+        const auto parameters_bytes = staged_parameters->to_bytes();
+        if (auto written = writer.write_chunk(
+                parameters_key, parameters_bytes, json_options());
+            !written) {
+            return std::move(written).error();
+        }
+        if (progress) {
+            progress(0.95F, "Committing embedded dataset");
+        }
+        if (cancel && cancel()) {
+            return fail<ProjectDocumentSaveReport>(
+                lfs::ErrorCode::Cancelled,
+                "Dataset embedding was canceled.",
+                "the caller canceled before project commit",
+                "project.dataset_embed");
         }
         if (auto committed = writer.commit(); !committed) {
             return std::move(committed).error();
@@ -3189,6 +3330,31 @@ namespace lfs::io::project {
         impl_->ppisp_payloads.insert_or_assign(
             instance_uuid, std::move(payload));
         impl_->mark(FOURCC_PPIS, instance_uuid);
+        return {};
+    }
+
+    const LazyChunkValue* ProjectDocument::find_sfm_observations() const noexcept {
+        return impl_->sfm_observations.empty() ? nullptr : &impl_->sfm_observations.begin()->second;
+    }
+
+    lfs::Result<void> ProjectDocument::set_sfm_observations(std::optional<LazyChunkValue> payload) {
+        if (payload && (payload->snapshot_uuid().is_nil() || payload->size() == 0)) {
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument,
+                "The SfM observation chapter identity is invalid.",
+                "SFMO payload needs an instance UUID and a non-empty body",
+                "SFMO.instance_uuid");
+        }
+        for (const auto& [uuid, ignored] : impl_->sfm_observations) {
+            (void)ignored;
+            impl_->mark(FOURCC_SFMO, uuid);
+        }
+        impl_->sfm_observations.clear();
+        if (payload) {
+            const auto uuid = payload->snapshot_uuid();
+            impl_->sfm_observations.emplace(uuid, std::move(*payload));
+            impl_->mark(FOURCC_SFMO, uuid);
+        }
         return {};
     }
 
@@ -3759,9 +3925,6 @@ namespace lfs::io::project {
                     project_root)) {
                 auto encoded = dataset_preview_png(*first);
                 if (encoded) {
-                    LOG_INFO(
-                        "Embedded dataset image as project preview: {}",
-                        lfs::core::path_to_utf8(*first));
                     dataset_preview = std::move(*encoded);
                     preview_png = dataset_preview;
                 } else {
@@ -3882,7 +4045,7 @@ namespace lfs::io::project {
             commit.extra_writer_capabilities.set(
                 RETAINED_JSON_FIELDS);
         }
-        if (!impl_->dataset_sources.empty()) {
+        if (!impl_->dataset_sources.empty() || !impl_->sfm_observations.empty()) {
             commit.extra_writer_capabilities.set(
                 OPAQUE_CHUNK_PRESERVATION);
         }
@@ -3991,7 +4154,7 @@ namespace lfs::io::project {
             add_encoded(sequencer_key, impl_->sequencer.to_bytes(),
                         json_options());
         }
-        if (impl_->dirty_or_new(metrics_key)) {
+        if (impl_->dirty_or_new(metrics_key) && !options.omit_metrics) {
             auto bytes = impl_->metrics.to_bytes();
             if (!bytes) {
                 return std::move(bytes).error();
@@ -4106,6 +4269,8 @@ namespace lfs::io::project {
             sequencer_key,
             metrics_key,
         };
+        if (options.omit_metrics)
+            desired.erase(metrics_key);
         for (const auto& [uuid, ignored] : impl_->splats) {
             (void)ignored;
             desired.insert(
@@ -4139,6 +4304,11 @@ namespace lfs::io::project {
             desired.insert(
                 ChunkKey{.fourcc = FOURCC_DSRC, .instance_uuid = uuid});
         }
+        for (const auto& [uuid, ignored] : impl_->sfm_observations) {
+            (void)ignored;
+            desired.insert(
+                ChunkKey{.fourcc = FOURCC_SFMO, .instance_uuid = uuid});
+        }
 
         auto planned_bytes = preflight_bytes(encoded);
         if (!planned_bytes) {
@@ -4171,6 +4341,10 @@ namespace lfs::io::project {
             return std::move(result).error();
         }
         if (auto result = add_lazy_preflight(impl_->dataset_sources);
+            !result) {
+            return std::move(result).error();
+        }
+        if (auto result = add_lazy_preflight(impl_->sfm_observations);
             !result) {
             return std::move(result).error();
         }
@@ -4510,6 +4684,11 @@ namespace lfs::io::project {
             !result) {
             return std::move(result).error();
         }
+        if (auto result =
+                write_lazy(FOURCC_SFMO, impl_->sfm_observations);
+            !result) {
+            return std::move(result).error();
+        }
         for (const auto& [key, chunk] : encoded) {
             if (auto result =
                     writer->write_chunk(key, chunk.bytes, chunk.options);
@@ -4704,8 +4883,51 @@ namespace lfs::io::project {
             .cancel = options.save_as_cancel,
             .excluded_checkpoints = options.save_as_excluded_checkpoints,
         };
-        auto compacted = ProjectWriter::compact_to(
-            original_path, temporary, compaction_options);
+        const auto source_autosave =
+            autosave_sidecar_path(original_path);
+        error.clear();
+        const bool preserve_source_autosave =
+            std::filesystem::is_regular_file(
+                source_autosave, error);
+        if (error == std::errc::no_such_file_or_directory) {
+            error.clear();
+        }
+        if (error) {
+            remove_temporary();
+            return fail<ProjectDocumentSaveReport>(
+                lfs::ErrorCode::Unavailable,
+                "The source project's autosave state could not be inspected.",
+                std::format("is_regular_file failed: {}", error.message()),
+                "project.save_as.autosave");
+        }
+
+        lfs::Result<void> compacted;
+        if (preserve_source_autosave) {
+            // The sidecar belongs to the original project and must remain
+            // available there. Save As uses the live document below, so
+            // compact a private copy of the master without touching either
+            // source file; save() then writes the live state to this copy.
+            if (!std::filesystem::copy_file(
+                    original_path, temporary,
+                    std::filesystem::copy_options::none, error)) {
+                remove_temporary();
+                const bool disk_full = detail::disk_full(error);
+                return fail<ProjectDocumentSaveReport>(
+                    disk_full ? lfs::ErrorCode::ResourceExhausted
+                              : lfs::ErrorCode::Unavailable,
+                    disk_full ? lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE
+                              : "The project could not be staged for Save As.",
+                    std::format("copy_file failed: {}", error.message()),
+                    "project.save_as.copy");
+            }
+            auto private_compaction_options = compaction_options;
+            private_compaction_options.writer_lock_lease.reset();
+            compacted = ProjectWriter::compact(
+                temporary, private_compaction_options);
+        } else {
+            compacted = ProjectWriter::compact_to(
+                original_path, temporary, compaction_options);
+        }
         if (!compacted &&
             compacted.error().code() == lfs::ErrorCode::Unavailable) {
             // Save As is read-only on the original and may proceed while
@@ -4717,9 +4939,11 @@ namespace lfs::io::project {
                     original_path, temporary,
                     std::filesystem::copy_options::none, error)) {
                 remove_temporary();
+                const bool disk_full = detail::disk_full(error);
                 return fail<ProjectDocumentSaveReport>(
-                    lfs::ErrorCode::Unavailable,
-                    "The project could not be staged for Save As.",
+                    disk_full ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::Unavailable,
+                    disk_full ? lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE
+                              : "The project could not be staged for Save As.",
                     std::format("copy_file failed: {}", error.message()),
                     "project.save_as.copy");
             }
@@ -4750,6 +4974,8 @@ namespace lfs::io::project {
                 dirty_checkpoints;
             std::unordered_map<lfs::core::Uuid, LazyChunkValue>
                 dirty_ppisp;
+            std::unordered_map<lfs::core::Uuid, LazyChunkValue>
+                dirty_sfm_observations;
             const auto extract_dirty =
                 [&preserved_dirty](auto& from, auto& to,
                                    const Fourcc fourcc) {
@@ -4786,6 +5012,9 @@ namespace lfs::io::project {
             extract_dirty(
                 impl_->ppisp_payloads, dirty_ppisp,
                 FOURCC_PPIS);
+            extract_dirty(
+                impl_->sfm_observations, dirty_sfm_observations,
+                FOURCC_SFMO);
             auto refreshed = impl_->refresh_source_rows(source);
             if (!refreshed) {
                 for (auto& [uuid, payload] : dirty_checkpoints) {
@@ -4794,6 +5023,10 @@ namespace lfs::io::project {
                 }
                 for (auto& [uuid, payload] : dirty_ppisp) {
                     impl_->ppisp_payloads.insert_or_assign(
+                        uuid, std::move(payload));
+                }
+                for (auto& [uuid, payload] : dirty_sfm_observations) {
+                    impl_->sfm_observations.insert_or_assign(
                         uuid, std::move(payload));
                 }
                 impl_->dirty = preserved_dirty;
@@ -4807,6 +5040,10 @@ namespace lfs::io::project {
             }
             for (auto& [uuid, payload] : dirty_ppisp) {
                 impl_->ppisp_payloads.insert_or_assign(
+                    uuid, std::move(payload));
+            }
+            for (auto& [uuid, payload] : dirty_sfm_observations) {
+                impl_->sfm_observations.insert_or_assign(
                     uuid, std::move(payload));
             }
             const auto erase_recorded_removals =
@@ -4827,6 +5064,9 @@ namespace lfs::io::project {
             erase_recorded_removals(
                 impl_->ppisp_payloads, dirty_ppisp,
                 FOURCC_PPIS);
+            erase_recorded_removals(
+                impl_->sfm_observations, dirty_sfm_observations,
+                FOURCC_SFMO);
             impl_->project = std::move(rebound_project);
             impl_->project_uuid = project_uuid;
             impl_->dirty = preserved_dirty;
@@ -5002,7 +5242,7 @@ namespace lfs::io::project {
         lfs::core::Scene& destination) const {
         auto shell =
             stage_scene_shell(
-                impl_->scene_graph, destination);
+                impl_->scene_graph, destination, impl_->sfm_observation_source());
         if (!shell) {
             return std::move(shell).error();
         }
@@ -5403,6 +5643,7 @@ namespace lfs::io::project {
                 }
             }
             ScenePayloadResolver resolver;
+            resolver.sfm_observations = impl_->sfm_observation_source();
             resolver.splat =
                 [&staged_splats,
                  &staged_checkpoint_splats,

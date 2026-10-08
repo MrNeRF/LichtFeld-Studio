@@ -58,7 +58,7 @@ namespace lfs::vis {
         }
 
         constexpr float kDefaultZoomSpeed = 11.0f;
-        constexpr float kDefaultNavigationSpeed = 8.0f;
+        constexpr float kDefaultNavigationSpeed = 10.0f;
         constexpr float kMinNavigationSpeed = 1.0f;
         constexpr float kMaxNavigationSpeed = 100.0f;
 

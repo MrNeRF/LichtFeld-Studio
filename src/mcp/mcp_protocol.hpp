@@ -32,17 +32,18 @@ namespace lfs::mcp {
     // A JSON-RPC 2.0 request/response id. Three states, not two: a request can
     // omit "id" entirely (notification - no response id field on the wire), or
     // carry an explicit JSON null (used when a parse error left the real id
-    // unknowable), or a real integer/string id to be echoed back verbatim.
+    // unknowable), or a real number/string id to be echoed back verbatim.
     class LFS_MCP_API RequestId {
     public:
         RequestId() = default; // absent -> notification semantics
         RequestId(std::nullptr_t) : value_(nullptr) {}
         RequestId(std::int64_t value) : value_(value) {}
+        explicit RequestId(double value) : value_(value) {}
         RequestId(std::string value) : value_(std::move(value)) {}
 
         // Reads the "id" member of a raw JSON-RPC request object. A missing
         // "id" key yields the absent/notification state; a present-but-non
-        // conforming id (not string/number/null) degrades to explicit null,
+        // conforming id (not number/string/null) degrades to explicit null,
         // matching JSON-RPC's "id unknowable" handling.
         static RequestId from_json(const json& request_object);
 
@@ -53,7 +54,7 @@ namespace lfs::mcp {
         bool operator==(const RequestId&) const = default;
 
     private:
-        std::variant<std::monostate, std::nullptr_t, std::int64_t, std::string> value_;
+        std::variant<std::monostate, std::nullptr_t, std::int64_t, double, std::string> value_;
     };
 
     struct JsonRpcRequest {

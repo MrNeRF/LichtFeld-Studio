@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include "core/path_utils.hpp"
 #include "io/project_chapters.hpp"
 #include "licht_test_support.hpp"
 
@@ -488,6 +489,46 @@ namespace {
                 .background_image_reference->to_string());
     }
 
+    // Catches a stored preset becoming unreadable once its evaluation mask file is moved or deleted,
+    // as when the project is opened on another machine.
+    TEST(ProjectChapterTest, PresetWithAMissingEvaluationMaskStaysReadable) {
+        TemporaryDirectory temporary;
+        const auto missing = lfs::core::param::normalize_eval_mask(
+            lfs::core::path_to_utf8(temporary.path / "moved_mask.obj"));
+        auto snapshot = parameter_snapshot();
+        snapshot.mcmc_current.enable_eval = true;
+        snapshot.mcmc_current.eval_mask = missing;
+
+        ParametersChapter chapter;
+        ASSERT_TRUE(chapter.set_snapshot(snapshot));
+        auto reparsed = ParametersChapter::from_bytes(chapter.to_bytes());
+        ASSERT_TRUE(reparsed) << lfs::format_for_developer(reparsed.error());
+        const auto restored = reparsed->snapshot();
+        ASSERT_TRUE(restored) << lfs::format_for_developer(restored.error());
+        EXPECT_EQ(restored->mcmc_current.eval_mask, missing);
+    }
+
+    // Catches a project saved by another version becoming unreadable because one stored value is
+    // outside what this version accepts, here an automatic learning rate stored as -1.
+    TEST(ProjectChapterTest, PresetFromAnotherVersionKeepsAcceptedValuesAndDefaultsTheRest) {
+        auto snapshot = parameter_snapshot();
+        snapshot.mrnf_session.iterations = 12345;
+        ParametersChapter chapter;
+        ASSERT_TRUE(chapter.set_snapshot(snapshot));
+        ASSERT_TRUE(chapter.dom().set_json("presets.mrnf.session.shs_lr", -1.0));
+        ASSERT_TRUE(chapter.dom().set_json("presets.mrnf.session.grow_fraction", -1.0));
+        ASSERT_TRUE(chapter.dom().set_json("presets.mrnf.session.late_lr_anneal", 0.3));
+
+        auto reparsed = ParametersChapter::from_bytes(chapter.to_bytes());
+        ASSERT_TRUE(reparsed) << lfs::format_for_developer(reparsed.error());
+        const auto restored = reparsed->snapshot();
+        ASSERT_TRUE(restored) << lfs::format_for_developer(restored.error());
+        const auto defaults = lfs::core::param::OptimizationParameters::mrnf_defaults();
+        EXPECT_EQ(restored->mrnf_session.iterations, 12345u);
+        EXPECT_FLOAT_EQ(restored->mrnf_session.shs_lr, defaults.shs_lr);
+        EXPECT_FLOAT_EQ(restored->mrnf_session.grow_fraction, defaults.grow_fraction);
+    }
+
     TEST(ProjectChapterTest, PathReferenceMintAndResolveRoundTrip) {
         TemporaryDirectory temporary;
         const fs::path project_root = temporary.path / "project";
@@ -554,6 +595,39 @@ namespace {
             EXPECT_EQ(row.locator.base, LocatorBase::Project);
             EXPECT_FALSE(row.unresolved);
         }
+    }
+
+    TEST(ProjectChapterTest, SiblingDatasetReferenceSurvivesProjectFolderMove) {
+        TemporaryDirectory temporary;
+        const fs::path origin = temporary.path / "origin";
+        const fs::path project_root = origin / "saved";
+        const fs::path dataset = origin / "dataset";
+        fs::create_directories(project_root);
+        fs::create_directories(dataset / "images");
+        {
+            std::ofstream image(dataset / "images" / "frame.bin", std::ios::binary);
+            image << "image-bytes";
+        }
+
+        ReferencesChapter references;
+        auto dataset_uuid = upsert_path_reference(
+            references, project_root, dataset, "dataset", "dataset");
+        ASSERT_TRUE(dataset_uuid)
+            << lfs::format_for_developer(dataset_uuid.error());
+
+        auto rows = references.records();
+        ASSERT_TRUE(rows);
+        ASSERT_EQ(rows->size(), 1u);
+        EXPECT_EQ(rows->front().locator.base, LocatorBase::Project);
+        EXPECT_EQ(rows->front().locator.preferred, "../dataset");
+
+        const fs::path relocated = temporary.path / "relocated";
+        fs::rename(origin, relocated);
+        const auto resolved = resolve_path_reference(
+            references, relocated / "saved", *dataset_uuid);
+        ASSERT_TRUE(resolved);
+        EXPECT_EQ(resolved->lexically_normal(),
+                  (relocated / "dataset").lexically_normal());
     }
 
     TEST(ProjectChapterTest, SceneGraphBatchedUpsertRetainsUnknownNodeMembers) {

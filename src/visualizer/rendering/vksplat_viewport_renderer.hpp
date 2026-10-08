@@ -45,6 +45,7 @@ namespace lfs::vis {
 
     class VksplatViewportRenderer {
         friend struct VksplatScratchReleaseTestAccess;
+        friend struct SplitOutputLifetimeTestAccess;
 
     public:
         struct RenderResult {
@@ -288,6 +289,7 @@ namespace lfs::vis {
 
         void releasePreviewResources();
         void releaseSplitOutputResources();
+        void retainPublishedSplitImages(VkImageView left, VkImageView right);
         void releaseSceneResources();
         void reset();
         [[nodiscard]] std::optional<LodPageCache::Snapshot> ensureLodPageCacheSnapshot(
@@ -424,9 +426,10 @@ namespace lfs::vis {
             std::size_t cached_transform_indices_bytes = 0;
             bool transform_indices_uploaded = false;
             std::vector<std::uint8_t> node_mask_upload_cpu;
-            // Fingerprint of emphasized_node_mask currently staged in the
-            // interop buffer.
+            // Fingerprint of the emphasized and culling visibility masks currently
+            // staged in the interop buffer.
             std::vector<bool> cached_emphasized_node_mask;
+            std::vector<bool> cached_culling_node_mask;
             OutputSlot cached_node_mask_output_slot = OutputSlot::Main;
             bool node_mask_uploaded = false;
             std::vector<float> overlay_params_upload_cpu;
@@ -676,6 +679,11 @@ namespace lfs::vis {
         static constexpr std::size_t kFrameRingSize = OutputSlotRing::kFrameRingSize;
         OutputSlotRing ring_{};
         OutputImagePool output_pool_{};
+        struct PublishedOutput {
+            VkImageView view = VK_NULL_HANDLE;
+            std::uint64_t serial = 0;
+        };
+        std::array<PublishedOutput, 2> published_split_outputs_{};
         // Vulkan-only completion counter for queue-to-queue dependencies. Keep
         // this separate from the externally shared CUDA payload below so Vulkan
         // readbacks never depend on external-payload tracking semantics.

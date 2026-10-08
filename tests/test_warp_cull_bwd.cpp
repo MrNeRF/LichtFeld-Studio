@@ -15,6 +15,7 @@
 #include <cuda_runtime.h>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -188,6 +189,48 @@ protected:
     std::unique_ptr<Camera> camera_;
     Tensor bg_;
 };
+
+TEST_F(WarpCullBwdTest, NonFinitePrimitiveIsCulledBeforeProjection) {
+    auto splat = make_synthetic_splat(1);
+    auto scaling = splat->scaling_raw().cpu();
+    scaling.ptr<float>()[0] = std::numeric_limits<float>::quiet_NaN();
+    splat->scaling_raw().copy_(scaling.to(Device::CUDA));
+
+    auto result = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);
+    ASSERT_TRUE(result.has_value()) << lfs::format_for_developer(result.error());
+    EXPECT_EQ(result->second.forward_ctx.n_instances, 0);
+    result->second.release_forward_context();
+    EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+}
+
+TEST_F(WarpCullBwdTest, FusedAdamHingeDoesNotGrowSecondMoment) {
+    auto splat = make_synthetic_splat(1);
+    splat->_max_screen_share = Tensor::full({size_t{1}}, 0.5f, Device::CUDA);
+    AdamConfig cfg;
+    cfg.lr = 1e-2f;
+    cfg.beta1 = 0.9;
+    cfg.beta2 = 0.999;
+    cfg.eps = 0.01;
+    AdamOptimizer opt(*splat, cfg);
+    opt.allocate_gradients();
+    opt.zero_grad(0);
+    opt.set_screen_share_cap(splat->_max_screen_share.ptr<float>(), 1, 0.1f, 1.0f);
+
+    auto forward = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);
+    ASSERT_TRUE(forward.has_value()) << lfs::format_for_developer(forward.error());
+    ASSERT_GT(forward->second.forward_ctx.n_instances, 0);
+    const float before = splat->scaling_raw().cpu().ptr<float>()[0];
+    auto zero_grad = Tensor::zeros_like(forward->first.image);
+    fast_rasterize_backward(forward->second, zero_grad, *splat, opt, {}, {},
+                            DensificationType::None, 1);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const float after = splat->scaling_raw().cpu().ptr<float>()[0];
+
+    const float expected_step = static_cast<float>(opt.get_param_lr(ParamType::Scaling)) *
+                                std::log2(0.5f / 0.1f);
+    EXPECT_NEAR(before - after, expected_step, expected_step * 0.12f);
+    forward->second.release_forward_context();
+}
 
 // ---------------------------------------------------------------------------
 // Sync-count: reverse-walk body must have zero block fences.

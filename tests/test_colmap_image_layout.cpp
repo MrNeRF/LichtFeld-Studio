@@ -382,6 +382,46 @@ TEST_F(ColmapImageLayoutTest, FiltersTextPointCloudByMinimumTrackLength) {
     EXPECT_EQ(result->value.point_cloud.size(), 1u);
 }
 
+// Catches a wrong parallax limit or ray centre, resolved points that move, a far point clamped off its ray, depths
+// along the baseline (no resolvable parallax) treated as resolvable, and viewer imports without camera views that
+// clamp. Two cameras 1 apart with a 100 px focal resolve 0.25 px of parallax straight ahead out to 400.
+TEST_F(ColmapImageLayoutTest, PullsUnresolvedPointDepthsToTheirTracksParallaxLimit) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required for COLMAP point cloud load";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "far_points";
+    write_text_file(dataset_dir / "cameras.txt", "1 PINHOLE 100 100 100 100 50 50\n");
+    write_text_file(dataset_dir / "images.txt",
+                    "1 1 0 0 0 0 0 0 1 a.png\n\n"
+                    "2 1 0 0 0 -1 0 0 1 b.png\n\n");
+    write_png(dataset_dir / "images" / "a.png");
+    write_png(dataset_dir / "images" / "b.png");
+    write_text_file(dataset_dir / "points3D.txt",
+                    "1 0.5 0 10 255 0 0 0.1 1 0 2 0\n"
+                    "2 0.5 0 4000 0 255 0 0.1 1 1 2 1\n"
+                    "3 1000 0 0 0 0 255 0.1 1 2 2 2\n");
+
+    lfs::io::ColmapPointCloudRecords records;
+    const auto cameras = lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {}, &records);
+    ASSERT_TRUE(cameras.has_value()) << cameras.error().format();
+    const auto clamped = lfs::io::read_colmap_point_cloud_text(dataset_dir, {}, &records);
+    ASSERT_TRUE(clamped.has_value()) << clamped.error().format();
+    const auto unclamped = lfs::io::read_colmap_point_cloud_text(dataset_dir);
+    ASSERT_TRUE(unclamped.has_value()) << unclamped.error().format();
+
+    const auto positions = clamped->value.means.cpu();
+    const auto original = unclamped->value.means.cpu();
+    ASSERT_EQ(positions.shape()[0], 3u);
+    const float* p = positions.ptr<float>();
+    const float* o = original.ptr<float>();
+    const float expected[9] = {0.5f, 0.0f, 10.0f, 0.5f, 0.0f, 400.0f, 1000.0f, 0.0f, 0.0f};
+    for (int i = 0; i < 9; ++i) {
+        EXPECT_NEAR(p[i], expected[i], 1e-3f) << "coordinate " << i;
+    }
+    EXPECT_FLOAT_EQ(o[5], 4000.0f);
+}
+
 TEST_F(ColmapImageLayoutTest, ResolvesDepthMapsByImageName) {
     const fs::path dataset_dir = temp_dir_ / "dataset";
     const fs::path image_path = dataset_dir / "images" / "frame_0000.png";
@@ -1093,6 +1133,43 @@ TEST_F(ColmapImageLayoutTest, WriteBackAppliesSceneTransformsToTextSparseModel) 
     EXPECT_EQ(track_point_idx, 0u);
 }
 
+TEST_F(ColmapImageLayoutTest, WriteBackAcceptsTrackObservingOneImageTwice) {
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+    const fs::path output_dir = temp_dir_ / "out_sparse";
+
+    write_text_file(dataset_dir / "cameras.txt",
+                    "1 PINHOLE 640 480 500 500 320 240\n");
+    write_text_file(dataset_dir / "images.txt",
+                    "1 1 0 0 0 0 0 0 1 frame_0001.png\n"
+                    "12 34 7 56 78 7\n");
+    write_text_file(dataset_dir / "points3D.txt",
+                    "7 10 20 30 1 2 3 0.25 1 0 1 1\n");
+
+    auto cameras_result = lfs::io::read_colmap_cameras_only(dataset_dir);
+    ASSERT_TRUE(cameras_result.has_value()) << cameras_result.error().format();
+    auto [cameras, scene_center] = std::move(*cameras_result);
+    (void)scene_center;
+    ASSERT_EQ(cameras.size(), 1u);
+
+    lfs::io::PointCloud point_cloud(
+        lfs::io::Tensor::from_vector({10.0f, 20.0f, 30.0f}, {1, 3}, lfs::io::Device::CPU),
+        lfs::io::Tensor::from_vector({1.0f / 255.0f, 2.0f / 255.0f, 3.0f / 255.0f}, {1, 3}, lfs::io::Device::CPU));
+    const std::vector<lfs::io::ColmapCameraWriteData> camera_data{
+        lfs::io::ColmapCameraWriteData{.camera = cameras[0], .data_world_transform = glm::mat4(1.0f)},
+    };
+
+    for (const auto format : {lfs::io::ColmapWriteFormat::Text, lfs::io::ColmapWriteFormat::Binary}) {
+        const auto write_result = lfs::io::write_colmap_reconstruction(
+            dataset_dir, output_dir, camera_data, &point_cloud, glm::mat4(1.0f),
+            lfs::io::ColmapWriteOptions{.format = format});
+        ASSERT_TRUE(write_result.has_value()) << write_result.error().format();
+    }
+
+    const auto points = lfs::io::read_colmap_point_cloud(output_dir);
+    ASSERT_TRUE(points.has_value()) << points.error().format();
+    EXPECT_EQ(points->value.size(), 1);
+}
+
 TEST_F(ColmapImageLayoutTest, WriteBackRemovesStaleOppositeFormatSparseFiles) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA device required for Camera-backed COLMAP write-back";
@@ -1326,4 +1403,52 @@ TEST(SidecarResampling, InvalidDepthAndNormalVectorsStayZero) {
     EXPECT_FLOAT_EQ(resized[0], 1.0f);
     EXPECT_FLOAT_EQ(resized[1], 0.0f);
     EXPECT_FLOAT_EQ(resized[2], -1.0f);
+}
+
+namespace {
+    class ScopedCurrentPath {
+    public:
+        explicit ScopedCurrentPath(const fs::path& path) : previous_(fs::current_path()) { fs::current_path(path); }
+        ~ScopedCurrentPath() {
+            std::error_code ec;
+            fs::current_path(previous_, ec);
+        }
+        ScopedCurrentPath(const ScopedCurrentPath&) = delete;
+        ScopedCurrentPath& operator=(const ScopedCurrentPath&) = delete;
+
+    private:
+        fs::path previous_;
+    };
+} // namespace
+
+TEST_F(ColmapImageLayoutTest, ResolvesImagesFolderNextToDatasetFromWorkingDirectory) {
+    // The parent directory name carries an "_2" that must not be read as an images_N scale.
+    const fs::path shot_dir = temp_dir_ / "take_2";
+    write_text_file(shot_dir / "colmap" / "sparse" / "0" / "cameras.txt", "1 PINHOLE 2 2 2 2 1 1\n");
+    write_text_file(shot_dir / "colmap" / "sparse" / "0" / "images.txt", "1 1 0 0 0 0 0 0 1 sub/frame_0001.png\n");
+    const fs::path image_path = shot_dir / "im01" / "sub" / "frame_0001.png";
+    fs::create_directories(image_path.parent_path());
+    const std::vector<unsigned char> pixels(2 * 2 * 3, 128);
+    ASSERT_TRUE(lfs::core::save_png(image_path, pixels.data(), 2, 2, 3, 8, 6));
+
+    const ScopedCurrentPath cwd(shot_dir);
+    lfs::io::ColmapLoader loader;
+    auto result = loader.load("colmap", {.images_folder = "im01"});
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+
+    const auto& cameras = std::get<lfs::io::LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 1u);
+    EXPECT_TRUE(fs::equivalent(cameras[0]->image_path(), image_path));
+    EXPECT_FLOAT_EQ(cameras[0]->focal_x(), 2.0f);
+}
+
+TEST_F(ColmapImageLayoutTest, MissingImagesFolderNamesBothSearchedLocations) {
+    write_minimal_colmap_text_dataset(temp_dir_ / "colmap" / "sparse" / "0", "frame_0001.png");
+
+    const ScopedCurrentPath cwd(temp_dir_);
+    lfs::io::ColmapLoader loader;
+    auto result = loader.load("colmap", {.images_folder = "im01"});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, lfs::io::ErrorCode::MISSING_REQUIRED_FILES);
+    EXPECT_NE(result.error().message.find("dataset or the working directory"), std::string::npos);
 }

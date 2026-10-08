@@ -1768,11 +1768,6 @@ class AssetIndex:
                     return False
                 self._cleanup_obsolete_storage()
                 _log.info("Migrated Asset Manager catalog to schema v%d", SCHEMA_VERSION)
-            _log.info(
-                "Loaded Asset Manager library with %d folders and %d projects",
-                len(self._folders),
-                len(self._projects),
-            )
             self._touch_catalog()
             return True
         except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
@@ -2239,7 +2234,9 @@ class AssetIndex:
         self._restore_state(previous_state)
         return False
 
-    def verify_projects_batch(self, asset_ids: List[str]) -> int:
+    def verify_projects_batch(
+        self, asset_ids: List[str], *, cancel_event: Optional[threading.Event] = None
+    ) -> int:
         with self._lock:
             work = []
             for asset_id in dict.fromkeys(asset_ids):
@@ -2255,6 +2252,8 @@ class AssetIndex:
                     )
         results = []
         for asset_id, path, expected_uuid, path_identity in work:
+            if cancel_event is not None and cancel_event.is_set():
+                break
             results.append(
                 (
                     asset_id,
@@ -2410,8 +2409,10 @@ class LibraryService:
     def list_projects(self) -> List[Project]:
         return self._call("list_projects")
 
-    def verify_projects_batch(self, asset_ids: List[str]) -> int:
-        return self._call("verify_projects_batch", asset_ids)
+    def verify_projects_batch(
+        self, asset_ids: List[str], *, cancel_event: Optional[threading.Event] = None
+    ) -> int:
+        return self._call("verify_projects_batch", asset_ids, cancel_event=cancel_event)
 
     def relink(self, *args: Any, **kwargs: Any) -> Any:
         return self._call("relink_asset", *args, **kwargs)

@@ -5,7 +5,6 @@ class MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test
 class MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
 class MRNFStrategyTest_SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth_Test;
 class MRNFStrategyTest_GrowAndSplitUsesIgsPlusSplitRule_Test;
-class MRNFStrategyTest_GrowAndSplitOversizeChannelPrefersOversizedError_Test;
 class MRNFStrategyTest_GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks_Test;
 class MRNFStrategyTest_DeletedMaskCapacityGrowthPreservesExistingRows_Test;
 class MRNFStrategyTest_GrowAndSplitReplacementSkipsZeroWeightCandidates_Test;
@@ -17,13 +16,9 @@ class MRNFStrategyTest_SetOptimizationParamsRecomputesDecayFromCurrentState_Test
 class MRNFStrategyTest_DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate_Test;
 class MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
 class CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_Test;
-class MRNFStrategyTest_FarDecayScaleAppliesOnlyToFarUnfrozenRows_Test;
+class MRNFStrategyTest_ApplyDecaySkipsFrozenRows_Test;
 class MRNFStrategyTest_DensificationInfoShapeIsTwoRows_Test;
 class MRNFStrategyTest_ZeroVisibilityProducesNoGrowth_Test;
-class MRNFStrategyTest_CadenceScaledMatchesRefineEvery_Test;
-class MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
-class MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
-class MRNFStrategyTest_ExploreStarvationWeights_Test;
 class MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
 class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
 
@@ -32,11 +27,13 @@ class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Te
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
+#include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
 #include "io/formats/ply.hpp"
+#include "io/project_document.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/mean_step_scale.cuh"
@@ -44,6 +41,7 @@ class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Te
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/checkpoint.hpp"
 #include "training/dataset.hpp"
+#include "training/kernels/densification_kernels.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 #include "training/optimizer/render_output.hpp"
 #include "training/strategies/mrnf.hpp"
@@ -52,6 +50,7 @@ class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Te
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cuda_runtime.h>
 #include <filesystem>
@@ -64,40 +63,6 @@ class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Te
 
 using namespace lfs::core;
 using namespace lfs::training;
-
-TEST(MRNFStrategyTest, PruneBoundsOrMatchesTensorChain) {
-    constexpr size_t n = 513;
-    std::vector<float> means_values(n * 3);
-    std::vector<float> scale_values(n);
-    for (size_t i = 0; i < n; ++i) {
-        means_values[3 * i] = static_cast<float>(static_cast<int>(i % 13) - 6);
-        means_values[3 * i + 1] = static_cast<float>(static_cast<int>(i % 7) - 3);
-        means_values[3 * i + 2] = static_cast<float>(static_cast<int>(i % 5) - 2);
-        scale_values[i] = static_cast<float>(static_cast<int>(i % 11) - 5) * 0.4f;
-    }
-    means_values[3] = std::numeric_limits<float>::quiet_NaN();
-    means_values[4] = 100.0f;
-    means_values[6] = std::numeric_limits<float>::infinity();
-    scale_values[7] = std::numeric_limits<float>::quiet_NaN();
-
-    const auto means = Tensor::from_vector(means_values, TensorShape({n, 3}), Device::CUDA);
-    const auto scale_max = Tensor::from_vector(scale_values, TensorShape({n}), Device::CUDA);
-    const auto initial = scale_max < -1.0f;
-    auto actual = initial.clone();
-    constexpr float center_values[3] = {0.25f, -0.5f, 0.75f};
-    const auto center = Tensor::from_vector(
-        std::vector<float>{center_values[0], center_values[1], center_values[2]},
-        TensorShape({1, 3}), Device::CUDA);
-    const auto expected = initial | (scale_max > 1.25f) |
-                          ((means - center).abs().max(1) > 3.5f);
-
-    mrnf_strategy::launch_prune_bounds_or(
-        means.ptr<float>(), scale_max.ptr<float>(), actual.ptr<bool>(),
-        n, center_values, 3.5f, 1.25f);
-    const auto actual_host = actual.cpu();
-    const auto expected_host = expected.cpu();
-    EXPECT_EQ(std::memcmp(actual_host.ptr<bool>(), expected_host.ptr<bool>(), n * sizeof(bool)), 0);
-}
 
 TEST(MRNFStrategyTest, ReplaceParentWeightsMatchesTensorProducts) {
     constexpr size_t n = 513;
@@ -166,72 +131,6 @@ namespace {
         return best;
     }
 } // namespace
-
-TEST(MRNFStrategyTest, RefinePredicatesAndIndicesMatchTensorReferenceOnRealScene) {
-    const auto scene = largest_scene_ply();
-    if (scene.empty())
-        GTEST_SKIP() << "no splat model in " << TEST_DATA_DIR;
-    const auto loaded = lfs::io::load_ply(scene);
-    ASSERT_TRUE(loaded.has_value()) << lfs::format_for_developer(loaded.error());
-    const SplatData& splat = loaded->value;
-    const size_t n = static_cast<size_t>(splat.size());
-    ASSERT_GT(n, 100000u);
-    const auto means = splat.means();
-    const auto scale_max = splat.scaling_raw().max(1);
-    const auto initial = splat.opacity_raw().squeeze(-1) < -2.0f;
-    const auto center_host = means.slice(0, 0, 1).contiguous().cpu();
-    const float center_values[3] = {center_host.ptr<float>()[0], center_host.ptr<float>()[1],
-                                    center_host.ptr<float>()[2]};
-    const auto center = Tensor::from_vector(
-        std::vector<float>{center_values[0], center_values[1], center_values[2]},
-        TensorShape({1, 3}), Device::CUDA);
-    auto opacities = splat.get_opacity().squeeze(-1);
-    const auto visibility = (scale_max > -10.0f).to(DataType::Float32);
-    const auto active = means.slice(1, 0, 1).squeeze(-1) > center_values[0];
-    const auto trainable = means.slice(1, 1, 2).squeeze(-1) > center_values[1];
-    const auto edge = scale_max.abs() + 0.25f;
-
-    for (const float max_allowed : {1.0f, 5.0f, 20.0f, 100.0f}) {
-        const float log_max_allowed = std::log(max_allowed);
-        auto actual_mask = initial.clone();
-        const auto reference_mask = initial | (scale_max > log_max_allowed) |
-                                    ((means - center).abs().max(1) > max_allowed);
-        mrnf_strategy::launch_prune_bounds_or(
-            means.ptr<float>(), scale_max.ptr<float>(), actual_mask.ptr<bool>(),
-            n, center_values, max_allowed, log_max_allowed);
-        const auto actual_mask_host = actual_mask.cpu();
-        const auto reference_mask_host = reference_mask.cpu();
-        EXPECT_EQ(std::memcmp(actual_mask_host.ptr<bool>(), reference_mask_host.ptr<bool>(), n), 0);
-
-        const size_t count = actual_mask.count_nonzero();
-        const auto reference_indices = actual_mask.nonzero().squeeze(-1);
-        auto indices = Tensor::empty({count}, Device::CUDA, DataType::Int64);
-        indices.set_stream(actual_mask.stream());
-        const size_t actual_count = tensor_ops::launch_nonzero_bool(
-            actual_mask.ptr<unsigned char>(), indices.ptr<int64_t>(), n, count,
-            actual_mask.stream());
-        ASSERT_EQ(actual_count, count);
-        ASSERT_EQ(reference_indices.numel(), count);
-        if (count) {
-            const auto indices_host = indices.cpu();
-            const auto reference_host = reference_indices.cpu();
-            EXPECT_EQ(std::memcmp(indices_host.ptr<int64_t>(), reference_host.ptr<int64_t>(),
-                                  count * sizeof(int64_t)),
-                      0);
-        }
-
-        const auto expected_weights = opacities * (visibility > 0.0f) * active * trainable * edge;
-        auto actual_weights = Tensor::empty({n}, Device::CUDA);
-        mrnf_strategy::launch_replace_parent_weights(
-            opacities.ptr<float>(), visibility.ptr<float>(), active.ptr<bool>(),
-            trainable.ptr<bool>(), edge.ptr<float>(), actual_weights.ptr<float>(), n);
-        const auto actual_weights_host = actual_weights.cpu();
-        const auto expected_weights_host = expected_weights.cpu();
-        EXPECT_EQ(std::memcmp(actual_weights_host.ptr<float>(), expected_weights_host.ptr<float>(),
-                              n * sizeof(float)),
-                  0);
-    }
-}
 
 TEST(MRNFStrategyTest, ShNBatchArenaMatchesCatFallbackOnRealScene) {
     struct QuantReset {
@@ -333,16 +232,10 @@ namespace {
         return SplatData(sh_degree, means, sh0, shN, scaling, rotation, opacity, 1.0f);
     }
 
-    void disable_default_far_field(param::OptimizationParameters& p) {
-        p.background_improvements = false;
-    }
-
     param::OptimizationParameters vanilla_mrnf_params() {
         auto p = param::OptimizationParameters::mrnf_defaults();
-        disable_default_far_field(p);
-        p.fill_pacing_iter = 0;
-        p.far_seed_dose = 0;
-        p.growth_ratio_rank = false;
+        p.opacity_decay_rendered_only = false;
+        p.densify_structure_weight = 0.0f;
         return p;
     }
 
@@ -491,7 +384,6 @@ TEST(MRNFStrategyTest, EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores) {
     MRNF strategy(splat_data);
 
     param::OptimizationParameters opt_params;
-    disable_default_far_field(opt_params);
     opt_params.iterations = 10'000;
     opt_params.refine_every = 100;
     opt_params.sh_degree_interval = 10'000;
@@ -583,7 +475,7 @@ TEST(CropDampingStrategyTest, MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale)
     opt_params.growth_grad_threshold = 0.5f;
     strategy.initialize(opt_params);
     strategy._refine_weight_max = Tensor::ones({10}, Device::CUDA);
-    strategy._vis_count = Tensor::ones({10}, Device::CUDA);
+    strategy.visibility_accumulator().fill_(1.0f);
 
     auto crop_mask = Tensor::zeros_bool({10}, Device::CPU);
     crop_mask.ptr<unsigned char>()[0] = 1;
@@ -658,8 +550,35 @@ TEST(MRNFStrategyTest, RefinementPreservesThinSurfacesAndPrunesCollapsedSplats) 
     const auto deleted_cpu = splat_data.deleted().cpu();
     const bool* deleted = deleted_cpu.ptr<bool>();
     for (size_t i = 0; i < 8; ++i) {
-        EXPECT_EQ(deleted[i], i >= 3 && i <= 6) << "splat " << i;
+        EXPECT_EQ(deleted[i], i >= 3 && i <= 5) << "splat " << i;
     }
+}
+
+TEST(MRNFStrategyTest, DistantBackgroundSurvivesRefinement) {
+    auto splat_data = create_mrnf_test_splat_data(8);
+    MRNF strategy(splat_data);
+    auto opt_params = vanilla_mrnf_params();
+    opt_params.iterations = 1'000;
+    opt_params.start_refine = 0;
+    opt_params.stop_refine = 900;
+    opt_params.refine_every = 10;
+    opt_params.grow_until_iter = 0;
+    opt_params.grow_fraction = 0.0f;
+    opt_params.max_cap = 32;
+    strategy.initialize(opt_params);
+
+    // Bounds for the initial scene are intentionally far behind this row.
+    splat_data.means().slice(0, 0, 1).copy_(Tensor::from_vector(
+        std::vector<float>{1.0e6f, 1.0e6f, 1.0e6f}, TensorShape({1, 3}), Device::CUDA));
+    splat_data._densification_info.zero_();
+
+    RenderOutput render_output;
+    strategy.post_backward(10, render_output);
+
+    ASSERT_EQ(splat_data.size(), 8u);
+    ASSERT_TRUE(splat_data.deleted().is_valid());
+    const auto deleted_cpu = splat_data.deleted().cpu();
+    EXPECT_FALSE(deleted_cpu.ptr<bool>()[0]);
 }
 
 TEST(MRNFStrategyTest, LineBoundsUseFiniteSceneScaleForMeanLearningRate) {
@@ -816,11 +735,12 @@ TEST(MRNFStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
     optimizer.get_grad(ParamType::Means).fill_(7.0f);
 
     strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    auto visibility = strategy.visibility_accumulator();
+    visibility.zero_();
 
     const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
     strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
-    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+    visibility.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
 
     const size_t initial_size = splat_data.size();
     strategy.grow_and_split(1, 0);
@@ -883,11 +803,12 @@ TEST(MRNFStrategyTest, SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth) {
     });
 
     strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    auto visibility = strategy.visibility_accumulator();
+    visibility.zero_();
 
     const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
     strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
-    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+    visibility.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
 
     const size_t initial_size = splat_data.size();
     strategy.grow_and_split(1, 0);
@@ -987,7 +908,6 @@ TEST(MRNFStrategyTest, DirectAuxiliaryGrowthPreservesPrefix) {
     MRNF strategy(splat_data);
     auto params = vanilla_mrnf_params();
     params.max_cap = 0;
-    params.growth_ratio_rank = true;
     strategy.initialize(params);
 
     // Model the post-SfM state immediately before a reservation boundary:
@@ -1000,9 +920,6 @@ TEST(MRNFStrategyTest, DirectAuxiliaryGrowthPreservesPrefix) {
         return tensor;
     };
     strategy._refine_weight_max = direct_float(sfm_points, 1.25f);
-    strategy._vis_count = direct_float(sfm_points, 2.5f);
-    strategy._refine_ratio_max = direct_float(sfm_points, 3.75f);
-    strategy._explore_score_sum = direct_float(sfm_points, 5.0f);
 
     EXPECT_TRUE(strategy.get_optimizer().preflight_grow_capacity(grown_points - sfm_points));
     EXPECT_NO_THROW(strategy.ensure_auxiliary_capacity_for_growth(grown_points));
@@ -1013,9 +930,6 @@ TEST(MRNFStrategyTest, DirectAuxiliaryGrowthPreservesPrefix) {
     };
     expect_grown(strategy._free_mask);
     expect_grown(strategy._refine_weight_max);
-    expect_grown(strategy._vis_count);
-    expect_grown(strategy._refine_ratio_max);
-    expect_grown(strategy._explore_score_sum);
 
     const auto expect_prefix = [sfm_points](const Tensor& tensor, const float expected) {
         const auto prefix = tensor.slice(0, 0, sfm_points).cpu();
@@ -1025,9 +939,6 @@ TEST(MRNFStrategyTest, DirectAuxiliaryGrowthPreservesPrefix) {
         }
     };
     expect_prefix(strategy._refine_weight_max, 1.25f);
-    expect_prefix(strategy._vis_count, 2.5f);
-    expect_prefix(strategy._refine_ratio_max, 3.75f);
-    expect_prefix(strategy._explore_score_sum, 5.0f);
 }
 
 TEST(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {
@@ -1044,11 +955,12 @@ TEST(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {
     strategy.initialize(opt_params);
 
     strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    auto visibility = strategy.visibility_accumulator();
+    visibility.zero_();
 
     const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
     strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
-    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+    visibility.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
 
     const size_t initial_size = splat_data.size();
     strategy.grow_and_split(1, 0);
@@ -1085,71 +997,6 @@ TEST(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {
     EXPECT_NEAR(opacities_ptr[initial_size], std::log(0.3f / 0.7f), 1e-5f);
 }
 
-TEST(MRNFStrategyTest, GrowAndSplitOversizeChannelPrefersOversizedError) {
-    auto splat_data = create_mrnf_test_splat_data();
-    MRNF strategy(splat_data);
-
-    auto opt_params = vanilla_mrnf_params();
-    opt_params.iterations = 10'000;
-    opt_params.sh_degree_interval = 10'000;
-    opt_params.max_cap = 32;
-    opt_params.growth_grad_threshold = 0.5f;
-    opt_params.grow_fraction = 0.5f;
-    opt_params.grow_until_iter = 10'000;
-    opt_params.max_screen_share = 0.3f;
-    opt_params.oversize_split_fraction = 1.0f;
-    strategy.initialize(opt_params);
-
-    const size_t n = static_cast<size_t>(splat_data.size());
-    strategy._refine_weight_max = Tensor::zeros({n}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({n}, Device::CUDA);
-
-    const auto idx0 = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
-    const auto idx1 = Tensor::from_vector(std::vector<int>{1}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
-    strategy._refine_weight_max.index_put_(idx0, Tensor::full({1}, 1.0f, Device::CUDA));
-    strategy._refine_weight_max.index_put_(idx1, Tensor::full({1}, 10.0f, Device::CUDA));
-    strategy._vis_count.index_put_(idx0, Tensor::full({1}, 1.0f, Device::CUDA));
-    strategy._vis_count.index_put_(idx1, Tensor::full({1}, 1.0f, Device::CUDA));
-
-    ASSERT_TRUE(splat_data._max_screen_share.is_valid());
-    auto share_cpu = Tensor::zeros({n}, Device::CPU);
-    share_cpu.ptr<float>()[0] = 0.9f;
-    share_cpu.ptr<float>()[1] = 0.05f;
-    splat_data._max_screen_share = share_cpu.cuda();
-
-    const auto means_before = splat_data.means().cpu();
-    const float* mb = means_before.ptr<float>();
-    const float splat1_x = mb[3];
-
-    const size_t initial_size = splat_data.size();
-    strategy.grow_and_split(1, 0);
-
-    ASSERT_EQ(splat_data.size(), initial_size + 1);
-
-    const auto means_cpu = splat_data.means().cpu();
-    const auto scales_cpu = splat_data.scaling_raw().cpu();
-    const auto opacities_cpu = splat_data.opacity_raw().cpu();
-    const float* means_ptr = means_cpu.ptr<float>();
-    const float* scales_ptr = scales_cpu.ptr<float>();
-    const float* opacities_ptr = opacities_cpu.ptr<float>();
-
-    EXPECT_NEAR(means_ptr[0], 0.5f, 1e-5f);
-    EXPECT_NEAR(means_ptr[1], 0.0f, 1e-5f);
-    EXPECT_NEAR(means_ptr[2], 0.0f, 1e-5f);
-    EXPECT_NEAR(means_ptr[3], splat1_x, 1e-5f);
-
-    const size_t child_base = initial_size * 3;
-    EXPECT_NEAR(means_ptr[child_base + 0], -0.5f, 1e-5f);
-    EXPECT_NEAR(means_ptr[child_base + 1], 0.0f, 1e-5f);
-    EXPECT_NEAR(means_ptr[child_base + 2], 0.0f, 1e-5f);
-
-    EXPECT_NEAR(scales_ptr[0], std::log(0.5f), 1e-5f);
-    EXPECT_NEAR(scales_ptr[1], std::log(0.85f), 1e-5f);
-    EXPECT_NEAR(scales_ptr[2], std::log(0.85f), 1e-5f);
-    EXPECT_NEAR(opacities_ptr[0], std::log(0.3f / 0.7f), 1e-5f);
-    EXPECT_NEAR(opacities_ptr[initial_size], std::log(0.3f / 0.7f), 1e-5f);
-}
-
 TEST(MRNFStrategyTest, StepScalingDoesNotScaleSparsifySteps) {
     auto params = vanilla_mrnf_params();
     params.grow_until_iter = 15000;
@@ -1160,7 +1007,7 @@ TEST(MRNFStrategyTest, StepScalingDoesNotScaleSparsifySteps) {
 
     EXPECT_EQ(params.grow_until_iter, 7500u);
     EXPECT_EQ(params.sparsify_steps, 15000);
-    EXPECT_EQ(params.refine_every, 100u);
+    EXPECT_EQ(params.refine_every, 82u);
     EXPECT_EQ(params.stop_refine, 14250u);
 }
 
@@ -1195,11 +1042,12 @@ TEST(MRNFStrategyTest, GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks) {
     strategy.initialize(opt_params);
 
     strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    auto visibility = strategy.visibility_accumulator();
+    visibility.zero_();
 
     const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
     strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
-    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+    visibility.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
 
     const size_t initial_size = splat_data.size();
     ASSERT_NO_THROW(strategy.grow_and_split(1, 0));
@@ -1232,12 +1080,13 @@ TEST(MRNFStrategyTest, DeletedMaskCapacityGrowthPreservesExistingRows) {
     splat_data.deleted().index_put_(deleted_index, Tensor::ones_bool({1}, Device::CUDA));
 
     strategy._refine_weight_max = Tensor::zeros({initial_size}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({initial_size}, Device::CUDA);
+    auto visibility = strategy.visibility_accumulator();
+    visibility.zero_();
     const auto split_index =
         Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA)
             .to(DataType::Int64);
     strategy._refine_weight_max.index_put_(split_index, Tensor::full({1}, 1.0f, Device::CUDA));
-    strategy._vis_count.index_put_(split_index, Tensor::full({1}, 1.0f, Device::CUDA));
+    visibility.index_put_(split_index, Tensor::full({1}, 1.0f, Device::CUDA));
 
     strategy.grow_and_split(1, 0);
 
@@ -1267,10 +1116,11 @@ TEST(MRNFStrategyTest, GrowAndSplitReplacementSkipsZeroWeightCandidates) {
     strategy._splat_data->deleted().index_put_(free_indices, true_vals);
 
     strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    auto visibility = strategy.visibility_accumulator();
+    visibility.zero_();
 
     const auto visible_parent = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
-    strategy._vis_count.index_put_(visible_parent, Tensor::full({1}, 1.0f, Device::CUDA));
+    visibility.index_put_(visible_parent, Tensor::full({1}, 1.0f, Device::CUDA));
 
     const size_t initial_size = splat_data.size();
     strategy.grow_and_split(10'001, 2);
@@ -1299,11 +1149,12 @@ TEST(MRNFStrategyTest, GrowAndSplitReusesFreeSlotsBeforeAppending) {
     strategy._splat_data->deleted().index_put_(free_indices, true_vals);
 
     strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    auto visibility = strategy.visibility_accumulator();
+    visibility.zero_();
 
     const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
     strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
-    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+    visibility.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
 
     const size_t initial_size = splat_data.size();
     strategy.grow_and_split(1, 0);
@@ -1400,7 +1251,7 @@ TEST(MRNFStrategyTest, DeserializeResizesTransientBuffersToLoadedModel) {
     restored.deserialize(ss);
 
     EXPECT_EQ(restored._refine_weight_max.numel(), 12u);
-    EXPECT_EQ(restored._vis_count.numel(), 12u);
+    EXPECT_EQ(restored.visibility_accumulator().numel(), 12u);
     ASSERT_TRUE(restored.get_model()._densification_info.is_valid());
     EXPECT_EQ(restored.get_model()._densification_info.shape()[1], 12u);
     EXPECT_FALSE(restored._edge_precompute_valid);
@@ -1446,16 +1297,6 @@ TEST(MRNFStrategyTest, SetOptimizationParamsRecomputesDecayFromCurrentState) {
 }
 
 namespace {
-    Camera make_explore_camera(int width, int height) {
-        std::vector<float> R_data = {1, 0, 0, 0, 1, 0, 0, 0, 1};
-        std::vector<float> T_data = {0, 0, 4};
-        auto R = Tensor::from_vector(R_data, TensorShape({3, 3}), Device::CPU).cuda();
-        auto T = Tensor::from_vector(T_data, TensorShape({3}), Device::CPU).cuda();
-        return Camera(R, T, 100.f, 100.f, width * 0.5f, height * 0.5f,
-                      Tensor(), Tensor(), CameraModelType::PINHOLE, "test", "",
-                      std::filesystem::path{}, width, height, 0);
-    }
-
     std::shared_ptr<Camera> make_hull_camera(float x, float y, float z, int uid) {
         std::vector<float> R_data = {1, 0, 0, 0, 1, 0, 0, 0, 1};
         std::vector<float> T_data = {-x, -y, -z};
@@ -1475,18 +1316,6 @@ namespace {
         return std::make_shared<CameraDataset>(std::move(cams), cfg, CameraDataset::Split::ALL);
     }
 
-    // Row past 8x-orbit census radius; still far for the 2x runtime mask.
-    void place_deep_far_probe_at(SplatData& splat_data, const int row) {
-        const int n = static_cast<int>(splat_data.size());
-        std::vector<float> means(static_cast<size_t>(n) * 3, 0.0f);
-        for (int i = 0; i < n; ++i) {
-            means[i * 3 + 0] = static_cast<float>(i);
-        }
-        means[row * 3 + 0] = 8.5f;
-        auto fixed = Tensor::from_vector(means, TensorShape({static_cast<size_t>(n), 3}), Device::CUDA);
-        splat_data.means().copy_(fixed);
-    }
-
     void place_deep_far_probe(SplatData& splat_data) {
         std::vector<float> means(8 * 3, 0.0f);
         for (int i = 0; i < 8; ++i) {
@@ -1500,194 +1329,9 @@ namespace {
     void install_test_camera_hull(MRNF& strategy) {
         strategy.set_training_dataset(make_hull_dataset());
     }
-
-    bool is_far_of_test_hull(float x, float y, float z) {
-        const float dist = std::sqrt(x * x + y * y + z * z);
-        return dist > 2.0f;
-    }
-
-    RenderOutput make_explore_render(Camera& camera, int width, int height, float target_value = 1.0f) {
-        RenderOutput out;
-        out.camera = &camera;
-        out.width = width;
-        out.height = height;
-        out.image = Tensor::zeros({3, static_cast<size_t>(height), static_cast<size_t>(width)}, Device::CUDA);
-        out.target_image = Tensor::full(
-            {3, static_cast<size_t>(height), static_cast<size_t>(width)}, target_value, Device::CUDA);
-        out.alpha = Tensor::full({1, static_cast<size_t>(height), static_cast<size_t>(width)}, 0.2f, Device::CUDA);
-        out.depth = Tensor::full({1, static_cast<size_t>(height), static_cast<size_t>(width)}, 2.0f, Device::CUDA);
-        return out;
-    }
-
 } // namespace
 
-TEST(MRNFStrategyTest, ExploreSplitsAreDisjointAndRespectMaxCap) {
-    auto splat_data = create_mrnf_test_splat_data();
-    MRNF strategy(splat_data);
-
-    auto opt_params = vanilla_mrnf_params();
-    opt_params.background_improvements = true;
-    opt_params.iterations = 10'000;
-    opt_params.sh_degree_interval = 10'000;
-    opt_params.max_cap = 12;
-    opt_params.growth_grad_threshold = 0.5f;
-    opt_params.grow_fraction = 0.0f;
-    opt_params.grow_until_iter = 10'000;
-    opt_params.refine_every = 100;
-    opt_params.explore_starvation_weighting = false;
-    strategy.initialize(opt_params);
-    strategy._far_starvation = 1.0f;
-    strategy._scene_has_far_field = true;
-
-    const auto free_indices =
-        Tensor::from_vector(std::vector<int>{8, 9}, TensorShape({2}), Device::CUDA).to(DataType::Int64);
-    strategy.mark_as_free(free_indices);
-    splat_data.deleted().index_put_(free_indices, Tensor::ones_bool({2}, Device::CUDA));
-
-    const size_t n = splat_data.size();
-    strategy._refine_weight_max = Tensor::zeros({n}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({n}, Device::CUDA);
-    strategy._vis_count.index_put_(
-        Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64),
-        Tensor::full({1}, 1.0f, Device::CUDA));
-
-    strategy._explore_score_sum = Tensor::zeros({n}, Device::CUDA);
-    strategy._explore_score_sum.index_put_(
-        Tensor::from_vector(std::vector<int>{0, 2, 3}, TensorShape({3}), Device::CUDA).to(DataType::Int64),
-        Tensor::full({3}, 4.0f, Device::CUDA));
-    strategy._explore_sample_count = 1;
-
-    const auto scales_before = splat_data.scaling_raw().cpu();
-    const size_t active_before = strategy.active_count();
-    strategy.grow_and_split(100, 2);
-
-    EXPECT_LE(strategy.active_count(), static_cast<size_t>(opt_params.max_cap));
-    EXPECT_GE(strategy.active_count(), active_before);
-
-    const auto scales_after = splat_data.scaling_raw().cpu();
-    const float* before = scales_before.ptr<float>();
-    const float* after = scales_after.ptr<float>();
-    const bool row0_split = std::abs(after[0] - before[0]) > 1e-4f;
-    const bool row2_split = std::abs(after[6] - before[6]) > 1e-4f;
-    const bool row3_split = std::abs(after[9] - before[9]) > 1e-4f;
-    EXPECT_TRUE(row0_split);
-    EXPECT_TRUE(row2_split);
-    EXPECT_TRUE(row3_split);
-}
-
-TEST(MRNFStrategyTest, FarGrowthCapConstrainsOutsideAllocations) {
-    auto splat_data = create_mrnf_test_splat_data();
-    MRNF strategy(splat_data);
-
-    auto opt_params = vanilla_mrnf_params();
-    opt_params.background_improvements = true;
-    opt_params.iterations = 10'000;
-    opt_params.sh_degree_interval = 10'000;
-    opt_params.max_cap = 32;
-    opt_params.growth_grad_threshold = 0.5f;
-    opt_params.grow_fraction = 0.0f;
-    opt_params.grow_until_iter = 10'000;
-    opt_params.refine_every = 100;
-    opt_params.explore_starvation_weighting = false;
-    strategy.initialize(opt_params);
-    install_test_camera_hull(strategy);
-    ASSERT_TRUE(strategy._camera_hull_valid);
-    strategy._far_starvation = 1.0f;
-    strategy.refresh_far_field_mask(static_cast<size_t>(splat_data.size()));
-
-    const size_t n = splat_data.size();
-    strategy._refine_weight_max = Tensor::zeros({n}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({n}, Device::CUDA);
-    auto far_scores = Tensor::zeros({n}, Device::CUDA);
-    std::vector<int> far_rows;
-    {
-        const auto means0 = splat_data.means().cpu();
-        const float* m0 = means0.ptr<float>();
-        for (size_t i = 0; i < n; ++i) {
-            if (is_far_of_test_hull(m0[i * 3], m0[i * 3 + 1], m0[i * 3 + 2])) {
-                far_rows.push_back(static_cast<int>(i));
-            }
-        }
-    }
-    ASSERT_FALSE(far_rows.empty());
-    far_scores.index_put_(
-        Tensor::from_vector(far_rows, TensorShape({far_rows.size()}), Device::CUDA).to(DataType::Int64),
-        Tensor::full({far_rows.size()}, 4.0f, Device::CUDA));
-    strategy._explore_score_sum = far_scores;
-    strategy._explore_sample_count = 1;
-
-    strategy.grow_and_split(100, 0);
-
-    const int n_explore = strategy.starved_cadence_count(kExploreSplits);
-    EXPECT_GT(strategy._far_growth.allocated, 0);
-    EXPECT_GT(strategy._far_growth.outside_used, 0);
-    EXPECT_LE(strategy._far_growth.outside_used,
-              static_cast<int>(std::lround(kFarGrowthCap * static_cast<double>(n_explore))));
-}
-
-TEST(MRNFStrategyTest, SeedFromViewInsertsRequestedRows) {
-    auto splat_data = create_mrnf_test_splat_data();
-    MRNF strategy(splat_data);
-
-    auto opt_params = vanilla_mrnf_params();
-    opt_params.background_improvements = true;
-    opt_params.iterations = 10'000;
-    opt_params.sh_degree_interval = 10'000;
-    opt_params.max_cap = 32;
-    opt_params.grow_until_iter = 10'000;
-    opt_params.refine_every = 100;
-    opt_params.explore_starvation_weighting = false;
-    strategy.initialize(opt_params);
-    install_test_camera_hull(strategy);
-    strategy._bounds.center[0] = 0.0f;
-    strategy._bounds.center[1] = 0.0f;
-    strategy._bounds.center[2] = 0.0f;
-    strategy._bounds.extent[0] = 2.5f;
-    strategy._bounds.extent[1] = 2.5f;
-    strategy._bounds.extent[2] = 2.5f;
-    strategy._bounds.median_size = 5.0f;
-    strategy._bounds.max_extent = 2.5f;
-    strategy._bounds_valid = true;
-    ASSERT_TRUE(strategy._camera_hull_valid);
-    strategy._far_starvation = 1.0f;
-    strategy.refresh_far_field_mask(static_cast<size_t>(splat_data.size()));
-
-    const auto free_indices =
-        Tensor::from_vector(std::vector<int>{8, 9}, TensorShape({2}), Device::CUDA).to(DataType::Int64);
-    strategy.mark_as_free(free_indices);
-    splat_data.deleted().index_put_(free_indices, Tensor::ones_bool({2}, Device::CUDA));
-
-    const size_t active_before = strategy.active_count();
-    RenderOutput invalid;
-    strategy.seed_from_view(100, invalid);
-    EXPECT_EQ(strategy.active_count(), active_before);
-
-    auto camera = make_explore_camera(8, 8);
-    auto render = make_explore_render(camera, 8, 8, 0.8f);
-    strategy.seed_from_view(100, render);
-    EXPECT_EQ(strategy.active_count(), active_before + static_cast<size_t>(kExploreSeeds));
-
-    const auto opac = splat_data.opacity_raw().cpu();
-    const auto scales = splat_data.scaling_raw().cpu();
-    const auto sh0 = splat_data.sh0().cpu();
-    const float expected_logit = std::log(kSeedOpacity / (1.0f - kSeedOpacity));
-    bool found_seed = false;
-    const float* o = opac.ptr<float>();
-    const float* s = scales.ptr<float>();
-    const float* c = sh0.ptr<float>();
-    const size_t rows = splat_data.size();
-    for (size_t i = 0; i < rows; ++i) {
-        if (std::abs(o[i] - expected_logit) < 1e-4f) {
-            found_seed = true;
-            EXPECT_NEAR(s[i * 3 + 0], s[i * 3 + 1], 1e-5f);
-            EXPECT_NEAR(s[i * 3 + 1], s[i * 3 + 2], 1e-5f);
-            EXPECT_NEAR(c[i * 3 + 0], (0.8f - 0.5f) / 0.28209479177387814f, 1e-4f);
-        }
-    }
-    EXPECT_TRUE(found_seed);
-}
-
-TEST(MRNFStrategyTest, FarDecayScaleAppliesOnlyToFarUnfrozenRows) {
+TEST(MRNFStrategyTest, ApplyDecaySkipsFrozenRows) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -1696,13 +1340,10 @@ TEST(MRNFStrategyTest, FarDecayScaleAppliesOnlyToFarUnfrozenRows) {
     opt_params.sh_degree_interval = 10'000;
     opt_params.max_cap = 32;
     strategy.initialize(opt_params);
-    install_test_camera_hull(strategy);
     splat_data.set_frozen_ranges({SplatData::FrozenRange{.start = 0, .count = 1}});
 
     const auto opac_orig = splat_data.opacity_raw().clone();
     const auto scale_orig = splat_data.scaling_raw().clone();
-    const auto means = splat_data.means().cpu();
-    const float* m = means.ptr<float>();
 
     const auto expected_raw = [](const float raw, const float decay, const float train_t) {
         const float opac = 1.0f / (1.0f + std::exp(-raw));
@@ -1716,31 +1357,6 @@ TEST(MRNFStrategyTest, FarDecayScaleAppliesOnlyToFarUnfrozenRows) {
     };
 
     strategy.apply_decay(500);
-    {
-        const auto opac = splat_data.opacity_raw().cpu();
-        const auto scales = splat_data.scaling_raw().cpu();
-        const float* o = opac.ptr<float>();
-        const float* s = scales.ptr<float>();
-        const float* o0 = opac_orig.cpu().ptr<float>();
-        const float* s0 = scale_orig.cpu().ptr<float>();
-        EXPECT_NEAR(o[0], o0[0], 1e-6f);
-        EXPECT_NEAR(s[0], s0[0], 1e-6f);
-        for (size_t i = 1; i < splat_data.size(); ++i) {
-            EXPECT_NEAR(o[i], expected_raw(o0[i], opt_params.opacity_decay, 0.5f), 1e-5f) << i;
-            EXPECT_NEAR(s[i * 3], expected_log_s(s0[i * 3], opt_params.scale_decay, 0.5f), 1e-5f) << i;
-        }
-    }
-
-    splat_data.opacity_raw().copy_(opac_orig);
-    splat_data.scaling_raw().copy_(scale_orig);
-    opt_params.background_improvements = true;
-    strategy.set_optimization_params(opt_params);
-    install_test_camera_hull(strategy);
-    ASSERT_TRUE(strategy._camera_hull_valid);
-    strategy._far_starvation = 1.0f;
-    strategy.refresh_far_field_mask(static_cast<size_t>(splat_data.size()));
-    strategy.apply_decay(500);
-
     const auto opac = splat_data.opacity_raw().cpu();
     const auto scales = splat_data.scaling_raw().cpu();
     const float* o = opac.ptr<float>();
@@ -1750,14 +1366,8 @@ TEST(MRNFStrategyTest, FarDecayScaleAppliesOnlyToFarUnfrozenRows) {
     EXPECT_NEAR(o[0], o0[0], 1e-6f);
     EXPECT_NEAR(s[0], s0[0], 1e-6f);
     for (size_t i = 1; i < splat_data.size(); ++i) {
-        const bool far = is_far_of_test_hull(m[i * 3], m[i * 3 + 1], m[i * 3 + 2]);
-        const float opac_decay = opt_params.opacity_decay * (far ? kFarDecayScale : 1.0f);
-        const float scale_decay = opt_params.scale_decay * (far ? kFarDecayScale : 1.0f);
-        EXPECT_NEAR(o[i], expected_raw(o0[i], opac_decay, 0.5f), 1e-5f) << "row " << i;
-        EXPECT_NEAR(s[i * 3], expected_log_s(s0[i * 3], scale_decay, 0.5f), 1e-5f) << "row " << i;
-        if (far) {
-            EXPECT_GT(std::abs(expected_raw(o0[i], opt_params.opacity_decay, 0.5f) - o[i]), 1e-6f) << i;
-        }
+        EXPECT_NEAR(o[i], expected_raw(o0[i], opt_params.opacity_decay, 0.5f), 1e-5f) << i;
+        EXPECT_NEAR(s[i * 3], expected_log_s(s0[i * 3], opt_params.scale_decay, 0.5f), 1e-5f) << i;
     }
 }
 
@@ -1774,6 +1384,41 @@ TEST(MRNFStrategyTest, DensificationInfoShapeIsTwoRows) {
     EXPECT_EQ(splat_data._densification_info.shape()[1], splat_data.size());
 }
 
+TEST(MRNFStrategyTest, LateLrAnnealDecaysOpacityAndColorAfterGrowth) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    auto opt_params = vanilla_mrnf_params();
+    opt_params.iterations = 200;
+    opt_params.grow_until_iter = 100;
+    opt_params.late_lr_anneal = 0.25f;
+    strategy.initialize(opt_params);
+
+    auto& optimizer = *strategy._optimizer;
+    const double opacity = optimizer.get_param_lr(ParamType::Opacity);
+    const double sh0 = optimizer.get_param_lr(ParamType::Sh0);
+    const double shn = optimizer.get_param_lr(ParamType::ShN);
+    const double rotation = optimizer.get_param_lr(ParamType::Rotation);
+
+    strategy.apply_late_lr_anneal(99);
+    EXPECT_EQ(optimizer.get_param_lr(ParamType::Opacity), opacity);
+
+    strategy.apply_late_lr_anneal(150);
+    EXPECT_NEAR(optimizer.get_param_lr(ParamType::Opacity), opacity * 0.5, opacity * 1e-12);
+    EXPECT_NEAR(optimizer.get_param_lr(ParamType::Sh0), sh0 * 0.5, sh0 * 1e-12);
+    EXPECT_NEAR(optimizer.get_param_lr(ParamType::ShN), shn * 0.5, shn * 1e-12);
+    EXPECT_EQ(optimizer.get_param_lr(ParamType::Rotation), rotation);
+
+    strategy.apply_late_lr_anneal(200);
+    EXPECT_NEAR(optimizer.get_param_lr(ParamType::Opacity), opacity * 0.25, opacity * 1e-12);
+
+    opt_params.late_lr_anneal = 1.0f;
+    strategy.set_optimization_params(opt_params);
+    strategy.apply_late_lr_anneal(150);
+    EXPECT_EQ(optimizer.get_param_lr(ParamType::Opacity), opacity);
+    EXPECT_EQ(optimizer.get_param_lr(ParamType::Sh0), sh0);
+    EXPECT_EQ(optimizer.get_param_lr(ParamType::ShN), shn);
+}
+
 TEST(MRNFStrategyTest, ZeroVisibilityProducesNoGrowth) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
@@ -1781,7 +1426,7 @@ TEST(MRNFStrategyTest, ZeroVisibilityProducesNoGrowth) {
     opt_params.iterations = 10'000;
     opt_params.sh_degree_interval = 10'000;
     opt_params.max_cap = 32;
-    opt_params.growth_grad_threshold = 10.0f;
+    opt_params.growth_grad_threshold = 0.5f;
     opt_params.grow_fraction = 1.0f;
     opt_params.grow_until_iter = 10'000;
     strategy.initialize(opt_params);
@@ -1789,9 +1434,14 @@ TEST(MRNFStrategyTest, ZeroVisibilityProducesNoGrowth) {
     const size_t n = splat_data.size();
     const size_t active = strategy.active_count();
     strategy._refine_weight_max = Tensor::ones({n}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({n}, Device::CUDA);
+    strategy.visibility_accumulator().zero_();
     strategy.grow_and_split(100, 0);
     EXPECT_EQ(strategy.active_count(), active);
+
+    strategy._refine_weight_max = Tensor::ones({n}, Device::CUDA);
+    strategy.visibility_accumulator().fill_(1.0f);
+    strategy.grow_and_split(100, 0);
+    EXPECT_GT(strategy.active_count(), active);
 }
 
 namespace {
@@ -1813,14 +1463,13 @@ namespace {
         return {p, p + cpu.numel()};
     }
 
-    param::OptimizationParameters mean_step_test_params(const bool per_splat) {
+    param::OptimizationParameters mean_step_test_params() {
         auto opt = vanilla_mrnf_params();
         opt.iterations = 10'000;
         opt.sh_degree_interval = 10'000;
         opt.max_cap = 32;
         opt.means_lr = 0.1f;
         opt.means_lr_end = 0.1f;
-        opt.background_improvements = per_splat;
         return opt;
     }
 } // namespace
@@ -1832,10 +1481,10 @@ TEST(MRNFStrategyTest, PerSplatMeanStepScalesWithExtentAndClamps) {
     place_deep_far_probe(splat_g);
     MRNF per_splat(splat_p);
     MRNF global(splat_g);
-    per_splat.initialize(mean_step_test_params(true));
-    global.initialize(mean_step_test_params(false));
+    per_splat.initialize(mean_step_test_params());
+    global.initialize(mean_step_test_params());
+    global.get_optimizer().set_per_splat_mean_step(false, 0.0f);
     install_test_camera_hull(per_splat);
-    per_splat._far_starvation = 1.0f;
     per_splat.refresh_far_field_mask(static_cast<size_t>(splat_p.size()));
     per_splat.sync_mean_learning_rate();
     ASSERT_TRUE(per_splat._bounds_valid);
@@ -1910,331 +1559,9 @@ TEST(MRNFStrategyTest, PerSplatMeanStepScalesWithExtentAndClamps) {
     EXPECT_NEAR(dx_huge / dx_med, r_max / r_min, 0.02f * (r_max / r_min));
 }
 
-TEST(MRNFStrategyTest, CadenceScaledMatchesRefineEvery) {
-    auto splat_data = create_mrnf_test_splat_data();
-    MRNF strategy(splat_data);
-
-    auto opt_params = vanilla_mrnf_params();
-    opt_params.iterations = 1'000;
-    opt_params.max_cap = 32;
-    opt_params.refine_every = 100;
-    strategy.initialize(opt_params);
-    EXPECT_EQ(strategy.cadence_scaled(kExploreSplits), kExploreSplits);
-    EXPECT_EQ(strategy.cadence_scaled(0), 0);
-
-    opt_params.refine_every = 200;
-    strategy.set_optimization_params(opt_params);
-    EXPECT_EQ(strategy.cadence_scaled(kExploreSplits), 2 * kExploreSplits);
-
-    opt_params.refine_every = 50;
-    strategy.set_optimization_params(opt_params);
-    EXPECT_EQ(strategy.cadence_scaled(kExploreSplits), kExploreSplits / 2);
-}
-
-TEST(MRNFStrategyTest, FarStarvationFactorFromSyntheticPopulations) {
-    EXPECT_FLOAT_EQ(MRNF::far_starvation_factor(1.0f, kFarCapRatioFull, kFarCapRatioRich), 1.0f);
-    EXPECT_FLOAT_EQ(MRNF::far_starvation_factor(2.0f, kFarCapRatioFull, kFarCapRatioRich), 1.0f);
-    EXPECT_FLOAT_EQ(MRNF::far_starvation_factor(2.75f, kFarCapRatioFull, kFarCapRatioRich), 0.5f);
-    EXPECT_FLOAT_EQ(MRNF::far_starvation_factor(3.5f, kFarCapRatioFull, kFarCapRatioRich), 0.0f);
-    EXPECT_FLOAT_EQ(MRNF::far_starvation_factor(6.0f, kFarCapRatioFull, kFarCapRatioRich), 0.0f);
-    EXPECT_FLOAT_EQ(MRNF::far_starvation_factor(0.0f, 0.0f, kFarCapRatioRich), 0.0f);
-
-    auto starvation_params = [](const int max_cap, const float min_frac = 0.0f) {
-        auto opt = vanilla_mrnf_params();
-        opt.background_improvements = true;
-        opt.iterations = 1'000;
-        opt.max_cap = max_cap;
-        opt.refine_every = 100;
-        opt.far_scene_min_fraction = min_frac;
-        return opt;
-    };
-
-    {
-        // census-active + ratio 6 -> s == 1 (dose is not annealed on a true far field)
-        auto splat = create_mrnf_test_splat_data(10);
-        MRNF strategy(splat);
-        strategy.initialize(starvation_params(60, 0.0f));
-        install_test_camera_hull(strategy);
-        EXPECT_EQ(strategy._initial_sfm_point_count, 10u);
-        EXPECT_TRUE(strategy._scene_has_far_field);
-        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
-    }
-
-    {
-        // census-inert + ratio 6 -> s == 0
-        auto splat = create_mrnf_test_splat_data(10);
-        MRNF strategy(splat);
-        strategy.initialize(starvation_params(60, 1.0f));
-        install_test_camera_hull(strategy);
-        EXPECT_EQ(strategy._initial_sfm_point_count, 10u);
-        EXPECT_FALSE(strategy._scene_has_far_field);
-        EXPECT_FLOAT_EQ(strategy._far_starvation, 0.0f);
-    }
-
-    {
-        // census-inert + ratio 1.5 -> s == 1
-        auto splat = create_mrnf_test_splat_data(10);
-        MRNF strategy(splat);
-        strategy.initialize(starvation_params(15, 1.0f));
-        install_test_camera_hull(strategy);
-        EXPECT_EQ(strategy._initial_sfm_point_count, 10u);
-        EXPECT_FALSE(strategy._scene_has_far_field);
-        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
-    }
-
-    {
-        auto splat = create_mrnf_test_splat_data(10);
-        MRNF strategy(splat);
-        strategy.initialize(starvation_params(10));
-        EXPECT_EQ(strategy._initial_sfm_point_count, 10u);
-        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
-        strategy._initial_sfm_point_count = 0;
-        strategy.update_far_starvation();
-        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
-    }
-
-    {
-        // uncapped census-inert -> 0
-        auto splat = create_mrnf_test_splat_data(10);
-        MRNF strategy(splat);
-        strategy.initialize(starvation_params(0, 1.0f));
-        install_test_camera_hull(strategy);
-        EXPECT_EQ(strategy._initial_sfm_point_count, 10u);
-        EXPECT_FALSE(strategy._scene_has_far_field);
-        EXPECT_FLOAT_EQ(strategy._far_starvation, 0.0f);
-    }
-
-    {
-        // uncapped census-active -> 1
-        auto splat = create_mrnf_test_splat_data(10);
-        MRNF strategy(splat);
-        strategy.initialize(starvation_params(0, 0.0f));
-        install_test_camera_hull(strategy);
-        EXPECT_EQ(strategy._initial_sfm_point_count, 10u);
-        EXPECT_TRUE(strategy._scene_has_far_field);
-        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
-    }
-}
-
-TEST(MRNFStrategyTest, CensusGateActivatesAndSuppressesFarFeatures) {
-    auto make_params = [](const bool background_improvements, const float min_frac,
-                          const bool starvation = true) {
-        auto opt = vanilla_mrnf_params();
-        opt.background_improvements = background_improvements;
-        opt.far_scene_min_fraction = min_frac;
-        opt.explore_starvation_weighting = starvation;
-        opt.iterations = 1'000;
-        opt.max_cap = 32;
-        opt.refine_every = 100;
-        return opt;
-    };
-
-    {
-        auto splat = create_mrnf_test_splat_data();
-        place_deep_far_probe_at(splat, 9);
-        MRNF strategy(splat);
-        strategy.initialize(make_params(true, 0.0f));
-        install_test_camera_hull(strategy);
-        EXPECT_TRUE(strategy._camera_hull_valid);
-        EXPECT_TRUE(strategy._scene_has_far_field);
-        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
-    }
-
-    {
-        // census-inert + starvation ON keeps the hull for exploration
-        auto splat = create_mrnf_test_splat_data();
-        place_deep_far_probe_at(splat, 9);
-        MRNF strategy(splat);
-        strategy.initialize(make_params(true, 1.0f));
-        install_test_camera_hull(strategy);
-        EXPECT_TRUE(strategy._camera_hull_valid);
-        EXPECT_FALSE(strategy._scene_has_far_field);
-    }
-
-    {
-        // census-inert + starvation OFF clears the hull
-        auto splat = create_mrnf_test_splat_data();
-        place_deep_far_probe_at(splat, 9);
-        MRNF strategy(splat);
-        strategy.initialize(make_params(true, 1.0f, false));
-        install_test_camera_hull(strategy);
-        EXPECT_FALSE(strategy._camera_hull_valid);
-        EXPECT_FALSE(strategy._scene_has_far_field);
-    }
-
-    {
-        auto splat = create_mrnf_test_splat_data();
-        place_deep_far_probe_at(splat, 9);
-        MRNF strategy(splat);
-        strategy.initialize(make_params(false, 0.0f));
-        install_test_camera_hull(strategy);
-        EXPECT_FALSE(strategy._camera_hull_valid);
-        EXPECT_FALSE(strategy._scene_has_far_field);
-        EXPECT_FALSE(strategy.get_optimizer().per_splat_mean_step());
-    }
-}
-
-TEST(MRNFStrategyTest, ExploreStarvationWeights) {
-    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(0.0f, 4.0f), 0.0f);
-    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(4.0f, 4.0f), kStarvEps);
-    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(1.0f, 4.0f),
-                    kStarvEps + std::pow(0.75f, kStarvGamma));
-
-    const int expected_dose = static_cast<int>(
-        std::lround(static_cast<double>(kExploreSplits) * static_cast<double>(kExploreStarvDose)));
-
-    auto opt_params = vanilla_mrnf_params();
-    opt_params.background_improvements = true;
-    opt_params.iterations = 1'000;
-    opt_params.max_cap = 16;
-    opt_params.refine_every = 100;
-    opt_params.far_scene_min_fraction = 1.0f;
-    opt_params.explore_starvation_weighting = false;
-
-    auto splat = create_mrnf_test_splat_data(5);
-    MRNF strategy(splat);
-    strategy.initialize(opt_params);
-    install_test_camera_hull(strategy);
-
-    const size_t n = splat.size();
-    strategy._vis_count = Tensor::from_vector(
-        std::vector<float>{0.0f, 4.0f, 1.0f, 4.0f, 4.0f}, TensorShape({n}), Device::CUDA);
-    strategy._explore_score_sum = Tensor::full({n}, 1.0f, Device::CUDA);
-    strategy._explore_sample_count = 1;
-    strategy._far_starvation = 1.0f;
-
-    Tensor empty;
-    auto weights_off = strategy.build_explore_split_weights(n, empty, empty, empty, empty);
-    ASSERT_TRUE(weights_off.is_valid());
-    ASSERT_EQ(weights_off.numel(), n);
-
-    auto log_scales = splat.scaling_raw();
-    auto score_mean = strategy._explore_score_sum /
-                      static_cast<float>(std::max(strategy._explore_sample_count, 1));
-    auto logw = log_scales.sum(1) + (score_mean + 0.05f).log();
-    auto part_a = (logw - logw.max()).exp();
-    part_a = apply_crop_damping_to_scores(strategy.get_optimizer(), part_a);
-
-    const auto off_cpu = weights_off.cpu();
-    const auto part_a_cpu = part_a.cpu();
-    ASSERT_EQ(off_cpu.numel(), part_a_cpu.numel());
-    EXPECT_EQ(std::memcmp(off_cpu.ptr<float>(), part_a_cpu.ptr<float>(),
-                          off_cpu.numel() * sizeof(float)),
-              0);
-
-    opt_params.explore_starvation_weighting = true;
-    strategy.set_optimization_params(opt_params);
-    install_test_camera_hull(strategy);
-    auto weights_on = strategy.build_explore_split_weights(n, empty, empty, empty, empty);
-    ASSERT_TRUE(weights_on.is_valid());
-    const auto on_cpu = weights_on.cpu();
-    const float* on = on_cpu.ptr<float>();
-    const float* base = part_a_cpu.ptr<float>();
-    EXPECT_FLOAT_EQ(on[0], 0.0f);
-    EXPECT_FLOAT_EQ(on[1], base[1] * kStarvEps);
-    EXPECT_NEAR(on[2], base[2] * MRNF::explore_starvation_multiplier(1.0f, 4.0f), 1.0e-5f);
-
-    EXPECT_TRUE(strategy.far_operators_active());
-    EXPECT_TRUE(strategy._camera_hull_valid);
-    EXPECT_FALSE(strategy._scene_has_far_field);
-    EXPECT_EQ(strategy.starved_cadence_count(kExploreSplits), expected_dose);
-
-    {
-        // census-active + starvation ON keeps s = 1; explore dose is still 2.38x
-        auto far_splat = create_mrnf_test_splat_data(10);
-        MRNF far_strategy(far_splat);
-        auto far_params = vanilla_mrnf_params();
-        far_params.background_improvements = true;
-        far_params.iterations = 1'000;
-        far_params.max_cap = 60;
-        far_params.refine_every = 100;
-        far_params.far_scene_min_fraction = 0.0f;
-        far_params.explore_starvation_weighting = true;
-        far_strategy.initialize(far_params);
-        install_test_camera_hull(far_strategy);
-        EXPECT_TRUE(far_strategy._scene_has_far_field);
-        EXPECT_FLOAT_EQ(far_strategy._far_starvation, 1.0f);
-        EXPECT_EQ(far_strategy.starved_cadence_count(kExploreSplits), expected_dose);
-    }
-}
-
-TEST(MRNFStrategyTest, OptimizationParametersDefaultToBackgroundImprovementsOff) {
-    const param::OptimizationParameters defaults{};
-    EXPECT_FALSE(defaults.background_improvements);
-    EXPECT_FLOAT_EQ(defaults.far_scene_min_fraction, 0.01f);
-    EXPECT_TRUE(defaults.explore_starvation_weighting);
-    EXPECT_EQ(kExploreSplits, 20);
-    EXPECT_EQ(kExploreSeeds, 20);
-    EXPECT_FLOAT_EQ(kSeedOpacity, 0.03f);
-    EXPECT_FLOAT_EQ(kFarGrowthCap, 0.3f);
-    EXPECT_FLOAT_EQ(kFarDecayScale, 0.25f);
-    EXPECT_FLOAT_EQ(kPerSplatMeanStepRatioMax, 300.0f);
-    EXPECT_FLOAT_EQ(kFarMaskOrbits, 2.0f);
-    EXPECT_FLOAT_EQ(kSeedDepthOrbits, 32.0f);
-    EXPECT_FLOAT_EQ(kFarCapRatioFull, 2.0f);
-    EXPECT_FLOAT_EQ(kFarCapRatioRich, 3.5f);
-    EXPECT_FLOAT_EQ(kStarvEps, 0.0026f);
-    EXPECT_FLOAT_EQ(kStarvGamma, 1.72f);
-    EXPECT_FLOAT_EQ(kExploreStarvDose, 2.38f);
-}
-
-TEST(MRNFStrategyTest, BackgroundImprovementsOffDisablesEveryProfileMechanism) {
-    auto splat_data = create_mrnf_test_splat_data();
-    MRNF strategy(splat_data);
-
-    auto opt_params = param::OptimizationParameters::mrnf_defaults();
-    EXPECT_TRUE(opt_params.growth_ratio_rank);
-    EXPECT_EQ(opt_params.fill_pacing_iter, 15'000u);
-    EXPECT_EQ(opt_params.far_seed_dose, 2'000u);
-    EXPECT_TRUE(opt_params.explore_starvation_weighting);
-    opt_params.background_improvements = false;
-    opt_params.iterations = 1'000;
-    opt_params.max_cap = 32;
-    strategy.initialize(opt_params);
-
-    EXPECT_FALSE(strategy.cfg_ratio_rank_on());
-    EXPECT_FLOAT_EQ(strategy.cfg_ratio_pow(), 0.0f);
-    EXPECT_EQ(strategy.cfg_fill_target_iter(), 0);
-    EXPECT_EQ(strategy.cfg_seed_dose(), 0);
-    EXPECT_FALSE(strategy.explore_starvation_weighting_enabled());
-    EXPECT_FALSE(strategy.far_operators_active());
-    EXPECT_EQ(strategy.effective_grow_until_iter(), static_cast<int>(opt_params.grow_until_iter));
-    EXPECT_FLOAT_EQ(strategy.effective_far_growth_cap(), 1.0f);
-    EXPECT_FLOAT_EQ(strategy.effective_far_decay_scale(), 1.0f);
-    EXPECT_FLOAT_EQ(strategy.effective_mean_step_ratio_max(), 1.0f);
-}
-
-TEST(MRNFStrategyTest, BackgroundImprovementsOnKeepsProfileMechanisms) {
-    auto splat_data = create_mrnf_test_splat_data();
-    MRNF strategy(splat_data);
-
-    auto opt_params = param::OptimizationParameters::mrnf_defaults();
-    opt_params.background_improvements = true;
-    EXPECT_TRUE(opt_params.growth_ratio_rank);
-    EXPECT_EQ(opt_params.fill_pacing_iter, 15'000u);
-    EXPECT_EQ(opt_params.far_seed_dose, 2'000u);
-    EXPECT_TRUE(opt_params.explore_starvation_weighting);
-    opt_params.iterations = 1'000;
-    opt_params.max_cap = 32;
-    strategy.initialize(opt_params);
-
-    EXPECT_TRUE(strategy.cfg_ratio_rank_on());
-    EXPECT_FLOAT_EQ(strategy.cfg_ratio_pow(), 0.75f);
-    EXPECT_EQ(strategy.cfg_fill_target_iter(), 15000);
-    EXPECT_EQ(strategy.cfg_seed_dose(), 2000);
-    EXPECT_TRUE(strategy.explore_starvation_weighting_enabled());
-    EXPECT_TRUE(strategy.far_operators_active());
-    EXPECT_EQ(strategy.effective_grow_until_iter(),
-              std::max(static_cast<int>(opt_params.grow_until_iter), 15000));
-    EXPECT_FLOAT_EQ(strategy.effective_far_growth_cap(), kFarGrowthCap);
-    EXPECT_FLOAT_EQ(strategy.effective_far_decay_scale(), kFarDecayScale);
-    EXPECT_FLOAT_EQ(strategy.effective_mean_step_ratio_max(), kPerSplatMeanStepRatioMax);
-}
-
 TEST(MRNFStrategyTest, PermutationRepublishesFarMask) {
     auto splat = create_mrnf_test_splat_data(4, 0);
     auto params = vanilla_mrnf_params();
-    params.background_improvements = true;
     params.max_cap = 8;
     MRNF strategy(splat);
     strategy.initialize(params);
@@ -2242,7 +1569,6 @@ TEST(MRNFStrategyTest, PermutationRepublishesFarMask) {
     strategy._far_field_mask = Tensor::from_vector(
                                    std::vector<int>{0, 1, 0, 1}, TensorShape({4}), Device::CUDA)
                                    .to(DataType::Bool);
-    strategy._far_growth.outside_mask = strategy._far_field_mask;
     strategy.publish_mean_step_far_mask();
     auto& optimizer = strategy.get_optimizer();
     ASSERT_EQ(optimizer.mean_step_far_mask(), strategy._far_field_mask.ptr<bool>());
@@ -2258,7 +1584,6 @@ TEST(MRNFStrategyTest, PermutationRepublishesFarMask) {
     EXPECT_NE(strategy._far_field_mask.ptr<bool>(), old_mask.ptr<bool>());
     EXPECT_EQ(optimizer.mean_step_far_mask(), strategy._far_field_mask.ptr<bool>());
     EXPECT_EQ(optimizer.mean_step_far_mask_n(), strategy._far_field_mask.numel());
-    EXPECT_EQ(strategy._far_growth.outside_mask.ptr<bool>(), strategy._far_field_mask.ptr<bool>());
     const auto reordered = strategy._far_field_mask.cpu();
     const bool* values = reordered.ptr<bool>();
     EXPECT_TRUE(values[0]);
@@ -2270,22 +1595,19 @@ TEST(MRNFStrategyTest, PermutationRepublishesFarMask) {
     strategy.refresh_camera_hull();
     EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
     EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
+}
 
-    strategy._camera_hull_valid = true;
-    strategy.publish_mean_step_far_mask();
-    params.background_improvements = false;
-    strategy._params = std::make_unique<const param::OptimizationParameters>(params);
-    strategy.refresh_camera_hull();
-    EXPECT_FALSE(strategy._far_field_mask.is_valid());
-    EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
-    EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
+TEST(MRNFStrategyTest, SetTrainingDatasetBeforeInitialize) {
+    auto splat_data = create_mrnf_test_splat_data(0);
+    MRNF strategy(splat_data);
+
+    // Trainer wires the dataset before initialize() binds params and creates the optimizer.
+    EXPECT_NO_THROW(strategy.set_training_dataset(make_hull_dataset()));
 }
 
 TEST(MRNFStrategyTest, HardRemovalRepublishesFarMaskForDegenerateModel) {
     auto splat = create_mrnf_test_splat_data(4, 0);
     auto params = vanilla_mrnf_params();
-    params.background_improvements = true;
-    params.far_scene_min_fraction = 0.0f;
     params.max_cap = 8;
     MRNF strategy(splat);
     strategy.initialize(params);
@@ -2303,11 +1625,11 @@ TEST(MRNFStrategyTest, HardRemovalRepublishesFarMaskForDegenerateModel) {
     ASSERT_EQ(splat.size(), 1);
     ASSERT_NE(optimizer.mean_step_far_mask(), nullptr);
     ASSERT_EQ(optimizer.mean_step_far_mask_n(), splat.means().shape()[0]);
-    bool far = false;
-    ASSERT_EQ(cudaMemcpy(&far, optimizer.mean_step_far_mask(), sizeof(far),
+    bool is_far = false;
+    ASSERT_EQ(cudaMemcpy(&is_far, optimizer.mean_step_far_mask(), sizeof(is_far),
                          cudaMemcpyDeviceToHost),
               cudaSuccess);
-    EXPECT_TRUE(far);
+    EXPECT_TRUE(is_far);
 
     optimizer.get_grad(ParamType::Means).fill_(0.2f);
     EXPECT_NO_THROW(optimizer.step(1));
@@ -2321,8 +1643,6 @@ TEST(MRNFStrategyTest, HardRemovalRepublishesFarMaskForDegenerateModel) {
 
 TEST(MRNFStrategyTest, DeserializeRepublishesFarMaskWithDegenerateBounds) {
     auto params = vanilla_mrnf_params();
-    params.background_improvements = true;
-    params.far_scene_min_fraction = 0.0f;
     params.max_cap = 8;
     auto source_splat = create_mrnf_test_splat_data(1, 0);
     source_splat.means().fill_(3.0f);
@@ -2340,20 +1660,20 @@ TEST(MRNFStrategyTest, DeserializeRepublishesFarMaskWithDegenerateBounds) {
     install_test_camera_hull(restored);
     auto& optimizer = restored.get_optimizer();
     ASSERT_NE(optimizer.mean_step_far_mask(), nullptr);
-    bool far = true;
-    ASSERT_EQ(cudaMemcpy(&far, optimizer.mean_step_far_mask(), sizeof(far),
+    bool is_far = true;
+    ASSERT_EQ(cudaMemcpy(&is_far, optimizer.mean_step_far_mask(), sizeof(is_far),
                          cudaMemcpyDeviceToHost),
               cudaSuccess);
-    ASSERT_FALSE(far);
+    ASSERT_FALSE(is_far);
 
     splat.deserialize(checkpoint);
     restored.deserialize(checkpoint);
     ASSERT_NE(optimizer.mean_step_far_mask(), nullptr);
     ASSERT_EQ(optimizer.mean_step_far_mask_n(), splat.means().shape()[0]);
-    ASSERT_EQ(cudaMemcpy(&far, optimizer.mean_step_far_mask(), sizeof(far),
+    ASSERT_EQ(cudaMemcpy(&is_far, optimizer.mean_step_far_mask(), sizeof(is_far),
                          cudaMemcpyDeviceToHost),
               cudaSuccess);
-    EXPECT_TRUE(far);
+    EXPECT_TRUE(is_far);
     optimizer.get_grad(ParamType::Means).fill_(0.2f);
     EXPECT_NO_THROW(optimizer.step(1));
     EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
@@ -2397,8 +1717,8 @@ TEST(MRNFStrategyTest, MeanStepFarMaskMismatchIsIgnoredByExplicitAdam) {
         control.initialize(params);
         auto& optimizer = strategy.get_optimizer();
         auto& control_optimizer = control.get_optimizer();
-        optimizer.set_per_splat_mean_step(true, 0.5f, 1.0f, 300.0f);
-        control_optimizer.set_per_splat_mean_step(true, 0.5f, 1.0f, 300.0f);
+        optimizer.set_per_splat_mean_step(true, 0.5f);
+        control_optimizer.set_per_splat_mean_step(true, 0.5f);
         const auto mask = Tensor::ones({static_cast<size_t>(mask_n)}, Device::CUDA).to(DataType::Bool);
         optimizer.set_mean_step_far_mask(mask);
         optimizer.get_grad(ParamType::Means).fill_(0.2f);
@@ -2427,7 +1747,7 @@ TEST(MRNFStrategyTest, MeanStepFarMaskMismatchIsIgnoredByFusedAdam) {
         MRNF strategy(splat);
         strategy.initialize(params);
         auto& optimizer = strategy.get_optimizer();
-        optimizer.set_per_splat_mean_step(true, 0.5f, 1.0f, 300.0f);
+        optimizer.set_per_splat_mean_step(true, 0.5f);
         const auto mask = Tensor::ones({static_cast<size_t>(mask_n)}, Device::CUDA).to(DataType::Bool);
         optimizer.set_mean_step_far_mask(mask);
         FarMaskWarningCapture warnings;
@@ -2467,8 +1787,8 @@ TEST(MRNFStrategyTest, MeanStepFarMaskUploadsHostStorageBeforeAdam) {
         control.initialize(params);
         auto& optimizer = strategy.get_optimizer();
         auto& control_optimizer = control.get_optimizer();
-        optimizer.set_per_splat_mean_step(true, 0.5f, 1.0f, 300.0f);
-        control_optimizer.set_per_splat_mean_step(true, 0.5f, 1.0f, 300.0f);
+        optimizer.set_per_splat_mean_step(true, 0.5f);
+        control_optimizer.set_per_splat_mean_step(true, 0.5f);
         {
             // A strided CPU view exercises both pageable/pinned upload and packing.
             auto host = Tensor::empty({2, 2}, Device::CPU, DataType::Bool, pinned);
@@ -2506,7 +1826,7 @@ TEST(MRNFStrategyTest, MeanStepFarMaskRetainsAllocationUntilBindingIsCleared) {
     MRNF strategy(splat);
     strategy.initialize(vanilla_mrnf_params());
     auto& optimizer = strategy.get_optimizer();
-    optimizer.set_per_splat_mean_step(true, 0.5f, 1.0f, 300.0f);
+    optimizer.set_per_splat_mean_step(true, 0.5f);
     std::weak_ptr<Tensor> allocation;
     {
         auto owner = std::make_shared<Tensor>(Tensor::ones_bool({2}, Device::CUDA));
@@ -2521,7 +1841,7 @@ TEST(MRNFStrategyTest, MeanStepFarMaskRetainsAllocationUntilBindingIsCleared) {
     optimizer.get_grad(ParamType::Means).fill_(0.2f);
     optimizer.step(1);
     EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-    optimizer.set_per_splat_mean_step(false, 0.0f, 1.0f, 300.0f);
+    optimizer.set_per_splat_mean_step(false, 0.0f);
     EXPECT_TRUE(allocation.expired());
     EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
     EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
@@ -2556,7 +1876,7 @@ TEST(MRNFStrategyTest, MeanStepFarMaskEmptyBindingsClearExplicitAndFusedAdam) {
     MRNF strategy(splat);
     strategy.initialize(vanilla_mrnf_params());
     auto& optimizer = strategy.get_optimizer();
-    optimizer.set_per_splat_mean_step(true, 0.5f, 1.0f, 300.0f);
+    optimizer.set_per_splat_mean_step(true, 0.5f);
     for (const auto device : {Device::CPU, Device::CUDA}) {
         optimizer.set_mean_step_far_mask(Tensor::ones_bool({2}, Device::CUDA));
         optimizer.set_mean_step_far_mask(Tensor::empty({0}, device, DataType::Bool));
@@ -2580,48 +1900,12 @@ TEST(MRNFStrategyTest, MeanStepFarMaskEmptyBindingsClearExplicitAndFusedAdam) {
     EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 }
 
-TEST(MRNFStrategyTest, BackgroundToggleBuildsAndClearsFarMaskBeforeNextAdamStep) {
-    auto splat = create_mrnf_test_splat_data(4, 0);
-    auto params = vanilla_mrnf_params();
-    params.far_scene_min_fraction = 0.0f;
-    MRNF strategy(splat);
-    strategy.initialize(params);
-    install_test_camera_hull(strategy);
-    auto& optimizer = strategy.get_optimizer();
-    EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
-
-    for (int iteration = 1; iteration <= 2; ++iteration) {
-        params.background_improvements = true;
-        strategy.set_optimization_params(params);
-        ASSERT_NE(optimizer.mean_step_far_mask(), nullptr);
-        ASSERT_EQ(optimizer.mean_step_far_mask_n(), 4);
-        bool values[4] = {};
-        ASSERT_EQ(cudaMemcpy(values, optimizer.mean_step_far_mask(), sizeof(values),
-                             cudaMemcpyDeviceToHost),
-                  cudaSuccess);
-        EXPECT_FALSE(values[0]);
-        EXPECT_TRUE(values[3]);
-        const auto fused = optimizer.prepare_fastgs_fused_adam(iteration, nullptr);
-        EXPECT_EQ(fused.mean_step_far_mask, optimizer.mean_step_far_mask());
-        optimizer.get_grad(ParamType::Means).fill_(0.2f);
-        optimizer.step(iteration);
-
-        params.background_improvements = false;
-        strategy.set_optimization_params(params);
-        EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
-        EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
-        EXPECT_FALSE(optimizer.per_splat_mean_step());
-    }
-    EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-}
-
 TEST(MRNFStrategyTest, CheckpointLoadPreservesDatasetFarFieldProtection) {
     auto original_model = create_mrnf_test_splat_data(8);
     place_deep_far_probe(original_model);
     MRNF original(original_model);
     param::TrainingParameters params;
-    params.optimization = mean_step_test_params(true);
-    params.optimization.far_scene_min_fraction = 0.0f;
+    params.optimization = mean_step_test_params();
     const auto dataset = make_hull_dataset();
     original.set_training_dataset(dataset);
     original.initialize(params.optimization);
@@ -2664,8 +1948,7 @@ TEST(MRNFDecayTest, ZeroDecayPreservesFiniteLogitsAndStillDecaysScales) {
         auto scales = Tensor::zeros({original.size(), 3}, Device::CUDA);
         for (int step = 0; step < 100; ++step) {
             mrnf_strategy::launch_mrnf_decay(opacity.ptr<float>(), scales.ptr<float>(),
-                                             nullptr, 0, nullptr, 0, decay, 0.01f, 1.0f,
-                                             train_t, original.size());
+                                             nullptr, 0, decay, 0.01f, train_t, original.size());
         }
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
         const auto actual = opacity.cpu().to_vector();
@@ -2683,8 +1966,7 @@ TEST(MRNFDecayTest, SaturatedAndLegacyInfiniteLogitsStayFinite) {
         auto opacity = Tensor::from_vector(original, {original.size()}, Device::CUDA);
         auto scales = Tensor::zeros({original.size(), 3}, Device::CUDA);
         mrnf_strategy::launch_mrnf_decay(opacity.ptr<float>(), scales.ptr<float>(),
-                                         nullptr, 0, nullptr, 0, decay, 0.0f, 1.0f,
-                                         0.5f, original.size());
+                                         nullptr, 0, decay, 0.0f, 0.5f, original.size());
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
         const auto actual = opacity.cpu().to_vector();
         for (size_t i = 0; i < original.size(); ++i) {
@@ -2699,25 +1981,21 @@ TEST(MRNFDecayTest, SaturatedAndLegacyInfiniteLogitsStayFinite) {
     }
 }
 
-TEST(MRNFDecayTest, FrozenRowsAndZeroFarDecayRemainUnchangedWhileNaNsStayVisible) {
+TEST(MRNFDecayTest, FrozenRowsRemainUnchangedWhileNaNsStayVisible) {
     const float inf = std::numeric_limits<float>::infinity();
-    auto opacity = Tensor::from_vector(std::vector<float>{inf, 20.0f, std::nanf(""), 20.0f}, {4}, Device::CUDA);
-    auto scales = Tensor::zeros({4, 3}, Device::CUDA);
-    const auto frozen = Tensor::from_vector(std::vector<bool>{true, false, false, false}, {4}, Device::CUDA);
-    const auto far = Tensor::from_vector(std::vector<bool>{false, true, false, false}, {4}, Device::CUDA);
+    auto opacity = Tensor::from_vector(std::vector<float>{inf, std::nanf(""), 20.0f}, {3}, Device::CUDA);
+    auto scales = Tensor::zeros({3, 3}, Device::CUDA);
+    const auto frozen = Tensor::from_vector(std::vector<bool>{true, false, false}, {3}, Device::CUDA);
     mrnf_strategy::launch_mrnf_decay(opacity.ptr<float>(), scales.ptr<float>(),
-                                     frozen.ptr<bool>(), 4, far.ptr<bool>(), 4,
-                                     0.004f, 0.01f, 0.0f, 0.5f, 4);
+                                     frozen.ptr<bool>(), 3, 0.004f, 0.01f, 0.5f, 3);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     const auto values = opacity.cpu().to_vector();
     EXPECT_EQ(values[0], inf);
-    EXPECT_FLOAT_EQ(values[1], 20.0f);
-    EXPECT_TRUE(std::isnan(values[2]));
-    EXPECT_NEAR(1.0 / (1.0 + std::exp(-double(values[3]))), 0.998, 2e-7);
+    EXPECT_TRUE(std::isnan(values[1]));
+    EXPECT_NEAR(1.0 / (1.0 + std::exp(-double(values[2]))), 0.998, 2e-7);
     const auto actual_scales = scales.cpu().to_vector();
     EXPECT_FLOAT_EQ(actual_scales[0], 0.0f);
-    EXPECT_FLOAT_EQ(actual_scales[3], 0.0f);
-    EXPECT_LT(actual_scales[9], 0.0f);
+    EXPECT_LT(actual_scales[6], 0.0f);
 }
 
 namespace {
@@ -2798,5 +2076,94 @@ TEST(MRNFStrategyTest, ChunkedChildPlacementMatchesSingleChunk) {
     ASSERT_EQ(chunked_sh.size(), single_sh.size());
     for (size_t i = 0; i < single_sh.size(); ++i) {
         ASSERT_NEAR(chunked_sh[i], single_sh[i], 1e-4f) << "SH value " << i;
+    }
+}
+
+TEST(MRNFStrategyTest, LongAxisSplitPlacementIgnoresQuaternionMagnitudeOnRealRows) {
+    const auto* path = std::getenv("LFS_SPLIT_TEST_MODEL");
+    if (!path)
+        GTEST_SKIP() << "set LFS_SPLIT_TEST_MODEL to a trained splat model";
+    auto document = lfs::io::project::ProjectDocument::open(path);
+    ASSERT_TRUE(document.has_value()) << lfs::format_for_developer(document.error());
+    Scene scene;
+    const auto hydration = document->hydrate(scene);
+    ASSERT_TRUE(hydration.has_value()) << lfs::format_for_developer(hydration.error());
+    const auto* model_ptr = scene.getCombinedModel();
+    ASSERT_NE(model_ptr, nullptr);
+    const auto& model = *model_ptr;
+    ASSERT_EQ(model.rotation_raw().ndim(), 2);
+    ASSERT_EQ(model.rotation_raw().shape()[1], 4);
+    ASSERT_EQ(model.scaling_raw().shape(), TensorShape({model.rotation_raw().shape()[0], 3}));
+    const auto source_rotations = model.rotation_raw().cpu().to_vector();
+    const auto source_scales = model.scaling_raw().cpu().to_vector();
+    std::vector<float> rotations, scales, expected_offsets;
+    std::vector<float> expected_lengths;
+    for (size_t row = 0; row < model.rotation_raw().shape()[0] && expected_lengths.size() < 192; ++row) {
+        double squared_norm = 0.0;
+        for (int c = 0; c < 4; ++c)
+            squared_norm += double(source_rotations[4 * row + c]) * source_rotations[4 * row + c];
+        const double norm = std::sqrt(squared_norm);
+        if (!std::isfinite(norm) || norm < 1e-6 || std::abs(norm - 1.0) < 0.01)
+            continue;
+        double q[4];
+        for (int c = 0; c < 4; ++c)
+            q[c] = source_rotations[4 * row + c] / norm;
+        const auto* scale = source_scales.data() + 3 * row;
+        const int axis = static_cast<int>(std::max_element(scale, scale + 3) - scale);
+        const float length = 0.5f * std::exp(scale[axis]);
+        ASSERT_TRUE(std::isfinite(length));
+        ASSERT_GT(length, 0.0f);
+        for (const float multiplier : {1.0f, static_cast<float>(1.0 / norm), 2.0f}) {
+            for (int c = 0; c < 4; ++c)
+                rotations.push_back(source_rotations[4 * row + c] * multiplier);
+            scales.insert(scales.end(), scale, scale + 3);
+            for (int c = 0; c < 3; ++c) {
+                const double cross = c == (axis + 1) % 3 ? q[1 + (axis + 2) % 3] : c == (axis + 2) % 3 ? -q[1 + (axis + 1) % 3]
+                                                                                                       : 0.0;
+                const double direction = (c == axis ? 2.0 * q[0] * q[0] - 1.0 : 0.0) +
+                                         2.0 * q[1 + axis] * q[1 + c] + 2.0 * q[0] * cross;
+                expected_offsets.push_back(static_cast<float>(length * direction));
+            }
+            expected_lengths.push_back(length);
+        }
+    }
+    ASSERT_FALSE(expected_lengths.empty()) << "trained model must contain non-unit quaternion rows";
+    const size_t n = expected_lengths.size();
+    auto positions = Tensor::zeros({n, 3}, Device::CUDA);
+    auto quaternions = Tensor::from_vector(rotations, {n, 4}, Device::CUDA);
+    auto log_scales = Tensor::from_vector(scales, {n, 3}, Device::CUDA);
+    auto sh0 = Tensor::zeros({n, 3}, Device::CUDA);
+    auto opacities = Tensor::zeros({n}, Device::CUDA);
+    auto children_positions = Tensor::empty({n, 3}, Device::CUDA);
+    auto children_rotations = Tensor::empty({n, 4}, Device::CUDA);
+    auto children_scales = Tensor::empty({n, 3}, Device::CUDA);
+    auto children_sh0 = Tensor::empty({n, 3}, Device::CUDA);
+    auto children_opacities = Tensor::empty({n}, Device::CUDA);
+    std::vector<int> indices(n);
+    for (size_t i = 0; i < n; ++i)
+        indices[i] = static_cast<int>(i);
+    const auto split_indices = Tensor::from_vector(indices, {n}, Device::CUDA).to(DataType::Int64);
+    kernels::launch_long_axis_split_gaussians_inplace(
+        positions.ptr<float>(), quaternions.ptr<float>(), log_scales.ptr<float>(),
+        sh0.ptr<float>(), nullptr, opacities.ptr<float>(), children_positions.ptr<float>(),
+        children_rotations.ptr<float>(), children_scales.ptr<float>(), children_sh0.ptr<float>(),
+        nullptr, children_opacities.ptr<float>(), split_indices.ptr<int64_t>(), static_cast<int>(n), 0);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto first = positions.cpu().to_vector();
+    const auto second = children_positions.cpu().to_vector();
+    EXPECT_EQ(quaternions.cpu().to_vector(), rotations);
+    EXPECT_EQ(children_rotations.cpu().to_vector(), rotations);
+    for (size_t row = 0; row < n; ++row) {
+        SCOPED_TRACE(row);
+        const float tolerance = std::max(1e-7f, expected_lengths[row] * 1e-4f);
+        float squared_length = 0.0f;
+        for (int c = 0; c < 3; ++c) {
+            EXPECT_NEAR(first[3 * row + c], expected_offsets[3 * row + c], tolerance);
+            EXPECT_NEAR(second[3 * row + c], -expected_offsets[3 * row + c], tolerance);
+            squared_length += first[3 * row + c] * first[3 * row + c];
+            if (row % 3 != 0)
+                EXPECT_NEAR(first[3 * row + c], first[3 * (row - row % 3) + c], tolerance);
+        }
+        EXPECT_NEAR(std::sqrt(squared_length), expected_lengths[row], tolerance);
     }
 }

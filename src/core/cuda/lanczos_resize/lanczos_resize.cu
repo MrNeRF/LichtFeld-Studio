@@ -235,7 +235,7 @@ namespace lfs::core {
                     const float kernel_value = kernel_value_y * kernel_value_x;
 
                     for (int ch = 0; ch < CHANNELS; ch++) {
-                        accumulator[ch] += PixelTraits<T>::load_and_normalize(input, input_pix_id * 3 + ch) * kernel_value;
+                        accumulator[ch] += PixelTraits<T>::load_and_normalize(input, input_pix_id * CHANNELS + ch) * kernel_value;
                     }
                 }
             }
@@ -370,8 +370,8 @@ namespace lfs::core {
             const int input_w = static_cast<int>(input.size(1));
             const int channels = static_cast<int>(input.size(2));
 
-            if (channels != 3) {
-                LOG_ERROR("lanczos_resize: Only 3-channel (RGB) images supported, got {}", channels);
+            if (channels < 1 || channels > 4) {
+                LOG_ERROR("lanczos_resize: Expected 1 to 4 channels, got {}", channels);
                 return Tensor();
             }
 
@@ -410,14 +410,22 @@ namespace lfs::core {
                                  (output_h + BLOCK_Y - 1) / BLOCK_Y);
             const dim3 block(BLOCK_X, BLOCK_Y, 1);
 
-            detail::LanczosResampleCUDA<NUM_CHANNELS, T>
-                <<<tile_grid, block, 0, cuda_stream>>>(
-                    input_h, input_w, output_h, output_w, kernel_size,
-                    layout_x->stride, layout_y->stride,
-                    coef_x.get(), coef_y.get(),
-                    input.ptr<T>(), output.ptr<float>());
-            LFS_CUDA_CHECK_MSG(cudaGetLastError(), "Lanczos RGB resample kernel launch");
-            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(cuda_stream), "Lanczos RGB resample completion");
+            const auto launch = [&]<uint32_t CHANNELS>() {
+                detail::LanczosResampleCUDA<CHANNELS, T>
+                    <<<tile_grid, block, 0, cuda_stream>>>(
+                        input_h, input_w, output_h, output_w, kernel_size,
+                        layout_x->stride, layout_y->stride,
+                        coef_x.get(), coef_y.get(),
+                        input.ptr<T>(), output.ptr<float>());
+                LFS_CUDA_CHECK_MSG(cudaGetLastError(), "Lanczos interleaved resample kernel launch");
+            };
+            switch (channels) {
+            case 1: launch.template operator()<1>(); break;
+            case 2: launch.template operator()<2>(); break;
+            case 3: launch.template operator()<3>(); break;
+            default: launch.template operator()<4>(); break;
+            }
+            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(cuda_stream), "Lanczos interleaved resample completion");
             return output;
         }
 

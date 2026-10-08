@@ -103,6 +103,8 @@ namespace lfs::io::project {
     struct LFS_IO_API DatasetEmbedResult {
         ProjectInspectorCard card;
         std::uint64_t images_embedded = 0;
+        std::uint64_t masks_embedded = 0;
+        std::uint64_t depths_embedded = 0;
         std::uint64_t normals_embedded = 0;
         std::uint64_t sparse_embedded = 0;
         std::uint64_t bytes_embedded = 0;

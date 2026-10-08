@@ -520,9 +520,9 @@ class SelectionControlsController:
         elif action == "delete":
             self._execute_selection_stage(lambda: lf.pipeline.edit.delete_())
         elif action == "select_all":
-            self._execute_selection_stage(lambda: lf.pipeline.select.all())
+            self._run_selection_command(lf.ui.select_all_gaussians)
         elif action == "unselect":
-            self._execute_selection_stage(lambda: lf.pipeline.select.none())
+            self._run_selection_command(lf.ui.deselect_all_gaussians)
         elif action == "undo":
             try:
                 if lf.undo.can_undo():
@@ -536,7 +536,7 @@ class SelectionControlsController:
             except Exception as exc:
                 self._report_error(str(exc).strip() or _ui_label("selection.redo_failed", "Redo failed."))
         elif action == "invert":
-            self._execute_selection_stage(lambda: lf.pipeline.select.invert())
+            self._run_selection_command(lf.ui.invert_gaussian_selection)
 
         self._refresh_state()
         self._dirty_all()
@@ -548,6 +548,13 @@ class SelectionControlsController:
             error = str(exc).strip() or _ui_label("selection.operation_failed_generic", "Operation failed.")
         if error:
             self._report_error(error)
+
+    def _run_selection_command(self, command):
+        """The toolbar buttons run the same commands as the Select menu and their shortcuts."""
+        try:
+            command()
+        except Exception as exc:
+            self._report_error(str(exc).strip() or _ui_label("selection.operation_failed_generic", "Operation failed."))
 
     def _report_error(self, message):
         dialog = getattr(lf.ui, "message_dialog", None)

@@ -260,6 +260,8 @@ def details_rows(entry: Any, details: Any, *, format_size: Callable[[Any], str],
     metrics = value(details, "metrics", None)
     embedded = bool(value(params, "embedded_dataset_present", False))
     embedded_images = int(value(params, "embedded_images", 0) or 0)
+    embedded_masks = int(value(params, "embedded_masks", 0) or 0)
+    embedded_depths = int(value(params, "embedded_depths", 0) or 0)
     embedded_normals = int(value(params, "embedded_normals", 0) or 0)
     embedded_sparse = int(value(params, "embedded_sparse", 0) or 0)
     external = next((ref for ref in references if str(value(ref, "kind", "")).lower() in {"dataset", "images", "data"}), None)
@@ -286,6 +288,8 @@ def details_rows(entry: Any, details: Any, *, format_size: Callable[[Any], str],
         "dataset_reachable": external_reachable,
         "embedded": embedded,
         "embedded_images": embedded_images,
+        "embedded_masks": embedded_masks,
+        "embedded_depths": embedded_depths,
         "embedded_normals": embedded_normals,
         "embedded_sparse": embedded_sparse,
         "embedded_complete": bool(value(params, "embedded_dataset_complete", False)),
@@ -305,7 +309,11 @@ def details_rows(entry: Any, details: Any, *, format_size: Callable[[Any], str],
     }
     if embedded:
         complete = "complete" if model["embedded_complete"] else "incomplete"
-        model["dataset"] = f"embedded, {embedded_images:,} images, {embedded_normals:,} normals and {embedded_sparse:,} sparse, {complete}"
+        model["dataset"] = (
+            f"embedded, {embedded_images:,} images, {embedded_masks:,} masks, "
+            f"{embedded_depths:,} depths, {embedded_normals:,} normals and "
+            f"{embedded_sparse:,} sparse, {complete}"
+        )
     elif external_path:
         model["dataset"] = f"{external_path} ({'reachable' if external_reachable else 'missing'})"
     if has_samples:
@@ -324,6 +332,8 @@ def operation_actions(entry: Any) -> list[dict[str, Any]]:
         {"action": "export_as", "label": "projects.action.export_as"},
         {"action": "update_thumbnail", "label": "projects.action.update_thumbnail"},
         {"action": "rename", "label": "projects.action.rename"},
+        {"action": "clean", "label": "project_cleanup.title"},
+        {"action": "compact_content", "label": "projects.contents.compact"},
     ]
 
 
@@ -556,9 +566,17 @@ def contents_rows(entry: Any, details: Any, plan: Any = None, *,
             checkpoint_uuid=uuid, iteration=iteration, bound=bool(value(cp, "binds_scene_graph", False)))
     embedded = bool(value(params, "embedded_dataset_present", False))
     if embedded:
-        count = int(value(params, "embedded_images", 0))
-        r = row("dataset:embedded", "dataset", safe_format(tr("projects.contents.dataset_embedded"), count=count),
-                sum(int(value(part, "bytes", 0)) for part in value(plan, "embedded_dataset", []) or []), remove=True, images=count)
+        counts = {
+            "images": int(value(params, "embedded_images", 0) or 0),
+            "masks": int(value(params, "embedded_masks", 0) or 0),
+            "depths": int(value(params, "embedded_depths", 0) or 0),
+            "normals": int(value(params, "embedded_normals", 0) or 0),
+            "sparse": int(value(params, "embedded_sparse", 0) or 0),
+        }
+        label = safe_format(tr("projects.contents.dataset_embedded"), **counts)
+        r = row("dataset:embedded", "dataset", label,
+                sum(int(value(part, "bytes", 0)) for part in value(plan, "embedded_dataset", []) or []),
+                remove=True, **counts)
         r["remove_disabled"] = not bool(value(value(plan, "drop_embedded_dataset", None), "allowed", False))
         r["remove_label"] = tr("projects.contents.dataset_kept") if r["remove_disabled"] else tr("projects.contents.remove")
     else:
@@ -597,6 +615,7 @@ def contents_rows(entry: Any, details: Any, plan: Any = None, *,
         r = row("removed:" + str(len(rows)), kind, label, removed.get("bytes", 0))
         r.update(pending=True, undo=True, removal_id=removed["id"], detail=tr("projects.contents.removed"))
     storage = value(details, "storage", None)
+    row("clean", "clean", tr("project_cleanup.title"), action="clean", action_label="project_cleanup.title")
     ratio = float(value(storage, "dead_ratio", 0) or 0)
     if ratio >= 0.01 or pending:
         compact = row("compact", "compact", tr("projects.contents.reclaimable").format(percent=f"{ratio * 100:.0f}"),

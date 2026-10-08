@@ -21,6 +21,16 @@ body {
     min-height: 0;
 }
 
+#action-footer {
+    display: flex;
+    flex-direction: column;
+    gap: 8dp;
+    flex-shrink: 0;
+    padding: 8dp 8dp 10dp;
+    border-top-width: 1dp;
+    border-top-color: rgba(88, 91, 112, 128);
+}
+
 #content {
     display: flex;
     flex-direction: column;
@@ -89,7 +99,8 @@ body {
     background-color: rgba(137, 180, 250, 42);
 }
 
-.transport-btn:disabled {
+.transport-btn:disabled,
+.transport-btn[disabled] {
     opacity: 0.35;
 }
 
@@ -166,7 +177,8 @@ body {
     overflow: hidden;
 }
 
-#timeline:disabled {
+#timeline:disabled,
+#timeline[disabled] {
     opacity: 0.45;
 }
 
@@ -392,8 +404,6 @@ body {
     line-height: 22dp;
     margin-right: 20dp;
     padding: 0 0 0 8dp;
-    position: relative;
-    top: 0;
 }
 
 .wide-select selectarrow,
@@ -401,8 +411,6 @@ body {
     width: 20dp;
     height: 22dp;
     line-height: 22dp;
-    position: relative;
-    top: 0;
 }
 
 .inline-control {
@@ -517,6 +525,16 @@ body {
     height: 10dp;
 }
 
+#progress-section {
+    flex: 1;
+}
+
+#progress-section progress {
+    flex: 1;
+    width: auto;
+    min-width: 120dp;
+}
+
 .status-section--success {
     border-color: rgba(166, 227, 161, 160);
 }
@@ -533,7 +551,7 @@ body {
     color: #cdd6f4;
 }
 
-button:disabled,
+button[disabled],
 input:disabled,
 select:disabled {
     opacity: 0.45;

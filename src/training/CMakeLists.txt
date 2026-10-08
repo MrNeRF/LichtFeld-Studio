@@ -12,6 +12,9 @@ add_subdirectory(rasterization/gsplat)
 set(LFS_TRAINING_KERNEL_SOURCES
     kernels/loss_tensor_contract.cpp
     kernels/camera_loss_heatmap.cu
+    kernels/thin_structure.cu
+    kernels/blob_seeding.cu
+    kernels/gradient_residual.cu
     kernels/ssim.cu
     kernels/l1_loss.cu
     kernels/ssim_reduction.cu
@@ -92,6 +95,7 @@ set(TRAINING_NEW_SOURCES
     strategies/strategy_utils.cpp
     strategies/mcmc.cpp
     strategies/mrnf.cpp
+    strategies/blob_seeding.cpp
     strategies/strategy_factory.cpp
     strategies/improved_gs_plus.cpp
     rasterization/fast_rasterizer.cpp
@@ -105,6 +109,9 @@ set(TRAINING_NEW_SOURCES
     components/sparsity_optimizer.cpp
     control/command_api.cpp
     metrics/eval_mask.cpp
+    metrics/eval_mask_kernels.cu
+    metrics/flip.cu
+    metrics/mesh_mask_kernels.cu
     metrics/metrics.cpp
         checkpoint.cpp
         project_snapshot_chapters.cpp

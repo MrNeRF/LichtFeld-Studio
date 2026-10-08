@@ -7,14 +7,18 @@
 #include "core/events.hpp"
 #include "core/mesh_data.hpp"
 #include "core/parameters.hpp"
+#include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "core/uuid.hpp"
+#include "io/exporter.hpp"
+#include "licht_test_support.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/core/services.hpp"
+#include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/training/training_manager.hpp"
 
@@ -241,6 +245,15 @@ protected:
         lfs::event::EventBridge::instance().clear_all();
     }
 
+    void set_running(lfs::vis::TrainerManager& manager) {
+        ASSERT_TRUE(manager.state_machine_.transitionTo(lfs::vis::TrainingState::Starting));
+        ASSERT_TRUE(manager.state_machine_.transitionTo(lfs::vis::TrainingState::Running));
+    }
+
+    void backdate_training_start(lfs::vis::TrainerManager& manager, const std::chrono::seconds age) {
+        manager.training_start_time_ = std::chrono::steady_clock::now() - age;
+    }
+
     void set_scene_owner_poster(
         lfs::vis::TrainerManager& manager,
         std::function<bool(std::function<void()>, std::function<void()>)> poster) {
@@ -259,6 +272,74 @@ protected:
         manager.runOnSceneOwnerThread(std::move(run), std::move(cancel));
     }
 };
+
+// Elapsed time adds the running segment only while the state is Running; a
+// stop that skips it before entering Stopping reports 0 s for a run without pauses.
+TEST_F(TrainingSceneInitConcurrencyTest, StopKeepsTheRunningSegmentInElapsedTime) {
+    lfs::core::Scene scene;
+    const auto dataset = scene.addDataset("Dataset");
+    const auto cameras = scene.addCameraGroup("Training (1)", dataset, 1);
+    ASSERT_NE(scene.addCamera("camera.png", cameras, make_test_camera()), lfs::core::NULL_NODE);
+    lfs::vis::TrainerManager manager;
+    manager.setTrainer(std::make_unique<lfs::training::Trainer>(scene));
+    set_running(manager);
+    backdate_training_start(manager, std::chrono::seconds(5));
+
+    std::optional<float> reported;
+    lfs::core::events::state::TrainingCompleted::when(
+        [&reported](const auto& event) { reported = event.elapsed_seconds; });
+    manager.stopTraining();
+
+    ASSERT_TRUE(wait_until([&] { return manager.getState() == lfs::vis::TrainingState::Finished; }));
+    EXPECT_GE(manager.getElapsedSeconds(), 5.0f);
+    ASSERT_TRUE(reported);
+    EXPECT_GE(*reported, 5.0f);
+}
+
+TEST_F(TrainingSceneInitConcurrencyTest, ColdViewportDefersWhileTrainerHoldsModelLock) {
+    lfs::vis::SceneManager scene_manager;
+    scene_manager.changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+    auto& scene = scene_manager.getScene();
+    const auto dataset = scene.addDataset("Dataset");
+    const auto cameras = scene.addCameraGroup("Training (1)", dataset, 1);
+    ASSERT_NE(scene.addCamera("camera.png", cameras, make_test_camera()), lfs::core::NULL_NODE);
+    lfs::vis::TrainerManager manager;
+    manager.setTrainer(std::make_unique<lfs::training::Trainer>(scene_manager.getScene()));
+    lfs::vis::services().set(&manager);
+    set_running(manager);
+
+    lfs::vis::RenderingManager rendering;
+    Viewport viewport(640, 480);
+    viewport.frameBufferSize = {640, 480};
+    lfs::vis::RenderSettings settings;
+    const lfs::vis::RenderingManager::RenderContext context{
+        .viewport = viewport,
+        .settings = settings,
+        .scene_manager = &scene_manager};
+    std::promise<void> locked;
+    std::promise<void> viewer_work;
+    auto work = viewer_work.get_future();
+    std::atomic<bool> timed_out{false};
+    std::jthread worker([&] {
+        std::unique_lock lock(manager.getTrainer()->getRenderMutex());
+        locked.set_value();
+        // Model growth waits for work on the viewer thread while holding this
+        // lock. Bound that wait so a blocking preview fails instead of hanging.
+        timed_out = work.wait_for(std::chrono::seconds(2)) == std::future_status::timeout;
+    });
+    locked.get_future().wait();
+    const auto deferred = rendering.renderVulkanFrame(context);
+    viewer_work.set_value();
+    worker.join();
+    EXPECT_FALSE(timed_out);
+    EXPECT_FALSE(deferred.matches_viewport_extent);
+    EXPECT_EQ(deferred.image, nullptr);
+    EXPECT_NE(rendering.pendingDirtyMask(), 0u);
+
+    // Once growth releases the lock, a hidden/empty scene can publish its extent.
+    const auto ready = rendering.renderVulkanFrame(context);
+    EXPECT_TRUE(ready.matches_viewport_extent);
+}
 
 TEST_F(TrainingSceneInitConcurrencyTest, DelayedOwnerInstallMutatesGraphWhileReadersScan) {
     lfs::vis::SceneManager scene_manager;
@@ -415,6 +496,31 @@ TEST_F(TrainingSceneInitConcurrencyTest, PrepareKeepsSeedsOutsideEnabledCropbox)
     EXPECT_EQ((*prepared)->preserved_cropbox_data.max, empty_box.max);
     EXPECT_EQ(scene.getNodeCount(), node_count);
     EXPECT_EQ(scene.getTrainingModel(), nullptr);
+}
+
+// Catches training from an --init splat dropping the crop box placed on its preview point cloud: the model then
+// trained without the crop box region and the cropbox evaluation mask found no crop box.
+TEST_F(TrainingSceneInitConcurrencyTest, PrepareFromInitSplatKeepsTheCropbox) {
+    lfs::core::Scene scene;
+    ASSERT_TRUE(populate_init_scene(scene));
+    const lfs::test::licht::TemporaryDirectory temp("lfs-init-splat-cropbox");
+    const auto init = temp.path / "init.ply";
+    ASSERT_TRUE(lfs::io::save_ply(*lfs::test::licht::make_splat(5),
+                                  {.output_path = init, .binary = true, .async = false}));
+    lfs::core::param::TrainingParameters params;
+    params.init_path = lfs::core::path_to_utf8(init);
+    params.optimization.sh_degree = 0;
+    params.optimization.max_cap = 16;
+    params.optimization.random = false;
+
+    const auto prepared = lfs::training::prepareTrainingModel(params, scene);
+    ASSERT_TRUE(prepared) << prepared.error();
+    ASSERT_TRUE(prepared->has_value());
+    EXPECT_EQ((*prepared)->model->size(), 5);
+    EXPECT_TRUE((*prepared)->has_preserved_cropbox);
+    EXPECT_TRUE((*prepared)->preserved_cropbox_data.enabled);
+    EXPECT_EQ((*prepared)->preserved_cropbox_data.min, glm::vec3(-100.0f));
+    EXPECT_EQ((*prepared)->preserved_cropbox_data.max, glm::vec3(100.0f));
 }
 
 TEST_F(TrainingSceneInitConcurrencyTest, StopTrainingReturnsWhileWorkerWaitsForOwner) {

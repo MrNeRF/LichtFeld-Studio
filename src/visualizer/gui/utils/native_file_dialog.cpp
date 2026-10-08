@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/utils/native_file_dialog.hpp"
+#include "gui/utils/file_dialog_path.hpp"
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -13,6 +14,7 @@
 #include <SDL3/SDL_video.h>
 #include <nfd.h>
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -29,6 +31,9 @@
 namespace lfs::vis::gui {
 
     namespace {
+
+        std::atomic_uint native_dialog_block_count{0};
+        thread_local bool native_dialog_block_attempted = false;
 
         enum class DialogKind : uint8_t {
             OpenFile,
@@ -157,30 +162,6 @@ namespace lfs::vis::gui {
                 extension.erase(extension.begin());
             }
             return extension;
-        }
-
-        [[nodiscard]] std::string ensureDefaultExtension(std::string defaultName,
-                                                         const std::string_view extension) {
-            const std::filesystem::path normalizedPath =
-                defaultName.empty() ? std::filesystem::path{}
-                                    : lfs::core::utf8_to_path(defaultName).filename();
-            const std::string normalizedName =
-                normalizedPath.empty() ? std::string{} : lfs::core::path_to_utf8(normalizedPath);
-            if (normalizedName.empty() || extension.empty() ||
-                normalizedPath.extension() == extension) {
-                return normalizedName;
-            }
-            return normalizedName + std::string(extension);
-        }
-
-        [[nodiscard]] std::filesystem::path appendRequiredExtension(
-            std::filesystem::path path,
-            const std::string_view extension) {
-            if (path.empty() || extension.empty() || path.extension() == extension) {
-                return path;
-            }
-            path += std::string(extension);
-            return path;
         }
 
         [[nodiscard]] std::filesystem::path absoluteDialogDirectory(
@@ -357,6 +338,11 @@ namespace lfs::vis::gui {
 
         bool runDialog(const DialogRequest& request, std::filesystem::path& resultPath) {
             resultPath.clear();
+            if (nativeFileDialogsBlocked()) {
+                native_dialog_block_attempted = true;
+                LOG_WARN("Native file dialog request blocked during an MCP GUI operation");
+                return false;
+            }
             if (!ensureDialogBackendInitialized()) {
                 return false;
             }
@@ -384,7 +370,7 @@ namespace lfs::vis::gui {
                 dialogResult = NFD_OpenDialogU8_With(&selectedPath, &args);
             } else if (request.kind == DialogKind::SaveFile) {
                 const std::string defaultName =
-                    ensureDefaultExtension(request.default_name, request.required_extension);
+                    detail::saveDialogDefaultName(request.default_name, request.required_extension);
                 const char* const defaultNameArg =
                     defaultName.empty() ? nullptr : defaultName.c_str();
                 const nfdsavedialogu8args_t args{
@@ -424,7 +410,7 @@ namespace lfs::vis::gui {
 
             resultPath = lfs::core::utf8_to_path(selectedPath);
             NFD_FreePathU8(selectedPath);
-            resultPath = appendRequiredExtension(resultPath, request.required_extension);
+            resultPath = detail::appendRequiredExtension(resultPath, request.required_extension);
             return !resultPath.empty();
         }
 
@@ -509,6 +495,11 @@ namespace lfs::vis::gui {
             const char* title,
             const GtkFileChooserAction action,
             const bool returnCurrentFolder) {
+            if (nativeFileDialogsBlocked()) {
+                native_dialog_block_attempted = true;
+                LOG_WARN("Native file dialog request blocked during an MCP GUI operation");
+                return {};
+            }
             if (!ensureDialogBackendInitialized()) {
                 return {};
             }
@@ -567,6 +558,20 @@ namespace lfs::vis::gui {
 
     void warmupNativeFileDialogBackend() {
         (void)ensureDialogBackendInitialized();
+    }
+
+    ScopedNativeFileDialogBlock::ScopedNativeFileDialogBlock() noexcept {
+        if (native_dialog_block_count.fetch_add(1, std::memory_order_acq_rel) == 0)
+            native_dialog_block_attempted = false;
+    }
+    ScopedNativeFileDialogBlock::~ScopedNativeFileDialogBlock() {
+        native_dialog_block_count.fetch_sub(1, std::memory_order_acq_rel);
+    }
+    bool nativeFileDialogsBlocked() noexcept {
+        return native_dialog_block_count.load(std::memory_order_acquire) != 0;
+    }
+    bool nativeFileDialogAttempted() noexcept {
+        return native_dialog_block_attempted;
     }
 
     std::filesystem::path OpenImageFileDialog(const std::filesystem::path& defaultPath) {

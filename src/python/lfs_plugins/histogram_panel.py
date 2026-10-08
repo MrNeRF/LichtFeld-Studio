@@ -121,6 +121,9 @@ class HistogramPanel(Panel):
         self._custom_range_max_value: float | None = None
         self._custom_range_min_str = ""
         self._custom_range_max_str = ""
+        self._uncommitted_range_inputs: set[str] = set()
+        self._range_metric_id: str | None = None
+        self._compare_y_range_metric_id: str | None = None
         self._compare_values: lf.Tensor | None = None
         self._compare_finite_mask: lf.Tensor | None = None
         self._compare_valid_x_values: lf.Tensor | None = None
@@ -367,6 +370,8 @@ class HistogramPanel(Panel):
         model.bind("histogram_bin_count", lambda: self._histogram_bin_count, self._set_histogram_bin_count)
         model.bind("compare_x_bin_count", lambda: self._compare_x_bin_count, self._set_compare_x_bin_count)
         model.bind("compare_y_bin_count", lambda: self._compare_y_bin_count, self._set_compare_y_bin_count)
+        model.bind_func("range_inputs_ready", self._range_inputs_ready)
+        model.bind_func("compare_y_range_inputs_ready", self._compare_y_range_inputs_ready)
         model.bind("range_min_str", lambda: self._custom_range_min_str, self._set_custom_range_min)
         model.bind("range_max_str", lambda: self._custom_range_max_str, self._set_custom_range_max)
         model.bind("compare_y_range_min_str",
@@ -596,10 +601,13 @@ class HistogramPanel(Panel):
         finite_values: lf.Tensor,
         range_min: float,
         range_max: float,
+        data_bounds: tuple[float, float] | None = None,
     ) -> tuple[float, float]:
         """Tighten [range_min, range_max] to the actual extent of values inside it."""
         if not math.isfinite(range_min) or not math.isfinite(range_max) or range_max <= range_min:
             return range_min, range_max
+        if data_bounds is not None and range_min <= data_bounds[0] and range_max >= data_bounds[1]:
+            return data_bounds if data_bounds[1] > data_bounds[0] else (range_min, range_max)
         in_range = (finite_values >= range_min) & (finite_values <= range_max)
         if not bool(in_range.any().item()):
             return range_min, range_max
@@ -620,10 +628,12 @@ class HistogramPanel(Panel):
         ]
 
     def _reset_custom_range(self):
+        # Keep the retained chart bounds until the reset result replaces them.
+        self._uncommitted_range_inputs.difference_update(("min", "max"))
         self._custom_range_min_value = None
         self._custom_range_max_value = None
-        self._custom_range_min_str = self._format_range_input(self._auto_histogram_min)
-        self._custom_range_max_str = self._format_range_input(self._auto_histogram_max)
+        self._custom_range_min_str = self._format_range_input(self._primary_histogram_min)
+        self._custom_range_max_str = self._format_range_input(self._primary_histogram_max)
 
     @staticmethod
     def _format_range_input(value: float) -> str:
@@ -662,6 +672,7 @@ class HistogramPanel(Panel):
         )
         self._custom_range_min_value = lo
         self._custom_range_max_value = hi
+        self._uncommitted_range_inputs.difference_update(("min", "max"))
         self._custom_range_min_str = self._format_range_input(lo)
         self._custom_range_max_str = self._format_range_input(hi)
         return changed
@@ -683,6 +694,7 @@ class HistogramPanel(Panel):
         )
         self._compare_y_custom_range_min_value = lo
         self._compare_y_custom_range_max_value = hi
+        self._uncommitted_range_inputs.difference_update(("y_min", "y_max"))
         self._compare_y_custom_range_min_str = self._format_range_input(lo)
         self._compare_y_custom_range_max_str = self._format_range_input(hi)
         return changed
@@ -901,14 +913,28 @@ class HistogramPanel(Panel):
             return False
         return self._apply_compare_view_range(zoomed_x[0], zoomed_x[1], zoomed_y[0], zoomed_y[1])
 
+    def _range_inputs_ready(self):
+        return self._range_metric_id == self._metric_id
+
+    def _compare_y_range_inputs_ready(self):
+        return self._compare_y_range_metric_id == self._compare_metric_id
+
     def _set_custom_range_min(self, value):
         # Per-keystroke setter: just buffer the text. Commit happens on Enter or blur
         # via _commit_custom_range so the user can type freely without the input
         # snapping back mid-keystroke.
-        self._custom_range_min_str = str(value)
+        text = str(value)
+        if not self._range_inputs_ready() or text == self._custom_range_min_str:
+            return
+        self._custom_range_min_str = text
+        self._uncommitted_range_inputs.add("min")
 
     def _set_custom_range_max(self, value):
-        self._custom_range_max_str = str(value)
+        text = str(value)
+        if not self._range_inputs_ready() or text == self._custom_range_max_str:
+            return
+        self._custom_range_max_str = text
+        self._uncommitted_range_inputs.add("max")
 
     @staticmethod
     def _parse_range_input(value) -> float | None:
@@ -928,8 +954,13 @@ class HistogramPanel(Panel):
         return abs(float(a) - float(b)) <= max(abs(float(b)) * 1e-6, 1e-9)
 
     def _commit_custom_range(self):
-        parsed_min = self._parse_range_input(self._custom_range_min_str)
-        parsed_max = self._parse_range_input(self._custom_range_max_str)
+        if not self._range_inputs_ready():
+            return
+        # Only typed text is a constraint; formatted bounds may be rounded or
+        # belong to the retained snapshot during an asynchronous metric change.
+        parsed_min = self._parse_range_input(self._custom_range_min_str) if "min" in self._uncommitted_range_inputs else None
+        parsed_max = self._parse_range_input(self._custom_range_max_str) if "max" in self._uncommitted_range_inputs else None
+        self._uncommitted_range_inputs.difference_update(("min", "max"))
 
         new_min = parsed_min if parsed_min is not None else self._custom_range_min_value
         new_max = parsed_max if parsed_max is not None else self._custom_range_max_value
@@ -962,6 +993,7 @@ class HistogramPanel(Panel):
             self._refresh_range_input_strings()
 
     def _refresh_range_input_strings(self):
+        self._uncommitted_range_inputs.difference_update(("min", "max"))
         self._custom_range_min_str = self._format_range_input(self._primary_histogram_min)
         self._custom_range_max_str = self._format_range_input(self._primary_histogram_max)
         if self._handle:
@@ -1000,20 +1032,34 @@ class HistogramPanel(Panel):
         return self._has_custom_range() or self._has_compare_y_custom_range()
 
     def _reset_compare_y_custom_range(self):
+        self._uncommitted_range_inputs.difference_update(("y_min", "y_max"))
         self._compare_y_custom_range_min_value = None
         self._compare_y_custom_range_max_value = None
-        self._compare_y_custom_range_min_str = self._format_range_input(self._compare_y_auto_min)
-        self._compare_y_custom_range_max_str = self._format_range_input(self._compare_y_auto_max)
+        self._compare_y_custom_range_min_str = self._format_range_input(self._compare_y_min)
+        self._compare_y_custom_range_max_str = self._format_range_input(self._compare_y_max)
 
     def _set_compare_y_range_min(self, value):
-        self._compare_y_custom_range_min_str = str(value)
+        text = str(value)
+        if not self._compare_y_range_inputs_ready() or text == self._compare_y_custom_range_min_str:
+            return
+        self._compare_y_custom_range_min_str = text
+        self._uncommitted_range_inputs.add("y_min")
 
     def _set_compare_y_range_max(self, value):
-        self._compare_y_custom_range_max_str = str(value)
+        text = str(value)
+        if not self._compare_y_range_inputs_ready() or text == self._compare_y_custom_range_max_str:
+            return
+        self._compare_y_custom_range_max_str = text
+        self._uncommitted_range_inputs.add("y_max")
 
     def _commit_compare_y_range(self):
-        parsed_min = self._parse_range_input(self._compare_y_custom_range_min_str)
-        parsed_max = self._parse_range_input(self._compare_y_custom_range_max_str)
+        if not self._compare_y_range_inputs_ready():
+            return
+        # Only typed text is a constraint; formatted bounds may be rounded or
+        # belong to the retained snapshot during an asynchronous metric change.
+        parsed_min = self._parse_range_input(self._compare_y_custom_range_min_str) if "y_min" in self._uncommitted_range_inputs else None
+        parsed_max = self._parse_range_input(self._compare_y_custom_range_max_str) if "y_max" in self._uncommitted_range_inputs else None
+        self._uncommitted_range_inputs.difference_update(("y_min", "y_max"))
 
         new_min = parsed_min if parsed_min is not None else self._compare_y_custom_range_min_value
         new_max = parsed_max if parsed_max is not None else self._compare_y_custom_range_max_value
@@ -1042,6 +1088,7 @@ class HistogramPanel(Panel):
             self._refresh_compare_y_input_strings()
 
     def _refresh_compare_y_input_strings(self):
+        self._uncommitted_range_inputs.difference_update(("y_min", "y_max"))
         self._compare_y_custom_range_min_str = self._format_range_input(self._compare_y_min)
         self._compare_y_custom_range_max_str = self._format_range_input(self._compare_y_max)
         if self._handle:
@@ -1379,6 +1426,9 @@ class HistogramPanel(Panel):
         finite_mask = values.isfinite()
         if visible_mask is not None and visible_mask.shape == values.shape:
             finite_mask = finite_mask & visible_mask
+        apply_crop_filter = getattr(scene, "apply_crop_filter", None)
+        if apply_crop_filter is not None:
+            apply_crop_filter(finite_mask)
         primary = panel._build_series_result(
             values, finite_mask, metric_id, bin_count, custom_range, cancel_event
         )
@@ -1399,9 +1449,7 @@ class HistogramPanel(Panel):
             if compare_values is None or compare_values.shape != values.shape:
                 compare = {"kind": "unavailable"}
             else:
-                compare_mask = values.isfinite() & compare_values.isfinite()
-                if visible_mask is not None and visible_mask.shape == values.shape:
-                    compare_mask = compare_mask & visible_mask
+                compare_mask = finite_mask & compare_values.isfinite()
                 compare = panel._build_compare_result(
                     values,
                     compare_values,
@@ -1439,11 +1487,13 @@ class HistogramPanel(Panel):
         if self._histogram_compute_cancelled(cancel_event):
             return {"kind": "cancelled"}
         sorted_values, _ = valid_values.sort()
-        auto_min, auto_max = self._histogram_bounds(valid_values, metric_id)
+        data_bounds = (float(sorted_values[0].item()), float(sorted_values[-1].item()))
+        bounded_extent = data_bounds if metric_id in ("opacity", "anisotropy", "erank") else None
+        auto_min, auto_max = self._histogram_bounds(valid_values, metric_id, bounded_extent)
         if self._histogram_compute_cancelled(cancel_event):
             return {"kind": "cancelled"}
         histogram_min, histogram_max = HistogramPanel._resolve_and_snap_bounds(
-            valid_values, auto_min, auto_max, custom_range
+            valid_values, auto_min, auto_max, custom_range, bounded_extent
         )
         valid_bin_indices = self._bin_indices_for_values(
             valid_values, histogram_min, histogram_max, int(bin_count)
@@ -1468,8 +1518,8 @@ class HistogramPanel(Panel):
             "valid_values": valid_values,
             "finite_values_cpu": valid_values,
             "sorted_values": sorted_values,
-            "min_value": float(sorted_values[0].item()),
-            "max_value": float(sorted_values[-1].item()),
+            "min_value": data_bounds[0],
+            "max_value": data_bounds[1],
             "mean_value": float(valid_values.mean().item()),
             "median_value": self._percentile_from_sorted(sorted_values, 50.0),
             "p95_value": self._percentile_from_sorted(sorted_values, 95.0),
@@ -1506,12 +1556,14 @@ class HistogramPanel(Panel):
             return {"kind": "empty"}
         if self._histogram_compute_cancelled(cancel_event):
             return {"kind": "cancelled"}
-        x_auto_min, x_auto_max = self._histogram_bounds(x_valid, x_metric_id)
-        y_auto_min, y_auto_max = self._histogram_bounds(y_valid, y_metric_id)
+        x_bounds = (x_valid.min_scalar(), x_valid.max_scalar()) if x_metric_id in ("opacity", "anisotropy", "erank") else None
+        y_bounds = (y_valid.min_scalar(), y_valid.max_scalar()) if y_metric_id in ("opacity", "anisotropy", "erank") else None
+        x_auto_min, x_auto_max = self._histogram_bounds(x_valid, x_metric_id, x_bounds)
+        y_auto_min, y_auto_max = self._histogram_bounds(y_valid, y_metric_id, y_bounds)
         if self._histogram_compute_cancelled(cancel_event):
             return {"kind": "cancelled"}
-        x_min, x_max = HistogramPanel._resolve_and_snap_bounds(x_valid, x_auto_min, x_auto_max, custom_range)
-        y_min, y_max = HistogramPanel._resolve_and_snap_bounds(y_valid, y_auto_min, y_auto_max, y_custom_range)
+        x_min, x_max = HistogramPanel._resolve_and_snap_bounds(x_valid, x_auto_min, x_auto_max, custom_range, x_bounds)
+        y_min, y_max = HistogramPanel._resolve_and_snap_bounds(y_valid, y_auto_min, y_auto_max, y_custom_range, y_bounds)
         x_bin_indices = self._build_selection_bin_indices(
             x_cpu, mask_cpu, x_min, x_max, int(x_bin_count)
         )
@@ -1564,6 +1616,13 @@ class HistogramPanel(Panel):
         self._auto_histogram_max = primary["auto_max"]
         self._primary_histogram_min = primary["histogram_min"]
         self._primary_histogram_max = primary["histogram_max"]
+        self._range_metric_id = self._metric_id
+        # Enter may blur before this result arrives and restore the previous bounds.
+        # Publish the snapped bounds without replacing a newer, uncommitted edit.
+        if "min" not in self._uncommitted_range_inputs:
+            self._custom_range_min_str = self._format_range_input(self._primary_histogram_min)
+        if "max" not in self._uncommitted_range_inputs:
+            self._custom_range_max_str = self._format_range_input(self._primary_histogram_max)
         self._show_chart = True
         self._sample_count = f"{int(primary['valid_values'].shape[0]):,}"
         self._range_text = self._format_range_text(primary["min_value"], primary["max_value"])
@@ -1618,6 +1677,11 @@ class HistogramPanel(Panel):
         self._compare_x_max = compare["x_max"]
         self._compare_y_min = compare["y_min"]
         self._compare_y_max = compare["y_max"]
+        self._compare_y_range_metric_id = self._compare_metric_id
+        if "y_min" not in self._uncommitted_range_inputs:
+            self._compare_y_custom_range_min_str = self._format_range_input(self._compare_y_min)
+        if "y_max" not in self._uncommitted_range_inputs:
+            self._compare_y_custom_range_max_str = self._format_range_input(self._compare_y_max)
         self._compare_x_bin_indices = compare["x_bin_indices"]
         self._compare_y_bin_indices = compare["y_bin_indices"]
         self._compare_counts = compare["counts"]
@@ -1663,6 +1727,7 @@ class HistogramPanel(Panel):
         )
         # Inputs reflect the current effective min/max; the typed constraint stays in
         # _custom_range_{min,max}_value.
+        self._uncommitted_range_inputs.difference_update(("min", "max"))
         self._custom_range_min_str = self._format_range_input(histogram_min)
         self._custom_range_max_str = self._format_range_input(histogram_max)
         self._primary_histogram_min = histogram_min
@@ -2393,22 +2458,30 @@ class HistogramPanel(Panel):
         entropy = -(probabilities * (probabilities + 1e-12).log()).sum(1)
         return entropy.exp().reshape([-1])
 
-    def _histogram_bounds(self, values: lf.Tensor, metric_id: str | None = None) -> tuple[float, float]:
+    def _histogram_bounds(
+        self,
+        values: lf.Tensor,
+        metric_id: str | None = None,
+        data_bounds: tuple[float, float] | None = None,
+    ) -> tuple[float, float]:
         metric_id = self._metric_id if metric_id is None else metric_id
+        if metric_id in ("opacity", "anisotropy", "erank"):
+            # Automatic domains must include every finite sample, even outside the ideal bounds.
+            data_min, data_max = data_bounds if data_bounds is not None else (values.min_scalar(), values.max_scalar())
         if metric_id == "opacity":
-            return 0.0, 1.0
+            return min(0.0, data_min), max(1.0, data_max)
         if metric_id == "anisotropy":
-            lo = 1.0
-            hi = values.max_scalar()
+            lo = min(1.0, data_min)
+            hi = data_max
             if not math.isfinite(hi):
                 return lo, lo + 1.0
-            if hi < lo:
-                hi = lo
-            if math.isclose(hi, lo, rel_tol=1e-6, abs_tol=1e-9):
-                return lo, lo + 1e-3
+            if hi < 1.0:
+                hi = 1.0
+            if math.isclose(hi, 1.0, rel_tol=1e-6, abs_tol=1e-9):
+                return lo, 1.0 + 1e-3
             return lo, hi
         if metric_id == "erank":
-            return 1.0, 3.0
+            return min(1.0, data_min), max(3.0, data_max)
 
         lo = values.min_scalar()
         hi = values.max_scalar()
@@ -2427,12 +2500,13 @@ class HistogramPanel(Panel):
         auto_min: float,
         auto_max: float,
         custom_range: tuple[float | None, float | None],
+        data_bounds: tuple[float, float] | None = None,
     ) -> tuple[float, float]:
         lo = custom_range[0] if custom_range[0] is not None else auto_min
         hi = custom_range[1] if custom_range[1] is not None else auto_max
         if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
             lo, hi = auto_min, auto_max
-        return HistogramPanel._snap_bounds_to_data(values, lo, hi)
+        return HistogramPanel._snap_bounds_to_data(values, lo, hi, data_bounds)
 
     def _build_histogram(
         self,
@@ -2696,6 +2770,9 @@ class HistogramPanel(Panel):
         finite_mask = primary_values.isfinite() & compare_values.isfinite()
         if visible_mask is not None and visible_mask.shape == primary_values.shape:
             finite_mask = finite_mask & visible_mask
+        apply_crop_filter = getattr(scene, "apply_crop_filter", None)
+        if apply_crop_filter is not None:
+            apply_crop_filter(finite_mask)
 
         if not self._any_true(finite_mask):
             self._set_compare_empty(
@@ -2723,8 +2800,10 @@ class HistogramPanel(Panel):
         self._compare_valid_y_values = y_valid
         self._compare_x_finite_cpu = x_finite
         self._compare_y_finite_cpu = y_finite
-        self._compare_x_auto_min, self._compare_x_auto_max = self._histogram_bounds(x_finite, self._metric_id)
-        self._compare_y_auto_min, self._compare_y_auto_max = self._histogram_bounds(y_finite, self._compare_metric_id)
+        x_bounds = (x_finite.min_scalar(), x_finite.max_scalar()) if self._metric_id in ("opacity", "anisotropy", "erank") else None
+        y_bounds = (y_finite.min_scalar(), y_finite.max_scalar()) if self._compare_metric_id in ("opacity", "anisotropy", "erank") else None
+        self._compare_x_auto_min, self._compare_x_auto_max = self._histogram_bounds(x_finite, self._metric_id, x_bounds)
+        self._compare_y_auto_min, self._compare_y_auto_max = self._histogram_bounds(y_finite, self._compare_metric_id, y_bounds)
         self._compare_summary_text = _trf(
             "histogram.compare.summary",
             "{x_metric} vs {y_metric} across {count} Gaussians",
@@ -2734,9 +2813,9 @@ class HistogramPanel(Panel):
         )
         self._compare_x_metric_label = METRIC_BY_ID[self._metric_id].label()
         self._compare_y_metric_label = METRIC_BY_ID[self._compare_metric_id].label()
-        self._rebind_compare_from_cache()
+        self._rebind_compare_from_cache(x_bounds, y_bounds)
 
-    def _rebind_compare_from_cache(self):
+    def _rebind_compare_from_cache(self, x_bounds=None, y_bounds=None):
         """Re-resolve compare X/Y ranges and rebuild the heatmap from cached values."""
         x_finite = self._compare_x_finite_cpu
         y_finite = self._compare_y_finite_cpu
@@ -2745,9 +2824,10 @@ class HistogramPanel(Panel):
         # Mirror the primary axis range-of-interest on the compare X axis so the 2D
         # heatmap stays consistent with the 1D histogram.
         x_range_min, x_range_max = self._resolve_active_bounds(self._compare_x_auto_min, self._compare_x_auto_max)
-        x_min, x_max = self._snap_bounds_to_data(x_finite, x_range_min, x_range_max)
+        x_min, x_max = self._snap_bounds_to_data(x_finite, x_range_min, x_range_max, x_bounds)
         y_range_min, y_range_max = self._resolve_compare_y_bounds(self._compare_y_auto_min, self._compare_y_auto_max)
-        y_min, y_max = self._snap_bounds_to_data(y_finite, y_range_min, y_range_max)
+        y_min, y_max = self._snap_bounds_to_data(y_finite, y_range_min, y_range_max, y_bounds)
+        self._uncommitted_range_inputs.difference_update(("y_min", "y_max"))
         self._compare_y_custom_range_min_str = self._format_range_input(y_min)
         self._compare_y_custom_range_max_str = self._format_range_input(y_max)
         self._compare_x_min = x_min
@@ -3532,7 +3612,7 @@ class HistogramPanel(Panel):
         self._marked_bin_start = bin_index
         self._marked_bin_end = bin_index
         self._sync_marked_range(apply_scene=False, preview_scene=True)
-        event.stop_propagation()
+        # RmlUi only detects double-clicks after a propagating mousedown.
 
     @staticmethod
     def _wheel_zoom_magnitude(delta: float) -> float:
@@ -3590,7 +3670,7 @@ class HistogramPanel(Panel):
         self._compare_mark_start = (x_bin, y_bin)
         self._compare_mark_end = (x_bin, y_bin)
         self._sync_compare_mark(apply_scene=False, preview_scene=True)
-        event.stop_propagation()
+        # RmlUi only detects double-clicks after a propagating mousedown.
 
     def _on_compare_chart_mousescroll(self, event):
         if not self._show_compare_chart or not self._event_matches_histogram_zoom_binding(event):

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "core/file_extensions.hpp"
 #include "core/path_utils.hpp"
 #include <filesystem>
 #include <string>
@@ -8,7 +9,7 @@
 namespace lfs::io {
     inline bool is_ssog_path(const std::filesystem::path& p) {
         std::error_code ec;
-        return (p.extension() == ".ssog" && std::filesystem::is_regular_file(p, ec)) ||
+        return (core::has_extension(p, ".ssog") && std::filesystem::is_regular_file(p, ec)) ||
                (p.filename() == "lod-meta.json" && std::filesystem::is_regular_file(p, ec)) ||
                (std::filesystem::is_directory(p, ec) && std::filesystem::is_regular_file(p / "lod-meta.json", ec));
     }

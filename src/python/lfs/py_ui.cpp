@@ -48,8 +48,10 @@
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/core/services.hpp"
+#include "visualizer/gui/gizmo_manager.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
+#include "visualizer/input/sdl_coordinate_utils.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_context.hpp"
@@ -63,6 +65,7 @@
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/Core.h>
+#include <stdexcept>
 #include <typeinfo>
 
 #include "config.h"
@@ -305,6 +308,38 @@ namespace lfs::python {
             g_project_switch_confirmation_callback;
         nb::object
             g_show_load_file_confirmation_callback;
+        lfs::event::HandlerId g_show_load_file_confirmation_handler_id = 0;
+        bool g_show_load_file_confirmation_with_batch = false;
+
+        void register_load_file_confirmation(nb::object callback, bool with_batch) {
+            using lfs::core::events::cmd::ShowLoadFileConfirmation;
+            if (g_show_load_file_confirmation_handler_id != 0) {
+                lfs::event::EventBridge::instance().unsubscribe(
+                    typeid(ShowLoadFileConfirmation), g_show_load_file_confirmation_handler_id);
+                g_show_load_file_confirmation_handler_id = 0;
+            }
+            g_show_load_file_confirmation_callback = std::move(callback);
+            g_show_load_file_confirmation_with_batch = with_batch;
+            if (!g_show_load_file_confirmation_callback || g_show_load_file_confirmation_callback.is_none())
+                return;
+            g_show_load_file_confirmation_handler_id = ShowLoadFileConfirmation::when([](const auto& event) {
+                nb::gil_scoped_acquire guard;
+                if (!g_show_load_file_confirmation_callback || g_show_load_file_confirmation_callback.is_none())
+                    return;
+                try {
+                    nb::list paths;
+                    for (const auto& path : event.paths)
+                        paths.append(lfs::core::path_to_utf8(path));
+                    if (g_show_load_file_confirmation_with_batch)
+                        g_show_load_file_confirmation_callback(paths, event.is_dataset, event.replace, event.user_batch);
+                    else
+                        g_show_load_file_confirmation_callback(paths, event.is_dataset, event.replace);
+                } catch (const std::exception& error) {
+                    LOG_ERROR("Load-file confirmation callback error: {}", error.what());
+                }
+            });
+        }
+
         nb::object
             g_stop_training_confirmation_callback;
         nb::object g_open_camera_preview_callback;
@@ -2354,7 +2389,7 @@ namespace lfs::python {
     std::tuple<float, float> PyUILayout::get_mouse_pos() const {
         float x = 0.0f;
         float y = 0.0f;
-        SDL_GetMouseState(&x, &y);
+        lfs::vis::input::mouseStateInPixels(SDL_GetMouseFocus(), &x, &y);
         return {x, y};
     }
     std::tuple<float, float> PyUILayout::get_window_pos() const {
@@ -2731,7 +2766,7 @@ namespace lfs::python {
         m.def("get_mouse_screen_pos", []() -> nb::tuple {
             float x = 0.0f;
             float y = 0.0f;
-            SDL_GetMouseState(&x, &y);
+            lfs::vis::input::mouseStateInPixels(SDL_GetMouseFocus(), &x, &y);
             return nb::make_tuple(x, y);
         });
 
@@ -3832,7 +3867,8 @@ namespace lfs::python {
                                                 event.path),
                                         event.keep_asset_manager_open,
                                         lfs::core::path_to_utf8(event.create_path),
-                                        event.allow_existing_destination_replacement);
+                                        event.allow_existing_destination_replacement,
+                                        event.stop_training);
                                 } catch (
                                     const std::
                                         exception& error) {
@@ -3848,43 +3884,18 @@ namespace lfs::python {
 
         m.def(
             "on_show_load_file_confirmation",
-            [](nb::object callback) {
-                g_show_load_file_confirmation_callback =
-                    callback;
-                lfs::core::events::cmd::
-                    ShowLoadFileConfirmation::
-                        when([](const auto& event) {
-                            if (g_show_load_file_confirmation_callback &&
-                                !g_show_load_file_confirmation_callback
-                                     .is_none()) {
-                                nb::gil_scoped_acquire
-                                    guard;
-                                try {
-                                    nb::list paths;
-                                    for (const auto& path :
-                                         event.paths) {
-                                        paths.append(
-                                            lfs::core::
-                                                path_to_utf8(
-                                                    path));
-                                    }
-                                    g_show_load_file_confirmation_callback(
-                                        paths,
-                                        event.is_dataset,
-                                        event.replace);
-                                } catch (
-                                    const std::
-                                        exception& error) {
-                                    LOG_ERROR(
-                                        "Load-file confirmation callback error: {}",
-                                        error.what());
-                                }
-                            }
-                        });
-            },
+            [](nb::object callback) { register_load_file_confirmation(std::move(callback), false); },
             nb::arg("callback"),
             "Register callback for a load-file wipe confirmation "
             "(receives paths: list[str], is_dataset: bool, replace: bool)");
+
+        m.def(
+            "on_show_load_file_confirmation_with_batch",
+            [](nb::object callback) { register_load_file_confirmation(std::move(callback), true); },
+            nb::arg("callback"),
+            "Register a load-file confirmation callback with batch provenance "
+            "(receives paths: list[str], is_dataset: bool, replace: bool, user_batch: bool). "
+            "Replaces the callback registered through either load-file confirmation API.");
 
         m.def(
             "on_stop_training_confirmation",
@@ -4218,7 +4229,13 @@ namespace lfs::python {
 
         m.def(
             "toggle_gt_comparison",
-            []() { lfs::core::events::cmd::ToggleGTComparison{}.emit(); },
+            []() {
+                auto* const rendering = lfs::python::get_rendering_manager();
+                if (!rendering || (!rendering->isGTComparisonActive() && !rendering->hasGTComparisonAvailable())) {
+                    throw std::runtime_error("GT comparison requires a loaded dataset with source images");
+                }
+                lfs::core::events::cmd::ToggleGTComparison{}.emit();
+            },
             "Toggle ground-truth comparison split view");
 
         m.def(
@@ -4423,7 +4440,7 @@ namespace lfs::python {
                     lfs::vis::op::operators().dispatchModalEvent(event);
                 }
                 if (auto* const rm = lfs::vis::services().renderingOrNull()) {
-                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY);
+                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
                 }
             },
             nb::arg("enabled"),
@@ -4444,7 +4461,7 @@ namespace lfs::python {
                     lfs::vis::op::operators().dispatchModalEvent(event);
                 }
                 if (auto* const rm = lfs::vis::services().renderingOrNull()) {
-                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY);
+                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
                 }
             },
             nb::arg("enabled"),
@@ -5029,6 +5046,11 @@ namespace lfs::python {
 
         m.def("set_multi_transform_mode", &set_multi_transform_mode, nb::arg("mode"), "Set multi-transform mode (0=Group, 1=Individual)");
 
+        m.attr("MULTI_TRANSFORM_MODE_SELECTION") =
+            static_cast<int>(lfs::vis::gui::MultiTransformMode::Selection);
+        m.attr("MULTI_TRANSFORM_MODE_INDIVIDUAL") =
+            static_cast<int>(lfs::vis::gui::MultiTransformMode::Individual);
+
         // Thumbnail system (for Getting Started window)
         m.def("request_thumbnail", &request_thumbnail, nb::arg("video_id"),
               "Request download of a YouTube thumbnail for the given video ID");
@@ -5362,13 +5384,21 @@ namespace lfs::python {
                 return mcp::applyActiveMcpHttpConfig({
                     .enabled = state.enabled,
                     .expose_network = state.expose_network,
-                    .port = state.port,
+                    .port = vis::mcpPortOverride().value_or(state.port),
                     .request_logging = state.request_logging,
                 });
             },
             nb::arg("enabled"), nb::arg("expose_network"), nb::arg("port"),
             nb::arg("request_logging") = false,
             "Persist and immediately apply MCP HTTP server preferences");
+
+        m.def(
+            "get_mcp_port_override",
+            []() -> std::optional<int> {
+                nb::gil_scoped_release release;
+                return vis::mcpPortOverride();
+            },
+            "Get the MCP port set on the command line for this session, or None");
 
         m.def(
             "get_project_location",
@@ -5695,8 +5725,7 @@ namespace lfs::python {
             }
             g_project_switch_confirmation_callback =
                 nb::object();
-            g_show_load_file_confirmation_callback =
-                nb::object();
+            register_load_file_confirmation(nb::object(), false);
             g_stop_training_confirmation_callback =
                 nb::object();
             g_open_camera_preview_callback = nb::object();
@@ -5910,7 +5939,14 @@ namespace lfs::python {
                 }
                 return rm->getAverageFPS();
             },
-            "Get current FPS");
+            "Get viewport renders in the trailing second (cached and deferred results excluded)");
+
+        m.def(
+            "get_ui_fps", []() -> float {
+                auto* rm = get_rendering_manager();
+                return rm ? rm->getPresentedAverageFPS() : 0.0f;
+            },
+            "Get successful GUI presents in the trailing second (idle-clear frame excluded)");
 
         m.def(
             "get_content_type", []() -> const char* {

@@ -7,12 +7,13 @@
 namespace gsplat_lfs {
     // Geometry channels use camera Z for pinhole cameras and radial distance for
     // fisheye/panoramic cameras. Normals are camera-space, facing the camera.
+    // Colour channels 0..2 belong to spherical harmonics and are left untouched.
     void geometry_features_fwd(const float* means, const float* quats, const float* scales,
-                               const float* viewmats, const float* rgb, float* features,
+                               const float* viewmats, float* features,
                                uint32_t N, uint32_t C, uint32_t channels,
                                CameraModelType model, cudaStream_t stream);
     void geometry_features_bwd(const float* means, const float* quats, const float* scales,
-                               const float* viewmats, const float* grad_features, float* grad_rgb,
+                               const float* viewmats, const float* grad_features,
                                float* grad_means, float* grad_quats,
                                uint32_t N, uint32_t C, uint32_t channels,
                                CameraModelType model, cudaStream_t stream);

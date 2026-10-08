@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "viewer_admission.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -150,24 +151,6 @@ namespace lfs::core {
             std::uint32_t boundaries_since_growth = 0;
         };
 
-        struct GrowthTiming {
-            mutable std::mutex mutex;
-            uint64_t commit_attempts_warmup = 0;
-            uint64_t commit_attempts_steady = 0;
-            uint64_t commit_events_warmup = 0;
-            uint64_t commit_events_steady = 0;
-            uint64_t commit_time_us_warmup = 0;
-            uint64_t commit_time_us_steady = 0;
-            uint64_t growth_path_time_us_warmup = 0;
-            uint64_t growth_path_time_us_steady = 0;
-            uint64_t growth_sync_time_us_warmup = 0;
-            uint64_t growth_sync_time_us_steady = 0;
-            uint64_t b1_events = 0;
-            uint64_t b1_time_us = 0;
-            uint64_t b3_events = 0;
-            uint64_t b3_time_us = 0;
-        };
-
         std::unordered_map<int, std::unique_ptr<Arena>> device_arenas_;
         std::unordered_map<uint64_t, FrameContext> frame_contexts_;
         Config config_;
@@ -176,10 +159,8 @@ namespace lfs::core {
         mutable std::mutex frame_mutex_;
         std::atomic<uint64_t> frame_counter_{0};
         std::atomic<uint64_t> generation_counter_{0};
-        std::shared_ptr<GrowthTiming> growth_timing_ = std::make_shared<GrowthTiming>();
 
         // Performance tracking
-        std::chrono::steady_clock::time_point creation_time_;
         std::atomic<size_t> total_frames_processed_{0};
 
         // The arena uses a single offset per device, so only one live frame can own it safely.
@@ -194,7 +175,22 @@ namespace lfs::core {
         uint64_t render_handoff_token_ = 0;
         uint64_t next_render_handoff_token_ = 1;
         std::chrono::steady_clock::time_point render_handoff_deadline_{};
-        uint32_t render_handoff_training_frames_ = 0;
+        // Turn ledger: training frames that may begin before a waiting viewer
+        // (live handoff token) takes the arena. Set by the viewer when it
+        // releases a navigation frame; survives without a live token.
+        uint32_t training_turns_owed_ = 0;
+        uint32_t viewer_release_waiters_ = 0;
+        ViewerAdmission viewer_admission_;
+        // Turn cost measurements. stats_mutex_ is always innermost (taken under
+        // sync_mutex_ by begin_frame, alone elsewhere) and never held across a
+        // CUDA call.
+        mutable std::mutex stats_mutex_;
+        std::chrono::steady_clock::time_point last_training_begin_{};
+        bool last_tenant_was_training_ = false;
+        double training_step_ms_ = 0.0;
+        double viewer_record_ms_ = 0.0;
+        double viewer_turn_ring_[5] = {};
+        uint32_t viewer_turn_count_ = 0;
 
         // Completion event of the most recent stream-aware frame. Invalid when
         // the last frame was legacy (no stream) — the next begin then falls back
@@ -202,11 +198,26 @@ namespace lfs::core {
         mutable std::mutex last_frame_event_mutex_;
         cudaEvent_t last_frame_event_ = nullptr;
         bool last_frame_event_valid_ = false;
+        // A host-consumed viewer release completes the chain even when another
+        // admission waiter or teardown consumed it. Cleared by end_frame.
+        bool last_frame_gpu_complete_ = false;
 
         // Pending Vulkan release of the previous frame's arena work (see
-        // note_external_release). Guarded by last_frame_event_mutex_.
+        // await_external_release). Guarded by last_frame_event_mutex_.
         cudaExternalSemaphore_t external_release_semaphore_ = nullptr;
         uint64_t external_release_value_ = 0;
+        // GPU completion of that release: a wait on the imported timeline is
+        // enqueued on release_stream_ and release_event_ is recorded behind it,
+        // so both tenants can see (query) and host-wait (synchronize) the
+        // viewer's batch without a device-wide sync. release_pending_ is false
+        // when event tracking could not be set up; the semaphore/value paths
+        // above then run exactly as before.
+        // Borrowed from the viewer; drain before its owner destroys it.
+        cudaStream_t release_stream_ = nullptr;
+        cudaEvent_t release_event_ = nullptr;
+        bool release_pending_ = false;
+        bool release_stream_failed_ = false;
+        std::chrono::steady_clock::time_point release_submitted_at_{};
 
     public:
         // Constructors
@@ -230,7 +241,7 @@ namespace lfs::core {
         // the chain.
         //
         // A tenant whose arena work runs on a VULKAN queue (the viewport) must
-        // call note_external_release before ending its frame: neither the chain
+        // call await_external_release before ending its frame: neither the chain
         // event nor cudaDeviceSynchronize can see in-flight Vulkan work, so the
         // next frame waits the imported timeline value instead.
         uint64_t begin_frame(bool from_rendering = false) { return begin_frame(nullptr, from_rendering); }
@@ -253,22 +264,45 @@ namespace lfs::core {
         std::optional<uint64_t> try_begin_frame_for(uint32_t timeout_ms, cudaStream_t stream,
                                                     bool from_rendering = false);
         using RenderHandoffToken = uint64_t;
-        static constexpr uint32_t kRenderHandoffLeaseMs = 100;
+        // Every live holder renews within a few milliseconds (the parked preview
+        // polls at 4 ms, the navigation wait at 1 ms); the lease only bounds what
+        // an abandoned or late holder can cost training.
+        static constexpr uint32_t kRenderHandoffLeaseMs = 25;
         // Keeps the next idle arena window for a renderer after an ordinary
         // bounded timeout. The short lease survives the caller unwinding model
         // locks, but expires on its own if the viewport is minimized, paused, or
         // otherwise abandons the retry. Supplying the current token renews only
         // that request; an old token can never replace or cancel a newer owner.
-        // A new reservation lets `training_frames_first` training frames begin
-        // before it holds training back; renewing keeps what is left of them.
-        [[nodiscard]] RenderHandoffToken request_render_handoff(
-            RenderHandoffToken current_token = 0, uint32_t training_frames_first = 0);
+        // Training frames still begin first while the turn ledger owes them
+        // (owe_training_frames).
+        [[nodiscard]] RenderHandoffToken request_render_handoff(RenderHandoffToken current_token = 0);
         void cancel_render_handoff(RenderHandoffToken token);
         [[nodiscard]] bool has_render_handoff(RenderHandoffToken token) const;
         // True while this live reservation still lets training frames begin first.
         [[nodiscard]] bool render_handoff_owes_training(RenderHandoffToken token) const;
         // Stops this reservation from letting any further training frame begin.
         void withdraw_render_handoff_training_frames(RenderHandoffToken token);
+        // Lets `frames` training frames begin before a waiting renderer takes the
+        // arena. Called by the viewer when it releases a navigation frame.
+        void owe_training_frames(uint32_t frames);
+        void prepare_viewer_frame();
+        void cancel_viewer_prediction();
+        [[nodiscard]] RenderHandoffToken reserve_next_viewer_turn(RenderHandoffToken current_token);
+
+        // Measured turn costs, for the viewer's cadence budget.
+        struct TurnStats {
+            // Median of the last five viewer turns (submit → GPU completion).
+            double viewer_turn_ms = 0.0;
+            // CPU recording also excludes training from the shared arena.
+            double viewer_record_ms = 0.0;
+            // Period between consecutive training frames with no viewer turn between.
+            double training_step_ms = 0.0;
+        };
+        [[nodiscard]] TurnStats turn_stats() const;
+        // Test seam: registers an already-recorded event as the pending viewer
+        // release, standing in for the imported Vulkan timeline. Owns the event;
+        // the optional viewer stream remains owned by the caller.
+        void set_release_event_for_testing(cudaEvent_t event, cudaStream_t viewer_stream = nullptr);
         // Host-waits for GPU work only within timeout_ms: while the previous
         // CUDA frame is still running on the GPU it polls that frame, then
         // declines like a busy arena, and the caller's reservation keeps the
@@ -284,9 +318,14 @@ namespace lfs::core {
 
         // Registers the Vulkan-side completion of the current frame's arena work
         // (an imported timeline + the value its submit signals). Consumed once by
-        // the next begin_frame, which waits it GPU-side (or via the legacy
-        // stream ahead of its device sync on the streamless path).
-        void note_external_release(cudaExternalSemaphore_t semaphore, uint64_t value);
+        // the next begin_frame, which host-waits its release event before
+        // admission (falling back to the tenant stream if setup fails).
+        // The non-blocking viewer stream has already queued the input uploads.
+        // Its owner must call drain_external_release before destroying it.
+        void await_external_release(cudaExternalSemaphore_t semaphore, uint64_t value, cudaStream_t viewer_stream);
+        // Drain before destroying the imported semaphore, including after the
+        // backing has been detached. No arena/model lock may be held.
+        void drain_external_release();
 
         // Caps wait-forever begin_frame() on the CURRENT thread to a bounded
         // wait for its scope — so a cross-thread reader (GUI metric render) that
@@ -343,7 +382,6 @@ namespace lfs::core {
 
         Statistics get_statistics() const;
         MemoryInfo get_memory_info() const;
-        void dump_statistics() const;
         void log_memory_status(uint64_t frame_id, bool force = false);
         [[nodiscard]] bool has_last_frame_event_for_testing() const;
 
@@ -360,14 +398,22 @@ namespace lfs::core {
                                                  std::optional<uint32_t> wait_timeout_ms,
                                                  RenderHandoffToken render_handoff_token = 0,
                                                  bool decline_while_previous_frame_runs = false);
+        // A host-consumed release preserves a shared completion proof until the
+        // next tenant ends, including when another waiter consumed the release.
         cudaError_t wait_for_previous_frame(cudaStream_t stream);
-        // True while the last stream-ordered frame's completion event is still
-        // pending on the GPU. Caller holds sync_mutex_.
+        // True while the last stream-ordered frame's completion event, or the
+        // viewer's pending release, is still pending on the GPU. Caller holds
+        // sync_mutex_.
         [[nodiscard]] bool previous_frame_still_running() const;
-        // Host-blocks on a pending Vulkan release fence (note_external_release)
-        // and clears it. Must run before any path that frees or replaces arena
-        // backing — a device sync cannot observe the in-flight Vulkan batch.
-        void drain_external_release();
+        // True while a viewer batch registered through await_external_release is
+        // still running on the GPU. Caller holds last_frame_event_mutex_.
+        [[nodiscard]] bool release_event_pending_locked() const;
+        // Host-waits the pending viewer release event, records the turn cost and
+        // clears the pending state. Returns false when nothing was pending.
+        // Must not be called with sync_mutex_ held.
+        bool wait_release_event();
+        // Update the completed-turn history without holding a CUDA event lock.
+        void update_viewer_turn_cost(double turn_ms);
         bool install_external_backing_impl(ExternalBacking backing, bool wait, uint32_t timeout_ms = 0);
         char* allocate_internal(Arena& arena, size_t size, uint64_t frame_id,
                                 const char* label);
@@ -375,15 +421,10 @@ namespace lfs::core {
         bool grow_arena(Arena& arena, size_t required_size);
         size_t align_size(size_t size) const;
         void record_allocation(uint64_t frame_id, const BufferHandle& handle);
-        bool commit_more_memory(Arena& arena, size_t required_size, uint64_t frame_id);
+        bool commit_more_memory(Arena& arena, size_t required_size);
         void decommit_unused_memory(Arena& arena, bool release_all = false,
                                     bool allow_reclaim = true);
         bool shrink_at_boundary(bool release_all);
-        void record_commit_timing(uint64_t frame_id, uint64_t elapsed_us, bool committed);
-        void record_growth_path_timing(uint64_t frame_id, uint64_t elapsed_us,
-                                       uint64_t sync_elapsed_us);
-        void record_boundary_timing(bool release_all, uint64_t frame_count, uint64_t elapsed_us);
-        void dump_growth_timing() const;
         bool is_vmm_supported(int device) const;
         void empty_cuda_cache();
     };

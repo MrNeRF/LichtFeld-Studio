@@ -5,7 +5,8 @@
     border-color: @{border};
 }
 
-.video-card:hover .card-body {
+.video-card:hover .card-body,
+.video-card:focus-visible .card-body {
     border-color: @{primary};
     background-color: @{components.title_surface};
 }
@@ -15,5 +16,29 @@
 }
 
 .card-title {
+    color: @{text};
+}
+
+.guide-footer {
+    border-top-color: @{border};
+}
+
+.guide-tab {
     color: @{text_dim};
+    background-color: @{panel.tab_inactive_bg};
+    border-color: @{border};
+}
+
+.guide-tab:hover,
+.guide-tab:focus-visible {
+    color: @{text};
+    background-color: @{panel.tab_hover_bg};
+    border-color: @{panel.tab_hover_border};
+}
+
+.guide-tab.active {
+    color: @{text};
+    background-color: @{panel.tab_active_bg};
+    border-color: @{panel.tab_active_border};
+    font-weight: bold;
 }

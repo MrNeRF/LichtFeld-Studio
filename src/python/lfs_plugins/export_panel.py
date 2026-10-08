@@ -70,6 +70,17 @@ def _progress_format_name(fmt):
     return EXPORT_PROGRESS_FORMAT_NAMES.get(fmt, "file")
 
 
+def _exported_count(node):
+    """Splats the export writes: soft-deleted rows are left out."""
+    try:
+        splat = node.splat_data()
+    except Exception:
+        splat = None
+    if splat is None:
+        return int(node.gaussian_count)
+    return int(splat.visible_count())
+
+
 @panel_class("export")
 class ExportPanel(Panel):
 
@@ -587,7 +598,7 @@ class ExportPanel(Panel):
                     {
                         "name": node.name,
                         "selected": node.name in self._selected_nodes,
-                        "count_text": f"({node.gaussian_count:,})",
+                        "count_text": f"({_exported_count(node):,})",
                     }
                     for node in nodes
                 ],

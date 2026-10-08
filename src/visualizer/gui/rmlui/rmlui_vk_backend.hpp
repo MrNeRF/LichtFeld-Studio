@@ -51,6 +51,8 @@
 #define RMLUI_VK_API_VERSION VK_API_VERSION_1_3
 
 class RenderInterface_VK : public Rml::RenderInterface {
+    friend class RenderInterfaceVKTestAccess;
+
 public:
     static constexpr uint32_t kSwapchainBackBufferCount = 3;
     static constexpr VkDeviceSize kVideoMemoryForAllocation = 4 * 1024 * 1024; // [bytes]
@@ -229,6 +231,13 @@ private:
         bool embedded_project_preview = false;
     };
 
+    class MemoryPool;
+    struct pool_allocation_t {
+        MemoryPool* owner = nullptr;
+        VmaVirtualAllocation handle = nullptr;
+        explicit operator bool() const noexcept { return handle != nullptr; }
+    };
+
     struct geometry_handle_t {
         int m_num_indices;
 
@@ -238,9 +247,9 @@ private:
 
         // @ this is for freeing our logical blocks for VMA
         // see https://gpuopen-librariesandsdks.github.io/VulkanMemoryAllocator/html/virtual_allocator.html
-        VmaVirtualAllocation m_p_vertex_allocation;
-        VmaVirtualAllocation m_p_index_allocation;
-        VmaVirtualAllocation m_p_shader_allocation;
+        pool_allocation_t m_p_vertex_allocation;
+        pool_allocation_t m_p_index_allocation;
+        pool_allocation_t m_p_shader_allocation;
     };
 
     struct buffer_data_t {
@@ -419,14 +428,14 @@ private:
         MemoryPool();
         ~MemoryPool();
 
-        void Initialize(VkDeviceSize byte_size, VkDeviceSize device_min_uniform_alignment, VmaAllocator p_allocator, VkDevice p_device) noexcept;
+        bool Initialize(VkDeviceSize byte_size, VkDeviceSize device_min_uniform_alignment, VmaAllocator p_allocator, VkDevice p_device) noexcept;
         void Shutdown() noexcept;
 
-        bool Alloc_GeneralBuffer(VkDeviceSize size, void** p_data, VkDescriptorBufferInfo* p_out, VmaVirtualAllocation* p_alloc) noexcept;
+        bool Alloc_GeneralBuffer(VkDeviceSize size, void** p_data, VkDescriptorBufferInfo* p_out, pool_allocation_t* p_alloc) noexcept;
         bool Alloc_VertexBuffer(uint32_t number_of_elements, uint32_t stride_in_bytes, void** p_data, VkDescriptorBufferInfo* p_out,
-                                VmaVirtualAllocation* p_alloc) noexcept;
+                                pool_allocation_t* p_alloc) noexcept;
         bool Alloc_IndexBuffer(uint32_t number_of_elements, uint32_t stride_in_bytes, void** p_data, VkDescriptorBufferInfo* p_out,
-                               VmaVirtualAllocation* p_alloc) noexcept;
+                               pool_allocation_t* p_alloc) noexcept;
 
         void SetDescriptorSet(uint32_t binding_index, uint32_t size, VkDescriptorType descriptor_type, VkDescriptorSet p_set) noexcept;
         void SetDescriptorSet(uint32_t binding_index, VkDescriptorBufferInfo* p_info, VkDescriptorType descriptor_type,
@@ -434,11 +443,14 @@ private:
         void SetDescriptorSet(uint32_t binding_index, VkSampler p_sampler, VkImageLayout layout, VkImageView p_view, VkDescriptorType descriptor_type,
                               VkDescriptorSet p_set) noexcept;
 
-        void Free_Allocation(VmaVirtualAllocation allocation) noexcept;
+        void Free_Allocation(pool_allocation_t allocation) noexcept;
         void Free_GeometryHandle(geometry_handle_t* p_valid_geometry_handle) noexcept;
         void Free_GeometryHandle_ShaderDataOnly(geometry_handle_t* p_valid_geometry_handle) noexcept;
 
     private:
+        friend class RenderInterface_VK;
+        std::unique_ptr<MemoryPool> m_overflow;
+        VkDescriptorSet m_shader_descriptor_set = VK_NULL_HANDLE;
         VkDeviceSize m_memory_total_size;
         VkDeviceSize m_device_min_uniform_alignment;
         char* m_p_data;
@@ -649,10 +661,8 @@ private:
     uint32_t ActiveResourceSlot() const noexcept;
 
 private:
-    bool m_is_transform_enabled;
     bool m_is_apply_to_regular_geometry_stencil;
     bool m_is_clip_mask_enabled;
-    bool m_is_transformed_scissor_enabled;
     bool m_is_use_scissor_specified;
     bool m_is_use_stencil_pipeline;
     bool m_external_context = false;
@@ -687,6 +697,7 @@ private:
     VkPipeline m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_with_textures;
     VkPipeline m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_without_textures;
     VkDescriptorSet m_p_descriptor_set;
+    std::vector<VkDescriptorSet> m_overflow_shader_descriptor_sets;
     VkSampler m_p_sampler_linear;
     VkSampler m_p_sampler_nearest;
     VkRect2D m_scissor;
@@ -733,7 +744,7 @@ private:
     float m_texture_quad_y = 0.0f;
     float m_texture_quad_w = 0.0f;
     float m_texture_quad_h = 0.0f;
-    Rml::Array<Rml::Vector<VmaVirtualAllocation>, kSwapchainBackBufferCount> m_transient_shader_allocations_by_frame;
+    Rml::Array<Rml::Vector<pool_allocation_t>, kSwapchainBackBufferCount> m_transient_shader_allocations_by_frame;
     VkImage m_external_swapchain_image = VK_NULL_HANDLE;
     VkImageView m_external_swapchain_image_view = VK_NULL_HANDLE;
     VkImageView m_external_depth_stencil_image_view = VK_NULL_HANDLE;

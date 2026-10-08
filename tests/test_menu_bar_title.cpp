@@ -8,6 +8,7 @@
 #include "python/python_runtime.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/visualizer.hpp"
+#include <algorithm>
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
@@ -50,6 +51,8 @@ namespace lfs::vis::gui {
         }
         static void rebuildPortalStatus(RmlMenuBar& bar) { bar.rebuildPortalStatus(); }
         static void layout(RmlMenuBar& bar, int width, float dp) {
+            bar.updateCompactLayout(width, dp);
+            bar.rml_context_->Update();
             bar.updateProjectTitleLayout(width, dp);
         }
         static bool hit(const RmlMenuBar& bar, float x, float y) {
@@ -142,7 +145,8 @@ namespace {
             resize(1600);
         }
         void TearDown() override {
-            // RmlMenuBar owns no context in this fixture; remove it before Rml shutdown.
+            // Release input registrations before destroying the externally owned context.
+            manager_.shutdown();
             ASSERT_TRUE(Rml::RemoveContext("menu_bar_title_test"));
         }
         Rml::Element* el(const char* id) { return document_->GetElementById(id); }
@@ -163,6 +167,23 @@ namespace {
         lfs::vis::gui::RmlUIManager manager_;
         lfs::vis::gui::RmlMenuBar bar_;
     };
+
+    TEST_F(MenuBarTitleTest, HiddenToolbarKeepsItsWidthAcrossScaleChanges) {
+        resize(1600, 1.0f, true);
+        const float base_width = el("menu-toolbar")->GetOffsetWidth();
+        ASSERT_GT(base_width, 0);
+        RmlMenuBarTestAccess::toolbar(bar_, false, 400);
+        context_->Update();
+        for (float dp : {2.0f, 1.5f, 1.0f}) {
+            context_->SetDensityIndependentPixelRatio(dp);
+            context_->Update();
+            EXPECT_FALSE(el("menu-toolbar")->IsVisible());
+            EXPECT_NEAR(el("menu-toolbar")->GetOffsetWidth(), base_width * dp, 1.0f);
+        }
+        resize(1600, 1.0f, true);
+        EXPECT_TRUE(el("menu-toolbar")->IsVisible());
+        EXPECT_FLOAT_EQ(el("menu-toolbar")->GetOffsetWidth(), base_width);
+    }
 
     TEST_F(MenuBarTitleTest, ConstrainsAndCentersTitleBetweenMenusAndControls) {
         for (float dp : {1.0f, 1.5f}) {
@@ -195,7 +216,7 @@ namespace {
             // The narrowest window SDL allows, and a little wider.
             for (int width : {640, 720}) {
                 SCOPED_TRACE(::testing::Message() << width << " dp=" << dp);
-                resize(static_cast<int>(width * dp), dp, false);
+                resize(width, dp, false);
                 const auto controls = bounds(el("menu-window-controls"));
                 Rml::ElementList labels;
                 document_->GetElementsByClassName(labels, "menu-label");
@@ -203,7 +224,7 @@ namespace {
                 ASSERT_EQ(labels.size(), 6u);
                 for (auto* label : labels)
                     EXPECT_LE(bounds(label).right, controls.left + 0.5f);
-                EXPECT_LE(bounds(el("menu-window-close")).right, width * dp + 0.5f);
+                EXPECT_LE(bounds(el("menu-window-close")).right, width + 0.5f);
             }
         }
     }

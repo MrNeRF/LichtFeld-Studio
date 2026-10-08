@@ -174,16 +174,15 @@ namespace lfs::core {
                         const size_t base = outer * dim_size * inner_size + inner;
                         float selected = src[base];
                         int64_t selected_index = 0;
-                        for (size_t index = 1; index < dim_size; ++index) {
+                        for (size_t index = 1; index < dim_size && !std::isnan(selected); ++index) {
                             const float candidate = src[base + index * inner_size];
                             if (std::isnan(candidate)) {
                                 selected = candidate;
                                 selected_index = static_cast<int64_t>(index);
                                 break;
                             }
-                            if (!std::isnan(selected) &&
-                                (find_maximum ? candidate > selected
-                                              : candidate < selected)) {
+                            if (find_maximum ? candidate > selected
+                                             : candidate < selected) {
                                 selected = candidate;
                                 selected_index = static_cast<int64_t>(index);
                             }

@@ -212,7 +212,7 @@ TEST(PreferencesMigration, CameraSpeedPreferencesPersistAndClamp) {
 
     auto& preferences = lfs::vis::UserPreferences::instance();
     EXPECT_FLOAT_EQ(preferences.zoomSpeed(), 11.0f);
-    EXPECT_FLOAT_EQ(preferences.navigationSpeed(), 8.0f);
+    EXPECT_FLOAT_EQ(preferences.navigationSpeed(), 10.0f);
 
     preferences.setZoomSpeed(42.0f);
     preferences.setNavigationSpeed(73.0f);

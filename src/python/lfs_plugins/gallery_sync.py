@@ -18,6 +18,7 @@ import time
 import urllib.error
 from pathlib import Path
 
+from .private_directory import mkdir_private
 from .portal_account import PortalHTTPError, PortalProtocolError, _locked_sidecar
 from .portal_gallery import (PortalGalleryClient, GalleryTransferCanceled, GalleryProcessingPaused,
     GalleryProcessingTimeout, GalleryTransferInvalid, PROCESSING_TIMEOUT, DEFAULT_MAX_FILE_BYTES, disk_preflight, domain_tokens, UNSUPPORTED_PORTAL, _fingerprint)
@@ -162,6 +163,14 @@ def _validate_journal(data):
 COVER_WARNING = "projects.gallery.warning.cover_failed"
 
 
+def portal_sentence(exc):
+    """The sentence a rejected gallery request carries for the user, in the error or its detail."""
+    for text in (exc.error, (exc.detail or {}).get("message")):
+        if isinstance(text, str) and " " in text.strip():
+            return text
+    return ""
+
+
 def friendly_error(exc):
     import lichtfeld as lf
 
@@ -175,6 +184,8 @@ def friendly_error(exc):
                 "Invalid portable LichtFeld project.", "Project checksum failed.",
                 "Embedded project asset checksum failed."):
             return "The downloaded file is damaged or was changed on the portal."
+        if exc.status == 400 and portal_sentence(exc):
+            return redact(portal_sentence(exc))
     if isinstance(status, int):
         key = {401: "authorization_expired", 403: "access", 404: "not_found",
                409: "http_conflict", 413: "too_large", 429: "portal_busy"}.get(status)
@@ -1197,9 +1208,7 @@ class GallerySync:
                     exc = (ConnectionError("Gallery download connection closed before completion")
                         if job.get("kind") == "download" else GalleryTransferInvalid(
                             "The portal closed the upload without acknowledging it. Start a new upload."))
-                elif isinstance(exc, PortalHTTPError) and exc.status == 400 and exc.error in (
-                        "Invalid portable LichtFeld project.", "Project checksum failed.",
-                        "Embedded project asset checksum failed."):
+                elif isinstance(exc, PortalHTTPError) and exc.status == 400 and portal_sentence(exc):
                     exc = GalleryTransferInvalid(friendly_error(exc))
                 with self._lock:
                     job["failureReason"] = safe_text(f"{type(exc).__name__}: {exc}")
@@ -1324,7 +1333,7 @@ class GallerySync:
                     raise ValueError("The recovery copy destination already exists. Try again.")
                 disk_preflight([(backup, Path(project_path).stat().st_size),
                                 (project_path, expected_stamp[2] + job['total'])])
-                directory.mkdir(mode=0o700, exist_ok=True)
+                mkdir_private(directory, exist_ok=True)
                 if file_stamp(project_path) != expected_stamp:
                     raise ValueError("The local project changed. Review it before updating.")
                 source_identity.validate()
@@ -1412,7 +1421,7 @@ class GallerySync:
                 if not for_update:
                     preflight.append((self._download_destination(job), Path(job['path']).stat().st_size))
                 disk_preflight(preflight)
-                target.parent.mkdir(mode=0o700, exist_ok=True)
+                mkdir_private(target.parent, exist_ok=True)
                 with self._lock:
                     record["path"] = str(target)
                 self._save()  # Keep partial preparations discoverable after a restart.
@@ -1453,7 +1462,7 @@ class GallerySync:
                     # Keep a private asset independently of disposable import
                     # staging. Saved projects/recovery copies reference it.
                     assets = self.root / "environments"
-                    assets.mkdir(mode=0o700, exist_ok=True)
+                    mkdir_private(assets, exist_ok=True)
                     if assets.is_symlink() or getattr(assets, "is_junction", lambda: False)():
                         raise ValueError("The HDR asset folder was redirected.")
                     asset = assets / (identifier + ".lfsenv")
@@ -2079,7 +2088,7 @@ class GallerySync:
                         job.update(completed=done, total=total)
                         self.version += 1
                 client.download(job["sceneId"], job["path"], cancel=self._cancel, on_progress=progress)
-                target.parent.mkdir(mode=0o700, exist_ok=True)
+                mkdir_private(target.parent, exist_ok=True)
                 if target.parent.is_symlink() or target.is_symlink() or temporary.is_symlink():
                     raise ValueError("The HDR background folder was redirected.")
                 from .portable_project import ProjectFile

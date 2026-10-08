@@ -561,6 +561,19 @@ def test_http_status_reasons_remain_distinct_at_the_ui(monkeypatch, status, key)
     assert localize_message(friendly_error(urllib.error.HTTPError('https://host', status, 'reason', {}, io.BytesIO()))) == expected
 
 
+# Catches a rejected request (storage limit, unsupported format) shown as a lost connection with retry.
+def test_portal_rejection_sentence_reaches_the_ui_unchanged(monkeypatch):
+    import sys
+    from lfs_plugins.gallery_sync import friendly_error
+    from lfs_plugins.gallery_messages import localize_message
+    monkeypatch.setitem(sys.modules, 'lichtfeld', SimpleNamespace(ui=SimpleNamespace(tr=lambda key: key)))
+    sentence = 'Your gallery storage limit has been reached. Delete scenes or cancel pending uploads first.'
+    assert localize_message(friendly_error(PortalHTTPError(400, sentence))) == sentence
+    assert 'connection' in friendly_error(PortalHTTPError(400, 'invalid_request'))
+    changed = 'The gallery scene changed. Sync before trying again.'
+    assert localize_message(friendly_error(PortalHTTPError(400, 'sync_conflict', detail={'message': changed}))) == changed
+
+
 def test_gallery_notice_never_contains_a_python_traceback(monkeypatch):
     import sys
     from lfs_plugins.gallery_messages import localize_message

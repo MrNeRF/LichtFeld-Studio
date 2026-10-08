@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -246,6 +247,7 @@ namespace lfs::python {
         params.optimization.max_cap = 16;
         params.optimization.headless = true;
         params.optimization.enable_eval = false;
+        params.optimization.use_exposure_correction = false;
         params.optimization.use_ppisp = use_ppisp;
         return params;
     }
@@ -1916,6 +1918,119 @@ namespace lfs::python {
         for (int col = 0; col < 4; ++col)
             for (int row = 0; row < 4; ++row)
                 EXPECT_NEAR(world_before[col][row], world_after[col][row], 1e-4f);
+    }
+
+    TEST_F(SceneValidityTest, ReparentRejectsUnrepresentableParentInverseWithoutMutation) {
+        const auto group = dummy_scene_.addGroup("TinyGroup");
+        const auto splat = dummy_scene_.addSplat("Child", make_test_splat(1));
+        const glm::mat4 local_before = dummy_scene_.getNodeById(splat)->local_transform.get();
+        const glm::mat4 tiny_scale = glm::scale(glm::mat4(1.0f), glm::vec3(1e-18f));
+        dummy_scene_.setNodeTransform(group, tiny_scale);
+
+        EXPECT_FALSE(dummy_scene_.reparent(splat, group));
+        EXPECT_EQ(dummy_scene_.getNodeById(splat)->parent_id, core::NULL_NODE);
+        EXPECT_TRUE(dummy_scene_.getNodeById(group)->children.empty());
+        EXPECT_EQ(dummy_scene_.getNodeById(splat)->local_transform.get(), local_before);
+    }
+
+    TEST_F(SceneValidityTest, MoveRejectsUnrepresentableParentInverseWithoutMutation) {
+        const auto group = dummy_scene_.addGroup("TinyGroup");
+        const auto splat = dummy_scene_.addSplat("Child", make_test_splat(1));
+        const glm::mat4 local_before = dummy_scene_.getNodeById(splat)->local_transform.get();
+        const glm::mat4 tiny_scale = glm::scale(glm::mat4(1.0f), glm::vec3(1e-18f));
+        dummy_scene_.setNodeTransform(group, tiny_scale);
+
+        EXPECT_FALSE(dummy_scene_.moveNode(splat, group, -1));
+        EXPECT_EQ(dummy_scene_.getNodeById(splat)->parent_id, core::NULL_NODE);
+        EXPECT_TRUE(dummy_scene_.getNodeById(group)->children.empty());
+        EXPECT_EQ(dummy_scene_.getNodeById(splat)->local_transform.get(), local_before);
+    }
+
+    TEST_F(SceneValidityTest, ReparentAndMoveAcceptFiniteAnisotropicParentsAndPreserveWorldTransform) {
+        const std::array<glm::vec3, 2> scales = {
+            glm::vec3(1.0f, 1.0f, 1.0e-7f), glm::vec3(1.0e3f, 1.0e-3f, 1.0f)};
+        for (size_t index = 0; index < scales.size(); ++index) {
+            const auto group = dummy_scene_.addGroup("AnisotropicGroup" + std::to_string(index));
+            const auto splat = dummy_scene_.addSplat("AnisotropicChild" + std::to_string(index),
+                                                     make_test_splat(1));
+            const auto moved = dummy_scene_.addSplat("AnisotropicMoved" + std::to_string(index),
+                                                     make_test_splat(1));
+            ASSERT_NE(group, core::NULL_NODE);
+            ASSERT_NE(splat, core::NULL_NODE);
+            ASSERT_NE(moved, core::NULL_NODE);
+
+            dummy_scene_.setNodeTransform(group, glm::scale(glm::mat4(1.0f), scales[index]));
+            glm::mat4 child_transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.5f, -2.0f, 3.0f));
+            child_transform = glm::rotate(child_transform, 0.17f, glm::vec3(0.0f, 0.0f, 1.0f));
+            dummy_scene_.setNodeTransform(splat, child_transform);
+            child_transform[3][0] += 2.0f;
+            dummy_scene_.setNodeTransform(moved, child_transform);
+            const glm::mat4 world_before = dummy_scene_.getWorldTransform(splat);
+            const glm::mat4 moved_world_before = dummy_scene_.getWorldTransform(moved);
+
+            ASSERT_TRUE(dummy_scene_.reparent(splat, group));
+            ASSERT_TRUE(dummy_scene_.moveNode(moved, group, -1));
+            const glm::mat4 world_after = dummy_scene_.getWorldTransform(splat);
+            const glm::mat4 moved_world_after = dummy_scene_.getWorldTransform(moved);
+            for (int column = 0; column < 4; ++column) {
+                for (int row = 0; row < 3; ++row) {
+                    const float tolerance = 1.0e-4f * std::max(1.0f, std::abs(world_before[column][row]));
+                    EXPECT_NEAR(world_after[column][row], world_before[column][row], tolerance);
+                    const float moved_tolerance =
+                        1.0e-4f * std::max(1.0f, std::abs(moved_world_before[column][row]));
+                    EXPECT_NEAR(moved_world_after[column][row], moved_world_before[column][row], moved_tolerance);
+                }
+            }
+        }
+    }
+
+    TEST_F(SceneValidityTest, ReparentRejectsZeroAndTinyNestedParentsWithoutMutation) {
+        const auto outer = dummy_scene_.addGroup("OuterGroup");
+        const auto inner = dummy_scene_.addGroup("InnerGroup", outer);
+        const auto splat = dummy_scene_.addSplat("Child", make_test_splat(1));
+        ASSERT_NE(outer, core::NULL_NODE);
+        ASSERT_NE(inner, core::NULL_NODE);
+        ASSERT_NE(splat, core::NULL_NODE);
+        const glm::mat4 local_before = dummy_scene_.getNodeById(splat)->local_transform.get();
+
+        for (const float scale : {0.0f, 1.0e-30f}) {
+            dummy_scene_.setNodeTransform(outer, glm::scale(glm::mat4(1.0f), glm::vec3(scale)));
+            EXPECT_FALSE(dummy_scene_.reparent(splat, inner));
+            EXPECT_EQ(dummy_scene_.getNodeById(splat)->parent_id, core::NULL_NODE);
+            EXPECT_TRUE(dummy_scene_.getNodeById(inner)->children.empty());
+            EXPECT_EQ(dummy_scene_.getNodeById(splat)->local_transform.get(), local_before);
+        }
+    }
+
+    TEST_F(SceneValidityTest, ReparentAndMoveMatchLegacyInverseForFiniteParents) {
+        const auto group = dummy_scene_.addGroup("TransformedGroup");
+        const auto reparented = dummy_scene_.addSplat("Reparented", make_test_splat(1));
+        const auto moved = dummy_scene_.addSplat("Moved", make_test_splat(1));
+
+        glm::mat4 group_transform = glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, -3.0f, 4.0f));
+        group_transform = glm::rotate(group_transform, 0.37f, glm::vec3(0.0f, 1.0f, 0.0f));
+        group_transform = glm::scale(group_transform, glm::vec3(1.25f, 0.75f, 1.5f));
+        dummy_scene_.setNodeTransform(group, group_transform);
+
+        glm::mat4 reparented_transform = glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, 0.5f, 2.0f));
+        reparented_transform = glm::rotate(reparented_transform, -0.23f, glm::vec3(1.0f, 0.0f, 0.0f));
+        dummy_scene_.setNodeTransform(reparented, reparented_transform);
+        const glm::mat4 reparented_world = dummy_scene_.getWorldTransform(reparented);
+        const glm::mat4 expected_reparented_local =
+            glm::inverse(dummy_scene_.getWorldTransform(group)) * reparented_world;
+
+        ASSERT_TRUE(dummy_scene_.reparent(reparented, group));
+        EXPECT_EQ(dummy_scene_.getNodeById(reparented)->local_transform.get(), expected_reparented_local);
+
+        glm::mat4 moved_transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.25f, 1.5f, -2.0f));
+        moved_transform = glm::rotate(moved_transform, 0.19f, glm::vec3(0.0f, 0.0f, 1.0f));
+        dummy_scene_.setNodeTransform(moved, moved_transform);
+        const glm::mat4 moved_world = dummy_scene_.getWorldTransform(moved);
+        const glm::mat4 expected_moved_local =
+            glm::inverse(dummy_scene_.getWorldTransform(group)) * moved_world;
+
+        ASSERT_TRUE(dummy_scene_.moveNode(moved, group, -1));
+        EXPECT_EQ(dummy_scene_.getNodeById(moved)->local_transform.get(), expected_moved_local);
     }
 
     TEST_F(SceneValidityTest, SceneManagerMoveNodeReparentsIntoGroup) {

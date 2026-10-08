@@ -773,3 +773,91 @@ TEST_F(TensorBasicTest, MoveThroughExpectedAndConstructorPreservesTensor) {
     EXPECT_EQ(result->data.shape(), TensorShape({3}));
     EXPECT_EQ(result->data.cpu().to_vector(), (std::vector<float>{1.0f, 2.0f, 3.0f}));
 }
+
+TEST(TensorAssignmentTest, CopyRebindsViewsAndSharesSourceStorage) {
+    for (const auto device : {Device::CPU, Device::CUDA}) {
+        for (const bool strided : {false, true}) {
+            auto backing = Tensor::zeros({4, 4}, device);
+            auto destination = strided ? backing.slice(1, 1, 3) : backing.slice(0, 1, 3);
+            const auto source = Tensor::ones(destination.shape(), device);
+            destination = source;
+            EXPECT_EQ(destination.storage_ptr(), source.storage_ptr());
+            EXPECT_NE(destination.storage_ptr(), backing.storage_ptr());
+            EXPECT_EQ(backing.to_vector(), std::vector<float>(16, 0.0f));
+            destination.fill_(7.0f);
+            EXPECT_EQ(source.to_vector(), std::vector<float>(8, 7.0f));
+        }
+    }
+}
+
+TEST(TensorAssignmentTest, MoveIntoViewStealsSourceAndEmptiesIt) {
+    for (const auto device : {Device::CPU, Device::CUDA}) {
+        auto backing = Tensor::zeros({4, 4}, device);
+        auto destination = backing.slice(1, 1, 3);
+        const auto source_backing = Tensor::ones({4, 6}, device);
+        auto source = source_backing.slice(1, 2, 4);
+        const auto source_offset = source.storage_offset();
+        const auto source_strides = source.strides();
+        destination = std::move(source);
+        EXPECT_EQ(destination.storage_ptr(), source_backing.storage_ptr());
+        EXPECT_EQ(destination.storage_offset(), source_offset);
+        EXPECT_EQ(destination.strides(), source_strides);
+        EXPECT_FALSE(source.is_valid());
+        EXPECT_EQ(source.ndim(), 0u);
+        EXPECT_EQ(backing.to_vector(), std::vector<float>(16, 0.0f));
+        EXPECT_EQ(destination.to_vector(), std::vector<float>(8, 1.0f));
+    }
+}
+
+TEST(TensorAssignmentTest, CopyFromWritesIntoContiguousAndStridedViews) {
+    for (const auto device : {Device::CPU, Device::CUDA}) {
+        for (const bool strided : {false, true}) {
+            auto backing = Tensor::zeros({4, 4}, device);
+            auto destination = strided ? backing.slice(1, 1, 3) : backing.slice(0, 1, 3);
+            const auto source = Tensor::ones(destination.shape(), device);
+            destination.copy_from(source);
+            EXPECT_EQ(destination.storage_ptr(), backing.storage_ptr());
+            EXPECT_NE(destination.storage_ptr(), source.storage_ptr());
+            const auto values = backing.to_vector();
+            for (size_t row = 0; row < 4; ++row) {
+                for (size_t column = 0; column < 4; ++column) {
+                    const bool selected = strided ? column == 1 || column == 2 : row == 1 || row == 2;
+                    EXPECT_FLOAT_EQ(values[row * 4 + column], selected ? 1.0f : 0.0f);
+                }
+            }
+        }
+    }
+}
+
+TEST(TensorAssignmentTest, CopyPreservesSourceViewMetadataAndSelfAssignment) {
+    for (const auto device : {Device::CPU, Device::CUDA}) {
+        auto backing = Tensor::zeros({4, 4}, device);
+        auto destination = backing.slice(1, 1, 3);
+        const auto source_backing = Tensor::ones({4, 6}, device);
+        const auto source = source_backing.slice(1, 2, 4);
+        destination = source;
+        EXPECT_EQ(destination.storage_ptr(), source_backing.storage_ptr());
+        EXPECT_EQ(destination.storage_offset(), source.storage_offset());
+        EXPECT_EQ(destination.strides(), source.strides());
+        EXPECT_EQ(destination.is_view(), source.is_view());
+        auto& alias = destination;
+        destination = alias;
+        destination = std::move(alias);
+        EXPECT_EQ(destination.storage_ptr(), source_backing.storage_ptr());
+        EXPECT_EQ(destination.to_vector(), std::vector<float>(8, 1.0f));
+        EXPECT_EQ(backing.to_vector(), std::vector<float>(16, 0.0f));
+    }
+}
+
+TEST(TensorAssignmentTest, CrossDeviceAssignmentRebindsWithoutCopyingIntoHostView) {
+    auto backing = Tensor::zeros({4}, Device::CPU);
+    auto destination = backing.slice(0, 0, 4);
+    const auto source = Tensor::ones({4}, Device::CUDA);
+    destination = source;
+    EXPECT_EQ(destination.device(), source.device());
+    EXPECT_EQ(destination.storage_ptr(), source.storage_ptr());
+    EXPECT_EQ(backing.to_vector(), std::vector<float>(4, 0.0f));
+    destination = Tensor{};
+    EXPECT_FALSE(destination.is_valid());
+    EXPECT_TRUE(source.is_valid());
+}

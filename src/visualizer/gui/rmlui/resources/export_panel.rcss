@@ -72,10 +72,16 @@
 
 .ep-model-row .setting-label {
     flex: 1;
+    min-width: 0;
     overflow: hidden;
 }
 
 .ep-model-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     font-size: 12dp;
 }
 
@@ -125,7 +131,7 @@
     margin: 6dp 0;
 }
 
-.ep-progress fill {
+.ep-progress-wrap.is-exporting .ep-progress fill {
     animation: ep-pulse 1.2s quadratic-in-out infinite alternate;
 }
 

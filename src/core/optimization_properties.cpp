@@ -89,7 +89,6 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.lr_opacity")
             .precision(4)
             .ui_step(0.001)
-            .flags(PROP_LIVE_UPDATE)
             .all_strategies()
             .float_prop(&OptimizationParameters::scaling_lr,
                         "scaling_lr", "Scale LR", d.scaling_lr, 0.0f, 0.1f,
@@ -108,6 +107,15 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.scaling_lr_end")
             .precision(6)
             .ui_step(1e-5)
+            .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .float_prop(&OptimizationParameters::late_lr_anneal,
+                        "late_lr_anneal", "Late Learning Rate Fade", d.late_lr_anneal, 0.01f, 1.0f,
+                        "After growth ends, color and opacity learning slows to this fraction of normal speed by the last iteration, so the model does not memorize single photos; 1 turns it off")
+            .locale("training.advanced.late_lr_anneal")
+            .tooltip("training.tooltip.late_lr_anneal")
+            .precision(2)
+            .ui_step(0.05)
             .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
@@ -161,6 +169,80 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.scale_reg")
             .precision(4)
             .ui_step(0.001)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::scale_reg_decay_power,
+                        "scale_reg_decay_power", "Scale Penalty Fade", d.scale_reg_decay_power, -1.0f, 4.0f,
+                        "How fast the scale penalty fades to zero over training; higher starts stronger and fades faster, negative keeps it constant")
+            .strategies({"mrnf"})
+            .locale("training.losses.scale_reg_decay_power")
+            .tooltip("training.tooltip.scale_reg_decay_power")
+            .flags(PROP_ADVANCED)
+            .precision(2)
+            .ui_step(0.1)
+            .float_prop(&OptimizationParameters::erank_reg,
+                        "erank_reg", "Spike Shape Penalty", d.erank_reg, 0.0f, 1.0f,
+                        "Discourages needle-shaped splats that show up as streaks from new angles; 0 turns it off")
+            .strategies({"mrnf"})
+            .locale("training.losses.erank_reg")
+            .tooltip("training.tooltip.erank_reg")
+            .flags(PROP_ADVANCED)
+            .precision(4)
+            .ui_step(0.001)
+            .float_prop(&OptimizationParameters::dc_reg,
+                        "dc_reg", "Color Range Penalty", d.dc_reg, 0.0f, 1.0f,
+                        "Keeps base colors between black and white so splats cannot cancel each other out; 0 turns it off")
+            .strategies({"mrnf"})
+            .locale("training.losses.dc_reg")
+            .tooltip("training.tooltip.dc_reg")
+            .flags(PROP_ADVANCED)
+            .precision(4)
+            .ui_step(0.001)
+            .float_prop(&OptimizationParameters::sh_rest_reg,
+                        "sh_rest_reg", "View-Dependent Color Penalty", d.sh_rest_reg, 0.0f, 1.0f,
+                        "Keeps the angle-dependent part of each color small so splats cannot fake detail by changing color with the view; 0 turns it off")
+            .strategies({"mrnf"})
+            .locale("training.losses.sh_rest_reg")
+            .tooltip("training.tooltip.sh_rest_reg")
+            .precision(4)
+            .ui_step(0.001)
+            .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
+
+            .all_strategies()
+            .float_prop(&OptimizationParameters::thin_structure_weight,
+                        "thin_structure_weight", "Thin Structure Emphasis", d.thin_structure_weight, 0.0f, 4.0f,
+                        "Makes errors on thin lines such as cables and branches count more so they are not blurred away; 0 turns it off, 0.5 to 1 works well")
+            .locale("training.losses.thin_structure_weight")
+            .tooltip("training.tooltip.thin_structure_weight")
+            .flags(PROP_ADVANCED)
+            .precision(2)
+            .ui_step(0.1)
+
+            .all_strategies()
+            .float_prop(&OptimizationParameters::gradient_loss_weight,
+                        "gradient_loss_weight", "Edge Sharpness Loss", d.gradient_loss_weight, 0.0f, 8.0f,
+                        "From iteration 2000, also matches edges and fine texture of the photos to keep the result sharp; 0 turns it off")
+            .locale("training.losses.gradient_loss_weight")
+            .tooltip("training.tooltip.gradient_loss_weight")
+            .flags(PROP_ADVANCED)
+            .precision(2)
+            .ui_step(0.1)
+
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::opacity_decay_rendered_only,
+                       "opacity_decay_rendered_only", "Fade Only Visible Splats", d.opacity_decay_rendered_only,
+                       "Fades the opacity only of splats drawn since the last refinement, so splats out of view are not lost; no effect with GUT")
+            .locale("training.losses.opacity_decay_rendered_only")
+            .tooltip("training.tooltip.opacity_decay_rendered_only")
+            .flags(PROP_ADVANCED)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::densify_structure_weight,
+                        "densify_structure_weight", "Thin Structure Growth", d.densify_structure_weight, 0.0f, 4.0f,
+                        "Gives thin lines such as cables and branches priority when new splats are added; 0 turns it off")
+            .locale("training.losses.densify_structure_weight")
+            .tooltip("training.tooltip.densify_structure_weight")
+            .flags(PROP_ADVANCED)
+            .precision(2)
+            .ui_step(0.1)
 
             // Refinement
             .all_strategies()
@@ -558,69 +640,11 @@ namespace lfs::core::param {
             .ui_step(0.1)
             .flags(PROP_ADVANCED)
             .all_strategies()
-            .float_prop(&OptimizationParameters::oversize_split_fraction,
-                        "oversize_split_fraction", "Oversize Split Fraction",
-                        d.oversize_split_fraction, 0.0f, 1.0f,
-                        "Fraction of MRNF growth budget used to split splats over the screen-share cap; 0 disables")
-            .locale("training.advanced.oversize_split_fraction")
-            .tooltip("training.tooltip.oversize_split_fraction")
-            .precision(3)
-            .ui_step(0.05)
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
-            .all_strategies()
             .bool_prop(&OptimizationParameters::use_edge_map,
                        "use_edge_map", "Edge Map", d.use_edge_map,
                        "Weight MRNF refine signal by Canny edge map on GT images")
             .locale("training.advanced.use_edge_map")
             .tooltip("training.tooltip.use_edge_map")
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
-            .all_strategies()
-            .bool_prop(&OptimizationParameters::background_improvements,
-                       "background_improvements", "Background Improvements", d.background_improvements,
-                       "Improve distant background reconstruction (MRNF): far-field seeding and splits, decay relief, growth cap, per-splat position steps, visibility-ratio growth ranking, paced capacity fill")
-            .locale("training_params.background_improvements")
-            .tooltip("training.tooltip.background_improvements")
-            .flags(PROP_NEEDS_RESTART)
-            .strategies({"mrnf"})
-            .float_prop(&OptimizationParameters::far_scene_min_fraction,
-                        "far_scene_min_fraction", "Far Scene Min Fraction", d.far_scene_min_fraction, 0.0f, 1.0f,
-                        "Minimum deep-far splat fraction that activates far-field features (0 = always on)")
-            .locale("training.advanced.far_scene_min_fraction")
-            .tooltip("training.tooltip.far_scene_min_fraction")
-            .precision(3)
-            .ui_step(0.01)
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
-            .bool_prop(&OptimizationParameters::growth_ratio_rank,
-                       "growth_ratio_rank", "Growth Ratio Rank", d.growth_ratio_rank,
-                       "Rank MRNF growth by visibility-normalized error (err/vis^p) instead of raw window error")
-            .locale("training.advanced.growth_ratio_rank")
-            .tooltip("training.tooltip.growth_ratio_rank")
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
-            .float_prop(&OptimizationParameters::growth_ratio_pow,
-                        "growth_ratio_pow", "Growth Ratio Pow", d.growth_ratio_pow, 0.0f, 1.0f,
-                        "Visibility exponent p for the err/vis^p growth rank")
-            .locale("training.advanced.growth_ratio_pow")
-            .tooltip("training.tooltip.growth_ratio_pow")
-            .precision(2)
-            .ui_step(0.05)
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
-            .size_prop(&OptimizationParameters::fill_pacing_iter,
-                       "fill_pacing_iter", "Fill Pacing Iter", d.fill_pacing_iter, 0, 100000,
-                       "Pace MRNF cap fill until this iteration (0 = fill as fast as possible)")
-            .locale("training.advanced.fill_pacing_iter")
-            .tooltip("training.tooltip.fill_pacing_iter")
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
-            .size_prop(&OptimizationParameters::far_seed_dose,
-                       "far_seed_dose", "Far Seed Dose", d.far_seed_dose, 0, 100000,
-                       "Far-field seeds injected per refine window (0 = starvation-scaled default)")
-            .locale("training.advanced.far_seed_dose")
-            .tooltip("training.tooltip.far_seed_dose")
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
 
@@ -670,6 +694,15 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.ppisp_warmup")
             .precision(0)
             .ui_step(100)
+            .flags(PROP_ADVANCED)
+            .all_strategies()
+            .enum_prop(&OptimizationParameters::ppisp_holdout_appearance,
+                       "ppisp_holdout_appearance", "Held-Out Photo Appearance", d.ppisp_holdout_appearance,
+                       {{"Mean", PPISPHoldoutAppearance::Mean, "training.options.ppisp_holdout_appearance.mean", "mean"},
+                        {"Nearest", PPISPHoldoutAppearance::Nearest, "training.options.ppisp_holdout_appearance.nearest", "nearest"}},
+                       "Exposure and white balance used to evaluate held-out photos: nearest blends the training photos shot just before and after, mean uses one average setting")
+            .locale("training_params.ppisp_holdout_appearance")
+            .tooltip("training.tooltip.ppisp_holdout_appearance")
             .flags(PROP_ADVANCED)
             .all_strategies()
             .bool_prop(&OptimizationParameters::ppisp_use_controller,
@@ -723,6 +756,56 @@ namespace lfs::core::param {
                        "Train on every image and evaluate all of them; no image is held out")
             .locale("training_params.eval_all")
             .tooltip("training.tooltip.eval_all")
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::eval_flip,
+                       "eval_flip", "Eval FLIP", d.eval_flip,
+                       "Also compute FLIP per evaluated image and save its error map next to the evaluation images")
+            .locale("training_params.eval_flip")
+            .tooltip("training.tooltip.eval_flip")
+            .all_strategies()
+            .enum_prop(&OptimizationParameters::eval_space,
+                       "eval_space", "Eval Space", d.eval_space,
+                       {{"Distorted", EvalSpace::Distorted, "training.options.eval_space.distorted", "distorted"},
+                        {"Undistorted", EvalSpace::Undistorted, "training.options.eval_space.undistorted", "undistorted"}},
+                       "Reference images for evaluation with --undistort: distorted = the original "
+                       "images, with the render warped into the original lens; undistorted = the "
+                       "undistorted training images")
+            .locale("training_params.eval_space")
+            .tooltip("training.tooltip.eval_space")
+            .all_strategies()
+            .enum_prop(&OptimizationParameters::eval_bit_depth,
+                       "eval_bit_depth", "Eval Bit Depth", d.eval_bit_depth,
+                       {{"Auto", EvalBitDepth::Auto, "training.options.eval_bit_depth.auto", "auto"},
+                        {"8-bit", EvalBitDepth::Eight, "training.options.eval_bit_depth.eight", "8"},
+                        {"16-bit", EvalBitDepth::Sixteen, "training.options.eval_bit_depth.sixteen", "16"},
+                        {"Float", EvalBitDepth::Float, "training.options.eval_bit_depth.float", "float"}},
+                       "Grid the render is quantized to before evaluation metrics: auto = each reference "
+                       "image's own encoding (8-bit, 16-bit or float)")
+            .locale("training_params.eval_bit_depth")
+            .tooltip("training.tooltip.eval_bit_depth")
+            .all_strategies()
+            .string_prop(&OptimizationParameters::eval_mask,
+                         "eval_mask", "Evaluation Mask", d.eval_mask,
+                         "Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range, points or a splat); training is not affected")
+            .locale("training_params.eval_mask")
+            .tooltip("training.tooltip.eval_mask")
+            .flags(PROP_NEEDS_RESTART)
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::eval_mask_invert,
+                       "eval_mask_invert", "Invert Evaluation Mask", d.eval_mask_invert,
+                       "Scores the pixels outside the evaluation mask instead")
+            .locale("training_params.eval_mask_invert")
+            .tooltip("training.tooltip.eval_mask_invert")
+            .flags(PROP_NEEDS_RESTART)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::eval_mask_opacity,
+                        "eval_mask_opacity", "Splat Mask Opacity", d.eval_mask_opacity, 0.01f, 1.0f,
+                        "Rendered opacity a pixel needs to count as covered by a splat mask; lower widens the mask past the outline, higher pulls it in")
+            .locale("training_params.eval_mask_opacity")
+            .tooltip("training.tooltip.eval_mask_opacity")
+            .precision(2)
+            .ui_step(0.05)
+            .flags(PROP_NEEDS_RESTART)
 
             // Random initialization
             .all_strategies()
@@ -794,7 +877,10 @@ namespace lfs::core::param {
             .all_strategies()
             .bool_prop(&OptimizationParameters::undistort,
                        "undistort", "Undistort", d.undistort,
-                       "Undistort images on-the-fly before training")
+                       "Remove lens distortion before training: each image and its mask, depth and "
+                       "normal map are resampled once from full resolution into a distortion-free "
+                       "pinhole camera, which training then uses. Alternative to --gut for distorted "
+                       "or non-pinhole cameras")
             .locale("training_params.undistort")
             .tooltip("training.tooltip.undistort")
             .flags(PROP_NEEDS_RESTART)

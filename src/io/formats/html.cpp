@@ -84,9 +84,11 @@ namespace lfs::io {
         Result<std::string> build_viewer_tools_script(const std::string& gizmo_js,
                                                       const std::string& measure_tool_js,
                                                       const std::string& label_tool_js,
+                                                      const std::string& vr_annotations_js,
                                                       const std::filesystem::path& gizmo_path,
                                                       const std::filesystem::path& measure_tool_path,
-                                                      const std::filesystem::path& label_tool_path) {
+                                                      const std::filesystem::path& label_tool_path,
+                                                      const std::filesystem::path& vr_annotations_path) {
             auto gizmo_body = strip_trailing_export(gizmo_js, "export { Gizmo, TranslateGizmo };", gizmo_path);
             if (!gizmo_body) {
                 return std::unexpected(gizmo_body.error());
@@ -101,16 +103,23 @@ namespace lfs::io {
             if (!label_body) {
                 return std::unexpected(label_body.error());
             }
+            auto vr_annotations_body = strip_trailing_export(vr_annotations_js, "export { initVrAnnotations };",
+                                                             vr_annotations_path);
+            if (!vr_annotations_body) {
+                return std::unexpected(vr_annotations_body.error());
+            }
 
             std::string wrapped;
-            wrapped.reserve(gizmo_body->size() + measure_body->size() + label_body->size() + 160);
+            wrapped.reserve(gizmo_body->size() + measure_body->size() + label_body->size() + vr_annotations_body->size() + 200);
             wrapped += "\n(function () {\n";
             wrapped += *gizmo_body;
             wrapped += "\n";
             wrapped += *measure_body;
             wrapped += "\n";
             wrapped += *label_body;
-            wrapped += "\nwindow.__lfsInitMeasureTool = initMeasureTool;\nwindow.__lfsInitLabelTool = initLabelTool;\n})();\n";
+            wrapped += "\n";
+            wrapped += *vr_annotations_body;
+            wrapped += "\nwindow.__lfsInitMeasureTool = initMeasureTool;\nwindow.__lfsInitLabelTool = initLabelTool;\nwindow.__lfsInitVrAnnotations = initVrAnnotations;\n})();\n";
             return wrapped;
         }
 
@@ -196,11 +205,16 @@ namespace lfs::io {
             auto label_tool_result = read_text_file(resource_dir / "label-tool.js");
             if (!label_tool_result)
                 return std::unexpected(label_tool_result.error());
+            auto vr_annotations_result = read_text_file(resource_dir / "vr-annotations.js");
+            if (!vr_annotations_result)
+                return std::unexpected(vr_annotations_result.error());
 
             auto tools_script_result = build_viewer_tools_script(*gizmo_result, *measure_tool_result, *label_tool_result,
+                                                                 *vr_annotations_result,
                                                                  resource_dir / "gizmo.js",
                                                                  resource_dir / "measure-tool.js",
-                                                                 resource_dir / "label-tool.js");
+                                                                 resource_dir / "label-tool.js",
+                                                                 resource_dir / "vr-annotations.js");
             if (!tools_script_result)
                 return std::unexpected(tools_script_result.error());
 

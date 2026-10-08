@@ -9,6 +9,7 @@ from .gallery_logging import failure as log_failure
 import lichtfeld as lf
 
 from .gallery_messages import localize_message, tr as gallery_tr
+from .gallery_preferences import UPLOAD_FORMATS, resolve_upload_format
 from .panels import panel_class
 from .types import Panel
 
@@ -17,12 +18,31 @@ __lfs_panel_classes__ = ["GalleryFilePanel"]
 __lfs_panel_ids__ = ["lfs.gallery_file"]
 
 
+# Phones and tablets refuse scenes without LOD levels above this many splats.
+PHONE_SPLAT_LIMIT = 3_000_000
+
+
+def gallery_lod_levels(count):
+    """The exporter's gallery SSOG levels: halve until the coarsest holds 500k splats or fewer, at most 8."""
+    levels = 1
+    while levels < 8 and count >> (levels - 1) > 500_000:
+        levels += 1
+    return levels
+
+
+# Bytes measured on real scenes (3.5M splats SH3, 5M splats SH0): lossless WebP textures per splat, the SH labels
+# per splat and one degree-3 SH codebook. SSOG units encode with less effort, and each unit of about 250k splats
+# carries its own codebook.
+SOG_BYTES, SOG_LABEL_BYTES, SOG_CODEBOOK_BYTES = 9.9, 1.15, 1.5e6
+SSOG_BYTES, SSOG_LABEL_BYTES, SSOG_CODEBOOK_BYTES, SSOG_UNIT_ROWS = 11.65, 3.6, 1.82e6, 250_000
+
+
 def estimate_upload_size(publication, upload_format):
     """A preview estimate, never an eligibility or quota proof.
 
-    SOG follows the native exporter's texture budget and compression heuristic.
-    SSOG budgets two levels' worth of points. SPZ uses the packed byte budget
-    before compression; the Studio format uses the binary PLY stride.
+    SOG and SSOG follow the measured texture, label and codebook sizes above;
+    SSOG sums its LOD levels and units. SPZ uses the packed byte budget before
+    compression; the Studio format uses the binary PLY stride.
     """
     import math
     count, degree = publication.get("estimatedPoints"), publication.get("shDegree", 3)
@@ -32,10 +52,14 @@ def estimate_upload_size(publication, upload_format):
         return 8192 + count * (14 + 3 * (degree + 1)**2) * 4
     if upload_format == "spz":
         return 8192 + count * (19 + 3 * ((degree + 1)**2 - 1))
-    width = math.ceil(math.sqrt(count) / 4) * 4
-    height = math.ceil(count / width / 4) * 4
-    sog = 8192 + int(width * height * 4 * (7 if degree else 5) * 0.4)
-    return sog * 2 if upload_format == "ssog" else sog
+    codebook_share = ((degree + 1)**2 - 1) / 15
+    if upload_format != "ssog":
+        sh = count * SOG_LABEL_BYTES + SOG_CODEBOOK_BYTES * codebook_share if degree else 0
+        return int(8192 + count * SOG_BYTES + sh)
+    rows = [round(count * 0.5**level) for level in range(gallery_lod_levels(count))]
+    units = sum(math.ceil(level_rows / SSOG_UNIT_ROWS) for level_rows in rows)
+    sh = sum(rows) * SSOG_LABEL_BYTES + units * SSOG_CODEBOOK_BYTES * codebook_share if degree else 0
+    return int(8192 + sum(rows) * SSOG_BYTES + sh)
 
 
 def open_gallery_file_panel(**review):
@@ -132,7 +156,7 @@ class GalleryFilePanel(Panel):
             self._dirty()
             return
         value = str(value)
-        if name == "upload_format" and value not in ("studio", "sog", "ssog", "spz"):
+        if name == "upload_format" and value not in UPLOAD_FORMATS:
             return
         self._fields[name] = value
         self._error = ""
@@ -240,7 +264,9 @@ class GalleryFilePanel(Panel):
             "show_unlinked_hint": lambda: bool((self._review or {}).get("unlinked")),
             "unlinked_copy": lambda: tr("review.unlinked_copy"),
             "submit_label": self._submit_label,
-            "format_hint": lambda: tr("format." + self._fields.get("upload_format", "sog") + "_hint"),
+            "format_hint": lambda: tr("format." + self._fields.get("upload_format", "auto") + "_hint"),
+            "phone_warning": self._phone_warning,
+            "show_phone_warning": lambda: bool(self._phone_warning()),
             "includes": lambda: (self._review or {}).get("includes", ""),
             "quota": lambda: (self._review or {}).get("quota", ""),
             "warning": lambda: (self._review or {}).get("warning", ""),
@@ -258,8 +284,10 @@ class GalleryFilePanel(Panel):
         model.bind_event("browse_pull_folder", lambda _h, _e, _args: self._browse_pull_folder())
         model.bind_func("cancel_label", lambda: tr("replacement.later") if (self._review or {}).get("mode") == "replacement" else tr("action.cancel"))
         for key in ("review.title", "review.description", "review.upload_as",
-                    "format.studio", "format.sog", "format.ssog", "format.spz", "info.folder", "info.filename", "action.cancel"):
+                    "format.auto", "format.studio", "format.sog", "format.ssog", "format.spz", "info.folder",
+                    "info.filename", "action.cancel"):
             model.bind_func("g_" + key.replace(".", "_"), lambda k=key: tr(k))
+        model.bind_event("use_ssog", lambda _h, _e, _args: self._set("upload_format", "ssog"))
         model.bind_event("apply_local", lambda _h, _e, _args: self._submit(local_only=True))
         model.bind_event("submit", lambda _h, _e, _args: self._submit())
         model.bind_event("cancel", lambda _h, _e, _args: self._close(False))
@@ -312,6 +340,7 @@ class GalleryFilePanel(Panel):
                 if review["open_project"]:
                     details["saveProject"] = bool(self._fields["save_project"])
                 controller.upload_format = self._fields["upload_format"]
+                self._remember_unpublished_details(review, details)
                 if review.get("unlinked"):
                     controller.publish_unlinked_scene(review["asset"], details, self._fields["upload_format"])
                 else:
@@ -330,6 +359,15 @@ class GalleryFilePanel(Panel):
             self._submitting = False
             self._dirty()
 
+    def _remember_unpublished_details(self, review, details):
+        # A failed upload is retried from a fresh review. Linked projects keep their details in the link.
+        project_id = review["asset"]["id"]
+        if review.get("unlinked") or project_id in self._state.get("links", {}):
+            return
+        library = lf.ui.get_panel_object("lfs.asset_manager")
+        if library:
+            library.remember_gallery_details(project_id, details["title"], details["description"])
+
     def _eligibility_reason(self):
         if not self._review or self._review.get("mode") != "publish" or self._is_pull():
             return ""
@@ -339,17 +377,29 @@ class GalleryFilePanel(Panel):
 
     def _eligibility_facts(self):
         replaced = ((self._review or {}).get("scene") or {}).get("contentLength", 0) if (self._review or {}).get("action") == "update" else 0
-        return dict(self._state, replacedBytes=replaced, upload_format=self._fields.get("upload_format"))
+        return dict(self._state, replacedBytes=replaced, upload_format=self._resolved_format())
+
+    def _splat_count(self):
+        return (self._review or {}).get("asset", {}).get("publication", {}).get("estimatedPoints")
+
+    def _resolved_format(self):
+        return resolve_upload_format(self._fields.get("upload_format", "auto"), self._splat_count())
+
+    def _phone_warning(self):
+        count = self._splat_count()
+        if self._resolved_format() == "ssog" or type(count) is not int or count <= PHONE_SPLAT_LIMIT:
+            return ""
+        return tr("review.phone_limit", count=f"{count / 1e6:.1f}")
 
     def _estimate(self):
         from .asset_format import format_size
         asset = (self._review or {}).get("asset", {})
         size = asset.get("publication", {}).get("estimatedBytes")
         link = self._state.get("links", {}).get(asset.get("id"), {})
-        if not size and link.get("uploadFormat") == self._fields.get("upload_format"):
+        if not size and link.get("uploadFormat") == self._resolved_format():
             size = ((self._review or {}).get("scene") or {}).get("contentLength")
         if not size:
-            size = estimate_upload_size(asset.get("publication", {}), self._fields.get("upload_format", "sog"))
+            size = estimate_upload_size(asset.get("publication", {}), self._resolved_format())
         return format_size(size) if size else tr("review.estimate_pending")
 
     def _finish(self, submitted):

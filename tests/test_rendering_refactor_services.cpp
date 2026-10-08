@@ -12,6 +12,7 @@
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/tensor.hpp"
+#include "gui/volume_guide_visibility.hpp"
 #include "io/cache_image_loader.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -197,13 +198,31 @@ namespace lfs::vis {
         void SetUp() override {
             lfs::event::EventBridge::instance().clear_all();
             lfs::core::event::bus().clear_all();
+            services().clear();
         }
 
         void TearDown() override {
+            services().clear();
             lfs::event::EventBridge::instance().clear_all();
             lfs::core::event::bus().clear_all();
         }
     };
+
+    namespace {
+        void addDatasetCameraWithImage(SceneManager& manager) {
+            manager.changeContentType(SceneManager::ContentType::Dataset);
+            auto& scene = manager.getScene();
+            const auto group = scene.addCameraGroup("Cameras", scene.addGroup("Dataset"), 1);
+            auto camera = std::make_shared<lfs::core::Camera>(
+                lfs::core::Tensor::eye(3, lfs::core::Device::CPU),
+                lfs::core::Tensor::zeros({size_t{3}}, lfs::core::Device::CPU),
+                100.0f, 100.0f, 32.0f, 32.0f,
+                lfs::core::Tensor(), lfs::core::Tensor(), lfs::core::CameraModelType::PINHOLE,
+                "source", std::filesystem::path("source.png"), std::filesystem::path{},
+                64, 64, 1);
+            scene.addCamera("source", group, std::move(camera));
+        }
+    } // namespace
 
     class SceneManagerRenderStateTest : public ::testing::Test {
     protected:
@@ -1671,6 +1690,52 @@ namespace lfs::vis {
         EXPECT_FALSE(model_b->model->has_deleted_mask());
         EXPECT_EQ(model_b->model->visible_count(), 2u);
     }
+
+    TEST_F(SceneManagerRenderStateTest, NewEllipsoidRepairsOnlyNonpositiveRadii) {
+        for (const std::string shape : {"single", "flat", "volume", "tiny"}) {
+            SCOPED_TRACE(shape);
+            SceneManager manager;
+            services().set(&manager);
+            auto& scene = manager.getScene();
+            auto model = shape == "single" ? makeTestSplat(1.0f) : makeTwoPointTestSplat(0.0f, 2.0f);
+            if (shape == "volume" || shape == "tiny") {
+                const float scale = shape == "tiny" ? 1e-6f : 1.0f;
+                model->means_raw() = core::Tensor::from_vector(
+                    {0.0f, 0.0f, 0.0f, 2.0f * scale, 4.0f * scale, 6.0f * scale},
+                    {size_t{2}, size_t{3}}, core::Device::CPU);
+            }
+            const auto parent = scene.addSplat("model", std::move(model));
+            glm::vec3 min_bounds, max_bounds;
+            ASSERT_TRUE(scene.getNodeBounds(parent, min_bounds, max_bounds));
+            auto expected = (max_bounds - min_bounds) * 0.5f * 1.732050808f;
+            for (int axis = 0; axis < 3; ++axis) {
+                if (expected[axis] <= 0.0f)
+                    expected[axis] = 1e-4f;
+            }
+            const auto result = cap::ensureEllipsoid(manager, nullptr, parent);
+            ASSERT_TRUE(result) << result.error();
+            const auto* node = scene.getNodeById(*result);
+            ASSERT_NE(node, nullptr);
+            EXPECT_EQ(node->ellipsoid->radii, expected);
+            EXPECT_EQ(glm::vec3(scene.getNodeTransform(node->name)[3]), (min_bounds + max_bounds) * 0.5f);
+            ASSERT_TRUE(op::undoHistory().undo().success);
+            EXPECT_EQ(scene.getEllipsoidForSplat(parent), core::NULL_NODE);
+            ASSERT_TRUE(op::undoHistory().redo().success);
+            node = scene.getNode("model_ellipsoid");
+            ASSERT_NE(node, nullptr);
+            EXPECT_EQ(node->ellipsoid->radii, expected);
+
+            core::EllipsoidData legacy = *node->ellipsoid;
+            legacy.radii = glm::vec3(1e-6f, 2e-6f, 3e-6f);
+            scene.setEllipsoidData(node->id, legacy);
+            const auto existing = cap::ensureEllipsoid(manager, nullptr, parent);
+            ASSERT_TRUE(existing);
+            EXPECT_EQ(scene.getNodeById(*existing)->ellipsoid->radii, legacy.radii);
+            op::undoHistory().clear();
+            services().clear();
+        }
+    }
+
     TEST_F(SceneManagerRenderStateTest, EnsureEllipsoidConvertsExistingCropBoxInPlace) {
         SceneManager manager;
         RenderingManager rendering_manager;
@@ -2391,7 +2456,6 @@ namespace lfs::vis {
         preview_selection.ptr<std::uint8_t>()[1] = 1;
 
         RenderSettings settings;
-        settings.selection_color_committed = {0.25f, 0.5f, 0.75f};
         settings.selection_color_preview = {0.1f, 0.9f, 0.2f};
         settings.voxel_size = 0.02f;
 
@@ -2412,7 +2476,7 @@ namespace lfs::vis {
         EXPECT_EQ(request.overlay.selection_mask, scene_state.selection_mask);
         EXPECT_EQ(request.overlay.transient_mask.mask, &preview_selection);
         EXPECT_FALSE(request.overlay.transient_mask.additive);
-        EXPECT_EQ(request.overlay.selection_colors[1], glm::vec4(settings.selection_color_committed, 1.0f));
+        EXPECT_EQ(request.overlay.selection_colors[1], lfs::rendering::defaultSelectionColorTable()[1]);
         EXPECT_EQ(request.overlay.selection_colors[lfs::rendering::kSelectionPreviewColorIndex],
                   glm::vec4(settings.selection_color_preview, 1.0f));
         EXPECT_EQ(request.render.voxel_size, settings.voxel_size);
@@ -2435,6 +2499,19 @@ namespace lfs::vis {
 
         EXPECT_EQ(service.handleTrainingRefresh(false, interval), DirtyFlag::SPLATS);
         EXPECT_EQ(service.handleTrainingRefresh(false, interval), 0u);
+    }
+
+    TEST(ViewportFrameLifecycleServiceTest, RestRenderRestartsTheIdlePreviewBudget) {
+        ViewportFrameLifecycleService service;
+        constexpr float interval = 0.05f;
+        EXPECT_EQ(service.handleTrainingRefresh(true, interval), DirtyFlag::SPLATS);
+        // Motion deferred the requested preview until the camera came to rest.
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        service.restartTrainingRefresh();
+        EXPECT_EQ(service.handleTrainingRefresh(true, interval), 0u);
+        EXPECT_GT(service.secondsUntilTrainingRefresh(interval), 0.0);
+        // A pause still publishes the final training state immediately.
+        EXPECT_EQ(service.handleTrainingRefresh(false, interval), DirtyFlag::SPLATS);
     }
 
     TEST(ViewportFrameLifecycleServiceTest, ResizeActiveDefersFullRefreshUntilDebounceCompletes) {
@@ -2656,6 +2733,29 @@ namespace lfs::vis {
         EXPECT_TRUE(right_request.overlay.cursor.enabled);
     }
 
+    // Catches the passive brush hover tinting splats: it never re-renders on motion, so
+    // the first unrelated frame froze a green brush blob where the pointer last rested.
+    TEST(ViewportRequestBuilderTest, CursorPreviewWithoutSplatHighlightLeavesSplatsUntinted) {
+        Viewport viewport;
+        RenderSettings settings;
+        FrameContext ctx{
+            .viewport = viewport,
+            .settings = settings,
+            .render_size = {800, 600},
+            .cursor_preview =
+                {.active = true,
+                 .x = 120.0f,
+                 .y = 80.0f,
+                 .radius = 24.0f,
+                 .add_mode = true,
+                 .highlight_splats = false},
+        };
+
+        EXPECT_FALSE(buildViewportRenderRequest(ctx, {800, 600}).overlay.cursor.enabled);
+        ctx.cursor_preview.highlight_splats = true;
+        EXPECT_TRUE(buildViewportRenderRequest(ctx, {800, 600}).overlay.cursor.enabled);
+    }
+
     TEST(ViewportRequestBuilderTest, TrainingSuppressesInteractiveSelectionOverlayButKeepsRenderMarkers) {
         using lfs::core::DataType;
         using lfs::core::Device;
@@ -2692,7 +2792,6 @@ namespace lfs::vis {
                  .preview_selection = &preview_selection,
                  .focused_gaussian_id = 1,
                  .selection_mode = SelectionPreviewMode::Rings},
-            .selection_flash_intensity = 0.75f,
         };
 
         const auto request = buildViewportRenderRequest(ctx, {640, 480});
@@ -2706,7 +2805,6 @@ namespace lfs::vis {
         EXPECT_FALSE(request.overlay.emphasis.transient_mask.additive);
         EXPECT_TRUE(request.overlay.emphasis.emphasized_node_mask.empty());
         EXPECT_FALSE(request.overlay.emphasis.dim_non_emphasized);
-        EXPECT_FLOAT_EQ(request.overlay.emphasis.flash_intensity, 0.0f);
         EXPECT_EQ(request.overlay.emphasis.focused_gaussian_id, -1);
 
         const std::vector<glm::mat4> transforms{glm::mat4(1.0f)};
@@ -2715,7 +2813,103 @@ namespace lfs::vis {
         EXPECT_EQ(point_cloud_request.overlay.transient_mask.mask, nullptr);
     }
 
+    // Gating the whole selection overlay instead of only the Gaussian mask would drop node emphasis too.
+    TEST(ViewportRequestBuilderTest, HiddenGaussianSelectionKeepsNodeEmphasis) {
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        Viewport viewport(640, 480);
+        SceneRenderState scene_state;
+        scene_state.selection_mask = std::make_shared<Tensor>(
+            Tensor::zeros({size_t{2}}, Device::CPU, DataType::UInt8));
+        scene_state.selection_mask->ptr<std::uint8_t>()[0] = 1;
+        scene_state.has_selection = true;
+        scene_state.selected_node_mask = {true, false};
+
+        RenderSettings settings;
+        settings.desaturate_unselected = true;
+
+        FrameContext ctx{
+            .viewport = viewport,
+            .scene_state = scene_state,
+            .settings = settings,
+            .render_size = {640, 480},
+            .viewport_pos = {0, 0},
+        };
+        const std::vector<glm::mat4> transforms{glm::mat4(1.0f)};
+
+        const auto shown = buildViewportRenderRequest(ctx, {640, 480});
+        EXPECT_EQ(shown.overlay.emphasis.mask, scene_state.selection_mask);
+        EXPECT_TRUE(shown.overlay.has_selection);
+        EXPECT_EQ(buildPointCloudRenderRequest(ctx, {640, 480}, transforms).overlay.selection_mask,
+                  scene_state.selection_mask);
+
+        ctx.gaussian_selection_visible = false;
+        const auto hidden = buildViewportRenderRequest(ctx, {640, 480});
+        EXPECT_EQ(hidden.overlay.emphasis.mask, nullptr);
+        EXPECT_FALSE(hidden.overlay.has_selection);
+        EXPECT_EQ(hidden.overlay.emphasis.emphasized_node_mask, scene_state.selected_node_mask);
+        EXPECT_TRUE(hidden.overlay.emphasis.dim_non_emphasized);
+        EXPECT_EQ(buildPointCloudRenderRequest(ctx, {640, 480}, transforms).overlay.selection_mask, nullptr);
+    }
+
+    TEST_F(RenderingManagerEventsTest, NodeSelectionRequestsOneRedrawWithoutAnimation) {
+        SceneManager scene_manager;
+        RenderingManager manager;
+        services().set(&scene_manager);
+        services().set(&manager);
+        auto& scene = scene_manager.getScene();
+        const auto left = scene.addSplat("left", makeTestSplat(0.0f));
+        const auto right = scene.addSplat("right", makeTestSplat(1.0f));
+        auto& ledger = manager.frameDemandLedger();
+        (void)ledger.plan(FrameClock::now());
+
+        const auto expect_one_redraw = [&](const size_t selected_count) {
+            EXPECT_EQ(scene_manager.getSelectedNodeNames().size(), selected_count);
+            const auto plan = ledger.plan(FrameClock::now());
+            EXPECT_TRUE(plan.present);
+            EXPECT_NE(plan.view_flags[0] & DirtyFlag::SELECTION, 0u);
+            // Consume the selection change, then poll inside the former animation interval.
+            // A persistent tint needs one redraw; a timer would keep requesting more.
+            for (int i = 0; i < 3; ++i) {
+                (void)manager.pollDirtyState();
+                EXPECT_TRUE(ledger.plan(FrameClock::now()).empty());
+                EXPECT_FALSE(ledger.nextDeadline(FrameClock::now()).has_value());
+            }
+        };
+
+        scene_manager.selectNode(left);
+        expect_one_redraw(1);
+        scene_manager.selectNode(left);
+        EXPECT_TRUE(ledger.plan(FrameClock::now()).empty());
+        scene_manager.addToSelection(right);
+        expect_one_redraw(2);
+        scene_manager.removeFromSelection(left);
+        expect_one_redraw(1);
+        scene_manager.selectNodesById({left, right});
+        expect_one_redraw(2);
+        scene_manager.clearSelection();
+        expect_one_redraw(0);
+    }
+
+    TEST(RenderAnimationStateTest, PivotAndExplicitOverlayAnimationsStillRequestFrames) {
+        RenderAnimationState state;
+        EXPECT_EQ(state.pollDirtyState(), 0u);
+        state.setOverlayAnimationActive(true);
+        EXPECT_EQ(state.pollDirtyState(), DirtyFlag::OVERLAY);
+        state.setPivotAnimationEndTime(FrameClock::now() + std::chrono::seconds(10));
+        EXPECT_EQ(state.pollDirtyState(), DirtyFlag::CAMERA | DirtyFlag::OVERLAY);
+        state.setPivotAnimationEndTime(FrameClock::now() - std::chrono::seconds(1));
+        EXPECT_EQ(state.pollDirtyState(), DirtyFlag::OVERLAY);
+        state.setOverlayAnimationActive(false);
+        EXPECT_EQ(state.pollDirtyState(), 0u);
+    }
+
     TEST_F(RenderingManagerEventsTest, SceneLoadedDisablesGtComparison) {
+        SceneManager scene_manager;
+        addDatasetCameraWithImage(scene_manager);
+        services().set(&scene_manager);
         RenderingManager manager;
         lfs::core::events::cmd::ToggleGTComparison{}.emit();
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::GTComparison);
@@ -2730,7 +2924,23 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
     }
 
+    TEST_F(RenderingManagerEventsTest, ViewerCannotEnterGtComparisonThroughCommand) {
+        services().clear();
+        SceneManager scene_manager;
+        RenderingManager manager;
+        services().set(&scene_manager);
+        services().set(&manager);
+
+        lfs::core::events::cmd::ToggleGTComparison{}.emit();
+
+        EXPECT_FALSE(manager.isGTComparisonActive());
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+    }
+
     TEST_F(RenderingManagerEventsTest, SceneClearedDisablesGtComparison) {
+        SceneManager scene_manager;
+        addDatasetCameraWithImage(scene_manager);
+        services().set(&scene_manager);
         RenderingManager manager;
         lfs::core::events::cmd::ToggleGTComparison{}.emit();
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::GTComparison);
@@ -2853,3 +3063,31 @@ namespace lfs::vis {
     }
 
 } // namespace lfs::vis
+
+namespace lfs::vis::gui {
+    template <typename Volume>
+    class VolumeGuideVisibilityTest : public ::testing::Test {};
+    using GuideVolumes = ::testing::Types<core::Scene::RenderableCropBox, core::Scene::RenderableEllipsoid>;
+    TYPED_TEST_SUITE(VolumeGuideVisibilityTest, GuideVolumes);
+
+    TYPED_TEST(VolumeGuideVisibilityTest, SelectionGuideIgnoresHiddenCropHelper) {
+        const std::vector<TypeParam> volumes{{.node_id = 7, .effectively_visible = false}};
+        EXPECT_TRUE(activeVolumeGuideVisible(false, 7, volumes));
+    }
+
+    TYPED_TEST(VolumeGuideVisibilityTest, SelectionGuideSurvivesMissingCropSnapshot) {
+        EXPECT_TRUE(activeVolumeGuideVisible(false, 7, std::vector<TypeParam>{}));
+    }
+
+    TYPED_TEST(VolumeGuideVisibilityTest, ExistingGuideVisibilityIsPreserved) {
+        const std::vector<TypeParam> volumes{
+            {.node_id = 7, .effectively_visible = false},
+            {.node_id = 8, .effectively_visible = true}};
+        EXPECT_TRUE(activeVolumeGuideVisible(false, core::NULL_NODE, volumes));
+        EXPECT_TRUE(activeVolumeGuideVisible(false, 8, volumes));
+        EXPECT_FALSE(activeVolumeGuideVisible(true, core::NULL_NODE, volumes));
+        EXPECT_FALSE(activeVolumeGuideVisible(true, 7, volumes));
+        EXPECT_TRUE(activeVolumeGuideVisible(true, 8, volumes));
+        EXPECT_FALSE(activeVolumeGuideVisible(true, 9, volumes));
+    }
+} // namespace lfs::vis::gui

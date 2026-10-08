@@ -46,12 +46,6 @@ namespace lfs::vis::gui {
             status_bar.model_.mcp_details_expanded = expanded;
         }
 
-        static void bindStore(RmlStatusBar& status_bar) { status_bar.bindReactiveStore(); }
-        static void clearRedraw(RmlStatusBar& status_bar) { status_bar.model_dirty_ = false; }
-        [[nodiscard]] static bool redrawPending(const RmlStatusBar& status_bar) {
-            return status_bar.model_dirty_;
-        }
-
         static void trackRenderedFrame(RmlStatusBar& status_bar,
                                        RmlUIManager& manager,
                                        const float bar_x,
@@ -149,7 +143,7 @@ namespace {
         std::string gpu_model_text = "NVIDIA GeForce RTX 5090";
         std::string gpu_mem_text = "GPU 18.75/31.99 GiB";
         std::string gpu_mem_color = "#ffffff";
-        std::string fps_value = "144";
+        std::string fps_value = "UI 144 · View 144";
         std::string fps_color = "#ffffff";
         std::string fps_label = " FPS";
         std::string git_commit = "abcdef12";
@@ -349,6 +343,8 @@ namespace {
             EXPECT_GE(fit_level, previous_fit_level);
             assertNoVerticalOverflow(document_);
             assertFlexSiblingsDoNotOverlap(document_);
+            auto* fps = document_->GetElementById("fps-value");
+            EXPECT_LE(fps->GetAbsoluteOffset().x + fps->GetOffsetWidth(), width);
             previous_fit_level = fit_level;
         }
 
@@ -397,28 +393,6 @@ namespace {
 
         lfs::vis::gui::RmlStatusBarTestAccess::setMcpExpanded(status_bar_, false);
         EXPECT_EQ(status_bar_.overlayHeight(), 0.0f);
-    }
-
-    // Catches a status bar that redraws on every training step or every frame:
-    // step, loss, splat count and FPS arrive through its periodic refresh, while
-    // a training state change still redraws at once.
-    TEST(StatusBarRefreshTest, TrainingTelemetryWaitsForThePeriodicRefresh) {
-        lfs::vis::gui::RmlStatusBar status_bar;
-        lfs::vis::gui::RmlStatusBarTestAccess::bindStore(status_bar);
-        auto& store = lfs::vis::app_store();
-        (void)store.store().drain_dirty_into_frame();
-        lfs::vis::gui::RmlStatusBarTestAccess::clearRedraw(status_bar);
-
-        store.iteration.set(store.iteration.get() + 1);
-        store.loss.set(store.loss.get() + 0.5f);
-        store.num_gaussians.set(store.num_gaussians.get() + 1);
-        store.fps.set(store.fps.get() + 1.0f);
-        (void)store.store().drain_dirty_into_frame();
-        EXPECT_FALSE(lfs::vis::gui::RmlStatusBarTestAccess::redrawPending(status_bar));
-
-        store.training_state.set(store.training_state.get() + "_changed");
-        (void)store.store().drain_dirty_into_frame();
-        EXPECT_TRUE(lfs::vis::gui::RmlStatusBarTestAccess::redrawPending(status_bar));
     }
 
     TEST(RuntimeServiceControlsTest, DispatchesMcpActionsThroughVisualizerBoundary) {

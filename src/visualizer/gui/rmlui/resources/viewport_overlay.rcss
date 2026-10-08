@@ -281,6 +281,10 @@ body {
     z-index: 8;
 }
 
+.gizmo-cramped .viewport-gizmo-controls {
+    display: none;
+}
+
 .viewport-gizmo-control-row {
     display: flex;
     flex-direction: row;
@@ -499,9 +503,12 @@ body {
     padding: 0 0 0 8dp;
     position: relative;
     top: 0;
+    /* Viewport selects align from the top instead of using shared centering. */
+    transform: none;
 }
 
-#depth-view-block .viewport-depth-mode-select selectvalue {
+#depth-view-block .viewport-depth-mode-select selectvalue,
+#gt-compare-mode-block .viewport-depth-mode-select selectvalue {
     height: 20dp;
     line-height: 20dp;
 }
@@ -512,9 +519,11 @@ body {
     line-height: 22dp;
     position: relative;
     top: 0;
+    transform: none;
 }
 
-#depth-view-block .viewport-depth-mode-select selectarrow {
+#depth-view-block .viewport-depth-mode-select selectarrow,
+#gt-compare-mode-block .viewport-depth-mode-select selectarrow {
     height: 20dp;
     line-height: 20dp;
 }
@@ -1268,7 +1277,6 @@ body {
 .viewport-lod-stats-value {
     flex-grow: 1;
     min-width: 0;
-    font-family: "JetBrains Mono";
     font-size: 9dp;
     line-height: 14dp;
     text-align: right;
@@ -1335,12 +1343,16 @@ body {
 
 .vram-hud-tabs {
     display: flex;
+    flex-wrap: wrap;
     gap: 0dp;
     border-bottom-width: 1dp;
 }
 
+/* Content-sized tabs wrap onto a second row in a narrow HUD instead of overlapping. */
 .vram-hud-tab {
-    flex: 1;
+    flex: 1 0 auto;
+    padding: 0 6dp;
+    white-space: nowrap;
     height: 24dp;
     font-size: 11dp;
     text-align: center;
@@ -1975,11 +1987,12 @@ body {
     align-items: center;
     gap: 6dp;
     height: 18dp;
-    cursor: pointer;
+    drag: drag;
+    cursor: move;
 }
 
 .perf-hud-strip-title { flex-grow: 1; }
-.perf-hud-strip-rate, .perf-hud-strip-value, .perf-hud-strip-badge { font-family: "JetBrains Mono"; font-weight: normal; }
+.perf-hud-strip-rate, .perf-hud-strip-value, .perf-hud-strip-badge { font-weight: normal; }
 .perf-hud-strip-meter { display: flex; align-items: center; gap: 5dp; height: 18dp; cursor: pointer; }
 .perf-hud-strip-label { width: 34dp; }
 .perf-hud-meter-track { flex-grow: 1; display: flex; height: 7dp; overflow: hidden; border-radius: 3dp; }
@@ -2045,28 +2058,28 @@ body {
 
 .vram-hud-timeline { display: block; width: 100%; height: 100%; }
 .vram-hud-timeline-frame { position: relative; width: 100%; height: 48%; min-height: 220dp; flex-shrink: 0; margin-bottom: 0dp; overflow: hidden; }
-.vram-hud-timeline-axis { position: absolute; top: 0; bottom: 0; left: 3dp; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; font-family: "JetBrains Mono"; font-size: 9dp; }
-.vram-hud-timeline-capacity { position: absolute; top: 16dp; right: 5dp; pointer-events: none; font-family: "JetBrains Mono"; font-size: 9dp; }
-.vram-hud-timeline-x-axis { width: 100%; display: flex; justify-content: space-between; height: 15dp; font-family: "JetBrains Mono"; font-size: 9dp; }
+.vram-hud-timeline-axis { position: absolute; top: 0; bottom: 0; left: 3dp; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; font-size: 9dp; }
+.vram-hud-timeline-capacity { position: absolute; top: 16dp; right: 5dp; pointer-events: none; font-size: 9dp; }
+.vram-hud-timeline-x-axis { width: 100%; display: flex; justify-content: space-between; height: 15dp; font-size: 9dp; }
 .vram-hud-timeline-markers { position: absolute; top: 0; left: 0; right: 0; height: 16dp; pointer-events: none; }
-.vram-hud-marker { position: absolute; top: 0; font-size: 8dp; font-family: "JetBrains Mono"; opacity: .55; pointer-events: auto; }
+.vram-hud-marker { position: absolute; top: 0; font-size: 8dp; opacity: .55; pointer-events: auto; }
 #vram-hud-panel-overview > * { flex-shrink: 0; }
 .vram-hud-crosshair { position: absolute; display: none; top: 0; bottom: 0; width: 1dp; pointer-events: none; }
 .vram-hud-crosshair.active { display: block; }
 .vram-hud-mini-timeline { display: block; width: 100%; height: 28dp; }
 .vram-hud-health { font-size: 10dp; margin-right: 7dp; }
-.vram-hud-timeline-tooltip { min-height: 16dp; font-family: "JetBrains Mono"; font-size: 10dp; white-space: normal; }
+.vram-hud-timeline-tooltip { min-height: 16dp; font-size: 10dp; white-space: normal; }
 .vram-hud-timeline-legend button { display: flex; align-items: center; gap: 4dp; }
 .vram-hud-timeline-legend button.muted { opacity: .42; }
 .vram-hud-legend-swatch { display: inline-block; width: 8dp; height: 8dp; border-radius: 2dp; }
-.vram-hud-legend-chip b { font-family: "JetBrains Mono"; font-weight: normal; margin-left: 3dp; }
+.vram-hud-legend-chip b { font-weight: normal; margin-left: 3dp; }
 .vram-hud-section-title { font-size: 11dp; font-weight: bold; cursor: pointer; margin-top: 7dp; }
 .vram-hud-peak { display: flex; flex-direction: column; gap: 3dp; }
 .vram-hud-peak-bar { display: flex; width: 100%; height: 11dp; overflow: hidden; }
 .vram-hud-peak-segment { height: 100%; }
 .vram-hud-peak-row { display: flex; justify-content: space-between; align-items: center; gap: 6dp; font-size: 10dp; }
-.vram-hud-peak-value { min-width: 155dp; text-align: right; font-family: "JetBrains Mono"; }
-.vram-hud-movers { max-height: 130dp; overflow-y: auto; font-family: "JetBrains Mono"; font-size: 10dp; }
+.vram-hud-peak-value { min-width: 155dp; text-align: right; }
+.vram-hud-movers { max-height: 130dp; overflow-y: auto; font-size: 10dp; }
 .vram-hud-mover-row { display: flex; align-items: center; gap: 6dp; padding: 2dp; cursor: pointer; }
 .vram-hud-mover-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vram-hud-mover-number { width: 76dp; min-width: 76dp; text-align: right; }
@@ -2093,7 +2106,6 @@ body {
 .vram-hud-allocs-summary-value,
 .vram-hud-breakdown-bytes,
 .vram-hud-breakdown-pct {
-    font-family: "JetBrains Mono";
     font-weight: normal;
 }
 

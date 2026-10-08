@@ -5,7 +5,14 @@ import json
 import threading
 from pathlib import Path
 
-DEFAULTS = dict(uploadFormat="sog", posterCacheMiB=64)
+UPLOAD_FORMATS = ("auto", "studio", "sog", "ssog", "spz")
+DEFAULTS = dict(uploadFormat="auto", posterCacheMiB=64)
+# Earlier builds wrote their default ("sog", later "ssog") back with every
+# change, so either format from an older file records no user choice and
+# yields the current default.
+VERSION = 3
+# Phones hold at most 2M splats, so larger scenes need LOD levels.
+AUTO_SSOG_ABOVE = 2_000_000
 _lock = threading.RLock()
 
 
@@ -26,6 +33,8 @@ def read_preferences(root=None):
                     result[key] = _validate(key, raw[key])
                 except (ValueError, TypeError):
                     pass
+        if raw.get("version") != VERSION and result["uploadFormat"] in ("sog", "ssog"):
+            result["uploadFormat"] = DEFAULTS["uploadFormat"]
     except (OSError, ValueError, TypeError, AttributeError):
         pass
     return result
@@ -33,7 +42,7 @@ def read_preferences(root=None):
 
 def _validate(key, value):
     if key == "uploadFormat":
-        if value not in ("studio", "sog", "ssog", "spz"):
+        if value not in UPLOAD_FORMATS:
             raise ValueError("Unsupported upload format")
         return value
     if key != "posterCacheMiB" or isinstance(value, bool):
@@ -44,13 +53,22 @@ def _validate(key, value):
     return number
 
 
+def resolve_upload_format(upload_format, splat_count):
+    """The format to publish: auto picks SSOG above the phone budget, and when the count is unknown."""
+    if upload_format != "auto":
+        return upload_format
+    return "sog" if type(splat_count) is int and 0 < splat_count <= AUTO_SSOG_ABOVE else "ssog"
+
+
 def set_preference(key, value, root=None):
     value = _validate(key, value)
     with _lock:
         path = _root(root) / "preferences.json"
         values = read_preferences(path.parent)
+        if values[key] == value:
+            return
         values[key] = value
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(values))
+        temporary.write_text(json.dumps(dict(values, version=VERSION)))
         temporary.replace(path)

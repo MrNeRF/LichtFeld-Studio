@@ -523,15 +523,21 @@ namespace lfs::python {
         info.initial_height = initial_height;
 
         const bool registered = invoke_on_viewer(
-            [info = std::move(info)]() mutable {
-                return gui::PanelRegistry::instance().register_panel(std::move(info));
+            [this, info = std::move(info), module_prefix]() mutable {
+                const nb::gil_scoped_acquire acquire;
+                const auto id = info.id;
+                auto adapter = info.panel;
+                if (!gui::PanelRegistry::instance().register_panel(std::move(info)))
+                    return false;
+                // Release the old adapter and its named Rml context before the next draw.
+                panels_[id] = {std::move(adapter), module_prefix};
+                return true;
             },
             false);
         if (!registered) {
             throw_value_error(
                 std::string("register_panel: runtime rejected panel '") + panel_id + "'");
         }
-        panels_[panel_id] = {adapter, module_prefix};
     }
 
     void PyPanelRegistry::unregister_panel(nb::object panel_class) {
@@ -545,26 +551,20 @@ namespace lfs::python {
             panel_id = get_class_id(panel_class);
         }
 
-        if (on_graphics_thread()) {
+        invoke_on_viewer([this, panel_id]() {
+            const nb::gil_scoped_acquire acquire;
             gui::PanelRegistry::instance().unregister_panel(panel_id);
-        } else {
-            schedule_graphics_callback([id = panel_id]() {
-                gui::PanelRegistry::instance().unregister_panel(id);
-            });
-        }
-        panels_.erase(panel_id);
+            panels_.erase(panel_id);
+        });
     }
 
     void PyPanelRegistry::unregister_all() {
         std::lock_guard lock(mutex_);
-        if (on_graphics_thread()) {
+        invoke_on_viewer([this]() {
+            const nb::gil_scoped_acquire acquire;
             gui::PanelRegistry::instance().unregister_all_non_native();
-        } else {
-            schedule_graphics_callback([]() {
-                gui::PanelRegistry::instance().unregister_all_non_native();
-            });
-        }
-        panels_.clear();
+            panels_.clear();
+        });
     }
 
     void PyPanelRegistry::unregister_for_module(const std::string& prefix) {
@@ -582,17 +582,14 @@ namespace lfs::python {
             }
         }
 
-        for (const auto& panel_id : to_remove) {
-            if (on_graphics_thread()) {
+        invoke_on_viewer([this, to_remove = std::move(to_remove), prefix]() {
+            const nb::gil_scoped_acquire acquire;
+            for (const auto& panel_id : to_remove) {
                 gui::PanelRegistry::instance().unregister_panel(panel_id);
-            } else {
-                schedule_graphics_callback([id = panel_id]() {
-                    gui::PanelRegistry::instance().unregister_panel(id);
-                });
+                panels_.erase(panel_id);
+                LOG_INFO("Unregistered panel '{}' for module '{}'", panel_id, prefix);
             }
-            panels_.erase(panel_id);
-            LOG_INFO("Unregistered panel '{}' for module '{}'", panel_id, prefix);
-        }
+        });
     }
 
     void register_ui_panels(nb::module_& m) {
@@ -781,6 +778,15 @@ namespace lfs::python {
                 });
             },
             nb::arg("panel_id"), "Set the active bottom-dock panel id");
+
+        m.def(
+            "set_main_panel_active_tab", [](const std::string& panel_id) {
+                invoke_on_viewer([panel_id] {
+                    if (auto* const gui_manager = get_gui_manager())
+                        gui_manager->focusMainPanelTab(panel_id);
+                });
+            },
+            nb::arg("panel_id"), "Activate a main panel tab by panel id");
 
         m.def(
             "get_panel", [](const std::string& panel_id) {

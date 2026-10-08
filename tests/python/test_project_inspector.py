@@ -113,6 +113,7 @@ def test_details_model_hides_metrics_without_samples_and_formats_embedded_datase
         parameters=SimpleNamespace(
             active_strategy="MRNF", embedded_dataset_present=True,
             embedded_dataset_complete=True, embedded_images=194,
+            embedded_masks=194, embedded_depths=180,
             embedded_normals=194, embedded_sparse=3,
         ),
         scene_graph=SimpleNamespace(dataset_node_name="images"),
@@ -122,7 +123,7 @@ def test_details_model_hides_metrics_without_samples_and_formats_embedded_datase
         autosave_sidecar_present=False,
     )
     model = details_rows(_entry(), details, format_size=lambda n: f"{n} B", format_time=lambda n: "")
-    assert model["dataset"] == "embedded, 194 images, 194 normals and 3 sparse, complete"
+    assert model["dataset"] == "embedded, 194 images, 194 masks, 180 depths, 194 normals and 3 sparse, complete"
     assert model["reclaimable_percent"] == "49.9%"
     assert not model["has_metrics"]
     assert model["title"] == "Bicycle"
@@ -130,7 +131,7 @@ def test_details_model_hides_metrics_without_samples_and_formats_embedded_datase
 
 def test_context_actions_open_inspector_and_file_operations():
     actions = {row["action"] for row in operation_actions(_entry())}
-    assert actions == {"inspector", "export_as", "update_thumbnail", "rename"}
+    assert actions == {"inspector", "export_as", "update_thumbnail", "rename", "clean", "compact_content"}
 
 
 def test_thumbnail_source_options_only_offer_sources_available_for_target(tmp_path):
@@ -200,14 +201,16 @@ def _contents(details, plan=None, **kwargs):
     from pathlib import Path
     from lfs_plugins.project_inspector import contents_rows
     translations = json.loads((Path(__file__).parents[2] / 'src/visualizer/gui/resources/locales/en.json').read_text())
+    translations['project_cleanup.title'] = translations['project_cleanup']['title']
     return contents_rows(_entry(), details, plan, tr=lambda key: translations[key],
                          format_size=lambda size: f'{size} B', format_time=lambda timestamp: '2026-08-27' if timestamp else '', **kwargs)
 
 
-def test_empty_contents_has_only_the_two_add_rows():
+def test_empty_contents_offers_add_rows_and_project_cleanup():
     rows = _contents(_contents_details())
     assert [(r['id'], r['label'], r['action']) for r in rows] == [
-        ('thumbnail', 'Add thumbnail', 'thumbnail'), ('license', 'Add license', 'license')]
+        ('thumbnail', 'Add thumbnail', 'thumbnail'), ('license', 'Add license', 'license'),
+        ('clean', 'Clean project…', 'clean')]
     assert not any(r['removable'] for r in rows)
 
 
@@ -267,11 +270,18 @@ def test_checkpoint_display_order_is_independent_of_storage_order(order):
     assert [cp.iteration for cp in checkpoints[:5]] == order
 
 
-def test_contents_embedded_dataset_counts_images_without_counting_normals_as_images():
-    details = _contents_details(parameters=SimpleNamespace(embedded_dataset_present=True, embedded_images=194, embedded_normals=194, embedded_sparse=3))
+def test_contents_embedded_dataset_shows_counts_per_kind():
+    details = _contents_details(parameters=SimpleNamespace(
+        embedded_dataset_present=True, embedded_images=194, embedded_masks=194,
+        embedded_depths=180, embedded_normals=194, embedded_sparse=3,
+    ))
     plan = SimpleNamespace(embedded_dataset=[SimpleNamespace(bytes=100), SimpleNamespace(bytes=50)], drop_embedded_dataset=SimpleNamespace(allowed=False))
     dataset = next(r for r in _contents(details,plan) if r['kind']=='dataset')
-    assert dataset['label'] == 'Dataset, 194 images embedded' and dataset['bytes']==150
+    assert dataset['label'] == 'Dataset, 194 images, 194 masks, 180 depths, 194 normals and 3 sparse files embedded'
+    assert dataset['bytes']==150
+    assert {key: dataset[key] for key in ('images','masks','depths','normals','sparse')} == {
+        'images': 194, 'masks': 194, 'depths': 180, 'normals': 194, 'sparse': 3,
+    }
     assert dataset['removable'] and dataset['remove_disabled']
     plan.drop_embedded_dataset.allowed=True
     assert not next(r for r in _contents(details,plan) if r['kind']=='dataset')['remove_disabled']

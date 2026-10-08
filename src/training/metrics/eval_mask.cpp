@@ -5,10 +5,11 @@
 #include "eval_mask.hpp"
 
 #include "core/cuda/undistort/undistort.hpp"
-#include "core/image_io.hpp"
+#include "io/cache_image_loader.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "training/kernels/mask_preprocess.hpp"
 
+#include <cassert>
 #include <stdexcept>
 #include <utility>
 
@@ -19,63 +20,50 @@ namespace lfs::training {
             return mode == lfs::core::param::MaskMode::SegmentAndIgnore;
         }
 
-        [[nodiscard]] lfs::core::Tensor finalize_binary_metrics_mask(lfs::core::Tensor mask) {
-            return mask.ge(0.5f).to(lfs::core::DataType::UInt8).contiguous();
+        [[nodiscard]] lfs::core::Tensor finalize_binary_metrics_mask(
+            lfs::core::Tensor mask, const float threshold = 0.5f) {
+            return mask.ge(threshold).to(lfs::core::DataType::UInt8).contiguous();
         }
 
         [[nodiscard]] std::expected<LoadedMetricsMask, std::string> load_rgba_metrics_inputs(
             const lfs::core::Camera& camera,
             const MetricsMaskLoadConfig& config) {
             try {
-                auto [img_data, width, height, channels] = lfs::core::load_image_with_alpha(
-                    camera.image_path(), config.resize_factor, config.max_width);
-
-                if (!img_data || channels != 4) {
-                    if (img_data) {
-                        lfs::core::free_image(img_data);
-                    }
-                    return std::unexpected("failed to decode RGBA image");
-                }
-
-                const auto H = static_cast<size_t>(height);
-                const auto W = static_cast<size_t>(width);
-
-                auto cpu_tensor = lfs::core::Tensor::from_blob(
-                    img_data, lfs::core::TensorShape({H, W, 4}),
-                    lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-                auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
-                lfs::core::free_image(img_data);
-
-                auto rgb = lfs::core::Tensor::zeros(
+                const bool undistort = camera.is_undistort_prepared() && config.apply_undistortion;
+                const auto rgba = lfs::io::load_rgba_image_cpu_decoded(
+                    camera.image_path(),
+                    undistort ? 1 : config.resize_factor,
+                    undistort ? 0 : config.max_width);
+                const auto H = rgba.shape()[1];
+                const auto W = rgba.shape()[2];
+                const auto rgb_float = rgba.slice(0, 0, 3).contiguous();
+                auto mask = rgba.slice(0, 3, 4).squeeze(0).contiguous();
+                auto rgb = lfs::core::Tensor::empty(
                     lfs::core::TensorShape({3, H, W}),
                     lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-                auto mask = lfs::core::Tensor::zeros(
-                    lfs::core::TensorShape({H, W}),
-                    lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-
-                lfs::io::cuda::launch_uint8_rgba_split_to_uint8_rgb_and_float32_alpha(
-                    gpu_uint8.ptr<uint8_t>(), rgb.ptr<uint8_t>(), mask.ptr<float>(),
-                    H, W, nullptr);
-                gpu_uint8 = lfs::core::Tensor();
+                rgb_float.sync_to_stream(nullptr);
+                mask.sync_to_stream(nullptr);
+                lfs::io::cuda::launch_float32_chw_to_uint8_chw(
+                    rgb_float.ptr<float>(), rgb.ptr<uint8_t>(), H, W, 3, nullptr);
 
                 const bool sai = is_segment_and_ignore(config.mask_mode);
                 if (config.invert_masks) {
                     lfs::io::cuda::launch_mask_invert(mask.ptr<float>(), H, W, nullptr);
                 }
-                // SegmentAndIgnore must keep authored bands through undistort.
-                // Binary modes still snap before the warp, then re-binarize after.
-                if (!sai && config.mask_threshold > 0.0f) {
+                if (!sai && !undistort && config.mask_threshold > 0.0f) {
                     lfs::io::cuda::launch_mask_threshold(
                         mask.ptr<float>(), H, W, config.mask_threshold, nullptr);
                 }
 
-                if (camera.is_undistort_prepared()) {
-                    const auto scaled = lfs::core::scale_undistort_params(
+                if (undistort) {
+                    const auto scaled = lfs::core::prepare_undistort_params(
                         camera.undistort_params(),
                         static_cast<int>(W), static_cast<int>(H),
+                        config.resize_factor,
                         config.max_width);
                     auto rgb_float = rgb.to(lfs::core::DataType::Float32) / 255.0f;
-                    rgb_float = lfs::core::undistort_image(rgb_float, scaled, nullptr);
+                    rgb_float = lfs::core::undistort_image(
+                        rgb_float, scaled, nullptr);
                     auto rgb_uint8 = lfs::core::Tensor::empty(
                         rgb_float.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
                     lfs::io::cuda::launch_float32_chw_to_uint8_chw(
@@ -86,13 +74,16 @@ namespace lfs::training {
                         rgb_float.shape()[0],
                         nullptr);
                     rgb = std::move(rgb_uint8);
-                    mask = lfs::core::undistort_mask(mask, scaled, nullptr);
+                    mask = lfs::core::undistort_mask_area(mask, scaled, nullptr);
                 }
 
                 if (sai) {
                     mask = classify_keep_mask_for_metrics(mask);
                 } else {
-                    mask = finalize_binary_metrics_mask(std::move(mask));
+                    const float threshold = undistort && config.mask_threshold > 0.0f
+                                                ? config.mask_threshold
+                                                : 0.5f;
+                    mask = finalize_binary_metrics_mask(std::move(mask), threshold);
                 }
                 return LoadedMetricsMask{.gt_image = std::move(rgb), .mask = std::move(mask)};
             } catch (const std::exception& e) {
@@ -109,7 +100,8 @@ namespace lfs::training {
                 config.max_width,
                 config.invert_masks,
                 config.mask_threshold,
-                !sai);
+                !sai,
+                config.apply_undistortion);
             if (!mask.is_valid()) {
                 return {};
             }
@@ -152,7 +144,8 @@ namespace lfs::training {
         if (!loaded) {
             return {};
         }
-        gt_image = std::move(loaded->gt_image);
+        if (config.replace_gt_image)
+            gt_image = std::move(loaded->gt_image);
         return std::move(loaded->mask);
     }
 
@@ -177,6 +170,27 @@ namespace lfs::training {
         const lfs::core::Camera& camera,
         const MetricsMaskLoadConfig& config) {
         return load_rgba_metrics_inputs(camera, config);
+    }
+
+    lfs::core::Tensor load_eval_alpha(
+        const lfs::core::Camera& camera,
+        const MetricsMaskLoadConfig& config) {
+        const bool undistort = camera.is_undistort_prepared() && config.apply_undistortion;
+        const auto rgba = lfs::io::load_rgba_image_cpu_decoded(
+            camera.image_path(),
+            undistort ? 1 : config.resize_factor,
+            undistort ? 0 : config.max_width);
+        assert(rgba.ndim() == 3 && rgba.shape()[0] == 4 && rgba.dtype() == lfs::core::DataType::Float32);
+        auto alpha = rgba.slice(0, 3, 4).squeeze(0).contiguous();
+        if (undistort) {
+            const auto scaled = lfs::core::prepare_undistort_params(
+                camera.undistort_params(),
+                static_cast<int>(rgba.shape()[2]), static_cast<int>(rgba.shape()[1]),
+                config.resize_factor,
+                config.max_width);
+            alpha = lfs::core::undistort_mask_area(alpha, scaled, nullptr);
+        }
+        return alpha;
     }
 
 } // namespace lfs::training

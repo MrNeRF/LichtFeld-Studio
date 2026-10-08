@@ -1246,11 +1246,12 @@ class GalleryController:
             self._save_pending["canceled"] = True
 
     def _review_publish(self, scene, details, upload_format, publish_as_new, *, update=False, expected_commit=None):
+        from .gallery_preferences import UPLOAD_FORMATS
         project = self._project_identity()
         metadata = self._details(details)
         if publish_as_new:
             metadata["_publishAsNew"] = True
-        if upload_format not in ("studio", "sog", "ssog", "spz"):
+        if upload_format not in UPLOAD_FORMATS:
             raise ValueError("Choose a supported upload format.")
         metadata["viewerSettings"] = capture_view(lf)
         environment_source = str(lf.get_render_settings().environment_map_path) if metadata["viewerSettings"].get("environment") else None

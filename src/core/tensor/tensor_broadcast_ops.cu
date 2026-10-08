@@ -725,4 +725,21 @@ namespace lfs::core::tensor_ops {
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::logical_xor_op, cudaStream_t);
 
+#define LFS_BROADCAST_UINT32_COMPARISON(OP)                                     \
+    template LFS_CORE_API void launch_broadcast_binary<uint32_t, unsigned char, \
+                                                       ops::OP>(                \
+        const uint32_t*, const uint32_t*, unsigned char*,                       \
+        const size_t*, const size_t*, const size_t*,                            \
+        size_t, size_t, size_t, size_t, ops::OP, cudaStream_t);
+    LFS_BROADCAST_UINT32_COMPARISON(greater_op)
+    LFS_BROADCAST_UINT32_COMPARISON(greater_equal_op)
+    LFS_BROADCAST_UINT32_COMPARISON(less_op)
+    LFS_BROADCAST_UINT32_COMPARISON(less_equal_op)
+    LFS_BROADCAST_UINT32_COMPARISON(equal_op)
+    LFS_BROADCAST_UINT32_COMPARISON(not_equal_op)
+    LFS_BROADCAST_UINT32_COMPARISON(logical_and_op)
+    LFS_BROADCAST_UINT32_COMPARISON(logical_or_op)
+    LFS_BROADCAST_UINT32_COMPARISON(logical_xor_op)
+#undef LFS_BROADCAST_UINT32_COMPARISON
+
 } // namespace lfs::core::tensor_ops

@@ -1181,8 +1181,8 @@ struct Uniforms {
     float rasterization_scale;
 }
 
-// mip_filter packs MIP filtering (bit 0), exact depth replay (bit 1), and
-// full-frame binning for banded exports (bit 2).
+// mip_filter packs MIP filtering (bit 0), exact depth replay (bit 1),
+// full-frame binning for banded exports (bit 2), and a depth sample mask (bit 3).
 #ifndef LFS_BANDED_EXPORT_RENDER
 #define LFS_BANDED_EXPORT_RENDER 0
 #endif
@@ -1219,9 +1219,17 @@ uint higs_macro_grid_height(uint grid_height) {
     return (grid_height + HIGS_MACRO_T16_H - 1u) / HIGS_MACRO_T16_H;
 }
 
+// The active-mask buffer starts with one word per possible macro batch.
+// Exact-depth replay ballots follow that header and reuse the partials pool
+// across raster waves. Use the logical grid here, not its allocation bucket.
+[ForceInline]
+uint higs_replay_mask_base(Uniforms uniforms) {
+    return (uniforms.sort_capacity + RASTER_BATCH_SIZE - 1u) / RASTER_BATCH_SIZE +
+           higs_macro_grid_width(uniforms.grid_width) * higs_macro_grid_height(uniforms.grid_height);
+}
+
 static const uint OVERLAY_FLAG_DIM = 1;
 static const uint OVERLAY_FLAG_NONSELECTABLE = 2;
-static const uint OVERLAY_FLAG_FLASH = 4;
 
 static const uint SELECTION_PREVIEW_FLAG = 0x80;
 static const uint SELECTION_GROUP_MASK = 0x7F;
@@ -1311,7 +1319,6 @@ struct OverlayUniformState {
     bool preview_mask_enabled;
     bool add_mode;
     int focused_gaussian_id;
-    float flash_intensity;
 };
 
 [ForceInline]
@@ -1321,7 +1328,6 @@ OverlayUniformState load_overlay_uniform_state(StructuredBuffer<float4> overlay_
     float4 marker_flags = overlay_params[OVERLAY_PARAM_MARKER_FLAGS];
     float4 selection_cursor = overlay_params[OVERLAY_PARAM_SELECTION_CURSOR];
     float4 selection_flags = overlay_params[OVERLAY_PARAM_SELECTION_FLAGS];
-    float4 emphasis_flags = overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS];
 
     OverlayUniformState state;
     state.cursor_enabled = overlay_enabled(cursor_flags.x);
@@ -1337,12 +1343,11 @@ OverlayUniformState load_overlay_uniform_state(StructuredBuffer<float4> overlay_
     state.preview_mask_enabled = overlay_enabled(selection_flags.y);
     state.add_mode = overlay_enabled(selection_flags.z);
     state.focused_gaussian_id = overlay_int(selection_flags.w);
-    state.flash_intensity = emphasis_flags.w;
     return state;
 }
 
 // Pack per-splat overlay payload for groupshared staging: flags | sel | preview.
-// Flags currently use 3 bits; 16 bits leave headroom without a second shared slot.
+// Flags currently use 2 bits; 16 bits leave headroom without a second shared slot.
 [ForceInline]
 uint pack_overlay_per_splat(uint flags, uint selection_byte, uint preview_byte)
 {
@@ -1536,24 +1541,6 @@ float4 apply_selection_overlay(
     } else if (group_id > 0u) {
         color = lerp(color, selection_colors[group_id].xyz, SELECTION_COMMITTED_BLEND);
     }
-    return replace_unpremultiplied_color(gauss_rgba, color);
-}
-
-[ForceInline]
-float4 apply_flash_overlay(
-    float4 gauss_rgba,
-    uint flags,
-    float flash_intensity)
-{
-    if ((flags & OVERLAY_FLAG_FLASH) == 0u) {
-        return gauss_rgba;
-    }
-    if (flash_intensity <= 0.0f) {
-        return gauss_rgba;
-    }
-    float3 color = unpremultiplied_color(gauss_rgba);
-    const float3 flash_color = float3(1.0f, 0.95f, 0.6f);
-    color = lerp(color, flash_color, flash_intensity * 0.5f);
     return replace_unpremultiplied_color(gauss_rgba, color);
 }
 

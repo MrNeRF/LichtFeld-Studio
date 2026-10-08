@@ -33,15 +33,13 @@ namespace lfs::python {
         void unregister_uilist(const std::string& id);
         void unregister_all();
 
-        [[nodiscard]] PyUIListInfo* get_uilist(const std::string& id);
+        [[nodiscard]] nb::object get_uilist(const std::string& id);
         [[nodiscard]] std::vector<std::string> get_uilist_ids() const;
 
     private:
         PyUIListRegistry() = default;
         PyUIListRegistry(const PyUIListRegistry&) = delete;
         PyUIListRegistry& operator=(const PyUIListRegistry&) = delete;
-
-        PyUIListInfo* ensure_instance(PyUIListInfo& uilist);
 
         mutable std::mutex mutex_;
         std::unordered_map<std::string, PyUIListInfo> uilists_;

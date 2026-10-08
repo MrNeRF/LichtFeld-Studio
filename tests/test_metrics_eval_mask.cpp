@@ -3,11 +3,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
 #include "core/parameters.hpp"
+#include "core/point_cloud.hpp"
 #include "core/tensor.hpp"
 #include "io/cache_image_loader.hpp"
+#include "io/exporter.hpp"
+#include "io/filesystem_utils.hpp"
+#include "licht_test_support.hpp"
 #include "training/kernels/mask_preprocess.hpp"
 #include "training/metrics/eval_mask.hpp"
 #include "training/metrics/metrics.hpp"
@@ -30,6 +35,7 @@ using lfs::core::CameraModelType;
 using lfs::core::DataType;
 using lfs::core::Device;
 using lfs::core::Tensor;
+using lfs::core::UndistortParams;
 using lfs::core::param::MaskMode;
 using lfs::training::classify_keep_mask_for_metrics;
 using lfs::training::load_alpha_masked_metrics_inputs;
@@ -238,6 +244,56 @@ TEST(MetricsEvalMask, RgbaAlphaThroughEvalAndInteractiveLoaders) {
                 "load_alpha_masked_metrics_inputs");
 }
 
+TEST(MetricsEvalMask, KeepsSourceMaskAndTargetWhenUndistortionIsDisabled) {
+    if (!cuda_available())
+        GTEST_SKIP() << "CUDA not available";
+    UniqueTempDir tmp("lfs_eval_mask_source_space");
+    const auto image_path = tmp.path() / "rgba.png";
+    write_rgba_png(image_path, {kBandBytes.begin(), kBandBytes.end()}, kBandH, kBandW);
+    auto cam = make_camera(image_path, {}, kBandW, kBandH);
+    cam->set_has_alpha(true);
+
+    UndistortParams params{};
+    params.src_fx = params.src_fy = 20.0f;
+    params.src_cx = static_cast<float>(kBandW) * 0.5f;
+    params.src_cy = static_cast<float>(kBandH) * 0.5f;
+    params.dst_fx = params.src_fx;
+    params.dst_fy = params.src_fy;
+    params.dst_cx = params.src_cx + 1.0f;
+    params.dst_cy = params.src_cy;
+    params.src_width = params.dst_width = kBandW;
+    params.src_height = params.dst_height = kBandH;
+    params.model_type = CameraModelType::PINHOLE;
+    cam->adopt_undistortion(params);
+    cam->prepare_undistortion();
+
+    auto cfg = sai_config();
+    cfg.apply_undistortion = false;
+    cfg.replace_gt_image = false;
+    auto gt = Tensor::zeros({3, kBandH, kBandW}, Device::CUDA, DataType::UInt8);
+    const auto mask = load_eval_mask(cam.get(), gt, true, cfg);
+    expect_keep(mask, {kExpectedKeep.begin(), kExpectedKeep.end()}, "source-space alpha mask");
+    EXPECT_FLOAT_EQ(gt.to(DataType::Float32).sum().item<float>(), 0.0f);
+}
+
+TEST(MetricsEvalMask, ErosionRemovesIncompleteMetricWindows) {
+    if (!cuda_available())
+        GTEST_SKIP() << "CUDA not available";
+    std::vector<float> values(49, 1.0f);
+    values[3 * 7 + 3] = 0;
+    auto mask = Tensor::from_vector(values, lfs::core::TensorShape({7, 7}), Device::CUDA)
+                    .to(DataType::UInt8);
+    const auto eroded = lfs::training::erode_metrics_mask(mask, 1, nullptr);
+    const auto cpu = eroded.cpu().contiguous();
+    const uint8_t* const actual = cpu.ptr<uint8_t>();
+    EXPECT_EQ(actual[1 * 7 + 1], 1);
+    EXPECT_EQ(actual[1 * 7 + 5], 1);
+    EXPECT_EQ(actual[3 * 7 + 2], 0);
+    EXPECT_EQ(actual[3 * 7 + 3], 0);
+    EXPECT_EQ(actual[3 * 7 + 4], 0);
+    EXPECT_EQ(actual[0 * 7 + 3], 0);
+}
+
 TEST(MetricsEvalMask, DefaultThresholdDoesNotPromoteSegmentBand) {
     if (!cuda_available())
         GTEST_SKIP() << "CUDA not available";
@@ -313,6 +369,29 @@ TEST(MetricsEvalMask, SidecarWinsOverAlpha) {
     expect_keep(mask, {kExpectedKeep.begin(), kExpectedKeep.end()}, "sidecar precedence");
 }
 
+// Fails if the evaluation alpha is binarised like a keep mask (soft edges composite wrongly), is not Float32
+// (the composite rejects it and every view is skipped) or if a sidecar mask replaces the image's own alpha.
+TEST(MetricsEvalMask, EvalAlphaKeepsSoftCoverage) {
+    if (!cuda_available())
+        GTEST_SKIP() << "CUDA not available";
+    UniqueTempDir tmp("lfs_eval_alpha_soft");
+    const auto image_path = tmp.path() / "rgba.png";
+    const auto mask_path = tmp.path() / "mask.png";
+    write_rgba_png(image_path, {kBandBytes.begin(), kBandBytes.end()}, kBandH, kBandW);
+    write_gray_png(mask_path, std::vector<uint8_t>(6, 0), kBandH, kBandW);
+    auto cam = make_camera(image_path, mask_path, kBandW, kBandH);
+    cam->set_has_alpha(true);
+
+    const auto alpha = lfs::training::load_eval_alpha(*cam, MetricsMaskLoadConfig{});
+    ASSERT_EQ(alpha.dtype(), DataType::Float32);
+    ASSERT_EQ(alpha.ndim(), 2u);
+    ASSERT_EQ(alpha.shape()[0], static_cast<size_t>(kBandH));
+    ASSERT_EQ(alpha.shape()[1], static_cast<size_t>(kBandW));
+    const auto values = alpha.cpu().to_vector();
+    for (size_t i = 0; i < kBandBytes.size(); ++i)
+        EXPECT_NEAR(values[i], kBandBytes[i] / 255.0f, 1e-6f) << "pixel " << i;
+}
+
 TEST(MetricsEvalMask, InMemoryMaskAndCacheKeying) {
     if (!cuda_available())
         GTEST_SKIP() << "CUDA not available";
@@ -342,6 +421,46 @@ TEST(MetricsEvalMask, InMemoryMaskAndCacheKeying) {
     ASSERT_TRUE(interactive.has_value()) << interactive.error();
     expect_keep(*interactive, {kExpectedKeep.begin(), kExpectedKeep.end()},
                 "in-memory load_external_mask_for_metrics after binary cache");
+}
+
+TEST(CameraTensorAssignment, ReplacingInMemoryMaskRebindsAnExistingView) {
+    Camera camera;
+    auto first_storage = Tensor::from_vector({1.0f, 2.0f, 3.0f, 4.0f}, {2, 2}, Device::CPU);
+    auto second_storage = Tensor::from_vector({5.0f, 6.0f, 7.0f, 8.0f}, {2, 2}, Device::CPU);
+
+    camera.set_mask_tensor(first_storage.slice(0, 0, 2));
+    camera.set_mask_tensor(second_storage.slice(0, 0, 2));
+
+    EXPECT_EQ(first_storage.to_vector(), (std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f}));
+    EXPECT_EQ(second_storage.to_vector(), (std::vector<float>{5.0f, 6.0f, 7.0f, 8.0f}));
+}
+
+TEST(CameraTensorAssignment, TranslateRebindsAnExistingTranslationView) {
+    if (!cuda_available())
+        GTEST_SKIP() << "CUDA not available";
+
+    auto translation_storage = Tensor::from_vector(
+        {0.0f, 0.0f, 1.0f, 9.0f, 9.0f, 9.0f}, {2, 3}, Device::CPU);
+    auto rotation = Tensor::eye(3, Device::CPU);
+    auto camera = Camera(rotation, translation_storage.slice(0, 0, 1).squeeze(0),
+                         2.0f, 2.0f, 1.0f, 1.0f, Tensor(), Tensor(),
+                         CameraModelType::PINHOLE, "", {}, {}, 2, 2, 0);
+    camera.translate(Tensor::from_vector({1.0f, 0.0f, 0.0f}, {3}, Device::CPU));
+
+    EXPECT_EQ(translation_storage.to_vector(),
+              (std::vector<float>{0.0f, 0.0f, 1.0f, 9.0f, 9.0f, 9.0f}));
+}
+
+TEST(CameraTensorAssignment, MoveAssignmentRebindsExistingTensorViews) {
+    Camera target;
+    Camera source;
+    auto target_storage = Tensor::zeros({2, 2}, Device::CPU);
+    target.set_mask_tensor(target_storage.slice(0, 0, 2));
+    source.set_mask_tensor(Tensor::full({2, 2}, 17.0f, Device::CPU));
+
+    target = std::move(source);
+
+    EXPECT_EQ(target_storage.to_vector(), std::vector<float>(4, 0.0f));
 }
 
 TEST(MetricsEvalMask, UndistortClassifiesFloatKeepBand) {
@@ -394,6 +513,48 @@ TEST(MetricsEvalMask, UndistortClassifiesFloatKeepBand) {
     const auto alpha_bytes = mask_bytes(alpha->mask);
     EXPECT_EQ(*std::max_element(alpha_bytes.begin(), alpha_bytes.end()), 0)
         << "alpha 200 must stay not-keep after undistort";
+}
+
+TEST(MetricsEvalMask, UndistortedBinaryAlphaThresholdsFinalAreaValues) {
+    if (!cuda_available())
+        GTEST_SKIP() << "CUDA not available";
+    UniqueTempDir tmp("lfs_eval_mask_area_threshold");
+    constexpr int width = 32;
+    constexpr int height = 32;
+    std::vector<uint8_t> alpha(static_cast<size_t>(width * height), 176);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            if ((x + 2 * y) % 4 == 0)
+                alpha[static_cast<size_t>(y) * width + x] = 255;
+        }
+    }
+    const auto image_path = tmp.path() / "rgba.png";
+    write_rgba_png(image_path, alpha, height, width);
+    auto camera = make_camera(
+        image_path, {}, width, height,
+        Tensor::from_vector({-0.1f, 0.02f}, {2}, Device::CPU));
+    camera->set_has_alpha(true);
+    camera->prepare_undistortion();
+
+    auto config = sai_config();
+    config.mask_mode = MaskMode::Segment;
+    config.mask_threshold = 0.7f;
+    auto loaded = load_alpha_masked_metrics_inputs(*camera, config);
+    ASSERT_TRUE(loaded.has_value()) << loaded.error();
+
+    std::vector<float> normalized(alpha.size());
+    std::transform(alpha.begin(), alpha.end(), normalized.begin(),
+                   [](const uint8_t value) { return static_cast<float>(value) / 255.0f; });
+    const auto scaled = lfs::core::prepare_undistort_params(
+        camera->undistort_params(), width, height,
+        config.resize_factor, config.max_width);
+    const auto expected = lfs::core::undistort_mask_area(
+                              Tensor::from_vector(normalized, {height, width}, Device::CUDA),
+                              scaled, nullptr)
+                              .ge(config.mask_threshold)
+                              .to(DataType::UInt8)
+                              .contiguous();
+    EXPECT_EQ(mask_bytes(loaded->mask), mask_bytes(expected));
 }
 
 TEST(MetricsEvalMask, SegmentModeStillUsesBinaryThreshold) {
@@ -495,5 +656,65 @@ TEST(MetricsEvalMask, MovedCameraPreservesMaskCacheProcessingKey) {
         }
         expect_keep(destination->load_and_get_mask(0, 0, false, 0.5f, true),
                     {1, 0, 1, 0}, "non-inverted load after move");
+    }
+}
+
+// Catches folder masks that miss the dataset name variants or diverge from the camera's own mask processing.
+TEST(MetricsEvalMask, FolderMaskMatchesSidecarProcessingAndNameVariants) {
+    if (!cuda_available())
+        GTEST_SKIP() << "CUDA not available";
+    ensure_image_loader();
+    UniqueTempDir tmp("lfs_eval_mask_folder");
+    const auto image_path = tmp.path() / "gt.png";
+    const auto sidecar_path = tmp.path() / "sidecar.png";
+    const auto folder = tmp.path() / "eval_masks";
+    std::filesystem::create_directories(folder);
+    write_rgb_png(image_path, kBandH, kBandW);
+    write_gray_png(sidecar_path, {kBandBytes.begin(), kBandBytes.end()}, kBandH, kBandW);
+    write_gray_png(folder / "gt.mask.png", {kBandBytes.begin(), kBandBytes.end()}, kBandH, kBandW);
+
+    auto cam = make_camera(image_path, sidecar_path, kBandW, kBandH);
+    const auto found = lfs::io::MaskDirCache::for_folder(folder).find(cam->image_name());
+    ASSERT_EQ(found, folder / "gt.mask.png");
+    EXPECT_TRUE(lfs::io::MaskDirCache::for_folder(tmp.path() / "missing").find(cam->image_name()).empty());
+
+    const auto from_folder = mask_bytes(cam->load_mask_file(found, -1, 0, false, 0.5f, true, false));
+    const auto from_sidecar = mask_bytes(cam->load_and_get_mask(-1, 0, false, 0.5f, true, false));
+    EXPECT_EQ(from_folder, from_sidecar);
+    const auto inverted = mask_bytes(cam->load_mask_file(found, -1, 0, true, 0.5f, true, false));
+    ASSERT_EQ(inverted.size(), from_sidecar.size());
+    for (size_t i = 0; i < inverted.size(); ++i)
+        EXPECT_EQ(inverted[i], 1 - from_sidecar[i]) << i;
+}
+
+// Catches a points file read in the wrong frame or with points lost: positions saved as a point cloud PLY and as a
+// splat PLY must come back unchanged except for the shift by the training origin.
+TEST(MetricsEvalMask, PointsFileLoadsPositionsInTheTrainingFrame) {
+    constexpr size_t count = 64;
+    std::vector<float> positions;
+    positions.reserve(count * 3);
+    for (size_t i = 0; i < count; ++i)
+        positions.insert(positions.end(), {0.1f * static_cast<float>(i), std::sin(0.3f * static_cast<float>(i)),
+                                           2.0f - 0.05f * static_cast<float>(i)});
+    const lfs::test::licht::TemporaryDirectory temp("lfs-eval-points-file");
+    const auto cloud_path = temp.path / "cloud.ply";
+    const lfs::core::PointCloud cloud(lfs::core::Tensor::from_vector(positions, {count, 3}, lfs::core::Device::CPU),
+                                      lfs::core::Tensor::zeros({count, 3}, lfs::core::Device::CPU,
+                                                               lfs::core::DataType::UInt8));
+    ASSERT_TRUE(lfs::io::save_ply(cloud, {.output_path = cloud_path}).has_value());
+    const auto splat = lfs::test::licht::make_splat(count);
+    const auto splat_path = temp.path / "splat.ply";
+    ASSERT_TRUE(lfs::io::save_ply(*splat, {.output_path = splat_path}).has_value());
+
+    const std::array<float, 3> origin{0.25f, -1.5f, 3.0f};
+    for (const auto& [path, expected] : {std::pair{cloud_path, positions},
+                                         std::pair{splat_path, splat->means().cpu().to_vector()}}) {
+        const auto means = lfs::training::load_evaluation_points(path, origin);
+        ASSERT_TRUE(means.has_value()) << means.error().detail();
+        ASSERT_EQ(means->shape()[0], count);
+        const auto actual = means->cpu().to_vector();
+        ASSERT_EQ(actual.size(), expected.size());
+        for (size_t i = 0; i < actual.size(); ++i)
+            ASSERT_NEAR(actual[i], expected[i] - origin[i % 3], 1e-5f) << path << " value " << i;
     }
 }

@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import os
 import shutil
+import struct
 import uuid
+import zlib
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolate_project_operations_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("LFS_HOME", str(tmp_path / "home"))
 
 
 def _symlink_or_skip(link: Path, target: Path) -> None:
@@ -37,6 +44,18 @@ def _overwrite_superblock(path: Path, replacement: Path) -> None:
         stream.write(contents)
         stream.flush()
         os.fsync(stream.fileno())
+
+
+def _minimal_png() -> bytes:
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload))
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00"))
+        + chunk(b"IEND", b"")
+    )
 
 
 @pytest.fixture
@@ -82,7 +101,7 @@ def test_contents_refuses_swap_after_backup(native_io, identity_project, tmp_pat
         "rebind": lambda: native_io.rebind_checkpoint(selected, str(uuid.uuid4())),
         "reduce": lambda: native_io.reduce_size(selected, {"compact": False, "drop_thumbnail": True}),
         "embed": lambda: native_io.embed_dataset_file(selected),
-        "thumbnail": lambda: native_io.set_project_preview(selected, b"\x89PNG\r\n\x1a\n"),
+        "thumbnail": lambda: native_io.set_project_preview(selected, _minimal_png()),
         "license": lambda: native_io.set_project_license(selected, "CC0-1.0", "Changed"),
         "clear_license": lambda: native_io.clear_project_license(selected),
         "compact": lambda: native_io.compact_project_file(selected),
@@ -302,7 +321,7 @@ def test_closed_file_operations(native_io, tmp_path):
     restored = native_io.restore_save(path, 1, tmp_path / "restored.licht")
     assert restored.project_uuid != native_io.inspect_project_card(path).project_uuid
 
-    png = b"\x89PNG\r\n\x1a\n"
+    png = _minimal_png()
     native_io.set_project_preview(path, png)
     native_io.set_project_license(path, "CC-BY-4.0", "Python test")
     titled = native_io.set_project_title(path, "Python operation copy")
@@ -316,7 +335,6 @@ def test_closed_file_operations(native_io, tmp_path):
 
 
 def test_contents_removals_persist_until_compaction(native_io, tmp_path):
-    import base64
     import json
     source = _fixture()
     if not source.is_file():
@@ -325,8 +343,7 @@ def test_contents_removals_persist_until_compaction(native_io, tmp_path):
     shutil.copy2(source,path)
     native_io.set_project_title(path,'Before removal')
     native_io.set_project_license(path,'CC-BY-4.0','Credit: Studio')
-    png=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aGNcAAAAASUVORK5CYII=')
-    native_io.set_project_preview(path,png)
+    native_io.set_project_preview(path, _minimal_png())
     details=native_io.inspect_project_details(path)
     current=details.card.generation
     with pytest.raises(Exception,match='current save'):
@@ -498,11 +515,6 @@ def test_operation_guard_rejects_replaced_identity_and_commit(native_io, tmp_pat
     assert native_io.verify_project_file(path).status is native_io.ProjectVerificationStatus.VERIFIED
 
 
-@pytest.mark.xfail(
-    os.name == "nt",
-    reason="Native closed-file mutations do not yet accept CJK paths on Windows",
-    strict=True,
-)
 def test_closed_file_mutation_accepts_unicode_path(native_io, tmp_path):
     path = tmp_path / "项目.licht"
     shutil.copy2(_fixture(), path)

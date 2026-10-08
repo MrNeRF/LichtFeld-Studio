@@ -175,7 +175,7 @@ namespace lfs::python {
      * @brief Set a callback to be called each frame. Used for animations.
      * @param callback Function(delta_time) called each frame.
      */
-    void set_frame_callback(std::function<void(float)> callback);
+    void set_frame_callback(std::function<void(float)> callback, std::optional<double> duration_s = std::nullopt);
 
     /**
      * @brief Clear the frame callback.

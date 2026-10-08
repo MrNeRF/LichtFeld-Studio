@@ -8,13 +8,16 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
 #include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <thread>
@@ -22,6 +25,23 @@
 
 using namespace lfs::training;
 using namespace lfs::core;
+
+TEST(FastGSSortKeyTest, PreservesFullPositiveFloatDepthPrecision) {
+    using InstanceKey = std::uint64_t;
+    ASSERT_EQ(sizeof(InstanceKey), sizeof(std::uint64_t));
+
+    const float near_depth = 1.0f;
+    const float far_depth = std::nextafter(near_depth, 2.0f);
+    const std::uint32_t near_bits = std::bit_cast<std::uint32_t>(near_depth);
+    const std::uint32_t far_bits = std::bit_cast<std::uint32_t>(far_depth);
+    ASSERT_LT(near_bits, far_bits);
+
+    const InstanceKey near_key = (InstanceKey{7} << 32) | near_bits;
+    const InstanceKey far_key = (InstanceKey{7} << 32) | far_bits;
+    const InstanceKey next_tile_key = (InstanceKey{8} << 32) | near_bits;
+    EXPECT_LT(near_key, far_key);
+    EXPECT_LT(far_key, next_tile_key);
+}
 
 namespace {
 
@@ -207,8 +227,15 @@ TEST(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     }
 
-    std::size_t free_before = 0, total = 0;
-    ASSERT_EQ(cudaMemGetInfo(&free_before, &total), cudaSuccess);
+    // Device-wide free memory moves with every other process on the GPU; prefer this process's own usage.
+    const auto device_bytes_in_use = [] {
+        if (const auto own = lfs::diagnostics::process_device_memory_bytes())
+            return *own;
+        std::size_t free = 0, total = 0;
+        EXPECT_EQ(cudaMemGetInfo(&free, &total), cudaSuccess);
+        return total - free;
+    };
+    const std::size_t used_before = device_bytes_in_use();
 
     constexpr int kThreads = 4;
     constexpr int kForwardsPerThread = 3;
@@ -256,16 +283,15 @@ TEST(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {
     cleanup_arena();
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
-    std::size_t free_after = 0;
-    ASSERT_EQ(cudaMemGetInfo(&free_after, &total), cudaSuccess);
+    const std::size_t used_after = device_bytes_in_use();
 
     // Each worker builds arena sort storage plus image TLS. If either leaks,
-    // free drops by multiple MiB * kThreads.
+    // usage grows by multiple MiB * kThreads.
     constexpr std::size_t kSlack = 32ull << 20; // 32 MiB driver/fragmentation slack
-    EXPECT_GE(free_after + kSlack, free_before)
+    EXPECT_LE(used_after, used_before + kSlack)
         << "FastGS sort/raster storage leaked across spawn-render-join "
-        << "free_before=" << free_before << " free_after=" << free_after
+        << "used_before=" << used_before << " used_after=" << used_after
         << " delta_MiB="
-        << (static_cast<long long>(free_before) - static_cast<long long>(free_after)) /
+        << (static_cast<long long>(used_after) - static_cast<long long>(used_before)) /
                (1024 * 1024);
 }

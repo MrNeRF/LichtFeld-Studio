@@ -106,6 +106,8 @@ namespace lfs::python {
         GetThumbnailTextureCallback g_get_thumbnail_texture_cb = nullptr;
 
         // Viewport overlay callbacks
+        GetUIListInstanceCallback g_uilist_instance_cb = nullptr;
+        WrapUIListLayoutCallback g_uilist_layout_cb = nullptr;
         HasViewportDrawHandlersCallback g_has_viewport_draw_handlers_cb = nullptr;
         InvokeViewportOverlayCallback g_invoke_viewport_overlay_cb = nullptr;
         SyncViewportOverlayDocumentCallback g_sync_viewport_overlay_document_cb = nullptr;
@@ -1555,6 +1557,19 @@ namespace lfs::python {
         if (g_signal_bridge_callbacks.flush) {
             g_signal_bridge_callbacks.flush();
         }
+    }
+
+    void set_uilist_callbacks(GetUIListInstanceCallback get_instance, WrapUIListLayoutCallback wrap_layout) {
+        g_uilist_instance_cb = get_instance;
+        g_uilist_layout_cb = wrap_layout;
+    }
+
+    void* wrap_uilist_layout(void* layout) {
+        return g_uilist_layout_cb ? g_uilist_layout_cb(layout) : nullptr;
+    }
+
+    void* get_uilist_instance(const char* id) {
+        return g_uilist_instance_cb ? g_uilist_instance_cb(id) : nullptr;
     }
 
     void set_viewport_overlay_callbacks(HasViewportDrawHandlersCallback has_cb,

@@ -36,9 +36,13 @@ namespace lfs::vis::tools {
         [[nodiscard]] float getDepthFrustumHalfWidth() const { return frustum_half_width_; }
         void setDepthFilterEnabled(bool enabled);
         void setDepthFilterRange(bool enabled, float depth_near, float depth_far, float frustum_half_width);
+        // Inverse of the box applySelectionFilterSettings writes; a box saved in split view is narrowed in x.
+        void restoreDepthFilterBox(const glm::vec3& box_min, const glm::vec3& box_max, bool saved_in_split_view);
         void toggleDepthFilter() { setDepthFilterEnabled(!depth_filter_enabled_); }
         void adjustDepthFar(float scale);
         void syncDepthFilterToCamera(const Viewport& viewport);
+        // The split panel the user selects in owns the depth box; camera navigation in the other panel does not.
+        void setFilterPanel(SplitViewPanelId panel);
 
         // Crop filter (use scene crop box/ellipsoid as selection filter)
         [[nodiscard]] bool isCropFilterEnabled() const { return crop_filter_enabled_; }
@@ -79,6 +83,7 @@ namespace lfs::vis::tools {
         float depth_near_ = 0.0f;
         float depth_far_ = DEFAULT_DEPTH_FAR;
         float frustum_half_width_ = DEFAULT_FRUSTUM_HALF_WIDTH;
+        SplitViewPanelId filter_panel_ = SplitViewPanelId::Left;
 
         // Crop filter
         bool crop_filter_enabled_ = false;

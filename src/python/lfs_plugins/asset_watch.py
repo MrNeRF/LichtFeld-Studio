@@ -624,7 +624,10 @@ def verify_catalog_projects(
         if cancel_event is not None and cancel_event.is_set():
             return True
         if callable(verify_batch):
-            verified += verify_batch(batch)
+            verified += (
+                verify_batch(batch, cancel_event=cancel_event)
+                if cancel_event is not None else verify_batch(batch)
+            )
         elif callable(verify_asset):
             for asset_id in batch:
                 if cancel_event is not None and cancel_event.is_set():

@@ -36,22 +36,12 @@ namespace fast_lfs::rasterization::kernels::forward {
             actual_count);
     }
 
-    __device__ __forceinline__ uint quantize_depth_key(float depth, const uint depth_bits) {
-        if (depth_bits == 0)
-            return 0;
-
-        constexpr uint FLOAT32_FRACTION_BITS = 23;
-        constexpr uint FLOAT32_FRACTION_MASK = (1u << FLOAT32_FRACTION_BITS) - 1u;
-        constexpr uint FLOAT32_BELOW_TWO = 0x3fffffffu;
-
-        float normalized_depth = (2.0f * depth + 1.0f) / (depth + 1.0f);
-        normalized_depth = fminf(fmaxf(normalized_depth, 1.0f), __uint_as_float(FLOAT32_BELOW_TWO));
-        const uint fraction = __float_as_uint(normalized_depth) & FLOAT32_FRACTION_MASK;
-        return fraction >> (FLOAT32_FRACTION_BITS - depth_bits);
+    __device__ __forceinline__ uint depth_sort_key(float depth) {
+        return __float_as_uint(depth);
     }
 
-    __device__ __forceinline__ InstanceKey make_instance_key(const uint tile_key, const uint depth_key, const uint depth_bits) {
-        return (static_cast<InstanceKey>(tile_key) << depth_bits) | static_cast<InstanceKey>(depth_key);
+    __device__ __forceinline__ InstanceKey make_instance_key(const uint tile_key, const uint depth_key) {
+        return (static_cast<InstanceKey>(tile_key) << kInstanceDepthBits) | static_cast<InstanceKey>(depth_key);
     }
 
     __global__ void preprocess_cu(
@@ -94,8 +84,8 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float clip_bottom,
         const float near_, // near and far are macros in windowns
         const float far_,
-        const uint depth_bits,
         const bool mip_filter,
+        const float dilation_scale,
         float* __restrict__ max_screen_share) {
         (void)w;
         (void)h;
@@ -135,12 +125,19 @@ namespace fast_lfs::rasterization::kernels::forward {
 
         // compute 3d covariance from raw scale and rotation
         const float3 raw_scale = active ? raw_scales[primitive_idx] : make_float3(0.0f, 0.0f, 0.0f);
+        const float4 raw_rotation = raw_rotations[primitive_idx];
+        if (!isfinite(mean3d.x) || !isfinite(mean3d.y) || !isfinite(mean3d.z) ||
+            !isfinite(raw_scale.x) || !isfinite(raw_scale.y) || !isfinite(raw_scale.z) ||
+            !isfinite(raw_rotation.x) || !isfinite(raw_rotation.y) ||
+            !isfinite(raw_rotation.z) || !isfinite(raw_rotation.w) || !isfinite(raw_opacity))
+            active = false;
+        if (__ballot_sync(0xffffffffu, active) == 0)
+            return;
         const float3 clamped_scale = make_float3(
             fminf(raw_scale.x, config::max_raw_scale),
             fminf(raw_scale.y, config::max_raw_scale),
             fminf(raw_scale.z, config::max_raw_scale));
         const float3 variance = make_float3(expf(2.0f * clamped_scale.x), expf(2.0f * clamped_scale.y), expf(2.0f * clamped_scale.z));
-        const float4 raw_rotation = raw_rotations[primitive_idx];
         const float qr = raw_rotation.x;
         const float qx = raw_rotation.y;
         const float qy = raw_rotation.z;
@@ -207,7 +204,7 @@ namespace fast_lfs::rasterization::kernels::forward {
 
         // Mip filter: use smaller dilation and compensate opacity
         const float det_raw = mip_filter ? fmaxf(cov2d.x * cov2d.z - cov2d.y * cov2d.y, 0.0f) : 0.0f;
-        const float kernel_size = mip_filter ? config::dilation_mip_filter : config::dilation;
+        const float kernel_size = (mip_filter ? config::dilation_mip_filter : config::dilation) * dilation_scale;
         cov2d.x += kernel_size;
         cov2d.z += kernel_size;
         const float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
@@ -296,7 +293,7 @@ namespace fast_lfs::rasterization::kernels::forward {
             primitive_idx, active_sh_bases, sh_layout_slots,
             sh_value_bounds, sh_value_n_cells, sh_value_bits);
         primitive_color[work_idx] = make_float4(sh_color, 0.0f);
-        primitive_depth_keys[work_idx] = quantize_depth_key(depth, depth_bits);
+        primitive_depth_keys[work_idx] = depth_sort_key(depth);
         primitive_depths[work_idx] = depth;
 
         // Camera-space unit normal: rotation column of the smallest axis, oriented toward the camera.
@@ -323,7 +320,6 @@ namespace fast_lfs::rasterization::kernels::forward {
         const bool along_x,
         const uint grid_width,
         const uint depth_key,
-        const uint depth_bits,
         const uint primitive_idx,
         uint& write_at,
         const uint write_end,
@@ -331,7 +327,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         uint* __restrict__ instance_primitive_indices) {
         for (uint t = span.x; t < span.y && write_at < write_end; t++) {
             const uint tile_key = along_x ? (scan_index * grid_width + t) : (t * grid_width + scan_index);
-            instance_keys[write_at] = make_instance_key(tile_key, depth_key, depth_bits);
+            instance_keys[write_at] = make_instance_key(tile_key, depth_key);
             instance_primitive_indices[write_at] = primitive_idx;
             write_at++;
         }
@@ -355,7 +351,6 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float3 conic,
         const float radius_sq,
         const uint grid_width,
-        const uint depth_bits,
         const uint4 diagnostic_bounds,
         InstanceKey* __restrict__ instance_keys,
         uint* __restrict__ instance_primitive_indices,
@@ -398,7 +393,7 @@ namespace fast_lfs::rasterization::kernels::forward {
                 uint write_at = src_write + emitted_unclamped + excl;
                 if (row < src_n_scan) {
                     emit_ellipse_tile_span(
-                        span, scan_index, src_along_x, grid_width, src_dkey, depth_bits, src_prim,
+                        span, scan_index, src_along_x, grid_width, src_dkey, src_prim,
                         write_at, src_write_end, instance_keys, instance_primitive_indices);
                 }
                 emitted_unclamped += lfs::core::warp_ops::warp_reduce_sum(cnt);
@@ -436,7 +431,6 @@ namespace fast_lfs::rasterization::kernels::forward {
         uint* __restrict__ instance_primitive_indices,
         FastGSForwardStatus* __restrict__ status,
         const uint grid_width,
-        const uint depth_bits,
         const uint n_visible,
         const uint max_instances) {
         uint idx = cg::this_grid().thread_rank();
@@ -501,7 +495,7 @@ namespace fast_lfs::rasterization::kernels::forward {
                     const uint2 span = ellipse_touched_tile_span(
                         conic, radius_sq, mean2d_shifted, scan_along_x, scan_index, cross0, cross1);
                     emit_ellipse_tile_span(
-                        span, scan_index, scan_along_x, grid_width, depth_key, depth_bits, primitive_idx,
+                        span, scan_index, scan_along_x, grid_width, depth_key, primitive_idx,
                         current_write_offset, write_offset_end, instance_keys, instance_primitive_indices);
                 }
                 if (current_write_offset != write_offset_end) {
@@ -520,7 +514,7 @@ namespace fast_lfs::rasterization::kernels::forward {
             create_instances_coop_warp(
                 active, n_scan, scan0, cross0, cross1, write_offset_end, current_write_offset,
                 primitive_idx, depth_key, scan_along_x, mean2d_shifted, conic, radius_sq,
-                grid_width, depth_bits, diagnostic_bounds, instance_keys, instance_primitive_indices, status);
+                grid_width, diagnostic_bounds, instance_keys, instance_primitive_indices, status);
         }
     }
 
@@ -529,7 +523,6 @@ namespace fast_lfs::rasterization::kernels::forward {
         const InstanceKey* instance_keys,
         uint2* tile_instance_ranges,
         FastGSForwardStatus* __restrict__ status,
-        const uint depth_bits,
         const uint n_tiles,
         const uint n_instances_upper,
         const std::uint64_t* __restrict__ d_n_instances) {
@@ -541,7 +534,7 @@ namespace fast_lfs::rasterization::kernels::forward {
                                      : n_instances_upper;
         if (instance_idx >= n_instances)
             return;
-        const uint instance_tile_idx = static_cast<uint>(instance_keys[instance_idx] >> depth_bits);
+        const uint instance_tile_idx = static_cast<uint>(instance_keys[instance_idx] >> kInstanceDepthBits);
         if (instance_tile_idx >= n_tiles) {
             report_forward_status(
                 status,
@@ -557,7 +550,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         if (instance_idx == 0)
             tile_instance_ranges[instance_tile_idx].x = 0;
         else {
-            const uint previous_instance_tile_idx = static_cast<uint>(instance_keys[instance_idx - 1] >> depth_bits);
+            const uint previous_instance_tile_idx = static_cast<uint>(instance_keys[instance_idx - 1] >> kInstanceDepthBits);
             if (previous_instance_tile_idx >= n_tiles) {
                 report_forward_status(
                     status,

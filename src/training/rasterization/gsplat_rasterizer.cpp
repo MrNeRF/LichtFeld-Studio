@@ -22,6 +22,7 @@
 #include <cstring>
 #include <cuda_runtime.h>
 #include <spdlog/spdlog.h>
+#include <stdexcept>
 
 namespace lfs::training {
 
@@ -172,6 +173,8 @@ namespace lfs::training {
             auto sh0 = ensure_contiguous(gaussian_model.sh0());
             auto shN = ensure_contiguous(gaussian_model.shN());
             const uint32_t sh_degree = static_cast<uint32_t>(gaussian_model.get_active_sh_degree());
+            const uint32_t sh_layout_degree =
+                static_cast<uint32_t>(gaussian_model.get_max_sh_degree());
 
             // Squeeze opacities if needed
             if (opacities.ndim() == 2 && opacities.shape()[1] == 1) {
@@ -283,14 +286,19 @@ namespace lfs::training {
             const float* tangential_ptr = nullptr;
             const float* thin_prism_ptr = nullptr;
 
-            auto upload_dist = [&](const core::Tensor& src, size_t n, core::Tensor& dest) {
-                if (!src.is_valid() || src.numel() == 0 || n == 0) {
+            auto upload_fixed_dist = [&](const core::Tensor& src, const size_t fixed_size,
+                                         core::Tensor& dest) {
+                if (!src.is_valid() || src.numel() == 0) {
                     dest = {};
                     return;
                 }
-                const size_t copy_n = std::min(n, static_cast<size_t>(src.numel()));
+                if (src.ndim() != 1 || src.dtype() != core::DataType::Float32 ||
+                    src.numel() > fixed_size) {
+                    throw std::runtime_error("Invalid camera distortion coefficient tensor");
+                }
+                const size_t copy_n = src.numel();
                 if (src.device() == core::Device::CUDA && src.is_contiguous() &&
-                    src.numel() == n) {
+                    copy_n == fixed_size) {
                     dest = src;
                     if (dest.stream() != fwd_stream) {
                         dest.set_stream(fwd_stream);
@@ -305,39 +313,53 @@ namespace lfs::training {
                     host = host.cpu();
                 }
                 std::array<float, 6> padded{};
-                std::copy_n(host.ptr<float>(), copy_n, padded.data());
-                gsplat_thread_caches.staging.copy_to(dest, padded.data(), n, fwd_stream);
+                std::memcpy(padded.data(), host.ptr<float>(), copy_n * sizeof(float));
+                gsplat_thread_caches.staging.copy_to(
+                    dest, padded.data(), fixed_size, fwd_stream);
             };
 
             if (!undistorted) {
                 switch (camera_model) {
                 case CameraModelType::THIN_PRISM_FISHEYE:
-                    if (radial_dist.is_valid() && radial_dist.numel() == 4) {
-                        upload_dist(radial_dist, 4, gsplat_thread_caches.radial);
+                    if (radial_dist.is_valid() && radial_dist.numel() > 0) {
+                        if (radial_dist.numel() != 4) {
+                            throw std::runtime_error(
+                                "Thin-prism fisheye requires four radial coefficients");
+                        }
+                        upload_fixed_dist(radial_dist, 4, gsplat_thread_caches.radial);
                         radial_cuda = gsplat_thread_caches.radial;
                     }
-                    if (tangential_dist.is_valid() && tangential_dist.numel() == 4) {
-                        upload_dist(tangential_dist, 4, gsplat_thread_caches.thin_prism);
+                    if (tangential_dist.is_valid() && tangential_dist.numel() > 0) {
+                        if (tangential_dist.numel() != 4) {
+                            throw std::runtime_error(
+                                "Thin-prism fisheye requires four tangential and prism coefficients");
+                        }
+                        upload_fixed_dist(tangential_dist, 4, gsplat_thread_caches.thin_prism);
                         thin_prism_cuda = gsplat_thread_caches.thin_prism;
                     }
                     break;
                 case CameraModelType::FISHEYE:
-                    if (radial_dist.is_valid() && radial_dist.numel() >= 4) {
-                        upload_dist(radial_dist.numel() == 4 ? radial_dist : radial_dist.slice(0, 0, 4),
-                                    4, gsplat_thread_caches.radial);
+                    if (radial_dist.is_valid() && radial_dist.numel() > 0) {
+                        upload_fixed_dist(radial_dist, 4, gsplat_thread_caches.radial);
                         radial_cuda = gsplat_thread_caches.radial;
                     }
                     break;
                 case CameraModelType::PINHOLE: {
                     if (radial_dist.is_valid() && radial_dist.numel() > 0) {
-                        const size_t n_rad = std::min(radial_dist.numel(), size_t(6));
-                        upload_dist(radial_dist.numel() == n_rad ? radial_dist : radial_dist.slice(0, 0, n_rad),
-                                    6, gsplat_thread_caches.radial);
+                        const size_t radial_count = radial_dist.numel();
+                        if (radial_count > 3 && radial_count != 6) {
+                            throw std::runtime_error(
+                                "Pinhole cameras require at most three polynomial radial coefficients or six rational radial coefficients");
+                        }
+                        upload_fixed_dist(radial_dist, 6, gsplat_thread_caches.radial);
                         radial_cuda = gsplat_thread_caches.radial;
                     }
-                    if (tangential_dist.is_valid() && tangential_dist.numel() >= 2) {
-                        upload_dist(tangential_dist.numel() == 2 ? tangential_dist : tangential_dist.slice(0, 0, 2),
-                                    2, gsplat_thread_caches.tangential);
+                    if (tangential_dist.is_valid() && tangential_dist.numel() > 0) {
+                        if (tangential_dist.numel() != 2) {
+                            throw std::runtime_error(
+                                "Pinhole cameras require two tangential coefficients");
+                        }
+                        upload_fixed_dist(tangential_dist, 2, gsplat_thread_caches.tangential);
                         tangential_cuda = gsplat_thread_caches.tangential;
                     }
                     break;
@@ -421,12 +443,11 @@ namespace lfs::training {
             const size_t tile_offsets_size =
                 align((C * num_tiles_y * num_tiles_x + 1u) * sizeof(int32_t));
             const size_t colors_size = align(C * N * channels * sizeof(float));
-            const size_t rgb_size = channels == 3 ? 0 : align(C * N * 3 * sizeof(float));
             const size_t last_ids_size = align(C * H * W * sizeof(int32_t));
 
             const size_t total_size = radii_size + means2d_size + depths_size + dirs_size +
                                       conics_size + compensations_size + tiles_per_gauss_size +
-                                      tile_offsets_size + colors_size + last_ids_size + rgb_size;
+                                      tile_offsets_size + colors_size + last_ids_size;
 
             // Allocate from arena
             char* blob = arena_allocator(total_size);
@@ -464,8 +485,6 @@ namespace lfs::training {
             auto* colors_ptr_out = reinterpret_cast<float*>(ptr);
             ptr += colors_size;
             auto* last_ids_ptr_out = reinterpret_cast<int32_t*>(ptr);
-            ptr += last_ids_size;
-            auto* rgb_ptr = channels == 3 ? nullptr : reinterpret_cast<float*>(ptr);
 
             auto& cached_image_chw = gsplat_thread_caches.image_chw;
             auto& cached_alpha_chw = gsplat_thread_caches.alpha_chw;
@@ -504,8 +523,7 @@ namespace lfs::training {
                 .compensations = compensations_ptr_out,
                 .isect_ids = nullptr,
                 .flatten_ids = nullptr,
-                .n_isects = 0,
-                .rgb = rgb_ptr};
+                .n_isects = 0};
 
             // Call raw pointer forward API
             gsplat_lfs::rasterize_from_world_with_sh_fwd(
@@ -516,6 +534,7 @@ namespace lfs::training {
                 sh0_ptr,
                 shN_ptr,
                 sh_degree,
+                sh_layout_degree,
                 bg_color_ptr,
                 bg_image_ptr, // per-pixel background image
                 nullptr,      // masks
@@ -652,6 +671,7 @@ namespace lfs::training {
             ctx.K_sh = K;
             ctx.channels = channels;
             ctx.sh_degree = sh_degree;
+            ctx.sh_layout_degree = sh_layout_degree;
             ctx.image_width = image_width;
             ctx.image_height = image_height;
             ctx.tile_size = tile_size;
@@ -881,6 +901,7 @@ namespace lfs::training {
                 ctx.sh0.ptr<float>(),
                 (ctx.sh_degree > 0 && ctx.shN.is_valid() && ctx.shN.numel() > 0) ? ctx.shN.ptr<float>() : nullptr,
                 ctx.sh_degree,
+                ctx.sh_layout_degree,
                 bg_color_ptr,
                 bg_image_ptr, // per-pixel background image
                 nullptr,      // masks

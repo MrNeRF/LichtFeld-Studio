@@ -159,15 +159,4 @@ namespace lfs::training::kernels {
         size_t n,
         cudaStream_t stream = nullptr);
 
-    /// out[i] = sqrt(error) * (share/limit) when share > limit and error > 0, else 0.
-    void launch_oversize_split_scores(
-        const float* error_score, // [N]
-        const float* max_share,   // [N]
-        const bool* frozen_mask,
-        size_t frozen_n,
-        float* out_scores, // [N]
-        float limit,
-        size_t n,
-        cudaStream_t stream = nullptr);
-
 } // namespace lfs::training::kernels

@@ -58,3 +58,27 @@ TEST_F(CudaPoolStreamTeardownTest,
     pool.release_stream(recycled);
     ASSERT_EQ(cudaStreamDestroy(recycled), cudaSuccess);
 }
+
+TEST_F(CudaPoolStreamTeardownTest, ReserveCopiesAfterWritesQueuedOnTheTensorsStream) {
+    cudaStream_t stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+    {
+        const CUDAStreamGuard guard(stream);
+        // Queue enough work that a copy ignoring the stream would run before the fill below.
+        auto busy = Tensor::ones({2048, 2048}, Device::CUDA);
+        for (int i = 0; i < 40; ++i)
+            busy = busy.matmul(busy) * 1e-3f;
+        // A value no earlier run left in the reused storage.
+        static float run = 0.0f;
+        const float value = 7.0f + ++run;
+        auto values = Tensor::full({1 << 20}, value, Device::CUDA);
+        values.reserve(1 << 21);
+        const auto host = values.cpu().to_vector();
+        ASSERT_EQ(host.size(), size_t{1} << 20);
+        for (size_t i = 0; i < host.size(); ++i)
+            ASSERT_EQ(host[i], value) << "element " << i;
+        ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+    }
+    CudaMemoryPool::instance().release_stream(stream);
+    ASSERT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+}

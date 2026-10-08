@@ -120,6 +120,7 @@ namespace lfs::vis {
             glm::vec4 depth_params{0.0f, 0.0f, 0.0f, 0.0f};
             // xy = uv_scale, zw = uv_clamp_max for padded splat depth.
             glm::vec4 uv_region{1.0f, 1.0f, 1.0f, 1.0f};
+            glm::vec4 ndc_to_view_coeffs{0.0f};
         };
 
         struct ShapeOverlayPush {
@@ -130,18 +131,20 @@ namespace lfs::vis {
             glm::vec4 params{0.0f, 0.0f, 0.0f, 0.0f};
             // xy = uv_scale, zw = uv_clamp_max for padded splat depth.
             glm::vec4 uv_region{1.0f, 1.0f, 1.0f, 1.0f};
+            glm::vec4 ndc_to_view_coeffs{0.0f};
         };
 
         struct FrustumPush {
             glm::vec4 viewport_rect{0.0f, 0.0f, 0.0f, 0.0f};
             glm::vec4 params{0.0f, 0.0f, 0.0f, 0.0f};
             glm::vec4 uv_region{1.0f, 1.0f, 1.0f, 1.0f};
+            glm::vec4 ndc_to_view_coeffs{0.0f};
             glm::mat4 view{1.0f};
             glm::vec4 viewport_panel{0.0f, 0.0f, 0.0f, 0.0f};
             glm::vec4 projection{0.0f, 0.0f, 0.0f, 0.0f};
         };
-        // 144 bytes exceeds the 128-byte Vulkan minimum for maxPushConstantsSize.
-        // Acceptable only because CUDA requires NVIDIA hardware (reports 256).
+        // 160 bytes exceeds the 128-byte Vulkan minimum for maxPushConstantsSize.
+        // createPipeline checks the actual physical-device limit before creating the layout.
         static_assert(sizeof(FrustumPush) <= 256);
 
         constexpr std::uint32_t kFrustumVertexCount = 48;
@@ -226,6 +229,7 @@ namespace lfs::vis {
             VkDescriptorSet frustum_descriptor_set = VK_NULL_HANDLE;
             VkDescriptorSet shape_overlay_descriptor_set = VK_NULL_HANDLE;
             VkImageView bound_shape_overlay_depth_view = VK_NULL_HANDLE;
+            std::uint64_t bound_shape_overlay_depth_revision = 0;
         };
         std::vector<FrameResources> frame_resources;
 
@@ -1283,11 +1287,14 @@ namespace lfs::vis {
             return true;
         }
 
-        void bindShapeOverlayDepth(FrameResources& frame, VkImageView view) {
+        void bindShapeOverlayDepth(FrameResources& frame, VkImageView view,
+                                   const std::uint64_t binding_revision = 0) {
             if (view == VK_NULL_HANDLE) {
                 view = shape_overlay_dummy_depth_view;
             }
-            if (frame.bound_shape_overlay_depth_view == view) {
+            // A recreated depth image can reuse the same Vulkan handle.
+            if (frame.bound_shape_overlay_depth_view == view &&
+                frame.bound_shape_overlay_depth_revision == binding_revision) {
                 return;
             }
             VkDescriptorImageInfo di{};
@@ -1303,6 +1310,7 @@ namespace lfs::vis {
             w.pImageInfo = &di;
             vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
             frame.bound_shape_overlay_depth_view = view;
+            frame.bound_shape_overlay_depth_revision = binding_revision;
         }
 
         [[nodiscard]] bool createQuadBuffer() {
@@ -1338,6 +1346,17 @@ namespace lfs::vis {
                                           VkPipeline& pipeline,
                                           VkDescriptorSetLayout extra_descriptor_layout = VK_NULL_HANDLE,
                                           bool depth_test = false) {
+            if (push_constant) {
+                VkPhysicalDeviceProperties properties{};
+                vkGetPhysicalDeviceProperties(context->physicalDevice(), &properties);
+                if (push_constant->offset + push_constant->size > properties.limits.maxPushConstantsSize) {
+                    LOG_ERROR("Viewport {} push constants require {} bytes, but the device supports {}",
+                              label, push_constant->offset + push_constant->size,
+                              properties.limits.maxPushConstantsSize);
+                    return false;
+                }
+            }
+
             VkShaderModule vertex_module = lfs::vis::createShaderModule(device, vertex_spv, "Viewport");
             VkShaderModule fragment_module = lfs::vis::createShaderModule(device, fragment_spv, "Viewport");
             if (vertex_module == VK_NULL_HANDLE || fragment_module == VK_NULL_HANDLE) {
@@ -2103,9 +2122,6 @@ namespace lfs::vis {
                 if (scene_upscaler_selection.fellBack()) {
                     LOG_WARN("Scene reconstruction '{}' unavailable; using native presentation",
                              sceneUpscalerBackendId(scene_upscaler_selection.requested));
-                } else {
-                    LOG_INFO("Scene reconstruction active: {}",
-                             sceneUpscalerBackendId(scene_upscaler_selection.effective));
                 }
                 logged_scene_upscaler_selection = scene_upscaler_selection;
             }
@@ -2459,6 +2475,7 @@ namespace lfs::vis {
                 push.effects = overlay.effects;
                 push.viewport_rect = ctx.viewport_rect_push;
                 push.depth_params = depth_params;
+                push.ndc_to_view_coeffs = params.depth_blit.ndc_to_view_coeffs;
                 push.uv_region = glm::vec4(params.depth_blit.uv_scale,
                                            params.depth_blit.uv_clamp_max);
                 vkCmdBindDescriptorSets(command_buffer,
@@ -2505,7 +2522,8 @@ namespace lfs::vis {
                 .viewport_rect = ctx.viewport_rect_push,
                 .params = ctx.world_depth_params_push,
                 .uv_region = glm::vec4(params.depth_blit.uv_scale,
-                                       params.depth_blit.uv_clamp_max)};
+                                       params.depth_blit.uv_clamp_max),
+                .ndc_to_view_coeffs = params.depth_blit.ndc_to_view_coeffs};
             recordShapeOverlays(ctx.cmd, frame.shape_overlay, frame, world_shape_overlay_push);
         }
 
@@ -2560,6 +2578,7 @@ namespace lfs::vis {
                                         projection_mode);
                 push.uv_region = glm::vec4(params.depth_blit.uv_scale,
                                            params.depth_blit.uv_clamp_max);
+                push.ndc_to_view_coeffs = params.depth_blit.ndc_to_view_coeffs;
                 push.view = batch.view;
                 push.viewport_panel = glm::vec4(batch.viewport_pos, batch.viewport_size);
                 push.projection = glm::vec4(batch.render_size, batch.focal_x, batch.focal_y);
@@ -2682,7 +2701,8 @@ namespace lfs::vis {
                 0.0f, 0.0f};
             bindShapeOverlayDepth(
                 frame,
-                depth_available ? depth_blit_pass.depthView(params.frame_slot) : VK_NULL_HANDLE);
+                depth_available ? depth_blit_pass.depthView(params.frame_slot) : VK_NULL_HANDLE,
+                depth_available ? depth_blit_pass.depthBindingRevision(params.frame_slot) : 0);
 
             bindViewport(command_buffer, rect);
             bindQuad(command_buffer);
@@ -2820,6 +2840,41 @@ namespace lfs::vis {
             impl_ = std::make_unique<Impl>();
         }
         return impl_->init(context);
+    }
+
+    void VulkanViewportPass::discardImportMesh(uint64_t mesh_id) {
+        if (impl_)
+            impl_->mesh_pass.discardImport(mesh_id);
+    }
+
+    void VulkanViewportPass::prepareImport(VulkanContext& context, const VulkanViewportPassParams& params,
+                                           VulkanViewportPass* resident_mesh_resources) {
+        std::string error;
+        VulkanImportErrorScope capture(error);
+        if (!init(context) || (resident_mesh_resources && !resident_mesh_resources->init(context)))
+            throw std::runtime_error(error.empty() ? "Could not prepare the viewport" : error);
+        if (!context.waitForSubmittedFrames())
+            throw std::runtime_error("Could not finish the previous viewport work");
+        {
+            const auto slot = params.frame_slot;
+            const VulkanMeshPassParams mesh_params{
+                .view_projection = params.mesh_view_projection,
+                .camera_position = params.mesh_camera_position,
+                .items = params.mesh_items,
+                .frame_slot = slot,
+                .draw_group_count = std::max<size_t>(1, params.mesh_panels.size())};
+            // Preparation does not write per-draw presentation uniforms. Reuse the
+            // resident geometry, material textures and shadows without copying
+            // them into the temporary pass. Missing uploads are retained there.
+            auto& mesh_owner = resident_mesh_resources ? *resident_mesh_resources : *this;
+            mesh_owner.impl_->mesh_pass.prepare(context, mesh_params);
+            impl_->environment_pass.prepare(params.environment, slot);
+            impl_->depth_blit_pass.prepare(params.depth_blit, slot);
+            impl_->split_view_pass.prepare(params.split_view, slot);
+            if (!error.empty())
+                throw std::runtime_error(error);
+            LOG_DEBUG("Prepared import viewport resources: meshes={}, frame_slot={}", params.mesh_items.size(), slot);
+        }
     }
 
     void VulkanViewportPass::prepare(VulkanContext& context, const VulkanViewportPassParams& params) {

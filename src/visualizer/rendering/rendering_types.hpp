@@ -92,6 +92,17 @@ namespace lfs::vis {
         return std::nullopt;
     }
 
+    // Select a validation pair containing the provisional node without changing
+    // the stored comparison offset. Keep the displayed left model when possible.
+    [[nodiscard]] inline size_t plyComparisonImportOffset(size_t count, size_t offset, size_t provisional) {
+        const auto displayed = plyComparisonPairForOffset(count, offset);
+        if (!displayed || provisional >= count || displayed->first == provisional || displayed->second == provisional)
+            return offset;
+        const size_t left = std::min(displayed->first, provisional);
+        const size_t right = std::max(displayed->first, provisional);
+        return left * (2 * count - left - 1) / 2 + right - left - 1;
+    }
+
     [[nodiscard]] inline bool splitViewUsesGTComparison(const SplitViewMode mode) {
         return mode == SplitViewMode::GTComparison;
     }
@@ -361,8 +372,7 @@ namespace lfs::vis {
         lfs::rendering::DepthVisualizationMode depth_visualization_mode =
             lfs::rendering::DepthVisualizationMode::Palette;
 
-        // Selection colors (RGB: committed=219,83,83 preview=0,222,76 center=0,154,187)
-        glm::vec3 selection_color_committed{0.859f, 0.325f, 0.325f};
+        // Selection colors (RGB: preview=0,222,76 center=0,154,187); committed splats use their group color
         glm::vec3 selection_color_preview{0.0f, 0.871f, 0.298f};
         glm::vec3 selection_color_center_marker{0.0f, 0.604f, 0.733f};
 

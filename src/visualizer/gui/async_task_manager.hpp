@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <condition_variable>
+#include <cstdint>
+
 #include "core/events.hpp"
 #include "core/export.hpp"
 #include "core/job_registry.hpp"
@@ -138,7 +141,7 @@ namespace lfs::vis {
             }
             void dismissImport();
             void cancelImport(bool wait_for_worker = true);
-            [[nodiscard]] bool canCancelGalleryImport() const { return splat_load_state_.gallery.has_value() && isImporting(); }
+            [[nodiscard]] bool canCancelGalleryImport() const;
             bool requestGalleryImportCancel();
 
             [[nodiscard]] bool startSplatLoad(
@@ -146,7 +149,7 @@ namespace lfs::vis {
                 bool replace_first,
                 std::vector<std::string> name_hints = {},
                 std::vector<bool> visibility = {},
-                std::optional<core::events::cmd::LoadGalleryScene> gallery = std::nullopt);
+                std::optional<core::events::cmd::LoadGalleryScene> gallery = std::nullopt, bool import_batch = false);
 
             // Video export
             [[nodiscard]] bool isExportingVideo() const {
@@ -216,6 +219,8 @@ namespace lfs::vis {
             void cancelSplatSimplify();
 
         private:
+            bool import_cancel_pending_ = false;
+            bool importWorkersFinished() const;
             friend class lfs::vis::VisualizerImplResetTest_ImportWorkerFailureSettlesFailed_Test;
             struct ExportSplatSource {
                 const lfs::core::SplatData* data = nullptr;
@@ -260,16 +265,27 @@ namespace lfs::vis {
                 std::optional<core::Uuid> gallery_group_uuid;
                 std::atomic<bool> worker_complete{false};
                 mutable std::mutex mutex;
+                std::condition_variable_any completion_consumed;
+                bool attachment_pending = false;
+                std::vector<std::pair<std::filesystem::path, std::string>> failures;
                 std::deque<SplatLoadCompletion> completions;
                 std::vector<SplatLoadRequest> requests;
                 size_t loaded_count = 0;
                 size_t failed_count = 0;
                 bool consolidation_pending = false;
+                std::optional<SplatLoadRequest> pending_render_request;
+                core::Uuid pending_render_node;
+                std::vector<core::Uuid> previous_selection;
+                uint32_t attachment_selection_generation = 0;
+                bool validate_batch = false;
+                std::atomic<bool> batch_stopped{false};
+                std::string batch_stop_reason;
                 std::optional<std::jthread> thread;
             };
             SplatLoadState splat_load_state_;
             uint64_t gallery_scene_epoch_ = 0;
             void checkAsyncSplatLoadCompletion();
+            bool discardPendingImport(const core::Uuid& uuid);
             void checkAsyncImportCompletion();
             void applyLoadedDataToScene();
             void applyAutoCropToLoadedScene();

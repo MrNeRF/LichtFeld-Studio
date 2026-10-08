@@ -95,6 +95,8 @@ def test_vulkan_preview_render_view_uses_native_device_limits_not_16k_policy():
     assert "format_properties.imageFormatProperties.maxExtent" in context
     assert "exceeds device-supported limit" in context
     assert "kMaxNativePreviewPixelStateBytes" in source
+    # Catches growing the export band budget back: 4 GiB bands peaked at +9.3 GB VRAM for a 32K export.
+    assert "kMaxNativePreviewPixelStateBytes = std::size_t{256} << 20" in source
     assert "renderPreviewImageTiledWithState" in header
     assert "renderPreviewImageTiledWithState" in source
     assert "request.frame_view.intrinsics_override" in source

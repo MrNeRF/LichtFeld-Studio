@@ -114,8 +114,8 @@
         "item_spacing": [8.0, 5.0],
         "item_inner_spacing": [5.0, 4.0],
         "indent_spacing": 21.0,
-        "scrollbar_size": 13.0,
-        "grab_min_size": 16.0,
+        "scrollbar_size": 4.0,
+        "grab_min_size": 12.0,
         "toolbar_button_size": 24.0,
         "toolbar_padding": 6.0,
         "toolbar_spacing": 4.0
@@ -178,8 +178,7 @@
         "border": [0.220, 0.580, 1.000, 1.0],
         "icon": [0.353, 0.682, 1.000, 1.0],
         "highlight": [0.196, 0.420, 0.902, 1.0],
-        "selection": [0.141, 0.333, 0.722, 1.0],
-        "selection_flash": [0.686, 0.420, 1.000, 1.0]
+        "selection": [0.141, 0.333, 0.722, 1.0]
       }
     },
 
@@ -292,8 +291,8 @@
         "item_spacing": [8.0, 5.0],
         "item_inner_spacing": [5.0, 4.0],
         "indent_spacing": 21.0,
-        "scrollbar_size": 13.0,
-        "grab_min_size": 16.0,
+        "scrollbar_size": 4.0,
+        "grab_min_size": 12.0,
         "toolbar_button_size": 24.0,
         "toolbar_padding": 6.0,
         "toolbar_spacing": 4.0
@@ -356,8 +355,7 @@
         "border": [0.035, 0.318, 0.820, 1.0],
         "icon": [0.184, 0.420, 0.855, 1.0],
         "highlight": [0.753, 0.851, 0.984, 1.0],
-        "selection": [0.616, 0.741, 0.961, 1.0],
-        "selection_flash": [0.455, 0.188, 0.824, 1.0]
+        "selection": [0.616, 0.741, 0.961, 1.0]
       }
     }
   }

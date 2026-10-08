@@ -27,7 +27,7 @@ namespace lfs::core {
     void waitForCUDAStream(cudaStream_t execution_stream, cudaStream_t dependency_stream) {
         unretire_stream(execution_stream);
         unretire_stream(dependency_stream);
-        if (dependency_stream == nullptr || dependency_stream == execution_stream) {
+        if (dependency_stream == execution_stream) {
             return;
         }
 
@@ -85,6 +85,12 @@ namespace lfs::core {
     cudaStream_t prepare_inputs_for_stream(
         const std::initializer_list<const Tensor*> inputs,
         const std::optional<cudaStream_t> requested_stream) {
+        // A deferred input enqueues its producer only when it materializes; do that
+        // first so the ordering below covers it.
+        for (const Tensor* input : inputs) {
+            if (input != nullptr && input->is_valid() && input->is_deferred())
+                (void)input->data_ptr();
+        }
         cudaStream_t execution_stream = requested_stream.has_value()
                                             ? *requested_stream
                                             : getCurrentCUDAStream();

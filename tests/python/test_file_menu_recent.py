@@ -116,6 +116,8 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     lf_stub.is_dataset_path = lambda _path: True
     lf_stub.read_checkpoint_header = lambda _path: object()
     lf_stub.read_checkpoint_params = lambda _path: object()
+    lf_stub.scene = SimpleNamespace(NodeType=SimpleNamespace(SPLAT="splat"))
+    lf_stub.get_scene = lambda: SimpleNamespace(get_nodes=lambda: [], is_node_effectively_visible=lambda _node: True)
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
     class Operator:
@@ -1055,6 +1057,25 @@ def test_new_project_asks_before_stopping_training(monkeypatch, stop):
     assert file_menu.lf.project_create_calls == []
 
 
+def test_project_switch_confirmation_keeps_prior_training_approval(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.project_is_dirty = lambda: True
+    file_menu.lf.is_training_active = lambda: True
+
+    file_menu._show_project_switch_confirmation(
+        True, "", False, "", False, True
+    )
+
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    title, _message, buttons, callback = file_menu.lf.confirm_dialogs[0]
+    assert title == "tr:menu.file.new_project"
+    callback(buttons[1])
+
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    assert file_menu.lf.new_project_calls == [(True, True)]
+    assert file_menu.lf.project_create_calls == []
+
+
 def test_open_recent_while_training_prompts_instead_of_opening(
     monkeypatch, tmp_path
 ):
@@ -1159,34 +1180,17 @@ def test_load_file_confirmation_title_for_splat_and_dataset(monkeypatch):
     assert dataset_title == "tr:load_dataset_popup.save_title"
 
 
-def test_load_file_confirmation_reissues_in_order_with_replace_on_first(
-    monkeypatch,
-):
+def test_load_file_confirmation_preserves_one_ordered_batch(monkeypatch):
     file_menu = _load_file_menu(monkeypatch)
-
+    calls = []
+    file_menu.lf.load_files = lambda *args, **kwargs: calls.append((args, kwargs))
     file_menu._show_load_file_confirmation(
-        ["/tmp/a.ply", "/tmp/b.ply"], False, True
+        ["/tmp/a.ply", "/tmp/b.ply"], False, True, True
     )
-
-    assert file_menu.lf.load_file_calls == [
-        (
-            ("/tmp/a.ply",),
-            {
-                "is_dataset": False,
-                "discard_changes": True,
-                "replace": True,
-                "stop_training": False,
-            },
-        ),
-        (
-            ("/tmp/b.ply",),
-            {
-                "is_dataset": False,
-                "discard_changes": True,
-                "replace": False,
-                "stop_training": False,
-            },
-        ),
+    assert file_menu.lf.load_file_calls == []
+    assert calls == [
+        ((["/tmp/a.ply", "/tmp/b.ply"],),
+         {"discard_changes": True, "replace": True, "stop_training": False, "_user_batch": True})
     ]
 
 
@@ -1214,3 +1218,33 @@ def test_menu_bar_transfer_operator_shows_overlay(monkeypatch):
     assert scope['GalleryTransfersOperator'].description == 'Show gallery transfers'
     assert scope['GalleryTransfersOperator']().execute(None) == {'FINISHED'}
     assert calls == ['overlay']
+
+
+def test_registered_load_confirmation_keeps_batch_after_prompt(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    callbacks = {}
+    file_menu.lf.register_class = lambda _cls: None
+    for name in (
+        "on_show_new_project_dialog", "on_show_resume_checkpoint_popup",
+        "on_request_exit", "on_project_switch_confirmation",
+        "on_show_load_file_confirmation_with_batch", "on_stop_training_confirmation",
+    ):
+        setattr(file_menu.lf.ui, name, lambda cb, key=name: callbacks.__setitem__(key, cb))
+    file_menu.register()
+    file_menu.lf.project_is_dirty = lambda: True
+    file_menu.lf.project_has_path = lambda: True
+    calls = []
+    file_menu.lf.load_files = lambda *args, **kwargs: calls.append((args, kwargs))
+    callbacks["on_show_load_file_confirmation_with_batch"](
+        ["/tmp/first.ply", "/tmp/second.ply"], False, True, True
+    )
+    assert calls == []
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    _title, _message, buttons, on_result = file_menu.lf.confirm_dialogs[0]
+    assert "tr:unsaved_work.continue_without_saving" in buttons
+    on_result("tr:unsaved_work.continue_without_saving")
+    assert calls == [
+        ((["/tmp/first.ply", "/tmp/second.ply"],),
+         {"discard_changes": True, "replace": True,
+          "stop_training": False, "_user_batch": True})
+    ]

@@ -14,10 +14,14 @@
 #include <cmath>
 #include <cstdint>
 #include <expected>
+#include <format>
+#include <limits>
 #include <string>
 #include <vector>
 
 namespace lfs::mcp {
+
+    inline constexpr int MAX_CAPTURE_DIMENSION = 16384;
 
     namespace detail {
 
@@ -35,9 +39,9 @@ namespace lfs::mcp {
                                                          int dst_height) {
             std::vector<uint8_t> dst(static_cast<size_t>(dst_width) * dst_height * channels);
             for (int y = 0; y < dst_height; ++y) {
-                const int src_y = std::min(src_height - 1, (y * src_height) / dst_height);
+                const int src_y = std::min(src_height - 1, static_cast<int>((static_cast<int64_t>(y) * src_height) / dst_height));
                 for (int x = 0; x < dst_width; ++x) {
-                    const int src_x = std::min(src_width - 1, (x * src_width) / dst_width);
+                    const int src_x = std::min(src_width - 1, static_cast<int>((static_cast<int64_t>(x) * src_width) / dst_width));
                     const auto* const src_pixel = src + (static_cast<size_t>(src_y) * src_width + src_x) * channels;
                     auto* const dst_pixel = dst.data() + (static_cast<size_t>(y) * dst_width + x) * channels;
                     std::copy_n(src_pixel, channels, dst_pixel);
@@ -50,23 +54,22 @@ namespace lfs::mcp {
                                                                                     int src_height,
                                                                                     int width,
                                                                                     int height) {
+            if (width < 0 || height < 0)
+                return std::unexpected("Capture size must not be negative");
             if (width <= 0 && height <= 0) {
                 return std::pair{src_width, src_height};
             }
-            if (width <= 0) {
-                width = std::max(1, static_cast<int>(std::lround(
-                                        static_cast<double>(src_width) * static_cast<double>(height) /
-                                        static_cast<double>(src_height))));
+            const auto follow_aspect = [](const int src_along, const int src_across, const int across) {
+                return std::max(1.0, std::round(static_cast<double>(src_along) * across / src_across));
+            };
+            const double out_width = width > 0 ? width : follow_aspect(src_width, src_height, height);
+            const double out_height = height > 0 ? height : follow_aspect(src_height, src_width, width);
+            if (out_width > MAX_CAPTURE_DIMENSION || out_height > MAX_CAPTURE_DIMENSION) {
+                return std::unexpected(std::format(
+                    "Capture size {:.0f}x{:.0f} exceeds the {} pixel limit per side (requested {}x{} from a {}x{} source)",
+                    out_width, out_height, MAX_CAPTURE_DIMENSION, width, height, src_width, src_height));
             }
-            if (height <= 0) {
-                height = std::max(1, static_cast<int>(std::lround(
-                                         static_cast<double>(src_height) * static_cast<double>(width) /
-                                         static_cast<double>(src_width))));
-            }
-            if (width <= 0 || height <= 0) {
-                return std::unexpected("Capture size must be positive");
-            }
-            return std::pair{width, height};
+            return std::pair{static_cast<int>(out_width), static_cast<int>(out_height)};
         }
 
     } // namespace detail
@@ -84,11 +87,18 @@ namespace lfs::mcp {
         if (channels < 1 || channels > 4)
             return std::unexpected("Pixel buffer channel count must be between 1 and 4");
 
+        if ((width > 0 && width > MAX_CAPTURE_DIMENSION) ||
+            (height > 0 && height > MAX_CAPTURE_DIMENSION))
+            return std::unexpected(std::format("Capture size {}x{} exceeds the supported limit", width, height));
+
         const auto size = detail::resolve_capture_size(src_width, src_height, width, height);
         if (!size)
             return std::unexpected(size.error());
 
         const auto [out_width, out_height] = *size;
+        if ((static_cast<int64_t>(out_width) * channels + 1) * out_height > std::numeric_limits<int>::max())
+            return std::unexpected(std::format("Capture size {}x{} with {} channels is too large to encode as PNG",
+                                               out_width, out_height, channels));
 
         const uint8_t* pixels = src_pixels;
         std::vector<uint8_t> resized;
@@ -99,7 +109,7 @@ namespace lfs::mcp {
         }
 
         std::vector<uint8_t> png_buf;
-        png_buf.reserve(static_cast<size_t>(out_width) * out_height * channels);
+        png_buf.reserve(static_cast<size_t>(out_width) * static_cast<size_t>(out_height) * channels);
         const int ok = stbi_write_png_to_func(
             detail::stbi_write_png_callback,
             &png_buf,

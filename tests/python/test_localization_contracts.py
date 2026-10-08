@@ -220,6 +220,7 @@ def test_counted_messages_use_supported_plural_forms():
 
     keys = dict(_flatten(_load("en")))
     for key in (
+        "runtime.import_batch_failed",
         "projects.status.showing_projects",
         "plugin_marketplace.registry_loaded",
         "plugin_marketplace.registry_unavailable",
@@ -440,8 +441,9 @@ def test_cached_native_panels_request_a_frame_for_language_changes():
     sequencer_panel = (ROOT / "src" / "visualizer" / "sequencer" / "rml_sequencer_panel.cpp").read_text(encoding="utf-8")
     assert "bool RmlSequencerPanel::needsLocalizationFrame() const" in sequencer_panel
     sequencer_manager = (ROOT / "src" / "visualizer" / "gui" / "sequencer_ui_manager.cpp").read_text(encoding="utf-8")
-    sequencer_demand = sequencer_manager[sequencer_manager.index("bool SequencerUIManager::needsAnimationFrame() const") :]
-    assert "panel_->needsLocalizationFrame()" in sequencer_demand.split("controller_.isPlaying()", 1)[0]
+    demand_start = sequencer_manager.index("bool SequencerUIManager::needsAnimationFrame(")
+    sequencer_demand = sequencer_manager[demand_start : sequencer_manager.index("\n    }\n", demand_start)]
+    assert "panel_->needsLocalizationFrame()" in sequencer_demand
 
 
 def test_rendering_labels_preserve_fullwidth_colons():
@@ -515,3 +517,21 @@ if __name__ == "__main__":
     for contract in contracts:
         contract()
         print(f"PASS {contract.__name__}")
+
+
+def test_locale_strings_use_real_line_breaks():
+    """A JSON "\\\\n" decodes to a backslash and an n, which dialogs print literally."""
+    def strings(node, key=""):
+        if isinstance(node, dict):
+            for child_key, child in node.items():
+                yield from strings(child, f"{key}.{child_key}" if key else child_key)
+        elif isinstance(node, str):
+            yield key, node
+
+    escaped = [
+        f"{path.name}:{key}"
+        for path in sorted(LOCALES.glob("*.json"))
+        for key, text in strings(json.loads(path.read_text(encoding="utf-8")))
+        if "\\n" in text
+    ]
+    assert not escaped, escaped

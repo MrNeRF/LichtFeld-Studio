@@ -14,6 +14,7 @@
 #include "gui/scale_gizmo.hpp"
 #include "gui/translation_gizmo.hpp"
 #include "gui/ui_widgets.hpp"
+#include "gui/viewport_gizmo_geometry.hpp"
 #include "input/input_controller.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
@@ -108,6 +109,19 @@ namespace lfs::vis::gui {
             return (frame_input.key_mods & SDL_KMOD_CTRL) != 0;
         }
 
+        // Gizmo hover is refreshed only while that gizmo is drawn. A tool change can stop
+        // drawing the hovered gizmo, and its stale hover would keep claiming viewport presses.
+        void resetIdleGizmoHover() {
+            if (!isTranslationGizmoActive())
+                cancelTranslationGizmoDrag();
+            if (!isRotationGizmoActive())
+                cancelRotationGizmoDrag();
+            if (!isScaleGizmoActive())
+                cancelScaleGizmoDrag();
+            if (!isBoundsGizmoActive())
+                cancelBoundsGizmoDrag();
+        }
+
         struct ViewportGizmoMarker {
             int encoded_axis = -1;
             glm::vec2 screen_pos{0.0f};
@@ -137,7 +151,8 @@ namespace lfs::vis::gui {
             const float size,
             const float margin_x,
             const float margin_y) {
-            if (!panel.valid() || size <= 0.0f) {
+            if (!panel.valid() || size <= 0.0f ||
+                !viewportGizmoFits(panel.size.x, panel.size.y, viewportGizmoUiScale())) {
                 return std::nullopt;
             }
 
@@ -284,6 +299,103 @@ namespace lfs::vis::gui {
 
             return panels.front();
         }
+
+        // Crop tool gizmo state in world space, shared by every split panel that draws it.
+        struct CropToolGizmoFrame {
+            GizmoOperation operation = GizmoOperation::Translate;
+            glm::vec3 pivot_world{0.0f};
+            glm::mat3 axes_orientation{1.0f};
+            glm::vec3 bounds_center_world{0.0f};
+            glm::mat3 bounds_orientation{1.0f};
+            glm::vec3 bounds_half_extents_world{0.0f};
+            glm::vec3 scale_pivot_world{0.0f};
+        };
+
+        // In an independent split view the focused panel owns crop tool input; every other panel shows the same
+        // gizmo read-only, projected with its own camera and clipped to its own rectangle.
+        void drawPassiveCropToolGizmos(VisualizerImpl* const viewer,
+                                       const ViewportLayout& viewport,
+                                       const SplitViewPanelId active_panel,
+                                       const RenderSettings& settings,
+                                       const int gizmo_id_base,
+                                       const CropToolGizmoFrame& frame,
+                                       NativeOverlayDrawList& draw_list) {
+            auto* const rendering_manager = viewer ? viewer->getRenderingManager() : nullptr;
+            if (!rendering_manager || !rendering_manager->isIndependentSplitViewActive())
+                return;
+
+            NativeGizmoInput no_input;
+            no_input.mouse_pos = glm::vec2(-1.0e9f);
+            for (const auto& panel : collectViewportGizmoPanels(
+                     viewer, {viewport.pos.x, viewport.pos.y}, {viewport.size.x, viewport.size.y})) {
+                if (!panel.valid() || panel.panel == active_panel)
+                    continue;
+
+                const glm::mat4 view = panel.viewport->getViewMatrix();
+                const glm::ivec2 size(static_cast<int>(panel.size.x), static_cast<int>(panel.size.y));
+                const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
+                    size, settings.focal_length_mm, settings.orthographic,
+                    panel.viewport->ortho_scale_override.value_or(settings.ortho_scale));
+                const int id = panelGizmoId(gizmo_id_base, panel.panel);
+
+                draw_list.PushClipRect(panel.pos, panel.pos + panel.size, true);
+                if (frame.operation == GizmoOperation::Scale) {
+                    BoundsGizmoConfig bounds_config;
+                    bounds_config.id = id;
+                    bounds_config.viewport_pos = panel.pos;
+                    bounds_config.viewport_size = panel.size;
+                    bounds_config.view = view;
+                    bounds_config.projection = projection;
+                    bounds_config.center_world = frame.bounds_center_world;
+                    bounds_config.orientation_world = frame.bounds_orientation;
+                    bounds_config.half_extents_world = frame.bounds_half_extents_world;
+                    bounds_config.draw_list = &draw_list;
+                    bounds_config.input = no_input;
+                    bounds_config.input_enabled = false;
+                    (void)drawBoundsGizmo(bounds_config);
+
+                    ScaleGizmoConfig scale_config;
+                    scale_config.id = id;
+                    scale_config.viewport_pos = panel.pos;
+                    scale_config.viewport_size = panel.size;
+                    scale_config.view = view;
+                    scale_config.projection = projection;
+                    scale_config.pivot_world = frame.scale_pivot_world;
+                    scale_config.orientation_world = frame.bounds_orientation;
+                    scale_config.draw_list = &draw_list;
+                    scale_config.input = no_input;
+                    scale_config.input_enabled = false;
+                    (void)drawScaleGizmo(scale_config);
+                } else if (frame.operation == GizmoOperation::Translate) {
+                    TranslationGizmoConfig translation_config;
+                    translation_config.id = id;
+                    translation_config.viewport_pos = panel.pos;
+                    translation_config.viewport_size = panel.size;
+                    translation_config.view = view;
+                    translation_config.projection = projection;
+                    translation_config.pivot_world = frame.pivot_world;
+                    translation_config.orientation_world = frame.axes_orientation;
+                    translation_config.draw_list = &draw_list;
+                    translation_config.input = no_input;
+                    translation_config.input_enabled = false;
+                    (void)drawTranslationGizmo(translation_config);
+                } else if (frame.operation == GizmoOperation::Rotate) {
+                    RotationGizmoConfig rotation_config;
+                    rotation_config.id = id;
+                    rotation_config.viewport_pos = panel.pos;
+                    rotation_config.viewport_size = panel.size;
+                    rotation_config.view = view;
+                    rotation_config.projection = projection;
+                    rotation_config.pivot_world = frame.pivot_world;
+                    rotation_config.orientation_world = frame.axes_orientation;
+                    rotation_config.draw_list = &draw_list;
+                    rotation_config.input = no_input;
+                    rotation_config.input_enabled = false;
+                    (void)drawRotationGizmo(rotation_config);
+                }
+                draw_list.PopClipRect();
+            }
+        }
     } // namespace
     constexpr float MIN_GIZMO_SCALE = 0.001f;
     constexpr float ROTATION_SNAP_DEGREES = 5.0f;
@@ -330,6 +442,7 @@ namespace lfs::vis::gui {
 
     GizmoManager::GizmoManager(VisualizerImpl* viewer)
         : viewer_(viewer) {
+        python::set_selection_submode(static_cast<int>(selection_mode_));
     }
 
     bool GizmoManager::isCropToolActive() const {
@@ -512,7 +625,11 @@ namespace lfs::vis::gui {
         const glm::mat4 data_world_transform =
             rendering::visualizerWorldTransformToDataWorld(crop_tool_visualizer_transform_);
         const glm::mat4 parent_world = scene.getWorldTransform(node->parent_id);
-        const glm::mat4 local_transform = glm::inverse(parent_world) * data_world_transform;
+        const auto local_transform = core::finiteLocalTransform(parent_world, data_world_transform);
+        if (!local_transform) {
+            LOG_WARN("Cannot commit crop tool transform: parent transform cannot preserve a finite world transform");
+            return false;
+        }
 
         if (crop_tool_shape_ == CropToolShape::Box) {
             if (!node->cropbox)
@@ -529,10 +646,10 @@ namespace lfs::vis::gui {
             if (enable)
                 data.enabled = true;
             scene.setCropBoxData(node->id, data);
-            sm->setNodeTransform(node->name, local_transform);
+            sm->setNodeTransform(node->name, *local_transform);
             scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
             if (rm)
-                rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+                rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
 
             auto entry = std::make_unique<op::CropBoxUndoEntry>(
                 *sm, rm, node->name, before_data, before_transform, show_before, use_before);
@@ -554,10 +671,10 @@ namespace lfs::vis::gui {
         if (enable)
             data.enabled = true;
         scene.setEllipsoidData(node->id, data);
-        sm->setNodeTransform(node->name, local_transform);
+        sm->setNodeTransform(node->name, *local_transform);
         scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         if (rm)
-            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
 
         auto entry = std::make_unique<op::EllipsoidUndoEntry>(
             *sm, rm, node->name, before_data, before_transform, show_before, use_before);
@@ -815,7 +932,7 @@ namespace lfs::vis::gui {
         if (!effectively_visible) {
             rm->setCropboxGizmoActive(false);
             rm->setEllipsoidGizmoActive(false);
-            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
             return;
         }
         if (crop_tool_shape_ == CropToolShape::Box) {
@@ -827,7 +944,7 @@ namespace lfs::vis::gui {
                 true, crop_tool_ellipsoid_radii_, crop_tool_visualizer_transform_, affects_render, parent_node_index);
             rm->setCropboxGizmoActive(false);
         }
-        rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+        rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
     }
 
     void GizmoManager::setCropToolShape(const std::string& shape) {
@@ -878,6 +995,9 @@ namespace lfs::vis::gui {
 
         auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
         if (!sm)
+            return;
+
+        if (!sm->canApplyCropToNode(crop_tool_target_node_id_))
             return;
 
         if (!persistActiveCropToolToNode(true))
@@ -979,7 +1099,8 @@ namespace lfs::vis::gui {
             node_selection_bounds_cache_valid_ = false;
         });
 
-        state::PLYRemoved::when([this](const auto&) { deactivateAllTools(); });
+        // Node removal changes the selection, not the chosen tool. Reset only
+        // when the whole scene is cleared so the editor and registry stay in sync.
         state::SceneCleared::when([this](const auto&) { deactivateAllTools(); });
 
         lfs::core::events::tools::SetToolbarTool::when([this](const auto& e) {
@@ -987,7 +1108,13 @@ namespace lfs::vis::gui {
             const auto tool = static_cast<ToolType>(e.tool_mode);
 
             auto& registry = UnifiedToolRegistry::instance();
-            if (registry.getActiveTool() == "builtin.cropbox") {
+            // Undo can reselect a crop volume without entering the crop tool.
+            const auto* const sm = viewer_->getSceneManager();
+            const bool selected_crop_volume = sm && sm->hasSelectedNode() &&
+                                              (sm->getSelectedNodeType() == core::NodeType::CROPBOX ||
+                                               sm->getSelectedNodeType() == core::NodeType::ELLIPSOID);
+            if (registry.getActiveTool() == "builtin.cropbox" ||
+                (tool != ToolType::None && selected_crop_volume)) {
                 leaveCropTool(true, true, true);
             } else if (editor.hasActiveOperator() && tool != ToolType::Selection) {
                 python::cancel_active_operator();
@@ -1081,6 +1208,9 @@ namespace lfs::vis::gui {
             if (!cropbox_node || !cropbox_node->cropbox)
                 return;
 
+            if (!sm->canApplyCropToNode(cropbox_node->parent_id))
+                return;
+
             cap::CropBoxUpdate update;
             update.has_use = true;
             update.use = true;
@@ -1124,6 +1254,9 @@ namespace lfs::vis::gui {
 
             const auto* ellipsoid_node = sm->getScene().getNodeById(ellipsoid_id);
             if (!ellipsoid_node || !ellipsoid_node->ellipsoid)
+                return;
+
+            if (!sm->canApplyCropToNode(ellipsoid_node->parent_id))
                 return;
 
             cap::EllipsoidUpdate update;
@@ -1223,6 +1356,10 @@ namespace lfs::vis::gui {
         if (stamp == last_tool_state_stamp_)
             return;
         last_tool_state_stamp_ = stamp;
+        resetIdleGizmoHover();
+
+        if (rendering_manager)
+            rendering_manager->setGaussianSelectionVisible(is_selection_mode);
 
         if (scene_manager && !ui_hidden) {
             bool is_transform_tool = false;
@@ -1355,7 +1492,7 @@ namespace lfs::vis::gui {
         const glm::mat4 view = vp.getViewMatrix();
         const glm::ivec2 vp_size(static_cast<int>(active_panel->size.x), static_cast<int>(active_panel->size.y));
         const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
-            vp_size, settings.focal_length_mm, settings.orthographic, settings.ortho_scale);
+            vp_size, settings.focal_length_mm, settings.orthographic, vp.ortho_scale_override.value_or(settings.ortho_scale));
 
         const bool use_world_space = (transform_space_ == TransformSpace::World) || is_multi_selection;
 
@@ -1549,6 +1686,8 @@ namespace lfs::vis::gui {
         const bool use_scale_gizmo = node_gizmo_operation_ == GizmoOperation::Scale;
         bool is_using = false;
         bool gizmo_changed = false;
+        bool gizmo_released = false;
+        bool gizmo_returned_to_start = false;
         glm::mat4 delta_matrix(1.0f);
         bool bounds_result_valid = false;
         bool bounds_gizmo_active = false;
@@ -1579,6 +1718,8 @@ namespace lfs::vis::gui {
             const auto bounds_result = drawBoundsGizmo(bounds_config);
             is_using = is_using || bounds_result.active;
             gizmo_changed = gizmo_changed || bounds_result.changed;
+            gizmo_released = gizmo_released || bounds_result.released;
+            gizmo_returned_to_start = gizmo_returned_to_start || bounds_result.returned_to_start;
             bounds_gizmo_active = bounds_result.active;
             if (bounds_result.active) {
                 const glm::mat3 box_rotation = extractRotation(gizmo_matrix);
@@ -1616,6 +1757,8 @@ namespace lfs::vis::gui {
             const auto translation_result = drawTranslationGizmo(translation_config);
             is_using = translation_result.active;
             gizmo_changed = translation_result.changed;
+            gizmo_released = translation_result.released;
+            gizmo_returned_to_start = translation_result.returned_to_start;
             delta_matrix = glm::translate(glm::mat4(1.0f), translation_result.delta_translation);
             if (translation_result.active) {
                 gizmo_matrix[3] =
@@ -1642,6 +1785,8 @@ namespace lfs::vis::gui {
             const auto rotation_result = drawRotationGizmo(rotation_config);
             is_using = rotation_result.active;
             gizmo_changed = rotation_result.changed;
+            gizmo_released = rotation_result.released;
+            gizmo_returned_to_start = rotation_result.returned_to_start;
             delta_matrix = glm::mat4(rotation_result.delta_rotation);
             if (rotation_result.hovered || rotation_result.active) {
                 guiFocusState().want_capture_mouse = true;
@@ -1667,6 +1812,8 @@ namespace lfs::vis::gui {
             scale_result = drawScaleGizmo(scale_config);
             is_using = is_using || scale_result.active;
             gizmo_changed = gizmo_changed || scale_result.changed;
+            gizmo_released = gizmo_released || scale_result.released;
+            gizmo_returned_to_start = gizmo_returned_to_start || scale_result.returned_to_start;
             if (scale_result.changed) {
                 delta_matrix = glm::scale(glm::mat4(1.0f), scale_result.delta_scale);
                 transform_gizmo_matrix[0] *= scale_result.delta_scale.x;
@@ -1723,7 +1870,7 @@ namespace lfs::vis::gui {
             }
         }
 
-        if (gizmo_changed && is_using) {
+        if (gizmo_changed && (is_using || gizmo_released) && !gizmo_returned_to_start) {
             core::Scene::Transaction txn(scene_manager->getScene());
             if (node_gizmo_operation_ == GizmoOperation::Rotate) {
                 const glm::mat3 delta_rot = extractRotation(delta_matrix);
@@ -1865,6 +2012,11 @@ namespace lfs::vis::gui {
             }
         }
 
+        // Reset from the saved snapshot when the released pointer lands exactly at press.
+        // Incremental rotation and scale deltas can otherwise leave rounding residue.
+        if (gizmo_returned_to_start)
+            (void)cancelActiveNodeTransformDrag();
+
         if (!is_using && node_gizmo_active_) {
             node_gizmo_active_ = false;
             node_bounds_scale_active_ = false;
@@ -1905,7 +2057,7 @@ namespace lfs::vis::gui {
                             scene_manager->getScene(), node_gizmo_node_names_, updated_min, updated_max)) {
                         gizmo_pivot_ = (updated_min + updated_max) * 0.5f;
                         if (render_manager) {
-                            render_manager->updateSettings(render_manager->getSettings(), DirtyFlag::OVERLAY);
+                            render_manager->markDirty(DirtyFlag::OVERLAY, FrameReason::SceneChange);
                         }
                     }
                 }
@@ -1961,7 +2113,7 @@ namespace lfs::vis::gui {
         const glm::mat4 view = vp.getViewMatrix();
         const glm::ivec2 vp_size(static_cast<int>(active_panel->size.x), static_cast<int>(active_panel->size.y));
         const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
-            vp_size, settings.focal_length_mm, settings.orthographic, settings.ortho_scale);
+            vp_size, settings.focal_length_mm, settings.orthographic, vp.ortho_scale_override.value_or(settings.ortho_scale));
 
         const glm::vec3 local_size = crop_tool_box_max_ - crop_tool_box_min_;
         const glm::vec3 world_scale = glm::max(extractScale(crop_tool_visualizer_transform_), glm::vec3(1e-6f));
@@ -2142,11 +2294,43 @@ namespace lfs::vis::gui {
             const bool should_persist = crop_tool_drag_changed_;
             crop_tool_drag_active_ = false;
             crop_tool_drag_changed_ = false;
-            if (should_persist)
+            if (should_persist) {
+                // Clamp local extents at commit, as for ellipsoids, without changing drag deltas.
+                for (int axis = 0; axis < 3; ++axis) {
+                    if (scale_result.total_scale[axis] != 1.0f &&
+                        crop_tool_box_max_[axis] - crop_tool_box_min_[axis] < MIN_GIZMO_SCALE) {
+                        const float center = (crop_tool_box_min_[axis] + crop_tool_box_max_[axis]) * 0.5f;
+                        crop_tool_box_min_[axis] = center - MIN_GIZMO_SCALE * 0.5f;
+                        crop_tool_box_max_[axis] = center + MIN_GIZMO_SCALE * 0.5f;
+                    }
+                }
                 (void)persistActiveCropToolToNode(false);
+            }
         }
 
         overlay_drawlist.PopClipRect();
+
+        const glm::vec3 shown_scale = glm::max(extractScale(crop_tool_visualizer_transform_), glm::vec3(1e-6f));
+        const glm::mat3 shown_rotation = extractRotation(crop_tool_visualizer_transform_);
+        const glm::vec3 shown_pivot = glm::vec3(crop_tool_visualizer_transform_[3]) +
+                                      shown_rotation * (((crop_tool_box_min_ + crop_tool_box_max_) * 0.5f) * shown_scale);
+        glm::mat4 shown_matrix = glm::translate(glm::mat4(1.0f), shown_pivot);
+        if (local_aligned)
+            shown_matrix *= glm::mat4(shown_rotation);
+        shown_matrix = glm::scale(shown_matrix, (crop_tool_box_max_ - crop_tool_box_min_) * shown_scale);
+        const glm::mat3 shown_orientation = isSelectionVolumeMode()
+                                                ? selectionVolumeLocalRotation(shown_matrix)
+                                                : userFacingLocalRotation(shown_matrix);
+        CropToolGizmoFrame frame;
+        frame.operation = gizmo_op;
+        frame.pivot_world = shown_pivot;
+        frame.axes_orientation = local_aligned ? shown_orientation : glm::mat3(1.0f);
+        frame.bounds_center_world = glm::vec3(shown_matrix[3]);
+        frame.bounds_orientation = shown_orientation;
+        frame.bounds_half_extents_world = extractScale(shown_matrix) * 0.5f;
+        frame.scale_pivot_world = glm::vec3(crop_tool_visualizer_transform_[3]);
+        drawPassiveCropToolGizmos(ctx.viewer, viewport, active_panel->panel, settings, CROPBOX_GIZMO_ID_BASE, frame,
+                                  overlay_drawlist);
     }
 
     void GizmoManager::renderCropBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
@@ -2186,7 +2370,7 @@ namespace lfs::vis::gui {
         const glm::mat4 view = vp.getViewMatrix();
         const glm::ivec2 vp_size(static_cast<int>(active_panel->size.x), static_cast<int>(active_panel->size.y));
         const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
-            vp_size, settings.focal_length_mm, settings.orthographic, settings.ortho_scale);
+            vp_size, settings.focal_length_mm, settings.orthographic, vp.ortho_scale_override.value_or(settings.ortho_scale));
 
         const glm::vec3 cropbox_min = cropbox_node->cropbox->min;
         const glm::vec3 cropbox_max = cropbox_node->cropbox->max;
@@ -2403,7 +2587,7 @@ namespace lfs::vis::gui {
                 gizmo_ops::applyTranslation(gizmo_context_, scene, new_pivot_world);
             }
 
-            render_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            render_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
         }
 
         if (!is_using && cropbox_gizmo_active_) {
@@ -2460,7 +2644,7 @@ namespace lfs::vis::gui {
         const glm::mat4 view = vp.getViewMatrix();
         const glm::ivec2 vp_size(static_cast<int>(active_panel->size.x), static_cast<int>(active_panel->size.y));
         const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
-            vp_size, settings.focal_length_mm, settings.orthographic, settings.ortho_scale);
+            vp_size, settings.focal_length_mm, settings.orthographic, vp.ortho_scale_override.value_or(settings.ortho_scale));
 
         const glm::vec3 world_scale = glm::max(extractScale(crop_tool_visualizer_transform_), glm::vec3(1e-6f));
         const glm::mat3 rotation = extractRotation(crop_tool_visualizer_transform_);
@@ -2639,6 +2823,26 @@ namespace lfs::vis::gui {
         }
 
         overlay_drawlist.PopClipRect();
+
+        const glm::vec3 shown_scale = glm::max(extractScale(crop_tool_visualizer_transform_), glm::vec3(1e-6f));
+        const glm::vec3 shown_pivot(crop_tool_visualizer_transform_[3]);
+        glm::mat4 shown_matrix = glm::translate(glm::mat4(1.0f), shown_pivot);
+        if (local_aligned)
+            shown_matrix *= glm::mat4(extractRotation(crop_tool_visualizer_transform_));
+        shown_matrix = glm::scale(shown_matrix, crop_tool_ellipsoid_radii_ * shown_scale);
+        const glm::mat3 shown_orientation = isSelectionVolumeMode()
+                                                ? selectionVolumeLocalRotation(shown_matrix)
+                                                : userFacingLocalRotation(shown_matrix);
+        CropToolGizmoFrame frame;
+        frame.operation = gizmo_op;
+        frame.pivot_world = shown_pivot;
+        frame.axes_orientation = local_aligned ? shown_orientation : glm::mat3(1.0f);
+        frame.bounds_center_world = glm::vec3(shown_matrix[3]);
+        frame.bounds_orientation = shown_orientation;
+        frame.bounds_half_extents_world = extractScale(shown_matrix);
+        frame.scale_pivot_world = shown_pivot;
+        drawPassiveCropToolGizmos(ctx.viewer, viewport, active_panel->panel, settings, ELLIPSOID_GIZMO_ID_BASE, frame,
+                                  overlay_drawlist);
     }
 
     void GizmoManager::renderEllipsoidGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
@@ -2678,7 +2882,7 @@ namespace lfs::vis::gui {
         const glm::mat4 view = vp.getViewMatrix();
         const glm::ivec2 vp_size(static_cast<int>(active_panel->size.x), static_cast<int>(active_panel->size.y));
         const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
-            vp_size, settings.focal_length_mm, settings.orthographic, settings.ortho_scale);
+            vp_size, settings.focal_length_mm, settings.orthographic, vp.ortho_scale_override.value_or(settings.ortho_scale));
 
         const glm::vec3 radii = ellipsoid_node->ellipsoid->radii;
         const glm::mat4 world_transform = scene_coords::nodeVisualizerWorldTransform(scene_manager->getScene(), ellipsoid_id);
@@ -2890,7 +3094,7 @@ namespace lfs::vis::gui {
                 gizmo_ops::applyTranslation(gizmo_context_, scene, new_pivot_world);
             }
 
-            render_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            render_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
         }
 
         if (!is_using && ellipsoid_gizmo_active_) {
@@ -2971,6 +3175,8 @@ namespace lfs::vis::gui {
         ViewportGizmoPanelTarget* hovered_panel = nullptr;
         if (!ui_wants_mouse) {
             for (auto& panel : panels) {
+                if (!viewportGizmoFits(panel.size.x, panel.size.y, ui_scale))
+                    continue;
                 const float gizmo_x = panel.pos.x + panel.size.x - gizmo_size - gizmo_margin_x;
                 const float gizmo_y = panel.pos.y + gizmo_margin_y;
                 const bool mouse_in_gizmo = mouse_x >= gizmo_x &&
@@ -3102,7 +3308,7 @@ namespace lfs::vis::gui {
             node->cropbox->flash_intensity = 1.0f - static_cast<float>(elapsed_ms) / DURATION_MS;
         }
         sm->getScene().invalidateCache();
-        rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+        rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
     }
 
     void GizmoManager::deactivateAllTools() {
@@ -3115,9 +3321,44 @@ namespace lfs::vis::gui {
         current_operation_ = GizmoOperation::Translate;
     }
 
+    bool GizmoManager::cancelActiveNodeTransformDrag() {
+        if (!node_gizmo_active_ || node_gizmo_node_names_.empty() || node_transforms_before_drag_.empty()) {
+            return false;
+        }
+
+        auto* const scene_manager = viewer_ ? viewer_->getSceneManager() : nullptr;
+        if (!scene_manager) {
+            return false;
+        }
+
+        const size_t restore_count = std::min(node_gizmo_node_names_.size(), node_transforms_before_drag_.size());
+        for (size_t i = 0; i < restore_count; ++i) {
+            scene_manager->setNodeTransform(node_gizmo_node_names_[i], node_transforms_before_drag_[i]);
+        }
+
+        cancelTranslationGizmoDrag();
+        cancelRotationGizmoDrag();
+        cancelScaleGizmoDrag();
+        cancelBoundsGizmoDrag();
+        node_gizmo_active_ = false;
+        node_bounds_scale_active_ = false;
+        node_selection_bounds_scale_active_ = false;
+        node_gizmo_node_names_.clear();
+        node_transforms_before_drag_.clear();
+        node_original_visualizer_world_transforms_.clear();
+
+        if (auto* const rendering_manager = viewer_->getRenderingManager()) {
+            rendering_manager->setCropboxGizmoActive(false);
+            rendering_manager->setEllipsoidGizmoActive(false);
+            rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, FrameReason::SceneChange);
+        }
+        return true;
+    }
+
     void GizmoManager::setSelectionSubMode(SelectionSubMode mode) {
         const bool was_volume_mode = isSelectionVolumeSubMode(selection_mode_);
         selection_mode_ = mode;
+        python::set_selection_submode(static_cast<int>(mode));
 
         if (auto* rm = viewer_->getRenderingManager()) {
             rm->setSelectionPreviewMode(toSelectionPreviewMode(mode));
@@ -3155,6 +3396,7 @@ namespace lfs::vis::gui {
         captureSelectionVolumeBase(source_generation);
         selection_volume_apply_mode_ = apply_mode;
         selection_mode_ = mode;
+        python::set_selection_submode(static_cast<int>(mode));
         crop_tool_shape_ = mode == SelectionSubMode::Sphere ? CropToolShape::Ellipsoid : CropToolShape::Box;
         crop_tool_initialized_ = true;
         crop_tool_target_node_id_ = selectedCropTargetNodeId().value_or(core::NULL_NODE);
@@ -3206,6 +3448,8 @@ namespace lfs::vis::gui {
         const float gizmo_margin_x = VIEWPORT_GIZMO_MARGIN_X * ui_scale;
         const float gizmo_margin_y = VIEWPORT_GIZMO_MARGIN_Y * ui_scale;
         for (const auto& panel : panels) {
+            if (!viewportGizmoFits(panel.size.x, panel.size.y, ui_scale))
+                continue;
             const float gizmo_x = panel.pos.x + panel.size.x - gizmo_size - gizmo_margin_x;
             const float gizmo_y = panel.pos.y + gizmo_margin_y;
             if (x >= gizmo_x && x <= gizmo_x + gizmo_size &&

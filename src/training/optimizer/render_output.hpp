@@ -23,6 +23,8 @@ namespace lfs::training {
         lfs::core::Tensor radii;        // [..., N]
         lfs::core::Tensor visibility;   // [..., N]
         lfs::core::Tensor edges_score;
+        // target_image over the fixed background instead of a per-step one, for per-camera detectors
+        lfs::core::Tensor stable_target_image;
         lfs::core::Camera* camera = nullptr; // Current training camera, when available
         int width = 0;
         int height = 0;

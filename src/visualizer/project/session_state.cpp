@@ -348,6 +348,18 @@ namespace lfs::vis::project {
             };
         }
 
+        // Written for earlier readers, which require the key; ignored when reading.
+        template <typename Owner>
+        JsonField<Owner> legacy_vec3_field(
+            const std::string_view name,
+            const glm::vec3 value) {
+            return {
+                .name = name,
+                .write = [value](const Owner&) { return vec3_json(value); },
+                .read = [](const Json&, Owner&, std::string_view, std::string_view) { return lfs::Result<void>{}; },
+            };
+        }
+
         template <typename Owner>
         JsonField<Owner> vec3_field(
             const std::string_view name,
@@ -753,7 +765,8 @@ namespace lfs::vis::project {
                            [](RenderSettings& settings) {
                                sanitizeDepthViewSettings(settings);
                            }),
-                vec3_field("selection_color_committed", &RenderSettings::selection_color_committed),
+                // Removed setting; builds before its removal fail to open a project without it.
+                legacy_vec3_field<RenderSettings>("selection_color_committed", {0.859f, 0.325f, 0.325f}),
                 vec3_field("selection_color_preview", &RenderSettings::selection_color_preview),
                 vec3_field("selection_color_center_marker", &RenderSettings::selection_color_center_marker),
                 required_field("depth_clip_enabled", &RenderSettings::depth_clip_enabled),
@@ -3390,7 +3403,7 @@ namespace lfs::vis::project {
                         ->getSequencerUIState()
                         .show_camera_path);
             }
-            rendering->markDirty(DirtyFlag::ALL);
+            rendering->markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
         }
 
         std::optional<ToolType> builtin_tool_type(
@@ -3439,7 +3452,7 @@ namespace lfs::vis::project {
                     .armToolRestoreGuard();
                 gui_manager->panelLayout()
                     .setShowSequencer(sequencer_visible);
-                rendering->markDirty(DirtyFlag::ALL);
+                rendering->markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
             };
 
             const auto tools =
@@ -3579,26 +3592,12 @@ namespace lfs::vis::project {
                             // Disabled constructor-default boxes are not in near/far encoding.
                             if (settings
                                     ->depth_filter_enabled) {
-                                const float near_plane =
-                                    std::max(0.0f,
-                                             -settings
-                                                  ->depth_filter_max.z);
-                                const float far_plane =
-                                    std::max(near_plane + 0.01f,
-                                             -settings
-                                                  ->depth_filter_min.z);
-                                const float half_width =
-                                    std::max(
-                                        std::abs(settings
-                                                     ->depth_filter_min.x),
-                                        std::abs(settings
-                                                     ->depth_filter_max.x));
                                 selection_tool
-                                    ->setDepthFilterRange(
-                                        settings
-                                            ->depth_filter_enabled,
-                                        near_plane, far_plane,
-                                        half_width);
+                                    ->restoreDepthFilterBox(
+                                        settings->depth_filter_min,
+                                        settings->depth_filter_max,
+                                        settings->split_view_mode ==
+                                            SplitViewMode::IndependentDual);
                             }
                             auto restored =
                                 rendering->getSettings();
@@ -3858,7 +3857,7 @@ namespace lfs::vis::project {
         }
         if (auto* rendering =
                 viewer.getRenderingManager()) {
-            rendering->markDirty(DirtyFlag::ALL);
+            rendering->markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
         }
     }
 

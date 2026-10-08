@@ -17,6 +17,7 @@
 #include "internal/resource_paths.hpp"
 #include "operation/undo_history.hpp"
 #include "preferences.hpp"
+#include "python/python_runtime.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/services.hpp"
 
@@ -28,13 +29,16 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <ctime>
 #include <format>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string_view>
+#include <thread>
 
 namespace lfs::vis::gui {
 
@@ -340,11 +344,7 @@ namespace lfs::vis::gui {
             }
             return input->mouse_wheel != 0.0f ||
                    !input->keys_pressed.empty() ||
-                   !input->keys_repeated.empty() ||
-                   !input->keys_released.empty() ||
-                   !input->text_codepoints.empty() ||
-                   !input->text_inputs.empty() ||
-                   input->has_text_editing;
+                   !input->input_events.empty();
         }
 
         [[nodiscard]] std::string loggingRowInnerRml(const core::LogEntrySnapshot& entry) {
@@ -385,6 +385,8 @@ namespace lfs::vis::gui {
     }
 
     NativeScenePanel::~NativeScenePanel() {
+        if (log_handler_)
+            core::Logger::get().remove_log_handler(*log_handler_);
         clearElementCache();
     }
 
@@ -567,6 +569,7 @@ namespace lfs::vis::gui {
         if (auto* gui = services().guiOrNull()) {
             const std::string action = gui->globalContextMenu().pollResult();
             if (!action.empty() && tree_el_ && tree_el_->executeContextMenuAction(action)) {
+                syncPanel(ctx);
                 host_.markContentDirty();
                 host_.drawDirect(x, y, w, h);
                 return true;
@@ -742,8 +745,12 @@ namespace lfs::vis::gui {
                 changed = true;
         }
 
+        // Menu actions can mutate the scene after the frame context was captured.
+        // Synchronize the tree with the generation recorded in the panel stamp.
+        auto current_ctx = ctx;
+        current_ctx.scene_generation = app_store().scene_generation.get();
         changed |= syncLocale();
-        changed |= syncSceneState(ctx);
+        changed |= syncSceneState(current_ctx);
         changed |= syncHistoryState();
         changed |= syncLoggingState();
         changed |= syncTabState();
@@ -1307,7 +1314,23 @@ namespace lfs::vis::gui {
     void NativeScenePanel::setTab(const Tab tab) {
         if (active_tab_ == tab)
             return;
+        if (log_handler_) {
+            core::Logger::get().remove_log_handler(*log_handler_);
+            log_handler_.reset();
+        }
         active_tab_ = tab;
+        if (tab == Tab::Logging) {
+            const auto generation = std::make_shared<std::atomic<uint64_t>>(
+                core::Logger::get().buffered_log_generation());
+            log_handler_ = core::Logger::get().add_log_handler(
+                [generation, gui_thread = std::this_thread::get_id()](auto, const auto&, auto) {
+                    const auto current = core::Logger::get().buffered_log_generation();
+                    const auto previous = generation->exchange(current);
+                    // Rendering can itself log; only background producers need a wakeup.
+                    if (current != previous && std::this_thread::get_id() != gui_thread)
+                        python::request_redraw();
+                });
+        }
         host_.markContentDirty();
     }
 

@@ -214,6 +214,7 @@ namespace gsplat_lfs {
         const float* sh0,
         const float* shN,
         uint32_t sh_degree,
+        uint32_t sh_layout_degree,
         const float* backgrounds,
         const float* bg_images,
         const bool* masks,
@@ -290,14 +291,17 @@ namespace gsplat_lfs {
                 compute_view_dirs(means, viewmats0, C, N, result.dirs, stream);
             }
             spherical_harmonics_swizzled_fwd(
-                sh_degree, sh_degree > 0 ? result.dirs : nullptr, sh0, shN, nullptr,
-                static_cast<int64_t>(C) * N,
-                channels == 3 ? result.colors : result.rgb, stream);
+                sh_degree, sh_layout_degree, sh_degree > 0 ? result.dirs : nullptr,
+                sh0, shN, nullptr, static_cast<int64_t>(C) * N,
+                result.colors, channels, stream);
         }
         if (channels != 3) {
-            geometry_features_fwd(means, quats, scales, viewmats0, result.rgb, result.colors,
+            geometry_features_fwd(means, quats, scales, viewmats0, result.colors,
                                   N, C, channels, camera_model, stream);
         }
+
+        const float* render_backgrounds = (render_mode == 1 || render_mode == 2) ? nullptr : backgrounds;
+        const float* render_bg_images = (render_mode == 1 || render_mode == 2) ? nullptr : bg_images;
 
         auto render = [&](const IntersectTileResult& batch, TileRange tiles) {
             result.isect_ids = batch.isect_ids;
@@ -306,7 +310,7 @@ namespace gsplat_lfs {
             const uint32_t raster_n_isects = static_cast<uint32_t>(batch.n_sort);
             rasterize_to_pixels_from_world_3dgs_fwd(
                 means, quats, scaled_scales, result.colors, opacities,
-                backgrounds, bg_images, masks,
+                render_backgrounds, render_bg_images, masks,
                 C, N, raster_n_isects, channels,
                 image_width, image_height, tile_size,
                 viewmats0, viewmats1, Ks, camera_model,
@@ -357,6 +361,7 @@ namespace gsplat_lfs {
         const float* sh0,
         const float* shN,
         uint32_t sh_degree,
+        uint32_t sh_layout_degree,
         const float* backgrounds,
         const float* bg_images,
         const bool* masks,
@@ -416,6 +421,9 @@ namespace gsplat_lfs {
             channels = 8;
         }
 
+        const float* render_backgrounds = (render_mode == 1 || render_mode == 2) ? nullptr : backgrounds;
+        const float* render_bg_images = (render_mode == 1 || render_mode == 2) ? nullptr : bg_images;
+
         const size_t color_values = checked_multiply(
             checked_multiply(static_cast<size_t>(C), static_cast<size_t>(N),
                              "gsplat backward color elements"),
@@ -424,7 +432,7 @@ namespace gsplat_lfs {
             color_values, sizeof(float), "gsplat backward color gradients");
         // Grow-only TLS high-water — replaces per-backward cudaMallocAsync/Free.
         float* const v_colors =
-            static_cast<float*>(ensure_gsplat_color_grad_workspace(color_bytes + (channels == 3 ? 0 : static_cast<size_t>(C) * N * 3 * sizeof(float)), stream));
+            static_cast<float*>(ensure_gsplat_color_grad_workspace(color_bytes, stream));
         LFS_CUDA_CHECK_MSG(
             cudaMemsetAsync(v_colors, 0, color_bytes, stream),
             "gsplat backward color-gradient initialization");
@@ -432,7 +440,7 @@ namespace gsplat_lfs {
         auto render_backward = [&](TileRange tiles) {
             rasterize_to_pixels_from_world_3dgs_bwd(
                 means, quats, scales, colors, opacities,
-                backgrounds, bg_images, masks,
+                render_backgrounds, render_bg_images, masks,
                 C, N, n_isects, channels,
                 image_width, image_height, tile_size,
                 viewmats0, viewmats1, Ks, camera_model,
@@ -464,25 +472,25 @@ namespace gsplat_lfs {
             }
         }
 
-        float* const v_rgb = channels == 3 ? v_colors : v_colors + color_values;
         if (channels != 3) {
-            geometry_features_bwd(means, quats, scales, viewmats0, v_colors, v_rgb, v_means, v_quats,
+            geometry_features_bwd(means, quats, scales, viewmats0, v_colors, v_means, v_quats,
                                   N, C, channels, camera_model, stream);
         }
 
         // Backward through SH
         if (render_mode == 0 || render_mode >= 3) {
             spherical_harmonics_swizzled_bwd(
-                K, sh_degree,
+                K, sh_degree, sh_layout_degree,
                 dirs,
                 sh0,
                 shN,
                 nullptr, // masks
-                v_rgb,
+                v_colors,
                 static_cast<int64_t>(C) * N,
                 false, // compute_v_dirs
                 v_sh_coeffs,
                 nullptr, // v_dirs
+                channels,
                 stream);
         }
 

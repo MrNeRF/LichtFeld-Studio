@@ -116,6 +116,28 @@ TEST(SplatDataCloneTest, Q16CloneCarriesBounds) {
     EXPECT_FLOAT_EQ(model.means_raw().cpu().ptr<float>()[0], src_mean0);
 }
 
+TEST(SplatDataMoveAssignmentTest, RebindsTensorMembersThatAreViews) {
+    auto make_model = [](Tensor means) {
+        return SplatData(0,
+                         std::move(means),
+                         Tensor::zeros({1, 1, 3}, Device::CPU),
+                         Tensor::empty({0}, Device::CPU),
+                         Tensor::zeros({1, 3}, Device::CPU),
+                         Tensor::zeros({1, 4}, Device::CPU),
+                         Tensor::zeros({1, 1}, Device::CPU),
+                         1.0f);
+    };
+
+    auto target_storage = Tensor::zeros({1, 3}, Device::CPU);
+    auto target = make_model(target_storage.slice(0, 0, 1));
+    auto source = make_model(Tensor::full({1, 3}, 17.0f, Device::CPU));
+
+    target = std::move(source);
+
+    EXPECT_EQ(target_storage.to_vector(), (std::vector<float>{0.0f, 0.0f, 0.0f}));
+    EXPECT_EQ(target.means().to_vector(), (std::vector<float>{17.0f, 17.0f, 17.0f}));
+}
+
 TEST(SplatDataCloneTest, Fp32CloneUnchangedBehavior) {
     const ShValueQuantGuard quant_guard{false};
     auto model = make_random_sh3(kN);

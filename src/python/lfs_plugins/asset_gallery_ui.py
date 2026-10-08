@@ -45,7 +45,7 @@ class GalleryAssetMixin:
         self._gallery_unsubscribe = None
         self._gallery_state = {"scenes": [], "links": {}, "jobs": [], "signed_in": False}
         self._gallery_rows_generation = 0
-        self._gallery_upload_format = "sog"
+        self._gallery_upload_format = "auto"
         self._gallery_pull_folder = ""
         self._gallery_pull_name = ""
         self._gallery_batch = []

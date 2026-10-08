@@ -16,7 +16,13 @@ layout(push_constant) uniform TexturedOverlayPush {
     vec4 depth_params;
     // Valid-region UV for padded splat depth: xy = scale, zw = clamp max.
     vec4 uv_region;
+    // Zero for linear depth; otherwise clip-z/clip-w projection coefficients.
+    vec4 ndc_to_view_coeffs;
 } u;
+
+// Depth values at or above this bound represent background.
+const float kMaxValidDepth = 1.0e9;
+const float kBackgroundDepth = kMaxValidDepth;
 
 void main() {
     // Hard depth occlusion against the splat surface so the frustum thumbnail
@@ -30,7 +36,16 @@ void main() {
         }
         uv = min(uv * u.uv_region.xy, u.uv_region.zw);
         float splat_depth = texture(u_splat_depth, uv).r;
-        if (splat_depth > 0.0 && splat_depth < 1.0e9 && ViewDepth > splat_depth + 0.01) {
+        if (abs(u.ndc_to_view_coeffs.z) + abs(u.ndc_to_view_coeffs.w) > 0.0) {
+            // Hardware clear depth is background, not a surface one unit away.
+            if (splat_depth >= 1.0) {
+                splat_depth = kBackgroundDepth;
+            } else {
+                vec4 p = u.ndc_to_view_coeffs;
+                splat_depth = (p.y - splat_depth * p.w) / (p.x - splat_depth * p.z);
+            }
+        }
+        if (splat_depth > 0.0 && splat_depth < kMaxValidDepth && ViewDepth > splat_depth + 0.01) {
             discard;
         }
     }

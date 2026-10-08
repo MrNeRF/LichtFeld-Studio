@@ -249,13 +249,47 @@ TEST(ViewportTest, WasdAdvanceSupportsFlatAdditionalSpeedInVisualizerSpace) {
     const glm::vec3 t_step = viewport.camera.t - t_before;
     const glm::vec3 pivot_step = viewport.camera.pivot - pivot_before;
 
-    // Once the inertial velocity saturates, a settled step advances along -Z at
-    // (wasdSpeed + bonus), confirming the bonus is additive, not multiplicative.
+    // Once the inertial velocity saturates after the full hold ramp (x20), a
+    // settled step advances along -Z at twice (wasdSpeed + bonus) units per
+    // second, confirming the bonus is additive, not multiplicative.
     EXPECT_FLOAT_EQ(viewport.camera.getWasdSpeed(), base_speed);
     EXPECT_NEAR(t_step.x, 0.0f, 1e-5f);
     EXPECT_NEAR(t_step.y, 0.0f, 1e-5f);
-    EXPECT_NEAR(t_step.z, -(base_speed + bonus) * dt, 1e-4f);
+    EXPECT_NEAR(t_step.z, -(base_speed + bonus) * 2.0f * dt, 1e-3f);
     EXPECT_NEAR(glm::length(pivot_step - t_step), 0.0f, 1e-5f);
+}
+
+// Catches WASD speed that follows the scene size, a wrong hold ramp, a reversal
+// that loses the speed, and a ramp that does not restart after coming to rest.
+TEST(ViewportTest, WasdSpeedRampsWithHoldTimeNotSceneSize) {
+    constexpr float dt = 0.01f;
+    const auto fly = [](Viewport& viewport, const float seconds, const bool forward, const bool backward) {
+        for (int i = 0; i < static_cast<int>(seconds / dt + 0.5f); ++i)
+            viewport.camera.advanceWasd(dt, forward, backward, false, false, false, false);
+    };
+    const auto speed = [](Viewport& viewport, const bool forward, const bool backward) {
+        const glm::vec3 before = viewport.camera.t;
+        viewport.camera.advanceWasd(dt, forward, backward, false, false, false, false);
+        return glm::length(viewport.camera.t - before) / dt;
+    };
+    for (const float scene_radius : {0.0f, 0.5f, 50.0f, 5000.0f}) {
+        Viewport viewport(100, 100);
+        viewport.camera.R = glm::mat3(1.0f);
+        viewport.camera.setSceneExtent(scene_radius);
+        viewport.camera.setWasdSpeed(10.0f);
+
+        fly(viewport, 1.0f, true, false);
+        EXPECT_NEAR(speed(viewport, true, false), 5.8f, 0.6f) << "scene radius " << scene_radius;
+        fly(viewport, 3.0f, true, false);
+        EXPECT_NEAR(speed(viewport, true, false), 20.0f, 0.01f) << "scene radius " << scene_radius;
+
+        fly(viewport, 0.5f, false, true);
+        EXPECT_NEAR(speed(viewport, false, true), 20.0f, 0.5f) << "scene radius " << scene_radius;
+
+        fly(viewport, 2.0f, false, false);
+        fly(viewport, 1.0f, true, false);
+        EXPECT_NEAR(speed(viewport, true, false), 5.8f, 0.6f) << "scene radius " << scene_radius;
+    }
 }
 
 TEST(ViewportTest, OrbitDraggingRightMovesCameraLeftAroundPivot) {

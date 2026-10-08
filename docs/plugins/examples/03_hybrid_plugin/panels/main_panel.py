@@ -15,6 +15,7 @@ class HybridPanel(lf.ui.Panel):
     order = 220
     template = str(Path(__file__).resolve().with_name("main_panel.rml"))
     height_mode = lf.ui.PanelHeightMode.CONTENT
+    update_policy = "interval"
     update_interval_ms = 200
 
     def __init__(self):

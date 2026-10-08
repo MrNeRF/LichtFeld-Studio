@@ -8,6 +8,7 @@
 #include "helper_math.h"
 #include "kernel_utils.cuh"
 #include "lfs/core/warp_reduce.cuh"
+#include "lfs/training/effective_rank.cuh"
 #include "lfs/training/mean_step_scale.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
@@ -34,7 +35,7 @@ namespace fast_lfs::rasterization::kernels::backward {
 
     // minBlocks=3 budgets registers so shN Adam no longer lives across
     // the geometry backward (sweep 2..4; 3 is the measured default).
-    template <bool MIP_FILTER, int ACTIVE_SH_BASES>
+    template <bool MIP_FILTER, int ACTIVE_SH_BASES, bool DISABLED_FEATURES = false>
     __global__ void __launch_bounds__(config::block_size_preprocess_backward, 3) preprocess_backward_cu(
         // These four alias fused_adam.{means,scaling,rotation,opacity}.param (Adam writes).
         const float3* means,
@@ -45,6 +46,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float3* __restrict__ cam_position,
         const float* raw_opacities,
         const uint* __restrict__ primitive_work_indices,
+        const float4* __restrict__ primitive_color,
         const float2* __restrict__ grad_mean2d,
         const float3* __restrict__ grad_conic,
         const float* __restrict__ grad_depth,
@@ -66,8 +68,6 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float clip_bottom,
         const uint sh_layout_slots,
         FusedAdamSettings fused_adam,
-        const bool* __restrict__ mean_step_far_mask,
-        const int mean_step_far_mask_n,
         // model-truth shN-rest decode binds. fused_adam.shN.sh_value_*
         // is enablement-gated (null during SH warmup) and gates only the UPDATE
         // path; reading sh_coefficients_rest must always use these.
@@ -86,6 +86,9 @@ namespace fast_lfs::rasterization::kernels::backward {
         // per-call empty({num_blocks})/empty({1}) allocs.
         float scale_loss_local = 0.0f;
         float opacity_loss_local = 0.0f;
+        float erank_loss_local = 0.0f;
+        float dc_loss_local = 0.0f;
+        float erank_grads[3] = {0.0f, 0.0f, 0.0f};
         if (in_range) {
             if (fused_adam.scale_reg_loss_out != nullptr &&
                 fused_adam.scale_reg_weight > 0.0f &&
@@ -93,10 +96,36 @@ namespace fast_lfs::rasterization::kernels::backward {
                 fused_adam.scaling.n_elements > 0) {
                 const uint scale_base = static_cast<uint>(primitive_idx) * 3u;
                 const float inv_n = 1.0f / static_cast<float>(fused_adam.scaling.n_elements);
-                scale_loss_local = fused_adam.scale_reg_weight * inv_n *
-                                   (expf(fused_adam.scaling.param[scale_base]) +
-                                    expf(fused_adam.scaling.param[scale_base + 1]) +
-                                    expf(fused_adam.scaling.param[scale_base + 2]));
+                if constexpr (DISABLED_FEATURES) {
+                    scale_loss_local = fused_adam.scale_reg_weight * inv_n *
+                                       (expf(fused_adam.scaling.param[scale_base]) +
+                                        expf(fused_adam.scaling.param[scale_base + 1]) +
+                                        expf(fused_adam.scaling.param[scale_base + 2]));
+                } else if (fused_adam.scale_reg_log) {
+                    scale_loss_local = fused_adam.scale_reg_weight * 0.01f * inv_n /
+                                       fused_adam.scale_reg_normalizer *
+                                       (fmaxf(fused_adam.scaling.param[scale_base], -40.0f) +
+                                        fmaxf(fused_adam.scaling.param[scale_base + 1], -40.0f) +
+                                        fmaxf(fused_adam.scaling.param[scale_base + 2], -40.0f));
+                } else {
+                    scale_loss_local = fused_adam.scale_reg_weight * inv_n *
+                                       (expf(fused_adam.scaling.param[scale_base]) +
+                                        expf(fused_adam.scaling.param[scale_base + 1]) +
+                                        expf(fused_adam.scaling.param[scale_base + 2]));
+                }
+            }
+            if constexpr (!DISABLED_FEATURES) {
+                if (fused_adam.erank_reg_weight > 0.0f && fused_adam.scaling.n_primitives > 0) {
+                    const uint scale_base = static_cast<uint>(primitive_idx) * 3u;
+                    const auto penalty = lfs::training::effective_rank_penalty(
+                        fused_adam.scaling.param[scale_base], fused_adam.scaling.param[scale_base + 1u],
+                        fused_adam.scaling.param[scale_base + 2u]);
+                    const float coef = fused_adam.erank_reg_weight /
+                                       static_cast<float>(fused_adam.scaling.n_primitives);
+                    erank_loss_local = coef * penalty.value;
+                    for (int axis = 0; axis < 3; ++axis)
+                        erank_grads[axis] = coef * penalty.gradient[axis];
+                }
             }
             if (fused_adam.opacity_reg_loss_out != nullptr &&
                 fused_adam.opacity_reg_weight > 0.0f &&
@@ -119,6 +148,12 @@ namespace fast_lfs::rasterization::kernels::backward {
                 atomicAdd(fused_adam.opacity_reg_loss_out, block_sum);
             }
         }
+        if constexpr (!DISABLED_FEATURES)
+            if (fused_adam.erank_reg_loss_out != nullptr) {
+                const float block_sum = lfs::core::warp_ops::block_reduce_sum(erank_loss_local);
+                if (threadIdx.x == 0 && block_sum != 0.0f)
+                    atomicAdd(fused_adam.erank_reg_loss_out, block_sum);
+            }
 
         // Grad buffers. Joint block-bounds needs all threads to hit the same
         // adam_step_row sequence — no early returns before Adam sections.
@@ -134,15 +169,57 @@ namespace fast_lfs::rasterization::kernels::backward {
         const uint work_idx = in_range ? primitive_work_indices[primitive_idx] : 0u;
         const bool invisible = in_range && work_idx == 0xffffffffu;
         const bool visible = in_range && !invisible;
+        if constexpr (!DISABLED_FEATURES) {
+            if (visible && fused_adam.rendered_count != nullptr)
+                fused_adam.rendered_count[primitive_idx] += 1.0f;
+        }
+
+        // Gate the accumulated image derivative. Negative colour may recover
+        // only when its image derivative points brighter under gradient descent.
+        uint colour_reg_mask = 7u;
+        if (visible) {
+            const float3 colour = make_float3(primitive_color[work_idx]);
+            float3 image_grad = grad_color_helper[work_idx];
+            if (colour.x < 0.0f && image_grad.x >= 0.0f)
+                image_grad.x = 0.0f;
+            if (colour.y < 0.0f && image_grad.y >= 0.0f)
+                image_grad.y = 0.0f;
+            if (colour.z < 0.0f && image_grad.z >= 0.0f)
+                image_grad.z = 0.0f;
+            if (visible)
+                grad_color_helper[work_idx] = image_grad;
+            // A regularizer alone cannot take the below-black recovery exception.
+            if constexpr (!DISABLED_FEATURES)
+                if (fused_adam.sh0.param != nullptr)
+                    colour_reg_mask =
+                        (colour.x >= 0.0f || image_grad.x < 0.0f ? 1u : 0u) |
+                        (colour.y >= 0.0f || image_grad.y < 0.0f ? 2u : 0u) |
+                        (colour.z >= 0.0f || image_grad.z < 0.0f ? 4u : 0u);
+        }
+        if constexpr (!DISABLED_FEATURES) {
+            if (!visible && in_range && fused_adam.sh0.param != nullptr &&
+                (fused_adam.dc_reg_weight > 0.0f || fused_adam.sh_rest_reg_weight > 0.0f)) {
+                const float3 colour = convert_sh_to_color(
+                    reinterpret_cast<const float3*>(fused_adam.sh0.param), sh_coefficients_rest,
+                    means[primitive_idx], cam_position[0], primitive_idx, ACTIVE_SH_BASES,
+                    sh_layout_slots, shN_value_bounds,
+                    shN_value_bounds != nullptr ? shN_value_n_cells : 0u,
+                    shN_value_bits == 16u ? 16u : 0u);
+                colour_reg_mask = (colour.x >= 0.0f ? 1u : 0u) |
+                                  (colour.y >= 0.0f ? 2u : 0u) |
+                                  (colour.z >= 0.0f ? 4u : 0u);
+            }
+        }
 
         // Compute SH backward gradients before entering the geometry path.
         if (invisible) {
             // Reg-only scale/opacity; SH/means/rot get pure momentum decay (zeros).
             const uint scale_base = static_cast<uint>(primitive_idx) * 3u;
-            scale_grads[0] = scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base);
-            scale_grads[1] = scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1);
-            scale_grads[2] = scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2);
-            add_flatten_regularization_grads(fused_adam, fused_adam.scaling, scale_base, scale_grads);
+            scale_grads[0] = scale_regularization_grad<!DISABLED_FEATURES>(fused_adam, fused_adam.scaling, scale_base) + erank_grads[0];
+            scale_grads[1] = scale_regularization_grad<!DISABLED_FEATURES>(fused_adam, fused_adam.scaling, scale_base + 1) + erank_grads[1];
+            scale_grads[2] = scale_regularization_grad<!DISABLED_FEATURES>(fused_adam, fused_adam.scaling, scale_base + 2) + erank_grads[2];
+            if constexpr (!DISABLED_FEATURES)
+                add_flatten_regularization_grads(fused_adam, fused_adam.scaling, scale_base, scale_grads);
             opacity_grads[0] = opacity_extra_grad(fused_adam, fused_adam.opacity, static_cast<uint>(primitive_idx));
         } else if (visible) {
             const float3 mean3d = means[primitive_idx];
@@ -162,6 +239,30 @@ namespace fast_lfs::rasterization::kernels::backward {
                 shN_value_bits == 16u ? 16u : 0u);
         } // close visible — SH Adam next kills shN live range before geometry
 
+        if constexpr (!DISABLED_FEATURES)
+            if (in_range && fused_adam.dc_reg_weight > 0.0f && fused_adam.sh0.param != nullptr) {
+                constexpr float kSh0 = 0.28209479177387814f;
+                const float limit = 0.5f / kSh0;
+                const int stride = fused_adam.sh0.n_attributes > 0 ? fused_adam.sh0.n_attributes : 3;
+                const float* coeff = fused_adam.sh0.param + static_cast<uint>(primitive_idx) * static_cast<uint>(stride);
+                for (int c = 0; c < 3; ++c) {
+                    float delta = 0.0f;
+                    if (coeff[c] > limit)
+                        delta = coeff[c] - limit;
+                    else if (coeff[c] < -limit)
+                        delta = coeff[c] + limit;
+                    if (colour_reg_mask & (1u << c))
+                        sh0_grads[c] += (2.0f * fused_adam.dc_reg_weight / 3.0f) * delta;
+                    dc_loss_local += (fused_adam.dc_reg_weight / 3.0f) * delta * delta;
+                }
+            }
+        if constexpr (!DISABLED_FEATURES)
+            if (fused_adam.dc_reg_loss_out != nullptr) {
+                const float block_sum = lfs::core::warp_ops::block_reduce_sum(dc_loss_local);
+                if (threadIdx.x == 0 && block_sum != 0.0f)
+                    atomicAdd(fused_adam.dc_reg_loss_out, block_sum);
+            }
+
         // Apply SH Adam for all threads so joint block-bounds reduction remains valid.
         // Also the single re-encode site for SH value quant.
         adam_step_row(sh0_grads, fused_adam.sh0, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
@@ -169,9 +270,9 @@ namespace fast_lfs::rasterization::kernels::backward {
             const float3 sh_mean = visible ? means[primitive_idx] : make_float3(0.0f, 0.0f, 0.0f);
             const float3 sh_cam = visible ? cam_position[0] : make_float3(0.0f, 0.0f, 0.0f);
             const float3 sh_gc = visible ? grad_color_helper[work_idx] : make_float3(0.0f, 0.0f, 0.0f);
-            apply_shN_grads_packed<ACTIVE_SH_BASES>(
+            apply_shN_grads_packed<ACTIVE_SH_BASES, !DISABLED_FEATURES>(
                 fused_adam, primitive_idx, sh_layout_slots,
-                sh_mean, sh_cam, sh_gc, visible);
+                sh_mean, sh_cam, sh_gc, visible, colour_reg_mask);
         }
         // sh0 / streamed shN Adam state is dead from here on (compiler can free it).
 
@@ -365,10 +466,11 @@ namespace fast_lfs::rasterization::kernels::backward {
                 (raw_scale.z < config::max_raw_scale) ? 2.0f * variance.z * dL_dvariance_z : 0.0f);
             const float3 clamped_scale_grad = clamp_grad3(dL_draw_scale);
             const uint scale_base = primitive_idx * 3;
-            scale_grads[0] = clamped_scale_grad.x + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base);
-            scale_grads[1] = clamped_scale_grad.y + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1);
-            scale_grads[2] = clamped_scale_grad.z + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2);
-            add_flatten_regularization_grads(fused_adam, fused_adam.scaling, scale_base, scale_grads);
+            scale_grads[0] = clamped_scale_grad.x + scale_regularization_grad<!DISABLED_FEATURES>(fused_adam, fused_adam.scaling, scale_base) + erank_grads[0];
+            scale_grads[1] = clamped_scale_grad.y + scale_regularization_grad<!DISABLED_FEATURES>(fused_adam, fused_adam.scaling, scale_base + 1) + erank_grads[1];
+            scale_grads[2] = clamped_scale_grad.z + scale_regularization_grad<!DISABLED_FEATURES>(fused_adam, fused_adam.scaling, scale_base + 2) + erank_grads[2];
+            if constexpr (!DISABLED_FEATURES)
+                add_flatten_regularization_grads(fused_adam, fused_adam.scaling, scale_base, scale_grads);
 
             // raw rotation gradient
             mat3x3 dL_drotation = {
@@ -433,26 +535,29 @@ namespace fast_lfs::rasterization::kernels::backward {
             }
         } // visible geometry
 
-        // Scale the applied mean step, not the raw gradient.
-        const bool far_mean_step =
-            fused_adam.per_splat_mean_step &&
-            mean_step_far_mask != nullptr &&
-            primitive_idx < static_cast<uint>(mean_step_far_mask_n) &&
-            mean_step_far_mask[primitive_idx];
-        // single call site: helper runs block-wide reductions; divergent duplicates deadlock
-        FusedAdamParam means_p = fused_adam.means;
-        if (far_mean_step && fused_adam.scaling.param != nullptr) {
-            const uint sb = primitive_idx * 3u;
-            if (sb + 2u < static_cast<uint>(fused_adam.scaling.n_elements)) {
-                const float* s = fused_adam.scaling.param + sb;
-                means_p.step_size *= lfs::training::per_splat_mean_step_ratio(
-                    s[0], s[1], s[2],
-                    fused_adam.mean_step_median_extent,
-                    fused_adam.mean_step_r_min,
-                    fused_adam.mean_step_r_max);
+        if constexpr (DISABLED_FEATURES) {
+            adam_step_row(mean_grads, fused_adam.means, primitive_idx, 3,
+                          fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        } else {
+            // Scale the applied mean step, not the raw gradient.
+            const bool far_mean_step = fused_adam.per_splat_mean_step &&
+                                       fused_adam.mean_step_far_mask != nullptr &&
+                                       primitive_idx < static_cast<uint>(fused_adam.mean_step_far_mask_n) &&
+                                       fused_adam.mean_step_far_mask[primitive_idx];
+            // single call site: helper runs block-wide reductions; divergent duplicates deadlock
+            FusedAdamParam means_p = fused_adam.means;
+            if (far_mean_step && fused_adam.scaling.param != nullptr) {
+                const uint sb = primitive_idx * 3u;
+                if (sb + 2u < static_cast<uint>(fused_adam.scaling.n_elements)) {
+                    const float* s = fused_adam.scaling.param + sb;
+                    means_p.step_size *= lfs::training::per_splat_mean_step_ratio(
+                        s[0], s[1], s[2],
+                        fused_adam.mean_step_median_extent);
+                }
             }
+            adam_step_row(mean_grads, means_p, primitive_idx, 3,
+                          fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         }
-        adam_step_row(mean_grads, means_p, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_row(rotation_grads, fused_adam.rotation, primitive_idx, 4, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_row(scale_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_row(opacity_grads, fused_adam.opacity, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);

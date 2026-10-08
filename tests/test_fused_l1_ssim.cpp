@@ -19,9 +19,27 @@
 #include <cmath>
 #include <cuda_runtime.h>
 #include <limits>
+#include <utility>
 
 using namespace lfs::core;
 using namespace lfs::training::kernels;
+
+namespace {
+    // Corrected-image gradient plus the raw-render gradient, as the trainer adds them into the render gradient.
+    template <typename Context>
+    Tensor combined_gradient(const DecoupledGradients& grads, const Context& ctx) {
+        auto combined = grads.grad_corrected.clone();
+        accumulate_decoupled_raw_gradient(decoupled_raw_gradient(ctx), combined);
+        return combined;
+    }
+
+    template <typename Context>
+    Tensor raw_gradient(const DecoupledGradients& grads, const Context& ctx) {
+        auto raw = Tensor::zeros(grads.grad_corrected.shape(), Device::CUDA);
+        accumulate_decoupled_raw_gradient(decoupled_raw_gradient(ctx), raw);
+        return raw;
+    }
+} // namespace
 
 class FusedL1SSIMTest : public ::testing::Test {
 protected:
@@ -531,6 +549,43 @@ TEST_F(MaskedFusedL1SSIMTest, SoftWeightsUseWeightedMeanNormalization) {
             static_cast<float>(weight_sum * C + lfs::training::kernels::SSIM_EPSILON));
 }
 
+TEST_F(MaskedFusedL1SSIMTest, BatchUsesRepeatedMaskNormalization) {
+    constexpr int N = 2;
+    constexpr int C = 3;
+    constexpr int H = 17;
+    constexpr int W = 19;
+    constexpr float ssim_weight = 0.3f;
+    const auto prediction = Tensor::rand({N, C, H, W}, Device::CUDA) * 0.8f + 0.1f;
+    const auto target = Tensor::rand({N, C, H, W}, Device::CUDA) * 0.8f + 0.1f;
+    auto mask = Tensor::ones({H, W}, Device::CUDA);
+    mask.slice(0, 0, 4).zero_();
+    mask.slice(1, W - 3, W).fill_(0.25f);
+
+    MaskedFusedL1SSIMWorkspace workspace;
+    const auto [loss, ctx] =
+        masked_fused_l1_ssim_forward(prediction, target, mask, ssim_weight, workspace);
+    const auto gradient = masked_fused_l1_ssim_backward(ctx, workspace);
+    const auto [reference_loss, reference_gradient] =
+        compute_reference_masked_loss(prediction, target, mask, ssim_weight);
+
+    EXPECT_NEAR(loss.item<float>(), reference_loss, 2.0e-3f);
+    const auto difference = (gradient - reference_gradient).abs();
+    EXPECT_LT(difference.max().item<float>(), 2.0e-3f);
+    EXPECT_LT(difference.mean().item<float>(), 2.0e-5f);
+
+    MaskedDecoupledFusedL1SSIMWorkspace decoupled_workspace;
+    const auto [decoupled_loss, decoupled_ctx] =
+        masked_decoupled_fused_l1_ssim_forward(
+            prediction, prediction, target, mask, ssim_weight, decoupled_workspace);
+    const auto decoupled_gradients =
+        masked_decoupled_fused_l1_ssim_backward(decoupled_ctx, decoupled_workspace);
+    const auto decoupled_gradient = combined_gradient(decoupled_gradients, decoupled_ctx);
+    EXPECT_NEAR(decoupled_loss.item<float>(), reference_loss, 2.0e-3f);
+    const auto decoupled_difference = (decoupled_gradient - reference_gradient).abs();
+    EXPECT_LT(decoupled_difference.max().item<float>(), 2.0e-3f);
+    EXPECT_LT(decoupled_difference.mean().item<float>(), 2.0e-5f);
+}
+
 TEST_F(MaskedFusedL1SSIMTest, AllOneWeightMatchesUnmaskedTinyImage) {
     constexpr int N = 1;
     constexpr int C = 3;
@@ -769,13 +824,73 @@ TEST_F(FusedL1SSIMTest, DecoupledMatchesStandardWhenCorrectedEqualsRaw) {
     auto [decoupled_loss, decoupled_ctx] =
         decoupled_fused_l1_ssim_forward(corrected, raw, gt, ssim_weight, decoupled_workspace, true);
     auto decoupled_grads = decoupled_fused_l1_ssim_backward(decoupled_ctx, decoupled_workspace);
-    auto combined_grad = decoupled_grads.grad_corrected + decoupled_grads.grad_raw;
+    auto combined_grad = combined_gradient(decoupled_grads, decoupled_ctx);
 
     EXPECT_NEAR(decoupled_loss.item<float>(), standard_loss.item<float>(), 1e-4f);
 
     auto diff = (combined_grad - standard_grad).abs();
     EXPECT_LT(diff.max().item<float>(), 1e-3f);
     EXPECT_LT(diff.mean().item<float>(), 1e-5f);
+}
+
+TEST_F(FusedL1SSIMTest, ThinImagesMatchFiniteDifferenceForFusedAndDecoupled) {
+    constexpr int C = 3;
+    constexpr float ssim_weight = 0.35f;
+    constexpr float epsilon = 1.0e-2f;
+    // The L1 term has a kink where a pixel equals its target. A finite difference across it disagrees with the
+    // analytic gradient, so every pixel stays 0.2 from its target, beyond any epsilon step, and the draw is seeded.
+    Tensor::manual_seed(2574);
+    for (const auto& [H, W] : {std::pair{8, 40}, std::pair{40, 8}}) {
+        const TensorShape dims{
+            size_t{1}, static_cast<size_t>(C), static_cast<size_t>(H), static_cast<size_t>(W)};
+        auto raw = Tensor::rand(dims, Device::CUDA) * 0.4f + 0.3f;
+        const auto side = Tensor::rand(dims, Device::CUDA).gt(0.5f).to(DataType::Float32) * 2.0f - 1.0f;
+        auto target = raw + side * 0.2f;
+        auto direction = Tensor::randn(dims, Device::CUDA);
+
+        FusedL1SSIMWorkspace fused_workspace;
+        auto [fused_loss, fused_ctx] =
+            fused_l1_ssim_forward(raw, target, ssim_weight, fused_workspace, true);
+        const auto fused_grad = fused_l1_ssim_backward(fused_ctx, fused_workspace);
+        const float fused_analytic = (fused_grad * direction).sum().item<float>();
+        const auto [fused_plus, ignored_plus_ctx] = fused_l1_ssim_forward(
+            raw + direction * epsilon, target, ssim_weight, fused_workspace, true);
+        (void)ignored_plus_ctx;
+        const float fused_plus_value = fused_plus.item<float>();
+        const auto [fused_minus, ignored_minus_ctx] = fused_l1_ssim_forward(
+            raw - direction * epsilon, target, ssim_weight, fused_workspace, true);
+        (void)ignored_minus_ctx;
+        const float fused_minus_value = fused_minus.item<float>();
+        const float fused_numeric =
+            (fused_plus_value - fused_minus_value) / (2.0f * epsilon);
+        EXPECT_NEAR(fused_analytic, fused_numeric, 4.0e-3f)
+            << "fused thin image " << H << "x" << W;
+
+        DecoupledFusedL1SSIMWorkspace decoupled_workspace;
+        auto [decoupled_loss, decoupled_ctx] = decoupled_fused_l1_ssim_forward(
+            raw, raw, target, ssim_weight, decoupled_workspace, true);
+        const auto decoupled_grads =
+            decoupled_fused_l1_ssim_backward(decoupled_ctx, decoupled_workspace);
+        const auto decoupled_grad = combined_gradient(decoupled_grads, decoupled_ctx);
+        const float decoupled_analytic =
+            (decoupled_grad * direction).sum().item<float>();
+        const auto [decoupled_plus, ignored_dec_plus_ctx] = decoupled_fused_l1_ssim_forward(
+            raw + direction * epsilon, raw + direction * epsilon, target,
+            ssim_weight, decoupled_workspace, true);
+        (void)ignored_dec_plus_ctx;
+        const float decoupled_plus_value = decoupled_plus.item<float>();
+        const auto [decoupled_minus, ignored_dec_minus_ctx] = decoupled_fused_l1_ssim_forward(
+            raw - direction * epsilon, raw - direction * epsilon, target,
+            ssim_weight, decoupled_workspace, true);
+        (void)ignored_dec_minus_ctx;
+        const float decoupled_minus_value = decoupled_minus.item<float>();
+        const float decoupled_numeric =
+            (decoupled_plus_value - decoupled_minus_value) / (2.0f * epsilon);
+        EXPECT_NEAR(decoupled_analytic, decoupled_numeric, 4.0e-3f)
+            << "decoupled thin image " << H << "x" << W;
+        (void)fused_loss;
+        (void)decoupled_loss;
+    }
 }
 
 TEST_F(MaskedFusedL1SSIMTest, DecoupledMatchesStandardWhenCorrectedEqualsRaw) {
@@ -797,7 +912,7 @@ TEST_F(MaskedFusedL1SSIMTest, DecoupledMatchesStandardWhenCorrectedEqualsRaw) {
         masked_decoupled_fused_l1_ssim_forward(corrected, raw, gt, mask, ssim_weight, decoupled_workspace);
     auto decoupled_grads =
         masked_decoupled_fused_l1_ssim_backward(decoupled_ctx, decoupled_workspace);
-    auto combined_grad = decoupled_grads.grad_corrected + decoupled_grads.grad_raw;
+    auto combined_grad = combined_gradient(decoupled_grads, decoupled_ctx);
 
     EXPECT_NEAR(decoupled_loss.item<float>(), standard_loss.item<float>(), 1e-4f);
 
@@ -824,7 +939,7 @@ TEST_F(MaskedFusedL1SSIMTest, DecoupledAllZeroWeightReturnsZeroGradients) {
 
     EXPECT_LT(loss.item<float>(), 1.0e-5f);
     EXPECT_EQ(gradients.grad_corrected.abs().max().item<float>(), 0.0f);
-    EXPECT_EQ(gradients.grad_raw.abs().max().item<float>(), 0.0f);
+    EXPECT_EQ(raw_gradient(gradients, ctx).abs().max().item<float>(), 0.0f);
 }
 
 TEST_F(FusedL1SSIMTest, DecoupledRoutesContrastStructureGradientToRawBranch) {
@@ -841,5 +956,26 @@ TEST_F(FusedL1SSIMTest, DecoupledRoutesContrastStructureGradientToRawBranch) {
 
     EXPECT_GT(loss.item<float>(), 0.0f);
     EXPECT_LT(grads.grad_corrected.abs().max().item<float>(), 1e-4f);
-    EXPECT_GT(grads.grad_raw.abs().max().item<float>(), 1e-4f);
+    EXPECT_GT(raw_gradient(grads, ctx).abs().max().item<float>(), 1e-4f);
+}
+
+// Fails if the raw-render gradient overwrites the gradient it is added to instead of accumulating into it.
+TEST_F(FusedL1SSIMTest, DecoupledRawGradientAccumulatesIntoRenderGradient) {
+    const auto corrected = Tensor::rand({1, 3, 48, 64}, Device::CUDA);
+    const auto raw = Tensor::rand({1, 3, 48, 64}, Device::CUDA);
+    const auto gt = Tensor::rand({1, 3, 48, 64}, Device::CUDA);
+    const auto mask = Tensor::rand({48, 64}, Device::CUDA);
+
+    DecoupledFusedL1SSIMWorkspace workspace;
+    auto [loss, ctx] = decoupled_fused_l1_ssim_forward(corrected, raw, gt, 0.2f, workspace, true);
+    const auto grads = decoupled_fused_l1_ssim_backward(ctx, workspace);
+    EXPECT_EQ(combined_gradient(grads, ctx).cpu().to_vector(),
+              (grads.grad_corrected + raw_gradient(grads, ctx)).cpu().to_vector());
+
+    MaskedDecoupledFusedL1SSIMWorkspace masked_workspace;
+    auto [masked_loss, masked_ctx] =
+        masked_decoupled_fused_l1_ssim_forward(corrected, raw, gt, mask, 0.2f, masked_workspace);
+    const auto masked_grads = masked_decoupled_fused_l1_ssim_backward(masked_ctx, masked_workspace);
+    EXPECT_EQ(combined_gradient(masked_grads, masked_ctx).cpu().to_vector(),
+              (masked_grads.grad_corrected + raw_gradient(masked_grads, masked_ctx)).cpu().to_vector());
 }

@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "python/python_compat.hpp"
+#include "visualizer/rendering/passes/vulkan_split_view_pass.hpp"
+#include "visualizer/rendering/rendering_manager.hpp"
 #include <gtest/gtest.h>
 
 #include <torch/torch.h>
@@ -10,18 +12,23 @@
 #include "core/error_bus.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/control_boundary.hpp"
+#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
+#include "gui/line_renderer.hpp"
 #include "io/loader.hpp"
 #include "python/gil.hpp"
 #include "python/python_buffer_analysis.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/screen_overlay_renderer.hpp"
 #include "training/control/command_api.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/visualizer.hpp"
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 #include <array>
 #include <atomic>
@@ -123,7 +130,14 @@ namespace {
             return std::unexpected("not implemented");
         }
         void consolidateModels() override {}
-        std::expected<void, std::string> clearScene() override { return {}; }
+        std::expected<void, std::string> clearScene() override {
+            ++clear_calls;
+            if (!clear_error.empty())
+                return std::unexpected(clear_error);
+            return {};
+        }
+        int clear_calls = 0;
+        std::string clear_error;
         lfs::core::Scene& getScene() override { return scene_; }
         lfs::vis::SceneManager* getSceneManager() override { return nullptr; }
         lfs::vis::RenderingManager* getRenderingManager() override { return nullptr; }
@@ -826,6 +840,27 @@ TEST_F(PythonIntegrationTest, CleanPythonCodeRepairsUnindentedFunctionBlock) {
     EXPECT_NE(result.code.find("    return safe or \"splat\""), std::string::npos);
 }
 
+// Catches Format commenting out valid leading statements that the preamble heuristic does not recognize.
+TEST_F(PythonIntegrationTest, FormatPythonCodeKeepsLeadingStatements) {
+    const auto result = lfs::python::format_python_code("x=[1,2 ,3];print( 'a' ,x)\nfirst, second = 1, 2\n");
+
+    if (formatterUnavailable(result)) {
+        GTEST_SKIP() << result.error;
+    }
+    ASSERT_TRUE(result.success) << result.error;
+    EXPECT_EQ(result.code, "x = [1, 2, 3]\nprint(\"a\", x)\nfirst, second = 1, 2\n");
+}
+
+TEST_F(PythonIntegrationTest, CleanPythonCodeCommentsProsePreambleButKeepsAssignment) {
+    const auto result = lfs::python::clean_python_code("Here is the script:\nscene = lf.get_scene()\n");
+
+    if (formatterUnavailable(result)) {
+        GTEST_SKIP() << result.error;
+    }
+    ASSERT_TRUE(result.success) << result.error;
+    EXPECT_EQ(result.code, "# Here is the script:\nscene = lf.get_scene()\n");
+}
+
 TEST_F(PythonIntegrationTest, FormatPythonCodeReportsSyntaxErrorWithoutUnexpectedResultFallback) {
     const auto result = lfs::python::format_python_code("import os\nif True print('x')\n");
 
@@ -920,6 +955,38 @@ result_values = [float(top), float(bottom)]
     EXPECT_EQ(result.shape[0], 2);
     ASSERT_EQ(result.values.size(), static_cast<size_t>(2));
     EXPECT_GT(result.values[0], result.values[1]);
+}
+
+TEST_F(PythonIntegrationTest, CaptureSplitComparisonPreservesPresentedOrientation) {
+    for (const bool flip_y : {false, true}) {
+        const ScopedCaptureViewportRenderCallback callback([flip_y]() -> std::optional<lfs::vis::ViewportRender> {
+            constexpr size_t width = 64;
+            constexpr size_t height = 8;
+            std::vector<float> pixels(3 * width * height, 0.0f);
+            for (size_t x = 0; x < width; ++x) {
+                pixels[(flip_y ? height - 1 : 0) * width + x] = 1.0f;
+            }
+            const auto image = std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::from_vector(
+                pixels, {3, height, width}, lfs::core::Device::CPU));
+            lfs::vis::VulkanSplitViewParams params;
+            params.left.image = params.right.image = image;
+            params.left.flip_y = params.right.flip_y = flip_y;
+            params.content_rect = {0, 0, width, height};
+            return lfs::vis::ViewportRender{
+                lfs::vis::RenderingManager::composeSplitViewCpu(params, {width, height}), nullptr};
+        });
+        const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+image = lf.capture_viewport().image.cpu().tolist()
+result_shape = (4,)
+result_values = [image[0][0][0], image[-1][0][0], image[0][-1][0], image[-1][-1][0]]
+)PY");
+        ASSERT_EQ(result.values.size(), 4u);
+        EXPECT_FLOAT_EQ(result.values[0], 1.0f);
+        EXPECT_FLOAT_EQ(result.values[1], 0.0f);
+        EXPECT_FLOAT_EQ(result.values[2], 1.0f);
+        EXPECT_FLOAT_EQ(result.values[3], 0.0f);
+    }
 }
 
 TEST_F(PythonIntegrationTest, CaptureViewportPostsToViewerThreadWhenOffThread) {
@@ -1080,6 +1147,58 @@ except RuntimeError:
     ASSERT_EQ(result.values.size(), 1u);
     EXPECT_FLOAT_EQ(result.values[0], 1.0F);
     EXPECT_EQ(viewer.poll_calls, 0);
+}
+
+TEST_F(PythonIntegrationTest, SceneClearPreservesTypedShutdownError) {
+    for (const bool inline_call : {false, true}) {
+        TestVisualizer viewer;
+        viewer.on_viewer_thread = inline_call;
+        viewer.accepts_posted_work = false;
+        const ScopedVisualizer scoped_viewer(&viewer);
+        const lfs::python::SceneContextGuard scene_guard(&viewer.getScene());
+        const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+result_shape = (2,)
+result_values = []
+for clear in (lf.clear_scene, lf.get_scene().clear):
+    try:
+        clear()
+        result_values.append(0.0)
+    except lf.CancelledError as error:
+        assert error.code == 'Cancelled'
+        assert error.domain == 'Python'
+        result_values.append(1.0)
+)PY");
+        EXPECT_EQ(result.values, (std::vector<float>{1.0F, 1.0F}));
+        EXPECT_EQ(viewer.clear_calls, 0);
+    }
+}
+
+TEST_F(PythonIntegrationTest, SceneClearPreservesLegacyFailureContext) {
+    for (const bool inline_call : {false, true}) {
+        TestVisualizer viewer;
+        viewer.on_viewer_thread = inline_call;
+        viewer.clear_error = "Scene is busy";
+        const ScopedVisualizer scoped_viewer(&viewer);
+        const lfs::python::SceneContextGuard scene_guard(&viewer.getScene());
+        const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+result_shape = (2,)
+result_values = []
+for clear in (lf.clear_scene, lf.get_scene().clear):
+    try:
+        clear()
+        result_values.append(0.0)
+    except lf.Error as error:
+        assert error.code == 'FailedPrecondition'
+        assert error.domain == 'Rendering'
+        assert str(error) == 'Scene is busy'
+        assert error.context
+        result_values.append(1.0)
+)PY");
+        EXPECT_EQ(result.values, (std::vector<float>{1.0F, 1.0F}));
+        EXPECT_EQ(viewer.clear_calls, 2);
+    }
 }
 
 TEST_F(PythonIntegrationTest, ProjectLicenseRoundTripsThroughBinding) {
@@ -1455,3 +1574,164 @@ TEST_F(PythonIntegrationTest, ConcurrentEnsureInitializedLatchesOnceUnderRace) {
 // NOTE: Tests that actually execute Python scripts require the lichtfeld module
 // to be importable, which depends on the CommandCenter and training infrastructure.
 // These are better tested via integration tests (running training with --python-script).
+
+TEST_F(PythonIntegrationTest, LoadConfirmationLegacyCallbackOpensDialog) {
+    const lfs::python::GilAcquire gil;
+    std::unique_ptr<PyObject, decltype(&Py_DecRef)> globals(PyDict_New(), Py_DecRef);
+    ASSERT_NE(globals, nullptr);
+    PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins());
+    const auto run = [&](const char* code) {
+        auto* result = PyRun_String(code, Py_file_input, globals.get(), globals.get());
+        if (!result)
+            ADD_FAILURE() << consumePythonError();
+        const bool success = result != nullptr;
+        Py_XDECREF(result);
+        return success;
+    };
+    ASSERT_TRUE(run(R"PY(
+import lichtfeld as lf
+calls = []
+dialogs = []
+original_dialog = lf.ui.confirm_dialog
+lf.ui.confirm_dialog = lambda *args: dialogs.append(args)
+def callback(paths, is_dataset, replace):
+    calls.append((paths, is_dataset, replace))
+    lf.ui.confirm_dialog('Load files', 'Confirm replacement', ['Load', 'Cancel'])
+lf.ui.on_show_load_file_confirmation(callback)
+)PY"));
+    lfs::core::events::cmd::ShowLoadFileConfirmation{
+        .paths = {"first.ply", "second.ply"},
+        .is_dataset = false,
+        .replace = true,
+        .user_batch = true}
+        .emit();
+    EXPECT_TRUE(run(R"PY(
+try:
+    assert calls == [(['first.ply', 'second.ply'], False, True)], calls
+    assert dialogs == [('Load files', 'Confirm replacement', ['Load', 'Cancel'])], dialogs
+finally:
+    lf.ui.on_show_load_file_confirmation(lambda paths, is_dataset, replace: None)
+    lf.ui.confirm_dialog = original_dialog
+)PY"));
+}
+
+TEST_F(PythonIntegrationTest, LoadConfirmationBatchCallbackRetainsProvenance) {
+    const lfs::python::GilAcquire gil;
+    std::unique_ptr<PyObject, decltype(&Py_DecRef)> globals(PyDict_New(), Py_DecRef);
+    ASSERT_NE(globals, nullptr);
+    PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins());
+    const auto run = [&](const char* code) {
+        auto* result = PyRun_String(code, Py_file_input, globals.get(), globals.get());
+        if (!result)
+            ADD_FAILURE() << consumePythonError();
+        const bool success = result != nullptr;
+        Py_XDECREF(result);
+        return success;
+    };
+    ASSERT_TRUE(run(R"PY(
+import lichtfeld as lf
+calls = []
+lf.ui.on_show_load_file_confirmation(lambda *args: calls.append(('old', args)))
+def callback(paths, is_dataset, replace, user_batch):
+    calls.append((paths, is_dataset, replace, user_batch))
+lf.ui.on_show_load_file_confirmation_with_batch(callback)
+lf.ui.on_show_load_file_confirmation_with_batch(callback)
+)PY"));
+    lfs::core::events::cmd::ShowLoadFileConfirmation{
+        .paths = {"first.ply", "second.ply"},
+        .is_dataset = false,
+        .replace = true,
+        .user_batch = true}
+        .emit();
+    EXPECT_TRUE(run(R"PY(
+try:
+    assert calls == [(['first.ply', 'second.ply'], False, True, True)], calls
+finally:
+    lf.ui.on_show_load_file_confirmation_with_batch(lambda paths, is_dataset, replace, user_batch: None)
+)PY"));
+}
+
+TEST_F(PythonIntegrationTest, CustomGizmoOverlayDispatchesPerViewAndRetainsInstance) {
+    const lfs::python::GilAcquire gil;
+    std::unique_ptr<PyObject, decltype(&Py_DecRef)> globals(PyDict_New(), Py_DecRef);
+    PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins());
+    const auto run = [&](const char* code) {
+        auto* result = PyRun_String(code, Py_file_input, globals.get(), globals.get());
+        if (!result)
+            ADD_FAILURE() << consumePythonError();
+        const bool success = result != nullptr;
+        Py_XDECREF(result);
+        return success;
+    };
+    ASSERT_TRUE(run(R"PY(
+import lichtfeld as lf
+calls = []
+instances = []
+class CustomOverlay:
+    gizmo_id = "test.custom.overlay"
+    enabled = True
+    def __init__(self):
+        self.frames = 0
+        instances.append(self)
+    @classmethod
+    def poll(cls, ctx):
+        return cls.enabled
+    def draw(self, ctx):
+        self.frames += 1
+        point = ctx.world_to_screen((0, 0, 0))
+        calls.append((self.frames, point, ctx.camera_position, ctx.camera_forward,
+                      ctx.screen_to_world_ray(point)))
+        ctx.draw_line_3d((0, 0, 0), (1, 0, 0), (1, 0, 0, 1), 2)
+        ctx.draw_filled_circle(point, 4, (0, 1, 0, 1))
+lf.register_gizmo(CustomOverlay)
+)PY"));
+    EXPECT_TRUE(lfs::python::has_viewport_draw_handlers());
+    const glm::mat4 proj = glm::perspective(glm::radians(60.0f), 2.0f, 0.1f, 100.0f);
+    const glm::vec2 size(400, 200);
+    lfs::vis::gui::NativeOverlayDrawList draw_list;
+    lfs::rendering::ScreenOverlayRenderer overlay;
+    for (int i = 0; i < 2; ++i) {
+        const glm::vec2 pos(100 + i * 400, 50);
+        const glm::vec3 camera(i == 0 ? 0 : 5, 0, i == 0 ? 5 : 0);
+        const glm::vec3 forward = glm::normalize(-camera);
+        const glm::mat4 view = glm::lookAt(camera, glm::vec3(0), glm::vec3(0, 1, 0));
+        overlay.beginFrame();
+        lfs::python::invoke_viewport_overlay(glm::value_ptr(view), glm::value_ptr(proj),
+                                             glm::value_ptr(pos), glm::value_ptr(size),
+                                             glm::value_ptr(camera), glm::value_ptr(forward),
+                                             &overlay, &draw_list);
+        overlay.endFrame();
+        const auto commands = overlay.consumeCommands();
+        EXPECT_EQ(commands.size(), 2u);
+        for (const auto& command : commands) {
+            EXPECT_NEAR(command.p0.x, pos.x + size.x / 2, 0.001f);
+            EXPECT_NEAR(command.p0.y, pos.y + size.y / 2, 0.001f);
+            EXPECT_TRUE(command.clip.has_value());
+            if (command.clip) {
+                EXPECT_EQ(command.clip->min, pos);
+                EXPECT_EQ(command.clip->max, pos + size);
+            }
+        }
+    }
+    EXPECT_TRUE(run(R"PY(
+assert len(instances) == 1, len(instances)
+assert [c[0] for c in calls] == [1, 2], calls
+for c, point, camera, forward in zip(calls, [(300, 150), (700, 150)],
+                                    [(0, 0, 5), (5, 0, 0)], [(0, 0, -1), (-1, 0, 0)]):
+    for got, want in zip(c[1:], [point, camera, forward, forward]):
+        assert all(abs(a-b) < 0.001 for a, b in zip(got, want)), (got, want)
+)PY"));
+    EXPECT_TRUE(run("CustomOverlay.enabled = False"));
+    const glm::mat4 view(1);
+    const glm::vec2 pos(0);
+    const glm::vec3 camera(0), forward(0, 0, -1);
+    overlay.beginFrame();
+    lfs::python::invoke_viewport_overlay(glm::value_ptr(view), glm::value_ptr(proj),
+                                         glm::value_ptr(pos), glm::value_ptr(size),
+                                         glm::value_ptr(camera), glm::value_ptr(forward),
+                                         &overlay, &draw_list);
+    EXPECT_TRUE(overlay.consumeCommands().empty());
+    EXPECT_TRUE(run("lf.unregister_gizmo(CustomOverlay.gizmo_id)"));
+    EXPECT_FALSE(lfs::python::has_viewport_draw_handlers());
+    overlay.endFrame();
+}

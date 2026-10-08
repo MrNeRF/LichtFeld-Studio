@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 #include "render_pass.hpp"
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -17,6 +18,8 @@ namespace lfs::vis {
         ViewportArtifactService() = default;
         ~ViewportArtifactService();
 
+        ViewportArtifactService(ViewportArtifactService&&) noexcept = default;
+        ViewportArtifactService& operator=(ViewportArtifactService&&) noexcept = default;
         ViewportArtifactService(const ViewportArtifactService&) = delete;
         ViewportArtifactService& operator=(const ViewportArtifactService&) = delete;
 
@@ -52,10 +55,15 @@ namespace lfs::vis {
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> resolveLazyCapture();
         [[nodiscard]] bool hasLazyCapture() const { return static_cast<bool>(lazy_capture_); }
 
+        using DepthSampleFn = std::function<float(int, int, std::optional<SplitViewPanelId>, bool)>;
+        [[nodiscard]] bool hasDepthSampler() const { return static_cast<bool>(depth_sampler_); }
+        void setDepthSampler(DepthSampleFn fn) { depth_sampler_ = std::move(fn); }
+
         [[nodiscard]] float sampleLinearDepthAt(int x,
                                                 int y,
                                                 const glm::ivec2& fallback_viewport_size,
-                                                std::optional<SplitViewPanelId> panel = std::nullopt) const;
+                                                std::optional<SplitViewPanelId> panel = std::nullopt,
+                                                bool nonblocking = false) const;
 
     private:
         void invalidateCapture();
@@ -68,6 +76,7 @@ namespace lfs::vis {
         uint64_t captured_artifact_generation_ = 0;
         uint64_t lazy_captured_artifact_generation_ = 0;
         LazyCaptureFn lazy_capture_;
+        DepthSampleFn depth_sampler_;
     };
 
 } // namespace lfs::vis

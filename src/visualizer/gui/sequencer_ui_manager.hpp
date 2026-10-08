@@ -18,6 +18,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <core/error.hpp>
 #include <core/export.hpp>
 #include <cstdint>
 #include <deque>
@@ -37,6 +38,7 @@ namespace lfs::vis::gui {
 
 namespace lfs::vis {
     class VisualizerImpl;
+    class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
 
     namespace gui {
 
@@ -56,6 +58,8 @@ namespace lfs::vis {
             void destroyGraphicsResources();
             void tickPlaybackBeforeSceneRender();
             [[nodiscard]] bool scrubToTime(float time, bool update_camera);
+            lfs::Result<void> loadPlySequenceFromDirectory(
+                const std::filesystem::path& directory, float fps = 0.0f);
 
             [[nodiscard]] SequencerController& controller() { return controller_; }
             [[nodiscard]] const SequencerController& controller() const { return controller_; }
@@ -63,7 +67,7 @@ namespace lfs::vis {
             void setFloating(bool floating);
             [[nodiscard]] bool blocksPointer(double x, double y) const;
             [[nodiscard]] bool blocksKeyboard() const;
-            [[nodiscard]] bool needsAnimationFrame() const;
+            [[nodiscard]] bool needsAnimationFrame(bool ui_visible = true) const;
             [[nodiscard]] float preferredFloatingHeight() const;
             // Serialized status of the active PLY sequence (empty when inactive).
             // Used by MCP tooling to verify playback/scrub behaviour.
@@ -73,13 +77,15 @@ namespace lfs::vis {
             void setTimelineView(float zoom, float pan);
 
         private:
+            friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
             void renderSequencerPanel(const UIContext& ctx, const ViewportLayout& viewport,
                                       float panel_x, float panel_y, float panel_width,
                                       float panel_height, const PanelInputState& panel_input);
             void renderCameraPath(const ViewportLayout& viewport);
             void renderKeyframeGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void handleOverlayActions();
-            void loadPlySequenceFromDirectory(const std::filesystem::path& directory);
+            void recordKeyframeAddition(std::optional<sequencer::Keyframe> before,
+                                        sequencer::KeyframeId id, float duration_before);
             void applyPlySequenceFrame();
             void startPlySequenceStreaming(std::vector<std::filesystem::path> paths,
                                            lfs::io::SplatTensorAllocator allocator);
@@ -132,6 +138,7 @@ namespace lfs::vis {
             VisualizerImpl* viewer_;
             panels::SequencerUIState& ui_state_;
             SequencerController controller_;
+            std::shared_ptr<void> history_lifetime_ = std::make_shared<int>(0);
             std::unique_ptr<RmlSequencerPanel> panel_;
             std::unique_ptr<gui::RmlSequencerOverlay> overlay_;
             std::unique_ptr<KeyframeSceneSync> scene_sync_;

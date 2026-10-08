@@ -9,6 +9,7 @@
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/pinned_memory_allocator.hpp"
 #include "core/tensor.hpp"
 #include "cuda/image_format_kernels.cuh"
 #include "diagnostics/vram_profiler.hpp"
@@ -695,11 +696,28 @@ namespace lfs::io {
             bool active_ = false;
         };
 
+        std::atomic<size_t> live_loaders{0};
+
     } // anonymous namespace
 
     struct NvCodecImageLoader::Impl {
         Impl() {
             vram_account.set_owner(this);
+        }
+
+        // nvImageCodec otherwise frees its pinned staging with cudaFreeHost, which waits for the whole
+        // device; the caching allocator keeps the block and fences its reuse on the stream instead.
+        static int pinned_malloc(void*, void** ptr, const size_t size, cudaStream_t) {
+            if (!ptr || size == 0)
+                return 1;
+            *ptr = lfs::core::PinnedMemoryAllocator::instance().allocate(size);
+            return *ptr ? 0 : 1;
+        }
+
+        static int pinned_free(void*, void* ptr, size_t, cudaStream_t stream) {
+            if (ptr)
+                lfs::core::PinnedMemoryAllocator::instance().deallocate(ptr, stream);
+            return 0;
         }
 
         static int device_malloc(void* context, void** ptr, const size_t size, cudaStream_t stream) {
@@ -820,6 +838,13 @@ namespace lfs::io {
         bool sentinel_test_skip_cuda_retry = false;
         cudaMemPool_t decode_pool = nullptr;
         nvimgcodecDeviceAllocator_t device_allocator{};
+        nvimgcodecPinnedAllocator_t pinned_allocator{NVIMGCODEC_STRUCTURE_TYPE_PINNED_ALLOCATOR,
+                                                     sizeof(nvimgcodecPinnedAllocator_t),
+                                                     nullptr,
+                                                     &Impl::pinned_malloc,
+                                                     &Impl::pinned_free,
+                                                     nullptr,
+                                                     0};
         size_t device_budget_bytes = 0;
         std::atomic<size_t> device_bytes_in_use{0};
         NvCodecVramAccount vram_account;
@@ -843,6 +868,7 @@ namespace lfs::io {
             retry_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_EXECUTION_PARAMS;
             retry_params.struct_size = sizeof(nvimgcodecExecutionParams_t);
             retry_params.device_allocator = decode_pool ? &device_allocator : nullptr;
+            retry_params.pinned_allocator = &pinned_allocator;
             retry_params.max_num_cpu_threads = max_num_cpu_threads;
             retry_params.device_id = device_id;
             retry_params.num_backends = 1;
@@ -997,9 +1023,6 @@ namespace lfs::io {
     NvCodecImageLoader::NvCodecImageLoader(const Options& options)
         : impl_(std::make_unique<Impl>()) {
 
-        LOG_INFO("[NvCodecImageLoader] Initializing: device={}, pool={}, fallback={}",
-                 options.device_id, options.decoder_pool_size, options.enable_fallback);
-
         impl_->device_id = options.device_id;
         impl_->max_num_cpu_threads = options.max_num_cpu_threads;
         impl_->fallback_enabled = options.enable_fallback;
@@ -1054,11 +1077,11 @@ namespace lfs::io {
             sizeof(nvimgcodecExecutionParams_t),
             nullptr,
             impl_->decode_pool ? &impl_->device_allocator : nullptr,
-            nullptr,
+            &impl_->pinned_allocator,
             options.max_num_cpu_threads,
             nullptr,
             options.device_id,
-            0,
+            options.create_eagerly ? 1 : 0,
             0,
             0,
             nullptr};
@@ -1075,8 +1098,6 @@ namespace lfs::io {
             }
         }
 
-        LOG_INFO("[NvCodecImageLoader] {} decoders ready", pool_size);
-
         status = nvimgcodecEncoderCreate(impl_->instance, &impl_->encoder, &exec_params, nullptr);
         if (status != NVIMGCODEC_STATUS_SUCCESS) {
             LOG_WARN("[NvCodecImageLoader] Encoder unavailable: {}", nvimgcodec_status_to_string(status));
@@ -1084,17 +1105,23 @@ namespace lfs::io {
         }
 
         const auto init_vram_after = cuda_usage_snapshot_now();
-        if (init_vram_before.total_valid && init_vram_after.total_valid &&
+        // An eager build runs beside other GPU work, so its device-wide delta is not the loader's own.
+        if (!options.create_eagerly && init_vram_before.total_valid && init_vram_after.total_valid &&
             init_vram_after.total_used > init_vram_before.total_used) {
             const auto baseline_bytes =
                 NvCodecVramAccount::delta_bytes(init_vram_before, init_vram_after);
             impl_->vram_account.set_baseline_bytes(baseline_bytes);
-            LOG_INFO("[NvCodecImageLoader] Accounted nvImageCodec init VRAM: {:.1f} MiB",
-                     static_cast<double>(baseline_bytes.total()) / (1024.0 * 1024.0));
         }
+        live_loaders.fetch_add(1, std::memory_order_relaxed);
     }
 
-    NvCodecImageLoader::~NvCodecImageLoader() = default;
+    NvCodecImageLoader::~NvCodecImageLoader() {
+        live_loaders.fetch_sub(1, std::memory_order_relaxed);
+    }
+
+    size_t NvCodecImageLoader::live_count() {
+        return live_loaders.load(std::memory_order_relaxed);
+    }
 
     bool NvCodecImageLoader::is_available() {
         static std::once_flag once;
@@ -1104,17 +1131,6 @@ namespace lfs::io {
                 available = check_nvimgcodec_availability_with_diagnostics();
             } else {
                 available = check_nvimgcodec_availability_fast();
-            }
-            if (available) {
-                int device = 0;
-                cudaGetDevice(&device);
-                cudaDeviceProp prop{};
-                if (cudaGetDeviceProperties(&prop, device) == cudaSuccess) {
-                    LOG_INFO("[NvCodecImageLoader] decode backend=nvImageCodec batched=enabled device={} {} compute={}.{}",
-                             device, prop.name, prop.major, prop.minor);
-                } else {
-                    LOG_INFO("[NvCodecImageLoader] decode backend=nvImageCodec batched=enabled");
-                }
             }
         });
         return available;

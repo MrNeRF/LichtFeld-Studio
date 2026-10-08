@@ -49,9 +49,6 @@ namespace {
         EXPECT_EQ(
             loaded->autosave_quiet_seconds,
             2u);
-        EXPECT_EQ(
-            loaded->compaction_idle_seconds,
-            30u);
         EXPECT_TRUE(loaded->mru.empty());
         EXPECT_TRUE(loaded->dismissed_recovery.empty());
     }
@@ -115,7 +112,6 @@ namespace {
         settings.autosave_interval_seconds = 17;
         settings.autosave_dirty_epoch_threshold = 9;
         settings.autosave_quiet_seconds = 7;
-        settings.compaction_idle_seconds = 41;
         rememberProject(
             settings, first_uuid, old_path);
         rememberProject(

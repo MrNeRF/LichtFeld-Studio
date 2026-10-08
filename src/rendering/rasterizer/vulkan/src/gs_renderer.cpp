@@ -5,6 +5,7 @@
 #include "visible_mask.h"
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <csignal>
@@ -995,11 +996,6 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
             "Conditional rendering was enabled without both command entry points",
             LFS_SOURCE_SITE_CURRENT());
     }
-    LOG_INFO("vksplat depth waves: {} slots ({})",
-             supports_conditional_rendering_ ? HIGS_DEPTH_MAX_WAVES
-                                             : HIGS_DEPTH_MAX_WAVES_FALLBACK,
-             supports_conditional_rendering_ ? "conditional rendering"
-                                             : "VK_EXT_conditional_rendering unavailable");
 
     createComputePipeline(pipeline_projection_forward, spirv_paths.at("projection_forward"));
     createComputePipeline(pipeline_projection_forward_3dgut, spirv_paths.at("projection_forward_3dgut"));
@@ -2960,7 +2956,8 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     const _VulkanBuffer& selection_colors,
     const _VulkanBuffer& overlay_params,
     const bool overlays_active,
-    const bool predicate_waves) {
+    const bool predicate_waves,
+    const std::span<const uint32_t> exact_depth_sample_mask) {
     PerfTimer::Timer<PerfTimer::RasterizeForward> timer(this);
     DEVICE_GUARD;
 
@@ -3081,10 +3078,34 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     auto& partials = resizeDeviceBuffer(
         buffers.macro_partials,
         alloc_pool_batches * HIGS_MACRO_TILE_SIZE_TILES * HIGS_TILE_SIZE * 4u);
-    auto& active_mask = resize_scratch(buffers.macro_active_mask, alloc_max_batches);
+    const size_t replay_mask_words = (uniforms.mip_filter & 2u) != 0u
+                                         ? alloc_pool_batches * HIGS_REPLAY_MASK_WORDS_PER_BATCH
+                                         : 0u;
+    auto& active_mask = resize_scratch(buffers.macro_active_mask, alloc_max_batches + replay_mask_words);
     auto& pixel_state = resize_scratch(buffers.pixel_state, 4u * alloc_pixels);
     auto& pixel_depth = resize_scratch(buffers.pixel_depth, alloc_pixels);
     auto& n_contributors = resize_scratch(buffers.n_contributors, alloc_pixels);
+
+    const _VulkanBuffer* depth_sample_mask = &pixel_depth;
+    if (!exact_depth_sample_mask.empty()) {
+        const size_t expected_words = (_CEIL_DIV(size_t(uniforms.image_width), size_t{HIGS_DEPTH_SAMPLE_TILE_SIZE}) *
+                                           _CEIL_DIV(size_t(uniforms.image_height), size_t{HIGS_DEPTH_SAMPLE_TILE_SIZE}) +
+                                       31u) /
+                                      32u;
+        if (exact_depth_sample_mask.size() != expected_words) {
+            lfs::rendering::throw_renderer_contract("Exact depth mask dimensions do not match the viewport",
+                                                    LFS_SOURCE_SITE_CURRENT());
+        }
+        auto& mask = resizeDeviceBuffer(buffers.exact_depth_sample_mask, expected_words);
+        const lfs::rendering::vulkan::DeclaredAccess write{.buffer = &mask, .use = lfs::rendering::vulkan::BufferUse::TransferWrite};
+        planTransfer(std::span{&write, 1});
+        const auto bytes = std::as_bytes(exact_depth_sample_mask);
+        for (size_t offset = 0; offset < bytes.size(); offset += 65536u) {
+            vkCmdUpdateBuffer(command_buffer, mask.buffer, mask.offset + offset,
+                              std::min(size_t{65536u}, bytes.size() - offset), bytes.data() + offset);
+        }
+        depth_sample_mask = &mask;
+    }
 
     constexpr size_t kRadix = 256u;
     constexpr size_t kPartitionSize = 512u * 8u;
@@ -3139,6 +3160,8 @@ void VulkanGSRenderer::executeMacroDepthWaves(
             wave * sizeof(uint32_t));
 
         VulkanGSRendererUniforms wave_uniforms = uniforms;
+        if (!exact_depth_sample_mask.empty())
+            wave_uniforms.mip_filter |= 8u;
         wave_uniforms.depth_wave = static_cast<uint32_t>(wave);
         const auto record = bufferView(
             wave_buffer,
@@ -3249,6 +3272,8 @@ void VulkanGSRenderer::executeMacroDepthWaves(
                                      {overlay_params, BufferUse::ComputeRead},
                                      {buffers.orig_ids.deviceBuffer, BufferUse::ComputeRead}});
         }
+
+        compose_bindings.push_back({*depth_sample_mask, BufferUse::ComputeRead});
 
         for (size_t batch_wave = 0; batch_wave < batch_waves; ++batch_wave) {
             wave_uniforms.wave_base =
