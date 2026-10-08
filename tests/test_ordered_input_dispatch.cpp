@@ -573,6 +573,8 @@ namespace lfs::vis {
             gui::guiFocusState().reset();
         }
         gui::RmlUIManager& manager() { return gui_->rmlui_manager_; }
+        // GuiManager keeps these listeners alive until their Rml context is shut down.
+        gui::RmlViewportOverlay& viewportOverlay() { return gui_->rml_viewport_overlay_; }
         void dispatch(SDL_Event event) {
             event.common.timestamp = ++timestamp_;
             event.key.windowID = SDL_GetWindowID(window_->window_);
@@ -1506,7 +1508,7 @@ namespace lfs::vis {
 
 namespace lfs::vis {
     TEST_F(WindowInputDispatchTest, ExplicitOcclusionBlocksViewportPressAndItsRelease) {
-        gui::RmlViewportOverlay overlay;
+        auto& overlay = viewportOverlay();
         overlay.init(&manager());
         overlay.setViewportBounds({0, 0}, {400, 300}, {0, 0});
         auto* context = Rml::GetContext("viewport_overlay");
