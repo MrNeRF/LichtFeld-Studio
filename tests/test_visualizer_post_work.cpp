@@ -1648,6 +1648,70 @@ namespace lfs::vis {
         EXPECT_NE(training_plan.view_flags[0] & DirtyFlag::SPLATS, 0u);
     }
 
+    TEST_F(VisualizerImplResetTest, AddKeyframeJustPastClipEndPreservesEndpoint) {
+        VisualizerImpl viewer(projectOptions());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& timeline = controller.timeline();
+        const float end = timeline.clipDuration();
+        viewer.getViewport().camera.t = glm::vec3(1.0f, 2.0f, 3.0f);
+        core::events::cmd::SequencerAddKeyframe{.time = end}.emit();
+        ASSERT_EQ(timeline.realKeyframeCount(), 1u);
+        const auto endpoint = *timeline.getKeyframe(0);
+
+        for (const float offset : {0.001f, 0.002f, 0.020f}) {
+            SCOPED_TRACE(offset);
+            const auto count = timeline.realKeyframeCount();
+            const std::vector<sequencer::Keyframe> previous(timeline.keyframes().begin(), timeline.keyframes().end());
+            const glm::vec3 position(offset, 3.0f, 3.0f);
+            viewer.getViewport().camera.t = position;
+            core::events::cmd::SequencerAddKeyframe{.time = end + offset}.emit();
+            EXPECT_EQ(timeline.realKeyframeCount(), count + 1);
+            EXPECT_FLOAT_EQ(timeline.clipDuration(), end + offset);
+            for (const auto& key : previous) {
+                const auto* preserved = timeline.getKeyframeById(key.id);
+                ASSERT_NE(preserved, nullptr);
+                EXPECT_EQ(preserved->position, key.position);
+                EXPECT_EQ(preserved->rotation, key.rotation);
+                EXPECT_EQ(preserved->focal_length_mm, key.focal_length_mm);
+                EXPECT_EQ(preserved->time, key.time);
+            }
+            const auto& added = timeline.keyframes().back();
+            EXPECT_NE(added.id, endpoint.id);
+            EXPECT_FLOAT_EQ(added.time, end + offset);
+            EXPECT_EQ(added.position, position);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest, AddKeyframeWithinClipKeepsReplacementTolerance) {
+        VisualizerImpl viewer(projectOptions());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& timeline = controller.timeline();
+        const float end = timeline.clipDuration();
+        for (const float time : {2.0f, end}) {
+            core::events::cmd::SequencerAddKeyframe{.time = time}.emit();
+            const auto original = timeline.keyframes().back();
+            const auto count = timeline.realKeyframeCount();
+            for (const float offset : {-0.003f, -0.001f, 0.0f}) {
+                SCOPED_TRACE(time + offset);
+                const glm::vec3 position(time, offset, 1.0f);
+                viewer.getViewport().camera.t = position;
+                core::events::cmd::SequencerAddKeyframe{.time = time + offset}.emit();
+                EXPECT_EQ(timeline.realKeyframeCount(), count);
+                const auto* replaced = timeline.getKeyframeById(original.id);
+                ASSERT_NE(replaced, nullptr);
+                EXPECT_EQ(replaced->time, time);
+                EXPECT_EQ(replaced->position, position);
+                EXPECT_EQ(timeline.clipDuration(), end);
+            }
+        }
+        controller.seek(2.002f);
+        viewer.getViewport().camera.t = glm::vec3(4.0f, 5.0f, 6.0f);
+        core::events::cmd::SequencerAddKeyframe{}.emit();
+        EXPECT_EQ(timeline.realKeyframeCount(), 2u);
+        EXPECT_EQ(timeline.getKeyframe(0)->time, 2.0f);
+        EXPECT_EQ(timeline.getKeyframe(0)->position, viewer.getViewport().camera.t);
+    }
+
     class SequencerFrameDemandTest : public VisualizerImplResetTest {
     protected:
         static void SetUpTestSuite() {

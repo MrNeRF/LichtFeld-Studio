@@ -400,11 +400,14 @@ namespace lfs::vis::gui {
             // keyframe overwrites that keyframe with the current pose instead of stacking.
             constexpr float REPLACE_EPSILON_S = 0.01f;
             const auto& keyframes = controller_.timeline().keyframes();
-            const auto existing = std::find_if(keyframes.begin(), keyframes.end(),
-                                               [time](const lfs::sequencer::Keyframe& kf) {
-                                                   return !kf.is_loop_point &&
-                                                          std::abs(kf.time - time) < REPLACE_EPSILON_S;
-                                               });
+            // Adding beyond the clip extends it even within the replacement tolerance.
+            const auto existing = time > controller_.timeline().clipDuration()
+                                      ? keyframes.end()
+                                      : std::find_if(keyframes.begin(), keyframes.end(),
+                                                     [time](const lfs::sequencer::Keyframe& kf) {
+                                                         return !kf.is_loop_point &&
+                                                                std::abs(kf.time - time) < REPLACE_EPSILON_S;
+                                                     });
             if (existing != keyframes.end()) {
                 LOG_INFO("Replaced keyframe {} at t={:.3f}s instead of adding a new one", existing->id, time);
                 controller_.updateKeyframeById(existing->id, position, rotation, focal_mm);
