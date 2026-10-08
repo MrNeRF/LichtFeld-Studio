@@ -31,12 +31,14 @@
 
         <div id="histogram-range-of-interest">
           <span class="range-of-interest-label">{{ range_of_interest_label }}</span>
-          <input id="range-min-input" type="text" class="number-input range-input" data-value="range_min_str" data-attrif-disabled="!range_inputs_ready" />
-          <span class="range-separator">–</span>
-          <input id="range-max-input" type="text" class="number-input range-input" data-value="range_max_str" data-attrif-disabled="!range_inputs_ready" />
-          <button class="btn btn--secondary range-reset"
-                  data-event-click="reset_range()"
-                  data-attrif-disabled="!has_custom_range"><span class="btn-label">{{ reset_range_label }}</span></button>
+          <div class="histogram-range-controls">
+            <input id="range-min-input" type="text" class="number-input range-input" data-value="range_min_str" data-attrif-disabled="!range_inputs_ready" />
+            <span class="range-separator">–</span>
+            <input id="range-max-input" type="text" class="number-input range-input" data-value="range_max_str" data-attrif-disabled="!range_inputs_ready" />
+            <button class="btn btn--secondary range-reset"
+                    data-event-click="reset_range()"
+                    data-attrif-disabled="!has_custom_range"><span class="btn-label">{{ reset_range_label }}</span></button>
+          </div>
         </div>
 
         <div id="histogram-chart">

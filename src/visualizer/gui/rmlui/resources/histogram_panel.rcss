@@ -452,6 +452,7 @@
 #histogram-range-of-interest {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8dp;
     flex-shrink: 0;
 }
@@ -461,6 +462,19 @@
     font-weight: 600;
     letter-spacing: 0.3dp;
     color: #bac2de;
+}
+
+#histogram-range-of-interest .range-of-interest-label {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.histogram-range-controls {
+    display: flex;
+    align-items: center;
+    gap: 8dp;
+    flex: 1;
+    min-width: 260dp;
 }
 
 .range-input {

@@ -723,6 +723,7 @@ set(TEST_FILES
     test_rml_python_listener_lifetime.cpp
     test_status_bar_fit.cpp
     test_gallery_file_panel_layout.cpp
+    test_histogram_layout.cpp
     test_rmlui_preview_decode.cpp
     test_training_progress_publisher.cpp
     test_startup_overlay_geometry.cpp
