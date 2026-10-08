@@ -76,7 +76,7 @@ int runAtomicFileContracts() {
     const auto mask = ::umask(0022);
     const auto permission_result = writeTextFileAtomically(directory / "mode.json", "permissions");
     ::umask(mask);
-    struct stat state{};
+    struct stat state {};
     require(permission_result.has_value() && ::stat((directory / "mode.json").c_str(), &state) == 0 && (state.st_mode & 0777) == 0644, "published permissions honor umask");
 #endif
     for (const auto& entry : std::filesystem::directory_iterator(directory))

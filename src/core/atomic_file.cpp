@@ -74,7 +74,7 @@ namespace lfs::core {
             const int fd = ::open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0666);
             if (fd < 0)
                 return Status::failure(ioError(target, "reserve destination", errno));
-            struct stat owned{};
+            struct stat owned {};
             if (::fstat(fd, &owned) != 0) {
                 const int native = errno;
                 ::unlink(target.c_str());
@@ -84,7 +84,7 @@ namespace lfs::core {
             const int result = ::rename(source.c_str(), target.c_str());
             const int native = errno;
             if (result != 0) {
-                struct stat current{};
+                struct stat current {};
                 if (::lstat(target.c_str(), &current) == 0 &&
                     current.st_dev == owned.st_dev && current.st_ino == owned.st_ino)
                     ::unlink(target.c_str());
