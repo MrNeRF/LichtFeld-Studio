@@ -69,7 +69,7 @@ TEST(ViewerGpuMemory, UnavailableCudaProducesUnknownStatusWithoutThrowing) {
 }
 
 #ifdef __APPLE__
-TEST(ViewerGpuMemory, AppleStatusReportsUtilizationAndDeviceWideUnifiedMemory) {
+TEST(ViewerGpuMemory, AppleStatusUsesAvailableTelemetryOrBackendBudget) {
     const auto backend = default_gpu_backend();
     if (!gpu_backend_available(backend)) {
         GTEST_SKIP() << "GPU backend unavailable";
@@ -79,8 +79,20 @@ TEST(ViewerGpuMemory, AppleStatusReportsUtilizationAndDeviceWideUnifiedMemory) {
     const auto device = gpu_backend_device_info(backend);
     ASSERT_TRUE(device);
     const auto status = lfs::vis::gui::queryGpuMemory(backend);
-    ASSERT_TRUE(status.unified_memory);
     EXPECT_FALSE(status.device_name.empty());
+    if (!status.unified_memory) {
+        // Virtualized macOS can expose Metal/MoltenVK without IOKit accelerator statistics.
+        EXPECT_TRUE(status.uses_process_budget);
+        EXPECT_EQ(status.total, device->total_memory_bytes);
+        EXPECT_EQ(status.process_used, 0u);
+        EXPECT_FALSE(status.process_valid);
+        EXPECT_EQ(status.total_used, 0u);
+        EXPECT_FALSE(status.gpu_utilization_valid);
+        EXPECT_LT(status.gpu_utilization_percent, 0.0f);
+        EXPECT_EQ(status.process_budget, device->supports_process_memory_budget ? device->process_memory_budget_bytes : 0u);
+        EXPECT_EQ(status.process_budget_used, device->supports_process_memory_budget ? device->process_memory_used_bytes : 0u);
+        return;
+    }
     EXPECT_FALSE(status.uses_process_budget);
     EXPECT_EQ(status.total, device->process_memory_budget_bytes);
     EXPECT_GT(status.process_used, 0u);
