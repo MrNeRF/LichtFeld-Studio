@@ -81,6 +81,8 @@ namespace lfs::vis {
             void renderCameraPath(const ViewportLayout& viewport);
             void renderKeyframeGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void handleOverlayActions();
+            void recordKeyframeAddition(std::optional<sequencer::Keyframe> before,
+                                        sequencer::KeyframeId id, float duration_before);
             void loadPlySequenceFromDirectory(const std::filesystem::path& directory);
             void applyPlySequenceFrame();
             void startPlySequenceStreaming(std::vector<std::filesystem::path> paths,
@@ -134,6 +136,7 @@ namespace lfs::vis {
             VisualizerImpl* viewer_;
             panels::SequencerUIState& ui_state_;
             SequencerController controller_;
+            std::shared_ptr<void> history_lifetime_ = std::make_shared<int>(0);
             std::unique_ptr<RmlSequencerPanel> panel_;
             std::unique_ptr<gui::RmlSequencerOverlay> overlay_;
             std::unique_ptr<KeyframeSceneSync> scene_sync_;

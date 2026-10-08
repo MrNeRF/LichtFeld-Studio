@@ -20,6 +20,7 @@
 #include "gui/utils/native_file_dialog.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_export_options.hpp"
+#include "operation/undo_history.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -50,6 +51,60 @@
 namespace lfs::vis::gui {
 
     namespace {
+        [[nodiscard]] bool sameKeyframe(const sequencer::Keyframe& lhs, const sequencer::Keyframe& rhs) {
+            return lhs.id == rhs.id && lhs.time == rhs.time && lhs.position == rhs.position &&
+                   lhs.rotation == rhs.rotation && lhs.focal_length_mm == rhs.focal_length_mm &&
+                   lhs.easing == rhs.easing && lhs.is_loop_point == rhs.is_loop_point;
+        }
+
+        class KeyframeAdditionUndoEntry final : public op::UndoEntry {
+        public:
+            KeyframeAdditionUndoEntry(SequencerController& controller, std::weak_ptr<void> lifetime,
+                                      std::optional<sequencer::Keyframe> before, sequencer::Keyframe after,
+                                      const float duration_before)
+                : controller_(controller), lifetime_(std::move(lifetime)), before_(std::move(before)), after_(std::move(after)), duration_before_(duration_before), duration_after_(controller.clipDuration()) {}
+
+            void undo() override { apply(after_, before_, duration_after_, duration_before_); }
+            void redo() override { apply(before_, after_, duration_before_, duration_after_); }
+            [[nodiscard]] std::string name() const override { return before_ ? "Replace Keyframe" : "Add Keyframe"; }
+            [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this); }
+
+        private:
+            void apply(const std::optional<sequencer::Keyframe>& expected,
+                       const std::optional<sequencer::Keyframe>& desired,
+                       const float expected_duration, const float desired_duration) {
+                if (lifetime_.expired())
+                    throw op::HistoryStaleEntryError("Sequencer is no longer available");
+                const auto* current = controller_.timeline().getKeyframeById(after_.id);
+                if ((expected && (!current || !sameKeyframe(*current, *expected))) || (!expected && current))
+                    throw op::HistoryStaleEntryError("Keyframe changed since the recorded addition");
+
+                const bool restore_duration = controller_.clipDuration() == expected_duration;
+                if (desired) {
+                    if (!current)
+                        controller_.addKeyframe(*desired);
+                    // Restore the captured bits without renormalizing the quaternion.
+                    *controller_.timeline().getKeyframeById(after_.id) = *desired;
+                    controller_.commitKeyframeTimeById(after_.id);
+                } else {
+                    controller_.removeKeyframeById(after_.id);
+                }
+                // Preserve a later duration edit; the setter also protects later keys.
+                if (restore_duration && desired_duration != expected_duration)
+                    controller_.setClipDuration(desired_duration);
+                lfs::core::events::state::KeyframeListChanged{
+                    .count = controller_.timeline().realKeyframeCount()}
+                    .emit();
+            }
+
+            SequencerController& controller_;
+            std::weak_ptr<void> lifetime_;
+            std::optional<sequencer::Keyframe> before_;
+            sequencer::Keyframe after_;
+            float duration_before_;
+            float duration_after_;
+        };
+
         constexpr size_t MIN_PATH_RENDER_SAMPLES = 128;
         constexpr size_t MAX_PATH_RENDER_SAMPLES = 4096;
         constexpr float PATH_SAMPLES_PER_VIEWPORT_PIXEL = 2.0f;
@@ -408,7 +463,12 @@ namespace lfs::vis::gui {
                                                          return !kf.is_loop_point &&
                                                                 std::abs(kf.time - time) < REPLACE_EPSILON_S;
                                                      });
+            const float duration_before = controller_.clipDuration();
+            std::optional<sequencer::Keyframe> before;
+            sequencer::KeyframeId edited_id;
             if (existing != keyframes.end()) {
+                before = *existing;
+                edited_id = existing->id;
                 LOG_INFO("Replaced keyframe {} at t={:.3f}s instead of adding a new one", existing->id, time);
                 controller_.updateKeyframeById(existing->id, position, rotation, focal_mm);
             } else {
@@ -417,8 +477,9 @@ namespace lfs::vis::gui {
                 kf.position = position;
                 kf.rotation = rotation;
                 kf.focal_length_mm = focal_mm;
-                controller_.addKeyframeAtTime(kf, time);
+                edited_id = controller_.addKeyframeAtTime(kf, time);
             }
+            recordKeyframeAddition(std::move(before), edited_id, duration_before);
             state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
         });
 
@@ -2242,6 +2303,15 @@ namespace lfs::vis::gui {
             rm->markDirty(DirtyFlag::SPLATS, lfs::vis::FrameReason::SceneChange);
     }
 
+    void SequencerUIManager::recordKeyframeAddition(std::optional<sequencer::Keyframe> before,
+                                                    const sequencer::KeyframeId id, const float duration_before) {
+        const auto* after = controller_.timeline().getKeyframeById(id);
+        if (!after || (before && sameKeyframe(*before, *after)))
+            return;
+        op::undoHistory().push(std::make_unique<KeyframeAdditionUndoEntry>(
+            controller_, history_lifetime_, std::move(before), *after, duration_before));
+    }
+
     void SequencerUIManager::handleOverlayActions() {
         using Action = RmlSequencerOverlay::Action;
         using namespace lfs::core::events;
@@ -2258,7 +2328,9 @@ namespace lfs::vis::gui {
                 kf.position = cam.t;
                 kf.rotation = glm::quat_cast(cam.R);
                 kf.focal_length_mm = focal_mm;
-                controller_.addKeyframeAtTime(kf, time);
+                const float duration_before = controller_.clipDuration();
+                const auto id = controller_.addKeyframeAtTime(kf, time);
+                recordKeyframeAddition(std::nullopt, id, duration_before);
                 controller_.seek(time);
                 state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
             } break;

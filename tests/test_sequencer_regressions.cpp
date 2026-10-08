@@ -1,7 +1,15 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/event_bridge/event_bridge.hpp"
+#include "core/event_bridge/localization_manager.hpp"
+#include "core/event_bus.hpp"
+#include "core/events.hpp"
+#include "core/services.hpp"
+#include "gui/gui_manager.hpp"
 #include "io/video/video_export_options.hpp"
+#include "licht_test_support.hpp"
+#include "operation/undo_history.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "sequencer/animation_clip.hpp"
 #include "sequencer/keyframe.hpp"
@@ -9,11 +17,13 @@
 #include "sequencer/sequencer_controller.hpp"
 #include "sequencer/timeline.hpp"
 #include "sequencer/timeline_view_math.hpp"
+#include "visualizer_impl.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -55,6 +65,182 @@ namespace {
             std::filesystem::remove(path, ec);
         }
     };
+
+    class SequencerHistoryRegressionTest : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            if (const char* previous = std::getenv("LFS_HOME"))
+                previous_home_ = previous;
+            setHome(temporary_.path.string().c_str());
+            lfs::event::EventBridge::instance().clear_all();
+            lfs::core::event::bus().clear_all();
+            lfs::vis::services().clear();
+            lfs::vis::op::undoHistory().clear();
+            ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
+                (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+        }
+
+        void TearDown() override {
+            lfs::vis::op::undoHistory().clear();
+            lfs::vis::services().clear();
+            lfs::core::event::bus().clear_all();
+            lfs::event::EventBridge::instance().clear_all();
+            lfs::event::LocalizationManager::getInstance().reset();
+            setHome(previous_home_ ? previous_home_->c_str() : nullptr);
+        }
+
+        static void setHome(const char* value) {
+#ifdef _WIN32
+            (void)_putenv_s("LFS_HOME", value ? value : "");
+#else
+            if (value)
+                (void)setenv("LFS_HOME", value, 1);
+            else
+                (void)unsetenv("LFS_HOME");
+#endif
+        }
+
+        lfs::vis::ViewerOptions options() const {
+            lfs::vis::ViewerOptions result;
+            result.show_startup_overlay = false;
+            result.project_lifecycle_settings_path = temporary_.path / "lifecycle.json";
+            return result;
+        }
+
+        lfs::test::licht::TemporaryDirectory temporary_{"sequencer-history"};
+        std::optional<std::string> previous_home_;
+    };
+
+    TEST_F(SequencerHistoryRegressionTest, AddCommandParticipatesInSharedUndoHistory) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        ASSERT_EQ(controller.timeline().realKeyframeCount(), 0u);
+        viewer.getViewport().camera.R = glm::mat3_cast(glm::angleAxis(
+            0.73f, glm::normalize(glm::vec3(1.0f, 2.0f, 3.0f))));
+        lfs::core::events::cmd::SequencerAddKeyframe{.time = 2.5f}.emit();
+        ASSERT_EQ(controller.timeline().realKeyframeCount(), 1u);
+        const auto added = *controller.timeline().getKeyframe(0);
+        ASSERT_TRUE(history.canUndo());
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 0u);
+        ASSERT_TRUE(history.redo().success);
+        ASSERT_EQ(controller.timeline().realKeyframeCount(), 1u);
+        const auto restored = *controller.timeline().getKeyframe(0);
+        EXPECT_EQ(restored.id, added.id);
+        EXPECT_EQ(restored.time, added.time);
+        EXPECT_EQ(restored.position, added.position);
+        EXPECT_EQ(restored.rotation, added.rotation);
+        EXPECT_EQ(restored.focal_length_mm, added.focal_length_mm);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, AddCommandLatency) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        std::vector<double> samples;
+        for (int batch = 0; batch < 9; ++batch) {
+            controller.clear();
+            history.clear();
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 50; ++i)
+                lfs::core::events::cmd::SequencerAddKeyframe{.time = static_cast<float>(i)}.emit();
+            samples.push_back(std::chrono::duration<double, std::micro>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count() /
+                              50.0);
+            ASSERT_EQ(controller.timeline().realKeyframeCount(), 50u);
+        }
+        std::sort(samples.begin(), samples.end());
+        RecordProperty("median_add_us", std::to_string(samples[samples.size() / 2]));
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, ReplacementRestoresExactKeyAndDoesNotRecordNoOp) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        viewer.getViewport().camera.t = {1.0f, 2.0f, 3.0f};
+        lfs::core::events::cmd::SequencerAddKeyframe{.time = 2.5f}.emit();
+        const auto first = *controller.timeline().getKeyframe(0);
+        lfs::core::events::cmd::SequencerAddKeyframe{.time = 2.5f}.emit();
+        EXPECT_EQ(history.undoCount(), 1u);
+        viewer.getViewport().camera.t = {4.0f, 5.0f, 6.0f};
+        lfs::core::events::cmd::SequencerAddKeyframe{.time = 2.5f}.emit();
+        const auto replaced = *controller.timeline().getKeyframe(0);
+        ASSERT_EQ(replaced.id, first.id);
+        ASSERT_EQ(history.undoCount(), 2u);
+        ASSERT_TRUE(history.undo().success);
+        const auto restored = *controller.timeline().getKeyframeById(first.id);
+        EXPECT_EQ(restored.position, first.position);
+        EXPECT_EQ(restored.rotation, first.rotation);
+        EXPECT_EQ(restored.focal_length_mm, first.focal_length_mm);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_EQ(controller.timeline().getKeyframeById(first.id)->position, replaced.position);
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 1u);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, AdditionPreservesOtherKeysTracksAndLoopOnUndo) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        const auto first_id = controller.addKeyframe(makeKeyframe(0.0f, {1.0f, 2.0f, 3.0f}));
+        controller.setLoopMode(LoopMode::LOOP);
+        lfs::core::events::cmd::SequencerAddKeyframe{.time = 40.0f}.emit();
+        ASSERT_FLOAT_EQ(controller.clipDuration(), 40.0f);
+        const auto other_id = controller.addKeyframe(makeKeyframe(5.0f, {3.0f, 2.0f, 1.0f}));
+        auto* const clip = &controller.timeline().ensureAnimationClip();
+        controller.selectKeyframeById(other_id);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 30.0f);
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 2u);
+        EXPECT_NE(controller.timeline().getKeyframeById(first_id), nullptr);
+        EXPECT_NE(controller.timeline().getKeyframeById(other_id), nullptr);
+        EXPECT_EQ(controller.selectedKeyframeId(), other_id);
+        EXPECT_EQ(controller.timeline().animationClip(), clip);
+        EXPECT_EQ(controller.loopMode(), LoopMode::LOOP);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 40.0f);
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 3u);
+        EXPECT_EQ(controller.timeline().animationClip(), clip);
+        EXPECT_EQ(controller.selectedKeyframeId(), other_id);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, LaterKeyEditCannotBeOverwrittenByStaleHistory) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        lfs::core::events::cmd::SequencerAddKeyframe{.time = 2.5f}.emit();
+        const auto id = controller.timeline().getKeyframe(0)->id;
+        controller.updateKeyframeById(id, {7.0f, 8.0f, 9.0f}, lfs::sequencer::IDENTITY_ROTATION, 60.0f);
+        ASSERT_TRUE(history.canUndo());
+        EXPECT_FALSE(history.undo().success);
+        ASSERT_NE(controller.timeline().getKeyframeById(id), nullptr);
+        EXPECT_EQ(controller.timeline().getKeyframeById(id)->position, glm::vec3(7.0f, 8.0f, 9.0f));
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, LaterClipDurationEditIsPreserved) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        lfs::core::events::cmd::SequencerAddKeyframe{.time = 40.0f}.emit();
+        controller.setClipDuration(80.0f);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 0u);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 80.0f);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 1u);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 80.0f);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, HistoryCannotAccessDestroyedSequencer) {
+        auto& history = lfs::vis::op::undoHistory();
+        {
+            lfs::vis::VisualizerImpl viewer(options());
+            lfs::core::events::cmd::SequencerAddKeyframe{.time = 2.5f}.emit();
+            ASSERT_TRUE(history.canUndo());
+        }
+        EXPECT_FALSE(history.undo().success);
+    }
 
     TEST(SequencerTimelineRegressionTest, ExportCameraPreservesScreenCornersAcrossPoses) {
         // Independent screen-space oracle: right stays right, up maps to smaller
