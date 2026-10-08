@@ -1744,6 +1744,8 @@ namespace lfs::vis::cap {
             const glm::vec3 center = (min_bounds + max_bounds) * 0.5f;
             const glm::vec3 half_size = (max_bounds - min_bounds) * 0.5f;
             data.radii = half_size * CIRCUMSCRIBE_FACTOR;
+            data.radii = glm::mix(data.radii, glm::vec3(kCropVolumeMinExtent),
+                                  glm::lessThanEqual(data.radii, glm::vec3(0.0f)));
             scene.setNodeTransform(created_ellipsoid_name, glm::translate(glm::mat4(1.0f), center));
         }
         data.enabled = true;

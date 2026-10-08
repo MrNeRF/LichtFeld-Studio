@@ -1690,6 +1690,52 @@ namespace lfs::vis {
         EXPECT_FALSE(model_b->model->has_deleted_mask());
         EXPECT_EQ(model_b->model->visible_count(), 2u);
     }
+
+    TEST_F(SceneManagerRenderStateTest, NewEllipsoidRepairsOnlyNonpositiveRadii) {
+        for (const std::string shape : {"single", "flat", "volume", "tiny"}) {
+            SCOPED_TRACE(shape);
+            SceneManager manager;
+            services().set(&manager);
+            auto& scene = manager.getScene();
+            auto model = shape == "single" ? makeTestSplat(1.0f) : makeTwoPointTestSplat(0.0f, 2.0f);
+            if (shape == "volume" || shape == "tiny") {
+                const float scale = shape == "tiny" ? 1e-6f : 1.0f;
+                model->means_raw() = core::Tensor::from_vector(
+                    {0.0f, 0.0f, 0.0f, 2.0f * scale, 4.0f * scale, 6.0f * scale},
+                    {size_t{2}, size_t{3}}, core::Device::CPU);
+            }
+            const auto parent = scene.addSplat("model", std::move(model));
+            glm::vec3 min_bounds, max_bounds;
+            ASSERT_TRUE(scene.getNodeBounds(parent, min_bounds, max_bounds));
+            auto expected = (max_bounds - min_bounds) * 0.5f * 1.732050808f;
+            for (int axis = 0; axis < 3; ++axis) {
+                if (expected[axis] <= 0.0f)
+                    expected[axis] = 1e-4f;
+            }
+            const auto result = cap::ensureEllipsoid(manager, nullptr, parent);
+            ASSERT_TRUE(result) << result.error();
+            const auto* node = scene.getNodeById(*result);
+            ASSERT_NE(node, nullptr);
+            EXPECT_EQ(node->ellipsoid->radii, expected);
+            EXPECT_EQ(glm::vec3(scene.getNodeTransform(node->name)[3]), (min_bounds + max_bounds) * 0.5f);
+            ASSERT_TRUE(op::undoHistory().undo().success);
+            EXPECT_EQ(scene.getEllipsoidForSplat(parent), core::NULL_NODE);
+            ASSERT_TRUE(op::undoHistory().redo().success);
+            node = scene.getNode("model_ellipsoid");
+            ASSERT_NE(node, nullptr);
+            EXPECT_EQ(node->ellipsoid->radii, expected);
+
+            core::EllipsoidData legacy = *node->ellipsoid;
+            legacy.radii = glm::vec3(1e-6f, 2e-6f, 3e-6f);
+            scene.setEllipsoidData(node->id, legacy);
+            const auto existing = cap::ensureEllipsoid(manager, nullptr, parent);
+            ASSERT_TRUE(existing);
+            EXPECT_EQ(scene.getNodeById(*existing)->ellipsoid->radii, legacy.radii);
+            op::undoHistory().clear();
+            services().clear();
+        }
+    }
+
     TEST_F(SceneManagerRenderStateTest, EnsureEllipsoidConvertsExistingCropBoxInPlace) {
         SceneManager manager;
         RenderingManager rendering_manager;
