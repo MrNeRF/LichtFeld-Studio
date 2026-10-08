@@ -733,6 +733,49 @@ TEST_F(McpSequencerToolsTest, ScrubDoesNotInventCameraWithoutCameraKeyframes) {
     EXPECT_FLOAT_EQ(backend_.camera.fov_degrees, camera_before.fov_degrees);
 }
 
+TEST_F(McpSequencerToolsTest, ScrubReportsPendingFailedAndDisplayedFrames) {
+    backend_.controller.setPlySequence("sequence", "sequence",
+                                       {"frame_0.ply", "frame_1.ply"}, {"frame_0", "frame_1"}, 1.0f);
+    json status = {{"requested_frame", 1}, {"displayed_frame", 0}, {"on_target", false}, {"requested_frame_failed", false}, {"failed", 0}};
+    auto backend = backend_.tool_backend();
+    backend.ply_sequence_status = [&] { return status.dump(); };
+    unregister_tools();
+    lfs::app::register_gui_sequencer_tools(lfs::mcp::ToolRegistry::instance(), &viewer_, backend);
+    const auto scrub = [&] {
+        return lfs::mcp::ToolRegistry::instance().call_tool("sequencer.scrub", json{{"frame", 1}});
+    };
+
+    auto result = scrub();
+    EXPECT_FALSE(result.value("success", true));
+    EXPECT_TRUE(result.value("pending", false));
+    EXPECT_FALSE(result.contains("error"));
+    EXPECT_EQ(result["ply_player"]["displayed_frame"], 0);
+    EXPECT_FLOAT_EQ(backend_.controller.playhead(), 1.0f);
+
+    // A failed prefetch of another frame must not fail this request.
+    status["failed"] = 7;
+    result = scrub();
+    EXPECT_TRUE(result.value("pending", false));
+    EXPECT_FALSE(result.contains("error"));
+
+    status["requested_frame_failed"] = true;
+    result = scrub();
+    EXPECT_FALSE(result.value("success", true));
+    EXPECT_FALSE(result.value("pending", true));
+    ASSERT_TRUE(result.contains("error"));
+    EXPECT_NE(result["error"]["message"].get<std::string>().find("frame 1"), std::string::npos);
+    EXPECT_EQ(result["ply_player"]["displayed_frame"], 0);
+
+    // A successful retry restores the normal response despite old failure counts.
+    status["requested_frame_failed"] = false;
+    status["displayed_frame"] = 1;
+    status["on_target"] = true;
+    result = scrub();
+    EXPECT_TRUE(result.value("success", false));
+    EXPECT_FALSE(result.value("pending", true));
+    EXPECT_FALSE(result.contains("error"));
+}
+
 TEST_F(McpSequencerToolsTest, PlaybackAndPersistenceToolsRoundTripState) {
     backend_.add_manual_keyframe(0.0f, {0.0f, 0.0f, 0.0f});
     backend_.add_manual_keyframe(1.0f, {1.0f, 1.0f, 1.0f});

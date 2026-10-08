@@ -1115,6 +1115,7 @@ namespace lfs::vis::gui {
         ply_stream_paths_.clear();
         ply_stream_allocator_ = {};
         ply_stream_states_.clear();
+        ply_stream_failed_frames_.clear();
         ply_stream_requests_.clear();
         ply_stream_completed_.clear();
         ply_stream_inflight_ = false;
@@ -1170,6 +1171,7 @@ namespace lfs::vis::gui {
                 std::lock_guard lock(ply_stream_mutex_);
                 if (result.frame_index < ply_stream_states_.size())
                     ply_stream_states_[result.frame_index] = PlyStreamFrameState::Failed;
+                ply_stream_failed_frames_.insert(result.frame_index);
                 ++ply_stream_failed_count_;
                 continue;
             }
@@ -1191,6 +1193,7 @@ namespace lfs::vis::gui {
                 std::lock_guard lock(ply_stream_mutex_);
                 if (result.frame_index < ply_stream_states_.size())
                     ply_stream_states_[result.frame_index] = PlyStreamFrameState::Failed;
+                ply_stream_failed_frames_.insert(result.frame_index);
                 ++ply_stream_failed_count_;
                 ply_stream_last_load_ms_ = result.load_ms;
                 continue;
@@ -1206,6 +1209,7 @@ namespace lfs::vis::gui {
                 std::lock_guard lock(ply_stream_mutex_);
                 if (result.frame_index < ply_stream_states_.size())
                     ply_stream_states_[result.frame_index] = PlyStreamFrameState::Resident;
+                ply_stream_failed_frames_.erase(result.frame_index);
                 std::erase(loaded_ply_sequence_frames_, result.frame_index);
                 loaded_ply_sequence_frames_.push_back(result.frame_index);
                 ply_stream_last_load_ms_ = result.load_ms;
@@ -1388,6 +1392,7 @@ namespace lfs::vis::gui {
         size_t resident = 0;
         size_t queued = 0;
         size_t failed = 0;
+        bool requested_frame_failed = false;
         bool inflight = false;
         double last_load_ms = 0.0;
         size_t misses = 0;
@@ -1412,6 +1417,7 @@ namespace lfs::vis::gui {
             queued = std::max(queued, ply_stream_requests_.size());
             inflight = ply_stream_inflight_;
             failed = std::max(failed, ply_stream_failed_count_);
+            requested_frame_failed = current_frame && ply_stream_failed_frames_.contains(*current_frame);
             last_load_ms = ply_stream_last_load_ms_;
             misses = ply_stream_miss_count_;
             fallbacks = ply_stream_fallback_count_;
@@ -1426,7 +1432,7 @@ namespace lfs::vis::gui {
         return std::format(
             "{{\"frame_count\":{},\"displayed_frame\":{},\"requested_frame\":{},\"on_target\":{},"
             "\"resident\":{},\"slots\":{},\"max_slots\":{},\"decode_queue\":{},"
-            "\"inflight\":{},\"failed\":{},\"last_swap_ms\":{:.3f},"
+            "\"inflight\":{},\"failed\":{},\"requested_frame_failed\":{},\"last_swap_ms\":{:.3f},"
             "\"last_load_ms\":{:.3f},\"misses\":{},\"fallbacks\":{},"
             "\"evictions\":{},\"stale_queue_drops\":{},\"cache_hits\":{},"
             "\"cache_misses\":{},\"cache_writes\":{},\"cache_write_failures\":{},"
@@ -1444,6 +1450,7 @@ namespace lfs::vis::gui {
             queued,
             inflight ? 1 : 0,
             failed,
+            requested_frame_failed ? "true" : "false",
             0.0,
             last_load_ms,
             misses,
