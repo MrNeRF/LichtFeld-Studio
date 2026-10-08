@@ -5,6 +5,7 @@
 #include "gui/rmlui/elements/scene_graph_element.hpp"
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/rmlui/elements/scene_graph_drop_target.hpp"
+#include "gui/scene_graph_context_actions.hpp"
 #include "gui/scene_tree_session.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
@@ -2937,9 +2938,11 @@ namespace lfs::vis::gui {
                     tr("scene.add_group_ellipsis"),
                     prefixedAction(std::format("add_group:{}", node_id)),
                     !items.empty()));
-                items.push_back(makeAction(
-                    tr("scene.merge_to_single_ply"),
-                    prefixedAction(std::format("merge_group:{}", node_id))));
+                if (showGroupMergeAction(*scene, node_id)) {
+                    items.push_back(makeAction(
+                        tr("scene.merge_to_single_ply"),
+                        prefixedAction(std::format("merge_group:{}", node_id))));
+                }
                 items.push_back(makeAction(
                     tr("scene.ungroup"),
                     prefixedAction(std::format("ungroup:{}", node_id)), true));

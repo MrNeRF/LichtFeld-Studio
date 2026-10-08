@@ -7,6 +7,7 @@
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "gui/scene_graph_context_actions.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -326,6 +327,30 @@ namespace {
         EXPECT_EQ(manager_->applyDeleted(), 2u);
         EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNodeById(id)), 1u);
         EXPECT_EQ(scene.getNodeById(id)->model->size(), 1u);
+    }
+
+    TEST_F(SceneGraphRegression, EmptyGroupsDoNotOfferMerge) {
+        auto& scene = manager_->getScene();
+        const auto empty = scene.addGroup("empty");
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, empty));
+        const auto nested = scene.addGroup("nested", empty);
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, empty));
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, nested));
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, lfs::core::NULL_NODE));
+    }
+
+    TEST_F(SceneGraphRegression, PopulatedGroupsKeepMergeAction) {
+        auto& scene = manager_->getScene();
+        const auto group = scene.addGroup("group");
+        const auto nested = scene.addGroup("nested", group);
+        const auto splat = scene.addSplat("source", make_cpu_splat(2, 0.0f), nested);
+        EXPECT_TRUE(lfs::vis::gui::showGroupMergeAction(scene, nested));
+        EXPECT_TRUE(lfs::vis::gui::showGroupMergeAction(scene, group));
+        scene.setNodeVisibility(splat, false);
+        EXPECT_TRUE(lfs::vis::gui::showGroupMergeAction(scene, group));
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, splat));
+        scene.removeNodeById(splat);
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, group));
     }
 
     TEST_F(SceneGraphRegression, BakeTransformUndoRestoresMeans) {
