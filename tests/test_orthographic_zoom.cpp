@@ -147,6 +147,9 @@ namespace lfs::vis {
     }
 
     TEST_F(OrthographicZoomTest, FrustumCacheAndGridRespectViewportScale) {
+        // core::Camera keeps its transforms on the device; the CPU-only CI runners have none.
+        if (int devices = 0; cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)
+            GTEST_SKIP() << "CUDA device unavailable";
         VisualizerImpl viewer(projectOptions());
         auto& viewport = viewer.getViewport();
         viewport.windowSize = {400, 200};
