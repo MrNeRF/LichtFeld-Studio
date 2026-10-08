@@ -799,6 +799,15 @@ namespace lfs::vis::gui {
         void appendLineRendererCommandOverlays(VulkanViewportPassParams& params) {
             const auto commands = consumeLineRendererCommands();
             for (const auto& command : commands) {
+                // Draw-list clip rects keep gizmos inside their (split) viewport panel.
+                std::optional<lfs::rendering::OverlayClipRect> clip;
+                if (command.clip_rect) {
+                    const auto& rect = *command.clip_rect;
+                    clip = lfs::rendering::OverlayClipRect{
+                        .min = {static_cast<float>(rect.x), static_cast<float>(rect.y)},
+                        .max = {static_cast<float>(rect.x + rect.width), static_cast<float>(rect.y + rect.height)},
+                    };
+                }
                 switch (command.type) {
                 case LineRendererCommandType::Line:
                     appendShapeOverlayLine(params.ui_shape_overlay_triangles,
@@ -806,30 +815,61 @@ namespace lfs::vis::gui {
                                            command.p0,
                                            command.p1,
                                            command.color,
-                                           command.thickness);
+                                           command.thickness,
+                                           0.0f,
+                                           0.0f,
+                                           clip);
                     break;
                 case LineRendererCommandType::Triangle:
-                    appendScreenOverlayTriangle(params.overlay_triangles,
-                                                params,
-                                                command.p0,
-                                                command.p1,
-                                                command.p2,
-                                                command.color);
-                    break;
-                case LineRendererCommandType::Circle:
-                    appendShapeOverlayCircle(params.ui_shape_overlay_triangles,
-                                             params,
-                                             command.p0,
-                                             command.thickness,
-                                             command.color);
-                    break;
-                case LineRendererCommandType::CircleOutline:
-                    appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles,
+                    if (!clip) {
+                        appendScreenOverlayTriangle(params.overlay_triangles,
                                                     params,
                                                     command.p0,
-                                                    command.radius,
-                                                    command.color,
-                                                    command.thickness);
+                                                    command.p1,
+                                                    command.p2,
+                                                    command.color);
+                    } else {
+                        const std::array<glm::vec2, 3> triangle{command.p0, command.p1, command.p2};
+                        const auto clipped = clipPolygonToRect(triangle, *clip);
+                        for (size_t i = 1; i + 1 < clipped.size(); ++i) {
+                            appendScreenOverlayTriangle(params.overlay_triangles, params,
+                                                        clipped[0], clipped[i], clipped[i + 1], command.color);
+                        }
+                    }
+                    break;
+                case LineRendererCommandType::Circle:
+                    if (!clip) {
+                        appendShapeOverlayCircle(params.ui_shape_overlay_triangles,
+                                                 params,
+                                                 command.p0,
+                                                 command.thickness,
+                                                 command.color);
+                    } else if (command.thickness > 0.0f) {
+                        const float extent = command.thickness + 2.0f;
+                        appendScreenOverlayShapeQuad(
+                            params.ui_shape_overlay_triangles, params,
+                            {command.p0 + glm::vec2(-extent, -extent), command.p0 + glm::vec2(extent, -extent),
+                             command.p0 + glm::vec2(extent, extent), command.p0 + glm::vec2(-extent, extent)},
+                            command.p0, command.p0, command.color, {1.0f, 0.0f, command.thickness, 1.0f}, clip);
+                    }
+                    break;
+                case LineRendererCommandType::CircleOutline:
+                    if (!clip) {
+                        appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles,
+                                                        params,
+                                                        command.p0,
+                                                        command.radius,
+                                                        command.color,
+                                                        command.thickness);
+                    } else if (command.radius > 0.0f) {
+                        const float width = std::max(command.thickness, 1.0f);
+                        const float extent = command.radius + width * 0.5f + 2.0f;
+                        appendScreenOverlayShapeQuad(
+                            params.ui_shape_overlay_triangles, params,
+                            {command.p0 + glm::vec2(-extent, -extent), command.p0 + glm::vec2(extent, -extent),
+                             command.p0 + glm::vec2(extent, extent), command.p0 + glm::vec2(-extent, extent)},
+                            command.p0, command.p0, command.color, {2.0f, width, command.radius, 1.0f}, clip);
+                    }
                     break;
                 }
             }
