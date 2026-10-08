@@ -1459,6 +1459,7 @@
     "create": "Maken"
   },
   "notification": {
+    "merge_nodes_kept": "Bij het samenvoegen zijn {} niet-splat-knooppunten behouden.",
     "duplicate_training_data_skipped": "Trainingsgegevens (datasets, camera’s en afbeeldingen) zijn overgeslagen bij het dupliceren.",
     "dropped_not_recognized": "Het gesleepte",
     "directory": "map",

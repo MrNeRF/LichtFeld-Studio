@@ -1459,6 +1459,7 @@
     "create": "作成"
   },
   "notification": {
+    "merge_nodes_kept": "統合時にスプラット以外のノードを {} 個保持しました。",
     "duplicate_training_data_skipped": "複製時に学習データ（データセット、カメラ、画像）はスキップされました。",
     "dropped_not_recognized": "ドロップされた",
     "directory": "フォルダ",

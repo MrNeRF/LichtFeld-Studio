@@ -1459,6 +1459,7 @@
     "create": "Erstellen"
   },
   "notification": {
+    "merge_nodes_kept": "Beim Zusammenführen wurden {} Nicht-Splat-Knoten beibehalten.",
     "duplicate_training_data_skipped": "Trainingsdaten (Datensätze, Kameras und Bilder) wurden beim Duplizieren übersprungen.",
     "dropped_not_recognized": "Das abgelegte",
     "directory": "Verzeichnis",

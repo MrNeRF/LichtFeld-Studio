@@ -1457,6 +1457,7 @@
     "create": "Create"
   },
   "notification": {
+    "merge_nodes_kept": "Merge kept {} non-splat nodes.",
     "duplicate_training_data_skipped": "Training data (datasets, cameras and images) was skipped during duplication.",
     "dropped_not_recognized": "The dropped",
     "directory": "directory",

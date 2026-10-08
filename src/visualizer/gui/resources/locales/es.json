@@ -1459,6 +1459,7 @@
     "create": "Crear"
   },
   "notification": {
+    "merge_nodes_kept": "La fusión conservó {} nodos que no son splats.",
     "duplicate_training_data_skipped": "Se omitieron los datos de entrenamiento (conjuntos de datos, cámaras e imágenes) al duplicar.",
     "dropped_not_recognized": "El elemento soltado",
     "directory": "directorio",

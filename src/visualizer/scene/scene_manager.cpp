@@ -6,11 +6,13 @@
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/editor_context.hpp"
+#include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
+#include "core/scene_merge.hpp"
 #include "core/services.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data_transform.hpp"
@@ -4858,19 +4860,16 @@ namespace lfs::vis {
         // Check if the group being merged is currently selected
         const bool was_selected = selection_.isNodeSelected(group_id);
 
-        // Collect children to emit PLYRemoved events
+        const auto removal_plan = core::planGroupMergeRemoval(scene_, group_id);
         std::vector<std::pair<std::string, core::Uuid>> children_to_remove;
         std::vector<core::Uuid> uuids_to_remove{group_uuid};
-        std::function<void(const core::SceneNode*)> collect_children = [&](const core::SceneNode* n) {
-            for (const core::NodeId cid : n->children) {
-                if (const auto* c = scene_.getNodeById(cid)) {
-                    children_to_remove.emplace_back(c->name, c->uuid);
-                    uuids_to_remove.push_back(c->uuid);
-                    collect_children(c);
-                }
-            }
-        };
-        collect_children(group);
+        for (const auto id : removal_plan.removed) {
+            if (id == group_id)
+                continue;
+            const auto* child = scene_.getNodeById(id);
+            children_to_remove.emplace_back(child->name, child->uuid);
+            uuids_to_remove.push_back(child->uuid);
+        }
 
         auto history_options_with_payload = history_options;
         std::vector<core::Uuid> payload_uuids;
@@ -4959,7 +4958,7 @@ namespace lfs::vis {
             core::Scene::Transaction txn(scene_);
             detached_models = scene_.detachSplatModelsForRemoval(group_id, false);
             attachDetachedSplatModels(history_before, detached_models);
-            scene_.removeNodeById(group_id, false);
+            core::removeGroupForMerge(scene_, removal_plan);
             merged_id = scene_.addSplat(group_name, std::move(merged_model), parent_id);
             if (merged_id != core::NULL_NODE) {
                 if (auto* merged = scene_.getNodeById(merged_id))
@@ -5028,6 +5027,21 @@ namespace lfs::vis {
                     .metadata = {{"name", group_name}}}
                     .emit();
             }
+        }
+
+        if (removal_plan.kept > 0) {
+            lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                .error = lfs::make_error({
+                    .code = lfs::ErrorCode::FailedPrecondition,
+                    .domain = lfs::ErrorDomain::App,
+                    .severity = lfs::Severity::Info,
+                    .user_message = LOCF("notification.merge_nodes_kept", removal_plan.kept),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }),
+                .surface = lfs::ErrorSurface::StatusOnly,
+                .actions = {},
+                .operation_id = lfs::OperationId::generate(),
+            });
         }
 
         LOG_INFO("Merged group '{0}' -> '{0}'", group_name);

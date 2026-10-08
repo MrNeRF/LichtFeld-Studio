@@ -1459,6 +1459,7 @@
     "create": "Créer"
   },
   "notification": {
+    "merge_nodes_kept": "La fusion a conservé {} nœuds autres que des splats.",
     "duplicate_training_data_skipped": "Les données d’entraînement (jeux de données, caméras et images) ont été ignorées lors de la duplication.",
     "dropped_not_recognized": "L'élément déposé",
     "directory": "répertoire",

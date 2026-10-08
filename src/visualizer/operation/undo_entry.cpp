@@ -1589,15 +1589,22 @@ namespace lfs::vis::op {
                     existing->depth_path.clear();
                 }
                 if (existing->parent_id != desired_parent) {
-                    const bool was_locked = existing->locked;
-                    existing->locked.setQuiet(false);
-                    (void)scene.moveNode(existing->id, desired_parent, -1);
-                    existing->locked.setQuiet(was_locked);
-                    existing = scene.getNodeByUuid(snapshot.uuid);
-                    if (!existing || existing->parent_id != desired_parent) {
-                        throw HistoryCorruptionError(
-                            "Failed to reparent existing scene node '" + snapshot.name + "'");
+                    const auto* destination = scene.getNodeById(desired_parent);
+                    if (destination && !lfs::core::isSceneNodeParentCompatible(destination->type, snapshot.type)) {
+                        throw HistoryCorruptionError("Cannot restore parent for scene node '" + snapshot.name + "'");
                     }
+                    for (const auto* ancestor = destination; ancestor; ancestor = scene.getNodeById(ancestor->parent_id)) {
+                        if (ancestor->id == existing->id)
+                            throw HistoryCorruptionError("Cannot restore cyclic parentage for scene node '" + snapshot.name + "'");
+                    }
+                    // History owns the destination local pose; replay must not invert
+                    // a possibly singular parent transform to recompute it.
+                    if (auto* parent = scene.getNodeById(existing->parent_id))
+                        std::erase(parent->children, existing->id);
+                    existing->parent_id = desired_parent;
+                    if (auto* parent = scene.getNodeById(desired_parent))
+                        parent->children.push_back(existing->id);
+                    scene.notifyMutation(lfs::core::Scene::MutationType::NODE_REPARENTED);
                 }
 
                 existing->local_transform.setQuiet(snapshot.local_transform);

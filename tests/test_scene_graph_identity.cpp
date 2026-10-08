@@ -497,6 +497,142 @@ TEST_F(SceneGraphIdentityTest, MergeGroupByIdCommandCreatesNamedSplat) {
     EXPECT_EQ(scene.getNodeById(child_b_id), nullptr);
 }
 
+TEST_F(SceneGraphIdentityTest, MergePreservesNonSplatDescendantsAndWorldTransforms) {
+    auto& scene = scene_manager_->getScene();
+    const auto parent = scene.addGroup("parent");
+    const auto group = scene.addGroup("mixed", parent);
+    const auto nested = scene.addGroup("nested", group);
+    scene.addSplat("splat", make_test_splat({1.f, 2.f, 3.f}), nested);
+    auto cloud = std::make_shared<lfs::core::PointCloud>(
+        Tensor::full({2, 3}, 0.25f, Device::CPU), Tensor::ones({2, 3}, Device::CPU));
+    const auto points = scene.addPointCloud("points", cloud, group);
+    auto mesh = std::make_shared<lfs::core::MeshData>(
+        Tensor::from_vector({0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f}, {3, 3}, Device::CPU),
+        Tensor::from_vector(std::vector<int32_t>{0, 1, 2}, {1, 3}, Device::CPU));
+    const auto first_mesh = scene.addMesh("first_mesh", mesh, nested);
+    const auto second_mesh = scene.addMesh("second_mesh", mesh, group);
+    for (const auto id : {parent, group, nested, points, first_mesh, second_mesh}) {
+        glm::mat4 transform{1.f};
+        transform[0][0] = 1.5f;
+        transform[3][0] = static_cast<float>(id) * 0.125f;
+        scene.setNodeTransform(id, transform);
+    }
+    std::vector<glm::mat4> worlds;
+    std::vector<lfs::core::Uuid> parents;
+    const std::vector<lfs::core::NodeId> kept{points, first_mesh, second_mesh};
+    for (const auto id : kept) {
+        worlds.push_back(scene.getWorldTransform(id));
+        parents.push_back(scene.getNodeUuid(scene.getNodeById(id)->parent_id));
+    }
+    DuplicateNoticeConsumer notices;
+    auto subscription = lfs::ErrorBus::instance().subscribe(notices);
+    std::vector<std::string> removed;
+    ScopedPlyRemovedSubscription removed_subscription{
+        lfs::core::events::state::PLYRemoved::when(
+            [&](const auto& event) { removed.push_back(event.name); })};
+    ASSERT_EQ(scene_manager_->mergeGroupNode(group), "mixed");
+    const auto check_kept = [&](const bool merged) {
+        for (size_t i = 0; i < kept.size(); ++i) {
+            const auto* node = scene.getNodeById(kept[i]);
+            ASSERT_NE(node, nullptr);
+            EXPECT_EQ(node->parent_id, merged ? parent : scene.getNodeIdByUuid(parents[i]));
+            const auto world = scene.getWorldTransform(node->id);
+            for (int col = 0; col < 4; ++col)
+                for (int row = 0; row < 4; ++row)
+                    EXPECT_NEAR(world[col][row], worlds[i][col][row], 1e-5f);
+        }
+        EXPECT_EQ(scene.getNode("points")->point_cloud->means.to_vector(), cloud->means.to_vector());
+        EXPECT_EQ(scene.getNode("first_mesh")->mesh->vertices.to_vector(), mesh->vertices.to_vector());
+    };
+    check_kept(true);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+    EXPECT_EQ(notices.messages.size(), 1u);
+    EXPECT_EQ(removed, (std::vector<std::string>{"nested", "splat", "mixed"}));
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    check_kept(false);
+    ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+    check_kept(true);
+}
+
+TEST_F(SceneGraphIdentityTest, OrdinaryMoveStillRejectsSingularDestinationWithoutMutation) {
+    auto& scene = scene_manager_->getScene();
+    const auto parent = scene.addGroup("parent");
+    const auto child = scene.addGroup("child");
+    glm::mat4 singular{1.f};
+    singular[0][0] = 0.f;
+    scene.setNodeTransform(parent, singular);
+    const auto before = scene.getWorldTransform(child);
+    EXPECT_FALSE(scene.moveNode(child, parent, -1));
+    EXPECT_EQ(scene.getNodeById(child)->parent_id, lfs::core::NULL_NODE);
+    EXPECT_EQ(scene.getWorldTransform(child), before);
+}
+
+TEST_F(SceneGraphIdentityTest, MergeKeepsCameraAndPointCloudSubtrees) {
+    using lfs::core::NodeType;
+    for (const bool use_manager : {false, true}) {
+        SCOPED_TRACE(use_manager);
+        auto& scene = scene_manager_->getScene();
+        scene.clear();
+        lfs::vis::op::undoHistory().clear();
+        const auto parent = scene.addGroup("parent");
+        const auto group = scene.addGroup("group", parent);
+        const auto nested = scene.addGroup("nested", group);
+        const auto splat = scene.addSplat("splat", make_test_splat({0.f, 0.f, 0.f}), nested);
+        scene.addCropBox("splat_crop", splat);
+        scene.addEllipsoid("splat_ellipsoid", splat);
+        const auto cameras = scene.addCameraGroup("cameras", nested, 1);
+        auto camera = std::make_shared<lfs::core::Camera>(
+            Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+            100.f, 110.f, 32.f, 24.f, Tensor{}, Tensor{}, lfs::core::CameraModelType::PINHOLE,
+            "image.png", std::filesystem::path{}, std::filesystem::path{}, 64, 48, 7);
+        const auto camera_id = scene.addCamera("camera", cameras, camera);
+        const auto points = scene.addPointCloud("points", std::make_shared<lfs::core::PointCloud>(Tensor::ones({2, 3}, Device::CPU), Tensor::ones({2, 3}, Device::CPU)), nested);
+        const auto point_crop = scene.addCropBox("point_crop", points);
+        // A splat below a retained container must still be incorporated and consumed.
+        scene.addSplat("other", make_test_splat({1.f, 0.f, 0.f}), cameras);
+        glm::mat4 parent_transform{1.f};
+        parent_transform[0][0] = 0.f;
+        scene.setNodeTransform(parent, parent_transform);
+        glm::mat4 transform{1.f};
+        transform[3] = glm::vec4{2.f, 3.f, 4.f, 1.f};
+        scene.setNodeTransform(group, transform);
+        scene.setNodeTransform(nested, transform);
+        const auto world = scene.getWorldTransform(camera_id);
+        ASSERT_EQ(scene.getActiveCameras().size(), 1u);
+        scene.getNodeById(group)->visible = false;
+        const auto merged = use_manager ? scene_manager_->mergeGroupNode(group) : scene.mergeGroup(group);
+        ASSERT_EQ(merged, "group");
+        const auto check = [&] {
+            ASSERT_NE(scene.getNodeById(cameras), nullptr);
+            ASSERT_NE(scene.getNodeById(camera_id), nullptr);
+            ASSERT_NE(scene.getNodeById(points), nullptr);
+            ASSERT_NE(scene.getNodeById(point_crop), nullptr);
+            EXPECT_EQ(scene.getNodeById(cameras)->parent_id, parent);
+            EXPECT_EQ(scene.getNodeById(camera_id)->parent_id, cameras);
+            EXPECT_EQ(scene.getNodeById(points)->parent_id, parent);
+            EXPECT_EQ(scene.getNodeById(point_crop)->parent_id, points);
+            EXPECT_EQ(scene.getWorldTransform(camera_id), world);
+            EXPECT_FALSE(scene.getNodeById(cameras)->visible);
+            EXPECT_FALSE(scene.getNodeById(points)->visible);
+            const auto active_cameras = scene.getActiveCameras();
+            ASSERT_EQ(active_cameras.size(), 1u);
+            EXPECT_EQ(active_cameras.front()->uid(), camera->uid());
+            EXPECT_EQ(scene.getNode("splat_crop"), nullptr);
+            EXPECT_EQ(scene.getNode("splat_ellipsoid"), nullptr);
+            EXPECT_EQ(scene.getNode("other"), nullptr);
+            EXPECT_EQ(scene.getNode("group")->model->size(), 2u);
+        };
+        check();
+        if (use_manager) {
+            ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+            ASSERT_NE(scene.getNode("splat_crop"), nullptr);
+            EXPECT_EQ(scene.getNodeById(cameras)->parent_id, scene.getNodeIdByName("nested"));
+            ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+            check();
+        }
+    }
+}
+
 TEST_F(SceneGraphIdentityTest, MergeTrainingGroupKeepsRenderedModelThroughUndoRedo) {
     auto& scene = scene_manager_->getScene();
     const auto group = scene.addGroup("group");

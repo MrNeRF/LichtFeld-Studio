@@ -12,6 +12,7 @@
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/path_utils.hpp"
+#include "core/scene_merge.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_data_transform.hpp"
@@ -4988,8 +4989,9 @@ namespace lfs::core {
             return "";
         }
 
+        const auto removal_plan = planGroupMergeRemoval(*this, group_id);
         Transaction txn(*this);
-        removeNode(group_name, false);
+        removeGroupForMerge(*this, removal_plan);
         const NodeId merged_id = addSplat(group_name, std::move(merged), parent_id);
         if (merged_id == NULL_NODE) {
             LOG_ERROR("Failed to add merged group '{}'", group_name);
