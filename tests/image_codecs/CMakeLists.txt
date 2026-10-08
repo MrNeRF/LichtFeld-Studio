@@ -57,3 +57,8 @@ add_executable(lichtfeld_codec_exports_test test_codec_exports_main.cpp)
 target_link_libraries(lichtfeld_codec_exports_test PRIVATE lichtfeld_codec_exports_consumer)
 add_test(NAME lichtfeld_codec_exports_test COMMAND lichtfeld_codec_exports_test)
 set_tests_properties(lichtfeld_codec_exports_test PROPERTIES LABELS "fast;image;cpu" TIMEOUT 30)
+if(WIN32)
+    # Project DLLs live beside the app, not beside these nested test executables.
+    set_tests_properties(lichtfeld_image_codec_tests lichtfeld_codec_exports_test PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_image_codecs>")
+endif()
