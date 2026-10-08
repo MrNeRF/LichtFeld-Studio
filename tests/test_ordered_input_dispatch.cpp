@@ -12,6 +12,8 @@
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/line_renderer.hpp"
+#include "gui/line_renderer_overlays.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rml_modal_overlay.hpp"
@@ -31,6 +33,7 @@
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "visualizer/app_store.hpp"
@@ -45,6 +48,7 @@
 #include <future>
 #include <glm/gtc/type_ptr.hpp>
 #include <gtest/gtest.h>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -1207,6 +1211,88 @@ namespace lfs::vis {
             gizmo.deactivateAllTools();
             op::undoHistory().clear();
         }
+    }
+
+    TEST_F(WindowInputDispatchTest, CropToolGizmoDrawsInEveryIndependentSplitPanel) {
+        auto& sm = *viewer_->getSceneManager();
+        auto& scene = sm.getScene();
+        auto& gizmo = gui_->gizmo();
+        auto* const rendering = viewer_->getRenderingManager();
+        ASSERT_NE(rendering, nullptr);
+        auto& primary = viewer_->getViewport();
+        rendering->restoreSplitViewMode(SplitViewMode::IndependentDual, primary);
+        ASSERT_TRUE(rendering->isIndependentSplitViewActive());
+        for (const auto panel : {SplitViewPanelId::Left, SplitViewPanelId::Right}) {
+            auto& camera = rendering->resolvePanelViewport(primary, panel).camera;
+            camera.t = {panel == SplitViewPanelId::Left ? 0.0f : 6.0f, 0.0f, 12.0f};
+            camera.pivot = {0.0f, 0.0f, 0.0f};
+            camera.R = rendering::makeVisualizerLookAtRotation(camera.t, camera.pivot);
+        }
+        rendering->setFocusedSplitPanel(SplitViewPanelId::Left);
+
+        const auto model = scene.addSplat("Split model", lfs::test::licht::make_splat(3));
+        const auto box = scene.addCropBox("Split box", model);
+        core::CropBoxData data;
+        data.min = glm::vec3(-0.5f);
+        data.max = glm::vec3(0.5f);
+        scene.setCropBoxData(box, data);
+        const auto ellipsoid = scene.addEllipsoid("Split ellipsoid", model);
+        sm.changeContentType(SceneManager::ContentType::SplatFiles);
+
+        gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
+        const gui::ViewportLayout layout{.pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+        UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
+        for (const auto& [shape, volume] : {std::pair{"box", box}, std::pair{"ellipsoid", ellipsoid}}) {
+            sm.selectNode(volume);
+            viewer_->getEditorContext().update(&sm, viewer_->getTrainerManager());
+            gizmo.setCropToolShape(shape);
+            for (const auto operation :
+                 {gui::GizmoOperation::Translate, gui::GizmoOperation::Rotate, gui::GizmoOperation::Scale}) {
+                SCOPED_TRACE(std::string(shape) + " " + std::to_string(static_cast<int>(operation)));
+                gizmo.setOperation(operation);
+                gizmo.updateToolState(ui, false);
+                (void)gui::consumeLineRendererCommands();
+                gizmo.renderCropBoxGizmo(ui, layout);
+                gizmo.renderEllipsoidGizmo(ui, layout);
+                // Every split panel draws the gizmo, each clipped to its own rectangle.
+                std::set<std::pair<int, int>> clips;
+                for (const auto& command : gui::consumeLineRendererCommands()) {
+                    if (command.clip_rect)
+                        clips.emplace(command.clip_rect->x, command.clip_rect->x + command.clip_rect->width);
+                }
+                ASSERT_EQ(clips.size(), 2u);
+                EXPECT_EQ(clips.begin()->first, 0);
+                EXPECT_LE(clips.begin()->second, std::next(clips.begin())->first);
+                EXPECT_EQ(std::next(clips.begin())->second, 400);
+            }
+        }
+        gizmo.deactivateAllTools();
+        rendering->restoreSplitViewMode(SplitViewMode::Disabled, primary);
+        op::undoHistory().clear();
+    }
+
+    TEST(OverlayDrawListClip, PrimitivesStayInsideTheirClipRect) {
+        (void)gui::consumeLineRendererCommands();
+        const auto color = gui::overlayColor(255, 0, 0, 255);
+        gui::NativeOverlayDrawList draw_list;
+        draw_list.PushClipRect({0.0f, 0.0f}, {200.0f, 300.0f});
+        draw_list.AddLine({50.0f, 150.0f}, {350.0f, 150.0f}, color, 3.0f);
+        draw_list.AddTriangleFilled({150.0f, 100.0f}, {350.0f, 150.0f}, {150.0f, 200.0f}, color);
+        draw_list.AddCircleFilled({195.0f, 60.0f}, 20.0f, color);
+        draw_list.AddCircle({195.0f, 240.0f}, 20.0f, color, 16, 2.0f);
+        draw_list.PopClipRect();
+
+        VulkanViewportPassParams params;
+        params.viewport_pos = {0.0f, 0.0f};
+        params.viewport_size = {400.0f, 300.0f};
+        gui::detail::appendLineRendererOverlays(params);
+
+        ASSERT_FALSE(params.ui_shape_overlay_triangles.empty());
+        for (const auto& vertex : params.ui_shape_overlay_triangles)
+            EXPECT_LE(vertex.screen_position.x, 200.0f + 1e-3f);
+        ASSERT_FALSE(params.overlay_triangles.empty());
+        for (const auto& vertex : params.overlay_triangles)
+            EXPECT_LE((vertex.position.x + 1.0f) * 0.5f * params.viewport_size.x, 200.0f + 1e-3f);
     }
 
     // Catches gizmo hover that outlives the crop gizmo: the deleted volume's last hover

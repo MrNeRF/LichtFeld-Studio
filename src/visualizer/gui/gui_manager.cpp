@@ -32,6 +32,7 @@
 #include "gui/error_event_bridge.hpp"
 #include "gui/layout_state.hpp"
 #include "gui/line_renderer.hpp"
+#include "gui/line_renderer_overlays.hpp"
 #include "gui/native_panels.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/panel_registry.hpp"
@@ -3780,6 +3781,10 @@ namespace lfs::vis::gui {
                          lfs::format_for_developer(result.error()));
         }
     } // namespace
+
+    void detail::appendLineRendererOverlays(VulkanViewportPassParams& params) {
+        appendLineRendererCommandOverlays(params);
+    }
 
     GuiManager::GuiManager(VisualizerImpl* viewer)
         : viewer_(viewer),
