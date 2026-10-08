@@ -222,6 +222,8 @@ namespace lfs::io::project {
                 {"depth_view_min", 0.0},
                 {"depth_view_max", 100.0},
                 {"depth_visualization_mode", 0},
+                {"selection_color_committed",
+                 vec3(0.859, 0.325, 0.325)},
                 {"selection_color_preview",
                  vec3(0.0, 0.871, 0.298)},
                 {"selection_color_center_marker",

@@ -314,7 +314,7 @@ namespace lfs::vis::project {
         template <typename Owner, typename Member>
         JsonField<Owner> required_field(
             const std::string_view name,
-            Member Owner::*member) {
+            Member Owner::* member) {
             return {
                 .name = name,
                 .write = [member](const Owner& source) { return Json(source.*member); },
@@ -333,7 +333,7 @@ namespace lfs::vis::project {
         template <typename Owner, typename Member>
         JsonField<Owner> optional_field(
             const std::string_view name,
-            Member Owner::*member) {
+            Member Owner::* member) {
             return {
                 .name = name,
                 .write = [member](const Owner& source) { return Json(source.*member); },
@@ -348,10 +348,22 @@ namespace lfs::vis::project {
             };
         }
 
+        // Written for earlier readers, which require the key; ignored when reading.
+        template <typename Owner>
+        JsonField<Owner> legacy_vec3_field(
+            const std::string_view name,
+            const glm::vec3 value) {
+            return {
+                .name = name,
+                .write = [value](const Owner&) { return vec3_json(value); },
+                .read = [](const Json&, Owner&, std::string_view, std::string_view) { return lfs::Result<void>{}; },
+            };
+        }
+
         template <typename Owner>
         JsonField<Owner> vec3_field(
             const std::string_view name,
-            glm::vec3 Owner::*member) {
+            glm::vec3 Owner::* member) {
             return {
                 .name = name,
                 .write = [member](const Owner& source) { return vec3_json(source.*member); },
@@ -375,7 +387,7 @@ namespace lfs::vis::project {
                   typename AfterAssign = std::nullptr_t>
         JsonField<Owner> enum_field(
             const std::string_view name,
-            Enum Owner::*member,
+            Enum Owner::* member,
             const int minimum,
             const int maximum,
             const std::string_view invalid_detail,
@@ -467,7 +479,7 @@ namespace lfs::vis::project {
         template <typename Owner, std::size_t Size>
         JsonField<Owner> array_field(
             const std::string_view name,
-            std::array<float, Size> Owner::*member) {
+            std::array<float, Size> Owner::* member) {
             return custom_field<Owner>(
                 name,
                 [member](const Owner& source) {
@@ -503,7 +515,7 @@ namespace lfs::vis::project {
         template <typename Owner>
         JsonField<Owner> nullable_positive_float_field(
             const std::string_view name,
-            std::optional<float> Owner::*member) {
+            std::optional<float> Owner::* member) {
             return custom_field<Owner>(
                 name,
                 [member](const Owner& source) {
@@ -753,6 +765,8 @@ namespace lfs::vis::project {
                            [](RenderSettings& settings) {
                                sanitizeDepthViewSettings(settings);
                            }),
+                // Removed setting; builds before its removal fail to open a project without it.
+                legacy_vec3_field<RenderSettings>("selection_color_committed", {0.859f, 0.325f, 0.325f}),
                 vec3_field("selection_color_preview", &RenderSettings::selection_color_preview),
                 vec3_field("selection_color_center_marker", &RenderSettings::selection_color_center_marker),
                 required_field("depth_clip_enabled", &RenderSettings::depth_clip_enabled),
@@ -1624,7 +1638,7 @@ namespace lfs::vis::project {
             using Panel = gui::PanelProjectState;
             const auto nullable_float = [](
                                             const std::string_view name,
-                                            float Panel::*member) {
+                                            float Panel::* member) {
                 return custom_field<Panel>(
                     name,
                     [member](const Panel& panel) {
