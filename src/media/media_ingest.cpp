@@ -139,6 +139,7 @@ namespace lfs::media {
                 };
                 io::VideoFrameExtractor engine;
                 auto file_options = files ? files->files : FileFrameSinkOptions{};
+                file_options.preserve_metadata = p.generate_metadata;
                 if (files && files->files.format == FrameFileFormat::EXR) {
                     const auto sink_cancel = files->files.exr.cancelled;
                     file_options.exr.cancelled = [&, sink_cancel] { return (request.cancelled && request.cancelled()) || (sink_cancel && sink_cancel()); };

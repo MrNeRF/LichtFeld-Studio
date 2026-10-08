@@ -10,6 +10,12 @@ if(APPLE)
     target_link_options(media_linear_video_contracts PRIVATE "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
     target_link_libraries(media_linear_video_contracts PRIVATE lfs_python_embed)
 endif()
+add_test(NAME MediaTensorVideoCpuContracts COMMAND media_linear_video_contracts cpu)
+set_tests_properties(MediaTensorVideoCpuContracts PROPERTIES LABELS "media;cpu;video" TIMEOUT 120)
+if(WIN32)
+    set_tests_properties(MediaTensorVideoCpuContracts PROPERTIES ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
+endif()
 foreach(_linear_backend IN ITEMS cuda vulkan metal)
     if((_linear_backend STREQUAL "cuda" AND LFS_HAS_CUDA) OR
        (_linear_backend STREQUAL "vulkan" AND LFS_TENSOR_VULKAN) OR

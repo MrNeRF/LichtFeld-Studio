@@ -6,6 +6,8 @@
 // the perceptual gamut mapping 3D LUT and blue noise dithering. Inputs read
 // through fp16() are the ones libplacebo keeps in an RGBA16F FBO.
 
+#include "../core/tensor/programs/video_sampling.slangh"
+
 struct Constants {
     uint4 component[3];  // byte offset, row pitch, pixel step, bit shift
     uint4 layout;        // two-byte samples, sample mask, chroma width, chroma height
@@ -78,9 +80,7 @@ float mix(float a, float b, float x) {
 
 // Apple GPUs round render target stores to FP16 toward zero.
 float3 fp16(float3 v) {
-    uint3 h = f32tof16(v);
-    h = select(abs(f16tof32(h)) > abs(v), h - 1u, h);
-    return f16tof32(h);
+    return videoFp16(v);
 }
 
 uint2 store_source(float3 color) {
@@ -125,72 +125,42 @@ float3 pq_oetf(float3 v) {
 
 // ---- decode: planes to nonlinear RGB (pass_read_image, pl_shader_decode_color)
 
-uint load(Constants q, uint c, int x, int y) {
-    const uint4 component = q.component[c];
-    const uint at = component.x + uint(y) * component.y + uint(x) * component.z;
-    uint value = p.planes[at];
-    if (q.layout.x != 0u)
-        value |= uint(p.planes[at + 1u]) << 8;
-    return (value >> component.w) & q.layout.y;
-}
-
-// pl_shader_sample_ortho2 taps around a texel-space position. libplacebo reads
-// the normalized weights from 256 subpixel rows, linearly interpolated.
-int lanczos_weights(float position, out float w[6]) {
-    const float start = floor(position);
-    const float row = (position - start) * 255.0;
-    const float first = floor(row);
-    const uint row0 = uint(first) * 6u;
-    const uint row1 = uint(min(first + 1.0, 255.0)) * 6u;
-    for (int n = 0; n < 6; ++n)
-        w[n] = lerp(p.scaler_lut[row0 + uint(n)], p.scaler_lut[row1 + uint(n)], row - first);
-    return int(start) - 2;
-}
-
-float2 load_chroma(Constants q, int x, int y) {
-    return float2(load(q, 1u, x, y), load(q, 2u, x, y)) * q.sample.x;
-}
-
-// Vertical pass into an FP16 FBO, then horizontal, as libplacebo upsamples.
-float2 chroma(Constants q, int2 pixel) {
-    const int2 size = int2(q.layout.zw);
-    const float2 position = float2(pixel) * q.chroma.xz + q.chroma.yw;
-    float wy[6];
-    float wx[6];
-    const int y0 = q.flags.y != 0u ? lanczos_weights(position.y, wy) : pixel.y;
-    const int x0 = q.flags.x != 0u ? lanczos_weights(position.x, wx) : pixel.x;
-    const int columns = q.flags.x != 0u ? 6 : 1;
-    float2 result = float2(0.0);
-    for (int i = 0; i < columns; ++i) {
-        const int x = clamp(x0 + i, 0, size.x - 1);
-        float2 column = float2(0.0);
-        if (q.flags.y != 0u) {
-            for (int j = 0; j < 6; ++j)
-                column += wy[j] * load_chroma(q, x, clamp(y0 + j, 0, size.y - 1));
-            column *= q.sample.y;
-            if (q.flags.x != 0u)
-                column = fp16(float3(column, 0.0)).xy;
-        } else {
-            column = q.sample.y * load_chroma(q, x, y0);
-        }
-        result += q.flags.x != 0u ? wx[i] * column : column;
+VideoColorSampler source_sampler(Constants q) {
+    VideoColorSampler sampler;
+    sampler.reader.bytes = p.planes;
+    sampler.parameters.big_endian = 0u;
+    for (uint i = 0u; i < 3u; ++i) {
+        VideoColorComponent c;
+        c.offset = q.component[i].x; c.pitch = q.component[i].y;
+        c.step = q.component[i].z; c.shift = q.component[i].w;
+        c.depth = countbits(q.layout.y);
+        c.width = i == 0u ? p.source_width : q.layout.z;
+        c.height = i == 0u ? p.source_height : q.layout.w;
+        sampler.parameters.component[i] = c;
     }
-    return result;
+    return sampler;
 }
-
+uint load(Constants q, uint c, int x, int y) {
+    return uint(source_sampler(q).code(c, x, y));
+}
+int lanczos_weights(float position, out float w[6]) {
+    return videoLanczosWeights(p.scaler_lut, position, w);
+}
+VideoChromaSampler chroma_sampler(Constants q) {
+    VideoChromaSampler sampler;
+    sampler.planes = source_sampler(q); sampler.lut = p.scaler_lut;
+    sampler.width = q.layout.z; sampler.height = q.layout.w;
+    sampler.sub_x = q.flags.x; sampler.sub_y = q.flags.y;
+    sampler.mapping = q.chroma; sampler.normalization = q.sample.xy;
+    return sampler;
+}
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void chroma_vertical(uint3 tid : SV_DispatchThreadID) {
     const Constants q = p.c[0];
     if (tid.x >= q.layout.z || tid.y >= p.source_height)
         return;
-    const float position = float(tid.y) * q.chroma.z + q.chroma.w;
-    float wy[6];
-    const int y0 = lanczos_weights(position, wy);
-    float2 color = float2(0.0);
-    for (int j = 0; j < 6; ++j)
-        color += wy[j] * load_chroma(q, int(tid.x), clamp(y0 + j, 0, int(q.layout.w) - 1));
-    p.chroma_image[tid.y * q.layout.z + tid.x] = store_chroma(q.sample.y * color);
+    p.chroma_image[tid.y * q.layout.z + tid.x] = store_chroma(chroma_sampler(q).vertical(int(tid.x), int(tid.y)));
 }
 
 // pl_shader_dovi_reshape on one component.
@@ -231,19 +201,9 @@ void decode(uint3 tid : SV_DispatchThreadID) {
         return;
     const Constants q = p.c[0];
     const int2 pixel = int2(tid.xy);
-    float2 chroma_value;
-    if (q.flags.x != 0u && q.flags.y != 0u) {
-        const float position = float(pixel.x) * q.chroma.x + q.chroma.y;
-        float wx[6];
-        const int x0 = lanczos_weights(position, wx);
-        chroma_value = float2(0.0);
-        for (int i = 0; i < 6; ++i) {
-            const int x = clamp(x0 + i, 0, int(q.layout.z) - 1);
-            chroma_value += wx[i] * read_chroma(p.chroma_image[tid.y * q.layout.z + uint(x)]);
-        }
-    } else {
-        chroma_value = chroma(q, pixel);
-    }
+    VideoChromaSampler sampler = chroma_sampler(q);
+    float2 chroma_value = q.flags.x != 0u && q.flags.y != 0u
+        ? sampler.horizontal(p.chroma_image, pixel) : sampler.sample(pixel);
     float3 color = float3(q.sample.y * (float(load(q, 0u, pixel.x, pixel.y)) * q.sample.x), chroma_value);
     if (q.flags.z != 0u) {
         const float3 signal = clamp(color, 0.0, 1.0);

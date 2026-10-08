@@ -1,11 +1,14 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "core/video_color_math.h"
 #include "media/frame_sink.hpp"
-#include "video_color_math.h"
 #include <span>
 
 namespace lfs::media::detail {
+    using core::color::VideoColorComponent;
+    using core::color::VideoColorParameters;
+    using core::color::VideoColorSampler;
     // Generalized from the tensor HDR decoder; shared with the linear profile.
     inline bool yuvLumaCoefficients(ColorMatrix matrix, int width, int height, std::array<float, 3>& out) {
         switch (matrix) {

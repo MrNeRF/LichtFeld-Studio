@@ -794,6 +794,39 @@ namespace lfs::io {
         return false;
     }
 
+    std::vector<std::filesystem::path> generatedExtractionFiles(
+        const std::filesystem::path& directory, std::string_view pattern, bool legacy_rgb) {
+        const auto metadata = directory / "extraction_metadata.json";
+        std::unordered_set<std::filesystem::path> previous;
+        if (std::filesystem::is_regular_file(std::filesystem::symlink_status(metadata))) {
+            std::ifstream stream(metadata, std::ios::binary);
+            const auto manifest = nlohmann::json::parse(stream, nullptr, false);
+            if (manifest.is_object() && manifest.contains("frames") && manifest["frames"].is_array()) {
+                for (const auto& frame : manifest["frames"]) {
+                    if (!frame.is_object() || !frame.contains("file") || !frame["file"].is_string())
+                        continue;
+                    const auto filename = core::utf8_to_path(frame["file"].get<std::string>());
+                    if (!filename.empty() && filename == filename.filename() &&
+                        filename.native().find(std::filesystem::path::value_type{}) == std::filesystem::path::string_type::npos)
+                        previous.insert(filename);
+                }
+            }
+        }
+        std::vector<std::filesystem::path> files;
+        for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+            if (!std::filesystem::is_regular_file(entry.symlink_status()))
+                continue;
+            auto extension = entry.path().extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            const bool image = extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".exr";
+            if (entry.path().filename() == "extraction_metadata.json" ||
+                (image && (previous.contains(entry.path().filename()) || isGeneratedFrameFilename(entry.path(), pattern) ||
+                           (legacy_rgb && extension != ".exr"))))
+                files.push_back(entry.path());
+        }
+        return files;
+    }
+
     class VideoFrameExtractor::Impl {
     public:
         bool extract(const Params& params, std::string& error, media::FrameSink* provided_sink = nullptr, bool legacy_file_policy = false) {
@@ -2190,7 +2223,7 @@ namespace lfs::io {
                                 root["output"]["input_transfer"] = nullptr;
                             root["output"]["transfer_override"] = params.input_color.transfer != media::ColorTransfer::Unspecified;
                             root["output"]["primaries_override"] = params.input_color.primaries != media::ColorPrimaries::Unspecified;
-                            root["output"]["resize_filter"] = "pixel-center bilinear in linear light";
+                            root["output"]["resize_filter"] = "area reduction / bilinear enlargement in linear light";
                             root["output"]["sharpness_domain"] = params.sharpness.enabled ? "clipped quantized linear RGB8 proxy" : "disabled";
                         }
                         root["processing"] = {

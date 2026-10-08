@@ -7,6 +7,7 @@
 #include <cstring>
 #include <format>
 #include <limits>
+#include <tbb/parallel_for.h>
 
 namespace lfs::media {
     namespace {
@@ -155,13 +156,13 @@ namespace lfs::media::detail {
             uint32_t load(uint32_t address) { return data[address]; }
         };
         VideoColorSampler<Reader> sampler{parameters, {planes_.data()}};
-        for (int y = 0; y < height; ++y)
+        tbb::parallel_for(0, height, [&](int y) {
+            auto row_sampler = sampler;
             for (int x = 0; x < width; ++x) {
-                std::array<float, 3> value{};
-                for (uint32_t c = 0; c < 3; ++c)
-                    value[c] = sampler.resized(c, x, y, width, height);
-                std::memcpy(destination + (static_cast<size_t>(y) * width + x) * 12, value.data(), 12);
+                const auto value = row_sampler.resizedRgb(x, y, width, height);
+                std::memcpy(destination + (static_cast<size_t>(y) * width + x) * 12, value.channel, 12);
             }
+        });
         return {};
     }
 } // namespace lfs::media::detail

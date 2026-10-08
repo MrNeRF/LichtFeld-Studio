@@ -44,9 +44,11 @@ namespace lfs::media {
         filenames_.clear();
         existing_frames_.clear();
         if (options_.remove_stale_frames) {
-            for (const auto& entry : std::filesystem::directory_iterator(options_.output_directory))
-                if (!entry.is_symlink() && entry.is_regular_file() && io::isGeneratedFrameFilename(entry.path(), options_.filename_pattern))
-                    existing_frames_.push_back({entry.path(), entry.last_write_time(), entry.file_size()});
+            for (const auto& path : io::generatedExtractionFiles(options_.output_directory, options_.filename_pattern, options_.format != FrameFileFormat::EXR)) {
+                if (options_.preserve_metadata && path.filename() == "extraction_metadata.json")
+                    continue;
+                existing_frames_.push_back({path, std::filesystem::last_write_time(path), std::filesystem::file_size(path)});
+            }
         }
         active_ = true;
         return {};

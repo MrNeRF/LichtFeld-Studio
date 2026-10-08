@@ -10,6 +10,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "media/hdr_tonemap.hpp"
 #include "media/image_output.hpp"
@@ -23,6 +24,10 @@ namespace lfs::io {
     // Supports %d, %0Nd zero-padding, %% escaping, and legacy %000 zero-padding.
     [[nodiscard]] LFS_MEDIA_API std::string formatFrameFilenameStem(std::string_view pattern, int frame_number);
     [[nodiscard]] LFS_MEDIA_API bool isGeneratedFrameFilename(const std::filesystem::path&, std::string_view pattern);
+    // Includes previous manifest-listed frames and metadata independently of
+    // the current pattern. PNG/JPEG retains the legacy extension-wide policy.
+    [[nodiscard]] LFS_MEDIA_API std::vector<std::filesystem::path> generatedExtractionFiles(
+        const std::filesystem::path& directory, std::string_view pattern, bool legacy_rgb);
     [[nodiscard]] LFS_MEDIA_API std::size_t calculateFpsSampleCount(double start_time, double end_time,
                                                                     double target_fps);
     [[nodiscard]] LFS_MEDIA_API double fpsSampleTime(double start_time, double end_time,

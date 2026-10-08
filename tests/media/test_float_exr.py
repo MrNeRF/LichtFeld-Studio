@@ -129,6 +129,7 @@ class FloatEXR(unittest.TestCase):
             self.assertGreater(len(set(pixels["R"][:16])),len(set(round(v*255) for v in pixels["R"][:16])))
         metadata=json.loads((output/"extraction_metadata.json").read_text(encoding="utf-8"))
         self.assertEqual(metadata["output"]["color_profile"],"linear-sdr")
+        self.assertEqual(metadata["output"]["resize_filter"],"area reduction / bilinear enlargement in linear light")
         self.assertEqual(metadata["output"]["bit_depth"],32)
         self.assertFalse(metadata["output"]["transfer_override"])
         self.assertEqual(metadata["output"]["input_transfer"],"linear")

@@ -1292,7 +1292,7 @@ namespace lfs::gui {
         changed |= setCachedText(video_value_el_, video_display);
         changed |= setCachedText(output_value_el_, output_display);
         changed |= setCachedProperty(select_hint_el_, "display", can_start ? "none" : "inline-block");
-        changed |= setCachedText(select_hint_el_, LOC(VideoExtractor::SELECT_BOTH));
+        changed |= setCachedText(select_hint_el_, preflight.empty() ? LOC(VideoExtractor::SELECT_BOTH) : preflight);
 
         if (changed)
             markContentDirty();
@@ -1742,15 +1742,7 @@ namespace lfs::gui {
 
         // Check if output folder already contains generated extraction files
         if (std::filesystem::exists(output_dir_)) {
-            bool has_generated = false;
-            for (const auto& entry : std::filesystem::directory_iterator(output_dir_)) {
-                if (!entry.is_regular_file())
-                    continue;
-                if (io::isGeneratedFrameFilename(entry.path(), params.filename_pattern)) {
-                    has_generated = true;
-                    break;
-                }
-            }
+            const bool has_generated = !io::generatedExtractionFiles(output_dir_, params.filename_pattern, format_selection_ != 2).empty();
             if (has_generated) {
                 pending_params_ = params;
                 pending_params_set_ = true;

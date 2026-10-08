@@ -17,8 +17,10 @@ namespace lfs::media {
         FrameFileFormat format = FrameFileFormat::PNG;
         int jpeg_quality = 95;
         ExrOutputOptions exr;
-        // Only obsolete frame files matching the pattern, after success.
+        // Previous extraction output (including metadata), only after success.
         bool remove_stale_frames = false;
+        // The extractor owns metadata when it generates a new manifest.
+        bool preserve_metadata = false;
     };
     class LFS_MEDIA_API FileFrameSink final : public FrameSink {
     public:

@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "core/crash_handler.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_vignette.hpp"
@@ -645,3 +646,12 @@ namespace {
     INSTANTIATE_TEST_SUITE_P(Backends, Programs, testing::ValuesIn(kCompiledGpuBackends),
                              [](const auto& info) { return gpu_backend_name(info.param); });
 } // namespace
+
+int main(int argc, char** argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    const int result = RUN_ALL_TESTS();
+    // Match the app and test_main.cpp: release GPU holders before pools, then
+    // avoid static destructors re-entering already released GPU storage.
+    lfs::core::teardown_gpu_before_exit();
+    lfs::core::flush_and_exit(result);
+}

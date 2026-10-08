@@ -3,11 +3,15 @@
 #include "core/crash_handler.hpp"
 #include "core/gpu_backend_fwd.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_color.hpp"
+#include "core/tensor_upload.hpp"
 #include "media/video_color.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <limits>
+#include <optional>
 #include <stdexcept>
 namespace lfs::io {
     std::unique_ptr<media::detail::LinearVideoRenderer> createLinearTensorRenderer();
@@ -19,20 +23,48 @@ int main(int argc, char** argv) {
         const std::string_view name = argc > 1 ? argv[1] : "metal";
         const auto backend = name == "cuda" ? core::GpuBackend::CUDA : name == "vulkan" ? core::GpuBackend::Vulkan
                                                                                         : core::GpuBackend::Metal;
-        const auto selected = core::set_default_gpu_backend(backend);
-        if (!selected)
-            throw std::runtime_error(std::string(selected.error().detail()));
-        if (!core::gpu_backend_available(backend)) {
-            std::cout << name << ": device unavailable\n";
-            return 77;
+        const bool cpu = name == "cpu";
+        std::optional<core::GpuBackendScope> scope;
+        if (!cpu) {
+            const auto selected = core::set_default_gpu_backend(backend);
+            if (!selected)
+                throw std::runtime_error(std::string(selected.error().detail()));
+            if (!core::gpu_backend_available(backend)) {
+                std::cout << name << ": device unavailable\n";
+                return 77;
+            }
+            scope.emplace(backend);
         }
-        core::GpuBackendScope scope(backend);
         struct Shutdown {
             ~Shutdown() { core::teardown_gpu_before_exit(); }
         } shutdown;
-        auto renderer = io::createLinearTensorRenderer();
-        if (!renderer)
-            throw std::runtime_error("Linear video program unavailable on an available GPU backend");
+        auto renderer = cpu ? nullptr : io::createLinearTensorRenderer();
+        if (!cpu && !renderer)
+            throw std::runtime_error("Linear tensor op unavailable on an available GPU backend");
+        const auto make_bytes = [](const std::vector<uint8_t>& source, core::Device device) {
+            auto bytes = core::Tensor::empty({source.size()}, device, core::DataType::UInt8);
+            if (device == core::Device::CPU) {
+                std::memcpy(bytes.ptr<uint8_t>(), source.data(), source.size());
+            } else {
+                core::TensorUpload upload;
+                upload.enqueue(bytes, std::as_bytes(std::span(source)), nullptr);
+                upload.wait();
+            }
+            return bytes;
+        };
+        const auto convert = [&](const std::vector<uint8_t>& source, const VideoColorParameters& color, int width, int height, std::vector<uint8_t>& output) -> media::SinkResult {
+            if (renderer)
+                return renderer->convert(source, color, width, height, output);
+            auto bytes = make_bytes(source, core::Device::CPU);
+            auto result = core::video_to_linear_rgb(bytes, color, width, height);
+            if (!result)
+                return media::SinkResult::failure(std::move(result).error());
+            if (result->device() != core::Device::CPU || result->dtype() != core::DataType::Float32 ||
+                result->size(0) != size_t(height) || result->size(1) != size_t(width) || result->size(2) != 3 || result->bytes() != output.size())
+                throw std::runtime_error("Tensor video output violates shape/dtype/device contract");
+            std::memcpy(output.data(), result->ptr<float>(), output.size());
+            return {};
+        };
         VideoColorParameters color{};
         color.width = 8;
         color.height = 4;
@@ -48,7 +80,7 @@ int main(int argc, char** argv) {
                 for (int c = 0; c < 3; ++c)
                     source[(y * 8 + x) * 3 + c] = x % 4 == 0 || x % 4 == 3 ? 255 : 0;
         std::vector<uint8_t> output(2 * 1 * 12);
-        auto result = renderer->convert(source, color, 2, 1, output);
+        auto result = convert(source, color, 2, 1, output);
         if (!result)
             throw std::runtime_error(std::string(result.error().detail()));
         for (size_t i = 0; i < output.size(); i += 4) {
@@ -81,7 +113,7 @@ int main(int argc, char** argv) {
             source[33 + 2 * i] = 40 + (i * 31) % 190;
         }
         output.resize(8 * 4 * 12);
-        result = renderer->convert(source, color, 8, 4, output);
+        result = convert(source, color, 8, 4, output);
         if (!result)
             throw std::runtime_error(std::string(result.error().detail()));
         const auto chroma = [&](int channel, int x, int y) {
@@ -118,7 +150,7 @@ int main(int argc, char** argv) {
         source.resize(4);
         std::memcpy(source.data(), &packed, 4);
         output.resize(12);
-        result = renderer->convert(source, color, 1, 1, output);
+        result = convert(source, color, 1, 1, output);
         if (!result)
             throw std::runtime_error(std::string(result.error().detail()));
         const std::array expected{1.f, 512.f / 1023, 17.f / 1023};
@@ -128,6 +160,30 @@ int main(int argc, char** argv) {
             if (std::abs(actual - expected[c]) > 1e-6)
                 throw std::runtime_error("Packed RGB10 loses shifted components");
         }
+        auto bytes = make_bytes(source, cpu ? core::Device::CPU : core::Device::GPU);
+        auto tensor = core::video_to_linear_rgb(bytes, color, 1, 1);
+        if (!tensor || tensor->device() != bytes.device() || core::gpu_backend_of(*tensor) != core::gpu_backend_of(bytes))
+            throw std::runtime_error("Tensor video op does not preserve input device/backend");
+        const auto reject = [&](const auto& input, const VideoColorParameters& invalid, uint32_t width = 1) {
+            const auto rejected = core::video_to_linear_rgb(input, invalid, width, 1);
+            if (rejected || rejected.error().code() != ErrorCode::InvalidArgument)
+                throw std::runtime_error("Invalid tensor video layout was not rejected before dispatch");
+        };
+        auto invalid = color;
+        invalid.component[2].offset = uint32_t(source.size());
+        reject(bytes, invalid);
+        invalid = color;
+        invalid.component[1].shift = 32;
+        reject(bytes, invalid);
+        invalid = color;
+        invalid.component[0].pitch = 0;
+        reject(bytes, invalid);
+        invalid = color;
+        invalid.decode[0] = std::numeric_limits<float>::quiet_NaN();
+        reject(bytes, invalid);
+        reject(bytes, color, UINT32_MAX);
+        auto wrong_dtype = core::Tensor::empty({source.size()}, core::Device::CPU, core::DataType::Float32);
+        reject(wrong_dtype, color);
         std::cout << name << ": linear video contracts passed, maximum error=" << maximum_error << '\n';
         return 0;
     } catch (const std::exception& error) {

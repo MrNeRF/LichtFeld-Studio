@@ -36,10 +36,16 @@ for ranking; accepted master pixels remain float. Negative and above-one values
 are preserved. This profile intentionally selects CPU decoding even when Studio
 has registered hardware adapters. Existing RGB8 hardware paths remain available.
 
-Studio converts through the Tensor backend with one shared C++/Slang sampling
-program for CUDA, Vulkan and Metal. The leaf media/CLI keeps a CPU implementation
-of the same program without requiring a GPU. Matrix/range/chroma rules and
-sRGB/BT.709 curves reuse the existing color services.
+Studio calls the Tensor library's `video_to_linear_rgb` operation, which accepts
+contiguous UInt8 component storage and returns HWC Float32 on the input device
+and backend. It validates component extents, strides and numerical parameters
+before dispatch. Its C++/Slang sampler serves CPU, CUDA, Vulkan and Metal; the
+leaf media/CLI uses the same C++ sampler without requiring Tensor or a GPU.
+HDR tone mapping shares its plane reader and Lanczos chroma sampler in the
+Tensor library, preserving the existing HDR filter and FP16 intermediates.
+CPU conversion decodes all RGB channels together and parallelizes rows with
+the existing TBB dependency. Matrix/range/chroma rules and sRGB/BT.709 curves
+reuse the existing color services.
 
 Sharpness windows retain only the running best frame; equal scores preserve the
 first maximum. Working frames are checked for layout overflow and addressability
@@ -63,7 +69,10 @@ The codec encodes to a caller-owned stream. The shared `lfs_file_io` service own
 Unicode path handling, exclusive same-directory temporaries and atomic commit;
 existing settings/JSON, EXR frames and manifests use that same implementation.
 No-replace uses native Windows, macOS and Linux rename APIs, with a safe hard-link
-fallback when the platform lacks them. POSIX files use mode 0666 subject to umask.
+fallback when the platform lacks them. If both are unsupported, it reserves the
+destination with `O_CREAT|O_EXCL`, then renames the completed temporary over its
+own placeholder. The reserved name can briefly refer to an empty file; a failed
+rename removes the owned placeholder. POSIX files use mode 0666 subject to umask.
 Failed/cancelled writes
 remove their temporary and preserve an existing target. No-replace commit remains
 atomic under concurrent producers; replacement requires `overwrite=true`.
@@ -105,9 +114,14 @@ are shared with PNG/JPEG. The Studio dialog offers EXR-specific controls and
 source-metadata defaults, hides JPEG quality/HDR conversion for EXR, and shows a
 preflight reason beside the EXR controls while disabling Start for unsupported
 sources. Its preview remains a display image. Confirmed EXR replacement enables
-overwrite and removes stale generated frames matching the filename pattern only
-after success. Failure/cancellation keeps the old frames; unrelated files,
-symlinks and files changed during extraction are preserved.
+overwrite and removes stale generated frames only after success. Discovery uses
+the current pattern and safe filenames from previous extraction metadata, so
+changing the pattern still detects the old extraction. PNG/JPEG replacement
+retains the legacy extension-wide PNG/JPG/JPEG cleanup; EXR preserves unrelated
+images. Old metadata is removed when metadata output is disabled; newly generated
+metadata remains owned by the extractor regardless of filesystem timestamp
+resolution. Failure/cancellation keeps the old files; symlinks and files changed
+during extraction are preserved.
 
 ## Verification
 

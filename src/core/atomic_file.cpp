@@ -16,6 +16,7 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #ifdef __linux__
 #include <sys/syscall.h>
@@ -65,6 +66,33 @@ namespace lfs::core {
                 }
             }
         };
+#ifndef _WIN32
+        Status commitReserved(const std::filesystem::path& source, const std::filesystem::path& target) {
+            // Some filesystems (notably macOS exFAT) support neither exclusive
+            // rename nor hard links. O_EXCL is the atomic no-replace claim;
+            // publication then replaces only the placeholder we just created.
+            const int fd = ::open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0666);
+            if (fd < 0)
+                return Status::failure(ioError(target, "reserve destination", errno));
+            struct stat owned{};
+            if (::fstat(fd, &owned) != 0) {
+                const int native = errno;
+                ::unlink(target.c_str());
+                ::close(fd);
+                return Status::failure(ioError(target, "inspect reservation", native));
+            }
+            const int result = ::rename(source.c_str(), target.c_str());
+            const int native = errno;
+            if (result != 0) {
+                struct stat current{};
+                if (::lstat(target.c_str(), &current) == 0 &&
+                    current.st_dev == owned.st_dev && current.st_ino == owned.st_ino)
+                    ::unlink(target.c_str());
+            }
+            ::close(fd);
+            return result == 0 ? Status{} : Status::failure(ioError(target, "publish reserved destination", native));
+        }
+#endif
         Status commit(Temporary& temporary, const std::filesystem::path& target, bool overwrite) {
 #ifdef _WIN32
             if (!MoveFileExW(temporary.path.c_str(), target.c_str(),
@@ -89,6 +117,12 @@ namespace lfs::core {
                     // exists()+rename(): another writer could create the target.
                     if (::link(temporary.path.c_str(), target.c_str()) == 0)
                         return {};
+                    if (errno == ENOSYS || errno == ENOTSUP || errno == EINVAL) {
+                        if (auto status = commitReserved(temporary.path, target); !status)
+                            return status;
+                        temporary.owned = false;
+                        return {};
+                    }
                 }
             }
             if (result != 0)

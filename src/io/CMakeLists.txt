@@ -47,9 +47,8 @@ if(LFS_USE_VULKAN)
 else()
     target_sources(lfs_video PRIVATE hdr_libplacebo_unavailable.cpp)
 endif()
-lfs_add_gpu_program(lfs_video hdr_tonemap_program SOURCE hdr_tonemap.slang COMPUTE chroma_vertical decode measure resample gamut render)
-lfs_add_gpu_program(lfs_video linear_video_program SOURCE linear_video.slang COMPUTE linearVideo
-    DEPENDS "${CMAKE_SOURCE_DIR}/src/media/video_color_math.h" "${CMAKE_SOURCE_DIR}/src/core/include/core/color_transfer.h")
+lfs_add_gpu_program(lfs_video hdr_tonemap_program SOURCE hdr_tonemap.slang COMPUTE chroma_vertical decode measure resample gamut render
+    DEPENDS "${CMAKE_SOURCE_DIR}/src/core/tensor/programs/video_sampling.slangh" "${CMAKE_SOURCE_DIR}/src/core/include/core/video_color_math.h" "${CMAKE_SOURCE_DIR}/src/core/include/core/color_transfer.h")
 if(LFS_HAS_CUDA)
     target_sources(lfs_video PRIVATE
         video/color_convert.cuh
