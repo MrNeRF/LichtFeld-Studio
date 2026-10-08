@@ -27,6 +27,18 @@ if(NOT TARGET WebP::webp)
 endif()
 
 if(NOT TARGET lfs_image_codecs)
+    # The EXR writer uses the same typed-error provider as the root build.
+    find_package(nlohmann_json CONFIG REQUIRED)
+    find_package(spdlog CONFIG REQUIRED)
+    if(NOT TARGET lfs_diagnostics)
+        add_subdirectory(${LFS_CODEC_ROOT}/src/diagnostics ${CMAKE_CURRENT_BINARY_DIR}/diagnostics)
+    endif()
+    if(NOT TARGET lfs_logger)
+        add_subdirectory(${LFS_CODEC_ROOT}/src/core/logger ${CMAKE_CURRENT_BINARY_DIR}/logger)
+    endif()
+    if(NOT TARGET lfs_error)
+        add_subdirectory(${LFS_CODEC_ROOT}/src/core/error ${CMAKE_CURRENT_BINARY_DIR}/error)
+    endif()
     add_subdirectory(${LFS_CODEC_ROOT}/src/core/image_codecs ${CMAKE_CURRENT_BINARY_DIR}/image-codecs)
 endif()
 add_executable(lichtfeld_image_codec_tests
@@ -57,3 +69,8 @@ add_executable(lichtfeld_codec_exports_test test_codec_exports_main.cpp)
 target_link_libraries(lichtfeld_codec_exports_test PRIVATE lichtfeld_codec_exports_consumer)
 add_test(NAME lichtfeld_codec_exports_test COMMAND lichtfeld_codec_exports_test)
 set_tests_properties(lichtfeld_codec_exports_test PROPERTIES LABELS "fast;image;cpu" TIMEOUT 30)
+if(WIN32)
+    # Project DLLs live beside the app, not beside these nested test executables.
+    set_tests_properties(lichtfeld_image_codec_tests lichtfeld_codec_exports_test PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_image_codecs>")
+endif()
