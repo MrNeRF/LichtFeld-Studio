@@ -2122,9 +2122,6 @@ namespace lfs::vis {
                 if (scene_upscaler_selection.fellBack()) {
                     LOG_WARN("Scene reconstruction '{}' unavailable; using native presentation",
                              sceneUpscalerBackendId(scene_upscaler_selection.requested));
-                } else {
-                    LOG_INFO("Scene reconstruction active: {}",
-                             sceneUpscalerBackendId(scene_upscaler_selection.effective));
                 }
                 logged_scene_upscaler_selection = scene_upscaler_selection;
             }

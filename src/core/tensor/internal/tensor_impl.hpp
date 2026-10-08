@@ -1937,10 +1937,7 @@ namespace lfs::core {
         [[nodiscard]] std::uint64_t exportable_bound_generation() const noexcept {
             return storage_meta_ ? storage_meta_->exportable_bound_generation : 0u;
         }
-        static std::string storage_memory_summary();
         static std::size_t cuda_direct_storage_live_bytes();
-        static void log_storage_memory();
-        static void log_storage_memory(std::string_view label);
 
         // reserve() pre-allocates memory for future growth along dimension 0
         // Supports multi-dimensional tensors: [N, D1, D2, ...] reserves N "rows"

@@ -505,17 +505,6 @@ namespace lfs::vis {
                 if (interop_alloc_result) {
                     splat_interop_allocator_ = std::move(*interop_alloc_result);
                     tensor_allocator = splat_interop_allocator_;
-                    LOG_INFO("Training tensors share one CUDA-exportable VMM block "
-                             "imported into Vulkan (live≈{}, capacity={}, reserve={}, "
-                             "sh_degree={}, committed={} MiB reserved={} MiB chunks={}) "
-                             "— zero-copy viewer interop during live-N growth",
-                             live_estimate,
-                             exportable_capacity,
-                             reserve_capacity,
-                             sh_degree,
-                             splat_storage_->block->committed_bytes >> 20,
-                             splat_storage_->block->reserved_bytes >> 20,
-                             splat_storage_->block->chunks.size());
                 } else {
                     LOG_WARN("Exportable-interop allocator failed ({}); dropping storage "
                              "and falling back to legacy Vulkan-external allocator",
@@ -689,12 +678,6 @@ namespace lfs::vis {
         if (trainer_) {
             trainer_->setSplatTensorAllocator(alloc);
         }
-        LOG_INFO("Exportable splat storage grew for densify: capacity={} committed={} MiB "
-                 "gen={} chunks={} (appended/bound, no re-import)",
-                 splat_storage_->capacity(),
-                 splat_storage_->block->committed_bytes >> 20,
-                 splat_storage_->generation(),
-                 splat_storage_->block->chunks.size());
         model_ptr = scene_ ? scene_->getTrainingModel() : nullptr;
         return model_ptr && model_ptr->means_raw().capacity() >= needed_rows;
     }
@@ -1066,7 +1049,6 @@ namespace lfs::vis {
 
         python::update_training_state(false, "idle");
         python::update_trainer_loaded(false, 0);
-        LOG_INFO("Trainer cleared");
         return true;
     }
 
@@ -1144,7 +1126,6 @@ namespace lfs::vis {
         }
         launchTrainingThread();
 
-        LOG_INFO("Training initialization started - {} iterations planned", getTotalIterations());
         return true;
     }
 
@@ -1317,7 +1298,6 @@ namespace lfs::vis {
                         return lfs::Result<void>::failure(training_initialization_error(result.error()));
                     }
                 }
-                lfs::core::Tensor::log_storage_memory("After training model initialization");
             }
 
             if (scene_) {
@@ -1360,7 +1340,6 @@ namespace lfs::vis {
                 return lfs::Result<void>::failure(
                     training_initialization_error(result.error()));
             }
-            lfs::core::Tensor::log_storage_memory("After trainer initialization");
             lfs::core::Tensor::trim_memory_pool();
             if (scene_) {
                 installExportableDensifyBarrier();
@@ -2320,7 +2299,6 @@ namespace lfs::vis {
     }
 
     void TrainerManager::trainingInitializationThreadFunc(std::stop_token stop_token) {
-        LOG_INFO("Training initialization thread started");
         lfs::Result<void> initialization_result;
         try {
             initialization_result = initializeTrainingOnWorker(stop_token);
@@ -2403,8 +2381,6 @@ namespace lfs::vis {
         initialization_cv_.notify_all();
         release_training_thread_local_cuda_caches();
         training_thread_cv_.notify_one();
-
-        LOG_INFO("Training initialization thread finished");
     }
 
     void TrainerManager::trainingThreadFunc(std::stop_token stop_token) {
@@ -2416,7 +2392,6 @@ namespace lfs::vis {
                 return;
             }
         }
-        LOG_INFO("Training thread started");
         LOG_TIMER("Training execution");
 
         trainer_->setOnIterationStart([this] {
@@ -2441,8 +2416,6 @@ namespace lfs::vis {
             },
             [this](lfs::Result<void>&& result) {
                 if (result) {
-                    LOG_INFO("Training {}",
-                             trainer_->has_stopped() ? "stopped by user" : "completed successfully");
                     handleTrainingComplete(true);
                 } else {
                     const auto& error = result.error();
@@ -2458,8 +2431,6 @@ namespace lfs::vis {
             });
 
         release_training_thread_local_cuda_caches();
-
-        LOG_INFO("Training thread finished");
     }
 
     void TrainerManager::handleTrainingComplete(const bool success, const std::string& error,

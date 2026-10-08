@@ -996,13 +996,6 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
             "Conditional rendering was enabled without both command entry points",
             LFS_SOURCE_SITE_CURRENT());
     }
-    static std::atomic_bool depth_waves_logged{false};
-    if (!depth_waves_logged.exchange(true))
-        LOG_INFO("vksplat depth waves: {} slots ({})",
-                 supports_conditional_rendering_ ? HIGS_DEPTH_MAX_WAVES
-                                                 : HIGS_DEPTH_MAX_WAVES_FALLBACK,
-                 supports_conditional_rendering_ ? "conditional rendering"
-                                                 : "VK_EXT_conditional_rendering unavailable");
 
     createComputePipeline(pipeline_projection_forward, spirv_paths.at("projection_forward"));
     createComputePipeline(pipeline_projection_forward_3dgut, spirv_paths.at("projection_forward_3dgut"));

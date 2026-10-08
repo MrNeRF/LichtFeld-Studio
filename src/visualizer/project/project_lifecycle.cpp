@@ -4901,10 +4901,6 @@ namespace lfs::vis::project {
                 std::chrono::steady_clock::now();
             return {};
         }
-        if (training) {
-            LOG_INFO(
-                "Training-time autosave is light-only (no checkpoint capture)");
-        }
 
         const auto sequence =
             autosave_sequence_ + 1;
@@ -5608,9 +5604,6 @@ namespace lfs::vis::project {
                         now();
                 autosave_quiesce_logged_ = false;
                 autosave_memory_warning_published_ = false;
-                LOG_INFO(
-                    "Autosave sidecar sequence {} published",
-                    autosave_sequence_);
             } else if (
                 !dest_is_scratch &&
                 (project_write_purpose_ ==
@@ -6119,11 +6112,6 @@ namespace lfs::vis::project {
                     developerError(persisted.error()));
             }
         }
-        LOG_INFO(
-            "Adopted training .licht generation {} from {}",
-            document_->generation(),
-            lfs::core::path_to_utf8(
-                metrics.last_path));
         bindTrainerSnapshotTarget();
         return {};
     }

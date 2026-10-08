@@ -3925,9 +3925,6 @@ namespace lfs::io::project {
                     project_root)) {
                 auto encoded = dataset_preview_png(*first);
                 if (encoded) {
-                    LOG_INFO(
-                        "Embedded dataset image as project preview: {}",
-                        lfs::core::path_to_utf8(*first));
                     dataset_preview = std::move(*encoded);
                     preview_png = dataset_preview;
                 } else {

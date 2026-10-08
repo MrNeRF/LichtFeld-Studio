@@ -23,7 +23,6 @@
 #include <cuda_runtime.h>
 #include <format>
 #include <fstream>
-#include <iomanip>
 #include <numeric>
 #include <print>
 #include <tbb/blocked_range.h>
@@ -107,10 +106,6 @@ namespace lfs::core {
             if (allocations > 0) {
                 counter.live_allocations.fetch_sub(1, std::memory_order_relaxed);
             }
-        }
-
-        double mib(const uint64_t bytes) {
-            return static_cast<double>(bytes) / (1024.0 * 1024.0);
         }
 
         [[nodiscard]] bool is_supported_device(const Device device) {
@@ -311,40 +306,8 @@ namespace lfs::core {
         }
     }
 
-    std::string Tensor::storage_memory_summary() {
-        const auto& state = storage_accounting_state();
-        std::ostringstream oss;
-        const auto append = [&oss](std::string_view label, const StorageAccountingCounter& counter) {
-            const uint64_t live_bytes = counter.live_bytes.load(std::memory_order_relaxed);
-            const uint64_t live_allocations = counter.live_allocations.load(std::memory_order_relaxed);
-            const uint64_t total_bytes = counter.total_bytes.load(std::memory_order_relaxed);
-            const uint64_t total_allocations = counter.total_allocations.load(std::memory_order_relaxed);
-            oss << label << ": live=" << std::fixed << std::setprecision(2) << mib(live_bytes)
-                << " MiB/" << live_allocations << " allocs, total=" << mib(total_bytes)
-                << " MiB/" << total_allocations << " allocs";
-        };
-
-        oss << "Tensor storage accounting: ";
-        append("cuda_direct", state.cuda_direct);
-        oss << "; ";
-        append("vulkan_external", state.vulkan_external);
-        return oss.str();
-    }
-
     std::size_t Tensor::cuda_direct_storage_live_bytes() {
         return storage_accounting_state().cuda_direct.live_bytes.load(std::memory_order_relaxed);
-    }
-
-    void Tensor::log_storage_memory() {
-        log_storage_memory({});
-    }
-
-    void Tensor::log_storage_memory(const std::string_view label) {
-        if (label.empty()) {
-            LOG_INFO("{}", storage_memory_summary());
-        } else {
-            LOG_INFO("{} - {}", label, storage_memory_summary());
-        }
     }
 
     // TensorLeaf implementation

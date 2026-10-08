@@ -5675,8 +5675,6 @@ namespace lfs::app {
                     return result;
                 });
             });
-
-        LOG_INFO("Registered GUI-native MCP scene tools");
     }
 
     void register_gui_scene_resources(vis::Visualizer* viewer) {

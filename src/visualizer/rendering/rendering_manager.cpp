@@ -218,7 +218,6 @@ namespace lfs::vis {
         }
 
         initialized_ = true;
-        LOG_INFO("Auxiliary rendering engine initialized successfully");
     }
 
     void RenderingManager::markDirty(const DirtyMask flags, const FrameReason reason, std::string detail) {

@@ -326,8 +326,6 @@ namespace lfs::vis {
             dataset_config_.output_path = ds.output_path;
         }
         export_formats_ = params.export_formats;
-
-        LOG_INFO("Session: strategy={}, iter={}, resize={}", opt.strategy, opt.iterations, dataset_config_.resize_factor);
     }
 
     void ParameterManager::importParams(const lfs::core::param::OptimizationParameters& params) {

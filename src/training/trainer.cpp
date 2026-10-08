@@ -935,17 +935,9 @@ namespace lfs::training {
             const float non_jpeg_ratio = dataset ? dataset->get_non_jpeg_ratio() : 0.0f;
             if (non_jpeg_ratio <= NON_JPEG_THRESHOLD) {
                 if (config.output_queue_size > JPEG_HOT_OUTPUT_QUEUE_SIZE) {
-                    LOG_INFO(
-                        "Reducing JPEG image ready queue {} -> {} (hot path keeps compressed prefetch)",
-                        config.output_queue_size,
-                        JPEG_HOT_OUTPUT_QUEUE_SIZE);
                     config.output_queue_size = JPEG_HOT_OUTPUT_QUEUE_SIZE;
                 }
                 if (config.decoder_pool_size > JPEG_HOT_DECODER_POOL_SIZE) {
-                    LOG_INFO(
-                        "Reducing nvImageCodec decoder pool {} -> {} for JPEG hot path",
-                        config.decoder_pool_size,
-                        JPEG_HOT_DECODER_POOL_SIZE);
                     config.decoder_pool_size = JPEG_HOT_DECODER_POOL_SIZE;
                 }
             }
@@ -2071,7 +2063,6 @@ namespace lfs::training {
         // mutex for the lifetime of the trainer. TrainerManager::setTrainer also
         // wires this; constructor covers every Trainer(Scene) path.
         scene.setLiveModelMutex(&render_mutex_);
-        LOG_INFO("Scene live-model mutex wired to trainer render_mutex_ (one-lock q16)");
 
         LOG_DEBUG("Trainer constructed from Scene with {} cameras", scene.getAllCameras().size());
     }
@@ -3043,7 +3034,6 @@ namespace lfs::training {
                 bg_ptr[1] = bg_color[1];
                 bg_ptr[2] = bg_color[2];
                 background_ = background_.to(lfs::core::Device::CUDA);
-                LOG_INFO("Background color set to RGB({:.2f}, {:.2f}, {:.2f})", bg_color[0], bg_color[1], bg_color[2]);
             }
 
             // Initialize image cache loader before any code path that calls getInstance()
@@ -3233,7 +3223,6 @@ namespace lfs::training {
             }
 
             // Print configuration
-            LOG_INFO("Visualization: {}", params.optimization.headless ? "disabled" : "enabled");
             LOG_INFO("Strategy: {}", params.optimization.strategy);
             if (params.optimization.mask_mode != lfs::core::param::MaskMode::None) {
                 static constexpr const char* MASK_MODE_NAMES[] = {"none", "segment", "ignore", "segment_and_ignore", "alpha_consistent"};
@@ -3307,7 +3296,6 @@ namespace lfs::training {
 
             initialized_ = true;
 
-            LOG_INFO("Trainer initialization complete");
             return {};
         } catch (const std::exception& e) {
             return std::unexpected(std::format("Failed to initialize trainer: {}", e.what()));
@@ -4433,13 +4421,6 @@ namespace lfs::training {
             base_explicit_commit_uuid;
         prepared_project_autosave_sequence_ =
             autosave_sequence;
-        LOG_INFO(
-            "Prepared .licht snapshot {} for iteration {} "
-            "({} checkpoint bytes)",
-            prepared_project_snapshot_->snapshot_uuid()
-                .to_string(),
-            capture_iteration,
-            prepared_project_snapshot_->checkpoint_bytes());
     }
 
     void Trainer::consume_requested_project_snapshot(
@@ -5255,10 +5236,6 @@ namespace lfs::training {
                                         dataset_preview_png(
                                             *first);
                                 if (encoded) {
-                                    LOG_INFO(
-                                        "Embedded dataset image as project preview: {}",
-                                        lfs::core::path_to_utf8(
-                                            *first));
                                     preview_png =
                                         std::move(*encoded);
                                 } else {
@@ -5650,44 +5627,11 @@ namespace lfs::training {
             !std::isfinite(elapsed_ms)) {
             return;
         }
-        TrainingStepRegressionMetrics before;
-        TrainingStepRegressionMetrics after;
-        {
-            std::lock_guard lock(
-                project_snapshot_mutex_);
-            before =
-                project_step_regression_.metrics();
-            project_step_regression_.observe(
-                iteration, elapsed_ms,
-                topology_changed);
-            after =
-                project_step_regression_.metrics();
-        }
-        if (!before.gate_evaluated &&
-            after.gate_evaluated) {
-            LOG_INFO(
-                "Training snapshot post-resume step gate: "
-                "pre=[{},{}] pre_n={} pre_mean={:.3f}ms "
-                "post=[{},{}] post_n={} post_mean={:.3f}ms "
-                "regression={:.3f}% {}",
-                after.pre_snapshot
-                    .first_iteration,
-                after.pre_snapshot
-                    .last_iteration,
-                after.pre_snapshot
-                    .sample_count,
-                after.pre_snapshot.mean_ms,
-                after.post_resume
-                    .first_iteration,
-                after.post_resume
-                    .last_iteration,
-                after.post_resume
-                    .sample_count,
-                after.post_resume.mean_ms,
-                after.regression_percent,
-                after.within_gate ? "PASS"
-                                  : "FAIL");
-        }
+        std::lock_guard lock(
+            project_snapshot_mutex_);
+        project_step_regression_.observe(
+            iteration, elapsed_ms,
+            topology_changed);
     }
 
     void Trainer::handle_control_requests(int iter, std::stop_token stop_token) {
@@ -8375,20 +8319,6 @@ namespace lfs::training {
                         }
                         log_eval_appearance();
                         LOG_INFO("{}", metrics.to_string());
-                        if (strategy_) {
-                            auto& splat = strategy_->get_model();
-                            const float configured = params_.optimization.max_screen_share;
-                            const float limit = lfs::training::screen_share_cap_active(configured)
-                                                    ? configured
-                                                    : 0.3f;
-                            int n_over_share = 0;
-                            if (splat._max_screen_share.is_valid() &&
-                                splat._max_screen_share.numel() > 0) {
-                                auto over = splat._max_screen_share.gt(limit).to(lfs::core::DataType::Int32).sum();
-                                n_over_share = over.template item<int>();
-                            }
-                            LOG_INFO("n_over_share={} strategy={}", n_over_share, strategy_->strategy_type());
-                        }
                         if (ppisp_ && params_.optimization.ppisp_active() && ppisp_->isFinalized()) {
                             ppisp_->log_eval_diagnostics();
                         }
@@ -8723,7 +8653,6 @@ namespace lfs::training {
             is_running_ = true; // Active setParams() calls queue from this point onward.
         }
         apply_pending_params_at_safe_point();
-        LOG_INFO("Starting training loop");
         lfs::diagnostics::VramProfiler::instance().mark("training_start");
         if (params_.optimization.gut && params_.optimization.use_normal_loss) {
             LOG_WARN("normal loss requested but the 3DGUT backend has no normal channel; normal terms are inactive");
@@ -8840,22 +8769,6 @@ namespace lfs::training {
                 }
             }
             aux_pipeline_config.load_normals = training_normal_priors_enabled(params_.optimization);
-            if (aux_pipeline_config.load_normals || params_.optimization.normal_consistency_weight > 0.0f) {
-                const auto mode = params_.optimization.mask_mode;
-                const bool user_masks_normal_terms =
-                    (mode == lfs::core::param::MaskMode::Segment ||
-                     mode == lfs::core::param::MaskMode::Ignore ||
-                     mode == lfs::core::param::MaskMode::SegmentAndIgnore) &&
-                    std::any_of(train_dataset_->get_cameras().begin(), train_dataset_->get_cameras().end(),
-                                [&](const auto& camera) {
-                                    return camera && (camera->has_mask() ||
-                                                      (params_.optimization.use_alpha_as_mask && camera->has_alpha()));
-                                });
-                LOG_INFO("Normal terms use user mask: {} (where available); prior-depth gate: count >= {}, weight >= {}",
-                         user_masks_normal_terms ? "yes" : "no",
-                         lfs::training::kernels::kNormalConsistencyMinValidCount,
-                         lfs::training::kernels::kNormalConsistencyMinValidWeight);
-            }
             if (aux_pipeline_config.load_normals) {
                 ensure_training_normal_maps(params_, train_dataset_->get_cameras());
                 if (val_dataset_) {
@@ -9319,7 +9232,6 @@ namespace lfs::training {
                 : terminal_save_policy.on_completion;
         if (authorize_terminal_save &&
             terminal_project_path) {
-            const auto terminal_save_started = std::chrono::steady_clock::now();
             saving_model_.store(true, std::memory_order_release);
             try {
                 LOG_INFO("Saving {} project at iteration {}...",
@@ -9383,9 +9295,6 @@ namespace lfs::training {
                     }));
                 }
             }
-            LOG_INFO("Terminal {} save phase took {:.3f}s",
-                     terminal_error ? "emergency" : (user_stopped ? "stop" : "completion"),
-                     std::chrono::duration<double>(std::chrono::steady_clock::now() - terminal_save_started).count());
             pending_snapshot_finish_reason_ =
                 lfs::io::project::TrainingFinishReason::None;
             saving_model_.store(false, std::memory_order_release);
@@ -9448,11 +9357,6 @@ namespace lfs::training {
         release_training_transient_state_at_boundary();
         resize_rasterizer_arena_at_boundary("B3 training end", true);
         lfs::core::Tensor::trim_memory_pool();
-        if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
-            // Emit arena growth and cross-module churn totals while the
-            // training-end counters still include the terminal trim.
-            arena->dump_statistics();
-        }
 
         auto& command_center = lfs::training::CommandCenter::instance();
         auto snapshot_guard = makeScopeGuard([&command_center, this]() {

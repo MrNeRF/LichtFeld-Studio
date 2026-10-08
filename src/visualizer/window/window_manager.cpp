@@ -685,17 +685,9 @@ namespace lfs::vis {
             return false;
         }
 
-        if (const char* const video_driver = SDL_GetCurrentVideoDriver(); video_driver) {
-            LOG_INFO("SDL video driver: {}", video_driver);
-        }
-
         const auto vulkan_info = probeVulkanLoader();
-        if (vulkan_info.enabled) {
-            if (vulkan_info.loader_available) {
-                LOG_INFO("Vulkan loader available: API {}", formatVulkanApiVersion(vulkan_info.api_version));
-            } else {
-                LOG_WARN("Vulkan viewer dependency is enabled, but the loader probe failed: {}", vulkan_info.error);
-            }
+        if (vulkan_info.enabled && !vulkan_info.loader_available) {
+            LOG_WARN("Vulkan viewer dependency is enabled, but the loader probe failed: {}", vulkan_info.error);
         }
 
         window_ = SDL_CreateWindow(
@@ -784,7 +776,6 @@ namespace lfs::vis {
             return false;
         }
         SDL_AddEventWatch(watchEvent, this);
-        LOG_INFO("Vulkan window context initialized");
         return true;
     }
 

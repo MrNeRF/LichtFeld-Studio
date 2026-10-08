@@ -1768,11 +1768,6 @@ class AssetIndex:
                     return False
                 self._cleanup_obsolete_storage()
                 _log.info("Migrated Asset Manager catalog to schema v%d", SCHEMA_VERSION)
-            _log.info(
-                "Loaded Asset Manager library with %d folders and %d projects",
-                len(self._folders),
-                len(self._projects),
-            )
             self._touch_catalog()
             return True
         except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:

@@ -1105,8 +1105,6 @@ namespace lfs::app {
                     if (!export_and_shutdown(trainer, with_export_folder(*params, ckpt_params_result->dataset.output_path)))
                         return 1;
                 } else {
-                    LOG_INFO("Starting headless training...");
-
                     if (const auto result = training::loadTrainingDataIntoScene(*params, scene); !result) {
                         LOG_ERROR("Failed to load training data: {}", result.error());
                         return 1;
@@ -1155,8 +1153,6 @@ namespace lfs::app {
                         return 1;
                 }
 
-                LOG_INFO("Headless training {}",
-                         coordinator.interrupted() ? "stopped by user" : "completed");
                 core::teardown_gpu_before_exit();
                 core::mark_clean_exit();
                 core::flush_and_exit(0);
@@ -1461,7 +1457,6 @@ namespace lfs::app {
         }
 
         void warmupCudaAsync() {
-            LOG_INFO("Initializing CUDA (async)...");
             cudaWarmupFuture() = std::async(std::launch::async, [] {
                 auto& profiler = lfs::diagnostics::VramProfiler::instance();
                 // NVML is intentionally first touched here, after the window

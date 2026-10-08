@@ -81,7 +81,6 @@ namespace lfs::event {
 
         current_language_ = initial_language;
         language_generation_.fetch_add(1, std::memory_order_release);
-        LOG_INFO("Language set to: {}", initial_language);
         return true;
     }
 

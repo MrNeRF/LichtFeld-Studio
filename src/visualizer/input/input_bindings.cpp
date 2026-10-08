@@ -429,9 +429,6 @@ namespace lfs::vis::input {
                     const auto current_name = getActionName(binding.action);
                     if (toLowerCopy(stored_desc) != toLowerCopy(current_name)) {
                         if (const auto remapped = findActionByDescription(stored_desc)) {
-                            LOG_INFO("Profile binding remap: '{}' was action {} ({}), now {} ({})",
-                                     stored_desc, static_cast<int>(binding.action), current_name,
-                                     static_cast<int>(*remapped), getActionName(*remapped));
                             binding.action = *remapped;
                             binding.description = getActionName(*remapped);
                             ++rewritten;
@@ -496,7 +493,6 @@ namespace lfs::vis::input {
             rewritten += migrateLoadedProfile(legacy_window_profile && version == 27 ? 28 : version);
 
             rebuildLookupMaps();
-            LOG_INFO("Loaded profile '{}' ({} bindings) from {}", current_profile_name_, bindings_.size(), lfs::core::path_to_utf8(path));
 
             // Auto-persist the canonical Default profile so disk stays current
             // after a versioned migration. User-imported files are left untouched;

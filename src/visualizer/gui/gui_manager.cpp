@@ -988,7 +988,6 @@ namespace lfs::vis::gui {
             int pen_x = kPad;
             int pen_y = kPad;
             int row_h = 0;
-            int max_y = 0;
 
             for (int code = 32; code < 128; ++code) {
                 if (FT_Load_Char(face, static_cast<FT_ULong>(code), FT_LOAD_RENDER) != 0) {
@@ -1032,7 +1031,6 @@ namespace lfs::vis::gui {
 
                 pen_x += w + kPad;
                 row_h = std::max(row_h, h);
-                max_y = std::max(max_y, pen_y + h);
             }
 
             if (!g_overlay_atlas.texture.upload(rgba.data(), kAtlasW, kAtlasW, 4)) {
@@ -1042,8 +1040,6 @@ namespace lfs::vis::gui {
 
             g_overlay_atlas.atlas_px_size = static_cast<float>(px);
             g_overlay_atlas.valid = true;
-            LOG_INFO("Overlay font atlas baked at {} px ({}x{} pixels used)",
-                     px, kAtlasW, max_y + kPad);
             return true;
         }
 
@@ -4493,8 +4489,6 @@ namespace lfs::vis::gui {
         rebuildFonts(scale);
         current_ui_scale_ = scale;
         lfs::python::request_redraw();
-
-        LOG_INFO("UI scale applied: {:.2f}", scale);
     }
 
     void GuiManager::init() {
@@ -4527,8 +4521,6 @@ namespace lfs::vis::gui {
             if (std::filesystem::exists(source_locale_dir) &&
                 std::filesystem::is_directory(source_locale_dir)) {
                 locale_dir = source_locale_dir;
-                LOG_INFO("Localization dev source enabled: {}",
-                         lfs::core::path_to_utf8(locale_dir));
             }
         }
 #endif
@@ -4545,7 +4537,6 @@ namespace lfs::vis::gui {
                     lfs::vis::clearLanguagePreference();
                 }
             }
-            LOG_INFO("Localization initialized with language: {}", loc.getCurrentLanguageName());
         }
 
         float saved_scale = lfs::vis::loadUiScalePreference();
@@ -4617,7 +4608,6 @@ namespace lfs::vis::gui {
         startup_overlay_.init(&rmlui_manager_);
         const bool startup_overlay_enabled = viewer_->options_.show_startup_overlay;
         if (!startup_overlay_enabled) {
-            LOG_INFO("Startup overlay disabled");
             startup_overlay_.dismiss();
         }
         rml_shell_frame_.init(&rmlui_manager_);
@@ -4840,11 +4830,6 @@ namespace lfs::vis::gui {
         // worker and adopt its result from the normal render tick.
         launchDevResourceScan();
         dev_resource_watch_.next_scan = std::chrono::steady_clock::now() + std::chrono::seconds(1);
-        LOG_INFO("Resource hot reload enabled (RmlUI: '{}', locales: '{}')",
-                 dev_resource_watch_.rml_dir.empty() ? std::string("<disabled>")
-                                                     : lfs::core::path_to_utf8(dev_resource_watch_.rml_dir),
-                 dev_resource_watch_.locale_dir.empty() ? std::string("<disabled>")
-                                                        : lfs::core::path_to_utf8(dev_resource_watch_.locale_dir));
 #endif
     }
 
@@ -5087,10 +5072,6 @@ namespace lfs::vis::gui {
                 reloadLocalizationResources();
             if (reload_rml || reload_locale)
                 reloadRmlResources();
-
-            LOG_INFO("Hot-reloaded dev resources{}{}",
-                     reload_rml ? " (RmlUI)" : "",
-                     reload_locale ? " (locales)" : "");
         }
 
         if (dev_resource_watch_.scan_future.valid())

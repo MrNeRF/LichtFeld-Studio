@@ -615,8 +615,6 @@ namespace lfs::mcp {
             ToolHandler handler = create_command_handler(op);
             register_tool(std::move(tool), std::move(handler));
         }
-
-        LOG_INFO("Generated {} MCP tools from CommandCenter", ops.size());
     }
 
     void register_core_tools() {

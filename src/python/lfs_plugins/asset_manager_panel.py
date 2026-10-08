@@ -3952,14 +3952,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             with self._folder_scan_lock:
                 self._folder_scan_error = bool(result.failed)
                 self._folder_scan_unavailable = bool(getattr(result, "unavailable", False))
-            _log.info(
-                "Asset folder scan: discovered=%d added=%d existing=%d failed=%d cancelled=%s",
-                result.discovered,
-                result.added,
-                result.already_cataloged,
-                result.failed,
-                result.cancelled,
-            )
         except Exception:
             with self._folder_scan_lock:
                 self._folder_scan_error = True
@@ -4098,11 +4090,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         visible_ids: List[str], generation: int,
     ) -> None:
         try:
-            verified = verify_catalog_projects(
+            verify_catalog_projects(
                 self._library_service or index, cancel_event, visible_asset_ids=visible_ids
             )
             self._catalog_verify_succeeded = not cancel_event.is_set()
-            _log.info("Asset catalog verify: verified=%d cancelled=%s", verified, cancel_event.is_set())
         except Exception as exc:
             _log.exception("Projects catalog verification failed path=%s", self.STORAGE_PATH)
             reason = str(exc)

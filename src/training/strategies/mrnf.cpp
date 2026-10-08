@@ -625,8 +625,6 @@ namespace lfs::training {
         // A point cloud that already fills the capacity leaves no room for seeds, so skip capturing views for them.
         if (n > 0 && (_params->max_cap <= 0 || static_cast<int64_t>(n) < int64_t{_params->max_cap}))
             _blob_seeder = std::make_unique<BlobSeeder>(_splat_data->means());
-
-        LOG_INFO("MRNF strategy initialized with {} Gaussians", n);
     }
 
     void MRNF::set_training_dataset(std::shared_ptr<CameraDataset> views) {

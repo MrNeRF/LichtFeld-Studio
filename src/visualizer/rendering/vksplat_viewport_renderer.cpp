@@ -3774,8 +3774,6 @@ namespace lfs::vis {
                 "vksplat.scratch.arena.grow bytes={}MiB generation={} (stable address)",
                 shared_scratch_.bytes >> 20,
                 shared_scratch_.generation);
-            LOG_INFO("VkSplat shared scratch arena grew to {} MiB (stable address)",
-                     shared_scratch_.bytes >> 20);
             return {};
         }
 
@@ -3827,9 +3825,6 @@ namespace lfs::vis {
             shared_scratch_.bytes >> 20,
             reserve_bytes >> 20,
             shared_scratch_.generation);
-        LOG_INFO("VkSplat shared scratch arena: {} MiB committed, {} MiB reserved (grows in place)",
-                 shared_scratch_.bytes >> 20,
-                 reserve_bytes >> 20);
         return {};
     }
 
@@ -3880,8 +3875,6 @@ namespace lfs::vis {
             shared_scratch_.bytes >> 20,
             shared_scratch_.generation,
             shared_scratch_.imported_buffer.bound_chunks);
-        LOG_INFO("VkSplat shared scratch chunks bound after grow: {} MiB (no re-import)",
-                 shared_scratch_.bytes >> 20);
         return {};
     }
 
@@ -5285,12 +5278,6 @@ namespace lfs::vis {
             input_snapshot_changed &&
             matchesExceptDeletedMask(uploaded_input_snapshot, current_input_snapshot);
         const bool input_upload_requested = force_upload || input_snapshot_changed;
-        const bool first_q16_sh_enable =
-            input_snapshot_changed &&
-            uploaded_input_snapshot.valid() &&
-            uploaded_input_snapshot.active_sh_degree <= 0 &&
-            current_input_snapshot.active_sh_degree > 0 &&
-            current_input_snapshot.shn_q16;
 
         std::shared_ptr<VulkanExternalTensorStorage> means_storage, sh0_storage, shN_storage,
             shN_bounds_storage, rotations_storage, scaling_storage, opacity_storage, deleted_storage;
@@ -5365,19 +5352,6 @@ namespace lfs::vis {
             use_external_sh
                 ? external_layout
                 : (omit_layout_holder ? **omit_layout_holder : upload_layout);
-        if (first_q16_sh_enable) {
-            LOG_INFO(
-                "VkSplat first q16 SH enable: active_sh={} max_sh={} N={} gen={} "
-                "n_cells={} codes={} bounds={} (generation_checked={})",
-                current_input_snapshot.active_sh_degree,
-                current_input_snapshot.max_sh_degree,
-                current_input_snapshot.count,
-                current_input_snapshot.exportable_generation,
-                q16_bind.n_cells_per_prim,
-                static_cast<const void*>(q16_bind.codes),
-                static_cast<const void*>(q16_bind.bounds),
-                q16_bind.generation_checked);
-        }
 
         std::vector<std::string> input_copy_reasons;
         const auto note_missing_storage =

@@ -678,10 +678,6 @@ namespace lfs::vis {
             timed("vulkan_init.createCommandPool", [&] { return createCommandPool(); }) &&
             timed("vulkan_init.createCommandBuffers", [&] { return createCommandBuffers(); }) &&
             timed("vulkan_init.createSyncObjects", [&] { return createSyncObjects(); });
-        LOG_INFO("Vulkan diagnostics: validation_layers={}, debug_utils={}, validation_errors_fatal={}",
-                 validation_enabled_ ? "active" : "inactive",
-                 debugObjectNamingEnabled() ? "active" : "inactive",
-                 validation_errors_fatal_ ? "active" : "inactive");
         return initialized;
     }
 
@@ -2917,8 +2913,6 @@ namespace lfs::vis {
         vkGetDeviceQueue(device_, present_queue_family_, 0, &present_queue_);
         if (has_dedicated_compute_queue_) {
             vkGetDeviceQueue(device_, compute_queue_family_, 0, &compute_queue_);
-            LOG_INFO("Vulkan: dedicated async-compute queue family {} (graphics family {})",
-                     compute_queue_family_, graphics_queue_family_);
         } else {
             // Alias graphics so callers can submit unconditionally on computeQueue().
             compute_queue_ = graphics_queue_;
@@ -2927,9 +2921,6 @@ namespace lfs::vis {
         }
         if (has_dedicated_transfer_queue_) {
             vkGetDeviceQueue(device_, transfer_queue_family_, 0, &transfer_queue_);
-            LOG_INFO("Vulkan: dedicated transfer queue family {} (graphics family {})",
-                     transfer_queue_family_,
-                     graphics_queue_family_);
         } else {
             transfer_queue_ = VK_NULL_HANDLE;
             LOG_INFO("Vulkan: no dedicated transfer family; image readbacks use graphics family {}",
@@ -2963,13 +2954,6 @@ namespace lfs::vis {
             lfs::core::set_shareable_device_allocation_limit(
                 static_cast<std::size_t>(maint3.maxMemoryAllocationSize));
         }
-        LOG_INFO("Vulkan sparseBinding: feature={} graphics_queue_sparse={} enabled={} "
-                 "bufferDeviceAddress={} maxMemoryAllocationSize={:#x}",
-                 sparse_binding_supported,
-                 graphics_queue_sparse,
-                 sparse_binding_enabled_,
-                 buffer_device_address_enabled_,
-                 static_cast<unsigned long long>(maint3.maxMemoryAllocationSize));
         swapchain_maintenance1_enabled_ = enable_swapchain_maintenance1;
         has_push_descriptor_ = enable_push_descriptor;
         has_conditional_rendering_ = enable_conditional_rendering;
@@ -2986,21 +2970,6 @@ namespace lfs::vis {
         if (!external_semaphore_interop_enabled_) {
             return fail("Vulkan external timeline-semaphore interop is required (KHR_external_semaphore + platform variant); device is missing the extension(s)");
         }
-        LOG_INFO("Vulkan external memory interop enabled{}",
-                 external_memory_dedicated_allocation_enabled_ ? " with dedicated allocations" : "");
-        if (lfs::core::shareable_allocation_limited()) {
-            LOG_INFO("Vulkan external memory interop shareable ceiling: {} bytes ({})",
-                     lfs::core::max_shareable_allocation_bytes(),
-                     lfs::core::shareable_allocation_limit_from_env() ? "env override"
-                                                                      : "platform default");
-        }
-        LOG_INFO("Vulkan external timeline semaphore interop enabled");
-        LOG_INFO("Vulkan optional features: push_descriptor={} host_image_copy={} swapchain_maintenance1={} fill_mode_non_solid={} wide_lines={}",
-                 has_push_descriptor_,
-                 has_host_image_copy_,
-                 swapchain_maintenance1_enabled_,
-                 has_fill_mode_non_solid_,
-                 has_wide_lines_);
         return true;
     }
 
@@ -4672,25 +4641,14 @@ namespace lfs::vis {
         swapchain_extent_fixed_to_surface_ = extent_fixed_to_surface;
         swapchain_present_scaling_enabled_ = use_present_scaling;
         has_hdr_ = surface_format.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-        if (old_swapchain == VK_NULL_HANDLE) {
-            LOG_INFO("Vulkan swapchain: {} images, extent {}x{}, format {}, color space {}{}{}",
-                     image_count,
-                     extent.width,
-                     extent.height,
-                     vkFormatToString(surface_format.format),
-                     vkColorSpaceToString(surface_format.colorSpace),
-                     has_hdr_ ? " (HDR-capable)" : "",
-                     use_present_scaling ? " (one-to-one present scaling)" : "");
-        } else {
-            LOG_DEBUG("Vulkan swapchain: {} images, extent {}x{}, format {}, color space {}{}{}",
-                      image_count,
-                      extent.width,
-                      extent.height,
-                      vkFormatToString(surface_format.format),
-                      vkColorSpaceToString(surface_format.colorSpace),
-                      has_hdr_ ? " (HDR-capable)" : "",
-                      use_present_scaling ? " (one-to-one present scaling)" : "");
-        }
+        LOG_DEBUG("Vulkan swapchain: {} images, extent {}x{}, format {}, color space {}{}{}",
+                  image_count,
+                  extent.width,
+                  extent.height,
+                  vkFormatToString(surface_format.format),
+                  vkColorSpaceToString(surface_format.colorSpace),
+                  has_hdr_ ? " (HDR-capable)" : "",
+                  use_present_scaling ? " (one-to-one present scaling)" : "");
 
         // One image-available semaphore per swapchain image (NOT per frame slot). The
         // active index is captured in beginFrame and held until endFrame's submit waits
@@ -5077,11 +5035,6 @@ namespace lfs::vis {
         setDebugObjectName(VK_OBJECT_TYPE_PIPELINE_CACHE,
                            pipeline_cache_,
                            "lichtfeld.pipeline_cache");
-        if (!cache_data.empty()) {
-            LOG_INFO("Loaded Vulkan pipeline cache: {} ({} bytes)",
-                     lfs::core::path_to_utf8(*path),
-                     cache_data.size());
-        }
         return true;
     }
 
@@ -5130,9 +5083,6 @@ namespace lfs::vis {
                             }
                             if (!rename_ec) {
                                 saved_pipeline_cache_hash_ = cache_hash;
-                                LOG_INFO("Saved Vulkan pipeline cache: {} ({} bytes)",
-                                         lfs::core::path_to_utf8(*path),
-                                         cache_data.size());
                             }
                         }
                     }

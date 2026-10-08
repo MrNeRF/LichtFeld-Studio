@@ -79,23 +79,12 @@ namespace lfs::io {
 
         bool has_points_ply = !points_ply.empty();
 
-        LOG_INFO("[COLMAP_LOAD] discovery path='{}' cameras_bin={} images_bin={} points_bin={} cameras_txt={} images_txt={} points_txt={} points_ply={}",
-                 lfs::core::path_to_utf8(path),
-                 has_cameras,
-                 has_images,
-                 has_points,
-                 has_cameras_text,
-                 has_images_text,
-                 has_points_text,
-                 has_points_ply);
-
         if ((has_cameras || has_images || has_points) &&
             (has_cameras_text || has_images_text || has_points_text)) {
             LOG_WARN("Found both binary and text COLMAP files. Prioritizing binary files.");
         }
 
         bool trying_text = !(has_cameras && has_images) && (has_cameras_text && has_images_text);
-        LOG_INFO("Loading COLMAP in {} format", trying_text ? "text" : "binary");
 
         // Validate we have required files
         if ((!has_cameras || !has_images) && !trying_text) {
@@ -395,7 +384,6 @@ namespace lfs::io {
 
             auto scene_center_cpu = scene_center.cpu();
             const float* sc_ptr = scene_center_cpu.ptr<float>();
-            size_t num_cameras = cameras.size();
 
             LoadResult result{
                 .data = LoadedScene{
@@ -412,8 +400,6 @@ namespace lfs::io {
                 result.warnings.push_back("No sparse point cloud found - using random initialization");
             }
 
-            LOG_INFO("COLMAP dataset loaded successfully in {}ms", load_time.count());
-            LOG_INFO("  - {} cameras", num_cameras);
             LOG_DEBUG("  - Scene center: [{:.3f}, {:.3f}, {:.3f}]",
                       sc_ptr[0], sc_ptr[1], sc_ptr[2]);
 

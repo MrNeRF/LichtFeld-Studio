@@ -2978,8 +2978,6 @@ namespace lfs::core {
             }
 
             LOG_INFO("Scene scale: {}", scene_scale);
-            LOG_INFO("Initialized SplatData: {} points, max SH degree: {}, SH coefficients: {}, sh0 shape: {}, shN shape: {}",
-                     num_points, params.optimization.sh_degree, feature_shape, sh0_.shape().str(), shN_.shape().str());
 
             auto result = SplatData(
                 params.optimization.sh_degree,

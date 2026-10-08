@@ -151,24 +151,6 @@ namespace lfs::core {
             std::uint32_t boundaries_since_growth = 0;
         };
 
-        struct GrowthTiming {
-            mutable std::mutex mutex;
-            uint64_t commit_attempts_warmup = 0;
-            uint64_t commit_attempts_steady = 0;
-            uint64_t commit_events_warmup = 0;
-            uint64_t commit_events_steady = 0;
-            uint64_t commit_time_us_warmup = 0;
-            uint64_t commit_time_us_steady = 0;
-            uint64_t growth_path_time_us_warmup = 0;
-            uint64_t growth_path_time_us_steady = 0;
-            uint64_t growth_sync_time_us_warmup = 0;
-            uint64_t growth_sync_time_us_steady = 0;
-            uint64_t b1_events = 0;
-            uint64_t b1_time_us = 0;
-            uint64_t b3_events = 0;
-            uint64_t b3_time_us = 0;
-        };
-
         std::unordered_map<int, std::unique_ptr<Arena>> device_arenas_;
         std::unordered_map<uint64_t, FrameContext> frame_contexts_;
         Config config_;
@@ -177,10 +159,8 @@ namespace lfs::core {
         mutable std::mutex frame_mutex_;
         std::atomic<uint64_t> frame_counter_{0};
         std::atomic<uint64_t> generation_counter_{0};
-        std::shared_ptr<GrowthTiming> growth_timing_ = std::make_shared<GrowthTiming>();
 
         // Performance tracking
-        std::chrono::steady_clock::time_point creation_time_;
         std::atomic<size_t> total_frames_processed_{0};
 
         // The arena uses a single offset per device, so only one live frame can own it safely.
@@ -402,7 +382,6 @@ namespace lfs::core {
 
         Statistics get_statistics() const;
         MemoryInfo get_memory_info() const;
-        void dump_statistics() const;
         void log_memory_status(uint64_t frame_id, bool force = false);
         [[nodiscard]] bool has_last_frame_event_for_testing() const;
 
@@ -442,15 +421,10 @@ namespace lfs::core {
         bool grow_arena(Arena& arena, size_t required_size);
         size_t align_size(size_t size) const;
         void record_allocation(uint64_t frame_id, const BufferHandle& handle);
-        bool commit_more_memory(Arena& arena, size_t required_size, uint64_t frame_id);
+        bool commit_more_memory(Arena& arena, size_t required_size);
         void decommit_unused_memory(Arena& arena, bool release_all = false,
                                     bool allow_reclaim = true);
         bool shrink_at_boundary(bool release_all);
-        void record_commit_timing(uint64_t frame_id, uint64_t elapsed_us, bool committed);
-        void record_growth_path_timing(uint64_t frame_id, uint64_t elapsed_us,
-                                       uint64_t sync_elapsed_us);
-        void record_boundary_timing(bool release_all, uint64_t frame_count, uint64_t elapsed_us);
-        void dump_growth_timing() const;
         bool is_vmm_supported(int device) const;
         void empty_cuda_cache();
     };

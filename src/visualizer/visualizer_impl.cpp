@@ -1989,8 +1989,6 @@ namespace lfs::vis {
                 .enabled = false,
                 .voxel_size = 0.01f}
                 .emit();
-
-            LOG_INFO("Switched to splat rendering mode (training started)");
         });
 
         state::TrainingResumed::when([sync_viewer_mip_filter_with_training](const auto&) {
@@ -2301,7 +2299,6 @@ namespace lfs::vis {
             }
         } else if (!pending_dataset_path_.empty()) {
             auto path = std::exchange(pending_dataset_path_, {});
-            LOG_INFO("Queueing dataset import: {}", lfs::core::path_to_utf8(path));
             const auto& params = data_loader_->getParameters();
             cmd::LoadFile{
                 .path = path,
