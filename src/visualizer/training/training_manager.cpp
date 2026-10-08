@@ -1601,6 +1601,9 @@ namespace lfs::vis {
         }
 
         LOG_DEBUG("Requesting training stop");
+        if (getState() == TrainingState::Running) {
+            accumulated_training_time_ += std::chrono::steady_clock::now() - training_start_time_;
+        }
         if (!state_machine_.transitionTo(TrainingState::Stopping)) {
             LOG_WARN("Failed to transition to Stopping");
         }
