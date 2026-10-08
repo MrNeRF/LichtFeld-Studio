@@ -45,6 +45,18 @@ def test_every_scrollbar_uses_the_theme_size():
             )
 
 
+def test_narrow_tab_and_tool_bars_wrap_instead_of_clipping():
+    # Catches the HUD tabs overlapping and the console toolbar cutting off actions at large UI scales.
+    resources_dir = PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    overlay_rcss = (resources_dir / "viewport_overlay.rcss").read_text(encoding="utf-8")
+    assert "flex-wrap: wrap;" in _rule_body(overlay_rcss, ".vram-hud-tabs")
+    assert "flex: 1 0 auto;" in _rule_body(overlay_rcss, ".vram-hud-tab")
+
+    console_rcss = (resources_dir / "python_console_panel.rcss").read_text(encoding="utf-8")
+    assert "flex-wrap: wrap;" in _rule_body(console_rcss, ".toolbar-actions")
+    assert not re.search(r"(?<![-\w])height:", _rule_body(console_rcss, "#python-console-toolbar"))
+
+
 def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
     rml = (
         PROJECT_ROOT
