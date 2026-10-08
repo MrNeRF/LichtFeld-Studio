@@ -6,6 +6,7 @@
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
+#include "gui/film_strip_renderer.hpp"
 #include "gui/gui_manager.hpp"
 #include "io/video/video_export_options.hpp"
 #include "licht_test_support.hpp"
@@ -24,6 +25,10 @@
 #include "sequencer/timeline_view_math.hpp"
 #include "visualizer_impl.hpp"
 
+#include <RmlUi/Core.h>
+#include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/ElementInstancer.h>
+#include <RmlUi/Core/RenderInterface.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -34,6 +39,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <limits>
+#include <memory>
 #include <nlohmann/json.hpp>
 
 namespace {
@@ -1773,3 +1779,215 @@ namespace {
     }
 
 } // namespace
+
+namespace lfs::vis {
+
+    class SequencerMarkupRegressionTest : public ::testing::Test {
+    protected:
+        class CountingElement : public Rml::Element {
+        public:
+            explicit CountingElement(const Rml::String& tag) : Rml::Element(tag) {}
+            void SetInnerRML(const Rml::String& markup) override {
+                ++replacements;
+                Rml::Element::SetInnerRML(markup);
+            }
+            size_t replacements = 0;
+        };
+
+        class StubRenderer final : public Rml::RenderInterface {
+        public:
+            Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex>, Rml::Span<const int>) override { return 1; }
+            void RenderGeometry(Rml::CompiledGeometryHandle, Rml::Vector2f, Rml::TextureHandle) override {}
+            void ReleaseGeometry(Rml::CompiledGeometryHandle) override {}
+            Rml::TextureHandle LoadTexture(Rml::Vector2i& dimensions, const Rml::String&) override {
+                dimensions = {16, 16};
+                return 1;
+            }
+            Rml::TextureHandle GenerateTexture(Rml::Span<const Rml::byte>, Rml::Vector2i) override { return 1; }
+            void ReleaseTexture(Rml::TextureHandle) override {}
+            void EnableScissorRegion(bool) override {}
+            void SetScissorRegion(Rml::Rectanglei) override {}
+        };
+
+        static void SetUpTestSuite() {
+            ASSERT_TRUE(Rml::Initialise());
+            Rml::Factory::RegisterElementInstancer("counted-sequencer", &instancer_);
+        }
+        static void TearDownTestSuite() { Rml::Shutdown(); }
+
+        void SetUp() override {
+            context_ = Rml::CreateContext("sequencer_markup", {1000, 300}, &renderer_);
+            ASSERT_NE(context_, nullptr);
+            panel_ = std::make_unique<RmlSequencerPanel>(controller_, ui_, &manager_);
+            createDocument();
+            for (int i = 0; i < 500; ++i) {
+                sequencer::Keyframe keyframe;
+                keyframe.time = static_cast<float>(i) * 0.1f;
+                controller_.addKeyframeAtTime(keyframe, keyframe.time);
+            }
+            panel_->setFilmStripAttached(true);
+            rebuild();
+        }
+        void TearDown() override {
+            panel_.reset();
+            ASSERT_TRUE(Rml::RemoveContext("sequencer_markup"));
+        }
+
+        void createDocument() {
+            document_ = context_->LoadDocumentFromMemory("<rml><head/><body/></rml>");
+            ASSERT_NE(document_, nullptr);
+            for (auto& element : elements_) {
+                auto owned = document_->CreateElement("counted-sequencer");
+                element = static_cast<CountingElement*>(owned.get());
+                document_->AppendChild(std::move(owned));
+            }
+            bindElements();
+        }
+        void bindElements() {
+            panel_->document_ = document_;
+            panel_->elements_cached_ = true;
+            panel_->cached_panel_width_ = 1000.0f;
+            panel_->el_film_strip_dividers_ = elements_[0];
+            panel_->el_film_strip_sprockets_top_ = elements_[1];
+            panel_->el_film_strip_sprockets_bottom_ = elements_[2];
+            panel_->el_film_strip_gaps_ = elements_[3];
+            panel_->el_film_strip_markers_ = elements_[4];
+            panel_->el_easing_segments_ = elements_[5];
+            panel_->el_easing_curves_ = elements_[6];
+            panel_->el_easing_indicators_ = elements_[7];
+        }
+        void rebuild() {
+            PanelInputState input;
+            input.mouse_x = input.mouse_y = -1.0f;
+            panel_->rebuildFilmStrip(0.0f, width_, 200.0f, input, nullptr, nullptr, film_strip_);
+            panel_->rebuildEasingStripe(0.0f, width_);
+        }
+        void rebuildFresh() {
+            panel_->clearElementCache();
+            bindElements();
+            rebuild();
+        }
+        auto markup() const {
+            std::array<std::string, 8> result;
+            for (size_t i = 0; i < elements_.size(); ++i)
+                result[i] = elements_[i]->GetInnerRML();
+            return result;
+        }
+        void expectFreshEquivalent() {
+            rebuild();
+            const auto cached = markup();
+            rebuildFresh();
+            EXPECT_EQ(markup(), cached);
+        }
+        size_t replacements() const {
+            size_t result = 0;
+            for (const auto* element : elements_)
+                result += element->replacements;
+            return result;
+        }
+        void resetCounters() {
+            for (auto* element : elements_)
+                element->replacements = 0;
+        }
+        void replaceDocument() {
+            panel_->clearElementCache();
+            context_->UnloadDocument(document_);
+            context_->Update();
+            createDocument();
+        }
+        void destroyGraphics() { panel_->destroyGraphicsResources(); }
+        void hover(std::optional<size_t> index) { panel_->hovered_keyframe_ = index; }
+
+        inline static StubRenderer renderer_;
+        inline static Rml::ElementInstancerGeneric<CountingElement> instancer_;
+        gui::RmlUIManager manager_;
+        SequencerController controller_;
+        gui::panels::SequencerUIState ui_;
+        gui::FilmStripRenderer film_strip_;
+        std::unique_ptr<RmlSequencerPanel> panel_;
+        Rml::Context* context_ = nullptr;
+        Rml::ElementDocument* document_ = nullptr;
+        std::array<CountingElement*, 8> elements_{};
+        float width_ = 960.0f;
+    };
+
+    TEST_F(SequencerMarkupRegressionTest, PlaybackRetainsUnchangedSubtrees) {
+        const auto expected = markup();
+        resetCounters();
+        for (int i = 1; i <= 20; ++i) {
+            controller_.seek(static_cast<float>(i) * 0.1f);
+            rebuild();
+        }
+        EXPECT_EQ(replacements(), 0u);
+        EXPECT_EQ(markup(), expected);
+    }
+
+    TEST_F(SequencerMarkupRegressionTest, ChangesAndResourceResetsMatchFreshMarkup) {
+        ASSERT_EQ(elements_[4]->GetNumChildren(), 500);
+        controller_.selectKeyframe(12);
+        expectFreshEquivalent();
+        EXPECT_TRUE(elements_[4]->GetChild(12)->IsClassSet("selected"));
+        hover(18);
+        expectFreshEquivalent();
+        EXPECT_TRUE(elements_[4]->GetChild(18)->IsClassSet("hovered"));
+        hover(std::nullopt);
+        expectFreshEquivalent();
+        controller_.removeSelectedKeyframe();
+        expectFreshEquivalent();
+        EXPECT_EQ(elements_[4]->GetNumChildren(), 499);
+        width_ = 640.0f;
+        panel_->setTimelineView(2.0f, 4.0f);
+        expectFreshEquivalent();
+        controller_.setKeyframeEasing(18, sequencer::EasingType::EASE_IN_OUT);
+        expectFreshEquivalent();
+        controller_.timeline().setClipDuration(75.0f);
+        expectFreshEquivalent();
+        panel_->setFilmStripAttached(false);
+        expectFreshEquivalent();
+        EXPECT_EQ(elements_[4]->GetNumChildren(), 0);
+        panel_->setFilmStripAttached(true);
+        expectFreshEquivalent();
+        const auto expected = markup();
+        destroyGraphics();
+        rebuild();
+        EXPECT_EQ(markup(), expected);
+        replaceDocument();
+        rebuild();
+        EXPECT_EQ(markup(), expected);
+        controller_.clear();
+        expectFreshEquivalent();
+        EXPECT_EQ(elements_[4]->GetNumChildren(), 0);
+        EXPECT_EQ(elements_[5]->GetNumChildren(), 0);
+    }
+
+    TEST_F(SequencerMarkupRegressionTest, RepeatedUpdatesAreCheaperThanRebuildingMarkup) {
+        // Same production formatter and Rml parser, with only cache reuse changed.
+        // Interleave batches and use a generous relative margin, not a wall-time limit.
+        const auto measure = [&](const bool fresh) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 10; ++i) {
+                if (fresh)
+                    rebuildFresh();
+                else
+                    rebuild();
+            }
+            return std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count();
+        };
+        std::array<double, 5> cached{}, fresh{};
+        for (size_t i = 0; i < cached.size(); ++i) {
+            if (i % 2 == 0) {
+                cached[i] = measure(false);
+                fresh[i] = measure(true);
+            } else {
+                fresh[i] = measure(true);
+                cached[i] = measure(false);
+            }
+        }
+        std::sort(cached.begin(), cached.end());
+        std::sort(fresh.begin(), fresh.end());
+        RecordProperty("cached_batch_us", std::to_string(cached[2]));
+        RecordProperty("fresh_batch_us", std::to_string(fresh[2]));
+        EXPECT_LT(cached[2], fresh[2] * 0.5);
+    }
+
+} // namespace lfs::vis

@@ -293,6 +293,7 @@ namespace lfs::vis {
     }
 
     void RmlSequencerPanel::destroyGraphicsResources() {
+        timeline_markup_.clear();
         clearPendingComposite();
         if (rml_manager_)
             rml_manager_->releaseCachedVulkanContext(direct_cache_);
@@ -324,6 +325,7 @@ namespace lfs::vis {
     }
 
     void RmlSequencerPanel::clearElementCache() {
+        timeline_markup_.clear();
         elements_cached_ = false;
         el_panel_ = nullptr;
         el_floating_header_ = nullptr;

@@ -15,6 +15,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace Rml {
@@ -161,11 +162,14 @@ namespace lfs::vis {
         void reloadResources();
 
     private:
+        friend class SequencerMarkupRegressionTest;
         void initContext(int width, int height);
 
         void syncTheme();
 
         void clearElementCache();
+        void setTimelineMarkup(Rml::Element* element, std::string markup);
+        std::unordered_map<Rml::Element*, std::string> timeline_markup_;
         void cacheElements();
         void updateButtonStates();
         void updatePlayhead();
