@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/utils/native_file_dialog.hpp"
+#include "gui/utils/file_dialog_path.hpp"
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -161,30 +162,6 @@ namespace lfs::vis::gui {
                 extension.erase(extension.begin());
             }
             return extension;
-        }
-
-        [[nodiscard]] std::string ensureDefaultExtension(std::string defaultName,
-                                                         const std::string_view extension) {
-            const std::filesystem::path normalizedPath =
-                defaultName.empty() ? std::filesystem::path{}
-                                    : lfs::core::utf8_to_path(defaultName).filename();
-            const std::string normalizedName =
-                normalizedPath.empty() ? std::string{} : lfs::core::path_to_utf8(normalizedPath);
-            if (normalizedName.empty() || extension.empty() ||
-                normalizedPath.extension() == extension) {
-                return normalizedName;
-            }
-            return normalizedName + std::string(extension);
-        }
-
-        [[nodiscard]] std::filesystem::path appendRequiredExtension(
-            std::filesystem::path path,
-            const std::string_view extension) {
-            if (path.empty() || extension.empty() || path.extension() == extension) {
-                return path;
-            }
-            path += std::string(extension);
-            return path;
         }
 
         [[nodiscard]] std::filesystem::path absoluteDialogDirectory(
@@ -393,7 +370,7 @@ namespace lfs::vis::gui {
                 dialogResult = NFD_OpenDialogU8_With(&selectedPath, &args);
             } else if (request.kind == DialogKind::SaveFile) {
                 const std::string defaultName =
-                    ensureDefaultExtension(request.default_name, request.required_extension);
+                    detail::saveDialogDefaultName(request.default_name, request.required_extension);
                 const char* const defaultNameArg =
                     defaultName.empty() ? nullptr : defaultName.c_str();
                 const nfdsavedialogu8args_t args{
@@ -433,7 +410,7 @@ namespace lfs::vis::gui {
 
             resultPath = lfs::core::utf8_to_path(selectedPath);
             NFD_FreePathU8(selectedPath);
-            resultPath = appendRequiredExtension(resultPath, request.required_extension);
+            resultPath = detail::appendRequiredExtension(resultPath, request.required_extension);
             return !resultPath.empty();
         }
 

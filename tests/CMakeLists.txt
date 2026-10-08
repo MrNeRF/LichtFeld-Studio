@@ -52,6 +52,29 @@ target_link_libraries(lichtfeld_sdl_coordinate_tests PRIVATE
 add_test(NAME lichtfeld.sdl_coordinates COMMAND lichtfeld_sdl_coordinate_tests)
 set_tests_properties(lichtfeld.sdl_coordinates PROPERTIES LABELS "fast;cpu;input" TIMEOUT 30)
 
+# Save-path policy and the production native-dialog adapter, without opening an OS picker.
+add_executable(lichtfeld_file_dialog_tests test_file_dialog_path.cpp)
+target_compile_features(lichtfeld_file_dialog_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_file_dialog_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/visualizer
+)
+target_link_libraries(lichtfeld_file_dialog_tests PRIVATE GTest::gtest_main)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET lfs_visualizer AND TARGET PkgConfig::LFS_GTK3)
+    target_sources(lichtfeld_file_dialog_tests PRIVATE
+        test_native_save_dialog.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/gui/utils/native_file_dialog.cpp
+    )
+    target_link_libraries(lichtfeld_file_dialog_tests PRIVATE
+        lfs_io lfs_logger SDL3::SDL3 nfd::nfd PkgConfig::LFS_GTK3
+    )
+    target_link_options(lichtfeld_file_dialog_tests PRIVATE
+        "-Wl,--wrap=NFD_Init" "-Wl,--wrap=NFD_Quit" "-Wl,--wrap=NFD_SaveDialogU8_With_Impl"
+    )
+endif()
+add_test(NAME lichtfeld.file_dialog_paths COMMAND lichtfeld_file_dialog_tests)
+set_tests_properties(lichtfeld.file_dialog_paths PROPERTIES LABELS "fast;cpu;io" TIMEOUT 30)
+
 # =============================================================================
 # CPU-only visualizer tests (no LibTorch)
 # =============================================================================
