@@ -122,6 +122,8 @@ class HistogramPanel(Panel):
         self._custom_range_min_str = ""
         self._custom_range_max_str = ""
         self._uncommitted_range_inputs: set[str] = set()
+        self._range_metric_id: str | None = None
+        self._compare_y_range_metric_id: str | None = None
         self._compare_values: lf.Tensor | None = None
         self._compare_finite_mask: lf.Tensor | None = None
         self._compare_valid_x_values: lf.Tensor | None = None
@@ -368,6 +370,8 @@ class HistogramPanel(Panel):
         model.bind("histogram_bin_count", lambda: self._histogram_bin_count, self._set_histogram_bin_count)
         model.bind("compare_x_bin_count", lambda: self._compare_x_bin_count, self._set_compare_x_bin_count)
         model.bind("compare_y_bin_count", lambda: self._compare_y_bin_count, self._set_compare_y_bin_count)
+        model.bind_func("range_inputs_ready", self._range_inputs_ready)
+        model.bind_func("compare_y_range_inputs_ready", self._compare_y_range_inputs_ready)
         model.bind("range_min_str", lambda: self._custom_range_min_str, self._set_custom_range_min)
         model.bind("range_max_str", lambda: self._custom_range_max_str, self._set_custom_range_max)
         model.bind("compare_y_range_min_str",
@@ -624,11 +628,12 @@ class HistogramPanel(Panel):
         ]
 
     def _reset_custom_range(self):
+        # Keep the retained chart bounds until the reset result replaces them.
         self._uncommitted_range_inputs.difference_update(("min", "max"))
         self._custom_range_min_value = None
         self._custom_range_max_value = None
-        self._custom_range_min_str = self._format_range_input(self._auto_histogram_min)
-        self._custom_range_max_str = self._format_range_input(self._auto_histogram_max)
+        self._custom_range_min_str = self._format_range_input(self._primary_histogram_min)
+        self._custom_range_max_str = self._format_range_input(self._primary_histogram_max)
 
     @staticmethod
     def _format_range_input(value: float) -> str:
@@ -908,15 +913,27 @@ class HistogramPanel(Panel):
             return False
         return self._apply_compare_view_range(zoomed_x[0], zoomed_x[1], zoomed_y[0], zoomed_y[1])
 
+    def _range_inputs_ready(self):
+        return self._range_metric_id == self._metric_id
+
+    def _compare_y_range_inputs_ready(self):
+        return self._compare_y_range_metric_id == self._compare_metric_id
+
     def _set_custom_range_min(self, value):
         # Per-keystroke setter: just buffer the text. Commit happens on Enter or blur
         # via _commit_custom_range so the user can type freely without the input
         # snapping back mid-keystroke.
-        self._custom_range_min_str = str(value)
+        text = str(value)
+        if not self._range_inputs_ready() or text == self._custom_range_min_str:
+            return
+        self._custom_range_min_str = text
         self._uncommitted_range_inputs.add("min")
 
     def _set_custom_range_max(self, value):
-        self._custom_range_max_str = str(value)
+        text = str(value)
+        if not self._range_inputs_ready() or text == self._custom_range_max_str:
+            return
+        self._custom_range_max_str = text
         self._uncommitted_range_inputs.add("max")
 
     @staticmethod
@@ -937,9 +954,13 @@ class HistogramPanel(Panel):
         return abs(float(a) - float(b)) <= max(abs(float(b)) * 1e-6, 1e-9)
 
     def _commit_custom_range(self):
+        if not self._range_inputs_ready():
+            return
+        # Only typed text is a constraint; formatted bounds may be rounded or
+        # belong to the retained snapshot during an asynchronous metric change.
+        parsed_min = self._parse_range_input(self._custom_range_min_str) if "min" in self._uncommitted_range_inputs else None
+        parsed_max = self._parse_range_input(self._custom_range_max_str) if "max" in self._uncommitted_range_inputs else None
         self._uncommitted_range_inputs.difference_update(("min", "max"))
-        parsed_min = self._parse_range_input(self._custom_range_min_str)
-        parsed_max = self._parse_range_input(self._custom_range_max_str)
 
         new_min = parsed_min if parsed_min is not None else self._custom_range_min_value
         new_max = parsed_max if parsed_max is not None else self._custom_range_max_value
@@ -1014,21 +1035,31 @@ class HistogramPanel(Panel):
         self._uncommitted_range_inputs.difference_update(("y_min", "y_max"))
         self._compare_y_custom_range_min_value = None
         self._compare_y_custom_range_max_value = None
-        self._compare_y_custom_range_min_str = self._format_range_input(self._compare_y_auto_min)
-        self._compare_y_custom_range_max_str = self._format_range_input(self._compare_y_auto_max)
+        self._compare_y_custom_range_min_str = self._format_range_input(self._compare_y_min)
+        self._compare_y_custom_range_max_str = self._format_range_input(self._compare_y_max)
 
     def _set_compare_y_range_min(self, value):
-        self._compare_y_custom_range_min_str = str(value)
+        text = str(value)
+        if not self._compare_y_range_inputs_ready() or text == self._compare_y_custom_range_min_str:
+            return
+        self._compare_y_custom_range_min_str = text
         self._uncommitted_range_inputs.add("y_min")
 
     def _set_compare_y_range_max(self, value):
-        self._compare_y_custom_range_max_str = str(value)
+        text = str(value)
+        if not self._compare_y_range_inputs_ready() or text == self._compare_y_custom_range_max_str:
+            return
+        self._compare_y_custom_range_max_str = text
         self._uncommitted_range_inputs.add("y_max")
 
     def _commit_compare_y_range(self):
+        if not self._compare_y_range_inputs_ready():
+            return
+        # Only typed text is a constraint; formatted bounds may be rounded or
+        # belong to the retained snapshot during an asynchronous metric change.
+        parsed_min = self._parse_range_input(self._compare_y_custom_range_min_str) if "y_min" in self._uncommitted_range_inputs else None
+        parsed_max = self._parse_range_input(self._compare_y_custom_range_max_str) if "y_max" in self._uncommitted_range_inputs else None
         self._uncommitted_range_inputs.difference_update(("y_min", "y_max"))
-        parsed_min = self._parse_range_input(self._compare_y_custom_range_min_str)
-        parsed_max = self._parse_range_input(self._compare_y_custom_range_max_str)
 
         new_min = parsed_min if parsed_min is not None else self._compare_y_custom_range_min_value
         new_max = parsed_max if parsed_max is not None else self._compare_y_custom_range_max_value
@@ -1584,6 +1615,7 @@ class HistogramPanel(Panel):
         self._auto_histogram_max = primary["auto_max"]
         self._primary_histogram_min = primary["histogram_min"]
         self._primary_histogram_max = primary["histogram_max"]
+        self._range_metric_id = self._metric_id
         # Enter may blur before this result arrives and restore the previous bounds.
         # Publish the snapped bounds without replacing a newer, uncommitted edit.
         if "min" not in self._uncommitted_range_inputs:
@@ -1644,6 +1676,7 @@ class HistogramPanel(Panel):
         self._compare_x_max = compare["x_max"]
         self._compare_y_min = compare["y_min"]
         self._compare_y_max = compare["y_max"]
+        self._compare_y_range_metric_id = self._compare_metric_id
         if "y_min" not in self._uncommitted_range_inputs:
             self._compare_y_custom_range_min_str = self._format_range_input(self._compare_y_min)
         if "y_max" not in self._uncommitted_range_inputs:

@@ -1560,7 +1560,11 @@ def pending_range_panel(histogram_panel_module, lf, numpy, monkeypatch):
     values = numpy.array([0.1, 0.2, 0.4, 0.6, 0.8, 0.9], dtype=numpy.float32)
     opacity = lf.Tensor.from_numpy(values)
     scaling = lf.Tensor.from_numpy(numpy.repeat(values[:, None], 3, axis=1))
-    model = SimpleNamespace(num_points=len(values), get_opacity=lambda: opacity, get_scaling=lambda: scaling)
+    means = lf.Tensor.from_numpy(numpy.array([
+        [-40, -10, 0], [-2, -5, 0], [0, 0, 0], [2, 5, 0], [3, 10, 0], [58, 20, 0],
+    ], dtype=numpy.float32))
+    model = SimpleNamespace(num_points=len(values), get_opacity=lambda: opacity,
+                            get_scaling=lambda: scaling, get_means=lambda: means)
     scene = SimpleNamespace(is_valid=lambda: True, combined_model=lambda: model, get_nodes=lambda: [])
     monkeypatch.setattr(module.lf, "get_scene", lambda: scene)
     monkeypatch.setattr(panel, "_scene_data_generation_value", lambda: 1)
@@ -1679,3 +1683,102 @@ def test_range_reset_and_cached_commit_update_fields(pending_range_panel, axis):
     assert not panel._computing
     assert getattr(panel, f"{prefix}_min_str") == "0.4"
     assert getattr(panel, f"{prefix}_min_value") == 0.35
+
+
+@pytest.mark.parametrize("compare", [False, True])
+def test_metric_switch_publishes_current_range_before_commit(pending_range_panel, compare):
+    panel, deliver = pending_range_panel
+    panel._set_compare_metric_id("position_y" if compare else "")
+    deliver()
+    for metric in ("erank", "position_x", "opacity"):
+        panel._set_metric_id(metric)
+        if panel._computing:
+            deliver()
+        assert panel._custom_range_min_str == panel._format_range_input(panel._primary_histogram_min)
+        assert panel._custom_range_max_str == panel._format_range_input(panel._primary_histogram_max)
+        if compare:
+            assert panel._compare_y_custom_range_min_str == panel._format_range_input(panel._compare_y_min)
+            assert panel._compare_y_custom_range_max_str == panel._format_range_input(panel._compare_y_max)
+        counts = list(panel._hist_counts)
+        # RmlUi can send the current value again on Return, without a text edit.
+        panel._set_custom_range_min(panel._custom_range_min_str)
+        panel._on_range_input_change(SimpleNamespace(get_bool_parameter=lambda name, default: name == "linebreak"))
+        panel._on_range_input_blur(None)
+        assert panel._custom_range_min_value is None
+        assert panel._custom_range_max_value is None
+        assert not panel._computing
+        assert panel._hist_counts == counts
+
+
+@pytest.mark.parametrize("side", ["min", "max"])
+@pytest.mark.parametrize("axis", ["primary", "compare_y"])
+def test_pending_metric_switch_cannot_commit_previous_metric(pending_range_panel, side, axis):
+    panel, deliver = pending_range_panel
+    compare = axis == "compare_y"
+    switch = panel._set_compare_metric_id if compare else panel._set_metric_id
+    commit = panel._commit_compare_y_range if compare else panel._commit_custom_range
+    prefix = "_compare_y_custom_range" if compare else "_custom_range"
+    setter = getattr(panel, f"_set_compare_y_range_{side}" if compare else f"_set_custom_range_{side}")
+    switch("position_x")
+    # The old snapshot stays visible while the different metric computes.
+    setter("0.5")
+    commit()
+    assert getattr(panel, f"{prefix}_min_value") is None
+    assert getattr(panel, f"{prefix}_max_value") is None
+    deliver()
+    assert getattr(panel, f"{prefix}_min_str") == "-40"
+    assert getattr(panel, f"{prefix}_max_str") == "58"
+    assert not panel._computing
+
+
+def test_compare_metric_switch_publishes_both_y_bounds(pending_range_panel):
+    panel, deliver = pending_range_panel
+    for metric in ("position_x", "erank", "scale_x"):
+        panel._set_compare_metric_id(metric)
+        if panel._computing:
+            deliver()
+        assert panel._compare_y_custom_range_min_str == panel._format_range_input(panel._compare_y_min)
+        assert panel._compare_y_custom_range_max_str == panel._format_range_input(panel._compare_y_max)
+        panel._set_compare_y_range_max(panel._compare_y_custom_range_max_str)
+        panel._on_compare_y_range_input_change(SimpleNamespace(get_bool_parameter=lambda name, default: name == "linebreak"))
+        panel._on_compare_y_range_input_blur(None)
+        assert panel._compare_y_custom_range_min_value is None
+        assert panel._compare_y_custom_range_max_value is None
+        assert not panel._computing
+
+
+@pytest.mark.parametrize("axis", ["primary", "compare_y"])
+def test_editing_one_bound_preserves_other_typed_constraint(pending_range_panel, axis):
+    panel, deliver = pending_range_panel
+    compare = axis == "compare_y"
+    prefix = "_compare_y_custom_range" if compare else "_custom_range"
+    set_min = panel._set_compare_y_range_min if compare else panel._set_custom_range_min
+    set_max = panel._set_compare_y_range_max if compare else panel._set_custom_range_max
+    commit = panel._commit_compare_y_range if compare else panel._commit_custom_range
+    set_min("0.35")
+    commit()
+    deliver()
+    assert getattr(panel, f"{prefix}_min_str") == "0.4"
+    set_max("0.65")
+    commit()
+    deliver()
+    assert getattr(panel, f"{prefix}_min_value") == 0.35
+    assert getattr(panel, f"{prefix}_max_value") == 0.65
+    assert getattr(panel, f"{prefix}_min_str") == "0.4"
+    assert getattr(panel, f"{prefix}_max_str") == "0.6"
+
+
+@pytest.mark.parametrize("axis", ["primary", "compare_y"])
+def test_outdated_metric_result_cannot_replace_current_range(pending_range_panel, axis):
+    panel, deliver = pending_range_panel
+    compare = axis == "compare_y"
+    switch = panel._set_compare_metric_id if compare else panel._set_metric_id
+    prefix = "_compare_y_custom_range" if compare else "_custom_range"
+    switch("position_x")
+    switch("position_y")
+    deliver()  # Older metric result is rejected by the existing token/key check.
+    assert panel._computing
+    deliver()
+    assert not panel._computing
+    assert getattr(panel, f"{prefix}_min_str") == "-10"
+    assert getattr(panel, f"{prefix}_max_str") == "20"

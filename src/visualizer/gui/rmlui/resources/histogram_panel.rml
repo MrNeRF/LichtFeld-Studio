@@ -31,9 +31,9 @@
 
         <div id="histogram-range-of-interest">
           <span class="range-of-interest-label">{{ range_of_interest_label }}</span>
-          <input id="range-min-input" type="text" class="number-input range-input" data-value="range_min_str" />
+          <input id="range-min-input" type="text" class="number-input range-input" data-value="range_min_str" data-attrif-disabled="!range_inputs_ready" />
           <span class="range-separator">–</span>
-          <input id="range-max-input" type="text" class="number-input range-input" data-value="range_max_str" />
+          <input id="range-max-input" type="text" class="number-input range-input" data-value="range_max_str" data-attrif-disabled="!range_inputs_ready" />
           <button class="btn btn--secondary range-reset"
                   data-event-click="reset_range()"
                   data-attrif-disabled="!has_custom_range"><span class="btn-label">{{ reset_range_label }}</span></button>
@@ -84,13 +84,13 @@
           <div id="compare-range-of-interest">
             <span class="range-of-interest-label">{{ range_of_interest_label }}</span>
             <span class="compare-axis-marker">X</span>
-            <input id="compare-range-x-min-input" type="text" class="number-input range-input" data-value="range_min_str" />
+            <input id="compare-range-x-min-input" type="text" class="number-input range-input" data-value="range_min_str" data-attrif-disabled="!range_inputs_ready" />
             <span class="range-separator">–</span>
-            <input id="compare-range-x-max-input" type="text" class="number-input range-input" data-value="range_max_str" />
+            <input id="compare-range-x-max-input" type="text" class="number-input range-input" data-value="range_max_str" data-attrif-disabled="!range_inputs_ready" />
             <span class="compare-axis-marker">Y</span>
-            <input id="compare-range-y-min-input" type="text" class="number-input range-input" data-value="compare_y_range_min_str" />
+            <input id="compare-range-y-min-input" type="text" class="number-input range-input" data-value="compare_y_range_min_str" data-attrif-disabled="!compare_y_range_inputs_ready" />
             <span class="range-separator">–</span>
-            <input id="compare-range-y-max-input" type="text" class="number-input range-input" data-value="compare_y_range_max_str" />
+            <input id="compare-range-y-max-input" type="text" class="number-input range-input" data-value="compare_y_range_max_str" data-attrif-disabled="!compare_y_range_inputs_ready" />
             <button class="btn btn--secondary range-reset"
                     data-event-click="reset_compare_range()"
                     data-attrif-disabled="!compare_has_custom_range"><span class="btn-label">{{ reset_range_label }}</span></button>
