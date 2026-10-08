@@ -134,6 +134,8 @@ namespace {
     }
 
     TEST(AlignDepth, VulkanPointCloudDepthMatchesSurfaceWithoutGaussians) {
+        if (!std::getenv("LFS_ASYNC_GPU_TESTS"))
+            GTEST_SKIP() << "Set LFS_ASYNC_GPU_TESTS=1 on a GPU host";
         // Device adoption must precede the first Vulkan tensor in the process.
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         EXPECT_EXIT({
