@@ -41,6 +41,7 @@
 #include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <regex>
 
 namespace {
 
@@ -1991,3 +1992,170 @@ namespace lfs::vis {
     }
 
 } // namespace lfs::vis
+
+namespace {
+    class SequencerToolbarLayoutTest : public ::testing::Test {
+    protected:
+        class Renderer final : public Rml::RenderInterface {
+        public:
+            Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex>, Rml::Span<const int>) override { return 1; }
+            void RenderGeometry(Rml::CompiledGeometryHandle, Rml::Vector2f, Rml::TextureHandle) override {}
+            void ReleaseGeometry(Rml::CompiledGeometryHandle) override {}
+            Rml::TextureHandle LoadTexture(Rml::Vector2i& dimensions, const Rml::String&) override {
+                dimensions = {16, 16};
+                return 1;
+            }
+            Rml::TextureHandle GenerateTexture(Rml::Span<const Rml::byte>, Rml::Vector2i) override { return 1; }
+            void ReleaseTexture(Rml::TextureHandle) override {}
+            void EnableScissorRegion(bool) override {}
+            void SetScissorRegion(Rml::Rectanglei) override {}
+        };
+        static void SetUpTestSuite() {
+            ASSERT_TRUE(Rml::Initialise());
+            ASSERT_TRUE(Rml::LoadFontFace((std::filesystem::path(PROJECT_ROOT_PATH) /
+                                           "src/visualizer/gui/assets/fonts/Inter-Regular.ttf")
+                                              .string()));
+        }
+        static void TearDownTestSuite() {
+            Rml::Shutdown();
+            lfs::event::LocalizationManager::getInstance().reset();
+        }
+        void SetUp() override {
+            context_ = Rml::CreateContext("sequencer_toolbar", {1240, 320}, &renderer_);
+            ASSERT_NE(context_, nullptr);
+        }
+        void TearDown() override { ASSERT_TRUE(Rml::RemoveContext("sequencer_toolbar")); }
+        static std::string read(const std::filesystem::path& path) {
+            std::ifstream file(path);
+            return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+        }
+        void load(int width, float scale = 1.0f, const std::string& language = "en") {
+            if (document_)
+                context_->UnloadDocument(document_);
+            context_->SetDimensions({width, 640});
+            context_->SetDensityIndependentPixelRatio(scale);
+            const auto root = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui";
+            const auto resources = root / "rmlui/resources";
+            auto rml = read(resources / "sequencer.rml");
+            auto& locales = lfs::event::LocalizationManager::getInstance();
+            ASSERT_TRUE(locales.initialize((root / "resources/locales").string()));
+            ASSERT_TRUE(locales.setLanguage(language));
+            const std::regex token("@tr:([A-Za-z0-9_.-]+)");
+            std::string localized;
+            size_t offset = 0;
+            for (std::sregex_iterator it(rml.begin(), rml.end(), token), end; it != end; ++it) {
+                localized.append(rml, offset, static_cast<size_t>(it->position()) - offset);
+                localized += Rml::StringUtilities::EncodeRml(locales.get((*it)[1].str()));
+                offset = static_cast<size_t>(it->position() + it->length());
+            }
+            localized.append(rml, offset, std::string::npos);
+            const auto begin = localized.find("<link");
+            const auto end = localized.find("/>", begin) + 2;
+            localized.replace(begin, end - begin, "<style>" + read(resources / "components.rcss") + read(resources / "sequencer.rcss") + "</style>");
+            document_ = context_->LoadDocumentFromMemory(localized);
+            ASSERT_NE(document_, nullptr);
+            document_->GetElementById("floating-header")->SetClass("hidden", false);
+            document_->GetElementById("panel")->SetClass("is-floating", true);
+            document_->Show();
+            context_->Update();
+        }
+        Rml::Element* row() { return document_->GetElementById("transport-row"); }
+        float right(Rml::Element* element) {
+            return element->GetAbsoluteOffset(Rml::BoxArea::Border).x + element->GetBox().GetSize(Rml::BoxArea::Border).x;
+        }
+        void expectReachable(const char* id) {
+            SCOPED_TRACE(id);
+            auto* element = document_->GetElementById(id);
+            ASSERT_NE(element, nullptr);
+            ASSERT_TRUE(element->IsVisible(true));
+            const auto origin = row()->GetAbsoluteOffset();
+            const auto x = element->GetAbsoluteOffset(Rml::BoxArea::Border).x;
+            row()->SetScrollLeft(row()->GetScrollLeft() + x - origin.x);
+            context_->Update();
+            EXPECT_GE(element->GetAbsoluteOffset(Rml::BoxArea::Border).x, origin.x - 1.0f);
+            EXPECT_LE(right(element), origin.x + row()->GetClientWidth() + 1.0f);
+            EXPECT_GE(element->GetAbsoluteOffset(Rml::BoxArea::Border).y, origin.y - 1.0f);
+            EXPECT_LE(element->GetAbsoluteOffset(Rml::BoxArea::Border).y + element->GetBox().GetSize(Rml::BoxArea::Border).y,
+                      origin.y + row()->GetClientHeight() + 1.0f);
+        }
+        inline static Renderer renderer_;
+        Rml::Context* context_ = nullptr;
+        Rml::ElementDocument* document_ = nullptr;
+    };
+
+    TEST_F(SequencerToolbarLayoutTest, OverflowControlsRemainReachable) {
+        for (const auto& language : {"en", "de"}) {
+            for (const auto [width, scale] : {std::pair{1240, 1.0f}, {600, 1.0f}, {1240, 2.0f}}) {
+                SCOPED_TRACE(std::format("{} width={} scale={}", language, width, scale));
+                load(width, scale, language);
+                ASSERT_GT(row()->GetScrollWidth(), row()->GetClientWidth());
+                // A scroll range without a visible affordance still leaves these controls unreachable.
+                ASSERT_GT(row()->GetOffsetHeight() - row()->GetClientHeight(), 2.0f * scale);
+                for (const auto* id : {"quality-scrub", "btn-export", "btn-clear", "btn-dock-toggle", "btn-play"})
+                    expectReachable(id);
+            }
+        }
+    }
+
+    TEST_F(SequencerToolbarLayoutTest, WideToolbarNeedsNoScrollingAndKeepsTimelinePosition) {
+        load(2400);
+        EXPECT_FLOAT_EQ(row()->GetScrollWidth(), row()->GetClientWidth());
+        EXPECT_FLOAT_EQ(row()->GetScrollLeft(), 0.0f);
+        EXPECT_FLOAT_EQ(row()->GetBox().GetSize(Rml::BoxArea::Content).y, 36.0f);
+        const auto timeline_y = document_->GetElementById("timeline")->GetAbsoluteOffset().y;
+        for (const auto* id : {"btn-play", "quality-scrub", "btn-export", "btn-clear", "btn-dock-toggle"})
+            expectReachable(id);
+        load(1240);
+        EXPECT_FLOAT_EQ(document_->GetElementById("timeline")->GetAbsoluteOffset().y, timeline_y);
+    }
+    TEST_F(SequencerToolbarLayoutTest, RecordsLayoutUpdateCost) {
+        load(1240);
+        std::array<double, 7> batches;
+        for (auto& elapsed : batches) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 100; ++i) {
+                context_->SetDimensions({1240 + i % 2, 640});
+                context_->Update();
+            }
+            elapsed = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / 100.0;
+        }
+        std::sort(batches.begin(), batches.end());
+        RecordProperty("median_layout_update_us", std::to_string(batches[3]));
+    }
+
+    TEST_F(SequencerToolbarLayoutTest, RecordsSteadyUpdateCostAgainstUnclippedReference) {
+        // At this width the old media rules hide no controls. Overriding overflow
+        // reproduces the previous layout for a same-process steady-update control.
+        const auto measure = [&](const bool reference) {
+            load(1240);
+            if (reference) {
+                row()->SetProperty("overflow-x", "visible");
+                row()->SetProperty("overflow-y", "visible");
+                context_->Update();
+            }
+            const auto origin = row()->GetAbsoluteOffset();
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 2000; ++i) {
+                context_->ProcessMouseMove(static_cast<int>(origin.x) + 30 + i % 2,
+                                           static_cast<int>(origin.y) + 12, 0);
+                context_->Update();
+            }
+            return std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / 2000.0;
+        };
+        std::array<double, 7> current{}, reference{};
+        for (size_t i = 0; i < current.size(); ++i) {
+            if (i % 2 == 0) {
+                current[i] = measure(false);
+                reference[i] = measure(true);
+            } else {
+                reference[i] = measure(true);
+                current[i] = measure(false);
+            }
+        }
+        std::sort(current.begin(), current.end());
+        std::sort(reference.begin(), reference.end());
+        RecordProperty("steady_update_us", std::to_string(current[3]));
+        RecordProperty("unclipped_reference_us", std::to_string(reference[3]));
+    }
+
+} // namespace
