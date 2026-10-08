@@ -936,6 +936,7 @@ namespace lfs::core {
                 std::pair{"mask_threshold", mask_threshold},
                 std::pair{"prune_opacity", prune_opacity},
                 std::pair{"grow_fraction", grow_fraction},
+                std::pair{"growth_exchange", growth_exchange},
                 std::pair{"opacity_decay", opacity_decay},
                 std::pair{"scale_decay", scale_decay},
                 std::pair{"bounds_percentile", bounds_percentile},

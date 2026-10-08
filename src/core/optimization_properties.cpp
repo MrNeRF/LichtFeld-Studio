@@ -570,6 +570,16 @@ namespace lfs::core::param {
             .ui_step(1000)
             .strategies({"mrnf"})
             .all_strategies()
+            .float_prop(&OptimizationParameters::growth_exchange,
+                        "growth_exchange", "Growth Exchange", d.growth_exchange, 0.0f, 0.2f,
+                        "While growth runs at the splat cap, share of splats freed per refine so growth can place them where the error is (MRNF)")
+            .locale("training.advanced.growth_exchange")
+            .tooltip("training.tooltip.growth_exchange")
+            .precision(3)
+            .ui_step(0.005)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .float_prop(&OptimizationParameters::opacity_decay,
                         "opacity_decay", "Opacity Decay", d.opacity_decay, 0.0f, 0.1f,
                         "Opacity decay rate per refine (MRNF)")

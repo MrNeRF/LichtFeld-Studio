@@ -161,6 +161,8 @@ namespace lfs::training {
         // is a zeroed float32 [N] per-view scratch vector.
         const float* edge_weight_map = nullptr;
         float* edge_score_out = nullptr;
+        // Optional float32 [N] vector raised to each splat's peak per-pixel blend weight.
+        float* dominance_out = nullptr;
     };
 
     [[nodiscard]] fast_lfs::rasterization::FusedAdamSettings make_fastgs_fused_adam_settings(
