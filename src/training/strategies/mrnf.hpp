@@ -102,6 +102,8 @@ namespace lfs::training {
         std::shared_ptr<CameraDataset> get_training_dataset() const override { return _views; }
         lfs::core::Tensor edge_score_scratch(int iter) override;
         void on_edge_score_accumulated(int iter) override;
+        lfs::core::Tensor dominance_scratch(int iter) override;
+        void on_dominance_accumulated(int iter) override;
 
     private:
         friend class ::MRNFStrategyTest_PermutationRepublishesFarMask_Test;
@@ -132,6 +134,23 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_LateLrAnnealDecaysOpacityAndColorAfterGrowth_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
+        // Frees rows the way refine() prunes them: free mask, deleted mask, zero
+        // quaternion (early exit in preprocessing) and fresh optimizer state.
+        void soft_delete_rows(const lfs::core::Tensor& indices);
+
+        // Growth exchange (growth_exchange > 0). At max_cap MRNF's error-guided growth has
+        // no budget; each refine frees the least important splats so growth can respend
+        // them. Importance is the peak per-pixel blend weight (FastGS backward; summed
+        // visibility elsewhere), kept as a leaky max that halves once per pass over the
+        // training views so splats seen only in rare views keep their score.
+        [[nodiscard]] bool growth_exchange_active(int iter) const;
+        [[nodiscard]] float exchange_importance_decay() const;
+        [[nodiscard]] int exchange_warmup_windows() const;
+        void update_exchange_importance();
+        size_t exchange_least_important(size_t count);
+        // Newly grown rows start with full importance, so they are not exchanged before
+        // they have been seen.
+        void protect_exchange_newborns();
         void refine(int iter);
         void grow_and_split(int iter, int pruned_count);
         // Splits the given parents and places their children (free slots first,
@@ -216,6 +235,13 @@ namespace lfs::training {
         bool _camera_hull_valid = false;
         lfs::core::Tensor _free_mask;
         bool _topology_frozen = false;
+
+        // Growth exchange state; transient (rebuilt after a resume or compaction).
+        lfs::core::Tensor _exchange_importance;         // [N] leaky max of the window signal
+        lfs::core::Tensor _exchange_dominance;          // [N] window peak blend weight (backward)
+        lfs::core::Tensor _exchange_free_before_growth; // free slots right before growth
+        int _exchange_windows = 0;                      // windows in the current importance memory
+        bool _exchange_dominance_written = false;       // a backward wrote dominance this window
 
         DensifyNScratch _densify_n_scratch;
         GumbelTopKScratch _gumbel_scratch;

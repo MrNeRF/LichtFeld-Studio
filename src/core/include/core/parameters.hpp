@@ -350,6 +350,10 @@ namespace lfs::core {
             float growth_grad_threshold = 0.003f;
             float grow_fraction = 0.07f;
             size_t grow_until_iter = 15000;
+            // While growth runs at max_cap: share of active splats freed per refine (lowest peak
+            // per-pixel blend weight over the last pass of training views) so error-guided growth
+            // can place them where the error is. 0 disables.
+            float growth_exchange = 0.0f;
             float opacity_decay = 0.004f;
             float scale_decay = 0.002f;
             float means_noise_weight = 50.0f;

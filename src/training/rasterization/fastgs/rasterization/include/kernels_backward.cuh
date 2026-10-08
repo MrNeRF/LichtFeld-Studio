@@ -580,11 +580,12 @@ namespace fast_lfs::rasterization::kernels::backward {
         float densification_weight;
         float densification_error_weighted;
         float edge_weighted_contribution;
+        float peak_blending_weight;
     };
 
     __device__ __forceinline__ BlendBackwardAccum make_zero_blend_backward_accum() {
         return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-                0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+                0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     }
 
     // Reverse-order index into [0, T_eff): high contributor first.
@@ -665,6 +666,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float* __restrict__ densification_error_map,
         const float* __restrict__ edge_weight_map,
         float* __restrict__ edge_score_out,
+        float* __restrict__ dominance_out,
         FastGSForwardStatus* __restrict__ status,
         const uint n_instances,
         const uint n_primitives,
@@ -1032,6 +1034,9 @@ namespace fast_lfs::rasterization::kernels::backward {
                         if (edge_score_out != nullptr) {
                             accum.edge_weighted_contribution += blending_weight * edge_weight;
                         }
+                        if (dominance_out != nullptr) {
+                            accum.peak_blending_weight = fmaxf(accum.peak_blending_weight, blending_weight);
+                        }
                         float normal_dot_grad = 0.0f;
                         if constexpr (NORMAL_CHANNEL) {
                             normal_dot_grad = dot(normal, grad_n);
@@ -1123,6 +1128,12 @@ namespace fast_lfs::rasterization::kernels::backward {
                         const float edge_score = edge_score_out != nullptr
                                                      ? reduce_field(accum.edge_weighted_contribution)
                                                      : 0.0f;
+                        float peak_weight = 0.0f;
+                        if (dominance_out != nullptr) {
+                            peak_weight = n_contrib == 1u
+                                              ? __shfl_sync(0xffffffffu, accum.peak_blending_weight, src_lane)
+                                              : lfs::core::warp_ops::warp_reduce_max(accum.peak_blending_weight);
+                        }
                         if (lane_id == 0u) {
                             atomicAdd(&grad_mean2d[work_idx].x, clamp_grad(mean_x));
                             atomicAdd(&grad_mean2d[work_idx].y, clamp_grad(mean_y));
@@ -1145,6 +1156,11 @@ namespace fast_lfs::rasterization::kernels::backward {
                             }
                             if (edge_score_out != nullptr) {
                                 atomicAdd(&edge_score_out[primitive_idx], edge_score);
+                            }
+                            // Blend weights are non-negative, so their bit patterns order like ints.
+                            if (dominance_out != nullptr && peak_weight > 0.0f) {
+                                atomicMax(reinterpret_cast<int*>(&dominance_out[primitive_idx]),
+                                          __float_as_int(peak_weight));
                             }
                         }
                     }

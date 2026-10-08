@@ -38,6 +38,7 @@
   "gradient_loss_weight": 0.0,
   "grow_fraction": 0.07000000029802322,
   "grow_until_iter": 15000,
+  "growth_exchange": 0.0,
   "growth_grad_threshold": 0.003000000026077032,
   "gut": false,
   "headless": false,
