@@ -6,6 +6,7 @@ import os
 import pathlib
 
 import lichtfeld
+import lichtfeld.media
 import lichtfeld.scene
 
 
@@ -944,5 +945,10 @@ def get_supported_extensions() -> list[str]:
 
 def save_image(path: str | os.PathLike, image: lichtfeld.Tensor, include_provenance: bool = True) -> None:
     """
-    Save image tensor to file (PNG, JPG, TIFF, EXR). Accepts [H,W,C] or [C,H,W] float [0,1]. include_provenance (default true) writes a full Comment stamp on PNG and JPEG; when false, a minimal build stamp is still embedded.
+    Save display image tensor to PNG, JPG or TIFF. Accepts [H,W,C] or [C,H,W] float [0,1]. include_provenance (default true) writes a full Comment stamp on PNG and JPEG; when false, a minimal build stamp is still embedded.
+    """
+
+def save_exr_image(path: str | os.PathLike, image: lichtfeld.Tensor, color: lichtfeld.media.FrameColor, options: lichtfeld.media.ExrOutputOptions, include_provenance: bool = True) -> None:
+    """
+    Save an HWC Float16/Float32 RGB/RGBA tensor through the shared EXR writer. Requires explicit linear color/alpha and ExrOutputOptions (HALF/FLOAT, ZIP/none, overwrite). No display quantization, transfer conversion or layout guessing; preserves signed/high-range samples. Uses a synchronized CPU transfer for GPU tensors; existing provenance is preserved.
     """

@@ -41,6 +41,7 @@ add_library(lfs_video STATIC
         hdr_tonemap_tensor.hpp
         hdr_tonemap_tensor.cpp
         linear_video_tensor.cpp
+        image_output.cpp
 )
 if(LFS_USE_VULKAN)
     target_sources(lfs_video PRIVATE hdr_libplacebo.cpp)

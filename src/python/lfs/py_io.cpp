@@ -23,6 +23,7 @@
 #include "core/splat_data.hpp"
 #include "core/user_paths.hpp"
 #include "io/exporter.hpp"
+#include "io/image_output.hpp"
 #include "io/loader.hpp"
 #include "io/ply_export_internal.hpp"
 #include "io/project_chapters.hpp"
@@ -1547,8 +1548,31 @@ namespace lfs::python {
             },
             nb::arg("path"), nb::arg("image"),
             nb::arg("include_provenance") = true,
-            "Save image tensor to file (PNG, JPG, TIFF, EXR). Accepts [H,W,C] or [C,H,W] float [0,1]. "
+            "Save display image tensor to PNG, JPG or TIFF. Accepts [H,W,C] or [C,H,W] float [0,1]. "
             "include_provenance (default true) writes a full Comment stamp on PNG and JPEG; when false, a minimal build stamp is still embedded.");
+        m.def(
+            "save_exr_image",
+            [](const std::filesystem::path& path, const PyTensor& image, media::FrameColor color,
+               const media::ExrOutputOptions& options, bool include_provenance) {
+                auto output = options;
+                if (output.provenance.empty())
+                    output.provenance = core::provenance_to_json(
+                        include_provenance ? core::make_provenance_stamp() : core::make_minimal_provenance_stamp());
+                media::FrameInfo info;
+                info.origin = media::FrameOrigin::External;
+                media::SinkResult result;
+                {
+                    nb::gil_scoped_release release;
+                    result = io::writeExrImage(path, image.tensor(), color, output, info);
+                }
+                if (!result)
+                    throw Exception(result.error());
+            },
+            nb::arg("path"), nb::arg("image"), nb::arg("color"), nb::arg("options"), nb::arg("include_provenance") = true,
+            "Save an HWC Float16/Float32 RGB/RGBA tensor through the shared EXR writer. "
+            "Requires explicit linear color/alpha and ExrOutputOptions (HALF/FLOAT, ZIP/none, overwrite). "
+            "No display quantization, transfer conversion or layout guessing; preserves signed/high-range samples. "
+            "Uses a synchronized CPU transfer for GPU tensors; existing provenance is preserved.");
     }
 
 } // namespace lfs::python

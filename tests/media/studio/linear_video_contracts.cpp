@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/crash_handler.hpp"
 #include "core/gpu_backend_fwd.hpp"
+#include "core/image_codecs.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_color.hpp"
 #include "core/tensor_upload.hpp"
+#include "io/image_output.hpp"
 #include "media/video_color.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -16,6 +19,66 @@
 namespace lfs::io {
     std::unique_ptr<media::detail::LinearVideoRenderer> createLinearTensorRenderer();
 }
+namespace {
+    void imageOutputContracts(lfs::core::Device device) {
+        using namespace lfs;
+        const auto path = std::filesystem::temp_directory_path() /
+                          ("lfs-tensor-image-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".exr");
+        struct Cleanup {
+            std::filesystem::path path;
+            ~Cleanup() {
+                std::error_code ignored;
+                std::filesystem::remove(path, ignored);
+            }
+        } cleanup{path};
+        const std::vector<float> values{-.25f, .125f, 2.f, .5f, .5f, 1.f, .25f, .25f};
+        const auto host = core::Tensor::from_vector(values, {1, 2, 4}, core::Device::CPU);
+        const media::FrameColor color{media::ColorTransfer::Linear, media::ColorPrimaries::Bt709, media::AlphaMode::Independent};
+        media::FrameInfo info;
+        info.origin = media::FrameOrigin::Rendered;
+        for (const auto dtype : {core::DataType::Float32, core::DataType::Float16}) {
+            const auto source = host.to(device).to(dtype);
+            for (const auto precision : {media::ExrPrecision::Half, media::ExrPrecision::Float}) {
+                media::ExrOutputOptions options;
+                options.precision = precision;
+                options.overwrite = true;
+                auto result = io::writeExrImage(path, source, color, options, info);
+                if (!result)
+                    throw Exception(result.error());
+                core::image_codecs::Image decoded;
+                std::string error;
+                if (!core::image_codecs::decode(path, decoded, error) || decoded.width != 2 || decoded.height != 1 ||
+                    decoded.channels != 4 || decoded.sample_type != core::image_codecs::SampleType::Float32)
+                    throw std::runtime_error("Tensor EXR did not retain dimensions/channels/float precision: " + error);
+                for (size_t pixel = 0; pixel < 2; ++pixel)
+                    for (size_t c = 0; c < 4; ++c) {
+                        float actual;
+                        std::memcpy(&actual, decoded.data.data() + (pixel * 4 + c) * sizeof(float), sizeof(float));
+                        const auto expected = values[pixel * 4 + c] * (c == 3 ? 1.f : values[pixel * 4 + 3]);
+                        if (actual != expected)
+                            throw std::runtime_error("Tensor EXR loses signed/high-range samples or premultiplies alpha incorrectly");
+                    }
+            }
+        }
+        const auto collision = io::writeExrImage(path, host, color);
+        if (collision || collision.error().code() != ErrorCode::AlreadyExists)
+            throw std::runtime_error("Tensor EXR collision policy differs from shared writer");
+        media::ExrOutputOptions cancelled;
+        cancelled.overwrite = true;
+        cancelled.cancelled = [] { return true; };
+        const auto stopped = io::writeExrImage(path, host, color, cancelled);
+        if (stopped || stopped.error().code() != ErrorCode::Cancelled)
+            throw std::runtime_error("Tensor EXR did not cancel before readback");
+        const auto invalid = io::writeExrImage(path, host.to(core::DataType::UInt8), color);
+        if (invalid || invalid.error().code() != ErrorCode::InvalidArgument)
+            throw std::runtime_error("Tensor EXR accepted a quantized byte image");
+        auto display = color;
+        display.transfer = media::ColorTransfer::Srgb;
+        const auto rejected = io::writeExrImage(path, host, display);
+        if (rejected || rejected.error().code() != ErrorCode::Unsupported)
+            throw std::runtime_error("Tensor EXR silently relabelled display color as linear");
+    }
+} // namespace
 int main(int argc, char** argv) {
     using namespace lfs;
     using namespace media::detail;
@@ -38,6 +101,7 @@ int main(int argc, char** argv) {
         struct Shutdown {
             ~Shutdown() { core::teardown_gpu_before_exit(); }
         } shutdown;
+        imageOutputContracts(cpu ? core::Device::CPU : core::Device::GPU);
         auto renderer = cpu ? nullptr : io::createLinearTensorRenderer();
         if (!cpu && !renderer)
             throw std::runtime_error("Linear tensor op unavailable on an available GPU backend");
