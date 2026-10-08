@@ -417,6 +417,9 @@ namespace lfs::app {
                     if (!keyframe_index)
                         return json{{"error", keyframe_index.error()}};
 
+                    if (*keyframe_index == 0)
+                        return mcp::invalid_argument_result("The first keyframe cannot be deleted", "keyframe_id");
+
                     if (backend.delete_keyframe)
                         backend.delete_keyframe(*keyframe_index);
                     return sequencer_state_json(backend, **controller);
