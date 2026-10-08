@@ -14,6 +14,7 @@
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "core/uuid.hpp"
 #include "io/formats/ply.hpp"
 #include "io/splat_chapter.hpp"
@@ -861,6 +862,7 @@ TEST(SceneCombinedEncode, CpuDecodeMatchesFrozenMasterForEveryCode) {
                                SplatData::ShNLayout::Swizzled);
             checkFrozenMaster("decode_" + std::to_string(i), expanded.shN_canonical_cpu(), sizeof(float));
         }
+        lfs::core::CudaMemoryPool::instance().release_stream(stream);
         ASSERT_EQ(cudaStreamDestroy(stream), cudaSuccess);
     }
 }
@@ -967,8 +969,11 @@ TEST(SceneCombinedEncode, QuantizedBandsMatchMasterEncodedBytesAndBounds) {
             }
         }
     }
-    for (auto stream : producers)
+    for (auto stream : producers) {
+        lfs::core::CudaMemoryPool::instance().release_stream(stream);
         EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+    }
+    lfs::core::CudaMemoryPool::instance().release_stream(build_stream);
     EXPECT_EQ(cudaStreamDestroy(build_stream), cudaSuccess);
 }
 

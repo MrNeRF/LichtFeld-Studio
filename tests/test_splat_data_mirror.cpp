@@ -5,6 +5,7 @@
 #include "core/splat_data_mirror.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -183,6 +184,8 @@ TEST(MirrorPrecisionTest, CentroidOrdersIndependentInputStreams) {
         }();
         EXPECT_EQ(compute_selection_center(model, mask), glm::vec3(2, 3, 4));
     }
+    CudaMemoryPool::instance().release_stream(mask_stream);
+    CudaMemoryPool::instance().release_stream(positions_stream);
     EXPECT_EQ(cudaStreamDestroy(mask_stream), cudaSuccess);
     EXPECT_EQ(cudaStreamDestroy(positions_stream), cudaSuccess);
 }

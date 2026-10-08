@@ -12,6 +12,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "io/cache_image_loader.hpp"
 #include "training/dataset.hpp"
 #include "training/metrics/metrics.hpp"
@@ -1112,6 +1113,7 @@ TEST(MetricsEvaluatorUndistort, WaitsForRenderOutputsFromAnotherStream) {
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     cudaEventDestroy(gate);
     cudaStreamDestroy(gate_holder);
+    lfs::core::CudaMemoryPool::instance().release_stream(render_stream);
     cudaStreamDestroy(render_stream);
     std::filesystem::remove_all(tmp);
 }
