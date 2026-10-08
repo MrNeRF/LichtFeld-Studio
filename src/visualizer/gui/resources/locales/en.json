@@ -1458,6 +1458,7 @@
     "create": "Create"
   },
   "notification": {
+    "duplicate_training_data_skipped": "Training data (datasets, cameras and images) was skipped during duplication.",
     "dropped_not_recognized": "The dropped",
     "directory": "directory",
     "file": "file",

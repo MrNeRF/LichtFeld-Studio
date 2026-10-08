@@ -1460,6 +1460,7 @@
     "create": "作成"
   },
   "notification": {
+    "duplicate_training_data_skipped": "複製時に学習データ（データセット、カメラ、画像）はスキップされました。",
     "dropped_not_recognized": "ドロップされた",
     "directory": "フォルダ",
     "file": "ファイル",

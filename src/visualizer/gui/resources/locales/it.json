@@ -1460,6 +1460,7 @@
     "create": "Crea"
   },
   "notification": {
+    "duplicate_training_data_skipped": "I dati di addestramento (dataset, fotocamere e immagini) sono stati esclusi dalla duplicazione.",
     "dropped_not_recognized": "L'elemento trascinato",
     "directory": "cartella",
     "file": "file",

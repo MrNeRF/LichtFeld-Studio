@@ -1460,6 +1460,7 @@
     "create": "Crear"
   },
   "notification": {
+    "duplicate_training_data_skipped": "Se omitieron los datos de entrenamiento (conjuntos de datos, cámaras e imágenes) al duplicar.",
     "dropped_not_recognized": "El elemento soltado",
     "directory": "directorio",
     "file": "archivo",

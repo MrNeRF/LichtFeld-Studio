@@ -1460,6 +1460,7 @@
     "create": "创建"
   },
   "notification": {
+    "duplicate_training_data_skipped": "复制时已跳过训练数据（数据集、相机和图像）。",
     "dropped_not_recognized": "拖放的",
     "directory": "文件夹",
     "file": "文件",

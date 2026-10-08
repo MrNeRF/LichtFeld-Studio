@@ -2,9 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/error_bus.hpp"
 #include "core/event_bridge/event_bridge.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
+#include "core/mesh_data.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
@@ -16,6 +19,7 @@
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "visualizer/app_store.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -204,6 +208,201 @@ TEST_F(SceneGraphIdentityTest, DuplicateBasicPointCloudPreservesAbsentAttributes
     scene.getNodeById(id)->locked = true;
     EXPECT_TRUE(scene_manager_->duplicateNodeTree(id).empty());
     EXPECT_EQ(scene.getNode("cloud_copy_3"), nullptr);
+}
+
+TEST_F(SceneGraphIdentityTest, DuplicateMixedGroupPreservesPayloadsHierarchyAndTransforms) {
+    auto& scene = scene_manager_->getScene();
+    const auto parent = scene.addGroup("parent");
+    const auto group = scene.addGroup("mixed", parent);
+    const auto nested = scene.addGroup("nested", group);
+    const auto first = scene.addSplat("first", make_test_splat({1.f, 2.f, 3.f}), group);
+    const auto second = scene.addSplat("second", make_test_splat({4.f, 5.f, 6.f}), nested);
+    auto cloud = std::make_shared<lfs::core::PointCloud>(
+        Tensor::full({2, 3}, 0.25f, Device::CPU), Tensor::ones({2, 3}, Device::CPU));
+    const auto points = scene.addPointCloud("points", cloud, nested);
+    const auto crop = scene.addCropBox("crop", points);
+    const auto ellipsoid = scene.addEllipsoid("ellipsoid", first);
+    scene.getCropBoxData(crop)->min = glm::vec3{-3.f};
+    scene.getEllipsoidData(ellipsoid)->radii = glm::vec3{2.f, 3.f, 4.f};
+    auto mesh = std::make_shared<lfs::core::MeshData>(
+        Tensor::from_vector({0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f}, {3, 3}, Device::CPU),
+        Tensor::from_vector(std::vector<int32_t>{0, 1, 2}, {1, 3}, Device::CPU));
+    const auto mesh_id = scene.addMesh("mesh", mesh, group);
+    const std::vector<lfs::core::NodeId> ids{group, nested, first, second, points, crop, ellipsoid, mesh_id};
+    for (const auto id : ids) {
+        ASSERT_NE(id, lfs::core::NULL_NODE);
+        glm::mat4 transform{1.f};
+        transform[0][0] = 1.5f;
+        transform[3][0] = static_cast<float>(id) * 0.125f;
+        scene.setNodeTransform(id, transform);
+    }
+    scene.getNodeById(second)->visible = false;
+    const auto before_count = scene.getNodes().size();
+    ASSERT_EQ(scene_manager_->duplicateNodeTree(group), "mixed_copy");
+    const auto check_copy = [&] {
+        EXPECT_EQ(scene.getNodes().size(), before_count + ids.size());
+        for (const auto id : ids) {
+            const auto* source = scene.getNodeById(id);
+            ASSERT_NE(source, nullptr);
+            const auto* copy = scene.getNode(source->name + "_copy");
+            ASSERT_NE(copy, nullptr) << source->name;
+            EXPECT_NE(copy->uuid, source->uuid);
+            EXPECT_EQ(copy->type, source->type);
+            ASSERT_EQ(copy->children.size(), source->children.size());
+            EXPECT_EQ(copy->local_transform.get(), source->local_transform.get());
+            EXPECT_EQ(scene.getWorldTransform(copy->id), scene.getWorldTransform(id));
+            EXPECT_EQ(copy->visible.get(), source->visible.get());
+            const auto* source_parent = scene.getNodeById(source->parent_id);
+            ASSERT_NE(source_parent, nullptr);
+            EXPECT_EQ(scene.getNodeById(copy->parent_id)->name,
+                      id == group ? "parent" : source_parent->name + "_copy");
+            for (size_t i = 0; i < source->children.size(); ++i)
+                EXPECT_EQ(scene.getNodeById(copy->children[i])->name,
+                          scene.getNodeById(source->children[i])->name + "_copy");
+        }
+        const auto* copied_points = scene.getNode("points_copy");
+        ASSERT_NE(copied_points, nullptr);
+        ASSERT_NE(copied_points->point_cloud, nullptr);
+        EXPECT_NE(copied_points->point_cloud->means.data_ptr(), cloud->means.data_ptr());
+        EXPECT_EQ(copied_points->point_cloud->means.to_vector(), cloud->means.to_vector());
+        const auto* copied_mesh = scene.getNode("mesh_copy");
+        ASSERT_NE(copied_mesh, nullptr);
+        EXPECT_NE(copied_mesh->mesh->vertices.data_ptr(), mesh->vertices.data_ptr());
+        EXPECT_EQ(copied_mesh->mesh->vertices.to_vector(), mesh->vertices.to_vector());
+        EXPECT_EQ(scene.getNode("crop_copy")->cropbox->min, glm::vec3(-3.f));
+        EXPECT_EQ(scene.getNode("ellipsoid_copy")->ellipsoid->radii, glm::vec3(2.f, 3.f, 4.f));
+        EXPECT_EQ(scene.getNode("first_copy")->model->means_raw().cpu().to_vector(),
+                  scene.getNodeById(first)->model->means_raw().cpu().to_vector());
+    };
+    check_copy();
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_EQ(scene.getNodes().size(), before_count);
+    ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+    check_copy();
+}
+
+namespace {
+    class DuplicateNoticeConsumer final : public lfs::NativeErrorConsumer {
+    public:
+        std::vector<std::string> messages;
+        void on_error(const lfs::ErrorNotification& notification,
+                      const lfs::ErrorDeliveryInfo&) noexcept override {
+            if (notification.error.severity() == lfs::Severity::Info &&
+                notification.surface == lfs::ErrorSurface::StatusOnly)
+                messages.emplace_back(notification.error.user_message());
+        }
+    };
+} // namespace
+
+TEST_F(SceneGraphIdentityTest, DuplicateGroupSkipsTrainingDataOnceAndPreservesRenderDescendants) {
+    using lfs::core::NodeType;
+    auto& scene = scene_manager_->getScene();
+    DuplicateNoticeConsumer notices;
+    auto subscription = lfs::ErrorBus::instance().subscribe(notices);
+    const auto group = scene.addGroup("group");
+    const auto dataset = scene.addDataset("dataset");
+    ASSERT_TRUE(scene.reparent(dataset, group));
+    const auto cameras = scene.addCameraGroup("cameras", dataset, 2);
+    auto camera = std::make_shared<lfs::core::Camera>(
+        Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+        100.f, 110.f, 32.f, 24.f, Tensor{}, Tensor{}, lfs::core::CameraModelType::PINHOLE,
+        "image.png", std::filesystem::path{}, std::filesystem::path{}, 64, 48, 7);
+    const auto camera_id = scene.addCamera("camera", cameras, camera);
+    const auto images = scene.restoreNodeWithUuid({.uuid = lfs::core::generate_uuid_v4(),
+                                                   .type = NodeType::IMAGE_GROUP,
+                                                   .name = "images",
+                                                   .parent = dataset});
+    const auto image = scene.restoreNodeWithUuid({.uuid = lfs::core::generate_uuid_v4(),
+                                                  .type = NodeType::IMAGE,
+                                                  .name = "image",
+                                                  .parent = images});
+    const auto points = scene.addPointCloud("points", std::make_shared<lfs::core::PointCloud>(Tensor::ones({2, 3}, Device::CPU), Tensor::ones({2, 3}, Device::CPU)), dataset);
+    const auto splat = scene.addSplat("splat", make_test_splat({1.f, 2.f, 3.f}), group);
+    glm::mat4 transform{1.f};
+    transform[3] = glm::vec4{2.f, 3.f, 4.f, 1.f};
+    scene.setNodeTransform(dataset, transform);
+    scene.getNodeById(dataset)->visible = false;
+    const auto before_count = scene.getNodes().size();
+    const auto active_cameras = scene.getActiveCameras();
+    ASSERT_EQ(active_cameras.size(), 1u);
+    ASSERT_EQ(scene_manager_->publishLiveCameraCount(), 1u);
+    const auto check_copy = [&] {
+        EXPECT_EQ(scene.getNodes().size(), before_count + 3);
+        EXPECT_EQ(scene.getActiveCameras(), active_cameras);
+        EXPECT_EQ(scene.getAllCameras().size(), 1u);
+        EXPECT_EQ(lfs::vis::app_store().import_overlay_state.get().num_images, 1u);
+        for (const auto id : {dataset, cameras, camera_id, images, image}) {
+            const auto* source = scene.getNodeById(id);
+            ASSERT_NE(source, nullptr);
+            EXPECT_EQ(scene.getNode(source->name + "_copy"), nullptr);
+        }
+        for (const auto id : {points, splat}) {
+            const auto* copy = scene.getNode(scene.getNodeById(id)->name + "_copy");
+            ASSERT_NE(copy, nullptr);
+            EXPECT_EQ(copy->parent_id, scene.getNode("group_copy")->id);
+            EXPECT_EQ(scene.getWorldTransform(copy->id), scene.getWorldTransform(id));
+            EXPECT_EQ(scene.isNodeEffectivelyVisible(copy->id), scene.isNodeEffectivelyVisible(id));
+        }
+    };
+    ASSERT_EQ(scene_manager_->duplicateNodeTree(group), "group_copy");
+    check_copy();
+    ASSERT_EQ(notices.messages.size(), 1u);
+    EXPECT_EQ(notices.messages.front(), LOC("notification.duplicate_training_data_skipped"));
+    const auto copy_uuid = scene.getNode("points_copy")->uuid;
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_EQ(scene.getNodes().size(), before_count);
+    EXPECT_EQ(scene.getActiveCameras(), active_cameras);
+    ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+    check_copy();
+    EXPECT_EQ(scene.getNode("points_copy")->uuid, copy_uuid);
+    EXPECT_EQ(notices.messages.size(), 1u);
+    ASSERT_EQ(scene_manager_->duplicateNodeTree(group), "group_copy_2");
+    EXPECT_EQ(notices.messages.size(), 2u);
+    EXPECT_EQ(scene.getActiveCameras(), active_cameras);
+    const auto final_count = scene.getNodes().size();
+    EXPECT_TRUE(scene.duplicateNode("camera").empty());
+    EXPECT_EQ(scene.getNodes().size(), final_count);
+    EXPECT_EQ(notices.messages.size(), 3u);
+}
+
+TEST_F(SceneGraphIdentityTest, DuplicateGroupPreservesSequencerWithoutTrainingCamerasOrNotice) {
+    auto& scene = scene_manager_->getScene();
+    DuplicateNoticeConsumer notices;
+    auto subscription = lfs::ErrorBus::instance().subscribe(notices);
+    const auto group = scene.addGroup("group");
+    const auto frames = scene.addKeyframeGroup("frames", group);
+    auto keyframe = std::make_unique<lfs::core::KeyframeData>();
+    keyframe->time = 2.5f;
+    keyframe->position = glm::vec3{1.f, 2.f, 3.f};
+    const auto frame = scene.addKeyframe("frame", frames, std::move(keyframe));
+    const auto sequence = scene.addPlySequence("sequence", group, 0);
+    const auto check_copy = [&] {
+        EXPECT_EQ(scene.getNodes().size(), 8u);
+        EXPECT_TRUE(scene.getActiveCameras().empty());
+        EXPECT_TRUE(scene.getAllCameras().empty());
+        for (const auto id : {frames, frame, sequence}) {
+            const auto* source = scene.getNodeById(id);
+            const auto* copy = scene.getNode(source->name + "_copy");
+            ASSERT_NE(copy, nullptr);
+            EXPECT_EQ(copy->type, source->type);
+            EXPECT_EQ(copy->local_transform.get(), source->local_transform.get());
+            EXPECT_NE(copy->uuid, source->uuid);
+            EXPECT_EQ(scene.getNodeById(copy->parent_id)->name,
+                      scene.getNodeById(source->parent_id)->name + "_copy");
+        }
+        const auto* copy = scene.getNode("frame_copy");
+        ASSERT_NE(copy->keyframe, nullptr);
+        EXPECT_EQ(copy->keyframe->time, 2.5f);
+        EXPECT_EQ(copy->keyframe->position, glm::vec3(1.f, 2.f, 3.f));
+        EXPECT_NE(copy->keyframe.get(), scene.getNodeById(frame)->keyframe.get());
+        EXPECT_TRUE(notices.messages.empty());
+    };
+    ASSERT_EQ(scene_manager_->duplicateNodeTree(group), "group_copy");
+    check_copy();
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_EQ(scene.getNodes().size(), 4u);
+    ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+    check_copy();
 }
 
 // Locks the removed node's real event name and recursive subtree deletion; the underlying

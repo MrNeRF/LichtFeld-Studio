@@ -1460,6 +1460,7 @@
     "create": "Maken"
   },
   "notification": {
+    "duplicate_training_data_skipped": "Trainingsgegevens (datasets, camera’s en afbeeldingen) zijn overgeslagen bij het dupliceren.",
     "dropped_not_recognized": "Het gesleepte",
     "directory": "map",
     "file": "bestand",

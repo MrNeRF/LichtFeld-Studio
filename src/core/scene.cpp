@@ -6,6 +6,8 @@
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/error_bus.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
@@ -4666,6 +4668,7 @@ namespace lfs::core {
             return "";
 
         bool duplicates_splat_range = false;
+        bool skipped_training_data = false;
         std::vector<NodeId> pending{src_node->id};
         while (!pending.empty()) {
             const NodeId current_id = pending.back();
@@ -4699,8 +4702,33 @@ namespace lfs::core {
             return new_name;
         };
 
-        std::function<NodeId(NodeId, NodeId)> duplicate_recursive =
-            [&](const NodeId src_id, const NodeId parent_id) -> NodeId {
+        const auto report_skipped_training_data = [] {
+            lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                .error = lfs::make_error({
+                    .code = lfs::ErrorCode::FailedPrecondition,
+                    .domain = lfs::ErrorDomain::App,
+                    .severity = lfs::Severity::Info,
+                    .user_message = LOC("notification.duplicate_training_data_skipped"),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }),
+                .surface = lfs::ErrorSurface::StatusOnly,
+                .actions = {},
+                .operation_id = lfs::OperationId::generate(),
+            });
+        };
+
+        const auto is_training_data = [](const NodeType type) {
+            return type == NodeType::DATASET || type == NodeType::CAMERA_GROUP ||
+                   type == NodeType::CAMERA || type == NodeType::IMAGE_GROUP || type == NodeType::IMAGE;
+        };
+        if (is_training_data(src_node->type)) {
+            report_skipped_training_data();
+            return {};
+        }
+
+        std::function<NodeId(NodeId, NodeId, const glm::mat4*, bool)> duplicate_recursive =
+            [&](const NodeId src_id, const NodeId parent_id,
+                const glm::mat4* skipped_transform, const bool skipped_visible) -> NodeId {
             const auto* src = getNodeById(src_id);
             if (!src)
                 return NULL_NODE;
@@ -4708,18 +4736,30 @@ namespace lfs::core {
             const std::string src_name_copy = src->name;
             const Uuid src_uuid = src->uuid;
             const NodeType src_type = src->type;
-            const glm::mat4 src_transform = src->local_transform;
-            const bool src_visible = src->visible;
+            const glm::mat4 src_transform = skipped_transform ? *skipped_transform * src->local_transform.get() : src->local_transform.get();
+            const bool src_visible = skipped_visible && src->visible;
             const bool src_locked = src->locked;
             const std::vector<NodeId> src_children = src->children;
+
+            if (is_training_data(src_type)) {
+                skipped_training_data = true;
+                // Keep render descendants in place when omitting their training-data parent.
+                for (const NodeId child_id : src_children)
+                    duplicate_recursive(child_id, parent_id, &src_transform, src_visible);
+                return NULL_NODE;
+            }
 
             const std::string new_name = generate_unique_name(src_name_copy);
 
             NodeId new_id = NULL_NODE;
             if (src_type == NodeType::GROUP) {
                 new_id = addGroup(new_name, parent_id);
+            } else if (src_type == NodeType::KEYFRAME_GROUP) {
+                new_id = addKeyframeGroup(new_name, parent_id);
             } else if (src_type == NodeType::PLY_SEQUENCE) {
                 new_id = addPlySequence(new_name, parent_id, src->gaussian_count.load(std::memory_order_acquire));
+            } else if (src_type == NodeType::KEYFRAME && src->keyframe) {
+                new_id = addKeyframe(new_name, parent_id, std::make_unique<KeyframeData>(*src->keyframe));
             } else if (src_type == NodeType::CROPBOX) {
                 const auto* src_for_cropbox = getNodeById(src_id);
                 if (src_for_cropbox && src_for_cropbox->cropbox && parent_id != NULL_NODE) {
@@ -4807,7 +4847,7 @@ namespace lfs::core {
             }
 
             for (const NodeId child_id : src_children) {
-                duplicate_recursive(child_id, new_id);
+                duplicate_recursive(child_id, new_id, nullptr, true);
             }
 
             return new_id;
@@ -4815,7 +4855,7 @@ namespace lfs::core {
 
         const NodeId src_id = src_node->id;
         const NodeId src_parent_id = src_node->parent_id;
-        const NodeId result_id = duplicate_recursive(src_id, src_parent_id);
+        const NodeId result_id = duplicate_recursive(src_id, src_parent_id, nullptr, true);
         if (result_id == NULL_NODE) {
             return "";
         }
@@ -4828,6 +4868,8 @@ namespace lfs::core {
         }
 
         notifyMutation(MutationType::NODE_ADDED);
+        if (skipped_training_data)
+            report_skipped_training_data();
         LOG_DEBUG("Duplicated node '{}' as '{}'", name, result_name);
         return result_name;
     }

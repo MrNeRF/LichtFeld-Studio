@@ -1460,6 +1460,7 @@
     "create": "만들기"
   },
   "notification": {
+    "duplicate_training_data_skipped": "복제 중 학습 데이터(데이터 세트, 카메라 및 이미지)는 건너뛰었습니다.",
     "dropped_not_recognized": "드롭된",
     "directory": "폴더",
     "file": "파일",
