@@ -412,6 +412,34 @@
         <input type="text" class="color-hex" data-value="selection_color_center_marker_hex" />
       </div>
     </div>
+
+    <div class="selection-groups">
+      <div class="selection-groups__title">{{label_selection_groups}}</div>
+      <button type="button" class="btn btn--secondary btn--full" data-event-click="selection_group_add">{{label_add_selection_group}}</button>
+      <div id="selection-groups-list">
+        <div class="group-row"
+             data-for="group : selection_groups"
+             data-class-active="group.active"
+             data-attr-data-gid="group.gid">
+          <button type="button"
+                  class="icon-btn lock-btn"
+                  data-action="lock"
+                  data-attr-data-gid="group.gid">
+            <img data-attr-sprite="group.lock_sprite" />
+          </button>
+          <button type="button"
+                  class="color-swatch"
+                  data-action="color"
+                  data-attr-data-gid="group.gid"
+                  data-style-background-color="group.color_css"></button>
+          <button type="button"
+                  class="group-name"
+                  data-action="select"
+                  data-attr-data-gid="group.gid">{{ group.label }}</button>
+        </div>
+      </div>
+      <span class="empty-message" data-if="show_no_selection_groups">{{label_no_selection_groups}}</span>
+    </div>
   </div>
 
   <!-- Mesh -->

@@ -241,11 +241,6 @@ def _build_builtin_panel_steps(lf):
         _register_lazy_panel(lf, "new_project")
         _register_lazy_panel(lf, "resume_checkpoint")
 
-    def selection_groups():
-        from . import selection_groups as selection_groups_mod
-
-        selection_groups_mod.register()
-
     def operators():
         from . import operators as operators_mod
 
@@ -342,7 +337,6 @@ def _build_builtin_panel_steps(lf):
         ("rendering_panel", rendering_panel),
         ("training_panel", training_panel),
         ("import_panels", import_panels),
-        ("selection_groups", selection_groups),
         ("operators", operators),
         ("sequencer_ops", sequencer_ops),
         ("tools", tools),

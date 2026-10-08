@@ -41,6 +41,7 @@ def _install_lichtfeld_stub(monkeypatch):
         "active_tool": "builtin.select",
         "panel_enabled": [],
         "panels": {},
+        "main_panel_active_tab": None,
     }
 
     ui = SimpleNamespace(
@@ -110,6 +111,7 @@ def _install_lichtfeld_stub(monkeypatch):
         is_perf_hud_visible=lambda: False,
         set_panel_enabled=lambda panel_id, enabled: state["panel_enabled"].append((panel_id, enabled)),
         get_panel_object=lambda panel_id: state["panels"].get(panel_id),
+        set_main_panel_active_tab=lambda panel_id: state.__setitem__("main_panel_active_tab", panel_id),
         is_windows_platform=lambda: False,
         are_file_associations_registered=lambda: False,
         can_edit_gaussian_selection=lambda: state["can_edit_gaussian_selection"],
@@ -271,8 +273,14 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert select_items[7]["type"] == "separator"
     assert select_items[8]["label"] == "tr:menu.select.selection_groups"
     assert select_items[8]["enabled"] is True
+    revealed = []
+    state["panels"]["lfs.rendering"] = SimpleNamespace(
+        reveal_selection_groups=lambda: revealed.append(True) or True
+    )
     assert select_items[8]["callback"]() is True
-    assert state["panel_enabled"] == [("lfs.selection_groups", True)]
+    assert state["main_panel_active_tab"] == "lfs.rendering"
+    assert revealed == [True]
+    assert state["panel_enabled"] == []
 
     state["has_gaussian_selection"] = False
     state["has_gaussian_clipboard"] = True
@@ -286,11 +294,8 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     select_items = select_mod.SelectMenu().menu_items()
     assert select_items[4]["enabled"] is True
     assert select_items[5]["enabled"] is False
-    activated = []
-    monkeypatch.setattr(select_mod, "_activate_select_tool", lambda: activated.append("select") or True)
     assert select_items[8]["callback"]() is True
-    assert activated == ["select"]
-    assert state["panel_enabled"][-1] == ("lfs.selection_groups", True)
+    assert revealed == [True, True]
 
     state["active_tool"] = "builtin.select"
     state["can_edit_gaussian_selection"] = False

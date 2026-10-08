@@ -41,6 +41,55 @@ body {
     display: block;
 }
 
+.selection-groups__title {
+    padding-top: 6dp;
+    margin: 6dp 0 4dp;
+    border-top-width: 1dp;
+    font-size: 12dp;
+    font-weight: bold;
+}
+
+#selection-groups-list {
+    margin-top: 4dp;
+}
+
+.group-row {
+    display: flex;
+    align-items: center;
+    padding: 1dp 4dp;
+    cursor: pointer;
+    transition: background-color 0.1s quadratic-out;
+}
+
+.group-row .lock-btn {
+    width: 20dp;
+    height: 20dp;
+    padding: 2dp;
+    flex-shrink: 0;
+    background-color: transparent;
+    border-width: 0;
+}
+
+.group-row .lock-btn img {
+    width: 14dp;
+    height: 14dp;
+}
+
+.group-row .color-swatch {
+    margin-right: 6dp;
+}
+
+.group-name {
+    flex: 1;
+    font-size: 12dp;
+    overflow: hidden;
+    white-space: nowrap;
+    background-color: transparent;
+    border-width: 0;
+    text-align: left;
+    padding: 0;
+}
+
 .rendering-simplify-stats {
     display: flex;
     gap: 8dp;

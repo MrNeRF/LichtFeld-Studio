@@ -433,6 +433,9 @@ def get_bottom_dock_active_tab() -> str:
 def set_bottom_dock_active_tab(panel_id: str) -> None:
     """Set the active bottom-dock panel id"""
 
+def set_main_panel_active_tab(panel_id: str) -> None:
+    """Activate a main panel tab by panel id"""
+
 def get_panel(panel_id: str) -> PanelInfo | None:
     """Get typed panel info by id (None if not found)"""
 
