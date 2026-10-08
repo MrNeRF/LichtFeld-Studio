@@ -260,10 +260,8 @@ namespace {
 
 } // namespace
 
-RenderInterface_VK::RenderInterface_VK() : m_is_transform_enabled{false},
-                                           m_is_apply_to_regular_geometry_stencil{false},
+RenderInterface_VK::RenderInterface_VK() : m_is_apply_to_regular_geometry_stencil{false},
                                            m_is_clip_mask_enabled{false},
-                                           m_is_transformed_scissor_enabled{false},
                                            m_is_use_scissor_specified{false},
                                            m_is_use_stencil_pipeline{false},
                                            m_width{},
@@ -514,8 +512,6 @@ void RenderInterface_VK::EnableScissorRegion(bool enable) {
     m_is_use_scissor_specified = enable;
 
     if (m_is_use_scissor_specified == false) {
-        m_is_transformed_scissor_enabled = false;
-        m_is_apply_to_regular_geometry_stencil = m_is_clip_mask_enabled;
         m_scissor = ClampToCacheCaptureArea(ContextClipScissor());
         vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor);
     }
@@ -537,96 +533,36 @@ void RenderInterface_VK::SetScissorRegion(Rml::Rectanglei region) {
             static_cast<uint32_t>(std::max(0, requested_bottom - requested_top)),
         };
 
-        if (m_is_transform_enabled) {
-            Rml::Vertex vertices[4];
-
-            vertices[0].position = Rml::Vector2f(region.TopLeft());
-            vertices[1].position = Rml::Vector2f(region.TopRight());
-            vertices[2].position = Rml::Vector2f(region.BottomRight());
-            vertices[3].position = Rml::Vector2f(region.BottomLeft());
-
-            int indices[6] = {0, 2, 1, 0, 3, 2};
-
-            m_is_use_stencil_pipeline = true;
-            m_scissor = ClampToCacheCaptureArea(ContextClipScissor());
-            vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor);
+        // Enclose the translated rect; fractional panel offsets otherwise clip text edges.
+        const int left = Rml::Math::Clamp(requested_left, 0, m_width);
+        const int top = Rml::Math::Clamp(requested_top, 0, m_height);
+        const int right = Rml::Math::Clamp(requested_right, 0, m_width);
+        const int bottom = Rml::Math::Clamp(requested_bottom, 0, m_height);
+        m_scissor.offset.x = left;
+        m_scissor.offset.y = top;
+        m_scissor.extent.width = static_cast<uint32_t>(std::max(0, right - left));
+        m_scissor.extent.height = static_cast<uint32_t>(std::max(0, bottom - top));
+        m_scissor = ClampToCacheCaptureArea(IntersectContextClip(m_scissor));
 
 #ifdef RMLUI_VK_DEBUG
-            VkDebugUtilsLabelEXT info{};
-            info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
-            info.color[0] = 1.0f;
-            info.color[1] = 1.0f;
-            info.color[2] = 0.0f;
-            info.color[3] = 1.0f;
-            info.pLabelName = "SetScissorRegion (generated region)";
+        VkDebugUtilsLabelEXT info{};
+        info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+        info.color[0] = 1.0f;
+        info.color[1] = 0.0f;
+        info.color[2] = 0.0f;
+        info.color[3] = 1.0f;
+        info.pLabelName = "SetScissorRegion (offset)";
 
-            InsertDebugUtilsLabel(m_p_device, m_p_current_command_buffer, info);
+        InsertDebugUtilsLabel(m_p_device, m_p_current_command_buffer, info);
 #endif
 
-            VkClearDepthStencilValue info_clear_color{};
-
-            info_clear_color.depth = 1.0f;
-            info_clear_color.stencil = 0;
-
-            VkClearAttachment clear_attachment = {};
-            clear_attachment.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-            clear_attachment.clearValue.depthStencil = info_clear_color;
-            clear_attachment.colorAttachment = 1;
-
-            VkClearRect clear_rect = {};
-            clear_rect.layerCount = 1;
-            clear_rect.rect = ClampToCacheCaptureArea(VkRect2D{
-                {0, 0},
-                {static_cast<uint32_t>(m_width), static_cast<uint32_t>(m_height)},
-            });
-
-            vkCmdClearAttachments(m_p_current_command_buffer, 1, &clear_attachment, 1, &clear_rect);
-
-            if (Rml::CompiledGeometryHandle handle = CompileGeometry({vertices, 4}, {indices, 6})) {
-                RenderGeometry(handle, {}, {});
-                ReleaseGeometry(handle);
-            }
-
-            m_is_use_stencil_pipeline = false;
-
-            m_is_transformed_scissor_enabled = true;
-            m_is_apply_to_regular_geometry_stencil = true;
-            m_scissor = ClampToCacheCaptureArea(ContextClipScissor());
-            vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor);
-        } else {
-            m_is_transformed_scissor_enabled = false;
-            m_is_apply_to_regular_geometry_stencil = m_is_clip_mask_enabled;
-            // Enclose the translated rect; fractional panel offsets otherwise clip text edges.
-            const int left = Rml::Math::Clamp(requested_left, 0, m_width);
-            const int top = Rml::Math::Clamp(requested_top, 0, m_height);
-            const int right = Rml::Math::Clamp(requested_right, 0, m_width);
-            const int bottom = Rml::Math::Clamp(requested_bottom, 0, m_height);
-            m_scissor.offset.x = left;
-            m_scissor.offset.y = top;
-            m_scissor.extent.width = static_cast<uint32_t>(std::max(0, right - left));
-            m_scissor.extent.height = static_cast<uint32_t>(std::max(0, bottom - top));
-            m_scissor = ClampToCacheCaptureArea(IntersectContextClip(m_scissor));
-
-#ifdef RMLUI_VK_DEBUG
-            VkDebugUtilsLabelEXT info{};
-            info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
-            info.color[0] = 1.0f;
-            info.color[1] = 0.0f;
-            info.color[2] = 0.0f;
-            info.color[3] = 1.0f;
-            info.pLabelName = "SetScissorRegion (offset)";
-
-            InsertDebugUtilsLabel(m_p_device, m_p_current_command_buffer, info);
-#endif
-
-            vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor);
-        }
+        vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor);
     }
 }
 
 void RenderInterface_VK::EnableClipMask(bool enable) {
     m_is_clip_mask_enabled = enable;
-    m_is_apply_to_regular_geometry_stencil = m_is_clip_mask_enabled || m_is_transformed_scissor_enabled;
+    m_is_apply_to_regular_geometry_stencil = m_is_clip_mask_enabled;
 }
 
 void RenderInterface_VK::RenderToClipMask(Rml::ClipMaskOperation operation, Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation) {
@@ -1652,7 +1588,6 @@ void RenderInterface_VK::ReleaseTexture(Rml::TextureHandle texture_handle) {
 }
 
 void RenderInterface_VK::SetTransform(const Rml::Matrix4f* transform) {
-    m_is_transform_enabled = (transform != nullptr);
     m_rml_transform = transform ? *transform : Rml::Matrix4f::Identity();
     ApplyTransformState();
 }
@@ -1756,7 +1691,6 @@ void RenderInterface_VK::RenderTextureQuad(Rml::TextureHandle texture, const flo
         m_texture_quad_h = h;
     }
 
-    const bool transform_enabled = m_is_transform_enabled;
     const shader_vertex_user_data_t user_data = m_user_data_for_vertex_shader;
     const Rml::Matrix4f rml_transform = m_rml_transform;
     const Rml::Matrix4f context_transform = m_context_transform;
@@ -1765,7 +1699,6 @@ void RenderInterface_VK::RenderTextureQuad(Rml::TextureHandle texture, const flo
     if (m_texture_quad_geometry) {
         RenderGeometry(m_texture_quad_geometry, {}, texture);
     }
-    m_is_transform_enabled = transform_enabled;
     m_user_data_for_vertex_shader = user_data;
     m_rml_transform = rml_transform;
     m_context_transform = context_transform;
@@ -1952,7 +1885,6 @@ void RenderInterface_VK::RenderFrostedGlassQuad(texture_data_t& texture) {
         m_frosted_glass_quad_height = m_height;
     }
 
-    const bool transform_enabled = m_is_transform_enabled;
     const shader_vertex_user_data_t user_data = m_user_data_for_vertex_shader;
     const Rml::Matrix4f rml_transform = m_rml_transform;
     const Rml::Matrix4f context_transform = m_context_transform;
@@ -1962,7 +1894,6 @@ void RenderInterface_VK::RenderFrostedGlassQuad(texture_data_t& texture) {
         RenderGeometry(m_frosted_glass_quad_geometry,
                        {}, reinterpret_cast<Rml::TextureHandle>(&texture));
     }
-    m_is_transform_enabled = transform_enabled;
     m_user_data_for_vertex_shader = user_data;
     m_rml_transform = rml_transform;
     m_context_transform = context_transform;
@@ -2144,7 +2075,6 @@ void RenderInterface_VK::BeginExternalFrame(const VkCommandBuffer command_buffer
     m_active_layer = {};
     m_render_layer_stack_size = 0;
     m_is_clip_mask_enabled = false;
-    m_is_transformed_scissor_enabled = false;
     m_is_use_scissor_specified = false;
     m_is_use_stencil_pipeline = false;
     m_is_apply_to_regular_geometry_stencil = false;
@@ -2175,7 +2105,6 @@ void RenderInterface_VK::ResetContextRenderState() {
         return;
 
     m_is_clip_mask_enabled = false;
-    m_is_transformed_scissor_enabled = false;
     m_is_use_scissor_specified = false;
     m_is_use_stencil_pipeline = false;
     m_is_apply_to_regular_geometry_stencil = false;
@@ -3073,7 +3002,7 @@ void RenderInterface_VK::ResetDynamicRenderState() {
     if (!m_p_current_command_buffer)
         return;
     vkCmdSetViewport(m_p_current_command_buffer, 0, 1, &m_viewport);
-    VkRect2D scissor = (m_is_use_scissor_specified && !m_is_transformed_scissor_enabled) ? m_scissor : ContextClipScissor();
+    VkRect2D scissor = m_is_use_scissor_specified ? m_scissor : ContextClipScissor();
     scissor = ClampToCacheCaptureArea(IntersectContextClip(scissor));
     vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &scissor);
     vkCmdSetStencilReference(m_p_current_command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, 1);
@@ -3275,14 +3204,12 @@ void RenderInterface_VK::RenderFullscreenTexture(texture_data_t& texture, Rml::B
 
     int indices[6] = {0, 1, 2, 0, 2, 3};
 
-    const bool transform_enabled = m_is_transform_enabled;
     const Rml::Matrix4f transform = m_user_data_for_vertex_shader.m_transform;
     SetTransform(nullptr);
     if (Rml::CompiledGeometryHandle handle = CompileGeometry({vertices, 4}, {indices, 6})) {
         RenderGeometry(handle, {}, reinterpret_cast<Rml::TextureHandle>(&texture));
         ReleaseGeometry(handle);
     }
-    m_is_transform_enabled = transform_enabled;
     m_user_data_for_vertex_shader.m_transform = transform;
 }
 

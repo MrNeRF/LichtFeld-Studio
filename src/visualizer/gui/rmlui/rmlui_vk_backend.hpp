@@ -651,10 +651,8 @@ private:
     uint32_t ActiveResourceSlot() const noexcept;
 
 private:
-    bool m_is_transform_enabled;
     bool m_is_apply_to_regular_geometry_stencil;
     bool m_is_clip_mask_enabled;
-    bool m_is_transformed_scissor_enabled;
     bool m_is_use_scissor_specified;
     bool m_is_use_stencil_pipeline;
     bool m_external_context = false;
