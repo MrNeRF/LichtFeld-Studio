@@ -481,6 +481,8 @@ namespace lfs::python {
         assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
         assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
         assert(pts.shape()[0] == cols.shape()[0]);
+        if (cols.dtype() != core::DataType::UInt8 && cols.dtype() != core::DataType::Float32)
+            throw nb::value_error("colors must have dtype uint8 or float32");
 
         auto pc = std::make_shared<core::PointCloud>(pts.to(core::Device::CUDA), cols.to(core::Device::CUDA));
         const int32_t node_id = scene_->addPointCloud(name, std::move(pc), parent);
@@ -1336,7 +1338,7 @@ Returns:
                  nb::arg("points"),
                  nb::arg("colors"),
                  nb::arg("parent") = core::NULL_NODE,
-                 "Add a point cloud node from tensor data [N,3] positions and colors")
+                 "Add a point cloud node from [N,3] positions and uint8 or float32 colors; other color dtypes raise ValueError")
             .def("add_mesh", &PyScene::add_mesh,
                  nb::arg("name"),
                  nb::arg("vertices"),
