@@ -23,6 +23,14 @@ namespace lfs::io {
     [[nodiscard]] bool frameCoversSampleTime(double frame_time, double frame_duration,
                                              double sample_time);
     [[nodiscard]] bool shouldFillRetainedFpsTail(bool reached_eof, bool reached_end);
+    // End time to request for a trim range edited against the preview player's duration. An end
+    // at the player's (float) duration means "to the end of the video" (-1): the player's duration
+    // is an estimate, and the extractor resolves the exact end of the stream itself.
+    [[nodiscard]] inline double extractionEndTime(const float trim_end, const double player_duration) {
+        return trim_end < 0.0f || trim_end >= static_cast<float>(player_duration)
+                   ? -1.0
+                   : static_cast<double>(trim_end);
+    }
 
     enum class ExtractionMode {
         FPS,     // Extract at specific FPS

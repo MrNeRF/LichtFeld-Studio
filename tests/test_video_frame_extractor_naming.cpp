@@ -386,3 +386,61 @@ TEST(VideoStreamProbe, VideosThatNeedPacketProbingOpenAndExtract) {
         EXPECT_GT(countPngFiles(output_dir), 0u);
     }
 }
+
+TEST(VideoFrameExtractorTrim, EndPastTheStreamExtractsToTheLastFrame) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "CUDA device required for VideoEncoder-based fixture";
+
+    TempDir temp("trim_past_end");
+    const std::filesystem::path video_path = temp.path / "source.mp4";
+    std::string error;
+    ASSERT_TRUE(writeEncodedVideo(video_path, kFixtureFrameCount, 10, error)) << error;
+
+    const auto full_dir = temp.path / "full";
+    const auto past_dir = temp.path / "past";
+    std::filesystem::create_directories(full_dir);
+    std::filesystem::create_directories(past_dir);
+
+    auto full = extractionParams(video_path, full_dir);
+    full.end_time = -1.0;
+    VideoFrameExtractor full_extractor;
+    ASSERT_TRUE(full_extractor.extract(full, error)) << error;
+
+    // A frame-count estimate a few frames longer than the stream, as the preview reports for some files.
+    auto past = extractionParams(video_path, past_dir);
+    past.end_time = kFixtureFrameCount / 10.0 + 0.3;
+    VideoFrameExtractor past_extractor;
+    ASSERT_TRUE(past_extractor.extract(past, error)) << error;
+    EXPECT_EQ(countPngFiles(past_dir), countPngFiles(full_dir));
+    EXPECT_EQ(countPngFiles(past_dir), static_cast<std::size_t>(kFixtureFrameCount));
+
+    auto late_start = extractionParams(video_path, temp.path / "late");
+    late_start.start_time = kFixtureFrameCount / 10.0 + 0.3;
+    late_start.end_time = -1.0;
+    VideoFrameExtractor late_extractor;
+    EXPECT_FALSE(late_extractor.extract(late_start, error));
+}
+
+TEST(VideoFrameExtractorTrim, PlayerFullRangeKeepsTheLastFrame) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "CUDA device required for VideoEncoder-based fixture";
+
+    TempDir temp("trim_full_range");
+    const std::filesystem::path video_path = temp.path / "source.mp4";
+    const auto output_dir = temp.path / "frames";
+    std::filesystem::create_directories(output_dir);
+    constexpr int frame_count = 7;
+    std::string error;
+    ASSERT_TRUE(writeEncodedVideo(video_path, frame_count, 25, error)) << error;
+
+    lfs::io::VideoPlayer player;
+    ASSERT_TRUE(player.open(video_path));
+    // The dialog's default range ends at the player's duration, kept as a float.
+    const float trim_end = static_cast<float>(player.duration());
+
+    auto params = extractionParams(video_path, output_dir);
+    params.end_time = lfs::io::extractionEndTime(trim_end, player.duration());
+    VideoFrameExtractor extractor;
+    ASSERT_TRUE(extractor.extract(params, error)) << error;
+    EXPECT_EQ(countPngFiles(output_dir), static_cast<std::size_t>(frame_count));
+}

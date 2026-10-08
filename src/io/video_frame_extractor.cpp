@@ -1062,13 +1062,21 @@ namespace lfs::io {
                 const double start_time = params.start_time;
                 double end_time =
                     params.end_time < 0.0 ? video_duration : params.end_time;
+                // Extracting to the end reads every remaining frame: the container duration can stop
+                // at the last frame's timestamp, which a time bound would exclude.
+                bool extract_to_stream_end = params.end_time < 0.0;
                 if (video_duration > 0.0) {
                     const double duration_tolerance =
                         std::max(1.0e-6, time_base);
-                    if (start_time >= video_duration ||
-                        end_time > video_duration + duration_tolerance) {
+                    if (start_time >= video_duration) {
                         error = "Invalid extraction parameters: trim range exceeds video duration";
                         throw std::invalid_argument(error);
+                    }
+                    // A frame-count based duration estimate can run past the stream's end; an end
+                    // beyond the video extracts to its last frame.
+                    if (end_time > video_duration + duration_tolerance) {
+                        end_time = video_duration;
+                        extract_to_stream_end = true;
                     }
                 }
                 const double trim_duration = end_time - start_time;
@@ -1944,7 +1952,7 @@ namespace lfs::io {
                     const bool past_end =
                         params.mode == ExtractionMode::FPS
                             ? frame_time >= end_time
-                            : frame_time > end_time;
+                            : !extract_to_stream_end && frame_time > end_time;
                     if (past_end)
                         return true;
 

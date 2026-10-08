@@ -1670,7 +1670,7 @@ namespace lfs::gui {
         params.format = format_selection_ == 0 ? io::ImageFormat::PNG : io::ImageFormat::JPG;
         params.jpg_quality = jpg_quality_;
         params.start_time = static_cast<double>(trim_start_);
-        params.end_time = static_cast<double>(trim_end_);
+        params.end_time = io::extractionEndTime(trim_end_, player_->duration());
         static constexpr std::array<io::ResolutionMode, 3> RES_MODES{
             io::ResolutionMode::Original,
             io::ResolutionMode::Scale,
