@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "core/camera.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bus.hpp"
@@ -40,6 +41,7 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <future>
 #include <glm/gtc/type_ptr.hpp>
 #include <gtest/gtest.h>
@@ -2226,6 +2228,104 @@ namespace lfs::vis {
         const auto sync_elapsed = std::chrono::steady_clock::now() - sync_start;
         RecordProperty("live_sync_ns", std::chrono::duration_cast<std::chrono::nanoseconds>(sync_elapsed).count() / repeats);
         EXPECT_TRUE(ledger.plan(FrameClock::now()).empty());
+    }
+
+    TEST_F(ScenePanelRefreshTest, CameraMenusOnlyOfferActionsWithTargets) {
+        auto& scene_manager = *viewer_->getSceneManager();
+        auto& scene = scene_manager.getScene();
+        const auto empty = scene.addCameraGroup("Empty", core::NULL_NODE, 99);
+        const auto empty_nested = scene.addCameraGroup("Empty nested", core::NULL_NODE, 0);
+        scene.addGroup("Not a camera", empty_nested);
+        const auto full = scene.addCameraGroup("Full", core::NULL_NODE, 0);
+        const auto add_camera = [&](const std::string& name, const core::NodeId parent,
+                                    const std::filesystem::path& image_path, const int uid) {
+            return scene.addCamera(name, parent, std::make_shared<core::Camera>(core::Tensor::eye(3, core::Device::CPU), core::Tensor::zeros({3}, core::Device::CPU), 100.f, 110.f, 32.f, 24.f, core::Tensor{}, core::Tensor{}, core::CameraModelType::PINHOLE, name, image_path, std::filesystem::path{}, 64, 48, uid));
+        };
+        const auto no_image = add_camera("No image", core::NULL_NODE, {}, 41);
+        const auto with_image = add_camera("With image", core::NULL_NODE, "image.png", 42);
+        const auto child = add_camera("Child", full, {}, 43);
+        gui::NativeScenePanel panel(&manager());
+        gui::PanelDrawContext ctx;
+        ctx.scene = &scene;
+        const auto open_menu = [&](const core::NodeId id) {
+            menu().request({}, 0, 0);
+            ctx.scene_generation = python::get_scene_generation();
+            ++ctx.frame_serial;
+            panel.preload(ctx);
+            panel.renderDirect({.mode = gui::PanelDirectRenderMode::Preload,
+                                .width = 400,
+                                .height = 600},
+                               ctx);
+            auto* context = manager().getContext("scene_panel_native");
+            if (!context) {
+                ADD_FAILURE() << "Missing Scene panel";
+                return std::string{};
+            }
+            auto* document = context->GetDocument(0);
+            document->Show();
+            auto* tree = dynamic_cast<gui::SceneGraphElement*>(document->GetElementById("tree-container"));
+            if (!tree) {
+                ADD_FAILURE() << "Missing scene tree";
+                return std::string{};
+            }
+            tree->SetProperty("height", "500px");
+            context->SetDimensions({400, 600});
+            context->Update();
+            static_cast<void>(tree->syncFromScene(ctx));
+            context->Update();
+            auto* row = document->QuerySelector("[data-node-id='" + std::to_string(id) + "']");
+            if (!row) {
+                ADD_FAILURE() << "Missing Scene row " << id << " height=" << tree->GetClientHeight();
+                return std::string{};
+            }
+            row->DispatchEvent("mousedown", {{"button", Rml::Variant(1)}, {"mouse_x", Rml::Variant(10.f)}, {"mouse_y", Rml::Variant(10.f)}});
+            auto* menu_context = manager().getContext("global_context_menu");
+            if (!menu_context || !menu_context->GetDocument(0)) {
+                ADD_FAILURE() << "Missing context menu";
+                return std::string{};
+            }
+            return menu_context->GetDocument(0)->GetInnerRML();
+        };
+        auto html = open_menu(no_image);
+        EXPECT_EQ(html.find("scene_panel:go_to_image:"), std::string::npos);
+        EXPECT_NE(html.find("scene_panel:go_to_camera:"), std::string::npos);
+        html = open_menu(with_image);
+        EXPECT_NE(html.find("scene_panel:go_to_image:42"), std::string::npos);
+        EXPECT_NE(html.find("scene_panel:go_to_camera:42"), std::string::npos);
+        for (const auto id : {empty, empty_nested}) {
+            html = open_menu(id);
+            EXPECT_EQ(html.find("scene_panel:enable_all_train:"), std::string::npos);
+            EXPECT_EQ(html.find("scene_panel:disable_all_train:"), std::string::npos);
+            EXPECT_EQ(html.find("scene_panel:duplicate:"), std::string::npos);
+        }
+        html = open_menu(full);
+        EXPECT_NE(html.find("scene_panel:enable_all_train:"), std::string::npos);
+        EXPECT_NE(html.find("scene_panel:disable_all_train:"), std::string::npos);
+        EXPECT_EQ(html.find("scene_panel:duplicate:"), std::string::npos);
+        auto* menu_context = manager().getContext("global_context_menu");
+        ASSERT_NE(menu_context, nullptr);
+        auto* doc = menu_context->GetDocument(0);
+        ASSERT_NE(doc, nullptr);
+        auto* disable = doc->QuerySelector("[data-ctx-action='scene_panel:disable_all_train:" + std::to_string(full) + "']");
+        ASSERT_NE(disable, nullptr);
+        disable->DispatchEvent("click", {});
+        panel.preload(ctx);
+        EXPECT_FALSE(scene.getNodeById(child)->training_enabled);
+        open_menu(full);
+        auto* enable = doc->QuerySelector("[data-ctx-action='scene_panel:enable_all_train:" + std::to_string(full) + "']");
+        ASSERT_NE(enable, nullptr);
+        enable->DispatchEvent("click", {});
+        panel.preload(ctx);
+        EXPECT_TRUE(scene.getNodeById(child)->training_enabled);
+
+        scene_manager.selectNodesById({empty, empty_nested});
+        html = open_menu(empty);
+        EXPECT_EQ(html.find("scene_panel:enable_all_selected_train"), std::string::npos);
+        EXPECT_EQ(html.find("scene_panel:disable_all_selected_train"), std::string::npos);
+        scene_manager.selectNodesById({empty, with_image});
+        html = open_menu(empty);
+        EXPECT_NE(html.find("scene_panel:enable_all_selected_train"), std::string::npos);
+        EXPECT_NE(html.find("scene_panel:disable_all_selected_train"), std::string::npos);
     }
 
     TEST_F(ScenePanelRefreshTest, ContextMenuDuplicateRefreshesLiveTree) {

@@ -2811,6 +2811,16 @@ namespace lfs::vis::gui {
         if (!node)
             return;
 
+        const auto has_camera_target = [scene](const core::SceneNode& target) {
+            if (target.type == core::NodeType::CAMERA)
+                return true;
+            return target.type == core::NodeType::CAMERA_GROUP &&
+                   std::ranges::any_of(target.children, [scene](const core::NodeId id) {
+                       const auto* child = scene->getNodeById(id);
+                       return child && child->type == core::NodeType::CAMERA;
+                   });
+        };
+
         if (selected_ids_.size() > 1) {
             items.push_back(makeAction(tr("scene.select_hierarchy"),
                                        prefixedAction("select_hierarchy")));
@@ -2826,17 +2836,19 @@ namespace lfs::vis::gui {
                     prefixedAction(std::format("ungroup:{}", node_id)), true));
             }
             bool all_camera_like = true;
+            bool has_training_targets = false;
             for (const core::NodeId id : selected_ids_) {
                 const auto* selected = scene->getNodeById(id);
                 if (!selected)
                     continue;
+                has_training_targets |= has_camera_target(*selected);
                 if (selected->type != core::NodeType::CAMERA &&
                     selected->type != core::NodeType::CAMERA_GROUP) {
                     all_camera_like = false;
                     break;
                 }
             }
-            if (all_camera_like) {
+            if (all_camera_like && has_training_targets) {
                 items.push_back(makeAction(tr(string_keys::Scene::ENABLE_ALL_TRAINING),
                                            prefixedAction("enable_all_selected_train")));
                 items.push_back(makeAction(tr(string_keys::Scene::DISABLE_ALL_TRAINING),
@@ -2860,9 +2872,11 @@ namespace lfs::vis::gui {
                 items.push_back(makeAction(
                     tr(string_keys::Scene::GO_TO_CAMERA_VIEW),
                     prefixedAction(std::format("go_to_camera:{}", node->camera_uid))));
-                items.push_back(makeAction(
-                    tr(string_keys::Scene::GO_TO_IMAGE),
-                    prefixedAction(std::format("go_to_image:{}", node->camera_uid))));
+                if (!node->image_path.empty()) {
+                    items.push_back(makeAction(
+                        tr(string_keys::Scene::GO_TO_IMAGE),
+                        prefixedAction(std::format("go_to_image:{}", node->camera_uid))));
+                }
                 items.push_back(makeAction(
                     tr(string_keys::Scene::OPEN_IN_GT_COMPARE),
                     prefixedAction(std::format("open_in_gt_compare:{}", node->camera_uid))));
@@ -2915,12 +2929,14 @@ namespace lfs::vis::gui {
                     prefixedAction("add_kf")));
                 break;
             case core::NodeType::CAMERA_GROUP:
-                items.push_back(makeAction(
-                    tr(string_keys::Scene::ENABLE_ALL_TRAINING),
-                    prefixedAction(std::format("enable_all_train:{}", node_id))));
-                items.push_back(makeAction(
-                    tr(string_keys::Scene::DISABLE_ALL_TRAINING),
-                    prefixedAction(std::format("disable_all_train:{}", node_id))));
+                if (has_camera_target(*node)) {
+                    items.push_back(makeAction(
+                        tr(string_keys::Scene::ENABLE_ALL_TRAINING),
+                        prefixedAction(std::format("enable_all_train:{}", node_id))));
+                    items.push_back(makeAction(
+                        tr(string_keys::Scene::DISABLE_ALL_TRAINING),
+                        prefixedAction(std::format("disable_all_train:{}", node_id))));
+                }
                 break;
             case core::NodeType::DATASET:
                 if (colmapSparseSourcePath(*scene_manager)) {
@@ -2963,6 +2979,7 @@ namespace lfs::vis::gui {
             }
 
             if (node->type != core::NodeType::CAMERA &&
+                node->type != core::NodeType::CAMERA_GROUP &&
                 node->type != core::NodeType::CROPBOX &&
                 node->type != core::NodeType::ELLIPSOID &&
                 !node_snapshots_.at(node_id).locked) {
