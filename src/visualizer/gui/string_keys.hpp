@@ -398,7 +398,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* PPISP_CRF_TOE = "main_panel.ppisp_crf_toe";
         inline constexpr const char* PPISP_CRF_SHOULDER = "main_panel.ppisp_crf_shoulder";
         inline constexpr const char* RENDER_SCALE = "main_panel.render_scale";
-        inline constexpr const char* COMMITTED = "main_panel.committed";
         inline constexpr const char* PREVIEW = "main_panel.preview";
         inline constexpr const char* CENTER_MARKER = "main_panel.center_marker";
         inline constexpr const char* SELECTION_GROUPS = "main_panel.selection_groups";

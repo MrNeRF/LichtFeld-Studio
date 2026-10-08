@@ -160,7 +160,7 @@ BACKGROUND_COLOR_PROP = "background_color"
 
 COLOR_PROPS = [
     BACKGROUND_COLOR_PROP,
-    "selection_color_committed", "selection_color_preview",
+    "selection_color_preview",
     "selection_color_center_marker",
     "mesh_wireframe_color",
 ]
@@ -202,7 +202,6 @@ LOCALE_KEY = {
     "sh_degree": "main_panel.sh_degree",
     "grid_plane": "main_panel.plane",
     "background_color": "main_panel.color",
-    "selection_color_committed": "main_panel.committed",
     "selection_color_preview": "main_panel.preview",
     "selection_color_center_marker": "main_panel.center_marker",
     "mesh_wireframe": "main_panel.mesh_wireframe",

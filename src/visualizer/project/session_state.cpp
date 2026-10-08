@@ -753,7 +753,6 @@ namespace lfs::vis::project {
                            [](RenderSettings& settings) {
                                sanitizeDepthViewSettings(settings);
                            }),
-                vec3_field("selection_color_committed", &RenderSettings::selection_color_committed),
                 vec3_field("selection_color_preview", &RenderSettings::selection_color_preview),
                 vec3_field("selection_color_center_marker", &RenderSettings::selection_color_center_marker),
                 required_field("depth_clip_enabled", &RenderSettings::depth_clip_enabled),

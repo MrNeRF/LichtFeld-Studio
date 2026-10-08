@@ -2410,7 +2410,6 @@ namespace lfs::vis {
         preview_selection.ptr<std::uint8_t>()[1] = 1;
 
         RenderSettings settings;
-        settings.selection_color_committed = {0.25f, 0.5f, 0.75f};
         settings.selection_color_preview = {0.1f, 0.9f, 0.2f};
         settings.voxel_size = 0.02f;
 
@@ -2431,7 +2430,7 @@ namespace lfs::vis {
         EXPECT_EQ(request.overlay.selection_mask, scene_state.selection_mask);
         EXPECT_EQ(request.overlay.transient_mask.mask, &preview_selection);
         EXPECT_FALSE(request.overlay.transient_mask.additive);
-        EXPECT_EQ(request.overlay.selection_colors[1], glm::vec4(settings.selection_color_committed, 1.0f));
+        EXPECT_EQ(request.overlay.selection_colors[1], lfs::rendering::defaultSelectionColorTable()[1]);
         EXPECT_EQ(request.overlay.selection_colors[lfs::rendering::kSelectionPreviewColorIndex],
                   glm::vec4(settings.selection_color_preview, 1.0f));
         EXPECT_EQ(request.render.voxel_size, settings.voxel_size);

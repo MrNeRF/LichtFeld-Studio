@@ -382,16 +382,6 @@
       </label>
     </div>
 
-    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.selection_color_committed">
-      <span class="setting-row__label-col">{{label_selection_color_committed}}</span>
-      <div class="setting-row__control-col setting-row__control-col--color">
-        <span class="color-comp">{{selection_color_committed_r}}</span>
-        <span class="color-comp">{{selection_color_committed_g}}</span>
-        <span class="color-comp">{{selection_color_committed_b}}</span>
-        <div class="color-swatch" id="swatch-selection_color_committed" data-event-click="color_click('selection_color_committed')"></div>
-        <input type="text" class="color-hex" data-value="selection_color_committed_hex" />
-      </div>
-    </div>
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.selection_color_preview">
       <span class="setting-row__label-col">{{label_selection_color_preview}}</span>
       <div class="setting-row__control-col setting-row__control-col--color">

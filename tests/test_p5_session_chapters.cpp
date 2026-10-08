@@ -2214,7 +2214,6 @@ namespace {
         expect_bool(render, "/orthographic", true);
         expect_bool(render, "/depth_view", true);
         prove("VIEW-198");
-        expect_json(render, "/selection_color_committed", Json::array({0.11f, 0.22f, 0.33f}));
         expect_bool(render, "/depth_clip_enabled", true);
         expect_float(render, "/depth_clip_far", 34.0f);
         prove("VIEW-199");
