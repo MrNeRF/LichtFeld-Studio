@@ -6,6 +6,7 @@
 
 #include "camera_interaction_service.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/error.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
@@ -675,6 +676,11 @@ namespace lfs::vis {
                                            glm::ivec2 alloc_size = {0, 0});
         [[nodiscard]] float exportRasterizationScale(int target_height, int reference_height) const;
         [[nodiscard]] std::optional<float> exportOrthoScale(std::optional<float> scale, int target_height, int reference_height) const;
+        // Draws the visible meshes over a finished export image, depth-tested against the splats.
+        [[nodiscard]] lfs::Status compositeExportMeshes(
+            SceneManager* scene_manager,
+            const ExportImageRequest& request,
+            lfs::core::Tensor& image);
 
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageWithState(
             SceneManager* scene_manager,

@@ -943,43 +943,7 @@ namespace lfs::vis {
             const auto vp_data = frame_ctx.makeViewportData();
             frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
             frame.camera_position = vp_data.translation;
-            frame.items.reserve(frame_ctx.scene_state.meshes.size());
-
-            const bool any_selected_mesh = std::any_of(
-                frame_ctx.scene_state.meshes.begin(),
-                frame_ctx.scene_state.meshes.end(),
-                [](const auto& mesh) { return mesh.is_selected; });
-            const bool any_selected_node = std::any_of(
-                frame_ctx.scene_state.selected_node_mask.begin(),
-                frame_ctx.scene_state.selected_node_mask.end(),
-                [](const bool selected) { return selected; });
-            const bool dim_non_emphasized =
-                settings.desaturate_unselected && (any_selected_mesh || any_selected_node);
-
-            const glm::vec3 headlight_dir = glm::length(vp_data.translation) > 1e-6f
-                                                ? glm::normalize(vp_data.translation)
-                                                : settings.mesh_light_dir;
-
-            for (const auto& mesh : frame_ctx.scene_state.meshes) {
-                if (!mesh.mesh) {
-                    continue;
-                }
-                lfs::vis::VulkanMeshDrawItem item{};
-                item.mesh = mesh.mesh;
-                item.model = mesh.transform;
-                item.light_dir = headlight_dir;
-                item.light_intensity = settings.mesh_light_intensity;
-                item.ambient = settings.mesh_ambient;
-                item.backface_culling = settings.mesh_backface_culling;
-                item.is_emphasized = mesh.is_selected;
-                item.dim_non_emphasized = dim_non_emphasized;
-                item.wireframe_overlay = settings.mesh_wireframe;
-                item.wireframe_color = settings.mesh_wireframe_color;
-                item.wireframe_width = settings.mesh_wireframe_width;
-                item.shadow_enabled = settings.mesh_shadow_enabled;
-                item.shadow_map_resolution = settings.mesh_shadow_resolution;
-                frame.items.push_back(item);
-            }
+            frame.items = buildViewportMeshDrawItems(frame_ctx.scene_state, settings, vp_data.translation);
 
             const auto frame_view = frame_ctx.makeFrameView();
             frame.environment.enabled = environmentBackgroundEnabled(settings);

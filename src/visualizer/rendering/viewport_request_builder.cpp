@@ -606,6 +606,50 @@ namespace lfs::vis {
         return request;
     }
 
+    std::vector<VulkanMeshDrawItem> buildViewportMeshDrawItems(
+        const SceneRenderState& scene_state,
+        const RenderSettings& settings,
+        const glm::vec3& camera_position) {
+        const bool any_selected_mesh = std::any_of(
+            scene_state.meshes.begin(),
+            scene_state.meshes.end(),
+            [](const auto& mesh) { return mesh.is_selected; });
+        const bool any_selected_node = std::any_of(
+            scene_state.selected_node_mask.begin(),
+            scene_state.selected_node_mask.end(),
+            [](const bool selected) { return selected; });
+        const bool dim_non_emphasized =
+            settings.desaturate_unselected && (any_selected_mesh || any_selected_node);
+
+        const glm::vec3 headlight_dir = glm::length(camera_position) > 1e-6f
+                                            ? glm::normalize(camera_position)
+                                            : settings.mesh_light_dir;
+
+        std::vector<VulkanMeshDrawItem> items;
+        items.reserve(scene_state.meshes.size());
+        for (const auto& mesh : scene_state.meshes) {
+            if (!mesh.mesh) {
+                continue;
+            }
+            VulkanMeshDrawItem item{};
+            item.mesh = mesh.mesh;
+            item.model = mesh.transform;
+            item.light_dir = headlight_dir;
+            item.light_intensity = settings.mesh_light_intensity;
+            item.ambient = settings.mesh_ambient;
+            item.backface_culling = settings.mesh_backface_culling;
+            item.is_emphasized = mesh.is_selected;
+            item.dim_non_emphasized = dim_non_emphasized;
+            item.wireframe_overlay = settings.mesh_wireframe;
+            item.wireframe_color = settings.mesh_wireframe_color;
+            item.wireframe_width = settings.mesh_wireframe_width;
+            item.shadow_enabled = settings.mesh_shadow_enabled;
+            item.shadow_map_resolution = settings.mesh_shadow_resolution;
+            items.push_back(item);
+        }
+        return items;
+    }
+
     const core::SceneNode* plyComparisonNodeForPanel(
         const core::Scene& scene,
         const size_t split_view_offset,
