@@ -4910,7 +4910,12 @@ namespace lfs::core {
                 if (source_slice != selection_slices->end()) {
                     const auto* duplicated = getNodeById(new_id);
                     assert(duplicated && !duplicated->uuid.is_nil());
-                    auto cloned_slice = source_slice->second.clone();
+                    const auto& source_model = *getNodeById(src_id)->model;
+                    // Match the live-row order used by the model clone.
+                    auto cloned_slice = source_model.has_deleted_mask()
+                                            ? source_slice->second.index_select(
+                                                  0, source_model.deleted().logical_not().to(source_slice->second.device()))
+                                            : source_slice->second.clone();
                     const auto [slice_it, inserted] =
                         selection_slices->emplace(duplicated->uuid, std::move(cloned_slice));
                     (void)slice_it;

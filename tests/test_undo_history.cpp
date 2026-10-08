@@ -2767,6 +2767,46 @@ TEST_F(UndoHistoryTest, DuplicateSelectedNodeClonesSliceUnderNewUuid) {
               (std::vector<uint8_t>{0, 6, 0, 0, 6, 0}));
 }
 
+TEST_F(UndoHistoryTest, DuplicateCompactsLabeledSliceWithLiveRows) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+    const auto source = scene.addSplat("Source", make_linear_test_splat(8));
+    const auto other = scene.addSplat("Other", make_linear_test_splat(2));
+    scene.getNodeById(source)->model->soft_delete(make_uint8_mask({1, 0, 1, 0, 0, 1, 0, 0}).to(lfs::core::DataType::Bool));
+    scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+    scene.setSelectionMask(std::make_shared<Tensor>(make_uint8_mask({0, 6, 0, 0, 9, 0, 0, 3, 0, 7})));
+    const auto before = selection_mask_values(scene);
+    const auto source_uuid = scene.getNodeUuid(source);
+    const auto other_uuid = scene.getNodeUuid(other);
+    const auto name = scene_manager->duplicateNodeTree("Source");
+    ASSERT_FALSE(name.empty());
+    const auto* copy = scene.getNode(name);
+    ASSERT_NE(copy, nullptr);
+    const auto copy_uuid = copy->uuid;
+    ASSERT_EQ(copy->model->size(), 5u);
+    auto slices = scene.capturePerNodeSelectionSlices();
+    EXPECT_EQ(slices.at(source_uuid).cpu().to_vector_uint8(), (std::vector<uint8_t>{0, 6, 0, 0, 9, 0, 0, 3}));
+    EXPECT_EQ(slices.at(other_uuid).cpu().to_vector_uint8(), (std::vector<uint8_t>{0, 7}));
+    EXPECT_EQ(slices.at(copy_uuid).cpu().to_vector_uint8(), (std::vector<uint8_t>{6, 0, 9, 0, 3}));
+    const auto after = selection_mask_values(scene);
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_EQ(selection_mask_values(scene), before);
+    ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+    EXPECT_EQ(selection_mask_values(scene), after);
+    ASSERT_TRUE(scene_manager->cutSelectedGaussians());
+    EXPECT_EQ(scene.getNodeByUuid(source_uuid)->model->deleted().cpu().to_vector_bool(),
+              (std::vector<bool>{true, true, true, false, true, true, false, true}));
+    EXPECT_EQ(scene.getNodeByUuid(copy_uuid)->model->deleted().cpu().to_vector_bool(),
+              (std::vector<bool>{true, false, true, false, true}));
+    EXPECT_EQ(scene.getNodeByUuid(other_uuid)->model->deleted().cpu().to_vector_bool(),
+              (std::vector<bool>{false, true}));
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_EQ(selection_mask_values(scene), after);
+    ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+    EXPECT_EQ(scene.getNodeByUuid(copy_uuid)->model->visible_count(), 2u);
+}
+
 TEST_F(UndoHistoryTest, SceneGraphPatchPayloadCaptureIsOperationScoped) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     lfs::vis::services().set(scene_manager.get());

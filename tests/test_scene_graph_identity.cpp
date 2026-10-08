@@ -153,6 +153,15 @@ TEST_F(SceneGraphIdentityTest, DuplicatePointCloudCommandDeepCopiesPayloadAndSup
     source->visible = false;
     const auto source_uuid = source->uuid;
 
+    scene.setSelectionMask(lfs::core::SelectionDomain::PointCloud,
+                           std::make_shared<Tensor>(Tensor::from_vector(
+                               std::vector<bool>{false, true}, {2}, Device::CPU)));
+    const auto expect_mask = [&](const std::vector<bool>& expected) {
+        const auto mask = scene.getSelectionMask(lfs::core::SelectionDomain::PointCloud);
+        ASSERT_NE(mask, nullptr);
+        EXPECT_EQ(mask->cpu().to_vector_bool(), expected);
+    };
+
     lfs::core::events::cmd::DuplicateNodeById{.node_id = source_id}.emit();
     const auto* copy = scene.getNode("cloud_copy");
     ASSERT_NE(copy, nullptr);
@@ -174,12 +183,15 @@ TEST_F(SceneGraphIdentityTest, DuplicatePointCloudCommandDeepCopiesPayloadAndSup
         EXPECT_EQ(duplicate.to_vector(), original.to_vector());
         EXPECT_NE(duplicate.data_ptr(), original.data_ptr());
     }
+    expect_mask({false, true, false, false});
     const auto copy_uuid = copy->uuid;
     lfs::vis::op::undoHistory().undo();
     EXPECT_EQ(scene.getNode("cloud_copy"), nullptr);
+    expect_mask({false, true});
     ASSERT_NE(scene.getNode("cloud"), nullptr);
     EXPECT_EQ(scene.getNode("cloud")->point_cloud->means.to_vector(), cloud->means.to_vector());
     lfs::vis::op::undoHistory().redo();
+    expect_mask({false, true, false, false});
     copy = scene.getNode("cloud_copy");
     ASSERT_NE(copy, nullptr);
     EXPECT_EQ(copy->uuid, copy_uuid);

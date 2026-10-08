@@ -540,6 +540,44 @@ namespace {
         EXPECT_EQ(scene_state(*manager_), before);
     }
 
+    TEST_F(SceneGraphRegression, DuplicateCompactedSplatClonesLiveMaskThroughHistoryAndCut) {
+        auto& scene = manager_->getScene();
+        scene.addSplat("before", make_cuda_splat(3, 0.0f));
+        const auto source = scene.addSplat("source", make_cuda_splat(100000, 10.0f));
+        scene.addSplat("after", make_cuda_splat(4, 20.0f));
+        const auto rows = Tensor::arange(0, 100000, 1, Device::CUDA);
+        scene.getNodeById(source)->model->soft_delete(rows.lt(39628));
+        scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+        std::vector<bool> selected(100007, false);
+        std::fill(selected.begin() + 39631, selected.begin() + 100003, true);
+        scene.setSelectionMask(std::make_shared<Tensor>(
+            Tensor::from_vector(selected, {selected.size()}, Device::CUDA)));
+        manager_->selectNode(source);
+        const auto before = scene_state(*manager_, false);
+        const auto name = manager_->duplicateNodeTree(source);
+        ASSERT_FALSE(name.empty());
+        ASSERT_EQ(scene.getNode(name)->model->size(), 60372u);
+        selected.resize(160379, true);
+        EXPECT_EQ(scene.getSelectionMask()->cpu().to_vector_bool(), selected);
+        EXPECT_EQ(scene.selectedCount(), 120744u);
+        EXPECT_EQ(manager_->getSelectedNodeIds(), (std::vector<NodeId>{source}));
+        const auto after = scene_state(*manager_, false);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(scene_state(*manager_, false), before);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+        EXPECT_EQ(scene_state(*manager_, false), after);
+        EXPECT_EQ(scene.getSelectionMask()->cpu().to_vector_bool(), selected);
+        ASSERT_TRUE(manager_->cutSelectedGaussians());
+        const auto* remaining_copy = scene.getNode(name);
+        EXPECT_TRUE(!remaining_copy || remaining_copy->model->visible_count() == 0);
+        EXPECT_EQ(scene.getNode("before")->model->visible_count(), 3u);
+        EXPECT_EQ(scene.getNode("after")->model->visible_count(), 4u);
+        const auto* remaining_source = scene.getNode("source");
+        EXPECT_TRUE(!remaining_source || remaining_source->model->visible_count() == 0);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(scene_state(*manager_, false), after);
+    }
+
     TEST_F(SceneGraphRegression, DuplicatePreservesEllipsoidChild) {
         auto& scene = manager_->getScene();
         const NodeId source_id = scene.addSplat("source", make_cpu_splat(2, 0.0f));
