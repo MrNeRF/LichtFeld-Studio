@@ -2564,6 +2564,7 @@
     "task_failed_detail": "Échec : {}",
     "export_cancelled": "Exportation annulée par l’utilisateur",
     "no_splat_data": "Aucune donnée de splats à exporter",
+    "export_streamed_lod": "Impossible d'exporter \"{}\" : le modèle est trop volumineux pour tenir en mémoire et est lu en continu depuis le disque.",
     "video_encoder_unavailable": "Encodeur vidéo indisponible",
     "scene_manager_unavailable": "Le gestionnaire de scènes est indisponible",
     "no_model_selected": "Aucun modèle sélectionné pour l’exportation",

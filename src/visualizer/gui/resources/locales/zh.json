@@ -2564,6 +2564,7 @@
     "task_failed_detail": "失败：{}",
     "export_cancelled": "用户已取消导出",
     "no_splat_data": "没有可导出的 splat 数据",
+    "export_streamed_lod": "无法导出“{}”：模型太大，无法装入内存，正在从磁盘流式加载。",
     "video_encoder_unavailable": "视频编码器不可用",
     "scene_manager_unavailable": "场景管理器不可用",
     "no_model_selected": "未选择要导出的模型",

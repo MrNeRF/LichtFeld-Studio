@@ -153,7 +153,8 @@ namespace lfs::vis::gui {
     };
 
     [[nodiscard]] BorrowExportPlan makeBorrowSingleIdentityExportPlan(const lfs::vis::SceneManager& scene_manager,
-                                                                      const std::vector<std::string>& node_names) {
+                                                                      const std::vector<std::string>& node_names,
+                                                                      const ExportFormat format) {
         BorrowExportPlan plan;
         if (node_names.size() != 1)
             return plan;
@@ -164,6 +165,10 @@ namespace lfs::vis::gui {
             return plan;
 
         if (node->model->has_deleted_mask())
+            return plan;
+
+        // Only RAD stores an LOD tree; other formats need the merge to flatten it to its leaves.
+        if (format != ExportFormat::RAD && node->model->lod_tree && node->model->lod_tree->has_tree())
             return plan;
 
         if (node->uuid == scene.getTrainingModelNodeUuid()) {
@@ -1769,6 +1774,11 @@ namespace lfs::vis::gui {
         for (const auto& name : node_names) {
             const auto* node = scene.getNode(name);
             if (node && node->type == core::NodeType::SPLAT && node->model) {
+                if (const auto& tree = node->model->lod_tree;
+                    tree && tree->has_tree() && node->model->size() < tree->total_nodes()) {
+                    publishExportFailureState(format, path, LOCF(lichtfeld::Strings::Runtime::EXPORT_STREAMED_LOD, name));
+                    return;
+                }
                 splats.push_back(ExportSplatSource{
                     .data = node->model.get(),
                     .transform = scene_coords::nodeDataWorldTransform(scene, node->id)});
@@ -1779,7 +1789,7 @@ namespace lfs::vis::gui {
             return;
         }
 
-        auto borrow_plan = makeBorrowSingleIdentityExportPlan(*scene_manager, node_names);
+        auto borrow_plan = makeBorrowSingleIdentityExportPlan(*scene_manager, node_names, format);
 
         auto provenance = include_provenance ? make_gui_export_stamp(*scene_manager)
                                              : core::make_minimal_provenance_stamp();

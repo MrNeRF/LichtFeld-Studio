@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <format>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <limits>
@@ -1046,6 +1047,34 @@ namespace lfs::core {
 
         (void)result.apply_shN_value_quant();
         return result;
+    }
+
+    std::expected<SplatData, std::string> extract_lod_leaves(const SplatData& splat_data) {
+        LFS_ASSERT(splat_data.lod_tree && splat_data.lod_tree->has_tree());
+        const SplatLodTree& tree = *splat_data.lod_tree;
+        const size_t node_count = tree.total_nodes();
+        if (splat_data.size() < node_count) {
+            return std::unexpected(std::format(
+                "only {} of {} LOD nodes are in memory; the full-detail splats stream from disk",
+                splat_data.size(), node_count));
+        }
+        LFS_ASSERT(splat_data.size() == node_count);
+
+        std::vector<bool> is_leaf(node_count);
+        for (size_t i = 0; i < node_count; ++i) {
+            is_leaf[i] = tree.child_count_at(i) == 0;
+        }
+        Tensor keep = Tensor::from_vector(is_leaf, {node_count}, splat_data.means_raw().device());
+        if (splat_data.has_deleted_mask()) {
+            keep = keep.logical_and(splat_data.deleted().logical_not());
+        }
+
+        SplatData leaves = extract_by_mask(splat_data, keep);
+        leaves.lod_tree.reset();
+        if (tree.lod_opacity_encoded && leaves.size() > 0) {
+            leaves.opacity_raw() = leaves.opacity_raw().logit();
+        }
+        return leaves;
     }
 
 } // namespace lfs::core

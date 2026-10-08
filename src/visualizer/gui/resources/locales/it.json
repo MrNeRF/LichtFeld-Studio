@@ -2564,6 +2564,7 @@
     "task_failed_detail": "Non riuscito: {}",
     "export_cancelled": "Esportazione annullata dall’utente",
     "no_splat_data": "Nessun dato splat da esportare",
+    "export_streamed_lod": "Impossibile esportare \"{}\": il modello è troppo grande per la memoria e viene letto in streaming dal disco.",
     "video_encoder_unavailable": "Encoder video non disponibile",
     "scene_manager_unavailable": "Il gestore della scena non è disponibile",
     "no_model_selected": "Nessun modello selezionato per l’esportazione",

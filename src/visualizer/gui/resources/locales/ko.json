@@ -2564,6 +2564,7 @@
     "task_failed_detail": "실패: {}",
     "export_cancelled": "사용자가 내보내기를 취소했습니다",
     "no_splat_data": "내보낼 스플랫 데이터가 없습니다",
+    "export_streamed_lod": "\"{}\"을(를) 내보낼 수 없습니다: 모델이 너무 커서 메모리에 들어가지 않으며 디스크에서 스트리밍됩니다.",
     "video_encoder_unavailable": "비디오 인코더를 사용할 수 없습니다",
     "scene_manager_unavailable": "씬 관리자를 사용할 수 없습니다",
     "no_model_selected": "내보낼 모델이 선택되지 않았습니다",

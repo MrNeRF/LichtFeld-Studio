@@ -2564,6 +2564,7 @@
     "task_failed_detail": "Fallido: {}",
     "export_cancelled": "Exportación cancelada por el usuario",
     "no_splat_data": "No hay datos de splats para exportar",
+    "export_streamed_lod": "No se puede exportar \"{}\": el modelo es demasiado grande para la memoria y se transmite desde el disco.",
     "video_encoder_unavailable": "Codificador de vídeo no disponible",
     "scene_manager_unavailable": "El gestor de escenas no está disponible",
     "no_model_selected": "No se ha seleccionado ningún modelo para exportar",

@@ -27,6 +27,7 @@
 #include <cuda_runtime.h>
 #include <exception>
 #include <filesystem>
+#include <format>
 #include <functional>
 #include <glm/gtc/quaternion.hpp>
 #include <limits>
@@ -2475,6 +2476,16 @@ namespace lfs::core {
     std::shared_ptr<SplatData> Scene::SplatSnapshot::materialize() const {
         if (!data || row_offset > data->size() || row_count > data->size() - row_offset)
             throw std::runtime_error("Invalid scene snapshot range.");
+        if (data->lod_tree && data->lod_tree->has_tree()) {
+            if (row_offset != 0 || row_count != data->size())
+                throw std::runtime_error("An LOD model snapshot must cover the whole model.");
+            auto leaves = extract_lod_leaves(*data);
+            if (!leaves)
+                throw std::runtime_error(std::format("Cannot capture the LOD model: {}", leaves.error()));
+            auto flat = std::make_shared<SplatData>(std::move(*leaves));
+            flat->set_active_sh_degree(std::clamp(active_sh_degree, 0, flat->get_max_sh_degree()));
+            return flat;
+        }
         if (row_offset == 0 && row_count == data->size() && active_sh_degree == data->get_active_sh_degree())
             return data;
         auto keep = Tensor::zeros_bool({static_cast<size_t>(data->size())}, data->means_raw().device());
@@ -5023,6 +5034,44 @@ namespace lfs::core {
 
         if (sh_degree_limit < -1 || sh_degree_limit > 3)
             throw std::invalid_argument("SH degree limit must be -1 or between 0 and 3.");
+
+        // Only the single-identity borrow keeps an LOD tree; every other result is flat, so LOD
+        // sources contribute their leaves with real opacity instead of interior nodes.
+        const auto has_lod_tree = [](const auto& entry) {
+            return entry.first->lod_tree && entry.first->lod_tree->has_tree();
+        };
+        const bool keeps_lod_tree = storage_mode == MergeStorageMode::BorrowSingleIdentity &&
+                                    splats.size() == 1 && splats.front().second == glm::mat4{1.0f} &&
+                                    !splats.front().first->has_deleted_mask();
+        if (!keeps_lod_tree && std::any_of(splats.begin(), splats.end(), has_lod_tree)) {
+            std::vector<lfs::core::SplatData> leaves;
+            leaves.reserve(splats.size());
+            std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>> flat_splats;
+            flat_splats.reserve(splats.size());
+            for (const auto& entry : splats) {
+                if (!has_lod_tree(entry)) {
+                    flat_splats.push_back(entry);
+                    continue;
+                }
+                auto extracted = lfs::core::extract_lod_leaves(*entry.first);
+                if (!extracted) {
+                    LOG_ERROR("Cannot merge an LOD model: {}", extracted.error());
+                    return nullptr;
+                }
+                if (extracted->size() == 0)
+                    continue;
+                leaves.push_back(std::move(*extracted));
+                flat_splats.emplace_back(&leaves.back(), entry.second);
+            }
+            if (flat_splats.empty())
+                return nullptr;
+            // A lone leaf set is already a private copy, so it can be borrowed.
+            const auto flat_mode = flat_splats.size() == 1 && !leaves.empty()
+                                       ? MergeStorageMode::BorrowSingleIdentity
+                                       : storage_mode;
+            return mergeSplatsWithTransforms(flat_splats, flat_mode, sh_degree_limit);
+        }
+
         const auto storage_degree = [sh_degree_limit](const lfs::core::SplatData& model) {
             return sh_degree_limit < 0 ? model.get_max_sh_degree()
                                        : std::min({sh_degree_limit, model.get_active_sh_degree(), model.get_max_sh_degree()});

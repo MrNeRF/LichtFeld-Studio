@@ -5,7 +5,9 @@
 #pragma once
 
 #include "core/export.hpp"
+#include <expected>
 #include <glm/glm.hpp>
+#include <string>
 
 namespace lfs::geometry {
     class BoundingBox;
@@ -96,5 +98,9 @@ namespace lfs::core {
 
     // Extract gaussians where mask is non-zero
     LFS_CORE_API SplatData extract_by_mask(const SplatData& splat_data, const Tensor& mask);
+
+    // Full-detail splats of a model with an LOD tree: the leaves that are not soft-deleted, with
+    // LOD-encoded linear opacity converted back to logits. Fails when the leaves stream from disk.
+    LFS_CORE_API std::expected<SplatData, std::string> extract_lod_leaves(const SplatData& splat_data);
 
 } // namespace lfs::core

@@ -2564,6 +2564,7 @@
     "task_failed_detail": "失敗: {}",
     "export_cancelled": "ユーザーによってエクスポートがキャンセルされました",
     "no_splat_data": "エクスポートするスプラットデータがありません",
+    "export_streamed_lod": "「{}」をエクスポートできません: モデルが大きすぎてメモリに収まらず、ディスクからストリーミングされています。",
     "video_encoder_unavailable": "ビデオエンコーダーを利用できません",
     "scene_manager_unavailable": "シーンマネージャーを利用できません",
     "no_model_selected": "エクスポートするモデルが選択されていません",

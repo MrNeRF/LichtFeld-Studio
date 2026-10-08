@@ -2564,6 +2564,7 @@
     "task_failed_detail": "Fehlgeschlagen: {}",
     "export_cancelled": "Export vom Benutzer abgebrochen",
     "no_splat_data": "Keine Splat-Daten zum Exportieren",
+    "export_streamed_lod": "\"{}\" kann nicht exportiert werden: Das Modell passt nicht in den Arbeitsspeicher und wird von der Festplatte gestreamt.",
     "video_encoder_unavailable": "Video-Encoder nicht verfügbar",
     "scene_manager_unavailable": "Szenenverwaltung ist nicht verfügbar",
     "no_model_selected": "Kein Modell zum Exportieren ausgewählt",
