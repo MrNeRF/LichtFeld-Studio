@@ -1763,6 +1763,58 @@ namespace lfs::vis {
         EXPECT_EQ(controller.saveToJson(), applied);
     }
 
+    TEST_F(SequencerFrameDemandTest, ReportsFrameFailureUntilSuccessfulRetry) {
+        VisualizerImpl viewer(projectOptions());
+        auto& sequencer = viewer.getGuiManager()->sequencerUI();
+        auto& controller = sequencer.controller();
+        auto& scene = viewer.getSceneManager()->getScene();
+        scene.addSplat("frame_0", lfs::test::licht::make_splat(2));
+        scene.addSplat("frame_1", lfs::test::licht::make_splat(2));
+        controller.setPlySequence(temporary_.path, "sequence",
+                                  {temporary_.path / "frame_0.ply", temporary_.path / "frame_1.ply"},
+                                  {"frame_0", "frame_1"}, 1.0f);
+        using State = gui::SequencerUIManager::PlyStreamFrameState;
+        sequencer.ply_stream_states_.assign(2, State::Resident);
+        sequencer.last_ply_sequence_frame_ = 1;
+        const auto status = [&] { return nlohmann::json::parse(sequencer.plyPlayerStatusJson()); };
+        const auto generation = sequencer.ply_stream_generation_.load();
+        sequencer.ply_stream_completed_.push_back(
+            {.generation = generation, .frame_index = 0, .error = "Frame file is missing"});
+        sequencer.drainPlySequenceStream();
+        EXPECT_TRUE(status().value("requested_frame_failed", false));
+        EXPECT_FALSE(status()["on_target"].get<bool>());
+        EXPECT_EQ(status()["displayed_frame"], 1);
+        sequencer.requestPlySequenceFrame(0, true);
+        EXPECT_EQ(sequencer.ply_stream_states_[0], State::Queued);
+        EXPECT_TRUE(status().value("requested_frame_failed", false));
+        sequencer.ply_stream_states_[0] = State::Loading;
+        EXPECT_TRUE(status().value("requested_frame_failed", false));
+
+        controller.seek(1.0f);
+        EXPECT_FALSE(status().value("requested_frame_failed", true));
+        EXPECT_TRUE(status()["on_target"].get<bool>());
+        controller.seek(0.0f);
+        // Cancellation and stale completions cannot hide a known failure.
+        sequencer.ply_stream_completed_.push_back(
+            {.generation = generation, .frame_index = 0, .cancelled = true});
+        sequencer.ply_stream_completed_.push_back(
+            {.generation = generation + 1, .frame_index = 0, .model = lfs::test::licht::make_splat(2)});
+        sequencer.drainPlySequenceStream();
+        EXPECT_TRUE(status().value("requested_frame_failed", false));
+        sequencer.ply_stream_completed_.push_back(
+            {.generation = generation, .frame_index = 0, .model = lfs::test::licht::make_splat(2)});
+        sequencer.drainPlySequenceStream();
+        EXPECT_FALSE(status().value("requested_frame_failed", true));
+        EXPECT_EQ(sequencer.ply_stream_states_[0], State::Resident);
+
+        sequencer.ply_stream_completed_.push_back(
+            {.generation = generation, .frame_index = 0, .error = "Frame file is missing"});
+        sequencer.drainPlySequenceStream();
+        EXPECT_TRUE(status().value("requested_frame_failed", false));
+        sequencer.stopPlySequenceStreaming();
+        EXPECT_FALSE(status().value("requested_frame_failed", true));
+    }
+
     TEST_F(SequencerFrameDemandTest, PropagatesPlaybackStreamAndPreviewDemand) {
         VisualizerImpl viewer(projectOptions());
         auto& gui = *viewer.getGuiManager();

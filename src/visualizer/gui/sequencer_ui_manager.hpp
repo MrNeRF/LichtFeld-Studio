@@ -30,6 +30,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace lfs::vis::gui {
@@ -40,6 +41,7 @@ namespace lfs::vis {
     class SequencerFrameDemandTest_ApplyCurrentViewRecordsHistory_Test;
     class VisualizerImpl;
     class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
+    class SequencerFrameDemandTest_ReportsFrameFailureUntilSuccessfulRetry_Test;
 
     namespace gui {
 
@@ -80,6 +82,7 @@ namespace lfs::vis {
         private:
             friend class lfs::vis::SequencerFrameDemandTest_ApplyCurrentViewRecordsHistory_Test;
             friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
+            friend class lfs::vis::SequencerFrameDemandTest_ReportsFrameFailureUntilSuccessfulRetry_Test;
             void renderSequencerPanel(const UIContext& ctx, const ViewportLayout& viewport,
                                       float panel_x, float panel_y, float panel_width,
                                       float panel_height, const PanelInputState& panel_input);
@@ -206,6 +209,8 @@ namespace lfs::vis {
             std::vector<std::filesystem::path> ply_stream_paths_;
             lfs::io::SplatTensorAllocator ply_stream_allocator_;
             std::vector<PlyStreamFrameState> ply_stream_states_;
+            // Retain failures while retries are queued or loading; successful loads clear them.
+            std::unordered_set<size_t> ply_stream_failed_frames_;
             std::deque<size_t> ply_stream_requests_;
             std::deque<PlyStreamResult> ply_stream_completed_;
             bool ply_stream_inflight_ = false;
