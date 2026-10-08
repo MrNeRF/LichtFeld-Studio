@@ -380,7 +380,7 @@ namespace lfs::vis {
             return {};
         }
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
-        auto render_state = scene_manager ? scene_manager->buildRenderState() : SceneRenderState{};
+        auto render_state = scene_manager ? scene_manager->buildRenderState({.current_geometry = true}) : SceneRenderState{};
         const auto* const model = render_state.combined_model;
         if (!hasRenderableGaussians(model)) {
             return {};
@@ -498,7 +498,7 @@ namespace lfs::vis {
             return result;
         }
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
-        auto render_state = scene_manager ? scene_manager->buildRenderState() : SceneRenderState{};
+        auto render_state = scene_manager ? scene_manager->buildRenderState({.current_geometry = true}) : SceneRenderState{};
         const auto* const model = render_state.combined_model;
         if (!hasRenderableGaussians(model)) {
             return result;
@@ -585,7 +585,7 @@ namespace lfs::vis {
         const float rasterization_scale = exportRasterizationScale(height, reference_height);
         ortho_scale_override = exportOrthoScale(ortho_scale_override, height, reference_height);
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
-        auto render_state = scene_manager ? scene_manager->buildRenderState() : SceneRenderState{};
+        auto render_state = scene_manager ? scene_manager->buildRenderState({.current_geometry = true}) : SceneRenderState{};
         const auto* const model = render_state.combined_model;
         if (!hasRenderableGaussians(model)) {
             return {};
@@ -642,7 +642,7 @@ namespace lfs::vis {
         const float rasterization_scale = exportRasterizationScale(height, reference_height);
         ortho_scale_override = exportOrthoScale(ortho_scale_override, height, reference_height);
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
-        auto render_state = scene_manager ? scene_manager->buildRenderState() : SceneRenderState{};
+        auto render_state = scene_manager ? scene_manager->buildRenderState({.current_geometry = true}) : SceneRenderState{};
         const auto* const model = render_state.combined_model;
         if (!hasRenderableGaussians(model)) {
             return {};

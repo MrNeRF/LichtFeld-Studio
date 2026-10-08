@@ -421,6 +421,9 @@ namespace lfs::core {
         [[nodiscard]] std::vector<RenderableEllipsoid> getRenderableEllipsoids() const;
 
         const lfs::core::SplatData* getCombinedModel() const;
+        // Like getCombinedModel, but never serves the previous geometry while a worker rebuilds it:
+        // waits for that build, then rebuilds synchronously if the scene changed again. For captures.
+        const lfs::core::SplatData* getCurrentCombinedModel() const;
         // True when a combined or single-node alias is already installed.
         // Does not poll the worker or start a rebuild.
         [[nodiscard]] bool hasPreparedCombinedModel() const;

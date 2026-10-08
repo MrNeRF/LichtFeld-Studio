@@ -3601,7 +3601,8 @@ namespace lfs::vis {
                                         ? nullptr
                                         : (content_type_ == ContentType::Dataset
                                                ? scene_.getTrainingModel()
-                                               : scene_.getCombinedModel());
+                                               : (options.current_geometry ? scene_.getCurrentCombinedModel()
+                                                                           : scene_.getCombinedModel()));
         // PointCloud tensors are public and can be edited in place without a Scene mutation
         // notification. Keep the small node scan, but do not reuse a state that owns a merged
         // point cloud unless those tensors acquire an explicit generation in the future.
@@ -3630,7 +3631,7 @@ namespace lfs::vis {
         // metadata_only so this snapshot cannot start a combined-model worker.
         bool hidden_dataset_training_model = false;
         if (!options.metadata_only && content_type_ == ContentType::SplatFiles) {
-            state.combined_model = scene_.getCombinedModel();
+            state.combined_model = current_model;
         } else if (!options.metadata_only && content_type_ == ContentType::Dataset) {
             state.combined_model = scene_.getTrainingModel();
             hidden_dataset_training_model =

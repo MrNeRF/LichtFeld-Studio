@@ -326,6 +326,33 @@ TEST_F(SceneConsolidationExtractTest, WorkerBuildMatchesSynchronousCombinedModel
     expect_shN_q16(worker_build->model->shN_canonical().to_vector(), expected->shN_canonical().to_vector());
 }
 
+// Catches captures drawing the previous combined model while the worker rebuilds it: an export
+// right after showing a model left that model out.
+TEST_F(SceneConsolidationExtractTest, CurrentCombinedModelNeverServesThePreviousScene) {
+    const size_t n = static_cast<size_t>(bike_.size());
+    const size_t visible_copies = 1'000'000 / n + 2;
+    Scene scene;
+    std::vector<lfs::core::NodeId> ids;
+    for (size_t i = 0; i <= visible_copies; ++i) {
+        ids.push_back(scene.addSplat("copy_" + std::to_string(i), std::make_unique<SplatData>(bike_.clone())));
+        ASSERT_NE(ids.back(), lfs::core::NULL_NODE);
+    }
+    scene.setNodeVisibility(ids.back(), false);
+    const auto* before = scene.getCurrentCombinedModel();
+    ASSERT_NE(before, nullptr);
+    ASSERT_EQ(static_cast<size_t>(before->size()), visible_copies * n);
+
+    scene.setNodeVisibility(ids.back(), true);
+    const auto* interactive = scene.getCombinedModel();
+    ASSERT_NE(interactive, nullptr);
+    ASSERT_EQ(static_cast<size_t>(interactive->size()), visible_copies * n)
+        << "the interactive path keeps the previous scene while the worker rebuilds";
+
+    const auto* current = scene.getCurrentCombinedModel();
+    ASSERT_NE(current, nullptr);
+    EXPECT_EQ(static_cast<size_t>(current->size()), (visible_copies + 1) * n);
+}
+
 TEST_F(SceneConsolidationExtractTest, SceneDestructionJoinsCombinedModelWorker) {
     std::mutex gate_mutex;
     std::condition_variable gate_changed;

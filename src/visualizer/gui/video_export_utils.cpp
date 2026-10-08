@@ -71,7 +71,7 @@ namespace lfs::vis::gui {
         VideoExportSceneSnapshot snapshot;
 
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
-        const auto render_state = scene_manager.buildRenderState();
+        const auto render_state = scene_manager.buildRenderState({.current_geometry = true});
         const auto& scene = scene_manager.getScene();
 
         if (const auto* const model = scene_manager.getModelForRendering();

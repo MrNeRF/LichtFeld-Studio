@@ -913,6 +913,16 @@ namespace lfs::core {
         return single_node_model_ ? single_node_model_ : cached_combined_.get();
     }
 
+    const lfs::core::SplatData* Scene::getCurrentCombinedModel() const {
+        waitForCombinedModelBuild();
+        if (combined_model_build_failure_ &&
+            combined_model_build_failure_->first == render_generation_.load(std::memory_order_acquire)) {
+            return nullptr;
+        }
+        rebuildModelCacheIfNeeded();
+        return single_node_model_ ? single_node_model_ : cached_combined_.get();
+    }
+
     bool Scene::hasPreparedCombinedModel() const {
         return peekCombinedModel() != nullptr;
     }
