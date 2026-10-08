@@ -11,6 +11,7 @@
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "scene/scene_manager.hpp"
 #include "sequencer/animation_clip.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/rml_sequencer_panel.hpp"
@@ -132,6 +133,140 @@ namespace {
         EXPECT_EQ(restored.position, added.position);
         EXPECT_EQ(restored.rotation, added.rotation);
         EXPECT_EQ(restored.focal_length_mm, added.focal_length_mm);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, DeleteCommandRestoresExactKeyAndPreservesOtherTimelineContent) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        const auto first = controller.addKeyframe(makeKeyframe(0.0f, {1.0f, 2.0f, 3.0f}));
+        auto key = makeKeyframe(4.5f, {3.0f, 5.0f, 7.0f}, 73.0f);
+        key.rotation = glm::angleAxis(0.73f, glm::normalize(glm::vec3(1.0f, 2.0f, 3.0f)));
+        key.easing = EasingType::EASE_OUT;
+        const auto deleted = controller.addKeyframe(key);
+        const auto captured = *controller.timeline().getKeyframeById(deleted);
+        const auto other = controller.addKeyframe(makeKeyframe(8.0f));
+        auto* clip = &controller.timeline().ensureAnimationClip();
+        controller.setLoopMode(LoopMode::LOOP);
+        const float duration = controller.clipDuration();
+        history.clear();
+        lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = 1}.emit();
+        ASSERT_EQ(controller.timeline().getKeyframeById(deleted), nullptr);
+        ASSERT_EQ(history.undoCount(), 1u);
+        EXPECT_EQ(history.undoName(), "Delete Keyframe");
+        for (int repetition = 0; repetition < 2; ++repetition) {
+            ASSERT_TRUE(history.undo().success);
+            const auto* restored = controller.timeline().getKeyframeById(deleted);
+            ASSERT_NE(restored, nullptr);
+            EXPECT_EQ(restored->id, captured.id);
+            EXPECT_EQ(restored->time, captured.time);
+            EXPECT_EQ(restored->position, captured.position);
+            EXPECT_EQ(restored->rotation, captured.rotation);
+            EXPECT_EQ(restored->focal_length_mm, captured.focal_length_mm);
+            EXPECT_EQ(restored->easing, captured.easing);
+            EXPECT_EQ(controller.timeline().animationClip(), clip);
+            EXPECT_EQ(controller.loopMode(), LoopMode::LOOP);
+            EXPECT_EQ(controller.clipDuration(), duration);
+            EXPECT_NE(controller.timeline().getKeyframeById(first), nullptr);
+            EXPECT_NE(controller.timeline().getKeyframeById(other), nullptr);
+            EXPECT_EQ(history.undoCount(), 0u);
+            EXPECT_EQ(history.redoCount(), 1u);
+            ASSERT_TRUE(history.redo().success);
+            EXPECT_EQ(controller.timeline().getKeyframeById(deleted), nullptr);
+            EXPECT_EQ(history.undoCount(), 1u);
+            EXPECT_EQ(history.redoCount(), 0u);
+        }
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, DeleteUndoPrecedesEarlierSceneVisibilityChange) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f));
+        const auto deleted = controller.addKeyframe(makeKeyframe(1.0f));
+        auto* manager = viewer.getSceneManager();
+        const auto group = manager->getScene().addGroup("group");
+        manager->setNodeVisibility(group, false);
+        ASSERT_EQ(history.undoName(), "Set Visibility");
+        lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = 1}.emit();
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_FALSE(static_cast<bool>(manager->getScene().getNodeById(group)->visible));
+        EXPECT_NE(controller.timeline().getKeyframeById(deleted), nullptr);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_TRUE(static_cast<bool>(manager->getScene().getNodeById(group)->visible));
+        ASSERT_TRUE(history.redo().success);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_EQ(controller.timeline().getKeyframeById(deleted), nullptr);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, ProtectedAndMissingDeleteCommandsDoNotCreateHistory) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        const auto first = controller.addKeyframe(makeKeyframe(0.0f));
+        auto& history = lfs::vis::op::undoHistory();
+        lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = 0}.emit();
+        lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = 99}.emit();
+        EXPECT_NE(controller.timeline().getKeyframeById(first), nullptr);
+        EXPECT_EQ(history.undoCount(), 0u);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, GroupedControllerDeletionIsOneUndoStep) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f));
+        const auto second = controller.addKeyframe(makeKeyframe(1.0f));
+        const auto third = controller.addKeyframe(makeKeyframe(2.0f));
+        {
+            lfs::vis::op::TransactionGuard transaction("Delete Keyframes");
+            ASSERT_TRUE(controller.removeKeyframeById(second));
+            ASSERT_TRUE(controller.removeKeyframeById(third));
+            transaction.commit();
+        }
+        ASSERT_EQ(history.undoCount(), 1u);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_NE(controller.timeline().getKeyframeById(second), nullptr);
+        EXPECT_NE(controller.timeline().getKeyframeById(third), nullptr);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 1u);
+        EXPECT_EQ(history.undoCount(), 1u);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, DeleteHistoryCannotAccessDestroyedSequencer) {
+        auto& history = lfs::vis::op::undoHistory();
+        {
+            lfs::vis::VisualizerImpl viewer(options());
+            auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+            controller.addKeyframe(makeKeyframe(0.0f));
+            controller.addKeyframe(makeKeyframe(1.0f));
+            lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = 1}.emit();
+            ASSERT_EQ(history.undoCount(), 1u);
+        }
+        EXPECT_FALSE(history.undo().success);
+        EXPECT_EQ(history.undoCount(), 0u);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, DeleteCommandLatency) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        std::vector<double> samples;
+        for (int batch = 0; batch < 9; ++batch) {
+            controller.clear();
+            history.clear();
+            for (int i = 0; i < 51; ++i)
+                controller.addKeyframe(makeKeyframe(static_cast<float>(i)));
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 50; i > 0; --i)
+                lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = static_cast<size_t>(i)}.emit();
+            samples.push_back(std::chrono::duration<double, std::micro>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count() /
+                              50.0);
+            ASSERT_EQ(controller.timeline().realKeyframeCount(), 1u);
+        }
+        std::sort(samples.begin(), samples.end());
+        RecordProperty("median_delete_us", std::to_string(samples[samples.size() / 2]));
     }
 
     TEST_F(SequencerHistoryRegressionTest, AddCommandLatency) {

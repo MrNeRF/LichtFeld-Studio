@@ -57,16 +57,20 @@ namespace lfs::vis::gui {
                    lhs.easing == rhs.easing && lhs.is_loop_point == rhs.is_loop_point;
         }
 
-        class KeyframeAdditionUndoEntry final : public op::UndoEntry {
+        class KeyframeChangeUndoEntry final : public op::UndoEntry {
         public:
-            KeyframeAdditionUndoEntry(SequencerController& controller, std::weak_ptr<void> lifetime,
-                                      std::optional<sequencer::Keyframe> before, sequencer::Keyframe after,
-                                      const float duration_before)
+            KeyframeChangeUndoEntry(SequencerController& controller, std::weak_ptr<void> lifetime,
+                                    std::optional<sequencer::Keyframe> before, std::optional<sequencer::Keyframe> after,
+                                    const float duration_before)
                 : controller_(controller), lifetime_(std::move(lifetime)), before_(std::move(before)), after_(std::move(after)), duration_before_(duration_before), duration_after_(controller.clipDuration()) {}
 
             void undo() override { apply(after_, before_, duration_after_, duration_before_); }
             void redo() override { apply(before_, after_, duration_before_, duration_after_); }
-            [[nodiscard]] std::string name() const override { return before_ ? "Replace Keyframe" : "Add Keyframe"; }
+            [[nodiscard]] std::string name() const override {
+                if (!after_)
+                    return "Delete Keyframe";
+                return before_ ? "Replace Keyframe" : "Add Keyframe";
+            }
             [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this); }
 
         private:
@@ -75,19 +79,20 @@ namespace lfs::vis::gui {
                        const float expected_duration, const float desired_duration) {
                 if (lifetime_.expired())
                     throw op::HistoryStaleEntryError("Sequencer is no longer available");
-                const auto* current = controller_.timeline().getKeyframeById(after_.id);
+                const auto id = after_ ? after_->id : before_->id;
+                const auto* current = controller_.timeline().getKeyframeById(id);
                 if ((expected && (!current || !sameKeyframe(*current, *expected))) || (!expected && current))
-                    throw op::HistoryStaleEntryError("Keyframe changed since the recorded addition");
+                    throw op::HistoryStaleEntryError("Keyframe changed since the recorded change");
 
                 const bool restore_duration = controller_.clipDuration() == expected_duration;
                 if (desired) {
                     if (!current)
                         controller_.addKeyframe(*desired);
                     // Restore the captured bits without renormalizing the quaternion.
-                    *controller_.timeline().getKeyframeById(after_.id) = *desired;
-                    controller_.commitKeyframeTimeById(after_.id);
+                    *controller_.timeline().getKeyframeById(id) = *desired;
+                    controller_.commitKeyframeTimeById(id);
                 } else {
-                    controller_.removeKeyframeById(after_.id);
+                    controller_.removeKeyframeById(id);
                 }
                 // Preserve a later duration edit; the setter also protects later keys.
                 if (restore_duration && desired_duration != expected_duration)
@@ -100,7 +105,7 @@ namespace lfs::vis::gui {
             SequencerController& controller_;
             std::weak_ptr<void> lifetime_;
             std::optional<sequencer::Keyframe> before_;
-            sequencer::Keyframe after_;
+            std::optional<sequencer::Keyframe> after_;
             float duration_before_;
             float duration_after_;
         };
@@ -333,9 +338,17 @@ namespace lfs::vis::gui {
           ui_state_(ui_state),
           panel_(std::make_unique<RmlSequencerPanel>(controller_, ui_state_, rml_manager)),
           overlay_(std::make_unique<RmlSequencerOverlay>(controller_, rml_manager)),
-          scene_sync_(std::make_unique<KeyframeSceneSync>(controller_, viewer)) {}
+          scene_sync_(std::make_unique<KeyframeSceneSync>(controller_, viewer)) {
+        controller_.setKeyframeRemovedCallback([this](const sequencer::Keyframe& keyframe, const float duration_before) {
+            auto& history = op::undoHistory();
+            if (!history.isPlaybackActive())
+                history.push(std::make_unique<KeyframeChangeUndoEntry>(
+                    controller_, history_lifetime_, keyframe, std::nullopt, duration_before));
+        });
+    }
 
     SequencerUIManager::~SequencerUIManager() {
+        controller_.setKeyframeRemovedCallback({});
         stopPlySequenceStreaming();
     }
 
@@ -2317,7 +2330,7 @@ namespace lfs::vis::gui {
         const auto* after = controller_.timeline().getKeyframeById(id);
         if (!after || (before && sameKeyframe(*before, *after)))
             return;
-        op::undoHistory().push(std::make_unique<KeyframeAdditionUndoEntry>(
+        op::undoHistory().push(std::make_unique<KeyframeChangeUndoEntry>(
             controller_, history_lifetime_, std::move(before), *after, duration_before));
     }
 

@@ -457,6 +457,8 @@ namespace lfs::vis {
         if (!keyframe || keyframe->is_loop_point)
             return false;
 
+        const auto before = keyframe_removed_callback_ ? std::optional(*keyframe) : std::nullopt;
+        const float duration_before = clipDuration();
         removeLoopKeyframe();
         const bool removed = timeline_.removeKeyframeById(id);
         rebuildLoopKeyframe();
@@ -464,6 +466,8 @@ namespace lfs::vis {
             if (selected_keyframe_id_ == id)
                 deselectKeyframe();
             markTimelineChanged();
+            if (before)
+                keyframe_removed_callback_(*before, duration_before);
         }
         return removed;
     }

@@ -10,9 +10,11 @@
 #include <algorithm>
 #include <expected>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace lfs::vis {
@@ -109,6 +111,9 @@ namespace lfs::vis {
         bool setKeyframeEasingById(sequencer::KeyframeId id, sequencer::EasingType easing);
         bool removeKeyframeById(sequencer::KeyframeId id);
         bool removeSelectedKeyframe();
+        void setKeyframeRemovedCallback(std::function<void(const sequencer::Keyframe&, float)> callback) {
+            keyframe_removed_callback_ = std::move(callback);
+        }
         void clear();
         bool saveToJson(const std::string& path) const;
         bool loadFromJson(const std::string& path);
@@ -164,6 +169,7 @@ namespace lfs::vis {
         void markTimelineChanged();
         void markSelectionChanged();
 
+        std::function<void(const sequencer::Keyframe&, float)> keyframe_removed_callback_;
         sequencer::Timeline timeline_;
         std::optional<PlySequenceClip> ply_sequence_;
         PlaybackState state_ = PlaybackState::STOPPED;
