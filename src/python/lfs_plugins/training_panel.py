@@ -798,6 +798,10 @@ class TrainingPanel(Panel):
             lambda: p() is not None and p().has_params() and p().strategy == "igs+",
         )
         model.bind_func(
+            "depth_normal_disabled",
+            lambda: p() is not None and p().has_params() and p().gut,
+        )
+        model.bind_func(
             "dataset_disabled",
             lambda: (
                 not (
@@ -1773,6 +1777,12 @@ class TrainingPanel(Panel):
             return False
         if not hasattr(params, prop):
             return False
+        # GUT renders no depth or normals, so it excludes both supervision losses.
+        if prop in ("use_depth_loss", "use_normal_loss") and val and params.gut:
+            return False
+        if prop == "gut" and val:
+            params.use_depth_loss = False
+            params.use_normal_loss = False
         if prop == "ppisp_freeze_from_sidecar" and val:
             params.ppisp = True
         elif prop == "ppisp" and not val:

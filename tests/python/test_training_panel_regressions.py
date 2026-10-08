@@ -974,6 +974,40 @@ def test_set_bool_prop_hasattr_guard(training_panel_module, monkeypatch):
     assert not hasattr(params, "nonexistent_property")
 
 
+def test_gut_excludes_depth_and_normal_loss(training_panel_module, monkeypatch):
+    """GUT renders no depth or normals: enabling it clears both losses and neither can be enabled under it."""
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+    params = _ParamsStub()
+    params.gut = False
+    params.use_depth_loss = True
+    params.use_normal_loss = True
+    dataset = _DatasetStub()
+
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(
+            optimization_params=lambda: params,
+            dataset_params=lambda: dataset,
+            get_render_settings=lambda: None,
+        ),
+    )
+
+    assert panel._set_bool_prop("gut", True)
+    assert params.gut
+    assert not params.use_depth_loss
+    assert not params.use_normal_loss
+    assert not panel._set_bool_prop("use_depth_loss", True)
+    assert not panel._set_bool_prop("use_normal_loss", True)
+    assert not params.use_depth_loss
+    assert not params.use_normal_loss
+
+    assert panel._set_bool_prop("gut", False)
+    assert panel._set_bool_prop("use_depth_loss", True)
+    assert params.use_depth_loss
+
+
 def test_browse_background_image_uses_current_image_dialog(training_panel_module, monkeypatch):
     panel = training_panel_module.TrainingPanel()
     panel._handle = _HandleStub()

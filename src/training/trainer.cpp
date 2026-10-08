@@ -8714,6 +8714,9 @@ namespace lfs::training {
         if (params_.optimization.gut && params_.optimization.use_normal_loss) {
             LOG_WARN("normal loss requested but the 3DGUT backend has no normal channel; normal terms are inactive");
         }
+        if (params_.optimization.gut && params_.optimization.use_depth_loss) {
+            LOG_WARN("depth loss requested but the 3DGUT backend has no depth channel; depth terms are inactive");
+        }
         if (PerfBenchCollector::enabled()) {
             PerfBenchCollector::instance().on_training_start(get_total_iterations());
         }
@@ -8799,9 +8802,7 @@ namespace lfs::training {
                          params_.optimization.depth_loss_mode);
                 params_.optimization.use_depth_loss = false;
             }
-            aux_pipeline_config.load_depths =
-                params_.optimization.use_depth_loss &&
-                params_.optimization.depth_loss_weight > 0.0f;
+            aux_pipeline_config.load_depths = params_.optimization.depth_supervision_enabled();
             if (aux_pipeline_config.load_depths) {
                 size_t cameras_with_depth = 0;
                 for (const auto& cam : train_dataset_->get_cameras()) {
