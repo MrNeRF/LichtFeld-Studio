@@ -1487,12 +1487,12 @@ class HistogramPanel(Panel):
             return {"kind": "cancelled"}
         sorted_values, _ = valid_values.sort()
         data_bounds = (float(sorted_values[0].item()), float(sorted_values[-1].item()))
-        erank_bounds = data_bounds if metric_id == "erank" else None
-        auto_min, auto_max = self._histogram_bounds(valid_values, metric_id, erank_bounds)
+        bounded_extent = data_bounds if metric_id in ("opacity", "anisotropy", "erank") else None
+        auto_min, auto_max = self._histogram_bounds(valid_values, metric_id, bounded_extent)
         if self._histogram_compute_cancelled(cancel_event):
             return {"kind": "cancelled"}
         histogram_min, histogram_max = HistogramPanel._resolve_and_snap_bounds(
-            valid_values, auto_min, auto_max, custom_range, erank_bounds
+            valid_values, auto_min, auto_max, custom_range, bounded_extent
         )
         valid_bin_indices = self._bin_indices_for_values(
             valid_values, histogram_min, histogram_max, int(bin_count)
@@ -1555,8 +1555,8 @@ class HistogramPanel(Panel):
             return {"kind": "empty"}
         if self._histogram_compute_cancelled(cancel_event):
             return {"kind": "cancelled"}
-        x_bounds = (x_valid.min_scalar(), x_valid.max_scalar()) if x_metric_id == "erank" else None
-        y_bounds = (y_valid.min_scalar(), y_valid.max_scalar()) if y_metric_id == "erank" else None
+        x_bounds = (x_valid.min_scalar(), x_valid.max_scalar()) if x_metric_id in ("opacity", "anisotropy", "erank") else None
+        y_bounds = (y_valid.min_scalar(), y_valid.max_scalar()) if y_metric_id in ("opacity", "anisotropy", "erank") else None
         x_auto_min, x_auto_max = self._histogram_bounds(x_valid, x_metric_id, x_bounds)
         y_auto_min, y_auto_max = self._histogram_bounds(y_valid, y_metric_id, y_bounds)
         if self._histogram_compute_cancelled(cancel_event):
@@ -2464,23 +2464,23 @@ class HistogramPanel(Panel):
         data_bounds: tuple[float, float] | None = None,
     ) -> tuple[float, float]:
         metric_id = self._metric_id if metric_id is None else metric_id
+        if metric_id in ("opacity", "anisotropy", "erank"):
+            # Automatic domains must include every finite sample, even outside the ideal bounds.
+            data_min, data_max = data_bounds if data_bounds is not None else (values.min_scalar(), values.max_scalar())
         if metric_id == "opacity":
-            return 0.0, 1.0
+            return min(0.0, data_min), max(1.0, data_max)
         if metric_id == "anisotropy":
-            lo = 1.0
-            hi = values.max_scalar()
+            lo = min(1.0, data_min)
+            hi = data_max
             if not math.isfinite(hi):
                 return lo, lo + 1.0
-            if hi < lo:
-                hi = lo
-            if math.isclose(hi, lo, rel_tol=1e-6, abs_tol=1e-9):
-                return lo, lo + 1e-3
+            if hi < 1.0:
+                hi = 1.0
+            if math.isclose(hi, 1.0, rel_tol=1e-6, abs_tol=1e-9):
+                return lo, 1.0 + 1e-3
             return lo, hi
         if metric_id == "erank":
-            # Entropy roundoff can put finite ranks just outside the ideal [1, 3] domain.
-            # Include those samples in automatic ranges without changing the metric values.
-            lo, hi = data_bounds if data_bounds is not None else (values.min_scalar(), values.max_scalar())
-            return min(1.0, lo), max(3.0, hi)
+            return min(1.0, data_min), max(3.0, data_max)
 
         lo = values.min_scalar()
         hi = values.max_scalar()
@@ -2796,8 +2796,8 @@ class HistogramPanel(Panel):
         self._compare_valid_y_values = y_valid
         self._compare_x_finite_cpu = x_finite
         self._compare_y_finite_cpu = y_finite
-        x_bounds = (x_finite.min_scalar(), x_finite.max_scalar()) if self._metric_id == "erank" else None
-        y_bounds = (y_finite.min_scalar(), y_finite.max_scalar()) if self._compare_metric_id == "erank" else None
+        x_bounds = (x_finite.min_scalar(), x_finite.max_scalar()) if self._metric_id in ("opacity", "anisotropy", "erank") else None
+        y_bounds = (y_finite.min_scalar(), y_finite.max_scalar()) if self._compare_metric_id in ("opacity", "anisotropy", "erank") else None
         self._compare_x_auto_min, self._compare_x_auto_max = self._histogram_bounds(x_finite, self._metric_id, x_bounds)
         self._compare_y_auto_min, self._compare_y_auto_max = self._histogram_bounds(y_finite, self._compare_metric_id, y_bounds)
         self._compare_summary_text = _trf(

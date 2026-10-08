@@ -332,6 +332,99 @@ def test_erank_auto_range_keeps_rounded_boundary_samples(histogram_panel_module,
     numpy.testing.assert_array_equal(compare["y_bin_indices"].numpy() >= 0, finite)
 
 
+@pytest.mark.parametrize("metric,values,ideal", [
+    ("opacity", [-1e-7, 0.0, 0.25, 0.75, 1.0, 1.0000001192092896], (0.0, 1.0)),
+    ("anisotropy", [0.0028483483, 0.99999994, 1.0, 2.0, 4.0], (1.0, 4.0)),
+    ("erank", [0.99999976, 1.0, 2.0, 3.0, 3.00000024], (1.0, 3.0)),
+])
+@pytest.mark.parametrize("compare", [False, True])
+def test_bounded_auto_ranges_keep_all_finite_values(histogram_panel_module, lf, numpy, metric, values, ideal, compare):
+    values = numpy.array(values + [numpy.nan, numpy.inf, -numpy.inf], dtype=numpy.float32)
+    tensor = lf.Tensor.from_numpy(values)
+    finite = numpy.isfinite(values)
+    panel = histogram_panel_module.HistogramPanel()
+    if compare:
+        result = panel._build_compare_result(
+            tensor, tensor, tensor.isfinite(), metric, metric, 8, 8, (None, None), (None, None))
+        for axis in ("x", "y"):
+            numpy.testing.assert_array_equal(result[f"{axis}_bin_indices"].numpy() >= 0, finite)
+    else:
+        result = panel._build_series_result(tensor, tensor.isfinite(), metric, 8, (None, None))
+        numpy.testing.assert_array_equal(result["bin_indices"].numpy() >= 0, finite)
+        numpy.testing.assert_array_equal(result["values"].numpy(), values)
+    assert numpy.asarray(result["counts"]).sum() == finite.sum()
+
+    # An explicit ideal-domain range must continue to exclude the same samples.
+    expected = finite & (values >= ideal[0]) & (values <= ideal[1])
+    if compare:
+        custom = panel._build_compare_result(tensor, tensor, tensor.isfinite(), metric, metric, 8, 8, ideal, ideal)
+        for axis in ("x", "y"):
+            numpy.testing.assert_array_equal(custom[f"{axis}_bin_indices"].numpy() >= 0, expected)
+    else:
+        custom = panel._build_series_result(tensor, tensor.isfinite(), metric, 8, ideal)
+        numpy.testing.assert_array_equal(custom["bin_indices"].numpy() >= 0, expected)
+    assert numpy.asarray(custom["counts"]).sum() == expected.sum()
+
+
+def test_anisotropy_small_scales_keep_metric_values(histogram_panel_module, lf, numpy):
+    panel = histogram_panel_module.HistogramPanel()
+    scaling = numpy.array([[1e-15, 2e-15, 3e-15], [1e-12, 1e-12, 1e-12], [1.0, 2.0, 4.0]], dtype=numpy.float32)
+    model = _ModelStub(lf, numpy.zeros((3, 3), dtype=numpy.float32), scaling)
+    panel._metric_id = "anisotropy"
+    values = panel._extract_metric_values(_SceneSelectionStub(None), model)
+    expected = scaling.max(axis=1) / (scaling.min(axis=1) + 1e-12)
+    numpy.testing.assert_array_equal(values.numpy(), expected)
+    result = panel._build_series_result(values, values.isfinite(), "anisotropy", 8, (None, None))
+    assert sum(result["counts"]) == 3
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_bounded_auto_ranges_survive_compare_cache_rebind(histogram_panel_module, lf, numpy, reverse):
+    panel = histogram_panel_module.HistogramPanel()
+    panel._metric_id, panel._compare_metric_id = ("anisotropy", "opacity") if reverse else ("opacity", "anisotropy")
+    model = _ModelStub(
+        lf, numpy.zeros((3, 3), dtype=numpy.float32),
+        numpy.array([[1e-15, 2e-15, 3e-15], [1e-12, 1e-12, 1e-12], [1.0, 2.0, 4.0]], dtype=numpy.float32),
+        opacity=numpy.array([-1e-7, 0.5, 1.00000012], dtype=numpy.float32),
+    )
+    scene = _SceneSelectionStub()
+    primary = panel._extract_metric_values(scene, model, panel._metric_id)
+    panel._refresh_compare(scene, model, primary, None)
+    assert sum(panel._compare_counts) == 3
+    expected = list(panel._compare_counts)
+    panel._rebind_compare_from_cache()
+    assert panel._compare_counts == expected
+
+
+@pytest.mark.parametrize("metric,values", [
+    ("anisotropy", [0.25]), ("anisotropy", [0.25, 0.5]), ("anisotropy", [1.0, 1.0]),
+    ("opacity", [-1e-7]), ("opacity", [1.00000012]), ("erank", [0.99999976]),
+])
+def test_bounded_auto_ranges_keep_constant_and_outside_only_values(histogram_panel_module, lf, numpy, metric, values):
+    panel = histogram_panel_module.HistogramPanel()
+    tensor = lf.Tensor.from_numpy(numpy.array(values, dtype=numpy.float32))
+    result = panel._build_series_result(tensor, tensor.isfinite(), metric, 8, (None, None))
+    assert sum(result["counts"]) == len(values)
+    compare = panel._build_compare_result(tensor, tensor, tensor.isfinite(), metric, metric, 8, 8, (None, None), (None, None))
+    assert sum(compare["counts"]) == len(values)
+
+
+@pytest.mark.parametrize("metric", [
+    "opacity", "position_x", "position_y", "position_z", "scale_x", "scale_y", "scale_z",
+    "scale_max", "volume", "anisotropy", "erank", "distance", "world_distance",
+])
+def test_all_metric_auto_ranges_preserve_in_domain_bins(histogram_panel_module, lf, numpy, metric):
+    panel = histogram_panel_module.HistogramPanel()
+    values = numpy.array([0.0, 0.13, 0.39, 0.61, 0.87, 1.0], dtype=numpy.float32)
+    if metric in ("anisotropy", "erank"):
+        values = 1.0 + 2.0 * values
+    tensor = lf.Tensor.from_numpy(values)
+    result = panel._build_series_result(tensor, tensor.isfinite(), metric, 8, (None, None))
+    expected, _ = numpy.histogram(values, bins=8, range=(float(values.min()), float(values.max())))
+    assert result["counts"] == expected.tolist()
+    numpy.testing.assert_array_equal(result["values"].numpy(), values)
+
+
 def test_erank_in_domain_and_explicit_ranges_keep_existing_bins(histogram_panel_module, lf, numpy):
     panel = histogram_panel_module.HistogramPanel()
     values = numpy.array([1.0, 1.125, 1.5, 2.0, 2.5, 2.875, 3.0], dtype=numpy.float32)
