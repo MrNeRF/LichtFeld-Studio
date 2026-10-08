@@ -55,6 +55,8 @@ body {
 }
 
 #transport-row {
+    overflow-x: auto;
+    overflow-y: hidden;
     display: flex;
     flex-direction: row;
     width: 100%;
@@ -1087,21 +1089,7 @@ body {
 }
 
 @media (max-width: 1120dp) {
-    #btn-camera-path,
-    #btn-snap,
-    #btn-follow,
-    #btn-preview,
-    #btn-format,
-    #btn-clear,
     .transport-sep {
-        display: none;
-    }
-}
-
-@media (max-width: 1040dp) {
-    #btn-film-strip,
-    #btn-equirect,
-    #btn-load-sequence {
         display: none;
     }
 }
