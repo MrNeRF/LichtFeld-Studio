@@ -435,6 +435,38 @@ TEST_F(McpSequencerToolsTest, SelectKeyframeResolvesByIdAfterReorder) {
     EXPECT_NE(id_b, id_c);
 }
 
+TEST_F(McpSequencerToolsTest, SetEasingRejectsOutOfRangeNumbersWithoutChangingKeyframes) {
+    const auto id = backend_.add_manual_keyframe(0.0f, {0.0f, 0.0f, 0.0f});
+    const auto before = lfs::mcp::ToolRegistry::instance().call_tool("sequencer.get", json::object());
+    for (const int64_t easing : {-1LL, 4LL, 99LL, 4294967296LL}) {
+        SCOPED_TRACE(easing);
+        const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+            "sequencer.set_easing", json{{"keyframe_id", id}, {"easing", easing}});
+        EXPECT_EQ(result.value("error", json::object()).value("code", ""), "InvalidArgument");
+        EXPECT_NE(result.value("error_message", "").find("easing"), std::string::npos);
+        EXPECT_EQ(lfs::mcp::ToolRegistry::instance().call_tool("sequencer.get", json::object()), before);
+    }
+}
+
+TEST_F(McpSequencerToolsTest, SetEasingPreservesAllNumericAndNamedModes) {
+    const auto id = backend_.add_manual_keyframe(0.0f, {0.0f, 0.0f, 0.0f});
+    const std::array<const char*, 4> names = {"linear", "ease_in", "ease_out", "ease_in_out"};
+    for (size_t mode = 0; mode < names.size(); ++mode) {
+        for (const auto& easing : {json(mode), json(names[mode])}) {
+            SCOPED_TRACE(easing.dump());
+            backend_.controller.setKeyframeEasingById(
+                id, static_cast<lfs::sequencer::EasingType>((mode + 1) % names.size()));
+            const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+                "sequencer.set_easing", json{{"keyframe_id", id}, {"easing", easing}});
+            ASSERT_TRUE(result.value("success", false)) << result.dump();
+            EXPECT_EQ(result["keyframes"][0]["easing"], mode);
+            EXPECT_EQ(result["keyframes"][0]["easing_name"], names[mode]);
+            EXPECT_EQ(backend_.controller.timeline().getKeyframeById(id)->easing,
+                      static_cast<lfs::sequencer::EasingType>(mode));
+        }
+    }
+}
+
 TEST_F(McpSequencerToolsTest, SetEasingAndDeleteResolveByIdAfterReorder) {
     const auto id_a = backend_.add_manual_keyframe(0.0f, {0.0f, 0.0f, 0.0f});
     const auto id_b = backend_.add_manual_keyframe(1.0f, {1.0f, 0.0f, 0.0f});

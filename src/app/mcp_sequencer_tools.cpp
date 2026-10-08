@@ -433,6 +433,8 @@ namespace lfs::app {
                         {"keyframe_id", json{{"type", "integer"}, {"description", "Stable keyframe id"}}},
                         {"easing", json{{"oneOf", json::array({json{{"type", "integer"}},
                                                                json{{"type", "string"}, {"enum", json::array({"linear", "ease_in", "ease_out", "ease_in_out"})}}})},
+                                        {"minimum", 0},
+                                        {"maximum", 3},
                                         {"description", "Easing mode as integer or name"}}}},
                     .required = {"keyframe_id", "easing"}}},
             [viewer, backend](const json& args) -> json {
