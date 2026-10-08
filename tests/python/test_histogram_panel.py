@@ -299,6 +299,42 @@ def test_worker_histogram_matches_numpy_for_random_tensor(histogram_panel_module
     expected, _ = numpy.histogram(values, bins=numpy.asarray(result["primary"]["edges"]))
     assert result["primary"]["counts"] == expected.tolist()
 
+@pytest.mark.parametrize("crop_enabled", [False, True])
+def test_histogram_applies_render_crop_to_both_axes(histogram_panel_module, lf, numpy, crop_enabled):
+    values = lf.Tensor.from_numpy(numpy.array([0.1, 0.3, 0.6, 0.9], dtype=numpy.float32))
+    deleted = lf.Tensor.from_numpy(numpy.array([False, True, False, False]))
+    model = SimpleNamespace(get_opacity=lambda: values, has_deleted_mask=lambda: True, deleted=deleted)
+    calls = []
+
+    def apply_crop_filter(mask):
+        calls.append(True)
+        if crop_enabled:
+            mask[3] = False
+
+    scene = SimpleNamespace(get_nodes=lambda: [], apply_crop_filter=apply_crop_filter)
+    result = histogram_panel_module.HistogramPanel._compute_histogram_result(
+        scene, model, "opacity", 16, "opacity", 8, 8, (None, None), (None, None), set(),
+    )
+    expected = [True, False, True, not crop_enabled]
+    assert sum(result["primary"]["counts"]) == sum(expected)
+    assert sum(result["compare"]["counts"]) == sum(expected)
+    numpy.testing.assert_array_equal(result["primary"]["finite_mask"].numpy(), expected)
+    numpy.testing.assert_array_equal(result["primary"]["bin_indices"].numpy() >= 0, expected)
+    numpy.testing.assert_array_equal(result["compare"]["x_bin_indices"].numpy() >= 0, expected)
+    numpy.testing.assert_array_equal(result["compare"]["y_bin_indices"].numpy() >= 0, expected)
+    numpy.testing.assert_array_equal(values.numpy(), [numpy.float32(x) for x in (0.1, 0.3, 0.6, 0.9)])
+    if crop_enabled:
+        assert calls == [True]
+
+    panel = histogram_panel_module.HistogramPanel()
+    panel._metric_id = "opacity"
+    panel._compare_metric_id = "opacity"
+    panel._refresh_compare(scene, model, values, ~deleted)
+    assert sum(panel._compare_counts) == sum(expected)
+    numpy.testing.assert_array_equal(panel._compare_x_bin_indices.numpy() >= 0, expected)
+    numpy.testing.assert_array_equal(panel._compare_y_bin_indices.numpy() >= 0, expected)
+
+
 def test_histogram_metrics_include_positions_volume_anisotropy_and_erank(histogram_panel_module):
     metric_ids = {metric.id for metric in histogram_panel_module.METRICS}
 

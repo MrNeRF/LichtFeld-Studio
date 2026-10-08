@@ -183,7 +183,8 @@ namespace lfs::rendering {
         const Tensor* ellipsoid_radii,
         bool ellipsoid_inverse,
         const Tensor* model_transforms = nullptr,
-        const Tensor* transform_indices = nullptr);
+        const Tensor* transform_indices = nullptr,
+        int parent_node_index = -1);
 
     namespace config {
         void setSelectionGroupColor(int group_id, float3 color);

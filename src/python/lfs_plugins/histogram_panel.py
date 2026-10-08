@@ -1426,6 +1426,9 @@ class HistogramPanel(Panel):
         finite_mask = values.isfinite()
         if visible_mask is not None and visible_mask.shape == values.shape:
             finite_mask = finite_mask & visible_mask
+        apply_crop_filter = getattr(scene, "apply_crop_filter", None)
+        if apply_crop_filter is not None:
+            apply_crop_filter(finite_mask)
         primary = panel._build_series_result(
             values, finite_mask, metric_id, bin_count, custom_range, cancel_event
         )
@@ -1446,9 +1449,7 @@ class HistogramPanel(Panel):
             if compare_values is None or compare_values.shape != values.shape:
                 compare = {"kind": "unavailable"}
             else:
-                compare_mask = values.isfinite() & compare_values.isfinite()
-                if visible_mask is not None and visible_mask.shape == values.shape:
-                    compare_mask = compare_mask & visible_mask
+                compare_mask = finite_mask & compare_values.isfinite()
                 compare = panel._build_compare_result(
                     values,
                     compare_values,
@@ -2769,6 +2770,9 @@ class HistogramPanel(Panel):
         finite_mask = primary_values.isfinite() & compare_values.isfinite()
         if visible_mask is not None and visible_mask.shape == primary_values.shape:
             finite_mask = finite_mask & visible_mask
+        apply_crop_filter = getattr(scene, "apply_crop_filter", None)
+        if apply_crop_filter is not None:
+            apply_crop_filter(finite_mask)
 
         if not self._any_true(finite_mask):
             self._set_compare_empty(
