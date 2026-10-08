@@ -1277,7 +1277,7 @@ void main() {
                 // After DeviceWaitIdle, retained quarantine fences are safe to
                 // destroy (GPU has finished). CBs free with the command pool.
                 if (device_)
-                    vkDeviceWaitIdle(device_);
+                    lfs::rendering::vk_device_wait_idle_synced(device_);
                 for (VkFence fence : retained_fences_) {
                     if (fence != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE) {
                         vkDestroyFence(device_, fence, nullptr);

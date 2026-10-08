@@ -2015,7 +2015,7 @@ void RenderInterface_VK::ShutdownExternal() {
         return;
 
     if (m_p_device)
-        vkDeviceWaitIdle(m_p_device);
+        lfs::rendering::vk_device_wait_idle_synced(m_p_device);
 
     StopPreviewWorkerPool();
     m_async_preview_textures.clear();

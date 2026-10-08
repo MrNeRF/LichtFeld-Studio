@@ -23,6 +23,7 @@
 #include <format>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <source_location>
 #include <span>
 #include <string>
@@ -588,6 +589,7 @@ namespace lfs::vis {
         bool sparse_binding_enabled_ = false;
         bool buffer_device_address_enabled_ = false;
         std::mutex graphics_queue_mutex_;
+        std::shared_mutex device_queue_access_mutex_;
         bool swapchain_maintenance1_enabled_ = false;
         bool swapchain_present_scaling_enabled_ = false;
         bool has_push_descriptor_ = false;

@@ -584,7 +584,7 @@ void VulkanGSPipeline::cleanup() {
     lfs::diagnostics::VramProfiler::instance().clearStaticScope(kSlangShaderRootScope);
 
     if (device != VK_NULL_HANDLE) {
-        const VkResult idle_result = vkDeviceWaitIdle(device);
+        const VkResult idle_result = lfs::rendering::vk_device_wait_idle_synced(device);
         if (idle_result != VK_SUCCESS) {
             LOG_ERROR("Vulkan: vkDeviceWaitIdle failed during VkSplat pipeline cleanup "
                       "(device={:#x}, result={}({})); continuing resource destruction",

@@ -688,11 +688,10 @@ namespace lfs::vis {
     void VulkanContext::shutdown() {
         // AMB-B3: latch before any device wait so concurrent UI waits observe Shutdown.
         context_shutdown_started_.store(true, std::memory_order_release);
-        lfs::rendering::set_graphics_queue_external_sync(nullptr, VK_NULL_HANDLE, VK_NULL_HANDLE);
         if (device_ != VK_NULL_HANDLE) {
             // Shutdown is the one place where a whole-device wait is intentional:
             // all swapchain, UI, and external interop resources are about to be destroyed.
-            const VkResult idle_result = vkDeviceWaitIdle(device_);
+            const VkResult idle_result = lfs::rendering::vk_device_wait_idle_synced(device_);
             if (idle_result != VK_SUCCESS) {
                 LOG_ERROR("Vulkan shutdown could not retire device work before destruction (device={:#x}, pending_immediate_submits={}, frame_active={}, frame_slot={}, result={}({}))",
                           vkHandleValue(device_),
@@ -703,6 +702,8 @@ namespace lfs::vis {
                           static_cast<int>(idle_result));
             }
         }
+        lfs::rendering::set_graphics_queue_external_sync(
+            nullptr, VK_NULL_HANDLE, VK_NULL_HANDLE, nullptr);
 
         // #1488: surface leaked External* counts after idle, before device destroy.
         {
@@ -2132,7 +2133,7 @@ namespace lfs::vis {
         if (device_ == VK_NULL_HANDLE) {
             return true;
         }
-        const VkResult result = vkDeviceWaitIdle(device_);
+        const VkResult result = lfs::rendering::vk_device_wait_idle_synced(device_);
         if (result != VK_SUCCESS) {
             return setVkFailure(std::format("vkDeviceWaitIdle failed: {}", vkResultToString(result)), result);
         }
@@ -2950,7 +2951,7 @@ namespace lfs::vis {
         sparse_binding_enabled_ = features2.features.sparseBinding == VK_TRUE;
         buffer_device_address_enabled_ = features12.bufferDeviceAddress == VK_TRUE;
         lfs::rendering::set_graphics_queue_external_sync(
-            &graphics_queue_mutex_, graphics_queue_, present_queue_);
+            &graphics_queue_mutex_, graphics_queue_, present_queue_, &device_queue_access_mutex_);
 
         VkPhysicalDeviceMaintenance3Properties maint3{};
         maint3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES;
@@ -3618,8 +3619,8 @@ namespace lfs::vis {
         // exporter's handle. A stale handle must assert instead of being hidden
         // by the VUID-01742 suppression below.
         {
-            struct stat st_src {};
-            struct stat st_dup {};
+            struct stat st_src{};
+            struct stat st_dup{};
             const int st_src_rc = ::fstat(handle, &st_src);
             const int st_dup_rc = ::fstat(dup_fd, &st_dup);
             int kcmp_rc = 0;
@@ -5324,7 +5325,7 @@ namespace lfs::vis {
         {
             LOG_TIMER_THRESHOLD("frame_pacing.vulkan_recreateSwapchain.device_wait_idle", 1.0);
             const auto wait_start = std::chrono::steady_clock::now();
-            const VkResult idle_result = vkDeviceWaitIdle(device_);
+            const VkResult idle_result = lfs::rendering::vk_device_wait_idle_synced(device_);
             LOG_DEBUG("Vulkan recreateSwapchain deviceWaitIdle result={} elapsed_ms={:.1f}",
                       vkResultToString(idle_result),
                       elapsedMs(wait_start));
