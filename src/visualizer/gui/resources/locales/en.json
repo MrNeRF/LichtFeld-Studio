@@ -968,6 +968,7 @@
     "mcp_access_token": "Access token",
     "mcp_copy_token": "Copy token",
     "mcp_port": "Port",
+    "mcp_port_override": "This session uses port {port} from the command line.",
     "mcp_status": "Status",
     "mcp_endpoint": "Endpoint",
     "mcp_request_logging": "Log MCP activity",

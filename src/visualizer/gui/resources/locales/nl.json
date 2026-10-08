@@ -972,6 +972,7 @@
     "mcp_access_token": "Toegangstoken",
     "mcp_copy_token": "Token kopiëren",
     "mcp_port": "Poort",
+    "mcp_port_override": "Deze sessie gebruikt poort {port} van de opdrachtregel.",
     "mcp_status": "Status",
     "mcp_endpoint": "Eindpunt",
     "mcp_request_logging": "MCP-activiteit loggen",

@@ -369,6 +369,7 @@
               <button class="btn btn--primary preferences-port-confirm" data-event-click="confirm_mcp_port" data-attrif-disabled="mcp_safe_mode" data-class-disabled="mcp_safe_mode">@tr:common.ok</button>
             </div>
           </div>
+          <span class="preferences-description preferences-setting-hint" data-if="mcp_port_override_visible">{{ mcp_port_override_text }}</span>
           <div class="preferences-row preferences-checkbox-row">
             <span class="preferences-label">@tr:preferences.mcp_request_logging</span>
             <input type="checkbox" data-checked="mcp_request_logging" data-attrif-disabled="mcp_safe_mode" />

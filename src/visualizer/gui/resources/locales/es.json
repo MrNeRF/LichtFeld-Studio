@@ -972,6 +972,7 @@
     "mcp_access_token": "Token de acceso",
     "mcp_copy_token": "Copiar token",
     "mcp_port": "Puerto",
+    "mcp_port_override": "Esta sesión usa el puerto {port} de la línea de comandos.",
     "mcp_status": "Estado",
     "mcp_endpoint": "Endpoint",
     "mcp_request_logging": "Registrar actividad MCP",

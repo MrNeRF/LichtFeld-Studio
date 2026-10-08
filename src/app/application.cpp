@@ -1718,6 +1718,7 @@ namespace lfs::app {
                         .request_logging = config.request_logging,
                     });
                     return true; },
+                .mcp_port_override = mcp_port_override,
             });
             viewer->setShutdownRequestedCallback([&mcp_http]() {
                 vis::setRuntimeServiceControls({});

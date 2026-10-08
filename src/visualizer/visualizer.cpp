@@ -46,6 +46,11 @@ namespace lfs::vis {
         return true;
     }
 
+    std::optional<int> mcpPortOverride() {
+        std::lock_guard lock(g_runtime_service_controls_mutex);
+        return g_runtime_service_controls.mcp_port_override;
+    }
+
     std::uint64_t runtimeServiceRevision() {
         return g_runtime_service_revision.load(std::memory_order_acquire);
     }

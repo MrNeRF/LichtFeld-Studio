@@ -972,6 +972,7 @@
     "mcp_access_token": "访问令牌",
     "mcp_copy_token": "复制令牌",
     "mcp_port": "端口",
+    "mcp_port_override": "本次会话使用命令行指定的端口 {port}。",
     "mcp_status": "状态",
     "mcp_endpoint": "端点",
     "mcp_request_logging": "记录 MCP 活动",

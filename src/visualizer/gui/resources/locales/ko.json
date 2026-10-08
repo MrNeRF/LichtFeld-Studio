@@ -972,6 +972,7 @@
     "mcp_access_token": "액세스 토큰",
     "mcp_copy_token": "토큰 복사",
     "mcp_port": "포트",
+    "mcp_port_override": "이 세션은 명령줄에서 지정한 포트 {port}을(를) 사용합니다.",
     "mcp_status": "상태",
     "mcp_endpoint": "엔드포인트",
     "mcp_request_logging": "MCP 활동 기록",

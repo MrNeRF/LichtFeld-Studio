@@ -972,6 +972,7 @@
     "mcp_access_token": "Jeton d’accès",
     "mcp_copy_token": "Copier le jeton",
     "mcp_port": "Port",
+    "mcp_port_override": "Cette session utilise le port {port} de la ligne de commande.",
     "mcp_status": "État",
     "mcp_endpoint": "Point d'accès",
     "mcp_request_logging": "Journaliser l’activité MCP",

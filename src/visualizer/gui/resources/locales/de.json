@@ -972,6 +972,7 @@
     "mcp_access_token": "Zugriffstoken",
     "mcp_copy_token": "Token kopieren",
     "mcp_port": "Port",
+    "mcp_port_override": "Diese Sitzung verwendet Port {port} aus der Befehlszeile.",
     "mcp_status": "Status",
     "mcp_endpoint": "Endpunkt",
     "mcp_request_logging": "MCP-Aktivität protokollieren",

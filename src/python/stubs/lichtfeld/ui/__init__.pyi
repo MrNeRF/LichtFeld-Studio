@@ -2780,6 +2780,9 @@ def get_mcp_access_token() -> str:
 def set_mcp_preferences(enabled: bool, expose_network: bool, port: int, request_logging: bool = False) -> bool:
     """Persist and immediately apply MCP HTTP server preferences"""
 
+def get_mcp_port_override() -> int | None:
+    """Get the MCP port set on the command line for this session, or None"""
+
 def get_project_location() -> str:
     """Get the effective project location."""
 

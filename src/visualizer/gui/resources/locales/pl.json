@@ -972,6 +972,7 @@
     "mcp_access_token": "Token dostępu",
     "mcp_copy_token": "Kopiuj token",
     "mcp_port": "Port",
+    "mcp_port_override": "Ta sesja używa portu {port} z wiersza poleceń.",
     "mcp_status": "Stan",
     "mcp_endpoint": "Punkt końcowy",
     "mcp_request_logging": "Rejestruj aktywność MCP",

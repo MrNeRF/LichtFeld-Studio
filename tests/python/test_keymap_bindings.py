@@ -263,6 +263,7 @@ def _install_lf_stub(monkeypatch):
         get_current_language=lambda: state.language[0],
         request_redraw=lambda: None,
         get_mcp_preferences=lambda: dict(state.mcp_preferences),
+        get_mcp_port_override=lambda: None,
         get_project_location=lambda: "/home/tester/.lichtfeld/projects",
         get_project_location_preference=lambda: "",
         get_default_project_location=lambda: "/home/tester/.lichtfeld/projects",

@@ -237,6 +237,8 @@ class PreferencesPanel(Panel):
         model.bind("mcp_request_logging", lambda: self._mcp_request_logging, self._set_mcp_request_logging)
         model.bind_func("mcp_safe_mode", lambda: self._mcp_safe_mode)
         model.bind_func("mcp_status", self._mcp_status_text)
+        model.bind_func("mcp_port_override_visible", lambda: lf.ui.get_mcp_port_override() is not None)
+        model.bind_func("mcp_port_override_text", self._mcp_port_override_text)
         model.bind("mcp_endpoint_value", self._mcp_endpoint_text, lambda _value: None)
         model.bind("mcp_token_value", self._mcp_token_text, lambda _value: None)
         model.bind_func("mcp_error", self._mcp_error_text)
@@ -1297,6 +1299,12 @@ class PreferencesPanel(Panel):
                 return
             self._set_section(section)
 
+    def _mcp_port_override_text(self):
+        port = lf.ui.get_mcp_port_override()
+        if port is None:
+            return ""
+        return lf.ui.tr("preferences.mcp_port_override").replace("{port}", str(port))
+
     def _dirty_mcp(self):
         if not self._handle:
             return
@@ -1307,6 +1315,8 @@ class PreferencesPanel(Panel):
             "mcp_request_logging",
             "mcp_safe_mode",
             "mcp_status",
+            "mcp_port_override_visible",
+            "mcp_port_override_text",
             "mcp_endpoint_value",
             "mcp_token_value",
             "mcp_error",
