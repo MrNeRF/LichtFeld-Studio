@@ -12,6 +12,9 @@
 #include "operation/undo_history.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "scene/scene_manager.hpp"
+
+#include "rendering/rendering_manager.hpp"
+#include "scene/scene_manager.hpp"
 #include "sequencer/animation_clip.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/rml_sequencer_panel.hpp"
@@ -679,6 +682,147 @@ namespace {
         }
         std::sort(samples.begin(), samples.end());
         RecordProperty("median_duration_edit_us", std::to_string(samples[samples.size() / 2]));
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, CurrentViewUpdateRestoresExactPoseAndFocalLength) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f, {1.0f, 2.0f, 3.0f}, 41.0f));
+        controller.addKeyframe(makeKeyframe(4.5f, {3.0f, 5.0f, 7.0f}, 73.0f));
+        controller.setKeyframeEasing(0, EasingType::EASE_IN);
+        controller.setKeyframeEasing(1, EasingType::EASE_OUT);
+        auto* clip = &controller.timeline().ensureAnimationClip();
+        controller.setLoopMode(LoopMode::LOOP);
+        const auto original = controller.saveToJson();
+        for (size_t index = 0; index < 2; ++index) {
+            history.clear();
+            ASSERT_TRUE(controller.selectKeyframe(index));
+            const auto id = *controller.selectedKeyframeId();
+            auto& camera = viewer.getViewport().camera;
+            camera.t = {9.0f, 8.0f, 7.0f};
+            camera.R = glm::mat3_cast(glm::angleAxis(0.73f, glm::normalize(glm::vec3(1.0f, 2.0f, 3.0f))));
+            viewer.getRenderingManager()->setFocalLength(63.0f);
+            lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+            const auto edited = controller.saveToJson();
+            ASSERT_NE(edited, original);
+            const auto* updated = controller.timeline().getKeyframeById(id);
+            ASSERT_NE(updated, nullptr);
+            EXPECT_EQ(updated->position, camera.t);
+            EXPECT_EQ(updated->rotation, glm::normalize(glm::quat_cast(camera.R)));
+            EXPECT_EQ(updated->focal_length_mm, 63.0f);
+            ASSERT_EQ(history.undoCount(), 1u);
+            EXPECT_EQ(history.undoName(), "Update Keyframe");
+            lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+            EXPECT_EQ(history.undoCount(), 1u);
+            for (int repetition = 0; repetition < 2; ++repetition) {
+                ASSERT_TRUE(history.undo().success);
+                EXPECT_EQ(controller.saveToJson(), original);
+                EXPECT_EQ(history.undoCount(), 0u);
+                ASSERT_TRUE(history.redo().success);
+                EXPECT_EQ(controller.saveToJson(), edited);
+                EXPECT_EQ(history.undoCount(), 1u);
+            }
+            ASSERT_TRUE(history.undo().success);
+            EXPECT_EQ(controller.timeline().animationClip(), clip);
+            EXPECT_EQ(controller.selectedKeyframeId(), id);
+            EXPECT_EQ(controller.loopMode(), LoopMode::LOOP);
+            EXPECT_EQ(camera.t, glm::vec3(9.0f, 8.0f, 7.0f));
+        }
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, CurrentViewUpdateUndoPrecedesVisibilityChange) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f));
+        controller.addKeyframe(makeKeyframe(1.0f));
+        ASSERT_TRUE(controller.selectKeyframe(1));
+        const auto original = controller.saveToJson();
+        auto* manager = viewer.getSceneManager();
+        const auto group = manager->getScene().addGroup("group");
+        manager->setNodeVisibility(group, false);
+        viewer.getViewport().camera.t = {7.0f, 8.0f, 9.0f};
+        lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_EQ(controller.saveToJson(), original);
+        EXPECT_FALSE(static_cast<bool>(manager->getScene().getNodeById(group)->visible));
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_TRUE(static_cast<bool>(manager->getScene().getNodeById(group)->visible));
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, UnchangedInvalidAndUnselectedViewUpdatesDoNotCreateHistory) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        auto& camera = viewer.getViewport().camera;
+        auto key = makeKeyframe(0.0f, camera.t, viewer.getRenderingManager()->getFocalLengthMm());
+        key.rotation = glm::quat_cast(camera.R);
+        controller.addKeyframe(key);
+        ASSERT_TRUE(controller.selectKeyframe(0));
+        const auto original = controller.saveToJson();
+        lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+        EXPECT_EQ(history.undoCount(), 0u);
+        camera.t.x = std::numeric_limits<float>::quiet_NaN();
+        lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+        controller.deselectKeyframe();
+        camera.t = {9.0f, 8.0f, 7.0f};
+        lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+        EXPECT_EQ(controller.saveToJson(), original);
+        EXPECT_EQ(history.undoCount(), 0u);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, CurrentViewHistoryCannotOverwriteLaterKeyEdit) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        const auto key = controller.addKeyframe(makeKeyframe(0.0f));
+        ASSERT_TRUE(controller.selectKeyframe(0));
+        viewer.getViewport().camera.t = {7.0f, 8.0f, 9.0f};
+        lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+        ASSERT_EQ(history.undoCount(), 1u);
+        ASSERT_TRUE(controller.setKeyframeFocalLengthById(key, 73.0f));
+        const auto edited = controller.saveToJson();
+        EXPECT_FALSE(history.undo().success);
+        EXPECT_EQ(controller.saveToJson(), edited);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, CurrentViewHistoryCannotAccessDestroyedSequencer) {
+        auto& history = lfs::vis::op::undoHistory();
+        {
+            lfs::vis::VisualizerImpl viewer(options());
+            auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+            controller.addKeyframe(makeKeyframe(0.0f));
+            ASSERT_TRUE(controller.selectKeyframe(0));
+            viewer.getViewport().camera.t = {7.0f, 8.0f, 9.0f};
+            lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+            ASSERT_EQ(history.undoCount(), 1u);
+        }
+        EXPECT_FALSE(history.undo().success);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, CurrentViewUpdateLatency) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f));
+        controller.addKeyframe(makeKeyframe(1.0f));
+        ASSERT_TRUE(controller.selectKeyframe(1));
+        std::vector<double> samples;
+        for (int batch = 0; batch < 9; ++batch) {
+            history.clear();
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 50; ++i) {
+                viewer.getViewport().camera.t.x = static_cast<float>(i);
+                lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+            }
+            samples.push_back(std::chrono::duration<double, std::micro>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count() /
+                              50.0);
+        }
+        std::sort(samples.begin(), samples.end());
+        RecordProperty("median_update_us", std::to_string(samples[samples.size() / 2]));
     }
 
     TEST_F(SequencerHistoryRegressionTest, AddCommandLatency) {

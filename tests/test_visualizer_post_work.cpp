@@ -22,6 +22,7 @@
 #include "gui/gizmo_manager.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/import_error.hpp"
+#include "gui/rml_sequencer_overlay.hpp"
 #include "gui/scene_tree_session.hpp"
 #include "gui/string_keys.hpp"
 #include "input/input_controller.hpp"
@@ -42,6 +43,7 @@
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
+#include "rendering/rendering_manager.hpp"
 #include "scene/viewer_splat_quantize.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/checkpoint.hpp"
@@ -1714,14 +1716,52 @@ namespace lfs::vis {
 
     class SequencerFrameDemandTest : public VisualizerImplResetTest {
     protected:
-        static void SetUpTestSuite() {
+        void SetUp() override {
+            VisualizerImplResetTest::SetUp();
             ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
                 (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
         }
-        static void TearDownTestSuite() {
+        void TearDown() override {
             lfs::event::LocalizationManager::getInstance().reset();
+            VisualizerImplResetTest::TearDown();
         }
     };
+
+    TEST_F(SequencerFrameDemandTest, ApplyCurrentViewRecordsHistory) {
+        VisualizerImpl viewer(projectOptions());
+        auto& sequencer = viewer.getGuiManager()->sequencerUI();
+        auto& controller = sequencer.controller();
+        auto& history = op::undoHistory();
+        controller.addKeyframe(lfs::sequencer::Keyframe{});
+        lfs::sequencer::Keyframe second;
+        second.time = 2.0f;
+        second.position = {1.0f, 2.0f, 3.0f};
+        controller.addKeyframe(second);
+        sequencer.beginViewportKeyframeEdit(1);
+        history.clear();
+        const auto original = controller.saveToJson();
+        viewer.getViewport().camera.t = {7.0f, 8.0f, 9.0f};
+        viewer.getRenderingManager()->setFocalLength(73.0f);
+        sequencer.overlay_->pending_actions_.push_back({gui::RmlSequencerOverlay::Action::APPLY_EDIT});
+        sequencer.handleOverlayActions();
+        const auto applied = controller.saveToJson();
+        ASSERT_NE(applied, original);
+        ASSERT_EQ(history.undoCount(), 1u);
+        EXPECT_EQ(history.undoName(), "Update Keyframe");
+        sequencer.overlay_->pending_actions_.push_back({gui::RmlSequencerOverlay::Action::APPLY_EDIT});
+        sequencer.handleOverlayActions();
+        EXPECT_EQ(history.undoCount(), 1u);
+        viewer.getViewport().camera.t = {10.0f, 11.0f, 12.0f};
+        sequencer.overlay_->pending_actions_.push_back({gui::RmlSequencerOverlay::Action::REVERT_EDIT});
+        sequencer.handleOverlayActions();
+        EXPECT_EQ(viewer.getViewport().camera.t, glm::vec3(7.0f, 8.0f, 9.0f));
+        EXPECT_EQ(controller.saveToJson(), applied);
+        EXPECT_EQ(history.undoCount(), 1u);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_EQ(controller.saveToJson(), original);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_EQ(controller.saveToJson(), applied);
+    }
 
     TEST_F(SequencerFrameDemandTest, PropagatesPlaybackStreamAndPreviewDemand) {
         VisualizerImpl viewer(projectOptions());

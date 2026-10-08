@@ -37,6 +37,7 @@ namespace lfs::vis::gui {
 }
 
 namespace lfs::vis {
+    class SequencerFrameDemandTest_ApplyCurrentViewRecordsHistory_Test;
     class VisualizerImpl;
     class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
 
@@ -77,6 +78,7 @@ namespace lfs::vis {
             void setTimelineView(float zoom, float pan);
 
         private:
+            friend class lfs::vis::SequencerFrameDemandTest_ApplyCurrentViewRecordsHistory_Test;
             friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
             void renderSequencerPanel(const UIContext& ctx, const ViewportLayout& viewport,
                                       float panel_x, float panel_y, float panel_width,
@@ -86,6 +88,7 @@ namespace lfs::vis {
             void handleOverlayActions();
             void recordKeyframeAddition(std::optional<sequencer::Keyframe> before,
                                         sequencer::KeyframeId id, float duration_before);
+            bool updateKeyframeFromView(sequencer::KeyframeId id, const sequencer::CameraState& view_state);
             void applyPlySequenceFrame();
             void startPlySequenceStreaming(std::vector<std::filesystem::path> paths,
                                            lfs::io::SplatTensorAllocator allocator);
