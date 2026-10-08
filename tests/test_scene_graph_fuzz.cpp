@@ -641,7 +641,8 @@ namespace {
         EXPECT_EQ(scene.getNodeById(pasted_ellipsoid_id)->local_transform.get(), expected_transform);
     }
 
-    TEST_F(SceneGraphRegression, MergeHonorsEllipsoidCrop) {
+    // An enabled crop shape only filters the view until it is applied, so merging must not crop.
+    TEST_F(SceneGraphRegression, MergeKeepsSplatsOutsideAnUnappliedEllipsoid) {
         auto& scene = manager_->getScene();
         const NodeId group_id = scene.addGroup("ellipsoid_merge");
         const NodeId splat_id = scene.addSplat(
@@ -664,9 +665,9 @@ namespace {
         const auto* merged = scene.getNode("ellipsoid_merge");
         ASSERT_NE(merged, nullptr);
         ASSERT_NE(merged->model, nullptr);
-        EXPECT_EQ(merged->model->size(), 1);
+        EXPECT_EQ(merged->model->size(), 3);
         EXPECT_EQ(merged->model->means_raw().cpu().to_vector(),
-                  (std::vector<float>{-1.0f, 1.0f, -1.0f}));
+                  (std::vector<float>{-2.0f, 0.0f, 0.0f, -1.0f, 1.0f, -1.0f, 0.0f, 2.0f, -2.0f}));
     }
 
     TEST_F(SceneGraphFuzzTest, BatchRemovalRejectsDuplicateIdsAtomically) {

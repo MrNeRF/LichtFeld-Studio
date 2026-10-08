@@ -1433,7 +1433,8 @@ TEST_F(UndoHistoryTest, DeleteSplatUndoRestoresVisibleCropBox) {
     EXPECT_EQ(restored_cropbox->cropbox->enabled, expected_data.enabled);
 }
 
-TEST_F(UndoHistoryTest, CropBoxIsAppliedWhenMergingGroup) {
+// An enabled crop box only filters the view until it is applied, so merging must not crop.
+TEST_F(UndoHistoryTest, UnappliedCropBoxDoesNotCropMergedGroup) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
     lfs::vis::services().set(scene_manager.get());
@@ -1460,9 +1461,9 @@ TEST_F(UndoHistoryTest, CropBoxIsAppliedWhenMergingGroup) {
     const auto* merged = scene.getNode("group");
     ASSERT_NE(merged, nullptr);
     ASSERT_NE(merged->model, nullptr);
-    EXPECT_EQ(merged->model->size(), 1);
+    EXPECT_EQ(merged->model->size(), 3);
     EXPECT_EQ(merged->model->means_raw().cpu().to_vector(),
-              (std::vector<float>{0.0f, 0.0f, 0.0f}));
+              (std::vector<float>{-2.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 2.0f, 0.0f, 0.0f}));
 }
 
 TEST_F(UndoHistoryTest, CropBoxCapabilityUndoRestoresNodeVisibilityAndEnabledState) {

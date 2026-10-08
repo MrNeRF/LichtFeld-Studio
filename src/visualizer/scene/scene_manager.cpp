@@ -4899,9 +4899,7 @@ namespace lfs::vis {
         auto history_before = op::SceneGraphPatchEntry::captureStateByIds(
             *this, scene_.getRootNodes(), history_options_with_payload);
 
-        std::vector<std::unique_ptr<core::SplatData>> cropped_splats;
         std::vector<std::pair<const core::SplatData*, glm::mat4>> splats;
-        cropped_splats.reserve(scene_.getNodes().size());
         splats.reserve(scene_.getNodes().size());
         const std::function<void(core::NodeId, const glm::mat4&)> collect_splats = [&](const core::NodeId id, const glm::mat4& parent_transform) {
             const auto* const node = scene_.getNodeById(id);
@@ -4909,27 +4907,7 @@ namespace lfs::vis {
                 return;
             const glm::mat4 transform = parent_transform * node->local_transform.get();
             if (node->type == core::NodeType::SPLAT && node->model) {
-                auto model = std::make_unique<core::SplatData>(node->model->clone());
-                const glm::mat4 splat_world = scene_.getWorldTransform(id);
-                for (const core::NodeId child_id : node->children) {
-                    const auto* child = scene_.getNodeById(child_id);
-                    if (!child)
-                        continue;
-
-                    if (child->type == core::NodeType::CROPBOX && child->cropbox && child->cropbox->enabled) {
-                        geometry::BoundingBox crop_box;
-                        crop_box.setBounds(child->cropbox->min, child->cropbox->max);
-                        crop_box.setworld2BBox(glm::inverse(scene_.getWorldTransform(child_id)) * splat_world);
-                        (void)core::soft_crop_by_cropbox(*model, crop_box, child->cropbox->inverse);
-                    } else if (child->type == core::NodeType::ELLIPSOID && child->ellipsoid && child->ellipsoid->enabled) {
-                        const glm::mat4 splat_to_ellipsoid =
-                            glm::inverse(scene_.getWorldTransform(child_id)) * splat_world;
-                        (void)core::soft_crop_by_ellipsoid(
-                            *model, splat_to_ellipsoid, child->ellipsoid->radii, child->ellipsoid->inverse);
-                    }
-                }
-                cropped_splats.push_back(std::move(model));
-                splats.emplace_back(cropped_splats.back().get(), transform);
+                splats.emplace_back(node->model.get(), transform);
             }
             for (const core::NodeId child_id : node->children)
                 collect_splats(child_id, transform);
