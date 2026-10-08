@@ -280,6 +280,7 @@ class TransformControlsController:
                     lambda: True,
                     lambda _snapshot: self._cancel_active_edit(),
                 )
+                el.add_event_listener("change", self._on_input_change)
                 el.add_event_listener(
                     "blur",
                     lambda event, prop=value_property: self._on_input_blur(event, prop),
@@ -350,6 +351,7 @@ class TransformControlsController:
         self._dirty_all()
 
     def unmount(self):
+        self._commit_active_edit()
         self._handle = None
         self._doc = None
         self._visible = False
@@ -404,9 +406,9 @@ class TransformControlsController:
 
     def _set_single_display_transform(self, node_name: str, transform):
         if self._single_uses_world_space():
-            lf.set_node_visualizer_world_transform(node_name, transform)
+            lf.set_node_visualizer_world_transform(node_name, transform, record_history=False)
         else:
-            lf.set_node_transform(node_name, _flip_yz_rows(transform))
+            lf.set_node_transform(node_name, _flip_yz_rows(transform), record_history=False)
 
     def _update_single_node(self):
         node_name = self._selected[0]
@@ -671,7 +673,7 @@ class TransformControlsController:
         for i, name in enumerate(self._state.multi_node_names):
             original = self._state.multi_visualizer_world_transforms_before[i]
             if zero_rotation or identity_scale:
-                lf.set_node_visualizer_world_transform(name, original)
+                lf.set_node_visualizer_world_transform(name, original, record_history=False)
                 continue
 
             if tool == "builtin.rotate":
@@ -690,7 +692,7 @@ class TransformControlsController:
                     new_transform[12] = pivot[0] + r00 * x + r01 * y + r02 * z
                     new_transform[13] = pivot[1] + r10 * x + r11 * y + r12 * z
                     new_transform[14] = pivot[2] + r20 * x + r21 * y + r22 * z
-                lf.set_node_visualizer_world_transform(name, new_transform)
+                lf.set_node_visualizer_world_transform(name, new_transform, record_history=False)
                 continue
 
             if tool == "builtin.translate":
@@ -698,7 +700,7 @@ class TransformControlsController:
                 new_transform = list(original)
                 for axis in range(3):
                     new_transform[12 + axis] = original[12 + axis] + delta[axis]
-                lf.set_node_visualizer_world_transform(name, new_transform)
+                lf.set_node_visualizer_world_transform(name, new_transform, record_history=False)
                 continue
 
             if tool == "builtin.scale":
@@ -709,7 +711,7 @@ class TransformControlsController:
                         new_transform[12 + axis] = (
                             pivot[axis] + (original[12 + axis] - pivot[axis]) * factors[axis]
                         )
-                lf.set_node_visualizer_world_transform(name, new_transform)
+                lf.set_node_visualizer_world_transform(name, new_transform, record_history=False)
 
     def _can_reset_transform(self) -> bool:
         if not self._selected:
@@ -775,6 +777,7 @@ class TransformControlsController:
         del event
         if self._step_repeat_prop:
             self._step_repeat_prop = None
+            self._commit_active_edit()
 
     def _process_step_repeat(self):
         if not self._step_repeat_prop:
@@ -872,6 +875,11 @@ class TransformControlsController:
             target.select()
         self._begin_edit()
 
+    def _on_input_change(self, event):
+        if event.get_bool_parameter("linebreak", False):
+            self._commit_active_edit()
+            self._force_dirty = True
+
     def _on_input_blur(self, event, value_property=None):
         del event
         if value_property is not None and value_property != self._focused_input_property:
@@ -890,7 +898,7 @@ class TransformControlsController:
     def _cancel_active_edit(self):
         if self._state.editing_active and self._state.editing_node_names and self._state.transforms_before_edit:
             node_name = self._state.editing_node_names[0]
-            lf.set_node_transform(node_name, self._state.transforms_before_edit[0])
+            lf.set_node_transform(node_name, self._state.transforms_before_edit[0], record_history=False)
             self._state.reset_single_edit()
             self._update_single_node()
             self._force_dirty = True
@@ -898,7 +906,7 @@ class TransformControlsController:
 
         if self._state.multi_editing_active and self._state.multi_node_names and self._state.multi_transforms_before:
             for name, transform in zip(self._state.multi_node_names, self._state.multi_transforms_before):
-                lf.set_node_transform(name, transform)
+                lf.set_node_transform(name, transform, record_history=False)
             self._state.reset_multi_edit()
             self._update_multi_selection()
             self._force_dirty = True
@@ -922,8 +930,7 @@ class TransformControlsController:
 
         old = self._state.transforms_before_edit[0]
         if old != current:
-            lf.ops.invoke(
-                "transform.apply_batch",
+            lf.commit_node_transforms(
                 node_names=[node_name],
                 old_transforms=[old],
             )
@@ -945,8 +952,7 @@ class TransformControlsController:
                 break
 
         if any_changed:
-            lf.ops.invoke(
-                "transform.apply_batch",
+            lf.commit_node_transforms(
                 node_names=self._state.multi_node_names,
                 old_transforms=self._state.multi_transforms_before,
             )
@@ -954,6 +960,7 @@ class TransformControlsController:
         self._state.reset_multi_edit()
 
     def _reset_single_transform(self):
+        self._commit_active_edit()
         if not self._selected:
             return
 
@@ -963,9 +970,8 @@ class TransformControlsController:
             return
 
         identity = lf.compose_transform([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
-        lf.set_node_transform(node_name, identity)
-        lf.ops.invoke(
-            "transform.apply_batch",
+        lf.set_node_transform(node_name, identity, record_history=False)
+        lf.commit_node_transforms(
             node_names=[node_name],
             old_transforms=[current],
         )
@@ -991,10 +997,9 @@ class TransformControlsController:
 
         identity = lf.compose_transform([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
         for name in selected:
-            lf.set_node_transform(name, identity)
+            lf.set_node_transform(name, identity, record_history=False)
 
-        lf.ops.invoke(
-            "transform.apply_batch",
+        lf.commit_node_transforms(
             node_names=selected,
             old_transforms=old_transforms,
         )

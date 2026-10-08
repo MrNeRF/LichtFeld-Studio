@@ -573,11 +573,20 @@ def get_colmap_sparse_source_path() -> str | None:
 def get_node_visualizer_world_transform(name: str) -> list[float] | None:
     """Get node visualizer-world transform matrix (16 floats, column-major)"""
 
-def set_node_transform(name: str, matrix: Sequence[float]) -> None:
-    """Set node transform matrix (16 floats, column-major)"""
+def commit_node_transforms(node_names: Sequence[str], old_transforms: Sequence[Sequence[float]]) -> None:
+    """
+    Record a completed preview edit as one undo step using its original local transforms
+    """
 
-def set_node_visualizer_world_transform(name: str, matrix: Sequence[float]) -> None:
-    """Set node visualizer-world transform matrix (16 floats, column-major)"""
+def set_node_transform(name: str, matrix: Sequence[float], *, record_history: bool = True) -> None:
+    """
+    Set node transform matrix (16 floats, column-major). Disable record_history for previews committed with commit_node_transforms.
+    """
+
+def set_node_visualizer_world_transform(name: str, matrix: Sequence[float], *, record_history: bool = True) -> None:
+    """
+    Set node visualizer-world transform matrix (16 floats, column-major). Disable record_history for previews committed with commit_node_transforms.
+    """
 
 def bake_selected_node_transforms() -> int:
     """

@@ -384,7 +384,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -2696,21 +2696,49 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("name"), "Get node visualizer-world transform matrix (16 floats, column-major)");
 
     m.def(
-        "set_node_transform", [](const std::string& name, const std::vector<float>& mat) {
+        "commit_node_transforms", [](const std::vector<std::string>& names, const std::vector<std::vector<float>>& before) {
+            auto* sm = lfs::python::get_scene_manager();
+            if (!sm || names.empty())
+                return;
+            if (names.size() != before.size())
+                throw nb::value_error("Expected one transform per node");
+            std::vector<glm::mat4> transforms;
+            transforms.reserve(before.size());
+            for (const auto& matrix : before) {
+                if (matrix.size() != 16)
+                    throw nb::value_error("Expected 16 floats per transform");
+                glm::mat4 transform;
+                std::memcpy(&transform[0][0], matrix.data(), 16 * sizeof(float));
+                transforms.push_back(transform);
+            }
+            auto entry = std::make_unique<lfs::vis::op::SceneSnapshot>(*sm, "transform.batch");
+            if (!entry->captureTransformsBefore(names, transforms))
+                return;
+            entry->captureAfter();
+            lfs::vis::op::pushSceneSnapshotIfChanged(std::move(entry));
+        },
+        nb::arg("node_names"), nb::arg("old_transforms"), "Record a completed preview edit as one undo step using its original local transforms");
+
+    m.def(
+        "set_node_transform", [](const std::string& name, const std::vector<float>& mat, const bool record_history) {
             auto* sm = lfs::python::get_scene_manager();
             if (!sm || mat.size() != 16)
                 return;
             glm::mat4 transform;
             std::memcpy(&transform[0][0], mat.data(), 16 * sizeof(float));
+            if (!record_history) {
+                sm->setNodeTransform(name, transform);
+                return;
+            }
             if (auto result = lfs::vis::cap::setTransformMatrix(*sm, {name}, transform, "python.set_node_transform"); !result) {
                 LOG_WARN("set_node_transform fell back to direct update for '{}': {}", name, result.error());
                 sm->setNodeTransform(name, transform);
             }
         },
-        nb::arg("name"), nb::arg("matrix"), "Set node transform matrix (16 floats, column-major)");
+        nb::arg("name"), nb::arg("matrix"), nb::kw_only(), nb::arg("record_history") = true, "Set node transform matrix (16 floats, column-major). Disable record_history for previews committed with commit_node_transforms.");
 
     m.def(
-        "set_node_visualizer_world_transform", [](const std::string& name, const std::vector<float>& mat) {
+        "set_node_visualizer_world_transform", [](const std::string& name, const std::vector<float>& mat, const bool record_history) {
             auto* sm = lfs::python::get_scene_manager();
             if (!sm || mat.size() != 16)
                 return;
@@ -2728,6 +2756,10 @@ NB_MODULE(lichtfeld, m) {
                     name);
             }
 
+            if (!record_history) {
+                sm->setNodeTransform(name, *local_transform);
+                return;
+            }
             if (auto result = lfs::vis::cap::setTransformMatrix(
                     *sm, {name}, *local_transform, "python.set_node_visualizer_world_transform");
                 !result) {
@@ -2735,7 +2767,7 @@ NB_MODULE(lichtfeld, m) {
                 sm->setNodeTransform(name, *local_transform);
             }
         },
-        nb::arg("name"), nb::arg("matrix"), "Set node visualizer-world transform matrix (16 floats, column-major)");
+        nb::arg("name"), nb::arg("matrix"), nb::kw_only(), nb::arg("record_history") = true, "Set node visualizer-world transform matrix (16 floats, column-major). Disable record_history for previews committed with commit_node_transforms.");
 
     m.def(
         "bake_selected_node_transforms", []() -> size_t {
