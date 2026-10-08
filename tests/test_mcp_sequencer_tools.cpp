@@ -23,6 +23,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -147,6 +148,8 @@ namespace {
         lfs::python::SequencerUIStateData ui_state;
         CameraState camera;
         bool visible = false;
+        std::string ply_sequence_directory;
+        std::vector<float> ply_sequence_load_rates;
 
         lfs::app::SequencerToolBackend tool_backend() {
             return lfs::app::SequencerToolBackend{
@@ -173,6 +176,10 @@ namespace {
                 .set_playback_speed = [this](const float speed) {
                     controller.setPlaybackSpeed(speed);
                     ui_state.playback_speed = controller.playbackSpeed(); },
+                .load_ply_sequence = [this](const std::string& directory, const float fps) -> lfs::Result<void> {
+                    ply_sequence_directory = directory;
+                    ply_sequence_load_rates.push_back(fps);
+                    return {}; },
                 .scrub_to_time = [this](const float time, const bool update_camera) {
                     controller.seek(time);
                     if (!update_camera || controller.timeline().realKeyframeCount() == 0)
@@ -372,6 +379,39 @@ TEST_F(McpSequencerToolsTest, PlaybackSpeedRejectsValuesOutsideControllerRange) 
         "sequencer.set_playback_speed", json{{"speed", 0.5}});
     EXPECT_TRUE(valid["success"].get<bool>());
     EXPECT_FLOAT_EQ(backend_.controller.playbackSpeed(), 0.5f);
+}
+
+TEST_F(McpSequencerToolsTest, PlySequenceLoadRejectsOutOfRangeFpsWithoutSideEffects) {
+    for (const double fps : {-1.0, 0.0, 0.5, 241.0, 1.0e100}) {
+        SCOPED_TRACE(fps);
+        const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+            "sequencer.load_ply_sequence", json{{"directory", "frames"}, {"fps", fps}});
+        EXPECT_EQ(result.value("error", json::object()).value("code", ""), "InvalidArgument");
+        EXPECT_NE(result.value("error_message", "").find("fps"), std::string::npos);
+        EXPECT_FALSE(backend_.visible);
+        EXPECT_TRUE(backend_.ply_sequence_directory.empty());
+        EXPECT_TRUE(backend_.ply_sequence_load_rates.empty());
+    }
+}
+
+TEST_F(McpSequencerToolsTest, PlySequenceLoadPreservesValidAndDefaultFps) {
+    for (const float fps : {1.0f, 23.976f, 240.0f}) {
+        SCOPED_TRACE(fps);
+        const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+            "sequencer.load_ply_sequence", json{{"directory", "frames"}, {"fps", fps}, {"show_sequencer", false}});
+        ASSERT_TRUE(result.value("success", false)) << result.dump();
+        ASSERT_FALSE(backend_.ply_sequence_load_rates.empty());
+        EXPECT_FLOAT_EQ(backend_.ply_sequence_load_rates.back(), fps);
+        EXPECT_EQ(backend_.ply_sequence_directory, "frames");
+        EXPECT_FALSE(backend_.visible);
+    }
+    const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+        "sequencer.load_ply_sequence", json{{"directory", "other_frames"}});
+    ASSERT_TRUE(result.value("success", false)) << result.dump();
+    ASSERT_EQ(backend_.ply_sequence_load_rates.size(), 4);
+    EXPECT_FLOAT_EQ(backend_.ply_sequence_load_rates.back(), 24.0f);
+    EXPECT_EQ(backend_.ply_sequence_directory, "other_frames");
+    EXPECT_TRUE(backend_.visible);
 }
 
 TEST_F(McpSequencerToolsTest, AddKeyframeRejectsCoincidentCameraView) {
