@@ -11,6 +11,7 @@
 #define LFS_LOGGER_API
 #define LFS_ERROR_API
 #define LFS_IMAGE_CODECS_API
+#define LFS_FILE_IO_API
 #define LFS_MEDIA_API
 #define LFS_CORE_API
 #define LFS_VIS_API
@@ -25,6 +26,11 @@
 #define LFS_ERROR_API __declspec(dllexport)
 #else
 #define LFS_ERROR_API __declspec(dllimport)
+#endif
+#ifdef LFS_FILE_IO_EXPORTS
+#define LFS_FILE_IO_API __declspec(dllexport)
+#else
+#define LFS_FILE_IO_API __declspec(dllimport)
 #endif
 #ifdef LFS_IMAGE_CODECS_EXPORTS
 #define LFS_IMAGE_CODECS_API __declspec(dllexport)
@@ -60,6 +66,7 @@
 #define LFS_LOCAL_SYMBOL     __attribute__((visibility("hidden")))
 #define LFS_LOGGER_API       __attribute__((visibility("default")))
 #define LFS_ERROR_API        __attribute__((visibility("default")))
+#define LFS_FILE_IO_API      __attribute__((visibility("default")))
 #define LFS_IMAGE_CODECS_API __attribute__((visibility("default")))
 #define LFS_MEDIA_API        __attribute__((visibility("default")))
 #define LFS_CORE_API         __attribute__((visibility("default")))

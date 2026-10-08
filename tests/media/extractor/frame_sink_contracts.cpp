@@ -105,6 +105,24 @@ int runFrameSinkUnitContracts() {
         std::filesystem::remove(directory / ("jpeg_" + suffix + "_1.jpg"));
         std::filesystem::remove(expected);
     }
-    std::filesystem::remove(directory);
+    const auto seed = [&](const char* name) { std::ofstream(directory / name) << "existing"; };
+    seed("frame_5.png");
+    seed("frame_77.exr");
+    seed("photo.png");
+    seed("other_9.exr");
+    FileFrameSinkOptions replacement;
+    replacement.output_directory = directory;
+    replacement.remove_stale_frames = true;
+    FileFrameSink failed_replacement(replacement);
+    require(failed_replacement.begin({}).has_value(), "replacement snapshot begins");
+    failed_replacement.abort({SinkOutcome::Cancelled, 0, {}});
+    require(std::filesystem::exists(directory / "frame_5.png") && std::filesystem::exists(directory / "frame_77.exr"), "cancel preserves obsolete frames");
+    FileFrameSink successful_replacement(replacement);
+    require(successful_replacement.begin({}).has_value() && successful_replacement.write(file_view).has_value(), "replacement writes frame");
+    require(std::filesystem::exists(directory / "frame_77.exr"), "stale files survive until completion");
+    require(successful_replacement.complete({SinkOutcome::Completed, 1, {}}).has_value(), "replacement complete cleans stale frames");
+    require(!std::filesystem::exists(directory / "frame_5.png") && !std::filesystem::exists(directory / "frame_77.exr"), "obsolete generated PNG and EXR removed");
+    require(std::filesystem::exists(directory / "frame_1.png") && std::filesystem::exists(directory / "photo.png") && std::filesystem::exists(directory / "other_9.exr"), "new and unrelated files preserved");
+    std::filesystem::remove_all(directory);
     return 0;
 }

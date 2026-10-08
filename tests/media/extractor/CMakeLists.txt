@@ -12,13 +12,13 @@ set_directory_properties(PROPERTIES COMPILE_DEFINITIONS "${_media_test_definitio
 add_library(media_shared_core_bridge SHARED shared_core_bridge.cpp)
 target_link_libraries(media_shared_core_bridge PRIVATE lfs_error)
 set_target_properties(media_shared_core_bridge PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
-add_executable(media_extraction_runner runner.cpp probe_unit_contracts.cpp frame_sink_contracts.cpp shared_core_contracts.cpp jpeg_backend_contracts.cpp encode_session_contracts.cpp float_exr_contracts.cpp)
+add_executable(media_extraction_runner runner.cpp probe_unit_contracts.cpp frame_sink_contracts.cpp shared_core_contracts.cpp jpeg_backend_contracts.cpp encode_session_contracts.cpp float_exr_contracts.cpp atomic_file_contracts.cpp)
 set_target_properties(media_extraction_runner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 target_compile_features(media_extraction_runner PRIVATE cxx_std_23)
 target_compile_definitions(media_extraction_runner PRIVATE LFS_HAS_CUDA=0)
 target_include_directories(media_extraction_runner PRIVATE
     ${MEDIA_ROOT}/src ${MEDIA_ROOT}/src/io)
-target_link_libraries(media_extraction_runner PRIVATE lfs_media lfs_image_codecs lfs_logger lfs_diagnostics media_shared_core_bridge ${FFMPEG_LIBRARIES})
+target_link_libraries(media_extraction_runner PRIVATE lfs_media lfs_file_io lfs_image_codecs lfs_logger lfs_diagnostics media_shared_core_bridge ${FFMPEG_LIBRARIES})
 find_package(OpenEXR CONFIG REQUIRED)
 target_link_libraries(media_extraction_runner PRIVATE OpenEXR::OpenEXRCore)
 target_include_directories(media_extraction_runner SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
@@ -92,6 +92,8 @@ set_tests_properties(MediaPythonBindingsContracts PROPERTIES LABELS "media;cpu;o
     ENVIRONMENT "LFS_MEDIA_TEST_FFMPEG=${LFS_MEDIA_TEST_FFMPEG};LFS_MEDIA_TEST_FFPROBE=${LFS_MEDIA_TEST_FFPROBE}")
 
 add_test(NAME MediaFloatExrUnitContracts COMMAND media_extraction_runner --float-exr-unit)
+add_test(NAME MediaAtomicFileContracts COMMAND media_extraction_runner --atomic-unit)
+set_tests_properties(MediaAtomicFileContracts PROPERTIES LABELS "media;cpu;offline" TIMEOUT 30)
 add_executable(media_public_image_output public_image_output.cpp)
 target_link_libraries(media_public_image_output PRIVATE lfs_media)
 set_target_properties(media_public_image_output PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
@@ -103,6 +105,6 @@ add_test(NAME MediaFloatExrReferenceContracts
 set_tests_properties(MediaFloatExrReferenceContracts PROPERTIES LABELS "media;cpu;offline;integration" TIMEOUT 300
     ENVIRONMENT "LFS_MEDIA_TEST_FFMPEG=${LFS_MEDIA_TEST_FFMPEG};LFS_MEDIA_TEST_FFPROBE=${LFS_MEDIA_TEST_FFPROBE}")
 if(WIN32)
-    set_tests_properties(MediaFloatExrUnitContracts MediaFloatExrReferenceContracts MediaPublicImageOutputContracts PROPERTIES
+    set_tests_properties(MediaFloatExrUnitContracts MediaFloatExrReferenceContracts MediaPublicImageOutputContracts MediaAtomicFileContracts PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
 endif()

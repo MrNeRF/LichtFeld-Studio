@@ -5,12 +5,14 @@
 #include "media/media_backends.hpp"
 #include <mutex>
 namespace lfs::io {
+    std::unique_ptr<media::detail::LinearVideoRenderer> createLinearTensorRenderer();
 #if LFS_HAS_CUDA
     std::unique_ptr<media::detail::GpuJpegEncoder> createStudioJpegEncoder(const media::detail::JpegSettings&);
 #endif
     void registerStudioMediaBackends() {
         static std::once_flag once;
         std::call_once(once, [] {
+            media::detail::registerLinearVideoFactory(createLinearTensorRenderer);
             media::detail::registerHdrFactory([]() -> std::unique_ptr<HdrRenderer> {
                 return std::make_unique<HdrStudioRenderer>();
             });

@@ -3,6 +3,7 @@
 #include "media/file_frame_sink.hpp"
 #include "core/image_codecs.hpp"
 #include "core/path_utils.hpp"
+#include "media/media_options.hpp"
 #include "media/video_frame_extractor.hpp"
 #include <algorithm>
 #include <cstring>
@@ -25,11 +26,10 @@ namespace lfs::media {
             options_.filename_pattern.find('\0') != std::string::npos ||
             (options_.format != FrameFileFormat::PNG && options_.format != FrameFileFormat::JPEG && options_.format != FrameFileFormat::EXR))
             return sinkError(ErrorCode::InvalidArgument, "Invalid file sink directory or format");
-        if (options_.format == FrameFileFormat::EXR &&
-            ((options_.exr.precision != ExrPrecision::Half && options_.exr.precision != ExrPrecision::Float) ||
-             (options_.exr.compression != ExrCompression::None && options_.exr.compression != ExrCompression::ZIP) ||
-             options_.exr.provenance.find('\0') != std::string::npos || options_.exr.provenance.size() > 1024 * 1024))
-            return sinkError(ErrorCode::InvalidArgument, "Invalid EXR sink options");
+        if (options_.format == FrameFileFormat::EXR) {
+            if (auto valid = validateExrOutputOptions(options_.exr); !valid)
+                return valid;
+        }
         if (options_.format == FrameFileFormat::JPEG)
             options_.jpeg_quality = options_.jpeg_quality == 0 ? 90 : std::clamp(options_.jpeg_quality, 1, 100);
         std::error_code directory_error;
@@ -42,6 +42,12 @@ namespace lfs::media {
                                                    .native = NativeError{ErrorDomain::IO, directory_error.value(), directory_error.category().name()}}));
         }
         filenames_.clear();
+        existing_frames_.clear();
+        if (options_.remove_stale_frames) {
+            for (const auto& entry : std::filesystem::directory_iterator(options_.output_directory))
+                if (!entry.is_symlink() && entry.is_regular_file() && io::isGeneratedFrameFilename(entry.path(), options_.filename_pattern))
+                    existing_frames_.push_back({entry.path(), entry.last_write_time(), entry.file_size()});
+        }
         active_ = true;
         return {};
     }
@@ -88,6 +94,25 @@ namespace lfs::media {
         if (!active_)
             return sinkError(ErrorCode::FailedPrecondition, "File sink is not active");
         active_ = false;
+        for (const auto& old : existing_frames_) {
+            if (filenames_.contains(old.path))
+                continue;
+            std::error_code error;
+            const auto status = std::filesystem::symlink_status(old.path, error);
+            if (error || !std::filesystem::is_regular_file(status))
+                continue;
+            // Preserve anything another writer changed while we extracted.
+            const auto modified = std::filesystem::last_write_time(old.path, error);
+            if (error || modified != old.modified)
+                continue;
+            const auto size = std::filesystem::file_size(old.path, error);
+            if (error || size != old.size)
+                continue;
+            std::filesystem::remove(old.path, error);
+            if (error)
+                return sinkError(ErrorCode::Unavailable, "Remove obsolete frame failed: " + core::path_to_utf8(old.path) + ": " + error.message());
+        }
+        existing_frames_.clear();
         return {};
     }
     void FileFrameSink::abort(const SinkSummary&) noexcept { active_ = false; }

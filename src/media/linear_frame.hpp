@@ -5,13 +5,11 @@
 extern "C" {
 #include <libavcodec/codec_par.h>
 #include <libavutil/frame.h>
-#include <libswscale/swscale.h>
 }
-#include <array>
+#include "video_color.hpp"
 
 namespace lfs::media::detail {
-    // Integer SDR: RGB48 unpacking for RGB, direct float matrix for YUV444,
-    // then inverse transfer and pixel-center resize in linear light. No RGB8.
+    // Integer SDR through shared color primitives and the optional tensor host.
     class LinearFrameConverter {
     public:
         LinearFrameConverter(const AVCodecParameters&, FrameColor overrides);
@@ -26,9 +24,8 @@ namespace lfs::media::detail {
         AVCodecParameters source_{};
         FrameColor overrides_;
         ColorTransfer transfer_ = ColorTransfer::Unspecified;
-        std::array<float, 65536> lut_{};
-        std::vector<uint8_t> rgb48_;
-        SwsContext* context_ = nullptr;
-        int cached_width_ = 0, cached_height_ = 0, cached_format_ = -1;
+        std::vector<uint8_t> planes_;
+        std::unique_ptr<LinearVideoRenderer> renderer_;
+        bool renderer_attempted_ = false;
     };
 } // namespace lfs::media::detail

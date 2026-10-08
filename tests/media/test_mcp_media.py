@@ -76,7 +76,7 @@ class McpMedia(unittest.TestCase):
         result, output = self.invoke(format="exr", exr_precision="float", exr_compression="none",
                                      input_transfer="linear", input_primaries="bt709")
         self.assertTrue(result["capabilities"]["exr"])
-        self.assertIn("YUV444", result["capabilities"]["float_sdr_profile"])
+        self.assertIn("subsampled chroma", result["capabilities"]["float_sdr_profile"])
         self.assertTrue(result["start"]["success"])
         self.assertEqual(result["job"]["status"], "finished")
         self.assertEqual(len(list(output.glob("*.exr"))), 4)

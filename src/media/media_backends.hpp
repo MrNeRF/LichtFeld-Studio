@@ -4,6 +4,7 @@
 #include "core/export.hpp"
 #include "media/cuda_frame.hpp"
 #include "media/hdr_renderer.hpp"
+#include "video_color.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -29,6 +30,9 @@ namespace lfs::media::detail {
         virtual std::vector<std::vector<std::uint8_t>> encode(const std::vector<void*>&, int width, int height, int quality) = 0;
     };
     using GpuJpegFactory = std::unique_ptr<GpuJpegEncoder> (*)(const JpegSettings&);
+    using LinearVideoFactory = std::unique_ptr<LinearVideoRenderer> (*)();
+    LFS_MEDIA_API void registerLinearVideoFactory(LinearVideoFactory) noexcept;
+    LFS_MEDIA_API std::unique_ptr<LinearVideoRenderer> createLinearVideoRenderer();
     using HdrFactory = std::unique_ptr<io::HdrRenderer> (*)();
     LFS_MEDIA_API void registerGpuJpegFactory(GpuJpegFactory) noexcept;
     LFS_MEDIA_API void registerHdrFactory(HdrFactory) noexcept;

@@ -2093,6 +2093,8 @@
     "select_output_location": "Sélectionner l'Emplacement de Sortie"
   },
   "video_extractor": {
+    "exr_hdr_unsupported": "HDR et Dolby Vision ne font pas partie du profil EXR SDR linéaire.",
+    "source_metadata_unavailable": "Les métadonnées de couleur source ne sont pas disponibles.",
     "format_exr": "EXR · Linear SDR",
     "exr_precision": "Precision",
     "exr_compression": "Compression",
@@ -2101,7 +2103,7 @@
     "input_primaries": "Input primaries",
     "source_metadata": "Source metadata",
     "linear": "Linear",
-    "exr_profile_hint": "Linear SDR with color and timing metadata. Integer RGB up to 16-bit or planar YUV 4:4:4 only. HDR and subsampled YUV are unsupported. Override missing metadata only when the source color is known; the preview remains a display image.",
+    "exr_profile_hint": "SDR linéaire avec métadonnées de couleur et de temps. RGB entier ou YUV planaire/semi-planaire jusqu’à 16 bits, y compris avec chrominance sous-échantillonnée. HDR non pris en charge. Remplacez les métadonnées manquantes uniquement si la couleur source est connue ; l’aperçu reste une image d’affichage.",
     "exr_half": "HALF (16-bit)",
     "exr_float": "FLOAT (32-bit)",
     "srgb": "sRGB",
@@ -2186,7 +2188,7 @@
     "candidates_readout_fmt": "{} / ~{} images",
     "generate_metadata": "Générer le JSON de métadonnées",
     "convert_hdr_to_sdr": "Convertir HDR en SDR (8 bits)",
-    "overwrite_prompt": "Le dossier de sortie contient déjà des images extraites ou des métadonnées d'extraction. Supprimer uniquement les fichiers générés dans ce dossier ?",
+    "overwrite_prompt": "Remplacer les images générées correspondantes ? Les images obsolètes seront supprimées après une extraction réussie. Les autres fichiers sont conservés.",
     "overwrite_clear": "Continuer",
     "overwrite_cancel": "Annuler",
     "rotate_cw": "Pivoter dans le sens horaire",

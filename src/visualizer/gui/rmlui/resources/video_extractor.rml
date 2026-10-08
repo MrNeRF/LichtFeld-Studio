@@ -204,6 +204,7 @@
               </div>
             </div>
             <p class="inline-note">@tr:video_extractor.exr_profile_hint</p>
+            <p id="exr-preflight" class="inline-warning" style="display:none"></p>
           </div>
         </div>
 

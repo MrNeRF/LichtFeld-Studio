@@ -1,5 +1,27 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
+add_executable(media_linear_video_contracts linear_video_contracts.cpp)
+set_target_properties(media_linear_video_contracts PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+target_compile_features(media_linear_video_contracts PRIVATE cxx_std_23)
+target_include_directories(media_linear_video_contracts PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(media_linear_video_contracts PRIVATE lfs_video lfs_core lfs_media)
+if(APPLE)
+    find_package(Python REQUIRED COMPONENTS Development.Embed)
+    target_link_options(media_linear_video_contracts PRIVATE "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
+    target_link_libraries(media_linear_video_contracts PRIVATE lfs_python_embed)
+endif()
+foreach(_linear_backend IN ITEMS cuda vulkan metal)
+    if((_linear_backend STREQUAL "cuda" AND LFS_HAS_CUDA) OR
+       (_linear_backend STREQUAL "vulkan" AND LFS_TENSOR_VULKAN) OR
+       (_linear_backend STREQUAL "metal" AND LFS_TENSOR_METAL))
+        add_test(NAME MediaLinearVideo_${_linear_backend} COMMAND media_linear_video_contracts ${_linear_backend})
+        set_tests_properties(MediaLinearVideo_${_linear_backend} PROPERTIES LABELS "media;gpu;video" TIMEOUT 120 SKIP_RETURN_CODE 77)
+        if(WIN32)
+            set_tests_properties(MediaLinearVideo_${_linear_backend} PROPERTIES ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR};PATH=path_list_prepend:${CUDAToolkit_BIN_DIR};PATH=path_list_prepend:${CUDAToolkit_BIN_DIR}/x64")
+        endif()
+    endif()
+endforeach()
 add_executable(media_mcp_runner mcp_runner.cpp cpu_color_contracts.cpp ${CMAKE_SOURCE_DIR}/src/app/mcp_media_tools.cpp)
 set_target_properties(media_mcp_runner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 target_include_directories(media_mcp_runner PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/app/include)

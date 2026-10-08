@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "media/video_frame_extractor.hpp"
-#include "atomic_output.hpp"
+#include "core/atomic_file.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "decoded_video_frame_ffmpeg.hpp"
@@ -773,6 +773,27 @@ namespace lfs::io {
         return out;
     }
 
+    bool isGeneratedFrameFilename(const std::filesystem::path& path, std::string_view pattern) {
+        auto extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (extension != ".png" && extension != ".jpg" && extension != ".jpeg" && extension != ".exr")
+            return false;
+        const auto stem = core::path_to_utf8(path.stem());
+        // Reuse the actual formatter, including padding, %% and legacy patterns.
+        for (size_t start = 0; start < stem.size(); ++start) {
+            int value = 0;
+            for (size_t end = start; end < stem.size() && std::isdigit(static_cast<unsigned char>(stem[end])); ++end) {
+                const int digit = stem[end] - '0';
+                if (value > (std::numeric_limits<int>::max() - digit) / 10)
+                    break;
+                value = value * 10 + digit;
+                if (value > 0 && formatFrameFilenameStem(pattern, value) == stem)
+                    return true;
+            }
+        }
+        return false;
+    }
+
     class VideoFrameExtractor::Impl {
     public:
         bool extract(const Params& params, std::string& error, media::FrameSink* provided_sink = nullptr, bool legacy_file_policy = false) {
@@ -1062,8 +1083,8 @@ namespace lfs::io {
                 }
                 const int out_width = layout.width;
                 const int out_height = layout.height;
-                if (float_output && (layout.rgb_bytes > (256ULL * 1024 * 1024) / 4 || out_width > std::numeric_limits<int>::max() / 12)) {
-                    failure_ = make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Float output frame exceeds 256 MiB or codec stride limits", .detection = LFS_SOURCE_SITE_CURRENT()});
+                if (float_output && (layout.rgb_bytes > std::numeric_limits<size_t>::max() / 4 || out_width > std::numeric_limits<int>::max() / 12)) {
+                    failure_ = make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = std::format("Float output layout exceeds address/stride limits (rgb_bytes={}, width={}, byte_stride_limit={})", layout.rgb_bytes, out_width, std::numeric_limits<int>::max()), .detection = LFS_SOURCE_SITE_CURRENT()});
                     throw std::runtime_error(std::string(failure_->detail()));
                 }
                 const std::size_t frame_size = layout.rgb_bytes * (float_output ? 4 : 1);
@@ -1333,7 +1354,7 @@ namespace lfs::io {
                 } else if (params.format == ImageFormat::JPG) {
                     LOG_INFO("Using CPU JPEG encoding");
                 } else {
-                    LOG_INFO("Using CPU PNG encoding");
+                    LOG_INFO("Using CPU {} encoding", float_output ? "EXR" : "PNG");
                 }
 
                 int in_trim_frame_count = 0;
@@ -1388,7 +1409,20 @@ namespace lfs::io {
                     double timestamp = 0.0;
                     int source_frame = 0;
                 };
-                std::vector<CandidateFrame> window_candidates;
+                std::optional<CandidateFrame> window_best;
+                const auto consider_window_frame = [&](const uint8_t* pixels, const media::FrameInfo& info,
+                                                       double score, double timestamp, int source_frame) {
+                    // max_element retains the first maximum, including equal scores.
+                    if (window_best && !(score > window_best->score))
+                        return;
+                    if (!window_best)
+                        window_best.emplace();
+                    window_best->rgb.assign(pixels, pixels + frame_size);
+                    window_best->info = info;
+                    window_best->score = score;
+                    window_best->timestamp = timestamp;
+                    window_best->source_frame = source_frame;
+                };
                 std::vector<uint8_t> scoring_proxy;
                 int current_window_idx = 0;
                 int window_skip_counter = 0;
@@ -1511,17 +1545,13 @@ namespace lfs::io {
                 };
 
                 auto flush_window = [&]() {
-                    if (window_candidates.empty())
+                    if (!window_best)
                         return;
-                    const auto best = std::max_element(
-                        window_candidates.begin(), window_candidates.end(),
-                        [](const CandidateFrame& a, const CandidateFrame& b) {
-                            return a.score < b.score;
-                        });
+                    const auto* best = &*window_best;
                     std::filesystem::path fname = generate_filename(best->source_frame);
                     if (!reserve_output_filename(fname, best->source_frame)) {
                         finish_selected_frame();
-                        window_candidates.clear();
+                        window_best.reset();
                         window_skip_counter = 0;
                         return;
                     }
@@ -1542,7 +1572,7 @@ namespace lfs::io {
                                                 best->source_frame, best->score});
                     }
                     finish_selected_frame();
-                    window_candidates.clear();
+                    window_best.reset();
                     window_skip_counter = 0;
                 };
 
@@ -1577,14 +1607,7 @@ namespace lfs::io {
                             frame_score = computeSharpnessScore(
                                 cpu_contiguous_buffer, out_width, out_height, params.sharpness.algorithm);
                             if (params.sharpness.window_mode) {
-                                CandidateFrame cf;
-                                cf.rgb.assign(cpu_contiguous_buffer,
-                                              cpu_contiguous_buffer + frame_size);
-                                cf.info = current_info;
-                                cf.score = frame_score;
-                                cf.timestamp = current_frame_time;
-                                cf.source_frame = current_src_frame;
-                                window_candidates.push_back(std::move(cf));
+                                consider_window_frame(cpu_contiguous_buffer, current_info, frame_score, current_frame_time, current_src_frame);
                                 gpu_jpeg->finishHardware();
                                 return;
                             }
@@ -1645,14 +1668,7 @@ namespace lfs::io {
                             frame_score = computeSharpnessScore(
                                 cpu_contiguous_buffer, out_width, out_height, params.sharpness.algorithm);
                             if (params.sharpness.window_mode) {
-                                CandidateFrame cf;
-                                cf.rgb.assign(cpu_contiguous_buffer,
-                                              cpu_contiguous_buffer + frame_size);
-                                cf.info = current_info;
-                                cf.score = frame_score;
-                                cf.timestamp = current_frame_time;
-                                cf.source_frame = current_src_frame;
-                                window_candidates.push_back(std::move(cf));
+                                consider_window_frame(cpu_contiguous_buffer, current_info, frame_score, current_frame_time, current_src_frame);
                                 return;
                             }
                             if (params.sharpness.threshold > 0.0 && frame_score < params.sharpness.threshold) {
@@ -1766,18 +1782,7 @@ namespace lfs::io {
                         frame_score = computeSharpnessScore(score_pixels, out_width, out_height, params.sharpness.algorithm);
 
                         if (params.sharpness.window_mode) {
-                            if (float_output && window_candidates.size() >= std::min<size_t>(100000, (256ULL * 1024 * 1024) / frame_size)) {
-                                failure_ = make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Float sharpness candidates exceed 256 MiB payload or 100000 frames", .detection = LFS_SOURCE_SITE_CURRENT()});
-                                throw std::runtime_error(std::string(failure_->detail()));
-                            }
-                            CandidateFrame cf;
-                            cf.rgb.assign(cpu_contiguous_buffer,
-                                          cpu_contiguous_buffer + frame_size);
-                            cf.info = current_info;
-                            cf.score = frame_score;
-                            cf.timestamp = current_frame_time;
-                            cf.source_frame = current_src_frame;
-                            window_candidates.push_back(std::move(cf));
+                            consider_window_frame(cpu_contiguous_buffer, current_info, frame_score, current_frame_time, current_src_frame);
                             return;
                         }
 
@@ -2299,7 +2304,7 @@ namespace lfs::io {
                             media::ExrOutputOptions options;
                             options.overwrite = params.overwrite_metadata;
                             options.cancelled = params.cancel_requested;
-                            const auto result = media::detail::writeAtomicText(meta_path, root.dump(2), options);
+                            const auto result = core::writeTextFileAtomically(meta_path, root.dump(2), {.overwrite = options.overwrite, .durable = false, .create_directories = false, .cancelled = options.cancelled});
                             if (!result) {
                                 failure_ = result.error();
                                 if (failure_->code() == ErrorCode::Cancelled)

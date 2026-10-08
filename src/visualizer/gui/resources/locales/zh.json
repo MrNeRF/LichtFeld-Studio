@@ -2093,6 +2093,8 @@
     "select_output_location": "选择输出位置"
   },
   "video_extractor": {
+    "exr_hdr_unsupported": "HDR 和 Dolby Vision 不属于线性 SDR EXR 配置。",
+    "source_metadata_unavailable": "无法获取源颜色元数据。",
     "format_exr": "EXR · Linear SDR",
     "exr_precision": "Precision",
     "exr_compression": "Compression",
@@ -2101,7 +2103,7 @@
     "input_primaries": "Input primaries",
     "source_metadata": "Source metadata",
     "linear": "Linear",
-    "exr_profile_hint": "Linear SDR with color and timing metadata. Integer RGB up to 16-bit or planar YUV 4:4:4 only. HDR and subsampled YUV are unsupported. Override missing metadata only when the source color is known; the preview remains a display image.",
+    "exr_profile_hint": "带有颜色和时间元数据的线性 SDR。支持最高 16 位整数 RGB 或平面/半平面 YUV，包括色度子采样。不支持 HDR。仅在已知源颜色时覆盖缺失的元数据；预览仍为显示用图像。",
     "exr_half": "HALF (16-bit)",
     "exr_float": "FLOAT (32-bit)",
     "srgb": "sRGB",
@@ -2186,7 +2188,7 @@
     "candidates_readout_fmt": "{} / ~{} 帧",
     "generate_metadata": "生成元数据JSON",
     "convert_hdr_to_sdr": "将 HDR 转换为 SDR（8 位）",
-    "overwrite_prompt": "输出文件夹已包含提取的帧或提取元数据。是否仅删除此文件夹中生成的文件？",
+    "overwrite_prompt": "替换匹配的已生成帧？仅在提取成功后删除过时帧。其他文件将保留。",
     "overwrite_clear": "继续",
     "overwrite_cancel": "取消",
     "rotate_cw": "顺时针旋转",

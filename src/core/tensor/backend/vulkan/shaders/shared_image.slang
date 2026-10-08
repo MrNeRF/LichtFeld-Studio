@@ -67,9 +67,7 @@ float sinc(float x) {
 float lanczos(float x, float a) {
     return x <= -a || x >= a ? 0.0 : sinc(x) * sinc(x / a);
 }
-float srgbToLinear(float v) {
-    return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4);
-}
+#include "../../../../include/core/color_transfer.h"
 
 [numthreads(256, 1, 1)]
 void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Push push) {

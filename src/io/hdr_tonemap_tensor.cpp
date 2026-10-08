@@ -7,6 +7,7 @@
 #include "core/tensor_readback.hpp"
 #include "core/tensor_upload.hpp"
 #include "hdr_tonemap_program.hpp"
+#include "media/video_color.hpp"
 
 #include <algorithm>
 #include <array>
@@ -389,19 +390,7 @@ namespace lfs::io {
         }
 
         bool lumaCoefficients(const media::DecodedVideoFrame* frame, std::array<float, 3>& out) {
-            switch (frame->colorspace) {
-            case media::ColorMatrix::Bt709: out = {0.2126f, 0.7152f, 0.0722f}; return true;
-            case media::ColorMatrix::Bt470Bg:
-            case media::ColorMatrix::Smpte170M: out = {0.2990f, 0.5870f, 0.1140f}; return true;
-            case media::ColorMatrix::Smpte240M: out = {0.2122f, 0.7013f, 0.0865f}; return true;
-            case media::ColorMatrix::Bt2020Ncl: out = {0.2627f, 0.6780f, 0.0593f}; return true;
-            case media::ColorMatrix::Unspecified:
-                // pl_color_system_guess_ycbcr
-                out = frame->width >= 1280 || frame->height > 576 ? std::array{0.2126f, 0.7152f, 0.0722f}
-                                                                  : std::array{0.2990f, 0.5870f, 0.1140f};
-                return true;
-            default: return false;
-            }
+            return media::detail::yuvLumaCoefficients(frame->colorspace, frame->width, frame->height, out);
         }
 
         // pl_map_dovi_metadata, packed per component: pivot count, 9 pivots,
@@ -526,14 +515,11 @@ namespace lfs::io {
                     return false;
                 }
                 // pl_color_repr_decode
-                decode = {{{1, 0, 2 * (1 - k[0])},
-                           {1, -2 * (1 - k[2]) * k[2] / k[1], -2 * (1 - k[0]) * k[0] / k[1]},
-                           {1, 2 * (1 - k[2]), 0}}};
+                decode = media::detail::yuvDecodeMatrix(k);
                 const bool full = frame->color_range == media::ColorRange::Full;
-                const double ymin = full ? 0.0 : 16 / 256.0 * expand, ymax = full ? 1.0 : 235 / 256.0 * expand;
-                const double cmid = 128 / 256.0 * expand, cmax = full ? 1.0 : 240 / 256.0 * expand;
-                multiplier = {1.0 / (ymax - ymin), 0.5 / (cmax - cmid), 0.5 / (cmax - cmid)};
-                black = {ymin, cmid, cmid};
+                const auto levels = media::detail::yuvDecodeLevels(full, expand);
+                multiplier = levels.multiplier;
+                black = levels.black;
                 sample_scale = full ? float(((1LL << sample_depth) - 1.0) / ((1LL << depth) - 1.0))
                                     : float(1LL << sample_depth) / float(1LL << depth);
             }
@@ -549,16 +535,7 @@ namespace lfs::io {
             mapHdr(space.hdr, frame->stream_hdr);
 
             // pl_chroma_location_offset, LEFT when unknown
-            const media::ChromaLocation location = frame->chroma_location;
-            const float shift_x = location == media::ChromaLocation::Center || location == media::ChromaLocation::Top ||
-                                          location == media::ChromaLocation::Bottom
-                                      ? 0.0f
-                                      : -0.5f;
-            const float shift_y = location == media::ChromaLocation::TopLeft || location == media::ChromaLocation::Top         ? -0.5f
-                                  : location == media::ChromaLocation::BottomLeft || location == media::ChromaLocation::Bottom ? 0.5f
-                                                                                                                               : 0.0f;
-            const float rx = 1.0f / (1 << desc->chroma_w), ry = 1.0f / (1 << desc->chroma_h);
-            c.chroma = {rx, (0.5f - shift_x) * rx - 0.5f, ry, (0.5f - shift_y) * ry - 0.5f};
+            c.chroma = media::detail::chromaMapping(frame->chroma_location, desc->chroma_w, desc->chroma_h);
             c.flags = {desc->chroma_w > 0, desc->chroma_h > 0, dovi != nullptr,
                        space.transfer == Transfer::HLG};
             infer(space);

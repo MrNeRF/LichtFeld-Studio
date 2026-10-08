@@ -382,6 +382,7 @@ if(BUILD_UNICODE_TEST_ONLY)
         ${CMAKE_SOURCE_DIR}/src/core/memory_domain.cpp
         ${CMAKE_SOURCE_DIR}/src/core/nn/weight_file_open.cpp
         ${CMAKE_SOURCE_DIR}/src/core/user_paths.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/atomic_file.cpp
         ${CMAKE_SOURCE_DIR}/src/io/stb_image_impl.cpp
     )
 
@@ -542,6 +543,7 @@ set(LICHT_FORMAT_NON_WINDOWS_FILES
     test_project_inspector.cpp
     test_project_operations.cpp
     ${CMAKE_SOURCE_DIR}/src/core/user_paths.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/atomic_file.cpp
     ${CMAKE_SOURCE_DIR}/src/core/environment.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_inspector.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_operations.cpp

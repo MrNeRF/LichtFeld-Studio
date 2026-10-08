@@ -2093,6 +2093,8 @@
     "select_output_location": "Seleccionar Ubicación de Salida"
   },
   "video_extractor": {
+    "exr_hdr_unsupported": "HDR y Dolby Vision no forman parte del perfil EXR SDR lineal.",
+    "source_metadata_unavailable": "Los metadatos de color de la fuente no están disponibles.",
     "format_exr": "EXR · Linear SDR",
     "exr_precision": "Precision",
     "exr_compression": "Compression",
@@ -2101,7 +2103,7 @@
     "input_primaries": "Input primaries",
     "source_metadata": "Source metadata",
     "linear": "Linear",
-    "exr_profile_hint": "Linear SDR with color and timing metadata. Integer RGB up to 16-bit or planar YUV 4:4:4 only. HDR and subsampled YUV are unsupported. Override missing metadata only when the source color is known; the preview remains a display image.",
+    "exr_profile_hint": "SDR lineal con metadatos de color y tiempo. RGB entero o YUV planar/semiplanar de hasta 16 bits, también con crominancia submuestreada. HDR no compatible. Sustituye los metadatos ausentes solo si conoces el color de la fuente; la vista previa sigue siendo una imagen de visualización.",
     "exr_half": "HALF (16-bit)",
     "exr_float": "FLOAT (32-bit)",
     "srgb": "sRGB",
@@ -2186,7 +2188,7 @@
     "candidates_readout_fmt": "{} / ~{} fotogramas",
     "generate_metadata": "Generar JSON de metadatos",
     "convert_hdr_to_sdr": "Convertir HDR a SDR (8 bits)",
-    "overwrite_prompt": "La carpeta de salida ya contiene fotogramas extraídos o metadatos. ¿Eliminar solo los archivos generados en esta carpeta y continuar?",
+    "overwrite_prompt": "¿Reemplazar los fotogramas generados coincidentes? Los obsoletos se eliminarán solo tras una extracción correcta. Los demás archivos se conservan.",
     "overwrite_clear": "Continuar",
     "overwrite_cancel": "Cancelar",
     "rotate_cw": "Rotar en sentido horario",

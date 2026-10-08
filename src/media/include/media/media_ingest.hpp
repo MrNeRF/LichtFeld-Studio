@@ -72,7 +72,7 @@ namespace lfs::media {
         bool rgb_float_sdr = true;
         bool exr = true;
         // Stable capability description shared by CLI, Python and MCP.
-        std::string_view float_sdr_profile = "CPU; integer RGB <=16-bit or planar YUV444 8/10/12/16-bit; Linear/sRGB/BT709 transfer; BT709/BT2020 primaries; explicit metadata or overrides; no HDR, alpha video or subsampled YUV";
+        std::string_view float_sdr_profile = "Integer RGB or planar/semiplanar YUV 8-16-bit, including subsampled chroma; Linear/sRGB/BT709 transfer; BT709/BT2020 primaries; explicit metadata or overrides; shared CPU reference and optional tensor backend; no HDR or alpha video";
     };
     struct CodecBuildInfo {
         std::string ffmpeg_version;

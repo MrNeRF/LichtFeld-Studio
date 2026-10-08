@@ -2093,6 +2093,8 @@
     "select_output_location": "Selecteer Uitvoerlocatie"
   },
   "video_extractor": {
+    "exr_hdr_unsupported": "HDR en Dolby Vision vallen buiten het lineaire SDR-EXR-profiel.",
+    "source_metadata_unavailable": "De kleurmetadata van de bron zijn niet beschikbaar.",
     "format_exr": "EXR · Linear SDR",
     "exr_precision": "Precision",
     "exr_compression": "Compression",
@@ -2101,7 +2103,7 @@
     "input_primaries": "Input primaries",
     "source_metadata": "Source metadata",
     "linear": "Linear",
-    "exr_profile_hint": "Linear SDR with color and timing metadata. Integer RGB up to 16-bit or planar YUV 4:4:4 only. HDR and subsampled YUV are unsupported. Override missing metadata only when the source color is known; the preview remains a display image.",
+    "exr_profile_hint": "Lineaire SDR met kleur- en tijdmetadata. Geheelgetal-RGB of planaire/semiplanaire YUV tot 16 bit, ook met onderbemonsterde chroma. HDR wordt niet ondersteund. Overschrijf ontbrekende metadata alleen als de bronkleur bekend is; de voorvertoning blijft een weergavebeeld.",
     "exr_half": "HALF (16-bit)",
     "exr_float": "FLOAT (32-bit)",
     "srgb": "sRGB",
@@ -2186,7 +2188,7 @@
     "candidates_readout_fmt": "{} / ~{} frames",
     "generate_metadata": "Metadata JSON genereren",
     "convert_hdr_to_sdr": "HDR naar SDR converteren (8-bit)",
-    "overwrite_prompt": "De uitvoermap bevat al geëxtraheerde frames of extractiemetadata. Alleen de gegenereerde bestanden in deze map verwijderen?",
+    "overwrite_prompt": "Overeenkomende gegenereerde frames vervangen? Verouderde frames worden pas na een geslaagde extractie verwijderd. Andere bestanden blijven behouden.",
     "overwrite_clear": "Doorgaan",
     "overwrite_cancel": "Annuleren",
     "rotate_cw": "Met de klok mee draaien",

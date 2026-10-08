@@ -3,6 +3,7 @@
 #include "core/path_utils.hpp"
 #include "git_version.h"
 #include "media/media_ingest.hpp"
+#include "media/media_options.hpp"
 #include "media_json.hpp"
 #include <charconv>
 #include <cmath>
@@ -12,6 +13,14 @@
 #include <stdexcept>
 
 namespace {
+    template <class T>
+    T parse(std::string_view value) {
+        auto result = lfs::media::parseOutputOption<T>(value);
+        if (!result)
+            throw std::invalid_argument(std::string(result.error().detail()));
+        return *result;
+    }
+
     using nlohmann::json;
     using namespace lfs::media;
     volatile std::sig_atomic_t cancellation = 0;
@@ -134,41 +143,22 @@ namespace {
                 } else if (flag == "--name")
                     output.files.filename_pattern = value();
                 else if (flag == "--format") {
-                    const auto& format = value();
-                    if (format != "png" && format != "jpeg" && format != "jpg" && format != "exr")
-                        throw std::invalid_argument("Format must be png, jpeg or exr");
-                    output.files.format = format == "png" ? FrameFileFormat::PNG : format == "exr" ? FrameFileFormat::EXR
-                                                                                                   : FrameFileFormat::JPEG;
+                    output.files.format = parse<FrameFileFormat>(value());
                 } else if (flag == "--exr-precision") {
                     exr_options = true;
-                    const auto& precision = value();
-                    if (precision != "half" && precision != "float")
-                        throw std::invalid_argument("EXR precision must be half or float");
-                    output.files.exr.precision = precision == "half" ? ExrPrecision::Half : ExrPrecision::Float;
+                    output.files.exr.precision = parse<ExrPrecision>(value());
                 } else if (flag == "--exr-compression") {
                     exr_options = true;
-                    const auto& compression = value();
-                    if (compression != "zip" && compression != "none")
-                        throw std::invalid_argument("EXR compression must be zip or none");
-                    output.files.exr.compression = compression == "zip" ? ExrCompression::ZIP : ExrCompression::None;
+                    output.files.exr.compression = parse<ExrCompression>(value());
                 } else if (flag == "--overwrite") {
                     exr_options = true;
                     output.files.exr.overwrite = true;
                 } else if (flag == "--input-transfer") {
                     exr_options = true;
-                    const auto& curve = value();
-                    if (curve != "auto" && curve != "linear" && curve != "srgb" && curve != "bt709")
-                        throw std::invalid_argument("Unsupported input transfer override");
-                    request.input_color.transfer = curve == "linear" ? ColorTransfer::Linear : curve == "srgb" ? ColorTransfer::Srgb
-                                                                                           : curve == "bt709"  ? ColorTransfer::Bt709
-                                                                                                               : ColorTransfer::Unspecified;
+                    request.input_color.transfer = parse<ColorTransfer>(value());
                 } else if (flag == "--input-primaries") {
                     exr_options = true;
-                    const auto& primaries = value();
-                    if (primaries != "auto" && primaries != "bt709" && primaries != "bt2020")
-                        throw std::invalid_argument("Unsupported input primaries override");
-                    request.input_color.primaries = primaries == "bt709" ? ColorPrimaries::Bt709 : primaries == "bt2020" ? ColorPrimaries::Bt2020
-                                                                                                                         : ColorPrimaries::Unspecified;
+                    request.input_color.primaries = parse<ColorPrimaries>(value());
                 } else if (flag == "--metadata")
                     output.write_metadata = true;
                 else if (flag == "--quiet")

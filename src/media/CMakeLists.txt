@@ -16,7 +16,7 @@ if(LFS_HAS_CUDA)
     target_include_directories(lfs_media SYSTEM PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
 endif()
 target_link_libraries(lfs_media PUBLIC lfs_error
-    PRIVATE lfs_image_codecs lfs_logger)
+    PRIVATE lfs_image_codecs lfs_file_io lfs_logger)
 target_link_libraries(lfs_media PRIVATE ${FFMPEG_LIBRARIES})
 # Static third-party objects do not obey this target's C++ visibility preset.
 # Export the media namespace only, including in stripped portable builds.

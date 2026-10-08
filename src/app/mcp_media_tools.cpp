@@ -7,6 +7,7 @@
 #include "core/path_utils.hpp"
 #include "media/media_ingest.hpp"
 #include "media/media_json.hpp"
+#include "media/media_options.hpp"
 #include <algorithm>
 #include <climits>
 #include <cmath>
@@ -202,6 +203,13 @@ namespace lfs::app {
             return value;
         }
 
+        template <class T>
+        json option_names() {
+            auto names = json::array();
+            for (const auto& option : outputOptionValues<T>)
+                names.push_back(option.name);
+            return names;
+        }
         json extraction_properties() {
             const auto number = json{{"type", "number"}};
             const auto integer = json{{"type", "integer"}, {"minimum", 0}, {"maximum", INT_MAX}};
@@ -215,13 +223,13 @@ namespace lfs::app {
                     {"end_seconds", number},
                     {"convert_hdr_to_sdr", boolean},
                     {"allow_hardware_decode", boolean},
-                    {"format", {{"type", "string"}, {"enum", {"png", "jpeg", "exr"}}}},
+                    {"format", {{"type", "string"}, {"enum", option_names<FrameFileFormat>()}}},
                     {"jpeg_quality", integer},
-                    {"exr_precision", {{"type", "string"}, {"enum", {"half", "float"}}}},
-                    {"exr_compression", {{"type", "string"}, {"enum", {"zip", "none"}}}},
+                    {"exr_precision", {{"type", "string"}, {"enum", option_names<ExrPrecision>()}}},
+                    {"exr_compression", {{"type", "string"}, {"enum", option_names<ExrCompression>()}}},
                     {"overwrite", boolean},
-                    {"input_transfer", {{"type", "string"}, {"enum", {"auto", "linear", "srgb", "bt709"}}}},
-                    {"input_primaries", {{"type", "string"}, {"enum", {"auto", "bt709", "bt2020"}}}},
+                    {"input_transfer", {{"type", "string"}, {"enum", option_names<ColorTransfer>()}}},
+                    {"input_primaries", {{"type", "string"}, {"enum", option_names<ColorPrimaries>()}}},
                     {"filename_pattern", {{"type", "string"}}},
                     {"write_metadata", boolean}};
         }
@@ -279,13 +287,14 @@ namespace lfs::app {
             request.allow_hardware_decode = args.value("allow_hardware_decode", true);
             if (args.value("format", "png") == "exr")
                 request.output_format = FramePixelFormat::RGBFloat32;
-            const auto transfer = args.value("input_transfer", "auto");
-            request.input_color.transfer = transfer == "linear" ? ColorTransfer::Linear : transfer == "srgb" ? ColorTransfer::Srgb
-                                                                                      : transfer == "bt709"  ? ColorTransfer::Bt709
-                                                                                                             : ColorTransfer::Unspecified;
-            const auto primaries = args.value("input_primaries", "auto");
-            request.input_color.primaries = primaries == "bt709" ? ColorPrimaries::Bt709 : primaries == "bt2020" ? ColorPrimaries::Bt2020
-                                                                                                                 : ColorPrimaries::Unspecified;
+            const auto transfer = parseOutputOption<ColorTransfer>(args.value("input_transfer", "auto"));
+            const auto primaries = parseOutputOption<ColorPrimaries>(args.value("input_primaries", "auto"));
+            if (!transfer)
+                throw Exception(transfer.error());
+            if (!primaries)
+                throw Exception(primaries.error());
+            request.input_color.transfer = *transfer;
+            request.input_color.primaries = *primaries;
             return request;
         }
     } // namespace
@@ -334,10 +343,18 @@ namespace lfs::app {
                                    const bool exr = format == "exr";
                                    if ((!exr && (args.contains("exr_precision") || args.contains("exr_compression") || args.contains("overwrite") || args.contains("input_transfer") || args.contains("input_primaries"))) || (exr && (args.contains("jpeg_quality") || args.value("convert_hdr_to_sdr", false))))
                                        return mcp::invalid_argument_result("EXR options require EXR; EXR does not accept JPEG quality or HDR to SDR", "media.extract");
-                                   files.files.format = exr ? FrameFileFormat::EXR : format == "jpeg" ? FrameFileFormat::JPEG
-                                                                                                      : FrameFileFormat::PNG;
-                                   files.files.exr.precision = args.value("exr_precision", "half") == "float" ? ExrPrecision::Float : ExrPrecision::Half;
-                                   files.files.exr.compression = args.value("exr_compression", "zip") == "none" ? ExrCompression::None : ExrCompression::ZIP;
+                                   const auto parsed_format = parseOutputOption<FrameFileFormat>(format);
+                                   const auto precision = parseOutputOption<ExrPrecision>(args.value("exr_precision", "half"));
+                                   const auto compression = parseOutputOption<ExrCompression>(args.value("exr_compression", "zip"));
+                                   if (!parsed_format)
+                                       throw Exception(parsed_format.error());
+                                   if (!precision)
+                                       throw Exception(precision.error());
+                                   if (!compression)
+                                       throw Exception(compression.error());
+                                   files.files.format = *parsed_format;
+                                   files.files.exr.precision = *precision;
+                                   files.files.exr.compression = *compression;
                                    files.files.exr.overwrite = args.value("overwrite", false);
                                    files.files.jpeg_quality = args.value("jpeg_quality", 95);
                                    files.files.filename_pattern = args.value("filename_pattern", files.files.filename_pattern);

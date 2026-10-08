@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "media/media_ingest.hpp"
+#include "media/media_options.hpp"
 #include "media/video_frame_extractor.hpp"
 #include "media_backends.hpp"
 #include <cmath>
@@ -90,8 +91,8 @@ namespace lfs::media {
                     return failure(ErrorCode::InvalidArgument, "Invalid sharpness method", 0);
                 if (request.output_format != FramePixelFormat::RGB8 && request.output_format != FramePixelFormat::RGBFloat32)
                     return failure(ErrorCode::Unsupported, "Ingest supports RGB8 or integer SDR to linear RGBFloat32", 0);
-                if ((request.input_color.transfer != ColorTransfer::Unspecified && request.input_color.transfer != ColorTransfer::Linear && request.input_color.transfer != ColorTransfer::Srgb && request.input_color.transfer != ColorTransfer::Bt709) ||
-                    (request.input_color.primaries != ColorPrimaries::Unspecified && request.input_color.primaries != ColorPrimaries::Bt709 && request.input_color.primaries != ColorPrimaries::Bt2020) || request.input_color.alpha != AlphaMode::None)
+                if (outputOptionName(request.input_color.transfer) == "unknown" ||
+                    outputOptionName(request.input_color.primaries) == "unknown" || request.input_color.alpha != AlphaMode::None)
                     return failure(ErrorCode::InvalidArgument, "Invalid input color override", 0);
                 if (request.output_format == FramePixelFormat::RGB8 && (request.input_color.transfer != ColorTransfer::Unspecified || request.input_color.primaries != ColorPrimaries::Unspecified))
                     return failure(ErrorCode::InvalidArgument, "Input color overrides apply only to float SDR output", 0);
@@ -108,11 +109,10 @@ namespace lfs::media {
                     p.exr_compression = files->files.exr.compression;
                     if ((files->files.format == FrameFileFormat::EXR) != (request.output_format == FramePixelFormat::RGBFloat32))
                         return failure(ErrorCode::InvalidArgument, "EXR file extraction requires float output; PNG/JPEG require RGB8", 0);
-                    if (files->files.format == FrameFileFormat::EXR &&
-                        ((p.exr_precision != ExrPrecision::Half && p.exr_precision != ExrPrecision::Float) ||
-                         (p.exr_compression != ExrCompression::None && p.exr_compression != ExrCompression::ZIP) ||
-                         files->files.exr.provenance.find('\0') != std::string::npos || files->files.exr.provenance.size() > 1024 * 1024))
-                        return failure(ErrorCode::InvalidArgument, "Invalid EXR precision, compression or provenance", 0);
+                    if (files->files.format == FrameFileFormat::EXR) {
+                        if (auto valid = validateExrOutputOptions(files->files.exr); !valid)
+                            return std::move(valid).error();
+                    }
                     if (files->files.output_directory.empty() ||
                         files->files.output_directory.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos ||
                         files->files.filename_pattern.find('\0') != std::string::npos ||

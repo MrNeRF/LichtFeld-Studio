@@ -256,7 +256,7 @@ class FloatEXR(unittest.TestCase):
                             self.assertGreater(pixels["R"][0],1)
                             self.assertLess(pixels["R"][1],0)
 
-    def test_yuv_depths_and_subsampled_rejection(self):
+    def test_yuv_depths_and_subsampled_reference(self):
         # Raw planar codes are independent of either implementation's RGB conversion.
         for depth in [8,12,16]:
             with self.subTest(depth=depth):
@@ -277,16 +277,57 @@ class FloatEXR(unittest.TestCase):
                 for name in "RGB":
                     for code,value in zip(yy,pixels[name]):
                         self.assertAlmostEqual(value,(code-16*scale)/(219*scale),delta=2e-6)
-        for fmt in ["yuv420p10le","yuv422p10le"]:
-            with self.subTest(format=fmt):
-                source=self.root/f"subsampled-{fmt}.mkv"
-                run([FFMPEG,"-v","error","-i",self.input,"-vf",f"format={fmt},setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709:range=limited",
-                     "-c:v","ffv1","-level","3","-color_range","tv",source])
-                output=self.root/f"subsampled-out-{fmt}"
-                result=self.invoke("extract",source,"--output",output,"--format","exr","--quiet",code=3)
-                self.assertEqual(result["error"]["code"],"Unsupported")
-                self.assertFalse(list(output.glob("*.exr")))
-                self.assertFalse(list(output.glob("*.tmp")))
+        # Native H.264/HEVC and raw-code references exercise actual subsampling.
+        for depth in [8, 10]:
+            for chroma_h in [1, 2]:
+                for siting in ["left", "center", "topleft"]:
+                    with self.subTest(depth=depth,chroma_h=chroma_h,siting=siting):
+                        scale=1<<(depth-8)
+                        yy=[(16+((i*19)%220))*scale for i in range(128)]
+                        cb=[(40+(i*23)%190)*scale for i in range(64//chroma_h)]
+                        cr=[(40+(i*31)%190)*scale for i in range(64//chroma_h)]
+                        fmt=f"yuv4{2 if chroma_h==1 else 2}{2 if chroma_h==1 else 0}p"+("" if depth==8 else "10le")
+                        values=yy+cb+cr
+                        raw=bytes(values) if depth==8 else struct.pack("<"+"H"*len(values),*values)
+                        source=self.root/f"sub-{depth}-{chroma_h}-{siting}.mkv"
+                        run([FFMPEG,"-v","error","-f","rawvideo","-pixel_format",fmt,"-video_size","16x8","-framerate","10","-i","pipe:0",
+                             "-vf","setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=limited","-c:v","ffv1","-level","3","-chroma_sample_location",siting,"-color_range","tv",source],raw)
+                        self.assertEqual(run([FFMPEG,"-v","error","-i",source,"-f","rawvideo","-pix_fmt",fmt,"pipe:1"]),raw)
+                        output=self.root/f"sub-out-{depth}-{chroma_h}-{siting}"
+                        self.invoke("extract",source,"--output",output,"--format","exr","--exr-precision","float","--exr-compression","none","--quiet")
+                        _,_,_,_,pixels=uncompressed_exr(output/"frame_1.exr")
+                        def chroma(codes,x,y):
+                            cx=x/2+(0 if siting in ["left","topleft"] else -.25)
+                            cy=y/chroma_h+(0 if chroma_h==1 or siting=="topleft" else -.25)
+                            ix,iy=int(cx//1),int(cy//1);fx,fy=cx-ix,cy-iy
+                            def code(a,b): return codes[max(0,min(8//chroma_h-1,b))*8+max(0,min(7,a))]
+                            return (code(ix,iy)*(1-fx)+code(ix+1,iy)*fx)*(1-fy)+(code(ix,iy+1)*(1-fx)+code(ix+1,iy+1)*fx)*fy
+                        for y in range(8):
+                            for x in range(16):
+                                i=y*16+x
+                                l=(yy[i]-16*scale)/(219*scale);b=(chroma(cb,x,y)-128*scale)/(224*scale);c=(chroma(cr,x,y)-128*scale)/(224*scale)
+                                encoded=[l+2*(1-.2126)*c,l-2*.0722*(1-.0722)/.7152*b-2*.2126*(1-.2126)/.7152*c,l+2*(1-.0722)*b]
+                                for name,value in zip("RGB",encoded): self.assertAlmostEqual(pixels[name][i],inverse(value,"bt709"),delta=3e-6)
+        for codec,fmt in [("libx264","yuv420p"),("libx265","yuv420p10le")]:
+            source=self.root/f"native-{codec}.mp4"
+            run([FFMPEG,"-v","error","-i",self.input,"-vf","scale=64:64","-c:v",codec,"-pix_fmt",fmt,"-color_primaries","bt709","-color_trc","bt709","-colorspace","bt709","-color_range","tv",source])
+            result=self.invoke("extract",source,"--output",self.root/f"native-out-{codec}","--format","exr","--quiet")
+            self.assertGreater(result["frames_accepted"],0)
+
+    def test_area_reduction_removes_checkerboard_aliasing(self):
+        # Every 4x4 block contains equal black/white pixels: the correct linear
+        # area average is 0.5; a bilinear four-sample reduction aliases this pattern.
+        source=self.root/"checker.mkv"
+        codes=[65535 if (x%4==0 or x%4==3) else 0 for y in range(8) for x in range(16)]
+        raw=struct.pack("<"+"H"*384,*(codes*3))
+        run([FFMPEG,"-v","error","-f","rawvideo","-pixel_format","gbrp16le","-video_size","16x8","-framerate","10","-i","pipe:0",
+             "-vf","setparams=color_primaries=bt709:color_trc=linear:colorspace=gbr:range=full","-c:v","ffv1","-level","3",source],raw)
+        output=self.root/"checker-out"
+        self.invoke("extract",source,"--output",output,"--format","exr","--exr-precision","float","--exr-compression","none","--scale","0.25","--quiet")
+        w,h,_,_,pixels=uncompressed_exr(output/"frame_1.exr")
+        self.assertEqual((w,h),(4,2))
+        for name in "RGB":
+            for value in pixels[name]: self.assertAlmostEqual(value,.5,delta=1e-6)
 
 
 if __name__ == "__main__":

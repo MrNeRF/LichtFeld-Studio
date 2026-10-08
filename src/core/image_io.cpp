@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/image_io.hpp"
+#include "core/color_transfer.h"
 
 #include "image_codecs.hpp"
 
@@ -1028,10 +1029,7 @@ namespace lfs::core {
     }
 
     float srgb_encoding_to_linear(const float v) {
-        if (v <= 0.04045f) {
-            return v / 12.92f;
-        }
-        return std::pow((v + 0.055f) / 1.055f, 2.4f);
+        return color::srgbToLinear(v);
     }
 
     void srgb_normal_prior_to_linear_chw(float* data, const size_t value_count) {

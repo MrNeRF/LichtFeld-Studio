@@ -15,6 +15,7 @@
 #include "gui/utils/native_file_dialog.hpp"
 #include "io/media_studio_backends.hpp"
 #include "media/media_ingest.hpp"
+#include "media/media_options.hpp"
 #include <cctype>
 
 #include <RmlUi/Core.h>
@@ -399,6 +400,7 @@ namespace lfs::gui {
             files.files.format = params.format == io::ImageFormat::EXR ? media::FrameFileFormat::EXR : params.format == io::ImageFormat::PNG ? media::FrameFileFormat::PNG
                                                                                                                                              : media::FrameFileFormat::JPEG;
             files.files.exr = params.exr;
+            files.files.remove_stale_frames = params.remove_stale_frames;
             files.files.jpeg_quality = params.jpg_quality;
             files.write_metadata = params.generate_metadata;
             const auto result = media::MediaIngest::extractFiles(request, files);
@@ -500,6 +502,17 @@ namespace lfs::gui {
 
         const bool video_path_changed = path != video_path_;
         video_path_ = path;
+        source_description_.reset();
+        source_probe_error_.clear();
+        auto description = media::MediaIngest::probe(path);
+        if (description) {
+            for (const auto& stream : description->streams)
+                if (description->selected_video_stream == stream.index) {
+                    source_description_ = stream;
+                    break;
+                }
+        } else
+            source_probe_error_ = std::string(description.error().detail());
         trim_start_ = 0.0f;
         trim_end_ = static_cast<float>(player_->duration());
         custom_width_ = std::max(16, player_->sourceWidth());
@@ -670,6 +683,7 @@ namespace lfs::gui {
         format_select_el_ = nullptr;
         exr_selects_.fill(nullptr);
         exr_options_el_ = nullptr;
+        exr_preflight_el_ = nullptr;
         metadata_option_el_ = nullptr;
         quality_row_el_ = nullptr;
         quality_slider_el_ = nullptr;
@@ -752,6 +766,7 @@ namespace lfs::gui {
         for (size_t i = 0; i < exr_ids.size(); ++i)
             exr_selects_[i] = dynamic_cast<Rml::ElementFormControlSelect*>(document_->GetElementById(exr_ids[i]));
         exr_options_el_ = document_->GetElementById("exr-options");
+        exr_preflight_el_ = document_->GetElementById("exr-preflight");
         metadata_option_el_ = document_->GetElementById("metadata-option");
         quality_row_el_ = document_->GetElementById("quality-row");
         quality_slider_el_ = document_->GetElementById("quality-slider");
@@ -1156,12 +1171,29 @@ namespace lfs::gui {
             markContentDirty();
     }
 
+    std::string VideoExtractorDialog::exrPreflightError() const {
+        if (format_selection_ != 2 || !player_->isOpen())
+            return {};
+        if (player_->isHdr())
+            return LOC(VideoExtractor::EXR_HDR_UNSUPPORTED);
+        if (!source_description_)
+            return source_probe_error_.empty() ? LOC(VideoExtractor::SOURCE_METADATA_UNAVAILABLE) : source_probe_error_;
+        media::FrameColor overrides;
+        overrides.transfer = media::outputOptionValues<media::ColorTransfer>[std::clamp(exr_selections_[2], 0, 3)].value;
+        overrides.primaries = media::outputOptionValues<media::ColorPrimaries>[std::clamp(exr_selections_[3], 0, 2)].value;
+        const auto valid = media::validateFloatSdrSource(*source_description_, overrides);
+        return valid ? std::string{} : std::string(valid.error().detail());
+    }
+
     void VideoExtractorDialog::syncControls() {
         bool changed = false;
         const bool has_video = player_->isOpen();
         const bool extracting = extracting_.load();
         const bool stop_requested = stop_extraction_requested_.load();
-        const bool can_start = has_video && !output_dir_.empty() && !extracting;
+        const auto preflight = exrPreflightError();
+        const bool can_start = has_video && !output_dir_.empty() && !extracting && preflight.empty();
+        changed |= setCachedText(exr_preflight_el_, preflight);
+        changed |= setCachedProperty(exr_preflight_el_, "display", preflight.empty() ? "none" : "block");
 
         changed |= setCachedDisabled(step_back_btn_el_, !has_video);
         changed |= setCachedDisabled(play_btn_el_, !has_video);
@@ -1436,26 +1468,8 @@ namespace lfs::gui {
             beginExtractionFromUi();
         } else if (id == "overwrite-yes") {
             if (pending_params_set_) {
-                // Clear the folder
-                const auto& dir = pending_params_.output_dir;
-                if (pending_params_.format == io::ImageFormat::EXR)
-                    pending_params_.exr.overwrite = true;
-                if (pending_params_.format != io::ImageFormat::EXR && std::filesystem::exists(dir)) {
-                    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
-                        if (!entry.is_regular_file())
-                            continue;
-                        const auto ext = entry.path().extension().string();
-                        std::string lower;
-                        lower.reserve(ext.size());
-                        for (auto c : ext)
-                            lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-                        if (lower == ".jpg" || lower == ".jpeg" || lower == ".png" ||
-                            entry.path().filename() == "extraction_metadata.json") {
-                            std::error_code ec;
-                            std::filesystem::remove(entry.path(), ec);
-                        }
-                    }
-                }
+                pending_params_.exr.overwrite = true;
+                pending_params_.remove_stale_frames = true;
                 pending_params_set_ = false;
                 if (overwrite_overlay_el_)
                     overwrite_overlay_el_->SetClass("hidden", true);
@@ -1682,7 +1696,7 @@ namespace lfs::gui {
         applyTextInput("custom-height-input");
         applyTextInput("pattern-input");
 
-        if (!player_->isOpen() || output_dir_.empty() || extracting_.load())
+        if (!player_->isOpen() || output_dir_.empty() || extracting_.load() || !exrPreflightError().empty())
             return;
 
         VideoExtractionParams params;
@@ -1694,12 +1708,10 @@ namespace lfs::gui {
         params.format = format_selection_ == 2 ? io::ImageFormat::EXR : format_selection_ == 0 ? io::ImageFormat::PNG
                                                                                                : io::ImageFormat::JPG;
         if (format_selection_ == 2) {
-            params.exr.precision = exr_selections_[0] == 1 ? media::ExrPrecision::Float : media::ExrPrecision::Half;
-            params.exr.compression = exr_selections_[1] == 1 ? media::ExrCompression::None : media::ExrCompression::ZIP;
-            constexpr std::array<media::ColorTransfer, 4> transfers{media::ColorTransfer::Unspecified, media::ColorTransfer::Linear, media::ColorTransfer::Srgb, media::ColorTransfer::Bt709};
-            constexpr std::array<media::ColorPrimaries, 3> primaries{media::ColorPrimaries::Unspecified, media::ColorPrimaries::Bt709, media::ColorPrimaries::Bt2020};
-            params.input_color.transfer = transfers[std::clamp(exr_selections_[2], 0, 3)];
-            params.input_color.primaries = primaries[std::clamp(exr_selections_[3], 0, 2)];
+            params.exr.precision = media::outputOptionValues<media::ExrPrecision>[std::clamp(exr_selections_[0], 0, 1)].value;
+            params.exr.compression = media::outputOptionValues<media::ExrCompression>[std::clamp(exr_selections_[1], 0, 1)].value;
+            params.input_color.transfer = media::outputOptionValues<media::ColorTransfer>[std::clamp(exr_selections_[2], 0, 3)].value;
+            params.input_color.primaries = media::outputOptionValues<media::ColorPrimaries>[std::clamp(exr_selections_[3], 0, 2)].value;
         }
         params.jpg_quality = jpg_quality_;
         params.start_time = static_cast<double>(trim_start_);
@@ -1734,13 +1746,7 @@ namespace lfs::gui {
             for (const auto& entry : std::filesystem::directory_iterator(output_dir_)) {
                 if (!entry.is_regular_file())
                     continue;
-                const auto ext = entry.path().extension().string();
-                std::string ext_lower;
-                ext_lower.reserve(ext.size());
-                for (auto c : ext)
-                    ext_lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-                if (ext_lower == ".jpg" || ext_lower == ".jpeg" || ext_lower == ".png" || ext_lower == ".exr" ||
-                    entry.path().filename() == "extraction_metadata.json") {
+                if (io::isGeneratedFrameFilename(entry.path(), params.filename_pattern)) {
                     has_generated = true;
                     break;
                 }

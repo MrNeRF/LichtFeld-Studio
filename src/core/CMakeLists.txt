@@ -34,6 +34,7 @@ add_subdirectory(event_bridge)
 # Logger shared library (leaf dep, breaks lfs_core ↔ lfs_event_bridge cycle)
 add_subdirectory(logger)
 add_subdirectory(error)
+add_subdirectory(file_io)
 add_subdirectory(image_codecs)
 
 # Tensor C++ sources (merged from src/core/tensor/)
@@ -405,6 +406,7 @@ target_link_libraries(lfs_core
     PUBLIC
         lfs_logger
         lfs_error
+        lfs_file_io
         lfs_image_codecs
         lfs_diagnostics
         lfs_event_bridge

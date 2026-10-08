@@ -22,6 +22,7 @@ namespace lfs::io {
 
     // Supports %d, %0Nd zero-padding, %% escaping, and legacy %000 zero-padding.
     [[nodiscard]] LFS_MEDIA_API std::string formatFrameFilenameStem(std::string_view pattern, int frame_number);
+    [[nodiscard]] LFS_MEDIA_API bool isGeneratedFrameFilename(const std::filesystem::path&, std::string_view pattern);
     [[nodiscard]] LFS_MEDIA_API std::size_t calculateFpsSampleCount(double start_time, double end_time,
                                                                     double target_fps);
     [[nodiscard]] LFS_MEDIA_API double fpsSampleTime(double start_time, double end_time,
