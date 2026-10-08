@@ -960,7 +960,7 @@
     "navigation_trackball": "Orbite libre",
     "navigation_fpv": "Vol",
     "navigation_drone": "Drone",
-    "interface_layout_description": "Rétablit la disposition initiale des volets, panneaux, onglets, fenêtres et HUD. Si un projet .licht est ouvert, sa disposition enregistrée sera remplacée lors du prochain enregistrement. Les préférences restent ouvertes.",
+    "interface_layout_description": "Cliquez sur « Réinitialiser cette section » ci-dessous pour rétablir la disposition initiale des volets, panneaux, onglets, fenêtres et HUD. Si un projet .licht est ouvert, sa disposition enregistrée sera remplacée lors du prochain enregistrement. Les préférences restent ouvertes.",
     "scene_graph": "Graphe de scène",
     "scene_graph_selection_markers": "Repères de sélection du graphe de scène",
     "scene_graph_selection_markers_description": "Affiche des repères radiaux compacts pour sélectionner des lignes et des hiérarchies complètes de nœuds.",

@@ -960,7 +960,7 @@
     "navigation_trackball": "フリーオービット",
     "navigation_fpv": "フライ",
     "navigation_drone": "ドローン",
-    "interface_layout_description": "ドック、パネル、タブ、ウィンドウ表示、HUD を初期レイアウトに戻します。.licht プロジェクトが開いている場合、次回保存時にプロジェクト内のレイアウトが置き換えられます。環境設定は開いたままです。",
+    "interface_layout_description": "下の「このセクションをリセット」をクリックすると、ドック、パネル、タブ、ウィンドウ表示、HUD が初期レイアウトに戻ります。.licht プロジェクトが開いている場合、次回保存時にプロジェクト内のレイアウトが置き換えられます。環境設定は開いたままです。",
     "scene_graph": "シーングラフ",
     "scene_graph_selection_markers": "シーングラフの選択マーカー",
     "scene_graph_selection_markers_description": "行とノード階層全体を選択するためのコンパクトな円形マーカーを表示します。",

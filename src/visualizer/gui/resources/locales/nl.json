@@ -960,7 +960,7 @@
     "navigation_trackball": "Vrije orbit",
     "navigation_fpv": "Vliegen",
     "navigation_drone": "Drone",
-    "interface_layout_description": "Zet docks, panelen, tabbladen, vensterzichtbaarheid en HUD's terug naar de beginindeling. Als een .licht-project open is, wordt de opgeslagen indeling bij de volgende opslag vervangen. Voorkeuren blijft open.",
+    "interface_layout_description": "Klik hieronder op \"Deze sectie resetten\" om docks, panelen, tabbladen, vensterzichtbaarheid en HUD's terug te zetten naar de beginindeling. Als een .licht-project open is, wordt de opgeslagen indeling bij de volgende opslag vervangen. Voorkeuren blijft open.",
     "scene_graph": "Scènegraph",
     "scene_graph_selection_markers": "Selectiemarkeringen in de scènegraph",
     "scene_graph_selection_markers_description": "Toont compacte radiale markeringen om rijen en volledige knooppunthiërarchieën te selecteren.",

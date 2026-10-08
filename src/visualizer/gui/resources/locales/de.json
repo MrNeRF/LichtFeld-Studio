@@ -960,7 +960,7 @@
     "navigation_trackball": "Freier Orbit",
     "navigation_fpv": "Flug",
     "navigation_drone": "Drohne",
-    "interface_layout_description": "Setzt Docks, Fenster, Tabs, Fenstersichtbarkeit und HUDs auf das ursprüngliche Layout zurück. Ist ein .licht-Projekt geöffnet, wird dessen gespeichertes Layout beim nächsten Speichern ersetzt. Die Einstellungen bleiben geöffnet.",
+    "interface_layout_description": "Klicken Sie unten auf „Diesen Bereich zurücksetzen“, um das ursprüngliche Layout von Docks, Fenstern, Tabs, Fenstersichtbarkeit und HUDs wiederherzustellen. Ist ein .licht-Projekt geöffnet, wird dessen gespeichertes Layout beim nächsten Speichern ersetzt. Die Einstellungen bleiben geöffnet.",
     "scene_graph": "Szenengraph",
     "scene_graph_selection_markers": "Auswahlmarkierungen im Szenengraph",
     "scene_graph_selection_markers_description": "Zeigt kompakte radiale Markierungen zum Auswählen von Zeilen und vollständigen Knotenhierarchien.",

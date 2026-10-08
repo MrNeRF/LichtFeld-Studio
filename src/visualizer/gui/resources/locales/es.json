@@ -960,7 +960,7 @@
     "navigation_trackball": "Órbita libre",
     "navigation_fpv": "Vuelo",
     "navigation_drone": "Dron",
-    "interface_layout_description": "Restablece los paneles, pestañas, ventanas y HUD a su diseño inicial. Si hay un proyecto .licht abierto, su diseño guardado se sustituirá la próxima vez que se guarde. Preferencias permanece abierto.",
+    "interface_layout_description": "Haz clic en «Restablecer esta sección» abajo para restaurar el diseño inicial de paneles, pestañas, ventanas y HUD. Si hay un proyecto .licht abierto, su diseño guardado se sustituirá la próxima vez que se guarde. Preferencias permanece abierto.",
     "scene_graph": "Grafo de escena",
     "scene_graph_selection_markers": "Marcadores de selección del grafo de escena",
     "scene_graph_selection_markers_description": "Muestra marcadores radiales compactos para seleccionar filas y jerarquías completas de nodos.",

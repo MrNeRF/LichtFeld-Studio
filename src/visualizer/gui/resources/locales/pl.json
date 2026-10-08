@@ -960,7 +960,7 @@
     "navigation_trackball": "Swobodna orbita",
     "navigation_fpv": "Lot",
     "navigation_drone": "Dron",
-    "interface_layout_description": "Przywraca początkowy układ doków, paneli, kart, widoczności okien i HUD. Jeśli projekt .licht jest otwarty, jego zapisany układ zostanie zastąpiony przy następnym zapisie. Preferencje pozostają otwarte.",
+    "interface_layout_description": "Kliknij poniżej „Resetuj tę sekcję”, aby przywrócić początkowy układ doków, paneli, kart, widoczności okien i HUD. Jeśli projekt .licht jest otwarty, jego zapisany układ zostanie zastąpiony przy następnym zapisie. Preferencje pozostają otwarte.",
     "scene_graph": "Graf sceny",
     "scene_graph_selection_markers": "Znaczniki wyboru grafu sceny",
     "scene_graph_selection_markers_description": "Pokazuje kompaktowe znaczniki radialne do wybierania wierszy i całych hierarchii węzłów.",
