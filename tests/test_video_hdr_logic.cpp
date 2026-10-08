@@ -189,4 +189,7 @@ TEST(VideoTrimRange, EndAtThePlayerDurationExtractsToTheEnd) {
     EXPECT_EQ(lfs::io::extractionEndTime(static_cast<float>(player_duration), player_duration), -1.0);
     EXPECT_EQ(lfs::io::extractionEndTime(-1.0f, player_duration), -1.0);
     EXPECT_DOUBLE_EQ(lfs::io::extractionEndTime(1.5f, player_duration), 1.5);
+    const float end = static_cast<float>(player_duration);
+    EXPECT_DOUBLE_EQ(lfs::io::extractionEndTime(end, player_duration, false), static_cast<double>(end));
+    EXPECT_DOUBLE_EQ(lfs::io::extractionEndTime(1.5f, player_duration, false), 1.5);
 }

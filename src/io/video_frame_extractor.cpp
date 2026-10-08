@@ -1062,8 +1062,8 @@ namespace lfs::io {
                 const double start_time = params.start_time;
                 double end_time =
                     params.end_time < 0.0 ? video_duration : params.end_time;
-                // Extracting to the end reads every remaining frame: the container duration can stop
-                // at the last frame's timestamp, which a time bound would exclude.
+                // Plain interval extraction can read to EOF when the duration estimate is short.
+                // FPS sampling and sharpness windows retain their existing time boundaries.
                 bool extract_to_stream_end = params.end_time < 0.0;
                 if (video_duration > 0.0) {
                     const double duration_tolerance =
@@ -1079,6 +1079,8 @@ namespace lfs::io {
                         extract_to_stream_end = true;
                     }
                 }
+                extract_to_stream_end = extract_to_stream_end &&
+                                        !(params.sharpness.enabled && params.sharpness.window_mode);
                 const double trim_duration = end_time - start_time;
                 if (!std::isfinite(trim_duration) || trim_duration <= 0.0) {
                     error = "Invalid extraction parameters: invalid video trim range";

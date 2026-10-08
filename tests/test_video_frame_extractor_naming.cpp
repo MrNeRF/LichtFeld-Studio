@@ -2,10 +2,13 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "gui/windows/video_extractor_dialog.hpp"
 #include "io/video/video_encoder.hpp"
 #include "io/video_frame_extractor.hpp"
 #include "io/video_player.hpp"
 
+#include <RmlUi/Core.h>
+#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <gtest/gtest.h>
 
 extern "C" {
@@ -16,6 +19,7 @@ extern "C" {
 #include <cuda_runtime.h>
 #include <nlohmann/json.hpp>
 
+#include <bit>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
@@ -29,6 +33,9 @@ namespace {
 
     using lfs::io::ExtractionMode;
     using lfs::io::VideoFrameExtractor;
+
+    bool writeProbedVideo(const std::filesystem::path& path, const char* container,
+                          AVCodecID codec_id, int frame_count, int leading_frames);
 
     constexpr int kWidth = 64;
     constexpr int kHeight = 64;
@@ -157,6 +164,126 @@ namespace {
     }
 
 } // namespace
+
+namespace lfs::gui {
+    class VideoExtractorDialogTestAccess {
+    public:
+        static double end(const VideoExtractorDialog& dialog) { return dialog.trim_end_; }
+
+        static void reset(VideoExtractorDialog& dialog) { dialog.handleClick("btn-trim-reset"); }
+
+        static void syncEndInput(VideoExtractorDialog& dialog, Rml::Element* input) {
+            dialog.trim_end_input_el_ = input;
+            input->SetId("trim-end-input");
+            input->AddEventListener(Rml::EventId::Change, &dialog.listener_);
+            input->AddEventListener(Rml::EventId::Blur, &dialog.listener_);
+            dialog.syncTimeline();
+            input->DispatchEvent(Rml::EventId::Blur, {});
+            input->RemoveEventListener(Rml::EventId::Change, &dialog.listener_);
+            input->RemoveEventListener(Rml::EventId::Blur, &dialog.listener_);
+        }
+
+        static void sharpnessWindow(VideoExtractorDialog& dialog, Rml::Element* toggle,
+                                    Rml::ElementFormControlSelect* mode) {
+            dialog.sharpness_toggle_el_ = toggle;
+            dialog.sharpness_mode_select_el_ = mode;
+        }
+
+        static VideoExtractionParams request(VideoExtractorDialog& dialog,
+                                             const std::filesystem::path& output_dir,
+                                             const bool interval, const bool edit_end) {
+            dialog.output_dir_ = output_dir;
+            dialog.mode_selection_ = interval ? 1 : 0;
+            if (edit_end)
+                dialog.handleChange("trim-end-input");
+            dialog.beginExtractionFromUi();
+            EXPECT_TRUE(dialog.pending_params_set_);
+            return dialog.pending_params_;
+        }
+    };
+} // namespace lfs::gui
+
+TEST(VideoExtractorDialogTrim, FpsFullRangeKeepsThePreviewEnd) {
+    TempDir temp("dialog_fps_end");
+    const auto video_path = temp.path / "source.mp4";
+    const auto output_dir = temp.path / "frames";
+    std::filesystem::create_directories(output_dir);
+    std::ofstream(output_dir / "frame_1.png").put('x'); // Capture the pending overwrite request.
+    ASSERT_TRUE(writeProbedVideo(video_path, "mp4", AV_CODEC_ID_MPEG4, 50, 0));
+    lfs::gui::VideoExtractorDialog dialog;
+    ASSERT_TRUE(dialog.openVideoPath(video_path));
+    const double expected_end = lfs::gui::VideoExtractorDialogTestAccess::end(dialog);
+    const auto request = lfs::gui::VideoExtractorDialogTestAccess::request(dialog, output_dir, false, false);
+    EXPECT_DOUBLE_EQ(request.end_time, expected_end);
+}
+
+TEST(VideoExtractorDialogTrim, ExplicitEndAtPreviewDurationStaysBounded) {
+    TempDir temp("dialog_explicit_end");
+    const auto video_path = temp.path / "source.mp4";
+    const auto output_dir = temp.path / "frames";
+    std::filesystem::create_directories(output_dir);
+    std::ofstream(output_dir / "frame_1.png").put('x');
+    ASSERT_TRUE(writeProbedVideo(video_path, "mp4", AV_CODEC_ID_MPEG4, 50, 0));
+    lfs::gui::VideoExtractorDialog dialog;
+    ASSERT_TRUE(dialog.openVideoPath(video_path));
+    const double expected_end = lfs::gui::VideoExtractorDialogTestAccess::end(dialog);
+    const auto request = lfs::gui::VideoExtractorDialogTestAccess::request(dialog, output_dir, true, true);
+    EXPECT_DOUBLE_EQ(request.end_time, expected_end);
+}
+
+TEST(VideoExtractorDialogTrim, AutomaticIntervalAndResetStillReadToEnd) {
+    TempDir temp("dialog_auto_end");
+    const auto video_path = temp.path / "source.mp4";
+    const auto output_dir = temp.path / "frames";
+    std::filesystem::create_directories(output_dir);
+    std::ofstream(output_dir / "frame_1.png").put('x');
+    ASSERT_TRUE(writeProbedVideo(video_path, "mp4", AV_CODEC_ID_MPEG4, 50, 0));
+    lfs::gui::VideoExtractorDialog dialog;
+    ASSERT_TRUE(dialog.openVideoPath(video_path));
+    using Access = lfs::gui::VideoExtractorDialogTestAccess;
+    EXPECT_DOUBLE_EQ(Access::request(dialog, output_dir, true, false).end_time, -1.0);
+    EXPECT_DOUBLE_EQ(Access::request(dialog, output_dir, true, true).end_time, Access::end(dialog));
+    Access::reset(dialog);
+    EXPECT_DOUBLE_EQ(Access::request(dialog, output_dir, true, false).end_time, -1.0);
+    EXPECT_DOUBLE_EQ(Access::request(dialog, output_dir, false, false).end_time, Access::end(dialog));
+}
+
+TEST(VideoExtractorDialogTrim, SharpnessWindowKeepsThePreviewEnd) {
+    ASSERT_TRUE(Rml::Initialise());
+    struct RmlLifetime {
+        ~RmlLifetime() { Rml::Shutdown(); }
+    } rml_lifetime;
+    auto toggle = Rml::Factory::InstanceElement(nullptr, "input", "input", {});
+    auto select = Rml::Factory::InstanceElement(nullptr, "select", "select", {});
+    auto end_input = Rml::Factory::InstanceElement(nullptr, "input", "input", {});
+    ASSERT_TRUE(toggle);
+    ASSERT_TRUE(end_input);
+    end_input->SetAttribute("type", "text");
+    auto* mode = dynamic_cast<Rml::ElementFormControlSelect*>(select.get());
+    ASSERT_NE(mode, nullptr);
+    toggle->SetAttribute("checked", "");
+    mode->Add("Threshold", "threshold");
+    mode->Add("Window", "window");
+    mode->SetSelection(1);
+
+    TempDir temp("dialog_window_end");
+    const auto video_path = temp.path / "source.mp4";
+    const auto output_dir = temp.path / "frames";
+    std::filesystem::create_directories(output_dir);
+    std::ofstream(output_dir / "frame_1.png").put('x');
+    ASSERT_TRUE(writeProbedVideo(video_path, "mp4", AV_CODEC_ID_MPEG4, 50, 0));
+    lfs::gui::VideoExtractorDialog dialog;
+    ASSERT_TRUE(dialog.openVideoPath(video_path));
+    lfs::gui::VideoExtractorDialogTestAccess::syncEndInput(dialog, end_input.get());
+    EXPECT_DOUBLE_EQ(lfs::gui::VideoExtractorDialogTestAccess::request(dialog, output_dir, true, false).end_time, -1.0);
+    lfs::gui::VideoExtractorDialogTestAccess::sharpnessWindow(dialog, toggle.get(), mode);
+    const double expected_end = lfs::gui::VideoExtractorDialogTestAccess::end(dialog);
+    for (const bool interval : {false, true}) {
+        const auto request = lfs::gui::VideoExtractorDialogTestAccess::request(dialog, output_dir, interval, false);
+        ASSERT_TRUE(request.sharpness_enabled && request.sharpness_window_mode);
+        EXPECT_DOUBLE_EQ(request.end_time, expected_end);
+    }
+}
 
 TEST(VideoFrameExtractorOutputNaming, IntervalUsesSourceFrameNumbers) {
     if (!cudaAvailable())
@@ -385,6 +512,44 @@ TEST(VideoStreamProbe, VideosThatNeedPacketProbingOpenAndExtract) {
         ASSERT_TRUE(extractor.extract(params, error)) << error;
         EXPECT_GT(countPngFiles(output_dir), 0u);
     }
+}
+
+TEST(VideoFrameExtractorTrim, SharpnessWindowsKeepTheDurationBoundary) {
+    TempDir temp("window_duration");
+    const auto video_path = temp.path / "source.mkv";
+    ASSERT_TRUE(writeProbedVideo(video_path, "matroska", AV_CODEC_ID_MPEG4, 25, 0));
+
+    // Model a recording whose duration estimate is shorter than its packet timeline.
+    std::ifstream input(video_path, std::ios::binary);
+    std::string bytes{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    input.close();
+    const auto duration_offset = bytes.find(std::string("\x44\x89\x88", 3));
+    ASSERT_NE(duration_offset, std::string::npos);
+    ASSERT_LE(duration_offset + 11, bytes.size());
+    const uint64_t duration_bits = std::bit_cast<uint64_t>(520.0);
+    for (int i = 0; i < 8; ++i)
+        bytes[duration_offset + 3 + i] = static_cast<char>(duration_bits >> (56 - 8 * i));
+    std::ofstream(video_path, std::ios::binary).write(bytes.data(), bytes.size());
+
+    auto bounded = extractionParams(video_path, temp.path / "bounded");
+    bounded.end_time = 0.52;
+    bounded.frame_interval = 10;
+    bounded.sharpness.enabled = true;
+    bounded.sharpness.window_mode = true;
+    bounded.sharpness.window_candidates_target = 0;
+    auto automatic = bounded;
+    automatic.output_dir = temp.path / "automatic";
+    automatic.end_time = -1.0;
+    std::string error;
+    VideoFrameExtractor bounded_extractor;
+    ASSERT_TRUE(bounded_extractor.extract(bounded, error)) << error;
+    VideoFrameExtractor automatic_extractor;
+    ASSERT_TRUE(automatic_extractor.extract(automatic, error)) << error;
+    const auto reference = readMetadata(bounded.output_dir);
+    const auto actual = readMetadata(automatic.output_dir);
+    ASSERT_EQ(reference["frames"].size(), 2u);
+    EXPECT_EQ(actual["frames"], reference["frames"]);
+    EXPECT_EQ(actual["processing"]["frame_selection"]["estimated_targets"], 2);
 }
 
 TEST(VideoFrameExtractorTrim, EndPastTheStreamExtractsToTheLastFrame) {
