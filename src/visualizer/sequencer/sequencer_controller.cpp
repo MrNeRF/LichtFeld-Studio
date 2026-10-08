@@ -210,6 +210,13 @@ namespace lfs::vis {
         markTimelineChanged();
     }
 
+    void SequencerController::editClipDuration(const float duration) {
+        const float before = clipDuration();
+        setClipDuration(duration);
+        if (before != clipDuration() && clip_duration_commit_callback_)
+            clip_duration_commit_callback_(before, clipDuration());
+    }
+
     void SequencerController::setLoopMode(const LoopMode mode) {
         if (loop_mode_ == mode)
             return;

@@ -1376,7 +1376,7 @@ namespace lfs::vis {
             char* end = nullptr;
             const float parsed = std::strtof(text.c_str(), &end);
             if (end != text.c_str())
-                controller_.setClipDuration(parsed);
+                controller_.editClipDuration(parsed);
         }
 
         duration_editing_ = false;

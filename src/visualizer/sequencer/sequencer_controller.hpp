@@ -157,6 +157,11 @@ namespace lfs::vis {
 
         [[nodiscard]] float clipDuration() const { return timeline_.clipDuration(); }
         void setClipDuration(float duration);
+        void editClipDuration(float duration);
+        using ClipDurationCommitCallback = std::function<void(float, float)>;
+        void setClipDurationCommitCallback(ClipDurationCommitCallback callback) {
+            clip_duration_commit_callback_ = std::move(callback);
+        }
 
         [[nodiscard]] LoopMode loopMode() const { return loop_mode_; }
         void setLoopMode(LoopMode mode);
@@ -200,6 +205,8 @@ namespace lfs::vis {
         };
         std::optional<PendingKeyframeTimeEdit> pending_keyframe_time_edit_;
         KeyframeTimeCommitCallback keyframe_time_commit_callback_;
+
+        ClipDurationCommitCallback clip_duration_commit_callback_;
     };
 
 } // namespace lfs::vis
