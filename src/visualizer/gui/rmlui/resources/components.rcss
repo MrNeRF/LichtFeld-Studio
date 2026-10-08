@@ -1101,6 +1101,11 @@ color-picker {
     display: block;
 }
 
+/* An absolute popup shrinks to its content; the full-width RGB row would otherwise stretch it. */
+.color-picker-popup {
+    width: 200dp;
+}
+
 crf-curve {
     height: 120dp;
     display: block;
