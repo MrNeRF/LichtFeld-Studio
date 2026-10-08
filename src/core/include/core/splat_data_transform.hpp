@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include <expected>
 #include <glm/glm.hpp>
@@ -101,6 +102,6 @@ namespace lfs::core {
 
     // Full-detail splats of a model with an LOD tree: the leaves that are not soft-deleted, with
     // LOD-encoded linear opacity converted back to logits. Fails when the leaves stream from disk.
-    LFS_CORE_API std::expected<SplatData, std::string> extract_lod_leaves(const SplatData& splat_data);
+    LFS_CORE_API lfs::Result<SplatData> extract_lod_leaves(const SplatData& splat_data);
 
 } // namespace lfs::core

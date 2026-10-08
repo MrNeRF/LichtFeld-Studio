@@ -2481,7 +2481,7 @@ namespace lfs::core {
                 throw std::runtime_error("An LOD model snapshot must cover the whole model.");
             auto leaves = extract_lod_leaves(*data);
             if (!leaves)
-                throw std::runtime_error(std::format("Cannot capture the LOD model: {}", leaves.error()));
+                throw std::runtime_error(std::format("Cannot capture the LOD model: {}", leaves.error().detail()));
             auto flat = std::make_shared<SplatData>(std::move(*leaves));
             flat->set_active_sh_degree(std::clamp(active_sh_degree, 0, flat->get_max_sh_degree()));
             return flat;
@@ -5060,7 +5060,7 @@ namespace lfs::core {
                 }
                 auto extracted = lfs::core::extract_lod_leaves(*entry.first);
                 if (!extracted) {
-                    LOG_ERROR("Cannot merge an LOD model: {}", extracted.error());
+                    LOG_ERROR("Cannot merge an LOD model: {}", extracted.error().detail());
                     return nullptr;
                 }
                 if (extracted->size() == 0)

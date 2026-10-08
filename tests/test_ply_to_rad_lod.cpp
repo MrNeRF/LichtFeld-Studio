@@ -725,14 +725,14 @@ TEST(RadLodLeaves, ExtractLodLeavesRestoresTheSavedSplats) {
     ASSERT_GT(static_cast<std::size_t>(f.rad->size()), f.source_count);
 
     auto leaves = lfs::core::extract_lod_leaves(*f.rad);
-    ASSERT_TRUE(leaves.has_value()) << leaves.error();
+    ASSERT_TRUE(leaves.has_value()) << leaves.error().detail();
     expect_matches_source(*leaves, f);
 
     auto host_loaded = lfs::io::load_rad(f.rad_path);
     ASSERT_TRUE(host_loaded.has_value()) << host_loaded.error();
     ASSERT_EQ(host_loaded->means_raw().device(), lfs::core::Device::CPU);
     auto host_leaves = lfs::core::extract_lod_leaves(*host_loaded);
-    ASSERT_TRUE(host_leaves.has_value()) << host_leaves.error();
+    ASSERT_TRUE(host_leaves.has_value()) << host_leaves.error().detail();
     expect_matches_source(*host_leaves, f);
 }
 

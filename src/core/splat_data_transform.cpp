@@ -1049,14 +1049,19 @@ namespace lfs::core {
         return result;
     }
 
-    std::expected<SplatData, std::string> extract_lod_leaves(const SplatData& splat_data) {
+    lfs::Result<SplatData> extract_lod_leaves(const SplatData& splat_data) {
         LFS_ASSERT(splat_data.lod_tree && splat_data.lod_tree->has_tree());
         const SplatLodTree& tree = *splat_data.lod_tree;
         const size_t node_count = tree.total_nodes();
         if (splat_data.size() < node_count) {
-            return std::unexpected(std::format(
-                "only {} of {} LOD nodes are in memory; the full-detail splats stream from disk",
-                splat_data.size(), node_count));
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::Core,
+                .detail = std::format(
+                    "only {} of {} LOD nodes are in memory; the full-detail splats stream from disk",
+                    splat_data.size(), node_count),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
         }
         LFS_ASSERT(splat_data.size() == node_count);
 
