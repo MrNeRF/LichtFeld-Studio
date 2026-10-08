@@ -526,7 +526,8 @@ namespace lfs::python {
 
         if (colors && colors->tensor().is_valid()) {
             const auto& c = colors->tensor();
-            assert(c.shape().rank() == 2 && c.shape()[0] == verts.shape()[0]);
+            if (c.ndim() != 2 || c.size(0) != verts.size(0) || c.size(1) != 4)
+                throw nb::value_error("colors must have shape [N, 4] matching vertices");
             mesh->colors = c.to(core::DataType::Float32).to(core::Device::CPU);
         }
 
@@ -1346,7 +1347,7 @@ Returns:
                  nb::arg("colors") = nb::none(),
                  nb::arg("normals") = nb::none(),
                  nb::arg("parent") = core::NULL_NODE,
-                 "Add a mesh node from [V,3] vertices, [F,3] face indices, optional [V,4] colors and [V,3] normals")
+                 "Add a mesh node from [V,3] vertices, [F,3] face indices, optional [V,4] colors and [V,3] normals; invalid color shapes raise ValueError")
             .def("add_camera_group", &PyScene::add_camera_group,
                  nb::arg("name"),
                  nb::arg("parent"),

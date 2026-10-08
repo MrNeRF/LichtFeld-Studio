@@ -507,7 +507,7 @@ class Scene:
 
     def add_mesh(self, name: str, vertices: lichtfeld.Tensor, indices: lichtfeld.Tensor, colors: lichtfeld.Tensor | None = None, normals: lichtfeld.Tensor | None = None, parent: int = -1) -> int:
         """
-        Add a mesh node from [V,3] vertices, [F,3] face indices, optional [V,4] colors and [V,3] normals
+        Add a mesh node from [V,3] vertices, [F,3] face indices, optional [V,4] colors and [V,3] normals; invalid color shapes raise ValueError
         """
 
     def add_camera_group(self, name: str, parent: int, camera_count: int) -> int:
