@@ -61,8 +61,8 @@ public:
     // Retained panel geometry plus three in-flight generations of canvas meshes.
     static constexpr VkDeviceSize kVideoMemoryForAllocation = 16 * 1024 * 1024; // [bytes]
 
-    RenderInterface_VK();
-    ~RenderInterface_VK();
+    LFS_VIS_API RenderInterface_VK();
+    LFS_VIS_API ~RenderInterface_VK();
 
     [[nodiscard]] bool initialize(lfs::vis::GraphicsContext& graphics) override;
     void shutdown() override { ShutdownExternal(); }
@@ -463,17 +463,17 @@ private:
     // @ main manager for "allocating" vertex, index, uniform stuff
     class MemoryPool {
     public:
-        MemoryPool();
-        ~MemoryPool();
+        LFS_VIS_API MemoryPool();
+        LFS_VIS_API ~MemoryPool();
 
-        bool Initialize(VkDeviceSize byte_size, VkDeviceSize device_min_uniform_alignment, VmaAllocator p_allocator, VkDevice p_device) noexcept;
-        void Shutdown() noexcept;
+        LFS_VIS_API bool Initialize(VkDeviceSize byte_size, VkDeviceSize device_min_uniform_alignment, VmaAllocator p_allocator, VkDevice p_device) noexcept;
+        LFS_VIS_API void Shutdown() noexcept;
 
-        bool Alloc_GeneralBuffer(VkDeviceSize size, void** p_data, VkDescriptorBufferInfo* p_out, pool_allocation_t* p_alloc) noexcept;
-        bool Alloc_VertexBuffer(uint32_t number_of_elements, uint32_t stride_in_bytes, void** p_data, VkDescriptorBufferInfo* p_out,
-                                pool_allocation_t* p_alloc) noexcept;
-        bool Alloc_IndexBuffer(uint32_t number_of_elements, uint32_t stride_in_bytes, void** p_data, VkDescriptorBufferInfo* p_out,
-                               pool_allocation_t* p_alloc) noexcept;
+        LFS_VIS_API bool Alloc_GeneralBuffer(VkDeviceSize size, void** p_data, VkDescriptorBufferInfo* p_out, pool_allocation_t* p_alloc) noexcept;
+        LFS_VIS_API bool Alloc_VertexBuffer(uint32_t number_of_elements, uint32_t stride_in_bytes, void** p_data, VkDescriptorBufferInfo* p_out,
+                                            pool_allocation_t* p_alloc) noexcept;
+        LFS_VIS_API bool Alloc_IndexBuffer(uint32_t number_of_elements, uint32_t stride_in_bytes, void** p_data, VkDescriptorBufferInfo* p_out,
+                                           pool_allocation_t* p_alloc) noexcept;
 
         void SetDescriptorSet(uint32_t binding_index, uint32_t size, VkDescriptorType descriptor_type, VkDescriptorSet p_set) noexcept;
         void SetDescriptorSet(uint32_t binding_index, VkDescriptorBufferInfo* p_info, VkDescriptorType descriptor_type,
@@ -481,7 +481,7 @@ private:
         void SetDescriptorSet(uint32_t binding_index, VkSampler p_sampler, VkImageLayout layout, VkImageView p_view, VkDescriptorType descriptor_type,
                               VkDescriptorSet p_set) noexcept;
 
-        void Free_Allocation(pool_allocation_t allocation) noexcept;
+        LFS_VIS_API void Free_Allocation(pool_allocation_t allocation) noexcept;
         void Free_GeometryHandle(geometry_handle_t* p_valid_geometry_handle) noexcept;
 
     private:

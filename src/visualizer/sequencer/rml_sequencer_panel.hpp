@@ -112,17 +112,17 @@ namespace lfs::vis {
 
     class RmlSequencerPanel {
     public:
-        RmlSequencerPanel(SequencerController& controller, gui::panels::SequencerUIState& ui_state,
-                          gui::RmlUIManager* rml_manager);
+        LFS_VIS_API RmlSequencerPanel(SequencerController& controller, gui::panels::SequencerUIState& ui_state,
+                                      gui::RmlUIManager* rml_manager);
         LFS_VIS_API ~RmlSequencerPanel();
 
         RmlSequencerPanel(const RmlSequencerPanel&) = delete;
         RmlSequencerPanel& operator=(const RmlSequencerPanel&) = delete;
 
-        void render(float panel_x, float panel_y, float panel_width, float total_height,
-                    const PanelInputState& input,
-                    RenderingManager* rm, SceneManager* sm,
-                    gui::FilmStripRenderer& film_strip);
+        LFS_VIS_API void render(float panel_x, float panel_y, float panel_width, float total_height,
+                                const PanelInputState& input,
+                                RenderingManager* rm, SceneManager* sm,
+                                gui::FilmStripRenderer& film_strip);
         void clearPendingComposite();
 
         void setFilmStripAttached(bool attached) { film_strip_attached_ = attached; }
@@ -146,7 +146,7 @@ namespace lfs::vis {
         [[nodiscard]] float cachedPanelY() const { return cached_panel_y_; }
         [[nodiscard]] float zoomLevel() const { return zoom_level_; }
         [[nodiscard]] float panOffset() const { return pan_offset_; }
-        void setTimelineView(float zoom, float pan);
+        LFS_VIS_API void setTimelineView(float zoom, float pan);
         [[nodiscard]] float getDisplayEndTime() const;
         [[nodiscard]] std::optional<sequencer::KeyframeId> hoveredKeyframeId() const;
 
@@ -155,7 +155,7 @@ namespace lfs::vis {
         [[nodiscard]] TimeEditRequest consumeTimeEditRequest();
         [[nodiscard]] FocalEditRequest consumeFocalEditRequest();
 
-        void destroyGraphicsResources();
+        LFS_VIS_API void destroyGraphicsResources();
         void reloadResources();
 
     private:
@@ -166,7 +166,7 @@ namespace lfs::vis {
 
         void syncTheme();
 
-        void clearElementCache();
+        LFS_VIS_API void clearElementCache();
         void setTimelineMarkup(Rml::Element* element, std::string markup);
         std::unordered_map<Rml::Element*, std::string> timeline_markup_;
         void cacheElements();
@@ -177,12 +177,12 @@ namespace lfs::vis {
         void updateTransportSettings();
         void rebuildKeyframes();
         void rebuildPlySequenceClip();
-        void rebuildRuler();
-        void rebuildEasingStripe(float timeline_x, float timeline_width);
-        void rebuildFilmStrip(float timeline_x, float timeline_width,
-                              float strip_y, const PanelInputState& input,
-                              RenderingManager* rm, SceneManager* sm,
-                              gui::FilmStripRenderer& film_strip);
+        LFS_VIS_API void rebuildRuler();
+        LFS_VIS_API void rebuildEasingStripe(float timeline_x, float timeline_width);
+        LFS_VIS_API void rebuildFilmStrip(float timeline_x, float timeline_width,
+                                          float strip_y, const PanelInputState& input,
+                                          RenderingManager* rm, SceneManager* sm,
+                                          gui::FilmStripRenderer& film_strip);
         void rebuildFilmStripDecor(float timeline_width);
         void ensureFilmThumbPool(size_t count);
         void clearFilmThumbPool();
