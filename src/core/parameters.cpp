@@ -3,12 +3,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/parameters.hpp"
+#include "core/file_extensions.hpp"
 #include "core/logger.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include "io/project_path.hpp"
 #include <any>
+#include <array>
 #include <cassert>
 #include <cctype>
 #include <charconv>
@@ -1145,6 +1147,28 @@ namespace lfs::core {
                 return std::format("print_status_freq_num must be positive (got {})",
                                    loading_params.print_status_freq_num);
             return {};
+        }
+
+        std::string DatasetConfig::output_stem() const {
+            constexpr std::array kNamedFormats{OutputFormat::PLY, OutputFormat::SOG, OutputFormat::SSOG,
+                                               OutputFormat::SPZ, OutputFormat::GLB, OutputFormat::HTML,
+                                               OutputFormat::USD, OutputFormat::USDA, OutputFormat::USDC,
+                                               OutputFormat::RAD};
+            const auto name = lfs::core::utf8_to_path(output_name);
+            const bool names_a_file_type =
+                lfs::core::has_extension(name, ".licht") ||
+                std::ranges::any_of(kNamedFormats, [&](const OutputFormat format) {
+                    return lfs::core::has_extension(name, output_format_extension(format));
+                });
+            if (!names_a_file_type)
+                return output_name;
+            return lfs::core::path_to_utf8(std::filesystem::path(name).replace_extension());
+        }
+
+        std::filesystem::path DatasetConfig::project_file() const {
+            const auto stem = output_stem();
+            return output_path / (stem.empty() ? std::filesystem::path("project.licht")
+                                               : lfs::core::utf8_to_path(stem + ".licht"));
         }
 
         OptimizationParameters OptimizationParameters::mcmc_defaults() {

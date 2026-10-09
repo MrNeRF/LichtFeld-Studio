@@ -94,14 +94,14 @@ namespace lfs::app {
         };
 
         // Headless runs train into the project they were started from unless
-        // -o redirects the result to a fresh project.licht.
+        // -o redirects the result to a fresh project file in the output folder.
         [[nodiscard]] std::filesystem::path headless_project_save_destination(
             const core::param::TrainingParameters& cli_params,
             const std::filesystem::path& source) {
             if (!cli_params.dataset.output_path_explicit)
                 return source;
 
-            const auto destination = cli_params.dataset.output_path / "project.licht";
+            const auto destination = cli_params.dataset.project_file();
             LOG_INFO("Headless project destination: {}",
                      core::path_to_utf8(destination));
             return destination;
@@ -117,7 +117,7 @@ namespace lfs::app {
         }
 
         // Empty for a plain dataset-folder run, which keeps the default
-        // output_path/project.licht destination.
+        // project file destination in the output folder.
         [[nodiscard]] std::filesystem::path headless_dataset_project_destination(
             const core::param::TrainingParameters& params) {
             if (!params.dataset_project)

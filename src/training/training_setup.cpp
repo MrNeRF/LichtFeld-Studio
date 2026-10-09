@@ -1371,7 +1371,7 @@ namespace lfs::training {
         }
         trainer.set_live_project_snapshot(
             destination.empty()
-                ? params.dataset.output_path / "project.licht"
+                ? params.dataset.project_file()
                 : destination,
             {}, std::move(source_path));
         trainer.set_trainer_project_save_policy({
@@ -1475,7 +1475,7 @@ namespace lfs::training {
         const std::filesystem::path out_dir = params.dataset.output_path;
         const std::string stem = params.dataset.output_name.empty()
                                      ? std::format("splat_{}", trainer.get_current_iteration())
-                                     : params.dataset.output_name;
+                                     : params.dataset.output_stem();
 
         lfs::core::ProvenanceStamp stamp = params.include_provenance
                                                ? lfs::core::make_provenance_stamp()

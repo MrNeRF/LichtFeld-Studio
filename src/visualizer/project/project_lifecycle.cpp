@@ -4394,8 +4394,7 @@ namespace lfs::vis::project {
                     create_error.message(),
                     "project.training");
             }
-            const auto destination =
-                dataset.output_path / "project.licht";
+            const auto destination = dataset.project_file();
             std::error_code abs_error;
             const auto absolute_destination =
                 std::filesystem::absolute(

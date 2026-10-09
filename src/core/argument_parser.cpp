@@ -711,8 +711,8 @@ namespace {
             ::args::Group paths_sep(parser, " ");
             ::args::Group paths_group(parser, "TRAINING PATHS:");
             ::args::ValueFlag<std::string> data_path(paths_group, "data_path", "Path to training data: a dataset folder or an untrained .licht project", {'d', "data-path"});
-            ::args::ValueFlag<std::string> output_path(paths_group, "output_path", "Directory for project.licht and --export files", {'o', "output-path"});
-            ::args::ValueFlag<std::string> output_name(paths_group, "output_name", "Output filename (replaces default splat_ITER.ply stem)", {"output-name"});
+            ::args::ValueFlag<std::string> output_path(paths_group, "output_path", "Directory for the project file and --export files", {'o', "output-path"});
+            ::args::ValueFlag<std::string> output_name(paths_group, "output_name", "Name of the project file and --export files (default project.licht and splat_ITER)", {"output-name"});
             ::args::ValueFlag<std::string> config_file(paths_group, "config_file", "LichtFeldStudio config file (json)", {"config"});
             ::args::ValueFlag<std::string> init_path(paths_group, "path", "Initialize from splat file (.ply, .sog, .ssog, .spz, .usd, .usda, .usdc, .usdz, .resume)", {"init"});
             ::args::ValueFlagList<std::string> add_splats(paths_group, "path", "Append trained splat file(s) to the training model before optimizer initialization", {"add-splat"});

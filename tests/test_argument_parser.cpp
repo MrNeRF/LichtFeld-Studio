@@ -255,6 +255,25 @@ TEST(ArgumentParserTest, RejectsOutputNamePathComponents) {
     EXPECT_NE(parsed.error().find("output-name"), std::string::npos);
 }
 
+TEST(ArgumentParserTest, OutputNameNamesProjectFileWithoutFileExtension) {
+    lfs::core::param::DatasetConfig dataset;
+    dataset.output_path = "out";
+    EXPECT_EQ(dataset.project_file(), std::filesystem::path("out") / "project.licht");
+
+    for (const auto& [name, stem] : std::vector<std::pair<std::string, std::string>>{
+             {"scene.ply", "scene"},
+             {"scene.PLY", "scene"},
+             {"scene.sog", "scene"},
+             {"scene.licht", "scene"},
+             {"scene", "scene"},
+             {"scene.v2", "scene.v2"},
+         }) {
+        dataset.output_name = name;
+        EXPECT_EQ(dataset.output_stem(), stem) << name;
+        EXPECT_EQ(dataset.project_file(), std::filesystem::path("out") / (stem + ".licht")) << name;
+    }
+}
+
 TEST(ArgumentParserTest,
      TrainingSaveProjectAtIterLeavesPathEmptyWithoutSaveProjectPath) {
     const auto data_path =

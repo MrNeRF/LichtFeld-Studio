@@ -460,6 +460,11 @@ namespace lfs::core {
             nlohmann::json to_json() const;
             static DatasetConfig from_json(const nlohmann::json& j);
             [[nodiscard]] std::string validate() const;
+
+            // output_name without a splat or project extension, so "scene.ply" names scene.ply, not scene.ply.ply.
+            [[nodiscard]] std::string output_stem() const;
+            // output_path/<output_stem>.licht, or output_path/project.licht without an output name.
+            [[nodiscard]] std::filesystem::path project_file() const;
         };
 
         struct LFS_CORE_API ServerConfig {
