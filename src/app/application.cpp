@@ -1301,7 +1301,7 @@ namespace lfs::app {
                 return 1;
             }
 
-            const float duration = timeline.duration();
+            const float duration = timeline.clipDuration();
             const int total_frames = static_cast<int>(std::ceil(duration * cfg.fps)) + 1;
             LOG_INFO("Rendering {} frame(s) ({:.2f}s @ {}fps) from {} to {}",
                      total_frames, duration, cfg.fps,

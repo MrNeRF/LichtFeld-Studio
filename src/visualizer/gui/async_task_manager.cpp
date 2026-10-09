@@ -3101,14 +3101,14 @@ namespace lfs::vis::gui {
 
         const auto export_options = *validated_options;
         const auto render_settings = rendering_manager->getSettings();
-        const float duration = timeline.duration();
+        const float duration = timeline.clipDuration();
         const int total_frames = static_cast<int>(std::ceil(duration * export_options.framerate)) + 1;
         const int width = export_options.width;
         const int height = export_options.height;
 
         std::vector<lfs::sequencer::CameraState> frame_states;
         frame_states.reserve(total_frames);
-        const float start_time = timeline.startTime();
+        const float start_time = 0.0f;
         const float time_step = 1.0f / static_cast<float>(export_options.framerate);
         for (int i = 0; i < total_frames; ++i)
             frame_states.push_back(timeline.evaluate(start_time + static_cast<float>(i) * time_step));
