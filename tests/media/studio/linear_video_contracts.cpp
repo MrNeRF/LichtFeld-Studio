@@ -23,7 +23,7 @@ namespace lfs::io {
     std::unique_ptr<media::detail::LinearVideoRenderer> createLinearTensorRenderer();
 }
 namespace {
-    void videoOutputContracts(lfs::core::Device device) {
+    void videoOutputContracts(lfs::core::Device device, bool require_videotoolbox) {
         using namespace lfs;
         const auto path = std::filesystem::temp_directory_path() /
                           ("lfs-video-reuse-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".mp4");
@@ -44,6 +44,10 @@ namespace {
             const auto opened = encoder.open(path, options);
             if (!opened)
                 throw std::runtime_error(opened.error());
+            if (require_videotoolbox && encoder.backend() != media::VideoEncodeBackend::VideoToolbox)
+                throw std::runtime_error("VideoToolbox contract silently fell back to software");
+            std::cout << "video encoder backend=" << static_cast<int>(encoder.backend())
+                      << ", extent=" << width << "x96\n";
             for (int index = 0; index < 12; ++index) {
                 // Alternate CPU/GPU producers and strided views; reopening at a
                 // different extent must also discard the previous plane cache.
@@ -160,6 +164,7 @@ int main(int argc, char** argv) {
         const auto backend = name == "cuda" ? core::GpuBackend::CUDA : name == "vulkan" ? core::GpuBackend::Vulkan
                                                                                         : core::GpuBackend::Metal;
         const bool cpu = name == "cpu";
+        const bool require_videotoolbox = argc > 2 && std::string_view(argv[2]) == "--require-videotoolbox";
         std::optional<core::GpuBackendScope> scope;
         if (!cpu) {
             const auto selected = core::set_default_gpu_backend(backend);
@@ -178,8 +183,8 @@ int main(int argc, char** argv) {
         // CUDA builds select NVENC by default even for a CPU source. Keep the
         // CPU-only contract independent of hardware; GPU profiles also exercise
         // CPU sources above, while non-CUDA builds cover the CPU producer here.
-        if (!cpu || !LFS_HAS_CUDA)
-            videoOutputContracts(cpu ? core::Device::CPU : core::Device::GPU);
+        if (!cpu || !LFS_HAS_CUDA || require_videotoolbox)
+            videoOutputContracts(cpu ? core::Device::CPU : core::Device::GPU, require_videotoolbox);
         auto renderer = cpu ? nullptr : io::createLinearTensorRenderer();
         if (!cpu && !renderer)
             throw std::runtime_error("Linear tensor op unavailable on an available GPU backend");
