@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/atomic_file.hpp"
 #include "core/export.hpp"
 
 #include <cstdint>
@@ -75,5 +76,20 @@ namespace lfs::core::image_codecs {
                                         std::string& error);
     LFS_IMAGE_CODECS_API bool write_tiff(const std::filesystem::path& path, const std::uint8_t* data,
                                          int width, int height, int channels, std::string& error);
+
+    // Packed display bytes: preserve samples, PNG/TIFF alpha and legacy codec
+    // defaults. JPEG drops RGBA alpha; gray-alpha JPEG is unsupported. This is
+    // shared atomic file service; legacy callers keep overwrite enabled and do
+    // not create directories. No linear/EXR conversion.
+    LFS_IMAGE_CODECS_API bool write_image_u8(const std::filesystem::path& path, const std::uint8_t* data,
+                                             int width, int height, int channels, int jpeg_quality,
+                                             const std::optional<std::string>& comment, std::string& error,
+                                             bool jpeg_full_chroma = false);
+    // Explicit publication/cancellation policy; encoding is shared with the
+    // path-based codecs and does not close the atomic service's borrowed stream.
+    LFS_IMAGE_CODECS_API Status write_image_u8(const std::filesystem::path& path, const std::uint8_t* data,
+                                               int width, int height, int channels, int jpeg_quality,
+                                               const std::optional<std::string>& comment, const AtomicFileOptions&,
+                                               bool jpeg_full_chroma = false);
 
 } // namespace lfs::core::image_codecs

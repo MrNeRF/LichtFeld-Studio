@@ -44,6 +44,7 @@
 #include <numbers>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <variant>
 
 #include <glm/glm.hpp>
@@ -638,7 +639,7 @@ namespace lfs::python {
         group.id = "render_settings";
         group.name = "Render Settings";
 
-        auto add_color3 = [&](std::array<float, 3> Proxy::*member, const std::string& id, const std::string& name,
+        auto add_color3 = [&](std::array<float, 3> Proxy::* member, const std::string& id, const std::string& name,
                               const std::string& desc, std::array<double, 3> default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -658,7 +659,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_bool = [&](bool Proxy::*member, const std::string& id, const std::string& name, const std::string& desc,
+        auto add_bool = [&](bool Proxy::* member, const std::string& id, const std::string& name, const std::string& desc,
                             bool default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -675,7 +676,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_float = [&](float Proxy::*member, const std::string& id, const std::string& name,
+        auto add_float = [&](float Proxy::* member, const std::string& id, const std::string& name,
                              const std::string& desc, double default_val, double min_val, double max_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -694,7 +695,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_int = [&](int Proxy::*member, const std::string& id, const std::string& name,
+        auto add_int = [&](int Proxy::* member, const std::string& id, const std::string& name,
                            const std::string& desc, int default_val, int min_val, int max_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -713,7 +714,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_int_enum = [&](int Proxy::*member, const std::string& id, const std::string& name,
+        auto add_int_enum = [&](int Proxy::* member, const std::string& id, const std::string& name,
                                 const std::string& desc, std::vector<EnumItem> items, int default_idx) {
             PropertyMeta meta;
             meta.id = id;
@@ -748,7 +749,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_string = [&](std::string Proxy::*member, const std::string& id, const std::string& name,
+        auto add_string = [&](std::string Proxy::* member, const std::string& id, const std::string& name,
                               const std::string& desc, const std::string& default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -908,7 +909,7 @@ namespace lfs::python {
                      {{"Manual", "MANUAL", 0}, {"Auto", "AUTO", 1}}, 1);
 
         using PPISP = vis::PPISPOverrides;
-        const auto add_ppisp_float = [&](float PPISP::*member, const char* id, const char* name,
+        const auto add_ppisp_float = [&](float PPISP::* member, const char* id, const char* name,
                                          const char* desc, double def, double min_v, double max_v) {
             PropertyMeta meta;
             meta.id = id;
@@ -927,7 +928,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        const auto add_ppisp_bool = [&](bool PPISP::*member, const char* id, const char* name,
+        const auto add_ppisp_bool = [&](bool PPISP::* member, const char* id, const char* name,
                                         const char* desc, bool def) {
             PropertyMeta meta;
             meta.id = id;
@@ -1279,49 +1280,52 @@ namespace lfs::python {
 
         using ExportImageResult = std::expected<core::Tensor, std::string>;
 
-        [[nodiscard]] ExportImageResult runExportOnViewerThread(
-            std::function<ExportImageResult()> invoke_render) {
+        template <typename RenderResult>
+        [[nodiscard]] RenderResult runExportOnViewerThread(
+            std::function<RenderResult()> invoke_render) {
+            const auto failure = [](const char* detail) -> RenderResult {
+                if constexpr (std::is_same_v<RenderResult, ExportImageResult>)
+                    return std::unexpected(detail);
+                else
+                    return make_error({.code = ErrorCode::Cancelled, .domain = ErrorDomain::Rendering, .detail = detail, .detection = LFS_SOURCE_SITE_CURRENT()});
+            };
             auto* const viewer = get_visualizer();
-            if (!viewer || viewer->isOnViewerThread()) {
+            if (!viewer || viewer->isOnViewerThread())
                 return invoke_render();
-            }
-            if (!viewer->acceptsPostedWork()) {
-                return std::unexpected("viewer is not accepting export work");
-            }
-
+            if (!viewer->acceptsPostedWork())
+                return failure("viewer is not accepting export work");
             nb::gil_scoped_release release;
             return vis::post_work_and_wait(
                 [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
                 std::move(invoke_render),
-                []() -> ExportImageResult {
-                    return std::unexpected("viewport export was cancelled");
-                });
+                [failure]() -> RenderResult { return failure("viewport export was cancelled"); });
         }
 
-        [[nodiscard]] core::Tensor renderCurrentViewExport(const vis::ViewInfo& view_info,
-                                                           const int width,
-                                                           const int height,
-                                                           const vis::ExportPostProcessMode mode) {
-            auto result = runExportOnViewerThread([&view_info, width, height, mode]() -> ExportImageResult {
-                auto* const viewer = get_visualizer();
-                auto* const rendering_manager = viewer ? viewer->getRenderingManager() : nullptr;
-                auto* const scene_manager = viewer ? viewer->getSceneManager() : nullptr;
-                if (!rendering_manager || !scene_manager) {
-                    return std::unexpected("no active viewer is available");
-                }
-                const vis::RenderingManager::ExportImageRequest request{
-                    .rotation = viewInfoRotationMatrix(view_info),
-                    .translation = {view_info.translation[0],
-                                    view_info.translation[1],
-                                    view_info.translation[2]},
+        vis::RenderingManager::ExportImageRequest currentViewImageRequest(
+            const vis::ViewInfo& view_info, int width, int height, vis::ExportPostProcessMode mode) {
+            return {.rotation = viewInfoRotationMatrix(view_info),
+                    .translation = {view_info.translation[0], view_info.translation[1], view_info.translation[2]},
                     .focal_length_mm = lfs::rendering::vFovToFocalLength(view_info.fov),
                     .width = width,
                     .height = height,
                     .reference_height = view_info.height,
                     .orthographic_override = view_info.orthographic,
                     .ortho_scale_override = viewInfoOrthoScale(view_info),
-                    .mode = mode,
-                };
+                    .mode = mode};
+        }
+
+        [[nodiscard]] core::Tensor renderCurrentViewExport(const vis::ViewInfo& view_info,
+                                                           const int width,
+                                                           const int height,
+                                                           const vis::ExportPostProcessMode mode) {
+            auto result = runExportOnViewerThread<ExportImageResult>([&view_info, width, height, mode]() -> ExportImageResult {
+                auto* const viewer = get_visualizer();
+                auto* const rendering_manager = viewer ? viewer->getRenderingManager() : nullptr;
+                auto* const scene_manager = viewer ? viewer->getSceneManager() : nullptr;
+                if (!rendering_manager || !scene_manager) {
+                    return std::unexpected("no active viewer is available");
+                }
+                const auto request = currentViewImageRequest(view_info, width, height, mode);
                 return rendering_manager->renderExportImage(scene_manager, request);
             });
             if (!result) {
@@ -1334,7 +1338,7 @@ namespace lfs::python {
         // transparent fallback): applies the same PPISP correction path.
         [[nodiscard]] core::Tensor applyExportPostProcessThreadSafe(core::Tensor image,
                                                                     const vis::ExportPostProcessMode mode) {
-            auto result = runExportOnViewerThread(
+            auto result = runExportOnViewerThread<ExportImageResult>(
                 [image = std::move(image), mode]() mutable -> ExportImageResult {
                     auto* const viewer = get_visualizer();
                     auto* const rendering_manager = viewer ? viewer->getRenderingManager() : nullptr;
@@ -2034,6 +2038,31 @@ Returns:
     with_depth=False: CPU Tensor [H, W, 3] RGB image
     with_depth=True: tuple (image [H, W, 3], depth [H, W]) of CPU float tensors
     or None if no active visualizer scene is available
+)doc");
+
+        m.def("render_linear_image", [](int width, int height, bool transparent) {
+            auto result = runExportOnViewerThread<Result<core::Tensor>>(
+                [width, height, transparent]() -> Result<core::Tensor> {
+                    auto* const viewer = get_visualizer();
+                    const auto view = vis::get_current_view_info();
+                    if (!viewer || !view || !viewer->getRenderingManager() || !viewer->getSceneManager())
+                        return make_error({.code = ErrorCode::FailedPrecondition, .domain = ErrorDomain::Rendering,
+                                           .detail = "No active viewer is available for float render capture", .detection = LFS_SOURCE_SITE_CURRENT()});
+                    const auto request = currentViewImageRequest(*view, width, height,
+                        transparent ? vis::ExportPostProcessMode::Transparent : vis::ExportPostProcessMode::Opaque);
+                    return viewer->getRenderingManager()->renderLinearImage(viewer->getSceneManager(), request);
+                });
+            if (!result)
+                throw Exception(result.error());
+            return PyTensor(std::move(*result)); }, nb::arg("width"), nb::arg("height"), nb::arg("transparent") = true,
+              R"doc(Render the current Gaussian view before byte quantization.
+
+Returns CPU Float32 [H,W,4], relative linear BT709 RGB and straight alpha.
+Uses the current raster tone settings before PPISP and environment export
+post-processing. This is display-referred SDR linear color, not scene HDR.
+The returned tensor owns its samples and remains valid after later renders.
+Use io.save_exr_image with explicit matching color and EXR options.
+Raises an error if no active renderable viewer is available.
 )doc");
 
         m.def("render_view_u8", &render_view_u8, nb::arg("rotation"), nb::arg("translation"), nb::arg("width"), nb::arg("height"),

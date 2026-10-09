@@ -31,6 +31,7 @@ namespace lfs::vis {
         MetalViewportRenderer();
         ~MetalViewportRenderer();
         static bool supports(const core::SplatData&, const rendering::ViewportRenderRequest&);
+        lfs::Result<std::shared_ptr<core::Tensor>> readLinearColorImage(RenderTargetId) const;
         // Diagnostics are opt-in and separate from ordinary rendering and wall latency.
         struct FrameDiagnostics {
             uint64_t required_instances = 0;

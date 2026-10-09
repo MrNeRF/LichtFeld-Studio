@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "metal_viewport_renderer.hpp"
+#include "float_color_readback.hpp"
 #include "core/logger.hpp"
 #include "core/gpu_elapsed.hpp"
 #include "core/memory_pressure.hpp"
@@ -220,6 +221,8 @@ namespace lfs::vis {
         };
 #endif
         struct Frame {
+            core::Tensor float_color;
+            FloatColorReadbackSettings float_settings;
             glm::ivec2 size{};
             uint32_t count = 0, capacity = 0;
             uint64_t generation = 0, consumer_serial = 0, producer_value = 0;
@@ -1367,6 +1370,10 @@ namespace lfs::vis {
             presented.capture = {uint32_t(expected_depth), 0, 0, 0};
             if (auto shown = state.raster->present(presented); !shown)
                 throw lfs::Exception(shown.error());
+            // Own the unquantized samples: later frames reuse raster scratch.
+            f.float_color = request.capture_float_color && !request.depth_view ? state.raster->color().clone() : core::Tensor{};
+            f.float_settings = {.background = background, .transparent = transparent, .transmittance = false,
+                                .tone = presented.tone, .exposure = presented.exposure};
             state.raster->set_stage_marker(nullptr);
             // LOD statistics and the RAD pager read the cut's counts and chunk
             // touches after completion.
@@ -1444,6 +1451,36 @@ namespace lfs::vis {
         std::lock_guard lock(impl_->readback_mutex);
         auto f = impl_->latestFrame(slot);
         return f ? f->size : glm::ivec2{};
+    }
+    lfs::Result<std::shared_ptr<core::Tensor>> MetalViewportRenderer::readLinearColorImage(Slot slot) const
+    {
+        try {
+            auto& i = *impl_;
+            std::lock_guard lock(i.readback_mutex);
+            auto* f = i.latestFrame(slot);
+            if (!f || !f->float_color.is_valid())
+                return nativeError("Float color was not captured for this render target", ErrorCode::FailedPrecondition);
+            i.wait(f->producer_value);
+            [f->command waitUntilCompleted];
+            if (f->command.status == MTLCommandBufferStatusError)
+                return nativeError(std::format("Metal float color producer failed: {}", f->command.error.localizedDescription.UTF8String ?: "none"));
+            if (f->rasterStatus().error)
+                return nativeError("Metal float color producer overflowed", ErrorCode::ResourceExhausted);
+            // The raster arena stores half samples in a byte-addressed view.
+            // Download those bytes unchanged, then borrow their typed CPU view
+            // while the owning tensor remains alive through normalization.
+            const auto bytes = f->float_color.cpu().contiguous();
+            if (bytes.bytes() != size_t(f->size.x) * size_t(f->size.y) * 4 * sizeof(uint16_t))
+                return nativeError("Metal float color arena has an invalid extent", ErrorCode::InvalidArgument);
+            const auto samples = core::Tensor::from_blob(const_cast<uint8_t*>(bytes.ptr<uint8_t>()),
+                {size_t(f->size.y), size_t(f->size.x), 4}, core::Device::CPU, core::DataType::Float16);
+            auto image = linearFloatColorReadback(samples, f->float_settings);
+            if (!image)
+                return std::move(image).error();
+            return std::make_shared<core::Tensor>(std::move(*image));
+        } catch (const std::exception& error) {
+            return nativeError(error);
+        }
     }
 #ifndef LFS_GRAPHICS_VULKAN
     lfs::Status MetalViewportRenderer::copyOutputs(Slot slot, core::Tensor& color, core::Tensor* depth) const {

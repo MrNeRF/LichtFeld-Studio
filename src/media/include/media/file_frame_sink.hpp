@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "core/atomic_file.hpp"
 #include "core/export.hpp"
 #include "media/image_output.hpp"
 #include <filesystem>
@@ -21,6 +22,8 @@ namespace lfs::media {
         bool remove_stale_frames = false;
         // The extractor owns metadata when it generates a new manifest.
         bool preserve_metadata = false;
+        // Appended to preserve existing positional aggregate initializers.
+        core::AtomicFileOptions image_output{.overwrite = true, .durable = false, .create_directories = false};
     };
     class LFS_MEDIA_API FileFrameSink final : public FrameSink {
     public:

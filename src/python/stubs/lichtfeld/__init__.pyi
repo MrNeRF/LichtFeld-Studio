@@ -1643,6 +1643,18 @@ def render_view(rotation: Tensor, translation: Tensor, width: int, height: int, 
         or None if no active visualizer scene is available
     """
 
+def render_linear_image(width: int, height: int, transparent: bool = True) -> Tensor:
+    """
+    Render the current Gaussian view before byte quantization.
+
+    Returns CPU Float32 [H,W,4], relative linear BT709 RGB and straight alpha.
+    Uses the current raster tone settings before PPISP and environment export
+    post-processing. This is display-referred SDR linear color, not scene HDR.
+    The returned tensor owns its samples and remains valid after later renders.
+    Use io.save_exr_image with explicit matching color and EXR options.
+    Raises an error if no active renderable viewer is available.
+    """
+
 def render_view_u8(rotation: Tensor, translation: Tensor, width: int, height: int, fov: float = 60.0, bg_color: Tensor | None = None, orthographic: bool | None = None, ortho_scale: float | None = None) -> Tensor | None:
     """
     Render scene from arbitrary camera parameters as an 8-bit RGB image.

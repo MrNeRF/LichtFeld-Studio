@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/image_codecs.hpp"
+#include <array>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -88,6 +89,124 @@ namespace {
             std::filesystem::remove_all(path, error);
         }
     };
+    TEST(ProductionImageOutput, DispatchPreservesLegacyBytesAndComments) {
+        TemporaryDirectory temporary;
+        const auto bytes = [](const std::filesystem::path& path) {
+            std::ifstream file(path, std::ios::binary);
+            return std::vector<std::uint8_t>{std::istreambuf_iterator<char>(file), {}};
+        };
+        for (const std::string extension : {".PNG", ".JpEg", ".TIFF", ".jpg", ".tif"}) {
+            for (const int channels : {1, 2, 3, 4}) {
+                for (const bool full_chroma : {false, true}) {
+                    SCOPED_TRACE(::testing::Message() << extension << " channels=" << channels << " full_chroma=" << full_chroma);
+                    constexpr int width = 19, height = 17;
+                    std::vector<std::uint8_t> pixels(width * height * channels);
+                    for (std::size_t i = 0; i < pixels.size(); ++i)
+                        pixels[i] = static_cast<std::uint8_t>(i * 17);
+                    const auto actual = temporary.path / std::filesystem::path(u8"export 日本語").concat(extension);
+                    const auto reference = temporary.path / ("reference" + extension);
+                    std::string error;
+                    const bool jpeg = extension == ".JpEg" || extension == ".jpg";
+                    if (jpeg && channels == 2) {
+                        EXPECT_FALSE(codec::write_image_u8(actual, pixels.data(), width, height, channels, 95, "provenance", error, full_chroma));
+                        EXPECT_FALSE(std::filesystem::exists(actual));
+                        continue;
+                    }
+                    if (jpeg) {
+                        // The legacy Studio policy drops alpha without compositing.
+                        std::vector<std::uint8_t> rgb(width * height * 3);
+                        if (channels == 4) {
+                            for (std::size_t pixel = 0; pixel < width * height; ++pixel)
+                                for (std::size_t c = 0; c < 3; ++c)
+                                    rgb[pixel * 3 + c] = pixels[pixel * 4 + c];
+                        }
+                        ASSERT_TRUE(codec::write_jpeg(reference, channels == 4 ? rgb.data() : pixels.data(), width, height,
+                                                      channels == 4 ? 3 : channels, 95, "provenance", error, full_chroma))
+                            << error;
+                    } else if (extension == ".PNG") {
+                        ASSERT_TRUE(codec::write_png(reference, pixels.data(), width, height, channels, 8, 6, "provenance", error)) << error;
+                    } else {
+                        ASSERT_TRUE(codec::write_tiff(reference, pixels.data(), width, height, channels, error)) << error;
+                    }
+                    ASSERT_TRUE(codec::write_image_u8(actual, pixels.data(), width, height, channels, 95, "provenance", error, full_chroma)) << error;
+                    EXPECT_EQ(bytes(actual), bytes(reference));
+                    if (extension == ".PNG")
+                        EXPECT_EQ(read_png_comment(actual), "provenance");
+                    std::filesystem::remove(actual);
+                    std::filesystem::remove(reference);
+                }
+            }
+        }
+    }
+    TEST(ProductionImageOutput, AtomicCollisionCancellationAndEncodingFailuresPreserveTarget) {
+        TemporaryDirectory temporary;
+        const auto bytes = [](const std::filesystem::path& path) {
+            std::ifstream file(path, std::ios::binary);
+            return std::vector<std::uint8_t>{std::istreambuf_iterator<char>(file), {}};
+        };
+        for (const std::string extension : {".png", ".jpg", ".tiff"}) {
+            SCOPED_TRACE(extension);
+            const auto path = temporary.path / ("preserve" + extension);
+            std::vector<std::uint8_t> pixels(19 * 17 * 4, 128);
+            lfs::core::AtomicFileOptions options{.overwrite = false, .durable = false, .create_directories = false};
+            ASSERT_TRUE(codec::write_image_u8(path, pixels.data(), 19, 17, 4, 95, "stamp", options));
+            const auto original = bytes(path);
+            std::fill(pixels.begin(), pixels.end(), 42);
+            const auto collision = codec::write_image_u8(path, pixels.data(), 19, 17, 4, 95, {}, options);
+            ASSERT_FALSE(collision);
+            EXPECT_EQ(collision.error().code(), lfs::ErrorCode::AlreadyExists);
+            EXPECT_EQ(bytes(path), original);
+            options.overwrite = true;
+            int checks = 0;
+            options.cancelled = [&] { return ++checks == 2; };
+            const auto cancelled = codec::write_image_u8(path, pixels.data(), 19, 17, 4, 95, {}, options);
+            ASSERT_FALSE(cancelled);
+            EXPECT_EQ(cancelled.error().code(), lfs::ErrorCode::Cancelled);
+            EXPECT_EQ(bytes(path), original);
+            options.cancelled = {};
+            const auto invalid = codec::write_image_u8(path, nullptr, 19, 17, 4, 95, {}, options);
+            ASSERT_FALSE(invalid);
+            EXPECT_EQ(invalid.error().code(), lfs::ErrorCode::InvalidArgument);
+            EXPECT_EQ(bytes(path), original);
+            ASSERT_TRUE(codec::write_image_u8(path, pixels.data(), 19, 17, 4, 95, {}, options));
+            EXPECT_NE(bytes(path), original);
+            EXPECT_EQ(std::distance(std::filesystem::directory_iterator(temporary.path), std::filesystem::directory_iterator{}), 1);
+            std::filesystem::remove(path);
+        }
+    }
+    TEST(ProductionImageOutput, AtomicParallelPngPreservesEncodingAndPixels) {
+        TemporaryDirectory temporary;
+        constexpr int width = 1024, height = 1025, channels = 4;
+        std::vector<std::uint8_t> pixels(std::size_t(width) * height * channels);
+        for (std::size_t i = 0; i < pixels.size(); ++i)
+            pixels[i] = static_cast<std::uint8_t>(i * 17);
+        const auto direct = temporary.path / "direct.png", atomic = temporary.path / "atomic.png";
+        std::string error;
+        ASSERT_TRUE(codec::write_png(direct, pixels.data(), width, height, channels, 8, 6, "stamp", error)) << error;
+        ASSERT_TRUE(codec::write_image_u8(atomic, pixels.data(), width, height, channels, 95, "stamp", error)) << error;
+        std::ifstream direct_file(direct, std::ios::binary), atomic_file(atomic, std::ios::binary);
+        EXPECT_EQ((std::vector<std::uint8_t>{std::istreambuf_iterator<char>(direct_file), {}}),
+                  (std::vector<std::uint8_t>{std::istreambuf_iterator<char>(atomic_file), {}}));
+        codec::Image decoded;
+        ASSERT_TRUE(codec::decode(atomic, decoded, error)) << error;
+        EXPECT_EQ(decoded.data, pixels);
+    }
+    TEST(ProductionImageOutput, InvalidJpegAndUnsupportedFormatsDoNotTruncateExistingFiles) {
+        TemporaryDirectory temporary;
+        const std::array<std::uint8_t, 4> pixels{10, 20, 30, 0};
+        for (const std::string extension : {".jpg", ".exr", ".unknown"}) {
+            const auto path = temporary.path / ("existing" + extension);
+            {
+                std::ofstream file(path, std::ios::binary);
+                file << "keep";
+            }
+            std::string error;
+            EXPECT_FALSE(codec::write_image_u8(path, pixels.data(), JPEG_MAX_DIMENSION + 1, 1, 4, 95, {}, error));
+            EXPECT_FALSE(error.empty());
+            std::ifstream file(path, std::ios::binary);
+            EXPECT_EQ((std::string{std::istreambuf_iterator<char>(file), {}}), "keep");
+        }
+    }
     TEST(ProductionPng, AllChannelsAndDepthsRoundTripWithCommentsAndUnicodePaths) {
         TemporaryDirectory temporary;
         for (int channels : {1, 2, 3, 4}) {

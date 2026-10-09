@@ -828,7 +828,7 @@ namespace lfs::core::image_codecs {
 #ifndef _WIN32
             if (hdr && target.sample_type == SampleType::Float32) {
                 const int descriptor = open(path.c_str(), O_RDONLY);
-                struct stat file_status {};
+                struct stat file_status{};
                 if (descriptor >= 0 && fstat(descriptor, &file_status) == 0 && file_status.st_size > 0 &&
                     file_status.st_size <= std::numeric_limits<int>::max()) {
                     const auto size = static_cast<std::size_t>(file_status.st_size);
@@ -1199,10 +1199,11 @@ namespace lfs::core::image_codecs {
             JpegError error{};
             std::FILE* file = nullptr;
             bool created = false;
+            bool owns_file = true;
             ~JpegEncodeState() {
                 if (created)
                     jpeg_destroy_compress(&codec);
-                if (file)
+                if (file && owns_file)
                     std::fclose(file);
             }
         };
@@ -1249,16 +1250,17 @@ namespace lfs::core::image_codecs {
         return write_jpeg(path, data, width, height, channels, quality, comment, error, false);
     }
 
-    bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,
-                    const int width, const int height, const int channels, const int quality,
-                    const std::optional<std::string>& comment, std::string& error, const bool full_chroma) {
+    static bool write_jpeg_stream(const std::filesystem::path& path, const std::uint8_t* data,
+                                  const int width, const int height, const int channels, const int quality,
+                                  const std::optional<std::string>& comment, std::string& error, const bool full_chroma, FILE* borrowed) {
         if (!data || width <= 0 || height <= 0 || width > JPEG_MAX_DIMENSION || height > JPEG_MAX_DIMENSION ||
             (channels != 1 && channels != 3)) {
             error = "Unsupported JPEG layout";
             return false;
         }
         auto state = std::make_unique<JpegEncodeState>();
-        state->file = open_output_file(path);
+        state->owns_file = !borrowed;
+        state->file = borrowed ? borrowed : open_output_file(path);
         if (!state->file) {
             error = "Could not open JPEG output " + path_to_utf8(path);
             return false;
@@ -1268,11 +1270,17 @@ namespace lfs::core::image_codecs {
             set_error(error, "JPEG encode failed", state->error.message);
             return false;
         }
-        const bool success = std::fclose(state->file) == 0;
+        const bool success = borrowed ? !std::ferror(borrowed) : std::fclose(state->file) == 0;
         state->file = nullptr;
         if (!success)
             error = "Could not write JPEG output " + path_to_utf8(path);
         return success;
+    }
+
+    bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,
+                    const int width, const int height, const int channels, const int quality,
+                    const std::optional<std::string>& comment, std::string& error, const bool full_chroma) {
+        return write_jpeg_stream(path, data, width, height, channels, quality, comment, error, full_chroma, nullptr);
     }
 
     namespace {
@@ -1379,7 +1387,7 @@ namespace lfs::core::image_codecs {
 
         bool write_png_parallel(const std::filesystem::path& path, const std::uint8_t* pixels, const int width,
                                 const int height, const int channels, const int compression_level,
-                                const std::optional<std::string>& comment, std::string& error) {
+                                const std::optional<std::string>& comment, std::string& error, FILE* borrowed) {
             const auto row_bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(channels);
             const unsigned threads = std::max(1u, std::thread::hardware_concurrency());
             // About 8 MiB of pixels per stripe keeps every core busy without hurting the ratio.
@@ -1414,7 +1422,7 @@ namespace lfs::core::image_codecs {
             for (std::size_t s = 1; s < stripes.size(); ++s)
                 adler = adler32_combine(adler, stripes[s].adler, static_cast<z_off_t>(stripes[s].filtered_bytes));
 
-            std::FILE* file = open_output_file(path);
+            std::FILE* file = borrowed ? borrowed : open_output_file(path);
             if (!file) {
                 error = "Could not open PNG output " + path_to_utf8(path);
                 return false;
@@ -1449,24 +1457,24 @@ namespace lfs::core::image_codecs {
             append_u32(checksum, static_cast<std::uint32_t>(adler));
             ok = ok && write_png_chunk(file, "IDAT", checksum.data(), checksum.size()) &&
                  write_png_chunk(file, "IEND", nullptr, 0);
-            const bool closed = std::fclose(file) == 0;
+            const bool closed = borrowed ? !std::ferror(borrowed) : std::fclose(file) == 0;
             if (!ok || !closed)
                 error = "Could not write PNG output " + path_to_utf8(path);
             return ok && closed;
         }
     } // namespace
 
-    bool write_png(const std::filesystem::path& path, const void* data,
-                   const int width, const int height, const int channels, const int bit_depth,
-                   const int compression_level, const std::optional<std::string>& comment,
-                   std::string& error) {
+    static bool write_png_stream(const std::filesystem::path& path, const void* data,
+                                 const int width, const int height, const int channels, const int bit_depth,
+                                 const int compression_level, const std::optional<std::string>& comment,
+                                 std::string& error, FILE* borrowed) {
         if (!data || width <= 0 || height <= 0 || channels < 1 || channels > 4 || (bit_depth != 8 && bit_depth != 16)) {
             error = "Unsupported PNG layout";
             return false;
         }
         if (bit_depth == 8 && static_cast<std::size_t>(width) * static_cast<std::size_t>(height) >= kParallelPngMinPixels) {
             return write_png_parallel(path, static_cast<const std::uint8_t*>(data), width, height, channels,
-                                      compression_level, comment, error);
+                                      compression_level, comment, error, borrowed);
         }
         png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
         png_infop info = png ? png_create_info_struct(png) : nullptr;
@@ -1475,14 +1483,15 @@ namespace lfs::core::image_codecs {
             error = "Could not allocate PNG encoder";
             return false;
         }
-        std::FILE* file = open_output_file(path);
+        std::FILE* file = borrowed ? borrowed : open_output_file(path);
         if (!file) {
             png_destroy_write_struct(&png, &info);
             error = "Could not open PNG output " + path_to_utf8(path);
             return false;
         }
         if (setjmp(png_jmpbuf(png))) {
-            std::fclose(file);
+            if (!borrowed)
+                std::fclose(file);
             png_destroy_write_struct(&png, &info);
             error = "PNG encode failed";
             return false;
@@ -1514,7 +1523,7 @@ namespace lfs::core::image_codecs {
             rows[y] = bytes + static_cast<std::size_t>(y) * row_bytes;
         const bool encoded = write_png_pixels(png, info, rows.data());
         png_destroy_write_struct(&png, &info);
-        const bool closed = std::fclose(file) == 0;
+        const bool closed = borrowed ? !std::ferror(borrowed) : std::fclose(file) == 0;
         if (!encoded)
             error = "PNG encode failed";
         else if (!closed)
@@ -1522,25 +1531,62 @@ namespace lfs::core::image_codecs {
         return encoded && closed;
     }
 
-    bool write_tiff(const std::filesystem::path& path, const std::uint8_t* data,
-                    const int width, const int height, const int channels, std::string& error) {
+    bool write_png(const std::filesystem::path& path, const void* data,
+                   const int width, const int height, const int channels, const int bit_depth,
+                   const int compression_level, const std::optional<std::string>& comment, std::string& error) {
+        return write_png_stream(path, data, width, height, channels, bit_depth, compression_level, comment, error, nullptr);
+    }
+
+    namespace {
+        toff_t tiff_seek(thandle_t handle, toff_t offset, int origin) {
+            auto* file = static_cast<FILE*>(handle);
+#ifdef _WIN32
+            if (::_fseeki64(file, static_cast<int64_t>(offset), origin) != 0)
+                return toff_t(-1);
+            const auto position = ::_ftelli64(file);
+#else
+            if (::fseeko(file, static_cast<off_t>(offset), origin) != 0)
+                return toff_t(-1);
+            const auto position = ::ftello(file);
+#endif
+            return position < 0 ? toff_t(-1) : toff_t(position);
+        }
+        toff_t tiff_size(thandle_t handle) {
+            const auto current = tiff_seek(handle, 0, SEEK_CUR);
+            const auto end = tiff_seek(handle, 0, SEEK_END);
+            return current == toff_t(-1) || tiff_seek(handle, current, SEEK_SET) == toff_t(-1) ? 0 : end;
+        }
+        TIFF* tiff_stream(const std::filesystem::path& path, FILE* file) {
+            install_tiff_quiet_handlers();
+            return TIFFClientOpen(path_to_utf8(path).c_str(), "w", file, [](thandle_t h, void* p, tmsize_t n) -> tmsize_t { return n < 0 ? -1 : tmsize_t(std::fread(p, 1, size_t(n), static_cast<FILE*>(h))); }, [](thandle_t h, void* p, tmsize_t n) -> tmsize_t { return n < 0 ? -1 : tmsize_t(std::fwrite(p, 1, size_t(n), static_cast<FILE*>(h))); }, tiff_seek, [](thandle_t) { return 0; }, tiff_size, [](thandle_t, void**, toff_t*) { return 0; }, [](thandle_t, void*, toff_t) {});
+        }
+    } // namespace
+
+    static bool write_tiff_stream(const std::filesystem::path& path, const std::uint8_t* data,
+                                  const int width, const int height, const int channels, std::string& error, FILE* borrowed) {
         if (!data || width <= 0 || height <= 0 || channels < 1 || channels > 4) {
             error = "Unsupported TIFF layout";
             return false;
         }
-        TIFF* tiff = open_tiff(path, "w", error);
-        if (!tiff)
+        TIFF* tiff = borrowed ? tiff_stream(path, borrowed) : open_tiff(path, "w", error);
+        if (!tiff) {
+            if (borrowed)
+                error = "Could not initialize TIFF codec for " + path_to_utf8(path);
             return false;
+        }
         TIFFSetField(tiff, TIFFTAG_IMAGEWIDTH, width);
         TIFFSetField(tiff, TIFFTAG_IMAGELENGTH, height);
         TIFFSetField(tiff, TIFFTAG_SAMPLESPERPIXEL, channels);
         TIFFSetField(tiff, TIFFTAG_BITSPERSAMPLE, 8);
         TIFFSetField(tiff, TIFFTAG_ORIENTATION, ORIENTATION_TOPLEFT);
         TIFFSetField(tiff, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-        TIFFSetField(tiff, TIFFTAG_PHOTOMETRIC, channels == 1 ? PHOTOMETRIC_MINISBLACK : PHOTOMETRIC_RGB);
+        TIFFSetField(tiff, TIFFTAG_PHOTOMETRIC, channels < 3 ? PHOTOMETRIC_MINISBLACK : PHOTOMETRIC_RGB);
+        // libtiff may omit the default RowsPerStrip; make it explicit for readers
+        // that require a nonzero strip height, without changing decoded samples.
+        TIFFSetField(tiff, TIFFTAG_ROWSPERSTRIP, std::min<uint32_t>(height, TIFFDefaultStripSize(tiff, 0)));
         TIFFSetField(tiff, TIFFTAG_COMPRESSION, COMPRESSION_LZW);
         std::uint16_t extra_sample = EXTRASAMPLE_UNASSALPHA;
-        if (channels == 4)
+        if (channels == 2 || channels == 4)
             TIFFSetField(tiff, TIFFTAG_EXTRASAMPLES, 1, &extra_sample);
         const auto row_bytes = static_cast<std::size_t>(width) * channels;
         bool success = true;
@@ -1550,10 +1596,62 @@ namespace lfs::core::image_codecs {
                 break;
             }
         }
+        success = success && TIFFWriteDirectory(tiff) != 0 && TIFFFlush(tiff) != 0;
         TIFFClose(tiff);
         if (!success)
             error = "TIFF scanline write failed";
         return success;
     }
 
+    bool write_tiff(const std::filesystem::path& path, const std::uint8_t* data,
+                    const int width, const int height, const int channels, std::string& error) {
+        return write_tiff_stream(path, data, width, height, channels, error, nullptr);
+    }
+
+    static bool encode_image_u8(const std::filesystem::path& path, const std::uint8_t* data,
+                                const int width, const int height, const int channels, const int jpeg_quality,
+                                const std::optional<std::string>& comment, std::string& error, const bool jpeg_full_chroma, FILE* borrowed) {
+        auto extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return std::tolower(c); });
+        if (extension == ".png")
+            return write_png_stream(path, data, width, height, channels, 8, 6, comment, error, borrowed);
+        if (extension == ".tif" || extension == ".tiff")
+            return write_tiff_stream(path, data, width, height, channels, error, borrowed);
+        if (extension == ".jpg" || extension == ".jpeg") {
+            if (channels != 4)
+                return write_jpeg_stream(path, data, width, height, channels, jpeg_quality, comment, error, jpeg_full_chroma, borrowed);
+            if (!data || width <= 0 || height <= 0 || width > JPEG_MAX_DIMENSION || height > JPEG_MAX_DIMENSION ||
+                static_cast<std::size_t>(width) > std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(height) / 4) {
+                error = "Unsupported JPEG layout";
+                return false;
+            }
+            const auto pixels = static_cast<std::size_t>(width) * height;
+            std::vector<std::uint8_t> rgb(pixels * 3);
+            for (std::size_t pixel = 0; pixel < pixels; ++pixel)
+                std::copy_n(data + pixel * 4, 3, rgb.data() + pixel * 3);
+            return write_jpeg_stream(path, rgb.data(), width, height, 3, jpeg_quality, comment, error, jpeg_full_chroma, borrowed);
+        }
+        error = "Unsupported image extension: " + extension;
+        return false;
+    }
+    Status write_image_u8(const std::filesystem::path& path, const std::uint8_t* data,
+                          const int width, const int height, const int channels, const int jpeg_quality,
+                          const std::optional<std::string>& comment, const AtomicFileOptions& options,
+                          const bool jpeg_full_chroma) {
+        return writeFileAtomically(path, [&](FILE* stream) -> Status {
+            std::string error;
+            if (!encode_image_u8(path, data, width, height, channels, jpeg_quality, comment, error, jpeg_full_chroma, stream))
+                return Status::failure(make_error({.code = error.starts_with("Unsupported") ? ErrorCode::InvalidArgument : ErrorCode::Unavailable,
+                                                  .domain = ErrorDomain::IO, .detail = std::move(error), .detection = LFS_SOURCE_SITE_CURRENT()}));
+            return {}; }, options);
+    }
+    bool write_image_u8(const std::filesystem::path& path, const std::uint8_t* data,
+                        const int width, const int height, const int channels, const int jpeg_quality,
+                        const std::optional<std::string>& comment, std::string& error, const bool jpeg_full_chroma) {
+        const auto result = write_image_u8(path, data, width, height, channels, jpeg_quality, comment,
+                                           {.overwrite = true, .durable = false, .create_directories = false}, jpeg_full_chroma);
+        if (!result)
+            error = std::string(result.error().detail());
+        return bool(result);
+    }
 } // namespace lfs::core::image_codecs

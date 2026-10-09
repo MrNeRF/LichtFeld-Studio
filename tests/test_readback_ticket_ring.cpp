@@ -26,7 +26,7 @@ namespace {
         meta.source_image = source_image;
         meta.source_depth_image = source_depth;
         meta.byte_count = 64;
-        meta.delivery = ReadbackTicketRing::DeliveryKind::DepthFloatPlane;
+        meta.delivery = ReadbackTicketRing::DeliveryKind::FloatBuffer;
         return meta;
     }
 

@@ -11,6 +11,7 @@
 //                    1024 depth-batch prefix, 2048 separate median,
 //                    8192 panorama wrap, 16384 float footprint
 #include "../slang/config.slang"
+#include "../slang/spark_alpha.inc"
 #include "splat_overlay.slang"
 #include "splat_types.slang"
 
@@ -405,7 +406,7 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
                     if (value < means[j].w)
                         continue;
                     if (colors[j].w > 0)
-                        alpha = 1.f - pow(max(0.f, 1.f - value), colors[j].w);
+                        alpha = lfsSparkAlphaFromDensity(value, colors[j].w);
                 }
                 alpha = min(alpha, .999f);
                 if (half_footprint) {

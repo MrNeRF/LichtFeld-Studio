@@ -352,29 +352,13 @@ namespace {
         LOG_INFO("Saving image: {} shape: [{}, {}, {}]", path_utf8, height, width, channels);
         auto ext = path.extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
-        std::string error;
-        bool success = false;
-        if (ext == ".jpg" || ext == ".jpeg") {
-            if (channels == 4) {
-                std::vector<std::uint8_t> rgb(static_cast<size_t>(width) * height * 3);
-                for (size_t i = 0, n = static_cast<size_t>(width) * height; i < n; ++i) {
-                    rgb[i * 3 + 0] = prepared.ptr<uint8_t>()[i * 4 + 0];
-                    rgb[i * 3 + 1] = prepared.ptr<uint8_t>()[i * 4 + 1];
-                    rgb[i * 3 + 2] = prepared.ptr<uint8_t>()[i * 4 + 2];
-                }
-                success = image_codecs::write_jpeg(path, rgb.data(), width, height, 3, jpeg_quality, metadata_comment, error);
-            } else if (channels == 1 || channels == 3) {
-                success = image_codecs::write_jpeg(path, prepared.ptr<uint8_t>(), width, height, channels, jpeg_quality, metadata_comment, error);
-            } else {
-                throw std::runtime_error("save_image: unsupported JPEG channel count");
-            }
-        } else if (ext == ".png") {
-            success = image_codecs::write_png(path, prepared.ptr<uint8_t>(), width, height, channels, 8, 6, metadata_comment, error);
-        } else if (ext == ".tif" || ext == ".tiff") {
-            success = image_codecs::write_tiff(path, prepared.ptr<uint8_t>(), width, height, channels, error);
-        } else {
+        if (ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".tif" && ext != ".tiff")
             throw std::runtime_error("Unsupported image extension: " + ext);
-        }
+        if ((ext == ".jpg" || ext == ".jpeg") && channels == 2)
+            throw std::runtime_error("save_image: unsupported JPEG channel count");
+        std::string error;
+        const bool success = image_codecs::write_image_u8(path, prepared.ptr<uint8_t>(), width, height, channels,
+                                                          jpeg_quality, metadata_comment, error);
         if (!success)
             throw std::runtime_error("Failed to save " + path_utf8 + (error.empty() ? "" : ": " + error));
     }
@@ -1073,35 +1057,8 @@ namespace lfs::core {
             return false;
         }
 
-        // Get file extension to determine format
-        std::string ext = p.extension().string();
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-        // Check if format is supported
-        if (ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".tif" && ext != ".tiff") {
-            return false;
-        }
-
         std::string error;
-        bool success = false;
-        if (ext == ".jpg" || ext == ".jpeg") {
-            if (channels == 4) {
-                std::vector<unsigned char> rgb(static_cast<size_t>(width) * height * 3);
-                for (size_t i = 0, n = static_cast<size_t>(width) * height; i < n; ++i) {
-                    rgb[i * 3 + 0] = data[i * 4 + 0];
-                    rgb[i * 3 + 1] = data[i * 4 + 1];
-                    rgb[i * 3 + 2] = data[i * 4 + 2];
-                }
-                success = image_codecs::write_jpeg(p, rgb.data(), width, height, 3, 95, {}, error);
-            } else if (channels == 1 || channels == 3) {
-                success = image_codecs::write_jpeg(p, data, width, height, channels, 95, {}, error);
-            }
-        } else if (ext == ".png") {
-            success = image_codecs::write_png(p, data, width, height, channels, 8, 6, {}, error);
-        } else if (ext == ".tif" || ext == ".tiff") {
-            success = image_codecs::write_tiff(p, data, width, height, channels, error);
-        }
-        return success;
+        return image_codecs::write_image_u8(p, data, width, height, channels, 95, {}, error);
     }
 
 } // namespace lfs::core

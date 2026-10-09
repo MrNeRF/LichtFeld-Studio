@@ -19,6 +19,9 @@ namespace lfs::vis {
     lfs::Result<SceneRenderer::OutputTensors> SceneRenderer::readOutputTensors(RenderTargetId) const {
         return lfs::Result<SceneRenderer::OutputTensors>(noTensorOutput("scene"));
     }
+    Result<std::shared_ptr<core::Tensor>> SceneRenderer::readLinearColorImage(RenderTargetId) const {
+        return make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::Rendering, .detail = "This renderer has no captured float color output", .detection = LFS_SOURCE_SITE_CURRENT()});
+    }
     lfs::Result<SceneRenderer::OutputTensors> PointSceneRenderer::readOutputTensors(RenderTargetId) const {
         return lfs::Result<SceneRenderer::OutputTensors>(noTensorOutput("point"));
     }
@@ -126,6 +129,9 @@ namespace lfs::vis {
                 const bool rgba = format == OutputImageFormat::RgbaFloat || format == OutputImageFormat::Rgba8;
                 const bool bytes = format == OutputImageFormat::Rgb8 || format == OutputImageFormat::Rgba8;
                 return readImage(t, rgba ? 4 : 3, bytes ? core::DataType::UInt8 : core::DataType::Float32);
+            }
+            Result<std::shared_ptr<core::Tensor>> readLinearColorImage(RenderTargetId target) const override {
+                return native().readLinearColorImage(target);
             }
             auto readPreviewDepth(RenderTargetId t) const -> std::expected<std::shared_ptr<core::Tensor>, std::string> override {
                 if (!hasRenderTarget(t))

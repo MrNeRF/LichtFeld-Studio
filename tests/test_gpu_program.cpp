@@ -1,12 +1,13 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "core/crash_handler.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_vignette.hpp"
 #include "program_contract.hpp"
 #include "program_features.hpp"
 #include "program_features_variant.hpp"
+#include "spark_alpha_contract.hpp"
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -23,6 +24,38 @@ namespace {
         uint32_t padding = 0;
     };
     class Programs : public testing::TestWithParam<GpuBackend> {};
+
+    TEST_P(Programs, SparkDensityPreservesWeakCoverage) {
+        if (!gpu_backend_available(GetParam()))
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        std::vector<float> samples;
+        for (float density : {1.f, 2.f, 100.f, 6830.182f})
+            for (float value : {0.f, 1e-9f, 3.2529191e-7f, 1e-6f, 1e-4f, .009999f, .01f, .010001f, .125f, .5f, .999f, 1.f}) {
+                samples.push_back(value);
+                samples.push_back(density);
+            }
+        const auto count = static_cast<uint32_t>(samples.size() / 2);
+        auto input = Tensor::from_blob(samples.data(), {count, 2}, Device::CPU, DataType::Float32).to(Device::GPU);
+        auto output = Tensor::zeros({count}, Device::GPU);
+        auto module = M::load(spark_alpha_contract_entries(), GetParam());
+        ASSERT_TRUE(module) << module.error().detail();
+        const Params params{.count = count};
+        const std::array bindings{M::Binding{0, &input}, M::Binding{8, &output, M::Access::ReadWrite}};
+        ASSERT_TRUE((*module)->dispatch({.function = "evaluate", .arguments = {std::as_bytes(std::span(&params, 1)), bindings}, .groups = {1, 1, 1}}));
+        const auto actual = output.cpu().contiguous();
+        for (uint32_t i = 0; i < count; ++i) {
+            const double value = samples[2 * i], density = samples[2 * i + 1];
+            const double expected = value == 1 ? 1 : -std::expm1(density * std::log1p(-value));
+            SCOPED_TRACE(testing::Message() << "value=" << value << " density=" << density);
+            // The retained native pow branch has backend-dependent FP32 rounding.
+            // Weak coverage must preserve relative accuracy before the alpha cutoff.
+            const double tolerance = value < .01f ? std::max(1e-12, expected * 1e-6) : 3e-6;
+            EXPECT_NEAR(actual.ptr<float>()[i], expected, tolerance);
+            if (value > 0 && value < 1e-5f)
+                EXPECT_GT(actual.ptr<float>()[i], 0.f);
+        }
+    }
 
     TEST(CudaProgramArtifacts, CudaEntriesUseFatbinaryContainers) {
 #if LFS_HAS_CUDA
@@ -646,12 +679,3 @@ namespace {
     INSTANTIATE_TEST_SUITE_P(Backends, Programs, testing::ValuesIn(kCompiledGpuBackends),
                              [](const auto& info) { return gpu_backend_name(info.param); });
 } // namespace
-
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    const int result = RUN_ALL_TESTS();
-    // Match the app and test_main.cpp: release GPU holders before pools, then
-    // avoid static destructors re-entering already released GPU storage.
-    lfs::core::teardown_gpu_before_exit();
-    lfs::core::flush_and_exit(result);
-}

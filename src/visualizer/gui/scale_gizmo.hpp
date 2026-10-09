@@ -53,8 +53,8 @@ namespace lfs::vis::gui {
 
     LFS_VIS_API ScaleGizmoResult drawScaleGizmo(const ScaleGizmoConfig& config);
 
-    [[nodiscard]] bool isScaleGizmoHovered();
-    [[nodiscard]] bool isScaleGizmoActive();
-    void cancelScaleGizmoDrag();
+    [[nodiscard]] LFS_VIS_API bool isScaleGizmoHovered();
+    [[nodiscard]] LFS_VIS_API bool isScaleGizmoActive();
+    LFS_VIS_API void cancelScaleGizmoDrag();
 
 } // namespace lfs::vis::gui

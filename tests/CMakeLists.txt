@@ -191,10 +191,13 @@ if(BUILD_TESTS)
         add_test(NAME UiTextureTensorContracts COMMAND ui_texture_tensor_contracts)
         set_tests_properties(UiTextureTensorContracts PROPERTIES LABELS "gpu;ui" TIMEOUT 120)
     endif()
-    add_executable(gpu_program_contracts test_gpu_program.cpp test_gpu_bookkeeping.cpp)
+    add_executable(gpu_program_contracts gpu_contract_main.cpp test_gpu_program.cpp test_gpu_bookkeeping.cpp)
     target_include_directories(gpu_program_contracts PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer)
     target_link_libraries(gpu_program_contracts PRIVATE lfs_core GTest::gtest)
     target_compile_features(gpu_program_contracts PRIVATE cxx_std_23)
+    lfs_add_gpu_program(gpu_program_contracts spark_alpha_contract SOURCE shaders/spark_alpha_contract.slang
+        DEPENDS "${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/slang/spark_alpha.inc"
+        COMPUTE evaluate)
     lfs_add_gpu_program(gpu_program_contracts program_contract SOURCE shaders/program_contract.slang
         COMPUTE transform VERTEX vertexMain FRAGMENT fragmentMain)
     lfs_add_gpu_program(gpu_program_contracts program_features SOURCE shaders/program_features.slang
@@ -216,6 +219,7 @@ if(BUILD_TESTS)
     set_tests_properties(GpuProgramContracts PROPERTIES LABELS "tensor;gpu" TIMEOUT 120)
     if(TARGET lfs_tensor_rasterizer)
         add_executable(tensor_rasterizer_contracts
+            gpu_contract_main.cpp
             test_splat_point_renderer.cpp
             test_splat_tile_binner.cpp
             test_splat_rasterizer.cpp
@@ -229,7 +233,7 @@ if(BUILD_TESTS)
         target_include_directories(tensor_rasterizer_contracts PRIVATE
             ${CMAKE_SOURCE_DIR}/src
             ${CMAKE_SOURCE_DIR}/src/visualizer)
-        target_link_libraries(tensor_rasterizer_contracts PRIVATE lfs_tensor_rasterizer GTest::gtest_main)
+        target_link_libraries(tensor_rasterizer_contracts PRIVATE lfs_tensor_rasterizer GTest::gtest)
         target_compile_features(tensor_rasterizer_contracts PRIVATE cxx_std_23)
         add_test(NAME TensorRasterizerContracts COMMAND tensor_rasterizer_contracts)
         # The contracts check precise-math oracles; MoltenVK compiles its MSL

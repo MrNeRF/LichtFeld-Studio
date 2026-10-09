@@ -28,6 +28,7 @@
 #include <cstring>
 #include <format>
 #include <limits>
+#include <new>
 #include <shared_mutex>
 #include <string_view>
 #include <utility>
@@ -36,6 +37,12 @@
 namespace lfs::vis {
 
     namespace {
+        Error previewImageFailure(ErrorCode code, std::string detail) {
+            return make_error({.code = code, .domain = ErrorDomain::Rendering, .detail = std::move(detail), .detection = LFS_SOURCE_SITE_CURRENT()});
+        }
+        std::shared_ptr<core::Tensor> legacyPreviewImage(Result<std::shared_ptr<core::Tensor>> result) {
+            return result ? std::move(*result) : nullptr;
+        }
         constexpr std::size_t kPreviewPixelStateBytesPerPixel = 4u * sizeof(float);
         // Large exports render in bands of at most this much per-pixel state. Rendering is cheap
         // next to encoding, so small bands keep export VRAM flat at any output size.
@@ -424,6 +431,13 @@ namespace lfs::vis {
         const bool has_background_color_override) {
         PreviewImageReadbackConfig config{};
         switch (readback) {
+        case PreviewImageReadback::LinearRgba:
+        case PreviewImageReadback::LinearOpaqueRgba:
+            config.dtype = core::DataType::Float32;
+            config.channels = 4;
+            config.capture_float_color = true;
+            config.transparent_background_override = readback == PreviewImageReadback::LinearRgba;
+            break;
         case PreviewImageReadback::FloatRgb:
             config.dtype = lfs::core::DataType::Float32;
             config.channels = 3;
@@ -464,7 +478,7 @@ namespace lfs::vis {
         }
 
         if (previewRenderNeedsTiling(width, height)) {
-            return renderPreviewImageTiledWithState(
+            return legacyPreviewImage(renderPreviewImageTiledWithState(
                 scene_manager,
                 *model,
                 std::move(render_state),
@@ -477,10 +491,10 @@ namespace lfs::vis {
                 background_color_override,
                 orthographic_override,
                 ortho_scale_override,
-                PreviewImageReadback::FloatRgb);
+                PreviewImageReadback::FloatRgb));
         }
 
-        return renderPreviewImageWithState(
+        return legacyPreviewImage(renderPreviewImageWithState(
             scene_manager,
             *model,
             std::move(render_state),
@@ -494,7 +508,7 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            PreviewImageReadback::FloatRgb);
+            PreviewImageReadback::FloatRgb));
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderDatasetCameraImage(SceneManager* const scene_manager,
@@ -516,7 +530,7 @@ namespace lfs::vis {
         if (!hasRenderableGaussians(model)) {
             return {};
         }
-        return renderPreviewImageWithState(
+        return legacyPreviewImage(renderPreviewImageWithState(
             scene_manager,
             *model,
             std::move(render_state),
@@ -530,7 +544,7 @@ namespace lfs::vis {
             false,
             std::nullopt,
             std::nullopt,
-            PreviewImageReadback::FloatRgb);
+            PreviewImageReadback::FloatRgb));
     }
 
     std::expected<void, std::string> RenderingManager::renderDepthCaptureToPreviewSlotWithState(
@@ -710,7 +724,7 @@ namespace lfs::vis {
         }
 
         if (previewRenderNeedsTiling(width, height)) {
-            return renderPreviewImageTiledWithState(
+            return legacyPreviewImage(renderPreviewImageTiledWithState(
                 scene_manager,
                 *model,
                 std::move(render_state),
@@ -724,10 +738,10 @@ namespace lfs::vis {
                 orthographic_override,
                 ortho_scale_override,
                 PreviewImageReadback::UInt8Rgb,
-                rasterization_scale);
+                rasterization_scale));
         }
 
-        return renderPreviewImageWithState(
+        return legacyPreviewImage(renderPreviewImageWithState(
             scene_manager,
             *model,
             std::move(render_state),
@@ -742,7 +756,7 @@ namespace lfs::vis {
             ortho_scale_override,
             background_color_override,
             PreviewImageReadback::UInt8Rgb,
-            rasterization_scale);
+            rasterization_scale));
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgba8(SceneManager* const scene_manager,
@@ -767,7 +781,7 @@ namespace lfs::vis {
         }
 
         if (previewRenderNeedsTiling(width, height)) {
-            return renderPreviewImageTiledWithState(
+            return legacyPreviewImage(renderPreviewImageTiledWithState(
                 scene_manager,
                 *model,
                 std::move(render_state),
@@ -781,10 +795,10 @@ namespace lfs::vis {
                 orthographic_override,
                 ortho_scale_override,
                 PreviewImageReadback::UInt8Rgba,
-                rasterization_scale);
+                rasterization_scale));
         }
 
-        return renderPreviewImageWithState(
+        return legacyPreviewImage(renderPreviewImageWithState(
             scene_manager,
             *model,
             std::move(render_state),
@@ -799,7 +813,7 @@ namespace lfs::vis {
             ortho_scale_override,
             std::nullopt,
             PreviewImageReadback::UInt8Rgba,
-            rasterization_scale);
+            rasterization_scale));
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImage(const lfs::core::SplatData& model,
@@ -816,7 +830,7 @@ namespace lfs::vis {
             return {};
         }
         if (previewRenderNeedsTiling(width, height)) {
-            return renderPreviewImageTiledWithState(
+            return legacyPreviewImage(renderPreviewImageTiledWithState(
                 nullptr,
                 model,
                 std::move(scene_state),
@@ -829,10 +843,10 @@ namespace lfs::vis {
                 background_color_override,
                 orthographic_override,
                 ortho_scale_override,
-                PreviewImageReadback::FloatRgb);
+                PreviewImageReadback::FloatRgb));
         }
 
-        return renderPreviewImageWithState(
+        return legacyPreviewImage(renderPreviewImageWithState(
             nullptr,
             model,
             std::move(scene_state),
@@ -846,7 +860,7 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            PreviewImageReadback::FloatRgb);
+            PreviewImageReadback::FloatRgb));
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgb8(const lfs::core::SplatData& model,
@@ -863,7 +877,7 @@ namespace lfs::vis {
             return {};
         }
         if (previewRenderNeedsTiling(width, height)) {
-            return renderPreviewImageTiledWithState(
+            return legacyPreviewImage(renderPreviewImageTiledWithState(
                 nullptr,
                 model,
                 std::move(scene_state),
@@ -876,10 +890,10 @@ namespace lfs::vis {
                 background_color_override,
                 orthographic_override,
                 ortho_scale_override,
-                PreviewImageReadback::UInt8Rgb);
+                PreviewImageReadback::UInt8Rgb));
         }
 
-        return renderPreviewImageWithState(
+        return legacyPreviewImage(renderPreviewImageWithState(
             nullptr,
             model,
             std::move(scene_state),
@@ -893,7 +907,7 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            PreviewImageReadback::UInt8Rgb);
+            PreviewImageReadback::UInt8Rgb));
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgba8(const lfs::core::SplatData& model,
@@ -909,7 +923,7 @@ namespace lfs::vis {
             return {};
         }
         if (previewRenderNeedsTiling(width, height)) {
-            return renderPreviewImageTiledWithState(
+            return legacyPreviewImage(renderPreviewImageTiledWithState(
                 nullptr,
                 model,
                 std::move(scene_state),
@@ -922,10 +936,10 @@ namespace lfs::vis {
                 std::nullopt,
                 orthographic_override,
                 ortho_scale_override,
-                PreviewImageReadback::UInt8Rgba);
+                PreviewImageReadback::UInt8Rgba));
         }
 
-        return renderPreviewImageWithState(
+        return legacyPreviewImage(renderPreviewImageWithState(
             nullptr,
             model,
             std::move(scene_state),
@@ -939,7 +953,7 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             std::nullopt,
-            PreviewImageReadback::UInt8Rgba);
+            PreviewImageReadback::UInt8Rgba));
     }
 
     void RenderingManager::releasePreviewImageResources() {
@@ -992,6 +1006,45 @@ namespace lfs::vis {
             lod_leaf_view_deleted_version_ = deleted_version;
         }
         return lod_leaf_view_;
+    }
+
+    Result<core::Tensor> RenderingManager::renderLinearImage(SceneManager* scene_manager, const ExportImageRequest& request) {
+        if (request.width <= 0 || request.height <= 0)
+            return previewImageFailure(ErrorCode::InvalidArgument, "Invalid float render dimensions");
+        if (request.mode != ExportPostProcessMode::Transparent && request.mode != ExportPostProcessMode::Opaque)
+            return previewImageFailure(ErrorCode::Unsupported, "Raw linear render capture precedes environment export post-processing");
+        struct PreviewResourceGuard {
+            RenderingManager& manager;
+            ~PreviewResourceGuard() { manager.releasePreviewImageResources(); }
+        } guard{*this};
+        try {
+            auto render_lock = acquireLiveModelRenderLock(scene_manager);
+            auto state = scene_manager ? scene_manager->buildRenderState({.current_geometry = true}) : SceneRenderState{};
+            const auto* model = state.combined_model;
+            if (!hasRenderableGaussians(model))
+                return previewImageFailure(ErrorCode::FailedPrecondition, "No renderable Gaussian model is available");
+            const auto readback = request.mode == ExportPostProcessMode::Transparent ? PreviewImageReadback::LinearRgba : PreviewImageReadback::LinearOpaqueRgba;
+            const auto ortho_scale = exportOrthoScale(request.ortho_scale_override, request.height, request.reference_height);
+            const float scale = exportRasterizationScale(request.height, request.reference_height);
+            auto image = previewRenderNeedsTiling(request.width, request.height)
+                             ? renderPreviewImageTiledWithState(scene_manager, *model, std::move(state), request.rotation, request.translation,
+                                                                request.focal_length_mm, request.width, request.height, render_lock.has_value(), std::nullopt,
+                                                                request.orthographic_override, ortho_scale, readback, scale)
+                             : renderPreviewImageWithState(scene_manager, *model, std::move(state), request.rotation, request.translation,
+                                                           request.focal_length_mm, request.width, request.height, render_lock.has_value(), std::nullopt,
+                                                           request.orthographic_override, ortho_scale, std::nullopt, readback, scale);
+            // The captured CPU tensor owns its samples; renderer resources can retire.
+            if (!image)
+                return std::move(image).error();
+            return std::move(**image);
+        } catch (const Exception& error) {
+            return error.error();
+        } catch (const std::bad_alloc&) {
+            return previewImageFailure(ErrorCode::ResourceExhausted, "Float render capture allocation failed");
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): Preserve the exception detail in the typed rendering error.
+            return previewImageFailure(ErrorCode::Unavailable, error.what());
+        }
     }
 
     std::expected<lfs::core::Tensor, std::string> RenderingManager::renderExportImage(
@@ -1199,7 +1252,7 @@ namespace lfs::vis {
         return {};
     }
 
-    std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageWithState(
+    Result<std::shared_ptr<core::Tensor>> RenderingManager::renderPreviewImageWithState(
         SceneManager* const scene_manager,
         const lfs::core::SplatData& model,
         SceneRenderState scene_state,
@@ -1239,7 +1292,7 @@ namespace lfs::vis {
             background_color_override,
             readback_config.transparent_background_override,
             rasterization_scale,
-            readback != PreviewImageReadback::FloatRgb);
+            readback != PreviewImageReadback::FloatRgb, readback_config.capture_float_color);
         if (!rendered) {
             if (!intrinsics_override && isTileInstanceOverflow(rendered.error()) &&
                 height > kMinPreviewSubdivisionHeight) {
@@ -1260,9 +1313,11 @@ namespace lfs::vis {
                     rasterization_scale);
             }
             LOG_ERROR("Gaussian preview image render failed: {}", rendered.error());
-            return {};
+            return previewImageFailure(ErrorCode::InvalidArgument, "Invalid preview dimensions");
         }
 
+        if (readback_config.capture_float_color)
+            return scene_renderer_->readLinearColorImage(preview_render_target_);
         std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> image =
             std::unexpected("unsupported preview image readback format");
         if (readback_config.dtype == lfs::core::DataType::UInt8 &&
@@ -1278,7 +1333,7 @@ namespace lfs::vis {
         }
         if (!image) {
             LOG_ERROR("Gaussian preview image readback failed: {}", image.error());
-            return {};
+            return previewImageFailure(ErrorCode::Unavailable, rendered.error());
         }
         return std::move(*image);
     }
@@ -1302,7 +1357,7 @@ namespace lfs::vis {
         std::optional<glm::vec3> background_color_override,
         std::optional<bool> transparent_background_override,
         const float rasterization_scale,
-        const bool deterministic_export) {
+        const bool deterministic_export, const bool capture_float_color) {
         if (width <= 0 || height <= 0) {
             return std::unexpected("invalid preview render dimensions");
         }
@@ -1358,6 +1413,9 @@ namespace lfs::vis {
         };
 
         auto request = buildViewportRenderRequest(frame_ctx, frame_ctx.render_size);
+        request.capture_float_color = capture_float_color;
+        if (capture_float_color)
+            request.depth_view = false;
         if (transparent_background_override) {
             request.transparent_background = *transparent_background_override;
         }
@@ -1397,7 +1455,7 @@ namespace lfs::vis {
         return {};
     }
 
-    std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageTiledWithState(
+    Result<std::shared_ptr<core::Tensor>> RenderingManager::renderPreviewImageTiledWithState(
         SceneManager* const scene_manager,
         const lfs::core::SplatData& model,
         SceneRenderState scene_state,
@@ -1413,7 +1471,7 @@ namespace lfs::vis {
         const PreviewImageReadback readback,
         const float rasterization_scale) {
         if (width <= 0 || height <= 0) {
-            return {};
+            return previewImageFailure(ErrorCode::InvalidArgument, "Invalid tiled preview dimensions");
         }
         const auto readback_config =
             previewImageReadbackConfig(readback, background_color_override.has_value());
@@ -1421,7 +1479,7 @@ namespace lfs::vis {
         const int tile_width = width;
         const int tile_height_limit = previewTileHeightForWidth(tile_width);
         if (tile_height_limit <= 0) {
-            return {};
+            return previewImageFailure(ErrorCode::InvalidArgument, "No valid preview tile height");
         }
 
         LOG_INFO("Gaussian preview image {}x{} uses tiled render readback: tile_width={} max_tile_height={}",
@@ -1438,7 +1496,7 @@ namespace lfs::vis {
             readback_config.dtype);
         if (!output.is_valid()) {
             LOG_TRACE("Gaussian preview tiled render failed to allocate output tensor");
-            return {};
+            return previewImageFailure(ErrorCode::ResourceExhausted, "Tiled preview output allocation failed");
         }
 
         int band_height_limit = tile_height_limit;
@@ -1474,7 +1532,7 @@ namespace lfs::vis {
                     background_color_override,
                     readback_config.transparent_background_override,
                     rasterization_scale,
-                    true);
+                    true, readback_config.capture_float_color);
                 if (rendered) {
                     break;
                 }
@@ -1487,7 +1545,7 @@ namespace lfs::vis {
                     if (outstanding_export_ticket) {
                         (void)scene_renderer_->waitReadbackTicket(*outstanding_export_ticket);
                     }
-                    return {};
+                    return previewImageFailure(ErrorCode::Unavailable, rendered.error());
                 }
                 tile_height = std::max(kMinPreviewSubdivisionHeight,
                                        (tile_height / 2) / kPreviewTileHeightAlignment * kPreviewTileHeightAlignment);
@@ -1496,6 +1554,16 @@ namespace lfs::vis {
                          tile_y,
                          tile_height);
             }
+            if (readback_config.capture_float_color) {
+                // Consume the owned, synchronized float band before raster scratch
+                // is reused. The existing byte pipeline remains asynchronous.
+                auto image = scene_renderer_->readLinearColorImage(preview_render_target_);
+                if (!image)
+                    return std::move(image).error();
+                output.slice(0, size_t(tile_y), size_t(tile_y + tile_height)).copy_from(**image);
+                tile_y += tile_height;
+                continue;
+            }
             // After render of band N: wait prior band's copy (if any), then submit band N.
             if (outstanding_export_ticket) {
                 auto waited = scene_renderer_->waitReadbackTicket(*outstanding_export_ticket);
@@ -1503,7 +1571,7 @@ namespace lfs::vis {
                     LOG_TRACE("Gaussian preview tiled prior-band readback failed at tile y={}: {}",
                               tile_y,
                               waited.error());
-                    return {};
+                    return previewImageFailure(ErrorCode::Unavailable, waited.error());
                 }
                 outstanding_export_ticket.reset();
             }
@@ -1517,7 +1585,7 @@ namespace lfs::vis {
                           tile_y,
                           tile_height,
                           ticket.error());
-                return {};
+                return previewImageFailure(ErrorCode::Unavailable, ticket.error());
             }
             outstanding_export_ticket = *ticket;
             tile_y += tile_height;
@@ -1526,7 +1594,7 @@ namespace lfs::vis {
             auto waited = scene_renderer_->waitReadbackTicket(*outstanding_export_ticket);
             if (!waited) {
                 LOG_TRACE("Gaussian preview tiled final-band readback failed: {}", waited.error());
-                return {};
+                return previewImageFailure(ErrorCode::Unavailable, waited.error());
             }
         }
 

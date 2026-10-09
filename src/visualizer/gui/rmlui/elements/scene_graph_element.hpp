@@ -6,6 +6,7 @@
 
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/EventListener.h>
+#include <core/export.hpp>
 #include <core/scene.hpp>
 
 #include <chrono>
@@ -43,7 +44,7 @@ namespace lfs::vis::gui {
         void setPanelScreenOffset(float x, float y);
         void setFilterText(std::string_view text);
         void setSelectionMarkersVisible(bool visible);
-        [[nodiscard]] bool syncFromScene(const PanelDrawContext& ctx);
+        [[nodiscard]] LFS_VIS_API bool syncFromScene(const PanelDrawContext& ctx);
         [[nodiscard]] bool executeContextMenuAction(std::string_view action);
         [[nodiscard]] bool needsAnimationFrame() const {
             return (drag_source_id_ != core::NULL_NODE &&

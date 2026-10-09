@@ -306,6 +306,32 @@ namespace {
         EXPECT_NEAR(selected[0].conic_opacity[3], 1.25 * std::sqrt(rx * ry / ((rx + .3) * (ry + .3))), 1e-5);
     }
 
+    TEST_P(SplatProjectionContracts, ExportBandPreservesFullCameraCovariance) {
+        SplatProjector projector(GetParam());
+        auto means = upload(std::array<float, 3>{0, 0, 3});
+        auto scales = upload(std::array<float, 3>{std::log(.7f), std::log(.7f), std::log(.7f)});
+        auto rotation = upload(std::array<float, 4>{1, 0, 0, 0});
+        auto opacity = upload(std::array<float, 1>{0});
+        auto sh0 = upload(std::array<float, 3>{0, 0, 0});
+        SplatSources source{&means, &scales, &rotation, &opacity, &sh0, nullptr, nullptr, nullptr, 1, 0, SplatShStorage::CanonicalFloat32};
+        auto output = Tensor::empty({64}, Device::GPU, DataType::UInt8);
+        auto full = projection();
+        full.panorama = {256, 256, 0, 0};
+        ASSERT_TRUE(projector.project(source, full, 0, SplatPrimitive::Gaussian, false, output));
+        const auto reference = download_one<ProjectedSplat>(output);
+        auto band = full;
+        band.extent[1] = 64;
+        band.intrinsics[3] -= 192;
+        band.panorama[3] = 192;
+        ASSERT_TRUE(projector.project(source, band, 0, SplatPrimitive::Gaussian, false, output));
+        const auto cropped = download_one<ProjectedSplat>(output);
+        ASSERT_GT(cropped.bounds[3], cropped.bounds[1]);
+        for (size_t c = 0; c < 4; ++c)
+            EXPECT_NEAR(cropped.conic_opacity[c], reference.conic_opacity[c], 1e-7);
+        EXPECT_NEAR(cropped.mean_depth[0], reference.mean_depth[0], 1e-5);
+        EXPECT_NEAR(cropped.mean_depth[1] + 192, reference.mean_depth[1], 1e-5);
+    }
+
     INSTANTIATE_TEST_SUITE_P(Backends, SplatProjectionContracts, testing::ValuesIn(kCompiledGpuBackends),
                              [](const auto& info) { return std::string(gpu_backend_name(info.param)); });
 } // namespace

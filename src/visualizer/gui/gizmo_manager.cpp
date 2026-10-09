@@ -711,6 +711,10 @@ namespace lfs::vis::gui {
         return true;
     }
 
+    bool GizmoManager::ensureCropToolStateForRestore() {
+        return ensureCropToolState();
+    }
+
     bool GizmoManager::ensureCropToolState() {
         auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
         if (!sm)
