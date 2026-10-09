@@ -66,6 +66,17 @@ namespace lfs::app {
             return std::nullopt;
         }
 
+        std::optional<std::string> explicit_up_error(const glm::vec3& eye, const glm::vec3& target,
+                                                     const glm::vec3& up) {
+            const float up_length = glm::length(up);
+            if (!std::isfinite(up_length) || up_length <= 1.0e-6f)
+                return "Camera up vector must have finite length greater than 1e-6";
+            const glm::vec3 forward = glm::normalize(target - eye);
+            if (glm::length(glm::cross(forward, up / up_length)) <= 1.0e-6f)
+                return "Camera up vector must not be parallel to the view direction";
+            return std::nullopt;
+        }
+
         const char* keyframe_easing_name(const uint8_t easing) {
             switch (easing) {
             case 0: return "linear";
@@ -252,6 +263,10 @@ namespace lfs::app {
                 if (eye->has_value()) {
                     if (auto error = view_vectors_error(**eye, **target))
                         return mcp::invalid_argument_result(*error, "eye");
+                    if (up->has_value()) {
+                        if (auto error = explicit_up_error(**eye, **target, **up))
+                            return mcp::invalid_argument_result(*error, "up");
+                    }
                 }
 
                 const std::optional<float> fov = args.contains("fov_degrees")
@@ -308,6 +323,10 @@ namespace lfs::app {
                 if (eye->has_value()) {
                     if (auto error = view_vectors_error(**eye, **target))
                         return mcp::invalid_argument_result(*error, "eye");
+                    if (up->has_value()) {
+                        if (auto error = explicit_up_error(**eye, **target, **up))
+                            return mcp::invalid_argument_result(*error, "up");
+                    }
                 }
 
                 const std::optional<float> fov = args.contains("fov_degrees")

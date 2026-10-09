@@ -414,6 +414,46 @@ TEST_F(McpSequencerToolsTest, PlySequenceLoadPreservesValidAndDefaultFps) {
     EXPECT_TRUE(backend_.visible);
 }
 
+TEST_F(McpSequencerToolsTest, CameraCommandsRejectDegenerateExplicitUpWithoutSideEffects) {
+    const auto id = backend_.add_manual_keyframe(0.0f, {3.0f, 2.0f, 1.0f});
+    const auto before = lfs::mcp::ToolRegistry::instance().call_tool("sequencer.get", json::object());
+    const auto camera_before = backend_.camera;
+    for (const auto* tool : {"sequencer.add_keyframe", "sequencer.update_keyframe"}) {
+        for (const auto& up : {json::array({0.0, 0.0, 0.0}), json::array({0.0, 0.0, 1.0}),
+                               json::array({0.0, 0.0, -1.0}), json::array({0.0, 1.0e-8, 1.0})}) {
+            SCOPED_TRACE(std::string(tool) + up.dump());
+            const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+                tool, json{{"keyframe_id", id}, {"eye", json::array({0, 0, 5})}, {"target", json::array({0, 0, 0})}, {"up", up}, {"fov_degrees", 30.0}});
+            EXPECT_EQ(result.value("error", json::object()).value("code", ""), "InvalidArgument");
+            EXPECT_NE(result.value("error_message", "").find("up"), std::string::npos);
+            EXPECT_EQ(lfs::mcp::ToolRegistry::instance().call_tool("sequencer.get", json::object()), before);
+            EXPECT_EQ(backend_.camera.eye, camera_before.eye);
+            EXPECT_EQ(backend_.camera.target, camera_before.target);
+            EXPECT_EQ(backend_.camera.up, camera_before.up);
+            EXPECT_FLOAT_EQ(backend_.camera.fov_degrees, camera_before.fov_degrees);
+        }
+    }
+}
+
+TEST_F(McpSequencerToolsTest, CameraCommandsPreserveValidExplicitAndDefaultUp) {
+    const auto id = backend_.add_manual_keyframe(0.0f, {0.0f, 0.0f, 0.0f});
+    for (const auto* tool : {"sequencer.add_keyframe", "sequencer.update_keyframe"}) {
+        backend_.visible = false;
+        for (const auto& up : {json::array({0.0, 1.0, 0.0}), json::array({1.0, 1.0, 0.0}),
+                               json::array({0.0, 2.0, 0.0}), json::array({0.0, 1.0, 1.0})}) {
+            const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+                tool, json{{"keyframe_id", id}, {"eye", json::array({0, 0, 5})}, {"target", json::array({0, 0, 0})}, {"up", up}, {"show_sequencer", false}});
+            ASSERT_TRUE(result.value("success", false)) << result.dump();
+            EXPECT_EQ(backend_.camera.up, glm::vec3(up[0].get<float>(), up[1].get<float>(), up[2].get<float>()));
+            EXPECT_FALSE(backend_.visible);
+        }
+        const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+            tool, json{{"keyframe_id", id}, {"eye", json::array({0, 5, 0})}, {"target", json::array({0, 0, 0})}});
+        ASSERT_TRUE(result.value("success", false)) << result.dump();
+        EXPECT_EQ(backend_.camera.up, glm::vec3(0.0f, 1.0f, 0.0f));
+    }
+}
+
 TEST_F(McpSequencerToolsTest, AddKeyframeRejectsCoincidentCameraView) {
     const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
         "sequencer.add_keyframe",
