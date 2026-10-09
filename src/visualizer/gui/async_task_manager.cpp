@@ -610,7 +610,10 @@ namespace lfs::vis::gui {
                                                cam_state.position,
                                                cam_state.focal_length_mm,
                                                width,
-                                               height)
+                                               height,
+                                               std::nullopt,
+                                               std::nullopt,
+                                               render_settings.equirectangular)
                                      : snapshot.borrowed_model
                                          // Sequence switches must not inherit interactive depth-tie order.
                                          ? rendering_manager.renderPreviewImageRgb8(
@@ -620,7 +623,11 @@ namespace lfs::vis::gui {
                                                cam_state.position,
                                                cam_state.focal_length_mm,
                                                width,
-                                               height)
+                                               height,
+                                               std::nullopt,
+                                               std::nullopt,
+                                               std::nullopt,
+                                               render_settings.equirectangular)
                                          : rendering_manager.renderPreviewImage(
                                                *snapshot.gaussianModel(),
                                                std::move(scene_state),
@@ -628,7 +635,11 @@ namespace lfs::vis::gui {
                                                cam_state.position,
                                                cam_state.focal_length_mm,
                                                width,
-                                               height);
+                                               height,
+                                               std::nullopt,
+                                               std::nullopt,
+                                               std::nullopt,
+                                               render_settings.equirectangular);
                 auto video_frame = makeGaussianPreviewVideoFrame(preview_image);
                 if (!video_frame) {
                     return std::unexpected(video_frame.error());
@@ -3242,7 +3253,7 @@ namespace lfs::vis::gui {
                              mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, width, height, sequence_uuid, sequence_frame = sequence_uuid ? sequence_frames[frame] : 0,
                              cam_state = frame_states[frame],
                              clip_time = start_time + static_cast<float>(frame) * time_step]() mutable
-                            -> std::expected<lfs::core::Tensor, std::string> {
+                                -> std::expected<lfs::core::Tensor, std::string> {
                                 if (sequence_uuid) {
                                     auto& sequencer_ui = viewer->getGuiManager()->sequencerUI();
                                     const auto* current = sequencer_ui.controller().plySequence();

@@ -10,6 +10,7 @@
 #include "io/video/video_encoder.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
+#include "rendering/rendering_manager.hpp"
 #include "rendering/vksplat_viewport_renderer.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
@@ -626,3 +627,86 @@ TEST(VideoEncoderValidationTest, AcceptsMp4CaseVariantsAndExtensionlessNames) {
         EXPECT_TRUE(std::filesystem::is_regular_file(directory.path / name));
     }
 }
+
+namespace {
+    // Keep the regression runnable against the old API to prove the image failure.
+    template <typename Manager>
+    std::shared_ptr<Tensor> renderExportPreview(Manager& manager, const lfs::core::SplatData& model,
+                                                int format, int width, int height, bool panorama) {
+        const glm::mat3 rotation(1.0f);
+        const glm::vec3 position(0.0f);
+        if (format == 0) {
+            if constexpr (requires { manager.renderPreviewImage(model, {}, rotation, position, 35.0f, width, height,
+                                                                std::nullopt, std::nullopt, std::nullopt, panorama); })
+                return manager.renderPreviewImage(model, {}, rotation, position, 35.0f, width, height,
+                                                  std::nullopt, std::nullopt, std::nullopt, panorama);
+            else
+                return manager.renderPreviewImage(model, {}, rotation, position, 35.0f, width, height);
+        }
+        if (format == 1) {
+            if constexpr (requires { manager.renderPreviewImageRgb8(model, {}, rotation, position, 35.0f, width, height,
+                                                                    std::nullopt, std::nullopt, std::nullopt, panorama); })
+                return manager.renderPreviewImageRgb8(model, {}, rotation, position, 35.0f, width, height,
+                                                      std::nullopt, std::nullopt, std::nullopt, panorama);
+            else
+                return manager.renderPreviewImageRgb8(model, {}, rotation, position, 35.0f, width, height);
+        }
+        if constexpr (requires { manager.renderPreviewImageRgba8(model, {}, rotation, position, 35.0f, width, height,
+                                                                 std::nullopt, std::nullopt, panorama); })
+            return manager.renderPreviewImageRgba8(model, {}, rotation, position, 35.0f, width, height,
+                                                   std::nullopt, std::nullopt, panorama);
+        else
+            return manager.renderPreviewImageRgba8(model, {}, rotation, position, 35.0f, width, height);
+    }
+
+    TEST_P(VideoExportBandTest, PreviewProjectionMatchesRenderer) {
+        const bool panorama = std::get<0>(GetParam());
+        const bool tiled = std::get<1>(GetParam());
+        const int width = tiled ? 6144 : 1024;
+        const int height = width / 2;
+        lfs::vis::RenderingManager manager;
+        auto settings = manager.getSettings();
+        settings.raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgut;
+        settings.gut = true;
+        settings.equirectangular = panorama;
+        settings.sh_degree = 0;
+        settings.mip_filter = false;
+        settings.antialiasing = false;
+        settings.background_color = glm::vec3(0.0f);
+        manager.updateSettings(settings);
+        const Viewport viewport(64, 64);
+        // Establish the same context that the viewer passes to the export manager.
+        manager.renderVulkanFrame({.viewport = viewport, .settings = settings, .vulkan_context = &context_});
+        lfs::rendering::ViewportRenderRequest request;
+        request.frame_view.size = {width, height};
+        request.frame_view.focal_length_mm = 35.0f;
+        request.sh_degree = 0;
+        request.raster_backend = settings.raster_backend;
+        request.gut = true;
+        request.equirectangular = panorama;
+        const auto slot = lfs::vis::VksplatViewportRenderer::OutputSlot::Preview;
+        for (int format = 0; format < 3; ++format) {
+            SCOPED_TRACE(::testing::Message() << "format=" << format << " tiled=" << tiled);
+            request.transparent_background = format == 2;
+            auto rendered = renderer_->render(context_, *model_, request, false, slot, false, true);
+            ASSERT_TRUE(rendered) << rendered.error();
+            auto reference = format == 2 ? renderer_->readOutputImageRgba8(context_, slot)
+                                         : renderer_->readOutputImageRgb8(context_, slot);
+            ASSERT_TRUE(reference) << reference.error();
+            auto actual = renderExportPreview(manager, *model_, format, width, height, panorama);
+            ASSERT_TRUE(actual);
+            ASSERT_EQ(actual->numel(), (*reference)->numel());
+            int max_diff = 0;
+            size_t changed = 0;
+            const auto* expected = (*reference)->ptr<uint8_t>();
+            for (size_t i = 0; i < actual->numel(); ++i) {
+                const int value = format == 0 ? int(std::clamp(actual->ptr<float>()[i], 0.0f, 1.0f) * 255.0f + 0.5f)
+                                              : actual->ptr<uint8_t>()[i];
+                const int diff = std::abs(value - int(expected[i]));
+                max_diff = std::max(max_diff, diff);
+                changed += diff > 1;
+            }
+            EXPECT_LE(max_diff, 1) << "channels differing by more than one=" << changed;
+        }
+    }
+} // namespace

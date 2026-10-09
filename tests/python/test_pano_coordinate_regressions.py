@@ -57,3 +57,12 @@ def test_gpu_environment_pass_uses_top_down_viewport_coordinates():
     assert "vec2 viewport_uv = vec2(TexCoord.x, 1.0 - TexCoord.y);" in source
     assert "float lat = (viewport_uv.y - 0.5) * PI;" in source
     assert "vec2 pixel = viewport_uv * viewport;" in source
+
+
+def test_video_export_forwards_panorama_to_every_gaussian_readback():
+    source = _read("src/visualizer/gui/async_task_manager.cpp")
+    for method in ("renderPreviewImage", "renderPreviewImageRgb8", "renderPreviewImageRgba8"):
+        call = source.index(f"rendering_manager.{method}(")
+        trailing_arguments = source.index("height", call)
+        end = source.index(")", trailing_arguments)
+        assert "render_settings.equirectangular" in source[trailing_arguments:end], method

@@ -176,7 +176,8 @@ namespace lfs::vis {
                                                               int width, int height,
                                                               std::optional<glm::vec3> background_color_override = std::nullopt,
                                                               std::optional<bool> orthographic_override = std::nullopt,
-                                                              std::optional<float> ortho_scale_override = std::nullopt);
+                                                              std::optional<float> ortho_scale_override = std::nullopt,
+                                                              bool equirectangular = false);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgb8(SceneManager* scene_manager,
                                                                   const glm::mat3& camera_rotation,
                                                                   const glm::vec3& camera_position,
@@ -185,7 +186,8 @@ namespace lfs::vis {
                                                                   std::optional<glm::vec3> background_color_override = std::nullopt,
                                                                   std::optional<bool> orthographic_override = std::nullopt,
                                                                   std::optional<float> ortho_scale_override = std::nullopt,
-                                                                  int reference_height = 0);
+                                                                  int reference_height = 0,
+                                                                  bool equirectangular = false);
 
         // Image + per-pixel linear depth from the same viewport render. When
         // expected_depth is true, depth is alpha-weighted expected depth instead
@@ -208,7 +210,8 @@ namespace lfs::vis {
                                                                    int width, int height,
                                                                    std::optional<bool> orthographic_override = std::nullopt,
                                                                    std::optional<float> ortho_scale_override = std::nullopt,
-                                                                   int reference_height = 0);
+                                                                   int reference_height = 0,
+                                                                   bool equirectangular = false);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImage(const lfs::core::SplatData& model,
                                                               SceneRenderState scene_state,
                                                               const glm::mat3& camera_rotation,
@@ -217,7 +220,8 @@ namespace lfs::vis {
                                                               int width, int height,
                                                               std::optional<glm::vec3> background_color_override = std::nullopt,
                                                               std::optional<bool> orthographic_override = std::nullopt,
-                                                              std::optional<float> ortho_scale_override = std::nullopt);
+                                                              std::optional<float> ortho_scale_override = std::nullopt,
+                                                              bool equirectangular = false);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgb8(const lfs::core::SplatData& model,
                                                                   SceneRenderState scene_state,
                                                                   const glm::mat3& camera_rotation,
@@ -226,7 +230,8 @@ namespace lfs::vis {
                                                                   int width, int height,
                                                                   std::optional<glm::vec3> background_color_override = std::nullopt,
                                                                   std::optional<bool> orthographic_override = std::nullopt,
-                                                                  std::optional<float> ortho_scale_override = std::nullopt);
+                                                                  std::optional<float> ortho_scale_override = std::nullopt,
+                                                                  bool equirectangular = false);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgba8(const lfs::core::SplatData& model,
                                                                    SceneRenderState scene_state,
                                                                    const glm::mat3& camera_rotation,
@@ -234,7 +239,8 @@ namespace lfs::vis {
                                                                    float focal_length_mm,
                                                                    int width, int height,
                                                                    std::optional<bool> orthographic_override = std::nullopt,
-                                                                   std::optional<float> ortho_scale_override = std::nullopt);
+                                                                   std::optional<float> ortho_scale_override = std::nullopt,
+                                                                   bool equirectangular = false);
         void releasePreviewImageResources();
 
         // One-shot export: (tiled) preview render followed by the streamed GPU
@@ -700,7 +706,8 @@ namespace lfs::vis {
             std::optional<float> ortho_scale_override,
             std::optional<glm::vec3> background_color_override,
             PreviewImageReadback readback,
-            float rasterization_scale = 1.0f);
+            float rasterization_scale = 1.0f,
+            bool equirectangular = false);
         [[nodiscard]] std::expected<void, std::string> renderPreviewImageToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -719,7 +726,8 @@ namespace lfs::vis {
             std::optional<glm::vec3> background_color_override,
             std::optional<bool> transparent_background_override,
             float rasterization_scale = 1.0f,
-            bool deterministic_export = false);
+            bool deterministic_export = false,
+            bool equirectangular = false);
         [[nodiscard]] std::expected<void, std::string> renderDepthCaptureToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -748,7 +756,8 @@ namespace lfs::vis {
             std::optional<bool> orthographic_override,
             std::optional<float> ortho_scale_override,
             PreviewImageReadback readback,
-            float rasterization_scale = 1.0f);
+            float rasterization_scale = 1.0f,
+            bool equirectangular = false);
 
         struct CameraMetricsJobRequest {
             uint64_t generation = 0;
