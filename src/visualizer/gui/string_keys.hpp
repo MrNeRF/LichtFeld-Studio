@@ -366,7 +366,12 @@ namespace lichtfeld::Strings {
 
     namespace Preferences {
         inline constexpr const char* LANGUAGE = "preferences.language";
+        inline constexpr const char* TITLE = "preferences.title";
     } // namespace Preferences
+
+    namespace GettingStarted {
+        inline constexpr const char* TITLE = "getting_started.title";
+    } // namespace GettingStarted
 
     namespace MainPanel {
         inline constexpr const char* COLOR = "main_panel.color";

@@ -520,6 +520,40 @@ namespace {
                   byte_vector(R"({"generation":3})"));
     }
 
+    TEST(ProjectContainerReader, HeadIdentityFollowsTheNewestValidHead) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "head-identity.licht";
+        const ChunkKey key = fixed_key("PROJ", 961);
+        for (std::uint64_t generation = 1; generation <= 3; ++generation) {
+            ProjectWriter writer = require_result(
+                generation == 1
+                    ? ProjectWriter::create(path, fixture_create_options(960))
+                    : ProjectWriter::append(path, fixture_append_options()));
+            const auto payload = byte_vector(
+                std::format(R"({{"generation":{}}})", generation));
+            require_status(writer.plan_commit(fixture_commit_options(
+                960 + generation * 3, 961 + generation * 3, generation)));
+            require_status(writer.preflight(payload.size()));
+            require_status(writer.write_chunk(key, payload));
+            require_status(writer.commit());
+
+            const ProjectHeadIdentity head =
+                require_result(ProjectReader::read_head_identity(path));
+            const ProjectReader reader = require_result(ProjectReader::open(path));
+            EXPECT_EQ(head.project_uuid, reader.superblock().project_uuid);
+            EXPECT_EQ(head.commit_uuid, reader.commit().commit_uuid);
+            EXPECT_EQ(head.generation, generation);
+        }
+
+        const std::uint32_t newest_slot =
+            require_result(ProjectReader::open(path)).selected_head().slot_id;
+        const std::array corruption = {std::byte{0xff}};
+        write_file_range(path, HEAD_SLOT_OFFSETS[newest_slot] + 40, corruption);
+        EXPECT_EQ(require_result(ProjectReader::read_head_identity(path)).generation, 2u);
+        write_file_range(path, HEAD_SLOT_OFFSETS[1 - newest_slot] + 40, corruption);
+        EXPECT_FALSE(ProjectReader::read_head_identity(path));
+    }
+
     TEST(ProjectContainerReader,
          PositionalReadValidatesOnlyTouchedBlockCrcRanges) {
         TemporaryDirectory temporary;

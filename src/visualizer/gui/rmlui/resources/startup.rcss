@@ -55,6 +55,13 @@ body {
     margin-top: 16dp;
 }
 
+#app-row {
+    display: flex;
+    align-items: center;
+    gap: 24dp;
+    margin-top: 10dp;
+}
+
 .social-link {
     display: flex;
     align-items: center;
