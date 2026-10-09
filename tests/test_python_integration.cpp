@@ -40,6 +40,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <numbers>
@@ -75,6 +76,69 @@ protected:
 };
 
 namespace {
+    template <typename ClearCallback, typename HasCallback>
+    void check_callback_lock_order_in_child(
+        const char* registration_code,
+        ClearCallback clear_callback,
+        HasCallback has_callback) {
+        {
+            const lfs::python::GilAcquire gil;
+            ASSERT_EQ(PyRun_SimpleString(registration_code), 0);
+        }
+
+        std::promise<void> gil_acquired;
+        auto gil_acquired_future = gil_acquired.get_future();
+        std::promise<void> clear_started;
+        auto clear_started_future = clear_started.get_future();
+
+        std::packaged_task<void()> gil_task([&] {
+            const lfs::python::GilAcquire gil;
+            gil_acquired.set_value();
+            clear_started_future.wait();
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            (void)has_callback();
+        });
+        auto gil_done = gil_task.get_future();
+        std::thread gil_thread(std::move(gil_task));
+
+        std::packaged_task<void()> clear_task([&] {
+            gil_acquired_future.wait();
+            clear_started.set_value();
+            clear_callback();
+        });
+        auto clear_done = clear_task.get_future();
+        std::thread clear_thread(std::move(clear_task));
+
+        const auto timeout = std::chrono::seconds(2);
+        const bool gil_finished = gil_done.wait_for(timeout) == std::future_status::ready;
+        const bool clear_finished = clear_done.wait_for(timeout) == std::future_status::ready;
+        if (gil_finished && clear_finished) {
+            gil_thread.join();
+            clear_thread.join();
+        } else {
+            ADD_FAILURE() << "Callback clear and has-check deadlocked across the Python GIL and registry mutex";
+            // The child process owns both blocked threads and all their state.
+            std::_Exit(1);
+        }
+
+        gil_done.get();
+        clear_done.get();
+    }
+
+    template <typename ClearCallback, typename HasCallback>
+    void expect_callback_clear_does_not_invert_gil_and_registry_lock(
+        const char* registration_code,
+        ClearCallback clear_callback,
+        HasCallback has_callback) {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        ASSERT_EXIT(
+            {
+                check_callback_lock_order_in_child(registration_code, clear_callback, has_callback);
+                std::_Exit(::testing::Test::HasFailure() ? 1 : 0);
+            },
+            ::testing::ExitedWithCode(0), "");
+    }
+
     struct PythonTensorResult {
         std::vector<int64_t> shape;
         std::vector<float> values;
@@ -556,6 +620,60 @@ TEST_F(PythonIntegrationTest, SceneTimeCallbackSupportsSetTickClearAndUnsetTick)
     EXPECT_FALSE(lfs::python::has_scene_time_callback());
     EXPECT_NO_THROW(lfs::python::tick_scene_time_callback(2.0f));
     EXPECT_EQ(clip_times, (std::vector<float>{0.0f, 1.25f}));
+}
+
+TEST_F(PythonIntegrationTest, FrameCallbackSupportsReplaceClearAndExpiry) {
+    struct FrameCallbackReset {
+        ~FrameCallbackReset() { lfs::python::clear_frame_callback(); }
+    } reset;
+    std::vector<float> values;
+    lfs::python::set_frame_callback([&](float dt) { values.push_back(dt); }, 60.0);
+    EXPECT_TRUE(lfs::python::has_frame_callback());
+    lfs::python::tick_frame_callback(0.25f);
+    lfs::python::set_frame_callback([&](float dt) { values.push_back(2.0f * dt); }, 60.0);
+    lfs::python::tick_frame_callback(0.5f);
+    lfs::python::clear_frame_callback();
+    EXPECT_FALSE(lfs::python::has_frame_callback());
+    lfs::python::tick_frame_callback(1.0f);
+    lfs::python::set_frame_callback([&](float dt) { values.push_back(dt); }, 0.0);
+    EXPECT_FALSE(lfs::python::has_frame_callback());
+    lfs::python::tick_frame_callback(2.0f);
+    EXPECT_EQ(values, (std::vector<float>{0.25f, 1.0f}));
+}
+
+TEST_F(PythonIntegrationTest, SceneTimeCallbackClearDoesNotInvertGilAndRegistryLock) {
+    expect_callback_clear_does_not_invert_gil_and_registry_lock(
+        "import lichtfeld as lf\nlf.on_scene_time(lambda t: None)",
+        lfs::python::clear_scene_time_callback,
+        lfs::python::has_scene_time_callback);
+}
+
+TEST_F(PythonIntegrationTest, FrameCallbackClearDoesNotInvertGilAndRegistryLock) {
+    expect_callback_clear_does_not_invert_gil_and_registry_lock(
+        "import lichtfeld as lf\nlf.on_frame(lambda t: None, duration_s=60.0)",
+        lfs::python::clear_frame_callback,
+        lfs::python::has_frame_callback);
+}
+
+TEST_F(PythonIntegrationTest, SceneTimeCallbackReplaceDoesNotInvertGilAndRegistryLock) {
+    expect_callback_clear_does_not_invert_gil_and_registry_lock(
+        "import lichtfeld as lf\nlf.on_scene_time(lambda t: None)",
+        [] { lfs::python::set_scene_time_callback([](float) {}); },
+        lfs::python::has_scene_time_callback);
+}
+
+TEST_F(PythonIntegrationTest, FrameCallbackReplaceDoesNotInvertGilAndRegistryLock) {
+    expect_callback_clear_does_not_invert_gil_and_registry_lock(
+        "import lichtfeld as lf\nlf.on_frame(lambda t: None, duration_s=60.0)",
+        [] { lfs::python::set_frame_callback([](float) {}, 60.0); },
+        lfs::python::has_frame_callback);
+}
+
+TEST_F(PythonIntegrationTest, FrameCallbackExpiryDoesNotInvertGilAndRegistryLock) {
+    expect_callback_clear_does_not_invert_gil_and_registry_lock(
+        "import lichtfeld as lf\nlf.on_frame(lambda t: None, duration_s=0.000001)",
+        [] { EXPECT_FALSE(lfs::python::has_frame_callback()); },
+        lfs::python::has_frame_callback);
 }
 
 TEST_F(PythonIntegrationTest, ForcedInitFailureLatchesQueryableError) {
