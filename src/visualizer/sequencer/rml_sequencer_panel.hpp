@@ -163,6 +163,8 @@ namespace lfs::vis {
 
     private:
         friend class SequencerMarkupRegressionTest;
+
+        friend class SequencerRulerRegressionTest;
         void initContext(int width, int height);
 
         void syncTheme();
@@ -414,6 +416,7 @@ namespace lfs::vis {
         float last_ruler_zoom_ = -1.0f;
         float last_ruler_pan_ = -1.0f;
         float last_ruler_width_ = -1.0f;
+        float last_ruler_dp_ratio_ = -1.0f;
         float last_ruler_display_end_ = -1.0f;
         uint64_t last_timeline_revision_ = 0;
         uint64_t last_selection_revision_ = 0;

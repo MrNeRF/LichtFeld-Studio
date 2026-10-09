@@ -427,6 +427,7 @@ namespace lfs::vis {
         last_ruler_zoom_ = -1.0f;
         last_ruler_pan_ = -1.0f;
         last_ruler_width_ = -1.0f;
+        last_ruler_dp_ratio_ = -1.0f;
         last_ruler_display_end_ = -1.0f;
         last_timeline_revision_ = 0;
         last_selection_revision_ = 0;
@@ -940,11 +941,13 @@ namespace lfs::vis {
         if (zoom_level_ == last_ruler_zoom_ &&
             pan_offset_ == last_ruler_pan_ &&
             timeline_width == last_ruler_width_ &&
+            cached_dp_ratio_ == last_ruler_dp_ratio_ &&
             display_end_time == last_ruler_display_end_)
             return;
         last_ruler_zoom_ = zoom_level_;
         last_ruler_pan_ = pan_offset_;
         last_ruler_width_ = timeline_width;
+        last_ruler_dp_ratio_ = cached_dp_ratio_;
         last_ruler_display_end_ = display_end_time;
         if (timeline_width <= 0.0f)
             return;
@@ -953,13 +956,14 @@ namespace lfs::vis {
         const float visible_start = pan_offset_;
         const float visible_end = visible_start + visible_duration;
 
-        const float major_interval = sequencer_ui::rulerMajorInterval(visible_duration);
+        const float label_margin = 30.0f * cached_dp_ratio_;
+        // Leave room for the label span and the inward clamp at the ruler's ends.
+        const float major_interval = sequencer_ui::rulerMajorInterval(visible_duration, timeline_width, 2.0f * label_margin);
         const float minor_interval = major_interval / 4.0f;
 
         std::string html;
         html.reserve(2048);
 
-        const float label_margin = 30.0f * cached_dp_ratio_;
         const float half_label = label_margin * 0.5f;
 
         int first_index = static_cast<int>(std::floor(visible_start / minor_interval));
