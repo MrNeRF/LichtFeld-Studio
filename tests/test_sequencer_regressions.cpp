@@ -1353,6 +1353,95 @@ namespace {
         EXPECT_THROW((void)AnimationClip::fromJson(duplicate_target), std::runtime_error);
     }
 
+    TEST(SequencerControllerRegressionTest, ClearResetsPlayheadAfterRemovingContent) {
+        for (const auto mode : {LoopMode::ONCE, LoopMode::LOOP, LoopMode::PING_PONG}) {
+            for (const float first_time : {0.0f, 5.0f, 59.0f}) {
+                for (const bool playing : {false, true}) {
+                    SCOPED_TRACE(::testing::Message() << "first=" << first_time << " playing=" << playing
+                                                      << " loop=" << static_cast<int>(mode));
+                    SequencerController controller;
+                    const auto id = controller.addKeyframe(makeKeyframe(first_time));
+                    controller.addKeyframe(makeKeyframe(first_time + 2.0f));
+                    controller.setLoopMode(mode);
+                    controller.setPlaybackSpeed(2.0f);
+                    ASSERT_TRUE(controller.selectKeyframeById(id));
+                    if (playing)
+                        controller.play();
+                    controller.seek(first_time + 1.0f);
+                    const auto revision = controller.timelineRevision();
+
+                    controller.clear();
+
+                    EXPECT_FLOAT_EQ(controller.playhead(), 0.0f);
+                    EXPECT_FLOAT_EQ(controller.clipDuration(), 30.0f);
+                    EXPECT_TRUE(controller.isStopped());
+                    EXPECT_FALSE(controller.hasPlayableContent());
+                    EXPECT_FALSE(controller.hasSelection());
+                    EXPECT_EQ(controller.timelineRevision(), revision + 1);
+                    EXPECT_EQ(controller.loopMode(), mode);
+                    EXPECT_FLOAT_EQ(controller.playbackSpeed(), 2.0f);
+                    controller.clear();
+                    EXPECT_FLOAT_EQ(controller.playhead(), 0.0f);
+                }
+            }
+        }
+    }
+
+    TEST(SequencerControllerRegressionTest, ClearAlsoResetsEmptyAndPlyTimelines) {
+        SequencerController controller;
+        controller.seek(25.0f);
+        controller.clear();
+        EXPECT_FLOAT_EQ(controller.playhead(), 0.0f);
+        controller.setPlySequence({}, "sequence", {"frame.ply"}, {"frame"}, 24.0f);
+        controller.addKeyframe(makeKeyframe(59.0f));
+        controller.play();
+        controller.seek(59.0f);
+        controller.clear();
+        EXPECT_FALSE(controller.hasPlySequence());
+        EXPECT_FALSE(controller.hasPlayableContent());
+        EXPECT_TRUE(controller.isStopped());
+        EXPECT_FLOAT_EQ(controller.playhead(), 0.0f);
+    }
+
+    TEST(SequencerControllerRegressionTest, ClearLatency) {
+        std::vector<double> samples;
+        std::vector<SequencerController> controllers(1000);
+        for (int batch = 0; batch < 11; ++batch) {
+            for (auto& controller : controllers) {
+                controller.addKeyframe(makeKeyframe(59.0f));
+                controller.seek(59.0f);
+            }
+            const auto start = std::chrono::steady_clock::now();
+            for (auto& controller : controllers)
+                controller.clear();
+            samples.push_back(std::chrono::duration<double, std::nano>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count() /
+                              controllers.size());
+        }
+        std::sort(samples.begin(), samples.end());
+        RecordProperty("median_clear_ns", std::to_string(samples[samples.size() / 2]));
+    }
+
+    TEST(SequencerControllerRegressionTest, StopStillReturnsToFirstKeyframeWithoutClearing) {
+        SequencerController controller;
+        const auto id = controller.addKeyframe(makeKeyframe(59.0f));
+        controller.addKeyframe(makeKeyframe(61.0f));
+        ASSERT_TRUE(controller.selectKeyframeById(id));
+        const auto saved = controller.saveToJson();
+        const auto revision = controller.timelineRevision();
+        controller.play();
+        controller.seek(60.0f);
+
+        controller.stop();
+
+        EXPECT_FLOAT_EQ(controller.playhead(), 59.0f);
+        EXPECT_TRUE(controller.isStopped());
+        EXPECT_EQ(controller.selectedKeyframeId(), id);
+        EXPECT_EQ(controller.timelineRevision(), revision);
+        EXPECT_EQ(controller.saveToJson(), saved);
+    }
+
     TEST(SequencerControllerRegressionTest, SelectionTracksKeyframeIdentityAcrossResort) {
         SequencerController controller;
         const auto first_id = controller.addKeyframe(makeKeyframe(1.0f, {1.0f, 0.0f, 0.0f}));

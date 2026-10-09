@@ -519,10 +519,10 @@ namespace lfs::vis {
     void SequencerController::clear() {
         ++timeline_generation_;
         pending_keyframe_time_edit_.reset();
-        stop();
         deselectKeyframe();
         ply_sequence_.reset();
         timeline_.clear();
+        stop();
         markTimelineChanged();
     }
 
