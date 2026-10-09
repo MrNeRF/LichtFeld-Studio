@@ -6,6 +6,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "git_version.h"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
@@ -361,6 +362,8 @@ namespace lfs::vis::gui {
                 el->SetInnerRML(LOC(key));
         };
 
+        if (auto* version = document_->GetElementById("version-text"))
+            version->SetInnerRML(GIT_TAGGED_VERSION);
         set_text("supported-text", lichtfeld::Strings::Startup::SUPPORTED_BY);
         set_text("lang-label", lichtfeld::Strings::Preferences::LANGUAGE);
         set_text("discord-link", lichtfeld::Strings::Startup::DISCORD);

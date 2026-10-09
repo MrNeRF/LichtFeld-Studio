@@ -8,6 +8,7 @@
     <div id="window-shadow-key"></div>
     <div id="overlay-box">
       <img id="logo" />
+      <span id="version-text" class="dim-text"></span>
       <span id="supported-text" class="dim-text"></span>
       <div id="sponsor-row">
         <div id="link-core11" class="sponsor-link" data-url="https://www.core11.eu/">
