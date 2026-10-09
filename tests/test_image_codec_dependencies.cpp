@@ -138,6 +138,59 @@ namespace {
             }
         }
     }
+    TEST(ProductionImageOutput, AtomicCollisionCancellationAndEncodingFailuresPreserveTarget) {
+        TemporaryDirectory temporary;
+        const auto bytes = [](const std::filesystem::path& path) {
+            std::ifstream file(path, std::ios::binary);
+            return std::vector<std::uint8_t>{std::istreambuf_iterator<char>(file), {}};
+        };
+        for (const std::string extension : {".png", ".jpg", ".tiff"}) {
+            SCOPED_TRACE(extension);
+            const auto path = temporary.path / ("preserve" + extension);
+            std::vector<std::uint8_t> pixels(19 * 17 * 4, 128);
+            lfs::core::AtomicFileOptions options{.overwrite = false, .durable = false, .create_directories = false};
+            ASSERT_TRUE(codec::write_image_u8(path, pixels.data(), 19, 17, 4, 95, "stamp", options));
+            const auto original = bytes(path);
+            std::fill(pixels.begin(), pixels.end(), 42);
+            const auto collision = codec::write_image_u8(path, pixels.data(), 19, 17, 4, 95, {}, options);
+            ASSERT_FALSE(collision);
+            EXPECT_EQ(collision.error().code(), lfs::ErrorCode::AlreadyExists);
+            EXPECT_EQ(bytes(path), original);
+            options.overwrite = true;
+            int checks = 0;
+            options.cancelled = [&] { return ++checks == 2; };
+            const auto cancelled = codec::write_image_u8(path, pixels.data(), 19, 17, 4, 95, {}, options);
+            ASSERT_FALSE(cancelled);
+            EXPECT_EQ(cancelled.error().code(), lfs::ErrorCode::Cancelled);
+            EXPECT_EQ(bytes(path), original);
+            options.cancelled = {};
+            const auto invalid = codec::write_image_u8(path, nullptr, 19, 17, 4, 95, {}, options);
+            ASSERT_FALSE(invalid);
+            EXPECT_EQ(invalid.error().code(), lfs::ErrorCode::InvalidArgument);
+            EXPECT_EQ(bytes(path), original);
+            ASSERT_TRUE(codec::write_image_u8(path, pixels.data(), 19, 17, 4, 95, {}, options));
+            EXPECT_NE(bytes(path), original);
+            EXPECT_EQ(std::distance(std::filesystem::directory_iterator(temporary.path), std::filesystem::directory_iterator{}), 1);
+            std::filesystem::remove(path);
+        }
+    }
+    TEST(ProductionImageOutput, AtomicParallelPngPreservesEncodingAndPixels) {
+        TemporaryDirectory temporary;
+        constexpr int width = 1024, height = 1025, channels = 4;
+        std::vector<std::uint8_t> pixels(std::size_t(width) * height * channels);
+        for (std::size_t i = 0; i < pixels.size(); ++i)
+            pixels[i] = static_cast<std::uint8_t>(i * 17);
+        const auto direct = temporary.path / "direct.png", atomic = temporary.path / "atomic.png";
+        std::string error;
+        ASSERT_TRUE(codec::write_png(direct, pixels.data(), width, height, channels, 8, 6, "stamp", error)) << error;
+        ASSERT_TRUE(codec::write_image_u8(atomic, pixels.data(), width, height, channels, 95, "stamp", error)) << error;
+        std::ifstream direct_file(direct, std::ios::binary), atomic_file(atomic, std::ios::binary);
+        EXPECT_EQ((std::vector<std::uint8_t>{std::istreambuf_iterator<char>(direct_file), {}}),
+                  (std::vector<std::uint8_t>{std::istreambuf_iterator<char>(atomic_file), {}}));
+        codec::Image decoded;
+        ASSERT_TRUE(codec::decode(atomic, decoded, error)) << error;
+        EXPECT_EQ(decoded.data, pixels);
+    }
     TEST(ProductionImageOutput, InvalidJpegAndUnsupportedFormatsDoNotTruncateExistingFiles) {
         TemporaryDirectory temporary;
         const std::array<std::uint8_t, 4> pixels{10, 20, 30, 0};

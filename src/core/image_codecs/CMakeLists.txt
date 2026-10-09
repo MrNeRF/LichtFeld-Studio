@@ -6,7 +6,7 @@ target_include_directories(lfs_image_codecs PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../.." "${CMAKE_CURRENT_SOURCE_DIR}/.."
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../external")
 target_include_directories(lfs_image_codecs BEFORE PRIVATE ${ZLIB_INCLUDE_DIRS})
-target_link_libraries(lfs_image_codecs PUBLIC lfs_error PRIVATE PNG::PNG JPEG::JPEG ZLIB::ZLIB
+target_link_libraries(lfs_image_codecs PUBLIC lfs_error lfs_file_io PRIVATE PNG::PNG JPEG::JPEG ZLIB::ZLIB
     TIFF::TIFF WebP::webp OpenEXR::OpenEXRCore Threads::Threads)
 set_target_properties(lfs_image_codecs PROPERTIES
     POSITION_INDEPENDENT_CODE ON CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON

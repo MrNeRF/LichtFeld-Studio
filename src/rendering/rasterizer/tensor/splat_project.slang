@@ -381,9 +381,13 @@ void project_splats(uint3 tid : SV_DispatchThreadID) {
         float3 raw_covariance = 0;
         if (p.primitive_mode != 3u) {
             // Bound the covariance Jacobian near the frustum, as in 3DGS.
-            const float2 margin = .3f * .5f * float2(frame.extent.xy) / frame.intrinsics.xy;
-            const float2 positive = (float2(frame.extent.xy) - frame.intrinsics.zw) / frame.intrinsics.xy + margin;
-            const float2 negative = frame.intrinsics.zw / frame.intrinsics.xy + margin;
+            // Clamp against the complete camera, not an export band's local
+            // frustum. Otherwise an off-band mean changes its covariance.
+            const float2 camera_extent = all(frame.panorama.xy > 0) ? frame.panorama.xy : float2(frame.extent.xy);
+            const float2 camera_center = frame.intrinsics.zw + frame.panorama.zw;
+            const float2 margin = .3f * .5f * camera_extent / frame.intrinsics.xy;
+            const float2 positive = (camera_extent - camera_center) / frame.intrinsics.xy + margin;
+            const float2 negative = camera_center / frame.intrinsics.xy + margin;
             const float2 ratio = portal ? view.xy / view.z : clamp(view.xy / view.z, -negative, positive);
             float3 jx = orthographic ? float3(frame.intrinsics.x, 0, 0) : float3(frame.intrinsics.x / view.z, 0, -frame.intrinsics.x * ratio.x / view.z);
             float3 jy = orthographic ? float3(0, frame.intrinsics.y, 0) : float3(0, frame.intrinsics.y / view.z, -frame.intrinsics.y * ratio.y / view.z);

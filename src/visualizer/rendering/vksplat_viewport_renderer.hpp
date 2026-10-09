@@ -184,6 +184,8 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readPreviewDepth(
             VulkanContext& context,
             RenderTargetId target) const;
+        [[nodiscard]] Result<std::shared_ptr<lfs::core::Tensor>> readLinearColorImage(
+            VulkanContext&, RenderTargetId) const;
         // Forces the non-batched per-pixel rasterizer chain (not the macro-tile
         // HiGS chain, whose depth is one median per macro-tile, nor the batched
         // compose, which covers only a subset of pixels) so readPreviewDepth gets
@@ -262,6 +264,10 @@ namespace lfs::vis {
         [[nodiscard]] GpuLodSelectionStatus gpuLodSelectionStatus(RenderTargetId target) const;
 
     private:
+        [[nodiscard]] Result<std::shared_ptr<lfs::core::Tensor>> readRasterFloatBuffer(
+            VulkanContext&, RenderTargetId, bool color) const;
+        bool float_color_capture_ = false;
+        lfs::rendering::ViewportRenderRequest float_color_request_{};
         struct ResidentRasterScratchProvenance {
             RenderTargetId target{};
             glm::ivec2 size{0, 0};

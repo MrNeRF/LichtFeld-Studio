@@ -12,5 +12,7 @@ bool exercise_image_codec_exports() {
     const bool full_chroma_jpeg = !codec::write_jpeg(path, nullptr, 1, 1, 3, 95, std::nullopt, error, true);
     const bool png = !codec::write_png(path, nullptr, 1, 1, 3, 8, 6, std::nullopt, error);
     const bool image = !codec::write_image_u8("invalid.png", nullptr, 1, 1, 3, 95, std::nullopt, error);
-    return original_jpeg && full_chroma_jpeg && png && image && !error.empty();
+    const lfs::core::AtomicFileOptions options{.overwrite = false, .durable = false, .create_directories = false};
+    const auto atomic = codec::write_image_u8(path, nullptr, 1, 1, 3, 95, std::nullopt, options);
+    return original_jpeg && full_chroma_jpeg && png && image && !atomic && !error.empty();
 }

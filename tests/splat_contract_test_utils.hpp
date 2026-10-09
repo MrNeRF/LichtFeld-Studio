@@ -132,7 +132,8 @@ namespace lfs::test::splat {
     }
 
     inline uint16_t float_to_half(float value) {
-        _Float16 h = value;
+        // Use the tensor conversion on every host, including MSVC.
+        const auto h = core::detail::tensor_float_to_half(value);
         uint16_t bits;
         std::memcpy(&bits, &h, sizeof(bits));
         return bits;

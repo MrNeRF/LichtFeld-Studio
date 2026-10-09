@@ -40,7 +40,7 @@ namespace lfs::vis {
 
         enum class DeliveryKind : std::uint8_t {
             ColorHwc = 1,
-            DepthFloatPlane = 2,
+            FloatBuffer = 2,
             DepthSample = 3,
         };
 

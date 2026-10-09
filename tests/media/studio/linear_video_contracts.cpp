@@ -8,6 +8,7 @@
 #include "core/tensor_upload.hpp"
 #include "io/image_output.hpp"
 #include "media/video_color.hpp"
+#include "visualizer/rendering/float_color_readback.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -38,6 +39,20 @@ namespace {
         info.origin = media::FrameOrigin::Rendered;
         for (const auto dtype : {core::DataType::Float32, core::DataType::Float16}) {
             const auto source = host.to(device).to(dtype);
+            const auto captured = vis::linearFloatColorReadback(source, {.transparent = true});
+            if (!captured)
+                throw Exception(captured.error());
+            const auto* linear = captured->ptr<float>();
+            for (size_t pixel = 0; pixel < 2; ++pixel) {
+                for (size_t channel = 0; channel < 3; ++channel) {
+                    const double straight = values[pixel * 4 + channel] / values[pixel * 4 + 3];
+                    const double expected = straight <= .04045 ? straight / 12.92 : std::pow((straight + .055) / 1.055, 2.4);
+                    if (std::abs(linear[pixel * 4 + channel] - expected) > 2e-5)
+                        throw std::runtime_error("Unquantized raster capture changes signed/high-range color or applies alpha twice");
+                }
+                if (linear[pixel * 4 + 3] != values[pixel * 4 + 3])
+                    throw std::runtime_error("Unquantized raster capture changes coverage");
+            }
             for (const auto precision : {media::ExrPrecision::Half, media::ExrPrecision::Float}) {
                 media::ExrOutputOptions options;
                 options.precision = precision;

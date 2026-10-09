@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vksplat_viewport_renderer.hpp"
+#include "float_color_readback.hpp"
 #include "rendering/rasterizer/vulkan/src/display_color.h"
 #include "vulkan_scene_output.hpp"
 
@@ -6145,7 +6146,7 @@ namespace lfs::vis {
             std::memcpy(meta.dest, src, sizeof(float));
             break;
         }
-        case DeliveryKind::DepthFloatPlane: {
+        case DeliveryKind::FloatBuffer: {
             if (meta.dest == nullptr) {
                 readback_ring_.markFailed(cell, "depth plane delivery missing destination");
                 return std::unexpected(readback_ring_.cell(cell).error);
@@ -6456,21 +6457,48 @@ namespace lfs::vis {
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
     VksplatViewportRenderer::readPreviewDepth(VulkanContext& context, const RenderTargetId target) const {
+        auto result = readRasterFloatBuffer(context, target, false);
+        if (!result)
+            return std::unexpected(std::string(result.error().detail()));
+        return std::move(*result);
+    }
+    Result<std::shared_ptr<core::Tensor>> VksplatViewportRenderer::readLinearColorImage(VulkanContext& context, const RenderTargetId target) const {
+        std::lock_guard target_lock(target_mutex_);
+        if (!float_color_capture_)
+            return make_error({.code = ErrorCode::FailedPrecondition, .domain = ErrorDomain::Rendering, .detail = "Float color was not captured by the last successful render", .detection = LFS_SOURCE_SITE_CURRENT()});
+        auto raw = readRasterFloatBuffer(context, target, true);
+        if (!raw)
+            return std::move(raw).error();
+        const FloatColorReadbackSettings settings{
+            .background = float_color_request_.frame_view.background_color,
+            .transparent = float_color_request_.transparent_background,
+            .transmittance = true,
+            .tone = float_color_request_.splat_render_profile == 1 ? 0u : uint32_t(float_color_request_.color_tonemapping),
+            .exposure = std::isfinite(float_color_request_.color_exposure) ? std::clamp(float_color_request_.color_exposure, .1f, 8.f) : 1.f};
+        auto image = linearFloatColorReadback(**raw, settings);
+        if (!image)
+            return std::move(image).error();
+        return std::make_shared<core::Tensor>(std::move(*image));
+    }
+
+    Result<std::shared_ptr<lfs::core::Tensor>>
+    VksplatViewportRenderer::readRasterFloatBuffer(VulkanContext& context, const RenderTargetId target, const bool color) const {
+        const auto failure = [](std::string detail) { return make_error({.code = ErrorCode::Unavailable, .domain = ErrorDomain::Rendering, .detail = std::move(detail), .detection = LFS_SOURCE_SITE_CURRENT()}); };
         std::lock_guard target_lock(target_mutex_);
         if (!target.valid() || resident_raster_scratch_.target != target)
-            return std::unexpected("Raw depth scratch belongs to a different render target");
+            return failure("Raw raster scratch belongs to a different render target");
         const auto readback_t0 = std::chrono::steady_clock::now();
         const auto size = latestOutputImageSize(target);
         if (!size) {
-            return std::unexpected(legacyErrorString(size.error()));
+            return failure(legacyErrorString(size.error()));
         }
 
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (!context_) {
-            return std::unexpected("VkSplat depth readback requested before renderer initialization");
+            return failure("VkSplat float raster readback requested before renderer initialization");
         }
         if (&context != context_) {
-            return std::unexpected("VkSplat depth readback received a different Vulkan context");
+            return failure("VkSplat float raster readback received a different Vulkan context");
         }
         // Produce ordering is the timeline wait on the readback submit.
 
@@ -6478,17 +6506,17 @@ namespace lfs::vis {
         const std::uint64_t completion_value =
             std::max(output.completion_value, last_submitted_render_value_);
         if (render_complete_timeline_ == VK_NULL_HANDLE || completion_value == 0) {
-            return std::unexpected(
-                "VkSplat depth readback has no submitted render completion to wait on");
+            return failure(
+                "VkSplat float raster readback has no submitted render completion to wait on");
         }
 
-        const auto& depth_buffer = buffers_.pixel_depth.deviceBuffer;
+        const auto& depth_buffer = color ? buffers_.pixel_state.deviceBuffer : buffers_.pixel_depth.deviceBuffer;
         const std::size_t pixel_count =
             static_cast<std::size_t>(size->x) * static_cast<std::size_t>(size->y);
-        const VkDeviceSize byte_count = static_cast<VkDeviceSize>(pixel_count) * sizeof(float);
+        const VkDeviceSize byte_count = static_cast<VkDeviceSize>(pixel_count) * sizeof(float) * (color ? 4 : 1);
         if (depth_buffer.size < byte_count || !depth_buffer.containsRange(0, byte_count)) {
-            return std::unexpected(std::format(
-                "VkSplat depth readback requires a live pixel-depth buffer with a copy range inside its view and backing buffer (buffer={:#x}, backing_size={}, view_offset={}, view_capacity={}, view_size={}, required_bytes={}, image_size={}x{}, label='{}') ({}:{})",
+            return failure(std::format(
+                "VkSplat float raster readback requires a live pixel-depth buffer with a copy range inside its view and backing buffer (buffer={:#x}, backing_size={}, view_offset={}, view_capacity={}, view_size={}, required_bytes={}, image_size={}x{}, label='{}') ({}:{})",
                 vkHandleValue(depth_buffer.buffer),
                 depth_buffer.allocSize,
                 depth_buffer.offset,
@@ -6503,16 +6531,16 @@ namespace lfs::vis {
         }
 
         if (const auto ready = ensureReadbackContext(); !ready) {
-            return std::unexpected(ready.error());
+            return failure(ready.error());
         }
         const auto cell_or = acquireReadbackCell();
         if (!cell_or) {
-            return std::unexpected(cell_or.error());
+            return failure(cell_or.error());
         }
         const std::size_t cell = *cell_or;
         if (const auto staging_ready = ensureReadbackSlotStaging(context, cell, byte_count);
             !staging_ready) {
-            return std::unexpected(staging_ready.error());
+            return failure(staging_ready.error());
         }
 
         // pixel_depth buffers are EXCLUSIVE on the graphics family — stay on graphics.
@@ -6520,14 +6548,14 @@ namespace lfs::vis {
         const VkCommandBuffer command_buffer = slot.graphics_cmd;
         VkResult result = vkResetCommandBuffer(command_buffer, 0);
         if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkResetCommandBuffer(VkSplat depth readback)", result));
+            return failure(vkError("vkResetCommandBuffer(VkSplat float raster readback)", result));
         }
         VkCommandBufferBeginInfo begin_info{};
         begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         result = vkBeginCommandBuffer(command_buffer, &begin_info);
         if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkBeginCommandBuffer(VkSplat depth readback)", result));
+            return failure(vkError("vkBeginCommandBuffer(VkSplat float raster readback)", result));
         }
 
         VkBufferMemoryBarrier2 depth_barrier{};
@@ -6555,19 +6583,19 @@ namespace lfs::vis {
 
         result = vkEndCommandBuffer(command_buffer);
         if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkEndCommandBuffer(VkSplat depth readback)", result));
+            return failure(vkError("vkEndCommandBuffer(VkSplat float raster readback)", result));
         }
 
         auto tensor = lfs::core::Tensor::empty(
-            {static_cast<std::size_t>(size->y), static_cast<std::size_t>(size->x)},
+            color ? core::TensorShape{size_t(size->y), size_t(size->x), size_t{4}} : core::TensorShape{size_t(size->y), size_t(size->x)},
             lfs::core::Device::CPU,
             lfs::core::DataType::Float32);
         if (!tensor.is_valid()) {
-            return std::unexpected("VkSplat depth readback failed to allocate CPU tensor");
+            return failure("VkSplat float raster readback failed to allocate CPU tensor");
         }
         auto* const dst = tensor.ptr<float>();
         if (dst == nullptr) {
-            return std::unexpected("VkSplat depth readback has null destination");
+            return failure("VkSplat float raster readback has null destination");
         }
 
         ReadbackTicketRing::TicketMeta meta{};
@@ -6575,7 +6603,7 @@ namespace lfs::vis {
         meta.byte_count = byte_count;
         meta.width = size->x;
         meta.height = size->y;
-        meta.delivery = ReadbackTicketRing::DeliveryKind::DepthFloatPlane;
+        meta.delivery = ReadbackTicketRing::DeliveryKind::FloatBuffer;
         meta.dest = dst;
 
         const auto ticket = submitReadbackTicket(
@@ -6586,13 +6614,13 @@ namespace lfs::vis {
             completion_value,
             VK_PIPELINE_STAGE_TRANSFER_BIT,
             std::move(meta),
-            "VkSplat depth readback submit",
-            "VkSplat depth readback");
+            "VkSplat float raster readback submit",
+            "VkSplat float raster readback");
         if (!ticket) {
-            return std::unexpected(ticket.error());
+            return failure(ticket.error());
         }
         if (const auto waited = waitReadbackTicketLocked(*ticket); !waited) {
-            return std::unexpected(waited.error());
+            return failure(waited.error());
         }
         LOG_PERF("vksplat.readback.readPreviewDepth took_us={}",
                  std::chrono::duration_cast<std::chrono::microseconds>(
@@ -6728,7 +6756,7 @@ namespace lfs::vis {
         meta.byte_count = byte_count;
         meta.width = output.size.x;
         meta.height = output.size.y;
-        meta.delivery = ReadbackTicketRing::DeliveryKind::DepthFloatPlane;
+        meta.delivery = ReadbackTicketRing::DeliveryKind::FloatBuffer;
         meta.dest = destination.data_ptr();
 
         return submitReadbackTicket(
@@ -7707,6 +7735,7 @@ namespace lfs::vis {
         const RenderTargetId target,
         const bool synchronize_input_read) {
         std::lock_guard target_lock(target_mutex_);
+        float_color_capture_ = false;
         if (rendering_target_.valid())
             return std::unexpected("A render target is already being rendered");
         if (!target.valid() || ring_.released(target))
@@ -7974,6 +8003,7 @@ namespace lfs::vis {
         const bool synchronize_input_upload,
         const bool deterministic_export) {
         std::lock_guard target_lock(target_mutex_);
+        float_color_capture_ = false;
         if (rendering_target_.valid())
             return std::unexpected("A render target is already being rendered");
         if (!target.valid() || ring_.released(target))
@@ -9136,6 +9166,12 @@ namespace lfs::vis {
         resident_depth_wave_armed_ = armed_depth_waves;
         resident_sort_bits_ = depth_wave_sort_bits;
         resident_raster_scratch_ = makeResidentRasterScratchProvenance(target, request, splat_data.size());
+        float_color_capture_ = request.capture_float_color && !request.depth_view;
+        float_color_request_.frame_view.background_color = request.frame_view.background_color;
+        float_color_request_.transparent_background = request.transparent_background;
+        float_color_request_.color_exposure = request.color_exposure;
+        float_color_request_.color_tonemapping = std::clamp(request.color_tonemapping, 0, 6);
+        float_color_request_.splat_render_profile = request.splat_render_profile;
         resident_model_snapshot_ = makeModelInputSnapshot(splat_data);
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         if (shared_arena_guard) {

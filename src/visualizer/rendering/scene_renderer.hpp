@@ -118,6 +118,9 @@ namespace lfs::vis {
         }
         virtual bool nextOutputImagesNeedResize(glm::ivec2, RenderTargetId) const = 0;
         virtual std::expected<std::shared_ptr<core::Tensor>, std::string> readColorImage(RenderTargetId, OutputImageFormat) const = 0;
+        // CPU HWC Float32 linear BT709/straight RGBA; only after an explicit
+        // capture_float_color render. Read immediately, before target reuse.
+        virtual Result<std::shared_ptr<core::Tensor>> readLinearColorImage(RenderTargetId) const;
         std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImage(RenderTargetId target) const { return readColorImage(target, OutputImageFormat::RgbFloat); }
         std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImageRgba(RenderTargetId target) const { return readColorImage(target, OutputImageFormat::RgbaFloat); }
         std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImageRgb8(RenderTargetId target) const { return readColorImage(target, OutputImageFormat::Rgb8); }

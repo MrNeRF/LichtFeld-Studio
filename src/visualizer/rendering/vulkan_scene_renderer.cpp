@@ -52,6 +52,9 @@ namespace lfs::vis {
                 }
                 return std::unexpected("Unsupported color output format");
             }
+            Result<std::shared_ptr<core::Tensor>> readLinearColorImage(RenderTargetId target) const override {
+                return renderer_.readLinearColorImage(context_, target);
+            }
             std::expected<std::shared_ptr<core::Tensor>, std::string> readPreviewDepth(RenderTargetId target) const override { return renderer_.readPreviewDepth(context_, target); }
             void setDepthCaptureMode(bool enabled, bool expected) override { renderer_.setDepthCaptureMode(enabled, expected); }
             std::expected<void, std::string> readOutputImageIntoCpuHwc(RenderTargetId target, core::Tensor& destination, int x, int y) const override { return renderer_.readOutputImageIntoCpuHwc(context_, target, destination, x, y); }

@@ -229,6 +229,9 @@ namespace lfs::vis {
             std::optional<float> ortho_scale_override;
             ExportPostProcessMode mode = ExportPostProcessMode::Opaque;
         };
+        // Raw raster/tone output before UInt8, PPISP and environment post-process.
+        // CPU Float32 HWC linear BT709/straight RGBA; must run on the viewer thread.
+        [[nodiscard]] Result<core::Tensor> renderLinearImage(SceneManager*, const ExportImageRequest&);
         [[nodiscard]] std::expected<lfs::core::Tensor, std::string> renderExportImage(
             SceneManager* scene_manager, const ExportImageRequest& request);
 
@@ -720,6 +723,8 @@ namespace lfs::vis {
         mutable std::unordered_map<ViewId, std::pair<uint64_t, uint64_t>> depth_window_epochs_;
         enum class PreviewImageReadback {
             FloatRgb,
+            LinearRgba,
+            LinearOpaqueRgba,
             UInt8Rgb,
             UInt8Rgba,
         };
@@ -727,6 +732,7 @@ namespace lfs::vis {
         struct PreviewImageReadbackConfig {
             lfs::core::DataType dtype = lfs::core::DataType::Float32;
             int channels = 3;
+            bool capture_float_color = false;
             std::optional<bool> transparent_background_override;
         };
 
@@ -739,7 +745,7 @@ namespace lfs::vis {
         [[nodiscard]] float exportRasterizationScale(int target_height, int reference_height) const;
         [[nodiscard]] std::optional<float> exportOrthoScale(std::optional<float> scale, int target_height, int reference_height) const;
 
-        std::shared_ptr<lfs::core::Tensor> renderPreviewImageWithState(
+        Result<std::shared_ptr<core::Tensor>> renderPreviewImageWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
             SceneRenderState scene_state,
@@ -774,7 +780,7 @@ namespace lfs::vis {
             std::optional<glm::vec3> background_color_override,
             std::optional<bool> transparent_background_override,
             float rasterization_scale = 1.0f,
-            bool deterministic_export = false);
+            bool deterministic_export = false, bool capture_float_color = false);
         [[nodiscard]] std::expected<void, std::string> renderDepthCaptureToPreviewSlotWithState(
             const RenderSettings& settings,
             SceneManager* scene_manager,
@@ -790,7 +796,7 @@ namespace lfs::vis {
             std::optional<glm::vec3> background_color_override,
             std::optional<bool> orthographic_override,
             std::optional<float> ortho_scale_override);
-        std::shared_ptr<lfs::core::Tensor> renderPreviewImageTiledWithState(
+        Result<std::shared_ptr<core::Tensor>> renderPreviewImageTiledWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
             SceneRenderState scene_state,

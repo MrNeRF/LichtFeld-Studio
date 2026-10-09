@@ -85,11 +85,10 @@ namespace lfs::media {
                             pixels + row * frame.layout.row_stride, row_bytes);
             pixels = packed.data();
         }
-        std::string error;
-        const bool success = core::image_codecs::write_image_u8(filename, pixels, frame.layout.width, frame.layout.height, 3,
-                                                                options_.jpeg_quality, std::nullopt, error,
-                                                                options_.format == FrameFileFormat::JPEG && options_.jpeg_quality > 90);
-        return success ? SinkResult{} : sinkError(ErrorCode::Unavailable, std::move(error));
+        auto result = core::image_codecs::write_image_u8(filename, pixels, frame.layout.width, frame.layout.height, 3,
+                                                         options_.jpeg_quality, std::nullopt, options_.image_output,
+                                                         options_.format == FrameFileFormat::JPEG && options_.jpeg_quality > 90);
+        return result ? SinkResult{} : SinkResult::failure(std::move(result).error());
     }
     SinkResult FileFrameSink::complete(const SinkSummary&) {
         if (!active_)
