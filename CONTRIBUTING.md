@@ -25,19 +25,16 @@ Thanks for your interest in contributing!
 
 ## Opening an Issue
 
-Search existing issues, then choose **Bug report**, **Feature request**, or
-**Question / unexpected behavior**. If you are unsure whether something is a
-bug, the question form is a good place to start.
+Search existing issues, then choose **Report a problem**, **Suggest an improvement**,
+or **Ask a question**. You can also open a blank issue if none of the forms fits.
 
-Keep each issue focused on one main problem or request and link related issues.
-For bugs, include your version/build, system and GPU, reproduction steps, and
-expected versus actual behavior. If you built from source, add the branch and
-commit SHA if available; a branch name alone changes over time. Separate what
-you observed from any suspected cause or proposed fix.
+Short reports are welcome. For problems, your app version, operating system, and
+GPU help us investigate. Share whatever details you know. For source builds,
+the repository or fork, branch, and commit are helpful if available.
 
-For feature requests, describe the problem and desired behavior with a concrete
-example. Logs, screenshots, and small samples are welcome; remove private
-information before sharing.
+Describe one main topic per issue and link related reports when useful. Share
+what you observed; you do not need to diagnose the cause. Screenshots, logs, and
+small samples are welcome. Remove private information before sharing.
 
 ## Localization
 

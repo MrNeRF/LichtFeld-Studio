@@ -1,78 +1,68 @@
-name: Bug report
-description: Report a crash or something that does not work as expected.
-labels:
-- bug
+name: Report a problem
+description: Something went wrong, crashed, or behaved unexpectedly.
+labels: [bug]
 body:
-- type: markdown
-  attributes:
-    value: Please report one main problem per issue and check for similar reports first. If you are unsure
-      whether this is a bug, choose **Question / unexpected behavior**.
-- type: dropdown
-  id: installation
-  attributes:
-    label: Installation method
-    description: How are you running LichtFeld Studio?
-    options:
-    - Official release
-    - Nightly build
-    - Built from source
-    - Other / not sure
-  validations:
-    required: true
-- type: input
-  id: version
-  attributes:
-    label: Version or build
-    description: Enter the version or build identifier. If unknown, provide the download link or approximate
-      download date.
-    placeholder: Version / build / download link
-  validations:
-    required: true
-- type: input
-  id: source
-  attributes:
-    label: Branch and commit (source builds only)
-    description: If you built from source, include the branch and commit SHA; include the fork URL if
-      applicable. Leave this blank for downloaded builds.
-  validations:
-    required: false
-- type: textarea
-  id: environment
-  attributes:
-    label: System and GPU
-    description: Include your operating system, GPU model, and GPU driver version if known (for example, NVIDIA, AMD, or Intel).
-    placeholder: Windows 11, GPU model (VRAM), driver ...
-  validations:
-    required: true
-- type: textarea
-  id: reproduce
-  attributes:
-    label: Steps to reproduce
-    description: List the steps and relevant settings. For intermittent problems, describe when and how
-      often they happen.
-    placeholder: '1. Open ...
-
-      2. Select ...
-
-      3. ...'
-  validations:
-    required: true
-- type: textarea
-  id: behavior
-  attributes:
-    label: Expected and actual behavior
-    description: What did you expect, and what happened instead? Include the error message if available.
-    placeholder: 'Expected: ...
-
-      Actual: ...'
-  validations:
-    required: true
-- type: textarea
-  id: attachments
-  attributes:
-    label: Logs, screenshots, or extra details
-    description: 'Optional: attach logs or a small sample. For training/export problems, include relevant
-      dataset sizes and settings. If this worked before, mention the last working build. Remove private
-      information before sharing.'
-  validations:
-    required: false
+  - type: markdown
+    attributes:
+      value: >-
+        Thanks for reporting a problem! A few sentences are enough to get started.
+        Share whatever details you know. You do not need to identify the cause.
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: >-
+        What were you trying to do, what happened, and what did you expect instead?
+        You can also attach screenshots here.
+      placeholder: |
+        I was trying to...
+        Instead, ...
+        I expected...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: System and GPU
+      description: >-
+        Which operating system and GPU are you using? Approximate details are fine.
+        If you are unsure, say so. Driver details are welcome if known;
+        on macOS, the operating system version is enough for driver information.
+      placeholder: >-
+        For example: Windows 11 / NVIDIA RTX 4070, or macOS 27 / Apple M4.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or download (optional)
+      description: >-
+        Add the app version, build identifier, or download link if available.
+        For source builds, the repository or fork, branch, and commit are helpful.
+      placeholder: Version, build, download link, or approximate download date.
+    validations:
+      required: false
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How can we reproduce it? (optional)
+      description: >-
+        If you know the steps, list them here along with any relevant settings.
+        If it only happens sometimes, describe when.
+        It is okay if you cannot reproduce it reliably.
+      placeholder: |
+        1. Open...
+        2. Select...
+        3. ...
+    validations:
+      required: false
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Anything else that might help? (optional)
+      description: >-
+        Logs, screenshots, or a small sample are welcome.
+        If this worked before, mention the last working version you remember.
+        Remove private information before sharing.
+    validations:
+      required: false

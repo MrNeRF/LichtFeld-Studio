@@ -1,32 +1,26 @@
-name: Question / unexpected behavior
-description: Ask for help or clarification when you are unsure whether something is a bug.
-labels:
-- question
+name: Ask a question
+description: Get help with a workflow or something you are unsure about.
+labels: [question]
 body:
-- type: markdown
-  attributes:
-    value: Check the [FAQ](https://github.com/MrNeRF/LichtFeld-Studio/wiki/Frequently-Asked-Questions)
-      and similar issues first. You do not need to diagnose the problem yourself.
-- type: textarea
-  id: question
-  attributes:
-    label: Your question
-    description: What are you trying to do, what did you try, and what is unclear?
-  validations:
-    required: true
-- type: input
-  id: version
-  attributes:
-    label: Version or build
-    description: Include the version or build if relevant. For source builds, add the branch and commit
-      if known.
-  validations:
-    required: false
-- type: textarea
-  id: details
-  attributes:
-    label: Additional details
-    description: 'Optional: include relevant settings, your system/GPU, logs, or screenshots. Remove private
-      information before sharing.'
-  validations:
-    required: false
+  - type: markdown
+    attributes:
+      value: >-
+        Not sure how something works, or whether a result is expected? Ask here.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: >-
+        What are you trying to do, and what would you like to understand?
+        If you have already tried something, tell us briefly.
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Additional details (optional)
+      description: >-
+        If relevant, include your app version, operating system and GPU,
+        settings, or screenshots. Remove private information before sharing.
+    validations:
+      required: false
