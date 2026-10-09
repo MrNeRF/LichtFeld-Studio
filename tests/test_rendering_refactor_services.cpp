@@ -38,6 +38,7 @@
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <memory>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -1245,6 +1246,97 @@ namespace lfs::vis {
         ASSERT_NE(consolidated, nullptr);
         scene.discardUnconsolidatedModelCache();
         EXPECT_EQ(scene.peekCombinedModel(), consolidated);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, AggregateSnapshotSurvivesRebuildAndMetadataQueries) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        scene.addSplat("left", makeTestSplat(0.0f));
+        scene.addSplat("right", makeTestSplat(1.0f));
+        const auto original = manager.buildRenderState();
+        ASSERT_NE(original.owned_combined_model, nullptr);
+        ASSERT_EQ(original.owned_combined_model.get(), original.combined_model);
+        ASSERT_NE(original.transform_indices, nullptr);
+        scene.addSplat("third", makeTestSplat(2.0f));
+        const auto* replacement = scene.getCurrentCombinedModel();
+        ASSERT_NE(replacement, nullptr);
+        EXPECT_NE(replacement, original.combined_model);
+        EXPECT_EQ(replacement->size(), 3u);
+        const auto metadata = manager.buildRenderState({.metadata_only = true});
+        EXPECT_EQ(metadata.owned_combined_model, nullptr);
+        const auto current = manager.buildRenderState();
+        EXPECT_EQ(current.combined_model, replacement);
+        EXPECT_EQ(current.owned_combined_model.get(), replacement);
+        EXPECT_EQ(original.combined_model->size(), 2u);
+        EXPECT_EQ(original.transform_indices->numel(), 2u);
+        EXPECT_EQ(original.model_transforms.size(), 2u);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, AggregateSnapshotSurvivesCacheDiscardUntilReleased) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        scene.addSplat("left", makeTestSplat(0.0f));
+        scene.addSplat("right", makeTestSplat(1.0f));
+        auto retained = manager.buildRenderState();
+        ASSERT_NE(retained.owned_combined_model, nullptr);
+        std::weak_ptr<const core::SplatData> aggregate = retained.owned_combined_model;
+        scene.discardUnconsolidatedModelCache();
+        EXPECT_EQ(scene.peekCombinedModel(), nullptr);
+        EXPECT_EQ(manager.buildRenderState({.metadata_only = true}).combined_model, nullptr);
+        ASSERT_FALSE(aggregate.expired());
+        EXPECT_EQ(retained.combined_model->size(), 2u);
+        retained = {};
+        EXPECT_TRUE(aggregate.expired());
+    }
+
+    TEST_F(SceneManagerRenderStateTest, SceneClearReleasesCachedAggregateWithoutAnotherRender) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        scene.addSplat("left", makeTestSplat(0.0f));
+        scene.addSplat("right", makeTestSplat(1.0f));
+        std::weak_ptr<const core::SplatData> aggregate;
+        {
+            const auto state = manager.buildRenderState();
+            ASSERT_NE(state.owned_combined_model, nullptr);
+            aggregate = state.owned_combined_model;
+        }
+        ASSERT_FALSE(aggregate.expired());
+        ASSERT_TRUE(manager.clear());
+        EXPECT_TRUE(aggregate.expired());
+        EXPECT_EQ(manager.buildRenderState().combined_model, nullptr);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, ReturnedAggregateSnapshotSurvivesSceneClear) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        scene.addSplat("left", makeTestSplat(0.0f));
+        scene.addSplat("right", makeTestSplat(1.0f));
+        auto retained = manager.buildRenderState();
+        ASSERT_NE(retained.owned_combined_model, nullptr);
+        std::weak_ptr<const core::SplatData> aggregate = retained.owned_combined_model;
+        ASSERT_TRUE(manager.clear());
+        ASSERT_FALSE(aggregate.expired());
+        EXPECT_EQ(retained.combined_model->size(), 2u);
+        retained = {};
+        EXPECT_TRUE(aggregate.expired());
+    }
+
+    TEST_F(SceneManagerRenderStateTest, SingleNodeAndMetadataSnapshotsDoNotOwnAnAggregate) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        const auto id = scene.addSplat("single", makeTestSplat(0.0f));
+        const auto single = manager.buildRenderState();
+        EXPECT_EQ(single.combined_model, scene.getNodeById(id)->model.get());
+        EXPECT_EQ(single.owned_combined_model, nullptr);
+        EXPECT_EQ(scene.sharePreparedCombinedModel(), nullptr);
+        const auto metadata = manager.buildRenderState({.metadata_only = true});
+        EXPECT_EQ(metadata.combined_model, nullptr);
+        EXPECT_EQ(metadata.owned_combined_model, nullptr);
     }
 
     TEST_F(SceneManagerRenderStateTest, PlyComparisonMetadataCacheIsDistinctFromFullCombinedState) {

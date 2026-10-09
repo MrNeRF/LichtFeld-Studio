@@ -1562,6 +1562,7 @@ namespace lfs::vis {
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             content_type_ = ContentType::Empty;
+            cached_render_state_.reset();
             splat_paths_.clear();
             dataset_path_.clear();
             colmap_sparse_path_.clear();
@@ -3631,6 +3632,11 @@ namespace lfs::vis {
         bool hidden_dataset_training_model = false;
         if (!options.metadata_only && content_type_ == ContentType::SplatFiles) {
             state.combined_model = current_model;
+            if (current_model) {
+                state.owned_combined_model = scene_.sharePreparedCombinedModel();
+                if (state.owned_combined_model.get() != current_model)
+                    state.owned_combined_model.reset();
+            }
         } else if (!options.metadata_only && content_type_ == ContentType::Dataset) {
             state.combined_model = scene_.getTrainingModel();
             hidden_dataset_training_model =

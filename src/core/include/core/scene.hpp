@@ -429,6 +429,9 @@ namespace lfs::core {
         [[nodiscard]] bool hasPreparedCombinedModel() const;
         // Installed combined/single-node alias, or null. Does not build.
         [[nodiscard]] const lfs::core::SplatData* peekCombinedModel() const;
+        // Retain the installed aggregate without polling/building or copying buffers.
+        // Single-node aliases remain owned by their scene node.
+        [[nodiscard]] std::shared_ptr<const lfs::core::SplatData> sharePreparedCombinedModel() const;
         // Drop redundant aggregate storage while rendering owned nodes. A running
         // worker is drained on a later call; consolidated storage is preserved.
         void discardUnconsolidatedModelCache() const;

@@ -27,6 +27,9 @@ namespace lfs::vis {
 
     struct SceneRenderState {
         const lfs::core::SplatData* combined_model = nullptr;
+        // UI/selection queries can replace the aggregate before this snapshot is drawn.
+        // Keep its buffers alive alongside their matching transform/selection metadata.
+        std::shared_ptr<const lfs::core::SplatData> owned_combined_model;
         const lfs::core::PointCloud* point_cloud = nullptr;             // For pre-training point cloud rendering
         std::shared_ptr<const lfs::core::PointCloud> owned_point_cloud; // Keeps merged point clouds alive
         glm::mat4 point_cloud_transform{1.0f};

@@ -931,6 +931,11 @@ namespace lfs::core {
         return single_node_model_ ? single_node_model_ : cached_combined_.get();
     }
 
+    std::shared_ptr<const lfs::core::SplatData> Scene::sharePreparedCombinedModel() const {
+        std::lock_guard<std::mutex> lock(combined_model_mutex_);
+        return single_node_model_ ? nullptr : cached_combined_;
+    }
+
     void Scene::discardUnconsolidatedModelCache() const {
         if (consolidated_ || combined_model_build_running_.load(std::memory_order_acquire)) {
             return;
