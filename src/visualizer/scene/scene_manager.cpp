@@ -3621,8 +3621,15 @@ namespace lfs::vis {
             cached_render_model_ == current_model &&
             cached_render_content_type_ == content_type_ &&
             cached_render_metadata_only_ == options.metadata_only &&
-            cached_render_state_->node_active_sh_degrees == node_active_sh_degrees)
-            return *cached_render_state_;
+            cached_render_state_->node_active_sh_degrees == node_active_sh_degrees) {
+            SceneRenderState cached = *cached_render_state_;
+            if (cached.combined_model && !options.metadata_only && content_type_ == ContentType::SplatFiles) {
+                cached.owned_combined_model = scene_.sharePreparedCombinedModel();
+                if (cached.owned_combined_model.get() != cached.combined_model)
+                    cached.owned_combined_model.reset();
+            }
+            return cached;
+        }
 
         SceneRenderState state;
         state.node_active_sh_degrees = node_active_sh_degrees;
@@ -3761,6 +3768,9 @@ namespace lfs::vis {
         // getNodeMask() may promote shared→exclusive internally, call outside shared_lock
         state.selected_node_mask = selection_.getNodeMask(scene_);
 
+        // The cache must not pin the aggregate: discarding it before an import frees its
+        // memory. Only the returned snapshot owns it.
+        auto owned_combined_model = std::move(state.owned_combined_model);
         cached_render_state_ = std::make_shared<const SceneRenderState>(std::move(state));
         cached_render_scene_generation_ = scene_generation;
         cached_render_selection_generation_ = selection_generation;
@@ -3769,7 +3779,9 @@ namespace lfs::vis {
         cached_render_model_ = current_model;
         cached_render_content_type_ = content_type_;
         cached_render_metadata_only_ = options.metadata_only;
-        return *cached_render_state_;
+        SceneRenderState result = *cached_render_state_;
+        result.owned_combined_model = std::move(owned_combined_model);
+        return result;
     }
 
     void SceneManager::completePendingSelectionCounts() const {

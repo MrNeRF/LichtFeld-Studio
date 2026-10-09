@@ -1339,6 +1339,24 @@ namespace lfs::vis {
         EXPECT_EQ(metadata.owned_combined_model, nullptr);
     }
 
+    TEST_F(SceneManagerRenderStateTest, DiscardingTheAggregateFreesItOnceSnapshotsAreGone) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        scene.addSplat("left", makeTestSplat(0.0f));
+        scene.addSplat("right", makeTestSplat(1.0f));
+        std::weak_ptr<const core::SplatData> aggregate;
+        {
+            const auto state = manager.buildRenderState();
+            ASSERT_NE(state.owned_combined_model, nullptr);
+            aggregate = state.owned_combined_model;
+        }
+        // Imports discard the aggregate to free its memory before allocating the next one;
+        // the manager's own snapshot cache must not keep it alive.
+        scene.discardUnconsolidatedModelCache();
+        EXPECT_TRUE(aggregate.expired());
+    }
+
     TEST_F(SceneManagerRenderStateTest, PlyComparisonMetadataCacheIsDistinctFromFullCombinedState) {
         SceneManager manager;
         manager.changeContentType(SceneManager::ContentType::SplatFiles);
