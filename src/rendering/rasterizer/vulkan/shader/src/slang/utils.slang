@@ -14,6 +14,7 @@
 
 #include "config.slang"
 #include "overlay_flags.inc"
+#include "../../../../slang/spark_alpha.inc"
 
 #define LFS_PORTAL_INLINE
 #define LFS_PORTAL_VEC3 float3
@@ -873,7 +874,7 @@ float spark_rad_alpha_from_value(float opacity, float val)
     }
 
     const float lod_density = exp((opacity * opacity - 1.0f) / 2.718281828459045f);
-    const float lod_alpha = 1.0f - pow(max(0.0f, 1.0f - val), lod_density);
+    const float lod_alpha = lfsSparkAlphaFromDensity(val, lod_density);
     return clipOpacity(lod_alpha);
 }
 

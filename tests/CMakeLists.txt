@@ -195,6 +195,9 @@ if(BUILD_TESTS)
     target_include_directories(gpu_program_contracts PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer)
     target_link_libraries(gpu_program_contracts PRIVATE lfs_core GTest::gtest)
     target_compile_features(gpu_program_contracts PRIVATE cxx_std_23)
+    lfs_add_gpu_program(gpu_program_contracts spark_alpha_contract SOURCE shaders/spark_alpha_contract.slang
+        DEPENDS "${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/slang/spark_alpha.inc"
+        COMPUTE evaluate)
     lfs_add_gpu_program(gpu_program_contracts program_contract SOURCE shaders/program_contract.slang
         COMPUTE transform VERTEX vertexMain FRAGMENT fragmentMain)
     lfs_add_gpu_program(gpu_program_contracts program_features SOURCE shaders/program_features.slang

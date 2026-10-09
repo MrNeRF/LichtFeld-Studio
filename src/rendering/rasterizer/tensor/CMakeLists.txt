@@ -31,39 +31,39 @@ lfs_add_gpu_program(lfs_tensor_rasterizer splat_selection SOURCE splat_selection
 # chunks (128|512) and prefix (128|512|1024). Generic blends per raster mode and
 # group width read their feature flags per dispatch.
 set(_blend_entries tile_blend tile_depth_compose)
-lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs_fast SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs_fast SOURCE splat_blend.slang DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../slang/spark_alpha.inc" COMPUTE ${_blend_entries}
     DEFINES LFS_BLEND_MODE=0 LFS_BLEND_FLAGS=128 RELAXED_MATH)
-lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs_batch SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs_batch SOURCE splat_blend.slang DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../slang/spark_alpha.inc" COMPUTE ${_blend_entries}
     DEFINES LFS_BLEND_MODE=0 LFS_BLEND_FLAGS=640 RELAXED_MATH)
-lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs_prefix SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs_prefix SOURCE splat_blend.slang DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../slang/spark_alpha.inc" COMPUTE ${_blend_entries}
     DEFINES LFS_BLEND_MODE=0 LFS_BLEND_FLAGS=1664 RELAXED_MATH)
 # Depth display keeps precise math, but otherwise has the same hot-path flag
 # stability as the opaque view. Specialize its serial, chunk and prefix passes
 # so Slang can discard every overlay/portal/Spark/GUT branch before emitting MSL.
-lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs_depth SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs_depth SOURCE splat_blend.slang DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../slang/spark_alpha.inc" COMPUTE ${_blend_entries}
     DEFINES LFS_BLEND_MODE=0 LFS_BLEND_FLAGS=2176)
-lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs_depth_batch SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs_depth_batch SOURCE splat_blend.slang DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../slang/spark_alpha.inc" COMPUTE ${_blend_entries}
     DEFINES LFS_BLEND_MODE=0 LFS_BLEND_FLAGS=2688)
-lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs_depth_prefix SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs_depth_prefix SOURCE splat_blend.slang DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../slang/spark_alpha.inc" COMPUTE ${_blend_entries}
     DEFINES LFS_BLEND_MODE=0 LFS_BLEND_FLAGS=3712)
-lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs32 SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs32 SOURCE splat_blend.slang DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../slang/spark_alpha.inc" COMPUTE ${_blend_entries}
     DEFINES LFS_BLEND_MODE=0 LFS_BLEND_SINGLE_SIMD=1)
-lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs64 SOURCE splat_blend.slang COMPUTE ${_blend_entries} DEFINES LFS_BLEND_MODE=0)
-lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_points SOURCE splat_blend.slang COMPUTE ${_blend_entries} DEFINES LFS_BLEND_MODE=1)
-lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_discs SOURCE splat_blend.slang COMPUTE ${_blend_entries} DEFINES LFS_BLEND_MODE=2)
-lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut32 SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gs64 SOURCE splat_blend.slang DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../slang/spark_alpha.inc" COMPUTE ${_blend_entries} DEFINES LFS_BLEND_MODE=0)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_points SOURCE splat_blend.slang DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../slang/spark_alpha.inc" COMPUTE ${_blend_entries} DEFINES LFS_BLEND_MODE=1)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_discs SOURCE splat_blend.slang DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../slang/spark_alpha.inc" COMPUTE ${_blend_entries} DEFINES LFS_BLEND_MODE=2)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut32 SOURCE splat_blend.slang DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../slang/spark_alpha.inc" COMPUTE ${_blend_entries}
     DEFINES LFS_BLEND_MODE=3 LFS_BLEND_SINGLE_SIMD=1)
-lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut64 SOURCE splat_blend.slang COMPUTE ${_blend_entries} DEFINES LFS_BLEND_MODE=3)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut64 SOURCE splat_blend.slang DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../slang/spark_alpha.inc" COMPUTE ${_blend_entries} DEFINES LFS_BLEND_MODE=3)
 # The ordinary GUT view always uses the legacy saturation convention (32),
 # with the rasterizer selecting 64 or 32 threads from the previous frame's
 # density. Exact variants recover the native function-constant specialization.
-lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut_plain32 SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut_plain32 SOURCE splat_blend.slang DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../slang/spark_alpha.inc" COMPUTE ${_blend_entries}
     DEFINES LFS_BLEND_MODE=3 LFS_BLEND_FLAGS=160 RELAXED_MATH)
-lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut_plain64 SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut_plain64 SOURCE splat_blend.slang DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../slang/spark_alpha.inc" COMPUTE ${_blend_entries}
     DEFINES LFS_BLEND_MODE=3 LFS_BLEND_FLAGS=32 RELAXED_MATH)
-lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut_batch SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut_batch SOURCE splat_blend.slang DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../slang/spark_alpha.inc" COMPUTE ${_blend_entries}
     DEFINES LFS_BLEND_MODE=3 LFS_BLEND_FLAGS=672 RELAXED_MATH)
-lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut_prefix SOURCE splat_blend.slang COMPUTE ${_blend_entries}
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut_prefix SOURCE splat_blend.slang DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../slang/spark_alpha.inc" COMPUTE ${_blend_entries}
     DEFINES LFS_BLEND_MODE=3 LFS_BLEND_FLAGS=1696 RELAXED_MATH)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_present SOURCE splat_present.slang COMPUTE present_viewer)
 lfs_add_gpu_program(lfs_tensor_rasterizer point_cloud SOURCE point_cloud.slang
