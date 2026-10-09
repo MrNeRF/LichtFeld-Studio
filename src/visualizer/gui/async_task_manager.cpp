@@ -3360,7 +3360,7 @@ namespace lfs::vis::gui {
                              fps = static_cast<float>(export_options.framerate),
                              cam_state = frame_states[frame],
                              clip_time = start_time + static_cast<float>(frame) * time_step]() mutable
-                                -> std::expected<lfs::core::Tensor, std::string> {
+                            -> std::expected<lfs::core::Tensor, std::string> {
                                 if (sequence_uuid) {
                                     auto& sequencer_ui = viewer->getGuiManager()->sequencerUI();
                                     const auto* current = sequencer_ui.controller().plySequence();
