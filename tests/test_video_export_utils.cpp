@@ -6,10 +6,17 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "gui/video_export_utils.hpp"
+#include "io/loader.hpp"
 #include "io/video/video_encoder.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/cuda_vulkan_interop.hpp"
+#include "rendering/vksplat_viewport_renderer.hpp"
+#include "rendering/vulkan_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "window/vulkan_context.hpp"
+#include <SDL3/SDL.h>
+#include <algorithm>
 
 #include <cuda_runtime.h>
 
@@ -126,6 +133,114 @@ TEST(VideoExportUtilsTest, CaptureSnapshotUsesRenderableModelAndTransforms) {
 
     ASSERT_TRUE(snapshot.transform_indices);
     EXPECT_EQ(snapshot.transform_indices->cpu().to_vector_int(), (std::vector<int>{0, 1}));
+}
+
+TEST(VideoExportUtilsTest, HiddenDatasetSnapshotCullsImplicitNodeInPreview) {
+    if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
+        GTEST_SKIP() << "SDL video unavailable: " << SDL_GetError();
+    struct VideoGuard {
+        ~VideoGuard() { SDL_QuitSubSystem(SDL_INIT_VIDEO); }
+    } video_guard;
+    std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(
+        SDL_CreateWindow("Video visibility test", 64, 64, SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN),
+        SDL_DestroyWindow);
+    if (!window)
+        GTEST_SKIP() << "Vulkan window unavailable: " << SDL_GetError();
+    lfs::vis::VulkanContext context;
+    if (!context.init(window.get(), 64, 64))
+        GTEST_SKIP() << "Vulkan unavailable: " << context.lastError();
+
+    lfs::rendering::setExpectedVulkanDeviceUuid(context.deviceUUID());
+
+    lfs::vis::SceneManager manager;
+    manager.changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+    auto& scene = manager.getScene();
+    const auto parent = scene.addGroup("Dataset");
+    scene.addSplat("Model", make_test_splat({0.0f, 0.0f, 3.0f}), parent);
+    scene.setTrainingModelNode("Model");
+    scene.setNodeVisibility(parent, false);
+    auto snapshot = lfs::vis::gui::captureVideoExportSceneSnapshot(manager);
+    ASSERT_TRUE(snapshot) << snapshot.error();
+    ASSERT_EQ(snapshot->node_visibility_mask, (std::vector<bool>{false}));
+    ASSERT_FALSE(snapshot->transform_indices);
+    const auto allocator = [&context](lfs::core::TensorShape shape, size_t capacity,
+                                      lfs::core::DataType dtype, std::string_view name) {
+        auto tensor = lfs::vis::makeVulkanExternalTensor(context, std::move(shape), dtype, capacity,
+                                                         std::string(name).c_str());
+        if (!tensor)
+            throw std::runtime_error(tensor.error());
+        return std::move(*tensor);
+    };
+    auto migrated = lfs::io::migrateSplatTensorsToAllocator(*snapshot->combined_model, allocator);
+    ASSERT_TRUE(migrated) << migrated.error().format();
+
+    lfs::vis::VksplatViewportRenderer renderer;
+    const auto slot = lfs::vis::VksplatViewportRenderer::OutputSlot::Preview;
+    lfs::rendering::ViewportRenderRequest request;
+    request.frame_view.size = {64, 64};
+    request.sh_degree = 0;
+    request.scene.model_transforms = &snapshot->model_transforms;
+    auto explicit_indices = std::make_shared<Tensor>(
+        Tensor::zeros({size_t{1}}, Device::CUDA, lfs::core::DataType::Int32));
+    const auto render = [&](const std::vector<bool>& mask, const bool indexed) {
+        request.scene.node_visibility_mask = mask;
+        request.scene.transform_indices = indexed ? explicit_indices : nullptr;
+        auto rendered = renderer.render(context, *snapshot->combined_model, request, false, slot, false, true);
+        EXPECT_TRUE(rendered) << (rendered ? "" : rendered.error());
+        if (!rendered)
+            return std::vector<uint8_t>{};
+        auto image = renderer.readOutputImageRgb8(context, slot);
+        EXPECT_TRUE(image) << (image ? "" : image.error());
+        if (!image)
+            return std::vector<uint8_t>{};
+        const auto* bytes = (*image)->ptr<uint8_t>();
+        return std::vector<uint8_t>(bytes, bytes + (*image)->numel());
+    };
+    for (const auto backend : {lfs::rendering::GaussianRasterBackend::ThreeDgs,
+                               lfs::rendering::GaussianRasterBackend::ThreeDgut}) {
+        request.raster_backend = backend;
+        request.gut = lfs::rendering::isGutBackend(backend);
+        SCOPED_TRACE(static_cast<int>(backend));
+        const auto visible = render({}, false);
+        ASSERT_EQ(visible.size(), 64u * 64u * 3u);
+        ASSERT_GT(*std::max_element(visible.begin(), visible.end()), 0);
+        EXPECT_EQ(render({true}, false), visible);
+        EXPECT_EQ(render({true}, true), visible);
+        const auto hidden_reference = render({false}, true);
+        ASSERT_EQ(hidden_reference.size(), visible.size());
+        EXPECT_TRUE(std::all_of(hidden_reference.begin(), hidden_reference.end(), [](uint8_t v) { return v == 0; }));
+        EXPECT_EQ(render(snapshot->node_visibility_mask, false), hidden_reference);
+        EXPECT_EQ(render({}, false), visible);
+
+        lfs::vis::VksplatViewportRenderer::SelectionMaskRequest selection;
+        selection.frame_view = request.frame_view;
+        selection.scene.model_transforms = &snapshot->model_transforms;
+        selection.gut = request.gut;
+        selection.primitives = {{32.0f, 32.0f, 64.0f, 0.0f}};
+        for (const bool indexed : {true, false}) {
+            selection.scene.transform_indices = indexed ? explicit_indices : nullptr;
+            for (const bool is_visible : {true, false}) {
+                selection.scene.node_visibility_mask = {is_visible};
+                auto mask = renderer.buildSelectionMask(context, *snapshot->combined_model, selection, false);
+                ASSERT_TRUE(mask) << mask.error();
+                EXPECT_EQ(mask->cpu().ptr<uint8_t>()[0], is_visible ? 1 : 0);
+            }
+        }
+
+        std::vector<double> visible_times;
+        for (int batch = 0; batch < 7; ++batch) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 20; ++i)
+                (void)render({}, false);
+            visible_times.push_back(std::chrono::duration<double, std::micro>(
+                                        std::chrono::steady_clock::now() - start)
+                                        .count() /
+                                    20.0);
+        }
+        std::sort(visible_times.begin(), visible_times.end());
+        RecordProperty(request.gut ? "gut_visible_render_readback_us" : "gs_visible_render_readback_us",
+                       std::to_string(visible_times[3]));
+    }
 }
 
 TEST(VideoExportUtilsTest, CaptureSnapshotPrefersSplatsOverPointCloudAndKeepsMeshes) {
