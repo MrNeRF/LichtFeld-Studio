@@ -810,4 +810,26 @@ namespace lfs::python {
                                                         void* overlay_renderer,
                                                         void* draw_list);
 
+    /**
+     * @brief Set a callback evaluated at an absolute scene clip time.
+     * @param callback Function(clip_time) called with time in seconds.
+     */
+    LFS_PYTHON_RUNTIME_API void set_scene_time_callback(std::function<void(float)> callback);
+
+    /**
+     * @brief Clear the scene-time callback.
+     */
+    LFS_PYTHON_RUNTIME_API void clear_scene_time_callback();
+
+    /**
+     * @brief Call the scene-time callback if set.
+     * @param clip_time Absolute clip time in seconds.
+     */
+    LFS_PYTHON_RUNTIME_API void tick_scene_time_callback(float clip_time);
+
+    /**
+     * @brief Check if a scene-time callback is set.
+     */
+    LFS_PYTHON_RUNTIME_API bool has_scene_time_callback();
+
 } // namespace lfs::python

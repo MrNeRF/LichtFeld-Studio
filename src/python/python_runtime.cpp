@@ -1581,4 +1581,38 @@ namespace lfs::python {
         }
     }
 
+    static std::function<void(float)> g_scene_time_callback;
+    static std::mutex g_scene_time_mutex;
+
+    void set_scene_time_callback(std::function<void(float)> callback) {
+        std::lock_guard lock(g_scene_time_mutex);
+        g_scene_time_callback = std::move(callback);
+    }
+
+    void clear_scene_time_callback() {
+        std::lock_guard lock(g_scene_time_mutex);
+        g_scene_time_callback = nullptr;
+    }
+
+    bool has_scene_time_callback() {
+        std::lock_guard lock(g_scene_time_mutex);
+        return g_scene_time_callback != nullptr;
+    }
+
+    void tick_scene_time_callback(float clip_time) {
+        std::function<void(float)> cb;
+        {
+            std::lock_guard lock(g_scene_time_mutex);
+            cb = g_scene_time_callback;
+        }
+        if (cb) {
+            const GilAcquire gil;
+            try {
+                cb(clip_time);
+            } catch (const std::exception& e) {
+                LOG_ERROR("Scene-time callback error: {}", e.what());
+            }
+        }
+    }
+
 } // namespace lfs::python

@@ -596,6 +596,29 @@ TEST_F(PythonIntegrationTest, SceneTimeCallbackSupportsSetTickClearAndUnsetTick)
     EXPECT_EQ(clip_times, (std::vector<float>{0.0f, 1.25f}));
 }
 
+TEST_F(PythonIntegrationTest, SceneTimeCallbackIsSharedWithPythonExtension) {
+    const lfs::python::GilAcquire gil;
+    struct SceneTimeCallbackReset {
+        ~SceneTimeCallbackReset() { lfs::python::clear_scene_time_callback(); }
+    } reset;
+
+    ASSERT_EQ(PyRun_SimpleString(
+                  "import lichtfeld as lf\n"
+                  "_scene_time_contract_ticks = []\n"
+                  "lf.on_scene_time(_scene_time_contract_ticks.append)\n"),
+              0);
+    ASSERT_TRUE(lfs::python::has_scene_time_callback());
+    lfs::python::tick_scene_time_callback(0.0f);
+    lfs::python::tick_scene_time_callback(0.5f);
+    lfs::python::tick_scene_time_callback(1.0f);
+    ASSERT_EQ(PyRun_SimpleString(
+                  "assert _scene_time_contract_ticks == [0.0, 0.5, 1.0]\n"
+                  "lf.clear_scene_time()\n"
+                  "del _scene_time_contract_ticks\n"),
+              0);
+    EXPECT_FALSE(lfs::python::has_scene_time_callback());
+}
+
 TEST_F(PythonIntegrationTest, ForcedInitFailureLatchesQueryableError) {
     // The forced-failure latch is terminal; the RAII guard restores the real
     // (Ready) latch even if an ASSERT below returns early, so sibling tests in
