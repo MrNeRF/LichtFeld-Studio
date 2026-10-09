@@ -156,7 +156,7 @@ namespace {
                            std::to_string(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count()));
             auto original = ProjectDocument::open(source);
             ASSERT_TRUE(original) << lfs::format_for_developer(original.error());
-            auto overwritten = (*original)->save_as(destination, save_options(19'582 + length, 400));
+            auto overwritten = original->save_as(destination, save_options(19'582 + length, 400));
             ASSERT_TRUE(overwritten) << lfs::format_for_developer(overwritten.error());
             auto reopened = ProjectDocument::open(destination);
             ASSERT_TRUE(reopened) << lfs::format_for_developer(reopened.error());
