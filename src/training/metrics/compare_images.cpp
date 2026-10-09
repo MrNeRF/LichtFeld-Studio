@@ -464,7 +464,8 @@ namespace lfs::training {
         for (const auto& [path, text] : {std::pair{report_path, format_compare_report(params, result)},
                                          std::pair{json_path, compare_json(params, result).dump(2)}}) {
             std::ofstream file;
-            if (!lfs::core::open_file_for_write(path, file) || !(file << text << '\n') || !file.flush())
+            if (!lfs::core::open_file_for_write(path, std::ios::out | std::ios::binary, file) ||
+                !(file << text << '\n') || !file.flush())
                 return evaluation_error(std::format("cannot write {}", lfs::core::path_to_utf8(path)),
                                         LFS_SOURCE_SITE_CURRENT());
         }
