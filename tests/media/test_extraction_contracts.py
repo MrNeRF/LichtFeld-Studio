@@ -108,13 +108,20 @@ class ExtractionContracts(unittest.TestCase):
                 video = work / f"apple-{width}.mp4"
                 request = work / "encode.json"
                 request.write_text(json.dumps({"operation": "encode-session", "output": str(video),
-                                               "width": width, "height": height, "videotoolbox": True}),
+                                               "width": width, "height": height, "videotoolbox": True,
+                                               "verify_apple_recovery": width == 8192}),
                                    encoding="utf-8")
                 result = subprocess.run([str(RUNNER), str(request)], capture_output=True, timeout=60)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 report = json.loads(result.stdout)
                 self.assertTrue(report["success"])
-                self.assertIn(report["backend"], (0, 2))
+                self.assertEqual(report["backend"], 3 if width == 8192 else 2)
+                if width == 8192:
+                    self.assertEqual(report["recovery_backend"], 2)
+                    recovery = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_frames",
+                                                                  "-show_streams", "-of", "json", report["recovery_output"]]))
+                    self.assertEqual(len(recovery["frames"]), 1)
+                    self.assertEqual((recovery["streams"][0]["width"], recovery["streams"][0]["height"]), (64, 48))
                 self.assertEqual(report["writer_calls"], 8)
                 decoded = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_frames",
                                                               "-show_streams", "-show_format", "-of", "json", str(video)]))

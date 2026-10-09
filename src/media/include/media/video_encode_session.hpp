@@ -15,7 +15,9 @@
 namespace lfs::media {
     enum class VideoEncodeBackend { Software,
                                     Cuda,
-                                    VideoToolbox };
+                                    VideoToolbox,
+                                    // Result-only: explicitly selected Apple software fallback.
+                                    VideoToolboxSoftware };
     enum class VideoEncodeLayout { YUV420P,
                                    NV12 };
     struct VideoEncodeOptions {

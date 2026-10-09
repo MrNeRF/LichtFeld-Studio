@@ -391,7 +391,8 @@ namespace lfs::media {
                 return encodeError(ErrorCode::Unavailable, "Packet allocation failed");
             }
 
-            backend_ = hardware ? VideoEncodeBackend::VideoToolbox : VideoEncodeBackend::Software;
+            backend_ = videotoolbox ? (hardware ? VideoEncodeBackend::VideoToolbox : VideoEncodeBackend::VideoToolboxSoftware)
+                                    : VideoEncodeBackend::Software;
             LOG_INFO("{} H.264 ({}): {}x{} @ {} fps, bitrate {} bps", hardware ? "Hardware" : "Software", codec->name,
                      width_, height_, framerate_, codec_ctx_->bit_rate);
             return {};
@@ -523,8 +524,27 @@ namespace lfs::media {
             options.preferred_backend != VideoEncodeBackend::Cuda &&
             options.preferred_backend != VideoEncodeBackend::VideoToolbox)
             return encodeError(ErrorCode::InvalidArgument, std::format("Unknown video encoder backend (got {})", static_cast<int>(options.preferred_backend)));
-        if (!av_color_space_name(static_cast<AVColorSpace>(options.matrix)))
+        switch (options.matrix) {
+        case ColorMatrix::Rgb:
+        case ColorMatrix::Bt709:
+        case ColorMatrix::Unspecified:
+        case ColorMatrix::Fcc:
+        case ColorMatrix::Bt470Bg:
+        case ColorMatrix::Smpte170M:
+        case ColorMatrix::Smpte240M:
+        case ColorMatrix::Ycgco:
+        case ColorMatrix::Bt2020Ncl:
+        case ColorMatrix::Bt2020Cl:
+        case ColorMatrix::Smpte2085:
+        case ColorMatrix::ChromaNcl:
+        case ColorMatrix::ChromaCl:
+        case ColorMatrix::Ictcp:
+        case ColorMatrix::YcgcoRe:
+        case ColorMatrix::YcgcoRo:
+            break;
+        default:
             return encodeError(ErrorCode::InvalidArgument, std::format("Unknown video color matrix (got {})", static_cast<int>(options.matrix)));
+        }
         if (options.range != ColorRange::Unspecified && options.range != ColorRange::Limited && options.range != ColorRange::Full)
             return encodeError(ErrorCode::InvalidArgument, std::format("Unknown video color range (got {})", static_cast<int>(options.range)));
         auto extension = core::path_to_utf8(path.extension());

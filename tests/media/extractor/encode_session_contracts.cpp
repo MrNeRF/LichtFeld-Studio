@@ -96,7 +96,7 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
     require(session.writeFrame(writer).error().code() == lfs::ErrorCode::FailedPrecondition && writer.calls == 0,
             "inactive write never calls producer");
     require(session.close().has_value(), "inactive close is idempotent");
-    for (int variant = 0; variant < 8; ++variant) {
+    for (int variant = 0; variant < 10; ++variant) {
         auto invalid = options;
         if (variant == 0)
             invalid.width = 0;
@@ -114,6 +114,10 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
             invalid.matrix = static_cast<ColorMatrix>(999);
         if (variant == 7)
             invalid.range = static_cast<ColorRange>(999);
+        if (variant == 8)
+            invalid.matrix = static_cast<ColorMatrix>(3);
+        if (variant == 9)
+            invalid.matrix = static_cast<ColorMatrix>(15);
         auto result = session.open(path, invalid);
         require(!result && result.error().code() == lfs::ErrorCode::InvalidArgument,
                 "invalid options rejected before opening output");
@@ -174,5 +178,21 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
     require(writer.reentrant_checked, "callback reentrancy exercised");
     require(destination.close().has_value() && !destination.isOpen() && destination.close().has_value(), "flush and repeat close");
     require(destination.writeFrame(writer).error().code() == lfs::ErrorCode::FailedPrecondition, "write after close rejected");
-    return {{"success", true}, {"frames", 4}, {"writer_calls", writer.calls}, {"comment", options.comment}, {"backend", static_cast<int>(backend)}};
+    nlohmann::json report{{"success", true}, {"frames", 4}, {"writer_calls", writer.calls}, {"comment", options.comment}, {"backend", static_cast<int>(backend)}};
+    if (request.value("verify_apple_recovery", false)) {
+        require(backend == VideoEncodeBackend::VideoToolboxSoftware, "8K must use Apple's software encoder");
+        auto small = options;
+        small.width = 64;
+        small.height = 48;
+        const auto recovery_path = path.parent_path() / "apple-recovery.mp4";
+        require(destination.open(recovery_path, small).has_value(), "same session reopens at a hardware-supported extent");
+        require(destination.backend() == VideoEncodeBackend::VideoToolbox, "same session returns to Apple hardware after fallback");
+        Writer recovery_writer;
+        recovery_writer.expected_backend = VideoEncodeBackend::VideoToolbox;
+        require(destination.writeFrame(recovery_writer).has_value(), "recovered hardware session accepts a frame");
+        require(destination.close().has_value(), "recovered hardware session flushes");
+        report["recovery_backend"] = static_cast<int>(VideoEncodeBackend::VideoToolbox);
+        report["recovery_output"] = lfs::core::path_to_utf8(recovery_path);
+    }
+    return report;
 }
