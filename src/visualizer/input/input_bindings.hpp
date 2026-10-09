@@ -298,6 +298,7 @@ namespace lfs::vis::input {
         std::uint64_t getBindingsRevision() const { return bindings_revision_; }
 
         static std::optional<std::filesystem::path> getConfigDir();
+        [[nodiscard]] static bool isPersistenceEnabled() noexcept;
         static void setPersistenceEnabled(bool enabled) noexcept;
 
         // Query effective bindings. Mode-local bindings are checked first; actions

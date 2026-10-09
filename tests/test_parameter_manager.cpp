@@ -6,17 +6,20 @@
 #include "core/argument_parser.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
+#include "core/services.hpp"
 #include "io/project_chapters.hpp"
+#include "python/lfs/py_params.hpp"
 #include "training/training_manager.hpp"
 
+#include <array>
+#include <cmath>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <random>
-
-#include <fstream>
+#include <string_view>
 
 namespace {
 
@@ -24,6 +27,180 @@ namespace {
         const auto* test = ::testing::UnitTest::GetInstance()->current_test_info();
         return std::filesystem::temp_directory_path() /
                std::format("lfs_{}_{}.json", test->name(), std::random_device{}());
+    }
+
+    TEST(DatasetParamsValidationTest, ResizeFactorRegistrySetterRejectsBelowMinimum) {
+        lfs::python::register_dataset_properties();
+        const auto meta = lfs::core::prop::PropertyRegistry::instance().get_property("dataset", "resize_factor");
+        ASSERT_TRUE(meta.has_value());
+        ASSERT_TRUE(meta->setter);
+
+        lfs::core::param::DatasetConfig config;
+        auto ref = lfs::core::prop::PropertyObjectRef::cpp(&config);
+        EXPECT_THROW(meta->setter(ref, std::any(-2)), std::invalid_argument);
+        EXPECT_EQ(config.resize_factor, -1);
+        EXPECT_THROW(meta->setter(ref, std::any(0)), std::invalid_argument);
+        EXPECT_EQ(config.resize_factor, -1);
+
+        meta->setter(ref, std::any(-1));
+        EXPECT_EQ(config.resize_factor, -1);
+        meta->setter(ref, std::any(4));
+        EXPECT_EQ(config.resize_factor, 4);
+    }
+
+    TEST(ParameterManagerTest, EditableDatasetUsesConfigurationAuthorityWithHeadlessFallback) {
+        lfs::vis::ParameterManager manager;
+        ASSERT_TRUE(manager.ensureLoaded());
+        lfs::vis::TrainerManager trainer_manager;
+        auto* previous = lfs::vis::services().paramsOrNull();
+        struct RestoreService {
+            lfs::vis::ParameterManager* previous;
+            ~RestoreService() { lfs::vis::services().set(previous); }
+        } restore{previous};
+        lfs::vis::services().set(&manager);
+        trainer_manager.getEditableDatasetParams().max_width = 800;
+        EXPECT_EQ(manager.getDatasetConfig().max_width, 800);
+        manager.getDatasetConfig().max_width = 1600;
+        EXPECT_EQ(std::as_const(trainer_manager).getEditableDatasetParams().max_width, 1600);
+        EXPECT_EQ(&trainer_manager.getEditableDatasetParams(), &manager.getDatasetConfig());
+        EXPECT_EQ(trainer_manager.getEditableTrainingParams(manager).dataset.max_width, 1600);
+        manager.modifyActiveParams([](auto& params) { params.iterations = 1234; });
+        EXPECT_EQ(trainer_manager.getEditableTrainingParams(manager).optimization.iterations, 1234u);
+
+        lfs::vis::services().set(static_cast<lfs::vis::ParameterManager*>(nullptr));
+        trainer_manager.getEditableDatasetParams().max_width = 1024;
+        EXPECT_EQ(std::as_const(trainer_manager).getEditableDatasetParams().max_width, 1024);
+        EXPECT_EQ(manager.getDatasetConfig().max_width, 1600);
+    }
+
+    TEST(ParameterManagerTest, ConfigRoundTripRestoresEditedDatasetAndOptimization) {
+        lfs::vis::ParameterManager source;
+        ASSERT_TRUE(source.ensureLoaded());
+        source.getDatasetConfig().max_width = 800;
+        source.getDatasetConfig().resize_factor = 2;
+        source.getDatasetConfig().invert_masks = true;
+        source.getDatasetConfig().loading_params.use_cpu_memory = false;
+        source.modifyActiveParams([](auto& params) { params.steps_scaler = 2.f; params.iterations = 1200; });
+        const auto path = unique_temp_config_path();
+        const auto exported = source.createForDataset("dataset", "output");
+        ASSERT_TRUE(lfs::core::param::save_training_parameters_to_json(exported, path));
+
+        lfs::vis::ParameterManager target;
+        ASSERT_TRUE(target.ensureLoaded());
+        ASSERT_TRUE(target.importConfigFile(path));
+        EXPECT_EQ(target.getDatasetConfig().max_width, 800);
+        EXPECT_EQ(target.getDatasetConfig().resize_factor, 2);
+        EXPECT_TRUE(target.getDatasetConfig().invert_masks);
+        EXPECT_FALSE(target.getDatasetConfig().loading_params.use_cpu_memory);
+        EXPECT_EQ(target.copyActiveParams().iterations, 1200);
+        EXPECT_TRUE(target.isDirty());
+        std::filesystem::remove(path);
+    }
+
+    TEST(ParameterManagerTest, PartialConfigPreservesOmittedDatasetFields) {
+        lfs::vis::ParameterManager manager;
+        ASSERT_TRUE(manager.ensureLoaded());
+        manager.getDatasetConfig().images = "images_4";
+        manager.getDatasetConfig().loading_params.use_cpu_memory = false;
+        const auto path = unique_temp_config_path();
+        nlohmann::json config{
+            {"optimization", lfs::core::param::OptimizationParameters::mrnf_defaults().to_json()},
+            {"dataset", {{"max_width", 800}}}};
+        std::ofstream(path) << config.dump();
+        ASSERT_TRUE(manager.importConfigFile(path));
+        EXPECT_EQ(manager.getDatasetConfig().max_width, 800);
+        EXPECT_EQ(manager.getDatasetConfig().images, "images_4");
+        EXPECT_FALSE(manager.getDatasetConfig().loading_params.use_cpu_memory);
+        auto mcmc_config = lfs::core::param::OptimizationParameters::mcmc_defaults();
+        mcmc_config.use_exposure_correction = true;
+        std::ofstream(path) << mcmc_config.to_json().dump();
+        ASSERT_TRUE(manager.importConfigFile(path));
+        EXPECT_EQ(manager.getDatasetConfig().max_width, 800);
+        EXPECT_EQ(manager.getActiveStrategy(), "mcmc");
+        EXPECT_TRUE(manager.getActiveParams().use_exposure_correction);
+        std::filesystem::remove(path);
+    }
+
+    TEST(ParameterManagerTest, ConfigImportFromAnotherDatasetPreservesLoadedPaths) {
+        lfs::vis::ParameterManager source;
+        ASSERT_TRUE(source.ensureLoaded());
+        source.getDatasetConfig().max_width = 800;
+        source.modifyActiveParams([](auto& params) { params.iterations = 1200; });
+        const auto path = unique_temp_config_path();
+        const auto exported = source.createForDataset("dataset_a", "output_a");
+        ASSERT_TRUE(lfs::core::param::save_training_parameters_to_json(exported, path));
+
+        for (const bool import_dataset : {false, true}) {
+            for (const bool output_explicit : {false, true}) {
+                SCOPED_TRACE(std::format("import_dataset={}, output_explicit={}", import_dataset, output_explicit));
+                lfs::vis::ParameterManager target;
+                ASSERT_TRUE(target.ensureLoaded());
+                auto* previous = lfs::vis::services().paramsOrNull();
+                struct RestoreService {
+                    lfs::vis::ParameterManager* previous;
+                    ~RestoreService() { lfs::vis::services().set(previous); }
+                } restore{previous};
+                lfs::vis::services().set(&target);
+                auto& dataset = target.getDatasetConfig();
+                dataset.data_path = "dataset_b";
+                dataset.output_path = "output_b";
+                dataset.output_path_explicit = output_explicit;
+                dataset.max_width = 1600;
+                ASSERT_TRUE(target.importConfigFile(path, import_dataset));
+                EXPECT_EQ(dataset.data_path, std::filesystem::path("dataset_b"));
+                EXPECT_EQ(dataset.output_path, std::filesystem::path("output_b"));
+                EXPECT_EQ(dataset.output_path_explicit, output_explicit);
+                EXPECT_EQ(dataset.max_width, import_dataset ? 800 : 1600);
+                EXPECT_EQ(target.copyActiveParams().iterations, 1200u);
+
+                lfs::vis::TrainerManager trainer_manager;
+                const auto training_params = trainer_manager.getEditableTrainingParams(target);
+                EXPECT_EQ(training_params.dataset.data_path, dataset.data_path);
+                EXPECT_EQ(training_params.dataset.output_path, dataset.output_path);
+                EXPECT_EQ(training_params.dataset.output_path_explicit, output_explicit);
+                EXPECT_EQ(training_params.dataset.max_width, dataset.max_width);
+                const auto saved_dataset = training_params.dataset.to_json();
+                EXPECT_EQ(saved_dataset.at("data_path"), "dataset_b");
+                EXPECT_EQ(saved_dataset.at("output_folder"), "output_b");
+            }
+        }
+        std::filesystem::remove(path);
+    }
+
+    TEST(ParameterManagerTest, InvalidDatasetImportDoesNotPartiallyChangeParameters) {
+        lfs::vis::ParameterManager manager;
+        ASSERT_TRUE(manager.ensureLoaded());
+        manager.getDatasetConfig().max_width = 800;
+        const auto path = unique_temp_config_path();
+        for (const auto* value : {"-1", "\"invalid\""}) {
+            nlohmann::json config{
+                {"optimization", lfs::core::param::OptimizationParameters::mcmc_defaults().to_json()},
+                {"dataset", {{"max_width", nlohmann::json::parse(value)}}}};
+            std::ofstream(path) << config.dump();
+            const auto result = manager.importConfigFile(path);
+            ASSERT_FALSE(result);
+            EXPECT_EQ(result.error().code(), lfs::ErrorCode::InvalidArgument);
+            EXPECT_EQ(result.error().domain(), lfs::ErrorDomain::IO);
+            EXPECT_FALSE(result.error().detail().empty());
+            EXPECT_EQ(manager.getDatasetConfig().max_width, 800);
+            EXPECT_EQ(manager.getActiveStrategy(), "mrnf");
+        }
+        std::filesystem::remove(path);
+    }
+
+    TEST(ParameterManagerTest, ConfigImportCanKeepActiveDatasetLocked) {
+        lfs::vis::ParameterManager manager;
+        ASSERT_TRUE(manager.ensureLoaded());
+        manager.getDatasetConfig().max_width = 800;
+        const auto path = unique_temp_config_path();
+        nlohmann::json config{
+            {"optimization", lfs::core::param::OptimizationParameters::mcmc_defaults().to_json()},
+            {"dataset", {{"max_width", 1600}}}};
+        std::ofstream(path) << config.dump();
+        ASSERT_TRUE(manager.importConfigFile(path, false));
+        EXPECT_EQ(manager.getDatasetConfig().max_width, 800);
+        EXPECT_EQ(manager.getActiveStrategy(), "mcmc");
+        std::filesystem::remove(path);
     }
 
     TEST(ParameterManagerTest, DefaultStrategyIsMrnf) {
@@ -35,6 +212,27 @@ namespace {
         EXPECT_EQ(manager.getActiveParams().strategy, "mrnf");
         EXPECT_EQ(lfs::core::param::OptimizationParameters{}.strategy, "mrnf");
         EXPECT_EQ(lfs::core::param::OptimizationParameters::mcmc_defaults().strategy, "mcmc");
+    }
+
+    TEST(ParameterManagerTest, StrategySwitchUsesExposureCorrectionPresetAndKeepsSlotEdits) {
+        lfs::vis::ParameterManager manager;
+        ASSERT_TRUE(manager.ensureLoaded());
+
+        EXPECT_EQ(manager.getActiveStrategy(), "mrnf");
+        EXPECT_TRUE(manager.getActiveParams().use_exposure_correction);
+
+        manager.setActiveStrategy("mcmc");
+        EXPECT_FALSE(manager.getActiveParams().use_exposure_correction);
+        manager.getActiveParams().use_exposure_correction = true;
+        manager.setActiveStrategy("mrnf");
+        EXPECT_TRUE(manager.getActiveParams().use_exposure_correction);
+
+        manager.getActiveParams().use_exposure_correction = false;
+        manager.setActiveStrategy("mcmc");
+        EXPECT_TRUE(manager.getActiveParams().use_exposure_correction);
+        manager.getActiveParams().use_exposure_correction = false;
+        manager.setActiveStrategy("mrnf");
+        EXPECT_FALSE(manager.getActiveParams().use_exposure_correction);
     }
 
     TEST(ParameterManagerTest, SessionCopyTracksExplicitSourcesAndResetBaseline) {
@@ -100,6 +298,7 @@ namespace {
         checkpoint_params.optimization.iterations = 600;
         checkpoint_params.optimization.max_cap = 123456;
         checkpoint_params.optimization.save_steps = {500};
+        checkpoint_params.optimization.use_exposure_correction = true;
         checkpoint_params.dataset.data_path = "/tmp/checkpoint_dataset";
         checkpoint_params.dataset.output_path = "/tmp/checkpoint_output";
         checkpoint_params.dataset.images = "images_4";
@@ -120,6 +319,7 @@ namespace {
         EXPECT_EQ(active.iterations, 600u);
         EXPECT_EQ(active.max_cap, 123456);
         EXPECT_EQ(active.save_steps, std::vector<size_t>({500}));
+        EXPECT_TRUE(active.use_exposure_correction);
 
         const auto& igs_params = manager.getCurrentParams("igs+");
         EXPECT_EQ(igs_params.iterations, 600u);
@@ -139,6 +339,7 @@ namespace {
         const auto recreated = manager.createForDataset("/tmp/override_dataset", "/tmp/override_output");
         EXPECT_EQ(recreated.optimization.strategy, "igs+");
         EXPECT_EQ(recreated.optimization.iterations, 600u);
+        EXPECT_TRUE(recreated.optimization.use_exposure_correction);
         EXPECT_EQ(recreated.dataset.data_path, "/tmp/override_dataset");
         EXPECT_EQ(recreated.dataset.output_path, "/tmp/override_output");
         EXPECT_EQ(recreated.dataset.images, "images_4");
@@ -200,7 +401,7 @@ namespace {
         EXPECT_TRUE(imported->server.tcp_connection);
         EXPECT_EQ(imported->server.tcp_server_connection_port, 12345);
 
-        trainer_manager.importTrainingParams(*imported, parameter_manager);
+        parameter_manager.importTrainingParams(*imported);
         const auto training_params = trainer_manager.getEditableTrainingParams(parameter_manager);
         EXPECT_EQ(training_params.dataset.max_width, 800);
         EXPECT_EQ(training_params.dataset.resize_factor, 2);
@@ -224,6 +425,55 @@ namespace {
         EXPECT_EQ(partial->dataset.max_width, 640);
         EXPECT_EQ(partial->server.tcp_server_connection_port, 23456);
         EXPECT_EQ(partial->optimization.iterations, 4321u);
+    }
+
+    TEST(ParameterManagerTest, ConfigImportRejectsUnknownOptimizationEnums) {
+        const auto config_path = unique_temp_config_path();
+        const std::array<std::pair<std::string_view, std::string_view>, 2> cases = {{
+            {"bg_mode", "solid_color"},
+            {"eval_space", "distorted"},
+        }};
+
+        for (const auto& [field, accepted_value] : cases) {
+            SCOPED_TRACE(field);
+            std::ofstream(config_path)
+                << nlohmann::json{{"optimization", {{field, "unknown-value"}}}}.dump();
+            const auto imported =
+                lfs::core::param::read_training_parameters_from_json(config_path);
+            ASSERT_FALSE(imported.has_value());
+            const auto detail = imported.error().detail();
+            EXPECT_NE(detail.find(field), std::string::npos);
+            EXPECT_NE(detail.find(accepted_value), std::string::npos);
+        }
+
+        std::error_code ec;
+        std::filesystem::remove(config_path, ec);
+    }
+
+    TEST(ParameterManagerTest, ConfigImportRejectsWrongJsonTypesWithFieldAndExpectedType) {
+        const auto config_path = unique_temp_config_path();
+        const std::array<std::pair<nlohmann::json, std::string_view>, 7> cases = {{
+            {nlohmann::json{{"dataset", {{"max_width", "160"}}}}, "max_width"},
+            {nlohmann::json{{"optimization", {{"max_cap", 100.5}}}}, "max_cap"},
+            {nlohmann::json{{"dataset", {{"images", 123}}}}, "images"},
+            {nlohmann::json{{"optimization", {{"bg_color", "black"}}}}, "bg_color"},
+            {nlohmann::json{{"optimization", {{"eval_steps", {1, 2.5}}}}}, "eval_steps"},
+            {nlohmann::json{{"dataset", {{"loading_params", {{"use_cpu_memory", "yes"}}}}}}, "loading_params.use_cpu_memory"},
+            {nlohmann::json{{"server", {{"tcp_connection", "yes"}}}}, "tcp_connection"},
+        }};
+
+        for (const auto& [config, field] : cases) {
+            SCOPED_TRACE(field);
+            std::ofstream(config_path) << config.dump();
+            const auto imported = lfs::core::param::read_training_parameters_from_json(config_path);
+            ASSERT_FALSE(imported.has_value());
+            const auto detail = imported.error().detail();
+            EXPECT_NE(detail.find(field), std::string::npos);
+            EXPECT_NE(detail.find("expected"), std::string::npos);
+        }
+
+        std::error_code ec;
+        std::filesystem::remove(config_path, ec);
     }
 
     TEST(ParameterManagerTest, SessionDefaultsCanReplaceCheckpointImportState) {
@@ -346,6 +596,30 @@ namespace {
         EXPECT_EQ(target.getCurrentParams("mcmc").iterations, 101u);
     }
 
+    TEST(ParameterManagerTest, ProjectResumeRetainsAutomaticCapacityValues) {
+        lfs::vis::ParameterManager source;
+        ASSERT_TRUE(source.ensureLoaded());
+        source.modifyActiveParams([](auto& params) {
+            params.max_cap = 1'000'000;
+            params.grow_fraction = -1.0f;
+            params.shs_lr = -1.0f;
+        });
+        auto captured = source.capturePendingProjectState();
+        ASSERT_TRUE(captured) << captured.error().user_message();
+
+        lfs::vis::ParameterManager resumed;
+        ASSERT_TRUE(resumed.ensureLoaded());
+        auto restored = resumed.restorePendingProjectState(*captured);
+        ASSERT_TRUE(restored) << restored.error().user_message();
+        auto params = resumed.copyActiveParams();
+        EXPECT_FLOAT_EQ(params.grow_fraction, -1.0f);
+        EXPECT_FLOAT_EQ(params.shs_lr, -1.0f);
+
+        params.resolve_mrnf_capacity_defaults();
+        EXPECT_NEAR(params.grow_fraction, 0.0758f, 1.0e-7f);
+        EXPECT_FLOAT_EQ(params.shs_lr, 0.005f);
+    }
+
     TEST(ParameterValidationTest, RejectsCrashProneIterationAndNumericValues) {
         lfs::core::param::OptimizationParameters params;
         EXPECT_TRUE(params.validate().empty());
@@ -438,6 +712,72 @@ namespace {
             .width = 1919,
             .height = 1080};
         EXPECT_NE(params.validate().find("render dimensions"), std::string::npos);
+    }
+
+    TEST(ParameterManagerTest, ImageScalingMatchesPreviousValuesAcrossStrategies) {
+        const auto reference = [](auto& params, const size_t count) {
+            const float scaler = count <= 300 ? 1.0f : static_cast<float>(count) / 300.0f;
+            const bool enabled = params.steps_scaler > 0.0f;
+            const float user_scaler = enabled ? params.steps_scaler / params.image_count_scaler : 1.0f;
+            const float ratio = enabled ? scaler / params.image_count_scaler : scaler;
+            params.image_count_scaler = scaler;
+            params.steps_scaler = user_scaler * scaler;
+            if (std::abs(ratio - 1.0f) >= 0.001f)
+                params.scale_steps(ratio);
+        };
+        for (const auto strategy : {"mcmc", "mrnf", "igs+"}) {
+            for (const float factor : {-1.0f, 0.0f, 0.5f, 1.0f, 1.1f, 2.0f}) {
+                for (const size_t count : {185u, 301u, 600u, 901u}) {
+                    SCOPED_TRACE(std::format("{} {} {}", strategy, factor, count));
+                    lfs::vis::ParameterManager manager;
+                    ASSERT_TRUE(manager.ensureLoaded());
+                    manager.setActiveStrategy(strategy);
+                    auto& params = manager.getActiveParams();
+                    params.steps_scaler = factor;
+                    params.image_count_scaler = 2.0f;
+                    auto expected = params;
+                    for (const size_t next : {count, count, size_t{300}, count}) {
+                        reference(expected, next);
+                        manager.autoScaleSteps(next);
+                        EXPECT_EQ(params.to_json(), expected.to_json());
+                        EXPECT_EQ(params.image_count_scaler, expected.image_count_scaler);
+                        EXPECT_EQ(params.steps_scaler, expected.steps_scaler);
+                    }
+                }
+            }
+        }
+    }
+
+    TEST(ParameterManagerTest, RestoredImageScalingKeepsCleanBaselineAndRealChangesDirty) {
+        for (const size_t camera_count : {185u, 300u, 600u, 901u}) {
+            SCOPED_TRACE(camera_count);
+            lfs::vis::ParameterManager source;
+            ASSERT_TRUE(source.ensureLoaded());
+            source.autoScaleSteps(camera_count);
+            const auto snapshot = source.capturePendingProjectState();
+            ASSERT_TRUE(snapshot);
+            lfs::vis::ParameterManager restored;
+            ASSERT_TRUE(restored.ensureLoaded());
+            ASSERT_TRUE(restored.restorePendingProjectState(*snapshot));
+            const auto serial = restored.dirtySerial();
+            const auto before = restored.getActiveParams().to_json();
+            restored.autoScaleSteps(camera_count);
+            EXPECT_EQ(restored.getActiveParams().to_json(), before);
+            EXPECT_FALSE(restored.isDirty());
+            EXPECT_EQ(restored.dirtySerial(), serial);
+
+            restored.modifyActiveParams([](auto& params) { ++params.iterations; });
+            EXPECT_TRUE(restored.isDirty());
+            const auto edited_serial = restored.dirtySerial();
+            restored.autoScaleSteps(camera_count);
+            EXPECT_TRUE(restored.isDirty());
+            EXPECT_EQ(restored.dirtySerial(), edited_serial);
+
+            ASSERT_TRUE(restored.restorePendingProjectState(*snapshot));
+            restored.autoScaleSteps(camera_count + 600);
+            EXPECT_TRUE(restored.isDirty());
+            EXPECT_GT(restored.dirtySerial(), edited_serial);
+        }
     }
 
     // Catches auto-scale replacing the user's factor instead of multiplying it.
@@ -571,7 +911,6 @@ namespace {
         const std::vector<std::vector<std::string>> cases{
             {"--sh-degree-interval", "1000"},
             {"--morton-reorder-interval", "3000"},
-            {"--fill-pacing-iter", "1234"},
             {"--eval", "--eval-steps", "1000"},
         };
         for (const auto& flags : cases) {

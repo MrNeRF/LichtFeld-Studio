@@ -15,23 +15,6 @@
     min-height: 0;
 }
 
-/* Match the Rendering and Training panels throughout Projects. */
-#content-wrap scrollbarvertical {
-    width: 4dp;
-}
-
-#content-wrap scrollbarvertical sliderbar {
-    min-height: 12dp;
-}
-
-#content-wrap scrollbarhorizontal {
-    height: 4dp;
-}
-
-#content-wrap scrollbarhorizontal sliderbar {
-    min-width: 12dp;
-}
-
 #asset-floating-header {
     min-height: 28dp;
     display: flex;
@@ -493,11 +476,20 @@
     height: 28dp;
 }
 
+/* Reserve a separate progress row even when idle so transfers never compress
+   the title/size text or change the virtualized grid's row height. */
 .asset-card-body {
+    box-sizing: border-box;
     display: flex;
+    flex: 0 0 48dp;
     flex-direction: column;
+    justify-content: flex-start;
     min-width: 0;
-    padding: 8dp;
+    height: 48dp;
+    min-height: 48dp;
+    max-height: 48dp;
+    padding: 4dp 8dp;
+    overflow: hidden;
 }
 
 .asset-card-title-row {
@@ -599,12 +591,6 @@
     position: relative;
 }
 
-.asset-card-body {
-    height: 40dp;
-    min-height: 40dp;
-    max-height: 40dp;
-    overflow: hidden;
-}
 
 .asset-list-primary {
     font-weight: 600;
@@ -853,6 +839,7 @@
 .asset-view-button { width: 24dp; height: 24dp; min-width: 24dp; min-height: 24dp; padding: 0; }
 .asset-view-button img { width: 16dp; height: 16dp; }
 .asset-toolbar-view img { width: 16dp; height: 16dp; }
+.asset-clean-missing img { width: 16dp; height: 16dp; }
 
 #asset-main-row {
     position: relative;
@@ -890,8 +877,7 @@
 .asset-card-slot { flex: 0 0 auto; min-width: 0; }
 .asset-card { position: relative; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
 .asset-card-thumb { box-sizing: border-box; width: 100%; min-height: 1dp; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.asset-card-body { box-sizing: border-box; flex: 0 0 40dp; min-width: 0; height: 40dp; padding: 4dp 8dp; display: flex; flex-direction: column; justify-content: center; }
-.asset-card-title-row, .asset-card-meta { min-width: 0; height: 16dp; line-height: 16dp; display: flex; gap: 8dp; }
+.asset-card-title-row, .asset-card-meta { flex: 0 0 16dp; min-width: 0; height: 16dp; line-height: 16dp; display: flex; gap: 8dp; }
 .asset-card-title-row { margin-bottom: 0; }
 .asset-card-meta { flex-direction: row; }
 .asset-card-title, .asset-card-meta span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -900,7 +886,7 @@
 .asset-card-menu { position: absolute; top: 4dp; right: 4dp; visibility: hidden; }
 .asset-card:hover .asset-card-menu, .asset-card:focus .asset-card-menu, .asset-card.is-selected .asset-card-menu { visibility: visible; }
 
-.gallery-card-transfer { height: 8dp; padding: 2dp 0; }
+.gallery-card-transfer { box-sizing: border-box; flex: 0 0 8dp; height: 8dp; padding: 2dp 0; }
 .gallery-progress { height: 4dp; min-height: 4dp; overflow: hidden; border-radius: 2dp; }
 .gallery-progress-fill { height: 100%; }
 
@@ -921,8 +907,8 @@
 .asset-list-row .asset-col { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .asset-col-name { flex: 1 1 0dp; min-width: 120dp; display: flex; flex-direction: column; justify-content: center; }
 .asset-col-folder { flex: 0 0 auto; }
-.asset-col-size { flex: 0 0 auto; text-align: right; font-family: "JetBrains Mono"; }
-.asset-col-modified { flex: 0 0 auto; font-family: "JetBrains Mono"; }
+.asset-col-size { flex: 0 0 auto; text-align: right; }
+.asset-col-modified { flex: 0 0 auto; }
 .asset-col-gallery { flex: 0 0 auto; min-width: 0; display: flex; align-items: center; gap: 4dp; }
 .asset-list-header .asset-col-gallery { display: flex; }
 .asset-list-header .asset-col, .asset-list-row .asset-col { flex: 0 0 auto; min-width: 0; max-width: none; box-sizing: border-box; height: 24dp; line-height: 24dp; }
@@ -954,10 +940,10 @@
 .asset-shell.inspector-expanded .asset-inspector { display: flex; }
 .asset-inspector-content { display: flex; flex-direction: column; flex: 1 1 0dp; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: scroll; }
 .asset-inspector-content > [data-if] { flex: 0 0 auto; min-width: 0; width: 100%; }
-.asset-info-asset-layout { box-sizing: border-box; display: flex; width: 100%; min-width: 0; gap: 16dp; align-items: stretch; }
+.asset-info-asset-layout { box-sizing: border-box; display: flex; width: 100%; min-width: 0; gap: 0; align-items: stretch; }
 .asset-info-details { box-sizing: border-box; width: 100%; min-width: 0; flex: 0 0 auto; }
-#asset-info-thumbnail { margin: 0; padding: 0; min-width: 0; min-height: 0; flex-shrink: 0; }
-.inspector-header { box-sizing: border-box; display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 8dp; padding: 8dp 12dp; margin: 0; min-width: 0; border-bottom-width: 1dp; }
+#asset-info-thumbnail { margin: 12dp 12dp 0; padding: 0; min-width: 0; min-height: 0; flex-shrink: 0; border-radius: 4dp; overflow: hidden; }
+.inspector-header { box-sizing: border-box; display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 8dp; padding: 12dp; margin: 0; min-width: 0; border-bottom-width: 1dp; }
 .inspector-title-row { display: flex; align-items: center; gap: 8dp; min-width: 0; }
 .inspector-title-row .inspector-title { flex: 1 1 0dp; width: 0; }
 .inspector-close { flex: 0 0 24dp; }
@@ -971,12 +957,12 @@
 .inspector-more { margin-left: auto; flex: 0 0 24dp; }
 .inspector-more img { width: 16dp; height: 16dp; }
 .inspector-facts { display: flex; flex-direction: column; min-width: 0; }
-.inspector-section { box-sizing: border-box; display: flex; flex: 0 0 auto; flex-direction: column; gap: 8dp; padding: 8dp 12dp; border-bottom-width: 1dp; min-width: 0; }
+.inspector-section { box-sizing: border-box; display: flex; flex: 0 0 auto; flex-direction: column; gap: 8dp; padding: 12dp; border-bottom-width: 1dp; min-width: 0; }
 .inspector-section-title { box-sizing: border-box; display: flex; flex: 0 0 24dp; align-items: center; gap: 4dp; justify-content: flex-start; width: 100%; height: 24dp; min-height: 24dp; padding: 0; margin: 0; border-width: 0; line-height: 16dp; font-weight: bold; text-align: left; cursor: pointer; }
 .inspector-section-title span { display: block; line-height: 16dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .inspector-disclosure { flex: 0 0 8dp; width: 8dp; height: 8dp; transform: rotate(-90deg); }
 .inspector-disclosure.is-expanded { transform: rotate(0deg); }
-.inspector-section-body { display: flex; flex-direction: column; min-width: 0; }
+.inspector-section-body { display: flex; flex-direction: column; gap: 4dp; min-width: 0; }
 .parameter-row { box-sizing: border-box; display: flex; flex: 0 0 24dp; flex-direction: row; align-items: center; gap: 8dp; height: 24dp; min-height: 24dp; padding: 0; border-width: 0; min-width: 0; }
 .parameter-label, .parameter-value { display: block; box-sizing: border-box; height: 24dp; min-height: 24dp; line-height: 24dp; padding: 0; margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 /* Covers the longest label in all ten locales at 12 dp, including French
@@ -984,7 +970,7 @@
 .parameter-label { flex: 0 0 168dp; width: 168dp; min-width: 168dp; font-size: 12dp; }
 .inspector-problem-status { display: block; flex: 0 0 auto; line-height: 18dp; white-space: normal; }
 .inspector-problem > .btn { max-width: 100%; height: auto; min-height: 24dp; white-space: normal; }
-.parameter-value { flex: 1 1 0dp; width: 0; min-width: 0; font-family: "JetBrains Mono"; font-size: 11dp; }
+.parameter-value { flex: 1 1 0dp; width: 0; min-width: 0; font-size: 11dp; }
 .inspector-gallery-summary { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .inspector-gallery-reason { display: block; padding: 4dp 0; }
 .inspector-gallery-detail-row { flex: 0 0 auto; height: auto; align-items: flex-start; }
@@ -993,8 +979,9 @@
 }
 .inspector-gallery-detail-row .parameter-value { line-height: 18dp; }
 
-.inspector-band-facts { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16dp; min-width: 0; }
-.inspector-band-column { display: flex; flex: 1 1 240dp; flex-direction: column; min-width: 240dp; }
+.inspector-band-facts { box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12dp; padding: 12dp; min-width: 0; }
+.inspector-band-column { display: flex; flex: 1 1 240dp; flex-direction: column; gap: 4dp; min-width: 0; }
+.inspector-edit-details { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; align-self: flex-start; height: 28dp; min-height: 28dp; margin-top: 4dp; padding: 0 10dp; }
 .inspector-multi { display: flex; flex-wrap: wrap; gap: 8dp; align-items: center; }
 .asset-info-empty { display: block; box-sizing: border-box; padding: 16dp 12dp; }
 
@@ -1085,7 +1072,7 @@
 /* Runtime font measurements include cell padding. Rows keep their own inset. */
 #asset-text-measure { position: absolute; visibility: hidden; pointer-events: none; width: 0; height: 0; }
 #asset-measure-prose { font-family: Inter; font-size: 12dp; font-weight: 400; }
-#asset-measure-mono { font-family: "JetBrains Mono"; font-size: 10dp; font-weight: 400; }
+#asset-measure-value { font-size: 10dp; font-weight: 400; }
 .asset-list-thumb { margin-right: 8dp; }
 .asset-list-row .asset-col, .asset-list-header .asset-col { padding: 0 8dp; }
 .asset-list-row .asset-col-size, .asset-list-row .asset-col-modified { font-size: 10dp; }
@@ -1114,7 +1101,7 @@
 .asset-health-badge > span { display: block; line-height: 16dp; }
 
 /* Contents keeps its actions visible while long part names ellipsize. */
-.inspector-contents { display: flex; flex-direction: column; gap: 4dp; min-width: 0; }
+.inspector-contents { display: flex; flex-direction: column; gap: 8dp; min-width: 0; }
 .contents-part { display: flex; flex-direction: column; flex: 0 0 auto; min-width: 0; width: 100%; }
 .contents-detail { display: block; width: 100%; min-width: 0; line-height: 18dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .contents-error { display: block; width: 100%; min-width: 0; line-height: 18dp; white-space: normal; word-break: break-all; }
@@ -1130,7 +1117,6 @@
 .contents-row--disabled { opacity: 0.5; }
 .contents-pending { display: block; line-height: 24dp; min-height: 24dp; white-space: normal; }
 
-.asset-shell.is-compact .inspector-section { padding-left: 8dp; padding-right: 8dp; }
 .asset-shell.is-compact .contents-row { gap: 2dp; }
 .asset-shell.is-compact .contents-action { padding-left: 4dp; padding-right: 4dp; }
 

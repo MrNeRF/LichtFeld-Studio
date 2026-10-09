@@ -11,12 +11,18 @@
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/mesh_data.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
 #include "eval_mask.hpp"
+#include "flip.cuh"
+#include "io/filesystem_utils.hpp"
+#include "io/loader.hpp"
 #include "io/pipelined_image_loader.hpp"
+#include "kernels/image_kernels.hpp"
 #include "lfs/kernels/ssim.cuh"
+#include "mesh_mask_kernels.cuh"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -31,6 +37,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -39,6 +46,10 @@
 namespace lfs::training {
 
     namespace {
+        // LPIPS tiles exactly, so the budget only trades speed for memory: 384 MiB evaluates 10 MP views at
+        // full speed instead of reserving 1.5 GiB on top of training.
+        constexpr std::size_t kEvalLpipsActivationBudget = 384ULL << 20;
+
         struct TensorLayoutInfo {
             int n;
             int c;
@@ -104,6 +115,21 @@ namespace lfs::training {
                        : image;
         }
 
+        // Saved evaluation images are named after their camera; a repeated stem keeps its view index.
+        std::vector<std::string> eval_image_stems(const CameraDataset& dataset) {
+            std::vector<std::string> stems;
+            stems.reserve(dataset.size());
+            std::unordered_set<std::string> used;
+            for (size_t i = 0; i < dataset.size(); ++i) {
+                auto stem = lfs::core::path_to_utf8(
+                    lfs::core::utf8_to_path(dataset.get_camera(i)->image_name()).stem());
+                if (stem.empty() || !used.insert(stem).second)
+                    stem = stem.empty() ? std::to_string(i) : std::format("{}_{}", stem, i);
+                stems.push_back(std::move(stem));
+            }
+            return stems;
+        }
+
         lfs::core::Tensor mask_as_float01(const lfs::core::Tensor& mask) {
             return (mask.dtype() == lfs::core::DataType::UInt8 || mask.dtype() == lfs::core::DataType::Bool)
                        ? mask.to(lfs::core::DataType::Float32)
@@ -158,9 +184,33 @@ namespace lfs::training {
             config.use_16bit_color = params.dataset.loading_params.use_16bit_color;
             return std::make_unique<lfs::io::PipelinedImageLoader>(config);
         }
+
+        lfs::io::LoadParams evaluation_load_params(const lfs::core::Camera& camera,
+                                                   const lfs::core::param::TrainingParameters& params) {
+            lfs::io::LoadParams load_params;
+            load_params.resize_factor = params.dataset.resize_factor;
+            load_params.max_width = params.dataset.max_width;
+            // Only an 8-bit reference evaluated on the 8-bit grid loads as bytes. Other references are decoded at the
+            // file's full precision and put on the requested grid after resizing, so both images are rounded once
+            // and alike.
+            const bool exact_uint8 =
+                evaluation_bit_depth(camera.image_path(), params.optimization.eval_bit_depth) == 8 &&
+                evaluation_bit_depth(camera.image_path(), lfs::core::param::EvalBitDepth::Auto) == 8;
+            load_params.output_uint8 = exact_uint8;
+            load_params.decode_16bit = !exact_uint8;
+            load_params.decode_float = !exact_uint8;
+            load_params.skip_blob_cache = true;
+            load_params.cuda_stream = lfs::core::getCurrentCUDAStream();
+            if (params.optimization.undistort && camera.is_undistort_prepared() &&
+                params.optimization.eval_space == lfs::core::param::EvalSpace::Undistorted)
+                load_params.undistort = &camera.undistort_params();
+            return load_params;
+        }
     } // namespace
 
     lfs::core::Tensor image_for_metrics_and_save(const lfs::core::Tensor& image) {
+        if (image.device() == lfs::core::Device::CUDA && image.dtype() == lfs::core::DataType::Float32)
+            return kernels::quantize_to_8bit_grid(image);
         return image.clamp(0.0f, 1.0f)
             .mul(255.0f)
             .add(0.5f)
@@ -168,6 +218,37 @@ namespace lfs::training {
             .to(lfs::core::DataType::Float32)
             .div(255.0f)
             .contiguous();
+    }
+
+    lfs::core::Tensor image_for_metrics(const lfs::core::Tensor& image, const int bit_depth) {
+        assert(bit_depth == 8 || bit_depth == 16 || bit_depth == 32);
+        if (bit_depth == 8)
+            return image_for_metrics_and_save(image);
+        if (bit_depth == 16) {
+            assert(image.device() == lfs::core::Device::CUDA && image.dtype() == lfs::core::DataType::Float32);
+            return kernels::quantize_to_grid(image, 65535.0f);
+        }
+        return image.clamp(0.0f, 1.0f).contiguous();
+    }
+
+    int evaluation_bit_depth(const std::filesystem::path& reference, const lfs::core::param::EvalBitDepth setting) {
+        using lfs::core::param::EvalBitDepth;
+        switch (setting) {
+        case EvalBitDepth::Eight:
+            return 8;
+        case EvalBitDepth::Sixteen:
+            return 16;
+        case EvalBitDepth::Float:
+            return 32;
+        case EvalBitDepth::Auto:
+            break;
+        }
+        const float step = lfs::core::image_quantization_step(reference);
+        if (step == 1.0f / 255.0f)
+            return 8;
+        if (step == 1.0f / 65535.0f)
+            return 16;
+        return 32;
     }
 
     float PSNR::compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
@@ -364,12 +445,131 @@ namespace lfs::training {
         });
     }
 
+    lfs::Result<EvaluationMesh> load_evaluation_mesh(
+        const std::filesystem::path& path, const std::array<float, 3>& training_origin, const bool invert) {
+        lfs::io::LoadOptions options;
+        options.mesh_geometry_only = true;
+        auto loaded = lfs::io::Loader::create()->load(path, options);
+        if (!loaded)
+            return evaluation_error(loaded.error().format(), LFS_SOURCE_SITE_CURRENT());
+        const auto* mesh = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&loaded->data);
+        if (!mesh || !*mesh)
+            return evaluation_error("the file does not contain a triangle mesh", LFS_SOURCE_SITE_CURRENT());
+        const auto& data = **mesh;
+        if (!data.indices.is_valid() || data.indices.numel() == 0)
+            return evaluation_error("the mesh has no triangles", LFS_SOURCE_SITE_CURRENT());
+        assert(data.vertices.ndim() == 2 && data.vertices.shape()[1] == 3);
+        assert(data.indices.ndim() == 2 && data.indices.shape()[1] == 3);
+
+        const auto positions = data.vertices.cpu().contiguous().to_vector();
+        std::array<float, 3> lower{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                                   std::numeric_limits<float>::max()};
+        std::array<float, 3> upper{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
+                                   std::numeric_limits<float>::lowest()};
+        for (size_t i = 0; i < positions.size(); ++i) {
+            lower[i % 3] = std::min(lower[i % 3], positions[i]);
+            upper[i % 3] = std::max(upper[i % 3], positions[i]);
+        }
+        const float diagonal = std::hypot(upper[0] - lower[0], upper[1] - lower[1], upper[2] - lower[2]);
+
+        const auto origin = lfs::core::Tensor::from_vector(
+            {training_origin[0], training_origin[1], training_origin[2]},
+            lfs::core::TensorShape({1, 3}), lfs::core::Device::CUDA);
+        return EvaluationMesh{
+            .vertices = (data.vertices.to(lfs::core::Device::CUDA) - origin).contiguous(),
+            .indices = data.indices.to(lfs::core::Device::CUDA).contiguous(),
+            .z_near = std::max(1.0e-6f, 1.0e-4f * diagonal),
+            .invert = invert};
+    }
+
+    lfs::Result<lfs::core::SplatData> load_evaluation_splat(
+        const std::filesystem::path& path, const std::array<float, 3>& training_origin) {
+        if (!lfs::io::is_gaussian_splat_ply(path))
+            return evaluation_error("the file is not a splat PLY", LFS_SOURCE_SITE_CURRENT());
+        auto loaded = lfs::io::Loader::create()->load(path);
+        if (!loaded)
+            return evaluation_error(loaded.error().format(), LFS_SOURCE_SITE_CURRENT());
+        auto* const splat = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&loaded->data);
+        if (!splat || !*splat || (*splat)->size() == 0)
+            return evaluation_error("the file does not contain splats", LFS_SOURCE_SITE_CURRENT());
+        auto model = std::move(**splat);
+        model.set_sh_degree(0);
+        assert(model.means().ndim() == 2 && model.means().shape()[1] == 3);
+        const auto origin = lfs::core::Tensor::from_vector(
+            {training_origin[0], training_origin[1], training_origin[2]},
+            lfs::core::TensorShape({1, 3}), model.means().device());
+        model.means() = (model.means() - origin).contiguous();
+        return model;
+    }
+
+    lfs::Result<lfs::core::Tensor> load_evaluation_points(
+        const std::filesystem::path& path, const std::array<float, 3>& training_origin) {
+        lfs::core::Tensor means;
+        if (lfs::io::is_gaussian_splat_ply(path)) {
+            auto loaded = lfs::io::Loader::create()->load(path);
+            if (!loaded)
+                return evaluation_error(loaded.error().format(), LFS_SOURCE_SITE_CURRENT());
+            const auto* splat = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&loaded->data);
+            if (!splat || !*splat)
+                return evaluation_error("the file does not contain splats", LFS_SOURCE_SITE_CURRENT());
+            means = (*splat)->means();
+        } else {
+            auto cloud = lfs::io::load_ply_point_cloud(path);
+            if (!cloud)
+                return evaluation_error(cloud.error(), LFS_SOURCE_SITE_CURRENT());
+            means = cloud->means;
+        }
+        if (!means.is_valid() || means.numel() == 0)
+            return evaluation_error("the file has no points", LFS_SOURCE_SITE_CURRENT());
+        assert(means.ndim() == 2 && means.shape()[1] == 3);
+        const auto origin = lfs::core::Tensor::from_vector(
+            {training_origin[0], training_origin[1], training_origin[2]},
+            lfs::core::TensorShape({1, 3}), lfs::core::Device::CUDA);
+        return (means.to(lfs::core::Device::CUDA).to(lfs::core::DataType::Float32) - origin).contiguous();
+    }
+
+    std::array<std::array<float, 3>, 8> axis_aligned_box_corners(
+        const std::array<float, 6>& box, const std::array<float, 3>& training_origin) {
+        std::array<std::array<float, 3>, 8> corners{};
+        for (size_t corner = 0; corner < corners.size(); ++corner) {
+            for (size_t axis = 0; axis < 3; ++axis) {
+                assert(box[axis] < box[axis + 3]);
+                corners[corner][axis] = box[(corner >> axis) & 1 ? axis + 3 : axis] - training_origin[axis];
+            }
+        }
+        return corners;
+    }
+
+    EvaluationMesh make_evaluation_box(const std::array<std::array<float, 3>, 8>& corners, const bool invert) {
+        std::vector<float> vertices;
+        vertices.reserve(8 * 3);
+        for (const auto& corner : corners)
+            vertices.insert(vertices.end(), corner.begin(), corner.end());
+        static const std::vector<int> faces{0, 2, 6, 0, 6, 4, 1, 3, 7, 1, 7, 5,
+                                            0, 1, 5, 0, 5, 4, 2, 3, 7, 2, 7, 6,
+                                            0, 1, 3, 0, 3, 2, 4, 5, 7, 4, 7, 6};
+        const auto& a = corners[0];
+        const auto& b = corners[7];
+        const float diagonal = std::hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+        return EvaluationMesh{
+            .vertices = lfs::core::Tensor::from_vector(vertices, lfs::core::TensorShape({8, 3}), lfs::core::Device::CUDA),
+            .indices = lfs::core::Tensor::from_vector(faces, lfs::core::TensorShape({12, 3}), lfs::core::Device::CUDA),
+            .z_near = std::max(1.0e-6f, 1.0e-4f * diagonal),
+            .invert = invert};
+    }
+
     lfs::Result<PreparedEvaluationView> prepare_evaluation_view(
         lfs::core::Camera& camera,
         const lfs::core::param::TrainingParameters& params,
         const EvaluationRenderFn& render,
         const EvaluationViewInputs* cached_inputs,
-        lfs::io::PipelinedImageLoader* image_loader) {
+        lfs::io::PipelinedImageLoader* image_loader,
+        const EvaluationMaskSources& mask_sources,
+        const lfs::core::Tensor& background) {
+        const auto* mesh = mask_sources.mesh;
+        const auto* points = mask_sources.points;
+        const auto* mask_folder = mask_sources.folder;
+        const auto* mask_splat = mask_sources.splat;
         RestoreCameraImageDimensions restore_dimensions{
             camera, camera.image_width(), camera.image_height(), camera.image_size_loaded()};
 
@@ -391,18 +591,14 @@ namespace lfs::training {
                     fallback_image_loader = make_eval_image_loader(params);
                     image_loader = fallback_image_loader.get();
                 }
-                lfs::io::LoadParams load_params;
-                load_params.resize_factor = params.dataset.resize_factor;
-                load_params.max_width = params.dataset.max_width;
-                load_params.output_uint8 = !params.dataset.loading_params.use_16bit_color;
-                load_params.cuda_stream = lfs::core::getCurrentCUDAStream();
-                if (undistorted_reference)
-                    load_params.undistort = &camera.undistort_params();
-                inputs.gt_image = image_loader->load_image_immediate(
-                    camera.image_path(), load_params);
+                inputs.bit_depth = evaluation_bit_depth(camera.image_path(), params.optimization.eval_bit_depth);
+                const auto load_params = evaluation_load_params(camera, params);
+                inputs.gt_image = image_loader->load_image_immediate(camera.image_path(), load_params);
                 if (!inputs.gt_image.is_valid() || inputs.gt_image.ndim() != 3 ||
                     inputs.gt_image.shape()[0] != 3)
                     return evaluation_error("failed to load evaluation image", LFS_SOURCE_SITE_CURRENT());
+                if (!load_params.output_uint8)
+                    inputs.gt_image = image_for_metrics(inputs.gt_image.to(lfs::core::DataType::Float32), inputs.bit_depth);
 
                 if (undistorted_reference) {
                     auto [source_width, source_height, source_channels] =
@@ -433,7 +629,21 @@ namespace lfs::training {
             }
 
             if (!cached_inputs) {
-                if (eval_uses_masks(params.optimization.mask_mode)) {
+                if (mask_folder) {
+                    const auto mask_path = mask_folder->find(camera.image_name());
+                    if (mask_path.empty())
+                        return evaluation_error(std::format("no evaluation mask for '{}' in the mask folder",
+                                                            camera.image_name()),
+                                                LFS_SOURCE_SITE_CURRENT());
+                    inputs.user_mask = camera.load_mask_file(
+                        mask_path, params.dataset.resize_factor, params.dataset.max_width,
+                        params.optimization.eval_mask_invert, params.optimization.mask_threshold, true,
+                        undistorted_reference);
+                    if (inputs.user_mask.numel() != inputs.gt_image.shape()[1] * inputs.gt_image.shape()[2])
+                        return evaluation_error(std::format("evaluation mask '{}' does not match the image size",
+                                                            lfs::core::path_to_utf8(mask_path)),
+                                                LFS_SOURCE_SITE_CURRENT());
+                } else if (!mesh && eval_uses_masks(params.optimization.mask_mode)) {
                     auto mask_config = metrics_mask_config_from(params);
                     mask_config.apply_undistortion = undistorted_reference;
                     mask_config.replace_gt_image = false;
@@ -441,6 +651,22 @@ namespace lfs::training {
                                                camera.has_alpha();
                     inputs.user_mask = lfs::training::load_eval_mask(
                         &camera, inputs.gt_image, alpha_as_mask, mask_config);
+                }
+                if (params.optimization.mask_mode == lfs::core::param::MaskMode::None &&
+                    params.optimization.use_alpha_as_mask && camera.has_alpha()) {
+                    auto alpha_config = metrics_mask_config_from(params);
+                    alpha_config.apply_undistortion = undistorted_reference;
+                    const auto alpha = lfs::training::load_eval_alpha(camera, alpha_config);
+                    if (alpha.numel() != inputs.gt_image.shape()[1] * inputs.gt_image.shape()[2])
+                        return evaluation_error("evaluation alpha does not match the evaluation image",
+                                                LFS_SOURCE_SITE_CURRENT());
+                    const auto& color = params.optimization.bg_color;
+                    inputs.gt_image = kernels::composite_over_background(
+                        inputs.gt_image, alpha,
+                        background.is_valid() ? background
+                                              : lfs::core::Tensor::from_vector(
+                                                    std::vector<float>{color[0], color[1], color[2]}, {3},
+                                                    lfs::core::Device::CUDA));
                 }
             }
 
@@ -456,6 +682,18 @@ namespace lfs::training {
                 params.optimization.eval_space == lfs::core::param::EvalSpace::Distorted;
             const bool native_gut_evaluation = distorted_evaluation && params.optimization.gut;
             const bool warp_to_distorted = distorted_evaluation && !native_gut_evaluation;
+            // Geometric masks follow the lens the scored image was taken with: the source lens when
+            // evaluating distorted images, and the camera's own lens when GUT renders it without --undistort.
+            std::optional<lfs::core::UndistortParams> mask_lens;
+            if (distorted_evaluation) {
+                mask_lens = scaled_undistort;
+            } else if (params.optimization.gut && !camera.is_undistort_prepared() && camera.has_distortion()) {
+                camera.precompute_undistortion();
+                if (camera.is_undistort_precomputed())
+                    mask_lens = lfs::core::prepare_undistort_params(
+                        camera.undistort_params(), inputs.source_width, inputs.source_height,
+                        params.dataset.resize_factor, params.dataset.max_width);
+            }
 
             if (native_gut_evaluation) {
                 const auto& native = camera.undistort_params();
@@ -556,8 +794,8 @@ namespace lfs::training {
             }
 
             auto metric_mask = inputs.user_mask;
+            lfs::core::Tensor validity_mask;
             if (warp_to_distorted) {
-                lfs::core::Tensor validity_mask;
                 rendered->output.image = lfs::core::distort_image_to_source(
                     rendered->output.image, *inverse_warp, validity_mask,
                     consumer);
@@ -616,9 +854,152 @@ namespace lfs::training {
                 }
             }
 
+            if (const auto range = lfs::core::param::parse_eval_mask_depth(params.optimization.eval_mask)) {
+                if (!rendered->output.depth.is_valid() || !rendered->output.alpha.is_valid())
+                    return evaluation_error("a depth evaluation mask needs rendered depth and alpha",
+                                            LFS_SOURCE_SITE_CURRENT());
+                const auto alpha = squeeze_to_hw(rendered->output.alpha);
+                const auto depth = squeeze_to_hw(rendered->output.depth);
+                assert(alpha.ndim() == 2 && alpha.shape() == depth.shape());
+                // Both rasterizers return alpha-weighted accumulated depth.
+                const auto expected = depth / alpha.clamp_min(1.0e-6f);
+                auto coverage = (alpha.gt(0.5f) && expected.ge((*range)[0]) && expected.le((*range)[1]))
+                                    .to(lfs::core::DataType::UInt8);
+                if (params.optimization.eval_mask_invert)
+                    coverage = coverage.eq(0).to(lfs::core::DataType::UInt8);
+                metric_mask = validity_mask.is_valid()
+                                  ? (coverage.to(lfs::core::DataType::Float32) *
+                                     validity_mask.to(lfs::core::DataType::Float32))
+                                        .gt(0.5f)
+                                        .to(lfs::core::DataType::UInt8)
+                                        .contiguous()
+                                  : coverage.contiguous();
+                if (metric_mask.to(lfs::core::DataType::Float32).sum().item<float>() <= 0.0f)
+                    return evaluation_error("depth mask covers no evaluated pixel", LFS_SOURCE_SITE_CURRENT());
+            }
+
+            if (mask_splat) {
+                // Rendered with the same camera and rasterizer as the scored image, so it follows the same lens.
+                auto& model = const_cast<lfs::core::SplatData&>(mask_splat->model);
+                auto mask_background =
+                    background.is_valid() ? background : lfs::core::Tensor::zeros({3}, lfs::core::Device::CUDA);
+                lfs::core::Tensor alpha;
+                try {
+                    alpha = params.optimization.gut
+                                ? gsplat_rasterize(*render_camera, model, mask_background, 1.0f, false,
+                                                   GsplatRenderMode::RGB, true)
+                                      .alpha
+                                : fast_rasterize(*render_camera, model, mask_background, params.optimization.mip_filter,
+                                                 {}, false, dilation_scale)
+                                      .alpha;
+                } catch (const std::exception& e) {
+                    // LFS-CENSUS-OK(empty-catch): converted into a typed evaluation error
+                    return evaluation_error(std::string("splat mask render failed: ") + e.what(),
+                                            LFS_SOURCE_SITE_CURRENT());
+                }
+                if (!alpha.is_valid())
+                    return evaluation_error("splat mask render has no alpha", LFS_SOURCE_SITE_CURRENT());
+                alpha.sync_to_stream(consumer);
+                if (warp_to_distorted)
+                    alpha = lfs::core::distort_mask_to_source_area(alpha, *inverse_warp, consumer);
+                auto coverage = squeeze_to_hw(alpha).ge(mask_splat->opacity).to(lfs::core::DataType::UInt8);
+                if (mask_splat->invert)
+                    coverage = coverage.eq(0).to(lfs::core::DataType::UInt8);
+                metric_mask = validity_mask.is_valid()
+                                  ? (coverage.to(lfs::core::DataType::Float32) *
+                                     validity_mask.to(lfs::core::DataType::Float32))
+                                        .gt(0.5f)
+                                        .to(lfs::core::DataType::UInt8)
+                                        .contiguous()
+                                  : coverage.contiguous();
+                if (metric_mask.to(lfs::core::DataType::Float32).sum().item<float>() <= 0.0f)
+                    return evaluation_error("splat mask covers no evaluated pixel", LFS_SOURCE_SITE_CURRENT());
+            }
+
+            if (points) {
+                const auto stream = rendered->output.image.stream();
+                const auto R = camera.R().cpu().contiguous().to_vector();
+                const auto T = camera.T().cpu().contiguous().to_vector();
+                MeshMaskCamera point_camera;
+                point_camera.world_to_camera = {R[0], R[1], R[2], T[0],
+                                                R[3], R[4], R[5], T[1],
+                                                R[6], R[7], R[8], T[2]};
+                if (mask_lens) {
+                    point_camera.fx = mask_lens->src_fx;
+                    point_camera.fy = mask_lens->src_fy;
+                    point_camera.cx = mask_lens->src_cx;
+                    point_camera.cy = mask_lens->src_cy;
+                    point_camera.width = inputs.source_width;
+                    point_camera.height = inputs.source_height;
+                } else {
+                    point_camera.fx = geometry.fx;
+                    point_camera.fy = geometry.fy;
+                    point_camera.cx = geometry.cx;
+                    point_camera.cy = geometry.cy;
+                    point_camera.width = geometry.width;
+                    point_camera.height = geometry.height;
+                }
+                auto coverage = splat_point_coverage(points->means, point_camera, points->radius, points->close,
+                                                     mask_lens ? &*mask_lens : nullptr, stream);
+                if (points->invert)
+                    coverage = coverage.eq(0).to(lfs::core::DataType::UInt8);
+                metric_mask = validity_mask.is_valid()
+                                  ? (coverage.to(lfs::core::DataType::Float32) *
+                                     validity_mask.to(lfs::core::DataType::Float32))
+                                        .gt(0.5f)
+                                        .to(lfs::core::DataType::UInt8)
+                                        .contiguous()
+                                  : coverage;
+                if (metric_mask.to(lfs::core::DataType::Float32).sum().item<float>() <= 0.0f)
+                    return evaluation_error("point mask covers no evaluated pixel", LFS_SOURCE_SITE_CURRENT());
+            }
+
+            if (mesh) {
+                const auto stream = rendered->output.image.stream();
+                const auto R = camera.R().cpu().contiguous().to_vector();
+                const auto T = camera.T().cpu().contiguous().to_vector();
+                MeshMaskCamera mesh_camera;
+                mesh_camera.world_to_camera = {R[0], R[1], R[2], T[0],
+                                               R[3], R[4], R[5], T[1],
+                                               R[6], R[7], R[8], T[2]};
+                lfs::core::Tensor coverage;
+                if (mask_lens) {
+                    mesh_camera.fx = mask_lens->src_fx;
+                    mesh_camera.fy = mask_lens->src_fy;
+                    mesh_camera.cx = mask_lens->src_cx;
+                    mesh_camera.cy = mask_lens->src_cy;
+                    mesh_camera.width = inputs.source_width;
+                    mesh_camera.height = inputs.source_height;
+                    const auto samples = lfs::core::inverse_distortion_sample_map(*mask_lens, stream);
+                    coverage = rasterize_mesh_coverage(
+                        mesh->vertices, mesh->indices, mesh_camera, samples, *mask_lens,
+                        mesh->z_near, stream);
+                } else {
+                    mesh_camera.fx = geometry.fx;
+                    mesh_camera.fy = geometry.fy;
+                    mesh_camera.cx = geometry.cx;
+                    mesh_camera.cy = geometry.cy;
+                    mesh_camera.width = geometry.width;
+                    mesh_camera.height = geometry.height;
+                    coverage = rasterize_mesh_coverage(
+                        mesh->vertices, mesh->indices, mesh_camera, mesh->z_near, stream);
+                }
+                if (mesh->invert)
+                    coverage = coverage.eq(0).to(lfs::core::DataType::UInt8);
+                metric_mask = validity_mask.is_valid()
+                                  ? (coverage.to(lfs::core::DataType::Float32) *
+                                     validity_mask.to(lfs::core::DataType::Float32))
+                                        .gt(0.5f)
+                                        .to(lfs::core::DataType::UInt8)
+                                        .contiguous()
+                                  : coverage;
+                if (metric_mask.to(lfs::core::DataType::Float32).sum().item<float>() <= 0.0f)
+                    return evaluation_error("mesh mask covers no evaluated pixel", LFS_SOURCE_SITE_CURRENT());
+            }
+
             if (rendered->raw_image.is_valid())
                 rendered->raw_image = rendered->raw_image.clamp(0.0f, 1.0f);
-            rendered->output.image = image_for_metrics_and_save(rendered->output.image);
+            rendered->output.image = image_for_metrics(rendered->output.image, inputs.bit_depth);
 
             assert(inputs.gt_image.ndim() == 3);
             assert(inputs.gt_image.shape()[0] == 3);
@@ -633,14 +1014,21 @@ namespace lfs::training {
                 assert(metric_mask.shape()[1] == inputs.gt_image.shape()[2]);
             }
 
+            const bool user_mask_applied = inputs.user_mask.is_valid() || mesh != nullptr || points != nullptr ||
+                                           mask_splat != nullptr ||
+                                           lfs::core::param::is_eval_mask_depth(params.optimization.eval_mask);
             return PreparedEvaluationView{
                 .inputs = std::move(inputs),
                 .output = std::move(rendered->output),
                 .raw_image = std::move(rendered->raw_image),
                 .metric_mask = std::move(metric_mask),
+                .validity_mask = std::move(validity_mask),
                 .render_geometry = geometry,
                 .validity_mask_applied = warp_to_distorted,
-                .erode_ssim_mask = warp_to_distorted};
+                .erode_ssim_mask = warp_to_distorted || mesh != nullptr || points != nullptr || mask_folder != nullptr ||
+                                   mask_splat != nullptr ||
+                                   lfs::core::param::is_eval_mask_depth(params.optimization.eval_mask),
+                .user_mask_applied = user_mask_applied};
         } catch (const std::exception& e) {
             // LFS-CENSUS-OK(empty-catch): converted into a typed evaluation error
             return evaluation_error(e.what(), LFS_SOURCE_SITE_CURRENT());
@@ -818,9 +1206,12 @@ namespace lfs::training {
             {"ssim", json_metric(view.ssim)},
             {"lpips", json_metric(view.lpips)},
             {"masked", view.masked},
+            {"bit_depth", view.bit_depth},
             {"evaluated_pixel_fraction", view.evaluated_pixel_fraction},
             {"validity_mask_applied", view.validity_mask_applied},
         };
+        if (view.flip)
+            entry["flip"] = json_metric(view.flip);
         if (!view.skipped_reason.empty())
             entry["skipped_reason"] = view.skipped_reason;
 
@@ -926,6 +1317,8 @@ namespace lfs::training {
             report_file << "SSIM:  " << final.ssim << "\n";
             if (final.lpips && std::isfinite(*final.lpips))
                 report_file << "LPIPS: " << *final.lpips << "\n";
+            if (final.flip && std::isfinite(*final.flip))
+                report_file << "FLIP:  " << *final.flip << "\n";
             report_file << "Time per image: " << final.elapsed_time << " seconds\n";
             report_file << "Number of Gaussians: " << final.num_gaussians << "\n";
             report_file << "Bias (raw):  (" << final.bias_r << ", " << final.bias_g << ", " << final.bias_b << ")\n";
@@ -1020,7 +1413,7 @@ namespace lfs::training {
         result.num_gaussians = static_cast<int>(splatData.size());
         result.iteration = iteration;
 
-        std::vector<float> psnr_values, ssim_values, lpips_values, normal_values, depth_values;
+        std::vector<float> psnr_values, ssim_values, lpips_values, flip_values, normal_values, depth_values;
         std::vector<float> bias_r_values, bias_g_values, bias_b_values;
         std::vector<float> bias_corr_r_values, bias_corr_g_values, bias_corr_b_values;
         const auto start_time = std::chrono::steady_clock::now();
@@ -1033,6 +1426,8 @@ namespace lfs::training {
         }
 
         const size_t val_dataset_size = val_dataset->size();
+        const auto image_stems = _params.optimization.enable_save_eval_images ? eval_image_stems(*val_dataset)
+                                                                              : std::vector<std::string>{};
         size_t skipped_images = 0;
         size_t evaluated_images = 0;
         size_t saved_images = 0;
@@ -1048,7 +1443,7 @@ namespace lfs::training {
             try {
                 auto loaded = lfs::core::nn::models::Lpips::load(
                     weights_path, lfs::core::Device::CUDA, lfs::core::DataType::Float16,
-                    lfs::core::nn::models::InputScaling::Identity);
+                    lfs::core::nn::models::InputScaling::Identity, kEvalLpipsActivationBudget);
                 if (loaded) {
                     _lpips_metric.emplace(std::move(*loaded));
                 } else {
@@ -1074,12 +1469,10 @@ namespace lfs::training {
         }
 
         bool render_normal = false;
-        if (!_params.optimization.gut) {
-            for (size_t image_idx = 0; image_idx < val_dataset_size; ++image_idx) {
-                if (val_dataset->get_camera(image_idx)->has_normal()) {
-                    render_normal = true;
-                    break;
-                }
+        for (size_t image_idx = 0; image_idx < val_dataset_size; ++image_idx) {
+            if (val_dataset->get_camera(image_idx)->has_normal()) {
+                render_normal = true;
+                break;
             }
         }
 
@@ -1099,7 +1492,9 @@ namespace lfs::training {
                         if (_params.optimization.gut) {
                             output = gsplat_rasterize(
                                 render_camera, splatData_mutable, background,
-                                1.0f, false, GsplatRenderMode::RGB, true);
+                                1.0f, false,
+                                render_normal ? GsplatRenderMode::RGB_D_N : GsplatRenderMode::RGB_D,
+                                true);
                         } else {
                             output = fast_rasterize(
                                 render_camera, splatData_mutable, background,
@@ -1118,7 +1513,14 @@ namespace lfs::training {
                     }
                 },
                 nullptr,
-                image_loader);
+                image_loader,
+                mask_sources(),
+                background);
+            // The next reference decodes on the host while this view is scored; its upload waits for its turn.
+            if (image_idx + 1 < val_dataset_size) {
+                const auto* const next = val_dataset->get_camera(image_idx + 1);
+                image_loader->decode_ahead(next->image_path(), evaluation_load_params(*next, _params));
+            }
             if (!prepared) {
                 LOG_WARN("Eval: skipping camera '{}' (view preparation failed: {})",
                          cam->image_name(), prepared.error().detail());
@@ -1133,12 +1535,15 @@ namespace lfs::training {
             auto render_raw = std::move(prepared->raw_image);
             const auto render_geometry = prepared->render_geometry;
             const bool erode_ssim_mask = prepared->erode_ssim_mask;
+            const bool user_mask_applied = prepared->user_mask_applied;
+            const auto prepared_validity = prepared->validity_mask;
             const bool distorted_coordinates =
                 _params.optimization.undistort && cam->is_undistort_prepared() &&
                 _params.optimization.eval_space == lfs::core::param::EvalSpace::Distorted;
             view.height = static_cast<int>(gt_image.shape()[1]);
             view.width = static_cast<int>(gt_image.shape()[2]);
             view.validity_mask_applied = prepared->validity_mask_applied;
+            view.bit_depth = prepared->inputs.bit_depth;
             view.evaluated_pixel_fraction = mask.is_valid()
                                                 ? mask.to(lfs::core::DataType::Float32).mean().item<float>()
                                                 : 1.0f;
@@ -1184,7 +1589,8 @@ namespace lfs::training {
                     const std::pair<int, int> image_size{image_height, image_width};
                     const bool size_changed = !lpips_preflight_size || *lpips_preflight_size != image_size;
                     lpips_preflight_size = image_size;
-                    const auto required = _lpips_metric->estimated_peak_bytes(image_height, image_width);
+                    const auto required =
+                        _lpips_metric->estimated_peak_bytes(image_height, image_width, mask.is_valid());
                     std::size_t free_bytes = 0;
                     std::size_t total_bytes = 0;
                     const auto status = cudaMemGetInfo(&free_bytes, &total_bytes);
@@ -1204,7 +1610,7 @@ namespace lfs::training {
                                                  cudaEventRecord(lpips_start_event, lpips_stream) == cudaSuccess;
                         auto value = mask.is_valid()
                                          ? _lpips_metric->forward(
-                                               pred_lpips, target_lpips, mask_as_float01(mask),
+                                               pred_lpips, target_lpips, mask,
                                                lfs::core::nn::models::InputScaling::Identity)
                                          : _lpips_metric->forward(
                                                pred_lpips, target_lpips,
@@ -1237,6 +1643,26 @@ namespace lfs::training {
                 }
             }
             view.lpips = lpips;
+            lfs::core::Tensor flip_map;
+            if (_params.optimization.eval_flip) {
+                try {
+                    // Pixels outside the mask are blanked in both images first, so the filters cannot carry
+                    // differences from there into the scored area.
+                    flip_map = mask.is_valid()
+                                   ? flip_error_map(mask_image(gt_float, mask), mask_image(r_output.image, mask)) *
+                                         mask_as_float01(mask)
+                                   : flip_error_map(gt_float, r_output.image);
+                    const float flip = mask.is_valid()
+                                           ? flip_map.sum().item<float>() / mask_as_float01(mask).sum().item<float>()
+                                           : flip_map.mean().item<float>();
+                    if (std::isfinite(flip)) {
+                        view.flip = flip;
+                        flip_values.push_back(flip);
+                    }
+                } catch (const std::exception& e) {
+                    LOG_WARN("Eval: FLIP failed for camera '{}' ({})", cam->image_name(), e.what());
+                }
+            }
             auto accumulate_bias = [&](const lfs::core::Tensor& image,
                                        std::vector<float>& br,
                                        std::vector<float>& bg,
@@ -1298,7 +1724,7 @@ namespace lfs::training {
                                     r_output.normal.clamp(-1.0f, 1.0f).mul(0.5f) + 0.5f,
                                     prior.clamp(-1.0f, 1.0f).mul(0.5f) + 0.5f};
                                 lfs::core::image_io::save_images_async(
-                                    eval_dir / (std::to_string(image_idx) + "_normals.png"),
+                                    eval_dir / (image_stems[image_idx] + "_normals.png"),
                                     normal_maps,
                                     true, // horizontal: rendered | prior
                                     4,
@@ -1339,6 +1765,9 @@ namespace lfs::training {
                         auto T_cpu = cam->T().cpu().contiguous();
                         const float* const R = R_cpu.ptr<float>();
                         const float* const T = T_cpu.ptr<float>();
+                        // GUT renders radial depth for non-pinhole lenses it rasterizes natively.
+                        const bool radial_depth = _params.optimization.gut && !render_geometry.undistorted &&
+                                                  cam->camera_model_type() != lfs::core::CameraModelType::PINHOLE;
                         // Observed pixels live in the distorted source image; the undistorted
                         // render is sampled at the point's projection through its own camera.
                         std::vector<DepthAbsRelSample> samples;
@@ -1349,11 +1778,11 @@ namespace lfs::training {
                             if (!std::isfinite(z) || z <= 1.0e-6f) {
                                 continue;
                             }
+                            const float x = R[0] * observation.x + R[1] * observation.y +
+                                            R[2] * observation.z + T[0];
+                            const float y = R[3] * observation.x + R[4] * observation.y +
+                                            R[5] * observation.z + T[1];
                             if (render_geometry.undistorted) {
-                                const float x = R[0] * observation.x + R[1] * observation.y +
-                                                R[2] * observation.z + T[0];
-                                const float y = R[3] * observation.x + R[4] * observation.y +
-                                                R[5] * observation.z + T[1];
                                 samples.push_back(DepthAbsRelSample{
                                     .u = render_geometry.fx * x / z + render_geometry.cx,
                                     .v = render_geometry.fy * y / z + render_geometry.cy,
@@ -1363,7 +1792,7 @@ namespace lfs::training {
                             samples.push_back(DepthAbsRelSample{
                                 .u = observation.u * u_scale,
                                 .v = observation.v * v_scale,
-                                .true_depth = z});
+                                .true_depth = radial_depth ? std::sqrt(x * x + y * y + z * z) : z});
                         }
                         if (const auto absrel = median_depth_absrel(depth, samples)) {
                             depth_values.push_back(*absrel);
@@ -1375,18 +1804,7 @@ namespace lfs::training {
             }
 
             if (_params.optimization.enable_save_eval_images) {
-                auto gt_vis = image_as_float01(gt_image);
-                auto render_vis = r_output.image;
-                if (mask.is_valid()) {
-                    auto mask_f = mask_as_float01(mask);
-                    const int C = static_cast<int>(gt_image.shape()[0]);
-                    const int H = static_cast<int>(mask_f.shape()[0]);
-                    const int W = static_cast<int>(mask_f.shape()[1]);
-                    auto mask_3d = mask_f.unsqueeze(0).expand({C, H, W});
-                    gt_vis = gt_vis * mask_3d;
-                    render_vis = r_output.image * mask_3d;
-                }
-                const std::vector<lfs::core::Tensor> rgb_images = {gt_vis.clone(), render_vis.clone()};
+                const auto& stem = image_stems[image_idx];
                 auto stamp = _params.include_provenance ? lfs::core::make_provenance_stamp()
                                                         : lfs::core::make_minimal_provenance_stamp();
                 if (_params.include_provenance) {
@@ -1395,18 +1813,45 @@ namespace lfs::training {
                     if (!strategy.empty())
                         stamp.strategy = std::string(strategy);
                 }
-                lfs::core::image_io::save_images_async(
-                    eval_dir / (std::to_string(image_idx) + ".png"),
-                    rgb_images,
-                    true, // horizontal
-                    4,    // separator width
-                    lfs::core::provenance_to_json(stamp));
-                if (view.validity_mask_applied) {
+                const auto metadata = lfs::core::provenance_to_json(stamp);
+                auto gt_vis = image_as_float01(gt_image);
+                auto render_vis = r_output.image;
+                if (user_mask_applied) {
+                    // Rows: as rendered, with the mask applied, with the inverted mask applied inside the valid view.
+                    assert(mask.is_valid() && mask.ndim() == 2);
+                    const auto scored = mask_as_float01(mask);
+                    const auto valid = prepared_validity.is_valid() ? mask_as_float01(prepared_validity)
+                                                                    : lfs::core::Tensor::full(scored.shape(), 1.0f,
+                                                                                              scored.device());
+                    const auto left_out = (scored * -1.0f + 1.0f) * valid;
+                    const size_t C = gt_vis.shape()[0], H = gt_vis.shape()[1], W = gt_vis.shape()[2];
+                    const auto gap_column = lfs::core::Tensor::full({C, H, 4}, 1.0f, gt_vis.device());
+                    const auto gap_row = lfs::core::Tensor::full({C, 4, 2 * W + 4}, 1.0f, gt_vis.device());
+                    const auto row = [&](const lfs::core::Tensor& weight) {
+                        const auto w = weight.unsqueeze(0).expand({(int)C, (int)H, (int)W});
+                        return lfs::core::Tensor::cat({gt_vis * w, gap_column, render_vis * w}, 2);
+                    };
+                    const auto as_rendered = lfs::core::Tensor::cat({gt_vis, gap_column, render_vis}, 2);
                     lfs::core::image_io::save_image_async(
-                        eval_dir / (std::to_string(image_idx) + "_metric_mask.png"),
-                        mask.to(lfs::core::DataType::Float32)
-                            .unsqueeze(0)
-                            .expand({3, view.height, view.width}));
+                        eval_dir / (stem + ".png"),
+                        lfs::core::Tensor::cat({as_rendered, gap_row, row(scored), gap_row, row(left_out)}, 1).contiguous(),
+                        metadata);
+                } else {
+                    if (mask.is_valid()) {
+                        const auto mask_3d = mask_as_float01(mask).unsqueeze(0).expand(
+                            {(int)gt_vis.shape()[0], (int)gt_vis.shape()[1], (int)gt_vis.shape()[2]});
+                        gt_vis = gt_vis * mask_3d;
+                        render_vis = render_vis * mask_3d;
+                    }
+                    lfs::core::image_io::save_images_async(eval_dir / (stem + ".png"), {gt_vis.clone(), render_vis.clone()},
+                                                           true, // horizontal
+                                                           4,    // separator width
+                                                           metadata);
+                }
+                if (flip_map.is_valid()) {
+                    lfs::core::image_io::save_image_async(
+                        eval_dir / (stem + "_flip.png"),
+                        flip_error_image(flip_map).to(lfs::core::DataType::Float32).div(255.0f));
                 }
                 saved_images++;
             }
@@ -1440,6 +1885,7 @@ namespace lfs::training {
             result.ssim = std::accumulate(ssim_values.begin(), ssim_values.end(), 0.0f) / ssim_values.size();
         }
         result.lpips = mean_of_finite(lpips_values);
+        result.flip = mean_of_finite(flip_values);
         if (!bias_r_values.empty()) {
             const auto n = static_cast<float>(bias_r_values.size());
             result.bias_r = std::accumulate(bias_r_values.begin(), bias_r_values.end(), 0.0f) / n;

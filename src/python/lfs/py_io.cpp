@@ -34,6 +34,8 @@
 #include "io/splat_path.hpp"
 #include "training/dataset.hpp"
 
+#include <array>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <memory>
@@ -247,7 +249,9 @@ namespace lfs::python {
             }
 
             if (nb::isinstance<nb::ndarray<>>(value)) {
-                return PyTensor::from_numpy(nb::cast<nb::ndarray<>>(value)).tensor();
+                return PyTensor::from_numpy(
+                           nb::cast<nb::ndarray<nb::numpy, nb::device::cpu>>(value))
+                    .tensor();
             }
 
             throw_invalid_io_argument(
@@ -634,6 +638,8 @@ namespace lfs::python {
             .def_ro("embedded_dataset_present", &project::ProjectInspectorParameters::embedded_dataset_present)
             .def_ro("embedded_dataset_complete", &project::ProjectInspectorParameters::embedded_dataset_complete)
             .def_ro("embedded_images", &project::ProjectInspectorParameters::embedded_images)
+            .def_ro("embedded_masks", &project::ProjectInspectorParameters::embedded_masks)
+            .def_ro("embedded_depths", &project::ProjectInspectorParameters::embedded_depths)
             .def_ro("embedded_normals", &project::ProjectInspectorParameters::embedded_normals)
             .def_ro("embedded_sparse", &project::ProjectInspectorParameters::embedded_sparse);
 
@@ -731,6 +737,8 @@ namespace lfs::python {
         nb::class_<project::DatasetEmbedResult>(m, "DatasetEmbedResult")
             .def_ro("card", &project::DatasetEmbedResult::card)
             .def_ro("images_embedded", &project::DatasetEmbedResult::images_embedded)
+            .def_ro("masks_embedded", &project::DatasetEmbedResult::masks_embedded)
+            .def_ro("depths_embedded", &project::DatasetEmbedResult::depths_embedded)
             .def_ro("normals_embedded", &project::DatasetEmbedResult::normals_embedded)
             .def_ro("sparse_embedded", &project::DatasetEmbedResult::sparse_embedded)
             .def_ro("bytes_embedded", &project::DatasetEmbedResult::bytes_embedded);
@@ -757,6 +765,19 @@ namespace lfs::python {
         nb::class_<project::ProjectRepairResult>(m, "ProjectRepairResult")
             .def_ro("card", &project::ProjectRepairResult::card)
             .def_ro("saves_recovered", &project::ProjectRepairResult::saves_recovered);
+
+        nb::class_<project::ProjectHeadIdentity>(m, "ProjectHeadIdentity")
+            .def_prop_ro("project_uuid", [](const project::ProjectHeadIdentity& head) { return head.project_uuid.to_string(); })
+            .def_prop_ro("commit_uuid", [](const project::ProjectHeadIdentity& head) { return head.commit_uuid.to_string(); })
+            .def_ro("generation", &project::ProjectHeadIdentity::generation);
+
+        m.def("inspect_project_head", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<project::ProjectHeadIdentity>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::ProjectReader::read_head_identity(path);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), "Read the project and commit identity from the head slots without opening the project.");
 
         m.def("classify_project", [](const std::filesystem::path& path) {
             std::optional<project::OpenClassification> result;
@@ -982,6 +1003,19 @@ namespace lfs::python {
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
 
         m.def("set_project_preview", [](const std::filesystem::path& path, const nb::bytes& png) {
+            constexpr std::array<unsigned char, 8> png_signature{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+            if (png.size() != 0) {
+                if (png.size() < png_signature.size() ||
+                    std::memcmp(png.data(), png_signature.data(), png_signature.size()) != 0) {
+                    throw std::invalid_argument("png_bytes must contain a valid PNG image");
+                }
+                const auto* data = reinterpret_cast<const std::uint8_t*>(png.data());
+                auto [pixels, width, height, channels] = core::load_image_from_memory(data, png.size());
+                const std::unique_ptr<unsigned char, decltype(&core::free_image)> decoded(pixels, &core::free_image);
+                if (!decoded || width <= 0 || height <= 0 || channels <= 0) {
+                    throw std::invalid_argument("png_bytes must contain a valid PNG image");
+                }
+            }
             std::optional<lfs::Result<project::ProjectInspectorCard>> result;
             {
                 nb::gil_scoped_release release;

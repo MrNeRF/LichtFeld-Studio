@@ -7,6 +7,10 @@
 #include "project_container_internal.hpp"
 
 #include "core/path_utils.hpp"
+#include "core/resource_messages.hpp"
+#include "project_filesystem.hpp"
+
+#include <xxhash.h>
 
 #include <algorithm>
 #include <atomic>
@@ -44,7 +48,7 @@ namespace lfs::io::project {
             std::error_code error;
             auto absolute = std::filesystem::absolute(path, error);
             if (!error)
-                absolute = std::filesystem::weakly_canonical(absolute, error);
+                absolute = detail::project_fs::weakly_canonical(absolute, error);
             return (error ? path : absolute)
                 .lexically_normal();
         }
@@ -138,12 +142,12 @@ namespace lfs::io::project::detail {
     lfs::Result<ProjectPathIdentity> ProjectPathIdentity::capture(const std::filesystem::path& path) {
         std::error_code error;
         const auto absolute = std::filesystem::absolute(path, error);
-        auto canonical = error ? absolute : std::filesystem::weakly_canonical(absolute, error);
+        auto canonical = error ? absolute : project_fs::weakly_canonical(absolute, error);
         if (error)
             return project_error(lfs::ErrorCode::FailedPrecondition,
                                  "The project path could not be checked.", error.message(), path);
         ProjectPathIdentity identity{absolute, std::move(canonical), std::nullopt};
-        const bool exists = std::filesystem::exists(path, error);
+        const bool exists = project_fs::exists(path, error);
         if (error)
             return project_error(lfs::ErrorCode::FailedPrecondition,
                                  "The project identity could not be checked.", error.message(), path);
@@ -187,6 +191,25 @@ namespace lfs::io::project::detail {
 
     lfs::Result<void> validate_project_operation_identity() {
         return active_identity ? active_identity->validate() : lfs::Result<void>{};
+    }
+
+    bool native_disk_full(const std::int64_t error) noexcept {
+#ifdef _WIN32
+        return error == ERROR_DISK_FULL || error == ERROR_HANDLE_DISK_FULL;
+#else
+        return error == ENOSPC || error == EDQUOT;
+#endif
+    }
+
+    bool disk_full(const std::error_code& error) noexcept {
+        if (error == std::errc::no_space_on_device)
+            return true;
+#ifdef _WIN32
+        return error.category() == std::system_category() && native_disk_full(error.value());
+#else
+        return (error.category() == std::system_category() || error.category() == std::generic_category()) &&
+               native_disk_full(error.value());
+#endif
     }
 
     namespace {
@@ -350,6 +373,8 @@ namespace lfs::io::project::detail {
         const std::filesystem::path& path, const std::optional<std::uint64_t> offset,
         const std::string_view field, const std::optional<std::int64_t> native_code,
         const std::string_view native_name) {
+        if (native_code.has_value() && native_disk_full(*native_code))
+            user_message = lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE;
         lfs::SmallFields fields;
         if (!path.empty()) {
             fields.add("path", lfs::core::path_to_utf8(path));
@@ -439,7 +464,7 @@ namespace lfs::io::project::detail {
     NativeFile::open_read(const std::filesystem::path& path) {
 #ifdef _WIN32
         const HANDLE handle = CreateFileW(
-            path.wstring().c_str(), GENERIC_READ,
+            project_fs::native_path(path).c_str(), GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, nullptr);
         if (handle == INVALID_HANDLE_VALUE) {
@@ -468,7 +493,7 @@ namespace lfs::io::project::detail {
     NativeFile::open_read_write(const std::filesystem::path& path) {
 #ifdef _WIN32
         const HANDLE handle = CreateFileW(
-            path.wstring().c_str(), GENERIC_READ | GENERIC_WRITE,
+            project_fs::native_path(path).c_str(), GENERIC_READ | GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, nullptr);
         if (handle == INVALID_HANDLE_VALUE) {
@@ -497,7 +522,7 @@ namespace lfs::io::project::detail {
     NativeFile::create_new(const std::filesystem::path& path) {
 #ifdef _WIN32
         const HANDLE handle = CreateFileW(
-            path.wstring().c_str(), GENERIC_READ | GENERIC_WRITE,
+            project_fs::native_path(path).c_str(), GENERIC_READ | GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_NEW,
             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, nullptr);
         if (handle == INVALID_HANDLE_VALUE) {
@@ -809,7 +834,7 @@ namespace lfs::io::project::detail {
             handle_ = INVALID_HANDLE_VALUE;
             // Best-effort: a contender that still has a share-delete handle
             // makes this fail, and that contender's release deletes the name.
-            DeleteFileW(path_.wstring().c_str());
+            DeleteFileW(project_fs::native_path(path_).c_str());
         }
 #else
         if (fd_ >= 0) {
@@ -849,7 +874,7 @@ namespace lfs::io::project::detail {
         std::error_code error;
         auto lock_path = std::filesystem::absolute(project_path, error);
         if (!error)
-            lock_path = std::filesystem::weakly_canonical(lock_path, error);
+            lock_path = project_fs::weakly_canonical(lock_path, error);
         if (error)
             return project_error(lfs::ErrorCode::FailedPrecondition,
                                  "The project path could not be locked.", error.message(), project_path);
@@ -863,11 +888,11 @@ namespace lfs::io::project::detail {
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
         DWORD last_error = 0;
         for (int attempt = 0; attempt < kAcquireAttempts; ++attempt) {
-            HANDLE handle = CreateFileW(lock_path.wstring().c_str(),
+            HANDLE handle = CreateFileW(project_fs::native_path(lock_path).c_str(),
                                         GENERIC_READ | GENERIC_WRITE, share_mode, nullptr,
                                         CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (handle == INVALID_HANDLE_VALUE && GetLastError() == ERROR_FILE_EXISTS) {
-                handle = CreateFileW(lock_path.wstring().c_str(), GENERIC_READ | GENERIC_WRITE,
+                handle = CreateFileW(project_fs::native_path(lock_path).c_str(), GENERIC_READ | GENERIC_WRITE,
                                      share_mode, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
                                      nullptr);
             }
@@ -974,6 +999,16 @@ namespace lfs::io::project::detail {
         return acquired;
     }
 
+    std::filesystem::path temporary_project_stem(const std::filesystem::path& destination) {
+        const auto name = lfs::core::path_to_utf8(destination.filename());
+        // Reserve the longest sibling suffix (72 bytes) and its .lock (5).
+        if (name.size() <= 178) {
+            return destination.stem();
+        }
+        const auto key = XXH3_128bits(name.data(), name.size());
+        return lfs::core::utf8_to_path(std::format(".lfs-{:016x}{:016x}", key.high64, key.low64));
+    }
+
     std::filesystem::path
     make_sibling_temp_path(const std::filesystem::path& destination, const std::string_view tag) {
         static std::atomic_uint64_t counter{0};
@@ -983,18 +1018,21 @@ namespace lfs::io::project::detail {
 #else
         const auto process_id = ::getpid();
 #endif
+        const auto stem = temporary_project_stem(destination);
+        const bool shortened = stem != destination.stem();
+        // Older recovery code must not infer a nonexistent master from a key.
         const std::string suffix =
-            std::format(".{}.{}.{}.{}.tmp", tag, ticks, process_id,
+            std::format(".{}{}.{}.{}.{}.tmp", tag, shortened ? "-short" : "", ticks, process_id,
                         counter.fetch_add(1, std::memory_order_relaxed));
         if (destination.has_extension()) {
-            auto temp_name = destination.stem();
+            auto temp_name = stem;
             temp_name += suffix;
             temp_name += destination.extension();
             return destination.parent_path() / temp_name;
         }
-        auto temporary = destination;
-        temporary += suffix;
-        return temporary;
+        auto temp_name = stem;
+        temp_name += suffix;
+        return destination.parent_path() / temp_name;
     }
 
     lfs::Result<void> ensure_parent_directory(const std::filesystem::path& path) {
@@ -1003,7 +1041,7 @@ namespace lfs::io::project::detail {
             return {};
         }
         std::error_code error;
-        std::filesystem::create_directories(parent, error);
+        project_fs::create_directories(parent, error);
         if (error) {
             return status_failure(project_error(
                 lfs::ErrorCode::PermissionDenied, "The project directory could not be created.",
@@ -1019,7 +1057,7 @@ namespace lfs::io::project::detail {
         if (parent.empty()) {
             parent = std::filesystem::current_path(error);
         }
-        const auto space = std::filesystem::space(parent, error);
+        const auto space = project_fs::space(parent, error);
         if (error) {
             return status_failure(project_error(
                 lfs::ErrorCode::PermissionDenied, "Available project disk space is unknown.",
@@ -1034,7 +1072,7 @@ namespace lfs::io::project::detail {
                 .code = lfs::ErrorCode::ResourceExhausted,
                 .domain = lfs::ErrorDomain::IO,
                 .operation_id = {},
-                .user_message = "There is not enough disk space to save the project.",
+                .user_message = lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE,
                 .detail = std::format("preflight requires {} bytes, volume reports {} available",
                                       required_bytes, space.available),
                 .detection = LFS_SOURCE_SITE_CURRENT(),
@@ -1084,7 +1122,7 @@ namespace lfs::io::project::detail {
                    const std::filesystem::path& destination) {
         AtomicReplaceState state;
         std::error_code exists_error;
-        const bool destination_exists = std::filesystem::exists(destination, exists_error);
+        const bool destination_exists = project_fs::exists(destination, exists_error);
         if (exists_error) {
             return project_error(lfs::ErrorCode::PermissionDenied,
                                  "The existing project could not be inspected.",
@@ -1095,8 +1133,8 @@ namespace lfs::io::project::detail {
 #ifdef _WIN32
         if (destination_exists) {
             const auto backup = make_sibling_temp_path(destination, "replace-backup");
-            if (!ReplaceFileW(destination.wstring().c_str(), replacement.wstring().c_str(),
-                              backup.wstring().c_str(), REPLACEFILE_WRITE_THROUGH, nullptr,
+            if (!ReplaceFileW(project_fs::native_path(destination).c_str(), project_fs::native_path(replacement).c_str(),
+                              project_fs::native_path(backup).c_str(), REPLACEFILE_WRITE_THROUGH, nullptr,
                               nullptr)) {
                 const DWORD error = GetLastError();
                 return project_error(
@@ -1108,7 +1146,7 @@ namespace lfs::io::project::detail {
                     static_cast<std::int64_t>(error), "Win32");
             }
             state.backup_path = backup;
-        } else if (!MoveFileExW(replacement.wstring().c_str(), destination.wstring().c_str(),
+        } else if (!MoveFileExW(project_fs::native_path(replacement).c_str(), project_fs::native_path(destination).c_str(),
                                 MOVEFILE_WRITE_THROUGH)) {
             const DWORD error = GetLastError();
             return project_error(
@@ -1156,7 +1194,7 @@ namespace lfs::io::project::detail {
             return {};
         }
         std::error_code error;
-        const bool removed = std::filesystem::remove(*state.backup_path, error);
+        const bool removed = project_fs::remove(*state.backup_path, error);
         if (error || !removed) {
             return status_failure(project_error(
                 lfs::ErrorCode::Internal,
@@ -1178,7 +1216,7 @@ namespace lfs::io::project::detail {
                 "first publication cannot be rolled back automatically", destination));
         }
 #ifdef _WIN32
-        if (!MoveFileExW(state.backup_path->wstring().c_str(), destination.wstring().c_str(),
+        if (!MoveFileExW(project_fs::native_path((*state.backup_path)).c_str(), project_fs::native_path(destination).c_str(),
                          MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
             const DWORD error = GetLastError();
             return status_failure(project_error(

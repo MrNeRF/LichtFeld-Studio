@@ -35,6 +35,24 @@ namespace lfs::vis::sequencer_ui {
         return 10.0f;
     }
 
+    [[nodiscard]] inline float rulerMajorInterval(const float visible_duration, const float timeline_width,
+                                                  const float minimum_tick_spacing) {
+        const float previous = rulerMajorInterval(visible_duration);
+        if (timeline_width <= 0.0f || minimum_tick_spacing <= 0.0f)
+            return previous;
+
+        const float minimum = visible_duration * minimum_tick_spacing / timeline_width;
+        if (previous >= minimum)
+            return previous;
+
+        constexpr float intervals[] = {0.25f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f, 20.0f, 30.0f, 60.0f};
+        for (const float interval : intervals) {
+            if (interval >= minimum && interval >= previous)
+                return interval;
+        }
+        return std::ceil(minimum / 60.0f) * 60.0f;
+    }
+
     [[nodiscard]] inline float maxPanOffset(const lfs::sequencer::Timeline& timeline, const float zoom_level) {
         const float visible_range = displayEndTime(timeline, zoom_level);
         return std::max(0.0f, unzoomedEndTime(timeline) - visible_range);

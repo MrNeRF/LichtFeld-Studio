@@ -104,7 +104,6 @@ body {
 }
 .details-block {
     display: block;
-    font-family: "JetBrains Mono";
     font-size: 11dp;
     text-align: left;
     margin-top: 8dp;

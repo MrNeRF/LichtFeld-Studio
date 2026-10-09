@@ -15,6 +15,7 @@
 #include <functional>
 #include <future>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -95,6 +96,16 @@ namespace lfs::io {
     };
 
     [[nodiscard]] LFS_IO_API Result<void> save_ssog(const SplatData&, const SsogSaveOptions&);
+
+    // What a streaming viewer relies on in an SSOG archive, from its ZIP central directory and lod-meta.json alone.
+    struct SsogArchiveSummary {
+        std::vector<std::size_t> counts; // lod-meta.json counts, level 0 finest; empty when the file has none
+        bool webp_stored = true;         // every .webp member is stored uncompressed
+        bool empty_license = false;      // a license member beside lod-meta.json holds no bytes
+    };
+    using ByteRangeReader = std::function<bool(std::uint64_t offset, std::span<std::byte> destination)>;
+    [[nodiscard]] LFS_IO_API Result<SsogArchiveSummary> summarize_ssog_archive(std::uint64_t size,
+                                                                               const ByteRangeReader& read_at);
 
     struct SsogLoadOptions {
         int lod_level = 0; // Negative levels count from the coarsest (-1).

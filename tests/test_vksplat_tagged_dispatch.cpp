@@ -10,6 +10,7 @@
 #include "rendering/rasterizer/vulkan/src/indirect_layout.h"
 #include "rendering/rasterizer/vulkan/src/viewport_scratch_bucket.h"
 #include "rendering/vulkan_wait.hpp"
+#include "visualizer/rendering/frustum_depth_coverage.hpp"
 
 #include <gtest/gtest.h>
 
@@ -28,6 +29,8 @@ VkAccessFlags2 toAccessMask(VulkanGSPipeline::BarrierMask barrierMask);
 VkPipelineStageFlags2 toStageMask(VulkanGSPipeline::BarrierMask barrierMask);
 
 namespace {
+
+    static_assert(lfs::vis::FrustumDepthCoverage::kTileSize == HIGS_DEPTH_SAMPLE_TILE_SIZE);
 
     using namespace lfs::rendering::vulkan;
     using TaggedBinding = VulkanGSPipeline::TaggedBinding;
@@ -130,6 +133,7 @@ namespace {
         std::vector<RecordedOp> ops;
         std::vector<CapturedBarrier2> barriers;
         std::vector<CapturedFill> fills;
+        std::vector<VkDescriptorBufferInfo> macro_depth_masks;
         std::vector<VulkanGSRendererUniforms> projection_uniforms;
         int submit_calls = 0;
         int begin_calls = 0;
@@ -150,6 +154,7 @@ namespace {
             ops.clear();
             barriers.clear();
             fills.clear();
+            macro_depth_masks.clear();
             projection_uniforms.clear();
         }
 
@@ -316,14 +321,19 @@ namespace {
             active()->ops.push_back(RecordedOp::CopyBuffer);
         }
 
-        // No-op push-descriptor — scripted tests never need real descriptor writes.
         static VKAPI_ATTR void VKAPI_CALL push_descriptor_set(VkCommandBuffer,
                                                               VkPipelineBindPoint,
-                                                              VkPipelineLayout,
+                                                              VkPipelineLayout layout,
                                                               uint32_t,
-                                                              uint32_t,
-                                                              const VkWriteDescriptorSet*) {
-            // intentionally empty
+                                                              uint32_t count,
+                                                              const VkWriteDescriptorSet* writes) {
+            if (layout == fakeVkHandle<VkPipelineLayout>(0x5641) ||
+                layout == fakeVkHandle<VkPipelineLayout>(0x5649)) {
+                for (uint32_t i = 0; i < count; ++i) {
+                    if (writes[i].dstBinding == 12)
+                        active()->macro_depth_masks.push_back(*writes[i].pBufferInfo);
+                }
+            }
         }
 
         // Conditional rendering EXT no-ops for predicate_waves audits.
@@ -2676,6 +2686,14 @@ TEST(VkSplatTaggedDispatch, MacroDepthWavesAuditW1AndW3) {
             overlay_params,
             /*overlays_active=*/false,
             /*predicate_waves=*/false);
+
+        // Even without sparse coverage, bind a valid fallback for the mask
+        // descriptor required by the compose shader's full-depth variant.
+        ASSERT_FALSE(script.macro_depth_masks.empty());
+        for (const auto& descriptor : script.macro_depth_masks) {
+            EXPECT_EQ(descriptor.buffer, buffers.pixel_depth.deviceBuffer.buffer);
+            EXPECT_GE(descriptor.range, kAuditWaveImage * kAuditWaveImage * sizeof(float));
+        }
 
         const std::size_t n = total_buffer_barrier_structs(script);
         const std::size_t baseline = armed == 1 ? kAuditMacroDepthW1 : kAuditMacroDepthW3;

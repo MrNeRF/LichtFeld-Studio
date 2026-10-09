@@ -232,7 +232,6 @@
 
 .mp-format-item {
     padding: 3dp 0 1dp 17dp;
-    font-family: "JetBrains Mono";
     font-size: 11dp;
     line-height: 15dp;
 }
@@ -362,7 +361,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-family: "JetBrains Mono";
     font-size: 11dp;
     line-height: 15dp;
 }
@@ -619,7 +617,6 @@
     padding: 0;
     border-width: 0;
     background-color: transparent;
-    font-family: "JetBrains Mono";
     font-size: 11dp;
     cursor: pointer;
 }

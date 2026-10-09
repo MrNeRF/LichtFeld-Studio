@@ -4,6 +4,7 @@
 #include "core/camera.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
+#include "gut_camera_model_cuda.hpp"
 #include "io/formats/colmap.hpp"
 #include <algorithm>
 #include <array>
@@ -624,6 +625,44 @@ TEST(UndistortInverse, FisheyeRoundTrip) {
     expect_inverse_round_trip(CameraModelType::FISHEYE);
 }
 
+// Catches GUT rendering thin prism fisheye cameras with another model than COLMAP and the undistortion
+// (tangential and prism terms on the radially distorted point instead of the theta-scaled one), and an
+// unprojection that does not invert the projection.
+TEST(GutThinPrismFisheye, ProjectsLikeColmapAndInvertsItself) {
+    const gut_camera_model_test::ThinPrismCamera camera{
+        .focal = {600.0f, 610.0f},
+        .principal = {512.0f, 384.0f},
+        .resolution = {1024, 768},
+        .radial = {0.25f, -0.05f, 0.01f, -0.002f},
+        .thin_prism = {0.01f, -0.008f, 0.012f, -0.009f}};
+    const std::array<double, 8> extra{camera.radial[0], camera.radial[1], camera.thin_prism[0], camera.thin_prism[1],
+                                      camera.radial[2], camera.radial[3], camera.thin_prism[2], camera.thin_prism[3]};
+    std::vector<float> rays;
+    std::vector<float> expected;
+    for (const float theta : {0.15f, 0.35f, 0.55f}) {
+        for (const float azimuth : {0.3f, 1.9f, 3.6f, 5.1f}) {
+            const float u = std::tan(theta) * std::cos(azimuth);
+            const float v = std::tan(theta) * std::sin(azimuth);
+            rays.insert(rays.end(), {u, v, 1.0f});
+            const auto [x, y] = colmap_thin_prism_fisheye_reference(u, v, extra);
+            expected.push_back(static_cast<float>(camera.focal[0] * x + camera.principal[0]));
+            expected.push_back(static_cast<float>(camera.focal[1] * y + camera.principal[1]));
+        }
+    }
+
+    const auto projected = gut_camera_model_test::project(camera, rays);
+    const auto rays_back = gut_camera_model_test::unproject(camera, expected);
+    for (size_t i = 0; i < expected.size() / 2; ++i) {
+        EXPECT_EQ(projected[3 * i + 2], 1.0f) << i;
+        EXPECT_NEAR(projected[3 * i], expected[2 * i], 0.01f) << i;
+        EXPECT_NEAR(projected[3 * i + 1], expected[2 * i + 1], 0.01f) << i;
+        EXPECT_EQ(rays_back[4 * i + 3], 1.0f) << i;
+        const float norm = std::sqrt(rays[3 * i] * rays[3 * i] + rays[3 * i + 1] * rays[3 * i + 1] + 1.0f);
+        for (int c = 0; c < 3; ++c)
+            EXPECT_NEAR(rays_back[4 * i + c], rays[3 * i + c] / norm, 2e-5f) << i << " " << c;
+    }
+}
+
 TEST(UndistortInverse, ThinPrismFisheyeRoundTrip) {
     expect_inverse_round_trip(CameraModelType::THIN_PRISM_FISHEYE);
 }
@@ -662,6 +701,32 @@ TEST(UndistortInverse, CpuThinPrismWideRaysRoundTrip) {
                 << "theta " << theta << " azimuth " << azimuth;
         }
     }
+}
+
+// The mesh evaluation mask samples coverage at these points; each must map back onto its
+// exact pixel centre through the forward model.
+TEST(UndistortInverse, SampleMapInvertsPixelCentres) {
+    auto radial = Tensor::from_vector({-0.08f, 0.01f}, TensorShape({2}), Device::CPU);
+    auto tangential = Tensor::from_vector({0.001f, -0.0008f}, TensorShape({2}), Device::CPU);
+    const auto params = compute_undistort_params(
+        450.0f, 455.0f, 160.0f, 120.0f, 320, 240, radial, tangential, CameraModelType::PINHOLE);
+    const auto samples = inverse_distortion_sample_map(params, nullptr).cpu().contiguous();
+    ASSERT_EQ(samples.shape(), (TensorShape({240, 320, 2})));
+    const float* const map = samples.ptr<float>();
+    int checked = 0;
+    for (int y = 0; y < 240; y += 7) {
+        for (int x = 0; x < 320; x += 7) {
+            const size_t i = static_cast<size_t>(y) * 320 + x;
+            if (!std::isfinite(map[2 * i]))
+                continue;
+            const auto [dx, dy] = distort_test_coordinate(map[2 * i], map[2 * i + 1], params);
+            EXPECT_LE(std::hypot(dx * params.src_fx + params.src_cx - (x + 0.5f),
+                                 dy * params.src_fy + params.src_cy - (y + 0.5f)),
+                      1.0e-2f);
+            ++checked;
+        }
+    }
+    EXPECT_GT(checked, 1000);
 }
 
 TEST(UndistortInverse, ValidityMaskExcludesOutOfFrameSamples) {

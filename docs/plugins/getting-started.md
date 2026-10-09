@@ -1,6 +1,32 @@
-# Plugin Developer Guide
+# Python Development Guide
+
+[Python docs](README.md) · [Application API](api-reference.md) · [Plugin and UI API](plugin-reference.md)
+
+The native `lichtfeld` module runs inside LichtFeld Studio's embedded Python
+runtime: use the integrated Python console, an app-run script, or a plugin.
+The `.pyi` SDK files provide editor completion; they are not an importable
+implementation for a system Python interpreter. Use `lf.help()` and
+`help(lf.Tensor.linspace)` in the app to inspect the running build.
 
 LichtFeld Studio plugins extend the application with panels, operators, tools, signals, and capabilities. Plugins live in `~/.lichtfeld/plugins/` and are just Python packages with a small manifest and entrypoint.
+
+## On this page
+
+- [Learning path](#learning-path)
+- [Quick start](#quick-start)
+- [Panels](#panels)
+- [UI Hooks and Menus](#ui-hooks-and-menus)
+- [Operators](#operators)
+- [Toolbar Tools](#toolbar-tools)
+- [Properties](#properties)
+- [Scene Access](#scene-access)
+- [Signals](#signals)
+- [Capabilities](#capabilities)
+- [Training Hooks](#training-hooks)
+- [Plugin Runtime and Dependencies](#plugin-runtime-and-dependencies)
+- [Hot Reload & Debugging](#hot-reload--debugging)
+- [IDE Setup](#ide-setup)
+- [Installing & Publishing](#installing--publishing)
 
 ## Learning path
 
@@ -171,7 +197,7 @@ class MyPanel(lf.ui.Panel):
     style = ""
     height_mode = lf.ui.PanelHeightMode.FILL
     update_policy = "dirty"
-    update_interval_ms = None
+    update_interval_ms = 100
 
     @classmethod
     def poll(cls, context) -> bool:
@@ -181,25 +207,11 @@ class MyPanel(lf.ui.Panel):
         ui.label("Content here")
 ```
 
-| Attribute | Type | Default | Description |
-|---|---|---|---|
-| `id` | `str` | `module.qualname` | Unique panel identifier. Used for replacement, visibility, and API lookups. |
-| `label` | `str` | `""` | Display name in the UI. Falls back to `id` when empty. |
-| `space` | `lf.ui.PanelSpace` | `lf.ui.PanelSpace.MAIN_PANEL_TAB` | Where the panel appears when `parent` is empty. |
-| `parent` | `str` | `""` | Parent panel id. When set, the panel embeds as a collapsible section and must not also override `space`. |
-| `order` | `int` | `100` | Sort order within its space. Lower values appear earlier. |
-| `options` | `set[lf.ui.PanelOption]` | `set()` | Panel options such as `lf.ui.PanelOption.DEFAULT_CLOSED` and `lf.ui.PanelOption.HIDE_HEADER`. |
-| `poll_dependencies` | `set[lf.ui.PollDependency]` | `{SCENE, SELECTION, TRAINING}` | Which app-state changes should re-run `poll()`. |
-| `size` | `tuple[float, float] \| None` | `None` | Initial width/height hint, mainly useful for floating panels. |
-| `template` | `str \| os.PathLike[str]` | `""` | Optional retained RML template. Use an absolute path for plugin-local files. |
-| `style` | `str` | `""` | Optional inline RCSS appended to the retained document. This is RCSS text, not a file path. |
-| `height_mode` | `lf.ui.PanelHeightMode` | `lf.ui.PanelHeightMode.FILL` | `FILL` or `CONTENT` for retained panels. |
-| `update_policy` | `str` | `"dirty"` | Use `"interval"` only when a panel needs periodic updates. |
-| `update_interval_ms` | `int \| None` | `None` | Required with `update_policy = "interval"`; otherwise leave unset. |
-
-The panel API is strict in v1: use the enum values above, not string literals.
-
-Panel definitions are validated eagerly. Invalid enum values, removed legacy fields, retained-only settings in `VIEWPORT_OVERLAY`, and conflicting fields such as `parent` plus explicit `space` raise `ValueError`, `TypeError`, or `AttributeError` during `lf.register_class()`.
+See [panel metadata and lifecycle](plugin-reference.md#panel) for defaults,
+validation rules, retained hooks, and reactive updates. Use `id`,
+`poll_dependencies`, and `lf.ui.PanelSpace`/`PanelOption`/`PanelHeightMode`
+enums. Removed legacy fields and string enum values are rejected during
+`lf.register_class()`.
 
 ### Step 2: add shell and retained behavior without rewriting `draw(ui)`
 
@@ -214,6 +226,7 @@ class StatusBarPanel(lf.ui.Panel):
     label = "Build Up 2"
     space = lf.ui.PanelSpace.STATUS_BAR
     height_mode = lf.ui.PanelHeightMode.CONTENT
+    update_policy = "interval"
     update_interval_ms = 120
     style = """
 body.status-bar-panel { padding: 0 12dp; }
@@ -393,6 +406,8 @@ See the complete multi-file example in [`examples/03_hybrid_plugin/`](examples/0
 | `VIEWPORT_OVERLAY` | Drawn over the 3D viewport. |
 | `SCENE_HEADER` | Header area above the scene tree. |
 | `FLOATING` | Free-floating window. |
+| `BOTTOM_DOCK` | Bottom dock area. |
+| `LEFT_DOCK` | Left dock area. |
 | `STATUS_BAR` | Bottom status bar. |
 
 ### Embedding in an existing tab
@@ -506,98 +521,59 @@ class StatsOverlay(lf.ui.Panel):
 
     @classmethod
     def poll(cls, context) -> bool:
-        return RuntimeState.has_scene.value
+        return context.has_scene
 
     def draw(self, ui):
         n = RuntimeState.num_gaussians.value
-        ui.draw_text(10, 10, f"Gaussians: {n:,}", (1.0, 1.0, 1.0, 0.8))
+        x, y = ui.get_viewport_pos()
+        ui.draw_text(x + 10, y + 10, f"Gaussians: {n:,}", (1.0, 1.0, 1.0, 0.8))
 ```
 
 ### Displaying GPU tensors
 
-Use `image_tensor` to render a CUDA tensor directly in a panel with no manual texture management:
+Panel `draw(ui)` receives `lf.ui.RmlUILayout`. Keep a `DynamicTexture` on
+the panel and use its opaque Vulkan texture `id` with `ui.image()`:
 
 ```python
 class PreviewPanel(lf.ui.Panel):
+    id = "my_plugin.preview"
     label = "Preview"
     space = lf.ui.PanelSpace.FLOATING
 
-    def draw(self, ui):
-        tensor = lf.Tensor.rand([256, 256, 3], device="cuda")
-        ui.image_tensor("my_preview", tensor, (256, 256))
-```
-
-The `label` argument (`"my_preview"`) caches the underlying GL texture between frames. Passing a tensor with a different resolution automatically recreates the texture. The tensor must be `[H, W, 3]` (RGB) or `[H, W, 4]` (RGBA). CPU tensors and integer dtypes are converted automatically.
-
-For advanced use cases, use `DynamicTexture`:
-
-```python
-class AdvancedPanel(lf.ui.Panel):
-    label = "Advanced"
-    space = lf.ui.PanelSpace.FLOATING
-
     def __init__(self):
-        self.tex = lf.ui.DynamicTexture()
+        self._texture = lf.ui.DynamicTexture()
+        self._image = lf.Tensor.rand([256, 256, 3], device="cuda")
 
     def draw(self, ui):
-        self.tex.update(my_tensor)
-        ui.image_texture(self.tex, (256, 256))
+        self._texture.update(self._image)
+        ui.image(self._texture.id, (256, 256))
+
+    def on_unmount(self, doc):
+        self._texture.destroy()
 ```
 
-See the [DynamicTexture API reference](api-reference.md#dynamictexture) for all properties and methods.
+The input must be `[H,W,3]` or `[H,W,4]`. CPU tensors are transferred to CUDA;
+non-float32 values are converted, and uint8 pixels are normalized to `[0,1]`.
+A new resolution recreates the texture. For changing image data, update the
+texture after the image changes rather than doing expensive work in every draw.
+
+`image_tensor()` and `image_texture()` are not methods of panel `RmlUILayout`.
+They exist on compatibility `UILayout`, where images are currently inert.
+See [images and their limitations](plugin-reference.md#images) and
+[DynamicTexture](plugin-reference.md#dynamictexture).
 
 ---
 
-## UI Hooks
+## UI Hooks and Menus
 
-Hooks let you inject UI into existing panels without replacing them. A hook callback receives a `layout` object and draws into the host panel at a predefined hook point.
+New plugin UI should use panels, retained data models, and `RuntimeState`
+subscriptions. Hook registration is deprecated for external plugins. Existing
+hooks can be discovered using `lf.ui.get_hook_points()`; availability and the
+layout supplied by a host determine whether interactive widgets work. Avoid
+assuming a hook point always provides a live panel layout.
 
-### Hook pattern
-
-```python
-import lichtfeld as lf
-
-
-class MyHookPanel:
-    def draw(self, layout):
-        if not layout.collapsing_header("My Section", default_open=True):
-            return
-        layout.label("Injected into the rendering panel")
-
-
-_instance = None
-
-
-def _draw_hook(layout):
-    global _instance
-    if _instance is None:
-        _instance = MyHookPanel()
-    _instance.draw(layout)
-
-
-def register():
-    lf.ui.add_hook("rendering", "selection_groups", _draw_hook, "append")
-
-
-def unregister():
-    lf.ui.remove_hook("rendering", "selection_groups", _draw_hook)
-```
-
-The `position` argument controls whether the hook draws before (`"prepend"`) or after (`"append"`) the native content at that hook point.
-
-### Available hook points
-
-| Panel | Section | Description |
-|---|---|---|
-| `"rendering"` | `"selection_groups"` | Rendering panel, between settings and tools |
-
-### Decorator form
-
-```python
-@lf.ui.hook("rendering", "selection_groups", "append")
-def my_hook(layout):
-    layout.label("Hello from hook")
-```
+See [hook registration](plugin-reference.md#ui-hooks) for the compatibility
+API and [Menu](plugin-reference.md#menu) for declarative menu entries.
 
 ---
 
@@ -650,52 +626,31 @@ Operators can also return a dict: `{"status": "FINISHED", "result": data}`.
 
 ### Event object
 
-The `Event` object is passed to `invoke()` and `modal()`:
-
-| Attribute        | Type    | Description                              |
-|------------------|---------|------------------------------------------|
-| `type`           | `str`   | `'MOUSEMOVE'`, `'LEFTMOUSE'`, `'KEY_A'`-`'KEY_Z'`, `'ESC'`, `'RET'`, `'SPACE'`, `'WHEELUPMOUSE'`, `'WHEELDOWNMOUSE'`, etc. |
-| `value`          | `str`   | `'PRESS'`, `'RELEASE'`, `'NOTHING'`      |
-| `mouse_x`        | `float` | Mouse X (viewport coords)               |
-| `mouse_y`        | `float` | Mouse Y (viewport coords)               |
-| `mouse_region_x` | `float` | Mouse X relative to region               |
-| `mouse_region_y` | `float` | Mouse Y relative to region               |
-| `delta_x`        | `float` | Mouse delta X                            |
-| `delta_y`        | `float` | Mouse delta Y                            |
-| `scroll_x`       | `float` | Scroll X offset                          |
-| `scroll_y`       | `float` | Scroll Y offset                          |
-| `shift`          | `bool`  | Shift held                               |
-| `ctrl`           | `bool`  | Ctrl held                                |
-| `alt`            | `bool`  | Alt held                                 |
-| `pressure`       | `float` | Tablet pressure (1.0 for mouse)          |
-| `over_gui`       | `bool`  | True if mouse is over a GUI element      |
-| `key_code`       | `int`   | Key code (see `key_codes.hpp`)           |
+`invoke()` and `modal()` receive an event with mouse, key, modifier, scroll,
+and GUI-hit fields. See [Event](plugin-reference.md#event) for the field list.
+Discover native operators with `lf.ops.get_all()` and inspect their metadata
+with `lf.ops.get_descriptor(id)`. Invoke an operator with a positional ID,
+`lf.ops.invoke(id, **properties)`, and check its `finished`/`cancelled` flags.
 
 ### Example: simple execute-only operator
 
 ```python
 import lichtfeld as lf
 from lfs_plugins.types import Operator
-from lfs_plugins.props import FloatProperty
 
-class ResetOpacity(Operator):
-    label = "Reset Opacity"
-    description = "Set opacity of all gaussians to a given value"
-
-    target_opacity: float = FloatProperty(default=1.0, min=0.0, max=1.0)
+class PrintGaussianCount(Operator):
+    label = "Print Gaussian Count"
+    description = "Log the number of gaussians in the current scene"
 
     @classmethod
     def poll(cls, context) -> bool:
-        return lf.has_scene()
+        return context.has_scene
 
     def execute(self, context) -> set:
         scene = lf.get_scene()
-        model = scene.combined_model()
-        n = model.num_points
-        mask = lf.Tensor.ones([n, 1], device="cuda")
-        scaled = mask * self.target_opacity
-        # Apply to opacity (working in logit space requires inverse sigmoid)
-        lf.log.info(f"Reset {n} gaussians to opacity {self.target_opacity}")
+        if scene is None:
+            return {"CANCELLED"}
+        lf.log.info(f"Gaussians: {scene.total_gaussian_count:,}")
         return {"FINISHED"}
 ```
 
@@ -885,15 +840,18 @@ Properties provide typed, validated attributes for operators and property groups
 | `FloatVectorProperty` | `(0,0,0)` | `size`, `min`, `max`, `subtype`           |
 | `IntVectorProperty` | `(0,0,0)`  | `size`, `min`, `max`                      |
 | `TensorProperty`    | `None`      | `shape`, `dtype`, `device`                |
-| `CollectionProperty`| `[]`        | `type=PropertyGroupSubclass`              |
+| `CollectionProperty`| `None`        | `type=PropertyGroupSubclass`              |
 | `PointerProperty`   | `None`      | `type=PropertyGroupSubclass`              |
 
-All properties accept: `name`, `description`, `subtype`, `update` (callback).
+All properties accept `name`, `description`, `subtype`, and `update`.
+The update callback receives `(owner, None)` after assignment; its second
+argument is a context placeholder, not the new value. Read `owner.<property>`
+in the callback. See [property signatures](plugin-reference.md#properties).
 
 ### PropertyGroup base class
 
 ```python
-from lfs_plugins.props import PropertyGroup, FloatProperty, StringProperty
+from lfs_plugins.props import PropertyGroup, FloatProperty, FloatVectorProperty, StringProperty
 
 class MaterialSettings(PropertyGroup):
     color = FloatVectorProperty(default=(1, 1, 1), size=3, subtype="COLOR")
@@ -978,7 +936,10 @@ splat_id = scene.add_splat(
     sh0=lf.Tensor.zeros([100, 1, 3], device="cuda"),
     shN=lf.Tensor.zeros([100, 0, 3], device="cuda"),
     scaling=lf.Tensor.zeros([100, 3], device="cuda"),
-    rotation=lf.Tensor.zeros([100, 4], device="cuda"),
+    rotation=lf.Tensor.cat([
+        lf.Tensor.ones([100, 1], device="cuda"),
+        lf.Tensor.zeros([100, 3], device="cuda"),
+    ], dim=1),  # Identity quaternions (w, x, y, z)
     opacity=lf.Tensor.zeros([100, 1], device="cuda"),
 )
 
@@ -1035,12 +996,15 @@ new_matrix = lf.compose_transform(
 
 ### Splat data access
 
-Splat data can be accessed from the combined model or from individual scene nodes:
+Splat data can be accessed from the combined model or from individual scene
+nodes. `combined_model()` merges visible splats and can return `None`. Treat it
+as render data; edit each node's `splat_data()` to update that node and call
+`scene.notify_changed()` after changing raw tensors.
 
 ```python
 scene = lf.get_scene()
 
-# Combined model (all splat nodes merged)
+# Combined model (visible splats merged; may be None)
 model = scene.combined_model()
 
 # Per-node access
@@ -1051,7 +1015,7 @@ for node in scene.get_nodes():
 ```
 
 ```python
-# Raw data (views into GPU memory — no copy)
+# Raw data views; use per-node data for edits
 means = model.means_raw           # [N, 3] positions
 sh0 = model.sh0_raw               # [N, 1, 3] base SH coefficients
 shN = model.shN_raw               # [N, K, 3] higher-order SH
@@ -1180,44 +1144,30 @@ with Batch():
     state.x.value = 10
     state.y.value = 20
     state.z.value = 30
-# Subscribers notified once here, not three times
+# Each changed signal notifies after all three assignments are complete
 ```
 
 ### RuntimeState
 
-Pre-defined signals for application state:
+Use native state names for new plugins:
 
 ```python
 from lfs_plugins.ui import RuntimeState
 
-# Training
-RuntimeState.is_training              # Signal[bool]
-RuntimeState.trainer_state            # Signal[str] - "idle", "ready", "running", "paused", "stopping"
-RuntimeState.has_trainer              # Signal[bool]
-RuntimeState.iteration                # Signal[int]
-RuntimeState.max_iterations           # Signal[int]
-RuntimeState.loss                     # Signal[float]
-RuntimeState.psnr                     # Signal[float]
-RuntimeState.num_gaussians            # Signal[int]
-
-# Scene
-RuntimeState.has_scene                # Signal[bool]
-RuntimeState.scene_generation         # Signal[int] - increments on scene change
-RuntimeState.scene_path               # Signal[str]
-
-# Selection
-RuntimeState.has_selection            # Signal[bool]
-RuntimeState.selection_count          # Signal[int]
-RuntimeState.selection_generation     # Signal[int]
-
-# Viewport
-RuntimeState.viewport_width           # Signal[int]
-RuntimeState.viewport_height          # Signal[int]
-
-# Computed
-RuntimeState.training_progress        # ComputedSignal[float] - 0.0 to 1.0
-RuntimeState.can_start_training       # ComputedSignal[bool]
+RuntimeState.training_running.value
+RuntimeState.training_state.value
+RuntimeState.trainer_loaded.value
+RuntimeState.iteration.value
+RuntimeState.total_iterations.value
+RuntimeState.loss.value
+RuntimeState.eval_psnr.value             # float or None
+RuntimeState.scene_generation.value
+RuntimeState.selection_generation.value
 ```
+
+The [runtime-state reference](plugin-reference.md#reactive-retained-panels)
+lists fields, compatibility aliases, and `PanelStateBinding`. For current
+scene/selection availability, use `lf.ui.context()` or native queries.
 
 ### Example: reactive training monitor
 
@@ -1245,17 +1195,18 @@ class TrainingMonitor(lf.ui.Panel):
 
     @classmethod
     def poll(cls, context) -> bool:
-        return RuntimeState.has_trainer.value
+        return context.has_trainer
 
     def draw(self, ui):
         ui.heading("Training Monitor")
 
-        state = RuntimeState.trainer_state.value
+        state = RuntimeState.training_state.value
         ui.label(f"State: {state}")
         ui.label(f"Iteration: {RuntimeState.iteration.value}")
         ui.label(f"Loss: {RuntimeState.loss.value:.6f}")
         ui.label(f"Best Loss: {self.best_loss.value:.6f}")
-        ui.label(f"PSNR: {RuntimeState.psnr.value:.2f}")
+        psnr = RuntimeState.eval_psnr.value
+        ui.label("PSNR: unavailable" if psnr is None else f"PSNR: {psnr:.2f}")
         ui.label(f"Gaussians: {RuntimeState.num_gaussians.value:,}")
 
         progress = RuntimeState.training_progress.value
@@ -1380,6 +1331,10 @@ def on_end(_hook):
     lf.log.info(f"Training finished: {lf.finish_reason()}")
 ```
 
+For unloadable plugins, keep registrations in a `lf.ControlSession()` and
+call `clear()` in `on_unload()`. Module-level decorators register until app
+shutdown; dropping a Python reference does not remove the callback.
+
 ### Training context
 
 ```python
@@ -1415,11 +1370,16 @@ lf.project_save()
 import lichtfeld as lf
 
 class AutoSavePlugin:
-    """Automatically save checkpoints every N iterations."""
+    """Request a project save every N iterations."""
 
     def __init__(self, interval=5000):
         self.interval = interval
         self.last_save = 0
+        self._hooks = lf.ControlSession()
+        self._hooks.on_post_step(self.on_post_step)
+
+    def close(self):
+        self._hooks.clear()
 
     def on_post_step(self, _hook):
         ctx = lf.context()
@@ -1433,11 +1393,12 @@ _auto_save = None
 def on_load():
     global _auto_save
     _auto_save = AutoSavePlugin(interval=5000)
-    lf.on_post_step(_auto_save.on_post_step)
     lf.log.info("Auto-save plugin loaded")
 
 def on_unload():
     global _auto_save
+    if _auto_save is not None:
+        _auto_save.close()
     _auto_save = None
 ```
 
@@ -1445,11 +1406,35 @@ def on_unload():
 
 ---
 
+## Plugin Runtime and Dependencies
+
+Discovery requires a `pyproject.toml` with `[tool.lichtfeld]`. The manager in
+`src/python/lfs_plugins/` validates the manifest, installs dependencies, imports
+the entrypoint, calls `on_load()`, and tracks lifecycle state. `lf.plugins`
+provides the native convenience bindings. The CLI handles `create`, `check`,
+and `list`; installs/updates are available through Python and the Marketplace.
+
+States are `UNLOADED`, `INSTALLING`, `LOADING`, `ACTIVE`, `ERROR`, and
+`DISABLED`. Inspect state and the captured traceback with `lf.plugins.get_state`,
+`get_error`, and `get_traceback`; see [management APIs](plugin-reference.md#pluginmanager).
+
+Declare dependencies in `[project].dependencies`. Dependencies are isolated
+in each plugin's `.venv` using bundled Python and `uv`. The CLI scaffold creates
+the environment immediately; the Python scaffold writes source files only and
+loading the plugin performs dependency setup. The installer uses `uv venv` and
+`uv sync` with `--no-managed-python --no-python-downloads` to use the app's Python.
+
+Compatibility ranges target separate versions: `plugin_api` matches the public
+plugin contract, `lichtfeld_version` matches the host application, and
+`required_features` names host features. Read `lf.PLUGIN_API_VERSION`,
+`lf.plugins.API_VERSION`, and `lf.plugins.FEATURES` for the current host.
+
 ## Hot Reload & Debugging
 
 ### File watcher
 
-When `hot_reload = true` in `pyproject.toml`, LichtFeld watches your plugin directory for changes. On any `.py` file save, the plugin is automatically unloaded and reloaded.
+When `hot_reload = true` in `pyproject.toml`, LichtFeld watches your plugin directory for changes. Changes detected by the running watcher unload and reload the plugin. Use
+`lf.plugins.start_watcher()`/`stop_watcher()` to control watching explicitly.
 
 ### Logging
 
@@ -1489,43 +1474,28 @@ lf.plugins.get_traceback("my_plugin")
 
 ## IDE Setup
 
-### Auto-generated pyrightconfig.json
+### Completion and type checking
 
-LichtFeld generates a `pyrightconfig.json` in the project root that includes the correct Python paths for type checking.
+`LichtFeld-Studio plugin create` writes `pyrightconfig.json` and VS Code settings
+inside the **plugin directory**, pointing at its venv and the host typings.
+For a Python-created plugin, configure these paths yourself:
 
-### VS Code
-
-Add to `.vscode/settings.json`:
-
-```json
-{
-    "python.analysis.extraPaths": [
-        "/path/to/gaussian-splatting-cuda/src/python",
-        "/path/to/gaussian-splatting-cuda/build/src/python/typings"
-    ]
-}
+```python
+import lichtfeld as lf
+print(lf.packages.embedded_python_path())
+print(lf.packages.typings_dir())
 ```
 
-### Type stubs
+The committed [SDK stubs](../../src/python/stubs/lichtfeld/) cover the native
+module and submodules. Generated stubs are under
+`<build-dir>/src/python/typings/`; use your actual build directory rather than
+a hard-coded `build/` path. Pure Python `lfs_plugins` helpers live in
+[src/python/lfs_plugins](../../src/python/lfs_plugins/).
 
-Type stubs are generated at `build/src/python/typings/` and provide autocomplete for:
-- `lichtfeld` - Main API (scene, training, rendering, etc.)
-- `lichtfeld.ui` - UI functions
-- `lichtfeld.scene` - Scene types
-- `lichtfeld.selection` - Selection types
-- `lichtfeld.plugins` - Plugin management
-
-The committed SDK stubs live in `src/python/stubs/` and are checked against the generated output during the build. If you intentionally change the Python API surface, refresh the committed stubs with:
-
-```bash
-cmake --build build --target refresh_python_stubs
-```
-
-You can also run the check explicitly with:
-
-```bash
-cmake --build build --target check_python_stubs
-```
+For binding maintainers, the full app build checks committed stubs against the
+generated output. The `refresh_python_stubs` maintenance target updates the
+committed SDK after intentional binding changes; it is not needed to author a
+plugin or change these docs.
 
 ### debugpy attach
 

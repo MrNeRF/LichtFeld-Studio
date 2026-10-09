@@ -85,7 +85,7 @@ body.docked-panel {
 /* ── Scrollbars ─────────────────────────────────────────── */
 
 scrollbarvertical {
-    width: 12dp;
+    width: 4dp;
 }
 
 scrollbarvertical slidertrack {
@@ -95,7 +95,7 @@ scrollbarvertical slidertrack {
 
 scrollbarvertical sliderbar {
     background-color: rgba(108, 112, 134, 160);
-    min-height: 16dp;
+    min-height: 12dp;
     border-radius: 6dp;
     transition: background-color 0.12s quadratic-out;
 }
@@ -105,7 +105,7 @@ scrollbarvertical sliderbar:hover {
 }
 
 scrollbarhorizontal {
-    height: 12dp;
+    height: 4dp;
 }
 
 scrollbarhorizontal slidertrack {
@@ -115,7 +115,7 @@ scrollbarhorizontal slidertrack {
 
 scrollbarhorizontal sliderbar {
     background-color: rgba(108, 112, 134, 160);
-    min-width: 16dp;
+    min-width: 12dp;
     border-radius: 6dp;
     transition: background-color 0.12s quadratic-out;
 }
@@ -559,7 +559,6 @@ progress fill {
     border-width: 1dp;
     border-color: #45475a;
     border-radius: 6dp;
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     cursor: ew-resize;
     transition: border-color 0.12s quadratic-out, background-color 0.12s quadratic-out;
@@ -592,7 +591,6 @@ progress fill {
     z-index: 1;
     width: 100%;
     text-align: right;
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     color: #cdd6f4;
 }
@@ -879,7 +877,9 @@ progress fill {
     background-color: #313244;
 }
 
-.btn:disabled {
+/* <button> is no form control in RmlUi: its disabled attribute sets no :disabled. */
+.btn:disabled,
+.btn[disabled] {
     opacity: 0.5;
     cursor: default;
 }
@@ -1101,6 +1101,11 @@ color-picker {
     display: block;
 }
 
+/* An absolute popup shrinks to its content; the full-width RGB row would otherwise stretch it. */
+.color-picker-popup {
+    width: 200dp;
+}
+
 crf-curve {
     height: 120dp;
     display: block;
@@ -1112,13 +1117,14 @@ crf-curve {
     flex: 1;
     min-width: 0;
     box-sizing: border-box;
-    font-family: "JetBrains Mono";
 }
 
+/* Square and exactly as tall as the 18dp fields beside it. */
 .num-step-btn {
-    width: 20dp;
+    width: 18dp;
     height: 18dp;
-    padding: 0 0 1dp 0;
+    padding: 0;
+    box-sizing: border-box;
     text-align: center;
     line-height: 16dp;
     font-size: 12dp;

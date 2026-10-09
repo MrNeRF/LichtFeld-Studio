@@ -25,6 +25,14 @@ namespace lfs::vis {
             return "No transform targets provided";
         }
 
+        // Switching tools leaves the crop tool and selects the volume's parent,
+        // so a selected crop volume makes its parent the tool target.
+        [[nodiscard]] const core::SceneNode* toolTargetNode(const core::Scene& scene, const core::SceneNode& node) {
+            if (node.type == core::NodeType::CROPBOX || node.type == core::NodeType::ELLIPSOID)
+                return scene.getNodeById(node.parent_id);
+            return &node;
+        }
+
         [[nodiscard]] std::string_view activeToolId(const ToolType tool) noexcept {
             switch (tool) {
             case ToolType::Selection: return "builtin.select";
@@ -138,8 +146,12 @@ namespace lfs::vis {
                     selected_type_initialized = true;
                 }
 
-                const bool locked = static_cast<bool>(node->locked);
-                const bool transformable = cap::isTransformableNodeType(node->type);
+                const auto* const target = toolTargetNode(scene, *node);
+                if (!target)
+                    continue;
+
+                const bool locked = scene.isNodeEffectivelyLocked(target->id);
+                const bool transformable = cap::isTransformableNodeType(target->type);
                 if (!transformable) {
                     found_untransformable = true;
                 } else if (locked) {
@@ -148,13 +160,22 @@ namespace lfs::vis {
                     has_editable_transform_target = true;
                 }
 
-                if (node->type == core::NodeType::SPLAT) {
-                    has_splat_selection_ = true;
-                    if (!locked)
-                        has_editable_splat_selection_ = true;
-                }
+                const auto inspect_splats = [&](const core::SceneNode& current, const bool ancestor_locked,
+                                                const auto& self) -> void {
+                    const bool current_locked = ancestor_locked || static_cast<bool>(current.locked);
+                    if (current.type == core::NodeType::SPLAT) {
+                        has_splat_selection_ = true;
+                        if (!current_locked && current.model)
+                            has_editable_splat_selection_ = true;
+                    } else {
+                        for (const auto child_id : current.children)
+                            if (const auto* child = scene.getNodeById(child_id))
+                                self(*child, current_locked, self);
+                    }
+                };
+                inspect_splats(*target, false, inspect_splats);
 
-                if (cap::isAlignTransformTargetType(node->type)) {
+                if (cap::isAlignTransformTargetType(target->type)) {
                     if (locked) {
                         has_locked_align_selection_ = true;
                     } else {

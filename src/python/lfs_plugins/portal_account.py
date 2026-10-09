@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterator, Mapping, Optional
 
+from .private_directory import mkdir_private
 from .http import urlopen
 from .credential_storage import CredentialStorage
 from .portal_security import redact, remember_secrets
@@ -240,7 +241,7 @@ def _retry_after_seconds(headers: object) -> Optional[float]:
 
 @contextmanager
 def _locked_sidecar(path: Path, *, blocking: bool = True) -> Iterator[None]:
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    mkdir_private(path.parent, parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
         if os.name == "nt":
@@ -622,6 +623,15 @@ class PortalAccountService:
             thread.join(remaining)
 
     def _device_flow_worker(self) -> None:
+        try:
+            self._run_device_flow()
+        except (OSError, PortalAccountError):
+            # Storage can fail after the portal has authorized the device.
+            # Always leave the linking state, preserving an existing session.
+            _log.warning("Portal authorization could not be completed")
+            self._finish_device_flow("sign_in_unavailable")
+
+    def _run_device_flow(self) -> None:
         previous_credentials = self._current_credentials()
         try:
             start = self._request_json(
@@ -839,7 +849,7 @@ class PortalAccountService:
         if refresh_result == "membership_required":
             raise PortalHTTPError(403, "membership_required")
         if refresh_result == "invalid":
-            self._clear_local_credentials()
+            self._clear_local_credentials("invalid_token")
             raise PortalHTTPError(401, "invalid_token")
         if refresh_result == "unavailable":
             raise PortalProtocolError("Portal token refresh was unavailable")
@@ -867,7 +877,7 @@ class PortalAccountService:
             if exc.status == 403 and exc.error == "membership_required":
                 self._set_membership_required(credentials)
             elif exc.status == 401 and exc.error == "invalid_token":
-                self._clear_local_credentials()
+                self._clear_local_credentials("invalid_token")
             raise
 
     def _request_with_bearer(
@@ -1082,7 +1092,7 @@ class PortalAccountService:
             remember_secrets(credentials.access_token, credentials.refresh_token)
         return credentials
 
-    def _clear_local_credentials(self) -> None:
+    def _clear_local_credentials(self, error: str = "") -> None:
         try:
             self._storage.delete()
         except FileNotFoundError:
@@ -1090,7 +1100,7 @@ class PortalAccountService:
         except OSError:
             _log.warning("Could not remove local portal credentials")
         self._clear_current_credentials()
-        self._set_signed_out("")
+        self._set_signed_out(error)
 
     def _current_credentials(self) -> Optional[_Credentials]:
         with self._lock:

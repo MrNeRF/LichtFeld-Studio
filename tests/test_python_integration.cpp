@@ -16,15 +16,19 @@
 #include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
+#include "gui/line_renderer.hpp"
 #include "io/loader.hpp"
 #include "python/gil.hpp"
 #include "python/python_buffer_analysis.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/screen_overlay_renderer.hpp"
 #include "training/control/command_api.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/visualizer.hpp"
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 #include <array>
 #include <atomic>
@@ -836,6 +840,27 @@ TEST_F(PythonIntegrationTest, CleanPythonCodeRepairsUnindentedFunctionBlock) {
     EXPECT_NE(result.code.find("    return safe or \"splat\""), std::string::npos);
 }
 
+// Catches Format commenting out valid leading statements that the preamble heuristic does not recognize.
+TEST_F(PythonIntegrationTest, FormatPythonCodeKeepsLeadingStatements) {
+    const auto result = lfs::python::format_python_code("x=[1,2 ,3];print( 'a' ,x)\nfirst, second = 1, 2\n");
+
+    if (formatterUnavailable(result)) {
+        GTEST_SKIP() << result.error;
+    }
+    ASSERT_TRUE(result.success) << result.error;
+    EXPECT_EQ(result.code, "x = [1, 2, 3]\nprint(\"a\", x)\nfirst, second = 1, 2\n");
+}
+
+TEST_F(PythonIntegrationTest, CleanPythonCodeCommentsProsePreambleButKeepsAssignment) {
+    const auto result = lfs::python::clean_python_code("Here is the script:\nscene = lf.get_scene()\n");
+
+    if (formatterUnavailable(result)) {
+        GTEST_SKIP() << result.error;
+    }
+    ASSERT_TRUE(result.success) << result.error;
+    EXPECT_EQ(result.code, "# Here is the script:\nscene = lf.get_scene()\n");
+}
+
 TEST_F(PythonIntegrationTest, FormatPythonCodeReportsSyntaxErrorWithoutUnexpectedResultFallback) {
     const auto result = lfs::python::format_python_code("import os\nif True print('x')\n");
 
@@ -1624,4 +1649,89 @@ try:
 finally:
     lf.ui.on_show_load_file_confirmation_with_batch(lambda paths, is_dataset, replace, user_batch: None)
 )PY"));
+}
+
+TEST_F(PythonIntegrationTest, CustomGizmoOverlayDispatchesPerViewAndRetainsInstance) {
+    const lfs::python::GilAcquire gil;
+    std::unique_ptr<PyObject, decltype(&Py_DecRef)> globals(PyDict_New(), Py_DecRef);
+    PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins());
+    const auto run = [&](const char* code) {
+        auto* result = PyRun_String(code, Py_file_input, globals.get(), globals.get());
+        if (!result)
+            ADD_FAILURE() << consumePythonError();
+        const bool success = result != nullptr;
+        Py_XDECREF(result);
+        return success;
+    };
+    ASSERT_TRUE(run(R"PY(
+import lichtfeld as lf
+calls = []
+instances = []
+class CustomOverlay:
+    gizmo_id = "test.custom.overlay"
+    enabled = True
+    def __init__(self):
+        self.frames = 0
+        instances.append(self)
+    @classmethod
+    def poll(cls, ctx):
+        return cls.enabled
+    def draw(self, ctx):
+        self.frames += 1
+        point = ctx.world_to_screen((0, 0, 0))
+        calls.append((self.frames, point, ctx.camera_position, ctx.camera_forward,
+                      ctx.screen_to_world_ray(point)))
+        ctx.draw_line_3d((0, 0, 0), (1, 0, 0), (1, 0, 0, 1), 2)
+        ctx.draw_filled_circle(point, 4, (0, 1, 0, 1))
+lf.register_gizmo(CustomOverlay)
+)PY"));
+    EXPECT_TRUE(lfs::python::has_viewport_draw_handlers());
+    const glm::mat4 proj = glm::perspective(glm::radians(60.0f), 2.0f, 0.1f, 100.0f);
+    const glm::vec2 size(400, 200);
+    lfs::vis::gui::NativeOverlayDrawList draw_list;
+    lfs::rendering::ScreenOverlayRenderer overlay;
+    for (int i = 0; i < 2; ++i) {
+        const glm::vec2 pos(100 + i * 400, 50);
+        const glm::vec3 camera(i == 0 ? 0 : 5, 0, i == 0 ? 5 : 0);
+        const glm::vec3 forward = glm::normalize(-camera);
+        const glm::mat4 view = glm::lookAt(camera, glm::vec3(0), glm::vec3(0, 1, 0));
+        overlay.beginFrame();
+        lfs::python::invoke_viewport_overlay(glm::value_ptr(view), glm::value_ptr(proj),
+                                             glm::value_ptr(pos), glm::value_ptr(size),
+                                             glm::value_ptr(camera), glm::value_ptr(forward),
+                                             &overlay, &draw_list);
+        overlay.endFrame();
+        const auto commands = overlay.consumeCommands();
+        EXPECT_EQ(commands.size(), 2u);
+        for (const auto& command : commands) {
+            EXPECT_NEAR(command.p0.x, pos.x + size.x / 2, 0.001f);
+            EXPECT_NEAR(command.p0.y, pos.y + size.y / 2, 0.001f);
+            EXPECT_TRUE(command.clip.has_value());
+            if (command.clip) {
+                EXPECT_EQ(command.clip->min, pos);
+                EXPECT_EQ(command.clip->max, pos + size);
+            }
+        }
+    }
+    EXPECT_TRUE(run(R"PY(
+assert len(instances) == 1, len(instances)
+assert [c[0] for c in calls] == [1, 2], calls
+for c, point, camera, forward in zip(calls, [(300, 150), (700, 150)],
+                                    [(0, 0, 5), (5, 0, 0)], [(0, 0, -1), (-1, 0, 0)]):
+    for got, want in zip(c[1:], [point, camera, forward, forward]):
+        assert all(abs(a-b) < 0.001 for a, b in zip(got, want)), (got, want)
+)PY"));
+    EXPECT_TRUE(run("CustomOverlay.enabled = False"));
+    const glm::mat4 view(1);
+    const glm::vec2 pos(0);
+    const glm::vec3 camera(0), forward(0, 0, -1);
+    overlay.beginFrame();
+    lfs::python::invoke_viewport_overlay(glm::value_ptr(view), glm::value_ptr(proj),
+                                         glm::value_ptr(pos), glm::value_ptr(size),
+                                         glm::value_ptr(camera), glm::value_ptr(forward),
+                                         &overlay, &draw_list);
+    EXPECT_TRUE(overlay.consumeCommands().empty());
+    EXPECT_TRUE(run("lf.unregister_gizmo(CustomOverlay.gizmo_id)"));
+    EXPECT_FALSE(lfs::python::has_viewport_draw_handlers());
+    overlay.endFrame();
 }

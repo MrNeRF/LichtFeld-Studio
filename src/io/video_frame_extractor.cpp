@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "video_frame_extractor.hpp"
+#include "core/image_codecs.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "hdr_libplacebo.hpp"
@@ -23,7 +24,6 @@ extern "C" {
 }
 
 #include <cuda_runtime.h>
-#include <stb_image_write.h>
 
 #include <nlohmann/json.hpp>
 
@@ -367,11 +367,21 @@ namespace lfs::io {
                               const void* data,
                               ImageFormat format,
                               int jpg_quality) {
-            const std::string path_utf8 = lfs::core::path_to_utf8(path);
+            std::string error;
             if (format == ImageFormat::JPG) {
-                return stbi_write_jpg(path_utf8.c_str(), width, height, 3, data, jpg_quality) != 0;
+                const int quality = jpg_quality == 0 ? 90 : std::clamp(jpg_quality, 1, 100);
+                const bool success = lfs::core::image_codecs::write_jpeg(
+                    path, static_cast<const std::uint8_t*>(data), width, height, 3,
+                    quality, std::nullopt, error, quality > 90);
+                if (!success)
+                    LOG_ERROR("{}", error);
+                return success;
             }
-            return stbi_write_png(path_utf8.c_str(), width, height, 3, data, width * 3) != 0;
+            const bool success = lfs::core::image_codecs::write_png(
+                path, data, width, height, 3, 8, 6, std::nullopt, error);
+            if (!success)
+                LOG_ERROR("{}", error);
+            return success;
         }
 
         void write_jpeg_to_file(const std::filesystem::path& path, const std::vector<uint8_t>& data) {
@@ -822,9 +832,13 @@ namespace lfs::io {
                 // description already stored in container headers, avoiding a
                 // global probe of audio tracks which this workflow never uses.
                 int video_stream_idx = findUsableHeaderVideoStream(fmt_ctx);
+                // avformat_find_stream_info frees its per-stream probe state; a
+                // second call on the same context dereferences it. Probe at most once.
+                bool stream_info_probed = false;
                 if (video_stream_idx < 0) {
                     // Preserve compatibility with containers that need packet
                     // probing to expose their video dimensions or codec.
+                    stream_info_probed = true;
                     if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
                         error = "Failed to find stream info";
                         avformat_close_input(&fmt_ctx);
@@ -846,7 +860,7 @@ namespace lfs::io {
                 // header (notably PQ/HLG signalling). Probe only after every
                 // non-video stream is discarded, then rewind so decoding and
                 // frame selection remain deterministic.
-                if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
+                if (!stream_info_probed && avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
                     LOG_WARN("Could not complete video-only stream metadata probe; some source metadata may be unavailable");
                 }
                 av_seek_frame(fmt_ctx, video_stream_idx, 0, AVSEEK_FLAG_BACKWARD);
@@ -1048,15 +1062,25 @@ namespace lfs::io {
                 const double start_time = params.start_time;
                 double end_time =
                     params.end_time < 0.0 ? video_duration : params.end_time;
+                // Plain interval extraction can read to EOF when the duration estimate is short.
+                // FPS sampling and sharpness windows retain their existing time boundaries.
+                bool extract_to_stream_end = params.end_time < 0.0;
                 if (video_duration > 0.0) {
                     const double duration_tolerance =
                         std::max(1.0e-6, time_base);
-                    if (start_time >= video_duration ||
-                        end_time > video_duration + duration_tolerance) {
+                    if (start_time >= video_duration) {
                         error = "Invalid extraction parameters: trim range exceeds video duration";
                         throw std::invalid_argument(error);
                     }
+                    // A frame-count based duration estimate can run past the stream's end; an end
+                    // beyond the video extracts to its last frame.
+                    if (end_time > video_duration + duration_tolerance) {
+                        end_time = video_duration;
+                        extract_to_stream_end = true;
+                    }
                 }
+                extract_to_stream_end = extract_to_stream_end &&
+                                        !(params.sharpness.enabled && params.sharpness.window_mode);
                 const double trim_duration = end_time - start_time;
                 if (!std::isfinite(trim_duration) || trim_duration <= 0.0) {
                     error = "Invalid extraction parameters: invalid video trim range";
@@ -1930,7 +1954,7 @@ namespace lfs::io {
                     const bool past_end =
                         params.mode == ExtractionMode::FPS
                             ? frame_time >= end_time
-                            : frame_time > end_time;
+                            : !extract_to_stream_end && frame_time > end_time;
                     if (past_end)
                         return true;
 

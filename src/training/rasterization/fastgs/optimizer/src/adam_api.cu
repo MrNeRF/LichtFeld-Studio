@@ -34,13 +34,6 @@ namespace fast_lfs::optimizer {
         const float bias_correction1_rcp,
         const float bias_correction2_sqrt_rcp,
         cudaStream_t stream,
-        const float* mean_step_scale_raw,
-        const int mean_step_scale_n,
-        const float mean_step_median_extent,
-        const float mean_step_r_min,
-        const float mean_step_r_max,
-        const bool* mean_step_far_mask,
-        const int mean_step_far_mask_n,
         const float* screen_share_max,
         const int screen_share_n,
         const float screen_share_limit,
@@ -49,12 +42,6 @@ namespace fast_lfs::optimizer {
         LFS_VALIDATE_CUDA_DEVICE_POINTER(packed, "joint_packed");
         LFS_VALIDATE_CUDA_DEVICE_POINTER(bounds, "joint_bounds");
         LFS_VALIDATE_CUDA_DEVICE_POINTER(param_grad, "param_grad");
-        if (mean_step_scale_raw != nullptr) {
-            LFS_VALIDATE_CUDA_DEVICE_POINTER(mean_step_scale_raw, "mean_step_scale_raw");
-        }
-        if (mean_step_far_mask != nullptr) {
-            LFS_VALIDATE_CUDA_DEVICE_POINTER(mean_step_far_mask, "mean_step_far_mask");
-        }
         if (screen_share_max != nullptr) {
             LFS_VALIDATE_CUDA_DEVICE_POINTER(screen_share_max, "screen_share_max");
         }
@@ -70,8 +57,6 @@ namespace fast_lfs::optimizer {
                 crop_damping_mask, crop_damping_mask_size, cropbox_lr_scale,
                 n_prims, n_attr, lr, beta1, beta2, eps,
                 bias_correction1_rcp, bias_correction2_sqrt_rcp,
-                mean_step_scale_raw, mean_step_scale_n, mean_step_median_extent,
-                mean_step_r_min, mean_step_r_max, mean_step_far_mask, mean_step_far_mask_n,
                 screen_share_max, screen_share_n, screen_share_limit, screen_share_penalty);
         } else if (bits == 8) {
             kernels::adam::adam_step_joint_contiguous_cu<8><<<n_blocks, kBS, 0, stream>>>(
@@ -80,8 +65,6 @@ namespace fast_lfs::optimizer {
                 crop_damping_mask, crop_damping_mask_size, cropbox_lr_scale,
                 n_prims, n_attr, lr, beta1, beta2, eps,
                 bias_correction1_rcp, bias_correction2_sqrt_rcp,
-                mean_step_scale_raw, mean_step_scale_n, mean_step_median_extent,
-                mean_step_r_min, mean_step_r_max, mean_step_far_mask, mean_step_far_mask_n,
                 screen_share_max, screen_share_n, screen_share_limit, screen_share_penalty);
         } else {
             throw std::runtime_error("adam_step_joint_contiguous: bits must be 8 or 16");
@@ -105,8 +88,6 @@ namespace fast_lfs::optimizer {
         const float* mean_step_scale_raw,
         const int mean_step_scale_n,
         const float mean_step_median_extent,
-        const float mean_step_r_min,
-        const float mean_step_r_max,
         const bool* mean_step_far_mask,
         const int mean_step_far_mask_n,
         const float* screen_share_max,
@@ -120,6 +101,7 @@ namespace fast_lfs::optimizer {
             throw std::runtime_error("adam_step_joint_contiguous_batched: too many entries");
         }
         int max_prims = 0;
+        bool mean_step_enabled = false;
         for (int i = 0; i < n_entries; ++i) {
             if (!host_entries[i].param || !host_entries[i].packed ||
                 !host_entries[i].bounds || !host_entries[i].grad) {
@@ -129,6 +111,7 @@ namespace fast_lfs::optimizer {
                 throw std::runtime_error("adam_step_joint_contiguous_batched: n_prims/n_attr");
             }
             max_prims = std::max(max_prims, host_entries[i].n_prims);
+            mean_step_enabled = mean_step_enabled || host_entries[i].apply_mean_step != 0;
         }
         if (mean_step_scale_raw != nullptr) {
             LFS_VALIDATE_CUDA_DEVICE_POINTER(mean_step_scale_raw, "mean_step_scale_raw");
@@ -144,15 +127,22 @@ namespace fast_lfs::optimizer {
         constexpr int kBS = 256;
         const int n_blocks = (max_prims + kBS - 1) / kBS;
         const dim3 grid(n_blocks, n_entries);
-        kernels::adam::adam_step_joint_contiguous_batched_cu<16><<<grid, kBS, 0, stream>>>(
-            batch,
-            frozen_mask, frozen_mask_size, frozen_lr_scale,
-            crop_damping_mask, crop_damping_mask_size, cropbox_lr_scale,
-            beta1, beta2, eps,
-            mean_step_scale_raw, mean_step_scale_n, mean_step_median_extent,
-            mean_step_r_min, mean_step_r_max, mean_step_far_mask, mean_step_far_mask_n,
-            screen_share_max, screen_share_n, screen_share_limit, screen_share_penalty);
-        LFS_CUDA_LAUNCH_CHECK(stream, "adam_step_joint_contiguous_batched");
+        auto launch = [&]<bool MEAN_STEP_ENABLED>() {
+            kernels::adam::adam_step_joint_contiguous_batched_cu<16, MEAN_STEP_ENABLED>
+                <<<grid, kBS, 0, stream>>>(
+                    batch,
+                    frozen_mask, frozen_mask_size, frozen_lr_scale,
+                    crop_damping_mask, crop_damping_mask_size, cropbox_lr_scale,
+                    beta1, beta2, eps,
+                    mean_step_scale_raw, mean_step_scale_n, mean_step_median_extent,
+                    mean_step_far_mask, mean_step_far_mask_n,
+                    screen_share_max, screen_share_n, screen_share_limit, screen_share_penalty);
+            LFS_CUDA_LAUNCH_CHECK(stream, "adam_step_joint_contiguous_batched");
+        };
+        if (mean_step_enabled)
+            launch.template operator()<true>();
+        else
+            launch.template operator()<false>();
     }
 
     void joint_encode_zero_rows_at_indices(

@@ -433,6 +433,9 @@ def get_bottom_dock_active_tab() -> str:
 def set_bottom_dock_active_tab(panel_id: str) -> None:
     """Set the active bottom-dock panel id"""
 
+def set_main_panel_active_tab(panel_id: str) -> None:
+    """Activate a main panel tab by panel id"""
+
 def get_panel(panel_id: str) -> PanelInfo | None:
     """Get typed panel info by id (None if not found)"""
 
@@ -2561,7 +2564,9 @@ def select_keyframe(index: int) -> None:
     """Select keyframe in timeline"""
 
 def delete_keyframe(index: int) -> None:
-    """Delete keyframe by index"""
+    """
+    Delete keyframe by index; raises ValueError for the protected first keyframe
+    """
 
 def set_keyframe_easing(index: int, easing: int) -> None:
     """
@@ -2623,6 +2628,10 @@ def get_multi_transform_mode() -> int:
 
 def set_multi_transform_mode(mode: int) -> None:
     """Set multi-transform mode (0=Group, 1=Individual)"""
+
+MULTI_TRANSFORM_MODE_SELECTION: int = 0
+
+MULTI_TRANSFORM_MODE_INDIVIDUAL: int = 1
 
 def request_thumbnail(video_id: str) -> None:
     """Request download of a YouTube thumbnail for the given video ID"""
@@ -2773,6 +2782,9 @@ def get_mcp_access_token() -> str:
 def set_mcp_preferences(enabled: bool, expose_network: bool, port: int, request_logging: bool = False) -> bool:
     """Persist and immediately apply MCP HTTP server preferences"""
 
+def get_mcp_port_override() -> int | None:
+    """Get the MCP port set on the command line for this session, or None"""
+
 def get_project_location() -> str:
     """Get the effective project location."""
 
@@ -2922,7 +2934,14 @@ def is_point_cloud_forced() -> bool:
     """Check if point cloud mode is forced (pre-training mode)"""
 
 def get_fps() -> float:
-    """Get current FPS"""
+    """
+    Get viewport renders in the trailing second (cached and deferred results excluded)
+    """
+
+def get_ui_fps() -> float:
+    """
+    Get successful GUI presents in the trailing second (idle-clear frame excluded)
+    """
 
 def get_content_type() -> str:
     """Get content type (empty, splat_files, dataset)"""

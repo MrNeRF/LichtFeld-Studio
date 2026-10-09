@@ -7,6 +7,7 @@
 #include "core/camera_types.h"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/export.hpp"
+#include "core/image_loader.hpp"
 #include "core/tensor.hpp"
 #include "core/uuid.hpp"
 #include <array>
@@ -62,11 +63,17 @@ namespace lfs::core {
         // Load image from disk and return it
         Tensor load_and_get_image(int resize_factor = -1, int max_width = 0, bool output_uint8 = false,
                                   bool update_dimensions = true);
+        Tensor load_and_get_image(int resize_factor, int max_width, bool output_uint8,
+                                  bool update_dimensions, const ImageLoadFunc& image_loader);
 
         // Load mask from disk, process it, and return it (cached)
         Tensor load_and_get_mask(int resize_factor = -1, int max_width = 0,
                                  bool invert_mask = false, float mask_threshold = 0.5f, bool binarize = true,
                                  bool apply_undistortion = true);
+
+        // Same processing as load_and_get_mask for an explicit mask file, without caching.
+        Tensor load_mask_file(const std::filesystem::path& path, int resize_factor, int max_width,
+                              bool invert_mask, float mask_threshold, bool binarize, bool apply_undistortion) const;
 
         // Load depth map from disk, convert to [H,W] float32 [0,1], and return it (cached)
         Tensor load_and_get_depth(int resize_factor = -1, int max_width = 0);
@@ -166,7 +173,9 @@ namespace lfs::core {
         const std::filesystem::path& mask_path() const noexcept { return _mask_path; }
         const std::filesystem::path& depth_path() const noexcept { return _depth_path; }
         const std::filesystem::path& normal_path() const noexcept { return _normal_path; }
+        void set_depth_path(std::filesystem::path path);
         void set_normal_path(std::filesystem::path path);
+        void set_mask_path(std::filesystem::path path);
 
         // Sparse SfM observations for this image (COLMAP 2D points with a 3D id).
         // Pixel coordinates are in the camera's native width/height at load
@@ -281,6 +290,10 @@ namespace lfs::core {
         // Image info
         std::string _image_name;
         std::filesystem::path _image_path;
+        Tensor read_mask_image(const std::filesystem::path& path, int resize_factor, int max_width,
+                               bool apply_undistortion) const;
+        Tensor finish_mask(Tensor mask, int resize_factor, int max_width, bool invert_mask, float mask_threshold,
+                           bool binarize, bool apply_undistortion) const;
         std::filesystem::path _mask_path;
         std::filesystem::path _depth_path;
         std::filesystem::path _normal_path;

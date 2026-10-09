@@ -133,6 +133,13 @@ enum class OperatorResult { Finished,
 
 namespace {
 
+    thread_local int python_run_depth = 0;
+
+    struct ScopedPythonRunDepth {
+        ScopedPythonRunDepth() { ++python_run_depth; }
+        ~ScopedPythonRunDepth() { --python_run_depth; }
+    };
+
     using lfs::training::Command;
     using lfs::training::CommandCenter;
     using lfs::training::CommandTarget;
@@ -1329,6 +1336,32 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("path") = "",
         nb::arg("wait") = false,
         "Save the active project to a new .licht path");
+    m.def(
+        "project_save_as_for_training_start",
+        [](const std::string& path, bool wait) {
+            nb::gil_scoped_release release;
+            const auto project_path =
+                python_utf8_path(path);
+            emit_project_cmd_marshaled(
+                "python.project_save_as_for_training_start",
+                [project_path] {
+                    lfs::core::events::cmd::ProjectSaveAs{
+                        .path = project_path,
+                        .fresh_training_start = true}
+                        .emit();
+                });
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return false;
+            }
+            return consume_project_save_started_and_wait(
+                viewer, wait,
+                "python.project_save_as_for_training_start.wait");
+        },
+        nb::arg("path") = "",
+        nb::arg("wait") = false,
+        "Save a clean project for a new training run");
     m.def(
         "project_get_license", []() -> std::optional<nb::dict> {
             auto* const viewer = lfs::python::get_visualizer();
@@ -2663,21 +2696,49 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("name"), "Get node visualizer-world transform matrix (16 floats, column-major)");
 
     m.def(
-        "set_node_transform", [](const std::string& name, const std::vector<float>& mat) {
+        "commit_node_transforms", [](const std::vector<std::string>& names, const std::vector<std::vector<float>>& before) {
+            auto* sm = lfs::python::get_scene_manager();
+            if (!sm || names.empty())
+                return;
+            if (names.size() != before.size())
+                throw nb::value_error("Expected one transform per node");
+            std::vector<glm::mat4> transforms;
+            transforms.reserve(before.size());
+            for (const auto& matrix : before) {
+                if (matrix.size() != 16)
+                    throw nb::value_error("Expected 16 floats per transform");
+                glm::mat4 transform;
+                std::memcpy(&transform[0][0], matrix.data(), 16 * sizeof(float));
+                transforms.push_back(transform);
+            }
+            auto entry = std::make_unique<lfs::vis::op::SceneSnapshot>(*sm, "transform.batch");
+            if (!entry->captureTransformsBefore(names, transforms))
+                return;
+            entry->captureAfter();
+            lfs::vis::op::pushSceneSnapshotIfChanged(std::move(entry));
+        },
+        nb::arg("node_names"), nb::arg("old_transforms"), "Record a completed preview edit as one undo step using its original local transforms");
+
+    m.def(
+        "set_node_transform", [](const std::string& name, const std::vector<float>& mat, const bool record_history) {
             auto* sm = lfs::python::get_scene_manager();
             if (!sm || mat.size() != 16)
                 return;
             glm::mat4 transform;
             std::memcpy(&transform[0][0], mat.data(), 16 * sizeof(float));
+            if (!record_history) {
+                sm->setNodeTransform(name, transform);
+                return;
+            }
             if (auto result = lfs::vis::cap::setTransformMatrix(*sm, {name}, transform, "python.set_node_transform"); !result) {
                 LOG_WARN("set_node_transform fell back to direct update for '{}': {}", name, result.error());
                 sm->setNodeTransform(name, transform);
             }
         },
-        nb::arg("name"), nb::arg("matrix"), "Set node transform matrix (16 floats, column-major)");
+        nb::arg("name"), nb::arg("matrix"), nb::kw_only(), nb::arg("record_history") = true, "Set node transform matrix (16 floats, column-major). Disable record_history for previews committed with commit_node_transforms.");
 
     m.def(
-        "set_node_visualizer_world_transform", [](const std::string& name, const std::vector<float>& mat) {
+        "set_node_visualizer_world_transform", [](const std::string& name, const std::vector<float>& mat, const bool record_history) {
             auto* sm = lfs::python::get_scene_manager();
             if (!sm || mat.size() != 16)
                 return;
@@ -2687,9 +2748,18 @@ NB_MODULE(lichtfeld, m) {
 
             const auto local_transform =
                 lfs::vis::scene_coords::nodeLocalTransformFromVisualizerWorld(sm->getScene(), name, visualizer_world_transform);
-            if (!local_transform)
-                return;
+            if (!local_transform) {
+                if (!sm->getScene().getNode(name))
+                    throw std::runtime_error("set_node_visualizer_world_transform: node not found: " + name);
+                throw std::runtime_error(
+                    "set_node_visualizer_world_transform: parent transform cannot preserve a finite world transform: " +
+                    name);
+            }
 
+            if (!record_history) {
+                sm->setNodeTransform(name, *local_transform);
+                return;
+            }
             if (auto result = lfs::vis::cap::setTransformMatrix(
                     *sm, {name}, *local_transform, "python.set_node_visualizer_world_transform");
                 !result) {
@@ -2697,7 +2767,7 @@ NB_MODULE(lichtfeld, m) {
                 sm->setNodeTransform(name, *local_transform);
             }
         },
-        nb::arg("name"), nb::arg("matrix"), "Set node visualizer-world transform matrix (16 floats, column-major)");
+        nb::arg("name"), nb::arg("matrix"), nb::kw_only(), nb::arg("record_history") = true, "Set node visualizer-world transform matrix (16 floats, column-major). Disable record_history for previews committed with commit_node_transforms.");
 
     m.def(
         "bake_selected_node_transforms", []() -> size_t {
@@ -3348,16 +3418,35 @@ NB_MODULE(lichtfeld, m) {
 
             nb::module_ sys = nb::module_::import_("sys");
             nb::list sys_path = nb::cast<nb::list>(sys.attr("path"));
+            nb::object builtins = nb::module_::import_("builtins");
+            const bool nested_run = python_run_depth > 0;
+            const nb::object previous_file = nested_run ? builtins.attr("__file__") : nb::none();
+            const nb::list previous_sys_path = nested_run
+                                                   ? nb::cast<nb::list>(sys_path.attr("copy")())
+                                                   : nb::list();
+            const ScopedPythonRunDepth run_depth;
             nb::str parent_str(parent.c_str());
             if (!nb::cast<bool>(sys_path.attr("__contains__")(parent_str))) {
                 sys_path.attr("insert")(0, parent_str);
             }
-
-            nb::object builtins = nb::module_::import_("builtins");
             builtins.attr("__file__") = nb::str(abs_path.c_str());
 
             nb::object py_exec = builtins.attr("exec");
-            py_exec(code);
+            const auto restore_nested_context = [&] {
+                if (!nested_run)
+                    return;
+                sys.attr("path") = sys_path;
+                sys_path.attr("clear")();
+                sys_path.attr("extend")(previous_sys_path);
+                builtins.attr("__file__") = previous_file;
+            };
+            try {
+                py_exec(code);
+            } catch (...) {
+                restore_nested_context();
+                throw;
+            }
+            restore_nested_context();
 
             LOG_INFO("Executed script: {}", path);
         },
@@ -3502,7 +3591,9 @@ NB_MODULE(lichtfeld, m) {
                 throw std::runtime_error("Only 'jet' colormap is currently supported");
             }
             const auto& t = values.tensor();
-            assert(t.shape().rank() == 1);
+            if (t.shape().rank() != 1) {
+                throw std::invalid_argument("values must have rank 1");
+            }
 
             auto v = t.clamp(0.0f, 1.0f);
 

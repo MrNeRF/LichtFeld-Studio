@@ -20,6 +20,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace lfs::core::internal {
 
@@ -388,7 +389,7 @@ namespace lfs::core::internal {
             case LazyPointwiseOpKind::Square: return x * x;
             case LazyPointwiseOpKind::Tanh: return std::tanh(x);
             case LazyPointwiseOpKind::Rsqrt: return 1.0f / std::sqrt(x);
-            case LazyPointwiseOpKind::Sign: return float((x > 0) - (x < 0));
+            case LazyPointwiseOpKind::Sign: return ops::sign_op{}(x);
             case LazyPointwiseOpKind::Reciprocal: return 1.0f / x;
             case LazyPointwiseOpKind::Floor: return std::floor(x);
             case LazyPointwiseOpKind::Ceil: return std::ceil(x);
@@ -418,7 +419,7 @@ namespace lfs::core::internal {
             }
             Tensor source = *recipe.source;
             // ptr<> materializes deferred sources.
-            const float* in_probe = source.is_valid() ? source.ptr<float>() : nullptr;
+            const float* in_probe = source.is_valid() ? std::as_const(source).ptr<float>() : nullptr;
             if (!source.is_valid() || in_probe == nullptr ||
                 source.dtype() != DataType::Float32 ||
                 !source.is_contiguous()) {
@@ -436,7 +437,7 @@ namespace lfs::core::internal {
                     return false;
                 }
                 Tensor rhs = *op.rhs;
-                const float* rhs_probe = rhs.ptr<float>();
+                const float* rhs_probe = std::as_const(rhs).ptr<float>();
                 if (rhs_probe == nullptr ||
                     rhs.dtype() != DataType::Float32 ||
                     !rhs.is_contiguous() ||
@@ -455,7 +456,7 @@ namespace lfs::core::internal {
                 chain.ops[i].kind = static_cast<uint8_t>(recipe.ops[i].kind);
                 chain.ops[i].scalar = recipe.ops[i].scalar;
                 if (is_tensor_binary_kind(recipe.ops[i].kind)) {
-                    chain.ops[i].rhs = rhs_storage[rhs_i].ptr<float>();
+                    chain.ops[i].rhs = std::as_const(rhs_storage[rhs_i]).ptr<float>();
                     ++rhs_i;
                 } else {
                     chain.ops[i].rhs = nullptr;
@@ -463,7 +464,7 @@ namespace lfs::core::internal {
             }
 
             if (source.device() == Device::CUDA) {
-                const float* in_ptr = source.ptr<float>();
+                const float* in_ptr = std::as_const(source).ptr<float>();
                 assert(in_ptr != nullptr);
                 // prepare_inputs_for_stream only takes initializer_list; pin source then each rhs.
                 cudaStream_t execution_stream = prepare_inputs_for_stream({&source});
@@ -479,7 +480,7 @@ namespace lfs::core::internal {
                 return true;
             }
 
-            const float* in_ptr = source.ptr<float>();
+            const float* in_ptr = std::as_const(source).ptr<float>();
             if (in_ptr == nullptr)
                 return false;
             Tensor out = Tensor::empty(source.shape(), Device::CPU, DataType::Float32);
@@ -492,7 +493,7 @@ namespace lfs::core::internal {
                 for (int j = 0; j < chain.num_ops; ++j) {
                     const float* rhs_ptr = nullptr;
                     if (is_tensor_binary_kind(recipe.ops[j].kind)) {
-                        rhs_ptr = rhs_storage[rhs_i].ptr<float>();
+                        rhs_ptr = std::as_const(rhs_storage[rhs_i]).ptr<float>();
                         ++rhs_i;
                     }
                     val = apply_pointwise_op_cpu(val, recipe.ops[j].kind, recipe.ops[j].scalar,

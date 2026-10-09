@@ -7,6 +7,8 @@ import ctypes.util
 
 import pytest
 
+from selection_submode_contract import check_selection_submode_follows_native_mode
+
 
 @pytest.mark.integration
 def test_draw_hook_receives_overlay_capable_layout(lf):
@@ -202,3 +204,11 @@ def test_rml_layout_does_not_advertise_removed_compatibility_methods(lf, method)
 def test_rml_sublayout_uses_collapsing_headers_instead_of_tree_aliases(lf):
     assert not hasattr(lf.ui.RmlSubLayout, "tree_node")
     assert not hasattr(lf.ui.RmlSubLayout, "tree_pop")
+
+
+@pytest.mark.integration
+def test_selection_submode_follows_native_mode(lf):
+    # Headless imports have no native viewer to receive selection events.
+    if lf.get_scene() is None:
+        pytest.skip("requires a native viewer (also run by SelectionSubmodeTest)")
+    check_selection_submode_follows_native_mode(lf)

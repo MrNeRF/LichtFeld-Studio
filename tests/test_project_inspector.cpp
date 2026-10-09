@@ -170,6 +170,79 @@ namespace {
         EXPECT_FALSE(details.retained_checkpoints.front().header_reachable);
     }
 
+    TEST(ProjectInspector, ReportsEmbeddedDatasetCountsForEveryKind) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "embedded-counts.licht";
+        ProjectWriter writer = require_result(
+            ProjectWriter::create(path, create_options(1501)));
+
+        ProjectChapter project;
+        require_status(project.set_project_uuid(fixed_uuid(1000)));
+        require_status(project.set_created_at_unix_ns(1'700'000'000'000'000'000));
+        require_status(project.set_manifest(ProjectManifest{}));
+        const auto project_bytes = project.to_bytes();
+
+        ParameterManagerSnapshot snapshot;
+        snapshot.mcmc_session = lfs::core::param::OptimizationParameters::mcmc_defaults();
+        snapshot.mrnf_session = lfs::core::param::OptimizationParameters::mrnf_defaults();
+        snapshot.igs_session = lfs::core::param::OptimizationParameters::igs_plus_defaults();
+        snapshot.mcmc_current = snapshot.mcmc_session;
+        snapshot.mrnf_current = snapshot.mrnf_session;
+        snapshot.igs_current = snapshot.igs_session;
+        ParametersChapter parameters;
+        require_status(parameters.set_snapshot(snapshot));
+
+        constexpr std::array<std::string_view, 6> kinds = {
+            "meta",
+            "image",
+            "mask",
+            "depth",
+            "normal",
+            "sparse",
+        };
+        const auto payload = byte_vector("dataset entry");
+        EmbeddedDatasetManifest manifest{
+            .schema_version = 1,
+            .images_folder = "images",
+            .complete = true,
+        };
+        std::vector<std::pair<ChunkKey, std::vector<std::byte>>> chunks;
+        for (std::size_t index = 0; index < kinds.size(); ++index) {
+            const auto tag = 1510 + index;
+            manifest.entries.push_back(EmbeddedDatasetEntry{
+                .rel_path = std::string(kinds[index]) + "/entry",
+                .kind = std::string(kinds[index]),
+                .chunk_uuid = fixed_uuid(tag),
+                .bytes = payload.size(),
+                .xxh3_128 = xxh3_128(payload),
+            });
+            chunks.emplace_back(fixed_key("DSRC", tag), payload);
+        }
+        require_status(parameters.set_embedded_dataset(manifest));
+        const auto parameters_bytes = parameters.to_bytes();
+
+        require_status(writer.plan_commit(commit_options(1502, 1)));
+        std::uint64_t total_bytes = project_bytes.size() + parameters_bytes.size();
+        for (const auto& [key, bytes] : chunks) {
+            total_bytes += bytes.size();
+        }
+        require_status(writer.preflight(total_bytes));
+        require_status(writer.write_chunk(fixed_key("PROJ", 1000), project_bytes));
+        require_status(writer.write_chunk(fixed_key("PRMS", 1000), parameters_bytes));
+        for (const auto& [key, bytes] : chunks) {
+            require_status(writer.write_chunk(key, bytes));
+        }
+        require_status(writer.commit());
+
+        const auto details = require_result(inspect_project_details(path));
+        EXPECT_TRUE(details.parameters.embedded_dataset_present);
+        EXPECT_EQ(details.parameters.embedded_images, 1u);
+        EXPECT_EQ(details.parameters.embedded_masks, 1u);
+        EXPECT_EQ(details.parameters.embedded_depths, 1u);
+        EXPECT_EQ(details.parameters.embedded_normals, 1u);
+        EXPECT_EQ(details.parameters.embedded_sparse, 1u);
+    }
+
     TEST(ProjectInspector, ConcurrentCardsDoNotHoldTheGILOrSharedState) {
         TemporaryDirectory temporary;
         const fs::path path = make_project(temporary.path / "parallel.licht");

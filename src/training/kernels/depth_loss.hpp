@@ -90,6 +90,13 @@ namespace lfs::training::kernels {
     // GPU half of fit_depth_anchor: projects the anchor cloud into the prior and
     // returns the raw (prior value, camera-space depth) sample pairs. Empty when
     // too few samples land in view. Synchronizes the stream; startup use only.
+    struct DepthCameraProjection {
+        int model = 0; // CameraModelType: pinhole=0, fisheye=2, equi=3, thin-prism=4
+        float radial[6] = {};
+        float tangential[2] = {};
+        float thin_prism[4] = {};
+    };
+
     [[nodiscard]] std::vector<float2> collect_depth_anchor_samples(
         const float* points_xyz, // [N,3] CUDA
         size_t num_points,
@@ -104,7 +111,8 @@ namespace lfs::training::kernels {
         float near_plane,
         const float aabb_lo[3],
         const float aabb_hi[3],
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        const DepthCameraProjection& projection = {});
 
     // CPU half of fit_depth_anchor: robust affine fits over collected samples.
     // Pure host work — safe to run across a worker thread pool.

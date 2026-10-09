@@ -220,8 +220,12 @@ namespace lfs::io {
 
             // Select the video stream before probing codec-level metadata.
             video_stream_idx_ = findUsableHeaderVideoStream(fmt_ctx_);
+            // avformat_find_stream_info frees its per-stream probe state; a second call on the
+            // same context dereferences it. Probe at most once.
+            bool stream_info_probed = false;
             if (video_stream_idx_ < 0) {
                 // Fallback for containers requiring packet probing.
+                stream_info_probed = true;
                 if (avformat_find_stream_info(fmt_ctx_, nullptr) < 0) {
                     close();
                     return false;
@@ -237,7 +241,7 @@ namespace lfs::io {
             discardNonVideoStreams(fmt_ctx_, video_stream_idx_);
 
             // Probe the selected stream for HDR metadata stored in the bitstream.
-            if (avformat_find_stream_info(fmt_ctx_, nullptr) < 0) {
+            if (!stream_info_probed && avformat_find_stream_info(fmt_ctx_, nullptr) < 0) {
                 LOG_WARN("VideoPlayer: could not complete video-only stream metadata probe");
             }
             av_seek_frame(fmt_ctx_, video_stream_idx_, 0, AVSEEK_FLAG_BACKWARD);

@@ -10,20 +10,46 @@
 
 #include "core/error.hpp"
 #include "core/path_utils.hpp"
+#include "core/scene.hpp"
 
 #include <chrono>
 #include <expected>
 #include <filesystem>
 #include <format>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace lfs::app {
+
+    class SceneNodeCounts {
+    public:
+        explicit SceneNodeCounts(const core::Scene& scene) : scene_(scene) {}
+
+        // One live-count snapshot per MCP response, shared across its nodes.
+        // Physical row counts remain unchanged for selection offsets and topology.
+        size_t get(const core::SceneNode& node) {
+            if (node.type == core::NodeType::SPLAT) {
+                if (!active_counts_) {
+                    active_counts_ = scene_.getActiveGaussianCountsByNode();
+                }
+                if (const auto it = active_counts_->find(node.id); it != active_counts_->end()) {
+                    return it->second;
+                }
+            }
+            return node.gaussian_count.load(std::memory_order_acquire);
+        }
+
+    private:
+        const core::Scene& scene_;
+        std::optional<std::unordered_map<core::NodeId, size_t>> active_counts_;
+    };
 
     namespace detail {
 

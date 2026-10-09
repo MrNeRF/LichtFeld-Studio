@@ -23,8 +23,8 @@
 
 namespace {
     namespace raster = fast_lfs::rasterization;
-    static_assert(sizeof(raster::InstanceKey) == sizeof(uint));
-    static_assert(sizeof(raster::InstanceKey) == 4);
+    static_assert(sizeof(raster::InstanceKey) == sizeof(uint64_t));
+    static_assert(sizeof(raster::InstanceKey) == 8);
 
     constexpr size_t kCubWorkspaceAlignment = 256;
     static_assert((kCubWorkspaceAlignment & (kCubWorkspaceAlignment - 1)) == 0);
@@ -47,18 +47,28 @@ namespace {
         size_t cub_workspace_offset_bytes = 0;
         int n_instances = 0;
 
-        [[nodiscard]] size_t per_buffer_bytes() const noexcept {
+        [[nodiscard]] size_t per_key_buffer_bytes() const noexcept {
             return static_cast<size_t>(n_instances) *
                    sizeof(raster::InstanceKey);
         }
 
+        [[nodiscard]] size_t per_index_buffer_bytes() const noexcept {
+            return static_cast<size_t>(n_instances) * sizeof(uint);
+        }
+
+        [[nodiscard]] size_t key_buffer_offset_bytes() const noexcept {
+            constexpr size_t alignment = alignof(raster::InstanceKey);
+            const size_t bytes = per_index_buffer_bytes();
+            return (bytes + alignment - 1) & ~(alignment - 1);
+        }
+
         [[nodiscard]] raster::InstanceKey* keys_current() const noexcept {
-            return reinterpret_cast<raster::InstanceKey*>(base + per_buffer_bytes());
+            return reinterpret_cast<raster::InstanceKey*>(base + key_buffer_offset_bytes());
         }
 
         [[nodiscard]] raster::InstanceKey* keys_alternate() const noexcept {
             return reinterpret_cast<raster::InstanceKey*>(
-                base + 2 * per_buffer_bytes());
+                base + key_buffer_offset_bytes() + per_key_buffer_bytes());
         }
 
         [[nodiscard]] uint* primitive_indices_current() const noexcept {
@@ -66,7 +76,8 @@ namespace {
         }
 
         [[nodiscard]] uint* primitive_indices_alternate() const noexcept {
-            return reinterpret_cast<uint*>(base + 3 * per_buffer_bytes());
+            return reinterpret_cast<uint*>(
+                base + key_buffer_offset_bytes() + 2 * per_key_buffer_bytes());
         }
 
         [[nodiscard]] void* cub_workspace() const noexcept {
@@ -200,7 +211,6 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
     const int n_tiles = checked_to_int(n_tiles_u64, "n_tiles exceeds int range");
     const uint n_tiles_u32 = static_cast<uint>(n_tiles);
-    const uint depth_bits = static_cast<uint>(packed_instance_depth_bits(n_tiles_u32));
     const int key_end_bit = packed_instance_key_end_bit(n_tiles_u32);
     const uint sh_layout_slots = kernels::shSlotsForBases(static_cast<uint>(sh_layout_bases));
 
@@ -280,7 +290,6 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             clip_bottom,
             near_,
             far_,
-            depth_bits,
             mip_filter,
             dilation_scale,
             screen_share);
@@ -473,7 +482,13 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             if (n > std::numeric_limits<size_t>::max() / bytes_per_instance) {
                 throw std::overflow_error("FastGS exact sort workspace size overflow");
             }
-            const size_t data_bytes = n * bytes_per_instance;
+            const size_t unaligned_data_bytes = n * bytes_per_instance;
+            const size_t data_padding =
+                n % 2 == 0 ? 0 : alignof(InstanceKey) - alignof(uint);
+            if (data_padding > std::numeric_limits<size_t>::max() - unaligned_data_bytes) {
+                throw std::overflow_error("FastGS exact sort workspace size overflow");
+            }
+            const size_t data_bytes = unaligned_data_bytes + data_padding;
             const size_t cub_offset_bytes = aligned_cub_workspace_offset(data_bytes);
             if (cub_bytes > std::numeric_limits<size_t>::max() - cub_offset_bytes) {
                 throw std::overflow_error("FastGS exact sort workspace size overflow");
@@ -506,7 +521,6 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                 primitive_indices.Current(),
                 forward_status,
                 grid.x,
-                depth_bits,
                 static_cast<uint>(n_visible),
                 static_cast<uint>(n_instances));
             LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.create_instances");
@@ -544,7 +558,6 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                 keys.Current(),
                 per_tile_buffers.instance_ranges,
                 forward_status,
-                depth_bits,
                 n_tiles_u32,
                 static_cast<uint>(n_instances),
                 /*d_n_instances=*/nullptr);

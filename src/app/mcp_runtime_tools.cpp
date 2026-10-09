@@ -404,14 +404,15 @@ namespace lfs::app {
                     "Trainer manager is not initialized");
             }
 
-            const auto state = trainer->getState();
+            const bool preparing = viewer.isTrainingStartPending();
+            const auto state = preparing ? vis::TrainingState::Starting : trainer->getState();
             const int total_iterations = trainer->getTotalIterations();
             const int current_iteration = trainer->getCurrentIteration();
             json payload{
                 {"id", "training.main"},
                 {"label", "Training"},
                 {"kind", "training"},
-                {"active", trainer->isTrainingActive()},
+                {"active", preparing || trainer->isTrainingActive()},
                 {"status",
                  state == vis::TrainingState::Finished && !trainer->getLastError().empty()
                      ? "failed"
@@ -777,6 +778,9 @@ namespace lfs::app {
                 if (auto* const rendering = viewer->getRenderingManager()) {
                     const auto snapshot = rendering->frameDemandLedger().snapshot();
                     frames = frame_snapshot_json(snapshot);
+                    const auto rates = rendering->getFrameRates();
+                    frames["ui_fps"] = rates.ui;
+                    frames["viewport_fps"] = rates.view;
                 }
             }
 
@@ -1155,7 +1159,11 @@ namespace lfs::app {
                 if (reset)
                     ledger.resetCounters();
                 const auto snapshot = ledger.snapshot();
-                return json{{"success", true}, {"frames", frame_snapshot_json(snapshot)}};
+                auto frames = frame_snapshot_json(snapshot);
+                const auto rates = rendering->getFrameRates();
+                frames["ui_fps"] = rates.ui;
+                frames["viewport_fps"] = rates.view;
+                return json{{"success", true}, {"frames", std::move(frames)}};
             });
 
         registry.register_tool(

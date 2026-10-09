@@ -7,10 +7,12 @@
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
+#include "core/splat_data.hpp"
 #include "core/user_paths.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "input/camera_animation_cadence.hpp"
+#include "input/frame_input_buffer.hpp"
 #include "input/input_controller.hpp"
 #include "input/input_router.hpp"
 #include "input/key_codes.hpp"
@@ -28,6 +30,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <glm/gtc/constants.hpp>
 #include <gtest/gtest.h>
 #include <iterator>
@@ -225,6 +228,30 @@ namespace lfs::vis {
         EXPECT_EQ(cadence.secondsUntilReady(next, 1.0 / 240.0), 0.0);
     }
 
+    // Fails if a wake without input (a viewer-thread user event) counts as input, which would let
+    // demand-driven frames skip the display pacing, or if any kind of user input does not bypass it.
+    TEST(FrameInputBufferTest, OnlyUserInputBypassesDisplayPacing) {
+        FrameInputBuffer input;
+        input.had_event = true;
+        input.user_event = true;
+        EXPECT_FALSE(input.hasUserInput());
+
+        const std::vector<std::function<void(FrameInputBuffer&)>> inputs{
+            [](FrameInputBuffer& b) { b.mouse_moved = true; },
+            [](FrameInputBuffer& b) { b.window_event = true; },
+            [](FrameInputBuffer& b) { b.mouse_wheel = 1.0f; },
+            [](FrameInputBuffer& b) { b.mouse_wheel_x = -1.0f; },
+            [](FrameInputBuffer& b) { b.mouse_button_events.emplace_back(); },
+            [](FrameInputBuffer& b) { b.input_events.emplace_back(); },
+            [](FrameInputBuffer& b) { b.keys_pressed.push_back(SDL_SCANCODE_W); },
+        };
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            FrameInputBuffer buffer;
+            inputs[i](buffer);
+            EXPECT_TRUE(buffer.hasUserInput()) << "input kind " << i;
+        }
+    }
+
     TEST_F(InputControllerFocusTest, CameraViewHotkeysDoNotBypassGuiKeyboardCapture) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
@@ -257,6 +284,7 @@ namespace lfs::vis {
         services().set(&scene_manager);
         services().set(&rendering_manager);
         auto& scene = scene_manager.getScene();
+        scene_manager.changeContentType(SceneManager::ContentType::Dataset);
         const auto group = scene.addCameraGroup("Cameras", scene.addGroup("Dataset"), 3);
         for (const int uid : {4, 17, 42}) {
             auto camera = std::make_shared<core::Camera>(
@@ -264,12 +292,12 @@ namespace lfs::vis {
                 core::Tensor::zeros({3}, core::Device::CPU),
                 100.0f, 100.0f, 32.0f, 32.0f,
                 core::Tensor(), core::Tensor(), core::CameraModelType::PINHOLE,
-                std::to_string(uid), std::filesystem::path{}, std::filesystem::path{},
+                std::to_string(uid), std::filesystem::path("source.png"), std::filesystem::path{},
                 64, 64, uid);
             scene.addCamera(std::to_string(uid), group, std::move(camera));
         }
         ASSERT_EQ(services().trainerOrNull(), nullptr);
-        core::events::cmd::ToggleGTComparison{}.emit();
+        controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
         ASSERT_TRUE(rendering_manager.isGTComparisonActive());
         const auto press = [&](const int key, const int expected_uid) {
             controller.handleKey(key, input::ACTION_PRESS, input::KEYMOD_NONE);
@@ -328,7 +356,7 @@ namespace lfs::vis {
         controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
         controller.handleKey(input::KEY_V, input::ACTION_PRESS, input::KEYMOD_NONE);
 
-        EXPECT_EQ(toggle_gt_count, 1);
+        EXPECT_EQ(toggle_gt_count, 0);
         EXPECT_EQ(toggle_split_count, 1);
     }
 
@@ -353,8 +381,69 @@ namespace lfs::vis {
         controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
         controller.handleKey(input::KEY_V, input::ACTION_PRESS, input::KEYMOD_NONE);
 
-        EXPECT_EQ(toggle_gt_count, 1);
+        EXPECT_EQ(toggle_gt_count, 0);
         EXPECT_EQ(toggle_split_count, 1);
+    }
+
+    TEST_F(InputControllerFocusTest, GUsesNodeCompareForViewerAndKeepsVBindings) {
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        router.focusViewportKeyboard();
+
+        SceneManager scene_manager;
+        RenderingManager rendering_manager;
+        services().set(&scene_manager);
+        services().set(&rendering_manager);
+        auto& scene = scene_manager.getScene();
+        const auto make_splat = [](const float x) {
+            return std::make_unique<lfs::core::SplatData>(
+                0,
+                Tensor::from_vector({x, 0.0f, 2.0f}, {size_t{1}, size_t{3}}, Device::CPU),
+                Tensor::from_vector({1.0f, 1.0f, 1.0f}, {size_t{1}, size_t{1}, size_t{3}}, Device::CPU),
+                Tensor::zeros({size_t{1}, size_t{0}, size_t{3}}, Device::CPU, DataType::Float32),
+                Tensor::zeros({size_t{1}, size_t{3}}, Device::CPU),
+                Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f}, {size_t{1}, size_t{4}}, Device::CPU),
+                Tensor::from_vector({8.0f}, {size_t{1}, size_t{1}}, Device::CPU),
+                1.0f);
+        };
+        int split_toggles = 0;
+        int gt_toggles = 0;
+        lfs::event::ScopedHandler handlers;
+        handlers.subscribe<core::events::cmd::ToggleSplitView>([&](const auto&) { ++split_toggles; });
+        handlers.subscribe<core::events::cmd::ToggleGTComparison>([&](const auto&) { ++gt_toggles; });
+
+        controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
+        EXPECT_EQ(split_toggles, 0);
+        EXPECT_EQ(gt_toggles, 0);
+        EXPECT_FALSE(rendering_manager.isGTComparisonActive());
+
+        scene.addSplat("first", make_splat(0.0f));
+        controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
+        EXPECT_EQ(split_toggles, 0);
+        EXPECT_EQ(gt_toggles, 0);
+        EXPECT_FALSE(rendering_manager.isGTComparisonActive());
+
+        scene.addSplat("second", make_splat(1.0f));
+        controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
+        EXPECT_EQ(split_toggles, 1);
+        EXPECT_EQ(gt_toggles, 0);
+        EXPECT_FALSE(rendering_manager.isGTComparisonActive());
+
+        controller.handleKey(input::KEY_V, input::ACTION_PRESS, input::KEYMOD_NONE);
+        EXPECT_EQ(split_toggles, 2);
+        EXPECT_EQ(gt_toggles, 0);
+
+        controller.handleKey(input::KEY_V, input::ACTION_PRESS, input::KEYMOD_SHIFT);
+        EXPECT_EQ(split_toggles, 2);
+        EXPECT_EQ(gt_toggles, 0);
+        EXPECT_TRUE(rendering_manager.isIndependentSplitViewActive());
     }
 
     TEST_F(InputControllerFocusTest, EscapeWithScenePanelFocusStaysWithGui) {
@@ -393,7 +482,7 @@ namespace lfs::vis {
         router.focusViewportKeyboard();
         controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
 
-        EXPECT_EQ(toggle_gt_count, 1);
+        EXPECT_EQ(toggle_gt_count, 0);
     }
 
     TEST_F(InputControllerFocusTest, ViewportViewHotkeysStayBlockedDuringTextEntry) {

@@ -1025,3 +1025,23 @@ TEST_F(TensorCatReductionBugTest, CatShCoefficientsAlongMiddleDimension) {
                                   0.0f, 0.0f, 0.0f,
                                   0.0f, 0.0f, 0.0f}));
 }
+
+// The CUDA kernels behind middle- and last-dimension concatenation copied 4-byte words whatever the dtype, so
+// Float16, UInt8 and Int64 results read past their rows and wrote past the output.
+TEST_F(TensorCatReductionBugTest, CatOfNarrowAndWideTypesAlongInnerDimensionsMatchesTheHost) {
+    for (const DataType dtype : {DataType::Float16, DataType::UInt8, DataType::Int64, DataType::Float32}) {
+        for (const int dim : {1, 2}) {
+            std::vector<float> first_values(2 * 3 * 4), second_values(2 * 3 * 4);
+            std::iota(first_values.begin(), first_values.end(), 1.0f);
+            std::iota(second_values.begin(), second_values.end(), 101.0f);
+            const auto first = Tensor::from_vector(first_values, {2, 3, 4}, Device::CPU).to(dtype);
+            const auto second = Tensor::from_vector(second_values, {2, 3, 4}, Device::CPU).to(dtype);
+            const auto expected = Tensor::cat({first, second.slice(size_t(dim), 0, 2).contiguous()}, dim);
+            const auto actual = Tensor::cat({first.to(Device::CUDA), second.slice(size_t(dim), 0, 2).contiguous().to(Device::CUDA)},
+                                            dim);
+            ASSERT_EQ(actual.shape(), expected.shape());
+            EXPECT_EQ(actual.to(DataType::Float32).cpu().to_vector(), expected.to(DataType::Float32).to_vector())
+                << "dtype " << static_cast<int>(dtype) << " dim " << dim;
+        }
+    }
+}

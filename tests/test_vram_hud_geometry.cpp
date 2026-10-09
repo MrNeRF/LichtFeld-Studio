@@ -6,6 +6,8 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+
 namespace lfs::vis::gui::vram_hud_geometry {
 
     TEST(VramHudGeometry, ConvertsAbsolutePositionToViewportLocal) {
@@ -25,6 +27,33 @@ namespace lfs::vis::gui::vram_hud_geometry {
 
         EXPECT_FLOAT_EQ(clampPosition(1000.0f, 600.0f, visible_viewport_width), 504.0f);
         EXPECT_FLOAT_EQ(clampExtent(30.0f, 360.0f, visible_viewport_width, 0.0f), 360.0f);
+    }
+
+    TEST(VramHudGeometry, CompactHudCapturesOnlyItsVisibleRectangle) {
+        EXPECT_FALSE(pointerTargetEnabled(true, true, false));
+        EXPECT_TRUE(pointerTargetEnabled(true, true, true));
+        EXPECT_TRUE(pointerTargetEnabled(true, false, false));
+        EXPECT_FALSE(pointerTargetEnabled(false, true, true));
+        EXPECT_TRUE(capturesPointer(true, 40.0f, 60.0f, 300.0f, 142.0f, 80.0f, 90.0f));
+        EXPECT_FALSE(capturesPointer(true, 40.0f, 60.0f, 300.0f, 142.0f, 400.0f, 160.0f));
+        EXPECT_FALSE(capturesPointer(false, 40.0f, 60.0f, 300.0f, 142.0f, 80.0f, 90.0f));
+    }
+
+    TEST(VramHudGeometry, CompactDragClampsUsingVisibleHudExtent) {
+        constexpr float viewport_width = 1120.0f;
+        constexpr float expanded_width = 620.0f;
+        constexpr float compact_width = 300.0f;
+        const auto extent = dragExtent(true, expanded_width, compact_width);
+        EXPECT_FLOAT_EQ(extent, compact_width);
+        EXPECT_FLOAT_EQ(clampDragPosition(900.0f, extent, viewport_width), 804.0f);
+    }
+
+    TEST(VramHudGeometry, PressBecomesDragOnlyPastClickSlop) {
+        EXPECT_FALSE(movedPastClickSlop(0.0f, 0.0f));
+        EXPECT_FALSE(movedPastClickSlop(2.0f, -2.0f));
+        EXPECT_TRUE(movedPastClickSlop(25.0f, 0.0f));
+        EXPECT_TRUE(movedPastClickSlop(-3.0f, 3.0f));
+        EXPECT_FALSE(movedPastClickSlop(std::numeric_limits<float>::quiet_NaN(), 10.0f));
     }
 
 } // namespace lfs::vis::gui::vram_hud_geometry

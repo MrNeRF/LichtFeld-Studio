@@ -36,7 +36,8 @@ namespace {
             root = fs::temp_directory_path() / ("lfs_init_centering_" + generate_uuid_v4().to_string());
             fs::create_directories(root / "images");
             fs::create_directories(root / "sparse" / "0");
-            std::ofstream(root / "sparse/0/cameras.txt") << "1 PINHOLE 1 1 1 1 0.5 0.5\n";
+            // A focal at which the cameras resolve the points' depth: the loader moves unresolved points.
+            std::ofstream(root / "sparse/0/cameras.txt") << "1 PINHOLE 1 1 1000 1000 0.5 0.5\n";
             // Camera centers (10,20,-40), (14,24,-40); second camera has a
             // 90-degree rotation, so checking only a common T offset is wrong.
             std::ofstream(root / "sparse/0/images.txt")

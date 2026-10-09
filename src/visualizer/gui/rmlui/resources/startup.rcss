@@ -30,8 +30,13 @@ body {
     z-index: 1;
 }
 
+#version-text {
+    margin-top: 6dp;
+    font-size: 12dp;
+}
+
 #supported-text {
-    margin-top: 20dp;
+    margin-top: 16dp;
 }
 
 #sponsor-row {
@@ -53,6 +58,13 @@ body {
     align-items: center;
     gap: 24dp;
     margin-top: 16dp;
+}
+
+#app-row {
+    display: flex;
+    align-items: center;
+    gap: 24dp;
+    margin-top: 10dp;
 }
 
 .social-link {

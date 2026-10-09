@@ -372,8 +372,7 @@ namespace lfs::vis {
         lfs::rendering::DepthVisualizationMode depth_visualization_mode =
             lfs::rendering::DepthVisualizationMode::Palette;
 
-        // Selection colors (RGB: committed=219,83,83 preview=0,222,76 center=0,154,187)
-        glm::vec3 selection_color_committed{0.859f, 0.325f, 0.325f};
+        // Selection colors (RGB: preview=0,222,76 center=0,154,187); committed splats use their group color
         glm::vec3 selection_color_preview{0.0f, 0.871f, 0.298f};
         glm::vec3 selection_color_center_marker{0.0f, 0.604f, 0.733f};
 

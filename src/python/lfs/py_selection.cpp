@@ -36,6 +36,47 @@ namespace lfs::python {
     namespace {
         constexpr float DEPTH_FILTER_HALF_HEIGHT = 10000.0f;
 
+        bool has_non_identity_transform(const std::vector<glm::mat4>& transforms) {
+            for (const auto& transform : transforms) {
+                for (int column = 0; column < 4; ++column) {
+                    for (int row = 0; row < 4; ++row) {
+                        const float expected = column == row ? 1.0f : 0.0f;
+                        if (transform[column][row] != expected)
+                            return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        struct SelectionTransformContext {
+            std::shared_ptr<core::Tensor> indices;
+            std::vector<glm::mat4> transforms;
+
+            [[nodiscard]] const core::Tensor* indices_ptr() const {
+                return indices ? indices.get() : nullptr;
+            }
+
+            [[nodiscard]] const std::vector<glm::mat4>* transforms_ptr() const {
+                return indices ? &transforms : nullptr;
+            }
+        };
+
+        SelectionTransformContext selection_transform_context(core::Scene& scene, const size_t model_size) {
+            SelectionTransformContext context;
+            context.transforms = scene.getVisibleNodeTransforms();
+            if (!has_non_identity_transform(context.transforms))
+                return context;
+
+            // Keep the original local-space path available while scene caches
+            // are rebuilding or the combined model is changing size.
+            auto indices = scene.getTransformIndices();
+            if (indices && indices->is_valid() && indices->numel() == model_size) {
+                context.indices = std::move(indices);
+            }
+            return context;
+        }
+
         vis::RenderingManager* get_rm() { return get_rendering_manager(); }
 
         vis::SceneManager* get_sm() { return get_scene_manager(); }
@@ -527,10 +568,15 @@ namespace lfs::python {
                 auto* model = scene.getCombinedModel();
                 if (!model)
                     return;
+                const auto transform_context = selection_transform_context(scene, model->means().size(0));
                 const auto group_id = scene.getActiveSelectionGroup();
                 auto current = *mask;
                 for (int i = 0; i < iterations; ++i)
-                    current = core::cuda::selection_grow(current, model->means(), radius, group_id);
+                    current = core::cuda::selection_grow(
+                        current, model->means(), radius, group_id,
+                        transform_context.indices_ptr(), transform_context.transforms_ptr());
+                if (auto* selection_service = get_ss())
+                    selection_service->restrictToEffectiveNodeScope(current);
                 apply_selection_state_with_undo(
                     *sm, "selection.grow",
                     [updated = std::move(current)](core::Scene& target_scene) mutable {
@@ -553,9 +599,12 @@ namespace lfs::python {
                 auto* model = scene.getCombinedModel();
                 if (!model)
                     return;
+                const auto transform_context = selection_transform_context(scene, model->means().size(0));
                 auto current = *mask;
                 for (int i = 0; i < iterations; ++i)
-                    current = core::cuda::selection_shrink(current, model->means(), radius);
+                    current = core::cuda::selection_shrink(
+                        current, model->means(), radius,
+                        transform_context.indices_ptr(), transform_context.transforms_ptr());
                 apply_selection_state_with_undo(
                     *sm, "selection.shrink",
                     [updated = std::move(current)](core::Scene& target_scene) mutable {
@@ -651,18 +700,6 @@ namespace lfs::python {
             nb::arg("gaussian_index"), nb::arg("threshold") = 0.2f, "Select gaussians by color similarity to a reference gaussian.\n"
                                                                     "Picks the SH DC color of the gaussian at the given index and selects all\n"
                                                                     "gaussians whose per-channel color difference is within the threshold (0-1).");
-
-        // ─────────────────────────────────────────────────────────────────────
-        // FLASH & FEEDBACK
-        // ─────────────────────────────────────────────────────────────────────
-
-        sel.def(
-            "trigger_flash", []() {
-                if (auto* rm = get_rm()) {
-                    rm->triggerSelectionFlash();
-                }
-            },
-            "Trigger selection flash animation feedback");
     }
 
 } // namespace lfs::python

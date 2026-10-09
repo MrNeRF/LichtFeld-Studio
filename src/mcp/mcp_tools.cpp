@@ -62,7 +62,9 @@ namespace lfs::mcp {
         [[nodiscard]] bool matches_declared_type(const json& value, const std::string& type) {
             if (type == "string")
                 return value.is_string();
-            if (type == "integer" || type == "number")
+            if (type == "integer")
+                return value.is_number_integer();
+            if (type == "number")
                 return value.is_number();
             if (type == "boolean")
                 return value.is_boolean();
@@ -78,6 +80,13 @@ namespace lfs::mcp {
         [[nodiscard]] std::optional<json> coerce_to_declared_type(const json& value, const std::string& type) {
             if (matches_declared_type(value, type))
                 return std::make_optional<json>(value);
+            if (type == "integer" && value.is_number_float()) {
+                const double number = value.get<double>();
+                // The upper bound is exclusive: double cannot represent INT64_MAX exactly.
+                if (std::isfinite(number) && number >= -0x1p63 && number < 0x1p63 && std::trunc(number) == number)
+                    return json(static_cast<std::int64_t>(number));
+                return std::nullopt;
+            }
             if ((type == "integer" || type == "number") && value.is_string()) {
                 const auto& text = value.get_ref<const std::string&>();
                 const char* const begin = text.data();
@@ -111,10 +120,32 @@ namespace lfs::mcp {
                                                                       const std::string& path) {
             if (!schema.is_object())
                 return std::nullopt;
+            for (const auto* keyword : {"oneOf", "anyOf"}) {
+                const auto alternatives = schema.find(keyword);
+                if (alternatives == schema.end() || !alternatives->is_array())
+                    continue;
+                bool matched = false;
+                for (const auto& alternative : *alternatives) {
+                    auto candidate = checked;
+                    if (check_against_schema(candidate, alternative, path))
+                        continue;
+                    if (const auto choices = alternative.find("enum"); choices != alternative.end() && choices->is_array() &&
+                                                                       std::find(choices->begin(), choices->end(), candidate) == choices->end())
+                        continue;
+                    checked = std::move(candidate);
+                    matched = true;
+                    break;
+                }
+                if (!matched)
+                    return std::format("Parameter '{}' must match a {} alternative", path, keyword);
+            }
             if (const auto type = schema.find("type"); type != schema.end() && type->is_string()) {
                 auto coerced = coerce_to_declared_type(checked, type->get<std::string>());
-                if (!coerced)
+                if (!coerced) {
+                    if (*type == "integer")
+                        return std::format("Parameter '{}' must be an integer", path);
                     return std::format("Parameter '{}' must be of type {}", path, type->get<std::string>());
+                }
                 checked = std::move(*coerced);
             }
             if (checked.is_number()) {
@@ -341,13 +372,22 @@ namespace lfs::mcp {
         }
 
         // A mistyped argument is the caller's error and must not reach the handler, where
-        // reading it would throw as an internal failure. Null keeps its per-tool meaning.
+        // reading it would throw as an internal failure. Null keeps its per-tool meaning
+        // except for boolean fields, whose schemas require an actual boolean value.
         json checked_arguments = arguments;
         if (properties.is_object() && arguments.is_object()) {
             for (const auto& [key, value] : arguments.items()) {
                 const auto property = properties.find(key);
-                if (value.is_null() || property == properties.end() || !property->is_object())
+                if (property == properties.end() || !property->is_object())
                     continue;
+                if (value.is_null()) {
+                    const auto type = property->find("type");
+                    if (type == property->end() || !type->is_string() ||
+                        type->get<std::string>() != "boolean" ||
+                        property->value("nullable", false)) {
+                        continue;
+                    }
+                }
                 if (auto error = check_against_schema(checked_arguments[key], *property, key)) {
                     return parameter_error_envelope(
                         lfs::ErrorCode::InvalidArgument, *error, key,
@@ -606,8 +646,6 @@ namespace lfs::mcp {
             ToolHandler handler = create_command_handler(op);
             register_tool(std::move(tool), std::move(handler));
         }
-
-        LOG_INFO("Generated {} MCP tools from CommandCenter", ops.size());
     }
 
     void register_core_tools() {

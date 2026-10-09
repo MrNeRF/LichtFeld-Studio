@@ -2,9 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/path_utils.hpp"
+#include "core/resource_messages.hpp"
 #include "core/uuid.hpp"
 #include "io/project/crc32c.hpp"
 #include "io/project/project_container_internal.hpp"
+#include "io/project/project_filesystem.hpp"
+#include "io/project/project_path_utils.hpp"
 #include "io/project_container.hpp"
 #include "io/project_path.hpp"
 #include "io/project_recovery.hpp"
@@ -51,6 +54,8 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#else
+#include <winerror.h>
 #endif
 
 namespace lfs::io::project::detail {
@@ -181,7 +186,7 @@ namespace {
         require_status(writer.preflight(payload.size()));
         require_status(writer.write_chunk(key, payload));
         require_status(writer.commit());
-        return read_file_bytes(path);
+        return read_file_bytes(detail::project_fs::native_path(path));
     }
 
     std::string recoverable_scene_graph_payload() {
@@ -256,6 +261,28 @@ namespace {
             }
         }
         return found;
+    }
+
+    // Fails if a write that hits a full volume keeps the generic write message, which hides the disk-space
+    // recovery, or if a file-size limit is reported as a full disk.
+    TEST(ProjectContainerFormat, FullVolumeWriteCarriesDiskSpaceMessage) {
+#ifdef _WIN32
+        constexpr std::int64_t disk_full = ERROR_DISK_FULL;
+        constexpr std::int64_t file_too_large = ERROR_FILE_TOO_LARGE;
+#else
+        constexpr std::int64_t disk_full = ENOSPC;
+        constexpr std::int64_t file_too_large = EFBIG;
+#endif
+        const auto full = detail::project_error(lfs::ErrorCode::ResourceExhausted, "The project could not be written.",
+                                                "write failed", "project.licht", 0, "positional_write", disk_full);
+        EXPECT_TRUE(lfs::core::is_disk_space_save_error(full.user_message()));
+        const auto too_large = detail::project_error(lfs::ErrorCode::ResourceExhausted, "The project could not be written.",
+                                                     "write failed", "project.licht", 0, "positional_write", file_too_large);
+        EXPECT_FALSE(lfs::core::is_disk_space_save_error(too_large.user_message()));
+
+        EXPECT_TRUE(detail::disk_full(std::make_error_code(std::errc::no_space_on_device)));
+        EXPECT_TRUE(detail::disk_full(std::error_code(static_cast<int>(disk_full), std::system_category())));
+        EXPECT_FALSE(detail::disk_full(std::make_error_code(std::errc::file_too_large)));
     }
 
     TEST(ProjectContainerFormat, Crc32cKnownVector) {
@@ -491,6 +518,40 @@ namespace {
         ASSERT_NE(row, nullptr);
         EXPECT_EQ(require_result(reader.read_chunk(*row)),
                   byte_vector(R"({"generation":3})"));
+    }
+
+    TEST(ProjectContainerReader, HeadIdentityFollowsTheNewestValidHead) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "head-identity.licht";
+        const ChunkKey key = fixed_key("PROJ", 961);
+        for (std::uint64_t generation = 1; generation <= 3; ++generation) {
+            ProjectWriter writer = require_result(
+                generation == 1
+                    ? ProjectWriter::create(path, fixture_create_options(960))
+                    : ProjectWriter::append(path, fixture_append_options()));
+            const auto payload = byte_vector(
+                std::format(R"({{"generation":{}}})", generation));
+            require_status(writer.plan_commit(fixture_commit_options(
+                960 + generation * 3, 961 + generation * 3, generation)));
+            require_status(writer.preflight(payload.size()));
+            require_status(writer.write_chunk(key, payload));
+            require_status(writer.commit());
+
+            const ProjectHeadIdentity head =
+                require_result(ProjectReader::read_head_identity(path));
+            const ProjectReader reader = require_result(ProjectReader::open(path));
+            EXPECT_EQ(head.project_uuid, reader.superblock().project_uuid);
+            EXPECT_EQ(head.commit_uuid, reader.commit().commit_uuid);
+            EXPECT_EQ(head.generation, generation);
+        }
+
+        const std::uint32_t newest_slot =
+            require_result(ProjectReader::open(path)).selected_head().slot_id;
+        const std::array corruption = {std::byte{0xff}};
+        write_file_range(path, HEAD_SLOT_OFFSETS[newest_slot] + 40, corruption);
+        EXPECT_EQ(require_result(ProjectReader::read_head_identity(path)).generation, 2u);
+        write_file_range(path, HEAD_SLOT_OFFSETS[1 - newest_slot] + 40, corruption);
+        EXPECT_FALSE(ProjectReader::read_head_identity(path));
     }
 
     TEST(ProjectContainerReader,
@@ -3645,6 +3706,118 @@ namespace {
         EXPECT_TRUE(fs::is_directory(lock_path));
     }
 #endif
+
+    struct LongPathTemporaryDirectory : TemporaryDirectory {
+        ~LongPathTemporaryDirectory() {
+#ifdef _WIN32
+            std::error_code ignored;
+            fs::remove_all(fs::path(L"\\\\?\\" + fs::absolute(path).native()), ignored);
+#endif
+        }
+    };
+
+    TEST(ProjectContainerWriter, LongFilenameAtomicReplacementCanRollbackAndFinish) {
+        LongPathTemporaryDirectory temporary;
+        const auto destination = temporary.path / (std::string(234, 'x') + ".licht");
+        const auto replacement = temporary.path / "replacement.licht";
+        create_single_chunk_fixture(destination, 1211, 1212, 1213, fixed_key("PROJ", 1214), R"({"version":"original"})");
+        create_single_chunk_fixture(replacement, 1221, 1222, 1223, fixed_key("PROJ", 1224), R"({"version":"replacement"})");
+        auto replaced = detail::atomic_replace(replacement, destination);
+        ASSERT_TRUE(replaced) << lfs::format_for_developer(replaced.error());
+        ASSERT_TRUE(replaced->backup_path);
+        EXPECT_LE(lfs::core::path_to_utf8(replaced->backup_path->filename()).size(), 255u);
+        {
+            auto reader = require_result(ProjectReader::open(destination));
+            EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(1222));
+            require_status(reader.verify_all());
+        }
+        require_status(detail::rollback_atomic_replace(*replaced, destination));
+        {
+            auto reader = require_result(ProjectReader::open(destination));
+            EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(1212));
+            require_status(reader.verify_all());
+        }
+        create_single_chunk_fixture(replacement, 1231, 1232, 1233, fixed_key("PROJ", 1234), R"({"version":"final"})");
+        auto final = require_result(detail::atomic_replace(replacement, destination));
+        const auto backup = *final.backup_path;
+        require_status(detail::finish_atomic_replace(final, destination));
+        EXPECT_FALSE(detail::project_fs::exists(backup));
+        auto reader = require_result(ProjectReader::open(destination));
+        EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(1232));
+        require_status(reader.verify_all());
+    }
+
+    TEST(ProjectContainerWriter, ShortenedTempsAreSweptOnlyUnderTheirMastersLock) {
+        LongPathTemporaryDirectory temporary;
+        const auto master = temporary.path / (std::string(234, 'x') + ".licht");
+        const auto other = temporary.path / (std::string(234, 'y') + ".licht");
+        create_single_chunk_fixture(master, 1241, 1242, 1243, fixed_key("PROJ", 1244), R"({"master":"source"})");
+        const auto stale = detail::make_sibling_temp_path(master, "compact");
+        const auto unrelated = detail::make_sibling_temp_path(other, "replace-backup");
+        write_file_bytes(detail::project_fs::native_path(stale), byte_vector("stale"));
+        write_file_bytes(detail::project_fs::native_path(unrelated), byte_vector("other"));
+        {
+            auto lease = require_result(WriterLockLease::acquire(master));
+            sweep_stale_licht_artifacts_for_known_masters({master});
+            EXPECT_TRUE(detail::project_fs::exists(stale));
+            EXPECT_TRUE(detail::project_fs::exists(unrelated));
+        }
+        sweep_stale_licht_artifacts_for_known_masters({master});
+        EXPECT_FALSE(detail::project_fs::exists(stale));
+        EXPECT_TRUE(detail::project_fs::exists(unrelated));
+    }
+
+#ifdef _WIN32
+    TEST(ProjectContainerWriter, LongDirectoryWorksWithoutProcessLongPathOptIn) {
+        LongPathTemporaryDirectory temporary;
+        const auto directory = temporary.path / std::string(100, 'a') / std::string(100, 'b') / lfs::core::utf8_to_path("保存");
+        std::error_code error;
+        ASSERT_TRUE(detail::project_fs::create_directories(directory, error)) << error.message();
+        const auto master = directory / "source.licht";
+        const auto destination = directory / "copy.licht";
+        ASSERT_GT(master.native().size(), 260u);
+        using LongPathOptIn = BOOLEAN(WINAPI*)();
+        const auto opted_in = reinterpret_cast<LongPathOptIn>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlAreLongPathsEnabled"));
+        if (opted_in) {
+            RecordProperty("process_long_paths_enabled", opted_in() ? "true" : "false");
+        }
+        create_single_chunk_fixture(master, 1251, 1252, 1253, fixed_key("PROJ", 1254), R"({"master":"deep"})");
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            CompactionOptions options;
+            options.new_file_uuid = fixed_uuid(1261 + attempt);
+            options.snapshot_uuid = fixed_uuid(1281 + attempt);
+            options.commit_uuid = fixed_uuid(1271 + attempt);
+            options.wallclock_unix_ns = FIXED_COMMIT_TIME_NS;
+            options.disk_reserve_bytes = 0;
+            require_status(ProjectWriter::compact_to(master, destination, options));
+            auto reader = require_result(ProjectReader::open(destination));
+            EXPECT_EQ(reader.commit().commit_uuid, options.commit_uuid);
+            require_status(reader.verify_all());
+        }
+        const auto stale = detail::make_sibling_temp_path(destination, "compact");
+        require_result(detail::NativeFile::create_new(stale)).reset();
+        sweep_stale_licht_artifacts_for_known_masters({destination});
+        EXPECT_FALSE(detail::project_fs::exists(stale));
+        EXPECT_EQ(detail::project_fs::weakly_canonical(destination, error), fs::absolute(destination));
+        EXPECT_FALSE(error);
+    }
+#endif
+
+    TEST(ProjectContainerWriter, RecoveryRemovesOnlyUnheldLongNameStagingFiles) {
+        TemporaryDirectory temporary;
+        const auto master = temporary.path / "source.licht";
+        create_single_chunk_fixture(master, 1201, 1202, 1203, fixed_key("PROJ", 1204), R"({"master":"source"})");
+        const auto destination = temporary.path / (std::string(167, 'x') + ".licht");
+        const auto stale = detail::save_as_staging_path(destination, "stale-token");
+        const auto held = detail::save_as_staging_path(destination, "held-token");
+        write_file_bytes(detail::project_fs::native_path(stale), byte_vector("stale"));
+        write_file_bytes(held, byte_vector("active"));
+        auto lease = WriterLockLease::acquire(held);
+        ASSERT_TRUE(lease);
+        sweep_stale_licht_artifacts_for_known_masters({master});
+        EXPECT_FALSE(fs::exists(stale));
+        EXPECT_TRUE(fs::exists(held));
+    }
 
     TEST(ProjectContainerWriter,
          StartupSweepRemovesStaleMasterLockAndSaveasTemp) {

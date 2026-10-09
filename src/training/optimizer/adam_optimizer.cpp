@@ -200,14 +200,9 @@ namespace lfs::training {
         cropbox_lr_scale_ = scale;
     }
 
-    void AdamOptimizer::set_per_splat_mean_step(const bool enabled,
-                                                const float median_extent,
-                                                const float r_min,
-                                                const float r_max) {
+    void AdamOptimizer::set_per_splat_mean_step(const bool enabled, const float median_extent) {
         per_splat_mean_step_ = enabled;
         mean_step_median_extent_ = median_extent;
-        mean_step_r_min_ = r_min;
-        mean_step_r_max_ = r_max;
         if (!enabled) {
             set_mean_step_far_mask({});
         }
@@ -380,8 +375,7 @@ namespace lfs::training {
                 static_cast<float>(config_.eps),
                 batch_stream,
                 batch_mean_step_scale_raw, batch_mean_step_scale_n,
-                mean_step_median_extent_, mean_step_r_min_, mean_step_r_max_,
-                mean_step_far_mask_, mean_step_far_mask_n_,
+                mean_step_median_extent_, mean_step_far_mask_, mean_step_far_mask_n_,
                 screen_share_max_, screen_share_n_, screen_share_limit_, screen_share_penalty_);
         }
         step_param(ParamType::ShN, iteration);
@@ -826,19 +820,6 @@ namespace lfs::training {
                 throw std::runtime_error("Optimizer state desync: " + name);
             }
             const size_t feature_dim = param_live.numel() / param_size;
-            if (mean_step_far_mask_storage_.is_valid()) {
-                mean_step_far_mask_storage_.sync_to_stream(execution_stream);
-            }
-            const float* mean_step_scale_raw = nullptr;
-            int mean_step_scale_n = 0;
-            if (type == ParamType::Means && per_splat_mean_step_) {
-                auto& scaling = splat_data_.scaling_raw();
-                if (scaling.is_valid() && scaling.numel() > 0) {
-                    lfs::core::waitForCUDAStream(execution_stream, scaling.stream());
-                    mean_step_scale_raw = scaling.ptr<float>();
-                    mean_step_scale_n = static_cast<int>(scaling.numel());
-                }
-            }
             const float* share_max = nullptr;
             int share_n = 0;
             float share_limit = 0.0f;
@@ -870,13 +851,6 @@ namespace lfs::training {
                 static_cast<float>(bias_correction1_rcp),
                 static_cast<float>(bias_correction2_sqrt_rcp),
                 execution_stream,
-                mean_step_scale_raw,
-                mean_step_scale_n,
-                mean_step_median_extent_,
-                mean_step_r_min_,
-                mean_step_r_max_,
-                mean_step_far_mask_,
-                mean_step_far_mask_n_,
                 share_max,
                 share_n,
                 share_limit,
@@ -1116,8 +1090,6 @@ namespace lfs::training {
         fused.opacity = prepare_param(ParamType::Opacity, 1, true);
         fused.per_splat_mean_step = per_splat_mean_step_;
         fused.mean_step_median_extent = mean_step_median_extent_;
-        fused.mean_step_r_min = mean_step_r_min_;
-        fused.mean_step_r_max = mean_step_r_max_;
         fused.mean_step_far_mask = mean_step_far_mask_;
         fused.mean_step_far_mask_n = mean_step_far_mask_n_;
 

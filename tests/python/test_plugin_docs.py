@@ -1014,8 +1014,8 @@ class TestMarkdownDocs:
         assert "lf.register_class" in content
         assert "lf.unregister_class" in content
 
-    def test_api_reference_covers_all_property_types(self):
-        content = (PROJECT_ROOT / "docs" / "plugins" / "api-reference.md").read_text()
+    def test_plugin_reference_covers_all_property_types(self):
+        content = (PROJECT_ROOT / "docs" / "plugins" / "plugin-reference.md").read_text()
         for prop_type in [
             "FloatProperty", "IntProperty", "BoolProperty",
             "StringProperty", "EnumProperty", "FloatVectorProperty",
@@ -1024,15 +1024,15 @@ class TestMarkdownDocs:
         ]:
             assert prop_type in content, f"API reference missing {prop_type}"
 
-    def test_api_reference_covers_signals(self):
-        content = (PROJECT_ROOT / "docs" / "plugins" / "api-reference.md").read_text()
+    def test_plugin_reference_covers_signals(self):
+        content = (PROJECT_ROOT / "docs" / "plugins" / "plugin-reference.md").read_text()
         assert "Signal[T]" in content or "Signal" in content
         assert "ComputedSignal" in content
         assert "ThrottledSignal" in content
         assert "Batch" in content
 
-    def test_api_reference_covers_reactive_panel_store(self):
-        content = (PROJECT_ROOT / "docs" / "plugins" / "api-reference.md").read_text()
+    def test_plugin_reference_covers_reactive_panel_store(self):
+        content = (PROJECT_ROOT / "docs" / "plugins" / "plugin-reference.md").read_text()
         assert "PanelStateBinding" in content
         assert "RuntimeState.scene_generation" in content
         assert 'update_policy = "dirty"' in content
@@ -1041,8 +1041,8 @@ class TestMarkdownDocs:
             in content
         )
 
-    def test_api_reference_covers_layout_api(self):
-        content = (PROJECT_ROOT / "docs" / "plugins" / "api-reference.md").read_text()
+    def test_plugin_reference_covers_layout_api(self):
+        content = (PROJECT_ROOT / "docs" / "plugins" / "plugin-reference.md").read_text()
         for widget in [
             "label(", "button(", "checkbox(", "slider_float(",
             "input_text(", "combo(", "collapsing_header(",

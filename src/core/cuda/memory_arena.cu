@@ -6,7 +6,6 @@
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
-#include "core/training_churn_metrics.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "memory_arena.hpp"
 #include <algorithm>
@@ -24,8 +23,7 @@ namespace lfs::core {
     }
 
     RasterizerMemoryArena::RasterizerMemoryArena(const Config& cfg)
-        : config_(cfg),
-          creation_time_(std::chrono::steady_clock::now()) {
+        : config_(cfg) {
 
         // Check if VMM is supported
         int device = -1;
@@ -54,7 +52,6 @@ namespace lfs::core {
     } // namespace
 
     RasterizerMemoryArena::~RasterizerMemoryArena() {
-        dump_statistics();
         drain_external_release();
 
         {
@@ -101,12 +98,6 @@ namespace lfs::core {
         config_ = other.config_;
         frame_counter_ = other.frame_counter_.load();
         generation_counter_ = other.generation_counter_.load();
-        growth_timing_ = std::move(other.growth_timing_);
-        if (!growth_timing_) {
-            growth_timing_ = std::make_shared<GrowthTiming>();
-        }
-        other.growth_timing_ = std::make_shared<GrowthTiming>();
-        creation_time_ = other.creation_time_;
         total_frames_processed_ = other.total_frames_processed_.load();
         active_frames_ = other.active_frames_;
         pending_render_frames_ = other.pending_render_frames_;
@@ -165,12 +156,6 @@ namespace lfs::core {
             config_ = other.config_;
             frame_counter_ = other.frame_counter_.load();
             generation_counter_ = other.generation_counter_.load();
-            growth_timing_ = std::move(other.growth_timing_);
-            if (!growth_timing_) {
-                growth_timing_ = std::make_shared<GrowthTiming>();
-            }
-            other.growth_timing_ = std::make_shared<GrowthTiming>();
-            creation_time_ = other.creation_time_;
             total_frames_processed_ = other.total_frames_processed_.load();
             active_frames_ = other.active_frames_;
             pending_render_frames_ = other.pending_render_frames_;
@@ -1517,10 +1502,6 @@ namespace lfs::core {
         arena.total_allocated.store(0, std::memory_order_release);
         arena.realloc_count.fetch_add(1, std::memory_order_relaxed);
 
-        LOG_INFO("Rasterizer arena now uses external CUDA backing '%s' size=%zu MiB ptr=%p",
-                 arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
-                 static_cast<size_t>(backing.size >> 20),
-                 backing.device_ptr);
         sync_lock.unlock();
         sync_cv_.notify_all();
         return true;
@@ -1554,10 +1535,6 @@ namespace lfs::core {
                 continue;
             }
 
-            LOG_INFO("Rasterizer arena released external CUDA backing '%s' size=%zu MiB ptr=%p",
-                     arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
-                     static_cast<size_t>(arena.committed_size >> 20),
-                     arena.fallback_buffer);
             release_arena_storage(arena);
             it = device_arenas_.erase(it);
         }
@@ -1645,26 +1622,17 @@ namespace lfs::core {
         // device is drained and no frame is active. device_ptr must stay constant.
         // The last submitted batch may still be in flight (#1621): commit must
         // retire the old import timeline-deferred, never destroy it inline.
-        const auto recommit_start = std::chrono::steady_clock::now();
         if (!commit(new_size)) {
             sync_lock.unlock();
             sync_cv_.notify_all();
             return fail(ExternalGrowFailure::CommitFailure);
         }
-        TrainingChurnMetrics::instance().record_arena_recommit(static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - recommit_start)
-                .count()));
-
         target->committed_size = new_size;
         target->capacity = new_size;
         target->boundaries_since_growth = 0;
         target->realloc_count.fetch_add(1, std::memory_order_relaxed);
         target->offset.store(0, std::memory_order_release);
         frame_contexts_.clear();
-
-        LOG_INFO("Rasterizer external arena grew in place: ptr=%p capacity=%zu MiB",
-                 device_ptr, static_cast<size_t>(new_size >> 20));
 
         sync_lock.unlock();
         sync_cv_.notify_all();
@@ -1723,7 +1691,6 @@ namespace lfs::core {
                     arena.d_ptr = 0;
                     arena.virtual_size = 0;
                 } else {
-                    LOG_INFO("VMM initialized: device=%d, virtual=%zu GB", device, arena.virtual_size >> 30);
                     // Reserving VA is free. Physical memory is committed only
                     // after the first frame has measured its actual requirement.
                     arena.generation = generation_counter_.fetch_add(1, std::memory_order_relaxed);
@@ -1743,8 +1710,7 @@ namespace lfs::core {
         return *arena_ptr;
     }
 
-    bool RasterizerMemoryArena::commit_more_memory(Arena& arena, size_t required_size,
-                                                   uint64_t frame_id) {
+    bool RasterizerMemoryArena::commit_more_memory(Arena& arena, size_t required_size) {
         // Only for VMM-enabled arenas
         if (arena.d_ptr == 0) {
             return false;
@@ -1815,18 +1781,6 @@ namespace lfs::core {
         prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
         prop.location.id = arena.device;
 
-        const auto timing_start = std::chrono::steady_clock::now();
-        const auto record_timing = [this, frame_id, &arena, &timing_start](bool committed) {
-            const auto elapsed_us = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-                                                              std::chrono::steady_clock::now() - timing_start)
-                                                              .count());
-            record_commit_timing(frame_id, elapsed_us, committed);
-            if (committed) {
-                arena.boundaries_since_growth = 0;
-                TrainingChurnMetrics::instance().record_arena_recommit(elapsed_us);
-            }
-        };
-
         CUmemGenericAllocationHandle handle;
         CUresult result = cuMemCreate(&handle, commit_size, &prop, 0);
 
@@ -1883,16 +1837,14 @@ namespace lfs::core {
                 arena.capacity = arena.committed_size;
                 arena.realloc_count.fetch_add(1, std::memory_order_relaxed);
                 LOG_DEBUG("Committed %zu MB via chunks (total: %zu MB)", total_allocated >> 20, arena.committed_size >> 20);
-                record_timing(true);
+                arena.boundaries_since_growth = 0;
                 return true;
             }
 
-            record_timing(false);
             return false;
         }
 
         if (result != CUDA_SUCCESS) {
-            record_timing(false);
             return false;
         }
 
@@ -1904,7 +1856,6 @@ namespace lfs::core {
         result = cuMemMap(arena.d_ptr + map_offset, commit_size, 0, handle, 0);
         if (result != CUDA_SUCCESS) {
             cuMemRelease(handle);
-            record_timing(false);
             return false;
         }
 
@@ -1917,7 +1868,6 @@ namespace lfs::core {
         if (result != CUDA_SUCCESS) {
             cuMemUnmap(arena.d_ptr + map_offset, commit_size);
             cuMemRelease(handle);
-            record_timing(false);
             return false;
         }
 
@@ -1939,7 +1889,7 @@ namespace lfs::core {
 
         LOG_DEBUG("Committed %zu MB (total: %zu MB)", commit_size >> 20, arena.committed_size >> 20);
 
-        record_timing(true);
+        arena.boundaries_since_growth = 0;
         return true;
     }
 
@@ -1952,13 +1902,6 @@ namespace lfs::core {
         const size_t current_offset = arena.offset.load(std::memory_order_acquire);
         const size_t recent_peak = arena.peak_usage.load(std::memory_order_acquire);
         const size_t granularity = std::max<size_t>(arena.granularity, 1);
-        const auto decommit_start = std::chrono::steady_clock::now();
-        const auto record_decommit = [&decommit_start]() noexcept {
-            TrainingChurnMetrics::instance().record_arena_decommit(static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - decommit_start)
-                    .count()));
-        };
         const auto reset_logical_peak = [&arena, current_offset]() {
             size_t lifetime_peak = arena.lifetime_peak_usage.load(std::memory_order_relaxed);
             while (current_offset > lifetime_peak) {
@@ -2001,7 +1944,6 @@ namespace lfs::core {
                               shrunk_size >> 20,
                               recent_peak >> 20,
                               viewer_high_water >> 20);
-                    record_decommit();
                 } else if (shrunk_size != 0) {
                     LOG_WARN("External arena '{}' shrink returned invalid size {} MiB (old {} MiB)",
                              arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
@@ -2091,7 +2033,6 @@ namespace lfs::core {
         if (chunks_removed > 0) {
             LOG_DEBUG("Decommitted %zu MB (%zu chunks), arena now at %zu MB",
                       total_freed >> 20, chunks_removed, arena.committed_size >> 20);
-            record_decommit();
         } else {
             LOG_TRACE("No unused chunks to decommit");
         }
@@ -2099,102 +2040,7 @@ namespace lfs::core {
         reset_logical_peak();
     }
 
-    void RasterizerMemoryArena::record_commit_timing(uint64_t frame_id,
-                                                     uint64_t elapsed_us,
-                                                     bool committed) {
-        if (!growth_timing_) {
-            return;
-        }
-        std::lock_guard<std::mutex> lock(growth_timing_->mutex);
-        const bool warmup = frame_id <= 200;
-        uint64_t& attempts = warmup ? growth_timing_->commit_attempts_warmup
-                                    : growth_timing_->commit_attempts_steady;
-        uint64_t& events = warmup ? growth_timing_->commit_events_warmup
-                                  : growth_timing_->commit_events_steady;
-        uint64_t& elapsed = warmup ? growth_timing_->commit_time_us_warmup
-                                   : growth_timing_->commit_time_us_steady;
-        ++attempts;
-        if (committed) {
-            ++events;
-        }
-        elapsed += elapsed_us;
-    }
-
-    void RasterizerMemoryArena::record_growth_path_timing(uint64_t frame_id,
-                                                          uint64_t elapsed_us,
-                                                          uint64_t sync_elapsed_us) {
-        if (!growth_timing_) {
-            return;
-        }
-        std::lock_guard<std::mutex> lock(growth_timing_->mutex);
-        if (frame_id <= 200) {
-            growth_timing_->growth_path_time_us_warmup += elapsed_us;
-            growth_timing_->growth_sync_time_us_warmup += sync_elapsed_us;
-        } else {
-            growth_timing_->growth_path_time_us_steady += elapsed_us;
-            growth_timing_->growth_sync_time_us_steady += sync_elapsed_us;
-        }
-    }
-
-    void RasterizerMemoryArena::record_boundary_timing(bool release_all,
-                                                       uint64_t frame_count,
-                                                       uint64_t elapsed_us) {
-        if (!growth_timing_) {
-            return;
-        }
-        std::lock_guard<std::mutex> lock(growth_timing_->mutex);
-        if (release_all) {
-            ++growth_timing_->b3_events;
-            growth_timing_->b3_time_us += elapsed_us;
-        } else if (frame_count > 0) {
-            ++growth_timing_->b1_events;
-            growth_timing_->b1_time_us += elapsed_us;
-        }
-    }
-
-    void RasterizerMemoryArena::dump_growth_timing() const {
-        if (!growth_timing_) {
-            return;
-        }
-        std::lock_guard<std::mutex> lock(growth_timing_->mutex);
-        LOG_INFO("Arena growth timing: commit_attempts warmup=%llu steady=%llu "
-                 "commit_events warmup=%llu (%llu us) steady=%llu (%llu us); "
-                 "growth_path warmup=%llu us steady=%llu us "
-                 "post_commit_sync warmup=%llu us steady=%llu us; "
-                 "boundary_events B1=%llu (%llu us) B3=%llu (%llu us)",
-                 static_cast<unsigned long long>(growth_timing_->commit_attempts_warmup),
-                 static_cast<unsigned long long>(growth_timing_->commit_attempts_steady),
-                 static_cast<unsigned long long>(growth_timing_->commit_events_warmup),
-                 static_cast<unsigned long long>(growth_timing_->commit_time_us_warmup),
-                 static_cast<unsigned long long>(growth_timing_->commit_events_steady),
-                 static_cast<unsigned long long>(growth_timing_->commit_time_us_steady),
-                 static_cast<unsigned long long>(growth_timing_->growth_path_time_us_warmup),
-                 static_cast<unsigned long long>(growth_timing_->growth_path_time_us_steady),
-                 static_cast<unsigned long long>(growth_timing_->growth_sync_time_us_warmup),
-                 static_cast<unsigned long long>(growth_timing_->growth_sync_time_us_steady),
-                 static_cast<unsigned long long>(growth_timing_->b1_events),
-                 static_cast<unsigned long long>(growth_timing_->b1_time_us),
-                 static_cast<unsigned long long>(growth_timing_->b3_events),
-                 static_cast<unsigned long long>(growth_timing_->b3_time_us));
-
-        const auto churn = TrainingChurnMetrics::instance().snapshot();
-        LOG_INFO("Training churn timing: trims=%llu (%llu us); "
-                 "arena_decommit=%llu (%llu us) arena_recommit=%llu (%llu us); "
-                 "child_alloc=%llu (%llu us) child_free=%llu (%llu us)",
-                 static_cast<unsigned long long>(churn.trim_calls),
-                 static_cast<unsigned long long>(churn.trim_time_us),
-                 static_cast<unsigned long long>(churn.arena_decommit_events),
-                 static_cast<unsigned long long>(churn.arena_decommit_time_us),
-                 static_cast<unsigned long long>(churn.arena_recommit_events),
-                 static_cast<unsigned long long>(churn.arena_recommit_time_us),
-                 static_cast<unsigned long long>(churn.child_alloc_events),
-                 static_cast<unsigned long long>(churn.child_alloc_time_us),
-                 static_cast<unsigned long long>(churn.child_free_events),
-                 static_cast<unsigned long long>(churn.child_free_time_us));
-    }
-
     bool RasterizerMemoryArena::shrink_at_boundary(bool release_all) {
-        const auto timing_start = std::chrono::steady_clock::now();
         std::unique_lock<std::mutex> sync_lock(sync_mutex_);
 
         // active_frames_ is the single global ownership count used by both the
@@ -2205,7 +2051,6 @@ namespace lfs::core {
         } else if (active_frames_ != 0) {
             return false;
         }
-        const uint64_t frame_count = total_frames_processed_.load(std::memory_order_relaxed);
         drain_external_release();
 
         bool success = true;
@@ -2255,10 +2100,6 @@ namespace lfs::core {
 
         sync_lock.unlock();
         sync_cv_.notify_all();
-        const auto elapsed_us = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-                                                          std::chrono::steady_clock::now() - timing_start)
-                                                          .count());
-        record_boundary_timing(release_all, frame_count, elapsed_us);
         return success;
     }
 
@@ -2351,7 +2192,6 @@ namespace lfs::core {
 
             // external_grow preserves the stable virtual base and returns the new
             // committed size. The Vulkan side re-imports its new handle later.
-            const auto recommit_start = std::chrono::steady_clock::now();
             const size_t new_committed = arena.external_grow(need);
             if (new_committed < need) {
                 LOG_ERROR("External rasterizer arena '%s' grow failed (need=%zu MiB, capacity=%zu MiB)",
@@ -2364,14 +2204,6 @@ namespace lfs::core {
             arena.capacity = new_committed;
             arena.boundaries_since_growth = 0;
             arena.realloc_count.fetch_add(1, std::memory_order_relaxed);
-            TrainingChurnMetrics::instance().record_arena_recommit(static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - recommit_start)
-                    .count()));
-            LOG_INFO("External rasterizer arena '%s' grew in place to %zu MiB (need %zu MiB)",
-                     arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
-                     static_cast<size_t>(new_committed >> 20),
-                     static_cast<size_t>(need >> 20));
             return ExternalGrowResult::Grown;
         };
 
@@ -2489,20 +2321,14 @@ namespace lfs::core {
             }
 
             // Try to grow
-            const auto growth_start = std::chrono::steady_clock::now();
-            uint64_t sync_elapsed_us = 0;
             bool success = false;
             if (arena.d_ptr != 0) {
                 // VMM path
-                success = commit_more_memory(arena, growth_needed, frame_id);
+                success = commit_more_memory(arena, growth_needed);
                 // Synchronize after committing new memory to ensure no GPU kernels
                 // are still accessing old memory regions before we allow new allocations
                 if (success) {
-                    const auto sync_start = std::chrono::steady_clock::now();
                     const cudaError_t sync_status = cudaDeviceSynchronize();
-                    sync_elapsed_us = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-                                                                std::chrono::steady_clock::now() - sync_start)
-                                                                .count());
                     if (sync_status != cudaSuccess) {
                         ensure_cuda_success(
                             sync_status, "cudaDeviceSynchronize(arena VMM growth)",
@@ -2515,12 +2341,6 @@ namespace lfs::core {
                 // only the arena's 256-byte sub-allocation alignment applied.
                 success = grow_arena(arena, total_needed);
             }
-            record_growth_path_timing(
-                frame_id,
-                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-                                          std::chrono::steady_clock::now() - growth_start)
-                                          .count()),
-                sync_elapsed_us);
 
             if (!success) {
                 if (retry < MAX_RETRIES - 1) {
@@ -2745,29 +2565,6 @@ namespace lfs::core {
                                 CudaFailureDisposition::LogOnly);
         }
         return info;
-    }
-
-    void RasterizerMemoryArena::dump_statistics() const {
-        const auto stats = get_statistics();
-        size_t lifetime_peak = stats.peak_usage;
-        {
-            std::lock_guard<std::mutex> lock(arena_mutex_);
-            for (const auto& entry : device_arenas_) {
-                if (entry.second) {
-                    lifetime_peak = std::max(
-                        lifetime_peak,
-                        entry.second->lifetime_peak_usage.load(std::memory_order_relaxed));
-                }
-            }
-        }
-        const auto runtime = std::chrono::steady_clock::now() - creation_time_;
-        const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(runtime).count();
-        const float utilization = stats.capacity > 0 ? (100.0f * stats.peak_usage / stats.capacity) : 0.0f;
-
-        LOG_INFO("Arena stats: committed=%zu MB, peak=%zu MB (%.1f%%), frames=%zu, reallocs=%zu, runtime=%lds",
-                 stats.capacity >> 20, lifetime_peak >> 20, utilization,
-                 stats.frame_count, stats.reallocation_count, seconds);
-        dump_growth_timing();
     }
 
     bool RasterizerMemoryArena::is_under_memory_pressure() const {

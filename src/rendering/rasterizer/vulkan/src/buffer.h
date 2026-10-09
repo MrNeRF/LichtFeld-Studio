@@ -192,7 +192,7 @@ struct VulkanGSPipelineBuffers {
     Buffer<float> depths;             // (N, 1)
     Buffer<float> inv_cov_vs_opacity; // (N, 4)
     Buffer<float> rgb;                // (N, 3)
-    // 3-bit payload (DIM|NONSELECTABLE|FLASH), one byte per splat. Byte-address
+    // 2-bit payload (DIM|NONSELECTABLE), one byte per splat. Byte-address
     // access rounds the descriptor up to a whole 32-bit word. Projection clears
     // the words before atomically ORing each byte; raster-only refreshes reuse
     // them. With writes disabled, bit 6 is clear and a one-word dummy is bound.
@@ -235,9 +235,10 @@ struct VulkanGSPipelineBuffers {
 
     // HiGS macro raster: half4 partials per (pool batch, render tile, pixel),
     // per-batch active-tile mask, and per-wave raster+compose indirect args.
-    Buffer<uint16_t> macro_partials;    // (pool_batches, 32, 256, 4) halfs
-    Buffer<uint32_t> macro_active_mask; // (total batches,)
-    Buffer<uint32_t> macro_wave_args;   // MacroWaveDispatch: raster + compose command per wave
+    Buffer<uint16_t> macro_partials;          // (pool_batches, 32, 256, 4) halfs
+    Buffer<uint32_t> exact_depth_sample_mask; // one bit per 4x4 output region
+    Buffer<uint32_t> macro_active_mask;       // batch activity header + optional pooled exact-depth ballots
+    Buffer<uint32_t> macro_wave_args;         // MacroWaveDispatch: raster + compose command per wave
 
     // tiles
     Buffer<int32_t> index_buffer_offset;       // N

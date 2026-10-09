@@ -7,6 +7,7 @@ import re
 import stat
 import uuid
 
+from .private_directory import mkdir_private
 from . import gallery_validation
 from .gallery_logging import failure as log_failure
 
@@ -96,7 +97,7 @@ def unpack_project(root, source, destination, *, progress=None):
     """Prepare embedded splats for merging; keep the .licht source authoritative."""
     from .portable_project import ProjectFile
     destination = staging_path(root, destination)
-    destination.mkdir(mode=0o700)
+    mkdir_private(destination)
     outputs = []
     try:
         with Path(source).open('rb') as stream:

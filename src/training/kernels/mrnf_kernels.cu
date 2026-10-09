@@ -4,7 +4,6 @@
 
 #include "core/cuda_error.hpp"
 #include "core/tensor/internal/tensor_generic_ops.cuh"
-#include "densification_kernels.hpp"
 #include "lfs/cuda_scratch.hpp"
 #include "lfs/training/refine_scratch.hpp"
 #include "mrnf_kernels.hpp"
@@ -47,48 +46,6 @@ namespace lfs::training::mrnf_strategy {
         };
 
     } // namespace
-
-    __global__ void prune_bounds_or_kernel(
-        const float* __restrict__ means,
-        const float* __restrict__ max_log_scales,
-        bool* __restrict__ prune_mask,
-        size_t N,
-        float center_x,
-        float center_y,
-        float center_z,
-        float max_allowed,
-        float log_max_allowed) {
-        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-        if (i >= N)
-            return;
-
-        const float dx = fabsf(means[3 * i] - center_x);
-        const float dy = fabsf(means[3 * i + 1] - center_y);
-        const float dz = fabsf(means[3 * i + 2] - center_z);
-        const bool distance_exceeds = !isnan(dx) && !isnan(dy) && !isnan(dz) &&
-                                      fmaxf(dx, fmaxf(dy, dz)) > max_allowed;
-        prune_mask[i] = prune_mask[i] || max_log_scales[i] > log_max_allowed || distance_exceeds;
-    }
-
-    void launch_prune_bounds_or(
-        const float* means,
-        const float* max_log_scales,
-        bool* prune_mask,
-        size_t N,
-        const float* center,
-        float max_allowed,
-        float log_max_allowed,
-        void* stream) {
-        if (N == 0)
-            return;
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((N + threads - 1) / threads);
-        cudaStream_t s = resolve_stream(stream);
-        prune_bounds_or_kernel<<<blocks, threads, 0, s>>>(
-            means, max_log_scales, prune_mask, N,
-            center[0], center[1], center[2], max_allowed, log_max_allowed);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.prune_bounds_or");
-    }
 
     __global__ void replace_parent_weights_kernel(
         const float* __restrict__ opacities,
@@ -197,18 +154,17 @@ namespace lfs::training::mrnf_strategy {
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.noise_injection");
     }
 
+    template <bool RenderedOnly>
     __global__ void mrnf_decay_kernel(
         float* __restrict__ raw_opacities,
         float* __restrict__ log_scales,
         const bool* __restrict__ frozen_mask,
         size_t frozen_mask_size,
-        const bool* __restrict__ far_mask,
-        size_t far_mask_size,
         float opacity_decay,
         float scale_decay,
-        float far_decay_scale,
         float train_t,
-        size_t N) {
+        size_t N,
+        const float* __restrict__ rendered_count) {
 
         const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
         if (idx >= N)
@@ -216,23 +172,17 @@ namespace lfs::training::mrnf_strategy {
         if (frozen_mask != nullptr && idx < frozen_mask_size && frozen_mask[idx])
             return;
 
-        float opac_decay = opacity_decay;
-        float scl_decay = scale_decay;
-        if (far_mask != nullptr && idx < far_mask_size && far_mask[idx]) {
-            opac_decay *= far_decay_scale;
-            scl_decay *= far_decay_scale;
-        }
-
         const float t_shrink = 1.0f - train_t;
 
-        const float opacity_delta = opac_decay * t_shrink;
+        const float opacity_delta = opacity_decay * t_shrink;
         // A sigmoid/logit round trip loses finite saturated logits even when
         // decay is disabled. Still repair infinities from older checkpoints.
-        if (opacity_delta != 0.0f || isinf(raw_opacities[idx])) {
+        if ((!RenderedOnly || rendered_count[idx] > 0.0f) &&
+            (opacity_delta != 0.0f || isinf(raw_opacities[idx]))) {
             raw_opacities[idx] = d_logit(d_sigmoid(raw_opacities[idx]) - opacity_delta);
         }
 
-        const float decay_factor = 1.0f - scl_decay * t_shrink;
+        const float decay_factor = 1.0f - scale_decay * t_shrink;
         for (int d = 0; d < 3; ++d) {
             const float scale = expf(log_scales[idx * 3 + d]) * decay_factor;
             log_scales[idx * 3 + d] = logf(fmaxf(scale, 1e-12f));
@@ -244,96 +194,31 @@ namespace lfs::training::mrnf_strategy {
         float* log_scales,
         const bool* frozen_mask,
         size_t frozen_mask_size,
-        const bool* far_mask,
-        size_t far_mask_size,
         float opacity_decay,
         float scale_decay,
-        float far_decay_scale,
         float train_t,
         size_t N,
-        void* stream) {
-
-        if (N == 0)
-            return;
-
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((N + threads - 1) / threads);
-        cudaStream_t s = resolve_stream(stream);
-
-        mrnf_decay_kernel<<<blocks, threads, 0, s>>>(
-            raw_opacities, log_scales, frozen_mask, frozen_mask_size,
-            far_mask, far_mask_size, opacity_decay, scale_decay, far_decay_scale,
-            train_t, N);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay");
-    }
-
-    __global__ void elementwise_add_inplace_kernel(
-        float* __restrict__ a,
-        const float* __restrict__ b,
-        size_t N) {
-        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
-        if (idx < N)
-            a[idx] += b[idx];
-    }
-
-    void launch_elementwise_add_inplace(
-        float* a,
-        const float* b,
-        size_t N,
-        void* stream) {
-        if (N == 0)
-            return;
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((N + threads - 1) / threads);
-        cudaStream_t s = resolve_stream(stream);
-        elementwise_add_inplace_kernel<<<blocks, threads, 0, s>>>(a, b, N);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.elementwise_add");
-    }
-
-    __global__ void fold_densification_and_zero_kernel(
-        float* __restrict__ vis_count,
-        float* __restrict__ refine_weight_max,
-        float* __restrict__ densification_info,
-        size_t N,
-        size_t n_rows,
-        float* __restrict__ ratio_max,
-        float ratio_pow) {
-
-        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
-        if (idx >= N)
-            return;
-
-        const float vis = densification_info[idx];
-        const float err = densification_info[N + idx];
-        vis_count[idx] += vis;
-        refine_weight_max[idx] = fmaxf(refine_weight_max[idx], err);
-        if (ratio_max != nullptr) {
-            const float ratio = (vis >= 0.05f) ? (ratio_pow > 0.0f ? (err / powf(vis, ratio_pow)) : (err / vis)) : 0.0f;
-            ratio_max[idx] = fmaxf(ratio_max[idx], ratio);
-        }
-        for (size_t row = 0; row < n_rows; ++row) {
-            densification_info[row * N + idx] = 0.f;
-        }
-    }
-
-    void launch_fold_densification_and_zero(
-        float* vis_count,
-        float* refine_weight_max,
-        float* densification_info,
-        size_t N,
         void* stream,
-        size_t n_rows,
-        float* ratio_max,
-        float ratio_pow) {
+        const float* rendered_count) {
+
         if (N == 0)
             return;
-        const size_t rows = n_rows >= 2 ? n_rows : 2;
+
         constexpr int threads = 256;
         const int blocks = static_cast<int>((N + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
-        fold_densification_and_zero_kernel<<<blocks, threads, 0, s>>>(
-            vis_count, refine_weight_max, densification_info, N, rows, ratio_max, ratio_pow);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.fold_densification_and_zero");
+
+        if (rendered_count != nullptr) {
+            mrnf_decay_kernel<true><<<blocks, threads, 0, s>>>(
+                raw_opacities, log_scales, frozen_mask, frozen_mask_size,
+                opacity_decay, scale_decay, train_t, N, rendered_count);
+            LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay_with_rendered_count");
+        } else {
+            mrnf_decay_kernel<false><<<blocks, threads, 0, s>>>(
+                raw_opacities, log_scales, frozen_mask, frozen_mask_size,
+                opacity_decay, scale_decay, train_t, N, nullptr);
+            LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay_without_rendered_count");
+        }
     }
 
     __global__ void fold_densification_error_and_zero_kernel(
@@ -781,131 +666,6 @@ namespace lfs::training::mrnf_strategy {
         LFS_CUDA_LAUNCH_CHECK(s, "MRNF Gumbel uint32 output widening");
     }
 
-    __global__ void project_visible_centers_kernel(
-        const float* __restrict__ means,
-        const float* __restrict__ w2c,
-        float fx,
-        float fy,
-        float cx,
-        float cy,
-        int width,
-        int height,
-        float near_plane,
-        float* __restrict__ means2d,
-        float* __restrict__ radii,
-        size_t N) {
-
-        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
-        if (idx >= N)
-            return;
-
-        const float x = means[idx * 3 + 0];
-        const float y = means[idx * 3 + 1];
-        const float z = means[idx * 3 + 2];
-        const float cam_x = w2c[0] * x + w2c[1] * y + w2c[2] * z + w2c[3];
-        const float cam_y = w2c[4] * x + w2c[5] * y + w2c[6] * z + w2c[7];
-        const float cam_z = w2c[8] * x + w2c[9] * y + w2c[10] * z + w2c[11];
-        if (!(cam_z > near_plane) || !isfinite(cam_x) || !isfinite(cam_y) || !isfinite(cam_z)) {
-            means2d[idx * 2 + 0] = 0.0f;
-            means2d[idx * 2 + 1] = 0.0f;
-            radii[idx] = 0.0f;
-            return;
-        }
-
-        const float px = fx * (cam_x / cam_z) + cx;
-        const float py = fy * (cam_y / cam_z) + cy;
-        means2d[idx * 2 + 0] = px;
-        means2d[idx * 2 + 1] = py;
-        const bool in_image = px >= 0.0f && py >= 0.0f &&
-                              px < static_cast<float>(width) &&
-                              py < static_cast<float>(height);
-        radii[idx] = in_image ? 1.0f : 0.0f;
-    }
-
-    void launch_project_visible_centers(
-        const float* means,
-        const float* w2c,
-        float fx,
-        float fy,
-        float cx,
-        float cy,
-        int width,
-        int height,
-        float near_plane,
-        float* means2d,
-        float* radii,
-        size_t N,
-        void* stream) {
-
-        if (N == 0)
-            return;
-        LFS_ASSERT(means != nullptr);
-        LFS_ASSERT(w2c != nullptr);
-        LFS_ASSERT(means2d != nullptr);
-        LFS_ASSERT(radii != nullptr);
-        LFS_ASSERT(width > 0);
-        LFS_ASSERT(height > 0);
-
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((N + threads - 1) / threads);
-        cudaStream_t s = resolve_stream(stream);
-        project_visible_centers_kernel<<<blocks, threads, 0, s>>>(
-            means, w2c, fx, fy, cx, cy, width, height, near_plane, means2d, radii, N);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.project_visible_centers");
-    }
-
-    __global__ void gather_center_error_kernel(
-        const float* __restrict__ means2d,
-        const float* __restrict__ radii,
-        const float* __restrict__ error,
-        int width,
-        int height,
-        float* __restrict__ scores,
-        size_t N) {
-
-        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
-        if (idx >= N)
-            return;
-
-        if (radii[idx] <= 0.0f) {
-            scores[idx] = 0.0f;
-            return;
-        }
-
-        int x = static_cast<int>(floorf(means2d[idx * 2 + 0]));
-        int y = static_cast<int>(floorf(means2d[idx * 2 + 1]));
-        x = max(0, min(x, width - 1));
-        y = max(0, min(y, height - 1));
-        scores[idx] = error[static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)];
-    }
-
-    void launch_gather_center_error(
-        const float* means2d,
-        const float* radii,
-        const float* error,
-        int width,
-        int height,
-        float* scores,
-        size_t N,
-        void* stream) {
-
-        if (N == 0)
-            return;
-        LFS_ASSERT(means2d != nullptr);
-        LFS_ASSERT(radii != nullptr);
-        LFS_ASSERT(error != nullptr);
-        LFS_ASSERT(scores != nullptr);
-        LFS_ASSERT(width > 0);
-        LFS_ASSERT(height > 0);
-
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((N + threads - 1) / threads);
-        cudaStream_t s = resolve_stream(stream);
-        gather_center_error_kernel<<<blocks, threads, 0, s>>>(
-            means2d, radii, error, width, height, scores, N);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.gather_center_error");
-    }
-
     __global__ void far_field_mask_kernel(
         const float* __restrict__ means,
         float centroid_x,
@@ -947,192 +707,6 @@ namespace lfs::training::mrnf_strategy {
         far_field_mask_kernel<<<blocks, threads, 0, s>>>(
             means, centroid_x, centroid_y, centroid_z, far_radius_sq, far_out, N);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.far_field_mask");
-    }
-
-    __global__ void mean_abs_error_hw_kernel(
-        const float* __restrict__ pred,
-        const float* __restrict__ target,
-        int channels,
-        size_t hw,
-        float* __restrict__ out_hw) {
-
-        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
-        if (idx >= hw)
-            return;
-
-        float sum = 0.0f;
-        for (int c = 0; c < channels; ++c) {
-            const size_t pix = static_cast<size_t>(c) * hw + idx;
-            sum += fabsf(pred[pix] - target[pix]);
-        }
-        out_hw[idx] = sum / static_cast<float>(channels);
-    }
-
-    void launch_mean_abs_error_hw(
-        const float* pred,
-        const float* target,
-        int channels,
-        int height,
-        int width,
-        float* out_hw,
-        void* stream) {
-
-        LFS_ASSERT(pred != nullptr);
-        LFS_ASSERT(target != nullptr);
-        LFS_ASSERT(out_hw != nullptr);
-        LFS_ASSERT(channels > 0);
-        LFS_ASSERT(height > 0);
-        LFS_ASSERT(width > 0);
-
-        const size_t hw = static_cast<size_t>(height) * static_cast<size_t>(width);
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((hw + threads - 1) / threads);
-        cudaStream_t s = resolve_stream(stream);
-        mean_abs_error_hw_kernel<<<blocks, threads, 0, s>>>(
-            pred, target, channels, hw, out_hw);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.mean_abs_error_hw");
-    }
-
-    __global__ void seed_weights_from_error_alpha_kernel(
-        const float* __restrict__ error_hw,
-        const float* __restrict__ alpha,
-        float* __restrict__ out_weights,
-        size_t hw) {
-
-        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
-        if (idx >= hw)
-            return;
-        out_weights[idx] = error_hw[idx] * (1.0f - alpha[idx]);
-    }
-
-    void launch_seed_weights_from_error_alpha(
-        const float* error_hw,
-        const float* alpha,
-        float* out_weights,
-        size_t hw,
-        void* stream) {
-
-        if (hw == 0)
-            return;
-        LFS_ASSERT(error_hw != nullptr);
-        LFS_ASSERT(alpha != nullptr);
-        LFS_ASSERT(out_weights != nullptr);
-
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((hw + threads - 1) / threads);
-        cudaStream_t s = resolve_stream(stream);
-        seed_weights_from_error_alpha_kernel<<<blocks, threads, 0, s>>>(
-            error_hw, alpha, out_weights, hw);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.seed_weights");
-    }
-
-    __global__ void gather_seed_payloads_chw_kernel(
-        const int64_t* __restrict__ pixel_indices,
-        size_t K,
-        size_t hw,
-        const float* __restrict__ target,
-        int channels,
-        const float* __restrict__ alpha,
-        const float* __restrict__ depth,
-        float* __restrict__ out_rgb,
-        float* __restrict__ out_alpha,
-        float* __restrict__ out_depth) {
-
-        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
-        if (idx >= K)
-            return;
-
-        const int64_t pix64 = pixel_indices[idx];
-        const size_t pix = (pix64 >= 0) ? static_cast<size_t>(pix64) : 0;
-        const size_t clamped = (pix < hw) ? pix : 0;
-        const int use_c = channels > 0 ? channels : 1;
-        for (int c = 0; c < 3; ++c) {
-            const int src_c = (c < use_c) ? c : (use_c - 1);
-            out_rgb[idx * 3 + static_cast<size_t>(c)] =
-                target[static_cast<size_t>(src_c) * hw + clamped];
-        }
-        out_alpha[idx] = alpha[clamped];
-        out_depth[idx] = depth ? depth[clamped] : 0.0f;
-    }
-
-    void launch_gather_seed_payloads(
-        const int64_t* pixel_indices,
-        size_t K,
-        size_t hw,
-        const float* target,
-        int channels,
-        const float* alpha,
-        const float* depth,
-        float* out_rgb,
-        float* out_alpha,
-        float* out_depth,
-        void* stream) {
-
-        if (K == 0)
-            return;
-        LFS_ASSERT(pixel_indices != nullptr);
-        LFS_ASSERT(target != nullptr);
-        LFS_ASSERT(alpha != nullptr);
-        LFS_ASSERT(out_rgb != nullptr);
-        LFS_ASSERT(out_alpha != nullptr);
-        LFS_ASSERT(out_depth != nullptr);
-        LFS_ASSERT(hw > 0);
-        LFS_ASSERT(channels > 0);
-
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((K + threads - 1) / threads);
-        cudaStream_t s = resolve_stream(stream);
-        gather_seed_payloads_chw_kernel<<<blocks, threads, 0, s>>>(
-            pixel_indices, K, hw, target, channels, alpha, depth,
-            out_rgb, out_alpha, out_depth);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.gather_seed_payloads");
-    }
-
-    float launch_sorted_median(const float* values, const size_t n, void* stream) {
-        if (n == 0 || values == nullptr)
-            return 0.0f;
-        const float median = lfs::training::kernels::launch_select_median(values, n, resolve_stream(stream));
-        return std::isfinite(median) ? median : 0.0f;
-    }
-
-    __global__ void apply_explore_starvation_weights_kernel(
-        float* __restrict__ weights,
-        const float* __restrict__ vis_count,
-        size_t n,
-        float median_vis) {
-
-        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
-        if (idx >= n)
-            return;
-        const float vis_i = vis_count[idx];
-        if (vis_i == 0.0f) {
-            weights[idx] = 0.0f;
-            return;
-        }
-        const float denom = fmaxf(median_vis, 1.19209290e-07f);
-        const float starved = fminf(fmaxf(1.0f - vis_i / denom, 0.0f), 1.0f);
-        const float term = powf(starved, kStarvGamma);
-        weights[idx] *= (kStarvEps + term);
-    }
-
-    void launch_apply_explore_starvation_weights(
-        float* weights,
-        const float* vis_count,
-        size_t n,
-        float median_vis,
-        void* stream) {
-
-        if (n == 0)
-            return;
-        LFS_ASSERT(weights != nullptr);
-        LFS_ASSERT(vis_count != nullptr);
-
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((n + threads - 1) / threads);
-        cudaStream_t s = resolve_stream(stream);
-        apply_explore_starvation_weights_kernel<<<blocks, threads, 0, s>>>(
-            weights, vis_count, n, median_vis);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.explore_starvation_weights");
     }
 
 } // namespace lfs::training::mrnf_strategy

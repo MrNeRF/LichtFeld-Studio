@@ -41,11 +41,14 @@ namespace lfs::vis::gui {
         RotationGizmoAxis hovered_axis = RotationGizmoAxis::None;
         RotationGizmoAxis active_axis = RotationGizmoAxis::None;
         glm::mat3 delta_rotation{1.0f};
+        bool released = false;
+        bool returned_to_start = false;
     };
 
     LFS_VIS_API RotationGizmoResult drawRotationGizmo(const RotationGizmoConfig& config);
 
     [[nodiscard]] bool isRotationGizmoHovered();
     [[nodiscard]] bool isRotationGizmoActive();
+    void cancelRotationGizmoDrag();
 
 } // namespace lfs::vis::gui

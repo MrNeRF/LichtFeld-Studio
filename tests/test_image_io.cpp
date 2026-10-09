@@ -1,7 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
+#include "core/tensor.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -68,6 +70,54 @@ namespace {
         append_u32(data, 0);
         append_u32(data, 0x43000000);
         append_u32(data, 0x42800000);
+        std::ofstream file(path, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+        ASSERT_TRUE(file.good());
+    }
+
+    // Minimal uncompressed RGB EXR, independent of the decoder library. Its
+    // negative and HDR samples detect accidental clipping or colour transforms.
+    void write_float_exr(const std::filesystem::path& path) {
+        std::vector<std::uint8_t> data;
+        append_u32(data, 20000630);
+        append_u32(data, 2);
+        const auto text = [](std::vector<std::uint8_t>& out, const char* value) {
+            out.insert(out.end(), value, value + std::strlen(value) + 1);
+        };
+        const auto attribute = [&](const char* name, const char* type, const std::vector<std::uint8_t>& value) {
+            text(data, name);
+            text(data, type);
+            append_u32(data, static_cast<std::uint32_t>(value.size()));
+            data.insert(data.end(), value.begin(), value.end());
+        };
+        std::vector<std::uint8_t> channels;
+        for (const char* name : {"B", "G", "R"}) {
+            text(channels, name);
+            append_u32(channels, 2); // FLOAT
+            append_u32(channels, 0); // pLinear and reserved bytes
+            append_u32(channels, 1);
+            append_u32(channels, 1);
+        }
+        channels.push_back(0);
+        attribute("channels", "chlist", channels);
+        attribute("compression", "compression", {0});
+        std::vector<std::uint8_t> window;
+        for (const auto value : {0u, 0u, 1u, 0u})
+            append_u32(window, value);
+        attribute("dataWindow", "box2i", window);
+        attribute("displayWindow", "box2i", window);
+        attribute("lineOrder", "lineOrder", {0});
+        attribute("pixelAspectRatio", "float", {0, 0, 128, 63});
+        attribute("screenWindowCenter", "v2f", std::vector<std::uint8_t>(8));
+        attribute("screenWindowWidth", "float", {0, 0, 128, 63});
+        data.push_back(0);
+        const auto chunk_offset = static_cast<std::uint32_t>(data.size() + 8);
+        append_u32(data, chunk_offset);
+        append_u32(data, 0);
+        append_u32(data, 0); // scanline y
+        append_u32(data, 24);
+        for (const auto value : {0x3f000000u, 0x40000000u, 0x3f800000u, 0x3e800000u, 0xbe800000u, 0x41200000u})
+            append_u32(data, value);
         std::ofstream file(path, std::ios::binary);
         file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
         ASSERT_TRUE(file.good());
@@ -232,6 +282,16 @@ TEST(ImageIoTest, LoadsJpegThumbnailWithDctScaling) {
     EXPECT_EQ(decoded_height, 64);
     EXPECT_EQ(channels, 3);
     lfs::core::free_image(decoded);
+}
+
+// Fails if a thumbnail decode reduces below the requested size or skips a reduction that still covers it.
+TEST(ImageIoTest, JpegScaleDenominatorKeepsThumbnailResolution) {
+    using lfs::core::image_codecs::jpeg_scale_denominator;
+    EXPECT_EQ(jpeg_scale_denominator(5187, 512), 8u);
+    EXPECT_EQ(jpeg_scale_denominator(2000, 512), 2u);
+    EXPECT_EQ(jpeg_scale_denominator(1023, 512), 2u);
+    EXPECT_EQ(jpeg_scale_denominator(1022, 512), 1u);
+    EXPECT_EQ(jpeg_scale_denominator(300, 512), 1u);
 }
 
 TEST(ImageIoTest, LoadsEmbeddedExifThumbnailAndReportsFastPath) {
@@ -422,6 +482,40 @@ TEST(ImageIoTest, FloatTiffInferenceRangeNormalization) {
     lfs::core::free_image_float(decoded);
 }
 
+TEST(ImageIoTest, ExrPreservesLinearHdrAndHighBitdepthPaths) {
+    const auto path = unique_temp_path("hdr", ".exr");
+    write_float_exr(path);
+    const auto [probe_width, probe_height, probe_channels] = lfs::core::get_image_info(path);
+    EXPECT_EQ(probe_width, 2);
+    EXPECT_EQ(probe_height, 1);
+    EXPECT_EQ(probe_channels, 3);
+    auto [rgba, width, height, channels] = lfs::core::load_image_float(path);
+    ASSERT_NE(rgba, nullptr);
+    EXPECT_EQ(width, 2);
+    EXPECT_EQ(height, 1);
+    EXPECT_EQ(channels, 4);
+    const float expected[] = {-0.25f, 1.0f, 0.5f, 1.0f, 10.0f, 0.25f, 2.0f, 1.0f};
+    for (size_t i = 0; i < std::size(expected); ++i)
+        EXPECT_FLOAT_EQ(rgba[i], expected[i]);
+    lfs::core::free_image_float(rgba);
+    auto [rgb, rgb_width, rgb_height] = lfs::core::load_image_rgb_high_bitdepth(path);
+    ASSERT_NE(rgb, nullptr);
+    EXPECT_EQ(rgb_width, 2);
+    EXPECT_EQ(rgb_height, 1);
+    for (size_t p = 0; p < 2; ++p)
+        for (size_t c = 0; c < 3; ++c)
+            EXPECT_FLOAT_EQ(rgb[p * 3 + c], expected[p * 4 + c]);
+    lfs::core::free_image_float(rgb);
+    auto [gray, gray_width, gray_height] = lfs::core::load_image_gray_high_bitdepth(path);
+    ASSERT_NE(gray, nullptr);
+    EXPECT_EQ(gray_width, 2);
+    EXPECT_EQ(gray_height, 1);
+    EXPECT_FLOAT_EQ(gray[0], -0.25f);
+    EXPECT_FLOAT_EQ(gray[1], 10.0f);
+    lfs::core::free_image_float(gray);
+    std::filesystem::remove(path);
+}
+
 TEST(ImageIoTest, GalleryEnvironmentValidatesBeforeAllocationAndPreservesFloats) {
     const auto path = unique_temp_path("gallery", ".lfsenv");
     std::vector<std::uint8_t> bytes{'L', 'F', 'S', 'E', 'N', 'V', '1', 0};
@@ -466,4 +560,47 @@ TEST(ImageIoTest, GalleryEnvironmentValidatesBeforeAllocationAndPreservesFloats)
         lfs::core::free_image_float(bad);
     }
     std::filesystem::remove(path);
+}
+
+// Catches the CUDA save path quantizing differently from the host path: a real image stretched past
+// [0, 1] must write the same bytes whether it is saved from the GPU or from the CPU.
+TEST(ImageIoTest, CudaImageSavesTheSameBytesAsTheHostImage) {
+    const auto source_path = std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/nn/lpips_crop_a.png";
+    auto [source, width, height, channels] = lfs::core::load_image(source_path);
+    ASSERT_NE(source, nullptr);
+    ASSERT_EQ(channels, 3);
+    const auto plane = static_cast<std::size_t>(width) * height;
+    std::vector<float> planes(plane * 3);
+    for (std::size_t pixel = 0; pixel < plane; ++pixel)
+        for (std::size_t c = 0; c < 3; ++c)
+            planes[c * plane + pixel] = static_cast<float>(source[pixel * 3 + c]) / 212.0f - 0.1f;
+    lfs::core::free_image(source);
+    const lfs::core::TensorShape shape{3, static_cast<std::size_t>(height), static_cast<std::size_t>(width)};
+    const auto host = lfs::core::Tensor::from_vector(planes, shape, lfs::core::Device::CPU);
+    const auto device = lfs::core::Tensor::from_vector(planes, shape, lfs::core::Device::CUDA);
+
+    const auto host_path = std::filesystem::temp_directory_path() / "lfs_image_io_host_save.png";
+    const auto device_path = std::filesystem::temp_directory_path() / "lfs_image_io_device_save.png";
+    lfs::core::save_image(host_path, host);
+    lfs::core::save_image(device_path, device);
+    auto host_loaded = lfs::core::load_image(host_path);
+    auto device_loaded = lfs::core::load_image(device_path);
+    std::error_code ec;
+    std::filesystem::remove(host_path, ec);
+    std::filesystem::remove(device_path, ec);
+
+    auto* const host_bytes = std::get<0>(host_loaded);
+    auto* const device_bytes = std::get<0>(device_loaded);
+    ASSERT_NE(host_bytes, nullptr);
+    ASSERT_NE(device_bytes, nullptr);
+    EXPECT_EQ(std::get<1>(device_loaded), width);
+    EXPECT_EQ(std::get<2>(device_loaded), height);
+    std::size_t clipped = 0;
+    for (std::size_t i = 0; i < plane * 3; ++i) {
+        clipped += host_bytes[i] == 0 || host_bytes[i] == 255;
+        ASSERT_EQ(device_bytes[i], host_bytes[i]) << "sample " << i;
+    }
+    EXPECT_GT(clipped, 0u);
+    lfs::core::free_image(host_bytes);
+    lfs::core::free_image(device_bytes);
 }

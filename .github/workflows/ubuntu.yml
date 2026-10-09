@@ -153,10 +153,19 @@ jobs:
       - name: Build
         run: cmake --build build -j $(nproc)
 
+      - name: Run CPU-only SDL coordinate tests
+        # The default app build also builds this isolated, SDL-free test executable.
+        run: ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld\.sdl_coordinates$'
+
       - name: Build and run CPU-only format tests
         run: |
           cmake --build build --target lichtfeld_format_tests -j $(nproc)
           ctest --test-dir build --output-on-failure -R '^lichtfeld_format_tests$'
+
+      - name: Build and run EXR image codec tests
+        run: |
+          cmake --build build --target lichtfeld_image_codec_tests -j $(nproc)
+          ctest --test-dir build --output-on-failure -R '^lichtfeld_image_codec_tests$'
 
       - name: Build and run frame-demand CPU tests
         run: |
@@ -173,16 +182,21 @@ jobs:
           CUDA_VISIBLE_DEVICES: ''
           NVIDIA_VISIBLE_DEVICES: void
           DISPLAY: ''
-          LFS_TEST_BUILD_DIR: ${{ github.workspace }}/build
         # The runner has no NVIDIA driver; the toolkit's stub libcuda lets the extension load without a GPU.
         run: |
+          # github.workspace is the host path; Python runs in the job container.
+          export LFS_TEST_BUILD_DIR="$PWD/build"
           mkdir -p "$RUNNER_TEMP/cuda-driver-stub"
           ln -sf /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/cuda-driver-stub/libcuda.so.1"
           LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
             build/vcpkg_installed/x64-linux/tools/python3/python3.12 -m pytest tests/python -m 'not gpu and not slow and not integration' -q
 
   idle-e2e:
-    if: vars.LFS_GPU_RUNNER == 'true'
+    name: GPU idle E2E (optional)
+    # Opt-in upstream check: skipping is expected without LFS_GPU_RUNNER=true.
+    # Requires a self-hosted Linux GPU runner, a configured build tree and
+    # LFS_RENDER_IDLE_MANIFEST. Fork pushes must not schedule this job.
+    if: github.repository == 'MrNeRF/LichtFeld-Studio' && vars.LFS_GPU_RUNNER == 'true'
     runs-on: [self-hosted, linux, gpu]
     timeout-minutes: 30
     env:

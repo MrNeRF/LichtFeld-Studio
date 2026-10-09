@@ -1269,6 +1269,8 @@ namespace {
                 } else {
                     output->write(filtered);
                 }
+                if (state.outputVisible())
+                    lfs::python::request_redraw();
             });
         });
     }
@@ -1479,11 +1481,21 @@ namespace lfs::vis::gui::panels {
                 }
 
                 lfs::python::SceneContextGuard ctx(scene);
-                const int result = PyRun_SimpleString(code.c_str());
-                if (result != 0) {
+                PyObject* const main_module = PyImport_AddModule("__main__");
+                PyObject* const globals = main_module ? PyModule_GetDict(main_module) : nullptr;
+                PyObject* const result = globals
+                                             ? PyRun_StringFlags(code.c_str(), Py_file_input, globals, globals, nullptr)
+                                             : nullptr;
+                Py_XDECREF(result);
+                if (!result) {
                     success = false;
                     interrupted = PyErr_ExceptionMatches(PyExc_KeyboardInterrupt);
-                    PyErr_Print();
+                    if (PyErr_ExceptionMatches(PyExc_SystemExit)) {
+                        PyErr_Clear();
+                        addError(LOC(lichtfeld::Strings::PythonConsole::SYSTEM_EXIT));
+                    } else {
+                        PyErr_Print();
+                    }
                 }
 
                 script_thread_id_ = 0;
@@ -1636,6 +1648,7 @@ namespace lfs::vis::gui::panels {
             pane.host->syncDirectLayout(w, h);
         }
 
+        state.setVisible(true);
         const int active_tab = std::clamp(state.getActiveTab(), 0, 2);
         if (auto* output = state.getOutputTerminal()) {
             output->setReadOnly(true);

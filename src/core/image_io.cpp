@@ -5,6 +5,7 @@
 
 #include "image_codecs.hpp"
 
+#include "core/cuda/image_quantize.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include <algorithm>
@@ -24,6 +25,8 @@
 #include <queue>
 #include <stdexcept>
 #include <string>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 #include <thread>
 #include <type_traits>
 #include <vector>
@@ -204,6 +207,13 @@ namespace {
         return std::nullopt;
     }
 
+    // Equals static_cast<T>(std::lround(value)) for value in [0, max of T], without a libm call per sample.
+    template <typename T>
+    T round_half_up(const double value) {
+        const auto whole = static_cast<std::uint32_t>(value);
+        return static_cast<T>(whole + (value - static_cast<double>(whole) >= 0.5 ? 1u : 0u));
+    }
+
     template <typename T>
     T* downscale_resample_nch(const T* src,
                               int w, int h, int nw, int nh,
@@ -212,29 +222,32 @@ namespace {
         auto* out = static_cast<T*>(std::malloc(outbytes));
         if (!out)
             throw std::bad_alloc();
-        for (int y = 0; y < nh; ++y) {
-            const float sy = (static_cast<float>(y) + 0.5f) * static_cast<float>(h) / nh - 0.5f;
-            const int y0 = std::clamp(static_cast<int>(std::floor(sy)), 0, h - 1);
-            const int y1 = std::min(y0 + 1, h - 1);
-            const float fy = sy - std::floor(sy);
-            for (int x = 0; x < nw; ++x) {
-                const float sx = (static_cast<float>(x) + 0.5f) * static_cast<float>(w) / nw - 0.5f;
-                const int x0 = std::clamp(static_cast<int>(std::floor(sx)), 0, w - 1);
-                const int x1 = std::min(x0 + 1, w - 1);
-                const float fx = sx - std::floor(sx);
-                for (int c = 0; c < channels; ++c) {
-                    const float top = static_cast<float>(src[(static_cast<size_t>(y0) * w + x0) * channels + c]) * (1.0f - fx) +
-                                      static_cast<float>(src[(static_cast<size_t>(y0) * w + x1) * channels + c]) * fx;
-                    const float bottom = static_cast<float>(src[(static_cast<size_t>(y1) * w + x0) * channels + c]) * (1.0f - fx) +
-                                         static_cast<float>(src[(static_cast<size_t>(y1) * w + x1) * channels + c]) * fx;
-                    const float value = top * (1.0f - fy) + bottom * fy;
-                    if constexpr (std::is_floating_point_v<T>)
-                        out[(static_cast<size_t>(y) * nw + x) * channels + c] = static_cast<T>(value);
-                    else
-                        out[(static_cast<size_t>(y) * nw + x) * channels + c] = static_cast<T>(std::clamp(std::lround(value), 0l, static_cast<long>(std::numeric_limits<T>::max())));
+        tbb::parallel_for(tbb::blocked_range<int>(0, nh), [&](const tbb::blocked_range<int>& rows) {
+            for (int y = rows.begin(); y < rows.end(); ++y) {
+                const float sy = (static_cast<float>(y) + 0.5f) * static_cast<float>(h) / nh - 0.5f;
+                const int y0 = std::clamp(static_cast<int>(std::floor(sy)), 0, h - 1);
+                const int y1 = std::min(y0 + 1, h - 1);
+                const float fy = sy - std::floor(sy);
+                for (int x = 0; x < nw; ++x) {
+                    const float sx = (static_cast<float>(x) + 0.5f) * static_cast<float>(w) / nw - 0.5f;
+                    const int x0 = std::clamp(static_cast<int>(std::floor(sx)), 0, w - 1);
+                    const int x1 = std::min(x0 + 1, w - 1);
+                    const float fx = sx - std::floor(sx);
+                    for (int c = 0; c < channels; ++c) {
+                        const float top = static_cast<float>(src[(static_cast<size_t>(y0) * w + x0) * channels + c]) * (1.0f - fx) +
+                                          static_cast<float>(src[(static_cast<size_t>(y0) * w + x1) * channels + c]) * fx;
+                        const float bottom = static_cast<float>(src[(static_cast<size_t>(y1) * w + x0) * channels + c]) * (1.0f - fx) +
+                                             static_cast<float>(src[(static_cast<size_t>(y1) * w + x1) * channels + c]) * fx;
+                        const float value = top * (1.0f - fy) + bottom * fy;
+                        if constexpr (std::is_floating_point_v<T>)
+                            out[(static_cast<size_t>(y) * nw + x) * channels + c] = static_cast<T>(value);
+                        else
+                            out[(static_cast<size_t>(y) * nw + x) * channels + c] = round_half_up<T>(
+                                std::clamp(value, 0.0f, static_cast<float>(std::numeric_limits<T>::max())));
+                    }
                 }
             }
-        }
+        });
         return out;
     }
 
@@ -265,6 +278,12 @@ namespace {
     }
 
     lfs::core::Tensor prepare_image_for_write(lfs::core::Tensor image) {
+        if (image.ndim() == 4)
+            image = image.squeeze(0); // [B,C,H,W] -> [C,H,W]
+        // A CUDA image is quantized where it lives and downloads as bytes.
+        if (image.device() == lfs::core::Device::CUDA && image.dtype() == lfs::core::DataType::Float32 &&
+            image.ndim() == 3 && image.shape()[0] <= 4)
+            return lfs::core::cuda::quantize_to_interleaved_bytes(image).to(lfs::core::Device::CPU);
         auto normalized = normalize_image_for_save(std::move(image));
         return (normalized.clamp(0, 1) * 255.0f + 0.5f)
             .to(lfs::core::DataType::UInt8)
@@ -386,15 +405,17 @@ namespace {
             } else {
                 const auto* source = reinterpret_cast<const float*>(decoded.data.data());
                 const auto convert = [&](const size_t index) {
-                    return static_cast<uint8_t>(std::lround(std::clamp(static_cast<double>(source[index]), 0.0, 1.0) * 255.0));
+                    return round_half_up<uint8_t>(std::clamp(static_cast<double>(source[index]), 0.0, 1.0) * 255.0);
                 };
-                for (size_t pixel = 0; pixel < pixels; ++pixel) {
-                    const size_t index = pixel * decoded.channels;
-                    const T first = convert(index);
-                    expand_pixel_to_rgb(base + pixel * 3, decoded.channels, first,
-                                        decoded.channels > 1 ? convert(index + 1) : first,
-                                        decoded.channels > 2 ? convert(index + 2) : first);
-                }
+                tbb::parallel_for(tbb::blocked_range<size_t>(0, pixels), [&](const tbb::blocked_range<size_t>& range) {
+                    for (size_t pixel = range.begin(); pixel < range.end(); ++pixel) {
+                        const size_t index = pixel * decoded.channels;
+                        const T first = convert(index);
+                        expand_pixel_to_rgb(base + pixel * 3, decoded.channels, first,
+                                            decoded.channels > 1 ? convert(index + 1) : first,
+                                            decoded.channels > 2 ? convert(index + 2) : first);
+                    }
+                });
             }
         } else {
             if (decoded.sample_type == image_codecs::SampleType::UInt16) {
@@ -424,18 +445,69 @@ namespace {
             } else {
                 const auto* source = reinterpret_cast<const float*>(decoded.data.data());
                 const auto convert = [&](const size_t index) {
-                    return static_cast<uint16_t>(std::lround(std::clamp(static_cast<double>(source[index]), 0.0, 1.0) * 65535.0));
+                    return round_half_up<uint16_t>(std::clamp(static_cast<double>(source[index]), 0.0, 1.0) * 65535.0);
                 };
-                for (size_t pixel = 0; pixel < pixels; ++pixel) {
-                    const size_t index = pixel * decoded.channels;
-                    const T first = convert(index);
-                    expand_pixel_to_rgb(base + pixel * 3, decoded.channels, first,
-                                        decoded.channels > 1 ? convert(index + 1) : first,
-                                        decoded.channels > 2 ? convert(index + 2) : first);
-                }
+                tbb::parallel_for(tbb::blocked_range<size_t>(0, pixels), [&](const tbb::blocked_range<size_t>& range) {
+                    for (size_t pixel = range.begin(); pixel < range.end(); ++pixel) {
+                        const size_t index = pixel * decoded.channels;
+                        const T first = convert(index);
+                        expand_pixel_to_rgb(base + pixel * 3, decoded.channels, first,
+                                            decoded.channels > 1 ? convert(index + 1) : first,
+                                            decoded.channels > 2 ? convert(index + 2) : first);
+                    }
+                });
             }
         }
         return base;
+    }
+
+    template <typename T>
+    T rgba_sample_as(const image_codecs::Image& decoded, const size_t index) {
+        if (decoded.sample_type == image_codecs::SampleType::UInt8) {
+            const auto value = decoded.data[index];
+            return std::is_same_v<T, uint16_t> ? static_cast<T>(value * 257) : value;
+        }
+        if (decoded.sample_type == image_codecs::SampleType::UInt16) {
+            const auto value = reinterpret_cast<const uint16_t*>(decoded.data.data())[index];
+            return std::is_same_v<T, uint16_t> ? value : static_cast<T>(std::lround(value / 257.0));
+        }
+        const float value = std::clamp(reinterpret_cast<const float*>(decoded.data.data())[index], 0.0f, 1.0f);
+        return static_cast<T>(std::lround(value * static_cast<float>(std::numeric_limits<T>::max())));
+    }
+
+    template <typename T>
+    std::tuple<T*, int, int, int>
+    load_image_with_alpha_t(const std::filesystem::path& p, const int res_div, const int max_width) {
+        image_codecs::Image decoded;
+        std::string error;
+        if (!image_codecs::decode(p, decoded, error))
+            throw std::runtime_error("Load failed: " + lfs::core::path_to_utf8(p) + (error.empty() ? "" : " : " + error));
+        if (decoded.channels != 4) {
+            LOG_ERROR("load_image_with_alpha: expected 4 channels, got {}", decoded.channels);
+            return std::make_tuple(nullptr, 0, 0, 0);
+        }
+        const size_t pixel_count = static_cast<size_t>(decoded.width) * decoded.height;
+        auto* out = static_cast<T*>(std::malloc(pixel_count * 4 * sizeof(T)));
+        if (!out) {
+            throw std::bad_alloc();
+        }
+        for (size_t i = 0; i < pixel_count * 4; ++i)
+            out[i] = rgba_sample_as<T>(decoded, i);
+
+        const auto [nw, nh] = lfs::core::resized_image_dimensions(decoded.width, decoded.height, res_div, max_width);
+        if (nw != decoded.width || nh != decoded.height) {
+            T* resized = nullptr;
+            try {
+                resized = downscale_resample_nch<T>(out, decoded.width, decoded.height, nw, nh, 4);
+            } catch (...) {
+                std::free(out);
+                throw;
+            }
+            std::free(out);
+            return {resized, nw, nh, 4};
+        }
+
+        return {out, decoded.width, decoded.height, 4};
     }
 
     void* allocate_image_buffer(const std::size_t bytes, void*) {
@@ -565,42 +637,12 @@ namespace lfs::core {
 
     std::tuple<unsigned char*, int, int, int>
     load_image_with_alpha(std::filesystem::path p, int res_div, int max_width) {
-        image_codecs::Image decoded;
-        std::string error;
-        if (!image_codecs::decode(p, decoded, error))
-            throw std::runtime_error("Load failed: " + lfs::core::path_to_utf8(p) + (error.empty() ? "" : " : " + error));
-        if (decoded.channels != 4) {
-            LOG_ERROR("load_image_with_alpha: expected 4 channels, got {}", decoded.channels);
-            return std::make_tuple(nullptr, 0, 0, 0);
-        }
-        const size_t pixel_count = static_cast<size_t>(decoded.width) * decoded.height;
-        auto* out = static_cast<unsigned char*>(std::malloc(pixel_count * 4));
-        if (!out) {
-            throw std::bad_alloc();
-        }
-        for (size_t i = 0; i < pixel_count * 4; ++i) {
-            if (decoded.sample_type == image_codecs::SampleType::UInt8)
-                out[i] = decoded.data[i];
-            else if (decoded.sample_type == image_codecs::SampleType::UInt16)
-                out[i] = static_cast<unsigned char>(std::lround(reinterpret_cast<const uint16_t*>(decoded.data.data())[i] / 257.0));
-            else
-                out[i] = static_cast<unsigned char>(std::lround(std::clamp(reinterpret_cast<const float*>(decoded.data.data())[i], 0.0f, 1.0f) * 255.0f));
-        }
+        return ::load_image_with_alpha_t<unsigned char>(p, res_div, max_width);
+    }
 
-        const auto [nw, nh] = resized_image_dimensions(decoded.width, decoded.height, res_div, max_width);
-        if (nw != decoded.width || nh != decoded.height) {
-            unsigned char* resized = nullptr;
-            try {
-                resized = downscale_resample_nch<unsigned char>(out, decoded.width, decoded.height, nw, nh, 4);
-            } catch (...) {
-                std::free(out);
-                throw;
-            }
-            std::free(out);
-            return {resized, nw, nh, 4};
-        }
-
-        return {out, decoded.width, decoded.height, 4};
+    std::tuple<uint16_t*, int, int, int>
+    load_image_with_alpha_u16(std::filesystem::path p, int res_div, int max_width) {
+        return ::load_image_with_alpha_t<uint16_t>(p, res_div, max_width);
     }
 
     std::tuple<unsigned char*, int, int, int>

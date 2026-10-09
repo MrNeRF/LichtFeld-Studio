@@ -7,6 +7,7 @@
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "rendering_manager.hpp"
+#include "scene/scene_manager.hpp"
 #include <algorithm>
 
 namespace lfs::vis {
@@ -62,7 +63,6 @@ namespace lfs::vis {
             [this](const auto& event) { setViewportResizeActive(event.active); });
         event_handlers_.subscribe<ui::GridSettingsChanged>(
             [this](const auto& event) { handleGridSettingsChanged(event); });
-        event_handlers_.subscribe<ui::NodeSelected>([this](const auto&) { triggerSelectionFlash(); });
         event_handlers_.subscribe<state::TrainingStarted>([this](const auto&) { handleTrainingStarted(); });
         event_handlers_.subscribe<state::TrainingCompleted>([this](const auto&) { handleTrainingCompleted(); });
         event_handlers_.subscribe<state::SceneLoaded>([this](const auto&) { handleSceneLoaded(); });
@@ -110,6 +110,11 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleGTComparison() {
+        if (!isGTComparisonActive() && !hasGTComparisonAvailable()) {
+            LOG_WARN("GT comparison requires a loaded dataset with source images");
+            return;
+        }
+
         SplitViewService::ModeChangeResult result;
 
         {

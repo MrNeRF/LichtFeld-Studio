@@ -296,7 +296,6 @@ namespace lfs::vis::gui::rml_theme {
             hashColor(seed, overlay.icon);
             hashColor(seed, overlay.highlight);
             hashColor(seed, overlay.selection);
-            hashColor(seed, overlay.selection_flash);
         }
 
         void hashGradient(std::size_t& seed, const std::optional<ThemeGradient>& gradient) {

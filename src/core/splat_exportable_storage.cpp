@@ -227,23 +227,6 @@ namespace lfs::core {
 
         diagnostics::VramProfiler::instance().setExportableSplatBytes(out.block->committed_bytes);
 
-        LOG_INFO("SplatExportableStorage: committed={} MiB reserved={} MiB capacity={} "
-                 "reserve_capacity={} sh_degree={} chunks={} (means={}, scaling={}, "
-                 "rotation={}, opacity={}, sh0={}, shN(q16)={}, shN_bounds={} MiB)",
-                 out.block->committed_bytes >> 20,
-                 out.block->reserved_bytes >> 20,
-                 capacity,
-                 reserve_gaussians,
-                 sh_degree,
-                 out.block->chunks.size(),
-                 live_bytes[Means] >> 20,
-                 live_bytes[Scaling] >> 20,
-                 live_bytes[Rotation] >> 20,
-                 live_bytes[Opacity] >> 20,
-                 live_bytes[Sh0] >> 20,
-                 live_bytes[ShN] >> 20,
-                 live_bytes[ShNBounds] >> 20);
-
         return out;
     }
 
@@ -337,12 +320,6 @@ namespace lfs::core {
 
         diagnostics::VramProfiler::instance().setExportableSplatBytes(block->committed_bytes);
 
-        LOG_INFO("SplatExportableStorage grew: capacity={} generation={} committed={} MiB "
-                 "chunks={} (appended, no relocation)",
-                 capacity_,
-                 generation_,
-                 block->committed_bytes >> 20,
-                 block->chunks.size());
         return true;
     }
 

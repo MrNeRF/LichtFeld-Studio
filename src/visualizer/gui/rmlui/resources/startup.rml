@@ -8,6 +8,7 @@
     <div id="window-shadow-key"></div>
     <div id="overlay-box">
       <img id="logo" />
+      <span id="version-text" class="dim-text"></span>
       <span id="supported-text" class="dim-text"></span>
       <div id="sponsor-row">
         <div id="link-core11" class="sponsor-link" data-url="https://www.core11.eu/">
@@ -29,6 +30,14 @@
         </div>
         <div id="link-donate" class="social-link" data-url="https://lichtfeld.io/#support-the-project">
           <img class="social-icon heart-icon" src="../icon/heart.png" /><span id="donate-link"></span>
+        </div>
+      </div>
+      <div id="app-row">
+        <div id="link-getting-started" class="social-link" data-panel="lfs.getting_started">
+          <img class="social-icon" src="../icon/video.png" /><span id="getting-started-link"></span>
+        </div>
+        <div id="link-preferences" class="social-link" data-panel="lfs.preferences">
+          <img class="social-icon" src="../icon/settings.png" /><span id="preferences-link"></span>
         </div>
       </div>
       <div id="lang-row">

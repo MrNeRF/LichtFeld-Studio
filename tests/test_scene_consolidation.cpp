@@ -14,6 +14,7 @@
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "core/uuid.hpp"
 #include "io/formats/ply.hpp"
 #include "io/splat_chapter.hpp"
@@ -324,6 +325,33 @@ TEST_F(SceneConsolidationExtractTest, WorkerBuildMatchesSynchronousCombinedModel
     EXPECT_EQ(worker_build->model->rotation_raw().to_vector(), expected->rotation_raw().to_vector());
     EXPECT_EQ(worker_build->model->opacity_raw().to_vector(), expected->opacity_raw().to_vector());
     expect_shN_q16(worker_build->model->shN_canonical().to_vector(), expected->shN_canonical().to_vector());
+}
+
+// Catches captures drawing the previous combined model while the worker rebuilds it: an export
+// right after showing a model left that model out.
+TEST_F(SceneConsolidationExtractTest, CurrentCombinedModelNeverServesThePreviousScene) {
+    const size_t n = static_cast<size_t>(bike_.size());
+    const size_t visible_copies = 1'000'000 / n + 2;
+    Scene scene;
+    std::vector<lfs::core::NodeId> ids;
+    for (size_t i = 0; i <= visible_copies; ++i) {
+        ids.push_back(scene.addSplat("copy_" + std::to_string(i), std::make_unique<SplatData>(bike_.clone())));
+        ASSERT_NE(ids.back(), lfs::core::NULL_NODE);
+    }
+    scene.setNodeVisibility(ids.back(), false);
+    const auto* before = scene.getCurrentCombinedModel();
+    ASSERT_NE(before, nullptr);
+    ASSERT_EQ(static_cast<size_t>(before->size()), visible_copies * n);
+
+    scene.setNodeVisibility(ids.back(), true);
+    const auto* interactive = scene.getCombinedModel();
+    ASSERT_NE(interactive, nullptr);
+    ASSERT_EQ(static_cast<size_t>(interactive->size()), visible_copies * n)
+        << "the interactive path keeps the previous scene while the worker rebuilds";
+
+    const auto* current = scene.getCurrentCombinedModel();
+    ASSERT_NE(current, nullptr);
+    EXPECT_EQ(static_cast<size_t>(current->size()), (visible_copies + 1) * n);
 }
 
 TEST_F(SceneConsolidationExtractTest, SceneDestructionJoinsCombinedModelWorker) {
@@ -834,6 +862,7 @@ TEST(SceneCombinedEncode, CpuDecodeMatchesFrozenMasterForEveryCode) {
                                SplatData::ShNLayout::Swizzled);
             checkFrozenMaster("decode_" + std::to_string(i), expanded.shN_canonical_cpu(), sizeof(float));
         }
+        lfs::core::CudaMemoryPool::instance().release_stream(stream);
         ASSERT_EQ(cudaStreamDestroy(stream), cudaSuccess);
     }
 }
@@ -940,8 +969,11 @@ TEST(SceneCombinedEncode, QuantizedBandsMatchMasterEncodedBytesAndBounds) {
             }
         }
     }
-    for (auto stream : producers)
+    for (auto stream : producers) {
+        lfs::core::CudaMemoryPool::instance().release_stream(stream);
         EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+    }
+    lfs::core::CudaMemoryPool::instance().release_stream(build_stream);
     EXPECT_EQ(cudaStreamDestroy(build_stream), cudaSuccess);
 }
 
@@ -1023,6 +1055,28 @@ TEST(SceneCombinedImport, OrdinaryBuildFailuresKeepAutomaticRetry) {
     fail = false;
     ASSERT_NE(scene.getCombinedModel(), nullptr);
     EXPECT_EQ(scene.getCombinedModel()->size(), 4u);
+}
+
+// Catches a worker that stays silent outside imports: a large multi-node edit such as
+// deleting a node left the viewport without splats until the next input event.
+TEST(SceneCombinedBuild, WorkerCompletionOutsideImportAnnouncesReadyModel) {
+    Scene scene;
+    scene.addSplat("first", make_alias_test_model(0.0f));
+    scene.addSplat("second", make_alias_test_model(1.0f));
+    std::atomic<int> ready{0};
+    lfs::event::ScopedHandler handler;
+    handler.subscribe<lfs::core::events::state::CombinedModelBuildReady>([&](const auto& event) {
+        if (event.scene == &scene)
+            ++ready;
+    });
+    scene.requestCombinedModelBuild(true);
+    while (scene.combinedModelBuildPending()) {
+        (void)scene.combinedModelBuildError();
+        std::this_thread::yield();
+    }
+    EXPECT_EQ(ready.load(), 1);
+    ASSERT_NE(scene.getCombinedModel(), nullptr);
+    EXPECT_EQ(scene.getCombinedModel()->size(), 4);
 }
 
 TEST(SceneCombinedEncode, QuantizedStorageCoversReservedModelCapacity) {

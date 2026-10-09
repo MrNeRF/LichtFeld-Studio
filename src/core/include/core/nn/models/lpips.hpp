@@ -56,7 +56,7 @@ namespace lfs::core::nn::models {
         [[nodiscard]] std::size_t activation_budget_bytes() const { return activation_budget_bytes_; }
         [[nodiscard]] std::size_t tile_size_for(int height, int width) const;
         // Extra free VRAM needed for the next call; includes allocator rounding.
-        [[nodiscard]] std::size_t estimated_peak_bytes(int height, int width) const;
+        [[nodiscard]] std::size_t estimated_peak_bytes(int height, int width, bool masked = false) const;
         void release_activations();
 
     private:

@@ -182,7 +182,7 @@ namespace lfs::core::nn::models {
         return tile;
     }
 
-    std::size_t Lpips::estimated_peak_bytes(const int height, const int width) const {
+    std::size_t Lpips::estimated_peak_bytes(const int height, const int width, const bool masked) const {
         const auto tile = tile_size_for(height, width);
         if (tile == 0)
             return 0;
@@ -190,13 +190,22 @@ namespace lfs::core::nn::models {
         const std::size_t tile_w = std::min<std::size_t>(static_cast<std::size_t>(width), tile);
         const std::size_t crop_h = std::min<std::size_t>(static_cast<std::size_t>(height), tile_h + 2 * kTileHalo);
         const std::size_t crop_w = std::min<std::size_t>(static_cast<std::size_t>(width), tile_w + 2 * kTileHalo);
+        // A masked call also holds the float mask, its clamped full-resolution weights and one pooled map per block.
+        std::size_t mask_bytes = 0;
+        if (masked) {
+            const auto mask_pixels = static_cast<std::size_t>(height) * static_cast<std::size_t>(width);
+            mask_bytes = 2 * SizeBucketedPool::get_bucket_size(mask_pixels * sizeof(float));
+            for (int block = 1; block < kBlocks; ++block)
+                mask_bytes += SizeBucketedPool::get_bucket_size(
+                    static_cast<std::size_t>(height >> block) * static_cast<std::size_t>(width >> block) * sizeof(float));
+        }
         if (compute_ == DataType::Float32)
-            return crop_h * crop_w * kExactBytesPerPixel;
+            return crop_h * crop_w * kExactBytesPerPixel + mask_bytes;
 
         // Count new allocations, including pool rounding. Existing buffers are
         // already reflected in cudaMemGetInfo; they need no second reservation.
         constexpr std::size_t driver_reserve = 64ULL * 1024 * 1024;
-        std::size_t bytes = driver_reserve;
+        std::size_t bytes = driver_reserve + mask_bytes;
         const auto feature_elems = 64 * crop_h * crop_w;
         for (const auto& buffer : fast_features_) {
             if (!buffer.is_valid() || buffer.numel() < feature_elems)

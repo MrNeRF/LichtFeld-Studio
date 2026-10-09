@@ -66,6 +66,17 @@ namespace lfs::app {
             return std::nullopt;
         }
 
+        std::optional<std::string> explicit_up_error(const glm::vec3& eye, const glm::vec3& target,
+                                                     const glm::vec3& up) {
+            const float up_length = glm::length(up);
+            if (!std::isfinite(up_length) || up_length <= 1.0e-6f)
+                return "Camera up vector must have finite length greater than 1e-6";
+            const glm::vec3 forward = glm::normalize(target - eye);
+            if (glm::length(glm::cross(forward, up / up_length)) <= 1.0e-6f)
+                return "Camera up vector must not be parallel to the view direction";
+            return std::nullopt;
+        }
+
         const char* keyframe_easing_name(const uint8_t easing) {
             switch (easing) {
             case 0: return "linear";
@@ -252,6 +263,10 @@ namespace lfs::app {
                 if (eye->has_value()) {
                     if (auto error = view_vectors_error(**eye, **target))
                         return mcp::invalid_argument_result(*error, "eye");
+                    if (up->has_value()) {
+                        if (auto error = explicit_up_error(**eye, **target, **up))
+                            return mcp::invalid_argument_result(*error, "up");
+                    }
                 }
 
                 const std::optional<float> fov = args.contains("fov_degrees")
@@ -308,6 +323,10 @@ namespace lfs::app {
                 if (eye->has_value()) {
                     if (auto error = view_vectors_error(**eye, **target))
                         return mcp::invalid_argument_result(*error, "eye");
+                    if (up->has_value()) {
+                        if (auto error = explicit_up_error(**eye, **target, **up))
+                            return mcp::invalid_argument_result(*error, "up");
+                    }
                 }
 
                 const std::optional<float> fov = args.contains("fov_degrees")
@@ -417,6 +436,9 @@ namespace lfs::app {
                     if (!keyframe_index)
                         return json{{"error", keyframe_index.error()}};
 
+                    if (*keyframe_index == 0)
+                        return mcp::invalid_argument_result("The first keyframe cannot be deleted", "keyframe_id");
+
                     if (backend.delete_keyframe)
                         backend.delete_keyframe(*keyframe_index);
                     return sequencer_state_json(backend, **controller);
@@ -433,6 +455,8 @@ namespace lfs::app {
                         {"keyframe_id", json{{"type", "integer"}, {"description", "Stable keyframe id"}}},
                         {"easing", json{{"oneOf", json::array({json{{"type", "integer"}},
                                                                json{{"type", "string"}, {"enum", json::array({"linear", "ease_in", "ease_out", "ease_in_out"})}}})},
+                                        {"minimum", 0},
+                                        {"maximum", 3},
                                         {"description", "Easing mode as integer or name"}}}},
                     .required = {"keyframe_id", "easing"}}},
             [viewer, backend](const json& args) -> json {
@@ -594,7 +618,7 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"directory", json{{"type", "string"}, {"description", "Directory containing ordered .ply frames"}}},
-                        {"fps", json{{"type", "number"}, {"description", "Playback frame rate (1-240, default 24)"}}},
+                        {"fps", json{{"type", "number"}, {"minimum", 1}, {"maximum", 240}, {"description", "Playback frame rate (1-240, default 24)"}}},
                         {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel (default: true)"}}}},
                     .required = {"directory"}}},
             [viewer, backend](const json& args) -> json {
@@ -611,7 +635,8 @@ namespace lfs::app {
                         backend.set_visible(true);
                     if (!backend.load_ply_sequence)
                         return json{{"error", "load_ply_sequence backend unavailable"}};
-                    backend.load_ply_sequence(directory, fps);
+                    if (const auto loaded = backend.load_ply_sequence(directory, fps); !loaded)
+                        return json{{"error", loaded.error().user_message()}};
 
                     json result = sequencer_state_json(backend, **controller);
                     result["directory"] = directory;
@@ -622,7 +647,7 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "sequencer.scrub",
-                .description = "Move the sequencer playhead to a time (seconds) or PLY-sequence frame index, optionally updating the viewport camera",
+                .description = "Move the sequencer playhead to a time (seconds) or PLY-sequence frame index, optionally updating the viewport camera. PLY seeks are asynchronous: success is false and pending is true until the requested frame is displayed. Poll sequencer.get ply_player.on_target and requested_frame_failed for completion",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
@@ -657,6 +682,17 @@ namespace lfs::app {
                     json result = sequencer_state_json(backend, **controller);
                     result["scrubbed_to_time"] = target_time;
                     result["camera_updated"] = camera_updated;
+                    if (const auto player = result.find("ply_player"); player != result.end()) {
+                        const bool displayed = player->value("on_target", false);
+                        const bool failed = !displayed && player->value("requested_frame_failed", false);
+                        result["success"] = displayed;
+                        result["pending"] = !displayed && !failed;
+                        if (failed) {
+                            result["error"] = std::format(
+                                "Failed to load requested PLY sequence frame {} (displayed frame: {})",
+                                player->value("requested_frame", -1ll), player->value("displayed_frame", -1ll));
+                        }
+                    }
                     return result;
                 });
             });

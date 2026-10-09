@@ -12,6 +12,10 @@
 
 namespace fast_lfs::rasterization {
 
+    // Compare the runtime-generic and settings-specialized preprocess kernels in tests.
+    void set_force_generic_preprocess_for_testing(bool force) noexcept;
+    [[nodiscard]] bool force_generic_preprocess_for_testing() noexcept;
+
     void backward(
         const float* densification_error_map,
         const float* grad_image,
@@ -59,8 +63,6 @@ namespace fast_lfs::rasterization {
         const float2* shN_value_bounds,
         const uint shN_value_n_cells,
         const uint shN_value_bits,
-        const bool* mean_step_far_mask,
-        const int mean_step_far_mask_n,
         const float* edge_weight_map,
         float* edge_score_out,
         cudaStream_t stream);

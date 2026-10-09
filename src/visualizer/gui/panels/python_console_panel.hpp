@@ -56,6 +56,9 @@ namespace lfs::vis::gui::panels {
         [[nodiscard]] std::string getEditorTextStripped() const;
         [[nodiscard]] std::string getOutputText() const;
 
+        void setVisible(bool visible) { visible_.store(visible); }
+        bool outputVisible() const { return visible_.load() && active_tab_.load() == 0; }
+
         // Tab selection (0 = Output, 1 = Terminal)
         int getActiveTab() const { return active_tab_; }
         void setActiveTab(int tab) { active_tab_ = tab; }
@@ -97,7 +100,8 @@ namespace lfs::vis::gui::panels {
         std::unique_ptr<terminal::TerminalWidget> terminal_;
         std::unique_ptr<terminal::TerminalWidget> output_terminal_;
         std::unique_ptr<editor::PythonEditor> editor_;
-        int active_tab_ = 0;
+        std::atomic<int> active_tab_{0};
+        std::atomic<bool> visible_{false};
         bool terminal_focused_ = false;
 
         // Script file tracking

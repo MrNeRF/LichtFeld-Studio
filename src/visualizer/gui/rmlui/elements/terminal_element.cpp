@@ -61,8 +61,6 @@ namespace lfs::vis::gui {
     TerminalElement::TerminalElement(const Rml::String& tag) : Rml::Element(tag) {
         SetProperty("display", "block");
         SetProperty("overflow", "hidden");
-        SetProperty("background-color", "rgba(30,30,30,255)");
-        SetProperty("color", "rgba(229,229,229,255)");
         SetProperty("font-family", "\"JetBrains Mono\"");
         SetProperty("white-space", "pre");
         SetAttribute("tabindex", "0");

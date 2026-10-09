@@ -84,7 +84,7 @@ def preferences_panel_module(monkeypatch):
         viewport_toolbar_position="centered",
         set_viewport_toolbar_position_calls=[],
         zoom_speed=11.0,
-        navigation_speed=8.0,
+        navigation_speed=10.0,
         project_location="",
         embed_dataset_by_default=False,
         project_manager_preferences={
@@ -151,6 +151,7 @@ def preferences_panel_module(monkeypatch):
         get_ui_scale_preference=lambda: 0.0,
         set_ui_scale=lambda *_a, **_k: None,
         get_mcp_preferences=lambda: dict(state.mcp_preferences),
+        get_mcp_port_override=lambda: None,
         get_mcp_access_token=lambda: "test-token",
         set_clipboard_text=lambda text: setattr(state, "clipboard_text", text),
         set_mcp_preferences=set_mcp_preferences,
@@ -551,7 +552,7 @@ def test_navigation_speed_preferences_reset_with_input_section(preferences_panel
     panel._reset_section()
 
     assert state.zoom_speed == 11
-    assert state.navigation_speed == 8
+    assert state.navigation_speed == 10
 
 
 def test_project_location_is_saved_and_can_return_to_default(
@@ -690,6 +691,17 @@ def test_mcp_port_is_drafted_until_explicit_confirmation(preferences_panel_modul
             "request_logging": False,
         }
     ]
+
+
+def test_mcp_port_note_names_the_command_line_port(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    assert panel._mcp_port_override_text() == ""
+
+    monkeypatch.setattr(module.lf.ui, "get_mcp_port_override", lambda: 45696)
+    monkeypatch.setattr(module.lf.ui, "tr", lambda key: "uses {port}" if key == "preferences.mcp_port_override" else key)
+
+    assert panel._mcp_port_override_text() == "uses 45696"
 
 
 def test_mcp_access_token_copy_uses_displayed_value(preferences_panel_module):

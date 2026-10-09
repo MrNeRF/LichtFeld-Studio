@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/logger.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/parameters.hpp"
 #include "core/property_registry.hpp"
@@ -23,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 using lfs::core::param::apply_explicit_training_overrides;
 using lfs::core::param::OptimizationParameters;
@@ -117,8 +119,12 @@ namespace {
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.012f);
         EXPECT_EQ(resolved<int>(defaults, "max_cap"), 5'000'000);
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "min_opacity"), 1.0f / 255.0f);
-        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_reg"), 0.003f);
-        EXPECT_EQ(resolved<size_t>(defaults, "refine_every"), 200u);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_reg"), 0.0f);
+        auto cap_adjusted = defaults;
+        cap_adjusted.max_cap = 1'000'000;
+        EXPECT_NEAR(resolved<float>(cap_adjusted, "grow_fraction"), 0.0758f, 1.0e-7f);
+        EXPECT_FLOAT_EQ(resolved<float>(cap_adjusted, "shs_lr"), 0.005f);
+        EXPECT_EQ(resolved<size_t>(defaults, "refine_every"), 163u);
     }
 
     TEST_F(TrainingParametersTest, StrategyApplicabilityTagsAreCanonicalAndKnown) {
@@ -126,9 +132,9 @@ namespace {
         const std::map<std::string, std::vector<std::string>> expected = {
             {"means_lr_end", {"mrnf"}},
             {"scaling_lr_end", {"mrnf"}},
+            {"late_lr_anneal", {"mrnf"}},
             {"growth_grad_threshold", {"mrnf"}},
             {"grow_fraction", {"mrnf"}},
-            {"oversize_split_fraction", {"mrnf"}},
             {"grow_until_iter", {"mrnf"}},
             {"opacity_decay", {"mrnf"}},
             {"scale_decay", {"mrnf"}},
@@ -136,12 +142,10 @@ namespace {
             {"bounds_percentile", {"mrnf"}},
             {"use_error_map", {"mrnf"}},
             {"use_edge_map", {"mrnf"}},
-            {"background_improvements", {"mrnf"}},
-            {"far_scene_min_fraction", {"mrnf"}},
-            {"growth_ratio_rank", {"mrnf"}},
-            {"growth_ratio_pow", {"mrnf"}},
-            {"fill_pacing_iter", {"mrnf"}},
-            {"far_seed_dose", {"mrnf"}},
+            {"scale_reg_decay_power", {"mrnf"}},
+            {"erank_reg", {"mrnf"}},
+            {"dc_reg", {"mrnf"}},
+            {"sh_rest_reg", {"mrnf"}},
             {"prune_opacity", {"igs+"}},
             {"reset_every", {"igs+"}},
             {"min_opacity", {"mcmc"}},
@@ -174,9 +178,19 @@ namespace {
     TEST_F(TrainingParametersTest, ResolvesMcmcFactorySentinels) {
         const auto defaults = OptimizationParameters::defaults_for_strategy("mcmc");
 
+        EXPECT_FALSE(defaults.use_exposure_correction);
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.025f);
         EXPECT_EQ(resolved<int>(defaults, "max_cap"), 1'000'000);
         EXPECT_EQ(resolved<size_t>(defaults, "refine_every"), 100u);
+    }
+
+    TEST_F(TrainingParametersTest, ExposureCorrectionIsEnabledOnlyByMrnfDefaults) {
+        EXPECT_FALSE(OptimizationParameters::defaults_for_strategy("mcmc").use_exposure_correction);
+        EXPECT_FALSE(OptimizationParameters::defaults_for_strategy("igs+").use_exposure_correction);
+        for (const auto strategy : {"mrnf", "mnrf", "lfs"}) {
+            EXPECT_TRUE(OptimizationParameters::defaults_for_strategy(strategy).use_exposure_correction)
+                << strategy;
+        }
     }
 
     // The IGS+ block pins its distinct override set, catching IGS+ factory drift and resolution
@@ -205,6 +219,10 @@ namespace {
 
         for (auto& [strategy, direct_factory] : direct_factories) {
             const auto dispatched = OptimizationParameters::defaults_for_strategy(strategy);
+            if (strategy == "mrnf") {
+                direct_factory.strategy = std::string(strategy);
+                direct_factory.resolve_mrnf_capacity_defaults();
+            }
             for (const auto& meta : group->properties) {
                 SCOPED_TRACE(std::string(strategy) + ":" + meta.id);
                 ASSERT_TRUE(meta.getter);
@@ -230,6 +248,7 @@ namespace {
     TEST_F(TrainingParametersTest, SerializedSurfaceHasRegistryCoverage) {
         OptimizationParameters serialization_probe{};
         serialization_probe.bg_image_path = "coverage-background.png";
+        serialization_probe.thin_structure_weight = 1.0f;
         const auto serialized = serialization_probe.to_json();
 
         const auto group = PropertyRegistry::instance().get_group_snapshot("optimization");
@@ -322,6 +341,8 @@ namespace {
         EXPECT_EQ(params.exposure_correction_grid_start_iter, 1000);
         EXPECT_FALSE(params.bilateral_grid_active());
         EXPECT_FALSE(params.ppisp_active());
+        EXPECT_FALSE(params.use_bilateral_grid);
+        EXPECT_FALSE(params.use_ppisp);
         EXPECT_TRUE(params.validate().empty());
 
         params.use_exposure_correction = true;
@@ -350,6 +371,11 @@ namespace {
         conflict = params;
         conflict.ppisp_freeze_from_sidecar = true;
         EXPECT_NE(conflict.validate().find(conflict_message), std::string::npos);
+
+        params.use_exposure_correction = false;
+        const auto opted_out_json = params.to_json();
+        EXPECT_FALSE(opted_out_json.at("use_exposure_correction").get<bool>());
+        EXPECT_FALSE(OptimizationParameters::from_json(opted_out_json).use_exposure_correction);
     }
 
     TEST_F(TrainingParametersTest, ResumeAcceptsAppliedSplatCompositionOnly) {
@@ -380,6 +406,12 @@ namespace {
         auto mrnf_json = OptimizationParameters::mrnf_defaults().to_json();
         mrnf_json.erase("max_cap");
         EXPECT_EQ(OptimizationParameters::from_json(mrnf_json).max_cap, 5'000'000);
+
+        auto mcmc_json = OptimizationParameters::mcmc_defaults().to_json();
+        mcmc_json.erase("use_exposure_correction");
+        EXPECT_FALSE(OptimizationParameters::from_json(mcmc_json).use_exposure_correction);
+        mcmc_json["use_exposure_correction"] = true;
+        EXPECT_TRUE(OptimizationParameters::from_json(mcmc_json).use_exposure_correction);
 
         auto igs_json = OptimizationParameters::igs_plus_defaults().to_json();
         igs_json.erase("tv_loss_weight");
@@ -422,6 +454,18 @@ namespace {
         }
     }
 
+    TEST_F(TrainingParametersTest, UnknownRegisteredEnumsKeepCurrentDefaultsWhenLoading) {
+        const auto defaults = OptimizationParameters::mrnf_defaults();
+        auto json = defaults.to_json();
+        json["bg_mode"] = "future-background";
+        json["normal_loss_space"] = "future-normal-space";
+
+        const auto restored = OptimizationParameters::from_json(json);
+
+        EXPECT_EQ(restored.bg_mode, defaults.bg_mode);
+        EXPECT_EQ(restored.normal_loss_space, defaults.normal_loss_space);
+    }
+
     TEST_F(TrainingParametersTest, NormalAutoGenerateRoundTripAndDefault) {
         auto params = OptimizationParameters::mrnf_defaults();
         EXPECT_TRUE(params.normal_auto_generate);
@@ -438,6 +482,20 @@ namespace {
         missing.erase("normal_auto_generate");
         const auto defaults = OptimizationParameters::from_json(missing);
         EXPECT_TRUE(defaults.normal_auto_generate);
+    }
+
+    TEST_F(TrainingParametersTest, DepthAutoGenerateRoundTripAndDefault) {
+        auto params = OptimizationParameters::mrnf_defaults();
+        EXPECT_TRUE(params.depth_auto_generate);
+
+        params.depth_auto_generate = false;
+        const auto json = params.to_json();
+        EXPECT_FALSE(json.at("depth_auto_generate").get<bool>());
+        EXPECT_FALSE(OptimizationParameters::from_json(json).depth_auto_generate);
+
+        auto missing = json;
+        missing.erase("depth_auto_generate");
+        EXPECT_TRUE(OptimizationParameters::from_json(missing).depth_auto_generate);
     }
 
     TEST_F(TrainingParametersTest, NormalSupervisionScheduleRoundTripAndValidation) {
@@ -574,7 +632,7 @@ namespace {
         EXPECT_EQ(mcmc_result->max_cap, 1'000'000);
 
         const auto mrnf_path = eval_config_path("mrnf_optimization_params.json");
-        EXPECT_EQ(frozen_config_fingerprint(mrnf_path), 0xd673eeb0fe318eeULL);
+        EXPECT_EQ(frozen_config_fingerprint(mrnf_path), 0xc7841d999e460d68ULL);
         const auto mrnf_result = lfs::core::param::read_optim_params_from_json(mrnf_path);
         ASSERT_TRUE(mrnf_result.has_value()) << mrnf_result.error();
         EXPECT_FLOAT_EQ(mrnf_result->means_lr, 2e-05f);
@@ -582,6 +640,7 @@ namespace {
         EXPECT_EQ(mrnf_result->start_refine, 0u);
         EXPECT_EQ(mrnf_result->stop_refine, 28'500u);
         EXPECT_FLOAT_EQ(mrnf_result->min_opacity, 0.0039215689f);
+        EXPECT_FLOAT_EQ(mrnf_result->opacity_reg, 0.0f);
 
         const auto igs_path = eval_config_path("improvedGSplus_optimization_params.json");
         EXPECT_EQ(frozen_config_fingerprint(igs_path), 0xf86e40494df20d22ULL);
@@ -594,20 +653,98 @@ namespace {
         EXPECT_EQ(igs_result->strategy, "igs+");
     }
 
-    TEST_F(TrainingParametersTest, ExploreStarvationWeightingIsConfigResidue) {
-        const auto defaults = OptimizationParameters::mrnf_defaults();
-        EXPECT_TRUE(defaults.explore_starvation_weighting);
+    TEST_F(TrainingParametersTest, MrnfRegularizationDefaultsAndSchedule) {
+        const auto params = OptimizationParameters::mrnf_defaults();
+        EXPECT_TRUE(resolved<bool>(params, "use_exposure_correction"));
+        EXPECT_FALSE(params.use_bilateral_grid);
+        EXPECT_FALSE(params.use_ppisp);
+        EXPECT_FLOAT_EQ(params.scale_reg, 0.01f);
+        EXPECT_FLOAT_EQ(params.scale_reg_decay_power, 0.4f);
+        EXPECT_FLOAT_EQ(params.erank_reg, 0.001f);
+        EXPECT_FLOAT_EQ(params.dc_reg, 0.001f);
+        EXPECT_FLOAT_EQ(params.sh_rest_reg, 0.001f);
+        EXPECT_FLOAT_EQ(params.lambda_dssim, 0.22f);
+        EXPECT_FLOAT_EQ(params.growth_grad_threshold, 0.00309693f);
+        EXPECT_FLOAT_EQ(params.max_screen_share, 0.586511f);
+        EXPECT_FLOAT_EQ(params.screen_share_penalty, 0.847085f);
+        EXPECT_FLOAT_EQ(params.means_lr, 2.17871e-5f);
+        EXPECT_EQ(params.refine_every, 163u);
+        EXPECT_FLOAT_EQ(params.scaling_lr, 0.00828016f);
+        EXPECT_FLOAT_EQ(params.rotation_lr, 0.0015f);
+        EXPECT_NEAR(params.scale_reg_at(0), 0.014f, 1.0e-7f);
+        EXPECT_FLOAT_EQ(params.scale_reg_at(static_cast<int>(params.iterations)), 0.0f);
+        EXPECT_TRUE(params.validate().empty()) << params.validate();
+        for (const auto* key : {"scale_reg_decay_power", "erank_reg", "dc_reg", "sh_rest_reg"})
+            EXPECT_TRUE(PropertyRegistry::instance().get_property("optimization", key)) << key;
 
-        const auto default_json = defaults.to_json();
-        EXPECT_FALSE(default_json.contains("explore_starvation_weighting"));
-        EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "explore_starvation_weighting"));
+        const auto roundtrip = OptimizationParameters::from_json(params.to_json());
+        EXPECT_FLOAT_EQ(roundtrip.scale_reg_decay_power, 0.4f);
+        EXPECT_FLOAT_EQ(roundtrip.erank_reg, 0.001f);
+        EXPECT_FLOAT_EQ(roundtrip.dc_reg, 0.001f);
+        EXPECT_FLOAT_EQ(roundtrip.sh_rest_reg, 0.001f);
+    }
 
-        auto json = defaults.to_json();
-        json["explore_starvation_weighting"] = false;
-        const auto parsed = OptimizationParameters::from_json(json);
-        EXPECT_FALSE(parsed.explore_starvation_weighting);
-        EXPECT_TRUE(parsed.validate().empty());
-        EXPECT_FALSE(parsed.to_json().at("explore_starvation_weighting").get<bool>());
+    TEST_F(TrainingParametersTest, CapacityDefaultsRespectExplicitValues) {
+        const auto factory_defaults = OptimizationParameters::mrnf_defaults();
+        EXPECT_FLOAT_EQ(factory_defaults.grow_fraction, -1.0f);
+        EXPECT_FLOAT_EQ(factory_defaults.shs_lr, -1.0f);
+
+        auto for_capacity = [](int cap) {
+            auto params = OptimizationParameters::mrnf_defaults();
+            params.max_cap = cap;
+            params.resolve_mrnf_capacity_defaults();
+            return params;
+        };
+
+        const auto below_reference = for_capacity(500'000);
+        EXPECT_NEAR(below_reference.grow_fraction, 0.0758f, 1.0e-7f);
+        EXPECT_FLOAT_EQ(below_reference.shs_lr, 0.005f);
+
+        const auto reference = for_capacity(1'000'000);
+        EXPECT_NEAR(reference.grow_fraction, 0.0758f, 1.0e-7f);
+        EXPECT_FLOAT_EQ(reference.shs_lr, 0.005f);
+
+        const auto middle = for_capacity(2'236'068);
+        EXPECT_NEAR(middle.grow_fraction, 0.0979f, 1.0e-4f);
+        EXPECT_NEAR(middle.shs_lr, 0.0033437f, 1.0e-7f);
+
+        const auto saturation = for_capacity(5'000'000);
+        EXPECT_NEAR(saturation.grow_fraction, 0.12f, 1.0e-7f);
+        EXPECT_NEAR(saturation.shs_lr, 0.002236068f, 1.0e-9f);
+
+        const auto above_saturation = for_capacity(20'000'000);
+        EXPECT_NEAR(above_saturation.grow_fraction, 0.12f, 1.0e-7f);
+        EXPECT_NEAR(above_saturation.shs_lr, 0.001118034f, 1.0e-9f);
+
+        auto explicit_values = OptimizationParameters::mrnf_defaults();
+        explicit_values.max_cap = 5'000'000;
+        explicit_values.grow_fraction = 0.2f;
+        explicit_values.shs_lr = 0.004f;
+        explicit_values.resolve_mrnf_capacity_defaults();
+        EXPECT_FLOAT_EQ(explicit_values.grow_fraction, 0.2f);
+        EXPECT_FLOAT_EQ(explicit_values.shs_lr, 0.004f);
+    }
+
+    TEST_F(TrainingParametersTest, ConfigCapacityDefaultsResolveAtTrainingStart) {
+        auto config = OptimizationParameters::mrnf_defaults().to_json();
+        config["max_cap"] = 1'000'000;
+        auto params = OptimizationParameters::from_json(config);
+        EXPECT_FLOAT_EQ(params.grow_fraction, -1.0f);
+        EXPECT_FLOAT_EQ(params.shs_lr, -1.0f);
+        EXPECT_TRUE(params.validate().empty()) << params.validate();
+
+        params.resolve_mrnf_capacity_defaults();
+        EXPECT_NEAR(params.grow_fraction, 0.0758f, 1.0e-7f);
+        EXPECT_FLOAT_EQ(params.shs_lr, 0.005f);
+
+        auto explicit_config = OptimizationParameters::mrnf_defaults().to_json();
+        explicit_config["max_cap"] = 5'000'000;
+        explicit_config["grow_fraction"] = 0.2f;
+        explicit_config["shs_lr"] = 0.004f;
+        auto explicit_params = OptimizationParameters::from_json(explicit_config);
+        explicit_params.resolve_mrnf_capacity_defaults();
+        EXPECT_FLOAT_EQ(explicit_params.grow_fraction, 0.2f);
+        EXPECT_FLOAT_EQ(explicit_params.shs_lr, 0.004f);
     }
 
     TEST_F(TrainingParametersTest, SaveLoadRoundTripPreservesParameters) {
@@ -751,6 +888,23 @@ namespace {
         auto json = params.to_json();
         json["future_bookkeeping"] = {{"arbitrary", true}};
         EXPECT_EQ(OptimizationParameters::from_json(json).to_json(), params.to_json());
+    }
+
+    // Catches warning on every file saved before the removal, which all carry the old 0.15 default.
+    TEST_F(TrainingParametersTest, RemovedOversizeSplitWarnsOnlyForChangedValues) {
+        std::vector<std::string> warnings;
+        const auto token = lfs::core::Logger::get().add_log_handler(
+            [&warnings](const lfs::core::LogLevel level, const lfs::core::SourceSite&, const std::string_view message) {
+                if (level == lfs::core::LogLevel::Warn && message.find("oversize_split_fraction") != std::string_view::npos)
+                    warnings.emplace_back(message);
+            });
+        auto json = OptimizationParameters::mrnf_defaults().to_json();
+        for (const float fraction : {0.15f, 0.0f, 0.3f}) {
+            json["oversize_split_fraction"] = fraction;
+            (void)OptimizationParameters::from_json(json);
+        }
+        lfs::core::Logger::get().remove_log_handler(token);
+        EXPECT_EQ(warnings.size(), 1u);
     }
 
     // Catches validation accepting a zero, negative or non-finite image share.

@@ -47,4 +47,41 @@ namespace lfs::vis::gui::vram_hud_geometry {
         return std::clamp(requested, 0.0f, max_pos);
     }
 
+    [[nodiscard]] inline bool pointerTargetEnabled(bool visible,
+                                                   bool compact,
+                                                   bool compact_strip) noexcept {
+        return visible && (compact ? compact_strip : !compact_strip);
+    }
+
+    [[nodiscard]] inline bool capturesPointer(bool visible,
+                                              float left,
+                                              float top,
+                                              float width,
+                                              float height,
+                                              float x,
+                                              float y) noexcept {
+        return visible && x >= left && y >= top && x < left + width && y < top + height;
+    }
+
+    [[nodiscard]] inline float dragExtent(bool compact,
+                                          float expanded_extent,
+                                          float compact_extent) noexcept {
+        return compact ? compact_extent : expanded_extent;
+    }
+
+    // A press that moved past this distance is a drag, so its release must not
+    // also act as a click (e.g. expand the compact strip).
+    inline constexpr float kClickSlopPx = 3.0f;
+
+    [[nodiscard]] inline bool movedPastClickSlop(float dx, float dy) noexcept {
+        return std::isfinite(dx) && std::isfinite(dy) &&
+               dx * dx + dy * dy > kClickSlopPx * kClickSlopPx;
+    }
+
+    [[nodiscard]] inline float clampDragPosition(float requested,
+                                                 float extent,
+                                                 float visible_extent) noexcept {
+        return std::max(0.0f, clampPosition(requested, extent, visible_extent));
+    }
+
 } // namespace lfs::vis::gui::vram_hud_geometry

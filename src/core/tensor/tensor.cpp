@@ -23,7 +23,6 @@
 #include <cuda_runtime.h>
 #include <format>
 #include <fstream>
-#include <iomanip>
 #include <numeric>
 #include <print>
 #include <tbb/blocked_range.h>
@@ -107,10 +106,6 @@ namespace lfs::core {
             if (allocations > 0) {
                 counter.live_allocations.fetch_sub(1, std::memory_order_relaxed);
             }
-        }
-
-        double mib(const uint64_t bytes) {
-            return static_cast<double>(bytes) / (1024.0 * 1024.0);
         }
 
         [[nodiscard]] bool is_supported_device(const Device device) {
@@ -311,40 +306,8 @@ namespace lfs::core {
         }
     }
 
-    std::string Tensor::storage_memory_summary() {
-        const auto& state = storage_accounting_state();
-        std::ostringstream oss;
-        const auto append = [&oss](std::string_view label, const StorageAccountingCounter& counter) {
-            const uint64_t live_bytes = counter.live_bytes.load(std::memory_order_relaxed);
-            const uint64_t live_allocations = counter.live_allocations.load(std::memory_order_relaxed);
-            const uint64_t total_bytes = counter.total_bytes.load(std::memory_order_relaxed);
-            const uint64_t total_allocations = counter.total_allocations.load(std::memory_order_relaxed);
-            oss << label << ": live=" << std::fixed << std::setprecision(2) << mib(live_bytes)
-                << " MiB/" << live_allocations << " allocs, total=" << mib(total_bytes)
-                << " MiB/" << total_allocations << " allocs";
-        };
-
-        oss << "Tensor storage accounting: ";
-        append("cuda_direct", state.cuda_direct);
-        oss << "; ";
-        append("vulkan_external", state.vulkan_external);
-        return oss.str();
-    }
-
     std::size_t Tensor::cuda_direct_storage_live_bytes() {
         return storage_accounting_state().cuda_direct.live_bytes.load(std::memory_order_relaxed);
-    }
-
-    void Tensor::log_storage_memory() {
-        log_storage_memory({});
-    }
-
-    void Tensor::log_storage_memory(const std::string_view label) {
-        if (label.empty()) {
-            LOG_INFO("{}", storage_memory_summary());
-        } else {
-            LOG_INFO("{} - {}", label, storage_memory_summary());
-        }
     }
 
     // TensorLeaf implementation
@@ -542,6 +505,12 @@ namespace lfs::core {
                     lazy->materializer = {};
 
                     try {
+                        // Materializers launch on the current stream. Without one they would
+                        // use the legacy stream, unordered with this tensor's declared home.
+                        std::optional<CUDAStreamGuard> home_stream;
+                        if (device_ == Device::CUDA && stream() != nullptr && getCurrentCUDAStream() == nullptr &&
+                            !is_stream_retired(stream()))
+                            home_stream.emplace(stream());
                         materialized = internal::lazy_planner_execute_plan_for_tensor(*this, materializer);
                         validate_materialized(materialized);
                         lazy->result = materialized;
@@ -570,6 +539,8 @@ namespace lfs::core {
             storage_bytes);
 
         const size_t preserved_id = id_;
+        // Sibling handles share TensorState; publish its fields under the gate their materializations share.
+        std::unique_lock<std::mutex> publish_lock(lazy->gate);
         ensure_state();
         const bool preserved_tracked = state_->tracked;
         const std::string preserved_name = state_->name;
@@ -612,6 +583,7 @@ namespace lfs::core {
         if (state_.use_count() <= 1) {
             state_->lazy.reset();
         }
+        publish_lock.unlock();
 
         id_ = preserved_id;
         compute_alignment();
@@ -888,7 +860,7 @@ namespace lfs::core {
                 // Rehoming changes where future writes occur. Preserve prior writes
                 // from the old home before changing allocator ownership metadata.
                 bridgeStreams(state_->stream, stream);
-                if (!has_external_storage()) {
+                if (!has_external_storage() && data_ != nullptr) {
                     CudaMemoryPool::instance().rehome_stream(data_owner_.get(), stream);
                 }
             }
@@ -912,6 +884,10 @@ namespace lfs::core {
                              data_, static_cast<const void*>(stream));
                 }
             }
+            return;
+        }
+        // Zero-byte tensors own a static sentinel, not an allocator block.
+        if (data_ == nullptr) {
             return;
         }
         if (device_ == Device::CUDA) {
@@ -1698,6 +1674,12 @@ namespace lfs::core {
         if (!is_contiguous_) {
             return contiguous().to(dtype);
         }
+
+        // Convert on the current stream, or this tensor's own when none is set,
+        // after the work that produced this tensor.
+        std::optional<CUDAStreamGuard> conversion_stream;
+        if (device_ == Device::CUDA)
+            conversion_stream.emplace(prepare_inputs_for_stream({this}));
 
 // Macro for type conversions using launch_convert_type
 #define CONVERT_DTYPE_CUDA(FROM_TYPE, TO_TYPE, FROM_DTYPE, TO_DTYPE)                \
@@ -2607,8 +2589,8 @@ namespace lfs::core {
     Tensor& Tensor::clamp_(float min_val, float max_val) {
         LFS_ASSERT_MSG(is_valid(),
                        "clamp_ requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,
-                       "clamp_ currently supports only Float32 and Int32");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Float16 || dtype_ == DataType::Int32,
+                       "clamp_ currently supports Float32, Float16 and Int32");
         LFS_ASSERT_MSG(!std::isnan(min_val) && !std::isnan(max_val) && min_val <= max_val,
                        "clamp_ bounds must not be NaN and must be ordered");
         if (dtype_ == DataType::Int32) {
@@ -2634,6 +2616,8 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {
             if (dtype_ == DataType::Float32) {
                 tensor_ops::launch_clamp_scalar(ptr<float>(), min_val, max_val, numel(), stream());
+            } else if (dtype_ == DataType::Float16) {
+                tensor_ops::launch_clamp_scalar_half(ptr<__half>(), min_val, max_val, numel(), stream());
             } else if (dtype_ == DataType::Int32) {
                 const int min_int = min_val == -std::numeric_limits<float>::infinity()
                                         ? std::numeric_limits<int>::lowest()
@@ -2646,7 +2630,13 @@ namespace lfs::core {
                                                     numel(), stream());
             }
         } else {
-            if (dtype_ == DataType::Float32) {
+            if (dtype_ == DataType::Float16) {
+                auto* data = ptr<__half>();
+                for (size_t i = 0; i < numel(); ++i) {
+                    const float value = __half2float(data[i]);
+                    data[i] = __float2half(std::isnan(value) ? value : std::clamp(value, min_val, max_val));
+                }
+            } else if (dtype_ == DataType::Float32) {
                 float* data = ptr<float>();
                 for (size_t i = 0; i < numel(); ++i) {
                     if (!std::isnan(data[i])) {
@@ -2671,11 +2661,11 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::clamp_min_(float min) {
-        return clamp_(min, std::numeric_limits<float>::max());
+        return clamp_(min, std::numeric_limits<float>::infinity());
     }
 
     Tensor& Tensor::clamp_max_(float max) {
-        return clamp_(std::numeric_limits<float>::lowest(), max);
+        return clamp_(-std::numeric_limits<float>::infinity(), max);
     }
 
     // ============= Cumulative sum =============
@@ -3564,11 +3554,14 @@ namespace lfs::core {
             const size_t copy_bytes =
                 checked_product(numel(), element_size, "reserve copy byte count");
             if (device_ == Device::CUDA) {
-                const cudaError_t status =
-                    cudaMemcpy(new_data, old_data, copy_bytes, cudaMemcpyDeviceToDevice);
+                // On the tensor's own stream: a legacy-stream copy does not wait for writes still queued on a
+                // non-blocking stream, and would copy what the storage held before them.
+                cudaError_t status = cudaMemcpyAsync(new_data, old_data, copy_bytes, cudaMemcpyDeviceToDevice, stream());
+                if (status == cudaSuccess)
+                    status = cudaStreamSynchronize(stream());
                 if (status != cudaSuccess) {
                     ensure_cuda_success(
-                        status, "cudaMemcpy(tensor reserve)",
+                        status, "cudaMemcpyAsync(tensor reserve)",
                         std::format("bytes={}, source_pointer={}, destination_pointer={}, "
                                     "tensor_shape={}, requested_capacity={}",
                                     copy_bytes, old_data, new_data, shape_.str(), new_capacity),

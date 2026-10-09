@@ -10,8 +10,12 @@
       <label for="gallery-file-description">{{g_review_description}}</label>
       <textarea id="gallery-file-description" rows="3" maxlength="5000" data-value="description" data-attr-title="description"/>
       <div class="gallery-file-fields" data-if="show_format">
-        <div class="setting-row"><span>{{g_review_upload_as}}</span><select data-value="upload_format"><option value="studio">{{g_format_studio}}</option><option value="sog">{{g_format_sog}}</option><option value="ssog">{{g_format_ssog}}</option><option value="spz">{{g_format_spz}}</option></select></div>
+        <div class="setting-row" data-attr-title="format_hint"><span>{{g_review_upload_as}}</span><select data-value="upload_format"><option value="auto">{{g_format_auto}}</option><option value="studio">{{g_format_studio}}</option><option value="sog">{{g_format_sog}}</option><option value="ssog">{{g_format_ssog}}</option><option value="spz">{{g_format_spz}}</option></select></div>
         <span class="text-muted">{{format_hint}}</span>
+        <div class="gallery-phone-warning" data-if="show_phone_warning">
+          <span class="status-warning">{{phone_warning}}</span>
+          <button class="btn btn--secondary" data-event-click="use_ssog" title="@tr:projects.gallery.review.use_ssog">@tr:projects.gallery.review.use_ssog</button>
+        </div>
         <span class="text-muted" data-attr-title="estimate">{{estimate}}</span>
         <label class="gallery-cover-option" data-if="show_cover"><input type="checkbox" data-checked="use_cover" data-attrif-disabled="!can_cover"/><span>@tr:projects.gallery.review.use_cover</span></label>
         <label class="gallery-cover-option" data-if="show_save_project"><input type="checkbox" data-checked="save_project"/><span>@tr:projects.gallery.review.save_project</span></label>

@@ -240,9 +240,12 @@ def _apply_section_visual_state(expanded, header_element=None, arrow_element=Non
         header_element.set_class("is-expanded", expanded)
         header_element.set_class("is-collapsed", not expanded)
     if arrow_element:
-        arrow_element.set_text(chr(0x25B6))
         arrow_element.set_class("is-expanded", expanded)
         arrow_element.set_class("is-collapsed", not expanded)
+
+
+_SECTION_TARGET_ATTR = "data-section-target"
+_SECTION_FINISH_ATTR = "data-section-finish"
 
 
 def sync_section_state(content_element, expanded, header_element=None, arrow_element=None):
@@ -251,6 +254,7 @@ def sync_section_state(content_element, expanded, header_element=None, arrow_ele
         return
 
     _apply_section_visual_state(expanded, header_element, arrow_element)
+    content_element.set_attribute(_SECTION_TARGET_ATTR, "expanded" if expanded else "collapsed")
     content_element.set_class("collapsed", not expanded)
 
     content_element.remove_property("max-height")
@@ -265,6 +269,7 @@ def animate_section_toggle(content_element, expanding, arrow_element=None,
         return
 
     _apply_section_visual_state(expanding, header_element, arrow_element)
+    content_element.set_attribute(_SECTION_TARGET_ATTR, "expanded" if expanding else "collapsed")
 
     if expanding:
         content_element.set_class("collapsed", False)
@@ -292,9 +297,25 @@ def animate_section_toggle(content_element, expanding, arrow_element=None,
         return
     duration = _section_duration(target_h, duration)
     fade_duration = max(0.1, min(0.18, duration * 0.7))
+    _listen_for_collapse_end(content_element, header_element, arrow_element)
     content_element.animate("max-height", "0px", duration, "cubic-in-out",
                             f"{target_h}px")
     content_element.animate("opacity", "0", fade_duration, "quadratic-out", "1")
+
+
+def _listen_for_collapse_end(content_element, header_element, arrow_element):
+    """A zero-height section left laid out keeps its border and still renders its rows."""
+    if content_element.get_attribute(_SECTION_FINISH_ATTR, "") == "1":
+        return
+    content_element.set_attribute(_SECTION_FINISH_ATTR, "1")
+
+    def finish(event):
+        if event.get_parameter("property", "") != "max-height":
+            return
+        if content_element.get_attribute(_SECTION_TARGET_ATTR, "") == "collapsed":
+            sync_section_state(content_element, False, header_element, arrow_element)
+
+    content_element.add_event_listener("animationend", finish)
 
 
 def button(container, id, label, style="", disabled=False):

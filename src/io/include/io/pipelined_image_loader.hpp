@@ -15,6 +15,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -152,6 +153,21 @@ namespace lfs::io {
         SidecarTally sidecars;
     };
 
+    /// Holds the GPU image decoders that loaders with this decoder pool size share, created up front so
+    /// the first loader's first batch does not wait for decoder setup.
+    class LFS_IO_API ImageDecoderWarmup {
+    public:
+        explicit ImageDecoderWarmup(size_t decoder_pool_size);
+        ~ImageDecoderWarmup();
+
+        ImageDecoderWarmup(const ImageDecoderWarmup&) = delete;
+        ImageDecoderWarmup& operator=(const ImageDecoderWarmup&) = delete;
+
+    private:
+        size_t decoder_pool_size_ = 0;
+        bool retained_ = false;
+    };
+
     class LFS_IO_API PipelinedImageLoader {
     public:
         struct GpuMemoryStats {
@@ -237,6 +253,9 @@ namespace lfs::io {
 
         lfs::core::Tensor load_image_immediate(
             const std::filesystem::path& path, const LoadParams& params);
+        // Decodes `path` on a CPU thread for the next load_image_immediate with these parameters, so that call only
+        // uploads it. One image waits in host memory; nothing is allocated on the device ahead of that call.
+        void decode_ahead(const std::filesystem::path& path, const LoadParams& params);
 
         size_t ready_count() const;
         size_t in_flight_count() const;
@@ -415,11 +434,33 @@ namespace lfs::io {
         void cold_process_thread_func(size_t worker_index);
 
         std::string make_cache_key(const std::filesystem::path& path, const LoadParams& params) const;
+        bool decodes_16bit(const LoadParams& params) const { return config_.use_16bit_color || params.decode_16bit; }
         bool is_jpeg_data(const std::vector<uint8_t>& data) const;
         std::vector<uint8_t> read_file(const std::filesystem::path& path) const;
         std::shared_ptr<std::vector<uint8_t>> load_cached_jpeg_blob(const std::string& cache_key);
         lfs::core::Tensor decode_file_on_cpu(const std::filesystem::path& path,
                                              const LoadParams& params) const;
+
+        enum class HostDecodeKind : uint8_t {
+            UInt8,
+            UInt16,
+            Float32
+        };
+        struct HostPixels {
+            std::unique_ptr<void, void (*)(void*)> data{nullptr, nullptr};
+            int width = 0;
+            int height = 0;
+            int channels = 0;
+        };
+        struct DecodeAhead {
+            std::filesystem::path path;
+            HostDecodeKind kind = HostDecodeKind::UInt8;
+            std::future<HostPixels> pixels;
+        };
+        // The host decode load_image_immediate would run for these parameters, if any.
+        std::optional<HostDecodeKind> host_decode_kind(const std::filesystem::path& path, const LoadParams& params);
+        static HostPixels decode_on_host(const std::filesystem::path& path, HostDecodeKind kind);
+        std::optional<HostPixels> take_decoded_ahead(const std::filesystem::path& path, HostDecodeKind kind) const;
         void write_derived_cache(NvCodecImageLoader& nvcodec,
                                  const lfs::core::Tensor& tensor,
                                  const std::string& cache_key,
@@ -509,6 +550,8 @@ namespace lfs::io {
         // Images are still stream-synced before handoff (materialized on arrival).
         mutable std::mutex decode_stream_mutex_;
         mutable cudaStream_t decode_stream_ = nullptr;
+        mutable std::mutex decode_ahead_mutex_;
+        mutable std::optional<DecodeAhead> decode_ahead_;
         std::vector<cudaStream_t> sidecar_streams_;
 
         ThreadSafeQueue<ImageRequest> prefetch_queue_;

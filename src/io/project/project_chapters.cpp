@@ -1991,21 +1991,6 @@ namespace lfs::io::project {
             return absolute.lexically_normal();
         }
 
-        bool path_is_under(
-            const std::filesystem::path& root,
-            const std::filesystem::path& candidate) {
-            if (root.empty()) {
-                return false;
-            }
-            const auto relative =
-                candidate.lexically_relative(root);
-            if (relative.empty() || relative == ".") {
-                return true;
-            }
-            const auto first = relative.begin();
-            return first == relative.end() || *first != std::filesystem::path("..");
-        }
-
         bool fingerprint_content_matches(
             const ReferenceFingerprint& expected,
             const ReferenceFingerprint& observed) {
@@ -2096,14 +2081,12 @@ namespace lfs::io::project {
         };
         if (!project_root.empty()) {
             const auto root = absolute_lexically(project_root);
-            if (path_is_under(root, absolute)) {
-                const auto relative = absolute.lexically_relative(root);
-                const auto first = relative.begin();
-                if (!relative.empty() && relative != "." &&
-                    (first == relative.end() || *first != std::filesystem::path(".."))) {
-                    locator.preferred = lfs::core::path_to_generic_utf8(relative);
-                    locator.base = LocatorBase::Project;
-                }
+            const auto relative = absolute.lexically_relative(root);
+            if (!relative.empty() && relative != "." &&
+                relative.is_relative()) {
+                locator.preferred =
+                    lfs::core::path_to_generic_utf8(relative);
+                locator.base = LocatorBase::Project;
             }
         }
 
@@ -3041,14 +3024,44 @@ namespace lfs::io::project {
                 adapted.erase("ppisp_sidecar_path");
                 adapted.erase("config_file");
                 adapted["headless"] = false;
-                auto result =
-                    lfs::core::param::OptimizationParameters::from_json(
-                        nlohmann::json::parse(adapted.dump()));
-                result.headless = false;
-                result.config_file.clear();
-                result.bg_image_path.clear();
-                result.ppisp_sidecar_path.clear();
-                if (const std::string invalid = result.validate(); !invalid.empty()) {
+                const auto decode = [](const nlohmann::json& json) {
+                    auto parameters =
+                        lfs::core::param::OptimizationParameters::from_json(json);
+                    parameters.headless = false;
+                    parameters.config_file.clear();
+                    parameters.bg_image_path.clear();
+                    parameters.ppisp_sidecar_path.clear();
+                    return parameters;
+                };
+                auto stored = nlohmann::json::parse(adapted.dump());
+                auto result = decode(stored);
+                std::string invalid = result.validate();
+                // Another version can store values this one rejects, such as an automatic
+                // setting it does not have. Keep every accepted value and default the rest.
+                const auto defaults =
+                    lfs::core::param::OptimizationParameters::defaults_for_strategy(
+                        result.strategy)
+                        .to_json();
+                for (bool defaulted = true; defaulted && !invalid.empty();) {
+                    defaulted = false;
+                    for (auto fallback = defaults.begin();
+                         !invalid.empty() && fallback != defaults.end(); ++fallback) {
+                        const auto current = stored.find(fallback.key());
+                        if (current == stored.end() || *current == *fallback)
+                            continue;
+                        auto trial = stored;
+                        trial[fallback.key()] = *fallback;
+                        auto candidate = decode(trial);
+                        if (std::string candidate_invalid = candidate.validate();
+                            candidate_invalid != invalid) {
+                            stored = std::move(trial);
+                            result = std::move(candidate);
+                            invalid = std::move(candidate_invalid);
+                            defaulted = true;
+                        }
+                    }
+                }
+                if (!invalid.empty()) {
                     return fail<ParsedParameterPreset>(
                         lfs::ErrorCode::DataLoss,
                         "A pending parameter preset is invalid.",

@@ -64,6 +64,7 @@
 #include <rasterization_api.h>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 #ifdef WIN32
 #include <windows.h>
@@ -93,21 +94,30 @@ namespace lfs::app {
         };
 
         // Headless runs train into the project they were started from unless
-        // -o redirects the result to a fresh project.licht.
+        // -o redirects the result to a fresh project file in the output folder.
         [[nodiscard]] std::filesystem::path headless_project_save_destination(
             const core::param::TrainingParameters& cli_params,
             const std::filesystem::path& source) {
             if (!cli_params.dataset.output_path_explicit)
                 return source;
 
-            const auto destination = cli_params.dataset.output_path / "project.licht";
+            const auto destination = cli_params.dataset.project_file();
             LOG_INFO("Headless project destination: {}",
                      core::path_to_utf8(destination));
             return destination;
         }
 
+        // Without -o, final exports go next to the project the run saves into.
+        [[nodiscard]] core::param::TrainingParameters with_export_folder(
+            core::param::TrainingParameters params,
+            const std::filesystem::path& project_folder) {
+            if (params.dataset.output_path.empty())
+                params.dataset.output_path = project_folder;
+            return params;
+        }
+
         // Empty for a plain dataset-folder run, which keeps the default
-        // output_path/project.licht destination.
+        // project file destination in the output folder.
         [[nodiscard]] std::filesystem::path headless_dataset_project_destination(
             const core::param::TrainingParameters& params) {
             if (!params.dataset_project)
@@ -469,6 +479,10 @@ namespace lfs::app {
             }
             auto checkpoint_params =
                 std::move(**parsed_params);
+            const auto checkpoint_dataset_path =
+                checkpoint_params.dataset.data_path;
+            const auto checkpoint_images_folder =
+                checkpoint_params.dataset.images;
 
             // Only retain the source dataset when the effective training root
             // still denotes the checkpoint's dataset (including path aliases).
@@ -481,8 +495,47 @@ namespace lfs::app {
                                                   ? recovery_document.document().source_path()
                                                   : std::nullopt;
             if (!cli_params.dataset.data_path.empty()) {
-                checkpoint_params.dataset.data_path =
-                    cli_params.dataset.data_path;
+                checkpoint_params.dataset.data_path = cli_params.dataset.data_path;
+            } else {
+                std::optional<std::filesystem::path> resolved_dataset;
+                if (const auto dataset_ref =
+                        recovery_document.document().project().dataset_reference();
+                    dataset_ref && *dataset_ref) {
+                    auto external = io::project::resolve_path_reference(
+                        recovery_document.document().references(), path.parent_path(), **dataset_ref);
+                    if (external && std::filesystem::is_directory(*external)) {
+                        resolved_dataset = std::move(*external);
+                    }
+                }
+                if (!resolved_dataset && std::filesystem::is_directory(checkpoint_dataset_path)) {
+                    resolved_dataset = checkpoint_dataset_path;
+                }
+                if (!resolved_dataset) {
+                    const auto manifest = recovery_document.document().parameters().embedded_dataset();
+                    if (manifest && *manifest && (**manifest).complete) {
+                        auto cache_dir = io::project::embedded_dataset_cache_dir(
+                            recovery_document.document());
+                        if (!cache_dir) {
+                            return std::move(cache_dir).error();
+                        }
+                        auto extracted = io::project::extract_embedded_dataset(
+                            recovery_document.document(), *cache_dir);
+                        if (!extracted) {
+                            return std::move(extracted).error();
+                        }
+                        if (*extracted) {
+                            resolved_dataset = std::move(**extracted);
+                            checkpoint_params.dataset.images = (**manifest).images_folder;
+                        }
+                    }
+                }
+                if (!resolved_dataset) {
+                    return training_project_error(
+                        lfs::ErrorCode::NotFound,
+                        "The project's dataset is neither reachable nor completely embedded",
+                        LFS_SOURCE_SITE_CURRENT());
+                }
+                checkpoint_params.dataset.data_path = std::move(*resolved_dataset);
             }
             if (!cli_params.dataset.output_path.empty()) {
                 checkpoint_params.dataset.output_path =
@@ -543,6 +596,76 @@ namespace lfs::app {
                     "Project hydration did not preserve the lazy CKPT "
                     "trainer-state barrier",
                     LFS_SOURCE_SITE_CURRENT());
+            }
+
+            const bool dataset_root_changed =
+                checkpoint_params.dataset.data_path != checkpoint_dataset_path;
+            const bool images_folder_changed =
+                checkpoint_params.dataset.images != checkpoint_images_folder;
+            if (dataset_root_changed) {
+                scene.rebaseCameraAssetPaths(
+                    checkpoint_dataset_path, checkpoint_params.dataset.data_path);
+            }
+            if (images_folder_changed) {
+                scene.rebaseCameraAssetPaths(
+                    checkpoint_params.dataset.data_path / checkpoint_images_folder,
+                    checkpoint_params.dataset.data_path / checkpoint_params.dataset.images);
+            }
+            if (dataset_root_changed || images_folder_changed) {
+                const auto missing_images = scene.revalidateCameraImagePresence();
+                if (!missing_images.empty()) {
+                    return training_project_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        "The supplied dataset is not compatible with the resumed project's cameras",
+                        LFS_SOURCE_SITE_CURRENT());
+                }
+            }
+            if (checkpoint_params.optimization.mask_mode != core::param::MaskMode::None) {
+                auto mask_source = io::Loader::create()->load(
+                    checkpoint_params.dataset.data_path,
+                    io::LoadOptions{
+                        .resize_factor = checkpoint_params.dataset.resize_factor,
+                        .max_width = checkpoint_params.dataset.max_width,
+                        .images_folder = checkpoint_params.dataset.images,
+                        .min_track_length = checkpoint_params.dataset.min_track_length,
+                        .load_masks = true,
+                    });
+                if (!mask_source) {
+                    return training_project_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        std::format(
+                            "Could not load sidecar masks for resumed project: {}",
+                            mask_source.error().format()),
+                        LFS_SOURCE_SITE_CURRENT());
+                }
+                const auto* loaded_scene = std::get_if<io::LoadedScene>(&mask_source->data);
+                if (!loaded_scene) {
+                    return training_project_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        "The resumed dataset did not load as a camera scene",
+                        LFS_SOURCE_SITE_CURRENT());
+                }
+                std::unordered_map<std::string, std::filesystem::path> masks_by_image;
+                for (const auto& camera : loaded_scene->cameras) {
+                    if (camera && camera->has_mask()) {
+                        masks_by_image.try_emplace(camera->image_name(), camera->mask_path());
+                    }
+                }
+                size_t bound_mask_count = 0;
+                for (const auto& camera : scene.getAllCameras()) {
+                    if (!camera || camera->has_mask()) {
+                        continue;
+                    }
+                    const auto mask = masks_by_image.find(camera->image_name());
+                    if (mask != masks_by_image.end()) {
+                        camera->set_mask_path(mask->second);
+                        ++bound_mask_count;
+                    }
+                }
+                scene.rebaseCameraAssetPaths(
+                    checkpoint_params.dataset.data_path,
+                    checkpoint_params.dataset.data_path);
+                LOG_DEBUG("Bound {} sidecar masks to resumed project cameras", bound_mask_count);
             }
             if (hydration->checkpoint_header->iteration < 0) {
                 return training_project_error(
@@ -931,7 +1054,7 @@ namespace lfs::app {
                                 rebound.error()));
                         return 1;
                     }
-                    if (!export_and_shutdown(trainer, *params))
+                    if (!export_and_shutdown(trainer, with_export_folder(*params, params->resume_project->parent_path())))
                         return 1;
                 } else if (params->resume_checkpoint) {
                     const auto ckpt_params_result = loadCheckpointParams(*params, scene);
@@ -979,11 +1102,9 @@ namespace lfs::app {
                         }
                         return 1;
                     }
-                    if (!export_and_shutdown(trainer, *params))
+                    if (!export_and_shutdown(trainer, with_export_folder(*params, ckpt_params_result->dataset.output_path)))
                         return 1;
                 } else {
-                    LOG_INFO("Starting headless training...");
-
                     if (const auto result = training::loadTrainingDataIntoScene(*params, scene); !result) {
                         LOG_ERROR("Failed to load training data: {}", result.error());
                         return 1;
@@ -1032,8 +1153,6 @@ namespace lfs::app {
                         return 1;
                 }
 
-                LOG_INFO("Headless training {}",
-                         coordinator.interrupted() ? "stopped by user" : "completed");
                 core::teardown_gpu_before_exit();
                 core::mark_clean_exit();
                 core::flush_and_exit(0);
@@ -1047,6 +1166,78 @@ namespace lfs::app {
                 core::flush_and_exit(exit_code);
             }
             return exit_code;
+        }
+
+        // eval subcommand: restore the model like a resume (or load a splat file as saved) and score it.
+        int runHeadlessEvaluation(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
+            lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
+            core::Scene scene;
+            std::unique_ptr<training::Trainer> trainer;
+
+            if (params->resume_project) {
+                auto project = loadTrainingProject(*params, scene);
+                if (!project) {
+                    LOG_ERROR("Failed to load the project: {}", lfs::format_for_developer(project.error()));
+                    return 1;
+                }
+                std::optional<io::project::RecoverySession> recovery_session;
+                if (const auto* session = project->document.recovery_session()) {
+                    recovery_session = *session;
+                }
+                auto installed = training::installTrainerFromProjectCheckpoint(
+                    scene, project->document.document(), project->checkpoint_uuid, project->params,
+                    core::path_to_utf8(*params->resume_project), project->iteration, recovery_session);
+                if (!installed) {
+                    LOG_ERROR("Failed to restore the project model: {}", installed.error());
+                    return 1;
+                }
+                trainer = std::move(installed->trainer);
+            } else if (params->resume_checkpoint) {
+                const auto ckpt_params = loadCheckpointParams(*params, scene);
+                if (!ckpt_params) {
+                    LOG_ERROR("Failed to load checkpoint: {}", ckpt_params.error());
+                    return 1;
+                }
+                trainer = std::make_unique<training::Trainer>(scene);
+                if (const auto result = trainer->initialize(*ckpt_params); !result) {
+                    LOG_ERROR("Failed to initialize trainer: {}", result.error());
+                    return 1;
+                }
+                if (const auto loaded = trainer->load_checkpoint(*params->resume_checkpoint); !loaded) {
+                    LOG_ERROR("Failed to restore checkpoint state: {}", loaded.error());
+                    return 1;
+                }
+            } else {
+                if (const auto result = training::loadTrainingDataIntoScene(*params, scene); !result) {
+                    LOG_ERROR("Failed to load the dataset: {}", result.error());
+                    return 1;
+                }
+                if (const auto result = training::initializeTrainingModel(*params, scene); !result) {
+                    LOG_ERROR("Failed to load the model: {}", result.error());
+                    return 1;
+                }
+                trainer = std::make_unique<training::Trainer>(scene);
+                if (const auto result = trainer->initialize(*params); !result) {
+                    LOG_ERROR("Failed to initialize trainer: {}", result.error());
+                    return 1;
+                }
+                auto& model = trainer->get_strategy_mutable().get_model();
+                model.set_active_sh_degree(model.get_max_sh_degree());
+            }
+
+            trainer->set_lpips_weights_path(prepare_lpips_weights(!params->no_download));
+            core::Tensor::trim_memory_pool();
+            const auto result = trainer->evaluate_current_model();
+            trainer->shutdown();
+            static_cast<void>(trainer.release());
+            if (!result) {
+                LOG_ERROR("Evaluation failed: {}", lfs::format_for_developer(result.error()));
+                return 1;
+            }
+            LOG_INFO("Evaluation written to {}", core::path_to_utf8(params->dataset.output_path));
+            core::teardown_gpu_before_exit();
+            core::mark_clean_exit();
+            core::flush_and_exit(0);
         }
 
         // Renders a sequencer camera path against a trained scene to a video file, headless.
@@ -1110,7 +1301,7 @@ namespace lfs::app {
                 return 1;
             }
 
-            const float duration = timeline.duration();
+            const float duration = timeline.clipDuration();
             const int total_frames = static_cast<int>(std::ceil(duration * cfg.fps)) + 1;
             LOG_INFO("Rendering {} frame(s) ({:.2f}s @ {}fps) from {} to {}",
                      total_frames, duration, cfg.fps,
@@ -1266,7 +1457,6 @@ namespace lfs::app {
         }
 
         void warmupCudaAsync() {
-            LOG_INFO("Initializing CUDA (async)...");
             cudaWarmupFuture() = std::async(std::launch::async, [] {
                 auto& profiler = lfs::diagnostics::VramProfiler::instance();
                 // NVML is intentionally first touched here, after the window
@@ -1523,6 +1713,7 @@ namespace lfs::app {
                         .request_logging = config.request_logging,
                     });
                     return true; },
+                .mcp_port_override = mcp_port_override,
             });
             viewer->setShutdownRequestedCallback([&mcp_http]() {
                 vis::setRuntimeServiceControls({});
@@ -1596,6 +1787,10 @@ namespace lfs::app {
                 core::teardown_gpu_before_exit();
             }
             return result;
+        }
+
+        if (params->evaluate_only) {
+            return runHeadlessEvaluation(std::move(params));
         }
 
         if (params->dataset_project) {

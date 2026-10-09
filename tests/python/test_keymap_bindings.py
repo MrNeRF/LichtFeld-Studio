@@ -263,6 +263,7 @@ def _install_lf_stub(monkeypatch):
         get_current_language=lambda: state.language[0],
         request_redraw=lambda: None,
         get_mcp_preferences=lambda: dict(state.mcp_preferences),
+        get_mcp_port_override=lambda: None,
         get_project_location=lambda: "/home/tester/.lichtfeld/projects",
         get_project_location_preference=lambda: "",
         get_default_project_location=lambda: "/home/tester/.lichtfeld/projects",
@@ -506,6 +507,21 @@ def test_keymap_builds_profile_and_mode_records(keymap_bindings_module):
     ]
 
 
+def test_keymap_selecting_the_active_profile_does_not_reload_it(keymap_bindings_module):
+    # Catches the profile select reloading the active profile from disk when it binds.
+    prefs, state = keymap_bindings_module
+    panel, _model = _bind_panel(prefs)
+    section = panel._keymap
+    loads = []
+    sys.modules["lichtfeld"].keymap.load_profile = lambda name: (loads.append(name), state.current_profile.__setitem__(0, name))
+
+    section._set_profile_idx("0")
+    assert loads == []
+
+    section._set_profile_idx("1")
+    assert loads == ["Studio"]
+
+
 def test_keymap_builds_binding_rows_with_capture_state(keymap_bindings_module):
     prefs, state = keymap_bindings_module
     panel, _model = _bind_panel(prefs)
@@ -583,6 +599,31 @@ def test_keymap_marks_conflicting_binding_rows(keymap_bindings_module):
     )
     assert orbit_row["desc_text"] == "GLOBAL:CAMERA_ORBIT :: also Action CAMERA_ZOOM"
     assert orbit_row["desc_class"] == "preferences-binding-desc preferences-conflict"
+
+
+def test_keymap_pending_capture_polls_until_the_key_arrives(keymap_bindings_module):
+    # Catches a dirty-policy panel that never notices the native capture finishing.
+    prefs, state = keymap_bindings_module
+    panel, model = _bind_panel(prefs)
+    section = panel._keymap
+    doc = _DocStub(with_conflict_overlay=True)
+    section.ensure_binding_rows()
+    section._rebinding_action = prefs.lf.keymap.Action.CAMERA_ORBIT
+    section._rebinding_mode = prefs.lf.keymap.ToolMode.GLOBAL
+    section._previous_trigger = None
+    state.capturing[0] = True
+
+    panel.on_update(doc)
+    assert model.handle.request_update_count == 1
+
+    state.capturing[0] = False
+    state.captured.append({"type": "key", "key": 85, "modifiers": 0})
+    panel.on_update(doc)
+    requests_after_capture = model.handle.request_update_count
+    panel.on_update(doc)
+
+    assert section._rebinding_action is None
+    assert model.handle.request_update_count == requests_after_capture
 
 
 def test_keymap_capture_conflict_prompts_to_replace(keymap_bindings_module):

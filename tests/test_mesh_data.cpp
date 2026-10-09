@@ -3,6 +3,7 @@
 
 #include "core/mesh_data.hpp"
 #include "rendering/mesh2splat.hpp"
+#include <cstdlib>
 #include <gtest/gtest.h>
 #include <map>
 #include <memory>
@@ -211,6 +212,21 @@ TEST_F(MeshDataTest, Mesh2SplatCpuTensorConverterProducesSplatData) {
     EXPECT_EQ((*result)->sh0_raw().size(1), size_t{1});
     EXPECT_EQ((*result)->sh0_raw().size(2), size_t{3});
     EXPECT_EQ((*result)->opacity_raw().size(1), size_t{1});
+}
+
+// Catches the converter's Vulkan device being destroyed by an exit handler after the driver has already shut
+// down, which crashed every process that converted a mesh when it exited.
+TEST_F(MeshDataTest, ProcessExitsCleanlyAfterMesh2Splat) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    const auto mesh = make_triangle();
+    EXPECT_EXIT(
+        {
+            Mesh2SplatOptions options;
+            options.resolution_target = Mesh2SplatOptions::kMinResolution;
+            const auto result = lfs::rendering::mesh_to_splat(mesh, options);
+            std::exit(result.has_value() ? 0 : 1);
+        },
+        ::testing::ExitedWithCode(0), "");
 }
 
 // Catches renderer GPU caches keyed on the MeshData address. Destroying a mesh and

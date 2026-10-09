@@ -21,6 +21,7 @@
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_text_input_handler.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 #include "internal/resource_paths.hpp"
 #include "python/python_runtime.hpp"
 
@@ -297,9 +298,7 @@ namespace lfs::vis::gui {
                 const auto& blob = font_blobs_.back();
                 Rml::Span<const Rml::byte> data{
                     reinterpret_cast<const Rml::byte*>(blob.data()), blob.size()};
-                if (Rml::LoadFontFace(data, specs[i].family, specs[i].style, specs[i].weight, specs[i].fallback)) {
-                    LOG_INFO("RmlUI: loaded font {}", loaded.path.string());
-                } else {
+                if (!Rml::LoadFontFace(data, specs[i].family, specs[i].style, specs[i].weight, specs[i].fallback)) {
                     LOG_WARN("RmlUI: failed to register {}", loaded.path.string());
                 }
             }
@@ -308,7 +307,6 @@ namespace lfs::vis::gui {
         }
 
         initialized_ = true;
-        LOG_INFO("RmlUI initialized");
         return true;
     }
 
@@ -366,7 +364,6 @@ namespace lfs::vis::gui {
                 reinterpret_cast<const Rml::byte*>(blob.data()), blob.size()};
             if (Rml::LoadFontFace(data, specs[i].family, Rml::Style::FontStyle::Normal,
                                   Rml::Style::FontWeight::Normal, true)) {
-                LOG_INFO("RmlUI: loaded CJK font {}", loaded.path.string());
                 any_loaded = true;
             } else {
                 LOG_WARN("RmlUI: failed to register {}", loaded.path.string());
@@ -500,8 +497,6 @@ namespace lfs::vis::gui {
         resize_deferring_ = false;
         vulkan_frame_active_ = false;
         initialized_ = false;
-
-        LOG_INFO("RmlUI shut down");
     }
 
     void RmlUIManager::setDpRatio(float ratio) {
@@ -922,7 +917,8 @@ namespace lfs::vis::gui {
                     cancelPointerInput(context, event.GetType() == "unload" && owns_drag);
             }
         }
-        if (event.GetType() == "focus" && rml_input::hasFocusedKeyboardTarget(element)) {
+        // Reloading a panel document dispatches focus to an element without a context.
+        if (event.GetType() == "focus" && element->GetContext() && rml_input::hasFocusedKeyboardTarget(element)) {
             accepts_text_activation_ = focusContext(element->GetContext());
             if (!accepts_text_activation_)
                 rejected_focus_.push_back(element->GetObserverPtr());
@@ -1050,7 +1046,8 @@ namespace lfs::vis::gui {
         }
     }
 
-    RmlUIManager::InputDispatchResult RmlUIManager::dispatchInputEvent(const SDL_Event& event) {
+    RmlUIManager::InputDispatchResult RmlUIManager::dispatchInputEvent(const SDL_Event& native_event) {
+        const SDL_Event event = input::pointerEventInPixels(native_event, window_);
         flushInputLifecycle();
         input_dispatch_active_ = true;
         struct FinishDispatch {

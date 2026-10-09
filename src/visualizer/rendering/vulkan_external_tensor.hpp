@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/error.hpp"
+#include "core/export.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
@@ -79,7 +80,7 @@ namespace lfs::vis {
             lfs::core::SplatExportableStorage::Means;
     };
 
-    [[nodiscard]] std::expected<lfs::core::Tensor, std::string> makeVulkanExternalTensor(
+    [[nodiscard]] LFS_VIS_API std::expected<lfs::core::Tensor, std::string> makeVulkanExternalTensor(
         VulkanContext& context,
         lfs::core::TensorShape shape,
         lfs::core::DataType dtype,

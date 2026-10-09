@@ -78,7 +78,7 @@ All sections may appear in `shared` or in an individual variant. Shared values a
 | `shadows` | `enabled`, `offset`, `blur`, `alpha` |
 | `vignette` | `enabled`, `intensity`, `radius`, `softness` |
 | `button` | `tint_normal`, `tint_hover`, `tint_active` |
-| `overlay` | `background`, `text`, `text_dim`, `border`, `icon`, `highlight`, `selection`, `selection_flash` |
+| `overlay` | `background`, `text`, `text_dim`, `border`, `icon`, `highlight`, `selection` |
 
 Two-component dimensions such as padding and shadow offset use `[x, y]`. Theme font properties are retained for format compatibility and for consumers that use them; defining a font section is optional.
 

@@ -323,16 +323,16 @@ class TestToolPolling:
         assert tool.can_activate(MockContext(has_scene=False, num_gaussians=100)) is False
 
 
-    def test_crop_volume_selection_disables_other_scene_tools(self, monkeypatch):
-        """Crop volume node selections should only expose the Crop tool."""
+    def test_crop_volume_selection_keeps_other_scene_tools(self, monkeypatch):
+        """Leaving the crop tool selects the volume's parent, so the other tools stay available."""
         _install_scene_stub(monkeypatch, ["crop"], {"crop": _node("CROPBOX")})
         sys.modules["lichtfeld"].ui = SimpleNamespace(
             is_tool_available=lambda _tool_id: True
         )
         context = MockContext(has_scene=True, num_gaussians=100, can_transform=True)
 
-        assert get_tool_by_id("builtin.cropbox").can_activate(context) is True
         for tool_id in (
+            "builtin.cropbox",
             "builtin.select",
             "builtin.translate",
             "builtin.rotate",
@@ -340,7 +340,7 @@ class TestToolPolling:
             "builtin.mirror",
             "builtin.align",
         ):
-            assert get_tool_by_id(tool_id).can_activate(context) is False
+            assert get_tool_by_id(tool_id).can_activate(context) is True
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

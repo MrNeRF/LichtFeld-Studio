@@ -204,7 +204,7 @@ namespace lfs::io::project {
             Hash128Stream hasher;
             auto copied = source->visit_stream(
                 [&](std::istream& input, const std::uint64_t size) -> lfs::Result<void> {
-                    std::vector<char> buffer(1024 * 1024);
+                    std::vector<char> buffer(4 * 1024 * 1024);
                     std::uint64_t copied_bytes = 0;
                     while (input && copied_bytes < size) {
                         const auto remaining = size - copied_bytes;
@@ -225,6 +225,16 @@ namespace lfs::io::project {
                         }
                         output.write(buffer.data(), count);
                         copied_bytes += static_cast<std::uint64_t>(count);
+                        if (progress && !progress(
+                                            total_bytes == 0
+                                                ? 1.0F
+                                                : static_cast<float>(completed_bytes + copied_bytes) /
+                                                      static_cast<float>(total_bytes))) {
+                            return lfs::Result<void>::failure(embed_error(
+                                lfs::ErrorCode::Cancelled,
+                                "Embedded dataset extraction was canceled.",
+                                "The caller requested cancellation"));
+                        }
                     }
                     if (!output || copied_bytes != size) {
                         return lfs::Result<void>::failure(embed_error(

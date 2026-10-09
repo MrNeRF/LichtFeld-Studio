@@ -39,6 +39,9 @@ namespace lfs::training {
     // disparity and depth candidates), so the caller resolves the dataset prior.
     // The optional progress callback fires once per depth camera as it is
     // projected, with (done, total_depth_cameras).
+    // The camera's lens as the GPU projection models it; pinhole once undistortion is prepared.
+    [[nodiscard]] kernels::DepthCameraProjection depth_camera_projection(const lfs::core::Camera& cam);
+
     using DepthAnchorProgress = std::function<void(std::size_t done, std::size_t total)>;
     [[nodiscard]] RawDepthAnchorMap computeRawDepthAnchors(
         const lfs::core::Tensor& means,

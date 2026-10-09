@@ -141,7 +141,7 @@ namespace lfs::io::project {
                 {"centre_speed", 0.002},
                 {"roll_speed", 0.01},
                 {"translate_speed", 0.0005},
-                {"wasd_speed", 8.0},
+                {"wasd_speed", 10.0},
                 {"max_wasd_speed", 100.0},
                 {"ortho_scale", nullptr},
             };

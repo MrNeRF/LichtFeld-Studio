@@ -563,6 +563,34 @@ def test_verify_catalog_projects_prioritizes_visible_window():
     ) == 5
     assert order == ["3", "1", "0", "2", "4"]
 
+@pytest.mark.parametrize("use_service", [False, True])
+def test_catalog_verify_cancels_between_projects(monkeypatch, tmp_path, use_service):
+    from lfs_plugins.asset_index import LibraryService
+
+    paths, inspections = _write_licht_tree(tmp_path, 5)
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(
+        lambda path: inspections[Path(path).name]))
+    index = AssetIndex(tmp_path / "library.json", tmp_path)
+    assert index.load()
+    for path in paths:
+        index.register_licht_asset(str(path))
+    cancel, reads = threading.Event(), []
+
+    def read(path, _expected_uuid, **_kwargs):
+        reads.append(path)
+        cancel.set()
+        return "UNCHANGED", None
+
+    monkeypatch.setattr(index, "_read_project_runtime", read)
+    service = LibraryService(index) if use_service else None
+    try:
+        assert verify_catalog_projects(service or index, cancel, interval_s=60) == 1
+        assert len(reads) == 1
+        assert len(index.list_projects()) == 5
+    finally:
+        if service:
+            service.close()
+
 
 @pytest.mark.parametrize("scan_all", [False, True])
 @pytest.mark.parametrize("remaining", [0, 1])
@@ -636,3 +664,118 @@ def test_scan_without_folder_roots_does_not_reconcile_unrelated_projects():
         reconcile_observations=lambda *args, **kwargs: pytest.fail("No folder was scanned"),
     )
     assert scan_all_asset_folders(index) == asset_watch.AssetFolderScanResult()
+
+
+def test_refresh_keeps_dataset_image_thumbnail_seen_on_open(monkeypatch, tmp_path: Path):
+    # A project without an embedded thumbnail shows its first dataset image. Opening resolves that
+    # image; the refresh after it (bulk verify without image lookup, rescan of the unchanged file)
+    # used to store "no image" and the card fell back to its old poster.
+    project_path = tmp_path / "scene.licht"
+    project_path.write_bytes(b"container")
+    first_image = tmp_path / "images" / "0001.jpg"
+    first_image.parent.mkdir()
+    first_image.write_bytes(b"jpeg")
+    project_uuid = str(uuid.uuid4())
+    inspection = _inspection(project_uuid)
+    inspection.has_checkpoint = True
+    inspection.has_dataset = True
+
+    def inspect(_path, resolve_fallback=True):
+        resolved = SimpleNamespace(**vars(inspection))
+        resolved.fallback_preview_path = str(first_image) if resolve_fallback else ""
+        resolved.preview_width, resolved.preview_height = (1600, 900) if resolve_fallback else (0, 0)
+        return resolved
+
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
+    index = AssetIndex(library_path=tmp_path / "library.json", default_folder_path=tmp_path)
+    index.load()
+    scan_all_asset_folders(index)
+    (project,) = index.list_projects()
+
+    opened = index.verify_asset(project.id)
+    assert opened.fallback_preview_path == str(first_image)
+
+    verify_catalog_projects(index, interval_s=0)
+    scan_all_asset_folders(index)
+
+    reloaded = AssetIndex(library_path=tmp_path / "library.json", default_folder_path=tmp_path)
+    assert reloaded.load() is True
+    for refreshed in (index.find_asset_by_path(str(project_path)), reloaded.list_projects()[0]):
+        assert refreshed.fallback_preview_path == str(first_image)
+        assert (refreshed.preview_width, refreshed.preview_height) == (1600, 900)
+
+
+def test_catalog_verify_reopens_only_changed_projects(monkeypatch, tmp_path: Path):
+    # Each reopen can take a second on some systems and the folder scan waits behind the verify,
+    # so a refresh with nothing changed sat at "0 folders" for half a minute.
+    paths = [tmp_path / f"scene{i}.licht" for i in range(3)]
+    inspections = {}
+    for path in paths:
+        path.write_bytes(b"container")
+        inspection = _inspection(str(uuid.uuid4()))
+        inspection.has_checkpoint = False
+        inspection.has_dataset = True
+        inspections[path.name] = inspection
+    opened = []
+
+    def inspect(path, _resolve_fallback=True):
+        opened.append(Path(path).name)
+        return inspections[Path(path).name]
+
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
+    index = AssetIndex(library_path=tmp_path / "library.json", default_folder_path=tmp_path)
+    index.load()
+    scan_all_asset_folders(index)
+    opened.clear()
+
+    verify_catalog_projects(index, interval_s=0)
+    assert opened == []
+
+    paths[1].write_bytes(b"container, saved again")
+    verify_catalog_projects(index, interval_s=0)
+    assert set(opened) == {"scene1.licht"}
+    assert all(project.status == "AVAILABLE" for project in index.list_projects())
+
+
+def test_rescan_reads_only_project_heads(monkeypatch, tmp_path: Path):
+    # The catalog write rechecks each project's identity; a full open per project made a rescan of an
+    # unchanged library as slow as reopening every project.
+    inspections = {}
+    for i in range(3):
+        path = tmp_path / f"scene{i}" / f"scene{i}.licht"
+        path.parent.mkdir()
+        path.write_bytes(b"container")
+        inspection = _inspection(str(uuid.uuid4()))
+        inspection.has_checkpoint = False
+        inspection.has_dataset = True
+        inspections[path.name] = inspection
+    opened = []
+
+    def inspect(path, _resolve_fallback=True):
+        opened.append(Path(path).name)
+        return inspections[Path(path).name]
+
+    def head(path):
+        inspection = inspections[Path(path).name]
+        return inspection.project_uuid, inspection.commit_uuid
+
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
+    index = AssetIndex(library_path=tmp_path / "library.json", default_folder_path=tmp_path)
+    index.load()
+    scan_all_asset_folders(index)
+    monkeypatch.setattr(AssetIndex, "_cheap_head_identity", staticmethod(head))
+    opened.clear()
+
+    scan_all_asset_folders(index)
+    verify_catalog_projects(index, interval_s=0)
+
+    assert opened == []
+    assert len(index.list_projects()) == 3
+
+    replaced = next(iter(inspections.values()))
+    original_uuid = replaced.project_uuid
+    replaced.project_uuid = str(uuid.uuid4())
+    (tmp_path / "scene0" / "scene0.licht").write_bytes(b"another project")
+    verify_catalog_projects(index, interval_s=0)
+    assert any(project.project_uuid == original_uuid and project.status != "AVAILABLE"
+               for project in index.list_projects())

@@ -1,11 +1,13 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "app/include/app/mcp_app_utils.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "gui/scene_graph_context_actions.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -258,6 +260,99 @@ namespace {
 
     class SceneGraphRegression : public SceneGraphFuzzTest {};
 
+    TEST_F(SceneGraphRegression, NodeSummaryCountsFollowCutUndoRedo) {
+        auto& scene = manager_->getScene();
+        const auto first = scene.addSplat("first", make_cuda_splat(100000, 0.0f));
+        const auto second = scene.addSplat("second", make_cuda_splat(100000, 10.0f));
+        const auto untouched = scene.addSplat("untouched", make_cuda_splat(7, 20.0f));
+        const auto group = scene.addGroup("empty");
+        const auto check = [&](const size_t expected) {
+            lfs::app::SceneNodeCounts counts(scene);
+            EXPECT_EQ(counts.get(*scene.getNodeById(first)), expected);
+            EXPECT_EQ(counts.get(*scene.getNodeById(second)), expected);
+            EXPECT_EQ(counts.get(*scene.getNodeById(untouched)), 7u);
+            EXPECT_EQ(counts.get(*scene.getNodeById(group)), 0u);
+            EXPECT_EQ(scene.getNodeById(first)->model->size(), 100000u);
+            EXPECT_EQ(scene.getTotalGaussianCount(), 200007u);
+            EXPECT_EQ(scene.getActiveGaussianCountsByNode().at(first), expected);
+        };
+        check(100000);
+        std::vector<bool> selected(200007, false);
+        std::fill_n(selected.begin(), 39628, true);
+        std::fill_n(selected.begin() + 100000, 39628, true);
+        scene.setSelectionMask(std::make_shared<Tensor>(
+            Tensor::from_vector(selected, {selected.size()}, Device::CUDA)));
+        ASSERT_TRUE(manager_->cutSelectedGaussians());
+        check(60372);
+        EXPECT_EQ(scene.selectedCount(), 0u);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        check(100000);
+        EXPECT_EQ(scene.selectedCount(), 79256u);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+        check(60372);
+    }
+
+    TEST_F(SceneGraphRegression, NodeSummaryCountsFollowDeleteAndPaste) {
+        auto& scene = manager_->getScene();
+        const auto id = scene.addSplat("source", make_cuda_splat(6, 0.0f));
+        scene.setSelectionMask(std::make_shared<Tensor>(Tensor::from_vector(
+            std::vector<bool>{true, true, false, false, false, false}, {6}, Device::CUDA)));
+        ASSERT_TRUE(manager_->copySelectedGaussians());
+        ASSERT_TRUE(manager_->deleteSelectedGaussiansWithHistory());
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNodeById(id)), 4u);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNodeById(id)), 6u);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNodeById(id)), 4u);
+        const auto pasted = manager_->pasteGaussians();
+        ASSERT_EQ(pasted.size(), 1u);
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNode(pasted.front())), 2u);
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNodeById(id)), 4u);
+    }
+
+    TEST_F(SceneGraphRegression, NodeSummaryCountsFollowCropAndCompaction) {
+        auto& scene = manager_->getScene();
+        const auto id = scene.addSplat("source", make_cuda_splat(3, 0.0f));
+        lfs::core::events::cmd::CropPLYEllipsoid{
+            .world_transform = glm::mat4(1.0f),
+            .radii = glm::vec3(0.5f),
+            .inverse = false,
+        }
+            .emit();
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNodeById(id)), 1u);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNodeById(id)), 3u);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNodeById(id)), 1u);
+        EXPECT_EQ(manager_->applyDeleted(), 2u);
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNodeById(id)), 1u);
+        EXPECT_EQ(scene.getNodeById(id)->model->size(), 1u);
+    }
+
+    TEST_F(SceneGraphRegression, EmptyGroupsDoNotOfferMerge) {
+        auto& scene = manager_->getScene();
+        const auto empty = scene.addGroup("empty");
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, empty));
+        const auto nested = scene.addGroup("nested", empty);
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, empty));
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, nested));
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, lfs::core::NULL_NODE));
+    }
+
+    TEST_F(SceneGraphRegression, PopulatedGroupsKeepMergeAction) {
+        auto& scene = manager_->getScene();
+        const auto group = scene.addGroup("group");
+        const auto nested = scene.addGroup("nested", group);
+        const auto splat = scene.addSplat("source", make_cpu_splat(2, 0.0f), nested);
+        EXPECT_TRUE(lfs::vis::gui::showGroupMergeAction(scene, nested));
+        EXPECT_TRUE(lfs::vis::gui::showGroupMergeAction(scene, group));
+        scene.setNodeVisibility(splat, false);
+        EXPECT_TRUE(lfs::vis::gui::showGroupMergeAction(scene, group));
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, splat));
+        scene.removeNodeById(splat);
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, group));
+    }
+
     TEST_F(SceneGraphRegression, BakeTransformUndoRestoresMeans) {
         auto& scene = manager_->getScene();
         const NodeId node_id = scene.addSplat("bake", make_cpu_splat(2, 1.0f));
@@ -445,6 +540,44 @@ namespace {
         EXPECT_EQ(scene_state(*manager_), before);
     }
 
+    TEST_F(SceneGraphRegression, DuplicateCompactedSplatClonesLiveMaskThroughHistoryAndCut) {
+        auto& scene = manager_->getScene();
+        scene.addSplat("before", make_cuda_splat(3, 0.0f));
+        const auto source = scene.addSplat("source", make_cuda_splat(100000, 10.0f));
+        scene.addSplat("after", make_cuda_splat(4, 20.0f));
+        const auto rows = Tensor::arange(0, 100000, 1, Device::CUDA);
+        scene.getNodeById(source)->model->soft_delete(rows.lt(39628));
+        scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+        std::vector<bool> selected(100007, false);
+        std::fill(selected.begin() + 39631, selected.begin() + 100003, true);
+        scene.setSelectionMask(std::make_shared<Tensor>(
+            Tensor::from_vector(selected, {selected.size()}, Device::CUDA)));
+        manager_->selectNode(source);
+        const auto before = scene_state(*manager_, false);
+        const auto name = manager_->duplicateNodeTree(source);
+        ASSERT_FALSE(name.empty());
+        ASSERT_EQ(scene.getNode(name)->model->size(), 60372u);
+        selected.resize(160379, true);
+        EXPECT_EQ(scene.getSelectionMask()->cpu().to_vector_bool(), selected);
+        EXPECT_EQ(scene.selectedCount(), 120744u);
+        EXPECT_EQ(manager_->getSelectedNodeIds(), (std::vector<NodeId>{source}));
+        const auto after = scene_state(*manager_, false);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(scene_state(*manager_, false), before);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+        EXPECT_EQ(scene_state(*manager_, false), after);
+        EXPECT_EQ(scene.getSelectionMask()->cpu().to_vector_bool(), selected);
+        ASSERT_TRUE(manager_->cutSelectedGaussians());
+        const auto* remaining_copy = scene.getNode(name);
+        EXPECT_TRUE(!remaining_copy || remaining_copy->model->visible_count() == 0);
+        EXPECT_EQ(scene.getNode("before")->model->visible_count(), 3u);
+        EXPECT_EQ(scene.getNode("after")->model->visible_count(), 4u);
+        const auto* remaining_source = scene.getNode("source");
+        EXPECT_TRUE(!remaining_source || remaining_source->model->visible_count() == 0);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(scene_state(*manager_, false), after);
+    }
+
     TEST_F(SceneGraphRegression, DuplicatePreservesEllipsoidChild) {
         auto& scene = manager_->getScene();
         const NodeId source_id = scene.addSplat("source", make_cpu_splat(2, 0.0f));
@@ -508,7 +641,8 @@ namespace {
         EXPECT_EQ(scene.getNodeById(pasted_ellipsoid_id)->local_transform.get(), expected_transform);
     }
 
-    TEST_F(SceneGraphRegression, MergeHonorsEllipsoidCrop) {
+    // An enabled crop shape only filters the view until it is applied, so merging must not crop.
+    TEST_F(SceneGraphRegression, MergeKeepsSplatsOutsideAnUnappliedEllipsoid) {
         auto& scene = manager_->getScene();
         const NodeId group_id = scene.addGroup("ellipsoid_merge");
         const NodeId splat_id = scene.addSplat(
@@ -531,9 +665,9 @@ namespace {
         const auto* merged = scene.getNode("ellipsoid_merge");
         ASSERT_NE(merged, nullptr);
         ASSERT_NE(merged->model, nullptr);
-        EXPECT_EQ(merged->model->size(), 1);
+        EXPECT_EQ(merged->model->size(), 3);
         EXPECT_EQ(merged->model->means_raw().cpu().to_vector(),
-                  (std::vector<float>{-1.0f, 1.0f, -1.0f}));
+                  (std::vector<float>{-2.0f, 0.0f, 0.0f, -1.0f, 1.0f, -1.0f, 0.0f, 2.0f, -2.0f}));
     }
 
     TEST_F(SceneGraphFuzzTest, BatchRemovalRejectsDuplicateIdsAtomically) {

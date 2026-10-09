@@ -226,29 +226,32 @@
           </div>
         </div>
 
-        <div class="action-row">
-          <button id="btn-start" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.start</button>
-          <button id="btn-stop" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.stop</button>
-          <button id="btn-cancel" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.cancel</button>
-          <span id="select-hint" class="inline-warning">@tr:video_extractor.select_both</span>
+      </div>
+    </div>
+
+    <div id="action-footer">
+      <div class="action-row">
+        <button id="btn-start" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.start</button>
+        <button id="btn-stop" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.stop</button>
+        <button id="btn-cancel" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.cancel</button>
+        <span id="select-hint" class="inline-warning">@tr:video_extractor.select_both</span>
+      </div>
+      <div class="status-row">
+        <div id="progress-section" class="status-section">
+          <span id="progress-text" class="status-text">@tr:video_extractor.starting</span>
+          <progress id="progress-bar" max="1" value="0"></progress>
         </div>
-        <div class="status-row">
-          <div id="progress-section" class="status-section">
-            <span id="progress-text" class="status-text">@tr:video_extractor.starting</span>
-            <progress id="progress-bar" max="1" value="0"></progress>
-          </div>
-          <div id="complete-section" class="status-section status-section--success">
-            <span id="complete-text" class="status-text">@tr:video_extractor.complete</span>
-            <button id="btn-complete-ok" class="btn btn--secondary mini-btn" type="button">@tr:video_extractor.ok</button>
-          </div>
-          <div id="stopped-section" class="status-section status-section--stopped">
-            <span id="stopped-text" class="status-text">@tr:video_extractor.stopped</span>
-            <button id="btn-stopped-ok" class="btn btn--secondary mini-btn" type="button">@tr:video_extractor.ok</button>
-          </div>
-          <div id="error-section" class="status-section status-section--error">
-            <span id="error-text" class="status-text">@tr:video_extractor.error</span>
-            <button id="btn-error-dismiss" class="btn btn--secondary mini-btn" type="button">@tr:video_extractor.dismiss</button>
-          </div>
+        <div id="complete-section" class="status-section status-section--success">
+          <span id="complete-text" class="status-text">@tr:video_extractor.complete</span>
+          <button id="btn-complete-ok" class="btn btn--secondary mini-btn" type="button">@tr:video_extractor.ok</button>
+        </div>
+        <div id="stopped-section" class="status-section status-section--stopped">
+          <span id="stopped-text" class="status-text">@tr:video_extractor.stopped</span>
+          <button id="btn-stopped-ok" class="btn btn--secondary mini-btn" type="button">@tr:video_extractor.ok</button>
+        </div>
+        <div id="error-section" class="status-section status-section--error">
+          <span id="error-text" class="status-text">@tr:video_extractor.error</span>
+          <button id="btn-error-dismiss" class="btn btn--secondary mini-btn" type="button">@tr:video_extractor.dismiss</button>
         </div>
       </div>
     </div>

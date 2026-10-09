@@ -23,6 +23,11 @@
 #define HIGS_TILE_WIDTH              8
 #define HIGS_TILE_HEIGHT             8
 #define HIGS_TILE_SIZE               (HIGS_TILE_WIDTH * HIGS_TILE_HEIGHT)
+// One coverage bit per 4x4 output region.
+#define HIGS_DEPTH_SAMPLE_TILE_SIZE 4
+// One 32-splat membership ballot per render tile and mini-batch, retained
+// only when compose needs exact median depth.
+#define HIGS_REPLAY_MASK_WORDS_PER_BATCH ((RASTER_BATCH_SIZE / SUBGROUP_SIZE) * HIGS_MACRO_TILE_SIZE_TILES)
 // Macro-tile extent in legacy 16px-tile units (projection rects use that grid).
 #define HIGS_MACRO_T16_W ((HIGS_MACRO_TILE_WIDTH_TILES * HIGS_TILE_WIDTH) / TILE_WIDTH)
 #define HIGS_MACRO_T16_H ((HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT) / TILE_HEIGHT)

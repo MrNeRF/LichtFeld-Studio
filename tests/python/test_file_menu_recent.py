@@ -116,6 +116,8 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     lf_stub.is_dataset_path = lambda _path: True
     lf_stub.read_checkpoint_header = lambda _path: object()
     lf_stub.read_checkpoint_params = lambda _path: object()
+    lf_stub.scene = SimpleNamespace(NodeType=SimpleNamespace(SPLAT="splat"))
+    lf_stub.get_scene = lambda: SimpleNamespace(get_nodes=lambda: [], is_node_effectively_visible=lambda _node: True)
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
     class Operator:
@@ -1052,6 +1054,25 @@ def test_new_project_asks_before_stopping_training(monkeypatch, stop):
     assert buttons == ["tr:common.yes", "tr:common.no"]
     callback(buttons[0 if stop else 1])
     assert file_menu.lf.new_project_calls == ([(True, True)] if stop else [])
+    assert file_menu.lf.project_create_calls == []
+
+
+def test_project_switch_confirmation_keeps_prior_training_approval(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.project_is_dirty = lambda: True
+    file_menu.lf.is_training_active = lambda: True
+
+    file_menu._show_project_switch_confirmation(
+        True, "", False, "", False, True
+    )
+
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    title, _message, buttons, callback = file_menu.lf.confirm_dialogs[0]
+    assert title == "tr:menu.file.new_project"
+    callback(buttons[1])
+
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    assert file_menu.lf.new_project_calls == [(True, True)]
     assert file_menu.lf.project_create_calls == []
 
 

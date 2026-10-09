@@ -2,11 +2,12 @@
  * Label tool for the self-contained HTML viewer export.
  *
  * Pick points on the model, name them, and save/load the resulting
- * annotation set as a simple .labels.json file (JSON). Placement reuses
- * the viewer's depth-based `Picker` (same as the measure tool); once a
- * label is selected a `TranslateGizmo` is attached so a mis-picked point
- * can be nudged precisely before it is saved. Labels behind the camera
- * (negative-facing view space) are hidden and are not hit-testable.
+ * annotation set - labels plus measurements - as a simple .labels.json
+ * file (JSON). Placement reuses the viewer's depth-based `Picker` (same
+ * as the measure tool); once a label is selected a `TranslateGizmo` is
+ * attached so a mis-picked point can be nudged precisely before it is
+ * saved. Labels behind the camera (negative-facing view space) are hidden
+ * and are not hit-testable.
  *
  * IMPORTANT: like gizmo.js and measure-tool.js, this file is NOT
  * self-contained at runtime. It is concatenated (see
@@ -242,11 +243,14 @@ function initLabelTool(global) {
     // ---- .labels.json file save/load ---------------------------------------
     const serializeLabels = () => JSON.stringify({
         format: 'lfs-labels',
-        version: 1,
+        version: 2,
         labels: labels.map((label) => ({
             text: label.text,
             position: [label.position.x, label.position.y, label.position.z]
-        }))
+        })),
+        // Measurements ride along in the same file so a single save/load
+        // round-trips both annotation types (see window.__lfsMeasureTool).
+        measurements: window.__lfsMeasureTool ? window.__lfsMeasureTool.get() : []
     }, null, 2);
 
     const suggestedName = () => {
@@ -296,23 +300,32 @@ function initLabelTool(global) {
         setTimeout(() => URL.revokeObjectURL(url), 1000);
     };
 
+    const parsePosition = (entry, what) => {
+        const pos = Array.isArray(entry.position) ? entry.position : entry.position && [entry.position.x, entry.position.y, entry.position.z];
+        if (!Array.isArray(pos) || pos.length < 3 || pos.slice(0, 3).some((v) => !Number.isFinite(Number(v)))) {
+            throw new Error(what + ' has an invalid position');
+        }
+        return new Vec3(Number(pos[0]), Number(pos[1]), Number(pos[2]));
+    };
+
     const parseLabels = (raw) => {
         const parsed = JSON.parse(raw);
-        const arr = Array.isArray(parsed) ? parsed : (parsed && parsed.labels);
-        if (!Array.isArray(arr)) {
+        // v1 files carry a bare labels array; v2 adds a measurements array.
+        const labelEntries = Array.isArray(parsed) ? parsed : (parsed && parsed.labels);
+        if (!Array.isArray(labelEntries)) {
             throw new Error('no labels array found');
         }
-        return arr.map((entry, i) => {
-            const text = entry && entry.text != null ? String(entry.text) : 'Label ' + (i + 1);
-            const pos = Array.isArray(entry.position) ? entry.position : entry.position && [entry.position.x, entry.position.y, entry.position.z];
-            if (!Array.isArray(pos) || pos.length < 3 || pos.slice(0, 3).some((v) => !Number.isFinite(Number(v)))) {
-                throw new Error('label ' + (i + 1) + ' has an invalid position');
-            }
-            return {
-                text,
-                position: new Vec3(Number(pos[0]), Number(pos[1]), Number(pos[2]))
-            };
-        });
+        const measureEntries = parsed && Array.isArray(parsed.measurements) ? parsed.measurements : [];
+        return {
+            labels: labelEntries.map((entry, i) => ({
+                text: entry && entry.text != null ? String(entry.text) : 'Label ' + (i + 1),
+                position: parsePosition(entry, 'label ' + (i + 1))
+            })),
+            measurements: measureEntries.map((entry, i) => ({
+                a: [Number(entry.a[0]), Number(entry.a[1]), Number(entry.a[2])],
+                b: [Number(entry.b[0]), Number(entry.b[1]), Number(entry.b[2])]
+            })).filter((m) => m.a.every(Number.isFinite) && m.b.every(Number.isFinite))
+        };
     };
 
     const fileInput = document.createElement('input');
@@ -333,10 +346,14 @@ function initLabelTool(global) {
             window.alert('Failed to load labels: ' + err.message);
             return;
         }
-        if (labels.length > 0 && !window.confirm('Replace ' + labels.length + ' existing label(s) with ' + next.length + ' from the file?')) {
+        const existingMeasurements = window.__lfsMeasureTool ? window.__lfsMeasureTool.get().length : 0;
+        if ((labels.length > 0 || existingMeasurements > 0) && !window.confirm('Replace ' + labels.length + ' label(s) and ' + existingMeasurements + ' measurement(s) with ' + next.labels.length + ' label(s) and ' + next.measurements.length + ' from the file?')) {
             return;
         }
-        replaceLabels(next);
+        replaceLabels(next.labels);
+        if (window.__lfsMeasureTool) {
+            window.__lfsMeasureTool.set(next.measurements);
+        }
     });
     document.getElementById('ui').appendChild(fileInput);
 
@@ -547,6 +564,15 @@ function initLabelTool(global) {
             setActive(false);
         }
     });
+
+    // Hook consumed by the VR annotations module (vr-annotations.js) so it
+    // can rebuild in-world labels from the current tool state on XR start.
+    window.__lfsLabelTool = {
+        get: () => labels.map((label) => ({
+            text: label.text,
+            position: [label.position.x, label.position.y, label.position.z]
+        }))
+    };
 }
 
 export { initLabelTool };

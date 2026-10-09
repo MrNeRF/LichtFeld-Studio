@@ -11,6 +11,7 @@
 #include "sogs.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/error_reporter.hpp"
+#include "core/file_extensions.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
@@ -1291,7 +1292,7 @@ namespace lfs::io {
                 license_bytes->reset();
             if (!std::filesystem::exists(path))
                 return make_error(ErrorCode::PATH_NOT_FOUND, "SOG file/directory does not exist", path);
-            if (path.extension() == ".sog") {
+            if (core::has_extension(path, ".sog") && !std::filesystem::is_directory(path)) {
                 auto result = read_sog_bundle(path, license_bytes);
                 if (!result)
                     return make_error(ErrorCode::DECODING_FAILED, result.error(), path);
@@ -1369,11 +1370,13 @@ namespace lfs::io {
         class SogArchive final : public SogSink {
             struct archive* a_ = nullptr;
             std::filesystem::path output_path_;
+            bool store_every_member_ = false;
             bool valid_ = false;
 
         public:
-            explicit SogArchive(const std::filesystem::path& output_path)
-                : output_path_(output_path) {}
+            explicit SogArchive(const std::filesystem::path& output_path, const bool store_every_member = false)
+                : output_path_(output_path),
+                  store_every_member_(store_every_member) {}
 
             Result<void> open() override {
                 a_ = archive_write_new();
@@ -1453,7 +1456,7 @@ namespace lfs::io {
                 archive_entry_set_mtime(entry, time_t, 0);
 
                 const bool is_webp = filename.size() >= 5 && filename.compare(filename.size() - 5, 5, ".webp") == 0;
-                const int compression_result = is_webp
+                const int compression_result = is_webp || store_every_member_
                                                    ? archive_write_zip_set_compression_store(a_)
                                                    : archive_write_zip_set_compression_deflate(a_);
                 if (compression_result != ARCHIVE_OK) {
@@ -2461,8 +2464,8 @@ namespace lfs::io {
         }
     }
 
-    std::unique_ptr<SogSink> make_sog_archive(const std::filesystem::path& path) {
-        return std::make_unique<SogArchive>(path);
+    std::unique_ptr<SogSink> make_sog_archive(const std::filesystem::path& path, const bool store_every_member) {
+        return std::make_unique<SogArchive>(path, store_every_member);
     }
 
     Result<void> save_sog(const SplatData& data, const SogSaveOptions& options) {

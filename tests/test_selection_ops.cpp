@@ -26,6 +26,10 @@ namespace {
         return Tensor::from_vector(xyz, {xyz.size() / 3, 3}, Device::CUDA);
     }
 
+    Tensor make_transform_indices(const std::vector<int>& indices) {
+        return Tensor::from_vector(indices, {indices.size()}, Device::CUDA);
+    }
+
 } // namespace
 
 // Success-path regression for selection_ops build_grid AWAIT + launch checks
@@ -44,9 +48,15 @@ protected:
 TEST_F(SelectionOpsCudaTest, GrowAndShrinkSuccessPathDoesNotThrow) {
     // Three points: seed at origin (selected), neighbor within radius, far point.
     const auto means = make_means({
-        0.0f, 0.0f, 0.0f, // 0: seed
-        0.5f, 0.0f, 0.0f, // 1: within radius 1.0
-        5.0f, 0.0f, 0.0f, // 2: far
+        0.0f,
+        0.0f,
+        0.0f, // 0: seed
+        0.5f,
+        0.0f,
+        0.0f, // 1: within radius 1.0
+        5.0f,
+        0.0f,
+        0.0f, // 2: far
     });
     const auto mask = make_uint8_mask({1, 0, 0});
 
@@ -56,20 +66,93 @@ TEST_F(SelectionOpsCudaTest, GrowAndShrinkSuccessPathDoesNotThrow) {
     ASSERT_EQ(grown.device(), Device::CUDA);
 
     const auto grown_cpu = grown.cpu().to_vector_uint8();
-    EXPECT_EQ(grown_cpu[0], 1);
-    EXPECT_EQ(grown_cpu[1], 1); // neighbor absorbed
-    EXPECT_EQ(grown_cpu[2], 0); // far point stays unselected
+    EXPECT_EQ(grown_cpu, (std::vector<uint8_t>{1, 1, 0})); // legacy untransformed result
 
     Tensor shrunk;
     EXPECT_NO_THROW(shrunk = lfs::core::cuda::selection_shrink(grown, means, 1.0f));
     ASSERT_EQ(shrunk.numel(), 3u);
     const auto shrunk_cpu = shrunk.cpu().to_vector_uint8();
-    // Erosion by radius 1: seed has an unselected neighbor within radius (point 2 is far;
-    // point 1 is selected). Point 1's neighborhood includes selected seed — shrink keeps
-    // interior points and drops boundary. At minimum, success path must not throw and
-    // return a well-formed mask of the same size.
-    EXPECT_EQ(shrunk_cpu.size(), 3u);
-    for (const auto v : shrunk_cpu) {
-        EXPECT_TRUE(v == 0 || v == 1);
-    }
+    EXPECT_EQ(shrunk_cpu, (std::vector<uint8_t>{1, 1, 0})); // legacy untransformed result
+}
+
+TEST_F(SelectionOpsCudaTest, GrowUsesWorldPositionsAcrossTransformedNodes) {
+    const auto means = make_means({
+        0.0f,
+        0.0f,
+        0.0f, // selected seed
+        0.4f,
+        0.0f,
+        0.0f, // within radius in node-local space
+        0.8f,
+        0.0f,
+        0.0f, // outside radius in node-local space
+        0.0f,
+        0.0f,
+        0.0f, // same local position, translated and scaled away
+        0.1f,
+        0.0f,
+        0.0f,
+        0.2f,
+        0.0f,
+        0.0f,
+    });
+    const auto mask = make_uint8_mask({1, 0, 0, 0, 0, 0});
+    const auto transform_indices = make_transform_indices({0, 0, 0, 1, 1, 1});
+    glm::mat4 distant_node(1.0f);
+    distant_node[0][0] = 4.0f;
+    distant_node[1][1] = 4.0f;
+    distant_node[2][2] = 4.0f;
+    distant_node[3][0] = 3.0f;
+    const std::vector<glm::mat4> transforms{glm::mat4(1.0f), distant_node};
+
+    const auto grown = lfs::core::cuda::selection_grow(
+                           mask, means, 0.41f, /*group_id=*/1, &transform_indices, &transforms)
+                           .cpu()
+                           .to_vector_uint8();
+    EXPECT_EQ(grown, (std::vector<uint8_t>{1, 1, 0, 0, 0, 0}));
+}
+
+TEST_F(SelectionOpsCudaTest, ShrinkUsesWorldSpacingAfterNodeScale) {
+    const auto means = make_means({
+        -0.4f,
+        -0.4f,
+        0.0f,
+        0.0f,
+        -0.4f,
+        0.0f,
+        0.4f,
+        -0.4f,
+        0.0f,
+        -0.4f,
+        0.0f,
+        0.0f,
+        0.0f,
+        0.0f,
+        0.0f,
+        0.4f,
+        0.0f,
+        0.0f,
+        -0.4f,
+        0.4f,
+        0.0f,
+        0.0f,
+        0.4f,
+        0.0f,
+        0.4f,
+        0.4f,
+        0.0f,
+    });
+    const auto mask = make_uint8_mask({0, 1, 0, 1, 1, 1, 0, 1, 0});
+    const auto transform_indices = make_transform_indices(std::vector<int>(9, 0));
+    glm::mat4 scaled_node(1.0f);
+    scaled_node[0][0] = 4.0f;
+    scaled_node[1][1] = 4.0f;
+    scaled_node[2][2] = 4.0f;
+    const std::vector<glm::mat4> transforms{scaled_node};
+
+    const auto shrunk = lfs::core::cuda::selection_shrink(
+                            mask, means, 0.41f, &transform_indices, &transforms)
+                            .cpu()
+                            .to_vector_uint8();
+    EXPECT_EQ(shrunk, (std::vector<uint8_t>{0, 1, 0, 1, 1, 1, 0, 1, 0}));
 }

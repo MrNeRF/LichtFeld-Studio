@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "diagnostics/vram_timeline.hpp"
@@ -27,7 +28,7 @@ namespace Rml {
 namespace lfs::vis::gui {
     class VramTimelineElement;
 
-    class VramHudOverlay {
+    class LFS_VIS_API VramHudOverlay {
     public:
         struct State {
             bool visible = false;
@@ -49,7 +50,7 @@ namespace lfs::vis::gui {
         void setState(State state);
         [[nodiscard]] bool isVisible() const noexcept { return state_.visible || state_.perf_hud.visible; }
         [[nodiscard]] bool needsAnimationFrame() const noexcept {
-            return pointer_captured_ || sparkline_tick_due();
+            return pointer_captured_;
         }
         [[nodiscard]] bool isCapturingPointer() const noexcept { return pointer_captured_; }
 
@@ -147,6 +148,7 @@ namespace lfs::vis::gui {
         bool has_viewport_geometry_ = false;
         Rml::Element* root_ = nullptr;
         Rml::Element* perf_strip_ = nullptr;
+        Rml::Element* perf_strip_header_ = nullptr;
         Rml::Element* perf_card_ = nullptr;
         Rml::Element* perf_rate_ = nullptr;
         Rml::Element* perf_vram_process_ = nullptr;
@@ -350,6 +352,7 @@ namespace lfs::vis::gui {
         float drag_start_size_w_ = 0.0f;
         float drag_start_size_h_ = 0.0f;
         bool dragging_header_ = false;
+        bool header_drag_moved_ = false;
         bool dragging_resize_ = false;
         bool pointer_captured_ = false;
         bool geometry_dirty_ = false;

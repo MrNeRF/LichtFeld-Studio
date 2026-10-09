@@ -73,6 +73,11 @@ PRECISE_SCROLL_STEP = 32.0
 ASSET_LIST_ROW_HEIGHT_DP = 40.0
 ASSET_GALLERY_ROW_HEIGHT_DP = 230.0
 ASSET_CARD_PREFERRED_WIDTH_DP = 208.0
+# Match the inspector gutters in asset_manager.rcss.
+ASSET_INSPECTOR_GUTTER_DP = 12.0
+ASSET_INSPECTOR_SCROLLBAR_DP = 4.0
+ASSET_STACKED_THUMBNAIL_MAX_WIDTH_DP = 240.0
+ASSET_INFO_THUMBNAIL_DEFAULT_WIDTH_DP = 160.0
 ASSET_WINDOW_OVERSCAN_ROWS = 1
 ASSET_WINDOW_BATCH_ROWS = 1
 ASSET_LIST_FALLBACK_ROWS = 24
@@ -304,6 +309,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         # on_unmount flips this false and mount generations guard callbacks.
         self._panel_mounted = True
         self._mount_generation = 0
+        self._open_request = 0
         self._backend_load_active = False
         self._catalog_load_failed = False
         self._catalog_notice = ""
@@ -800,6 +806,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("asset_results_summary_visible", lambda: True)
         model.bind_func("asset_results_summary", self.get_asset_results_summary)
         model.bind_func("asset_search_empty", self.get_asset_search_empty)
+        model.bind_func("can_clean_missing", self.get_can_clean_missing)
         model.bind_func("catalog_notice", self.get_catalog_notice)
         model.bind_func("has_catalog_notice", self.get_has_catalog_notice)
         model.bind_func("catalog_loading", lambda: self._backend_load_active and not self._catalog_preview)
@@ -923,6 +930,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "import_project_tooltip": "projects.tooltip.add_existing",
             "no_search_results_label": "projects.status.no_search_results",
             "clear_search_label": "projects.action.clear_search",
+            "clean_missing_label": "projects.action.clean_missing",
             "search_placeholder": "projects.toolbar.search_icon",
             "search_icon_label": "projects.toolbar.search_icon",
             "info_tab_label": "projects.info_panel.info",
@@ -1001,6 +1009,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             ("on_bottom_panel_resize_start", self.on_bottom_panel_resize_start),
             ("close_panel", self._on_close_panel),
             ("clear_search", lambda *_args: self.set_search_query("")),
+            ("clean_missing", self.on_clean_missing),
         ):
             model.bind_event(event, handler)
         self._handle = model.get_handle()
@@ -1761,6 +1770,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             str(value)
             for value in (
                 asset.get("name"),
+                self._get_asset_display_name(asset),
                 asset.get("path"),
                 asset.get("type"),
                 asset.get("project_uuid"),
@@ -1970,11 +1980,14 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         placeholder_title_changed = placeholder.get_attribute("title", "") != placeholder_title
         if placeholder_title_changed:
             placeholder.set_attribute("title", placeholder_title)
+        # Leave 12 dp gutters and 4 dp for the side inspector's scrollbar.
         # Side inspectors use their content width. The stacked inspector caps
         # its poster so opening it never consumes the whole results viewport.
-        width = (max(0.0, self._inspector_width - 12.0) if self._layout_class in ("wide", "medium")
-                 else min(240.0, max(0.0, self._content_width - 24.0))
-                 if self._layout_class in ("compact", "narrow") else 160.0)
+        gutters = 2.0 * ASSET_INSPECTOR_GUTTER_DP
+        width = (max(0.0, self._inspector_width - gutters - ASSET_INSPECTOR_SCROLLBAR_DP)
+                 if self._layout_class in ("wide", "medium")
+                 else min(ASSET_STACKED_THUMBNAIL_MAX_WIDTH_DP, max(0.0, self._content_width - gutters))
+                 if self._layout_class in ("compact", "narrow") else ASSET_INFO_THUMBNAIL_DEFAULT_WIDTH_DP)
         geometry = (width, width * 10.0 / 16.0)
         geometry_changed = geometry != self._info_thumbnail_geometry
         if created or geometry_changed:
@@ -2288,6 +2301,21 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def get_asset_search_empty(self) -> bool:
         return bool(self._search_query.strip()) and not self._filtered_assets()
+
+    def _shown_missing_asset_ids(self) -> List[str]:
+        catalog = self._asset_index_assets()
+        return [row["id"] for row in self._filtered_assets()
+                if row.get("id") in catalog
+                and (not row.get("exists", True) or str(row.get("status") or "") == "MISSING")]
+
+    def get_can_clean_missing(self) -> bool:
+        return self._active_filter == "missing" and bool(self._shown_missing_asset_ids())
+
+    def on_clean_missing(self, _handle=None, _ev=None, _args=None) -> None:
+        missing = self._shown_missing_asset_ids()
+        removed = self._library_command("delete_assets", missing) if missing else 0
+        self._catalog_notice = tr("projects.status.cleaned_missing", count=int(removed or 0))
+        self.refresh_catalog(scan_folders=False)
 
     def get_catalog_notice(self) -> str:
         if self._asset_index and getattr(self._asset_index, "last_error", ""):
@@ -2916,6 +2944,14 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "gallery_identity": self._gallery_state.get("identity"),
         })
 
+    def remember_gallery_details(self, project_id: str, title: str, description: str) -> None:
+        if project_id not in self._asset_index_assets():
+            return
+        if self._library_command(
+            "update_asset", project_id, gallery_details_draft={"title": title, "description": description}
+        ) is not None:
+            self.refresh_catalog(scan_folders=False)
+
     def open_project_operation(self, _handle=None, _ev=None, args=None) -> None:
         action = self._resolve_event_value(args, _ev, "data-project-operation")
         if not action and args:
@@ -3069,7 +3105,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             name = str(data.get("name") or "").strip()
             if name:
                 after = None if asset.get("recent_only") else lambda: self._rename_catalog_entry(asset["id"], name)
-                self._start_project_operation(asset["id"], "Rename project", lambda _progress, _cancel: self._native_io_call("set_project_title", path, name), after=after)
+                self._start_project_operation(
+                    asset["id"],
+                    "Rename project",
+                    lambda _progress, _cancel: self._native_io_call("set_project_title", path, name),
+                    after=after,
+                    reverify_asset=True,
+                )
         elif action == "repair":
             destination = str(data.get("destination") or "")
             if not destination:
@@ -3386,6 +3428,18 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _load_asset(self, asset_id: str) -> None:
         if not asset_id:
             return
+        self._open_request += 1
+        request = self._open_request
+        generation = self._mount_generation
+        with self._folder_scan_lock:
+            self._folder_scan_rerun_pending = False
+            self._folder_scan_rerun_target = None
+            cancel = self._folder_scan_cancel
+            verify_cancel = self._catalog_verify_cancel
+        if cancel is not None:
+            cancel.set()
+        if verify_cancel is not None:
+            verify_cancel.set()
         if asset_id.startswith("recent:"):
             asset = self._asset_dict(asset_id)
             if not asset or not asset.get("recent_only"):
@@ -3405,10 +3459,33 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._select_asset_id(asset_id)
             self._gallery_command("pull_open")
             return
-        project = self._library_command("verify_asset", asset_id)
-        if project is None:
-            return
-        asset = project.to_dict() if hasattr(project, "to_dict") else (self._asset_dict(asset_id) or {})
+        service, index = self._library_service, self._asset_index
+
+        def complete(asset, error) -> None:
+            if request != self._open_request or generation != self._mount_generation:
+                return
+            self._row_catalog_generation += 1
+            if error:
+                self._set_catalog_notice(error)
+                self._request_model_update()
+            if asset is not None:
+                self._open_verified_asset(asset_id, asset)
+
+        def worker() -> None:
+            asset, error = None, ""
+            try:
+                project = service.verify(asset_id) if service else index.verify_asset(asset_id)
+                if project is not None:
+                    asset = project.to_dict()
+                error = str(getattr(index, "last_error", "") or "")
+            except Exception as exc:
+                _log.exception("Project open verification failed")
+                error = str(exc)
+            self._schedule_ui(lambda: complete(asset, error))
+
+        threading.Thread(target=worker, daemon=True, name="AssetManagerOpen").start()
+
+    def _open_verified_asset(self, asset_id: str, asset: Dict[str, Any]) -> None:
         if not self._project_available(asset):
             self.refresh_catalog(scan_folders=False)
             return
@@ -3875,14 +3952,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             with self._folder_scan_lock:
                 self._folder_scan_error = bool(result.failed)
                 self._folder_scan_unavailable = bool(getattr(result, "unavailable", False))
-            _log.info(
-                "Asset folder scan: discovered=%d added=%d existing=%d failed=%d cancelled=%s",
-                result.discovered,
-                result.added,
-                result.already_cataloged,
-                result.failed,
-                result.cancelled,
-            )
         except Exception:
             with self._folder_scan_lock:
                 self._folder_scan_error = True
@@ -4021,11 +4090,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         visible_ids: List[str], generation: int,
     ) -> None:
         try:
-            verified = verify_catalog_projects(
+            verify_catalog_projects(
                 self._library_service or index, cancel_event, visible_asset_ids=visible_ids
             )
             self._catalog_verify_succeeded = not cancel_event.is_set()
-            _log.info("Asset catalog verify: verified=%d cancelled=%s", verified, cancel_event.is_set())
         except Exception as exc:
             _log.exception("Projects catalog verification failed path=%s", self.STORAGE_PATH)
             reason = str(exc)
@@ -4111,6 +4179,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._handle.dirty("assets")
             for field in (
                 "asset_results_summary",
+                "can_clean_missing",
                 "asset_list_top_spacer_height",
                 "asset_list_bottom_spacer_height",
                 "asset_gallery_top_spacer_height",
@@ -4884,8 +4953,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if not self._doc:
             return
         prose = self._doc.get_element_by_id("asset-measure-prose")
-        mono = self._doc.get_element_by_id("asset-measure-mono")
-        if not prose or not mono or not hasattr(prose, "measure_text"):
+        value = self._doc.get_element_by_id("asset-measure-value")
+        if not prose or not value or not hasattr(prose, "measure_text"):
             return
         scale = self._ui_scale()
         folder_records = self._asset_index_folders()
@@ -4906,8 +4975,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._inspector_label_width = math.ceil(widest(prose, labels))
         self._text_column_metrics = dict(
             gallery=math.ceil(widest(prose, gallery)) + 16.0 + 24.0,
-            size=math.ceil(widest(mono, ["1023.9 " + unit for unit in ("B", "KB", "MB", "GB", "TB")])) + 16.0,
-            modified=math.ceil(widest(mono, ["2000-12-30 23:59"])) + 16.0,
+            size=math.ceil(widest(value, ["1023.9 " + unit for unit in ("B", "KB", "MB", "GB", "TB")])) + 16.0,
+            modified=math.ceil(widest(value, ["2000-12-30 23:59"])) + 16.0,
             folder=min(240.0, math.ceil(widest(prose, folders)) + 16.0))
         for column in self._text_column_metrics:
             self._text_column_metrics[column] = max(self._text_column_metrics[column],
@@ -5148,6 +5217,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._persist_project_manager_state()
 
     def _refresh_after_project_write(self) -> bool:
+        # The scanner can hold the catalog lock while committing a batch. Keep
+        # the last observed generation until it finishes, then refresh the save.
+        with self._folder_scan_lock:
+            if self._folder_scan_active or self._catalog_verify_active:
+                return False
         poll_write = getattr(lf, "project_poll_write", None)
         if not callable(poll_write) or not self._asset_index:
             return False

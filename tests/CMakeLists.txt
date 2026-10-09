@@ -3,6 +3,10 @@
 
 # Testing module - comprehensive tests for all components
 
+if(BUILD_TESTS OR BUILD_FORMAT_TESTS)
+    add_subdirectory(image_codecs)
+endif()
+
 # =============================================================================
 # Headless localization contracts (no LibTorch/CUDA)
 # =============================================================================
@@ -31,6 +35,46 @@ endif()
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+# Headless SDL boundary regression tests, also built in the CPU-only CI configuration.
+# Do not link SDL itself: this isolated executable provides the four SDL state
+# queries used by the production coordinate helpers and frame finalization.
+
+add_executable(lichtfeld_sdl_coordinate_tests test_sdl_pixel_coordinates.cpp)
+target_compile_features(lichtfeld_sdl_coordinate_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_sdl_coordinate_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/visualizer
+)
+target_link_libraries(lichtfeld_sdl_coordinate_tests PRIVATE
+    GTest::gtest_main
+    SDL3::Headers
+    glm::glm
+)
+add_test(NAME lichtfeld.sdl_coordinates COMMAND lichtfeld_sdl_coordinate_tests)
+set_tests_properties(lichtfeld.sdl_coordinates PROPERTIES LABELS "fast;cpu;input" TIMEOUT 30)
+
+# Save-path policy and the production native-dialog adapter, without opening an OS picker.
+add_executable(lichtfeld_file_dialog_tests test_file_dialog_path.cpp)
+target_compile_features(lichtfeld_file_dialog_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_file_dialog_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/visualizer
+)
+target_link_libraries(lichtfeld_file_dialog_tests PRIVATE GTest::gtest_main)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET lfs_visualizer AND TARGET PkgConfig::LFS_GTK3)
+    target_sources(lichtfeld_file_dialog_tests PRIVATE
+        test_native_save_dialog.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/gui/utils/native_file_dialog.cpp
+    )
+    target_link_libraries(lichtfeld_file_dialog_tests PRIVATE
+        lfs_io lfs_logger SDL3::SDL3 nfd::nfd PkgConfig::LFS_GTK3
+    )
+    target_link_options(lichtfeld_file_dialog_tests PRIVATE
+        "-Wl,--wrap=NFD_Init" "-Wl,--wrap=NFD_Quit" "-Wl,--wrap=NFD_SaveDialogU8_With_Impl"
+    )
+endif()
+add_test(NAME lichtfeld.file_dialog_paths COMMAND lichtfeld_file_dialog_tests)
+set_tests_properties(lichtfeld.file_dialog_paths PROPERTIES LABELS "fast;cpu;io" TIMEOUT 30)
+
 # =============================================================================
 # CPU-only visualizer tests (no LibTorch)
 # =============================================================================
@@ -47,14 +91,18 @@ if(BUILD_VISUALIZER_TESTS)
     endif()
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
+        test_align_transform.cpp
+        test_orthographic_zoom.cpp
+        test_ui_visibility_transition.cpp
         test_menu_bar_title.cpp
         test_panel_layout_render_demand.cpp
         test_preferences_migration.cpp
         test_python_editor_input.cpp
         test_startup_overlay_geometry.cpp
         test_vram_hud_geometry.cpp
+        test_vram_hud_header_click.cpp
     )
-    add_executable(lichtfeld_visualizer_tests EXCLUDE_FROM_ALL
+    add_executable(lichtfeld_visualizer_tests
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}
     )
     target_compile_features(lichtfeld_visualizer_tests PRIVATE cxx_std_23)
@@ -70,6 +118,7 @@ if(BUILD_VISUALIZER_TESTS)
         lfs_python_runtime
         GTest::gtest_main
         Zep::Zep
+        SDL3::SDL3
     )
     add_test(
         NAME lichtfeld_visualizer_tests
@@ -186,6 +235,7 @@ endif()
 # unreferenced function sections before resolution. Keep the dependency-heavy
 # chapter coverage in the non-Windows composition.
 set(LICHT_FORMAT_WINDOWS_FILES
+    test_project_save_as_paths.cpp
     test_json_chapter_dom.cpp
     test_project_chapters.cpp
     test_project_container.cpp
@@ -222,6 +272,7 @@ set(LICHT_FORMAT_NON_WINDOWS_FILES
     ${CMAKE_SOURCE_DIR}/src/io/project/project_document.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/selection_chapter.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/session_chapters.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/sfm_observation_chapter.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/splat_chapter.cpp
     ${CMAKE_SOURCE_DIR}/src/visualizer/gui/layout_state.cpp
 )
@@ -309,8 +360,16 @@ set_tests_properties(lichtfeld_format_tests PROPERTIES
     TIMEOUT 300
 )
 
-add_executable(lichtfeld_frame_tests test_frame_demand_ledger.cpp)
+add_executable(lichtfeld_frame_tests
+    test_frame_demand_ledger.cpp
+    test_frustum_depth_coverage.cpp
+    test_framerate_controller.cpp
+    ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/framerate_controller.cpp)
+
+target_compile_definitions(lichtfeld_frame_tests PRIVATE LFS_STATIC_BUILD)
+
 target_include_directories(lichtfeld_frame_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/include
     ${CMAKE_SOURCE_DIR}/src/visualizer/rendering
     ${CMAKE_SOURCE_DIR}/src/visualizer
     ${CMAKE_SOURCE_DIR}/src
@@ -394,6 +453,10 @@ set(TEST_FILES
     test_fastgs_sort_buffers.cpp
     test_warp_cull_blend.cpp
     test_warp_cull_bwd.cpp
+    test_thin_structure.cpp
+    test_blob_seeding.cpp
+    test_rendered_structure.cpp
+    test_gradient_residual.cpp
     test_fused_reg_loss.cpp
     test_fused_bg_blend.cpp
     test_photometric_hygiene.cpp
@@ -401,6 +464,7 @@ set(TEST_FILES
     test_fused_noise_injection.cpp
     test_densification_info_zero.cpp
     test_densify_events_4x.cpp
+    test_median_selection_perf.cu
     test_training_state_ledger.cpp
     test_vram_ledger_model.cpp
     test_vram_owner_timeline.cpp
@@ -414,6 +478,7 @@ set(TEST_FILES
     test_splat_affine_transform.cpp
     test_splat_sh_affine.cpp
     test_splat_data_clone.cpp
+    test_splat_data_mirror.cpp
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp
     test_tensor_views.cpp
@@ -459,6 +524,7 @@ set(TEST_FILES
     test_tensor_uint8_masking.cpp
     test_tensor_serialization.cpp
     test_tensor_cat_reduction_bug.cpp
+    test_percentile_bounds.cpp
     test_tensor_inplace_capacity.cpp
     test_sog_format.cpp
     test_ssog_format.cpp
@@ -481,6 +547,8 @@ set(TEST_FILES
     test_mask_loss.cpp
     test_mask_preprocess_fusion.cpp
     test_roi_weight_map.cpp
+    test_mesh_mask_kernels.cpp
+    test_flip.cpp
     test_roi_weighted_losses.cpp
     test_checkpoint_resume.cpp
     test_component_config_serialization.cpp
@@ -499,14 +567,18 @@ set(TEST_FILES
     test_training_command_masks.cpp
     test_headless_run_coordinator.cpp
     test_argument_parser.cpp
+    test_licht_command.cpp
     test_user_paths.cpp
     test_window_state.cpp
     test_crash_handler.cpp
     test_gpu_teardown_order.cpp
     test_logger.cpp
     test_exif.cpp
+    test_nanoflann_build.cpp
+    test_initial_scales.cpp
     test_system_info.cpp
     test_parameter_manager.cpp
+    test_training_manager_events.cpp
     test_mcp_protocol.cpp
     test_mcp_training_state.cpp
     test_mcp_app_utils.cpp
@@ -562,6 +634,7 @@ set(TEST_FILES
     test_python_io.cpp
     test_extended_unary_ops_vs_torch.cpp
     test_scene_validity.cpp
+    test_scene_bounds_cache.cpp
     test_training_scene_init_concurrency.cpp
     test_training_init_centering.cpp
     test_scene_consolidation.cpp
@@ -588,6 +661,7 @@ set(TEST_FILES
     test_fastgs_analytical_gradients.cpp
     test_normal_prior_decode.cpp
     test_normal_auto_generate.cpp
+    test_lens_priors.cpp
     test_metrics_evaluator.cpp
     test_metrics_eval_mask.cpp
     test_background_image.cpp
@@ -619,6 +693,7 @@ set(TEST_FILES
     test_bilateral_grid_projection.cpp
     test_bilateral_grid_exposure_chroma.cpp
     test_bilateral_grid_backward_tiled.cpp
+    test_appearance_in_place.cpp
     test_ppisp_projection.cpp
     test_ppisp_cuda_vs_torch.cpp
     test_ppisp_banded_region.cpp
@@ -629,6 +704,7 @@ set(TEST_FILES
     test_project_thumbnail_image.cpp
     test_camera_thumbnail_policy.cpp
     test_undistort.cpp
+    gut_camera_model_cuda.cu
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp
     test_mesh_data.cpp
@@ -648,9 +724,14 @@ set(TEST_FILES
     test_rml_im_mode_layout.cpp
     test_rml_python_listener_lifetime.cpp
     test_status_bar_fit.cpp
+    test_gallery_file_panel_layout.cpp
+    test_histogram_layout.cpp
+    test_rmlui_preview_decode.cpp
     test_training_progress_publisher.cpp
     test_startup_overlay_geometry.cpp
     test_vram_hud_geometry.cpp
+    test_vram_hud_header_click.cpp
+    test_ui_visibility_transition.cpp
     test_menu_bar_title.cpp
     test_status_bar_mining.cpp
     test_rotated_sh_correctness.cpp
@@ -698,6 +779,7 @@ list(APPEND TEST_FILES test_vulkan_gpu_census.cpp)
 list(APPEND TEST_FILES test_output_image_pool.cpp)
 # Epic #1568 / #1567: output slot ring (GPU-free host bookkeeping).
 list(APPEND TEST_FILES test_output_slot_ring.cpp)
+list(APPEND TEST_FILES test_split_output_lifetime.cpp)
 # Epic #1577 / #1574: readback ticket ring (GPU-free host bookkeeping).
 list(APPEND TEST_FILES test_readback_ticket_ring.cpp)
 # Epic #1568 / #1566: payload-generic GpuResourcePool + subrect fit helper.
@@ -708,8 +790,10 @@ list(APPEND TEST_FILES test_lod_page_dequant.cpp)
 list(APPEND TEST_FILES test_lod_upload_engine.cpp)
 list(APPEND TEST_FILES test_octree_lod.cpp)
 list(APPEND TEST_FILES test_ply_to_rad_lod.cpp)
+list(APPEND TEST_FILES test_png_parallel_writer.cpp)
 list(APPEND TEST_FILES test_rad_gpu_encode.cpp)
 list(APPEND TEST_FILES test_rad_meta_sidecar.cpp)
+list(APPEND TEST_FILES test_rad_spark_paging.cpp)
 
 # Keep the source manifest strict: a stale entry should fail configuration
 # instead of silently dropping coverage from the executable.
@@ -725,6 +809,7 @@ list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/app/mcp_sequencer_tools.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_operator_schema.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/licht_command.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter_output_paths.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter_overwrite.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_params.cpp
@@ -757,6 +842,7 @@ target_include_directories(lichtfeld_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/tests
     ${CMAKE_SOURCE_DIR}/src/training   # For training headers
     ${CMAKE_SOURCE_DIR}/src            # For module headers
+    ${CMAKE_SOURCE_DIR}/src/preprocessing/include
     ${CMAKE_SOURCE_DIR}/src/app/include
     ${CMAKE_SOURCE_DIR}/src/visualizer # For visualizer-relative headers (e.g. gui/ui_widgets.hpp)
     ${CMAKE_SOURCE_DIR}/external/spz   # SPZ library headers
@@ -810,6 +896,7 @@ if(NOT LFS_SIMPLIFY_TEST_PLY_OK)
             "SplatSimplify.RealPlySimplifyDoesNotUndershootRequestedTarget will be skipped.")
     endif()
 endif()
+target_compile_definitions(lichtfeld_tests PRIVATE LFS_SIMPLIFY_TEST_PLY="${LFS_SIMPLIFY_TEST_PLY}")
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_TEST_INTERNAL_LINK_LIBS
@@ -1109,6 +1196,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_marketplace_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_system.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_templates.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rml_section_toggle.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_validator.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preferences_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_registry.py
@@ -1124,6 +1212,17 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_store.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_store_subscriptions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_float16_import.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_basic_indexing.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_arg_extrema_nan.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_empty_slices.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_empty_batch_matmul.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_float16_extraction.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_sign_nan.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_inverse_trig_domain.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_global_keepdim.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_row_mask_assignment.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_repeat_regression.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_property.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tool_registry_activation.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_manager_regressions.py
@@ -1226,6 +1325,16 @@ add_test(NAME lichtfeld.python.gpu
     COMMAND ${Python_EXECUTABLE} -m pytest -q
         -m gpu
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_basic_indexing.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_arg_extrema_nan.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_empty_slices.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_empty_batch_matmul.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_float16_extraction.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_sign_nan.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_inverse_trig_domain.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_global_keepdim.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_row_mask_assignment.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_repeat_regression.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_property.py
 )
 set_tests_properties(lichtfeld.python.gpu PROPERTIES

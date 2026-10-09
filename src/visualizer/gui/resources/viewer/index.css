@@ -225,16 +225,15 @@ button {
 #measureToolSvg.hidden {
   display: none;
 }
-#measureToolSvg > #measureLineBottom {
+#measureToolSvg .measureGroup .measureLineBottom {
   stroke: black;
   stroke-width: 6;
 }
-#measureToolSvg > #measureLineTop {
+#measureToolSvg .measureGroup .measureLineTop {
   stroke: white;
   stroke-width: 2;
 }
-#measureToolSvg > #measureLineStart,
-#measureToolSvg > #measureLineEnd {
+#measureToolSvg .measureGroup .measurePoint {
   fill: white;
   stroke: black;
   stroke-width: 2;
@@ -287,9 +286,11 @@ button {
   bottom: 100px;
   transform: translate(-50%, 0);
   display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 220px;
+  max-height: 40vh;
+  overflow-y: auto;
   padding: 8px 12px;
   border-radius: 8px;
   color: #E0DCDD;
@@ -299,8 +300,23 @@ button {
 #measurePanel.hidden {
   display: none;
 }
-#measurePanel > #measureLengthInput {
-  width: 70px;
+.measureRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.measureRow.hidden {
+  display: none;
+}
+.measureIndex {
+  width: 18px;
+  font-size: 12px;
+  text-align: right;
+  opacity: 0.7;
+}
+.measureLengthInput {
+  flex: 1;
+  min-width: 90px;
   padding: 4px 6px;
   border: 1px solid #555;
   border-radius: 4px;
@@ -308,7 +324,11 @@ button {
   background-color: #222;
   font-size: 13px;
 }
-#measurePanel > #measureClear {
+.measureLengthInput:focus {
+  outline: none;
+  border-color: #6ea8fe;
+}
+.measureDelete {
   width: 24px;
   height: 24px;
   padding: 0;
@@ -320,7 +340,7 @@ button {
   font-size: 16px;
   line-height: 1;
 }
-#measurePanel > #measureClear:hover {
+.measureDelete:hover {
   color: #fff;
   background-color: rgba(255, 255, 255, 0.1);
 }

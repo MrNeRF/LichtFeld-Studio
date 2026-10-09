@@ -16,6 +16,7 @@
 #include "gui/scene_tree_session.hpp"
 #include "gui/sequencer_ui_state.hpp"
 #include "io/project_document.hpp"
+#include "io/session_chapters.hpp"
 #include "io/video/video_export_options.hpp"
 #include "licht_matrix_test_data.hpp"
 #include "licht_test_support.hpp"
@@ -844,6 +845,110 @@ namespace {
         EXPECT_FALSE(captured.ortho_extent_world.has_value());
         captured = capturePanelCameraProjectState(invalid, std::nullopt);
         EXPECT_FALSE(captured.ortho_extent_world.has_value());
+    }
+
+    TEST(P5SessionChapterTest, ViewRenderSettingsKeepEveryKeyEarlierReadersRequire) {
+        // Every VIEW render-settings key earlier readers require; a project written without one
+        // of them does not open there. Removed settings keep being written.
+        static constexpr std::array<std::string_view, 76> earlier_reader_keys{
+            "focal_length_mm",
+            "scaling_modifier",
+            "antialiasing",
+            "mip_filter",
+            "sh_degree",
+            "render_scale",
+            "camera_metrics_mode",
+            "show_crop_box",
+            "use_crop_box",
+            "show_ellipsoid",
+            "use_ellipsoid",
+            "desaturate_unselected",
+            "desaturate_cropping",
+            "hide_outside_depth_box",
+            "crop_filter_for_selection",
+            "apply_appearance_correction",
+            "ppisp_mode",
+            "background_color",
+            "environment_mode",
+            "environment_exposure",
+            "environment_rotation_degrees",
+            "show_coord_axes",
+            "axes_size",
+            "show_grid",
+            "grid_plane",
+            "grid_opacity",
+            "point_cloud_mode",
+            "voxel_size",
+            "show_rings",
+            "ring_width",
+            "show_center_markers",
+            "show_camera_frustums",
+            "camera_frustum_scale",
+            "train_camera_color",
+            "eval_camera_color",
+            "show_pivot",
+            "split_view_mode",
+            "gt_comparison_mode",
+            "split_position",
+            "split_view_offset",
+            "equirectangular",
+            "orthographic",
+            "ortho_scale",
+            "depth_view",
+            "depth_view_min",
+            "depth_view_max",
+            "depth_visualization_mode",
+            "selection_color_committed",
+            "selection_color_preview",
+            "selection_color_center_marker",
+            "depth_clip_enabled",
+            "depth_clip_far",
+            "mesh_wireframe",
+            "mesh_wireframe_color",
+            "mesh_wireframe_width",
+            "mesh_light_dir",
+            "mesh_light_intensity",
+            "mesh_ambient",
+            "mesh_backface_culling",
+            "mesh_shadow_enabled",
+            "mesh_shadow_resolution",
+            "depth_filter_enabled",
+            "depth_filter_min",
+            "depth_filter_max",
+            "lod_enabled",
+            "lod_auto_enable_rad",
+            "lod_max_splats",
+            "lod_render_scale",
+            "lod_behind_camera_penalty",
+            "lod_cone_foveation",
+            "lod_cone_inner_degrees",
+            "lod_cone_outer_degrees",
+            "lod_page_pool_splats",
+            "lod_pool_vram_fraction",
+            "lod_fade_frames",
+            "lod_debug_colors",
+        };
+        const auto written = renderSettingsToProjectJson(lfs::vis::RenderSettings{});
+        const auto default_view =
+            lfs::io::project::default_session_chapter_dom(lfs::io::project::SessionJsonChapterKind::View)
+                .get_json("render_settings");
+        ASSERT_TRUE(default_view);
+        for (const auto key : earlier_reader_keys) {
+            EXPECT_TRUE(written.contains(std::string(key))) << key;
+            EXPECT_TRUE(default_view->contains(std::string(key))) << key;
+        }
+
+        const auto& committed = written.at("selection_color_committed");
+        ASSERT_TRUE(committed.is_array());
+        ASSERT_EQ(committed.size(), 3u);
+        EXPECT_FLOAT_EQ(committed[0].get<float>(), 0.859f);
+        EXPECT_FLOAT_EQ(committed[1].get<float>(), 0.325f);
+        EXPECT_FLOAT_EQ(committed[2].get<float>(), 0.325f);
+
+        auto without_removed = written;
+        without_removed.erase("selection_color_committed");
+        EXPECT_TRUE(renderSettingsFromProjectJson(without_removed));
+        EXPECT_TRUE(renderSettingsFromProjectJson(written));
     }
 
     TEST(P5SessionChapterTest,
@@ -2214,7 +2319,6 @@ namespace {
         expect_bool(render, "/orthographic", true);
         expect_bool(render, "/depth_view", true);
         prove("VIEW-198");
-        expect_json(render, "/selection_color_committed", Json::array({0.11f, 0.22f, 0.33f}));
         expect_bool(render, "/depth_clip_enabled", true);
         expect_float(render, "/depth_clip_far", 34.0f);
         prove("VIEW-199");

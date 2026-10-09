@@ -29,8 +29,9 @@ namespace Rml {
 } // namespace Rml
 
 namespace lfs::vis {
+    class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
     struct Theme;
-}
+} // namespace lfs::vis
 namespace lfs::vis::gui {
 
     struct PanelInputState;
@@ -112,12 +113,13 @@ namespace lfs::vis::gui {
                    toolbar_drag_active_ ||
                    (vram_hud_ && vram_hud_->needsAnimationFrame());
         }
-        // Finite RmlUi scheduled update delay (seconds) when > 0; nullopt for
-        // continuous demand (0) or idle (infinity).
+        // Next finite RmlUi or passive document-hook deadline in seconds.
+        // Continuous RmlUi demand is reported by needsAnimationFrame().
         [[nodiscard]] std::optional<double> nextScheduledUpdateDelay() const;
         [[nodiscard]] bool blocksPointer(double screen_x, double screen_y) const;
 
     private:
+        friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
         struct ToolbarDragListener final : Rml::EventListener {
             RmlViewportOverlay* owner = nullptr;
             void ProcessEvent(Rml::Event& event) override;
@@ -245,8 +247,6 @@ namespace lfs::vis::gui {
         std::optional<lfs::vis::AppStore::CameraMetrics> camera_metrics_;
         lfs::core::reactive::SubscriptionToken gt_metrics_config_subscription_;
         lfs::core::reactive::SubscriptionToken camera_metrics_subscription_;
-        lfs::core::reactive::SubscriptionToken vram_hud_subscription_;
-        lfs::core::reactive::SubscriptionToken perf_hud_subscription_;
         std::vector<lfs::core::reactive::SubscriptionToken> document_sync_subscriptions_;
         std::unique_ptr<VramHudOverlay> vram_hud_;
         RmlTooltipController tooltip_;

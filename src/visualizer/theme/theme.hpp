@@ -70,8 +70,8 @@ namespace lfs::vis {
         ThemeVec2 item_spacing = {8.0f, 4.0f};
         ThemeVec2 item_inner_spacing = {4.0f, 4.0f};
         float indent_spacing = 21.0f;
-        float scrollbar_size = 12.0f;
-        float grab_min_size = 16.0f;
+        float scrollbar_size = 4.0f;
+        float grab_min_size = 12.0f;
         float toolbar_button_size = 24.0f;
         float toolbar_padding = 6.0f;
         float toolbar_spacing = 4.0f;
@@ -146,7 +146,6 @@ namespace lfs::vis {
         ThemeColor icon = {0.47f, 0.63f, 0.78f, 1.0f};
         ThemeColor highlight = {0.31f, 0.47f, 0.7f, 1.0f};
         ThemeColor selection = {0.23f, 0.39f, 0.63f, 1.0f};
-        ThemeColor selection_flash = {0.55f, 0.7f, 0.94f, 1.0f};
     };
 
     struct ThemeGradient {

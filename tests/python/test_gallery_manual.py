@@ -118,7 +118,8 @@ def test_old_journal_is_rejected_without_migration(tmp_path):
 
 
 @pytest.mark.parametrize('reason', ['gallery_project_not_supported: Unsupported file',
-    'gallery_project_payload_unavailable: Missing payload', 'gallery_project_commit_mismatch: Changed commit'])
+    'gallery_project_payload_unavailable: Missing payload', 'gallery_project_hdr_unavailable: Missing HDR',
+    'gallery_project_commit_mismatch: Changed commit'])
 def test_native_refusal_keeps_exact_reason_and_never_opens(gallery, tmp_path, monkeypatch, reason):
     controller, state, _ = gallery
     import lfs_plugins.gallery_controller as module
@@ -137,6 +138,7 @@ def test_native_refusal_keeps_exact_reason_and_never_opens(gallery, tmp_path, mo
     expected_message = {
         'gallery_project_not_supported': 'projects.gallery.eligibility.format',
         'gallery_project_payload_unavailable': 'projects.gallery.eligibility.external_payloads',
+        'gallery_project_hdr_unavailable': 'projects.gallery.eligibility.hdr_missing',
         'gallery_project_commit_mismatch': 'projects.gallery.error.project_changed',
     }[reason.split(':', 1)[0]]
     assert controller._publish_steps.preparation_failure['message'] == reason

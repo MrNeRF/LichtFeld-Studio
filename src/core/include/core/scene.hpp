@@ -186,6 +186,20 @@ namespace lfs::core {
         [[nodiscard]] const glm::mat4& transform() const { return local_transform.get(); }
 
     private:
+        friend class Scene;
+        struct ModelBoundsCache {
+            const SplatData* model = nullptr;
+            const void* means = nullptr;
+            size_t count = 0;
+            uint64_t content_generation = 0;
+            uint64_t deleted_version = 0;
+            glm::vec3 min{0.0f};
+            glm::vec3 max{0.0f};
+            bool valid = false;
+            bool has_bounds = false;
+        };
+        mutable std::mutex model_bounds_mutex_;
+        mutable ModelBoundsCache model_bounds_cache_;
         Scene* scene_ = nullptr;
     };
 
@@ -367,6 +381,7 @@ namespace lfs::core {
         void markPayloadDiverged(NodeId id);
 
         [[nodiscard]] bool isNodeEffectivelyVisible(NodeId id) const;
+        [[nodiscard]] bool isNodeEffectivelyLocked(NodeId id) const;
         [[nodiscard]] glm::vec3 getNodeBoundsCenter(NodeId id) const;
         [[nodiscard]] bool getNodeBounds(NodeId id, glm::vec3& out_min, glm::vec3& out_max) const;
 
@@ -406,11 +421,17 @@ namespace lfs::core {
         [[nodiscard]] std::vector<RenderableEllipsoid> getRenderableEllipsoids() const;
 
         const lfs::core::SplatData* getCombinedModel() const;
+        // Like getCombinedModel, but never serves the previous geometry while a worker rebuilds it:
+        // waits for that build, then rebuilds synchronously if the scene changed again. For captures.
+        const lfs::core::SplatData* getCurrentCombinedModel() const;
         // True when a combined or single-node alias is already installed.
         // Does not poll the worker or start a rebuild.
         [[nodiscard]] bool hasPreparedCombinedModel() const;
         // Installed combined/single-node alias, or null. Does not build.
         [[nodiscard]] const lfs::core::SplatData* peekCombinedModel() const;
+        // Retain the installed aggregate without polling/building or copying buffers.
+        // Single-node aliases remain owned by their scene node.
+        [[nodiscard]] std::shared_ptr<const lfs::core::SplatData> sharePreparedCombinedModel() const;
         // Drop redundant aggregate storage while rendering owned nodes. A running
         // worker is drained on a later call; consolidated storage is preserved.
         void discardUnconsolidatedModelCache() const;
@@ -425,6 +446,7 @@ namespace lfs::core {
             std::shared_ptr<const lfs::core::SplatData> model;
             bool visible = true;
             size_t selection_offset = 0;
+            NodeId node_id = NULL_NODE;
         };
 
         struct CombinedModelBuild {
@@ -502,6 +524,7 @@ namespace lfs::core {
             size_t slot_index = 0;
         };
         [[nodiscard]] std::vector<VisibleSplatNodeSlot> getVisibleSplatNodeSlots() const;
+        [[nodiscard]] std::vector<VisibleSplatNodeSlot> getCombinedSplatNodeSlots() const;
 
         struct SplatSnapshot {
             std::shared_ptr<lfs::core::SplatData> data;
@@ -522,6 +545,16 @@ namespace lfs::core {
             return render_generation_.load(std::memory_order_acquire);
         }
         [[nodiscard]] uint64_t selectionGeneration() const noexcept { return selection_generation_; }
+
+        // Install before publishing a live scene to workers. Detached and restore
+        // staging scenes have no consumer and must not invalidate the live view.
+        using RenderInvalidationCallback = void (*)();
+        void setRenderInvalidationCallback(RenderInvalidationCallback callback) noexcept {
+            render_invalidation_callback_ = callback;
+        }
+        void setTransformInvalidationCallback(RenderInvalidationCallback callback) noexcept {
+            transform_invalidation_callback_ = callback;
+        }
 
         enum class MergeStorageMode {
             Clone,
@@ -579,10 +612,10 @@ namespace lfs::core {
                                       size_t selected_count_hint = 0);
         void applyDeferredSelectionCounts(size_t selected_count,
                                           const SelectionGroupCounts& group_counts);
-        // Last completed GPU histogram. Interactive commits update this
-        // asynchronously; callers needing an exact current count must call
-        // updateSelectionGroupCounts() first.
-        [[nodiscard]] size_t selectedCount() const { return selected_count_; }
+        // Returns the last completed count unless the selection mask changed
+        // before its asynchronous histogram completed; then it recomputes from
+        // the current masks.
+        [[nodiscard]] size_t selectedCount() const;
         void clearSelection();
         bool hasSelection() const;
         [[nodiscard]] SelectionStateMetadata captureSelectionStateMetadata() const;
@@ -602,6 +635,8 @@ namespace lfs::core {
         [[nodiscard]] bool selectionGroupCountsDirty() const { return selection_group_counts_dirty_; }
         void updateSelectionGroupCounts();
         void clearSelectionGroup(uint8_t id);
+        // Deselects every splat outside a locked group; clears everything when no group is locked.
+        void clearUnlockedSelection();
         void resetSelectionState();
 
         void setInitialPointCloud(std::shared_ptr<lfs::core::PointCloud> point_cloud);
@@ -624,7 +659,8 @@ namespace lfs::core {
         [[nodiscard]] std::shared_ptr<lfs::core::Camera> getCameraByUid(int uid);
         [[nodiscard]] std::shared_ptr<const lfs::core::Camera> getCameraByUid(int uid) const;
         [[nodiscard]] std::vector<std::shared_ptr<lfs::core::Camera>> getAllCameras() const;
-        [[nodiscard]] const std::vector<std::shared_ptr<lfs::core::Camera>>&
+        // Immutable snapshot; the training thread and the UI read it concurrently.
+        [[nodiscard]] std::shared_ptr<const std::vector<std::shared_ptr<lfs::core::Camera>>>
         getAllCamerasCached() const;
         [[nodiscard]] std::uint64_t cameraListGeneration() const noexcept {
             return camera_list_generation_;
@@ -675,22 +711,27 @@ namespace lfs::core {
 
         std::vector<const SceneNode*> getVisibleNodes() const;
         [[nodiscard]] std::vector<std::shared_ptr<const lfs::core::Camera>> getVisibleCameras() const;
-        [[nodiscard]] const std::vector<std::shared_ptr<const lfs::core::Camera>>&
+        // Immutable snapshot; the training thread and the UI read it concurrently.
+        [[nodiscard]] std::shared_ptr<const std::vector<std::shared_ptr<const lfs::core::Camera>>>
         getVisibleCamerasCached() const;
         [[nodiscard]] std::vector<glm::mat4> getVisibleCameraSceneTransforms() const;
         [[nodiscard]] std::optional<glm::mat4> getCameraSceneTransformByUid(int uid) const;
 
         void invalidateCache() {
+            invalidateBounds();
             model_cache_valid_.store(false, std::memory_order_release);
             transform_cache_valid_.store(false, std::memory_order_release);
-            cached_transform_indices_.reset();
             cached_visible_selection_indices_.reset();
             invalidateVisibleSelectionMaskCache();
-            render_generation_.fetch_add(1, std::memory_order_acq_rel);
+            publishRenderInvalidation();
         }
         void invalidateTransformCache() {
             transform_cache_valid_.store(false, std::memory_order_release);
-            render_generation_.fetch_add(1, std::memory_order_acq_rel);
+            publishRenderInvalidation(true);
+        }
+        // Geometry writers publish here without invalidating resident render inputs.
+        void invalidateBounds() noexcept {
+            bounds_generation_.fetch_add(1, std::memory_order_release);
         }
         void markDirty() { invalidateCache(); }
         void markTransformDirty(NodeId node);
@@ -763,8 +804,10 @@ namespace lfs::core {
         mutable uint64_t cached_visible_selection_mask_visibility_generation_ = 0;
         mutable std::atomic<bool> model_cache_valid_{false};
         mutable const lfs::core::SplatData* single_node_model_ = nullptr;
+        mutable NodeId single_node_id_ = NULL_NODE;
         mutable size_t single_node_selection_offset_ = 0;
         mutable size_t single_node_full_selection_count_ = 0;
+        mutable std::vector<NodeId> cached_combined_node_ids_;
 
         mutable std::mutex combined_model_mutex_;
         SplatTensorAllocator combined_model_allocator_;
@@ -782,19 +825,28 @@ namespace lfs::core {
 
         mutable std::vector<glm::mat4> cached_transforms_;
         mutable std::atomic<bool> transform_cache_valid_{false};
-        mutable std::vector<std::shared_ptr<const lfs::core::Camera>> cached_visible_cameras_;
+        mutable std::mutex camera_cache_mutex_;
+        mutable std::shared_ptr<const std::vector<std::shared_ptr<const lfs::core::Camera>>> cached_visible_cameras_;
         mutable uint64_t cached_visible_cameras_render_generation_ = 0;
         mutable uint64_t cached_visible_cameras_camera_list_generation_ = 0;
-        mutable bool cached_visible_cameras_valid_ = false;
-        mutable std::vector<std::shared_ptr<lfs::core::Camera>> cached_all_cameras_;
+        mutable std::shared_ptr<const std::vector<std::shared_ptr<lfs::core::Camera>>> cached_all_cameras_;
         mutable uint64_t cached_all_cameras_render_generation_ = 0;
         mutable uint64_t cached_all_cameras_camera_list_generation_ = 0;
-        mutable bool cached_all_cameras_valid_ = false;
         mutable bool consolidated_ = false;
         mutable std::vector<ConsolidatedNodeSlot> consolidated_node_slots_;
         mutable uint64_t consolidated_generation_ = 0;
         bool preserve_source_models_ = false;
         mutable std::atomic<uint64_t> render_generation_{0};
+        RenderInvalidationCallback render_invalidation_callback_ = nullptr;
+        RenderInvalidationCallback transform_invalidation_callback_ = nullptr;
+        std::atomic<uint64_t> bounds_generation_{1};
+        void publishRenderInvalidation(const bool transform_only = false) {
+            render_generation_.fetch_add(1, std::memory_order_acq_rel);
+            if (transform_only && transform_invalidation_callback_)
+                transform_invalidation_callback_();
+            else if (render_invalidation_callback_)
+                render_invalidation_callback_();
+        }
         mutable uint64_t selection_generation_ = 0;
 
         mutable std::shared_mutex selection_mutex_;
@@ -809,7 +861,8 @@ namespace lfs::core {
         mutable uint64_t cached_live_selection_revision_ = 0;
         mutable bool has_selection_ = false;
         mutable bool has_point_cloud_selection_ = false;
-        size_t selected_count_ = 0;
+        mutable size_t selected_count_ = 0;
+        mutable bool selected_count_valid_ = true;
 
         std::vector<SelectionGroup> selection_groups_;
         uint8_t active_selection_group_ = 1;
@@ -841,6 +894,9 @@ namespace lfs::core {
         [[nodiscard]] std::unique_ptr<lfs::core::SplatData>
         retireCombinedModelIfInFlight(
             std::unique_ptr<lfs::core::SplatData> model) const;
+        // Slot layout of the geometry getCombinedModel() keeps serving while a worker rebuild is
+        // pending; empty when the served geometry already matches the visible nodes.
+        [[nodiscard]] std::vector<NodeId> pendingRebuildSlotIds() const;
         void rebuildTransformCacheIfNeeded() const;
         void updateWorldTransform(const SceneNode& node) const;
         void removeNodeInternal(NodeId id, bool keep_children);

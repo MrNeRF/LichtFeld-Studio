@@ -7,6 +7,7 @@
 #include "core/services.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/string_keys.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 #include "internal/viewport.hpp"
 #include "operator/operator_registry.hpp"
 #include "operator/ops/align_ops.hpp"
@@ -82,6 +83,11 @@ namespace lfs::vis::tools {
     }
 
     void AlignTool::update(const ToolContext& ctx) {
+        if (isEnabled() && op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint)) {
+            op::ModalEvent event{};
+            event.type = op::ModalEvent::Type::NONE;
+            op::operators().dispatchModalEvent(event);
+        }
         auto* const rm = ctx.getRenderingManager();
         const bool has_status = services().getAlignStatusMessage() != nullptr;
         if (had_align_status_ && !has_status && rm) {
@@ -187,7 +193,7 @@ namespace lfs::vis::tools {
                 proj.focal_length_mm = fallback_focal_length_mm;
             }
             proj.orthographic = settings.orthographic;
-            proj.ortho_scale = settings.ortho_scale;
+            proj.ortho_scale = op::alignPanelOrthoScale(*panel_info->viewport, settings);
 
             proj.viewport = *panel_info->viewport;
             proj.viewport.windowSize = {panel_info->render_width, panel_info->render_height};
@@ -398,7 +404,7 @@ namespace lfs::vis::tools {
 
         float mx = 0.0f;
         float my = 0.0f;
-        SDL_GetMouseState(&mx, &my);
+        input::mouseStateInPixels(tool_context_->getWindow(), &mx, &my);
         const glm::vec2 mouse_pos{mx, my};
         auto* const rendering_manager = tool_context_->getRenderingManager();
         const float fallback_focal_length_mm = rendering_manager
@@ -435,7 +441,7 @@ namespace lfs::vis::tools {
             const auto settings = rendering_manager->getSettings();
             panel_proj_fallback.focal_length_mm = settings.focal_length_mm;
             panel_proj_fallback.orthographic = settings.orthographic;
-            panel_proj_fallback.ortho_scale = settings.ortho_scale;
+            panel_proj_fallback.ortho_scale = op::alignPanelOrthoScale(tool_context_->getViewport(), settings);
         }
         panel_proj_fallback.viewport = tool_context_->getViewport();
         panel_proj_fallback.viewport.windowSize = {fallback_render_width, fallback_render_height};
@@ -548,7 +554,7 @@ namespace lfs::vis::tools {
             const float depth = rendering_manager->getDepthAtPixel(
                 depth_x,
                 depth_y,
-                panel_proj_opt ? std::optional<SplitViewPanelId>(panel_proj.info.panel) : std::nullopt);
+                panel_proj_opt ? std::optional<SplitViewPanelId>(panel_proj.info.panel) : std::nullopt, true);
             if (depth > 0.0f && depth < 1e9f) {
                 hover_depth = depth;
             }

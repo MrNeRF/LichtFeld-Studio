@@ -54,8 +54,10 @@
 struct SDL_Cursor;
 
 namespace lfs::vis {
+    class OrthographicZoomTest;
     class WindowInputDispatchTest;
     class VisualizerImpl;
+    class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
     class WindowManager;
     class VulkanImportErrorScope;
     class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
@@ -67,7 +69,11 @@ namespace lfs::vis {
     class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
     class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
     class VisualizerImplResetTest_UiVisibilityWaitsForMatchingFrame_Test;
+    class UiVisibilityTransitionTest_UiVisibilityWaitsForMatchingFrame_Test;
     class VisualizerImplResetTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+    class UiVisibilityTransitionTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+    class UiVisibilityTransitionTest_UiVisibilityFinishesWithoutWaitingForFullscreenGuard_Test;
+    class UiVisibilityTransitionTest_UiVisibilityRequestsFreshFrameWithoutCooldown_Test;
     class VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
     class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
     class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
@@ -125,6 +131,7 @@ namespace lfs::vis {
             void notifyCameraThumbnailBatchReady();
             void setRmlResizeDeferring(bool defer) { rmlui_manager_.setResizeDeferring(defer); }
             void prepareInput();
+            void prepareLayout();
             RmlUIManager::InputDispatchResult dispatchInputEvent(const SDL_Event& event) {
                 return rmlui_manager_.dispatchInputEvent(event);
             }
@@ -143,6 +150,7 @@ namespace lfs::vis {
             [[nodiscard]] const GizmoManager& gizmo() const { return gizmo_manager_; }
             [[nodiscard]] PanelLayoutManager& panelLayout() { return panel_layout_; }
             [[nodiscard]] const PanelLayoutManager& panelLayout() const { return panel_layout_; }
+            void focusMainPanelTab(std::string panel_id) { focus_panel_name_ = std::move(panel_id); }
             [[nodiscard]] GlobalContextMenu& globalContextMenu() { return *global_context_menu_; }
 
             // State queries
@@ -252,6 +260,7 @@ namespace lfs::vis {
             std::string import_render_error_;
             std::unique_ptr<VulkanImportErrorScope> import_error_capture_;
             friend class lfs::vis::WindowInputDispatchTest;
+            friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
             friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
@@ -261,7 +270,11 @@ namespace lfs::vis {
             friend class lfs::vis::VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
             friend class lfs::vis::VisualizerImplResetTest_UiVisibilityWaitsForMatchingFrame_Test;
+            friend class lfs::vis::UiVisibilityTransitionTest_UiVisibilityWaitsForMatchingFrame_Test;
             friend class lfs::vis::VisualizerImplResetTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+            friend class lfs::vis::UiVisibilityTransitionTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+            friend class lfs::vis::UiVisibilityTransitionTest_UiVisibilityFinishesWithoutWaitingForFullscreenGuard_Test;
+            friend class lfs::vis::UiVisibilityTransitionTest_UiVisibilityRequestsFreshFrameWithoutCooldown_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
@@ -273,6 +286,7 @@ namespace lfs::vis {
             friend class lfs::vis::VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoverLegacyScratchThenSaveAsRemovesLegacyFile_Test;
             [[nodiscard]] bool isPositionOverRightPanelResizeEdge(double x, double y) const;
+            friend class lfs::vis::OrthographicZoomTest;
             [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(VkExtent2D extent,
                                                                              std::size_t frame_slot) const;
             void recordVulkanViewport(VkCommandBuffer command_buffer,
@@ -341,7 +355,6 @@ namespace lfs::vis {
             bool consumeCameraThumbnailRefresh();
 
             [[nodiscard]] bool isVramHudOverlayVisible() const;
-            [[nodiscard]] bool isVramHudPublishDue(std::chrono::steady_clock::time_point now) const;
             [[nodiscard]] PanelAnimationVisibility panelAnimationVisibility() const;
             [[nodiscard]] bool drainVulkanFramesForInteractiveTransition(
                 lfs::vis::WindowManager& window_manager,
@@ -394,11 +407,11 @@ namespace lfs::vis {
             bool show_main_panel_ = true;
             bool show_vram_hud_ = false;
             bool perf_hud_expanded_ = true;
-            bool vram_hud_visible_published_ = false;
             bool perf_hud_visible_published_ = false;
-            std::chrono::steady_clock::time_point next_vram_hud_publish_{};
             PerfSampler perf_sampler_;
-            std::chrono::steady_clock::time_point ui_toggle_next_allowed_at_{};
+            std::chrono::steady_clock::time_point last_hud_sample_{};
+            bool last_hud_expanded_ = false;
+            std::chrono::steady_clock::time_point ui_visibility_deadline_{};
             bool ui_toggle_pending_ = false;
             bool ui_visibility_resize_active_ = false;
             bool ui_visibility_layout_committed_ = false;

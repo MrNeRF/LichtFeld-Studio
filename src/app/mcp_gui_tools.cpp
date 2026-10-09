@@ -20,6 +20,7 @@
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/property_registry.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
@@ -285,17 +286,46 @@ namespace lfs::app {
                     }));
         }
 
-        std::expected<std::string, std::string> render_scene_to_base64(
-            core::Scene& scene,
-            int camera_index = 0,
-            int width = 0,
-            int height = 0) {
-            (void)scene;
-            (void)camera_index;
-            (void)width;
-            (void)height;
-            return std::unexpected(
-                "Camera-index CUDA scene rendering has been removed; use live Vulkan viewport capture");
+        // The viewer is pinhole: lens cameras render with their pose and vertical field of view.
+        std::expected<std::string, std::string> render_dataset_camera_to_base64(
+            vis::Visualizer* viewer,
+            const int camera_uid,
+            const int width,
+            const int height) {
+            auto* const scene_manager = viewer->getSceneManager();
+            auto* const rendering_manager = viewer->getRenderingManager();
+            if (!scene_manager || !rendering_manager)
+                return std::unexpected("Viewport rendering is not initialized");
+
+            const auto& scene = scene_manager->getScene();
+            const auto camera = scene.getCameraByUid(camera_uid);
+            if (!camera)
+                return std::unexpected("Camera UID not found: " + std::to_string(camera_uid));
+
+            const auto R = camera->R().cpu().contiguous();
+            const auto T = camera->T().cpu().contiguous();
+            glm::mat4 scene_transform(1.0f);
+            if (const auto transform = scene.getCameraSceneTransformByUid(camera_uid))
+                scene_transform = lfs::rendering::dataWorldTransformToVisualizerWorld(*transform);
+            const auto pose = lfs::rendering::visualizerCameraPoseFromDataWorldToCamera(
+                lfs::rendering::mat3FromRowMajor3x3(R.ptr<float>()),
+                glm::vec3(T.ptr<float>()[0], T.ptr<float>()[1], T.ptr<float>()[2]),
+                scene_transform);
+
+            const int camera_width = camera->image_width();
+            const int camera_height = camera->image_height();
+            const float focal_y = std::get<1>(camera->get_intrinsics());
+            if (camera_width <= 0 || camera_height <= 0 || !(focal_y > 0.0f))
+                return std::unexpected("Camera UID " + std::to_string(camera_uid) + " has no image size");
+            const float fov_y_degrees =
+                glm::degrees(2.0f * std::atan(static_cast<float>(camera_height) / (2.0f * focal_y)));
+
+            const auto image = rendering_manager->renderPreviewImage(
+                scene_manager, pose.rotation, pose.translation,
+                lfs::rendering::vFovToFocalLength(fov_y_degrees), camera_width, camera_height);
+            if (!image || !image->is_valid())
+                return std::unexpected("Rendering camera UID " + std::to_string(camera_uid) + " failed");
+            return mcp::encode_render_tensor_to_base64(*image, width, height);
         }
 
         template <typename F>
@@ -500,14 +530,16 @@ namespace lfs::app {
             return static_cast<int64_t>(scene_manager.getScene().selectedCount());
         }
 
-        json node_summary_json(const core::Scene& scene, const core::SceneNode& node) {
+        json node_summary_json(const core::Scene& scene, const core::SceneNode& node,
+                               SceneNodeCounts* counts = nullptr) {
+            SceneNodeCounts local_counts(scene);
             json result{
                 {"name", node.name},
                 {"uuid", node.uuid.to_string()},
                 {"type", node_type_to_string(node.type)},
                 {"visible", static_cast<bool>(node.visible)},
                 {"locked", static_cast<bool>(node.locked)},
-                {"gaussian_count", node.gaussian_count.load(std::memory_order_acquire)},
+                {"gaussian_count", (counts ? *counts : local_counts).get(node)},
             };
 
             if (node.parent_id != core::NULL_NODE) {
@@ -867,6 +899,140 @@ namespace lfs::app {
             return vis::cap::resetCropBox(scene_manager, rendering_manager, cropbox_id);
         }
 
+        const char* optimization_property_type(const core::prop::PropType type) {
+            using core::prop::PropType;
+            switch (type) {
+            case PropType::Bool: return "bool";
+            case PropType::Int: return "int";
+            case PropType::Float: return "float";
+            case PropType::String: return "string";
+            case PropType::SizeT: return "size";
+            case PropType::Enum: return "enum";
+            default: return "unsupported";
+            }
+        }
+
+        std::string_view enum_wire_value(const core::prop::EnumItem& item) {
+            return item.wire_value.empty() ? item.identifier : item.wire_value;
+        }
+
+        json optimization_value_json(const core::prop::PropertyMeta& meta, const std::any& value) {
+            using core::prop::PropType;
+            switch (meta.type) {
+            case PropType::Bool: return std::any_cast<bool>(value);
+            case PropType::Int: return std::any_cast<int>(value);
+            case PropType::Float: return std::any_cast<float>(value);
+            case PropType::String: return std::any_cast<std::string>(value);
+            case PropType::SizeT: return std::any_cast<size_t>(value);
+            case PropType::Enum: {
+                const int raw = std::any_cast<int>(value);
+                for (const auto& item : meta.enum_items)
+                    if (item.value == raw)
+                        return std::string(enum_wire_value(item));
+                return raw;
+            }
+            default: return nullptr;
+            }
+        }
+
+        lfs::Error optimization_value_error(const core::prop::PropertyMeta& meta, std::string message) {
+            lfs::SmallFields fields;
+            fields.add("property", meta.id);
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::MCP,
+                .severity = lfs::Severity::Error,
+                .retryability = lfs::Retryability::NotRetryable,
+                .operation_id = {},
+                .user_message = message,
+                .detail = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = std::move(fields),
+                .native = std::nullopt,
+            });
+        }
+
+        lfs::Result<std::any> optimization_value_from_json(const core::prop::PropertyMeta& meta,
+                                                           const json& value) {
+            using core::prop::PropType;
+            const auto in_range = [&meta](const double v) -> lfs::Result<void> {
+                if ((meta.min_value && v < *meta.min_value) || (meta.max_value && v > *meta.max_value))
+                    return lfs::Result<void>::failure(optimization_value_error(
+                        meta, std::format("{} must be within [{}, {}]", meta.id, meta.min_value.value_or(-INFINITY),
+                                          meta.max_value.value_or(INFINITY))));
+                return {};
+            };
+            try {
+                switch (meta.type) {
+                case PropType::Bool:
+                    return std::any(value.get<bool>());
+                case PropType::Int:
+                case PropType::Float:
+                case PropType::SizeT: {
+                    if (!value.is_number())
+                        return optimization_value_error(meta, meta.id + " must be a number");
+                    if (auto checked = in_range(value.get<double>()); !checked)
+                        return checked.error();
+                    if (meta.type == PropType::Float)
+                        return std::any(value.get<float>());
+                    if (!value.is_number_integer())
+                        return optimization_value_error(meta, meta.id + " must be an integer");
+                    if (meta.type == PropType::Int)
+                        return std::any(value.get<int>());
+                    return std::any(value.get<size_t>());
+                }
+                case PropType::String:
+                    return std::any(value.get<std::string>());
+                case PropType::Enum: {
+                    const auto wire = value.get<std::string>();
+                    for (const auto& item : meta.enum_items)
+                        if (enum_wire_value(item) == wire)
+                            return std::any(item.value);
+                    return optimization_value_error(meta, meta.id + " must be one of the listed options");
+                }
+                default:
+                    return optimization_value_error(meta, meta.id + " cannot be set over MCP");
+                }
+            } catch (const json::exception&) {
+                return optimization_value_error(meta, meta.id + " has the wrong value type");
+            }
+        }
+
+        json optimization_params_json(core::param::OptimizationParameters params, const bool advanced_only) {
+            params.resolve_mrnf_capacity_defaults();
+            auto ref = core::prop::PropertyObjectRef::cpp(&params);
+            const auto group = core::prop::PropertyRegistry::instance().get_group_snapshot("optimization");
+            json properties = json::array();
+            if (group) {
+                for (const auto& meta : group->properties) {
+                    if ((advanced_only && !meta.is_advanced()) || !meta.getter)
+                        continue;
+                    json entry{{"id", meta.id},
+                               {"name", meta.name},
+                               {"description", meta.description},
+                               {"type", optimization_property_type(meta.type)},
+                               {"value", optimization_value_json(meta, meta.getter(ref))},
+                               {"advanced", meta.is_advanced()},
+                               {"live_update", meta.is_live_update()},
+                               {"readonly", meta.is_readonly()}};
+                    if (meta.min_value)
+                        entry["min"] = *meta.min_value;
+                    if (meta.max_value)
+                        entry["max"] = *meta.max_value;
+                    if (meta.type == core::prop::PropType::Enum) {
+                        json options = json::array();
+                        for (const auto& item : meta.enum_items)
+                            options.push_back(std::string(enum_wire_value(item)));
+                        entry["options"] = std::move(options);
+                    }
+                    if (!meta.strategies.empty())
+                        entry["strategies"] = meta.strategies;
+                    properties.push_back(std::move(entry));
+                }
+            }
+            return json{{"strategy", params.strategy}, {"properties", std::move(properties)}};
+        }
+
         json render_settings_json(const vis::RenderSettingsProxy& settings) {
             return json{
                 {"success", true},
@@ -940,7 +1106,6 @@ namespace lfs::app {
                                  {"depth_view_min", settings.depth_view_min},
                                  {"depth_view_max", settings.depth_view_max},
                                  {"depth_visualization_mode", static_cast<int>(settings.depth_visualization_mode)},
-                                 {"selection_color_committed", json::array({settings.selection_color_committed[0], settings.selection_color_committed[1], settings.selection_color_committed[2]})},
                                  {"selection_color_preview", json::array({settings.selection_color_preview[0], settings.selection_color_preview[1], settings.selection_color_preview[2]})},
                                  {"selection_color_center_marker", json::array({settings.selection_color_center_marker[0], settings.selection_color_center_marker[1], settings.selection_color_center_marker[2]})},
                                  {"depth_clip_enabled", settings.depth_clip_enabled},
@@ -1062,7 +1227,21 @@ namespace lfs::app {
             set_bool("antialiasing", settings.antialiasing);
             set_bool("mip_filter", settings.mip_filter);
             set_int("sh_degree", settings.sh_degree);
-            set_float("render_scale", settings.render_scale);
+            if (args.contains("render_scale")) {
+                const auto& value = args["render_scale"];
+                if (!value.is_number()) {
+                    return std::unexpected(
+                        "Field 'render_scale' must be a number between 0.25 and 1.0");
+                }
+                const double render_scale = value.get<double>();
+                if (!std::isfinite(render_scale) || render_scale < 0.25 ||
+                    render_scale > 1.0) {
+                    return std::unexpected(
+                        "Field 'render_scale' must be between 0.25 and 1.0");
+                }
+                settings.render_scale = static_cast<float>(render_scale);
+                touched = true;
+            }
             if (auto result = set_scene_reconstruction(settings); !result)
                 return result;
             set_bool("show_crop_box", settings.show_crop_box);
@@ -1124,8 +1303,6 @@ namespace lfs::app {
             if (auto result = set_vec3("train_camera_color", settings.train_camera_color); !result)
                 return result;
             if (auto result = set_vec3("eval_camera_color", settings.eval_camera_color); !result)
-                return result;
-            if (auto result = set_vec3("selection_color_committed", settings.selection_color_committed); !result)
                 return result;
             if (auto result = set_vec3("selection_color_preview", settings.selection_color_preview); !result)
                 return result;
@@ -1641,7 +1818,8 @@ namespace lfs::app {
         }
 
         BorrowExportPlan make_borrow_single_identity_export_plan(const vis::SceneManager& scene_manager,
-                                                                 const std::vector<std::string>& node_names) {
+                                                                 const std::vector<std::string>& node_names,
+                                                                 const core::ExportFormat format) {
             BorrowExportPlan plan;
             if (node_names.size() != 1)
                 return plan;
@@ -1652,6 +1830,10 @@ namespace lfs::app {
                 return plan;
 
             if (node->model->has_deleted_mask())
+                return plan;
+
+            // Only RAD stores an LOD tree; other formats need the merge to flatten it to its leaves.
+            if (format != core::ExportFormat::RAD && node->model->lod_tree && node->model->lod_tree->has_tree())
                 return plan;
 
             if (node->uuid == scene.getTrainingModelNodeUuid()) {
@@ -1680,6 +1862,11 @@ namespace lfs::app {
             for (const auto& name : node_names) {
                 const auto* const node = scene.getNode(name);
                 if (node && node->type == core::NodeType::SPLAT && node->model) {
+                    if (const auto& tree = node->model->lod_tree;
+                        tree && tree->has_tree() && node->model->size() < tree->total_nodes()) {
+                        return std::unexpected(std::format(
+                            "Cannot export '{}': the model is too large to fit in memory and streams from disk", name));
+                    }
                     splats.emplace_back(node->model.get(), vis::scene_coords::nodeDataWorldTransform(scene, node->id));
                 }
             }
@@ -1687,7 +1874,7 @@ namespace lfs::app {
             if (splats.empty())
                 return std::unexpected("The requested node set does not contain any splat nodes");
 
-            auto borrow_plan = make_borrow_single_identity_export_plan(scene_manager, node_names);
+            auto borrow_plan = make_borrow_single_identity_export_plan(scene_manager, node_names, format);
             auto merged = core::Scene::mergeSplatsWithTransforms(splats, borrow_plan.storage_mode);
             if (!merged)
                 return std::unexpected("Failed to merge scene nodes for export");
@@ -2509,7 +2696,7 @@ namespace lfs::app {
                     // inside capture_live_viewport_to_base64 needs an active GUI frame.
                     return capture_after_gui_render(viewer, [viewer, camera_index, width, height]() {
                         if (camera_index)
-                            return render_scene_to_base64(viewer->getScene(), *camera_index, width, height);
+                            return render_dataset_camera_to_base64(viewer, *camera_index, width, height);
                         return capture_live_viewport_to_base64(viewer, width, height);
                     });
                 },
@@ -3071,6 +3258,105 @@ namespace lfs::app {
 
         registry.register_tool(
             McpTool{
+                .name = "training.params.get",
+                .description = "Read the training parameters for the next run, with type, range, options and whether each is advanced or applies live",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{{"advanced_only", json{{"type", "boolean"}}}},
+                    .required = {}}},
+            [viewer_impl](const json& args) -> json {
+                const bool advanced_only = args.value("advanced_only", false);
+                return post_and_wait(viewer_impl, [viewer_impl, advanced_only]() -> json {
+                    auto* const params = viewer_impl->getParameterManager();
+                    if (!params)
+                        return json{{"error", "Training parameters are not available"}};
+                    return optimization_params_json(params->copyActiveParams(), advanced_only);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "training.params.set",
+                .description = "Set training parameters by id, e.g. {\"values\": {\"thin_structure_weight\": 1.0}}. Options are passed by name. Live-update parameters also change a running training",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{{"values", json{{"type", "object"}}}},
+                    .required = {"values"}}},
+            [viewer_impl](const json& args) -> json {
+                if (!args.contains("values") || !args["values"].is_object() || args["values"].empty())
+                    return json{{"error", "values must be a non-empty object of parameter ids"}};
+                const json values = args["values"];
+                return post_and_wait(viewer_impl, [viewer_impl, values]() -> json {
+                    auto* const params = viewer_impl->getParameterManager();
+                    if (!params)
+                        return json{{"error", "Training parameters are not available"}};
+                    auto& registry = core::prop::PropertyRegistry::instance();
+
+                    struct Change {
+                        core::prop::PropertyMeta meta;
+                        std::any value;
+                    };
+                    std::vector<Change> changes;
+                    std::optional<std::string> strategy;
+                    for (const auto& [id, value] : values.items()) {
+                        auto meta = registry.get_property("optimization", id);
+                        if (!meta || !meta->setter)
+                            return json{{"error", "Unknown training parameter: " + id}};
+                        if (meta->is_readonly())
+                            return json{{"error", "Training parameter is read-only: " + id}};
+                        if (id == "strategy") {
+                            if (!value.is_string() || core::param::canonical_strategy_name(value.get<std::string>()).empty())
+                                return json{{"error", "strategy must be 'mcmc', 'mrnf', or 'igs+'"}};
+                            strategy = std::string(core::param::canonical_strategy_name(value.get<std::string>()));
+                            continue;
+                        }
+                        auto converted = optimization_value_from_json(*meta, value);
+                        if (!converted)
+                            return json{{"error", converted.error().user_message()}};
+                        changes.push_back({std::move(*meta), std::move(*converted)});
+                    }
+
+                    const auto before = params->copyActiveParams();
+                    if (strategy) {
+                        params->modifyActiveParams([&](auto&) {
+                            params->setActiveStrategy(*strategy);
+                            // Presets keep independent values; a GUT value left in the IGS+ slot would be invalid.
+                            if (*strategy == core::param::kStrategyIGSPlus)
+                                params->getActiveParams().gut = false;
+                        });
+                    }
+                    std::vector<std::any> previous;
+                    previous.reserve(changes.size());
+                    params->modifyActiveParams([&](auto& p) {
+                        auto ref = core::prop::PropertyObjectRef::cpp(&p);
+                        for (const auto& change : changes) {
+                            previous.push_back(change.meta.getter(ref));
+                            change.meta.setter(ref, change.value);
+                        }
+                    });
+                    if (const auto error = params->copyActiveParams().validate(); !error.empty()) {
+                        params->modifyActiveParams([&](auto& p) {
+                            auto ref = core::prop::PropertyObjectRef::cpp(&p);
+                            for (size_t i = changes.size(); i-- > 0;)
+                                changes[i].meta.setter(ref, previous[i]);
+                        });
+                        if (strategy)
+                            params->modifyActiveParams([&](auto&) { params->setActiveStrategy(before.strategy); });
+                        return json{{"error", error}};
+                    }
+                    if (strategy)
+                        registry.notify("optimization", "strategy", before.strategy, *strategy);
+                    for (size_t i = 0; i < changes.size(); ++i)
+                        registry.notify("optimization", changes[i].meta.id, previous[i], changes[i].value);
+
+                    auto result = optimization_params_json(params->copyActiveParams(), false);
+                    result["success"] = true;
+                    return result;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
                 .name = "dataset.get_info",
                 .description = "Inspect the current dataset/training scene metadata",
                 .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
@@ -3299,10 +3585,11 @@ namespace lfs::app {
 
                     core::events::cmd::DuplicateNodeById{.node_id = node->id}.emit();
 
+                    SceneNodeCounts counts(scene);
                     json nodes = json::array();
                     for (const auto* const node : scene.getNodes()) {
                         if (node && !before.contains(node->name))
-                            nodes.push_back(node_summary_json(scene, *node));
+                            nodes.push_back(node_summary_json(scene, *node, &counts));
                     }
 
                     if (nodes.empty())
@@ -4048,6 +4335,7 @@ namespace lfs::app {
                         return json{{"error", "Scene manager not initialized"}};
 
                     const auto& scene = scene_manager->getScene();
+                    SceneNodeCounts counts(scene);
                     json nodes = json::array();
                     for (const auto* const node : scene.getNodes()) {
                         if (!node)
@@ -4069,7 +4357,7 @@ namespace lfs::app {
                                 break;
                             }
                         }
-                        nodes.push_back(node_summary_json(scene, *node));
+                        nodes.push_back(node_summary_json(scene, *node, &counts));
                     }
 
                     return json{{"success", true}, {"count", nodes.size()}, {"nodes", nodes}};
@@ -4088,10 +4376,11 @@ namespace lfs::app {
                         return json{{"error", "Scene manager not initialized"}};
 
                     const auto& scene = scene_manager->getScene();
+                    SceneNodeCounts counts(scene);
                     json nodes = json::array();
                     for (const auto& name : scene_manager->getSelectedNodeNames()) {
                         if (const auto* const node = scene.getNode(name))
-                            nodes.push_back(node_summary_json(scene, *node));
+                            nodes.push_back(node_summary_json(scene, *node, &counts));
                     }
 
                     return json{{"success", true}, {"count", nodes.size()}, {"nodes", nodes}};
@@ -4125,10 +4414,11 @@ namespace lfs::app {
                     if (auto result = vis::cap::selectNode(*scene_manager, name, mode); !result)
                         return json{{"error", result.error()}};
 
+                    SceneNodeCounts counts(scene_manager->getScene());
                     json nodes = json::array();
                     for (const auto& selected_name : scene_manager->getSelectedNodeNames()) {
                         if (const auto* const node = scene_manager->getScene().getNode(selected_name))
-                            nodes.push_back(node_summary_json(scene_manager->getScene(), *node));
+                            nodes.push_back(node_summary_json(scene_manager->getScene(), *node, &counts));
                     }
 
                     return json{{"success", true}, {"count", nodes.size()}, {"nodes", nodes}};
@@ -5194,9 +5484,16 @@ namespace lfs::app {
                 .load_path = [](const std::string& path) { return python::load_camera_path(path); },
                 .set_playback_speed = [](const float speed) { python::set_playback_speed(speed); },
                 .load_ply_sequence =
-                    [](const std::string& directory, const float fps) {
-                        core::events::cmd::SequencerLoadPlySequence{.directory = directory, .fps = fps}.emit();
-                    },
+                    [viewer_impl](const std::string& directory, const float fps) -> lfs::Result<void> {
+                    auto* const gui_manager = viewer_impl ? viewer_impl->getGuiManager() : nullptr;
+                    if (!gui_manager)
+                        return lfs::Result<void>::failure(lfs::make_error(lfs::ErrorInit{
+                            .code = lfs::ErrorCode::Unavailable,
+                            .domain = lfs::ErrorDomain::MCP,
+                            .user_message = "Sequencer unavailable",
+                            .detection = LFS_SOURCE_SITE_CURRENT()}));
+                    return gui_manager->sequencerUI().loadPlySequenceFromDirectory(core::utf8_to_path(directory), fps);
+                },
                 .scrub_to_time =
                     [viewer_impl](const float time, const bool update_camera) {
                         auto* const gui_manager = viewer_impl ? viewer_impl->getGuiManager() : nullptr;
@@ -5295,7 +5592,7 @@ namespace lfs::app {
                 if (include_render) {
                     int camera_index = args.value("camera_index", 0);
                     auto render_result = post_and_wait(viewer, [viewer, camera_index]() {
-                        return render_scene_to_base64(viewer->getScene(), camera_index);
+                        return render_dataset_camera_to_base64(viewer, camera_index, 0, 0);
                     });
                     if (render_result)
                         base64_render = *render_result;
@@ -5344,7 +5641,7 @@ namespace lfs::app {
                 const std::string description = args["description"].get<std::string>();
 
                 auto render_result = post_and_wait(viewer_impl, [viewer_impl, camera_index]() {
-                    return render_scene_to_base64(viewer_impl->getScene(), camera_index);
+                    return render_dataset_camera_to_base64(viewer_impl, camera_index, 0, 0);
                 });
                 if (!render_result)
                     return json{{"error", render_result.error()}};
@@ -5407,8 +5704,6 @@ namespace lfs::app {
                     return result;
                 });
             });
-
-        LOG_INFO("Registered GUI-native MCP scene tools");
     }
 
     void register_gui_scene_resources(vis::Visualizer* viewer) {
@@ -5552,7 +5847,7 @@ namespace lfs::app {
                 }
 
                 auto result = post_and_wait(viewer, [viewer, camera_index]() {
-                    return render_scene_to_base64(viewer->getScene(), camera_index);
+                    return render_dataset_camera_to_base64(viewer, camera_index, 0, 0);
                 });
                 if (!result)
                     return std::unexpected(result.error());
@@ -5641,11 +5936,12 @@ namespace lfs::app {
                         return std::unexpected("Scene manager not initialized");
 
                     const auto& scene = scene_manager->getScene();
+                    SceneNodeCounts counts(scene);
                     json nodes = json::array();
                     for (const auto* const node : scene.getNodes()) {
                         if (!node)
                             continue;
-                        nodes.push_back(node_summary_json(scene, *node));
+                        nodes.push_back(node_summary_json(scene, *node, &counts));
                     }
 
                     return single_json_resource(uri, json{{"count", nodes.size()}, {"nodes", std::move(nodes)}});
@@ -5665,10 +5961,11 @@ namespace lfs::app {
                         return std::unexpected("Scene manager not initialized");
 
                     const auto& scene = scene_manager->getScene();
+                    SceneNodeCounts counts(scene);
                     json nodes = json::array();
                     for (const auto& name : scene_manager->getSelectedNodeNames()) {
                         if (const auto* const node = scene.getNode(name))
-                            nodes.push_back(node_summary_json(scene, *node));
+                            nodes.push_back(node_summary_json(scene, *node, &counts));
                     }
 
                     return single_json_resource(uri, json{{"count", nodes.size()}, {"nodes", std::move(nodes)}});

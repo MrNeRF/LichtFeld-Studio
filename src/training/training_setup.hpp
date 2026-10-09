@@ -33,6 +33,8 @@ namespace lfs::training {
         lfs::core::NodeId parent_id = lfs::core::NULL_NODE;
         lfs::core::NodeId point_cloud_node_id = lfs::core::NULL_NODE;
         glm::mat4 node_transform{1.0f};
+        // Removing the point cloud node drops the scene's initial point cloud; the points eval mask still needs it.
+        bool keep_initial_point_cloud = false;
         bool has_preserved_cropbox = false;
         lfs::core::CropBoxData preserved_cropbox_data{};
         glm::mat4 preserved_cropbox_transform{1.0f};
@@ -120,6 +122,12 @@ namespace lfs::training {
     std::expected<void, std::string> loadTrainingDataIntoScene(
         const lfs::core::param::TrainingParameters& params,
         lfs::core::Scene& scene);
+
+    /// Points a model trained with these parameters started from, in the training frame at
+    /// `training_origin`: the --init file when one was given, otherwise the dataset's sparse points.
+    /// A resumed project does not keep them; the evaluation points mask reloads them here.
+    [[nodiscard]] lfs::Result<std::shared_ptr<lfs::core::PointCloud>> loadInitialPointCloud(
+        const lfs::core::param::TrainingParameters& params, const glm::vec3& training_origin);
 
     /**
      * @brief Initialize training model from point cloud

@@ -293,6 +293,7 @@ namespace {
 
     TEST_F(PPISPSidecarTest, TrainingParamsValidationSkipsSidecarExistenceOnResume) {
         lfs::core::param::TrainingParameters params;
+        params.optimization.use_exposure_correction = false;
         params.optimization.use_ppisp = true;
         params.optimization.ppisp_freeze_from_sidecar = true;
         params.optimization.ppisp_sidecar_path = "/definitely/missing.ppisp";

@@ -624,7 +624,10 @@ def verify_catalog_projects(
         if cancel_event is not None and cancel_event.is_set():
             return True
         if callable(verify_batch):
-            verified += verify_batch(batch)
+            verified += (
+                verify_batch(batch, cancel_event=cancel_event)
+                if cancel_event is not None else verify_batch(batch)
+            )
         elif callable(verify_asset):
             for asset_id in batch:
                 if cancel_event is not None and cancel_event.is_set():
@@ -816,6 +819,9 @@ def _commit_registration_batch(
                                     role=SimpleNamespace(name=getattr(existing, "role", "MASTER")),
                                     open_state=SimpleNamespace(name=getattr(existing, "open_state", "OPEN")),
                                     has_preview=getattr(existing, "has_preview", False),
+                                    preview_width=getattr(existing, "preview_width", 0),
+                                    preview_height=getattr(existing, "preview_height", 0),
+                                    fallback_preview_path=getattr(existing, "fallback_preview_path", ""),
                                     has_checkpoint=existing.inspection["has_checkpoint"],
                                     has_dataset=existing.inspection["has_dataset"],
                                     iteration=getattr(existing, "iteration", None),

@@ -366,7 +366,12 @@ namespace lichtfeld::Strings {
 
     namespace Preferences {
         inline constexpr const char* LANGUAGE = "preferences.language";
+        inline constexpr const char* TITLE = "preferences.title";
     } // namespace Preferences
+
+    namespace GettingStarted {
+        inline constexpr const char* TITLE = "getting_started.title";
+    } // namespace GettingStarted
 
     namespace MainPanel {
         inline constexpr const char* COLOR = "main_panel.color";
@@ -398,7 +403,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* PPISP_CRF_TOE = "main_panel.ppisp_crf_toe";
         inline constexpr const char* PPISP_CRF_SHOULDER = "main_panel.ppisp_crf_shoulder";
         inline constexpr const char* RENDER_SCALE = "main_panel.render_scale";
-        inline constexpr const char* COMMITTED = "main_panel.committed";
         inline constexpr const char* PREVIEW = "main_panel.preview";
         inline constexpr const char* CENTER_MARKER = "main_panel.center_marker";
         inline constexpr const char* SELECTION_GROUPS = "main_panel.selection_groups";
@@ -676,6 +680,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* PYTHON = "python_console.python";
         inline constexpr const char* RUNNING = "python_console.running";
         inline constexpr const char* ALREADY_RUNNING = "python_console.already_running";
+        inline constexpr const char* SYSTEM_EXIT = "python_console.system_exit";
         inline constexpr const char* SYNTAX = "python_console.syntax";
         inline constexpr const char* OUTLINE = "python_console.outline";
         inline constexpr const char* SCOPE = "python_console.scope";
@@ -902,8 +907,11 @@ namespace lichtfeld::Strings {
         inline constexpr const char* TASK_ENCODE_ERROR = "runtime.task_encode_error";
         inline constexpr const char* TASK_FINALIZING = "runtime.task_finalizing";
         inline constexpr const char* TASK_FAILED_DETAIL = "runtime.task_failed_detail";
+        inline constexpr const char* VIDEO_EXPORT_SEQUENCE_CHANGED = "runtime.video_export_sequence_changed";
+        inline constexpr const char* VIDEO_EXPORT_SEQUENCE_FRAME_TIMEOUT = "runtime.video_export_sequence_frame_timeout";
         inline constexpr const char* EXPORT_CANCELLED = "runtime.export_cancelled";
         inline constexpr const char* NO_SPLAT_DATA = "runtime.no_splat_data";
+        inline constexpr const char* EXPORT_STREAMED_LOD = "runtime.export_streamed_lod";
         inline constexpr const char* VIDEO_ENCODER_UNAVAILABLE = "runtime.video_encoder_unavailable";
         inline constexpr const char* SCENE_MANAGER_UNAVAILABLE = "runtime.scene_manager_unavailable";
         inline constexpr const char* NO_MODEL_SELECTED = "runtime.no_model_selected";

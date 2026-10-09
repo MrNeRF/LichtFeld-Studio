@@ -4,68 +4,105 @@
   <link type="text/rcss" href="getting_started.rcss"/>
 </head>
 <body template="floating-window" data-model="getting_started">
-
-  <span class="panel-title">@tr:getting_started.title</span>
-  <div class="separator"></div>
-
   <p class="description">@tr:getting_started.description</p>
 
-  <div class="video-grid">
-    <div class="video-card" id="card-overview"
-         data-url="https://www.youtube.com/watch?v=i-04z4_eqiU"
-         data-event-click="open_url">
-      <div class="card-body">
-        <span class="play-icon">&#x25B6;</span>
-      </div>
-      <span class="card-title">@tr:getting_started.video_overview</span>
-    </div>
-    <div class="video-card" id="card-automotive"
-         data-url="https://www.youtube.com/watch?v=FqYTKeI5K6I"
-         data-event-click="open_url">
-      <div class="card-body">
-        <span class="play-icon">&#x25B6;</span>
-      </div>
-      <span class="card-title">@tr:getting_started.video_automotive</span>
-    </div>
-    <div class="video-card" id="card-intro"
-         data-url="https://www.youtube.com/watch?v=b1Olu_IU1sM"
-         data-event-click="open_url">
-      <div class="card-body">
-        <span class="play-icon">&#x25B6;</span>
-      </div>
-      <span class="card-title">@tr:getting_started.video_intro</span>
-    </div>
-    <div class="video-card" id="card-masks"
-         data-url="https://www.youtube.com/watch?v=956qR8N3Xk4"
-         data-event-click="open_url">
-      <div class="card-body">
-        <span class="play-icon">&#x25B6;</span>
-      </div>
-      <span class="card-title">@tr:getting_started.video_masks</span>
-    </div>
-    <div class="video-card" id="card-reality-scan"
-         data-url="https://www.youtube.com/watch?v=JWmkhTlbDvg"
-         data-event-click="open_url">
-      <div class="card-body">
-        <span class="play-icon">&#x25B6;</span>
-      </div>
-      <span class="card-title">@tr:getting_started.video_reality_scan</span>
-    </div>
-    <div class="video-card" id="card-colmap"
-         data-url="https://www.youtube.com/watch?v=-3TBbukYN00"
-         data-event-click="open_url">
-      <div class="card-body">
-        <span class="play-icon">&#x25B6;</span>
-      </div>
-      <span class="card-title">@tr:getting_started.video_colmap</span>
+  <div class="guide-tabs">
+    <button id="tab-highlights" class="btn guide-tab" data-class-active="show_highlights" data-event-click="show_highlights">@tr:getting_started.tab_highlights</button>
+    <button id="tab-training" class="btn guide-tab" data-class-active="show_training" data-event-click="show_training">@tr:getting_started.tab_training</button>
+    <button id="tab-datasets" class="btn guide-tab" data-class-active="show_datasets" data-event-click="show_datasets">@tr:getting_started.tab_datasets</button>
+  </div>
+
+  <div id="section-highlights" class="guide-section" data-if="show_highlights">
+    <div class="video-grid">
+      <button class="video-card" id="card-release-054"
+              data-url="https://www.youtube.com/watch?v=DIcGFMeBSXU"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_release_054</span>
+      </button>
+      <button class="video-card" id="card-projects-gallery"
+              data-url="https://www.youtube.com/watch?v=3TsppHhdZK8"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_projects_gallery</span>
+      </button>
+      <button class="video-card" id="card-codex"
+              data-url="https://www.youtube.com/watch?v=fcQ4nofXg44"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_codex</span>
+      </button>
+      <button class="video-card" id="card-overview"
+              data-url="https://www.youtube.com/watch?v=i-04z4_eqiU"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_overview</span>
+      </button>
     </div>
   </div>
 
-  <div class="separator"></div>
+  <div id="section-training" class="guide-section" data-if="show_training">
+    <div class="video-grid">
+      <button class="video-card" id="card-intro"
+              data-url="https://www.youtube.com/watch?v=b1Olu_IU1sM"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_intro</span>
+      </button>
+      <button class="video-card" id="card-masks"
+              data-url="https://www.youtube.com/watch?v=956qR8N3Xk4"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_masks</span>
+      </button>
+      <button class="video-card" id="card-automotive"
+              data-url="https://www.youtube.com/watch?v=FqYTKeI5K6I"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_automotive</span>
+      </button>
+    </div>
+  </div>
 
-  <span id="wiki-section" class="section-label wiki-link"
-        data-url="https://github.com/MrNeRF/LichtFeld-Studio/wiki"
-        data-event-click="open_url">@tr:getting_started.wiki_section</span>
+  <div id="section-datasets" class="guide-section" data-if="show_datasets">
+    <div class="video-grid">
+      <button class="video-card" id="card-colmap"
+              data-url="https://www.youtube.com/watch?v=-3TBbukYN00"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_colmap</span>
+      </button>
+      <button class="video-card" id="card-reality-scan"
+              data-url="https://www.youtube.com/watch?v=JWmkhTlbDvg"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_reality_scan</span>
+      </button>
+    </div>
+  </div>
 
+  <div class="guide-footer">
+    <button id="wiki-section" class="btn wiki-link"
+            data-url="https://github.com/MrNeRF/LichtFeld-Studio/wiki"
+            data-event-click="open_url">@tr:getting_started.documentation</button>
+  </div>
 </body>
 </rml>

@@ -177,12 +177,24 @@ jobs:
           set PATH=%CD%\%BUILD_DIR%;%CD%\%BUILD_DIR%\vcpkg_installed\x64-windows\bin;%PATH%
           cmake --build %BUILD_DIR% -j %NUMBER_OF_PROCESSORS%
 
+      - name: Run CPU-only SDL coordinate tests
+        # The default app build also builds this isolated, SDL-free test executable.
+        shell: cmd
+        run: ctest --test-dir %BUILD_DIR% --output-on-failure --no-tests=error -R "^lichtfeld\.sdl_coordinates$"
+
       - name: Build and run CPU-only format tests
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake --build %BUILD_DIR% --target lichtfeld_format_tests -j %NUMBER_OF_PROCESSORS%
           ctest --test-dir %BUILD_DIR% --output-on-failure -R "^lichtfeld_format_tests$"
+
+      - name: Build and run EXR image codec tests
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --build %BUILD_DIR% --target lichtfeld_image_codec_tests -j %NUMBER_OF_PROCESSORS%
+          ctest --test-dir %BUILD_DIR% --output-on-failure -R "^lichtfeld_image_codec_tests$"
 
       - name: Build and run CPU-only Unicode path tests
         shell: cmd

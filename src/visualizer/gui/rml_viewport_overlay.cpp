@@ -13,6 +13,7 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
+#include "gui/viewport_gizmo_geometry.hpp"
 #include "internal/resource_paths.hpp"
 #include "preferences.hpp"
 #include "python/python_runtime.hpp"
@@ -195,7 +196,6 @@ namespace lfs::vis::gui {
         doc_registered_ = false;
         gt_metrics_config_subscription_.reset();
         camera_metrics_subscription_.reset();
-        vram_hud_subscription_.reset();
         document_sync_subscriptions_.clear();
         resetToolbarDragListeners();
 
@@ -501,20 +501,6 @@ namespace lfs::vis::gui {
         gt_metrics_config_ = store.gt_metrics_overlay_config.get();
         camera_metrics_ = store.camera_metrics.get();
 
-        const auto make_overlay_state = [&store]() {
-            RmlViewportOverlay::VramHudOverlayState overlay_state;
-            const auto vram_hud_state = store.vram_hud.get();
-            const auto perf_hud_state = store.perf_hud.get();
-            if (vram_hud_state.visible && vram_hud_state.snapshot) {
-                overlay_state.visible = true;
-                overlay_state.snapshot = *vram_hud_state.snapshot;
-            }
-            overlay_state.perf_hud = perf_hud_state;
-            return overlay_state;
-        };
-        const auto overlay_state = make_overlay_state();
-        setVramHudOverlay(std::move(overlay_state));
-
         gt_metrics_config_subscription_ = store.gt_metrics_overlay_config.subscribe(
             [this](const lfs::vis::AppStore::GTMetricsOverlayConfig& config) {
                 gt_metrics_config_ = config;
@@ -525,28 +511,6 @@ namespace lfs::vis::gui {
                 camera_metrics_ = metrics;
                 refreshGTMetricsOverlayFromStore();
             });
-        vram_hud_subscription_ = store.vram_hud.subscribe(
-            [this](const lfs::vis::AppStore::VramHud& state) {
-                RmlViewportOverlay::VramHudOverlayState overlay;
-                if (state.visible && state.snapshot) {
-                    overlay.visible = true;
-                    overlay.snapshot = *state.snapshot;
-                }
-                overlay.perf_hud = lfs::vis::app_store().perf_hud.get();
-                setVramHudOverlay(std::move(overlay));
-            });
-        perf_hud_subscription_ = store.perf_hud.subscribe(
-            [this](const lfs::vis::AppStore::PerfHud& state) {
-                auto overlay = lfs::vis::app_store().vram_hud.get();
-                VramHudOverlayState combined;
-                combined.perf_hud = state;
-                if (overlay.visible && overlay.snapshot) {
-                    combined.visible = true;
-                    combined.snapshot = *overlay.snapshot;
-                }
-                setVramHudOverlay(std::move(combined));
-            });
-
         auto mark_document_dirty = [this](const auto&) {
             markDocumentSyncDirty();
         };
@@ -554,6 +518,7 @@ namespace lfs::vis::gui {
         document_sync_subscriptions_.push_back(store.scene_generation.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.selection_generation.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.active_tool.subscribe(mark_document_dirty));
+        document_sync_subscriptions_.push_back(store.align_state_generation.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.active_submode.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.transform_space.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.pivot_mode.subscribe(mark_document_dirty));
@@ -909,6 +874,12 @@ namespace lfs::vis::gui {
         const float height_dp = vp_size_.y / dp_ratio;
         content->SetClass("viewport-cramped",
                           width_dp < kCrampedViewportWidthDp || height_dp < kCrampedViewportHeightDp);
+        const auto update_gizmo = [&](const char* id, const float width) {
+            if (auto* root = document_->GetElementById(id))
+                root->SetClass("gizmo-cramped", !viewportGizmoFits(width, vp_size_.y, dp_ratio));
+        };
+        update_gizmo("primary-toolbar-root", primary_toolbar_width_);
+        update_gizmo("secondary-toolbar-root", secondary_toolbar_width_);
     }
 
     void RmlViewportOverlay::applySplitDividerOverlay() {
@@ -1636,9 +1607,21 @@ namespace lfs::vis::gui {
     }
 
     std::optional<double> RmlViewportOverlay::nextScheduledUpdateDelay() const {
+        std::optional<double> delay;
         if (std::isfinite(next_update_delay_) && next_update_delay_ > 0.0)
-            return next_update_delay_;
-        return std::nullopt;
+            delay = next_update_delay_;
+
+        // Passive document hooks poll toolbar state even when Rml itself has
+        // no animation deadline. Keep that poll alive while the frame loop idles.
+        if (document_ && vp_size_.x > 0 && vp_size_.y > 0 &&
+            (lfs::python::has_python_hooks("viewport_overlay", "document", true) ||
+             lfs::python::has_python_hooks("viewport_overlay", "document", false))) {
+            const auto elapsed = std::chrono::steady_clock::now() - last_document_hook_run_;
+            const double hook_delay = std::max(
+                0.001, std::chrono::duration<double>(kDocumentHookPollInterval - elapsed).count());
+            delay = delay ? std::min(*delay, hook_delay) : hook_delay;
+        }
+        return delay;
     }
 
 } // namespace lfs::vis::gui

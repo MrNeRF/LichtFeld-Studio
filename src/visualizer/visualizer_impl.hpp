@@ -61,6 +61,7 @@ namespace lfs::vis {
     } // namespace tools
 
     class LFS_VIS_API VisualizerImpl : public Visualizer {
+        friend class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
         friend class gui::GuiManager;
         friend class gui::AsyncTaskManager;
 
@@ -95,6 +96,12 @@ namespace lfs::vis {
         void set_evaluation_weights_preparer(
             std::function<std::optional<std::filesystem::path>(bool allow_download)> preparer) override;
         std::expected<void, std::string> startTraining() override;
+        [[nodiscard]] bool isTrainingStartPending() const {
+            return project_lifecycle_ && project_lifecycle_->isTrainingStartPending();
+        }
+        bool cancelTrainingStartPreparation() {
+            return project_lifecycle_ && project_lifecycle_->cancelTrainingStartPreparation();
+        }
         [[nodiscard]] ProjectTrainingSessionState
         projectTrainingSessionState() const override;
         lfs::Result<void>
@@ -106,6 +113,10 @@ namespace lfs::vis {
         lfs::Result<void>
         projectSaveAs(const std::filesystem::path& path,
                       bool regenerate_preview = true) override;
+        lfs::Result<void>
+        projectSaveAs(const std::filesystem::path& path,
+                      bool regenerate_preview,
+                      bool fresh_training_start);
         lfs::Result<void>
         projectCreateAt(
             const std::filesystem::path& path,
@@ -278,6 +289,19 @@ namespace lfs::vis {
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
         friend class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
+        friend class VisualizerImplResetTest_AsyncTrainingBindReturnsBeforeSlowWriteAndCoalescesStarts_Test;
+        friend class VisualizerImplResetTest_AsyncTrainingBindFailureDoesNotStart_Test;
+        friend class VisualizerImplResetTest_AsyncTrainingBindCloseDoesNotStart_Test;
+        friend class VisualizerImplResetTest_AsyncViewerTrainingStartCanBeCanceledBeforeInitialization_Test;
+        friend class VisualizerImplResetTest_AsyncTrainingBindCancelDoesNotStart_Test;
+        friend class VisualizerImplResetTest_AsyncTrainingBoundProjectPropagatesStartRejection_Test;
+
+        friend class VisualizerImplResetTest_AsyncTrainingBindWaitsForAutosave_Test;
+        friend class VisualizerImplResetTest_AsyncTrainingBindTrainerReplacementCancels_Test;
+        friend class VisualizerImplResetTest_AsyncPausedPreparationCancelPreservesSession_Test;
+        friend class VisualizerImplResetTest_AsyncPreparationCancelDrainsDeferredLoad_Test;
+        friend class VisualizerImplResetTest_AsyncPausedExplicitPreparationAdoptsItsSnapshot_Test;
+
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnSave_Test;
         friend class VisualizerImplResetTest_StoredSessionAtPrmsIterationsReportsCompleted_Test;
         friend class VisualizerImplResetTest_StoredSessionBelowPrmsIterationsReportsNotCompleted_Test;
@@ -305,6 +329,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_RestoreThenTrainWritesNewCheckpoint_Test;
         friend class VisualizerImplResetTest_HeadlessOpenPrintsHydrationStagesWhenBenchPathSet_Test;
         friend class VisualizerImplResetTest_ResetTrainingPreservesExplicitInitPath_Test;
+        friend class VisualizerImplResetTest_FreshTrainingStartSaveAsDropsCheckpointHistory_Test;
+        friend class VisualizerImplResetTest_FailedFreshTrainingStartSaveAsPreservesSourceHistory_Test;
         friend class VisualizerImplResetTest_ResetTrainingStopsTrainerDuringStarting_Test;
         friend class VisualizerImplResetTest_DirtyProjectSwitchRequiresExplicitDiscardAuthorization_Test;
         friend class VisualizerImplResetTest_NewProjectDirtyGateRunsBelowEveryCommandEntry_Test;
@@ -341,7 +367,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_TrainingSnapshotCancelTerminalizesBeforeSettlement_Test;
         friend class VisualizerImplResetTest_FailedAutosaveSettlementAppliesBackoffBeforeRetry_Test;
         friend class VisualizerImplResetTest_PendingCloseSuppressesBackgroundAutosave_Test;
-        friend class VisualizerImplResetTest_StoppingTrainerBlocksIdleCompactionAndAutosave_Test;
+        friend class VisualizerImplResetTest_StoppingTrainerBlocksAutosave_Test;
+        friend class VisualizerImplResetTest_IdleMaintenanceKeepsEverySave_Test;
         friend class VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptOrArmAutosave_Test;
         friend class VisualizerImplResetTest_SceneEditStillPromptsAndArmsAutosave_Test;
         friend class VisualizerImplResetTest_ParametersUnchangedRoundTripStaysClean_Test;
@@ -427,6 +454,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWritesScratch_Test;
         friend class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWaitsForAutosaveQuietPeriod_Test;
         friend class VisualizerImplResetTest_SaveAsMigratesScratchAutosaveToSidecar_Test;
+        friend class VisualizerImplResetTest_SaveAsSettlesCompletedSidecarAutosave_Test;
         friend class VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
         friend class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
         friend class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
@@ -451,10 +479,13 @@ namespace lfs::vis {
         friend class DatasetEmbedIntegrationTest_CreateLoadDeferredDatasetEmbedCompletes_Test;
         friend class DatasetEmbedIntegrationTest_ProjectInfoReportsLiveDatasetBeforeFirstSave_Test;
         friend class VisualizerImplResetTest_SplatDropOntoTitledDatasetProjectStartsUntitledSessionAndKeepsProjectFile_Test;
+        friend class VisualizerImplResetTest_DroppedProjectReplacesCurrentDuringHydration_Test;
+        friend class VisualizerImplResetTest_DroppedProjectReplacesCurrentAfterHydration_Test;
         friend class VisualizerImplResetTest_SplatAddOntoSplatSceneKeepsTitledProject_Test;
         friend class VisualizerImplResetTest_PreTrainingProjectSaveRestoresCameraEnabledAndHidden_Test;
         friend class VisualizerImplResetTest_PostTrainingProjectSaveRestoresCameraEnabledAndHidden_Test;
         friend class VisualizerImplResetTest_CaptureOmitsPlySequenceClipAndCollapsedUuid_Test;
+        friend class VisualizerImplResetTest_SequencerCaptureDropsRemovedTailAndPreservesExtensions_Test;
         friend class VisualizerImplResetTest_AssetManagerProjectRestorePreservesLeftDockWidth_Test;
         friend class VisualizerImplResetTest_SaveAsAssignsNewProjectIdentity_Test;
 
@@ -464,7 +495,8 @@ namespace lfs::vis {
     private:
         lfs::Result<void> projectSaveAsFromDialog(
             const std::filesystem::path& path,
-            bool regenerate_preview);
+            bool regenerate_preview,
+            bool fresh_training_start = false);
         void abandonSaveAndExitAttempt();
         void armStopSaveAndExit(
             std::optional<std::filesystem::path>
@@ -668,6 +700,7 @@ namespace lfs::vis {
         mutable std::chrono::steady_clock::time_point display_refresh_queried_at_{};
         mutable double gui_animation_frame_interval_ = 1.0 / 60.0;
         CameraAnimationCadence camera_animation_cadence_;
+        std::optional<std::chrono::steady_clock::time_point> last_presented_frame_start_;
         bool gui_initialized_ = false;
         bool tools_initialized_ = false;
         bool view_context_bridge_initialized_ = false;

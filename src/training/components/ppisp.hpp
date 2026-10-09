@@ -120,6 +120,9 @@ namespace lfs::training {
         lfs::core::Tensor apply(const lfs::core::Tensor& rgb, int camera_id, int uid,
                                 const PPISPRegion& region = {});
 
+        lfs::core::Tensor apply_interpolated_frames(const lfs::core::Tensor& rgb, int camera_id,
+                                                    int left_uid, int right_uid, float fraction);
+
         /// Same as apply(), but exposure comes from the argument instead of
         /// exposure_params_[frame]. Camera-level vignetting/CRF come from camera_id;
         /// per-frame colour is identity (held-out frames have no colour latent).
@@ -161,6 +164,8 @@ namespace lfs::training {
         /// @param uid Original frame UID (translated internally)
         lfs::core::Tensor backward(const lfs::core::Tensor& rgb, const lfs::core::Tensor& grad_output, int camera_id,
                                    int uid);
+        /// Backward pass that overwrites the contiguous grad with the gradient with respect to rgb.
+        void backward_in_place(const lfs::core::Tensor& rgb, lfs::core::Tensor& grad, int camera_id, int uid);
 
         /// Backward pass through ISP using controller-predicted params.
         /// Returns gradient w.r.t. controller_params [1,9] for controller backward.

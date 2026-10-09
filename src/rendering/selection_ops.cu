@@ -618,6 +618,7 @@ namespace lfs::rendering {
             }
         }
 
+        template <bool Scoped>
         __global__ void filterSelectionByCropKernel(
             bool* __restrict__ selection,
             const float3* __restrict__ means,
@@ -631,10 +632,16 @@ namespace lfs::rendering {
             const float* __restrict__ model_transforms,
             const int* __restrict__ transform_indices,
             const int num_model_transforms,
+            const int parent_node_index,
             const int n) {
             const int idx = blockIdx.x * blockDim.x + threadIdx.x;
             if (idx >= n || !selection[idx]) {
                 return;
+            }
+            if constexpr (Scoped) {
+                if ((transform_indices ? transform_indices[idx] : 0) != parent_node_index) {
+                    return;
+                }
             }
 
             float3 pos = means[idx];
@@ -1293,7 +1300,8 @@ namespace lfs::rendering {
         const Tensor* const ellipsoid_radii,
         const bool ellipsoid_inverse,
         const Tensor* const model_transforms,
-        const Tensor* const transform_indices) {
+        const Tensor* const transform_indices,
+        const int parent_node_index) {
         if (!selection.is_valid() || !means.is_valid()) {
             return;
         }
@@ -1338,21 +1346,29 @@ namespace lfs::rendering {
         }
 
         const int grid_size = (n + kBlockSize - 1) / kBlockSize;
-        filterSelectionByCropKernel<<<grid_size, kBlockSize, 0, currentSelectionStream(&selection)>>>(
-            selection.ptr<bool>(),
-            reinterpret_cast<const float3*>(means.ptr<float>()),
-            crop_t_ptr,
-            crop_min_ptr,
-            crop_max_ptr,
-            crop_inverse,
-            ellip_t_ptr,
-            ellip_radii_ptr,
-            ellipsoid_inverse,
-            prepared_transforms.ptr,
-            transform_indices_ptr,
-            prepared_transforms.count,
-            n);
-        LFS_CUDA_LAUNCH_CHECK(currentSelectionStream(&selection), "render.selection.filter_crop");
+        const auto launch = [&]<bool Scoped>() {
+            filterSelectionByCropKernel<Scoped><<<grid_size, kBlockSize, 0, currentSelectionStream(&selection)>>>(
+                selection.ptr<bool>(),
+                reinterpret_cast<const float3*>(means.ptr<float>()),
+                crop_t_ptr,
+                crop_min_ptr,
+                crop_max_ptr,
+                crop_inverse,
+                ellip_t_ptr,
+                ellip_radii_ptr,
+                ellipsoid_inverse,
+                prepared_transforms.ptr,
+                transform_indices_ptr,
+                prepared_transforms.count,
+                parent_node_index,
+                n);
+            LFS_CUDA_LAUNCH_CHECK(currentSelectionStream(&selection), "render.selection.filter_crop");
+        };
+        if (parent_node_index >= 0) {
+            launch.template operator()<true>();
+        } else {
+            launch.template operator()<false>();
+        }
     }
 
     namespace config {

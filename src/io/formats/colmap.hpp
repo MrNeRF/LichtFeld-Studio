@@ -9,6 +9,7 @@
 #include "core/tensor.hpp"
 #include "io/error.hpp"
 #include "io/loader.hpp"
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -16,6 +17,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace lfs::io {
@@ -65,13 +67,15 @@ namespace lfs::io {
         std::vector<Point3DTrackElement> track;
     };
 
-    // Filled only by read_colmap_cameras_and_images when SfM observations
-    // require the points; consumed (and cleared) by the first point-cloud
-    // read; never mutated otherwise.
+    // `records` are filled only by read_colmap_cameras_and_images when SfM
+    // observations require the points, then consumed (and cleared) by the first
+    // point-cloud read. `views` holds each image's centre and focal in pixels by
+    // image id; the point-cloud reads clamp unresolved point depths with them.
     struct ColmapPointCloudRecords {
         std::vector<Point3DData> records;
         std::vector<Diagnostic> warnings;
         bool loaded = false;
+        std::unordered_map<uint32_t, std::array<double, 4>> views;
     };
 
     Result<LoadOutcome<std::vector<ImageData>>> read_colmap_images_binary(
@@ -151,7 +155,8 @@ namespace lfs::io {
     read_colmap_cameras_and_images_text(
         const std::filesystem::path& base,
         const std::string& images_folder = "images",
-        const LoadOptions& options = {});
+        const LoadOptions& options = {},
+        ColmapPointCloudRecords* point_records = nullptr);
 
     /**
      * @brief Validate COLMAP dataset image and mask layout against metadata
@@ -176,11 +181,13 @@ namespace lfs::io {
      */
     Result<LoadOutcome<PointCloud>> read_colmap_point_cloud_text(
         const std::filesystem::path& filepath,
-        const LoadOptions& options = {});
+        const LoadOptions& options = {},
+        ColmapPointCloudRecords* point_records = nullptr);
 
     Result<LoadOutcome<ColmapPointCloudLoadStats>> read_colmap_point_cloud_text_with_stats(
         const std::filesystem::path& filepath,
-        const LoadOptions& options = {});
+        const LoadOptions& options = {},
+        ColmapPointCloudRecords* point_records = nullptr);
 
     /**
      * @brief Read COLMAP cameras only (no image file validation required)

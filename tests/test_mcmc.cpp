@@ -9,6 +9,7 @@
 #include "training/strategies/mcmc.hpp"
 #include <algorithm>
 #include <gtest/gtest.h>
+#include <limits>
 #include <vector>
 
 using namespace lfs::core;
@@ -164,6 +165,38 @@ TEST(CropDampingStrategyTest, IgsPlusRejectedRowsAreNeverSampledAtZeroScale) {
     EXPECT_EQ(unit_scale_scores, unmasked_scores);
 }
 
+TEST(ImprovedGSPlusTest, InitializesWhenStopRefinePrecedesStartRefine) {
+    auto splat_data = create_test_splat_data(8);
+    ImprovedGSPlus strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::igs_plus_defaults();
+    opt_params.iterations = 400;
+    opt_params.start_refine = 500;
+    opt_params.stop_refine = 400;
+    opt_params.max_cap = 16;
+    EXPECT_NO_THROW(strategy.initialize(opt_params));
+}
+
+TEST(ImprovedGSPlusTest, RefineWithoutEdgeScoresSkipsDensification) {
+    auto splat_data = create_test_splat_data(8);
+    ImprovedGSPlus strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::igs_plus_defaults();
+    opt_params.iterations = 1000;
+    opt_params.start_refine = 100;
+    opt_params.stop_refine = 800;
+    opt_params.refine_every = 100;
+    opt_params.max_cap = 16;
+    strategy.initialize(opt_params);
+
+    constexpr int kIter = 200;
+    ASSERT_TRUE(strategy.is_refining(kIter));
+    lfs::training::RenderOutput render_output;
+    strategy.pre_step(kIter, render_output);
+    EXPECT_NO_THROW(strategy.post_backward(kIter, render_output));
+    EXPECT_EQ(splat_data.size(), 8u);
+}
+
 TEST(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {
     auto splat_data = create_test_splat_data(12);
     MCMC strategy(splat_data);
@@ -241,4 +274,31 @@ TEST(MCMCTest, AddNewGaussiansExtendsDeletedMask) {
     for (int i = 2; i < 10; ++i) {
         EXPECT_FLOAT_EQ(deleted[i], 0.0f);
     }
+}
+
+TEST(MCMCTest, RelocationWithTinyCropWeightsNeverCopiesFrozenParents) {
+    auto splat_data = create_test_splat_data(16);
+    std::vector<float> positions(16 * 3, 0.0f);
+    for (size_t row = 0; row < 16; ++row)
+        positions[3 * row] = static_cast<float>(row);
+    splat_data.means() = Tensor::from_vector(positions, {16, 3}, Device::CUDA);
+    splat_data.set_frozen_ranges({{0, 4}});
+    MCMC strategy(splat_data);
+    auto params = param::OptimizationParameters::mcmc_defaults();
+    params.max_cap = 32;
+    strategy.initialize(params);
+    strategy.get_optimizer().set_crop_damping_mask(make_mask(16, 16));
+    // Initial error scores are floored to 1e-12; keep the resulting weight normal.
+    strategy.get_optimizer().set_cropbox_lr_scale(
+        1.01f * std::numeric_limits<float>::min() / 1e-12f);
+    std::vector<bool> dead(16, false);
+    for (size_t row = 4; row < 15; ++row)
+        dead[row] = true;
+    strategy.remove_gaussians(Tensor::from_vector(dead, {16}, Device::CUDA));
+    ASSERT_EQ(strategy.relocate_gs_test(), 11);
+    const auto result = splat_data.means().to_vector();
+    for (size_t row = 0; row < 4; ++row)
+        EXPECT_FLOAT_EQ(result[3 * row], static_cast<float>(row));
+    for (size_t row = 4; row < 16; ++row)
+        EXPECT_FLOAT_EQ(result[3 * row], 15.0f);
 }

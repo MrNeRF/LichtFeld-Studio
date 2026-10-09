@@ -65,7 +65,7 @@ namespace lfs::core {
             EVENT(ResumeTraining, );
             EVENT(StopTraining, );
             EVENT(ResetTraining, );
-            EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path = {}; std::filesystem::path init_path = {}; std::string centralize_dataset = {}; std::optional<int> max_width = {}; std::optional<int> min_track_length = {}; bool apply_auto_crop = false; bool stop_training = false; bool discard_changes = false; bool replace = false; std::vector<std::filesystem::path> paths = {}; bool user_batch = false;);
+            EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path = {}; std::filesystem::path init_path = {}; std::vector<std::filesystem::path> add_splat_paths = {}; std::vector<bool> add_splat_freeze = {}; float freeze_lr_scale = 0.0f; bool exclude_frozen_add_splats_from_export = false; std::string centralize_dataset = {}; std::optional<int> max_width = {}; std::optional<int> min_track_length = {}; bool apply_auto_crop = false; bool stop_training = false; bool discard_changes = false; bool replace = false; std::vector<std::filesystem::path> paths = {}; bool user_batch = false;);
             EVENT(PrepareGalleryProject, std::filesystem::path source_path; std::filesystem::path destination; ExportFormat payload_format = ExportFormat::GALLERY_SOG; std::string expected_commit_uuid;);
             EVENT(LoadGalleryScene, std::vector<std::filesystem::path> paths; std::vector<std::string> names; std::vector<glm::mat4> transforms; std::vector<int> sh_degrees; std::string group_name; bool hidden = false;);
             EVENT(LoadCheckpointForTraining, std::filesystem::path checkpoint_path; std::filesystem::path dataset_path; std::filesystem::path output_path;);
@@ -76,7 +76,7 @@ namespace lfs::core {
             EVENT(ShowResumeCheckpointPopup, std::filesystem::path checkpoint_path;);
             EVENT(NewProject, bool discard_changes = false; bool stop_training = false;);
             EVENT(ProjectSave, bool regenerate_preview = true;);
-            EVENT(ProjectSaveAs, std::filesystem::path path;);
+            EVENT(ProjectSaveAs, std::filesystem::path path; bool fresh_training_start = false;);
             EVENT(ProjectCreate, std::filesystem::path path; bool discard_changes = false; bool stop_training = false; bool allow_existing_destination_replacement = false;);
             EVENT(ProjectOpen, std::filesystem::path path; bool discard_changes = false; bool stop_training = false; bool keep_asset_manager_open = false;);
             EVENT(ProjectCompact, bool clean = false;
@@ -85,7 +85,7 @@ namespace lfs::core {
                   std::string expected_commit;
                   std::function<void(const std::string&)> on_started;);
             EVENT(ProjectEmbedDataset, );
-            EVENT(ShowProjectSwitchConfirmation, bool new_project = false; std::filesystem::path path; bool keep_asset_manager_open = false; std::filesystem::path create_path = {}; bool allow_existing_destination_replacement = false;);
+            EVENT(ShowProjectSwitchConfirmation, bool new_project = false; std::filesystem::path path; bool keep_asset_manager_open = false; std::filesystem::path create_path = {}; bool allow_existing_destination_replacement = false; bool stop_training = false;);
             EVENT(ShowLoadFileConfirmation, std::vector<std::filesystem::path> paths; bool is_dataset = false; bool replace = false; bool user_batch = false;);
             EVENT(ShowStopTrainingConfirmation, bool new_project = false; std::filesystem::path path; bool discard_changes = false; bool keep_asset_manager_open = false; std::filesystem::path create_path = {}; bool allow_existing_destination_replacement = false;);
             EVENT(SetReopenLastProject, bool enabled;);
@@ -262,7 +262,8 @@ namespace lfs::core {
                   std::string error;
                   size_t required_bytes;
                   size_t available_bytes;
-                  bool is_disk_space_error;);
+                  bool is_disk_space_error;
+                  bool is_project_save = false;);
             EVENT(MemoryUsage,
                   size_t gpu_used;
                   size_t gpu_total;

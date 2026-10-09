@@ -11,6 +11,7 @@
 #include "io/loader.hpp"
 #include "py_error.hpp"
 #include "python/python_runtime.hpp"
+#include "rendering/selection_ops.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/operation/undo_entry.hpp"
 #include "visualizer/operation/undo_history.hpp"
@@ -19,6 +20,8 @@
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/training/training_state.hpp"
 #include <algorithm>
+#include <cmath>
+#include <glm/gtc/type_ptr.hpp>
 #include <nanobind/ndarray.h>
 #include <stdexcept>
 
@@ -94,7 +97,7 @@ namespace lfs::python {
     }
 
     // Helper to convert ndarray to glm::mat4
-    static glm::mat4 ndarray_to_mat4(nb::ndarray<float, nb::shape<4, 4>> arr) {
+    static glm::mat4 ndarray_to_mat4(nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> arr) {
         glm::mat4 m;
         auto view = arr.view();
         for (int i = 0; i < 4; ++i) {
@@ -174,37 +177,41 @@ namespace lfs::python {
     }
 
     // PySceneNode implementation
-    void PySceneNode::set_local_transform(nb::ndarray<float, nb::shape<4, 4>> transform) {
-        apply_node_transform_with_undo(node_->name, ndarray_to_mat4(transform), scene_);
+    void PySceneNode::set_local_transform(
+        nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> transform) {
+        apply_node_transform_with_undo(node().name, ndarray_to_mat4(transform), scene_);
     }
 
     nb::tuple PySceneNode::local_transform() const {
-        return mat4_to_tuple(node_->local_transform.get());
+        return mat4_to_tuple(node().local_transform.get());
     }
 
     nb::tuple PySceneNode::world_transform() const {
-        return mat4_to_tuple(scene_->getWorldTransform(node_->id));
+        return mat4_to_tuple(scene_->getWorldTransform(node().id));
     }
 
     std::optional<PySplatData> PySceneNode::splat_data() {
-        if (node_->type != core::NodeType::SPLAT || !node_->model) {
+        auto& live = node();
+        if (live.type != core::NodeType::SPLAT || !live.model) {
             return std::nullopt;
         }
-        return PySplatData(node_->model.get());
+        return PySplatData(live.model.get());
     }
 
     std::optional<PyPointCloud> PySceneNode::point_cloud() {
-        if (node_->type != core::NodeType::POINTCLOUD || !node_->point_cloud) {
+        auto& live = node();
+        if (live.type != core::NodeType::POINTCLOUD || !live.point_cloud) {
             return std::nullopt;
         }
-        return PyPointCloud(node_->point_cloud.get(), false, node_, scene_);
+        return PyPointCloud(live.point_cloud.get(), false, &live, scene_);
     }
 
     std::optional<PyMeshInfo> PySceneNode::mesh() {
-        if (node_->type != core::NodeType::MESH || !node_->mesh) {
+        auto& live = node();
+        if (live.type != core::NodeType::MESH || !live.mesh) {
             return std::nullopt;
         }
-        return PyMeshInfo(node_->mesh);
+        return PyMeshInfo(live.mesh);
     }
 
     int64_t PyPointCloud::filter(const PyTensor& keep_mask) {
@@ -311,24 +318,27 @@ namespace lfs::python {
     }
 
     std::optional<PyCropBox> PySceneNode::cropbox() {
-        if (node_->type != core::NodeType::CROPBOX || !node_->cropbox) {
+        auto& live = node();
+        if (live.type != core::NodeType::CROPBOX || !live.cropbox) {
             return std::nullopt;
         }
-        return PyCropBox(node_->cropbox.get());
+        return PyCropBox(live.cropbox.get());
     }
 
     std::optional<PyEllipsoid> PySceneNode::ellipsoid() {
-        if (node_->type != core::NodeType::ELLIPSOID || !node_->ellipsoid) {
+        auto& live = node();
+        if (live.type != core::NodeType::ELLIPSOID || !live.ellipsoid) {
             return std::nullopt;
         }
-        return PyEllipsoid(node_->ellipsoid.get());
+        return PyEllipsoid(live.ellipsoid.get());
     }
 
     std::optional<PyKeyframeData> PySceneNode::keyframe_data() {
-        if (node_->type != core::NodeType::KEYFRAME || !node_->keyframe) {
+        auto& live = node();
+        if (live.type != core::NodeType::KEYFRAME || !live.keyframe) {
             return std::nullopt;
         }
-        const auto& kf = *node_->keyframe;
+        const auto& kf = *live.keyframe;
         return PyKeyframeData{
             .keyframe_index = kf.keyframe_index,
             .time = kf.time,
@@ -473,6 +483,8 @@ namespace lfs::python {
         assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
         assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
         assert(pts.shape()[0] == cols.shape()[0]);
+        if (cols.dtype() != core::DataType::UInt8 && cols.dtype() != core::DataType::Float32)
+            throw nb::value_error("colors must have dtype uint8 or float32");
 
         auto pc = std::make_shared<core::PointCloud>(pts.to(core::Device::CUDA), cols.to(core::Device::CUDA));
         const int32_t node_id = scene_->addPointCloud(name, std::move(pc), parent);
@@ -516,7 +528,8 @@ namespace lfs::python {
 
         if (colors && colors->tensor().is_valid()) {
             const auto& c = colors->tensor();
-            assert(c.shape().rank() == 2 && c.shape()[0] == verts.shape()[0]);
+            if (c.ndim() != 2 || c.size(0) != verts.size(0) || c.size(1) != 4)
+                throw nb::value_error("colors must have shape [N, 4] matching vertices");
             mesh->colors = c.to(core::DataType::Float32).to(core::Device::CPU);
         }
 
@@ -589,8 +602,25 @@ namespace lfs::python {
 
         const auto& R_tensor = R.tensor();
         const auto& T_tensor = T.tensor();
-        assert(R_tensor.ndim() == 2 && R_tensor.size(0) == 3 && R_tensor.size(1) == 3);
-        assert(T_tensor.numel() == 3);
+        if (!R_tensor.is_valid() || R_tensor.dtype() != core::DataType::Float32 || R_tensor.ndim() != 2 ||
+            R_tensor.size(0) != 3 || R_tensor.size(1) != 3)
+            throw nb::value_error("R must be a float32 tensor of shape [3, 3]");
+        if (!T_tensor.is_valid() || T_tensor.dtype() != core::DataType::Float32 || T_tensor.numel() != 3 ||
+            !(T_tensor.ndim() == 1 || (T_tensor.ndim() == 2 && T_tensor.size(1) == 1)))
+            throw nb::value_error("T must be a float32 tensor of shape [3] or [3, 1]");
+        const auto all_finite = [](const core::Tensor& tensor) {
+            const auto cpu = tensor.cpu().contiguous();
+            const auto* values = cpu.ptr<float>();
+            return std::all_of(values, values + cpu.numel(), [](const float value) { return std::isfinite(value); });
+        };
+        if (!all_finite(R_tensor))
+            throw nb::value_error("R must contain finite values");
+        if (!all_finite(T_tensor))
+            throw nb::value_error("T must contain finite values");
+        if (!std::isfinite(focal_x) || focal_x <= 0.0f || !std::isfinite(focal_y) || focal_y <= 0.0f)
+            throw nb::value_error("focal_x and focal_y must be finite and positive");
+        if (width <= 0 || height <= 0)
+            throw nb::value_error("width and height must be positive");
 
         auto T_flat = T_tensor.ndim() == 2 ? T_tensor.reshape({3}) : T_tensor;
 
@@ -765,7 +795,9 @@ namespace lfs::python {
         return mat4_to_tuple(scene_->getWorldTransform(node_id));
     }
 
-    void PyScene::set_node_transform(const std::string& name, nb::ndarray<float, nb::shape<4, 4>> transform) {
+    void PyScene::set_node_transform(
+        const std::string& name,
+        nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> transform) {
         apply_node_transform_with_undo(name, ndarray_to_mat4(transform), scene_);
     }
 
@@ -789,6 +821,72 @@ namespace lfs::python {
         if (!model)
             return std::nullopt;
         return PySplatData(model);
+    }
+
+    void PyScene::apply_crop_filter(PyTensor& mask) {
+        if (mask.tensor().numel() == 0)
+            return;
+        const auto boxes = scene_->getRenderableCropBoxes();
+        const auto ellipsoids = scene_->getRenderableEllipsoids();
+        const auto enabled = [](const auto& volume) {
+            return volume.data && volume.data->enabled && volume.parent_node_index >= 0;
+        };
+        if (!std::any_of(boxes.begin(), boxes.end(), enabled) &&
+            !std::any_of(ellipsoids.begin(), ellipsoids.end(), enabled)) {
+            return;
+        }
+
+        const auto* model = scene_->getCombinedModel();
+        auto& selection = mask.tensor();
+        if (!model || selection.ndim() != 1 || selection.size(0) != model->size() ||
+            selection.dtype() != core::DataType::Bool || !selection.is_contiguous() ||
+            selection.device() != core::Device::CUDA) {
+            throw std::invalid_argument("Crop filtering requires a contiguous CUDA bool mask matching the combined model");
+        }
+        const auto& means = model->means();
+        const auto transforms = scene_->getVisibleNodeTransforms();
+        std::vector<float> transform_values;
+        transform_values.reserve(transforms.size() * 16);
+        for (const auto& transform : transforms) {
+            for (int row = 0; row < 4; ++row) {
+                for (int col = 0; col < 4; ++col) {
+                    transform_values.push_back(transform[col][row]);
+                }
+            }
+        }
+        const auto model_transforms = core::Tensor::from_vector(
+            transform_values, {transforms.size(), 4, 4}, core::Device::CUDA);
+        // The single-model kernel already defaults to slot zero. Avoid creating
+        // a full-size index tensor for scenes that do not otherwise need one.
+        const auto indices = transforms.size() > 1 ? scene_->getTransformIndices() : nullptr;
+        const auto upload_transform = [](const glm::mat4& world) {
+            const auto inverse = glm::inverse(world);
+            const auto* ptr = glm::value_ptr(inverse);
+            return core::Tensor::from_vector(std::vector<float>(ptr, ptr + 16), {4, 4}, core::Device::CUDA);
+        };
+        const auto upload_vec = [](const glm::vec3& value) {
+            return core::Tensor::from_vector({value.x, value.y, value.z}, {3}, core::Device::CUDA);
+        };
+        for (const auto& box : boxes) {
+            if (!enabled(box))
+                continue;
+            const auto transform = upload_transform(box.world_transform);
+            const auto min = upload_vec(box.data->min);
+            const auto max = upload_vec(box.data->max);
+            rendering::filter_selection_by_crop(selection, means, &transform, &min, &max, box.data->inverse,
+                                                nullptr, nullptr, false, &model_transforms, indices.get(),
+                                                box.parent_node_index);
+        }
+        for (const auto& ellipsoid : ellipsoids) {
+            if (!enabled(ellipsoid))
+                continue;
+            const auto transform = upload_transform(ellipsoid.world_transform);
+            // Match the renderer's treatment of degenerate ellipsoid axes.
+            const auto radii = upload_vec(glm::max(glm::abs(ellipsoid.data->radii), glm::vec3(1e-8f)));
+            rendering::filter_selection_by_crop(selection, means, nullptr, nullptr, nullptr, false,
+                                                &transform, &radii, ellipsoid.data->inverse, &model_transforms,
+                                                indices.get(), ellipsoid.parent_node_index);
+        }
     }
 
     std::optional<PySplatData> PyScene::training_model() {
@@ -1309,7 +1407,7 @@ Returns:
                  nb::arg("points"),
                  nb::arg("colors"),
                  nb::arg("parent") = core::NULL_NODE,
-                 "Add a point cloud node from tensor data [N,3] positions and colors")
+                 "Add a point cloud node from [N,3] positions and uint8 or float32 colors; other color dtypes raise ValueError")
             .def("add_mesh", &PyScene::add_mesh,
                  nb::arg("name"),
                  nb::arg("vertices"),
@@ -1317,7 +1415,7 @@ Returns:
                  nb::arg("colors") = nb::none(),
                  nb::arg("normals") = nb::none(),
                  nb::arg("parent") = core::NULL_NODE,
-                 "Add a mesh node from [V,3] vertices, [F,3] face indices, optional [V,4] colors and [V,3] normals")
+                 "Add a mesh node from [V,3] vertices, [F,3] face indices, optional [V,4] colors and [V,3] normals; invalid color shapes raise ValueError")
             .def("add_camera_group", &PyScene::add_camera_group,
                  nb::arg("name"),
                  nb::arg("parent"),
@@ -1396,10 +1494,11 @@ Returns:
             .def("is_node_effectively_visible", &PyScene::is_node_effectively_visible, nb::arg("id"), "Check if a node is visible considering parent visibility")
             // Transforms
             .def("get_world_transform", &PyScene::get_world_transform, nb::arg("node_id"), "Get world-space transform as 4x4 row-major tuple")
-            .def("set_node_transform", &PyScene::set_node_transform, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] ndarray")
             .def("set_node_transform", &PyScene::set_node_transform_tensor, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] Tensor")
+            .def("set_node_transform", &PyScene::set_node_transform, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] ndarray")
             // Combined/training model
             .def("combined_model", &PyScene::combined_model, "Get the merged SplatData for all visible splats (None if empty)")
+            .def("apply_crop_filter", &PyScene::apply_crop_filter, nb::arg("mask"), "Filter a combined-model CUDA bool mask in place by enabled render crop boxes and ellipsoids. Scene selection is unchanged.")
             .def("training_model", &PyScene::training_model, "Get the SplatData used for training (None if unavailable)")
             .def("set_training_model_node", &PyScene::set_training_model_node, nb::arg("name"), "Set which node provides the training model")
             .def_prop_ro("training_model_node_name", &PyScene::training_model_node_name, "Name of the node providing the training model")

@@ -156,6 +156,7 @@ namespace lfs::rendering {
 
     namespace {
         std::mutex* g_graphics_queue_mu = nullptr;
+        std::shared_mutex* g_device_queue_access_mu = nullptr;
         VkQueue g_graphics_queue = VK_NULL_HANDLE;
         VkQueue g_present_queue = VK_NULL_HANDLE;
 
@@ -165,8 +166,12 @@ namespace lfs::rendering {
         }
     } // namespace
 
-    void set_graphics_queue_external_sync(std::mutex* mutex, VkQueue graphics, VkQueue present) noexcept {
+    void set_graphics_queue_external_sync(std::mutex* mutex,
+                                          VkQueue graphics,
+                                          VkQueue present,
+                                          std::shared_mutex* device_access_mutex) noexcept {
         g_graphics_queue_mu = mutex;
+        g_device_queue_access_mu = device_access_mutex;
         g_graphics_queue = graphics;
         g_present_queue = present;
     }
@@ -175,38 +180,52 @@ namespace lfs::rendering {
                                     const uint32_t submit_count,
                                     const VkSubmitInfo* submits,
                                     VkFence fence) {
-        std::unique_lock<std::mutex> lock;
-        if (queue_needs_external_lock(queue)) {
-            lock = std::unique_lock(*g_graphics_queue_mu);
-        }
-        return vkQueueSubmit(queue, submit_count, submits, fence);
+        return detail::with_device_queue_access(g_device_queue_access_mu, [&] {
+            std::unique_lock<std::mutex> lock;
+            if (queue_needs_external_lock(queue)) {
+                lock = std::unique_lock(*g_graphics_queue_mu);
+            }
+            return vkQueueSubmit(queue, submit_count, submits, fence);
+        });
     }
 
     VkResult vk_queue_present_synced(VkQueue queue, const VkPresentInfoKHR* present_info) {
-        std::unique_lock<std::mutex> lock;
-        if (queue_needs_external_lock(queue)) {
-            lock = std::unique_lock(*g_graphics_queue_mu);
-        }
-        return vkQueuePresentKHR(queue, present_info);
+        return detail::with_device_queue_access(g_device_queue_access_mu, [&] {
+            std::unique_lock<std::mutex> lock;
+            if (queue_needs_external_lock(queue)) {
+                lock = std::unique_lock(*g_graphics_queue_mu);
+            }
+            return vkQueuePresentKHR(queue, present_info);
+        });
     }
 
     VkResult vk_queue_wait_idle_synced(VkQueue queue) {
-        std::unique_lock<std::mutex> lock;
-        if (queue_needs_external_lock(queue)) {
-            lock = std::unique_lock(*g_graphics_queue_mu);
-        }
-        return vkQueueWaitIdle(queue);
+        return detail::with_device_queue_access(g_device_queue_access_mu, [&] {
+            std::unique_lock<std::mutex> lock;
+            if (queue_needs_external_lock(queue)) {
+                lock = std::unique_lock(*g_graphics_queue_mu);
+            }
+            return vkQueueWaitIdle(queue);
+        });
     }
 
     VkResult vk_queue_bind_sparse_synced(VkQueue queue,
                                          const uint32_t bind_info_count,
                                          const VkBindSparseInfo* bind_infos,
                                          VkFence fence) {
-        std::unique_lock<std::mutex> lock;
-        if (queue_needs_external_lock(queue)) {
-            lock = std::unique_lock(*g_graphics_queue_mu);
-        }
-        return vkQueueBindSparse(queue, bind_info_count, bind_infos, fence);
+        return detail::with_device_queue_access(g_device_queue_access_mu, [&] {
+            std::unique_lock<std::mutex> lock;
+            if (queue_needs_external_lock(queue)) {
+                lock = std::unique_lock(*g_graphics_queue_mu);
+            }
+            return vkQueueBindSparse(queue, bind_info_count, bind_infos, fence);
+        });
+    }
+
+    VkResult vk_device_wait_idle_synced(VkDevice device) {
+        return detail::with_device_idle_access(g_device_queue_access_mu, [&] {
+            return vkDeviceWaitIdle(device);
+        });
     }
 
     VulkanDispatch VulkanDispatch::real() noexcept {

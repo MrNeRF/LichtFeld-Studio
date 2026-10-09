@@ -1349,31 +1349,18 @@ namespace lfs::training {
                 record = capture->error.empty();
             }
             capture->drained_condition.notify_all();
-            double pause_p95_ms = 0.0;
-            std::size_t p95_n = 0;
-            {
-                std::scoped_lock lock(metrics_mutex);
-                active_capture = false;
-                if (record) {
-                    ++aggregate.completed_snapshots;
-                    aggregate.last = completed;
-                    pause_samples.push_back(
-                        completed.pause_ms);
-                    aggregate.pause_p95_ms =
-                        percentile_95(
-                            pause_samples);
-                    aggregate.p95_n =
-                        pause_samples.size();
-                    pause_p95_ms =
-                        aggregate.pause_p95_ms;
-                    p95_n = aggregate.p95_n;
-                }
-            }
+            std::scoped_lock lock(metrics_mutex);
+            active_capture = false;
             if (record) {
-                LOG_INFO(
-                    "Training snapshot pause metric: "
-                    "p95={:.3f}ms p95_n={}",
-                    pause_p95_ms, p95_n);
+                ++aggregate.completed_snapshots;
+                aggregate.last = completed;
+                pause_samples.push_back(
+                    completed.pause_ms);
+                aggregate.pause_p95_ms =
+                    percentile_95(
+                        pause_samples);
+                aggregate.p95_n =
+                    pause_samples.size();
             }
         }
 
@@ -1958,17 +1945,6 @@ namespace lfs::training {
                     impl_->config.ring_slots *
                     impl_->config.band_bytes;
             }
-            LOG_INFO(
-                "Training snapshot service initialized off the save path: "
-                "init={:.3f}ms pinned={} bytes raw_pinned_D2H={:.3f}GiB/s "
-                "mutating_streams={}",
-                impl_->initialization_ms,
-                impl_->config.ring_slots *
-                    impl_->config.band_bytes,
-                impl_->measured_bandwidth /
-                    static_cast<double>(
-                        1024ull * 1024 * 1024),
-                request.mutating_streams.size());
             return {};
         } catch (const std::exception& error) {
             // LFS-CENSUS-OK(empty-catch): normalize the exception into a typed snapshot error.
@@ -2394,63 +2370,6 @@ namespace lfs::training {
                 pending->metrics.rig_gate_ms;
             pending->pause_end = pause_end;
             lfs::core::Tensor::trim_memory_pool();
-
-            LOG_INFO(
-                "Training snapshot {} iter {}: "
-                "bytes={} device_bytes={} pause={:.3f}ms "
-                "prepare_stall={:.3f}ms cold_path={:.3f}ms "
-                "cold_first={} "
-                "(safe_entry={:.3f} sync={:.3f} cpu_state={:.3f} "
-                "serialize+issue={:.3f} "
-                "last_d2h_wait={:.3f}) gate={:.3f}ms "
-                "raw_pinned_D2H={:.3f}GiB/s pause={} cold_path={} "
-                "host_delta={} host_gate={}",
-                pending->metrics.snapshot_uuid
-                    .to_string(),
-                request.iteration,
-                pending->metrics.checkpoint_bytes,
-                pending->metrics
-                    .device_snapshot_bytes,
-                pending->metrics.pause_ms,
-                pending->metrics.prepare_stall_ms,
-                pending->metrics.cold_path_ms,
-                pending->metrics.cold_first_snapshot,
-                pending->metrics
-                    .safe_point_entry_ms,
-                pending->metrics.stream_sync_ms,
-                pending->metrics
-                    .additional_cpu_state_ms,
-                pending->metrics
-                    .serialize_and_issue_ms,
-                pending->metrics
-                    .last_d2h_wait_ms,
-                pending->metrics.rig_gate_ms,
-                pending->metrics
-                        .measured_pinned_d2h_bytes_per_second /
-                    static_cast<double>(
-                        1024ull * 1024 * 1024),
-                pending->metrics
-                        .pause_within_rig_gate
-                    ? "PASS"
-                    : "FAIL",
-                pending->metrics
-                        .cold_path_within_rig_gate
-                    ? "PASS"
-                    : "FAIL",
-                pending->metrics.host_rss_delta_bytes,
-                pending->metrics.host_ram_within_gate
-                    ? "PASS"
-                    : "FAIL");
-            LOG_INFO(
-                "Training snapshot {} CPU value capture in safe point: "
-                "SCNG={:.3f}ms SELM={:.3f}ms PRMS={:.3f}ms total={:.3f}ms",
-                pending->metrics.snapshot_uuid
-                    .to_string(),
-                pending->metrics.scng_ms,
-                pending->metrics.selm_ms,
-                pending->metrics.prms_ms,
-                pending->metrics
-                    .additional_cpu_state_ms);
 
             impl_->mark_issuing_complete(pending);
             prepared.impl_.reset();

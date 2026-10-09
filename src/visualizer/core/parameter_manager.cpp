@@ -30,15 +30,18 @@ namespace lfs::vis {
             });
         }
 
-        void apply_scaler_to_params(lfs::core::param::OptimizationParameters& p, const float new_scaler) {
+        bool apply_scaler_to_params(lfs::core::param::OptimizationParameters& p, const float new_scaler) {
             const bool enabled = p.steps_scaler > 0.0f;
             const float user_scaler = enabled ? p.steps_scaler / p.image_count_scaler : 1.0f;
             const float ratio = enabled ? new_scaler / p.image_count_scaler : new_scaler;
+            const float steps_scaler = user_scaler * new_scaler;
+            const bool changed = p.image_count_scaler != new_scaler || p.steps_scaler != steps_scaler;
             p.image_count_scaler = new_scaler;
-            p.steps_scaler = user_scaler * new_scaler;
+            p.steps_scaler = steps_scaler;
             if (std::abs(ratio - 1.0f) < 0.001f)
-                return;
+                return changed;
             p.scale_steps(ratio);
+            return true;
         }
     } // namespace
 
@@ -323,8 +326,6 @@ namespace lfs::vis {
             dataset_config_.output_path = ds.output_path;
         }
         export_formats_ = params.export_formats;
-
-        LOG_INFO("Session: strategy={}, iter={}, resize={}", opt.strategy, opt.iterations, dataset_config_.resize_factor);
     }
 
     void ParameterManager::importParams(const lfs::core::param::OptimizationParameters& params) {
@@ -350,6 +351,25 @@ namespace lfs::vis {
             igs_current_references_ = {};
         }
         LOG_INFO("Imported params: strategy={}, iter={}, sh={}", params.strategy, params.iterations, params.sh_degree);
+    }
+
+    std::expected<void, lfs::Error> ParameterManager::importConfigFile(const std::filesystem::path& path, const bool import_dataset) {
+        const auto defaults = createForDataset(dataset_config_.data_path, dataset_config_.output_path);
+        auto candidate = lfs::core::param::read_training_parameters_from_json(path, defaults);
+        if (!candidate)
+            return std::unexpected(candidate.error());
+
+        if (!import_dataset)
+            candidate->dataset = dataset_config_;
+        // Config files change settings, not the loaded dataset or its output destination.
+        candidate->dataset.data_path = dataset_config_.data_path;
+        candidate->dataset.output_path = dataset_config_.output_path;
+        candidate->dataset.output_path_explicit = dataset_config_.output_path_explicit;
+        // The upstream parser validates the entire configuration before applying it.
+        candidate->optimization.apply_step_scaling();
+        importTrainingParams(*candidate);
+        markDirty();
+        return {};
     }
 
     void ParameterManager::importTrainingParams(const lfs::core::param::TrainingParameters& params) {
@@ -415,15 +435,19 @@ namespace lfs::vis {
                                      : static_cast<float>(image_count) / static_cast<float>(BASE_IMAGE_COUNT);
 
         std::lock_guard lock(params_mutex_);
+        bool changed = false;
         for (auto* params : {&mcmc_current_, &mrnf_current_, &igs_current_}) {
             if (cli_step_locked_strategy_ &&
                 lfs::core::param::canonical_strategy_name(params->strategy) == *cli_step_locked_strategy_) {
                 LOG_INFO("Auto-scale skipped for {}: step values set on the command line", *cli_step_locked_strategy_);
                 continue;
             }
-            apply_scaler_to_params(*params, new_scaler);
+            changed |= apply_scaler_to_params(*params, new_scaler);
         }
-        markDirty();
+        // The panel reapplies image scaling when a restored session becomes Ready.
+        // Preserve the clean baseline when all parameter values already match.
+        if (changed)
+            markDirty();
         LOG_INFO("Auto-scaled steps for {} images: scaler={:.2f}", image_count, new_scaler);
     }
 

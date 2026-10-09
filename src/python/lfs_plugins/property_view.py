@@ -68,6 +68,7 @@ NUMBER_PROPS = (
     "sparsify_steps",
     "init_rho",
     "ppisp_controller_lr",
+    "eval_mask_opacity",
 )
 
 BOOL_PROPS = (
@@ -76,6 +77,7 @@ BOOL_PROPS = (
     "invert_masks",
     "use_alpha_as_mask",
     "use_depth_loss",
+    "depth_auto_generate",
     "use_normal_loss",
     "normal_auto_generate",
     "enable_sparsity",
@@ -90,10 +92,11 @@ BOOL_PROPS = (
     "random",
     "enable_eval",
     "eval_all",
-    "background_improvements",
+    "eval_flip",
+    "eval_mask_invert",
 )
 
-SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space", "eval_space")
+SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space", "eval_space", "eval_bit_depth")
 MIGRATED_PROP_IDS = NUMBER_PROPS + BOOL_PROPS + SELECT_PROPS
 
 # These registered properties are intentionally represented by bespoke widgets or
@@ -109,6 +112,7 @@ BESPOKE_OR_HIDDEN = {
     "headless": "runtime-only read-only flag",
     "prune_ratio": "scrub slider",
     "steps_scaler": "driven by apply_step_scaling via the iterations lock; raw edits desync step counts",
+    "eval_mask": "mesh file browser and path display",
 }
 
 AUTO_ADVANCED_RUN_ID = "advanced_registry"
@@ -135,7 +139,6 @@ def _run(
 
 BASIC_RUNS = (
     _run("basic_struct", "iterations", "max_cap"),
-    _run("basic_background", "background_improvements", visibility_condition_id="dep_mrnf"),
     _run(
         "basic_exposure_correction",
         "use_exposure_correction",
@@ -151,6 +154,7 @@ BASIC_RUNS = (
     ),
     _run(
         "basic_depth_weight",
+        "depth_auto_generate",
         "depth_loss_weight",
         visibility_condition_id="dep_depth_loss",
     ),
@@ -217,7 +221,19 @@ BASIC_RUNS = (
 DATASET_RUNS = (
     _run("dataset_eval", "enable_eval", visibility_condition_id="has_dataset"),
     _run("dataset_eval_train", "eval_all", visibility_condition_id="dep_eval"),
+    _run("dataset_eval_flip", "eval_flip", visibility_condition_id="dep_eval"),
     _run("dataset_eval_space", "eval_space", visibility_condition_id="dep_undistort"),
+    _run("dataset_eval_bit_depth", "eval_bit_depth", visibility_condition_id="dep_eval"),
+    _run(
+        "dataset_eval_mask_invert",
+        "eval_mask_invert",
+        visibility_condition_id="dep_eval_mask",
+    ),
+    _run(
+        "dataset_eval_mask_opacity",
+        "eval_mask_opacity",
+        visibility_condition_id="dep_eval_mask_splat",
+    ),
 )
 
 OPTIMIZATION_RUNS = (
@@ -797,6 +813,21 @@ class SectionBinding:
                 return False
             if value not in {int(item["value"]) for item in row["items"]}:
                 return False
+            try:
+                current = int(_params_value(self._params(), prop_id))
+            except (
+                AttributeError,
+                KeyError,
+                OverflowError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ):
+                return False
+            # Rebuilding a restored row can echo its existing selection.
+            # Only a different value is a parameter edit.
+            if value == current:
+                return True
         else:
             return False
         updated = self._write_value(prop_id, value)

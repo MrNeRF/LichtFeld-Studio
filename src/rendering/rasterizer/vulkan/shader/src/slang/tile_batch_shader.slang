@@ -226,7 +226,6 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                 }
 
                 gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
-                gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_state.flash_intensity);
                 #endif
 
                 float4 new_pixel_state = update_pixel_state(curr_pixel_state, gauss_rgba);
@@ -342,7 +341,6 @@ void replay_batch(uint range_start,
         }
 
         gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
-        gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_state.flash_intensity);
         #endif
 
         float4 new_pixel_state = update_pixel_state(curr_pixel_state, gauss_rgba);

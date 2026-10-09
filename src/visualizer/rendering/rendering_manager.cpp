@@ -155,6 +155,20 @@ namespace lfs::vis {
         lfs::rendering::releaseEnvironmentMapCaches();
     }
 
+    void RenderingManager::setVulkanMeshFrame(VulkanMeshFrame frame) {
+        std::lock_guard lock(vulkan_mesh_frame_mutex_);
+        if (vksplat_viewport_renderer_) {
+            vksplat_viewport_renderer_->retainPublishedSplitImages(
+                frame.split_view.enabled ? frame.split_view.left.external_image_view : VK_NULL_HANDLE,
+                frame.split_view.enabled ? frame.split_view.right.external_image_view : VK_NULL_HANDLE);
+        }
+        vulkan_mesh_frame_ = std::move(frame);
+    }
+
+    void RenderingManager::clearVulkanMeshFrame() {
+        setVulkanMeshFrame({});
+    }
+
     ViewportInteropService& RenderingManager::viewportInterop() {
         assert(viewport_interop_ && "ViewportInteropService not initialized");
         return *viewport_interop_;
@@ -204,7 +218,6 @@ namespace lfs::vis {
         }
 
         initialized_ = true;
-        LOG_INFO("Auxiliary rendering engine initialized successfully");
     }
 
     void RenderingManager::markDirty(const DirtyMask flags, const FrameReason reason, std::string detail) {
@@ -685,6 +698,18 @@ namespace lfs::vis {
         return split_view_service_.isGTComparisonActive(settings_);
     }
 
+    bool RenderingManager::hasGTComparisonAvailable() const {
+        const auto* const scene_manager = services().sceneOrNull();
+        if (!scene_manager || !scene_manager->hasDataset()) {
+            return false;
+        }
+
+        const auto cameras = scene_manager->getScene().getAllCamerasCached();
+        return cameras && std::any_of(cameras->begin(), cameras->end(), [](const auto& camera) {
+                   return camera && camera->has_image() && !camera->image_path().empty();
+               });
+    }
+
     bool RenderingManager::isPLYComparisonActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         return splitViewUsesPLYComparison(settings_.split_view_mode);
@@ -1018,10 +1043,11 @@ namespace lfs::vis {
                                                  const bool add_mode, lfs::core::Tensor* selection_tensor,
                                                  const bool saturation_mode, const float saturation_amount,
                                                  const std::optional<SplitViewPanelId> panel,
-                                                 const int focused_gaussian_id, const bool request_render) {
+                                                 const int focused_gaussian_id, const bool highlight_splats) {
         viewport_overlay_service_.setCursorPreview(active, x, y, radius, add_mode, selection_tensor,
-                                                   saturation_mode, saturation_amount, panel, focused_gaussian_id);
-        if (request_render)
+                                                   saturation_mode, saturation_amount, panel, focused_gaussian_id,
+                                                   highlight_splats);
+        if (highlight_splats)
             markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
     }
 

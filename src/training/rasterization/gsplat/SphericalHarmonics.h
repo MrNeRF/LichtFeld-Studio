@@ -37,8 +37,4 @@ namespace gsplat_lfs {
         float* v_dirs,   // [..., 3] optional
         cudaStream_t stream = nullptr);
 
-    void launch_rasterization_pack_depth_colors(
-        const float* depths, float* colors, uint32_t count, uint32_t channels,
-        cudaStream_t stream = nullptr);
-
 } // namespace gsplat_lfs

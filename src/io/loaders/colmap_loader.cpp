@@ -79,23 +79,12 @@ namespace lfs::io {
 
         bool has_points_ply = !points_ply.empty();
 
-        LOG_INFO("[COLMAP_LOAD] discovery path='{}' cameras_bin={} images_bin={} points_bin={} cameras_txt={} images_txt={} points_txt={} points_ply={}",
-                 lfs::core::path_to_utf8(path),
-                 has_cameras,
-                 has_images,
-                 has_points,
-                 has_cameras_text,
-                 has_images_text,
-                 has_points_text,
-                 has_points_ply);
-
         if ((has_cameras || has_images || has_points) &&
             (has_cameras_text || has_images_text || has_points_text)) {
             LOG_WARN("Found both binary and text COLMAP files. Prioritizing binary files.");
         }
 
         bool trying_text = !(has_cameras && has_images) && (has_cameras_text && has_images_text);
-        LOG_INFO("Loading COLMAP in {} format", trying_text ? "text" : "binary");
 
         // Validate we have required files
         if ((!has_cameras || !has_images) && !trying_text) {
@@ -240,7 +229,8 @@ namespace lfs::io {
             } else if (has_cameras_text && has_images_text) {
                 LOG_DEBUG("Reading text COLMAP data");
                 LOG_TIMER_DEBUG("COLMAP read text cameras and images");
-                auto result = read_colmap_cameras_and_images_text(path, actual_images_folder, options);
+                auto result = read_colmap_cameras_and_images_text(path, actual_images_folder, options,
+                                                                  &binary_point_records);
                 if (!result) {
                     return std::unexpected(result.error());
                 }
@@ -342,7 +332,7 @@ namespace lfs::io {
                 LOG_DEBUG("Loading text point cloud");
                 LOG_TIMER_DEBUG("COLMAP load text point cloud");
                 if (use_colmap_track_filter) {
-                    auto pc_result = read_colmap_point_cloud_text_with_stats(path, options);
+                    auto pc_result = read_colmap_point_cloud_text_with_stats(path, options, &binary_point_records);
                     if (!pc_result) {
                         return std::unexpected(pc_result.error());
                     }
@@ -359,7 +349,7 @@ namespace lfs::io {
                         warnings.push_back(diagnostic.message);
                     }
                 } else {
-                    auto pc_result = read_colmap_point_cloud_text(path, options);
+                    auto pc_result = read_colmap_point_cloud_text(path, options, &binary_point_records);
                     if (!pc_result) {
                         return std::unexpected(pc_result.error());
                     }
@@ -394,7 +384,6 @@ namespace lfs::io {
 
             auto scene_center_cpu = scene_center.cpu();
             const float* sc_ptr = scene_center_cpu.ptr<float>();
-            size_t num_cameras = cameras.size();
 
             LoadResult result{
                 .data = LoadedScene{
@@ -411,8 +400,6 @@ namespace lfs::io {
                 result.warnings.push_back("No sparse point cloud found - using random initialization");
             }
 
-            LOG_INFO("COLMAP dataset loaded successfully in {}ms", load_time.count());
-            LOG_INFO("  - {} cameras", num_cameras);
             LOG_DEBUG("  - Scene center: [{:.3f}, {:.3f}, {:.3f}]",
                       sc_ptr[0], sc_ptr[1], sc_ptr[2]);
 

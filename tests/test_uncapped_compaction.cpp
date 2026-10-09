@@ -29,7 +29,6 @@ TEST(MRNFCheckpoint, RealRemovalPreservesOptimizerCapacityInBothModes) {
         param::OptimizationParameters params;
         params.strategy = "mrnf";
         params.max_cap = capped ? static_cast<int>(model.size() + 128) : 0;
-        params.background_improvements = false;
         MRNF strategy(model);
         strategy.initialize(params);
         auto opacity = model.opacity_raw();

@@ -9,6 +9,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/resource_messages.hpp"
 #include "core/source_site.hpp"
 #include "gui/error_surface_types.hpp"
 #include "gui/string_keys.hpp"
@@ -82,8 +83,26 @@ namespace lfs::vis::gui {
         };
     }
 
+    std::optional<state::DiskSpaceSaveFailed> projectDiskSpaceFailure(const state::TrainingCompleted& e) {
+        if (e.success || e.user_stopped)
+            return std::nullopt;
+        std::string message = e.error_info ? e.error_info->message : e.error.value_or("");
+        if (!lfs::core::is_disk_space_save_error(message))
+            return std::nullopt;
+        return state::DiskSpaceSaveFailed{.iteration = e.iteration,
+                                          .path = {},
+                                          .error = std::move(message),
+                                          .required_bytes = 0,
+                                          .available_bytes = 0,
+                                          .is_disk_space_error = true,
+                                          .is_project_save = true};
+    }
+
     std::optional<lfs::ErrorNotification>
     translateTrainingCompleted(const state::TrainingCompleted& e) {
+        if (projectDiskSpaceFailure(e)) {
+            return std::nullopt; // the native disk-space modal offers Retry and Change Location
+        }
         if (e.user_stopped) {
             return std::nullopt; // a user-initiated Stop is not a failure
         }
@@ -208,8 +227,13 @@ namespace lfs::vis::gui {
             }
         };
 
-        state::TrainingCompleted::when(
-            [publish](const auto& e) { publish(translateTrainingCompleted(e)); });
+        state::TrainingCompleted::when([publish](const auto& e) {
+            if (const auto disk_space = projectDiskSpaceFailure(e)) {
+                disk_space->emit();
+                return;
+            }
+            publish(translateTrainingCompleted(e));
+        });
         state::DatasetLoadCompleted::when(
             [publish](const auto& e) { publish(translateDatasetLoadCompleted(e)); });
         state::ConfigLoadFailed::when(

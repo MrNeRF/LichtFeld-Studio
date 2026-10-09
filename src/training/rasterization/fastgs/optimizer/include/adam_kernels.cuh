@@ -45,13 +45,6 @@ namespace fast_lfs::optimizer::kernels::adam {
         const float eps,
         const float bias_correction1_rcp,
         const float bias_correction2_sqrt_rcp,
-        const float* mean_step_scale_raw,
-        const int mean_step_scale_n,
-        const float mean_step_median_extent,
-        const float mean_step_r_min,
-        const float mean_step_r_max,
-        const bool* mean_step_far_mask,
-        const int mean_step_far_mask_n,
         const float* screen_share_max,
         const int screen_share_n,
         const float screen_share_limit,
@@ -77,20 +70,6 @@ namespace fast_lfs::optimizer::kernels::adam {
                 apply_step = false;
             else
                 row_lr *= cropbox_lr_scale;
-        }
-        if (in_range && mean_step_scale_raw != nullptr &&
-            mean_step_far_mask != nullptr && prim < mean_step_far_mask_n &&
-            mean_step_far_mask[prim]) {
-            const int sb = prim * 3;
-            if (sb + 2 < mean_step_scale_n) {
-                row_lr *= lfs::training::per_splat_mean_step_ratio(
-                    mean_step_scale_raw[sb],
-                    mean_step_scale_raw[sb + 1],
-                    mean_step_scale_raw[sb + 2],
-                    mean_step_median_extent,
-                    mean_step_r_min,
-                    mean_step_r_max);
-            }
         }
         const int bidx = static_cast<int>(blockIdx.x);
         const float4 old_mm = (bounds != nullptr)
@@ -170,7 +149,7 @@ namespace fast_lfs::optimizer::kernels::adam {
         }
     }
 
-    template <int BITS>
+    template <int BITS, bool MEAN_STEP_ENABLED = true>
     __global__ void adam_step_joint_contiguous_batched_cu(
         const __grid_constant__ JointContiguousBatch batch,
         const bool* frozen_mask,
@@ -185,8 +164,6 @@ namespace fast_lfs::optimizer::kernels::adam {
         const float* mean_step_scale_raw,
         const int mean_step_scale_n,
         const float mean_step_median_extent,
-        const float mean_step_r_min,
-        const float mean_step_r_max,
         const bool* mean_step_far_mask,
         const int mean_step_far_mask_n,
         const float* screen_share_max,
@@ -228,18 +205,18 @@ namespace fast_lfs::optimizer::kernels::adam {
             else
                 row_lr *= cropbox_lr_scale;
         }
-        if (ent.apply_mean_step && mean_step_scale_raw != nullptr &&
-            mean_step_far_mask != nullptr && prim < mean_step_far_mask_n &&
-            mean_step_far_mask[prim]) {
-            const int sb = prim * 3;
-            if (sb + 2 < mean_step_scale_n) {
-                row_lr *= lfs::training::per_splat_mean_step_ratio(
-                    mean_step_scale_raw[sb],
-                    mean_step_scale_raw[sb + 1],
-                    mean_step_scale_raw[sb + 2],
-                    mean_step_median_extent,
-                    mean_step_r_min,
-                    mean_step_r_max);
+        if constexpr (MEAN_STEP_ENABLED) {
+            if (ent.apply_mean_step && mean_step_scale_raw != nullptr &&
+                mean_step_far_mask != nullptr && prim < mean_step_far_mask_n &&
+                mean_step_far_mask[prim]) {
+                const int sb = prim * 3;
+                if (sb + 2 < mean_step_scale_n) {
+                    row_lr *= lfs::training::per_splat_mean_step_ratio(
+                        mean_step_scale_raw[sb],
+                        mean_step_scale_raw[sb + 1],
+                        mean_step_scale_raw[sb + 2],
+                        mean_step_median_extent);
+                }
             }
         }
 

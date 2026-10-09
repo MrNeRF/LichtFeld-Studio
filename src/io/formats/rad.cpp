@@ -37,16 +37,19 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cassert>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <format>
 #include <fstream>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <numbers>
 #include <numeric>
 #include <optional>
 #include <string>
@@ -2465,6 +2468,22 @@ namespace lfs::io {
 
                 PackedSplatData packed = pack_splat_data(*export_source, flip_y_);
 
+                std::vector<std::uint32_t> paging_order;
+                if (packed.lod_tree && file_chunk_size_ == kRadStreamableChunkSplats &&
+                    packed.child_count.size() == packed.count) {
+                    auto paging = spark_paging_order(
+                        {packed.means, packed.count * 3}, {packed.scales, packed.count * 3},
+                        {packed.rotation, packed.count * 4}, {packed.opacity, packed.count},
+                        packed.child_count, packed.child_start);
+                    if (paging.order.empty()) {
+                        LOG_WARN("RAD export: the LOD tree root does not reach every node; keeping its node order");
+                    } else {
+                        paging_order = std::move(paging.order);
+                        packed.child_count = std::move(paging.child_count);
+                        packed.child_start = std::move(paging.child_start);
+                    }
+                }
+
                 // 0.2: Data packed
                 if (!report_progress(0.2f, "Data packed")) {
                     throw std::runtime_error("CANCELLED");
@@ -2527,14 +2546,10 @@ namespace lfs::io {
                                 return true;
                             };
 
+                            const ChunkRows rows = chunk_rows(packed, base, count, paging_order);
                             auto chunk_result = encode_rad_chunk(
                                 base, count, sh_degree, sh_coeffs,
-                                packed.means + static_cast<size_t>(base) * 3,
-                                packed.opacity + base,
-                                packed.sh0 + static_cast<size_t>(base) * 3,
-                                packed.scales + static_cast<size_t>(base) * 3,
-                                packed.rotation + static_cast<size_t>(base) * 4,
-                                packed.shN != nullptr ? packed.shN + static_cast<size_t>(base) * sh_coeffs * 3 : nullptr,
+                                rows.means, rows.opacity, rows.sh0, rows.scales, rows.rotation, rows.shN,
                                 lod_tree ? packed.child_count.data() + base : nullptr,
                                 lod_tree ? packed.child_start.data() + base : nullptr,
                                 lod_tree,
@@ -2626,6 +2641,62 @@ namespace lfs::io {
                 std::vector<uint16_t> child_count;
                 std::vector<uint32_t> child_start;
             };
+
+            // One file chunk's attribute rows: a view into the packed arrays, or a
+            // gathered copy when the file stores nodes in another order.
+            struct ChunkRows {
+                const float* means = nullptr;
+                const float* opacity = nullptr;
+                const float* sh0 = nullptr;
+                const float* scales = nullptr;
+                const float* rotation = nullptr;
+                const float* shN = nullptr;
+                std::vector<float> storage;
+            };
+
+            static ChunkRows chunk_rows(const PackedSplatData& packed, const uint32_t base, const uint32_t count,
+                                        const std::vector<std::uint32_t>& order) {
+                const std::size_t sh_floats = static_cast<std::size_t>(packed.sh_coeffs) * 3;
+                const std::size_t first = base;
+                if (order.empty()) {
+                    return {.means = packed.means + first * 3,
+                            .opacity = packed.opacity + first,
+                            .sh0 = packed.sh0 + first * 3,
+                            .scales = packed.scales + first * 3,
+                            .rotation = packed.rotation + first * 4,
+                            .shN = packed.shN != nullptr ? packed.shN + first * sh_floats : nullptr};
+                }
+                assert(first + count <= order.size());
+
+                constexpr std::size_t kMeansOpacitySh0ScalesRotationFloats = 3 + 1 + 3 + 3 + 4;
+                ChunkRows rows;
+                const std::size_t shN_floats = packed.shN != nullptr ? sh_floats : 0;
+                rows.storage.resize(static_cast<std::size_t>(count) * (kMeansOpacitySh0ScalesRotationFloats + shN_floats));
+                float* const means = rows.storage.data();
+                float* const opacity = means + static_cast<std::size_t>(count) * 3;
+                float* const sh0 = opacity + count;
+                float* const scales = sh0 + static_cast<std::size_t>(count) * 3;
+                float* const rotation = scales + static_cast<std::size_t>(count) * 3;
+                float* const shN = rotation + static_cast<std::size_t>(count) * 4;
+                for (std::size_t i = 0; i < count; ++i) {
+                    const std::size_t src = order[first + i];
+                    std::copy_n(packed.means + src * 3, 3, means + i * 3);
+                    opacity[i] = packed.opacity[src];
+                    std::copy_n(packed.sh0 + src * 3, 3, sh0 + i * 3);
+                    std::copy_n(packed.scales + src * 3, 3, scales + i * 3);
+                    std::copy_n(packed.rotation + src * 4, 4, rotation + i * 4);
+                    if (shN_floats > 0) {
+                        std::copy_n(packed.shN + src * shN_floats, shN_floats, shN + i * shN_floats);
+                    }
+                }
+                rows.means = means;
+                rows.opacity = opacity;
+                rows.sh0 = sh0;
+                rows.scales = scales;
+                rows.rotation = rotation;
+                rows.shN = shN_floats > 0 ? shN : nullptr;
+                return rows;
+            }
 
             static PackedSplatData pack_splat_data(const SplatData& splat_data, bool flip_y = false) {
                 PackedSplatData packed;
@@ -5118,6 +5189,174 @@ namespace lfs::io {
             }
         }
         return {};
+    }
+
+    RadPagingOrder spark_paging_order(
+        const std::span<const float> means,
+        const std::span<const float> scales,
+        const std::span<const float> rotation_wxyz,
+        const std::span<const float> opacity,
+        const std::span<const std::uint16_t> child_count,
+        const std::span<const std::uint32_t> child_start) {
+        const std::size_t n = child_count.size();
+        assert(child_start.size() == n);
+        assert(means.size() == n * 3 && scales.size() == n * 3);
+        assert(rotation_wxyz.size() == n * 4 && opacity.size() == n);
+        if (n == 0) {
+            return {};
+        }
+
+        constexpr std::size_t kChunk = kRadStreamableChunkSplats;
+        constexpr std::size_t kMinFill = 8 * 1024;
+        constexpr float kStdDevs = 1.5f;
+        const auto round_up_to_chunk = [](const std::size_t value) {
+            return (value + kChunk - 1) / kChunk * kChunk;
+        };
+
+        // Spark's Tsplat::feature_size: larger nodes refine first.
+        const auto feature_size = [&](const std::uint32_t i) {
+            const float max_scale = std::max({scales[i * 3 + 0], scales[i * 3 + 1], scales[i * 3 + 2]});
+            const float alpha = opacity[i];
+            const float lod_opacity =
+                alpha > 1.0f ? std::sqrt(1.0f + std::numbers::e_v<float> * std::log(alpha)) : 1.0f;
+            const float size = 2.0f * max_scale * lod_opacity;
+            return std::isnan(size) ? std::numeric_limits<float>::infinity() : size;
+        };
+
+        using Box = std::array<float, 6>;
+        const auto extend_by_splat = [&](Box& box, const std::uint32_t i) {
+            const float w = rotation_wxyz[i * 4 + 0];
+            const float x = rotation_wxyz[i * 4 + 1];
+            const float y = rotation_wxyz[i * 4 + 2];
+            const float z = rotation_wxyz[i * 4 + 3];
+            const float rotation[3][3] = {
+                {1.0f - 2.0f * (y * y + z * z), 2.0f * (x * y - w * z), 2.0f * (x * z + w * y)},
+                {2.0f * (x * y + w * z), 1.0f - 2.0f * (x * x + z * z), 2.0f * (y * z - w * x)},
+                {2.0f * (x * z - w * y), 2.0f * (y * z + w * x), 1.0f - 2.0f * (x * x + y * y)}};
+            float radius[3];
+            for (int k = 0; k < 3; ++k) {
+                radius[k] = std::max(scales[i * 3 + k], 1e-3f) * kStdDevs;
+            }
+            for (int a = 0; a < 3; ++a) {
+                const float half = std::abs(rotation[a][0]) * radius[0] +
+                                   std::abs(rotation[a][1]) * radius[1] +
+                                   std::abs(rotation[a][2]) * radius[2];
+                box[a] = std::min(box[a], means[i * 3 + a] - half);
+                box[a + 3] = std::max(box[a + 3], means[i * 3 + a] + half);
+            }
+        };
+
+        std::vector<std::uint32_t> order;
+        order.reserve(n);
+        order.push_back(0);
+        std::vector<std::uint8_t> placed(n, 0);
+        placed[0] = 1;
+        std::vector<std::uint32_t> placed_child_start(n, 0);
+        std::deque<std::vector<std::uint32_t>> batches;
+        batches.push_back({0});
+
+        using Entry = std::pair<float, std::uint32_t>;
+        std::vector<Entry> frontier;
+        while (!batches.empty()) {
+            frontier.clear();
+            for (const std::uint32_t node : batches.front()) {
+                frontier.emplace_back(feature_size(node), node);
+            }
+            batches.pop_front();
+            std::make_heap(frontier.begin(), frontier.end());
+
+            // Fill up to the next chunk boundary, at least kMinFill nodes, expanding
+            // the largest nodes first. A child block never straddles a boundary
+            // unless it cannot fit even into an otherwise empty batch.
+            const std::size_t batch_start = order.size();
+            std::size_t batch_end = round_up_to_chunk(batch_start + kMinFill);
+            while (!frontier.empty()) {
+                const std::uint32_t parent = frontier.front().second;
+                const std::size_t count = child_count[parent];
+                if (order.size() + count > batch_end) {
+                    if (order.size() > batch_start) {
+                        break;
+                    }
+                    batch_end = round_up_to_chunk(order.size() + count);
+                }
+                std::pop_heap(frontier.begin(), frontier.end());
+                frontier.pop_back();
+                if (count == 0) {
+                    continue;
+                }
+                const std::size_t first = child_start[parent];
+                if (first + count > n || order.size() + count > n) {
+                    return {};
+                }
+                placed_child_start[parent] = static_cast<std::uint32_t>(order.size());
+                for (std::size_t c = first; c < first + count; ++c) {
+                    if (placed[c]) {
+                        return {};
+                    }
+                    placed[c] = 1;
+                    const auto child = static_cast<std::uint32_t>(c);
+                    order.push_back(child);
+                    frontier.emplace_back(feature_size(child), child);
+                    std::push_heap(frontier.begin(), frontier.end());
+                }
+            }
+            if (frontier.empty()) {
+                continue;
+            }
+
+            // Split what is left spatially: halve elongated regions along their
+            // longest axis, otherwise into octants in Hilbert order.
+            Box box{std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(),
+                    std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(),
+                    -std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity()};
+            for (const auto& [size, node] : frontier) {
+                extend_by_splat(box, node);
+            }
+            const float extent[3] = {box[3] - box[0], box[4] - box[1], box[5] - box[2]};
+            if (std::max({extent[0], extent[1], extent[2]}) >= 3.0f * std::min({extent[0], extent[1], extent[2]})) {
+                const int axis = extent[0] >= extent[1] && extent[0] >= extent[2] ? 0
+                                 : extent[1] >= extent[2]                         ? 1
+                                                                                  : 2;
+                const float split = 0.5f * (box[axis] + box[axis + 3]);
+                std::vector<std::uint32_t> below;
+                std::vector<std::uint32_t> above;
+                for (const auto& [size, node] : frontier) {
+                    (means[node * 3 + axis] < split ? below : above).push_back(node);
+                }
+                if (below.size() < above.size()) {
+                    std::swap(below, above);
+                }
+                batches.push_back(std::move(below));
+                batches.push_back(std::move(above));
+            } else {
+                const float center[3] = {0.5f * (box[0] + box[3]), 0.5f * (box[1] + box[4]),
+                                         0.5f * (box[2] + box[5])};
+                std::array<std::vector<std::uint32_t>, 8> octants;
+                for (const auto& [size, node] : frontier) {
+                    const int octant = (means[node * 3 + 0] < center[0] ? 0 : 1) +
+                                       (means[node * 3 + 1] < center[1] ? 0 : 2) +
+                                       (means[node * 3 + 2] < center[2] ? 0 : 4);
+                    octants[octant].push_back(node);
+                }
+                for (const int octant : {0, 1, 3, 2, 6, 7, 5, 4}) {
+                    batches.push_back(std::move(octants[octant]));
+                }
+            }
+        }
+        if (order.size() != n) {
+            return {};
+        }
+
+        RadPagingOrder paging;
+        paging.child_count.resize(n);
+        paging.child_start.resize(n);
+        for (std::size_t p = 0; p < n; ++p) {
+            const std::uint32_t source = order[p];
+            paging.child_count[p] = child_count[source];
+            paging.child_start[p] = child_count[source] > 0 ? placed_child_start[source] : 0;
+        }
+        paging.order = std::move(order);
+        return paging;
     }
 
     // ========================================================================

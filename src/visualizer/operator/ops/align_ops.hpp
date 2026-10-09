@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/scene.hpp"
+#include "internal/viewport.hpp"
 #include "operator/operator.hpp"
 #include "rendering/rendering_types.hpp"
 #include <glm/glm.hpp>
@@ -46,9 +47,21 @@ namespace lfs::vis::op {
         bool drag_active_ = false;
         std::optional<int> selected_point_;
         std::optional<SplitViewPanelId> pick_panel_;
-
-        [[nodiscard]] glm::vec3 unprojectScreenPoint(double x, double y,
-                                                     SplitViewPanelId* out_panel = nullptr) const;
+        struct PendingPick {
+            glm::dvec2 screen_position;
+            // Empty for a new point; otherwise replace the dragged marker.
+            std::optional<int> point_index;
+        };
+        struct PointSample {
+            glm::vec3 world{Viewport::INVALID_WORLD_POS};
+            SplitViewPanelId panel = SplitViewPanelId::Left;
+            bool pending = false;
+        };
+        std::optional<PendingPick> pending_pick_;
+        void resolvePendingPoint();
+        [[nodiscard]] bool requestPoint(const PendingPick& pick);
+        [[nodiscard]] bool applyPointSample(const PointSample& sample, std::optional<int> index);
+        [[nodiscard]] PointSample sampleScreenPoint(glm::dvec2 position) const;
         [[nodiscard]] std::optional<int> hitTestPoint(double x, double y) const;
         [[nodiscard]] glm::vec3 resolvePickPanelCameraPosition() const;
         void syncPickedPointsToServices();
@@ -96,6 +109,11 @@ namespace lfs::vis::op {
     [[nodiscard]] LFS_VIS_API std::optional<glm::mat4> computeAlignTransform(const AlignTransformInputs& in);
 
     [[nodiscard]] LFS_VIS_API std::optional<glm::mat4> resolveAlignSnapTargetWorld(const SceneManager& scene);
+
+    // Orthographic pixels per world unit for one viewer panel: a split-view panel can carry its own zoom.
+    [[nodiscard]] inline float alignPanelOrthoScale(const Viewport& panel_viewport, const RenderSettings& settings) {
+        return panel_viewport.ortho_scale_override.value_or(settings.ortho_scale);
+    }
 
     inline constexpr float kAlignMarkerWorldRadius = 0.05f;
     [[nodiscard]] float alignMarkerScreenRadius(const glm::vec3& world_pos,

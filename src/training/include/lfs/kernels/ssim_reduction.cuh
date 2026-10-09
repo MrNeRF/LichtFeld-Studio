@@ -78,7 +78,7 @@ namespace lfs::training::kernels {
         float* loss_buffer,
         float* mask_sum_buffer,
         int N, int C, int H, int W,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr, float denominator = 0.0f);
 
     void launch_masked_fused_l1_ssim_mean_device(
         const float* img1,
@@ -90,7 +90,7 @@ namespace lfs::training::kernels {
         float* loss_buffer,
         float* mask_sum_buffer,
         int N, int C, int H, int W,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr, float denominator = 0.0f);
 
     void launch_masked_fused_l1_ssim_mean_device(
         const float* img1,
@@ -102,7 +102,7 @@ namespace lfs::training::kernels {
         float* loss_buffer,
         float* mask_sum_buffer,
         int N, int C, int H, int W,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr, float denominator = 0.0f);
 
     void launch_masked_fused_l1_ssim_mean_device(
         const float* img1,
@@ -114,6 +114,6 @@ namespace lfs::training::kernels {
         float* loss_buffer,
         float* mask_sum_buffer,
         int N, int C, int H, int W,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr, float denominator = 0.0f);
 
 } // namespace lfs::training::kernels

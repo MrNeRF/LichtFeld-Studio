@@ -12,9 +12,11 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <shared_mutex>
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 using namespace std::chrono_literals;
@@ -30,6 +32,33 @@ using lfs::rendering::WaitContext;
 using lfs::rendering::WaitOutcome;
 
 namespace {
+
+    TEST(VulkanQueueSync, DeviceIdleExcludesConcurrentQueueUse) {
+        std::shared_mutex device_access;
+        bool idle_entered_during_queue_access = false;
+        lfs::rendering::detail::with_device_queue_access(&device_access, [&] {
+            std::thread idle([&] {
+                idle_entered_during_queue_access = device_access.try_lock();
+                if (idle_entered_during_queue_access) {
+                    device_access.unlock();
+                }
+            });
+            idle.join();
+        });
+        EXPECT_FALSE(idle_entered_during_queue_access);
+
+        bool queue_entered_during_device_idle = false;
+        lfs::rendering::detail::with_device_idle_access(&device_access, [&] {
+            std::thread queue([&] {
+                queue_entered_during_device_idle = device_access.try_lock_shared();
+                if (queue_entered_during_device_idle) {
+                    device_access.unlock_shared();
+                }
+            });
+            queue.join();
+        });
+        EXPECT_FALSE(queue_entered_during_device_idle);
+    }
 
     struct ScriptedObserver final : lfs::rendering::WaitObserver {
         int stall_count = 0;

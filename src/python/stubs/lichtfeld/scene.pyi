@@ -351,7 +351,7 @@ class SceneNode:
     def world_transform(self) -> tuple:
         """World-space transform as 4x4 row-major tuple"""
 
-    def set_local_transform(self, arg: Annotated[NDArray[numpy.float32], dict(shape=(4, 4))], /) -> None:
+    def set_local_transform(self, arg: Annotated[NDArray[numpy.float32], dict(shape=(4, 4), device='cpu')], /) -> None:
         """Set local transform from a [4, 4] ndarray"""
 
     @property
@@ -501,11 +501,13 @@ class Scene:
         """
 
     def add_point_cloud(self, name: str, points: lichtfeld.Tensor, colors: lichtfeld.Tensor, parent: int = -1) -> int:
-        """Add a point cloud node from tensor data [N,3] positions and colors"""
+        """
+        Add a point cloud node from [N,3] positions and uint8 or float32 colors; other color dtypes raise ValueError
+        """
 
     def add_mesh(self, name: str, vertices: lichtfeld.Tensor, indices: lichtfeld.Tensor, colors: lichtfeld.Tensor | None = None, normals: lichtfeld.Tensor | None = None, parent: int = -1) -> int:
         """
-        Add a mesh node from [V,3] vertices, [F,3] face indices, optional [V,4] colors and [V,3] normals
+        Add a mesh node from [V,3] vertices, [F,3] face indices, optional [V,4] colors and [V,3] normals; invalid color shapes raise ValueError
         """
 
     def add_camera_group(self, name: str, parent: int, camera_count: int) -> int:
@@ -580,15 +582,20 @@ class Scene:
         """Get world-space transform as 4x4 row-major tuple"""
 
     @overload
-    def set_node_transform(self, name: str, transform: Annotated[NDArray[numpy.float32], dict(shape=(4, 4))]) -> None:
-        """Set node local transform from a [4, 4] ndarray"""
-
-    @overload
     def set_node_transform(self, name: str, transform: lichtfeld.Tensor) -> None:
         """Set node local transform from a [4, 4] Tensor"""
 
+    @overload
+    def set_node_transform(self, name: str, transform: Annotated[NDArray[numpy.float32], dict(shape=(4, 4), device='cpu')]) -> None:
+        """Set node local transform from a [4, 4] ndarray"""
+
     def combined_model(self) -> SplatData | None:
         """Get the merged SplatData for all visible splats (None if empty)"""
+
+    def apply_crop_filter(self, mask: lichtfeld.Tensor) -> None:
+        """
+        Filter a combined-model CUDA bool mask in place by enabled render crop boxes and ellipsoids. Scene selection is unchanged.
+        """
 
     def training_model(self) -> SplatData | None:
         """Get the SplatData used for training (None if unavailable)"""

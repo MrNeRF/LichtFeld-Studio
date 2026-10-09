@@ -22,6 +22,7 @@ namespace Rml {
 } // namespace Rml
 
 namespace lfs::vis {
+    class SequencerFrameDemandTest_ApplyCurrentViewRecordsHistory_Test;
     struct Theme;
     class SequencerController;
 } // namespace lfs::vis
@@ -101,6 +102,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::optional<EditResult> consumeFocalEdit();
 
     private:
+        friend class lfs::vis::SequencerFrameDemandTest_ApplyCurrentViewRecordsHistory_Test;
         void syncInputOwnership();
         void initContext();
         [[nodiscard]] bool ensureContextReady();

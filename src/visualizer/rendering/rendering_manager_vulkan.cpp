@@ -613,7 +613,7 @@ namespace lfs::vis {
                          },
                          .focal_length_mm = settings.focal_length_mm,
                          .orthographic = settings.orthographic,
-                         .ortho_scale = settings.ortho_scale},
+                         .ortho_scale = viewport->ortho_scale_override.value_or(settings.ortho_scale)},
                     .viewport_pos = {screen_viewport_pos.x + offset_x, screen_viewport_pos.y},
                     .viewport_size = {width, screen_viewport_size.y},
                 });
@@ -943,44 +943,7 @@ namespace lfs::vis {
             const auto vp_data = frame_ctx.makeViewportData();
             frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
             frame.camera_position = vp_data.translation;
-            frame.items.reserve(frame_ctx.scene_state.meshes.size());
-
-            const bool any_selected_mesh = std::any_of(
-                frame_ctx.scene_state.meshes.begin(),
-                frame_ctx.scene_state.meshes.end(),
-                [](const auto& mesh) { return mesh.is_selected; });
-            const bool any_selected_node = std::any_of(
-                frame_ctx.scene_state.selected_node_mask.begin(),
-                frame_ctx.scene_state.selected_node_mask.end(),
-                [](const bool selected) { return selected; });
-            const bool dim_non_emphasized =
-                settings.desaturate_unselected && (any_selected_mesh || any_selected_node);
-
-            const glm::vec3 headlight_dir = glm::length(vp_data.translation) > 1e-6f
-                                                ? glm::normalize(vp_data.translation)
-                                                : settings.mesh_light_dir;
-
-            for (const auto& mesh : frame_ctx.scene_state.meshes) {
-                if (!mesh.mesh) {
-                    continue;
-                }
-                lfs::vis::VulkanMeshDrawItem item{};
-                item.mesh = mesh.mesh;
-                item.model = mesh.transform;
-                item.light_dir = headlight_dir;
-                item.light_intensity = settings.mesh_light_intensity;
-                item.ambient = settings.mesh_ambient;
-                item.backface_culling = settings.mesh_backface_culling;
-                item.is_emphasized = mesh.is_selected;
-                item.dim_non_emphasized = dim_non_emphasized;
-                item.flash_intensity = frame_ctx.selection_flash_intensity;
-                item.wireframe_overlay = settings.mesh_wireframe;
-                item.wireframe_color = settings.mesh_wireframe_color;
-                item.wireframe_width = settings.mesh_wireframe_width;
-                item.shadow_enabled = settings.mesh_shadow_enabled;
-                item.shadow_map_resolution = settings.mesh_shadow_resolution;
-                frame.items.push_back(item);
-            }
+            frame.items = buildViewportMeshDrawItems(frame_ctx.scene_state, settings, vp_data.translation);
 
             const auto frame_view = frame_ctx.makeFrameView();
             frame.environment.enabled = environmentBackgroundEnabled(settings);
@@ -1668,7 +1631,7 @@ namespace lfs::vis {
         // The budget helper gives training's rest time. The refresh period also
         // includes the viewer turn itself.
         return static_cast<float>(std::max<double>(
-            framerate_controller_.getSettings().training_frame_refresh_time_sec,
+            FramerateSettings{}.training_frame_refresh_time_sec,
             idlePreviewIntervalSec(viewer_turn_ms) + viewer_turn_ms * 1e-3));
     }
 
@@ -1876,7 +1839,7 @@ namespace lfs::vis {
         }
 
         const auto framebuffer_region =
-            resolveFramebufferViewportRegion(context.viewport, context.logical_screen_size, context.viewport_region);
+            resolveFramebufferViewportRegion(context.viewport, context.screen_size_px, context.viewport_region);
         if (framebuffer_region.valid() && !context.preparing_import) {
             // resolveFramebufferViewportRegion reports a GL bottom-left origin; window
             // readbacks are top-left, so store the flipped form callers actually crop with.
@@ -2221,6 +2184,7 @@ namespace lfs::vis {
         };
         if (!render_lock_contended) {
             sample_model_under_lock();
+            releaseLodLeafRenderViewUnlessFor(model);
         }
         bool has_renderable_model = false;
         bool has_visible_gaussian_model = false;
@@ -2394,7 +2358,7 @@ namespace lfs::vis {
             viewport_artifact_service_.clearViewportOutput();
             clearVulkanMeshFrame();
             render_lock.reset();
-            return {.matches_viewport_extent = true};
+            return {.matches_viewport_extent = true, .rendered = true};
         }
 
         const DirtyMask split_deferred_dirty = frame_dirty & ~DirtyFlag::SPLIT_POSITION;
@@ -2561,8 +2525,6 @@ namespace lfs::vis {
             }
         } viewer_borrow_publisher{live_trainer, vksplat_viewport_renderer_.get()};
 
-        framerate_controller_.beginFrame();
-
         const FrameContext frame_ctx{
             .viewport = context.viewport,
             .viewport_region = context.viewport_region,
@@ -2575,12 +2537,12 @@ namespace lfs::vis {
             .viewport_pos = {0, 0},
             .frame_dirty = frame_dirty,
             .training_active = is_training,
+            .gaussian_selection_visible = gaussian_selection_visible_,
             .cursor_preview = viewport_overlay_service_.cursorPreview(),
             .gizmo = viewport_overlay_service_.makeFrameGizmoState(),
             .hovered_camera_id = camera_interaction_service_.hoveredCameraId(),
             .current_camera_id = camera_interaction_service_.currentCameraId(),
             .hovered_gaussian_id = viewport_overlay_service_.hoveredGaussianId(),
-            .selection_flash_intensity = getSelectionFlashIntensity(),
             .view_panels = {}};
 
         std::shared_ptr<lfs::core::Tensor> rendered_image;
@@ -3772,8 +3734,7 @@ namespace lfs::vis {
         if (split_view_service_.isActive(frame_settings) && !pending_split_view.enabled &&
             synchronize_vksplat_input_upload && has_cached_viewport_output &&
             isRetryableSharedScratchUnavailable(render_error)) {
-            dirty_mask_.fetch_or(frame_dirty != 0 ? frame_dirty : DirtyFlag::SPLATS,
-                                 std::memory_order_relaxed);
+            queueSharedScratchRetry(vksplatSharedScratchRetryDirty(frame_dirty));
             defer_shared_scratch(render_error);
             render_lock.reset();
             LOG_DEBUG("Split-view shared scratch unavailable ({}); returning cached split image",
@@ -3988,6 +3949,16 @@ namespace lfs::vis {
                     },
                     metadata,
                     render_result->size);
+                viewport_artifact_service_.setDepthSampler(
+                    [this, size = render_result->size](
+                        int x, int y, std::optional<SplitViewPanelId>, bool nonblocking) {
+                        if (!point_cloud_vulkan_renderer_ || !last_vulkan_context_)
+                            return -1.0f;
+                        return point_cloud_vulkan_renderer_->sampleDepthAtPixel(
+                                                               *last_vulkan_context_,
+                                                               {.pixel = {x, y}, .source_size = size, .nonblocking = nonblocking})
+                            .value_or(-1.0f);
+                    });
 
                 if (resize_result.completed) {
                     lfs::core::Tensor::trim_memory_pool();
@@ -4006,6 +3977,9 @@ namespace lfs::vis {
                         mesh_frame.depth_blit.external_image_view = render_result->depth_image_view;
                         mesh_frame.depth_blit.external_image_generation = render_result->depth_generation;
                         mesh_frame.depth_blit.depth_is_ndc = true;
+                        mesh_frame.depth_blit.ndc_to_view_coeffs = {
+                            projection[2][2], projection[3][2],
+                            projection[2][3], projection[3][3]};
                         mesh_frame.depth_blit.flip_y = render_result->flip_y;
                     }
                     setVulkanMeshFrame(std::move(mesh_frame));
@@ -4022,7 +3996,8 @@ namespace lfs::vis {
                     .external_image_generation = vulkan_external_viewport_image_generation_,
                     .size = vulkan_viewport_image_size_,
                     .flip_y = vulkan_viewport_image_flip_y_,
-                    .matches_viewport_extent = true};
+                    .matches_viewport_extent = true,
+                    .rendered = true};
             };
             if (auto vk_result = try_vulkan(); vk_result) {
                 if (scene_manager && vk_result->matches_viewport_extent)
@@ -4417,7 +4392,8 @@ namespace lfs::vis {
                                             .image_generation = vulkan_viewport_image_generation_,
                                             .size = vulkan_viewport_image_size_,
                                             .flip_y = vulkan_viewport_image_flip_y_,
-                                            .matches_viewport_extent = true};
+                                            .matches_viewport_extent = true,
+                                            .rendered = true};
                                 }
                                 LOG_WARN("VkSplat PPISP correction produced no valid viewport image; falling back to uncorrected external image");
                             } else {
@@ -4504,7 +4480,8 @@ namespace lfs::vis {
                                 .size = vulkan_viewport_image_size_,
                                 .alloc_size = vulkan_viewport_image_alloc_size_,
                                 .flip_y = vulkan_viewport_image_flip_y_,
-                                .matches_viewport_extent = true};
+                                .matches_viewport_extent = true,
+                                .rendered = true};
                     };
 
                     const DirtyMask non_overlay_dirty = frame_dirty & ~DirtyFlag::SELECTION;
@@ -4810,6 +4787,7 @@ namespace lfs::vis {
             }
             if (scene_manager)
                 noteImportRenderFrame(scene_manager->getScene().renderGeneration(), render_error);
+            result.rendered = true;
             return result;
         }
 
@@ -4929,7 +4907,8 @@ namespace lfs::vis {
                 .image_generation = vulkan_viewport_image_generation_,
                 .size = vulkan_viewport_image_size_,
                 .flip_y = vulkan_viewport_image_flip_y_,
-                .matches_viewport_extent = true};
+                .matches_viewport_extent = true,
+                .rendered = true};
     }
 
     std::expected<void, std::string> RenderingManager::ensureVksplatTrainingSharedScratchReady(

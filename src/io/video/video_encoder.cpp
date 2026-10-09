@@ -8,6 +8,8 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include <algorithm>
+#include <cctype>
 #include <cuda_runtime.h>
 #include <format>
 
@@ -54,6 +56,12 @@ namespace lfs::io::video {
                 return std::unexpected("Encoder is already open");
             if (const auto validation = validateVideoEncodingOptions(opts); !validation)
                 return std::unexpected(validation.error());
+
+            auto extension = core::path_to_utf8(path.extension());
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (!extension.empty() && extension != ".mp4")
+                return std::unexpected("Video export supports only MP4 (.mp4); unsupported filename extension");
 
             const size_t width = static_cast<size_t>(opts.width);
             const size_t height = static_cast<size_t>(opts.height);
@@ -485,6 +493,10 @@ namespace lfs::io::video {
                     return std::unexpected(std::string("Receive packet error: ") + err);
                 }
 
+                // Each submitted frame spans one tick of the fixed-rate codec time base.
+                // The muxer cannot infer this from timestamps for a single-frame video.
+                if (packet_->duration <= 0)
+                    packet_->duration = 1;
                 av_packet_rescale_ts(packet_, codec_ctx_->time_base, stream_->time_base);
                 packet_->stream_index = stream_->index;
 

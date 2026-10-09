@@ -515,7 +515,7 @@ namespace lfs::vis::cap {
                     continue;
                 }
 
-                if (static_cast<bool>(node->locked)) {
+                if (scene_manager.getScene().isNodeEffectivelyLocked(node->id)) {
                     selection.found_locked = true;
                     continue;
                 }
@@ -612,12 +612,54 @@ namespace lfs::vis::cap {
                                                                         const glm::mat4& visualizer_world_transform) {
             const auto local_transform =
                 scene_coords::nodeLocalTransformFromVisualizerWorld(scene_manager.getScene(), name, visualizer_world_transform);
-            if (!local_transform)
-                return std::unexpected("Node not found: " + name);
+            if (!local_transform) {
+                if (!scene_manager.getScene().getNode(name))
+                    return std::unexpected("Node not found: " + name);
+                return std::unexpected(
+                    "Cannot transform '" + name + "': parent transform cannot preserve a finite world transform");
+            }
 
             if (!scene_manager.setNodeTransform(name, *local_transform))
                 return std::unexpected("Cannot transform '" + name + "': node is locked");
             return {};
+        }
+
+        std::vector<std::string> top_level_transform_targets(
+            const core::Scene& scene,
+            const std::vector<std::string>& targets) {
+            std::unordered_set<core::NodeId> selected_ids;
+            selected_ids.reserve(targets.size());
+            for (const auto& name : targets) {
+                if (const auto* const node = scene.getNode(name))
+                    selected_ids.insert(node->id);
+            }
+
+            std::vector<std::string> top_level_names;
+            top_level_names.reserve(targets.size());
+            std::unordered_set<core::NodeId> emitted_ids;
+            emitted_ids.reserve(targets.size());
+            for (const auto& name : targets) {
+                const auto* const node = scene.getNode(name);
+                if (!node) {
+                    top_level_names.push_back(name);
+                    continue;
+                }
+                if (!emitted_ids.insert(node->id).second)
+                    continue;
+
+                bool ancestor_selected = false;
+                for (core::NodeId parent_id = node->parent_id; parent_id != core::NULL_NODE;) {
+                    if (selected_ids.contains(parent_id)) {
+                        ancestor_selected = true;
+                        break;
+                    }
+                    const auto* const parent = scene.getNodeById(parent_id);
+                    parent_id = parent ? parent->parent_id : core::NULL_NODE;
+                }
+                if (!ancestor_selected)
+                    top_level_names.push_back(name);
+            }
+            return top_level_names;
         }
 
         core::NodeId find_attached_child_node(const core::Scene& scene,
@@ -853,23 +895,40 @@ namespace lfs::vis::cap {
         if (!translation && !rotation && !scale)
             return std::unexpected("At least one transform component must be provided");
 
+        const auto transform_targets = top_level_transform_targets(scene_manager.getScene(), targets);
         auto entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
-        entry->captureTransforms(targets);
+        entry->captureTransforms(transform_targets);
 
-        for (const auto& name : targets) {
+        for (const auto& name : transform_targets) {
             const auto world_transform = scene_coords::nodeVisualizerWorldTransform(scene_manager.getScene(), name);
             if (!world_transform)
                 return std::unexpected("Node not found: " + name);
 
             auto components = decomposeTransform(*world_transform);
+            glm::mat4 updated_transform = *world_transform;
+            if (rotation) {
+                const glm::mat3 current_rotation(glm::eulerAngleXYZ(
+                    components.rotation.x, components.rotation.y, components.rotation.z));
+                const glm::mat3 target_rotation(glm::eulerAngleXYZ(rotation->x, rotation->y, rotation->z));
+                const glm::mat3 rotation_delta = target_rotation * glm::transpose(current_rotation);
+                for (int column = 0; column < 3; ++column) {
+                    const glm::vec3 basis = rotation_delta * glm::vec3(updated_transform[column]);
+                    updated_transform[column] = glm::vec4(basis, 0.0f);
+                }
+            }
+            if (scale) {
+                const glm::vec3 factors(
+                    std::abs(components.scale.x) > 1e-12f ? scale->x / components.scale.x : 1.0f,
+                    std::abs(components.scale.y) > 1e-12f ? scale->y / components.scale.y : 1.0f,
+                    std::abs(components.scale.z) > 1e-12f ? scale->z / components.scale.z : 1.0f);
+                updated_transform[0] = glm::vec4(glm::vec3(updated_transform[0]) * factors.x, 0.0f);
+                updated_transform[1] = glm::vec4(glm::vec3(updated_transform[1]) * factors.y, 0.0f);
+                updated_transform[2] = glm::vec4(glm::vec3(updated_transform[2]) * factors.z, 0.0f);
+            }
             if (translation)
-                components.translation = *translation;
-            if (rotation)
-                components.rotation = *rotation;
-            if (scale)
-                components.scale = *scale;
+                updated_transform[3] = glm::vec4(*translation, 1.0f);
 
-            if (auto result = set_visualizer_world_transform(scene_manager, name, composeTransform(components)); !result)
+            if (auto result = set_visualizer_world_transform(scene_manager, name, updated_transform); !result)
                 return result;
         }
 
@@ -885,18 +944,19 @@ namespace lfs::vis::cap {
         if (targets.empty())
             return std::unexpected("No transform targets provided");
 
+        const auto transform_targets = top_level_transform_targets(scene_manager.getScene(), targets);
         auto entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
-        entry->captureTransforms(targets);
+        entry->captureTransforms(transform_targets);
 
-        for (const auto& name : targets) {
+        for (const auto& name : transform_targets) {
             const auto* node = scene_manager.getScene().getNode(name);
             if (!node)
                 return std::unexpected(std::format("Cannot transform '{}': node not found", name));
-            if (static_cast<bool>(node->locked))
+            if (scene_manager.getScene().isNodeEffectivelyLocked(node->id))
                 return std::unexpected(std::format("Cannot transform '{}': node is locked", name));
         }
 
-        for (const auto& name : targets) {
+        for (const auto& name : transform_targets) {
             if (!scene_manager.setNodeTransform(name, transform))
                 return std::unexpected(std::format("Cannot transform '{}': node is locked", name));
         }
@@ -913,10 +973,11 @@ namespace lfs::vis::cap {
         if (targets.empty())
             return std::unexpected("No transform targets provided");
 
+        const auto transform_targets = top_level_transform_targets(scene_manager.getScene(), targets);
         auto entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
-        entry->captureTransforms(targets);
+        entry->captureTransforms(transform_targets);
 
-        for (const auto& name : targets) {
+        for (const auto& name : transform_targets) {
             const auto world_transform = scene_coords::nodeVisualizerWorldTransform(scene_manager.getScene(), name);
             if (!world_transform)
                 return std::unexpected("Node not found: " + name);
@@ -939,11 +1000,12 @@ namespace lfs::vis::cap {
         if (targets.empty())
             return std::unexpected("No transform targets provided");
 
+        const auto transform_targets = top_level_transform_targets(scene_manager.getScene(), targets);
         auto entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
-        entry->captureTransforms(targets);
+        entry->captureTransforms(transform_targets);
 
         const glm::mat4 rotation_delta = glm::eulerAngleXYZ(value.x, value.y, value.z);
-        for (const auto& name : targets) {
+        for (const auto& name : transform_targets) {
             const auto world_transform = scene_coords::nodeVisualizerWorldTransform(scene_manager.getScene(), name);
             if (!world_transform)
                 return std::unexpected("Node not found: " + name);
@@ -968,18 +1030,33 @@ namespace lfs::vis::cap {
                                                 const std::string_view undo_label) {
         if (targets.empty())
             return std::unexpected("No transform targets provided");
+        const bool identity_scale = value == glm::vec3(1.0f);
+        if (identity_scale) {
+            for (const auto& name : targets) {
+                const auto* const node = scene_manager.getScene().getNode(name);
+                if (!node)
+                    return std::unexpected("Node not found: " + name);
+                if (scene_manager.getScene().isNodeEffectivelyLocked(node->id))
+                    return std::unexpected("Cannot transform '" + name + "': node is locked");
+            }
+            return {};
+        }
 
+        const auto transform_targets = top_level_transform_targets(scene_manager.getScene(), targets);
         auto entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
-        entry->captureTransforms(targets);
+        entry->captureTransforms(transform_targets);
 
-        for (const auto& name : targets) {
+        for (const auto& name : transform_targets) {
             const auto world_transform = scene_coords::nodeVisualizerWorldTransform(scene_manager.getScene(), name);
             if (!world_transform)
                 return std::unexpected("Node not found: " + name);
 
-            auto components = decomposeTransform(*world_transform);
-            components.scale *= value;
-            if (auto result = set_visualizer_world_transform(scene_manager, name, composeTransform(components)); !result)
+            glm::mat4 scaled_world = *world_transform;
+            for (int column = 0; column < 3; ++column) {
+                glm::vec3 basis = glm::vec3(scaled_world[column]) * value;
+                scaled_world[column] = glm::vec4(basis, 0.0f);
+            }
+            if (auto result = set_visualizer_world_transform(scene_manager, name, scaled_world); !result)
                 return result;
         }
 
@@ -1002,7 +1079,7 @@ namespace lfs::vis::cap {
             const auto* const node = scene.getNode(name);
             if (!node)
                 return std::unexpected("Node not found: " + name);
-            if (!isTransformableNodeType(node->type) || static_cast<bool>(node->locked) || !has_bakeable_payload(*node))
+            if (!isTransformableNodeType(node->type) || scene_manager.getScene().isNodeEffectivelyLocked(node->id) || !has_bakeable_payload(*node))
                 continue;
 
             const glm::mat4 local_transform = node->local_transform.get();
@@ -1667,6 +1744,8 @@ namespace lfs::vis::cap {
             const glm::vec3 center = (min_bounds + max_bounds) * 0.5f;
             const glm::vec3 half_size = (max_bounds - min_bounds) * 0.5f;
             data.radii = half_size * CIRCUMSCRIBE_FACTOR;
+            data.radii = glm::mix(data.radii, glm::vec3(kCropVolumeMinExtent),
+                                  glm::lessThanEqual(data.radii, glm::vec3(0.0f)));
             scene.setNodeTransform(created_ellipsoid_name, glm::translate(glm::mat4(1.0f), center));
         }
         data.enabled = true;
