@@ -841,7 +841,7 @@ static float3 gsplat_geometry_normal(GsplatCamera cam,float3 mean,float3 scales,
 kernel void gsplat_geometry_rays(constant GsplatRasterParams& p [[buffer(0)]],uint i [[thread_position_in_grid]]) {
     if(i>=p.width*p.height) return;
     const GsplatCamera cam=*p.camera;
-    GsplatRay ray=gsplat_pixel_ray(cam,float2(i%p.width,i/p.width)+0.5f);
+    GsplatRay ray=gsplat_pixel_ray(*p.camera,float2(i%p.width,i/p.width)+0.5f);
     float3 r=cam.R*ray.dir;
     r=cam.model==kGsplatPinhole?r/r.z:normalize(r);
     for(uint c=0;c<3;++c) p.rays[3*i+c]=ray.valid?r[c]:as_type<float>(0x7fc00000u);
