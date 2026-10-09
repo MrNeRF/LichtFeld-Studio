@@ -2626,6 +2626,42 @@ namespace lfs::vis {
             const auto& loaded = viewer.getGuiManager()->sequencerUI().loaded_ply_sequence_frames_;
             return std::ranges::find(loaded, frame) != loaded.end();
         }
+
+        void expectRejectedImportPreservesState(VisualizerImpl& viewer,
+                                                const std::filesystem::path& directory) {
+            auto& sequencer = viewer.getGuiManager()->sequencerUI();
+            auto& controller = sequencer.controller();
+            auto& scene = viewer.getSceneManager()->getScene();
+            sequencer.ui_state_.sequence_fps = 7.0f;
+            controller.seek(2.0f);
+            controller.play();
+            const auto* sequence = controller.plySequence();
+            const auto* frames = sequence->frames.data();
+            const auto* model = scene.getNode("frame_65")->model.get();
+            const auto playhead = controller.playhead();
+            const auto loaded = sequencer.loaded_ply_sequence_frames_;
+            const auto states = sequencer.ply_stream_states_;
+            const auto generation = sequencer.ply_stream_generation_.load();
+            const auto result = sequencer.loadPlySequenceFromDirectory(directory, 12.0f);
+            ASSERT_FALSE(result);
+            EXPECT_EQ(result.error().code(), lfs::ErrorCode::InvalidArgument);
+            EXPECT_EQ(controller.plySequence(), sequence);
+            EXPECT_EQ(controller.plySequence()->frames.data(), frames);
+            EXPECT_FLOAT_EQ(controller.plySequenceFps(), 1.0f);
+            EXPECT_FLOAT_EQ(sequencer.ui_state_.sequence_fps, 7.0f);
+            EXPECT_FLOAT_EQ(controller.playhead(), playhead);
+            EXPECT_TRUE(controller.isPlaying());
+            EXPECT_EQ(sequencer.last_ply_sequence_frame_, 1u);
+            EXPECT_EQ(sequencer.loaded_ply_sequence_frames_, loaded);
+            EXPECT_EQ(sequencer.ply_stream_states_, states);
+            EXPECT_EQ(sequencer.ply_stream_generation_.load(), generation);
+            ASSERT_NE(scene.getNode("frame_65"), nullptr);
+            EXPECT_EQ(scene.getNode("frame_65")->model.get(), model);
+        }
+
+        static void stopStreaming(VisualizerImpl& viewer) {
+            viewer.getGuiManager()->sequencerUI().stopPlySequenceStreaming();
+        }
     };
 
     TEST_F(SequencerFrameIntegrityTest, EvictionPreservesEditedFramesAndStillReclaimsCleanFrames) {
@@ -2741,6 +2777,70 @@ namespace lfs::vis {
         EXPECT_EQ(residentCount(viewer), FRAME_COUNT);
         for (size_t i = 0; i < FRAME_COUNT; ++i)
             EXPECT_NE(scene.getNode(std::format("frame_{}", i))->model, nullptr);
+    }
+
+    TEST_F(SequencerFrameIntegrityTest, MissingImportDirectoryPreservesActiveSequence) {
+        VisualizerImpl viewer(options());
+        populate(viewer);
+        expectRejectedImportPreservesState(viewer, temporary_.path / "missing");
+    }
+
+    TEST_F(SequencerFrameIntegrityTest, ImportFileInsteadOfDirectoryPreservesActiveSequence) {
+        const auto path = temporary_.path / "not_a_directory.ply";
+        std::ofstream(path) << "not a directory";
+        VisualizerImpl viewer(options());
+        populate(viewer);
+        expectRejectedImportPreservesState(viewer, path);
+    }
+
+    TEST_F(SequencerFrameIntegrityTest, EmptyImportDirectoryPreservesActiveSequence) {
+        const auto directory = temporary_.path / "empty";
+        ASSERT_TRUE(std::filesystem::create_directory(directory));
+        VisualizerImpl viewer(options());
+        populate(viewer);
+        expectRejectedImportPreservesState(viewer, directory);
+    }
+
+    TEST_F(SequencerFrameIntegrityTest, DirectoryWithoutPlyFilesPreservesActiveSequence) {
+        const auto directory = temporary_.path / "other_files";
+        ASSERT_TRUE(std::filesystem::create_directory(directory));
+        std::ofstream(directory / "frame.txt") << "not a PLY";
+        ASSERT_TRUE(std::filesystem::create_directory(directory / "nested.ply"));
+        VisualizerImpl viewer(options());
+        populate(viewer);
+        expectRejectedImportPreservesState(viewer, directory);
+    }
+
+    TEST_F(SequencerFrameIntegrityTest, AcceptedImportKeepsAsynchronousDecodeAndFrameOrder) {
+        const auto directory = temporary_.path / "incoming";
+        ASSERT_TRUE(std::filesystem::create_directory(directory));
+        // Discovery succeeds before decoding: invalid payloads remain worker errors.
+        std::ofstream(directory / "frame_2.PLY") << "invalid payload";
+        std::ofstream(directory / "frame_10.ply") << "invalid payload";
+        std::ofstream(directory / "ignored.txt") << "ignored";
+        VisualizerImpl viewer(options());
+        auto& manager = *viewer.getSceneManager();
+        const auto old_name = manager.addGeneratedSplatNode(lfs::test::licht::make_splat(1), "old", "old", false);
+        ASSERT_FALSE(old_name.empty());
+        auto& sequencer = viewer.getGuiManager()->sequencerUI();
+        ASSERT_TRUE(sequencer.loadPlySequenceFromDirectory(directory, 12.0f));
+        stopStreaming(viewer);
+        const auto* sequence = sequencer.controller().plySequence();
+        ASSERT_NE(sequence, nullptr);
+        ASSERT_EQ(sequence->frames.size(), 2u);
+        EXPECT_EQ(sequence->frames[0].path, directory / "frame_10.ply");
+        EXPECT_EQ(sequence->frames[1].path, directory / "frame_2.PLY");
+        EXPECT_FLOAT_EQ(sequence->fps, 12.0f);
+        EXPECT_EQ(manager.getScene().getNode(old_name), nullptr);
+        const auto* container = manager.getScene().getNodeByUuid(sequence->node_uuid);
+        ASSERT_NE(container, nullptr);
+        EXPECT_EQ(container->children.size(), 2u);
+        for (const auto& frame : sequence->frames) {
+            const auto* node = manager.getScene().getNodeByUuid(frame.node_uuid);
+            ASSERT_NE(node, nullptr);
+            EXPECT_EQ(node->model, nullptr);
+            EXPECT_EQ(manager.getPlyPath(node->uuid), frame.path);
+        }
     }
 
 } // namespace lfs::vis

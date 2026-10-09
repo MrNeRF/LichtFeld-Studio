@@ -2291,8 +2291,8 @@ namespace lfs::vis::gui {
                 .user_message = std::move(message),
                 .detection = LFS_SOURCE_SITE_CURRENT()}));
         };
-        if (fps > 0.0f)
-            ui_state_.sequence_fps = std::clamp(fps, MIN_SEQUENCE_FPS, MAX_SEQUENCE_FPS);
+        const float sequence_fps = std::clamp(fps > 0.0f ? fps : ui_state_.sequence_fps,
+                                              MIN_SEQUENCE_FPS, MAX_SEQUENCE_FPS);
         auto* const scene_manager = viewer_->getSceneManager();
         if (!scene_manager)
             return fail(lfs::ErrorCode::Unavailable, "Scene manager unavailable");
@@ -2302,32 +2302,33 @@ namespace lfs::vis::gui {
             LOG_ERROR("PLY sequence path is not a directory: {}", lfs::core::path_to_utf8(directory));
             return fail(lfs::ErrorCode::InvalidArgument, std::format("PLY sequence path is not a directory: {}", lfs::core::path_to_utf8(directory)));
         }
-        last_ply_sequence_frame_ = std::nullopt;
-        loaded_ply_sequence_frames_.clear();
-
         std::vector<std::filesystem::path> paths;
-        const std::filesystem::directory_iterator entries(directory, ec);
-        if (ec) {
+        const auto directory_error = [&] {
             LOG_ERROR("Failed to read PLY sequence directory {}: {}",
-                      lfs::core::path_to_utf8(directory),
-                      ec.message());
-            return fail(lfs::ErrorCode::Unavailable, std::format("Failed to read PLY sequence directory: {}", ec.message()));
-        }
-        for (const auto& entry : entries) {
-            if (ec) {
-                LOG_ERROR("Failed to read PLY sequence directory {}: {}",
-                          lfs::core::path_to_utf8(directory),
-                          ec.message());
-                return fail(lfs::ErrorCode::Unavailable, std::format("Failed to read PLY sequence directory: {}", ec.message()));
-            }
-            if (!entry.is_regular_file(ec))
+                      lfs::core::path_to_utf8(directory), ec.message());
+            return fail(lfs::ErrorCode::Unavailable,
+                        std::format("Failed to read PLY sequence directory: {}", ec.message()));
+        };
+        std::filesystem::directory_iterator entry(directory, ec);
+        if (ec)
+            return directory_error();
+        const std::filesystem::directory_iterator end;
+        for (; entry != end; entry.increment(ec)) {
+            if (ec)
+                return directory_error();
+            const bool regular_file = entry->is_regular_file(ec);
+            if (ec)
+                return directory_error();
+            if (!regular_file)
                 continue;
-            auto ext = entry.path().extension().string();
+            auto ext = entry->path().extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(),
                            [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
             if (ext == ".ply")
-                paths.push_back(entry.path());
+                paths.push_back(entry->path());
         }
+        if (ec)
+            return directory_error();
 
         std::sort(paths.begin(), paths.end());
         if (paths.empty()) {
@@ -2394,7 +2395,8 @@ namespace lfs::vis::gui {
             LOG_DEBUG("Added PLY sequence placeholder '{}'", node_name);
         }
 
-        ui_state_.sequence_fps = std::clamp(ui_state_.sequence_fps, MIN_SEQUENCE_FPS, MAX_SEQUENCE_FPS);
+        ui_state_.sequence_fps = sequence_fps;
+        loaded_ply_sequence_frames_.clear();
         controller_.setPlySequence(directory,
                                    sequence_node,
                                    std::move(loaded_paths),
