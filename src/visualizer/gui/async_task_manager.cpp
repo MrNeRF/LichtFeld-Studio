@@ -3245,7 +3245,7 @@ namespace lfs::vis::gui {
                                     auto& sequencer_ui = viewer->getGuiManager()->sequencerUI();
                                     const auto* current = sequencer_ui.controller().plySequence();
                                     if (!current || current->node_uuid != *sequence_uuid)
-                                        return std::unexpected("PLY sequence changed during video export");
+                                        return std::unexpected(std::string(LOC(lichtfeld::Strings::Runtime::VIDEO_EXPORT_SEQUENCE_CHANGED)));
                                     auto ready = sequencer_ui.preparePlySequenceExportFrame(sequence_frame);
                                     if (!ready)
                                         return std::unexpected(std::string(ready.error().user_message()));
@@ -3292,7 +3292,7 @@ namespace lfs::vis::gui {
                             break;
                         }
                         if (std::chrono::steady_clock::now() >= deadline) {
-                            frame_tensor = std::unexpected("Timed out loading PLY sequence frame for video export");
+                            frame_tensor = std::unexpected(std::string(LOC(lichtfeld::Strings::Runtime::VIDEO_EXPORT_SEQUENCE_FRAME_TIMEOUT)));
                             break;
                         }
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));

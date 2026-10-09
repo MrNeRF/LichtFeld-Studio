@@ -2562,6 +2562,8 @@
     "task_encode_error": "인코딩 오류",
     "task_finalizing": "마무리 중",
     "task_failed_detail": "실패: {}",
+    "video_export_sequence_changed": "비디오 내보내기 중 PLY 시퀀스가 변경되었습니다",
+    "video_export_sequence_frame_timeout": "비디오 내보내기용 PLY 시퀀스 프레임을 불러오는 중 시간이 초과되었습니다",
     "export_cancelled": "사용자가 내보내기를 취소했습니다",
     "no_splat_data": "내보낼 스플랫 데이터가 없습니다",
     "export_streamed_lod": "\"{}\"을(를) 내보낼 수 없습니다: 모델이 너무 커서 메모리에 들어가지 않으며 디스크에서 스트리밍됩니다.",

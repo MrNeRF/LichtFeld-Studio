@@ -2562,6 +2562,8 @@
     "task_encode_error": "编码错误",
     "task_finalizing": "正在完成",
     "task_failed_detail": "失败：{}",
+    "video_export_sequence_changed": "视频导出期间 PLY 序列已更改",
+    "video_export_sequence_frame_timeout": "加载用于视频导出的 PLY 序列帧超时",
     "export_cancelled": "用户已取消导出",
     "no_splat_data": "没有可导出的 splat 数据",
     "export_streamed_lod": "无法导出“{}”：模型太大，无法装入内存，正在从磁盘流式加载。",

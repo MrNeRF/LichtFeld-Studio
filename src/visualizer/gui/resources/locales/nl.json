@@ -2562,6 +2562,8 @@
     "task_encode_error": "Encodeerfout",
     "task_finalizing": "Afronden",
     "task_failed_detail": "Mislukt: {}",
+    "video_export_sequence_changed": "De PLY-reeks is tijdens de video-export gewijzigd",
+    "video_export_sequence_frame_timeout": "Time-out bij het laden van een PLY-reeksframe voor de video-export",
     "export_cancelled": "Export geannuleerd door gebruiker",
     "no_splat_data": "Geen splat-gegevens om te exporteren",
     "export_streamed_lod": "Kan \"{}\" niet exporteren: het model is te groot voor het geheugen en wordt vanaf de schijf gestreamd.",

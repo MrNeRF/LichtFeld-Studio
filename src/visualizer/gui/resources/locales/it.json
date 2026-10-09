@@ -2562,6 +2562,8 @@
     "task_encode_error": "Errore di codifica",
     "task_finalizing": "Finalizzazione",
     "task_failed_detail": "Non riuscito: {}",
+    "video_export_sequence_changed": "La sequenza PLY è cambiata durante l'esportazione video",
+    "video_export_sequence_frame_timeout": "Timeout durante il caricamento di un fotogramma della sequenza PLY per l'esportazione video",
     "export_cancelled": "Esportazione annullata dall’utente",
     "no_splat_data": "Nessun dato splat da esportare",
     "export_streamed_lod": "Impossibile esportare \"{}\": il modello è troppo grande per la memoria e viene letto in streaming dal disco.",

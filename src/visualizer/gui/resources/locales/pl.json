@@ -2562,6 +2562,8 @@
     "task_encode_error": "Błąd kodowania",
     "task_finalizing": "Finalizowanie",
     "task_failed_detail": "Niepowodzenie: {}",
+    "video_export_sequence_changed": "Sekwencja PLY zmieniła się podczas eksportu wideo",
+    "video_export_sequence_frame_timeout": "Przekroczono limit czasu wczytywania klatki sekwencji PLY do eksportu wideo",
     "export_cancelled": "Eksport anulowany przez użytkownika",
     "no_splat_data": "Brak danych splat do wyeksportowania",
     "export_streamed_lod": "Nie można wyeksportować \"{}\": model jest zbyt duży, aby zmieścić się w pamięci, i jest strumieniowany z dysku.",

@@ -2561,6 +2561,8 @@
     "task_encode_error": "Encode error",
     "task_finalizing": "Finalizing",
     "task_failed_detail": "Failed: {}",
+    "video_export_sequence_changed": "PLY sequence changed during video export",
+    "video_export_sequence_frame_timeout": "Timed out loading PLY sequence frame for video export",
     "export_cancelled": "Export cancelled by user",
     "no_splat_data": "No splat data to export",
     "export_streamed_lod": "Can't export \"{}\": the model is too large to fit in memory and streams from disk.",

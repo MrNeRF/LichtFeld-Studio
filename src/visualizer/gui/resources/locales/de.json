@@ -2562,6 +2562,8 @@
     "task_encode_error": "Kodierungsfehler",
     "task_finalizing": "Wird abgeschlossen",
     "task_failed_detail": "Fehlgeschlagen: {}",
+    "video_export_sequence_changed": "Die PLY-Sequenz wurde während des Videoexports geändert",
+    "video_export_sequence_frame_timeout": "Zeitüberschreitung beim Laden eines PLY-Sequenzbilds für den Videoexport",
     "export_cancelled": "Export vom Benutzer abgebrochen",
     "no_splat_data": "Keine Splat-Daten zum Exportieren",
     "export_streamed_lod": "\"{}\" kann nicht exportiert werden: Das Modell passt nicht in den Arbeitsspeicher und wird von der Festplatte gestreamt.",
