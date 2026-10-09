@@ -2072,3 +2072,16 @@ def test_bin_counts_match_the_compacted_reference(histogram_panel_module, lf, nu
     expected = numpy.clip(numpy.floor(((valid - numpy.float32(0.1)) / numpy.float32(0.8)) * 32), 0, 31).astype(int)
     assert counts == numpy.bincount(expected, minlength=32).tolist()
     assert bins.cpu().numpy()[~numpy.isfinite(data)].tolist() == [-1] * int((~numpy.isfinite(data)).sum())
+
+
+@pytest.mark.parametrize("bounds", [(0.0, 1.0), (0.1, 0.2), (0.33, 0.34), (0.5, 0.7), (0.95, 1.5), (-1.0, 0.004)])
+def test_sampled_sorted_snapping_matches_the_full_scan_on_many_values(histogram_panel_module, lf, numpy, bounds, monkeypatch):
+    monkeypatch.setattr(histogram_panel_module, "SORTED_SAMPLE_POINTS", 64)
+    data = numpy.sort(numpy.random.default_rng(3).random(10_000).astype(numpy.float32))
+    data[5000:5100] = data[5000]
+    tensor = lf.Tensor.from_numpy(data)
+    panel_type = histogram_panel_module.HistogramPanel
+    sample = panel_type._sorted_sample(tensor)
+    assert sample[0] > 1
+    expected = panel_type._snap_bounds_to_data(tensor, *bounds)
+    assert panel_type._snap_sorted_bounds_to_data(tensor, *bounds, sample=sample) == expected

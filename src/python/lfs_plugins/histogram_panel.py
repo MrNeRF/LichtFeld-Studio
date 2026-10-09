@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import bisect
 import logging
 import math
 import threading
@@ -27,6 +28,7 @@ __lfs_panel_ids__ = ["lfs.histogram"]
 DEFAULT_HISTOGRAM_BIN_COUNT = 56
 MIN_HISTOGRAM_BIN_COUNT = 16
 MAX_HISTOGRAM_BIN_COUNT = 128
+SORTED_SAMPLE_POINTS = 4096
 DEFAULT_COMPARE_X_BIN_COUNT = 20
 DEFAULT_COMPARE_Y_BIN_COUNT = 20
 MIN_COMPARE_BIN_COUNT = 8
@@ -145,6 +147,9 @@ class HistogramPanel(Panel):
 
         self._selection_bin_indices: lf.Tensor | None = None
         self._static_bin_records_key: tuple | None = None
+        self._primary_sorted_sample: tuple[int, list[float]] | None = None
+        self._compare_x_sorted_sample: tuple[int, list[float]] | None = None
+        self._compare_y_sorted_sample: tuple[int, list[float]] | None = None
         self._static_bin_records_value: list[dict[str, object]] | None = None
         self._finish_histogram_init()
 
@@ -621,26 +626,28 @@ class HistogramPanel(Panel):
         return max(range_min, data_min), min(range_max, data_max)
 
     @staticmethod
-    def _sorted_index_at_least(sorted_values: lf.Tensor, bound: float) -> int:
-        lo, hi = 0, int(sorted_values.shape[0])
-        while lo < hi:
-            mid = (lo + hi) // 2
-            if float(sorted_values[mid].item()) < bound:
-                lo = mid + 1
-            else:
-                hi = mid
-        return lo
+    def _sorted_sample(sorted_values: lf.Tensor) -> tuple[int, list[float]]:
+        """Every stride-th sorted value as a plain list, to locate bounds without tensor churn."""
+        count = int(sorted_values.shape[0])
+        stride = max(1, -(-count // SORTED_SAMPLE_POINTS))
+        return stride, sorted_values[::stride].tolist()
 
     @staticmethod
-    def _sorted_index_above(sorted_values: lf.Tensor, bound: float) -> int:
-        lo, hi = 0, int(sorted_values.shape[0])
-        while lo < hi:
-            mid = (lo + hi) // 2
-            if float(sorted_values[mid].item()) <= bound:
-                lo = mid + 1
-            else:
-                hi = mid
-        return lo
+    def _sorted_search(
+        sorted_values: lf.Tensor, sample: tuple[int, list[float]], bound: float, right: bool
+    ) -> int:
+        """bisect_left/right over the sorted tensor reading one small block."""
+        stride, points = sample
+        count = int(sorted_values.shape[0])
+        search = bisect.bisect_right if right else bisect.bisect_left
+        k = search(points, bound)
+        if k == 0:
+            return 0
+        start = (k - 1) * stride + 1
+        stop = min(count, k * stride + 1)
+        if start >= stop:
+            return start
+        return start + search(sorted_values[start:stop].tolist(), bound)
 
     @staticmethod
     def _snap_sorted_bounds_to_data(
@@ -648,6 +655,7 @@ class HistogramPanel(Panel):
         range_min: float,
         range_max: float,
         data_bounds: tuple[float, float] | None = None,
+        sample: tuple[int, list[float]] | None = None,
     ) -> tuple[float, float]:
         """_snap_bounds_to_data for ascending finite values: O(log n), no full scan."""
         if not math.isfinite(range_min) or not math.isfinite(range_max) or range_max <= range_min:
@@ -656,8 +664,10 @@ class HistogramPanel(Panel):
             return data_bounds if data_bounds[1] > data_bounds[0] else (range_min, range_max)
         if sorted_values is None or int(sorted_values.shape[0]) == 0:
             return range_min, range_max
-        first = HistogramPanel._sorted_index_at_least(sorted_values, range_min)
-        last = HistogramPanel._sorted_index_above(sorted_values, range_max) - 1
+        if sample is None:
+            sample = HistogramPanel._sorted_sample(sorted_values)
+        first = HistogramPanel._sorted_search(sorted_values, sample, range_min, right=False)
+        last = HistogramPanel._sorted_search(sorted_values, sample, range_max, right=True) - 1
         if first > last:
             return range_min, range_max
         data_min = float(sorted_values[first].item())
@@ -830,7 +840,10 @@ class HistogramPanel(Panel):
         return float(view_min) <= domain_lo + tolerance and float(view_max) >= domain_hi - tolerance
 
     def _snap_histogram_zoom_bounds_to_data(self, range_min: float, range_max: float) -> tuple[float, float]:
-        return self._snap_sorted_bounds_to_data(self._primary_sorted_values, float(range_min), float(range_max))
+        return self._snap_sorted_bounds_to_data(
+            self._primary_sorted_values, float(range_min), float(range_max),
+            sample=self._primary_sorted_sample,
+        )
 
     def _histogram_value_for_mouse_x(self, mouse_x: float) -> float | None:
         if self._chart_el is None:
@@ -1559,6 +1572,7 @@ class HistogramPanel(Panel):
             "valid_values": sorted_values,
             "finite_values_cpu": sorted_values,
             "sorted_values": sorted_values,
+            "sorted_sample": self._sorted_sample(sorted_values),
             "min_value": data_bounds[0],
             "max_value": data_bounds[1],
             "mean_value": float(valid_values.mean().item()),
@@ -1631,6 +1645,8 @@ class HistogramPanel(Panel):
             "valid_y_values": y_sorted,
             "x_finite_cpu": x_sorted,
             "y_finite_cpu": y_sorted,
+            "x_sorted_sample": self._sorted_sample(x_sorted),
+            "y_sorted_sample": self._sorted_sample(y_sorted),
             "x_auto_min": x_auto_min,
             "x_auto_max": x_auto_max,
             "y_auto_min": y_auto_min,
@@ -1654,6 +1670,7 @@ class HistogramPanel(Panel):
         self._primary_valid_values = primary["valid_values"]
         self._primary_finite_values_cpu = primary["finite_values_cpu"]
         self._primary_sorted_values = primary["sorted_values"]
+        self._primary_sorted_sample = primary.get("sorted_sample")
         self._auto_histogram_min = primary["auto_min"]
         self._auto_histogram_max = primary["auto_max"]
         self._primary_histogram_min = primary["histogram_min"]
@@ -1711,6 +1728,8 @@ class HistogramPanel(Panel):
         self._compare_valid_y_values = compare["valid_y_values"]
         self._compare_x_finite_cpu = compare["x_finite_cpu"]
         self._compare_y_finite_cpu = compare["y_finite_cpu"]
+        self._compare_x_sorted_sample = compare.get("x_sorted_sample")
+        self._compare_y_sorted_sample = compare.get("y_sorted_sample")
         self._compare_x_auto_min = compare["x_auto_min"]
         self._compare_x_auto_max = compare["x_auto_max"]
         self._compare_y_auto_min = compare["y_auto_min"]
@@ -1765,7 +1784,7 @@ class HistogramPanel(Panel):
         # Snap to the actual extent of the values inside the resolved range so the bars
         # fill the chart instead of leaving leading/trailing empty bins.
         histogram_min, histogram_max = self._snap_sorted_bounds_to_data(
-            finite_values, range_min, range_max
+            finite_values, range_min, range_max, sample=self._primary_sorted_sample
         )
         # Inputs reflect the current effective min/max; the typed constraint stays in
         # _custom_range_{min,max}_value.
@@ -1795,6 +1814,7 @@ class HistogramPanel(Panel):
         self._primary_valid_values = None
         self._primary_finite_values_cpu = None
         self._primary_sorted_values = None
+        self._primary_sorted_sample = None
         self._primary_histogram_min = 0.0
         self._primary_histogram_max = 1.0
         self._auto_histogram_min = 0.0
@@ -2836,9 +2856,13 @@ class HistogramPanel(Panel):
         # Mirror the primary axis range-of-interest on the compare X axis so the 2D
         # heatmap stays consistent with the 1D histogram.
         x_range_min, x_range_max = self._resolve_active_bounds(self._compare_x_auto_min, self._compare_x_auto_max)
-        x_min, x_max = self._snap_sorted_bounds_to_data(x_finite, x_range_min, x_range_max, x_bounds)
+        x_min, x_max = self._snap_sorted_bounds_to_data(
+            x_finite, x_range_min, x_range_max, x_bounds, sample=self._compare_x_sorted_sample
+        )
         y_range_min, y_range_max = self._resolve_compare_y_bounds(self._compare_y_auto_min, self._compare_y_auto_max)
-        y_min, y_max = self._snap_sorted_bounds_to_data(y_finite, y_range_min, y_range_max, y_bounds)
+        y_min, y_max = self._snap_sorted_bounds_to_data(
+            y_finite, y_range_min, y_range_max, y_bounds, sample=self._compare_y_sorted_sample
+        )
         self._uncommitted_range_inputs.difference_update(("y_min", "y_max"))
         self._compare_y_custom_range_min_str = self._format_range_input(y_min)
         self._compare_y_custom_range_max_str = self._format_range_input(y_max)
@@ -2909,6 +2933,8 @@ class HistogramPanel(Panel):
         self._compare_valid_y_values = None
         self._compare_x_finite_cpu = None
         self._compare_y_finite_cpu = None
+        self._compare_x_sorted_sample = None
+        self._compare_y_sorted_sample = None
         self._compare_x_min = 0.0
         self._compare_x_max = 1.0
         self._compare_y_min = 0.0
