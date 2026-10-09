@@ -488,11 +488,59 @@ TEST_F(McpSequencerToolsTest, SetEasingRejectsOutOfRangeNumbersWithoutChangingKe
     }
 }
 
+TEST_F(McpSequencerToolsTest, FractionalKeyframeIdCannotMutateAnyCommand) {
+    auto& registry = lfs::mcp::ToolRegistry::instance();
+    for (const auto* command : {"sequencer.delete_keyframe", "sequencer.update_keyframe",
+                                "sequencer.select_keyframe", "sequencer.go_to_keyframe", "sequencer.set_easing"}) {
+        SCOPED_TRACE(command);
+        backend_.controller.clear();
+        backend_.add_manual_keyframe(0.0f, {0.0f, 0.0f, 0.0f});
+        backend_.add_manual_keyframe(1.0f, {1.0f, 0.0f, 0.0f});
+        backend_.add_manual_keyframe(2.0f, {2.0f, 0.0f, 0.0f});
+        const auto before = registry.call_tool("sequencer.get", json::object());
+        const auto result = registry.call_tool(command, json{{"keyframe_id", 2.5}, {"easing", "ease_out"}});
+        EXPECT_EQ(result.value("error", json::object()).value("code", ""), "InvalidArgument");
+        EXPECT_EQ(registry.call_tool("sequencer.get", json::object()), before);
+    }
+}
+
+TEST_F(McpSequencerToolsTest, FractionalPlyFrameCannotMovePlayhead) {
+    backend_.controller.setPlySequence("sequence", "sequence", {"0.ply", "1.ply", "2.ply", "3.ply"},
+                                       {"0", "1", "2", "3"}, 24.0f);
+    backend_.controller.seek(3.0f / 24.0f);
+    auto& registry = lfs::mcp::ToolRegistry::instance();
+    const auto before = registry.call_tool("sequencer.get", json::object());
+    const auto result = registry.call_tool("sequencer.scrub", json{{"frame", 1.5}});
+    EXPECT_EQ(result.value("error", json::object()).value("code", ""), "InvalidArgument");
+    EXPECT_FLOAT_EQ(backend_.controller.playhead(), 3.0f / 24.0f);
+    EXPECT_EQ(registry.call_tool("sequencer.get", json::object()), before);
+    for (const auto& frame : {json(2), json(2.0), json("2")}) {
+        const auto valid = registry.call_tool("sequencer.scrub", json{{"frame", frame}});
+        ASSERT_TRUE(valid.value("success", false));
+        EXPECT_FLOAT_EQ(backend_.controller.playhead(), 2.0f / 24.0f);
+    }
+}
+
+TEST_F(McpSequencerToolsTest, SetEasingRejectsFractionalModesWithoutChangingState) {
+    const auto id = backend_.add_manual_keyframe(0.0f, {0.0f, 0.0f, 0.0f});
+    backend_.add_manual_keyframe(1.0f, {1.0f, 0.0f, 0.0f});
+    for (const double easing : {0.5, 1.5, 2.7, 2.9999999999999996}) {
+        SCOPED_TRACE(easing);
+        backend_.controller.setKeyframeEasingById(id, lfs::sequencer::EasingType::EASE_IN_OUT);
+        const auto before = lfs::mcp::ToolRegistry::instance().call_tool("sequencer.get", json::object());
+        const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+            "sequencer.set_easing", json{{"keyframe_id", id}, {"easing", easing}});
+        EXPECT_EQ(result.value("error", json::object()).value("code", ""), "InvalidArgument");
+        EXPECT_NE(result.value("error_message", "").find("easing"), std::string::npos);
+        EXPECT_EQ(lfs::mcp::ToolRegistry::instance().call_tool("sequencer.get", json::object()), before);
+    }
+}
+
 TEST_F(McpSequencerToolsTest, SetEasingPreservesAllNumericAndNamedModes) {
     const auto id = backend_.add_manual_keyframe(0.0f, {0.0f, 0.0f, 0.0f});
     const std::array<const char*, 4> names = {"linear", "ease_in", "ease_out", "ease_in_out"};
     for (size_t mode = 0; mode < names.size(); ++mode) {
-        for (const auto& easing : {json(mode), json(names[mode])}) {
+        for (const auto& easing : {json(mode), json(static_cast<double>(mode)), json(names[mode])}) {
             SCOPED_TRACE(easing.dump());
             backend_.controller.setKeyframeEasingById(
                 id, static_cast<lfs::sequencer::EasingType>((mode + 1) % names.size()));
@@ -524,6 +572,25 @@ TEST_F(McpSequencerToolsTest, DeleteRejectsProtectedFirstKeyframeWithoutChanging
     reject_deletion(first);
     backend_.controller.setKeyframeTimeById(second, -1.0f);
     reject_deletion(second);
+}
+
+TEST_F(McpSequencerToolsTest, SetEasingCommandLatency) {
+    const auto id = backend_.add_manual_keyframe(0.0f, {0.0f, 0.0f, 0.0f});
+    auto& registry = lfs::mcp::ToolRegistry::instance();
+    std::vector<double> timings;
+    json args{{"keyframe_id", id}, {"easing", 0}};
+    for (int batch = 0; batch < 7; ++batch) {
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < 1000; ++i) {
+            args["easing"] = i % 4;
+            const auto result = registry.call_tool("sequencer.set_easing", args);
+            ASSERT_TRUE(result.value("success", false));
+            ASSERT_EQ(result["keyframes"][0]["easing"], i % 4);
+        }
+        timings.push_back(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / 1000);
+    }
+    std::sort(timings.begin(), timings.end());
+    RecordProperty("median_easing_us", std::to_string(timings[3]));
 }
 
 TEST_F(McpSequencerToolsTest, SetEasingAndDeleteResolveByIdAfterReorder) {
