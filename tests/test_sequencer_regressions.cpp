@@ -1453,6 +1453,97 @@ namespace {
         EXPECT_EQ(controller.saveToJson(), saved);
     }
 
+    TEST(SequencerControllerRegressionTest, PingPongTraversesBothDirectionsAcrossRepeatedCycles) {
+        for (const float speed : {1.0f, 4.0f}) {
+            for (const bool with_sequence : {false, true}) {
+                SCOPED_TRACE(std::format("speed={} sequence={}", speed, with_sequence));
+                SequencerController controller;
+                controller.addKeyframe(makeKeyframe(0.0f));
+                controller.addKeyframe(makeKeyframe(5.75f, {6.0f, 0.0f, 0.0f}));
+                if (with_sequence) {
+                    controller.setPlySequence("frames", "sequence",
+                                              {"0.ply", "1.ply", "2.ply", "3.ply"}, {}, 1.0f);
+                }
+                controller.setClipDuration(6.0f);
+                controller.setLoopMode(LoopMode::PING_PONG);
+                controller.setPlaybackSpeed(speed);
+                controller.play();
+                for (int step = 1; step <= 240; ++step) {
+                    SCOPED_TRACE(step);
+                    ASSERT_TRUE(controller.update(0.125f));
+                    const float phase = std::fmod(step * 0.125f * speed, 12.0f);
+                    const float expected = phase <= 6.0f ? phase : 12.0f - phase;
+                    ASSERT_FLOAT_EQ(controller.playhead(), expected);
+                    ASSERT_TRUE(controller.isPlaying());
+                    if (with_sequence) {
+                        EXPECT_EQ(controller.currentPlySequenceFrameIndex(),
+                                  controller.plySequenceFrameIndex(expected));
+                    }
+                }
+            }
+        }
+    }
+
+    TEST(SequencerControllerRegressionTest, PingPongReflectsOvershootsAndMultiplePeriods) {
+        SequencerController controller;
+        controller.addKeyframe(makeKeyframe(0.0f));
+        controller.addKeyframe(makeKeyframe(6.0f));
+        controller.setClipDuration(6.0f);
+        controller.setLoopMode(LoopMode::PING_PONG);
+        controller.play();
+        float elapsed = 0.0f;
+        for (const float delta : {6.25f, 0.25f, 5.75f, 0.25f, 24.5f, 19.25f, 0.25f, 12.0f, 0.25f}) {
+            SCOPED_TRACE(delta);
+            elapsed += delta;
+            ASSERT_TRUE(controller.update(delta));
+            const float phase = std::fmod(elapsed, 12.0f);
+            EXPECT_FLOAT_EQ(controller.playhead(), phase <= 6.0f ? phase : 12.0f - phase);
+        }
+    }
+
+    TEST(SequencerControllerRegressionTest, PingPongPauseResumesReverseAndStopResetsDirection) {
+        SequencerController controller;
+        controller.addKeyframe(makeKeyframe(0.0f));
+        controller.addKeyframe(makeKeyframe(6.0f));
+        controller.setClipDuration(6.0f);
+        controller.setLoopMode(LoopMode::PING_PONG);
+        controller.play();
+        ASSERT_TRUE(controller.update(6.25f));
+        controller.pause();
+        EXPECT_FALSE(controller.update(1.0f));
+        EXPECT_FLOAT_EQ(controller.playhead(), 5.75f);
+        controller.play();
+        ASSERT_TRUE(controller.update(0.25f));
+        EXPECT_FLOAT_EQ(controller.playhead(), 5.5f);
+        ASSERT_TRUE(controller.update(0.25f));
+        EXPECT_FLOAT_EQ(controller.playhead(), 5.25f);
+        controller.stop();
+        controller.play();
+        ASSERT_TRUE(controller.update(0.25f));
+        EXPECT_FLOAT_EQ(controller.playhead(), 0.25f);
+    }
+
+    TEST(SequencerControllerRegressionTest, OnceAndLoopPlaybackRetainEndpointBehavior) {
+        for (const auto mode : {LoopMode::ONCE, LoopMode::LOOP}) {
+            SequencerController controller;
+            controller.addKeyframe(makeKeyframe(0.0f));
+            controller.addKeyframe(makeKeyframe(5.75f));
+            controller.setClipDuration(6.0f);
+            controller.setLoopMode(mode);
+            controller.play();
+            float elapsed = 0.0f;
+            for (const float delta : {0.125f, 1.0f, 4.625f, 0.125f, 0.125f, 0.25f, 24.5f}) {
+                elapsed += delta;
+                const bool was_playing = controller.isPlaying();
+                EXPECT_EQ(controller.update(delta), was_playing);
+                EXPECT_FLOAT_EQ(controller.playhead(), mode == LoopMode::ONCE
+                                                           ? std::min(elapsed, 6.0f)
+                                                           : std::fmod(elapsed, 6.0f));
+                EXPECT_EQ(controller.isPlaying(), mode == LoopMode::LOOP || elapsed < 6.0f);
+            }
+        }
+    }
+
     TEST(SequencerControllerRegressionTest, SelectionTracksKeyframeIdentityAcrossResort) {
         SequencerController controller;
         const auto first_id = controller.addKeyframe(makeKeyframe(1.0f, {1.0f, 0.0f, 0.0f}));

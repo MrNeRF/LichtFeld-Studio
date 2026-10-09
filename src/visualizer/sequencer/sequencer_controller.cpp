@@ -330,10 +330,9 @@ namespace lfs::vis {
                     phase += period;
                 if (phase <= end) {
                     playhead_ = phase;
-                    reverse_direction_ = false;
                 } else {
                     playhead_ = period - phase;
-                    reverse_direction_ = true;
+                    reverse_direction_ = !reverse_direction_;
                 }
             }
             break;
