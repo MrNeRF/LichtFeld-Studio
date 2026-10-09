@@ -510,7 +510,7 @@ namespace lfs::training {
         _densify_child_required_peak_bytes = 0;
         _densify_child_allocated_peak_bytes = 0;
         if (optimParams.gut && optimParams.opacity_decay_rendered_only)
-            LOG_WARN("opacity_decay_rendered_only has no effect with GUT");
+            LOG_INFO("opacity_decay_rendered_only has no effect with GUT");
         auto resolved_params = optimParams;
         resolved_params.resolve_mrnf_capacity_defaults();
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(
@@ -2598,7 +2598,7 @@ namespace lfs::training {
         resolved_params.resolve_mrnf_capacity_defaults();
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(std::move(resolved_params));
         if ((support_changed || renderer_changed) && params.gut && params.opacity_decay_rendered_only)
-            LOG_WARN("opacity_decay_rendered_only has no effect with GUT");
+            LOG_INFO("opacity_decay_rendered_only has no effect with GUT");
         if (_splat_data && (support_changed || renderer_changed)) {
             if (params.opacity_decay_rendered_only && !params.gut)
                 reset_vector_buffer(_rendered_count, _splat_data->size(), _splat_data->means().device(), splat_reserved_capacity(*_splat_data));

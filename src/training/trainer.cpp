@@ -3438,7 +3438,7 @@ namespace lfs::training {
                             render_camera, model, background,
                             1.0f, false,
                             lfs::core::param::is_eval_mask_depth(params.optimization.eval_mask)
-                                ? GsplatRenderMode::RGB_ED
+                                ? GsplatRenderMode::RGB_D
                                 : GsplatRenderMode::RGB,
                             true);
                     } else {

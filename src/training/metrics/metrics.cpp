@@ -861,8 +861,8 @@ namespace lfs::training {
                 const auto alpha = squeeze_to_hw(rendered->output.alpha);
                 const auto depth = squeeze_to_hw(rendered->output.depth);
                 assert(alpha.ndim() == 2 && alpha.shape() == depth.shape());
-                // FastGS accumulates alpha-weighted depth; the GUT path renders expected depth.
-                const auto expected = params.optimization.gut ? depth : depth / alpha.clamp_min(1.0e-6f);
+                // Both rasterizers return alpha-weighted accumulated depth.
+                const auto expected = depth / alpha.clamp_min(1.0e-6f);
                 auto coverage = (alpha.gt(0.5f) && expected.ge((*range)[0]) && expected.le((*range)[1]))
                                     .to(lfs::core::DataType::UInt8);
                 if (params.optimization.eval_mask_invert)
@@ -1469,12 +1469,10 @@ namespace lfs::training {
         }
 
         bool render_normal = false;
-        if (!_params.optimization.gut) {
-            for (size_t image_idx = 0; image_idx < val_dataset_size; ++image_idx) {
-                if (val_dataset->get_camera(image_idx)->has_normal()) {
-                    render_normal = true;
-                    break;
-                }
+        for (size_t image_idx = 0; image_idx < val_dataset_size; ++image_idx) {
+            if (val_dataset->get_camera(image_idx)->has_normal()) {
+                render_normal = true;
+                break;
             }
         }
 
@@ -1495,9 +1493,7 @@ namespace lfs::training {
                             output = gsplat_rasterize(
                                 render_camera, splatData_mutable, background,
                                 1.0f, false,
-                                lfs::core::param::is_eval_mask_depth(_params.optimization.eval_mask)
-                                    ? GsplatRenderMode::RGB_ED
-                                    : GsplatRenderMode::RGB,
+                                render_normal ? GsplatRenderMode::RGB_D_N : GsplatRenderMode::RGB_D,
                                 true);
                         } else {
                             output = fast_rasterize(
@@ -1769,6 +1765,9 @@ namespace lfs::training {
                         auto T_cpu = cam->T().cpu().contiguous();
                         const float* const R = R_cpu.ptr<float>();
                         const float* const T = T_cpu.ptr<float>();
+                        // GUT renders radial depth for non-pinhole lenses it rasterizes natively.
+                        const bool radial_depth = _params.optimization.gut && !render_geometry.undistorted &&
+                                                  cam->camera_model_type() != lfs::core::CameraModelType::PINHOLE;
                         // Observed pixels live in the distorted source image; the undistorted
                         // render is sampled at the point's projection through its own camera.
                         std::vector<DepthAbsRelSample> samples;
@@ -1779,11 +1778,11 @@ namespace lfs::training {
                             if (!std::isfinite(z) || z <= 1.0e-6f) {
                                 continue;
                             }
+                            const float x = R[0] * observation.x + R[1] * observation.y +
+                                            R[2] * observation.z + T[0];
+                            const float y = R[3] * observation.x + R[4] * observation.y +
+                                            R[5] * observation.z + T[1];
                             if (render_geometry.undistorted) {
-                                const float x = R[0] * observation.x + R[1] * observation.y +
-                                                R[2] * observation.z + T[0];
-                                const float y = R[3] * observation.x + R[4] * observation.y +
-                                                R[5] * observation.z + T[1];
                                 samples.push_back(DepthAbsRelSample{
                                     .u = render_geometry.fx * x / z + render_geometry.cx,
                                     .v = render_geometry.fy * y / z + render_geometry.cy,
@@ -1793,7 +1792,7 @@ namespace lfs::training {
                             samples.push_back(DepthAbsRelSample{
                                 .u = observation.u * u_scale,
                                 .v = observation.v * v_scale,
-                                .true_depth = z});
+                                .true_depth = radial_depth ? std::sqrt(x * x + y * y + z * z) : z});
                         }
                         if (const auto absrel = median_depth_absrel(depth, samples)) {
                             depth_values.push_back(*absrel);
