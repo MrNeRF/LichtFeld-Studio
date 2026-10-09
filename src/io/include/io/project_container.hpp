@@ -273,6 +273,12 @@ namespace lfs::io::project {
         std::uint32_t head_crc32c = 0;
     };
 
+    struct ProjectHeadIdentity {
+        lfs::core::Uuid project_uuid;
+        lfs::core::Uuid commit_uuid;
+        std::uint64_t generation = 0;
+    };
+
     struct BlockCrcTable {
         std::uint64_t offset = 0;
         std::uint64_t payload_offset = 0;
@@ -408,6 +414,10 @@ namespace lfs::io::project {
                         const ReaderOptions& options = {});
         [[nodiscard]] static OpenClassification
         classify(const std::filesystem::path& path, const ReaderOptions& options = {});
+        // Identity of the newest head with a valid checksum, read from the superblock and the head slots only.
+        // The commit it names is not validated; a full open can still select an older head.
+        [[nodiscard]] static lfs::Result<ProjectHeadIdentity>
+        read_head_identity(const std::filesystem::path& path);
 
         ProjectReader(ProjectReader&&) noexcept;
         ProjectReader& operator=(ProjectReader&&) noexcept;

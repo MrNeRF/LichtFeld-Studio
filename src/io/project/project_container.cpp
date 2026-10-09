@@ -2837,6 +2837,56 @@ namespace lfs::io::project {
         return ProjectReader(std::make_shared<Impl>(std::move(state)));
     }
 
+    lfs::Result<ProjectHeadIdentity>
+    ProjectReader::read_head_identity(const std::filesystem::path& path) {
+        auto file_result = detail::NativeFile::open_read(path);
+        if (!file_result) {
+            return std::move(file_result).error();
+        }
+        const auto file = *file_result;
+        auto size_result = file->size();
+        if (!size_result) {
+            return std::move(size_result).error();
+        }
+        const std::uint64_t physical_size = *size_result;
+        auto superblock = parse_superblock(*file, physical_size);
+        if (!superblock) {
+            return std::move(superblock).error();
+        }
+        std::optional<ProjectHeadIdentity> newest;
+        std::uint64_t newest_sequence = 0;
+        for (std::uint32_t slot_id = 0; slot_id < HEAD_SLOT_OFFSETS.size(); ++slot_id) {
+            auto raw = read_fixed<HEAD_SLOT_BYTES>(
+                *file, HEAD_SLOT_OFFSETS[slot_id], physical_size, physical_size,
+                std::format("head[{}]", slot_id));
+            if (!raw) {
+                continue;
+            }
+            const auto bytes = byte_span(*raw);
+            if (!bytes_equal(bytes, 0, HEAD_MAGIC) ||
+                read_u32(bytes, 4092) != crc32c(0, raw->data(), 4092) ||
+                read_uuid(bytes, 32) != superblock->project_uuid) {
+                continue;
+            }
+            const std::uint64_t sequence = read_u64(bytes, 16);
+            if (newest && sequence <= newest_sequence) {
+                continue;
+            }
+            newest_sequence = sequence;
+            newest = ProjectHeadIdentity{
+                .project_uuid = superblock->project_uuid,
+                .commit_uuid = read_uuid(bytes, 64),
+                .generation = read_u64(bytes, 24),
+            };
+        }
+        if (!newest) {
+            return detail::project_error(lfs::ErrorCode::DataLoss,
+                                         "The project container is corrupt.",
+                                         "no head slot has a valid checksum", path);
+        }
+        return *newest;
+    }
+
     OpenClassification
     ProjectReader::classify(const std::filesystem::path& path,
                             const ReaderOptions& options) {

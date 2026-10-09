@@ -766,6 +766,19 @@ namespace lfs::python {
             .def_ro("card", &project::ProjectRepairResult::card)
             .def_ro("saves_recovered", &project::ProjectRepairResult::saves_recovered);
 
+        nb::class_<project::ProjectHeadIdentity>(m, "ProjectHeadIdentity")
+            .def_prop_ro("project_uuid", [](const project::ProjectHeadIdentity& head) { return head.project_uuid.to_string(); })
+            .def_prop_ro("commit_uuid", [](const project::ProjectHeadIdentity& head) { return head.commit_uuid.to_string(); })
+            .def_ro("generation", &project::ProjectHeadIdentity::generation);
+
+        m.def("inspect_project_head", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<project::ProjectHeadIdentity>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::ProjectReader::read_head_identity(path);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), "Read the project and commit identity from the head slots without opening the project.");
+
         m.def("classify_project", [](const std::filesystem::path& path) {
             std::optional<project::OpenClassification> result;
             {
