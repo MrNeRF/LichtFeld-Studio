@@ -404,8 +404,13 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
                     const float value = clamp(alpha / max(opacity, 1e-8f), 0.f, 1.f);
                     if (value < means[j].w)
                         continue;
-                    if (colors[j].w > 0)
-                        alpha = 1.f - pow(max(0.f, 1.f - value), colors[j].w);
+                    if (colors[j].w > 0) {
+                        // 1 - (1 - value)^density. GPU log is only absolutely accurate near 1, which
+                        // drops the faint tail of dense splats, so -log(1 - value) uses its series there.
+                        const float tail = value < .015625f ? value * (1.f + value * (.5f + value * (1.f / 3.f + value * .25f)))
+                                                            : -log(max(1.f - value, 1e-30f));
+                        alpha = 1.f - exp(-colors[j].w * tail);
+                    }
                 }
                 alpha = min(alpha, .999f);
                 if (half_footprint) {
