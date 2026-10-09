@@ -1354,9 +1354,18 @@ namespace lfs::vis::gui {
 
         const auto state = controller_.currentCameraState();
         auto& vp = viewer_->getViewport();
-        vp.setViewMatrix(glm::mat3_cast(state.rotation), state.position);
-        rm->setFocalLength(state.focal_length_mm);
-        rm->markCameraPoseChanged();
+        const auto rotation = glm::mat3_cast(state.rotation);
+        const bool pose_changed = vp.camera.R != rotation || vp.camera.t != state.position;
+        vp.setViewMatrix(rotation, state.position);
+        const float focal_length = std::clamp(state.focal_length_mm,
+                                              lfs::rendering::MIN_FOCAL_LENGTH_MM,
+                                              lfs::rendering::MAX_FOCAL_LENGTH_MM);
+        // The visible panel also follows a paused/stopped playhead. Reapplying
+        // its unchanged camera must not keep the render-on-demand loop awake.
+        if (rm->getFocalLengthMm() != focal_length)
+            rm->setFocalLength(focal_length);
+        if (pose_changed)
+            rm->markCameraPoseChanged();
         return true;
     }
 
