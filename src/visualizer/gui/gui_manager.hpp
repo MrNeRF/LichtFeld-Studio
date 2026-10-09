@@ -558,6 +558,8 @@ namespace lfs::vis {
             DevResourceWatchState dev_resource_watch_;
             bool pending_localization_ui_refresh_ = false;
             std::uint64_t localized_rml_language_generation_ = std::numeric_limits<std::uint64_t>::max();
+            mutable std::filesystem::path random_init_preview_cached_init_path_;
+            mutable bool random_init_preview_has_gaussian_init_ = false;
 
             // Native ErrorBus surfacing (Phase 8). Declared last so
             // error_subscription_ unsubscribes before any other member (the

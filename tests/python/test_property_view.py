@@ -333,6 +333,33 @@ EXPECTED_NUMBER_ROWS = {
         10.0,
         False,
     ),
+    "init_origin_x": (
+        "training.init.origin_x",
+        "training.tooltip.origin_x",
+        3,
+        0.1,
+        -1_000_000.0,
+        1_000_000.0,
+        False,
+    ),
+    "init_origin_y": (
+        "training.init.origin_y",
+        "training.tooltip.origin_y",
+        3,
+        0.1,
+        -1_000_000.0,
+        1_000_000.0,
+        False,
+    ),
+    "init_origin_z": (
+        "training.init.origin_z",
+        "training.tooltip.origin_z",
+        3,
+        0.1,
+        -1_000_000.0,
+        1_000_000.0,
+        False,
+    ),
     "min_opacity": (
         "training.thresholds.min_opacity",
         "training.tooltip.min_opacity",
@@ -577,13 +604,13 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 67
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 67
+    assert len(property_view.MIGRATED_PROP_IDS) == 70
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 70
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 94  # Backend has a bespoke selector.
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 97  # Backend has a bespoke selector.
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 

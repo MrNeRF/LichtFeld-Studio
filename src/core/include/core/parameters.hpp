@@ -386,6 +386,9 @@ namespace lfs::core {
             bool random = false;        // Use random initialization instead of SfM
             int init_num_pts = 100'000; // Number of random points to initialize
             float init_extent = 3.0f;   // Extent of random point cloud
+            float init_origin_x = 0.0f; // Center of random initialization volume
+            float init_origin_y = 0.0f;
+            float init_origin_z = 0.0f;
 
             // Sparsity optimization parameters
             bool enable_sparsity = false;

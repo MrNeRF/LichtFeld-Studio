@@ -2322,12 +2322,22 @@ namespace lfs::core {
                     num_points = capacity;
                 }
                 const float extent = params.optimization.init_extent;
+                const Tensor origin = Tensor::from_vector(
+                    std::vector<float>{params.optimization.init_origin_x,
+                                       params.optimization.init_origin_y,
+                                       params.optimization.init_origin_z},
+                    {1, 3}, Device::GPU);
 
-                LOG_DEBUG("  Using random initialization: num_points={}, extent={}", num_points, extent);
+                LOG_DEBUG("  Using random initialization: num_points={}, extent={}, origin=({}, {}, {})",
+                          num_points, extent,
+                          params.optimization.init_origin_x,
+                          params.optimization.init_origin_y,
+                          params.optimization.init_origin_z);
                 positions = (Tensor::rand({static_cast<size_t>(num_points), 3}, Device::GPU)
                                  .mul(2.0f)
                                  .sub(1.0f))
-                                .mul(extent);
+                                .mul(extent)
+                                .add(origin);
                 colors = Tensor::rand({static_cast<size_t>(num_points), 3}, Device::GPU);
                 LOG_DEBUG("  Random positions created: shape={}, numel={}", positions.shape().str(), positions.numel());
                 LOG_DEBUG("  Random colors created: shape={}, numel={}", colors.shape().str(), colors.numel());
@@ -2462,7 +2472,7 @@ namespace lfs::core {
 
             if (capacity > 0) {
                 // Fill the preallocated parameters in place so the pool sees no full-size temporaries.
-                means_.copy_from(params.optimization.random ? positions.mul(scene_scale) : positions);
+                means_.copy_from(positions);
 
                 if (lfs::core::param::is_mrnf_strategy(params.optimization.strategy)) {
                     if (num_points >= 3)
@@ -2494,12 +2504,7 @@ namespace lfs::core {
                 }
             } else {
                 // No capacity specified - use pool
-                Tensor means_temp;
-                if (params.optimization.random) {
-                    means_temp = positions.mul(scene_scale).gpu();
-                } else {
-                    means_temp = positions.gpu();
-                }
+                Tensor means_temp = positions.gpu();
 
                 Tensor scaling_temp;
                 if (lfs::core::param::is_mrnf_strategy(params.optimization.strategy)) {

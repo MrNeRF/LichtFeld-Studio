@@ -69,6 +69,7 @@
 #include "tools/align_tool.hpp"
 
 #include "core/camera_metrics.hpp"
+#include "core/data_loading_service.hpp"
 #include "core/events.hpp"
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
@@ -90,6 +91,7 @@
 #include "tools/selection_tool.hpp"
 #if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
+#include "training/training_setup.hpp"
 #endif
 #include "core/training_manager.hpp"
 #include "visualizer/app_store.hpp"
@@ -1684,6 +1686,60 @@ namespace lfs::vis::gui {
                                         corners[static_cast<size_t>(b)],
                                         color, thickness);
             }
+        }
+
+        void appendProjectedCenterCross(ViewportFrameDesc& params,
+                                        const VulkanGuideView& guide_view,
+                                        const RenderSettings& settings,
+                                        const glm::vec3& world,
+                                        const glm::vec4& color) {
+            const auto projected = projectSegmentToScreenClipped(
+                guide_view, settings, world, world);
+            if (!projected)
+                return;
+
+            constexpr float kHalfSize = 6.0f;
+            constexpr float kThickness = 2.0f;
+            appendShapeOverlayLine(params.shape_overlay_triangles,
+                                   params,
+                                   projected->a - glm::vec2(kHalfSize, 0.0f),
+                                   projected->a + glm::vec2(kHalfSize, 0.0f),
+                                   color,
+                                   kThickness);
+            appendShapeOverlayLine(params.shape_overlay_triangles,
+                                   params,
+                                   projected->a - glm::vec2(0.0f, kHalfSize),
+                                   projected->a + glm::vec2(0.0f, kHalfSize),
+                                   color,
+                                   kThickness);
+        }
+
+        void appendRandomInitializationPreview(
+            ViewportFrameDesc& params,
+            const VulkanGuideView& guide_view,
+            const RenderSettings& settings,
+            const lfs::core::param::OptimizationParameters& optimization,
+            const glm::mat4& model_to_world) {
+            const glm::vec3 origin(
+                optimization.init_origin_x,
+                optimization.init_origin_y,
+                optimization.init_origin_z);
+            const glm::vec3 extent(optimization.init_extent);
+            constexpr glm::vec4 kPreviewColor(0.45f, 0.78f, 1.0f, 1.0f);
+            appendProjectedBox(params,
+                               guide_view,
+                               settings,
+                               origin - extent,
+                               origin + extent,
+                               model_to_world,
+                               kPreviewColor,
+                               2.0f);
+            appendProjectedCenterCross(
+                params,
+                guide_view,
+                settings,
+                glm::vec3(model_to_world * glm::vec4(origin, 1.0f)),
+                kPreviewColor);
         }
 
         [[nodiscard]] glm::vec4 cropGuideColor(const glm::vec3& base_color,
@@ -5495,6 +5551,41 @@ namespace lfs::vis::gui {
                                                scene_manager,
                                                overlay_scene_state ? &*overlay_scene_state : nullptr,
                                                gizmo_state);
+                if (scene_manager && scene_manager->hasDataset() &&
+                    viewer_->getEditorContext().forcePointCloudMode()) {
+                    if (const auto* const parameter_manager = viewer_->getParameterManager();
+                        parameter_manager && parameter_manager->isLoaded()) {
+#if LFS_BUILD_TRAINER
+                        const auto optimization = parameter_manager->copyActiveParams();
+                        const auto& training_params = viewer_->getDataLoader()->getParameters();
+                        const auto init_path = training_params.init_path
+                                                   ? lfs::core::utf8_to_path(*training_params.init_path)
+                                                   : std::filesystem::path{};
+                        if (init_path != random_init_preview_cached_init_path_) {
+                            random_init_preview_cached_init_path_ = init_path;
+                            random_init_preview_has_gaussian_init_ =
+                                lfs::training::gaussianSplatInitPath(training_params).has_value();
+                        }
+                        if (optimization.random && !random_init_preview_has_gaussian_init_) {
+                            glm::mat4 model_to_world =
+                                lfs::rendering::DATA_TO_VISUALIZER_WORLD_AXES_4;
+                            const auto& scene = scene_manager->getScene();
+                            for (const auto* node : scene.getNodes()) {
+                                if (node && node->type == lfs::core::NodeType::POINTCLOUD &&
+                                    node->point_cloud) {
+                                    model_to_world = lfs::vis::scene_coords::nodeVisualizerWorldTransform(
+                                        scene, node->id);
+                                    break;
+                                }
+                            }
+                            for (const auto& guide_view : collectVulkanGuideViews(camera, layout)) {
+                                appendRandomInitializationPreview(
+                                    params, guide_view, settings, optimization, model_to_world);
+                            }
+                        }
+#endif
+                    }
+                }
                 appendVulkanViewportGizmoOverlay(params,
                                                  *viewer_, camera, layout,
                                                  current_ui_scale_,
