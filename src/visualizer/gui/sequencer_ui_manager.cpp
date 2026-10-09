@@ -1250,6 +1250,15 @@ namespace lfs::vis::gui {
         auto& scene = scene_manager->getScene();
         const size_t frame_count = sequence->frames.size();
         const size_t budget = std::min(MAX_STREAM_RESIDENT_FRAMES, frame_count);
+        if (loaded_ply_sequence_frames_.size() <= budget)
+            return;
+
+        // Selection offsets change when a preceding frame is unloaded. Retain
+        // selected payloads and restore their masks after the topology changes.
+        const auto selection = scene.hasSelection() ? scene.capturePerNodeSelectionSlices()
+                                                    : core::Scene::PerNodeSelectionSlices{};
+        core::Scene::Transaction transaction(scene);
+        bool evicted = false;
         while (loaded_ply_sequence_frames_.size() > budget) {
             auto victim_it = loaded_ply_sequence_frames_.end();
             bool victim_outside_window = false;
@@ -1263,6 +1272,19 @@ namespace lfs::vis::gui {
                     continue;
                 }
 
+                const auto& frame = sequence->frames[candidate];
+                const auto resolved = resolvePlySequenceNode(scene, frame.node_uuid, frame.node_name);
+                if (!resolved)
+                    continue;
+                const auto* node = scene.getNodeById(*resolved);
+                assert(node);
+                const auto source = scene_manager->getPlyPath(node->uuid);
+                // Reload uses frame.path, so a missing or changed source cannot
+                // recover this payload. Edited frames must stay resident too.
+                if (node->payload_diverged || selection.contains(node->uuid) ||
+                    frame.path.empty() || !source || *source != frame.path)
+                    continue;
+
                 const bool outside_window = !isPlySequenceFrameInWindow(candidate, keep_frame_index, frame_count);
                 const size_t distance = plySequenceFrameDistance(candidate, keep_frame_index, frame_count);
                 if (victim_it == loaded_ply_sequence_frames_.end() ||
@@ -1274,8 +1296,9 @@ namespace lfs::vis::gui {
                 }
             }
 
+            // Protected payloads may exceed the soft residency budget.
             if (victim_it == loaded_ply_sequence_frames_.end())
-                return;
+                break;
 
             const size_t victim = *victim_it;
             loaded_ply_sequence_frames_.erase(victim_it);
@@ -1293,12 +1316,15 @@ namespace lfs::vis::gui {
             assert(victim_node);
             auto old_model = scene.swapNodeModel(victim_node->name, nullptr);
             old_model.reset();
+            evicted = true;
             scene.setNodeVisibility(*resolved_node, false);
             std::lock_guard lock(ply_stream_mutex_);
             if (victim < ply_stream_states_.size())
                 ply_stream_states_[victim] = PlyStreamFrameState::Empty;
             ++ply_stream_eviction_count_;
         }
+        if (evicted && !selection.empty())
+            scene.applyPerNodeSelectionSlices(selection);
     }
 
     float SequencerUIManager::advancePanelClock() {

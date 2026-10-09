@@ -41,6 +41,7 @@ namespace lfs::vis {
     class SequencerFrameDemandTest_ApplyCurrentViewRecordsHistory_Test;
     class VisualizerImpl;
     class SequencerPreviewLayoutTest;
+    class SequencerFrameIntegrityTest;
     class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
     class SequencerFrameDemandTest_ReportsFrameFailureUntilSuccessfulRetry_Test;
 
@@ -89,6 +90,7 @@ namespace lfs::vis {
         private:
             friend class lfs::vis::SequencerFrameDemandTest_ApplyCurrentViewRecordsHistory_Test;
             friend class lfs::vis::SequencerPreviewLayoutTest;
+            friend class lfs::vis::SequencerFrameIntegrityTest;
             friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
             friend class lfs::vis::SequencerFrameDemandTest_ReportsFrameFailureUntilSuccessfulRetry_Test;
 

@@ -2553,3 +2553,133 @@ namespace lfs::vis {
         RecordProperty("median_position_ns", std::to_string(samples[samples.size() / 2]));
     }
 } // namespace lfs::vis
+
+namespace lfs::vis {
+
+    class SequencerFrameIntegrityTest : public ::SequencerHistoryRegressionTest {
+    protected:
+        static constexpr size_t FRAME_COUNT = 66;
+
+        void populate(VisualizerImpl& viewer) {
+            auto& manager = *viewer.getSceneManager();
+            auto& scene = manager.getScene();
+            auto& sequencer = viewer.getGuiManager()->sequencerUI();
+            std::vector<std::filesystem::path> paths;
+            std::vector<std::string> names;
+            std::vector<core::Uuid> uuids;
+            for (size_t i = 0; i < FRAME_COUNT; ++i) {
+                const auto name = std::format("frame_{}", i);
+                const auto path = temporary_.path / (name + ".ply");
+                const auto id = scene.addSplat(name, lfs::test::licht::make_splat(1));
+                ASSERT_NE(id, core::NULL_NODE);
+                const auto uuid = scene.getNodeById(id)->uuid;
+                manager.setPlyPath(uuid, path);
+                paths.push_back(path);
+                names.push_back(name);
+                uuids.push_back(uuid);
+                sequencer.loaded_ply_sequence_frames_.push_back(i);
+            }
+            sequencer.controller().setPlySequence(temporary_.path, "sequence", std::move(paths),
+                                                  std::move(names), 1.0f, {}, std::move(uuids));
+            sequencer.ply_stream_states_.assign(FRAME_COUNT, gui::SequencerUIManager::PlyStreamFrameState::Resident);
+            sequencer.last_ply_sequence_frame_ = 1;
+        }
+
+        static void evict(VisualizerImpl& viewer) {
+            viewer.getGuiManager()->sequencerUI().evictPlySequenceFrames(0);
+        }
+
+        static size_t residentCount(VisualizerImpl& viewer) {
+            return viewer.getGuiManager()->sequencerUI().loaded_ply_sequence_frames_.size();
+        }
+    };
+
+    TEST_F(SequencerFrameIntegrityTest, EvictionPreservesEditedFramesAndStillReclaimsCleanFrames) {
+        VisualizerImpl viewer(options());
+        populate(viewer);
+        auto& scene = viewer.getSceneManager()->getScene();
+        const auto* edited = scene.getNode("frame_65");
+        ASSERT_NE(edited, nullptr);
+        const auto* original = edited->model.get();
+        scene.markPayloadDiverged(edited->id);
+        evict(viewer);
+        EXPECT_EQ(edited->model.get(), original);
+        EXPECT_TRUE(edited->payload_diverged);
+        EXPECT_EQ(residentCount(viewer), 64u);
+        EXPECT_EQ(scene.getNode("frame_64")->model, nullptr);
+        EXPECT_EQ(scene.getNode("frame_63")->model, nullptr);
+        EXPECT_NE(scene.getNode("frame_0")->model, nullptr);
+        EXPECT_NE(scene.getNode("frame_1")->model, nullptr);
+    }
+
+    TEST_F(SequencerFrameIntegrityTest, RenamedEditedFramesAreProtectedByUuid) {
+        VisualizerImpl viewer(options());
+        populate(viewer);
+        auto& scene = viewer.getSceneManager()->getScene();
+        const auto* frame = scene.getNode("frame_65");
+        const auto* original = frame->model.get();
+        scene.markPayloadDiverged(frame->id);
+        ASSERT_TRUE(scene.renameNode(frame->id, "renamed_frame"));
+        evict(viewer);
+        EXPECT_EQ(frame->model.get(), original);
+        EXPECT_EQ(residentCount(viewer), 64u);
+    }
+
+    TEST_F(SequencerFrameIntegrityTest, EvictionPreservesSelectedFrameAndItsMaskAcrossOffsetChanges) {
+        VisualizerImpl viewer(options());
+        populate(viewer);
+        auto& scene = viewer.getSceneManager()->getScene();
+        const auto* selected = scene.getNode("frame_65");
+        const auto* original = selected->model.get();
+        std::vector<int> values(FRAME_COUNT, 0);
+        values.back() = 1;
+        auto mask = core::Tensor::from_vector(values, core::TensorShape{FRAME_COUNT}, core::Device::CPU)
+                        .to(core::DataType::UInt8);
+        scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(mask)));
+        evict(viewer);
+        EXPECT_EQ(selected->model.get(), original);
+        EXPECT_EQ(residentCount(viewer), 64u);
+        const auto slices = scene.capturePerNodeSelectionSlices();
+        ASSERT_EQ(slices.size(), 1u);
+        ASSERT_TRUE(slices.contains(selected->uuid));
+        EXPECT_EQ(slices.at(selected->uuid).count_nonzero(), 1u);
+    }
+
+    TEST_F(SequencerFrameIntegrityTest, EvictionPreservesFramesWhoseSourceChanged) {
+        VisualizerImpl viewer(options());
+        populate(viewer);
+        auto& manager = *viewer.getSceneManager();
+        auto& scene = manager.getScene();
+        const auto* frame = scene.getNode("frame_65");
+        const auto* original = frame->model.get();
+        manager.setPlyPath(frame->uuid, temporary_.path / "replacement.ply");
+        evict(viewer);
+        EXPECT_EQ(frame->model.get(), original);
+        EXPECT_EQ(residentCount(viewer), 64u);
+    }
+
+    TEST_F(SequencerFrameIntegrityTest, EvictionPreservesFramesWithoutSourceMetadata) {
+        VisualizerImpl viewer(options());
+        populate(viewer);
+        auto& manager = *viewer.getSceneManager();
+        const auto* frame = manager.getScene().getNode("frame_65");
+        const auto* original = frame->model.get();
+        manager.clearPlyPath(frame->uuid);
+        evict(viewer);
+        EXPECT_EQ(frame->model.get(), original);
+        EXPECT_EQ(residentCount(viewer), 64u);
+    }
+
+    TEST_F(SequencerFrameIntegrityTest, ProtectedFramesMayExceedTheSoftBudget) {
+        VisualizerImpl viewer(options());
+        populate(viewer);
+        auto& scene = viewer.getSceneManager()->getScene();
+        for (size_t i = 0; i < FRAME_COUNT; ++i)
+            scene.markPayloadDiverged(scene.getNode(std::format("frame_{}", i))->id);
+        evict(viewer);
+        EXPECT_EQ(residentCount(viewer), FRAME_COUNT);
+        for (size_t i = 0; i < FRAME_COUNT; ++i)
+            EXPECT_NE(scene.getNode(std::format("frame_{}", i))->model, nullptr);
+    }
+
+} // namespace lfs::vis
