@@ -2316,15 +2316,20 @@ namespace lfs::vis::gui {
         for (; entry != end; entry.increment(ec)) {
             if (ec)
                 return directory_error();
-            const bool regular_file = entry->is_regular_file(ec);
-            if (ec)
-                return directory_error();
-            if (!regular_file)
-                continue;
             auto ext = entry->path().extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(),
                            [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (ext == ".ply")
+            if (ext != ".ply")
+                continue;
+            const bool regular_file = entry->is_regular_file(ec);
+            // A dangling link or an entry removed since the listing is not a frame.
+            if (ec == std::errc::no_such_file_or_directory) {
+                ec.clear();
+                continue;
+            }
+            if (ec)
+                return directory_error();
+            if (regular_file)
                 paths.push_back(entry->path());
         }
         if (ec)

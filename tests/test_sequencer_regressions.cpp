@@ -2811,6 +2811,26 @@ namespace lfs::vis {
         expectRejectedImportPreservesState(viewer, directory);
     }
 
+    TEST_F(SequencerFrameIntegrityTest, DanglingPlyLinkDoesNotRejectTheImport) {
+        const auto directory = temporary_.path / "with_dangling_link";
+        ASSERT_TRUE(std::filesystem::create_directory(directory));
+        std::ofstream(directory / "frame_1.ply") << "invalid payload";
+        std::ofstream(directory / "frame_3.ply") << "invalid payload";
+        std::error_code ec;
+        std::filesystem::create_symlink(directory / "missing.ply", directory / "frame_2.ply", ec);
+        if (ec)
+            GTEST_SKIP() << "symbolic links unavailable: " << ec.message();
+        VisualizerImpl viewer(options());
+        auto& sequencer = viewer.getGuiManager()->sequencerUI();
+        ASSERT_TRUE(sequencer.loadPlySequenceFromDirectory(directory, 12.0f));
+        stopStreaming(viewer);
+        const auto* sequence = sequencer.controller().plySequence();
+        ASSERT_NE(sequence, nullptr);
+        ASSERT_EQ(sequence->frames.size(), 2u);
+        EXPECT_EQ(sequence->frames[0].path, directory / "frame_1.ply");
+        EXPECT_EQ(sequence->frames[1].path, directory / "frame_3.ply");
+    }
+
     TEST_F(SequencerFrameIntegrityTest, AcceptedImportKeepsAsynchronousDecodeAndFrameOrder) {
         const auto directory = temporary_.path / "incoming";
         ASSERT_TRUE(std::filesystem::create_directory(directory));
