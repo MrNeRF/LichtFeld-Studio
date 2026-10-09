@@ -67,8 +67,9 @@ namespace lfs::vis::gui {
     } // namespace
 
     std::expected<VideoExportSceneSnapshot, std::string> captureVideoExportSceneSnapshot(
-        const lfs::vis::SceneManager& scene_manager) {
+        const lfs::vis::SceneManager& scene_manager, const VideoExportCapture capture) {
         VideoExportSceneSnapshot snapshot;
+        const bool owned = capture == VideoExportCapture::Owned;
 
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
         const auto render_state = scene_manager.buildRenderState({.current_geometry = true});
@@ -76,8 +77,12 @@ namespace lfs::vis::gui {
 
         if (const auto* const model = scene_manager.getModelForRendering();
             model && model->size() > 0) {
-            snapshot.combined_model = std::make_shared<lfs::core::SplatData>(model->clone());
-            if (auto allocator = lfs::vis::makeViewerSplatTensorAllocator()) {
+            if (owned) {
+                snapshot.combined_model = std::make_shared<lfs::core::SplatData>(model->clone());
+            } else {
+                snapshot.borrowed_model = model;
+            }
+            if (auto allocator = owned ? lfs::vis::makeViewerSplatTensorAllocator() : lfs::io::SplatTensorAllocator{}) {
                 if (auto migrated = lfs::io::migrateSplatTensorsToAllocator(*snapshot.combined_model, allocator);
                     !migrated) {
                     return std::unexpected(std::string(LOC(lichtfeld::Strings::Runtime::VIDEO_SPLAT_PREPARATION_FAILED)) +
@@ -86,12 +91,15 @@ namespace lfs::vis::gui {
             }
             snapshot.model_transforms = render_state.model_transforms;
             snapshot.node_active_sh_degrees = render_state.node_active_sh_degrees;
-            snapshot.transform_indices = cloneOptionalTensor(render_state.transform_indices);
-            snapshot.selection_mask = cloneOptionalTensor(render_state.selection_mask);
+            snapshot.transform_indices = owned ? cloneOptionalTensor(render_state.transform_indices) : render_state.transform_indices;
+            snapshot.selection_mask = owned ? cloneOptionalTensor(render_state.selection_mask) : render_state.selection_mask;
             snapshot.selected_node_mask = render_state.selected_node_mask;
             snapshot.node_visibility_mask = render_state.node_visibility_mask;
         } else if (render_state.point_cloud && render_state.point_cloud->size() > 0) {
-            snapshot.point_cloud = clonePointCloud(*render_state.point_cloud);
+            if (owned)
+                snapshot.point_cloud = clonePointCloud(*render_state.point_cloud);
+            else
+                snapshot.borrowed_point_cloud = render_state.point_cloud;
             snapshot.point_cloud_transform = render_state.point_cloud_transform;
         }
 
@@ -100,7 +108,8 @@ namespace lfs::vis::gui {
             if (!vm.mesh)
                 continue;
             snapshot.meshes.push_back(VideoExportMeshSnapshot{
-                .mesh = cloneMeshData(*vm.mesh),
+                .mesh = owned ? cloneMeshData(*vm.mesh) : nullptr,
+                .borrowed_mesh = owned ? nullptr : vm.mesh,
                 .node_id = vm.node_id,
                 .transform = vm.transform,
                 .is_selected = vm.is_selected,

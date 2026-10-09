@@ -476,7 +476,7 @@ namespace lfs::vis::gui {
 
     SceneRenderState makeVideoExportGaussianSceneState(const VideoExportSceneSnapshot& snapshot) {
         SceneRenderState state;
-        state.combined_model = snapshot.combined_model.get();
+        state.combined_model = snapshot.gaussianModel();
         state.model_transforms = snapshot.model_transforms;
         state.node_active_sh_degrees = snapshot.node_active_sh_degrees;
         state.transform_indices = snapshot.transform_indices;
@@ -567,7 +567,7 @@ namespace lfs::vis::gui {
 
         std::optional<rendering::GpuFrame> primary_frame;
 
-        if (snapshot.combined_model && snapshot.combined_model->size() > 0) {
+        if (snapshot.gaussianModel() && snapshot.gaussianModel()->size() > 0) {
             if (render_settings.point_cloud_mode) {
                 rendering::PointCloudRenderRequest request{
                     .frame_view = frame_view,
@@ -585,7 +585,7 @@ namespace lfs::vis::gui {
                 applyVideoExportPointCloudFilters(request.filters, snapshot, render_settings);
 
                 if (!requires_composite_pass) {
-                    auto render_result = engine.renderPointCloudImage(*snapshot.combined_model, request);
+                    auto render_result = engine.renderPointCloudImage(*snapshot.gaussianModel(), request);
                     if (!render_result || !render_result->image) {
                         return std::unexpected(render_result ? LOC(lichtfeld::Strings::Runtime::RENDERED_POINT_CLOUD_INVALID)
                                                              : render_result.error());
@@ -593,7 +593,7 @@ namespace lfs::vis::gui {
                     return *render_result->image;
                 }
 
-                auto render_result = engine.renderPointCloudGpuFrame(*snapshot.combined_model, request);
+                auto render_result = engine.renderPointCloudGpuFrame(*snapshot.gaussianModel(), request);
                 if (!render_result || !render_result->valid()) {
                     return std::unexpected(render_result ? LOC(lichtfeld::Strings::Runtime::RENDERED_POINT_CLOUD_INVALID)
                                                          : render_result.error());
@@ -604,7 +604,17 @@ namespace lfs::vis::gui {
                 const auto camera_rotation = glm::mat3_cast(cam_state.rotation);
                 auto preview_image = render_environment
                                          ? rendering_manager.renderPreviewImageRgba8(
-                                               *snapshot.combined_model,
+                                               *snapshot.gaussianModel(),
+                                               std::move(scene_state),
+                                               camera_rotation,
+                                               cam_state.position,
+                                               cam_state.focal_length_mm,
+                                               width,
+                                               height)
+                                     : snapshot.borrowed_model
+                                         // Sequence switches must not inherit interactive depth-tie order.
+                                         ? rendering_manager.renderPreviewImageRgb8(
+                                               *snapshot.gaussianModel(),
                                                std::move(scene_state),
                                                camera_rotation,
                                                cam_state.position,
@@ -612,7 +622,7 @@ namespace lfs::vis::gui {
                                                width,
                                                height)
                                          : rendering_manager.renderPreviewImage(
-                                               *snapshot.combined_model,
+                                               *snapshot.gaussianModel(),
                                                std::move(scene_state),
                                                camera_rotation,
                                                cam_state.position,
@@ -639,7 +649,7 @@ namespace lfs::vis::gui {
                 }
                 primary_frame = std::move(*materialized);
             }
-        } else if (snapshot.point_cloud && snapshot.point_cloud->size() > 0) {
+        } else if (snapshot.pointCloud() && snapshot.pointCloud()->size() > 0) {
             const std::vector<glm::mat4> point_cloud_transforms = {snapshot.point_cloud_transform};
             rendering::PointCloudRenderRequest request{
                 .frame_view = frame_view,
@@ -656,7 +666,7 @@ namespace lfs::vis::gui {
                 .transparent_background = render_environment};
             applyVideoExportPointCloudFilters(request.filters, snapshot, render_settings);
 
-            auto render_result = engine.renderPointCloudGpuFrame(*snapshot.point_cloud, request);
+            auto render_result = engine.renderPointCloudGpuFrame(*snapshot.pointCloud(), request);
             if (!render_result || !render_result->valid()) {
                 return std::unexpected(render_result ? LOC(lichtfeld::Strings::Runtime::RENDERED_POINT_CLOUD_INVALID)
                                                      : render_result.error());
@@ -711,7 +721,7 @@ namespace lfs::vis::gui {
                 };
                 mesh_params.items.reserve(snapshot.meshes.size());
                 for (const auto& mesh_snapshot : snapshot.meshes) {
-                    if (!mesh_snapshot.mesh) {
+                    if (!mesh_snapshot.meshData()) {
                         return std::unexpected(
                             "Failed to render GPU mesh layer: mesh snapshot is invalid");
                     }
@@ -719,7 +729,7 @@ namespace lfs::vis::gui {
                     const auto options = makeVideoExportMeshOptions(
                         render_settings, any_selected, mesh_snapshot.is_selected);
                     mesh_params.items.push_back(VulkanMeshDrawItem{
-                        .mesh = mesh_snapshot.mesh.get(),
+                        .mesh = mesh_snapshot.meshData(),
                         .model = mesh_snapshot.transform,
                         .light_dir = options.light_dir,
                         .light_intensity = options.light_intensity,
@@ -3076,6 +3086,9 @@ namespace lfs::vis::gui {
             return;
         }
         const auto& timeline = gui_manager->sequencer().timeline();
+        const auto* sequence = gui_manager->sequencer().plySequence();
+        const auto sequence_uuid = sequence ? std::optional(sequence->node_uuid) : std::nullopt;
+        std::vector<size_t> sequence_frames;
         if (timeline.empty()) {
             fail_start(LOC(lichtfeld::Strings::Runtime::VIDEO_NO_KEYFRAMES));
             return;
@@ -3087,7 +3100,8 @@ namespace lfs::vis::gui {
             return;
         }
 
-        const auto snapshot_result = captureVideoExportSceneSnapshot(*scene_manager);
+        const auto snapshot_result = captureVideoExportSceneSnapshot(
+            *scene_manager, sequence ? VideoExportCapture::ImmediateRender : VideoExportCapture::Owned);
         if (!snapshot_result) {
             fail_start(snapshot_result.error());
             return;
@@ -3110,8 +3124,12 @@ namespace lfs::vis::gui {
         frame_states.reserve(total_frames);
         const float start_time = timeline.startTime();
         const float time_step = 1.0f / static_cast<float>(export_options.framerate);
-        for (int i = 0; i < total_frames; ++i)
-            frame_states.push_back(timeline.evaluate(start_time + static_cast<float>(i) * time_step));
+        for (int i = 0; i < total_frames; ++i) {
+            const float time = start_time + static_cast<float>(i) * time_step;
+            frame_states.push_back(timeline.evaluate(time));
+            if (sequence)
+                sequence_frames.push_back(*gui_manager->sequencer().plySequenceFrameIndex(time));
+        }
 
         if (!beginJob(
                 video_export_state_.job,
@@ -3140,20 +3158,23 @@ namespace lfs::vis::gui {
         video_export_state_.thread.emplace(
             [this, job, viewer = viewer_, path, export_options, total_frames, width, height,
              engine, scene_manager, rendering_manager, render_settings, start_time, time_step,
+             sequence_uuid, sequence_frames = std::move(sequence_frames),
              environment_state = video_export_environment_state_.get(),
              mesh_renderer_state = video_export_mesh_renderer_state_.get(),
-             snapshot = *snapshot_result,
+             snapshot = sequence_uuid ? VideoExportSceneSnapshot{} : *snapshot_result,
              frame_states = std::move(frame_states)](std::stop_token stop_token) mutable {
                 jobs_.work(job);
                 bool cancelled = false;
                 std::string error_msg;
-                auto cleanup_video_export_state = [this, viewer]() {
+                auto cleanup_video_export_state = [this, viewer, sequence_uuid]() {
                     if (!video_export_environment_state_ && !video_export_mesh_renderer_state_) {
                         return;
                     }
                     auto cleanup_result = postToViewerAndWait(
                         viewer,
-                        [this]() -> std::expected<void, std::string> {
+                        [this, viewer, sequence_uuid]() -> std::expected<void, std::string> {
+                            if (sequence_uuid)
+                                viewer->getGuiManager()->sequencerUI().finishPlySequenceExport();
                             resetVideoExportMeshRendererState();
                             resetVideoExportEnvironmentState();
                             return {};
@@ -3212,33 +3233,73 @@ namespace lfs::vis::gui {
                         break;
                     }
 
-                    auto frame_tensor = postToViewerAndWait(
-                        viewer,
-                        [viewer, engine, scene_manager, rendering_manager, environment_state,
-                         mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, width, height,
-                         cam_state = frame_states[frame],
-                         clip_time = start_time + static_cast<float>(frame) * time_step]()
-                            -> std::expected<lfs::core::Tensor, std::string> {
-                            if (lfs::python::has_scene_time_callback()) {
-                                lfs::python::tick_scene_time_callback(clip_time);
-                                refreshVideoExportMeshTransforms(
-                                    *snapshot_ptr, scene_manager->getScene());
-                            }
-                            auto* const window_manager = viewer->getWindowManager();
-                            auto* const vulkan_context =
-                                window_manager != nullptr ? window_manager->getVulkanContext() : nullptr;
-                            return renderVideoExportFrame(
-                                *rendering_manager,
-                                *engine,
-                                *environment_state,
-                                mesh_renderer_state,
-                                vulkan_context,
-                                *snapshot_ptr,
-                                render_settings,
-                                cam_state,
-                                width,
-                                height);
-                        });
+                    const auto render_frame = [&] {
+                        return postToViewerAndWait(
+                            viewer,
+                            [viewer, engine, scene_manager, rendering_manager, environment_state,
+                             mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, width, height, sequence_uuid, sequence_frame = sequence_uuid ? sequence_frames[frame] : 0,
+                             cam_state = frame_states[frame],
+                             clip_time = start_time + static_cast<float>(frame) * time_step]() mutable
+                                -> std::expected<lfs::core::Tensor, std::string> {
+                                if (sequence_uuid) {
+                                    auto& sequencer_ui = viewer->getGuiManager()->sequencerUI();
+                                    const auto* current = sequencer_ui.controller().plySequence();
+                                    if (!current || current->node_uuid != *sequence_uuid)
+                                        return std::unexpected("PLY sequence changed during video export");
+                                    auto ready = sequencer_ui.preparePlySequenceExportFrame(sequence_frame);
+                                    if (!ready)
+                                        return std::unexpected(std::string(ready.error().user_message()));
+                                    if (!*ready)
+                                        return lfs::core::Tensor{};
+                                }
+                                if (lfs::python::has_scene_time_callback()) {
+                                    lfs::python::tick_scene_time_callback(clip_time);
+                                    refreshVideoExportMeshTransforms(
+                                        *snapshot_ptr, scene_manager->getScene());
+                                }
+                                // Borrow only inside this synchronous viewer-thread render; no
+                                // per-frame Gaussian clone or retained live pointer.
+                                std::optional<VideoExportSceneSnapshot> sequence_snapshot;
+                                if (sequence_uuid) {
+                                    auto current = captureVideoExportSceneSnapshot(*scene_manager, VideoExportCapture::ImmediateRender);
+                                    if (!current)
+                                        return std::unexpected(current.error());
+                                    sequence_snapshot = std::move(*current);
+                                    snapshot_ptr = &*sequence_snapshot;
+                                }
+                                auto* const window_manager = viewer->getWindowManager();
+                                auto* const vulkan_context =
+                                    window_manager != nullptr ? window_manager->getVulkanContext() : nullptr;
+                                return renderVideoExportFrame(
+                                    *rendering_manager,
+                                    *engine,
+                                    *environment_state,
+                                    mesh_renderer_state,
+                                    vulkan_context,
+                                    *snapshot_ptr,
+                                    render_settings,
+                                    cam_state,
+                                    width,
+                                    height);
+                            });
+                    };
+                    auto frame_tensor = render_frame();
+                    const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+                    // No viewer-thread wait: let the player drain asynchronous frame loads.
+                    while (frame_tensor && !frame_tensor->is_valid()) {
+                        if (stop_token.stop_requested() || jobs_.cancelRequested(job)) {
+                            cancelled = true;
+                            break;
+                        }
+                        if (std::chrono::steady_clock::now() >= deadline) {
+                            frame_tensor = std::unexpected("Timed out loading PLY sequence frame for video export");
+                            break;
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        frame_tensor = render_frame();
+                    }
+                    if (cancelled)
+                        break;
 
                     if (!frame_tensor) {
                         LOG_ERROR("Failed to render frame {}: {}", frame, frame_tensor.error());

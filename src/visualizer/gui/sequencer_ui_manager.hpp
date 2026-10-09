@@ -43,6 +43,8 @@ namespace lfs::vis {
     class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
     class SequencerFrameDemandTest_ReportsFrameFailureUntilSuccessfulRetry_Test;
 
+    class SequencerFrameDemandTest_ExportUsesExactFrameAndRestoresPlayback_Test;
+
     namespace gui {
 
         class LFS_VIS_API SequencerUIManager {
@@ -61,6 +63,9 @@ namespace lfs::vis {
             void destroyGraphicsResources();
             void tickPlaybackBeforeSceneRender();
             [[nodiscard]] bool scrubToTime(float time, bool update_camera);
+            // False means the exact frame is still streaming; never export a fallback.
+            [[nodiscard]] lfs::Result<bool> preparePlySequenceExportFrame(size_t frame);
+            void finishPlySequenceExport();
             lfs::Result<void> loadPlySequenceFromDirectory(
                 const std::filesystem::path& directory, float fps = 0.0f);
 
@@ -83,6 +88,8 @@ namespace lfs::vis {
             friend class lfs::vis::SequencerFrameDemandTest_ApplyCurrentViewRecordsHistory_Test;
             friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
             friend class lfs::vis::SequencerFrameDemandTest_ReportsFrameFailureUntilSuccessfulRetry_Test;
+
+            friend class lfs::vis::SequencerFrameDemandTest_ExportUsesExactFrameAndRestoresPlayback_Test;
             void renderSequencerPanel(const UIContext& ctx, const ViewportLayout& viewport,
                                       float panel_x, float panel_y, float panel_width,
                                       float panel_height, const PanelInputState& panel_input);
@@ -93,6 +100,10 @@ namespace lfs::vis {
                                         sequencer::KeyframeId id, float duration_before);
             bool updateKeyframeFromView(sequencer::KeyframeId id, const sequencer::CameraState& view_state);
             void applyPlySequenceFrame();
+            [[nodiscard]] std::optional<size_t> requestedPlySequenceFrame() const {
+                return export_ply_frame_ ? export_ply_frame_ : controller_.currentPlySequenceFrameIndex();
+            }
+            std::optional<size_t> export_ply_frame_;
             void startPlySequenceStreaming(std::vector<std::filesystem::path> paths,
                                            lfs::io::SplatTensorAllocator allocator);
             void stopPlySequenceStreaming();
