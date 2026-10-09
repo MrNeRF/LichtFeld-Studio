@@ -22,6 +22,7 @@ struct GsplatRasterParams {
     Ptr<uint, Access.ReadWrite> depths;
     uint count, width, height, tiles_x, tiles_y, mode;
     Ptr<uint, Access.ReadWrite> control;
+    Ptr<float, Access.ReadWrite> normal, rays;
 };
 struct ControlParams {
     Ptr<int64_t, Access.Read> ends;
@@ -39,6 +40,7 @@ struct Push {
 [SpecializationConstant] const uint stage = 0;
 groupshared float4 m0[64], m1[64], m2[64], colors[64];
 groupshared float opacity[64];
+groupshared float3 normals[64];
 groupshared uint finished[256];
 groupshared int64_t prefix[256];
 void raster(GsplatRasterParams p, uint tile, uint lane) {
@@ -54,6 +56,7 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
             if (p.image != 0)
                 for (uint c = 0; c < 3; ++c) p.image[c * plane + pixel] = 0;
             if (p.depth != 0) p.depth[pixel] = 0;
+            if (p.normal != 0) for(uint c=0;c<3;++c) p.normal[c*plane+pixel]=0;
         }
         return;
     }
@@ -62,7 +65,7 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
     bool done = !inside || !ray.valid;
     uint begin = p.offsets[tile], end = p.offsets[tile + 1];
     float T = 1, z = 0;
-    float3 rgb = 0;
+    float3 rgb = 0, normal = 0;
     int last = 0;
     for (uint batch = begin; batch < end; batch += 64) {
         // Publish one completion flag per subgroup instead of reducing 256
@@ -81,6 +84,7 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
             float3x3 M = gsplat_world_to_unit(gsplat_load4(p.quats, g), exp(gsplat_load3(p.scales, g)));
             // Global-shutter rays share their origin across the whole tile.
             const float3 gro = mul(camera.origin - gsplat_load3(p.means, g), M);
+            if(p.normal != 0) normals[lane]=gsplat_geometry_normal(camera,gsplat_load3(p.means,g),gsplat_load3(p.scales,g),gsplat_load4(p.quats,g));
             opacity[lane] = gsplat_sigmoid(p.opacities[g]);
             m0[lane] = float4(M[0], gro.x);
             m1[lane] = float4(M[1], gro.y);
@@ -103,6 +107,7 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
             }
             rgb += colors[t].xyz * (a * T);
             z += colors[t].w * (a * T);
+            if(p.normal != 0) normal += normals[t]*(a*T);
             last = int(batch + t);
             T = next;
         }
@@ -111,6 +116,7 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
     if (!inside)
         return;
     uint pixel = y * p.width + x, plane = p.width * p.height;
+    if(p.normal != 0) for(uint c=0;c<3;++c) p.normal[c*plane+pixel]=normal[c];
     p.alpha[pixel] = 1 - T;
     p.last[pixel] = last;
     if (p.image != 0) {
@@ -128,7 +134,16 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
 result:
         $$uint3 = OpLoad builtin(NumWorkgroups : uint3);
     };
-    if (stage == 0) {
+    if(stage == 8) {
+        GsplatRasterParams p=((Ptr<GsplatRasterParams, Access.Read>)push.parameters)[0];
+        const GsplatCamera cam=gsplat_camera_load(p.camera);
+        for(uint i=gid.x*256+lane;i<p.width*p.height;i+=grid.x*256) {
+            GsplatRay ray=gsplat_pixel_ray(cam,float2(i%p.width,i/p.width)+0.5f);
+            float3 r=mul(ray.dir,cam.R);
+            r=cam.model==kGsplatPinhole?r/r.z:normalize(r);
+            for(uint c=0;c<3;++c) p.rays[3*i+c]=ray.valid?r[c]:asfloat(0x7fc00000u);
+        }
+    } else if (stage == 0) {
         if (lane == 0 && gid.x == 0)
             gsplat_camera_setup(((Ptr<GsplatSetupParams, Access.Read>)push.parameters)[0]);
     } else if (stage == 1) {

@@ -12,6 +12,7 @@
 #include "core/shared_image_ops.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "cuda_backend_test.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
@@ -1127,6 +1128,7 @@ TEST_F(MetricsEvaluatorStreams, WaitsForRenderOutputsFromAnotherStream) {
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     cudaEventDestroy(gate);
     cudaStreamDestroy(gate_holder);
+    lfs::core::release_cuda_stream(render_stream);
     cudaStreamDestroy(render_stream);
     std::filesystem::remove_all(tmp);
 }
@@ -1391,14 +1393,18 @@ TEST_P(MetricsEvaluatorGeom, RotatedPriorReportsKnownAngle) {
         std::vector<std::shared_ptr<Camera>>{cam}, DatasetConfig{}, CameraDataset::Split::ALL);
     auto splat = make_front_facing_splat();
     auto background = Tensor::zeros({3}, Device::GPU);
-    auto params = make_eval_params(tmp / "out");
-    std::filesystem::create_directories(params.dataset.output_path);
+    for (const bool gut : {false, true}) {
+        SCOPED_TRACE(gut ? "GUT" : "FastGS");
+        auto params = make_eval_params(tmp / "out");
+        params.optimization.gut = gut;
+        std::filesystem::create_directories(params.dataset.output_path);
 
-    MetricsEvaluator evaluator(params);
-    const auto metrics = evaluator.evaluate(1, splat, dataset, background);
-    ASSERT_TRUE(metrics.valid);
-    ASSERT_TRUE(metrics.normal_angle_deg.has_value());
-    EXPECT_NEAR(*metrics.normal_angle_deg, kDeg, 2.0f);
+        MetricsEvaluator evaluator(params);
+        const auto metrics = evaluator.evaluate(1, splat, dataset, background);
+        ASSERT_TRUE(metrics.valid);
+        ASSERT_TRUE(metrics.normal_angle_deg.has_value());
+        EXPECT_NEAR(*metrics.normal_angle_deg, kDeg, 2.0f);
+    }
 
     std::filesystem::remove_all(tmp);
 }
@@ -1424,14 +1430,74 @@ TEST_P(MetricsEvaluatorGeom, SparsePointAbsRelAgainstRenderedDepth) {
         std::vector<std::shared_ptr<Camera>>{cam}, DatasetConfig{}, CameraDataset::Split::ALL);
     auto splat = make_front_facing_splat();
     auto background = Tensor::zeros({3}, Device::GPU);
+    for (const bool gut : {false, true}) {
+        SCOPED_TRACE(gut ? "GUT" : "FastGS");
+        auto params = make_eval_params(tmp / "out");
+        params.optimization.gut = gut;
+        std::filesystem::create_directories(params.dataset.output_path);
+
+        MetricsEvaluator evaluator(params);
+        const auto metrics = evaluator.evaluate(1, splat, dataset, background);
+        ASSERT_TRUE(metrics.valid);
+        ASSERT_TRUE(metrics.depth_absrel.has_value());
+        EXPECT_LT(*metrics.depth_absrel, 0.15f);
+    }
+
+    std::filesystem::remove_all(tmp);
+}
+
+// GUT renders radial depth for native fisheye views; scoring it against camera Z
+// would report ~0.27 for this off-axis splat instead of ~0.
+TEST_P(MetricsEvaluatorGeom, NativeFisheyeGutAbsRelUsesRadialDepth) {
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_geom_metrics_fisheye_depth";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kSize = 64;
+    constexpr float kFocal = 32.0f;
+    const auto image_path = tmp / "gt.png";
+    write_rgb_png(image_path, 128, 128, 128, kSize, kSize);
+
+    auto R = Tensor::eye(3, Device::GPU);
+    std::vector<float> t_data{0.0f, 0.0f, 4.0f};
+    auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto cam = std::make_shared<Camera>(
+        R, T, kFocal, kFocal, 0.5f * kSize, 0.5f * kSize,
+        Tensor(), Tensor(), CameraModelType::FISHEYE,
+        image_path.filename().string(), image_path, std::filesystem::path{},
+        kSize, kSize, 0);
+    const float theta = std::atan2(4.0f, 5.0f);
+    cam->set_sfm_observations({Camera::SfmObservation{
+        .u = 0.5f * kSize + kFocal * theta,
+        .v = 0.5f * kSize,
+        .x = 4.0f,
+        .y = 0.0f,
+        .z = 1.0f}});
+    auto dataset = std::make_shared<CameraDataset>(
+        std::vector<std::shared_ptr<Camera>>{cam}, DatasetConfig{}, CameraDataset::Split::ALL);
+
+    std::vector<float> means_data{4.0f, 0.0f, 1.0f};
+    std::vector<float> scaling_data{0.0f, 0.0f, -3.0f};
+    std::vector<float> rotation_data{1.0f, 0.0f, 0.0f, 0.0f};
+    auto splat = SplatData(
+        0,
+        Tensor::from_blob(means_data.data(), {1, 3}, Device::CPU, DataType::Float32).to(Device::GPU),
+        Tensor::zeros({1, 1, 3}, Device::GPU),
+        Tensor::zeros({1, 0, 3}, Device::GPU),
+        Tensor::from_blob(scaling_data.data(), {1, 3}, Device::CPU, DataType::Float32).to(Device::GPU),
+        Tensor::from_blob(rotation_data.data(), {1, 4}, Device::CPU, DataType::Float32).to(Device::GPU),
+        Tensor::full({1}, std::log(0.99f / 0.01f), Device::GPU),
+        1.0f);
+    auto background = Tensor::zeros({3}, Device::GPU);
     auto params = make_eval_params(tmp / "out");
+    params.optimization.gut = true;
     std::filesystem::create_directories(params.dataset.output_path);
 
     MetricsEvaluator evaluator(params);
     const auto metrics = evaluator.evaluate(1, splat, dataset, background);
     ASSERT_TRUE(metrics.valid);
     ASSERT_TRUE(metrics.depth_absrel.has_value());
-    EXPECT_LT(*metrics.depth_absrel, 0.15f);
+    EXPECT_LT(*metrics.depth_absrel, 0.05f);
 
     std::filesystem::remove_all(tmp);
 }
@@ -1744,14 +1810,18 @@ TEST(MetricsEvaluator, DepthMaskSelectsSolidPixelsInsideTheRange) {
         return lfs::training::EvaluationRenderResult{.output = std::move(output)};
     };
 
-    for (const bool invert : {false, true}) {
-        params.optimization.eval_mask_invert = invert;
-        const auto prepared = prepare_evaluation_view(*camera, params, render);
-        ASSERT_TRUE(prepared.has_value()) << prepared.error().detail();
-        const auto mask = prepared->metric_mask.cpu().contiguous().to_vector_uint8();
-        ASSERT_EQ(mask.size(), static_cast<size_t>(kW) * kH);
-        for (size_t i = 0; i < mask.size(); ++i)
-            EXPECT_EQ(mask[i], invert ? 1 - expected_row[i % kW] : expected_row[i % kW]) << i << " invert " << invert;
+    for (const bool gut : {false, true}) {
+        params.optimization.gut = gut;
+        for (const bool invert : {false, true}) {
+            params.optimization.eval_mask_invert = invert;
+            const auto prepared = prepare_evaluation_view(*camera, params, render);
+            ASSERT_TRUE(prepared.has_value()) << prepared.error().detail();
+            const auto mask = prepared->metric_mask.cpu().contiguous().to_vector_uint8();
+            ASSERT_EQ(mask.size(), static_cast<size_t>(kW) * kH);
+            for (size_t i = 0; i < mask.size(); ++i)
+                EXPECT_EQ(mask[i], invert ? 1 - expected_row[i % kW] : expected_row[i % kW])
+                    << i << " invert " << invert << " gut " << gut;
+        }
     }
     std::filesystem::remove_all(tmp);
 }

@@ -11,7 +11,7 @@
 
 namespace lfs::training {
     class AdamOptimizer;
-    lfs::gpu_ops::GsplatGradients gsplat_gradients(AdamOptimizer&);
+    lfs::gpu_ops::GsplatGradients gsplat_gradients(AdamOptimizer&, const core::Tensor& depth = {}, const core::Tensor& normal = {}, float flatten_weight = 0.f);
 
     using GsplatRenderMode = lfs::gpu_ops::GsplatRenderMode;
     [[nodiscard]] lfs::Error gsplat_raster_error(const lfs::gpu_ops::RasterResult&);

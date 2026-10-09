@@ -1662,7 +1662,6 @@ namespace lfs::vis {
 
         state::SceneCleared{}.emit();
 
-        LOG_INFO("Scene cleared");
         return true;
     }
 

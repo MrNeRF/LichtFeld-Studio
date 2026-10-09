@@ -8,6 +8,7 @@
 #include "core/path_utils.hpp"
 #include "crc32c.hpp"
 #include "project_container_internal.hpp"
+#include "project_filesystem.hpp"
 #include "project_framing.hpp"
 #include "project_recovery_internal.hpp"
 
@@ -1096,7 +1097,7 @@ namespace lfs::io::project {
             if (mode == Mode::Create && !committed && !keep_temporary &&
                 !active_path.empty()) {
                 std::error_code ignored;
-                std::filesystem::remove(active_path, ignored);
+                detail::project_fs::remove(active_path, ignored);
             }
         }
 
@@ -2084,7 +2085,7 @@ namespace lfs::io::project {
         if (options.role == ContainerRole::Master) {
             std::error_code exists_error;
             const bool destination_exists =
-                std::filesystem::exists(
+                detail::project_fs::exists(
                     path, exists_error);
             if (exists_error) {
                 return writer_error(

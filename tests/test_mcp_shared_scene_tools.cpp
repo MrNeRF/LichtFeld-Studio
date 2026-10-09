@@ -47,6 +47,8 @@ namespace {
         bool load_dataset_called = false;
         std::optional<bool> start_overwrite;
         int capture_calls = 0;
+        std::optional<int> capture_camera;
+        bool capture_presented = false;
 
         lfs::mcp::SharedSceneToolBackend backend() {
             return lfs::mcp::SharedSceneToolBackend{
@@ -73,8 +75,10 @@ namespace {
                     start_overwrite = overwrite;
                     return {};
                 },
-                .render_capture = [this](int, int, bool) -> lfs::Result<std::string> {
+                .render_capture = [this](std::optional<int> camera, int, int, bool presented) -> lfs::Result<std::string> {
                     ++capture_calls;
+                    capture_camera = camera;
+                    capture_presented = presented;
                     return std::string{};
                 },
                 .gaussian_count = []() -> std::expected<int64_t, std::string> { return 0; },
@@ -280,7 +284,7 @@ TEST(McpSharedSceneToolsTest, RenderCaptureKeepsTheBackendErrorCode) {
     ScopedSharedSceneToolRegistration cleanup;
     FakeSharedSceneBackend fake;
     auto backend = fake.backend();
-    backend.render_capture = [](int, int, bool) -> lfs::Result<std::string> {
+    backend.render_capture = [](std::optional<int>, int, int, bool) -> lfs::Result<std::string> {
         return lfs::make_error(lfs::ErrorInit{
             .code = lfs::ErrorCode::InvalidArgument,
             .domain = lfs::ErrorDomain::MCP,
@@ -295,14 +299,15 @@ TEST(McpSharedSceneToolsTest, RenderCaptureKeepsTheBackendErrorCode) {
     EXPECT_EQ(result["error_message"], "Capture size 20603x16384 exceeds the 16384 pixel limit per side");
 }
 
-TEST(McpSharedSceneToolsTest, RenderCaptureDoesNotAdvertiseCameraIndex) {
+TEST(McpSharedSceneToolsTest, RenderCaptureForwardsCameraUidAndPresentedMode) {
     ScopedSharedSceneToolRegistration cleanup;
     FakeSharedSceneBackend backend;
     lfs::mcp::register_shared_scene_tools(backend.backend());
-
-    const auto tools = lfs::mcp::ToolRegistry::instance().list_tools();
-    const auto capture = std::ranges::find_if(tools, [](const auto& tool) { return tool.name == "render.capture"; });
-    ASSERT_NE(capture, tools.end());
-    EXPECT_FALSE(capture->input_schema.properties.contains("camera_index"))
-        << "render.capture advertises camera_index, which no backend can render";
+    auto& registry = lfs::mcp::ToolRegistry::instance();
+    ASSERT_EQ(registry.call_tool("render.capture", json::object())["success"], true);
+    EXPECT_FALSE(backend.capture_camera);
+    EXPECT_FALSE(backend.capture_presented);
+    ASSERT_EQ(registry.call_tool("render.capture", json{{"camera_index", 42}, {"presented", true}})["success"], true);
+    EXPECT_EQ(backend.capture_camera, 42);
+    EXPECT_TRUE(backend.capture_presented);
 }

@@ -10,6 +10,7 @@
 #include "view_source.hpp"
 
 #include "camera_interaction_service.hpp"
+#include "core/error.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
@@ -202,6 +203,15 @@ namespace lfs::vis {
                                                               std::optional<glm::vec3> background_color_override = std::nullopt,
                                                               std::optional<bool> orthographic_override = std::nullopt,
                                                               std::optional<float> ortho_scale_override = std::nullopt);
+        std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgb8(const lfs::core::SplatData& model,
+                                                                  SceneRenderState scene_state,
+                                                                  const glm::mat3& camera_rotation,
+                                                                  const glm::vec3& camera_position,
+                                                                  float focal_length_mm,
+                                                                  int width, int height,
+                                                                  std::optional<glm::vec3> background_color_override = std::nullopt,
+                                                                  std::optional<bool> orthographic_override = std::nullopt,
+                                                                  std::optional<float> ortho_scale_override = std::nullopt);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgba8(const lfs::core::SplatData& model,
                                                                    SceneRenderState scene_state,
                                                                    const glm::mat3& camera_rotation,
@@ -744,6 +754,11 @@ namespace lfs::vis {
                                      glm::ivec2 alloc_size = {0, 0});
         [[nodiscard]] float exportRasterizationScale(int target_height, int reference_height) const;
         [[nodiscard]] std::optional<float> exportOrthoScale(std::optional<float> scale, int target_height, int reference_height) const;
+        // Draws the visible meshes over a finished export image, depth-tested against the splats.
+        [[nodiscard]] lfs::Status compositeExportMeshes(
+            SceneManager* scene_manager,
+            const ExportImageRequest& request,
+            lfs::core::Tensor& image);
 
         Result<std::shared_ptr<core::Tensor>> renderPreviewImageWithState(
             SceneManager* scene_manager,

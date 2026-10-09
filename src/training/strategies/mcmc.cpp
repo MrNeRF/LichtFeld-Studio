@@ -866,9 +866,6 @@ namespace lfs::training {
                 ensure_capacity_direct(_splat_data->opacity_raw());
 
                 // noise is generated inside inject_noise_kernel (no buffer).
-
-                LOG_INFO("Pre-allocated capacity: {}/{} Gaussians ({:.1f}%)",
-                         current_size, capacity, 100.0f * current_size / capacity);
             } catch (const std::exception& e) {
                 LOG_WARN("Failed to pre-allocate capacity: {}. Continuing without pre-allocation.", e.what());
             }
@@ -893,8 +890,6 @@ namespace lfs::training {
             ensure_deleted_mask_size(*_splat_data);
         }
         _error_score_windows = 0;
-
-        LOG_INFO("MCMC strategy initialized with {} Gaussians", _splat_data->size());
     }
 
     void MCMC::permute_gaussian_rows(const lfs::core::Tensor& perm) {

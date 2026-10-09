@@ -171,7 +171,7 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba(
             VulkanContext& context,
             RenderTargetId target) const;
-        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgb8(
+        [[nodiscard]] LFS_VIS_API std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgb8(
             VulkanContext& context,
             RenderTargetId target) const;
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba8(
@@ -229,7 +229,7 @@ namespace lfs::vis {
         // Observability counters for LOG_PERF / GT compare cycles.
         [[nodiscard]] ReadbackStats readbackStats() const;
 
-        [[nodiscard]] std::expected<lfs::core::Tensor, std::string> buildSelectionMask(
+        [[nodiscard]] LFS_VIS_API std::expected<lfs::core::Tensor, std::string> buildSelectionMask(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             const SelectionMaskRequest& request,

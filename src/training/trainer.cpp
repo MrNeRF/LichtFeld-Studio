@@ -739,17 +739,9 @@ namespace lfs::training {
             // The JPEG hot path decodes on the GPU; CPU decoding keeps its queues.
             if (lfs::io::PipelinedImageLoader::decodes_on_gpu(config.backend) && non_jpeg_ratio <= NON_JPEG_THRESHOLD) {
                 if (config.output_queue_size > JPEG_HOT_OUTPUT_QUEUE_SIZE) {
-                    LOG_INFO(
-                        "Reducing JPEG image ready queue {} -> {} (hot path keeps compressed prefetch)",
-                        config.output_queue_size,
-                        JPEG_HOT_OUTPUT_QUEUE_SIZE);
                     config.output_queue_size = JPEG_HOT_OUTPUT_QUEUE_SIZE;
                 }
                 if (config.decoder_pool_size > JPEG_HOT_DECODER_POOL_SIZE) {
-                    LOG_INFO(
-                        "Reducing nvImageCodec decoder pool {} -> {} for JPEG hot path",
-                        config.decoder_pool_size,
-                        JPEG_HOT_DECODER_POOL_SIZE);
                     config.decoder_pool_size = JPEG_HOT_DECODER_POOL_SIZE;
                 }
             }
@@ -1850,7 +1842,6 @@ namespace lfs::training {
         // mutex for the lifetime of the trainer. TrainerManager::setTrainer also
         // wires this; constructor covers every Trainer(Scene) path.
         scene.setLiveModelMutex(&render_mutex_);
-        LOG_INFO("Scene live-model mutex wired to trainer render_mutex_ (one-lock q16)");
 
         LOG_DEBUG("Trainer constructed from Scene with {} cameras", scene.getAllCameras().size());
     }
@@ -2529,6 +2520,8 @@ namespace lfs::training {
                     LOG_WARN("Sparsity: clamping stop_refine from {} to {} to freeze topology before pruning",
                              params_.optimization.stop_refine, stop_refine_limit);
                     params_.optimization.stop_refine = stop_refine_limit;
+                    params_.optimization.start_refine =
+                        std::min(params_.optimization.start_refine, stop_refine_limit);
                 }
             }
 
@@ -2745,7 +2738,6 @@ namespace lfs::training {
                 bg_ptr[1] = bg_color[1];
                 bg_ptr[2] = bg_color[2];
                 background_ = background_.to(lfs::core::Device::GPU);
-                LOG_INFO("Background color set to RGB({:.2f}, {:.2f}, {:.2f})", bg_color[0], bg_color[1], bg_color[2]);
             }
 
             // Initialize image cache loader before any code path that calls getInstance()
@@ -2937,7 +2929,6 @@ namespace lfs::training {
             }
 
             // Print configuration
-            LOG_INFO("Visualization: {}", params.optimization.headless ? "disabled" : "enabled");
             LOG_INFO("Strategy: {}", params.optimization.strategy);
             if (params.optimization.mask_mode != lfs::core::param::MaskMode::None) {
                 static constexpr const char* MASK_MODE_NAMES[] = {"none", "segment", "ignore", "segment_and_ignore", "alpha_consistent"};
@@ -3011,7 +3002,6 @@ namespace lfs::training {
 
             initialized_ = true;
 
-            LOG_INFO("Trainer initialization complete");
             return {};
         } catch (const std::exception& e) {
             return std::unexpected(std::format("Failed to initialize trainer: {}", e.what()));
@@ -3158,7 +3148,7 @@ namespace lfs::training {
                         }
                         output = gsplat_infer(*training_ops_->gsplat, metrics_gsplat_saved_,
                                               render_camera, model, background, 1.0f, false,
-                                              lfs::core::param::is_eval_mask_depth(params.optimization.eval_mask) ? GsplatRenderMode::RGB_ED : GsplatRenderMode::RGB);
+                                              lfs::core::param::is_eval_mask_depth(params.optimization.eval_mask) ? GsplatRenderMode::RGB_D : GsplatRenderMode::RGB);
                     } else {
                         if (training_ops_ == nullptr || training_ops_->fast == nullptr) {
                             throw std::runtime_error(*unavailable_training_family(
@@ -4156,13 +4146,6 @@ namespace lfs::training {
             base_explicit_commit_uuid;
         prepared_project_autosave_sequence_ =
             autosave_sequence;
-        LOG_INFO(
-            "Prepared .licht snapshot {} for iteration {} "
-            "({} checkpoint bytes)",
-            prepared_project_snapshot_->snapshot_uuid()
-                .to_string(),
-            capture_iteration,
-            prepared_project_snapshot_->checkpoint_bytes());
     }
 
     void Trainer::consume_requested_project_snapshot(
@@ -4988,10 +4971,6 @@ namespace lfs::training {
                                         dataset_preview_png(
                                             *first);
                                 if (encoded) {
-                                    LOG_INFO(
-                                        "Embedded dataset image as project preview: {}",
-                                        lfs::core::path_to_utf8(
-                                            *first));
                                     preview_png =
                                         std::move(*encoded);
                                 } else {
@@ -5383,44 +5362,11 @@ namespace lfs::training {
             !std::isfinite(elapsed_ms)) {
             return;
         }
-        TrainingStepRegressionMetrics before;
-        TrainingStepRegressionMetrics after;
-        {
-            std::lock_guard lock(
-                project_snapshot_mutex_);
-            before =
-                project_step_regression_.metrics();
-            project_step_regression_.observe(
-                iteration, elapsed_ms,
-                topology_changed);
-            after =
-                project_step_regression_.metrics();
-        }
-        if (!before.gate_evaluated &&
-            after.gate_evaluated) {
-            LOG_INFO(
-                "Training snapshot post-resume step gate: "
-                "pre=[{},{}] pre_n={} pre_mean={:.3f}ms "
-                "post=[{},{}] post_n={} post_mean={:.3f}ms "
-                "regression={:.3f}% {}",
-                after.pre_snapshot
-                    .first_iteration,
-                after.pre_snapshot
-                    .last_iteration,
-                after.pre_snapshot
-                    .sample_count,
-                after.pre_snapshot.mean_ms,
-                after.post_resume
-                    .first_iteration,
-                after.post_resume
-                    .last_iteration,
-                after.post_resume
-                    .sample_count,
-                after.post_resume.mean_ms,
-                after.regression_percent,
-                after.within_gate ? "PASS"
-                                  : "FAIL");
-        }
+        std::lock_guard lock(
+            project_snapshot_mutex_);
+        project_step_regression_.observe(
+            iteration, elapsed_ms,
+            topology_changed);
     }
 
     void Trainer::handle_control_requests(int iter, std::stop_token stop_token) {
@@ -6411,7 +6357,9 @@ namespace lfs::training {
                                     const auto result = gsplat_render(
                                         *training_ops_->gsplat, gsplat_saved_,
                                         *cam, strategy_->get_model(), bg,
-                                        0, 0, 0, 0, 1.0f, false, GsplatRenderMode::RGB, bg_tile, output);
+                                        0, 0, 0, 0, 1.0f, false, (normal_supervision_started && (params_.optimization.normal_loss_weight > 0.f || params_.optimization.normal_consistency_weight > 0.f)) ? GsplatRenderMode::RGB_D_N : (params_.optimization.use_depth_loss && params_.optimization.depth_loss_weight > 0.f) ? GsplatRenderMode::RGB_D
+                                                                                                                                                                                                                                                                                                                             : GsplatRenderMode::RGB,
+                                        bg_tile, output);
                                     if (result.code != lfs::gpu_ops::RasterResult::Code::Success) {
                                         lfs::core::pop_gpu_range();
                                         lfs::core::pop_gpu_range();
@@ -6960,7 +6908,7 @@ namespace lfs::training {
                             }
                         }
 
-                        if (run_fastgs_gaussian_backward &&
+                        if ((run_fastgs_gaussian_backward || run_gut_gaussian_backward) &&
                             params_.optimization.use_depth_loss &&
                             params_.optimization.depth_loss_weight > 0.0f &&
                             output.depth.is_valid() &&
@@ -7076,7 +7024,7 @@ namespace lfs::training {
                             }
                         }
 
-                        if (run_fastgs_gaussian_backward &&
+                        if ((run_fastgs_gaussian_backward || run_gut_gaussian_backward) &&
                             normal_supervision_started &&
                             params_.optimization.normal_loss_weight > 0.0f &&
                             output.normal.is_valid() &&
@@ -7173,7 +7121,7 @@ namespace lfs::training {
                                     if (output.depth.is_valid() &&
                                         output.depth.numel() > 0 &&
                                         cam->camera_width() > 0 && cam->camera_height() > 0 &&
-                                        cam->focal_x() > 0.0f && cam->focal_y() > 0.0f) {
+                                        (gsplat_saved_.camera_rays.is_valid() || (cam->focal_x() > 0.0f && cam->focal_y() > 0.0f))) {
                                         lfs::core::Tensor rendered_depth = output.depth;
                                         if (rendered_depth.ndim() == 3 && rendered_depth.shape()[0] == 1) {
                                             rendered_depth = rendered_depth.squeeze(0);
@@ -7215,11 +7163,11 @@ namespace lfs::training {
                                             const float cy = cam->center_y() * static_cast<float>(render_h) /
                                                              static_cast<float>(cam->camera_height());
 
-                                            lfs::core::pin_operands({&target_normal, &rendered_depth, &rendered_alpha});
+                                            lfs::core::pin_operands({&target_normal, &rendered_depth, &rendered_alpha, &gsplat_saved_.camera_rays});
                                             training_ops_->geometry->prior_depth(
                                                 target_normal, rendered_depth, rendered_alpha, normal_pixel_weight,
                                                 depth_loss_grad_, depth_loss_grad_alpha_, normal_prior_depth_scalar_, normal_consistency_partials_,
-                                                {fx, fy, cx, cy}, params_.optimization.normal_loss_weight);
+                                                {fx, fy, cx, cy, params_.optimization.gut ? gsplat_saved_.camera_rays : lfs::core::Tensor{}, params_.optimization.gut && gsplat_saved_.equirectangular}, params_.optimization.normal_loss_weight);
                                             tile_loss = tile_loss + normal_prior_depth_scalar_;
                                         }
                                     }
@@ -7233,7 +7181,7 @@ namespace lfs::training {
                             }
                         }
 
-                        if (run_fastgs_gaussian_backward &&
+                        if ((run_fastgs_gaussian_backward || run_gut_gaussian_backward) &&
                             normal_supervision_started &&
                             params_.optimization.normal_consistency_weight > 0.0f &&
                             output.normal.is_valid() &&
@@ -7276,7 +7224,7 @@ namespace lfs::training {
                                 rendered_alpha.shape()[0] == rendered_normal.shape()[1] &&
                                 rendered_alpha.shape()[1] == rendered_normal.shape()[2] &&
                                 cam->camera_width() > 0 && cam->camera_height() > 0 &&
-                                cam->focal_x() > 0.0f && cam->focal_y() > 0.0f;
+                                (gsplat_saved_.camera_rays.is_valid() || (cam->focal_x() > 0.0f && cam->focal_y() > 0.0f));
 
                             if (consistency_shapes_match) {
                                 const lfs::core::TensorExecutionTarget consistency_stream = lfs::core::TensorExecutionTarget::current();
@@ -7320,13 +7268,13 @@ namespace lfs::training {
                                                  static_cast<float>(cam->camera_height());
 
                                 lfs::core::pin_operands(
-                                    {&rendered_normal, &rendered_depth, &rendered_alpha, &tile_grad_normal});
+                                    {&rendered_normal, &rendered_depth, &rendered_alpha, &tile_grad_normal, &gsplat_saved_.camera_rays});
                                 const auto& consistency_pixel_weight =
                                     normal_weight_on_stream(consistency_stream);
                                 training_ops_->geometry->consistency(
                                     rendered_normal, rendered_depth, rendered_alpha, consistency_pixel_weight,
                                     tile_grad_normal, depth_loss_grad_, depth_loss_grad_alpha_, normal_consistency_scalar_, normal_consistency_partials_,
-                                    {fx, fy, cx, cy}, params_.optimization.normal_consistency_weight);
+                                    {fx, fy, cx, cy, params_.optimization.gut ? gsplat_saved_.camera_rays : lfs::core::Tensor{}, params_.optimization.gut && gsplat_saved_.equirectangular}, params_.optimization.normal_consistency_weight);
 
                                 tile_loss = tile_loss + normal_consistency_scalar_;
                             }
@@ -7559,7 +7507,8 @@ namespace lfs::training {
                                 auto& optimizer = strategy_->get_optimizer();
                                 lfs::core::Tensor unused;
                                 training_ops_->gsplat->backward(gsplat_saved_, raster_grad, grad_alpha,
-                                                                gsplat_gradients(optimizer),
+                                                                gsplat_gradients(optimizer, tile_grad_depth, tile_grad_normal,
+                                                                                 normal_supervision_started ? params_.optimization.normal_flatten_weight : 0.f),
                                                                 model._densification_info,
                                                                 use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
                                                                 edge_weight_scoring_active_ ? edge_weight_map : lfs::core::Tensor{},
@@ -8150,20 +8099,6 @@ namespace lfs::training {
                         }
                         log_eval_appearance();
                         LOG_INFO("{}", metrics.to_string());
-                        if (strategy_) {
-                            auto& splat = strategy_->get_model();
-                            const float configured = params_.optimization.max_screen_share;
-                            const float limit = lfs::training::screen_share_cap_active(configured)
-                                                    ? configured
-                                                    : 0.3f;
-                            int n_over_share = 0;
-                            if (splat._max_screen_share.is_valid() &&
-                                splat._max_screen_share.numel() > 0) {
-                                auto over = splat._max_screen_share.gt(limit).to(lfs::core::DataType::Int32).sum();
-                                n_over_share = over.template item<int>();
-                            }
-                            LOG_INFO("n_over_share={} strategy={}", n_over_share, strategy_->strategy_type());
-                        }
                         if (ppisp_ && params_.optimization.ppisp_active() && ppisp_->isFinalized()) {
                             ppisp_->log_eval_diagnostics();
                         }
@@ -8503,14 +8438,7 @@ namespace lfs::training {
             is_running_ = true; // Active setParams() calls queue from this point onward.
         }
         apply_pending_params_at_safe_point();
-        LOG_INFO("Starting training loop");
         lfs::diagnostics::VramProfiler::instance().mark("training_start");
-        if (params_.optimization.gut && params_.optimization.use_normal_loss) {
-            LOG_WARN("normal loss requested but the 3DGUT backend has no normal channel; normal terms are inactive");
-        }
-        if (params_.optimization.gut && params_.optimization.use_depth_loss) {
-            LOG_WARN("depth loss requested but the 3DGUT backend has no depth channel; depth terms are inactive");
-        }
         if (PerfBenchCollector::enabled()) {
             PerfBenchCollector::instance().on_training_start(get_total_iterations());
         }
@@ -8601,7 +8529,18 @@ namespace lfs::training {
                          params_.optimization.depth_loss_mode);
                 params_.optimization.use_depth_loss = false;
             }
-            aux_pipeline_config.load_depths = params_.optimization.depth_supervision_enabled();
+            aux_pipeline_config.load_depths = training_depth_priors_enabled(params_.optimization);
+            aux_pipeline_config.load_normals = training_normal_priors_enabled(params_.optimization);
+            {
+                // Val cameras need maps too for the eval depth and normal metrics;
+                // one call keeps generation to a single estimator pass.
+                auto prior_cameras = train_dataset_->get_cameras();
+                if (val_dataset_) {
+                    const auto& val_cameras = val_dataset_->get_cameras();
+                    prior_cameras.insert(prior_cameras.end(), val_cameras.begin(), val_cameras.end());
+                }
+                ensure_training_prior_maps(params_, prior_cameras);
+            }
             if (aux_pipeline_config.load_depths) {
                 size_t cameras_with_depth = 0;
                 for (const auto& cam : train_dataset_->get_cameras()) {
@@ -8624,30 +8563,7 @@ namespace lfs::training {
                     fitDepthAnchors(cameras_with_depth);
                 }
             }
-            aux_pipeline_config.load_normals = training_normal_priors_enabled(params_.optimization);
-            if (aux_pipeline_config.load_normals || params_.optimization.normal_consistency_weight > 0.0f) {
-                const auto mode = params_.optimization.mask_mode;
-                const bool user_masks_normal_terms =
-                    (mode == lfs::core::param::MaskMode::Segment ||
-                     mode == lfs::core::param::MaskMode::Ignore ||
-                     mode == lfs::core::param::MaskMode::SegmentAndIgnore) &&
-                    std::any_of(train_dataset_->get_cameras().begin(), train_dataset_->get_cameras().end(),
-                                [&](const auto& camera) {
-                                    return camera && (camera->has_mask() ||
-                                                      (params_.optimization.use_alpha_as_mask && camera->has_alpha()));
-                                });
-                LOG_INFO("Normal terms use user mask: {} (where available); prior-depth gate: count >= {}, weight >= {}",
-                         user_masks_normal_terms ? "yes" : "no",
-                         lfs::training::kernels::kNormalConsistencyMinValidCount,
-                         lfs::training::kernels::kNormalConsistencyMinValidWeight);
-            }
             if (aux_pipeline_config.load_normals) {
-                ensure_training_normal_maps(params_, train_dataset_->get_cameras());
-                if (val_dataset_) {
-                    // Scene-path val cameras are a separate list, so generate
-                    // their missing maps too for the eval normal metric.
-                    ensure_training_normal_maps(params_, val_dataset_->get_cameras());
-                }
                 normal_prior_flip_yz_ = false;
                 normal_prior_world_space_ = false;
                 normal_prior_srgb_ = false;
@@ -9106,7 +9022,6 @@ namespace lfs::training {
                 : terminal_save_policy.on_completion;
         if (authorize_terminal_save &&
             terminal_project_path) {
-            const auto terminal_save_started = std::chrono::steady_clock::now();
             saving_model_.store(true, std::memory_order_release);
             try {
                 LOG_INFO("Saving {} project at iteration {}...",
@@ -9171,9 +9086,6 @@ namespace lfs::training {
                     }));
                 }
             }
-            LOG_INFO("Terminal {} save phase took {:.3f}s",
-                     terminal_error ? "emergency" : (user_stopped ? "stop" : "completion"),
-                     std::chrono::duration<double>(std::chrono::steady_clock::now() - terminal_save_started).count());
             pending_snapshot_finish_reason_ =
                 lfs::io::project::TrainingFinishReason::None;
             saving_model_.store(false, std::memory_order_release);
@@ -9229,8 +9141,6 @@ namespace lfs::training {
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
         }
-
-        training_session_ops().dump_arena_statistics();
 
         auto& command_center = lfs::training::CommandCenter::instance();
         auto snapshot_guard = makeScopeGuard([&command_center, this]() {

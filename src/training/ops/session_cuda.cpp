@@ -42,10 +42,7 @@ namespace lfs::training {
         }
 
         void reset_arena() { core::GlobalArenaManager::instance().get_arena().full_reset(); }
-        void dump_arena_statistics() {
-            if (auto* arena = core::GlobalArenaManager::instance().try_get_arena())
-                arena->dump_statistics();
-        }
+
         std::optional<lfs::gpu_ops::ArenaMemoryInfo> arena_memory_info() {
             if (auto* arena = core::GlobalArenaManager::instance().try_get_arena()) {
                 const auto info = arena->get_memory_info();
@@ -101,7 +98,6 @@ namespace lfs::training {
             .profile = profile,
             .resize_arena = resize_arena,
             .reset_arena = reset_arena,
-            .dump_arena_statistics = dump_arena_statistics,
             .arena_memory_info = arena_memory_info,
             .log_arena_failure = log_arena_failure,
             .set_arena_timeout = core::RasterizerMemoryArena::set_begin_frame_timeout,

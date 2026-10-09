@@ -25,7 +25,6 @@ namespace lfs::training {
             .profile = [](bool) {},
             .resize_arena = [](std::string_view, bool) {},
             .reset_arena = [] {},
-            .dump_arena_statistics = [] {},
             .arena_memory_info = []() -> std::optional<lfs::gpu_ops::ArenaMemoryInfo> { return std::nullopt; },
             .log_arena_failure = log_arena_failure,
             .set_arena_timeout = [](const uint32_t timeout) { return arena_timeout.exchange(timeout); },

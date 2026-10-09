@@ -43,7 +43,8 @@ body {
     flex-direction: column;
     margin: 0;
     padding: 0;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
     width: 100%;
     height: 100%;
 }
@@ -94,6 +95,9 @@ body {
 }
 
 #transport-row {
+    flex-shrink: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
     display: flex;
     flex-direction: row;
     width: 100%;
@@ -121,6 +125,7 @@ body {
 }
 
 #transport {
+    flex-shrink: 0;
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -709,6 +714,7 @@ body {
 }
 
 #time-display {
+    flex-shrink: 0;
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -780,6 +786,7 @@ body {
 }
 
 #easing-stripe {
+    flex-shrink: 0;
     display: block;
     width: auto;
     height: 36dp;
@@ -861,6 +868,7 @@ body {
 }
 
 #film-strip-panel {
+    flex-shrink: 0;
     display: block;
     width: auto;
     height: 56dp;
@@ -1126,21 +1134,7 @@ body {
 }
 
 @media (max-width: 1120dp) {
-    #btn-camera-path,
-    #btn-snap,
-    #btn-follow,
-    #btn-preview,
-    #btn-format,
-    #btn-clear,
     .transport-sep {
-        display: none;
-    }
-}
-
-@media (max-width: 1040dp) {
-    #btn-film-strip,
-    #btn-equirect,
-    #btn-load-sequence {
         display: none;
     }
 }

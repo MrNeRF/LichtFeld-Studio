@@ -377,13 +377,13 @@ namespace lfs::python {
         const auto original = trainer.getParams();
         auto invalid = original;
         invalid.optimization.gut = true;
-        invalid.optimization.use_depth_loss = true;
+        invalid.optimization.mip_filter = true;
 
         const auto updated = trainer.setParams(invalid);
 
         ASSERT_FALSE(updated.has_value());
         EXPECT_NE(
-            updated.error().user_message().find("Depth Loss"),
+            updated.error().user_message().find("Mip Filter"),
             std::string::npos);
         EXPECT_EQ(
             trainer.getParams().optimization.to_json(),
@@ -808,7 +808,7 @@ namespace lfs::python {
         parameter_manager.setActiveStrategy("mcmc");
         parameter_manager.modifyActiveParams([](auto& pending) {
             pending.gut = true;
-            pending.use_depth_loss = true;
+            pending.mip_filter = true;
         });
         lfs::vis::services().set(&parameter_manager);
         lfs::vis::TrainerManager manager;
@@ -817,7 +817,7 @@ namespace lfs::python {
 
         EXPECT_FALSE(manager.startTraining());
         EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Ready);
-        EXPECT_NE(manager.getLastError().find("Depth Loss"),
+        EXPECT_NE(manager.getLastError().find("Mip Filter"),
                   std::string::npos);
         // No run was accepted: a command rejection is not an initialization result.
         EXPECT_TRUE(manager.waitForInitialization());

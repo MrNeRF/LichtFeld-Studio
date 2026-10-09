@@ -31,6 +31,14 @@
           <img class="social-icon heart-icon" src="../icon/heart.png" /><span id="donate-link"></span>
         </div>
       </div>
+      <div id="app-row">
+        <div id="link-getting-started" class="social-link" data-panel="lfs.getting_started">
+          <img class="social-icon" src="../icon/video.png" /><span id="getting-started-link"></span>
+        </div>
+        <div id="link-preferences" class="social-link" data-panel="lfs.preferences">
+          <img class="social-icon" src="../icon/settings.png" /><span id="preferences-link"></span>
+        </div>
+      </div>
       <div id="lang-row">
         <span id="lang-label" class="dim-text"></span>
         <select id="lang-select"></select>

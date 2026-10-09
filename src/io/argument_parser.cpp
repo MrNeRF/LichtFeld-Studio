@@ -75,10 +75,11 @@ namespace lfs::io::args {
                                    "; values: none, segment, ignore, segment_and_ignore, alpha_consistent"},
             OptimizationCliBinding{"--invert-masks", "invert_masks", Bool},
             OptimizationCliBinding{"--no-alpha-as-mask", "use_alpha_as_mask", Bool, true},
-            OptimizationCliBinding{"--use-depth-loss", "use_depth_loss", Bool, false, "; not available with --gut"},
+            OptimizationCliBinding{"--use-depth-loss", "use_depth_loss", Bool},
             OptimizationCliBinding{"--depth-loss-weight", "depth_loss_weight", Float},
             OptimizationCliBinding{"--depth-loss-mode", "depth_loss_mode", String},
-            OptimizationCliBinding{"--use-normal-loss", "use_normal_loss", Bool, false, "; not available with --gut"},
+            OptimizationCliBinding{"--no-depth-auto-generate", "depth_auto_generate", Bool, true},
+            OptimizationCliBinding{"--use-normal-loss", "use_normal_loss", Bool},
             OptimizationCliBinding{"--no-normal-auto-generate", "normal_auto_generate", Bool, true},
             OptimizationCliBinding{"--normal-loss-weight", "normal_loss_weight", Float},
             OptimizationCliBinding{"--normal-consistency-weight", "normal_consistency_weight", Float},
@@ -719,8 +720,8 @@ namespace {
             ::args::Group paths_sep(parser, " ");
             ::args::Group paths_group(parser, "TRAINING PATHS:");
             ::args::ValueFlag<std::string> data_path(paths_group, "data_path", "Path to training data: a dataset folder or an untrained .licht project", {'d', "data-path"});
-            ::args::ValueFlag<std::string> output_path(paths_group, "output_path", "Directory for project.licht and --export files", {'o', "output-path"});
-            ::args::ValueFlag<std::string> output_name(paths_group, "output_name", "Output filename (replaces default splat_ITER.ply stem)", {"output-name"});
+            ::args::ValueFlag<std::string> output_path(paths_group, "output_path", "Directory for the project file and --export files", {'o', "output-path"});
+            ::args::ValueFlag<std::string> output_name(paths_group, "output_name", "Name of the project file and --export files (default project.licht and splat_ITER)", {"output-name"});
             ::args::ValueFlag<std::string> config_file(paths_group, "config_file", "LichtFeldStudio config file (json)", {"config"});
             ::args::ValueFlag<std::string> init_path(paths_group, "path", "Initialize from splat file (.ply, .sog, .ssog, .spz, .usd, .usda, .usdc, .usdz, .resume)", {"init"});
             ::args::ValueFlagList<std::string> add_splats(paths_group, "path", "Append trained splat file(s) to the training model before optimizer initialization", {"add-splat"});
@@ -839,6 +840,7 @@ namespace {
             ::args::Flag use_depth_loss(mask_group, "use_depth_loss", lfs::io::args::optimization_cli_help("--use-depth-loss"), {"use-depth-loss"});
             ::args::ValueFlag<float> depth_loss_weight(mask_group, "depth_loss_weight", lfs::io::args::optimization_cli_help("--depth-loss-weight"), {"depth-loss-weight"});
             ::args::ValueFlag<std::string> depth_loss_mode(mask_group, "depth_loss_mode", lfs::io::args::optimization_cli_help("--depth-loss-mode"), {"depth-loss-mode"});
+            ::args::Flag no_depth_auto_generate(mask_group, "no_depth_auto_generate", lfs::io::args::optimization_cli_help("--no-depth-auto-generate"), {"no-depth-auto-generate"});
             ::args::Flag use_normal_loss(mask_group, "use_normal_loss", lfs::io::args::optimization_cli_help("--use-normal-loss"), {"use-normal-loss"});
             ::args::Flag no_normal_auto_generate(mask_group, "no_normal_auto_generate", lfs::io::args::optimization_cli_help("--no-normal-auto-generate"), {"no-normal-auto-generate"});
             ::args::ValueFlag<float> normal_loss_weight(mask_group, "normal_loss_weight", lfs::io::args::optimization_cli_help("--normal-loss-weight"), {"normal-loss-weight"});
@@ -1599,6 +1601,7 @@ namespace {
                                         invert_masks_flag = bool(invert_masks),
                                         no_alpha_as_mask_flag = bool(no_alpha_as_mask),
                                         use_depth_loss_flag = bool(use_depth_loss),
+                                        no_depth_auto_generate_flag = bool(no_depth_auto_generate),
                                         use_normal_loss_flag = bool(use_normal_loss),
                                         no_normal_auto_generate_flag = bool(no_normal_auto_generate),
                                         no_error_map_flag = bool(no_error_map),
@@ -1811,6 +1814,8 @@ namespace {
                 if (depth_loss_mode_val) {
                     opt.depth_loss_mode = *depth_loss_mode_val;
                 }
+                if (no_depth_auto_generate_flag)
+                    opt.depth_auto_generate = false;
                 setFlag(use_normal_loss_flag, opt.use_normal_loss);
                 if (no_normal_auto_generate_flag)
                     opt.normal_auto_generate = false;
@@ -2097,8 +2102,6 @@ lfs::io::args::parse_args_and_params(int argc, const char* const argv[]) {
         return std::unexpected("--eval-flip needs --eval or --eval-all; without them no evaluation runs");
     if (flag_given("--eval-mask-invert") && !flag_given("--eval-mask"))
         return std::unexpected("--eval-mask-invert needs --eval-mask");
-    if (params->optimization.gut && (flag_given("--use-depth-loss") || flag_given("--use-normal-loss")))
-        return std::unexpected("Depth Loss (--use-depth-loss) and Normal Loss (--use-normal-loss) are not available with --gut: the 3DGUT rasterizer renders no depth or normals; use a 3DGS rasterizer");
     if (params->optimization.eval_all && flag_given("--test-every"))
         return std::unexpected("--test-every selects held-out images; --eval-all trains on every image and evaluates all of them");
     apply_ppisp_defaults(*params);

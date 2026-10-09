@@ -709,28 +709,10 @@ namespace lfs::vis {
             return false;
         }
 
-        if (const char* const video_driver = SDL_GetCurrentVideoDriver(); video_driver) {
-            LOG_INFO("SDL video driver: {}", video_driver);
-        }
-
-#ifdef __APPLE__
-        LOG_INFO("Scene renderer={} tensor={}",
-                 lfs::rendering::viewerBackendName(lfs::rendering::desktopViewerBackend()),
-                 lfs::core::gpu_backend_name(lfs::core::configured_gpu_backend()));
-#ifdef LFS_GRAPHICS_METAL
-        LOG_INFO("Desktop compositor uses tensor programs with native Metal presentation");
-#else
-        LOG_INFO("Desktop compositor uses Vulkan for presentation, UI and editor overlays, including with the Metal viewer");
-#endif
-#endif
 #ifndef LFS_GRAPHICS_METAL
         const auto vulkan_info = probeVulkanLoader();
-        if (vulkan_info.enabled) {
-            if (vulkan_info.loader_available) {
-                LOG_INFO("Vulkan loader available: API {}", formatVulkanApiVersion(vulkan_info.api_version));
-            } else {
-                LOG_WARN("Vulkan viewer dependency is enabled, but the loader probe failed: {}", vulkan_info.error);
-            }
+        if (vulkan_info.enabled && !vulkan_info.loader_available) {
+            LOG_WARN("Vulkan viewer dependency is enabled, but the loader probe failed: {}", vulkan_info.error);
         }
 #endif
 
@@ -828,13 +810,6 @@ namespace lfs::vis {
             return false;
         }
         SDL_AddEventWatch(watchEvent, this);
-        // Directives inside macro arguments are undefined behaviour (MSVC C2059).
-#ifdef LFS_GRAPHICS_METAL
-        constexpr std::string_view graphics_backend = "Metal";
-#else
-        constexpr std::string_view graphics_backend = "Vulkan";
-#endif
-        LOG_INFO("{} window context initialized", graphics_backend);
         return true;
     }
 

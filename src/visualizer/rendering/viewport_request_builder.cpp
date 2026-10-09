@@ -614,6 +614,50 @@ namespace lfs::vis {
         return request;
     }
 
+    std::vector<ViewportMeshDrawItem> buildViewportMeshDrawItems(
+        const SceneRenderState& scene_state,
+        const RenderSettings& settings,
+        const glm::vec3& camera_position) {
+        const bool any_selected_mesh = std::any_of(
+            scene_state.meshes.begin(),
+            scene_state.meshes.end(),
+            [](const auto& mesh) { return mesh.is_selected; });
+        const bool any_selected_node = std::any_of(
+            scene_state.selected_node_mask.begin(),
+            scene_state.selected_node_mask.end(),
+            [](const bool selected) { return selected; });
+        const bool dim_non_emphasized =
+            settings.desaturate_unselected && (any_selected_mesh || any_selected_node);
+
+        const glm::vec3 headlight_dir = glm::length(camera_position) > 1e-6f
+                                            ? glm::normalize(camera_position)
+                                            : settings.mesh_light_dir;
+
+        std::vector<ViewportMeshDrawItem> items;
+        items.reserve(scene_state.meshes.size());
+        for (const auto& mesh : scene_state.meshes) {
+            if (!mesh.mesh) {
+                continue;
+            }
+            ViewportMeshDrawItem item{};
+            item.mesh = mesh.mesh;
+            item.model = mesh.transform;
+            item.light_dir = headlight_dir;
+            item.light_intensity = settings.mesh_light_intensity;
+            item.ambient = settings.mesh_ambient;
+            item.backface_culling = settings.mesh_backface_culling;
+            item.is_emphasized = mesh.is_selected;
+            item.dim_non_emphasized = dim_non_emphasized;
+            item.wireframe_overlay = settings.mesh_wireframe;
+            item.wireframe_color = settings.mesh_wireframe_color;
+            item.wireframe_width = settings.mesh_wireframe_width;
+            item.shadow_enabled = settings.mesh_shadow_enabled;
+            item.shadow_map_resolution = settings.mesh_shadow_resolution;
+            items.push_back(item);
+        }
+        return items;
+    }
+
     void applyPlyComparisonNodeScope(
         lfs::rendering::GaussianSceneState& scene,
         lfs::rendering::GaussianFilterState& filters,
@@ -823,34 +867,7 @@ namespace lfs::vis {
         const auto vp_data = ctx.makeViewportData();
         frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
         frame.camera_position = vp_data.translation;
-        const auto& meshes = ctx.scene_state.meshes;
-        const auto& selected_nodes = ctx.scene_state.selected_node_mask;
-        const bool any_selected = std::ranges::any_of(meshes, [](const auto& mesh) { return mesh.is_selected; }) ||
-                                  std::ranges::any_of(selected_nodes, [](const bool selected) { return selected; });
-        const bool dim_non_emphasized = settings.desaturate_unselected && any_selected;
-        const glm::vec3 headlight_dir = glm::length(vp_data.translation) > 1e-6f
-                                            ? glm::normalize(vp_data.translation)
-                                            : settings.mesh_light_dir;
-        frame.items.reserve(meshes.size());
-        for (const auto& mesh : meshes) {
-            if (!mesh.mesh)
-                continue;
-            frame.items.push_back({
-                .mesh = mesh.mesh,
-                .model = mesh.transform,
-                .light_dir = headlight_dir,
-                .light_intensity = settings.mesh_light_intensity,
-                .ambient = settings.mesh_ambient,
-                .backface_culling = settings.mesh_backface_culling,
-                .is_emphasized = mesh.is_selected,
-                .dim_non_emphasized = dim_non_emphasized,
-                .wireframe_overlay = settings.mesh_wireframe,
-                .wireframe_color = settings.mesh_wireframe_color,
-                .wireframe_width = settings.mesh_wireframe_width,
-                .shadow_enabled = settings.mesh_shadow_enabled,
-                .shadow_map_resolution = settings.mesh_shadow_resolution,
-            });
-        }
+        frame.items = buildViewportMeshDrawItems(ctx.scene_state, settings, vp_data.translation);
         return frame;
     }
 

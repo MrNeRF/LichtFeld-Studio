@@ -36,6 +36,8 @@ struct GeomParams {
     float anchor_scale, anchor_shift, anchor_floor;
     float min_count, min_weight;
     uint prior; // depth-normal kernels: 0 consistency, 1 prior depth
+    device const float* rays;
+    uint wrap_horizontal;
 };
 
 constant constexpr int kGeomMaxStats = 3;
@@ -438,6 +440,8 @@ kernel void geom_normal_grad(constant GeomParams& p [[buffer(0)]], GEOM_THREAD_A
 }
 
 static float3 geom_ray(constant GeomParams& p, const int x, const int y) {
+    const int xx=p.wrap_horizontal?(x+p.width)%p.width:x;
+    if(p.rays) { uint i=3*(y*p.width+xx); return float3(p.rays[i],p.rays[i+1],p.rays[i+2]); }
     return float3((float(x) + 0.5f - p.cx) / p.fx, (float(y) + 0.5f - p.cy) / p.fy, 1.0f);
 }
 
@@ -467,14 +471,14 @@ struct DepthNormal {
 static DepthNormal depth_normal(constant GeomParams& p, const int x, const int y) {
     DepthNormal s;
     s.active = false;
-    if (x <= 0 || y <= 0 || x >= p.width - 1 || y >= p.height - 1)
+    if ((!p.wrap_horizontal && (x <= 0 || x >= p.width-1)) || y<=0 || y>=p.height-1)
         return s;
     const uint W = uint(p.width);
     const uint i = uint(y) * W + uint(x);
     float e_c, a_c;
     if (!geom_expected_depth(p, i, e_c, a_c))
         return s;
-    const uint neighbor[4] = {i + 1, i - 1, i + W, i - W};
+    const uint neighbor[4] = {uint(y)*W+(uint(x)+1)%W, uint(y)*W+(uint(x)+W-1)%W, i+W, i-W};
     const float jump = kConsistencyMaxRelJump * e_c;
     for (int k = 0; k < 4; ++k) {
         if (!geom_expected_depth(p, neighbor[k], s.neighbor_e[k], s.neighbor_alpha[k]))
@@ -486,7 +490,7 @@ static DepthNormal depth_normal(constant GeomParams& p, const int x, const int y
     const float3 ty = s.neighbor_e[2] * geom_ray(p, x, y + 1) - s.neighbor_e[3] * geom_ray(p, x, y - 1);
     const float3 n_raw = float3(tx.y * ty.z - tx.z * ty.y, tx.z * ty.x - tx.x * ty.z, tx.x * ty.y - tx.y * ty.x);
     const float norm_sq = n_raw.x * n_raw.x + n_raw.y * n_raw.y + n_raw.z * n_raw.z;
-    if (norm_sq < kConsistencyMinCrossSq)
+    if (!geom_finite(norm_sq) || norm_sq < kConsistencyMinCrossSq)
         return s;
     // Camera-facing orientation, detached like the rasterizer's own flip.
     const float3 ray = geom_ray(p, x, y);
@@ -523,7 +527,7 @@ static void depth_normal_backward(constant GeomParams& p, thread const DepthNorm
                           -(g_ty.x * r_ym.x + g_ty.y * r_ym.y + g_ty.z * r_ym.z)};
     const uint W = uint(p.width);
     const uint i = uint(y) * W + uint(x);
-    const uint neighbor[4] = {i + 1, i - 1, i + W, i - W};
+    const uint neighbor[4] = {uint(y)*W+(uint(x)+1)%W, uint(y)*W+(uint(x)+W-1)%W, i+W, i-W};
     for (int k = 0; k < 4; ++k) {
         // E = max(accum, 0)/alpha: dE/daccum = 1/alpha, dE/dalpha = -E/alpha
         const float inv_a = 1.0f / s.neighbor_alpha[k];

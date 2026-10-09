@@ -7,6 +7,7 @@
 #include "../readback_buffer.hpp"
 #include "../tensor_completion.hpp"
 #include "core/device_fault.hpp"
+#include "core/vulkan_queue_sync.hpp"
 
 #include "../../internal/tensor_impl.hpp"
 #include "core/assert.hpp"
@@ -607,12 +608,13 @@ namespace lfs::core::internal {
                     VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
                     VkFence fence = VK_NULL_HANDLE;
                     interop_vk_check(vkCreateFence(device, &fence_info, nullptr, &fence), "vkCreateFence(CUDA import)");
+                    lfs::rendering::register_vulkan_queue(device, static_cast<VkQueue>(target.sparse_queue));
                     VkResult status;
                     {
                         std::unique_lock<std::mutex> lock;
                         if (target.queue_mutex)
                             lock = std::unique_lock(*target.queue_mutex);
-                        status = vkQueueBindSparse(static_cast<VkQueue>(target.sparse_queue), 1, &bind, fence);
+                        status = lfs::rendering::vk_queue_bind_sparse_synced(static_cast<VkQueue>(target.sparse_queue), 1, &bind, fence);
                     }
                     if (status == VK_SUCCESS) {
                         do {

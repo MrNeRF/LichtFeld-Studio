@@ -254,6 +254,10 @@ protected:
         ASSERT_TRUE(manager.state_machine_.transitionTo(lfs::vis::TrainingState::Running));
     }
 
+    void backdate_training_start(lfs::vis::TrainerManager& manager, const std::chrono::seconds age) {
+        manager.training_start_time_ = std::chrono::steady_clock::now() - age;
+    }
+
     void set_scene_owner_poster(
         lfs::vis::TrainerManager& manager,
         std::function<bool(std::function<void()>, std::function<void()>)> poster) {
@@ -272,6 +276,29 @@ protected:
         manager.runOnSceneOwnerThread(std::move(run), std::move(cancel));
     }
 };
+
+// Elapsed time adds the running segment only while the state is Running; a
+// stop that skips it before entering Stopping reports 0 s for a run without pauses.
+TEST_F(TrainingSceneInitConcurrencyTest, StopKeepsTheRunningSegmentInElapsedTime) {
+    lfs::core::Scene scene;
+    const auto dataset = scene.addDataset("Dataset");
+    const auto cameras = scene.addCameraGroup("Training (1)", dataset, 1);
+    ASSERT_NE(scene.addCamera("camera.png", cameras, make_test_camera()), lfs::core::NULL_NODE);
+    lfs::vis::TrainerManager manager;
+    manager.setTrainer(std::make_unique<lfs::training::Trainer>(scene));
+    set_running(manager);
+    backdate_training_start(manager, std::chrono::seconds(5));
+
+    std::optional<float> reported;
+    lfs::core::events::state::TrainingCompleted::when(
+        [&reported](const auto& event) { reported = event.elapsed_seconds; });
+    manager.stopTraining();
+
+    ASSERT_TRUE(wait_until([&] { return manager.getState() == lfs::vis::TrainingState::Finished; }));
+    EXPECT_GE(manager.getElapsedSeconds(), 5.0f);
+    ASSERT_TRUE(reported);
+    EXPECT_GE(*reported, 5.0f);
+}
 
 TEST_F(TrainingSceneInitConcurrencyTest, ColdViewportDefersWhileTrainerHoldsModelLock) {
     lfs::vis::SceneManager scene_manager;

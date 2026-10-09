@@ -12,6 +12,7 @@
 #include "py_error.hpp"
 #include "py_viewer_dispatch.hpp"
 #include "python/python_runtime.hpp"
+#include "rendering/selection_ops.hpp"
 #include "visualizer/core/training_manager.hpp"
 #include "visualizer/core/training_state.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -21,6 +22,7 @@
 #include "visualizer/scene/scene_manager.hpp"
 #include <algorithm>
 #include <cmath>
+#include <glm/gtc/type_ptr.hpp>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <stdexcept>
@@ -891,6 +893,76 @@ namespace lfs::python {
         return PySplatData(model);
     }
 
+    void PyScene::apply_crop_filter(PyTensor& mask) {
+        if (mask.tensor().numel() == 0)
+            return;
+        const auto boxes = scene_->getRenderableCropBoxes();
+        const auto ellipsoids = scene_->getRenderableEllipsoids();
+        const auto enabled = [](const auto& volume) {
+            return volume.data && volume.data->enabled && volume.parent_node_index >= 0;
+        };
+        if (!std::any_of(boxes.begin(), boxes.end(), enabled) &&
+            !std::any_of(ellipsoids.begin(), ellipsoids.end(), enabled)) {
+            return;
+        }
+
+        const auto* model = scene_->getCombinedModel();
+        auto& selection = mask.tensor();
+        if (!model || selection.ndim() != 1 || selection.size(0) != model->size() ||
+            selection.dtype() != core::DataType::Bool || !selection.is_contiguous() ||
+            selection.device() != core::Device::GPU) {
+            throw std::invalid_argument("Crop filtering requires a contiguous GPU bool mask matching the combined model");
+        }
+        const auto backend = core::gpu_backend_of(selection);
+        if (!backend || core::gpu_backend_of(model->means()) != backend)
+            throw std::invalid_argument("Crop mask must use the combined model backend");
+        const core::GpuBackendScope backend_scope(*backend);
+        const auto& means = model->means();
+        const auto transforms = scene_->getVisibleNodeTransforms();
+        std::vector<float> transform_values;
+        transform_values.reserve(transforms.size() * 16);
+        for (const auto& transform : transforms) {
+            for (int row = 0; row < 4; ++row) {
+                for (int col = 0; col < 4; ++col) {
+                    transform_values.push_back(transform[col][row]);
+                }
+            }
+        }
+        const auto model_transforms = core::Tensor::from_vector(
+            transform_values, {transforms.size(), 4, 4}, core::Device::GPU);
+        // The single-model kernel already defaults to slot zero. Avoid creating
+        // a full-size index tensor for scenes that do not otherwise need one.
+        const auto indices = transforms.size() > 1 ? scene_->getTransformIndices() : nullptr;
+        const auto upload_transform = [](const glm::mat4& world) {
+            const auto inverse = glm::inverse(world);
+            const auto* ptr = glm::value_ptr(inverse);
+            return core::Tensor::from_vector(std::vector<float>(ptr, ptr + 16), {4, 4}, core::Device::GPU);
+        };
+        const auto upload_vec = [](const glm::vec3& value) {
+            return core::Tensor::from_vector({value.x, value.y, value.z}, {3}, core::Device::GPU);
+        };
+        for (const auto& box : boxes) {
+            if (!enabled(box))
+                continue;
+            const auto transform = upload_transform(box.world_transform);
+            const auto min = upload_vec(box.data->min);
+            const auto max = upload_vec(box.data->max);
+            rendering::filter_selection_by_crop(selection, means, &transform, &min, &max, box.data->inverse,
+                                                nullptr, nullptr, false, &model_transforms, indices.get(),
+                                                box.parent_node_index);
+        }
+        for (const auto& ellipsoid : ellipsoids) {
+            if (!enabled(ellipsoid))
+                continue;
+            const auto transform = upload_transform(ellipsoid.world_transform);
+            // Match the renderer's treatment of degenerate ellipsoid axes.
+            const auto radii = upload_vec(glm::max(glm::abs(ellipsoid.data->radii), glm::vec3(1e-8f)));
+            rendering::filter_selection_by_crop(selection, means, nullptr, nullptr, nullptr, false,
+                                                &transform, &radii, ellipsoid.data->inverse, &model_transforms,
+                                                indices.get(), ellipsoid.parent_node_index);
+        }
+    }
+
     std::optional<PySplatData> PyScene::training_model() {
         auto* model = scene_->getTrainingModel();
         if (!model)
@@ -1511,6 +1583,7 @@ Returns:
             .def("set_node_transform", &PyScene::set_node_transform, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] ndarray")
             // Combined/training model
             .def("combined_model", &PyScene::combined_model, "Get the merged SplatData for all visible splats (None if empty)")
+            .def("apply_crop_filter", &PyScene::apply_crop_filter, nb::arg("mask"), "Filter a combined-model GPU bool mask in place by enabled render crop boxes and ellipsoids. Scene selection is unchanged.")
             .def("training_model", &PyScene::training_model, "Get the SplatData used for training (None if unavailable)")
             .def("set_training_model_node", &PyScene::set_training_model_node, nb::arg("name"), "Set which node provides the training model")
             .def_prop_ro("training_model_node_name", &PyScene::training_model_node_name, "Name of the node providing the training model")

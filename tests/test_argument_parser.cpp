@@ -60,18 +60,19 @@ TEST(ArgumentParserTest, DataPathLichtWithoutOutputPathBindsProject) {
     EXPECT_FALSE((*parsed)->dataset.output_path_explicit);
 }
 
-TEST(ArgumentParserTest, GutRejectsUnsupportedFeaturesWithoutChanging3DGS) {
+TEST(ArgumentParserTest, GutValidatesFeatureCapabilitiesWithoutChanging3DGS) {
     const auto data_path = make_test_path("lfs_backend_validation_data");
     const auto output_path = make_test_path("lfs_backend_validation_output");
     struct Case {
         const char* flag;
         const char* label;
         const char* field;
+        bool supported_by_gut;
     };
     const Case cases[] = {
-        {"--enable-mip", "Mip Filter", "mip_filter"},
-        {"--use-depth-loss", "Depth Loss", "use_depth_loss"},
-        {"--use-normal-loss", "Normal Loss", "use_normal_loss"},
+        {"--enable-mip", "Mip Filter", "mip_filter", false},
+        {"--use-depth-loss", "Depth Loss", "use_depth_loss", true},
+        {"--use-normal-loss", "Normal Loss", "use_normal_loss", true},
     };
     for (const auto& test : cases) {
         SCOPED_TRACE(test.flag);
@@ -87,11 +88,17 @@ TEST(ArgumentParserTest, GutRejectsUnsupportedFeaturesWithoutChanging3DGS) {
             "--gut",
         };
         const auto gut = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
-        ASSERT_FALSE(gut.has_value());
-        EXPECT_NE(gut.error().find("3DGUT"), std::string::npos);
-        EXPECT_NE(gut.error().find("3DGS"), std::string::npos);
-        EXPECT_EQ(gut.error().find("FastGS"), std::string::npos);
-        EXPECT_NE(gut.error().find(test.label), std::string::npos);
+        if (test.supported_by_gut) {
+            ASSERT_TRUE(gut.has_value()) << gut.error();
+            EXPECT_TRUE((*gut)->optimization.gut);
+            EXPECT_TRUE((*gut)->optimization.to_json().at(test.field).get<bool>());
+        } else {
+            ASSERT_FALSE(gut.has_value());
+            EXPECT_NE(gut.error().find("3DGUT"), std::string::npos);
+            EXPECT_NE(gut.error().find("3DGS"), std::string::npos);
+            EXPECT_EQ(gut.error().find("FastGS"), std::string::npos);
+            EXPECT_NE(gut.error().find(test.label), std::string::npos);
+        }
 
         const auto standard_3dgs = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)) - 1, argv);
         ASSERT_TRUE(standard_3dgs.has_value()) << standard_3dgs.error();
@@ -432,6 +439,25 @@ TEST(ArgumentParserTest, RejectsOutputNamePathComponents) {
         static_cast<int>(std::size(argv)), argv);
     ASSERT_FALSE(parsed);
     EXPECT_NE(parsed.error().find("output-name"), std::string::npos);
+}
+
+TEST(ArgumentParserTest, OutputNameNamesProjectFileWithoutFileExtension) {
+    lfs::core::param::DatasetConfig dataset;
+    dataset.output_path = "out";
+    EXPECT_EQ(dataset.project_file(), std::filesystem::path("out") / "project.licht");
+
+    for (const auto& [name, stem] : std::vector<std::pair<std::string, std::string>>{
+             {"scene.ply", "scene"},
+             {"scene.PLY", "scene"},
+             {"scene.sog", "scene"},
+             {"scene.licht", "scene"},
+             {"scene", "scene"},
+             {"scene.v2", "scene.v2"},
+         }) {
+        dataset.output_name = name;
+        EXPECT_EQ(dataset.output_stem(), stem) << name;
+        EXPECT_EQ(dataset.project_file(), std::filesystem::path("out") / (stem + ".licht")) << name;
+    }
 }
 
 TEST(ArgumentParserTest,
@@ -1768,6 +1794,27 @@ TEST(ArgumentParserTest, TrainingConfigRejectsUnknownBackgroundMode) {
     EXPECT_NE(parsed.error().find("modulation"), std::string::npos) << parsed.error();
 }
 
+TEST(ArgumentParserTest, TrainingParsesNoDepthAutoGenerate) {
+    const auto data_path = make_test_path("lfs_arg_parser_no_depth_auto_data");
+    const auto output_path = make_test_path("lfs_arg_parser_no_depth_auto_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--use-depth-loss",
+        "--no-depth-auto-generate"};
+
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.use_depth_loss);
+    EXPECT_FALSE((*parsed)->optimization.depth_auto_generate);
+    EXPECT_TRUE((*parsed)->optimization.normal_auto_generate);
+}
+
 TEST(ArgumentParserTest, TrainingParsesNoNormalAutoGenerate) {
     const auto data_path = make_test_path("lfs_arg_parser_no_normal_auto_data");
     const auto output_path = make_test_path("lfs_arg_parser_no_normal_auto_output");
@@ -2593,25 +2640,6 @@ TEST(ArgumentParserTest, EvaluationFlagsOverrideTheConfigFile) {
     EXPECT_TRUE(restored.optimization.enable_eval);
     EXPECT_EQ(restored.optimization.eval_steps, (std::vector<size_t>{5, 10}));
     EXPECT_EQ(restored.dataset.test_every, 2);
-}
-
-// A parser that let --gut through with a depth or normal loss would train with supervision the 3DGUT
-// rasterizer cannot render; without --gut both flags must still parse.
-TEST(ArgumentParserTest, GutRejectsDepthAndNormalLoss) {
-    const auto data_path = make_test_path("lfs_arg_parser_gut_supervision_data");
-    const auto output_path = make_test_path("lfs_arg_parser_gut_supervision_output");
-
-    for (const char* loss : {"--use-depth-loss", "--use-normal-loss"}) {
-        const char* with_gut[] = {"LichtFeld-Studio", "-d", data_path.c_str(), "-o", output_path.c_str(), "--gut", loss};
-        const auto rejected = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(with_gut)), with_gut);
-        ASSERT_FALSE(rejected.has_value()) << loss;
-        EXPECT_NE(rejected.error().find("not available with --gut"), std::string::npos) << rejected.error();
-
-        const char* without_gut[] = {"LichtFeld-Studio", "-d", data_path.c_str(), "-o", output_path.c_str(), loss};
-        const auto accepted =
-            lfs::io::args::parse_args_and_params(static_cast<int>(std::size(without_gut)), without_gut);
-        ASSERT_TRUE(accepted.has_value()) << loss << ": " << accepted.error();
-    }
 }
 
 TEST(ArgumentParserTest, EvalStepsWithoutEvaluationStopTheRun) {

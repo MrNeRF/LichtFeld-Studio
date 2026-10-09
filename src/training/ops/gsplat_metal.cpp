@@ -57,25 +57,29 @@ namespace lfs::training {
             uint64_t camera, means, scales, quats, opacities, colors, bg_color, bg_image, tile_offsets, gaussian_ids;
             uint64_t image, alpha, last_ids, v_image, v_alpha, grads, densification, error_map, edge_map, edge_scores;
             uint32_t count, width, height, tiles_x;
+            uint64_t depth, normal, rays, v_depth, v_normal;
+            uint32_t mode;
         };
 
         struct AccumulateParams {
             uint64_t camera, means, scales, opacities, grads, radii, means2d;
             uint64_t means_grad, scaling_grad, rotation_grad, opacity_grad, sh0_grad, sh_rest_grad, grad_norms, shares;
             uint32_t count, degree, layout_rest, width, height;
+            float flatten_weight;
         };
 
         // What backward needs from the forward it follows.
         struct Frame {
             Tensor means, scales, quats, opacities, camera, bg_color, bg_image;
             Tensor radii, means2d, colors, tile_offsets, gaussian_ids, alpha, last_ids;
+            ops::GsplatRenderMode mode = ops::GsplatRenderMode::RGB;
             uint32_t count = 0, width = 0, height = 0, degree = 0, layout_rest = 0, intersections = 0;
         };
 
         struct MetalGsplatState : ops::BackendState {
             Frame frame;
             bool live = false;
-            Tensor camera, radial, tangential, prism, image, alpha, last_ids;
+            Tensor camera, radial, tangential, prism, image, alpha, last_ids, depth, normal, camera_rays;
         };
 
         MetalGsplatState& state_of(ops::GsplatSaved& saved) {
@@ -165,10 +169,6 @@ namespace lfs::training {
                                   const ops::RenderOutputs& output) {
             auto& state = state_of(saved);
             release(saved);
-            // CUDA depth modes read colour slots the SH pass never writes.
-            if (params.render_mode != ops::GsplatRenderMode::RGB)
-                throw std::invalid_argument(std::format("Metal gsplat renders RGB only, got render mode {}",
-                                                        static_cast<int>(params.render_mode)));
             const auto model = params.camera_model;
             if (model == core::CameraModelType::ORTHO)
                 throw std::invalid_argument("gsplat has no orthographic camera model");
@@ -181,6 +181,7 @@ namespace lfs::training {
                     layout_bases));
 
             Frame f;
+            f.mode = params.render_mode;
             const auto count = splats.means.is_valid() && splats.means.ndim() > 0 ? splats.means.shape()[0] : 0;
             f.count = static_cast<uint32_t>(count);
             f.means = float_input(splats.means, count * 3, "means");
@@ -333,7 +334,20 @@ namespace lfs::training {
             const auto plane = [&](const size_t channels) {
                 return core::TensorShape({channels, static_cast<size_t>(f.height), static_cast<size_t>(f.width)});
             };
-            const Tensor image = reuse(state.image, plane(3), DataType::Float32);
+            const bool rgb = params.render_mode == ops::GsplatRenderMode::RGB || params.render_mode == ops::GsplatRenderMode::RGB_D || params.render_mode == ops::GsplatRenderMode::RGB_ED || params.render_mode == ops::GsplatRenderMode::RGB_D_N;
+            const bool geometry = params.render_mode == ops::GsplatRenderMode::RGB_D_N;
+            const Tensor image = rgb ? reuse(state.image, plane(3), DataType::Float32) : Tensor{};
+            const Tensor depth = params.render_mode != ops::GsplatRenderMode::RGB ? reuse(state.depth, plane(1), DataType::Float32) : Tensor{};
+            const Tensor normal = geometry ? reuse(state.normal, plane(3), DataType::Float32) : Tensor{};
+            saved.camera_rays = geometry ? reuse(state.camera_rays, {size_t(f.height), size_t(f.width), size_t(3)}, DataType::Float32) : Tensor{};
+            if (geometry) {
+                RasterParams rays{};
+                rays.camera = mk::address(f.camera);
+                rays.width = f.width;
+                rays.height = f.height;
+                rays.rays = mk::address(saved.camera_rays);
+                mk::launch_items("gsplat_geometry_rays", rays, {&f.camera, &saved.camera_rays}, size_t(f.width) * f.height);
+            }
             f.alpha = reuse(state.alpha, plane(1), DataType::Float32);
             f.last_ids = reuse(state.last_ids, plane(1), DataType::Int32);
             if (bg_image.is_valid() && !bg_image.is_empty())
@@ -342,7 +356,12 @@ namespace lfs::training {
                 f.bg_color = float_input(bg_color, 3, "background colour");
             if (intersections == 0) {
                 // As CUDA: an empty intersection list clears the outputs, background included.
-                state.image.zero_();
+                if (image.is_valid())
+                    state.image.zero_();
+                if (depth.is_valid())
+                    state.depth.zero_();
+                if (normal.is_valid())
+                    state.normal.zero_();
                 f.alpha.zero_();
                 f.last_ids.zero_();
             } else {
@@ -364,15 +383,19 @@ namespace lfs::training {
                     .width = f.width,
                     .height = f.height,
                     .tiles_x = tiles_x,
+                    .depth = mk::address(depth),
+                    .normal = mk::address(normal),
+                    .mode = static_cast<uint32_t>(params.render_mode),
                 };
                 mk::launch_2d("gsplat_rasterize_forward", raster,
                               {&f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &f.colors, &f.bg_color,
-                               &f.bg_image, &f.tile_offsets, &f.gaussian_ids, &image, &f.alpha, &f.last_ids},
+                               &f.bg_image, &f.tile_offsets, &f.gaussian_ids, &image, &depth, &normal, &f.alpha, &f.last_ids},
                               tiles_x, tiles_y, kTile, kTile);
             }
             output.image = image;
             output.alpha = f.alpha;
-            output.depth = Tensor();
+            output.depth = depth;
+            output.normal = normal;
             state.frame = std::move(f);
             state.live = true;
             return {ops::RasterResult::Code::Success, true, {}};
@@ -395,9 +418,22 @@ namespace lfs::training {
             const auto plane = [&](const size_t channels) {
                 return core::TensorShape({channels, static_cast<size_t>(f.height), static_cast<size_t>(f.width)});
             };
-            const Tensor v_image = grad_image.is_valid() && grad_image.numel() > 0
-                                       ? float_input(grad_image, 3 * pixels, "image gradient")
-                                       : Tensor::zeros(plane(3), Device::GPU, DataType::Float32);
+            const Tensor v_normal = gradients.normal.is_valid() ? float_input(gradients.normal, pixels * 3, "normal gradient") : Tensor{};
+            Tensor v_image = Tensor::zeros(plane(3), Device::GPU, DataType::Float32), v_depth;
+            if (grad_image.is_valid() && grad_image.numel()) {
+                if (grad_image.numel() == 3 * pixels)
+                    v_image = float_input(grad_image, 3 * pixels, "image gradient");
+                else if (grad_image.numel() == 4 * pixels) {
+                    auto channels = float_input(grad_image, 4 * pixels, "image gradient").reshape({4, int(f.height), int(f.width)});
+                    v_image = channels.slice(0, 0, 3);
+                    v_depth = channels.slice(0, 3, 4);
+                } else {
+                    LFS_ASSERT_MSG(f.mode == ops::GsplatRenderMode::D || f.mode == ops::GsplatRenderMode::ED, "Gsplat image gradient has the wrong channel count");
+                    v_depth = float_input(grad_image, pixels, "depth gradient");
+                }
+            }
+            if (gradients.depth.is_valid())
+                v_depth = float_input(gradients.depth, pixels, "depth gradient");
             const Tensor v_alpha = grad_alpha.is_valid() && grad_alpha.numel() > 0
                                        ? float_input(grad_alpha, pixels, "alpha gradient")
                                        : Tensor::zeros(plane(1), Device::GPU, DataType::Float32);
@@ -453,12 +489,16 @@ namespace lfs::training {
                     .width = f.width,
                     .height = f.height,
                     .tiles_x = tiles_x,
+                    .depth = mk::address(state.depth),
+                    .v_depth = mk::address(v_depth),
+                    .v_normal = mk::address(v_normal),
+                    .mode = static_cast<uint32_t>(f.mode),
                 };
                 // Two pixels per thread.
                 mk::launch_2d("gsplat_rasterize_backward", raster,
                               {&f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &f.colors, &f.bg_color,
                                &f.bg_image, &f.tile_offsets, &f.gaussian_ids, &f.alpha, &f.last_ids, &v_image,
-                               &v_alpha, &grads, &densification, &errors, &edges, &edge_scores},
+                               &v_alpha, &v_depth, &v_normal, &state.depth, &grads, &densification, &errors, &edges, &edge_scores},
                               tiles_x, tiles_y, kTile / 2, kTile);
             }
 
@@ -501,6 +541,7 @@ namespace lfs::training {
                 .layout_rest = f.layout_rest,
                 .width = f.width,
                 .height = f.height,
+                .flatten_weight = gradients.flatten_weight,
             };
             mk::launch_items("gsplat_accumulate", accumulate,
                              {&f.camera, &f.means, &f.scales, &f.opacities, &grads, &f.radii, &f.means2d, &means_grad,
@@ -543,6 +584,10 @@ namespace lfs::training {
             state.image = {};
             state.alpha = {};
             state.last_ids = {};
+            state.depth = {};
+            state.normal = {};
+            state.camera_rays = {};
+            saved.camera_rays = {};
             return true;
         }
     } // namespace

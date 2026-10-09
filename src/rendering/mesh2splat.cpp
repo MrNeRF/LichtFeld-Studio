@@ -10,6 +10,7 @@
 #include "core/mesh_data.hpp"
 #include "core/tensor.hpp"
 #include "core/vulkan_helpers.hpp"
+#include "core/vulkan_queue_sync.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "mesh2splat_shared.hpp"
 #include "rendering/vulkan_result.hpp"
@@ -981,7 +982,7 @@ void main() {
                     error = vkError("vkCreateDevice", result);
                     return false;
                 }
-                vkGetDeviceQueue(device_, graphics_family_, 0, &queue_);
+                lfs::rendering::vk_get_device_queue_synced(device_, graphics_family_, 0, &queue_);
                 return true;
             }
 
@@ -1002,7 +1003,7 @@ void main() {
                 // After DeviceWaitIdle, retained quarantine fences are safe to
                 // destroy (GPU has finished). CBs free with the command pool.
                 if (device_)
-                    vkDeviceWaitIdle(device_);
+                    lfs::rendering::vk_device_wait_idle_synced(device_);
                 for (VkFence fence : retained_fences_) {
                     if (fence != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE) {
                         vkDestroyFence(device_, fence, nullptr);
@@ -1014,7 +1015,7 @@ void main() {
                 if (command_pool_)
                     vkDestroyCommandPool(device_, command_pool_, nullptr);
                 if (device_)
-                    vkDestroyDevice(device_, nullptr);
+                    lfs::rendering::vk_destroy_device_synced(device_, nullptr);
                 if (instance_)
                     vkDestroyInstance(instance_, nullptr);
                 command_pool_ = VK_NULL_HANDLE;

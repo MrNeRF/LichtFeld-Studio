@@ -119,17 +119,11 @@ namespace lfs::training {
                 centerInitializationMeans(point_cloud->means, scene.getTrainingDataOrigin());
             } else if (data.point_cloud && data.point_cloud->size() > 0) {
                 point_cloud = data.point_cloud;
-                if (verbose) {
-                    LOG_INFO("Adding {} points to scene", point_cloud->size());
-                }
             } else {
                 if (verbose) {
                     LOG_INFO("No point cloud, using random initialization");
                 }
                 point_cloud = createRandomPointCloud();
-                if (verbose) {
-                    LOG_INFO("Adding {} random points to scene", point_cloud->size());
-                }
             }
 
             scene.setInitialPointCloud(point_cloud);
@@ -484,12 +478,6 @@ namespace lfs::training {
             }
             lfs::core::Tensor::trim_memory_pool();
 
-            LOG_INFO("Migrated training SplatData tensors to Vulkan-external storage "
-                     "(gaussians={}, capacity={}, shN_q16={}, shN_capacity_cells={})",
-                     n,
-                     model.means_raw().capacity(),
-                     model.shN_value_quantized(),
-                     model.shN_raw().is_valid() ? model.shN_raw().capacity() : 0);
         } catch (const std::exception& e) {
             return std::unexpected(std::format(
                 "Failed to migrate training SplatData to Vulkan-external storage: {}",
@@ -513,11 +501,11 @@ namespace lfs::training {
             .min_track_length = effectiveMinTrackLengthForLoad(params),
             .validate_only = false,
             .load_masks = params.optimization.mask_mode != lfs::core::param::MaskMode::None,
-            .load_depths = params.optimization.use_depth_loss &&
-                           params.optimization.depth_loss_weight > 0.0f,
+            .load_depths = training_depth_priors_enabled(params.optimization),
             .load_normals = training_normal_priors_enabled(params.optimization) ||
-                            (!params.optimization.gut && params.optimization.enable_eval),
+                            params.optimization.enable_eval,
             .normal_auto_generate = params.optimization.normal_auto_generate,
+            .depth_auto_generate = params.optimization.depth_auto_generate,
             .centralize = parse_centralize(params.dataset.centralize_dataset),
             .progress = [&data_path](float percentage, const std::string& message) {
                 LOG_DEBUG("[{:5.1f}%] {}", percentage, message);
@@ -534,8 +522,6 @@ namespace lfs::training {
             return std::unexpected(std::format("Failed to load dataset: {}", load_result.error().format()));
         }
 
-        LOG_INFO("Dataset loaded successfully using {} loader", load_result->loader_used);
-
         return installLoadedDataset(params, scene, *load_result, true);
     }
 
@@ -551,10 +537,10 @@ namespace lfs::training {
             .min_track_length = params.dataset.min_track_length,
             .validate_only = true,
             .load_masks = params.optimization.mask_mode != lfs::core::param::MaskMode::None,
-            .load_depths = params.optimization.use_depth_loss &&
-                           params.optimization.depth_loss_weight > 0.0f,
+            .load_depths = training_depth_priors_enabled(params.optimization),
             .load_normals = training_normal_priors_enabled(params.optimization),
-            .normal_auto_generate = params.optimization.normal_auto_generate};
+            .normal_auto_generate = params.optimization.normal_auto_generate,
+            .depth_auto_generate = params.optimization.depth_auto_generate};
 
         auto result = data_loader->load(params.dataset.data_path, load_options);
         if (!result) {

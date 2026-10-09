@@ -119,8 +119,6 @@ namespace lfs::vis {
     } // namespace
 
     void MainLoop::run() {
-        LOG_INFO("Main loop starting");
-
         g_interrupt_count.store(0, std::memory_order_relaxed);
         g_interrupt_requested.store(false, std::memory_order_relaxed);
         close_interrupt_wake_fds();
@@ -227,8 +225,6 @@ namespace lfs::vis {
         std::signal(SIGINT, SIG_DFL);
         std::signal(SIGTERM, SIG_DFL);
         close_interrupt_wake_fds();
-
-        LOG_INFO("Main loop ended");
     }
 
     void MainLoop::installInterruptHandlers() {

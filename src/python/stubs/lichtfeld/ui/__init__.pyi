@@ -2602,7 +2602,9 @@ def select_keyframe(index: int) -> None:
     """Select keyframe in timeline"""
 
 def delete_keyframe(index: int) -> None:
-    """Delete keyframe by index"""
+    """
+    Delete keyframe by index; raises ValueError for the protected first keyframe
+    """
 
 def set_keyframe_easing(index: int, easing: int) -> None:
     """

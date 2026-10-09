@@ -11,7 +11,8 @@ namespace lfs::gpu_ops {
                                   D = 1,
                                   ED = 2,
                                   RGB_D = 3,
-                                  RGB_ED = 4 };
+                                  RGB_ED = 4,
+                                  RGB_D_N = 5 };
 
     struct GsplatParams {
         HW full_image;
@@ -29,10 +30,14 @@ namespace lfs::gpu_ops {
     struct GsplatGradients {
         void* owner;
         Out (*get)(void*, AdamSlot);
+        core::Tensor depth, normal;
+        float flatten_weight = 0.f;
     };
 
     struct GsplatSaved {
         State backend;
+        core::Tensor camera_rays;
+        bool equirectangular = false;
     };
 
     struct GsplatRasterOps {

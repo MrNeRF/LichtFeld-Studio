@@ -1,3 +1,4 @@
+#include "core/vulkan_queue_sync.hpp"
 #include <vulkan/vulkan.h>
 
 #define VMA_IMPLEMENTATION
@@ -178,7 +179,7 @@ namespace {
 
         ~VulkanContext() {
             if (device_ != VK_NULL_HANDLE)
-                vkDeviceWaitIdle(device_);
+                lfs::rendering::vk_device_wait_idle_synced(device_);
             if (timeline_ != VK_NULL_HANDLE)
                 vkDestroySemaphore(device_, timeline_, nullptr);
             if (commandPool_ != VK_NULL_HANDLE)
@@ -186,7 +187,7 @@ namespace {
             if (allocator_ != VK_NULL_HANDLE)
                 vmaDestroyAllocator(allocator_);
             if (device_ != VK_NULL_HANDLE)
-                vkDestroyDevice(device_, nullptr);
+                lfs::rendering::vk_destroy_device_synced(device_, nullptr);
             if (debugMessenger_ != VK_NULL_HANDLE) {
                 const auto destroy = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
                     vkGetInstanceProcAddr(instance_, "vkDestroyDebugUtilsMessengerEXT"));
@@ -340,7 +341,7 @@ namespace {
             submit.pCommandBufferInfos = &commandInfo;
             submit.signalSemaphoreInfoCount = 1;
             submit.pSignalSemaphoreInfos = &signalInfo;
-            check(vkQueueSubmit2(queue_, 1, &submit, VK_NULL_HANDLE), "vkQueueSubmit2");
+            check(lfs::rendering::vk_queue_submit2_synced(queue_, 1, &submit, VK_NULL_HANDLE), "vkQueueSubmit2");
             waitTimeline(value);
             vkFreeCommandBuffers(device_, commandPool_, 1, &command);
             return value;
@@ -568,7 +569,7 @@ namespace {
             deviceInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
             deviceInfo.ppEnabledExtensionNames = extensions.data();
             check(vkCreateDevice(physicalDevice_, &deviceInfo, nullptr, &device_), "vkCreateDevice");
-            vkGetDeviceQueue(device_, queueFamily_, 0, &queue_);
+            lfs::rendering::vk_get_device_queue_synced(device_, queueFamily_, 0, &queue_);
 
             vulkan13Properties_ = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES};
             subgroupProperties_ = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};

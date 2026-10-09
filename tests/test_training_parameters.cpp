@@ -120,7 +120,7 @@ namespace {
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.012f);
         EXPECT_EQ(resolved<int>(defaults, "max_cap"), 5'000'000);
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "min_opacity"), 1.0f / 255.0f);
-        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_reg"), 0.003f);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_reg"), 0.0f);
         auto cap_adjusted = defaults;
         cap_adjusted.max_cap = 1'000'000;
         EXPECT_NEAR(resolved<float>(cap_adjusted, "grow_fraction"), 0.0758f, 1.0e-7f);
@@ -346,8 +346,8 @@ namespace {
         };
         const std::array cases{
             Case{&OptimizationParameters::mip_filter, Conflict::MipFilter, "Mip Filter"},
-            Case{&OptimizationParameters::use_depth_loss, Conflict::DepthSupervision, "Depth Loss"},
-            Case{&OptimizationParameters::use_normal_loss, Conflict::NormalSupervision, "Normal Loss"},
+            Case{&OptimizationParameters::use_depth_loss, Conflict::None, "Depth Loss"},
+            Case{&OptimizationParameters::use_normal_loss, Conflict::None, "Normal Loss"},
         };
         for (const auto* strategy : {"mrnf", "mcmc", "igs+"}) {
             for (const auto& item : cases) {
@@ -359,6 +359,11 @@ namespace {
                 params.gut = true;
                 const auto expected = std::string_view(strategy) == "igs+" ? Conflict::IGSPlus : item.conflict;
                 EXPECT_EQ(params.backend_conflict(), expected);
+                if (expected == Conflict::None) {
+                    EXPECT_TRUE(params.backend_conflict_message().empty());
+                    EXPECT_TRUE(params.validate().empty());
+                    continue;
+                }
                 const auto descriptor =
                     lfs::core::param::training_backend_conflict_descriptor(expected);
                 ASSERT_FALSE(descriptor.id.empty());
@@ -386,7 +391,7 @@ namespace {
                         .id.empty());
     }
 
-    TEST_F(TrainingParametersTest, GutConflictValidationAllowsUndistortAndDoesNotNormalizeSettings) {
+    TEST_F(TrainingParametersTest, GutDepthSupervisionAllowsUndistortAndPreservesSettings) {
         using Conflict = lfs::core::param::TrainingBackendConflict;
         auto params = OptimizationParameters::mrnf_defaults();
         params.gut = true;
@@ -395,8 +400,8 @@ namespace {
         params.undistort = true;
         params.use_depth_loss = true;
         const auto before = params.to_json();
-        EXPECT_EQ(params.backend_conflict(), Conflict::DepthSupervision);
-        EXPECT_FALSE(params.validate().empty());
+        EXPECT_EQ(params.backend_conflict(), Conflict::None);
+        EXPECT_TRUE(params.validate().empty());
         EXPECT_EQ(params.to_json(), before);
         params.use_depth_loss = false;
         EXPECT_EQ(params.backend_conflict(), Conflict::None);
@@ -408,7 +413,7 @@ namespace {
     TEST_F(TrainingParametersTest, BackendConflictRejectsWithoutChangingSettings) {
         auto params = OptimizationParameters::mrnf_defaults();
         params.gut = true;
-        params.use_depth_loss = true;
+        params.mip_filter = true;
         const auto before = params.to_json();
         EXPECT_FALSE(params.validate().empty());
         EXPECT_EQ(params.to_json(), before);
@@ -576,6 +581,20 @@ namespace {
         EXPECT_TRUE(defaults.normal_auto_generate);
     }
 
+    TEST_F(TrainingParametersTest, DepthAutoGenerateRoundTripAndDefault) {
+        auto params = OptimizationParameters::mrnf_defaults();
+        EXPECT_TRUE(params.depth_auto_generate);
+
+        params.depth_auto_generate = false;
+        const auto json = params.to_json();
+        EXPECT_FALSE(json.at("depth_auto_generate").get<bool>());
+        EXPECT_FALSE(OptimizationParameters::from_json(json).depth_auto_generate);
+
+        auto missing = json;
+        missing.erase("depth_auto_generate");
+        EXPECT_TRUE(OptimizationParameters::from_json(missing).depth_auto_generate);
+    }
+
     TEST_F(TrainingParametersTest, NormalSupervisionScheduleRoundTripAndValidation) {
         auto params = OptimizationParameters::mrnf_defaults();
         EXPECT_FLOAT_EQ(params.normal_start_fraction, 0.08f);
@@ -617,18 +636,6 @@ namespace {
         params.normal_start_fraction = 0.2f;
         params.normal_end_fraction = -0.1f;
         EXPECT_NE(params.validate().find("normal_end_fraction"), std::string::npos);
-    }
-
-    // Catches depth maps loaded and anchors fitted for a GUT run, whose rasterizer renders no depth.
-    TEST_F(TrainingParametersTest, GutHasNoDepthSupervision) {
-        OptimizationParameters params;
-        params.use_depth_loss = true;
-        EXPECT_TRUE(params.depth_supervision_enabled());
-        params.gut = true;
-        EXPECT_FALSE(params.depth_supervision_enabled());
-        params.gut = false;
-        params.depth_loss_weight = 0.0f;
-        EXPECT_FALSE(params.depth_supervision_enabled());
     }
 
     TEST_F(TrainingParametersTest, NormalSupervisionActiveRespectsStartEndAndStepsScaler) {
@@ -743,8 +750,8 @@ namespace {
         EXPECT_EQ(gut_capabilities.igs_plus, TrainingFeatureSupport::Unsupported);
         EXPECT_EQ(gut_capabilities.undistort, TrainingFeatureSupport::Supported);
         EXPECT_EQ(gut_capabilities.mip_filter, TrainingFeatureSupport::Unsupported);
-        EXPECT_EQ(gut_capabilities.depth_supervision, TrainingFeatureSupport::Unsupported);
-        EXPECT_EQ(gut_capabilities.normal_supervision, TrainingFeatureSupport::Unsupported);
+        EXPECT_EQ(gut_capabilities.depth_supervision, TrainingFeatureSupport::Supported);
+        EXPECT_EQ(gut_capabilities.normal_supervision, TrainingFeatureSupport::Supported);
         EXPECT_EQ(gut_capabilities.masking, TrainingFeatureSupport::Supported);
         EXPECT_EQ(gut_capabilities.segmentation, TrainingFeatureSupport::Supported);
         EXPECT_EQ(gut_capabilities.background_modes, TrainingFeatureSupport::Supported);
@@ -853,7 +860,7 @@ namespace {
         EXPECT_EQ(mcmc_result->max_cap, 1'000'000);
 
         const auto mrnf_path = eval_config_path("mrnf_optimization_params.json");
-        EXPECT_EQ(frozen_config_fingerprint(mrnf_path), 0xff1bdba9c3fd52dbULL);
+        EXPECT_EQ(frozen_config_fingerprint(mrnf_path), 0xc7841d999e460d68ULL);
         const auto mrnf_result = lfs::core::param::read_optim_params_from_json(mrnf_path);
         ASSERT_TRUE(mrnf_result.has_value()) << mrnf_result.error();
         EXPECT_FLOAT_EQ(mrnf_result->means_lr, 2e-05f);
@@ -861,6 +868,7 @@ namespace {
         EXPECT_EQ(mrnf_result->start_refine, 0u);
         EXPECT_EQ(mrnf_result->stop_refine, 28'500u);
         EXPECT_FLOAT_EQ(mrnf_result->min_opacity, 0.0039215689f);
+        EXPECT_FLOAT_EQ(mrnf_result->opacity_reg, 0.0f);
 
         const auto igs_path = eval_config_path("improvedGSplus_optimization_params.json");
         EXPECT_EQ(frozen_config_fingerprint(igs_path), 0xf86e40494df20d22ULL);

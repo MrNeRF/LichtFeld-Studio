@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <limits>
 
 #include "config.h"
 #include "core/event_bridge/command_center_bridge.hpp"
@@ -1476,6 +1477,85 @@ namespace lfs::mcp {
         EXPECT_EQ(registry.call_tool(tool_name, json{{"label", "x"}, {"scale", "2.5x"}})["error"]["details"]["parameter"],
                   "scale");
         EXPECT_EQ(handler_calls, 3);
+    }
+
+    TEST(McpProtocolTest, IntegerArgumentsAreIntegralAndSafelyCoerced) {
+        const char* name = "test.integral";
+        ScopedToolRegistration cleanup(name);
+        int calls = 0;
+        ToolRegistry::instance().register_tool(
+            McpTool{.name = name, .description = "Integer validation", .input_schema = {.type = "object", .properties = json{{"x", {{"type", "integer"}}}}, .required = {"x"}}},
+            [&](const json& args) -> json { ++calls; return args; });
+        auto& registry = ToolRegistry::instance();
+        for (const auto& value : {json(2), json(2.0), json("2"), json(-2.0),
+                                  json(std::numeric_limits<int64_t>::min()), json(std::numeric_limits<int64_t>::max()),
+                                  json(std::numeric_limits<uint64_t>::max()), json(-0x1p63),
+                                  json("9223372036854775807"), json("-9223372036854775808")}) {
+            SCOPED_TRACE(value.dump());
+            const auto result = registry.call_tool(name, json{{"x", value}});
+            ASSERT_TRUE(result.contains("x")) << result.dump();
+            EXPECT_TRUE(result["x"].is_number_integer());
+            if (value == 2 || value == "2")
+                EXPECT_EQ(result["x"], 2);
+        }
+        const int accepted_calls = calls;
+        for (const auto& value : {json(2.5), json("2.5"), json(1e300), json(0x1p63), json(-0x1.0000000000001p63),
+                                  json("9223372036854775808"), json("-9223372036854775809"),
+                                  json(std::numeric_limits<double>::quiet_NaN()), json(std::numeric_limits<double>::infinity())}) {
+            SCOPED_TRACE(value.dump());
+            const auto result = registry.call_tool(name, json{{"x", value}});
+            EXPECT_EQ(result.value("error", json::object()).value("code", ""), "InvalidArgument");
+            EXPECT_EQ(result.value("error_message", ""), "Parameter 'x' must be an integer");
+            EXPECT_EQ(calls, accepted_calls);
+        }
+    }
+
+    TEST(McpProtocolTest, SchemaAlternativesCoerceOnCopiesAndCheckBoundsAndEnums) {
+        auto& registry = ToolRegistry::instance();
+        for (const auto* keyword : {"oneOf", "anyOf"}) {
+            SCOPED_TRACE(keyword);
+            const char* name = "test.alternatives";
+            ScopedToolRegistration cleanup(name);
+            int calls = 0;
+            const json alternatives = json::array({json{{"type", "integer"}, {"minimum", 0}, {"maximum", 3}},
+                                                   json{{"type", "string"}, {"enum", json::array({"linear", "ease_in", "ease_out", "ease_in_out", "04", "2"})}}});
+            registry.register_tool(
+                McpTool{.name = name, .description = "Alternative validation", .input_schema = {.type = "object", .properties = json{{"x", {{keyword, alternatives}}}}, .required = {"x"}}},
+                [&](const json& args) -> json { ++calls; return args; });
+            for (const auto& value : {json(2), json(2.0), json("2")}) {
+                const auto result = registry.call_tool(name, json{{"x", value}});
+                EXPECT_EQ(result.value("x", json()), 2);
+                EXPECT_TRUE(result.value("x", json()).is_number_integer());
+            }
+            for (const auto* value : {"ease_in", "04"}) {
+                const auto result = registry.call_tool(name, json{{"x", value}});
+                EXPECT_EQ(result.value("x", json()), value);
+            }
+            const int accepted_calls = calls;
+            for (const auto& value : {json(2.7), json("bogus"), json(4), json(-1), json(true)}) {
+                const auto result = registry.call_tool(name, json{{"x", value}});
+                EXPECT_EQ(result.value("error", json::object()).value("code", ""), "InvalidArgument");
+                EXPECT_EQ(calls, accepted_calls);
+            }
+        }
+    }
+
+    TEST(McpProtocolTest, ExistingScalarAndIntegerArrayCoercionsArePreserved) {
+        const char* name = "test.coercion_controls";
+        ScopedToolRegistration cleanup(name);
+        ToolRegistry::instance().register_tool(
+            McpTool{.name = name, .description = "Coercion controls", .input_schema = {.type = "object", .properties = json{{"flag", {{"type", "boolean"}}}, {"label", {{"type", "string"}}}, {"number", {{"type", "number"}}}, {"ids", {{"type", "array"}, {"items", {{"type", "integer"}}}}}}, .required = {}}},
+            [](const json& args) -> json { return args; });
+        auto& registry = ToolRegistry::instance();
+        for (const bool flag : {false, true}) {
+            const auto result = registry.call_tool(name, json{{"flag", flag ? "true" : "false"}, {"label", 5}, {"number", "2.5"}, {"ids", json::array({2, 2.0, "2"})}});
+            EXPECT_EQ(result, (json{{"flag", flag}, {"label", "5"}, {"number", 2.5}, {"ids", json::array({2, 2, 2})}}));
+            ASSERT_TRUE(result.contains("ids"));
+            for (const auto& id : result["ids"])
+                EXPECT_TRUE(id.is_number_integer());
+        }
+        const auto invalid = registry.call_tool(name, json{{"ids", json::array({2, 2.5})}});
+        EXPECT_EQ(invalid.value("error_message", ""), "Parameter 'ids[1]' must be an integer");
     }
 
     TEST(McpProtocolTest, OptionalBooleanNullIsRejectedBeforeTheHandler) {

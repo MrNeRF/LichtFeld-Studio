@@ -372,6 +372,12 @@ namespace lfs::core::param {
                          "depth_loss_mode", "Depth Loss Mode", d.depth_loss_mode,
                          "Depth prior convention: ssi (auto-detect), ssi-disparity, or ssi-depth")
             .all_strategies()
+            .bool_prop(&OptimizationParameters::depth_auto_generate,
+                       "depth_auto_generate", "Auto-generate Depth", d.depth_auto_generate,
+                       "Generate missing or size-mismatched depth maps with MoGe-2 from the full-resolution images/ folder")
+            .locale("training_params.depth_auto_generate")
+            .tooltip("training.tooltip.depth_auto_generate")
+            .all_strategies()
             .bool_prop(&OptimizationParameters::use_normal_loss,
                        "use_normal_loss", "Use Normal Loss", d.use_normal_loss,
                        "Use dataset normal maps for normal supervision")

@@ -154,63 +154,6 @@ namespace lfs::rendering {
 
     } // namespace
 
-    namespace {
-        std::mutex* g_graphics_queue_mu = nullptr;
-        VkQueue g_graphics_queue = VK_NULL_HANDLE;
-        VkQueue g_present_queue = VK_NULL_HANDLE;
-        VkQueue g_compute_queue = VK_NULL_HANDLE;
-
-        [[nodiscard]] bool queue_needs_external_lock(const VkQueue queue) noexcept {
-            return g_graphics_queue_mu != nullptr && queue != VK_NULL_HANDLE &&
-                   (queue == g_graphics_queue || queue == g_present_queue || queue == g_compute_queue);
-        }
-    } // namespace
-
-    void set_graphics_queue_external_sync(std::mutex* mutex, VkQueue graphics, VkQueue present, VkQueue compute) noexcept {
-        g_graphics_queue_mu = mutex;
-        g_graphics_queue = graphics;
-        g_present_queue = present;
-        g_compute_queue = compute;
-    }
-
-    VkResult vk_queue_submit_synced(VkQueue queue,
-                                    const uint32_t submit_count,
-                                    const VkSubmitInfo* submits,
-                                    VkFence fence) {
-        std::unique_lock<std::mutex> lock;
-        if (queue_needs_external_lock(queue)) {
-            lock = std::unique_lock(*g_graphics_queue_mu);
-        }
-        return vkQueueSubmit(queue, submit_count, submits, fence);
-    }
-
-    VkResult vk_queue_present_synced(VkQueue queue, const VkPresentInfoKHR* present_info) {
-        std::unique_lock<std::mutex> lock;
-        if (queue_needs_external_lock(queue)) {
-            lock = std::unique_lock(*g_graphics_queue_mu);
-        }
-        return vkQueuePresentKHR(queue, present_info);
-    }
-
-    VkResult vk_queue_wait_idle_synced(VkQueue queue) {
-        std::unique_lock<std::mutex> lock;
-        if (queue_needs_external_lock(queue)) {
-            lock = std::unique_lock(*g_graphics_queue_mu);
-        }
-        return vkQueueWaitIdle(queue);
-    }
-
-    VkResult vk_queue_bind_sparse_synced(VkQueue queue,
-                                         const uint32_t bind_info_count,
-                                         const VkBindSparseInfo* bind_infos,
-                                         VkFence fence) {
-        std::unique_lock<std::mutex> lock;
-        if (queue_needs_external_lock(queue)) {
-            lock = std::unique_lock(*g_graphics_queue_mu);
-        }
-        return vkQueueBindSparse(queue, bind_info_count, bind_infos, fence);
-    }
-
     VulkanDispatch VulkanDispatch::real() noexcept {
         VulkanDispatch d;
         d.wait_for_fences = ::vkWaitForFences;

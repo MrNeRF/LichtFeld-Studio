@@ -27,7 +27,7 @@
 namespace lfs::training {
     namespace {
 
-        constexpr int kSchemaVersion = 1;
+        constexpr int kSchemaVersion = 2;
 
         void hash_bytes(std::uint64_t& hash, const void* data, const std::size_t size) {
             const auto* bytes = static_cast<const unsigned char*>(data);
@@ -89,6 +89,25 @@ namespace lfs::training {
         }
 
     } // namespace
+
+    kernels::DepthCameraProjection depth_camera_projection(const lfs::core::Camera& cam) {
+        kernels::DepthCameraProjection p;
+        if (cam.is_undistort_prepared())
+            return p;
+        p.model = static_cast<int>(cam.camera_model_type());
+        auto copy = [](const lfs::core::Tensor& tensor, float* out, size_t count) {
+            if (!tensor.is_valid() || !tensor.numel())
+                return;
+            const auto host = tensor.cpu().contiguous();
+            std::copy_n(host.ptr<float>(), std::min(count, host.numel()), out);
+        };
+        copy(cam.radial_distortion(), p.radial, 6);
+        if (cam.camera_model_type() == lfs::core::CameraModelType::THIN_PRISM_FISHEYE)
+            copy(cam.tangential_distortion(), p.thin_prism, 4);
+        else
+            copy(cam.tangential_distortion(), p.tangential, 2);
+        return p;
+    }
 
     RawDepthAnchorMap computeRawDepthAnchors(
         const lfs::gpu_ops::GeometryLossOps& geometry,
@@ -242,7 +261,8 @@ namespace lfs::training {
                 {{cam->focal_x() * sx, cam->focal_y() * sy, cam->center_x() * sx, cam->center_y() * sy},
                  0.01f,
                  {aabb_lo[0], aabb_lo[1], aabb_lo[2]},
-                 {aabb_hi[0], aabb_hi[1], aabb_hi[2]}});
+                 {aabb_hi[0], aabb_hi[1], aabb_hi[2]},
+                 depth_camera_projection(*cam)});
             cam->release_depth_cache();
 
             if (samples.empty()) {
@@ -298,6 +318,14 @@ namespace lfs::training {
             hash_scalar(hash, cam->center_y());
             hash_scalar(hash, cam->camera_width());
             hash_scalar(hash, cam->camera_height());
+            const auto projection = depth_camera_projection(*cam);
+            hash_scalar(hash, projection.model);
+            for (float v : projection.radial)
+                hash_scalar(hash, v);
+            for (float v : projection.tangential)
+                hash_scalar(hash, v);
+            for (float v : projection.thin_prism)
+                hash_scalar(hash, v);
 
             const auto pose = cam->world_view_transform().cpu().contiguous();
             if (pose.is_valid() && pose.numel() >= 16) {

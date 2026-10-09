@@ -575,36 +575,6 @@ namespace gsplat_lfs {
         LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.sh_swizzled_bwd");
     }
 
-    __global__ void rasterization_pack_depth_colors_kernel(
-        const float* __restrict__ depths,
-        float* __restrict__ colors,
-        const uint32_t count,
-        const uint32_t channels) {
-        const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= count)
-            return;
-        if (channels == 1u) {
-            colors[idx] = depths[idx];
-        } else if (channels == 4u) {
-            colors[idx * channels + 3u] = depths[idx];
-        }
-    }
-
-    void launch_rasterization_pack_depth_colors(
-        const float* depths,
-        float* colors,
-        uint32_t count,
-        uint32_t channels,
-        cudaStream_t stream) {
-        if (count == 0)
-            return;
-        constexpr uint32_t threads = 256;
-        const uint32_t blocks = (count + threads - 1u) / threads;
-        rasterization_pack_depth_colors_kernel<<<blocks, threads, 0, stream>>>(
-            depths, colors, count, channels);
-        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.pack_depth_colors");
-    }
-
     // Compute viewing directions: dir = mean - camera_position
     __global__ void compute_view_dirs_kernel(
         const float* __restrict__ means,

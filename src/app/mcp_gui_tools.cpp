@@ -276,20 +276,27 @@ namespace lfs::app {
                     }));
         }
 
-        // Renders dataset camera `camera_index` (an index into the scene's camera list, as selection
-        // camera_index uses) from its pose and intrinsics at its image size. Viewer thread only.
+        // Render a dataset camera UID with its pose and intrinsics. Viewer thread only.
         std::expected<std::string, std::string> render_dataset_camera_to_base64(vis::Visualizer* viewer,
-                                                                                const int camera_index) {
+                                                                                const int camera_index, const int width, const int height, const bool use_uid = true) {
             auto* const scene_manager = viewer->getSceneManager();
             auto* const rendering_manager = viewer->getRenderingManager();
             if (!scene_manager || !rendering_manager)
                 return std::unexpected("Dataset camera rendering requires the GUI scene and renderer");
 
-            const auto cameras = scene_manager->getScene().getAllCameras();
-            if (camera_index < 0 || static_cast<size_t>(camera_index) >= cameras.size() || !cameras[camera_index])
-                return std::unexpected(std::format("Camera index {} is out of range; the scene has {} dataset cameras",
-                                                   camera_index, cameras.size()));
-            const auto& camera = *cameras[camera_index];
+            int camera_uid = camera_index;
+            if (!use_uid) {
+                // Selection and camera resources retain their camera-list index contract.
+                const auto cameras = scene_manager->getScene().getAllCameras();
+                if (camera_index < 0 || static_cast<size_t>(camera_index) >= cameras.size() || !cameras[camera_index])
+                    return std::unexpected(std::format("Camera index {} is out of range; the scene has {} dataset cameras",
+                                                       camera_index, cameras.size()));
+                camera_uid = cameras[camera_index]->uid();
+            }
+            const auto camera_ptr = scene_manager->getScene().getCameraByUid(camera_uid);
+            if (!camera_ptr)
+                return std::unexpected("Camera UID not found: " + std::to_string(camera_uid));
+            const auto& camera = *camera_ptr;
             if (camera.camera_model_type() == core::CameraModelType::EQUIRECTANGULAR)
                 return std::unexpected(std::format(
                     "Dataset camera {} is equirectangular; only pinhole-projected cameras can be rendered",
@@ -301,7 +308,7 @@ namespace lfs::app {
                     "Rendering dataset camera {} failed: the scene has no renderable Gaussian model, "
                     "or the renderer rejected the frame (see the log)",
                     camera_index));
-            auto encoded = mcp::encode_render_tensor_to_base64(*image);
+            auto encoded = mcp::encode_render_tensor_to_base64(*image, width, height);
             if (!encoded)
                 return std::unexpected(std::string(encoded.error().user_message()));
             return std::move(*encoded);
@@ -2802,13 +2809,18 @@ namespace lfs::app {
                     return result;
                 },
             .render_capture =
-                [viewer](int width, int height, bool presented) {
+                [viewer](std::optional<int> camera_index, int width, int height, bool presented) {
                     // Runs as render work, not plain posted work: the window-crop fallback
                     // inside capture_live_viewport_to_base64 needs an active GUI frame.
-                    return capture_after_gui_render(
-                        viewer, [viewer, width, height, presented]() {
-                            return capture_live_viewport_to_base64(viewer, width, height, presented);
-                        });
+                    return capture_after_gui_render(viewer, [viewer, camera_index, width, height, presented]() -> lfs::Result<std::string> {
+                        if (camera_index) {
+                            auto image = render_dataset_camera_to_base64(viewer, *camera_index, width, height);
+                            if (!image)
+                                return mcp::capture_error(lfs::ErrorCode::Unavailable, image.error());
+                            return std::move(*image);
+                        }
+                        return capture_live_viewport_to_base64(viewer, width, height, presented);
+                    });
                 },
             .gaussian_count =
                 [viewer]() -> std::expected<int64_t, std::string> {
@@ -5789,9 +5801,16 @@ namespace lfs::app {
                 .load_path = [](const std::string& path) { return python::load_camera_path(path); },
                 .set_playback_speed = [](const float speed) { python::set_playback_speed(speed); },
                 .load_ply_sequence =
-                    [](const std::string& directory, const float fps) {
-                        core::events::cmd::SequencerLoadPlySequence{.directory = directory, .fps = fps}.emit();
-                    },
+                    [viewer_impl](const std::string& directory, const float fps) -> lfs::Result<void> {
+                    auto* const gui_manager = viewer_impl ? viewer_impl->getGuiManager() : nullptr;
+                    if (!gui_manager)
+                        return lfs::Result<void>::failure(lfs::make_error(lfs::ErrorInit{
+                            .code = lfs::ErrorCode::Unavailable,
+                            .domain = lfs::ErrorDomain::MCP,
+                            .user_message = "Sequencer unavailable",
+                            .detection = LFS_SOURCE_SITE_CURRENT()}));
+                    return gui_manager->sequencerUI().loadPlySequenceFromDirectory(core::utf8_to_path(directory), fps);
+                },
                 .scrub_to_time =
                     [viewer_impl](const float time, const bool update_camera) {
                         auto* const gui_manager = viewer_impl ? viewer_impl->getGuiManager() : nullptr;
@@ -5890,7 +5909,7 @@ namespace lfs::app {
                 if (include_render) {
                     const int camera_index = args.value("camera_index", 0);
                     auto render_result = post_and_wait(viewer, [viewer, camera_index]() {
-                        return render_dataset_camera_to_base64(viewer, camera_index);
+                        return render_dataset_camera_to_base64(viewer, camera_index, 0, 0, false);
                     });
                     if (!render_result)
                         return json{{"error", render_result.error() + "; pass include_render=false to ask without a render"}};
@@ -5940,7 +5959,7 @@ namespace lfs::app {
                 const std::string description = args["description"].get<std::string>();
 
                 auto render_result = post_and_wait(viewer_impl, [viewer_impl, camera_index]() {
-                    return render_dataset_camera_to_base64(viewer_impl, camera_index);
+                    return render_dataset_camera_to_base64(viewer_impl, camera_index, 0, 0, false);
                 });
                 if (!render_result)
                     return json{{"error", render_result.error()}};
@@ -6003,8 +6022,6 @@ namespace lfs::app {
                     return result;
                 });
             });
-
-        LOG_INFO("Registered GUI-native MCP scene tools");
     }
 
     void register_gui_scene_resources(vis::Visualizer* viewer) {
@@ -6150,7 +6167,7 @@ namespace lfs::app {
                                            "'; expected lichtfeld://render/camera/<dataset camera index>");
 
                 auto result = post_and_wait(viewer, [viewer, camera_index]() {
-                    return render_dataset_camera_to_base64(viewer, camera_index);
+                    return render_dataset_camera_to_base64(viewer, camera_index, 0, 0, false);
                 });
                 if (!result)
                     return std::unexpected(result.error());

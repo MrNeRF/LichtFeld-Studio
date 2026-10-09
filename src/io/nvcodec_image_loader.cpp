@@ -1056,9 +1056,6 @@ namespace lfs::io {
     NvCodecImageLoader::NvCodecImageLoader(const Options& options)
         : impl_(std::make_unique<Impl>()) {
 
-        LOG_INFO("[NvCodecImageLoader] Initializing: device={}, pool={}, fallback={}",
-                 options.device_id, options.decoder_pool_size, options.enable_fallback);
-
         impl_->device_id = options.device_id;
         impl_->max_num_cpu_threads = options.max_num_cpu_threads;
         impl_->fallback_enabled = options.enable_fallback;
@@ -1138,8 +1135,6 @@ namespace lfs::io {
             }
         }
 
-        LOG_INFO("[NvCodecImageLoader] {} decoders ready", pool_size);
-
         status = nvimgcodecEncoderCreate(impl_->instance, &impl_->encoder, &exec_params, nullptr);
         if (status != NVIMGCODEC_STATUS_SUCCESS) {
             LOG_WARN("[NvCodecImageLoader] Encoder unavailable: {}", nvimgcodec_status_to_string(status));
@@ -1153,8 +1148,6 @@ namespace lfs::io {
             const auto baseline_bytes =
                 NvCodecVramAccount::delta_bytes(init_vram_before, init_vram_after);
             impl_->vram_account.set_baseline_bytes(baseline_bytes);
-            LOG_INFO("[NvCodecImageLoader] Accounted nvImageCodec init VRAM: {:.1f} MiB",
-                     static_cast<double>(baseline_bytes.total()) / (1024.0 * 1024.0));
         }
         live_loaders.fetch_add(1, std::memory_order_relaxed);
     }
@@ -1175,17 +1168,6 @@ namespace lfs::io {
                 available = check_nvimgcodec_availability_with_diagnostics();
             } else {
                 available = check_nvimgcodec_availability_fast();
-            }
-            if (available) {
-                int device = 0;
-                cudaGetDevice(&device);
-                cudaDeviceProp prop{};
-                if (cudaGetDeviceProperties(&prop, device) == cudaSuccess) {
-                    LOG_INFO("[NvCodecImageLoader] decode backend=nvImageCodec batched=enabled device={} {} compute={}.{}",
-                             device, prop.name, prop.major, prop.minor);
-                } else {
-                    LOG_INFO("[NvCodecImageLoader] decode backend=nvImageCodec batched=enabled");
-                }
             }
         });
         return available;

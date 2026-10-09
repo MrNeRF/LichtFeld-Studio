@@ -48,6 +48,12 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API ViewportEnvironment buildViewportEnvironment(
         const FrameContext& ctx, const RenderSettings& settings, bool enabled);
 
+    // Visible meshes shaded as the viewport draws them; exports reuse this to match it.
+    [[nodiscard]] LFS_VIS_API std::vector<ViewportMeshDrawItem> buildViewportMeshDrawItems(
+        const SceneRenderState& scene_state,
+        const RenderSettings& settings,
+        const glm::vec3& camera_position);
+
     // Visible splat node shown in a PLY-comparison panel, or null when the
     // scene has fewer than two visible splat slots.
 

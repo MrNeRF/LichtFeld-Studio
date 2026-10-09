@@ -582,6 +582,26 @@ TEST_F(ColmapImageLayoutTest, TransformsPrecomputesViewerUndistortionWithoutChan
     }
 }
 
+TEST_F(ColmapImageLayoutTest, SkipsAspectMismatchedDepthWhenAutoGenerate) {
+    const fs::path dataset_dir = temp_dir_ / "regen_depth_dataset";
+    const fs::path image_path = dataset_dir / "images_2" / "frame.png";
+    const fs::path depth_path = dataset_dir / "depth" / "frame.png";
+    const BicyclePixels source = read_bicycle_pixels();
+
+    write_text_file(dataset_dir / "cameras.txt",
+                    "1 PINHOLE " + std::to_string(source.width) + " " + std::to_string(source.height) +
+                        " 1000 1000 618.5 411\n");
+    write_text_file(dataset_dir / "images.txt", "1 1 0 0 0 0 0 0 1 frame.png\n");
+    write_derived_image(image_path, source, source.width / 2, source.height / 2);
+    write_derived_depth(depth_path, source, source.width, source.height / 2);
+
+    const auto result = lfs::io::read_colmap_cameras_and_images_text(
+        dataset_dir, "images_2", {.load_depths = true, .depth_auto_generate = true});
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    ASSERT_EQ(std::get<0>(result->value).size(), 1u);
+    EXPECT_FALSE(std::get<0>(result->value)[0]->has_depth());
+}
+
 TEST(SidecarDimensionsContract, OriginalSizePassesForSmallerTrainingImage) {
     // Integer rounding in selected image folders stays inside the 1% tolerance.
     EXPECT_TRUE(lfs::io::sidecar_dimensions_match_contract(1237, 822, 154, 102));

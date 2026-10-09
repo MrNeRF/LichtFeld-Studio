@@ -4573,8 +4573,7 @@ namespace lfs::vis::project {
                     create_error.message(),
                     "project.training");
             }
-            const auto destination =
-                dataset.output_path / "project.licht";
+            const auto destination = dataset.project_file();
             std::error_code abs_error;
             const auto absolute_destination =
                 std::filesystem::absolute(
@@ -5125,10 +5124,6 @@ namespace lfs::vis::project {
             last_autosave_at_ =
                 std::chrono::steady_clock::now();
             return {};
-        }
-        if (training) {
-            LOG_INFO(
-                "Training-time autosave is light-only (no checkpoint capture)");
         }
 
         const auto sequence =
@@ -5833,9 +5828,6 @@ namespace lfs::vis::project {
                         now();
                 autosave_quiesce_logged_ = false;
                 autosave_memory_warning_published_ = false;
-                LOG_INFO(
-                    "Autosave sidecar sequence {} published",
-                    autosave_sequence_);
             } else if (
                 !dest_is_scratch &&
                 (project_write_purpose_ ==
@@ -6345,11 +6337,6 @@ namespace lfs::vis::project {
                     developerError(persisted.error()));
             }
         }
-        LOG_INFO(
-            "Adopted training .licht generation {} from {}",
-            document_->generation(),
-            lfs::core::path_to_utf8(
-                metrics.last_path));
         bindTrainerSnapshotTarget();
         return {};
 

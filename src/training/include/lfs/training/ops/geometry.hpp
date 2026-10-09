@@ -10,6 +10,15 @@
 #include <vector>
 
 namespace lfs::gpu_ops {
+    struct GeometryCamera {
+        float fx = 0, fy = 0, cx = 0, cy = 0;
+        core::Tensor rays;
+        bool wrap_horizontal = false;
+        GeometryCamera() = default;
+        GeometryCamera(float fx, float fy, float cx, float cy, core::Tensor rays = {}, bool wrap = false)
+            : fx(fx), fy(fy), cx(cx), cy(cy), rays(std::move(rays)), wrap_horizontal(wrap) {}
+        GeometryCamera(Intrinsics k) : GeometryCamera(k.fx, k.fy, k.cx, k.cy) {}
+    };
     struct DepthParams {
         float weight, gradient_weight, prior_quantization_step;
         const training::kernels::DepthAnchor* anchor;
@@ -18,6 +27,7 @@ namespace lfs::gpu_ops {
         Intrinsics intrinsics;
         float near_plane;
         std::array<float, 3> aabb_lo, aabb_hi;
+        training::kernels::DepthCameraProjection projection;
     };
     // Scratch retains the diagnostic float prefix followed by aligned double
     // statistics: depth 10+6B slots, normal/consistency 6+6B, B=min(ceil(HW/256),1024).
@@ -28,10 +38,10 @@ namespace lfs::gpu_ops {
                        Out grad_normal, Out loss, Out partials, float weight);
         void (*consistency)(In normal, In depth, In alpha, In pixel_weight,
                             Out grad_normal, Out grad_depth, Out grad_alpha,
-                            Out loss, Out partials, Intrinsics, float weight);
+                            Out loss, Out partials, GeometryCamera, float weight);
         void (*prior_depth)(In prior_normal, In depth, In alpha, In pixel_weight,
                             Out grad_depth, Out grad_alpha, Out loss, Out partials,
-                            Intrinsics, float weight);
+                            GeometryCamera, float weight);
         std::vector<AnchorSample> (*collect_anchor_samples)(In points, In view, In prior, const AnchorParams&);
     };
 } // namespace lfs::gpu_ops

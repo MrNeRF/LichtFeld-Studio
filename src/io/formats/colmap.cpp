@@ -494,8 +494,7 @@ namespace lfs::io {
 
         bool parse_point3D_record_line(const std::string_view line,
                                        const TrackParseMode track_mode,
-                                       Point3DData& point,
-                                       size_t& total_track_elements) {
+                                       Point3DData& point) {
             const char* cur = nullptr;
             const char* end = nullptr;
             if (!parse_point3D_header(line, point, cur, end)) {
@@ -508,7 +507,6 @@ namespace lfs::io {
                     return false;
                 }
                 point.track_count = *count;
-                total_track_elements += point.track_count;
             } else if (track_mode == TrackParseMode::Full) {
                 const size_t estimated_pairs = static_cast<size_t>(std::max<std::ptrdiff_t>((end - cur) / 12, 0));
                 point.track.reserve(estimated_pairs);
@@ -525,7 +523,6 @@ namespace lfs::io {
                     point.track.push_back(track);
                 }
                 point.track_count = point.track.size();
-                total_track_elements += point.track_count;
             }
             return true;
         }
@@ -893,9 +890,6 @@ namespace lfs::io {
 
         LOG_TIMER_DEBUG("COLMAP validate dataset layout");
         const fs::path images_path = base / lfs::core::utf8_to_path(images_folder);
-        LOG_INFO("[COLMAP_LOAD] validate_layout images={} images_path='{}'",
-                 images.size(),
-                 lfs::core::path_to_utf8(images_path));
         if (!safe_is_directory(images_path)) {
             return make_error(ErrorCode::PATH_NOT_FOUND, "Images folder does not exist", images_path);
         }
@@ -1872,9 +1866,6 @@ namespace lfs::io {
     std::vector<std::string> read_text_file(const std::filesystem::path& file_path,
                                             const LoadOptions& options = {}) {
         LOG_TRACE("Reading text file: {}", lfs::core::path_to_utf8(file_path));
-        const auto start = std::chrono::high_resolution_clock::now();
-        std::error_code file_size_ec;
-        const auto byte_size = fs::file_size(file_path, file_size_ec);
         std::ifstream file;
         if (!lfs::core::open_file_for_read(file_path, file)) {
             throw_colmap_error(lfs::ErrorCode::Internal,
@@ -1901,11 +1892,6 @@ namespace lfs::io {
             lines.pop_back();
 
         LOG_TRACE("Read {} lines from text file", lines.size());
-        LOG_INFO("[COLMAP_LOAD] read_text_file file='{}' bytes={} data_lines={} elapsed_ms={:.2f}",
-                 lfs::core::path_to_utf8(file_path),
-                 file_size_ec ? std::string("unknown") : std::format("{}", byte_size),
-                 lines.size(),
-                 elapsed_ms(start));
         return lines;
     }
 
@@ -2102,9 +2088,6 @@ namespace lfs::io {
         const LoadOptions& options = {},
         SkipTally* pose_tally = nullptr) {
         LOG_TIMER_TRACE("Read images.txt camera metadata");
-        const auto start = std::chrono::high_resolution_clock::now();
-        std::error_code file_size_ec;
-        const auto byte_size = fs::file_size(file_path, file_size_ec);
 
         std::ifstream file;
         if (!lfs::core::open_file_for_read(file_path, file)) {
@@ -2181,11 +2164,6 @@ namespace lfs::io {
             throw_colmap_error(lfs::ErrorCode::DataLoss, "No valid images in images.txt");
         }
 
-        LOG_INFO("[COLMAP_LOAD] parse images.txt camera_metadata_fast images={} file_lines={} bytes={} elapsed_ms={:.2f}",
-                 images.size(),
-                 file_lines,
-                 file_size_ec ? std::string("unknown") : std::format("{}", byte_size),
-                 elapsed_ms(start));
         LOG_DEBUG("Read {} images from text file", images.size());
         return images;
     }
@@ -2305,21 +2283,18 @@ namespace lfs::io {
                                                        SkipTally* tally = nullptr) {
         LOG_TIMER_TRACE("Read points3D.txt");
         auto buffer = read_binary(file_path);
-        const auto parse_start = std::chrono::high_resolution_clock::now();
 
-        size_t total_track_elements = 0;
-        size_t file_lines = 0;
         std::vector<Point3DData> points;
 
         if (buffer->size() < POINTS3D_PARALLEL_MIN_BYTES) {
             points.reserve(std::max<size_t>(buffer->size() / 96, 1));
-            file_lines = for_each_data_line(
+            for_each_data_line(
                 std::span<const char>(buffer->data(), buffer->size()),
                 options,
                 "COLMAP point cloud parse cancelled",
                 [&](const std::string_view line, const size_t source_line) {
                     Point3DData point;
-                    if (parse_point3D_record_line(line, track_mode, point, total_track_elements)) {
+                    if (parse_point3D_record_line(line, track_mode, point)) {
                         points.push_back(std::move(point));
                     } else if (tally) {
                         tally->record(std::format("source_line={}", source_line));
@@ -2328,8 +2303,6 @@ namespace lfs::io {
         } else {
             struct RecordChunkResult {
                 std::vector<Point3DData> points;
-                size_t file_lines = 0;
-                size_t track_elements = 0;
                 SkipTally tally;
             };
 
@@ -2341,13 +2314,13 @@ namespace lfs::io {
                 const auto& chunk = chunks[chunk_index];
                 auto& result = results[chunk_index];
                 result.points.reserve(std::max<size_t>(static_cast<size_t>(chunk.end - chunk.begin) / 96, 1));
-                result.file_lines = for_each_data_line(
+                for_each_data_line(
                     std::span<const char>(chunk.begin, static_cast<size_t>(chunk.end - chunk.begin)),
                     options,
                     "COLMAP point cloud parse cancelled",
                     [&](const std::string_view line, const size_t source_line) {
                         Point3DData point;
-                        if (parse_point3D_record_line(line, track_mode, point, result.track_elements)) {
+                        if (parse_point3D_record_line(line, track_mode, point)) {
                             result.points.push_back(std::move(point));
                         } else {
                             result.tally.record(std::format("source_line={}", source_line));
@@ -2358,8 +2331,6 @@ namespace lfs::io {
             size_t total_points = 0;
             for (const auto& result : results) {
                 total_points += result.points.size();
-                total_track_elements += result.track_elements;
-                file_lines += result.file_lines;
                 if (tally) {
                     tally->merge(result.tally);
                 }
@@ -2386,14 +2357,6 @@ namespace lfs::io {
         }
 
         LOG_DEBUG("Reading {} 3D points from text file", points.size());
-        const char* mode_name = track_mode == TrackParseMode::Full ? "full" : (track_mode == TrackParseMode::CountOnly ? "count_only" : "none");
-        LOG_INFO("[COLMAP_LOAD] parse points3D.txt points={} track_elements={} parse_tracks={} mode={} file_lines={} elapsed_ms={:.2f}",
-                 points.size(),
-                 total_track_elements,
-                 track_mode == TrackParseMode::Full,
-                 mode_name,
-                 file_lines,
-                 elapsed_ms(parse_start));
         return points;
     }
 
@@ -3112,16 +3075,25 @@ namespace lfs::io {
                     auto [img_w, img_h, img_c] = get_image_info_cached();
                     auto [depth_w, depth_h, depth_c] = lfs::core::get_image_info(depth_path);
                     if (depth_c != 1 || !sidecar_dimensions_match_contract(depth_w, depth_h, img_w, img_h)) {
-                        errors[i] = make_error(
-                                        ErrorCode::DEPTH_SIZE_MISMATCH,
-                                        std::format("Depth map '{}' is {}x{} but image '{}' is {}x{}; expected a 1-channel map with aspect ratio within 1%",
-                                                    lfs::core::path_to_utf8(depth_path.filename()), depth_w, depth_h,
-                                                    img.name, img_w, img_h),
-                                        depth_path)
-                                        .error();
-                        return;
+                        if (!options.depth_auto_generate) {
+                            errors[i] = make_error(
+                                            ErrorCode::DEPTH_SIZE_MISMATCH,
+                                            std::format("Depth map '{}' is {}x{} but image '{}' is {}x{}; expected a 1-channel map with aspect ratio within 1%",
+                                                        lfs::core::path_to_utf8(depth_path.filename()), depth_w, depth_h,
+                                                        img.name, img_w, img_h),
+                                            depth_path)
+                                            .error();
+                            return;
+                        }
+                        LOG_WARN("Depth map '{}' is {}x{} but image '{}' is {}x{}; "
+                                 "ignoring it so auto-generate can overwrite that file",
+                                 lfs::core::path_to_utf8(depth_path.filename()),
+                                 depth_w, depth_h, img.name, img_w, img_h);
+                        output.depth_matched = false;
+                        depth_path.clear();
+                    } else {
+                        output.depth_sizes = {depth_w, depth_h, img_w, img_h};
                     }
-                    output.depth_sizes = {depth_w, depth_h, img_w, img_h};
                 }
                 if (image_file_present && options.load_normals && !normal_path.empty()) {
                     auto [img_w, img_h, img_c] = get_image_info_cached();
@@ -4439,7 +4411,6 @@ namespace lfs::io {
             if (point_records)
                 record_views(images, cam_map, *point_records);
 
-            LOG_INFO("Read {} cameras and {} images from COLMAP", cam_map.size(), images.size());
             auto validation = validate_colmap_dataset_layout_impl(base, images_folder, images, options);
             if (!validation) {
                 return std::unexpected(validation.error());
@@ -4569,7 +4540,6 @@ namespace lfs::io {
             if (point_records)
                 record_views(images, cam_map, *point_records);
 
-            LOG_INFO("Read {} cameras and {} images from COLMAP text files", cam_map.size(), images.size());
             auto validation = validate_colmap_dataset_layout_impl(base, images_folder, images, options);
             if (!validation) {
                 return std::unexpected(validation.error());

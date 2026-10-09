@@ -728,7 +728,9 @@ class AssetIndex:
                 self._projects[project_id].extra["display_name"] = title
         return False
 
-    def _apply_inspection(self, project: Project, inspection: Any) -> None:
+    def _apply_inspection(
+        self, project: Project, inspection: Any, *, fallback_resolved: bool = True
+    ) -> None:
         if self._projects.get(project.id) is project:
             self._remember_identity(project.path, project.project_uuid)
         project.file_uuid = str(inspection.file_uuid)
@@ -740,17 +742,20 @@ class AssetIndex:
         project.role = _enum_name(inspection.role)
         project.open_state = _enum_name(inspection.open_state)
         project.has_preview = bool(inspection.has_preview)
-        project.preview_width = int(getattr(inspection, "preview_width", 0) or 0)
-        project.preview_height = int(getattr(inspection, "preview_height", 0) or 0)
+        # An inspection that skipped the dataset image lookup knows nothing about the fallback thumbnail.
+        keeps_fallback = not fallback_resolved and not project.has_preview
+        if not keeps_fallback:
+            project.preview_width = int(getattr(inspection, "preview_width", 0) or 0)
+            project.preview_height = int(getattr(inspection, "preview_height", 0) or 0)
+            project.fallback_preview_path = str(
+                getattr(inspection, "fallback_preview_path", "") or ""
+            )
         iteration = getattr(inspection, "iteration", None)
         if iteration is not None:
             try:
                 project.iteration = int(iteration)
             except (TypeError, ValueError):
                 pass
-        project.fallback_preview_path = str(
-            getattr(inspection, "fallback_preview_path", "") or ""
-        )
         self._set_inspection_runtime_state(project)
         project.inspection_verified = True
         project.inspection_restored = False
@@ -853,10 +858,30 @@ class AssetIndex:
         expected_uuid: str,
         *,
         resolve_fallback: bool = False,
+        known_metadata: Optional[Any] = None,
     ) -> Tuple[str, Any]:
         metadata = self._path_stat(path)
         if metadata is None:
             return "MISSING", None
+        if known_metadata is not None:
+            if isinstance(known_metadata, dict):
+                current_identity = self._path_identity(path) or {}
+                unchanged = all(
+                    current_identity.get(key) == int(value)
+                    for key, value in known_metadata.items()
+                    if key in {"size", "mtime_ns", "st_dev", "st_ino", "st_ctime_ns"}
+                )
+                expected_commit = str(known_metadata.get("commit_uuid") or "")
+            else:
+                unchanged = metadata == known_metadata
+                expected_commit = ""
+            if unchanged:
+                head = self._cheap_head_identity(path)
+                if head is None or (
+                    head[0] == expected_uuid
+                    and (not expected_commit or head[1] == expected_commit)
+                ):
+                    return "UNCHANGED", metadata
         try:
             if resolve_fallback:
                 inspection = self._inspect_path(path)
@@ -891,10 +916,12 @@ class AssetIndex:
             return "UNSUPPORTED", "Not a master project container"
         return "AVAILABLE", inspection
 
-    def _apply_runtime_result(self, project: Project, kind: str, payload: Any) -> None:
+    def _apply_runtime_result(
+        self, project: Project, kind: str, payload: Any, *, fallback_resolved: bool = True
+    ) -> None:
         if kind == "AVAILABLE":
             project.relocation_candidate = ""
-            self._apply_inspection(project, payload)
+            self._apply_inspection(project, payload, fallback_resolved=fallback_resolved)
             return
         if kind == "IDENTITY_MISMATCH":
             self._clear_runtime(
@@ -949,8 +976,9 @@ class AssetIndex:
         for path, (identity, expected) in self._write_checks.items():
             identity.validate()
             if expected is not None:
-                inspection = self._inspect_path(path)
-                if str(inspection.project_uuid) != expected:
+                head = self._cheap_head_identity(path)
+                project_uuid = head[0] if head is not None else str(self._inspect_path(path).project_uuid)
+                if project_uuid != expected:
                     raise ValueError(f"The project identity changed at {path}. Refresh Projects and try again.")
                 identity.validate()
 
@@ -1726,11 +1754,6 @@ class AssetIndex:
                     return False
                 self._cleanup_obsolete_storage()
                 _log.info("Migrated Asset Manager catalog to schema v%d", SCHEMA_VERSION)
-            _log.info(
-                "Loaded Asset Manager library with %d folders and %d projects",
-                len(self._folders),
-                len(self._projects),
-            )
             self._touch_catalog()
             return True
         except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
@@ -2193,6 +2216,18 @@ class AssetIndex:
         self._restore_state(previous_state)
         return False
 
+    @staticmethod
+    def _inspected_file_identity(project: Project) -> Optional[Dict[str, Any]]:
+        # Reopening every project on a refresh is slow on some systems and blocks the folder scan
+        # queued behind it; a file still matching its last inspection needs only a stat.
+        if (
+            project.status != "AVAILABLE"
+            or not project.stat_identity
+            or not {"has_checkpoint", "has_dataset"}.issubset(project.inspection)
+        ):
+            return None
+        return {**project.stat_identity, "commit_uuid": project.commit_uuid}
+
     def verify_projects_batch(
         self, asset_ids: List[str], *, cancel_event: Optional[threading.Event] = None
     ) -> int:
@@ -2207,10 +2242,11 @@ class AssetIndex:
                             project.path,
                             project.project_uuid,
                             ProjectPathIdentity.capture(project.path),
+                            self._inspected_file_identity(project),
                         )
                     )
         results = []
-        for asset_id, path, expected_uuid, path_identity in work:
+        for asset_id, path, expected_uuid, path_identity, known_identity in work:
             if cancel_event is not None and cancel_event.is_set():
                 break
             results.append(
@@ -2220,7 +2256,7 @@ class AssetIndex:
                     expected_uuid,
                     path_identity,
                     self._read_project_runtime(
-                        path, expected_uuid
+                        path, expected_uuid, known_metadata=known_identity
                     ),
                 )
             )
@@ -2236,9 +2272,13 @@ class AssetIndex:
                     or project.project_uuid != expected_uuid
                 ):
                     continue
-                self._write_checks[path] = (path_identity, expected_uuid if kind == "AVAILABLE" else None)
-                self._apply_runtime_result(project, kind, payload)
-                changed = True
+                if kind == "UNCHANGED":
+                    project.inspection_verified = True
+                    project.inspection_restored = False
+                else:
+                    self._write_checks[path] = (path_identity, expected_uuid if kind == "AVAILABLE" else None)
+                    self._apply_runtime_result(project, kind, payload, fallback_resolved=False)
+                    changed = True
                 verified += 1
             if changed and not self.save():
                 self._restore_state(previous_state)

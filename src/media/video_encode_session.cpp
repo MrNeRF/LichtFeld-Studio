@@ -5,6 +5,7 @@
 #include "core/path_utils.hpp"
 #include "media/video_output_extent.hpp"
 #include <algorithm>
+#include <cctype>
 #include <exception>
 #include <format>
 #include <string_view>
@@ -503,6 +504,11 @@ namespace lfs::media {
             options.preferred_backend != VideoEncodeBackend::Cuda &&
             options.preferred_backend != VideoEncodeBackend::VideoToolbox)
             return encodeError(ErrorCode::InvalidArgument, std::format("Unknown video encoder backend (got {})", static_cast<int>(options.preferred_backend)));
+        auto extension = core::path_to_utf8(path.extension());
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (!extension.empty() && extension != ".mp4")
+            return encodeError(ErrorCode::InvalidArgument, "Video export supports only MP4 (.mp4); unsupported filename extension");
         return impl_->open(path, options);
     }
     Result<void> VideoEncodeSession::writeFrame(VideoEncodeWriter& writer) {

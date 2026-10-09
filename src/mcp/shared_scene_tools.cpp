@@ -195,10 +195,11 @@ namespace lfs::mcp {
         registry.register_tool(
             McpTool{
                 .name = "render.capture",
-                .description = "Capture the live viewport region of the current scene. By default this reads the renderer's internal raster when available; set presented=true to capture the presented viewport (window crop after Spatial/Temporal reconstruction, includes viewport overlays). Scenes with no Gaussian or point-cloud content (meshes and environment backgrounds alone) are composited straight into the window, so their capture is cropped from it and includes any viewport overlays such as the axis gizmo and floating toolbars.",
+                .description = "Capture the current scene. Pass camera_index to render the dataset camera UID reported by camera_list with its pose and intrinsics; omit it to capture the live viewport region. By default this reads the renderer's internal raster when available; set presented=true to capture the presented viewport (window crop after Spatial/Temporal reconstruction, includes viewport overlays). Scenes with no Gaussian or point-cloud content (meshes and environment backgrounds alone) are composited straight into the window, so their capture is cropped from it and includes any viewport overlays such as the axis gizmo and floating toolbars.",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
+                        {"camera_index", json{{"type", "integer"}, {"description", "Dataset camera UID as camera_list reports it; omit to capture the live viewport region only"}}},
                         {"width", capture_size_schema("Optional output width in pixels; preserves aspect ratio when height is omitted")},
                         {"height", capture_size_schema("Optional output height in pixels; preserves aspect ratio when width is omitted")},
                         {"presented", json{{"type", "boolean"}, {"default", false}, {"description", "Capture the presented viewport (window crop after Spatial/Temporal reconstruction, includes viewport overlays) instead of the renderer's internal raster"}}}},
@@ -209,7 +210,10 @@ namespace lfs::mcp {
                 const int height = args.value("height", 0);
                 const bool presented = args.value("presented", false);
 
-                auto result = backend.render_capture(width, height, presented);
+                const std::optional<int> camera_index = args.contains("camera_index")
+                                                            ? std::optional<int>(args["camera_index"].get<int>())
+                                                            : std::nullopt;
+                auto result = backend.render_capture(camera_index, width, height, presented);
                 if (!result)
                     return json{{"error", core::to_wire_envelope(result.error())}};
 

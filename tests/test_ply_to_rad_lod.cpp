@@ -730,9 +730,9 @@ TEST(PlyToRadLod, BorrowedSingleNodeMergePreservesRadLodOnReexport) {
 
 namespace {
 
-    // A real model saved as RAD and loaded back: the loaded data holds the LOD tree's interior
+    // A generated model saved as RAD and loaded back: the loaded data holds the LOD tree's interior
     // nodes plus the saved splats as leaves, with LOD-encoded linear opacity.
-    struct KerstbolRad {
+    struct GeneratedRad {
         std::filesystem::path dir;
         std::filesystem::path rad_path;
         std::size_t source_count = 0;
@@ -771,15 +771,18 @@ namespace {
         return std::move(data);
     }
 
-    const KerstbolRad& kerstbol_rad() {
-        static const KerstbolRad fixture = [] {
-            KerstbolRad f;
-            f.dir = std::filesystem::temp_directory_path() / "rad_lod_leaves_kerstbol";
+    const GeneratedRad& generated_rad() {
+        static const GeneratedRad fixture = [] {
+            GeneratedRad f;
+            f.dir = std::filesystem::temp_directory_path() / "rad_lod_leaves_generated";
             std::filesystem::remove_all(f.dir);
             std::filesystem::create_directories(f.dir);
-            f.rad_path = f.dir / "kerstbol.rad";
+            f.rad_path = f.dir / "generated.rad";
 
-            auto ply = lfs::io::load_ply(std::filesystem::path(TEST_DATA_DIR) / "kerstbol-isolated-rotated_137502.ply");
+            // Exceed the out-of-core preview and retain varied positions and opacity.
+            const auto ply_path = f.dir / "generated.ply";
+            write_synthetic_ply(ply_path, make_synthetic_splats(100'000));
+            auto ply = lfs::io::load_ply(ply_path);
             if (!ply) {
                 f.error = lfs::format_for_developer(ply.error());
                 return f;
@@ -809,7 +812,7 @@ namespace {
     // RAD stores LOD alpha in 8 bits over 0..2; a sigmoid of the raw linear value would sit at 0.5 or above.
     constexpr float kOpacityTolerance = 0.01f;
 
-    void expect_matches_source(const lfs::core::SplatData& flat, const KerstbolRad& f) {
+    void expect_matches_source(const lfs::core::SplatData& flat, const GeneratedRad& f) {
         EXPECT_EQ(flat.lod_tree, nullptr);
         ASSERT_EQ(flat.size(), f.source_count);
         EXPECT_LT(max_sorted_diff(sorted_sigmoid_opacity(flat), f.source_opacity_sorted), kOpacityTolerance);
@@ -823,7 +826,7 @@ namespace {
 // Catches flattening that keeps interior LOD nodes (count) or leaves LOD-encoded linear opacity
 // in the logit slot (every splat at least half opaque).
 TEST(RadLodLeaves, ExtractLodLeavesRestoresTheSavedSplats) {
-    const auto& f = kerstbol_rad();
+    const auto& f = generated_rad();
     ASSERT_TRUE(f.error.empty()) << f.error;
     ASSERT_TRUE(f.rad->lod_tree && f.rad->lod_tree->has_tree());
     ASSERT_TRUE(f.rad->lod_tree->lod_opacity_encoded);
@@ -847,7 +850,7 @@ TEST(RadLodLeaves, ExtractLodLeavesRestoresTheSavedSplats) {
 // Catches merges that drop the tree but keep its interior nodes: clone, transformed and
 // multi-source results must hold the saved splats only; the identity borrow keeps the tree.
 TEST(RadLodLeaves, FlatMergesContainOnlyTheSavedSplats) {
-    const auto& f = kerstbol_rad();
+    const auto& f = generated_rad();
     ASSERT_TRUE(f.error.empty()) << f.error;
     using Mode = lfs::core::Scene::MergeStorageMode;
     const glm::mat4 identity{1.0f};
@@ -875,7 +878,7 @@ TEST(RadLodLeaves, FlatMergesContainOnlyTheSavedSplats) {
 
 // Catches flattening that ignores the soft-delete mask on an LOD model.
 TEST(RadLodLeaves, SoftDeletedLeavesStayOutOfFlatMerges) {
-    const auto& f = kerstbol_rad();
+    const auto& f = generated_rad();
     ASSERT_TRUE(f.error.empty()) << f.error;
     auto rad = load_rad_on_gpu(f.rad_path);
     const auto& tree = *rad.lod_tree;
@@ -902,7 +905,7 @@ TEST(RadLodLeaves, SoftDeletedLeavesStayOutOfFlatMerges) {
 
 // Catches a scene snapshot (gallery publish, worker-side export) handing out the whole LOD tree.
 TEST(RadLodLeaves, SceneSnapshotMaterializesTheSavedSplats) {
-    const auto& f = kerstbol_rad();
+    const auto& f = generated_rad();
     ASSERT_TRUE(f.error.empty()) << f.error;
     lfs::core::Scene::SplatSnapshot snapshot;
     snapshot.data = std::make_shared<lfs::core::SplatData>(load_rad_on_gpu(f.rad_path));
@@ -916,7 +919,7 @@ TEST(RadLodLeaves, SceneSnapshotMaterializesTheSavedSplats) {
 
 // Catches flattening a model whose leaves stream from disk, which would export the coarse prefix.
 TEST(RadLodLeaves, OutOfCoreModelRefusesToFlatten) {
-    const auto& f = kerstbol_rad();
+    const auto& f = generated_rad();
     ASSERT_TRUE(f.error.empty()) << f.error;
     auto partial = lfs::io::load_rad(f.rad_path, {.out_of_core = true, .preview_splats = 65'536});
     ASSERT_TRUE(partial.has_value()) << partial.error();
@@ -951,7 +954,7 @@ namespace {
 // Catches flat rendering of an LOD model drawing its interior nodes or reading LOD-encoded linear
 // opacity as logits (the glow and blur of RAD files in multi-model scenes and offscreen renders).
 TEST(RadLodLeaves, LeafViewHidesInteriorNodesAndDecodesOpacity) {
-    const auto& f = kerstbol_rad();
+    const auto& f = generated_rad();
     ASSERT_TRUE(f.error.empty()) << f.error;
     const auto& rad = *f.rad;
     const auto rows = static_cast<std::size_t>(rad.size());
@@ -969,9 +972,9 @@ TEST(RadLodLeaves, LeafViewHidesInteriorNodesAndDecodesOpacity) {
 
 // Catches the multi-model render cache concatenating an LOD model's tree nodes as plain splats.
 TEST(RadLodLeaves, CombinedRenderModelShowsOnlyTheLeavesOfAnLodModel) {
-    const auto& f = kerstbol_rad();
+    const auto& f = generated_rad();
     ASSERT_TRUE(f.error.empty()) << f.error;
-    auto ply = lfs::io::load_ply(std::filesystem::path(TEST_DATA_DIR) / "kerstbol-isolated-rotated_137502.ply");
+    auto ply = lfs::io::load_ply(f.dir / "generated.ply");
     ASSERT_TRUE(ply.has_value()) << lfs::format_for_developer(ply.error());
     auto rad = std::make_unique<lfs::core::SplatData>(load_rad_on_gpu(f.rad_path));
     const auto rad_rows = static_cast<std::size_t>(rad->size());

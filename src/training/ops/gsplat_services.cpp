@@ -11,7 +11,7 @@
 
 namespace lfs::training {
 
-    lfs::gpu_ops::GsplatGradients gsplat_gradients(AdamOptimizer& optimizer) {
+    lfs::gpu_ops::GsplatGradients gsplat_gradients(AdamOptimizer& optimizer, const core::Tensor& depth, const core::Tensor& normal, const float flatten_weight) {
         return {&optimizer, [](void* owner, lfs::gpu_ops::AdamSlot slot) -> core::Tensor& {
                     auto& optimizer = *static_cast<AdamOptimizer*>(owner);
                     switch (slot) {
@@ -23,7 +23,8 @@ namespace lfs::training {
                     case lfs::gpu_ops::AdamSlot::ShN: return optimizer.get_grad(ParamType::ShN);
                     }
                     throw std::logic_error("Invalid gsplat gradient slot");
-                }};
+                },
+                depth, normal, flatten_weight};
     }
 
     lfs::Error gsplat_raster_error(const lfs::gpu_ops::RasterResult& result) {
@@ -68,6 +69,7 @@ namespace lfs::training {
         const lfs::gpu_ops::SplatInputs splats{
             model.means(), model.scaling_raw(), model.rotation_raw(), model.opacity_raw(),
             model.sh0(), model.shN(), q16 ? model.shN_value_bounds() : empty};
+        saved.equirectangular = params.camera_model == core::CameraModelType::EQUIRECTANGULAR;
         const auto result = ops.forward(saved, splats, camera.world_view_transform(),
                                         undistorted ? empty : camera.radial_distortion(),
                                         undistorted ? empty : camera.tangential_distortion(), bg_color, bg_image, params,

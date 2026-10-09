@@ -55,6 +55,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # Rendering
         rendering/camera_interaction_service.cpp
         rendering/gt_comparison_source.cpp
+        rendering/mesh_export.cpp
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/output_image_pool.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/mesh_offscreen_renderer.cpp>
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/mesh_offscreen_renderer_tensor.cpp>

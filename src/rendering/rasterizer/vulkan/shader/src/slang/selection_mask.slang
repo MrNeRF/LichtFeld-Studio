@@ -60,10 +60,10 @@ bool node_visible(uint splat_idx, SelectionUniforms uniforms)
 {
     if (uniforms.deleted_mask_enabled != 0u && read_byte(deleted_mask, splat_idx) != 0u)
         return false;
-    if (uniforms.transform_indices_enabled == 0 || uniforms.node_visibility_enabled == 0)
+    if (uniforms.node_visibility_enabled == 0)
         return true;
 
-    int node_idx = read_int32(transform_indices, splat_idx);
+    int node_idx = uniforms.transform_indices_enabled != 0 ? read_int32(transform_indices, splat_idx) : 0;
     if (node_idx < 0 || uint(node_idx) >= uniforms.node_visibility_count)
         return false;
 

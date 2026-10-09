@@ -547,6 +547,7 @@ set_tests_properties(lichtfeld.sdl_coordinates PROPERTIES LABELS "fast;cpu;input
 # unreferenced function sections before resolution. Keep the dependency-heavy
 # chapter coverage in the non-Windows composition.
 set(LICHT_FORMAT_WINDOWS_FILES
+    test_project_save_as_paths.cpp
     test_json_chapter_dom.cpp
     test_project_chapters.cpp
     test_project_container.cpp
@@ -1202,6 +1203,7 @@ set(TEST_FILES
     test_fastgs_analytical_gradients.cpp
     test_normal_prior_decode.cpp
     test_normal_auto_generate.cpp
+    test_lens_priors.cpp
     test_metrics_evaluator.cpp
     test_metrics_eval_mask.cpp
     test_background_image.cpp
@@ -1271,6 +1273,7 @@ set(TEST_FILES
     test_rml_python_listener_lifetime.cpp
     test_status_bar_fit.cpp
     test_gallery_file_panel_layout.cpp
+    test_histogram_layout.cpp
     test_rmlui_preview_decode.cpp
     test_training_progress_publisher.cpp
     test_startup_overlay_geometry.cpp
@@ -1434,6 +1437,7 @@ target_include_directories(lichtfeld_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/tests
     ${CMAKE_SOURCE_DIR}/src/training   # For training headers
     ${CMAKE_SOURCE_DIR}/src            # For module headers
+    ${CMAKE_SOURCE_DIR}/src/preprocessing/include
     ${CMAKE_SOURCE_DIR}/src/app/include
     ${CMAKE_SOURCE_DIR}/src/visualizer # For visualizer-relative headers (e.g. gui/ui_widgets.hpp)
     ${CMAKE_SOURCE_DIR}/external/spz   # SPZ library headers

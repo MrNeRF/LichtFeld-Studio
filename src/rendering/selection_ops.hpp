@@ -113,7 +113,8 @@ namespace lfs::rendering {
         const Tensor* ellipsoid_radii,
         bool ellipsoid_inverse,
         const Tensor* model_transforms = nullptr,
-        const Tensor* transform_indices = nullptr);
+        const Tensor* transform_indices = nullptr,
+        int parent_node_index = -1);
 
     void filter_selection_by_screen_window(
         Tensor& selection,

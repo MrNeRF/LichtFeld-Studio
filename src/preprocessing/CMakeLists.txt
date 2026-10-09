@@ -7,7 +7,11 @@ find_package(OpenSSL REQUIRED)
 
 add_library(lfs_preprocessing STATIC
     preprocess.cpp
+    lens_priors.cpp
+    lens_views.cpp
+    lens_views.hpp
     include/preprocessing/preprocess.hpp
+    include/preprocessing/lens_priors.hpp
 )
 
 target_include_directories(lfs_preprocessing
@@ -36,4 +40,11 @@ set_target_properties(lfs_preprocessing PROPERTIES
     CXX_STANDARD 23
     CXX_STANDARD_REQUIRED ON
     POSITION_INDEPENDENT_CODE ON
+    CUDA_STANDARD 20
+    CUDA_STANDARD_REQUIRED ON
+    CUDA_SEPARABLE_COMPILATION OFF
 )
+
+lfs_add_gpu_program(lfs_preprocessing lens_views_program SOURCE lens_views.slang COMPUTE setup rays sampleFace projectFace blend
+    DEPENDS "${CMAKE_SOURCE_DIR}/src/training/vulkan/shaders/gsplat_common.slangh"
+            "${CMAKE_SOURCE_DIR}/src/core/tensor/backend/vulkan/shaders/sh_decode.slangh")

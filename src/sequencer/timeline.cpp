@@ -286,7 +286,9 @@ namespace lfs::sequencer {
     }
 
     void Timeline::sortKeyframes() {
-        std::sort(keyframes_.begin(), keyframes_.end());
+        // Equal-time keys keep their current order.
+        if (!std::is_sorted(keyframes_.begin(), keyframes_.end()))
+            std::stable_sort(keyframes_.begin(), keyframes_.end());
     }
 
     nlohmann::json Timeline::saveToJson() const {
@@ -396,7 +398,13 @@ namespace lfs::sequencer {
                         AnimationClip::fromJson(json["animation_clip"]));
             }
 
-            std::sort(loaded_keyframes.begin(), loaded_keyframes.end());
+            // IDs were assigned in file order, so use them to preserve ties
+            // without allocating a second keyframe buffer for a stable sort.
+            if (!std::is_sorted(loaded_keyframes.begin(), loaded_keyframes.end()))
+                std::sort(loaded_keyframes.begin(), loaded_keyframes.end(),
+                          [](const Keyframe& a, const Keyframe& b) {
+                              return a.time < b.time || (a.time == b.time && a.id < b.id);
+                          });
             float loaded_duration = DEFAULT_CLIP_DURATION_SECONDS;
             if (json.contains("clip_duration")) {
                 loaded_duration =
