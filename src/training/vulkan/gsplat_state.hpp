@@ -18,7 +18,7 @@ namespace lfs::training::vulkan {
         bool indirect = true;
         core::Tensor control;
         std::string message;
-        core::Tensor camera, radial, tangential, prism, image, alpha, last_ids, depth;
+        core::Tensor camera, radial, tangential, prism, image, alpha, last_ids, depth, normal, camera_rays;
         core::Tensor radii, means2d, colors, depth_keys, tile_counts, tile_offsets, ends;
         core::Tensor keys_a, keys_b, ids_a, ids_b, grads;
         core::TensorReadback intersection_readback;

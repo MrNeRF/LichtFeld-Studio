@@ -13,6 +13,7 @@ struct GsplatRasterParams {
     Ptr<uint, Access.ReadWrite> depths;
     Ptr<float, Access.ReadWrite> rendered_depth;
     uint count, width, height, tiles_x, tiles_y, edge_factor, mode;
+    Ptr<float, Access.ReadWrite> v_normal;
 };
 float gsplat_background(GsplatRasterParams p, uint c, uint pixel) {
     return p.bg_image != 0 ? p.bg_image[c * p.width * p.height + pixel] : p.bg_color != 0 ? p.bg_color[c]
@@ -39,7 +40,9 @@ struct GsplatPixel {
     float T, T_final, v_a, bg_accum, error, edge_weight;
     float v_depth, depth_buffer;
     int bin_final;
-    bool active;
+    bool active, radial_depth;
+    float3x3 camera_R;
+    float3 v_normal, normal_buffer;
 };
 
 static GsplatPixel gsplat_pixel(GsplatRasterParams p, const uint i, const uint j) {
@@ -48,6 +51,10 @@ static GsplatPixel gsplat_pixel(GsplatRasterParams p, const uint i, const uint j
     const GsplatCamera camera = gsplat_camera_load(p.camera);
     const GsplatRay ray = gsplat_pixel_ray(camera, float2(float(j) + 0.5f, float(i) + 0.5f));
     GsplatPixel px;
+    px.camera_R=camera.R;
+    px.radial_depth=camera.model!=kGsplatPinhole;
+    px.v_normal=p.v_normal!=0?float3(p.v_normal[pixel],p.v_normal[plane+pixel],p.v_normal[2*plane+pixel]):float3(0.f);
+    px.normal_buffer=0;
     px.origin = ray.origin;
     px.dir = ray.dir;
     px.active = i < p.height && j < p.width && ray.valid;
@@ -104,7 +111,14 @@ static bool gsplat_contribute(inout GsplatPixel px, const int isect, const float
     px.T *= ra;
     const float fac = alpha * px.T;
     grad.rgb += fac * px.v_c;
-    grad.mean += (fac * px.v_depth) * px.depth_axis;
+    grad.mean += (fac * px.v_depth) * (px.radial_depth ? normalize(xyzo.xyz-px.origin) : px.depth_axis);
+    uint axis=gsplat_normal_axis(float3(m0.w,m1.w,m2.w));
+    float3 world_normal=gsplat_quat_to_rotmat(quat)[axis];
+    float facing=dot(world_normal,xyzo.xyz-px.origin)>0?-1.f:1.f;
+    float3 normal=mul(world_normal,px.camera_R)*facing;
+    float3x3 v_R=float3x3(0.f);
+    v_R[axis]=mul(px.v_normal,transpose(px.camera_R))*(fac*facing);
+    gsplat_quat_to_rotmat_vjp(quat,v_R,grad.quat);
     grad.dens_w += fac;
     grad.dens_e += fac * px.error;
     const float edge_contribution = fac * px.edge_weight;
@@ -112,6 +126,7 @@ static bool gsplat_contribute(inout GsplatPixel px, const int isect, const float
         grad.edge += edge_contribution;
     float v_alpha = dot(rgb * px.T - px.buffer * ra, px.v_c) + px.T_final * ra * px.v_a;
     v_alpha += (depth * px.T - px.depth_buffer * ra) * px.v_depth;
+    v_alpha += dot(normal*px.T-px.normal_buffer*ra,px.v_normal);
     if (have_bg)
         v_alpha += -px.T_final * ra * px.bg_accum;
     if (opac * vis <= 0.999f) {
@@ -128,6 +143,7 @@ static bool gsplat_contribute(inout GsplatPixel px, const int isect, const float
     }
     px.buffer += rgb * fac;
     px.depth_buffer += depth * fac;
+    px.normal_buffer += normal*fac;
     return true;
 }
 
@@ -151,6 +167,7 @@ struct GsplatAccumulateParams {
     uint degree;
     uint layout_rest;
     uint width, height;
+    float flatten_weight;
 };
 
 void gsplat_accumulate(GsplatAccumulateParams p, uint g) {
@@ -163,6 +180,8 @@ void gsplat_accumulate(GsplatAccumulateParams p, uint g) {
         p.means_grad[g * 3u + k] += v[k];
         p.scaling_grad[g * 3u + k] += v[3u + k] * scale[k];
     }
+    uint axis=gsplat_normal_axis(scale);
+    p.scaling_grad[g*3+axis] += p.flatten_weight*scale[axis]/float(p.count);
     for (uint k = 0; k < 4u; ++k)
         p.rotation_grad[g * 4u + k] += v[6u + k];
     p.opacity_grad[g] += v[10] * opacity * (1.0f - opacity);

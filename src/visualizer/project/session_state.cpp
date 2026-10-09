@@ -2755,6 +2755,17 @@ namespace lfs::vis::project {
             !merged) {
             return std::move(merged).error();
         }
+        // The live timeline owns the key list. The additive merge preserves
+        // extension fields on surviving keys, but must not retain removed tails.
+        const auto keyframe_count = sequencer_known["timeline"]["keyframes"].size();
+        if (const auto* merged_keys = result.sequencer.dom().get_json_ref("timeline.keyframes");
+            merged_keys && merged_keys->is_array() && merged_keys->size() > keyframe_count) {
+            Json current_keys(merged_keys->begin(), merged_keys->begin() + keyframe_count);
+            if (auto set = result.sequencer.dom().set_json("timeline.keyframes", std::move(current_keys));
+                !set) {
+                return std::move(set).error();
+            }
+        }
         if (auto merged_clips =
                 result.sequencer.dom()
                     .get_json(

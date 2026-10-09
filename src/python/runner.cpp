@@ -376,7 +376,6 @@ _add_dll_dirs()
                     Py_DECREF(py_path);
                     return false;
                 }
-                LOG_INFO("Added {} to Python path: {}", label, path_utf8);
             }
 
             Py_DECREF(py_path);
@@ -429,7 +428,6 @@ _add_dll_dirs()
             }
 
             Py_DECREF(result);
-            LOG_INFO("Python dev hot reload watcher started");
         }
 #endif
 
@@ -628,12 +626,10 @@ _add_dll_dirs()
 
             add_dll_directories();
 
-            LOG_INFO("Attempting to import lichtfeld module...");
             PyObject* lf = import_lichtfeld_module("Failed to import lichtfeld", true);
             if (!lf) {
                 return false;
             }
-            LOG_INFO("lichtfeld module imported successfully");
 
             ensure_builtin_ui_ready_locked();
 
@@ -956,8 +952,6 @@ _add_dll_dirs()
                     g_plugin_preload.state.store(PluginPreloadState::Loading,
                                                  std::memory_order_release);
                 }
-                LOG_INFO("Plugin autoload: {} plugin(s) enabled for startup",
-                         to_load.size());
                 publish_plugin_preload_status();
 
                 if (to_load.empty()) {
@@ -1208,7 +1202,6 @@ _add_dll_dirs()
                         latch_init_failure(make_init_status_error(st));
                         return;
                     }
-                    LOG_INFO("Set Python home: {}", lfs::core::path_to_utf8(python_home));
                 }
 
                 PyStatus status = Py_InitializeFromConfig(&config);
@@ -1221,7 +1214,6 @@ _add_dll_dirs()
                 }
 
                 g_we_initialized_python = true;
-                LOG_INFO("Python interpreter initialized by application");
             } else {
                 LOG_WARN("Python already initialized by external code (e.g., .pyd loading)");
                 g_we_initialized_python = false;
@@ -1274,7 +1266,6 @@ _add_dll_dirs()
 
             g_py_real_init_succeeded.store(true, std::memory_order_release);
             g_py_init_state.store(PyInitState::Ready, std::memory_order_release);
-            LOG_INFO("python-init state=Ready");
         }
     } // namespace
 

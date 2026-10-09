@@ -245,7 +245,7 @@ TEST_F(NnOpsCudaTest, ConvWaitsForPrecomputedWeightTaps) {
         ~Streams() {
             for (auto stream : {producer, consumer}) {
                 if (stream) {
-                    cudaStreamSynchronize(stream);
+                    release_cuda_stream(stream);
                     cudaStreamDestroy(stream);
                 }
             }

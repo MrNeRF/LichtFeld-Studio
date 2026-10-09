@@ -260,18 +260,6 @@ namespace lfs::io {
 
         ledger_.reserve(std::max(config_.prefetch_count, config_.output_queue_size) * 2);
 
-        LOG_INFO("[PipelinedImageLoader] batch_size={}, prefetch={}, output_queue={}, ring_capacity={}, io_threads={}, cold_threads={}, 16bit_color={}",
-                 config_.jpeg_batch_size,
-                 config_.prefetch_count,
-                 config_.output_queue_size,
-                 config_.decode_frame_ring_capacity,
-                 config_.io_threads,
-                 config_.cold_process_threads,
-                 config_.use_16bit_color);
-
-        LOG_INFO("[PipelinedImageLoader] host compressed cache cap: {:.1f} GiB",
-                 config_.max_cache_bytes / (1024.0 * 1024.0 * 1024.0));
-
         if (cuda_run) {
             const auto base = run_spill_base();
             std::error_code ec;
@@ -285,9 +273,6 @@ namespace lfs::io {
             if (ec) {
                 LOG_WARN("[PipelinedImageLoader] Run spill folder creation failed: {}", ec.message());
                 run_spill_folder_.clear();
-            } else {
-                LOG_INFO("[PipelinedImageLoader] run spill folder: {}",
-                         lfs::core::path_to_utf8(run_spill_folder_));
             }
         }
 
@@ -303,9 +288,6 @@ namespace lfs::io {
                 cold_process_threads_.emplace_back([this] { portable_process_thread_func(); });
             }
         }
-
-        LOG_INFO("[PipelinedImageLoader] Started {} I/O, 1 GPU, {} cold threads",
-                 config_.io_threads, config_.cold_process_threads);
     }
 
     PipelinedImageLoader::~PipelinedImageLoader() {
@@ -316,7 +298,6 @@ namespace lfs::io {
         if (!running_.exchange(false))
             return;
 
-        LOG_INFO("[PipelinedImageLoader] Shutting down...");
         if (decoded_frame_ring_)
             decoded_frame_ring_->cancel();
 
@@ -350,16 +331,6 @@ namespace lfs::io {
         sidecar_queues_.clear();
         release_cuda_decode_stage();
 
-        LOG_INFO("[PipelinedImageLoader] Done: {} loaded, {} hits, {} misses",
-                 stats_.total_images_loaded, stats_.hot_path_hits, stats_.cold_path_misses);
-        {
-            std::lock_guard<std::mutex> cache_lock(jpeg_cache_mutex_);
-            LOG_INFO("[PipelinedImageLoader] compressed run cache: {} RAM entries, {:.1f} MiB RAM, {} spill entries, {:.1f} MiB spill",
-                     jpeg_cache_.size(),
-                     jpeg_cache_bytes_.load() / (1024.0 * 1024.0),
-                     spill_cache_.size(),
-                     spill_cache_bytes_ / (1024.0 * 1024.0));
-        }
         cleanup_run_spill_directory();
     }
 
@@ -1245,22 +1216,10 @@ namespace lfs::io {
         if (unresolved > 0) {
             cancelled_sequences_.fetch_add(unresolved, std::memory_order_relaxed);
         }
-        const std::uint64_t cancelled =
+        [[maybe_unused]] const std::uint64_t cancelled =
             cancelled_sequences_.load(std::memory_order_relaxed);
         LFS_DEBUG_ASSERT_MSG(accepted == succeeded + failed + cancelled,
                              "PipelinedImageLoader shutdown: accepted != succeeded+failed+cancelled");
-
-        SidecarTally sidecars;
-        {
-            std::lock_guard<std::mutex> lock(sidecar_tally_mutex_);
-            sidecars = sidecar_tally_;
-        }
-        LOG_INFO("[PipelinedImageLoader] shutdown reconciliation: accepted={} succeeded={} failed={} cancelled={} "
-                 "mask={}/{}/{} depth={}/{}/{} normal={}/{}/{}",
-                 accepted, succeeded, failed, cancelled,
-                 sidecars.mask.requested, sidecars.mask.delivered, sidecars.mask.failed,
-                 sidecars.depth.requested, sidecars.depth.delivered, sidecars.depth.failed,
-                 sidecars.normal.requested, sidecars.normal.delivered, sidecars.normal.failed);
     }
 
     void PipelinedImageLoader::reset_pipeline_gpu_bytes() {

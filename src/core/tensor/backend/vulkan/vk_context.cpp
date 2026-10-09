@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vk_context.hpp"
+#include "core/vulkan_queue_sync.hpp"
 
 #include "core/assert.hpp"
 #include "core/error.hpp"
@@ -448,6 +449,8 @@ namespace lfs::core::internal {
         physical_device_ = adopted.physical_device;
         device_ = adopted.device;
         queue_ = adopted.queue;
+        lfs::rendering::register_vulkan_queue(device_, queue_);
+        lfs::rendering::register_vulkan_queue(device_, adopted.consumer_queue);
         queue_family_ = adopted.queue_family;
         if (adopted.consumer_queue_mutex) {
             consumer_queue_ = adopted.consumer_queue;
@@ -775,7 +778,7 @@ namespace lfs::core::internal {
         queue_info.pQueuePriorities = &priority;
         vk_check(this, create_vulkan_device(physical_device_, {queue_info}, enabled_extensions, &features, nullptr, &device_),
                  "vkCreateDevice");
-        vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
+        lfs::rendering::vk_get_device_queue_synced(device_, queue_family_, 0, &queue_);
     }
 
     void VulkanContext::create_allocator() {
@@ -956,7 +959,7 @@ namespace lfs::core::internal {
         submit_info.signalSemaphoreInfoCount = 1;
         submit_info.pSignalSemaphoreInfos = &signal_info;
         std::lock_guard lock(queue_mutex_);
-        vk_check(this, vkQueueSubmit2(queue_, 1, &submit_info, VK_NULL_HANDLE),
+        vk_check(this, lfs::rendering::vk_queue_submit2_synced(queue_, 1, &submit_info, VK_NULL_HANDLE),
                  "vkQueueSubmit2");
         publish_submitted_locked(signal_value);
     }
@@ -988,7 +991,7 @@ namespace lfs::core::internal {
         submit_info.signalSemaphoreInfoCount = 1;
         submit_info.pSignalSemaphoreInfos = &signal_info;
         std::lock_guard lock(queue_mutex_);
-        vk_check(this, vkQueueSubmit2(queue_, 1, &submit_info, VK_NULL_HANDLE),
+        vk_check(this, lfs::rendering::vk_queue_submit2_synced(queue_, 1, &submit_info, VK_NULL_HANDLE),
                  "vkQueueSubmit2");
         publish_submitted_locked(signal_value);
     }
@@ -997,7 +1000,7 @@ namespace lfs::core::internal {
         if (consumer_queue_ == VK_NULL_HANDLE)
             return;
         std::lock_guard lock(*consumer_queue_mutex_);
-        vk_check(this, vkQueueWaitIdle(consumer_queue_), "vkQueueWaitIdle(consumer queue)");
+        vk_check(this, lfs::rendering::vk_queue_wait_idle_synced(consumer_queue_), "vkQueueWaitIdle(consumer queue)");
     }
 
     void VulkanContext::submit_external_wait(VkSemaphore semaphore, uint64_t value, uint64_t signal_value) {
@@ -1015,7 +1018,7 @@ namespace lfs::core::internal {
         submit.signalSemaphoreInfoCount = 1;
         submit.pSignalSemaphoreInfos = &signal;
         std::lock_guard lock(queue_mutex_);
-        vk_check(this, vkQueueSubmit2(queue_, 1, &submit, VK_NULL_HANDLE), "vkQueueSubmit2(external tensor wait)");
+        vk_check(this, lfs::rendering::vk_queue_submit2_synced(queue_, 1, &submit, VK_NULL_HANDLE), "vkQueueSubmit2(external tensor wait)");
         publish_submitted_locked(signal_value);
     }
 
@@ -1048,7 +1051,7 @@ namespace lfs::core::internal {
         submit.signalSemaphoreInfoCount = 1;
         submit.pSignalSemaphoreInfos = &signal;
         std::lock_guard lock(queue_mutex_);
-        vk_check(this, vkQueueSubmit2(queue_, 1, &submit, VK_NULL_HANDLE),
+        vk_check(this, lfs::rendering::vk_queue_submit2_synced(queue_, 1, &submit, VK_NULL_HANDLE),
                  "vkQueueSubmit2(external tensor wait)");
         publish_submitted_locked(signal_value);
     }
@@ -1237,7 +1240,7 @@ namespace lfs::core::internal {
             return;
         }
         if (device_ != VK_NULL_HANDLE) {
-            vkDestroyDevice(device_, nullptr);
+            lfs::rendering::vk_destroy_device_synced(device_, nullptr);
             device_ = VK_NULL_HANDLE;
         }
         if (debug_messenger_ != VK_NULL_HANDLE) {

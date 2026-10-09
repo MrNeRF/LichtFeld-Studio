@@ -208,10 +208,8 @@ TEST_F(ShValueStorageTest, GpuEncodeDecodeRoundtripLowMse) {
 // grew it: growing it after that stream is destroyed freed on a dead handle, which
 // segfaults or reports cudaErrorContextIsDestroyed after switching projects.
 TEST_F(ShValueStorageTest, Q16WorkspaceGrowthAfterReleasedStreamDoesNotReportCudaFailure) {
-    auto loaded = lfs::io::load_ply(
-        std::filesystem::path(TEST_DATA_DIR) / "kerstbol-isolated-rotated_137502.ply");
-    ASSERT_TRUE(loaded.has_value()) << lfs::format_for_developer(loaded.error());
-    SplatData& splat = loaded->value;
+    // Grow across many quantization blocks, including a partial final block.
+    auto splat = make_random_sh3(512 * kN + 17);
     const auto rows = static_cast<size_t>(splat.size());
     const Tensor canonical = splat.shN_canonical();
     ASSERT_EQ(canonical.ndim(), 3u);

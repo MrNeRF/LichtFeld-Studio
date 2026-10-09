@@ -295,8 +295,6 @@ namespace lfs::training {
                     }
                 }
             }
-
-            LOG_INFO("Dataset created with {} images (split: {})", indices_.size(), static_cast<int>(split_));
         }
 
         lfs::core::Camera* get_camera(size_t index) const {

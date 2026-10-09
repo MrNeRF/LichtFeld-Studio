@@ -7,6 +7,7 @@
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor_backend_vulkan.hpp"
 #include "core/vulkan_helpers.hpp"
+#include "core/vulkan_queue_sync.hpp"
 #include "cuda_backend_test.hpp"
 
 #include <gtest/gtest.h>
@@ -247,7 +248,7 @@ namespace {
                 VK_SUCCESS) {
                 return std::nullopt;
             }
-            vkGetDeviceQueue(device.device_, queue_family, 0, &device.queue_);
+            lfs::rendering::vk_get_device_queue_synced(device.device_, queue_family, 0, &device.queue_);
             device.physical_device_ = physical;
             device.queue_family_ = queue_family;
             device.shader_atomic_float_ = shader_atomic_float;
@@ -275,8 +276,8 @@ namespace {
 
         ~HeadlessAdoptedDevice() {
             if (device_ != VK_NULL_HANDLE) {
-                vkDeviceWaitIdle(device_);
-                vkDestroyDevice(device_, nullptr);
+                lfs::rendering::vk_device_wait_idle_synced(device_);
+                lfs::rendering::vk_destroy_device_synced(device_, nullptr);
             }
             if (instance_ != VK_NULL_HANDLE) {
                 vkDestroyInstance(instance_, nullptr);

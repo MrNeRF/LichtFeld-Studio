@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vk_recorder.hpp"
+#include "core/vulkan_queue_sync.hpp"
 
 #include "../../internal/tensor_impl.hpp"
 #include "core/assert.hpp"
@@ -635,7 +636,7 @@ namespace lfs::core::internal {
             }
         }
         if (context_.dead()) {
-            static_cast<void>(vkDeviceWaitIdle(context_.device()));
+            static_cast<void>(lfs::rendering::vk_device_wait_idle_synced(context_.device()));
         }
         for (auto& [id, recorder] : recorders_) {
             (void)id;

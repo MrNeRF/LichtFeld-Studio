@@ -40,10 +40,11 @@ namespace lfs::test {
 
         void gsplat_rasterize_backward(GsplatTestContext& ctx, const core::Tensor& image,
                                        const core::Tensor& alpha, core::SplatData& model, training::AdamOptimizer& optimizer,
-                                       const core::Tensor& error = {}, const core::Tensor& edge = {}, core::Tensor scores = {}) {
+                                       const core::Tensor& error = {}, const core::Tensor& edge = {}, core::Tensor scores = {},
+                                       const core::Tensor& depth = {}, const core::Tensor& normal = {}, float flatten_weight = 0.f) {
             core::Tensor unused;
             training::cuda_gsplat_ops().backward(*ctx.saved, image, alpha,
-                                                 training::gsplat_gradients(optimizer),
+                                                 training::gsplat_gradients(optimizer, depth, normal, flatten_weight),
                                                  model._densification_info, error, edge, scores,
                                                  optimizer.collect_projected_screen_share() ? model._max_screen_share : unused);
         }

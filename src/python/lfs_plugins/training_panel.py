@@ -974,14 +974,6 @@ class TrainingPanel(Panel):
             lambda: _gut_feature_enable_disabled("mip_filter"),
         )
         model.bind_func(
-            "gut_depth_supervision_disabled",
-            lambda: _gut_feature_enable_disabled("use_depth_loss"),
-        )
-        model.bind_func(
-            "gut_normal_supervision_disabled",
-            lambda: _gut_feature_enable_disabled("use_normal_loss"),
-        )
-        model.bind_func(
             "dataset_disabled",
             lambda: (
                 not (
@@ -2017,12 +2009,6 @@ class TrainingPanel(Panel):
             return False
         if not hasattr(params, prop):
             return False
-        # GUT renders no depth or normals, so it excludes both supervision losses.
-        if prop in ("use_depth_loss", "use_normal_loss") and val and params.gut:
-            return False
-        if prop == "gut" and val:
-            params.use_depth_loss = False
-            params.use_normal_loss = False
         if prop == "ppisp_freeze_from_sidecar" and val:
             params.ppisp = True
         elif prop == "ppisp" and not val:

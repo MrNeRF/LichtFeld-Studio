@@ -511,6 +511,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_PreTrainingProjectSaveRestoresCameraEnabledAndHidden_Test;
         friend class VisualizerImplResetTest_PostTrainingProjectSaveRestoresCameraEnabledAndHidden_Test;
         friend class VisualizerImplResetTest_CaptureOmitsPlySequenceClipAndCollapsedUuid_Test;
+        friend class VisualizerImplResetTest_SequencerCaptureDropsRemovedTailAndPreservesExtensions_Test;
         friend class VisualizerImplResetTest_AssetManagerProjectRestorePreservesLeftDockWidth_Test;
         friend class VisualizerImplResetTest_SaveAsAssignsNewProjectIdentity_Test;
 

@@ -22,6 +22,9 @@
 #include "gui/rmlui/elements/scene_graph_element.hpp"
 #include "gui/rmlui/elements/terminal_element.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
+#include "gui/rmlui/rml_panel_host.hpp"
+#include "gui/rmlui/rml_theme.hpp"
+#include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "gui/rotation_gizmo.hpp"
 #include "gui/scale_gizmo.hpp"
 #include "gui/scene_panel_native.hpp"
@@ -42,6 +45,7 @@
 #include "window/window_manager.hpp"
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
+#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cstring>
@@ -564,6 +568,8 @@ namespace lfs::vis {
             });
         }
         void TearDown() override {
+            manager().ui_renderer_ = nullptr;
+            gui::PanelRegistry::instance().unregister_panel("test.input_float");
             gui::cancelTranslationGizmoDrag();
             gui::cancelRotationGizmoDrag();
             gui::cancelScaleGizmoDrag();
@@ -578,6 +584,53 @@ namespace lfs::vis {
             gui::guiFocusState().reset();
         }
         gui::RmlUIManager& manager() { return gui_->rmlui_manager_; }
+        void attachInputHost(gui::RmlPanelHost& host, int width, int height, const char* markup) {
+            // Input uses the real host and null geometry renderer, without a GPU frame.
+            manager().ui_renderer_ = &input_renderer_;
+            host.rml_context_ = manager().createContext(host.context_name_, width, height);
+            std::string styled_markup = markup;
+            styled_markup.insert(styled_markup.find("<style>") + 7, gui::rml_theme::getComponentsRCSS());
+            host.document_ = host.rml_context_->LoadDocumentFromMemory(styled_markup);
+            ASSERT_NE(host.document_, nullptr);
+            host.document_->Show();
+            host.rml_context_->Update();
+            host.last_fbo_w_ = width;
+            host.last_fbo_h_ = height;
+        }
+        void forwardHost(gui::RmlPanelHost& host, float x, float y) {
+            gui::PanelInputState input;
+            host.setInput(&input);
+            host.forwardInput(x, y);
+            host.setInput(nullptr);
+        }
+        void registerInputFloat() {
+            class Panel final : public gui::IPanel {
+                void draw(const gui::PanelDrawContext&) override {}
+                gui::PanelRenderCapabilities renderCapabilities() const override { return {.direct = true}; }
+            };
+            gui::PanelInfo info;
+            info.id = "test.input_float";
+            info.label = "Input float";
+            info.space = gui::PanelSpace::Floating;
+            info.panel = std::make_shared<Panel>();
+            ASSERT_TRUE(gui::PanelRegistry::instance().register_panel(std::move(info)));
+            gui::PanelRegistry::instance().apply_project_state({{
+                .id = "test.input_float",
+                .space = gui::PanelSpace::Floating,
+                .enabled = true,
+                .float_x = 100.f,
+                .float_y = 60.f,
+                .float_user_height = 100.f,
+                .float_last_bounds_valid = true,
+                .float_last_x = 100.f,
+                .float_last_y = 60.f,
+                .float_last_w = 180.f,
+                .float_last_h = 100.f,
+                .float_auto_center = false,
+            }});
+            ASSERT_TRUE(gui::PanelRegistry::instance().isPositionOverFloatingPanel(140, 100));
+        }
+        RenderInterface_VK input_renderer_;
         // GuiManager keeps these listeners alive until their Rml context is shut down.
         gui::RmlViewportOverlay& viewportOverlay() { return gui_->rml_viewport_overlay_; }
         void dispatch(SDL_Event event) {
@@ -1566,6 +1619,127 @@ namespace lfs::vis {
         EXPECT_TRUE(startupVisible());
         key(SDL_SCANCODE_ESCAPE);
         EXPECT_FALSE(startupVisible());
+    }
+
+    TEST_F(WindowInputDispatchTest, FloatingSelectDoesNotPressDockedHostBehindIt) {
+        gui::RmlPanelHost docked(&manager(), "test-input-docked", "");
+        gui::RmlPanelHost floating(&manager(), "test-input-floating", "");
+        attachInputHost(docked, 400, 300,
+                        "<rml><head><style>body { width:400px; height:300px; }"
+                        "div { width:400px; height:300px; }</style></head>"
+                        "<body><div id='chart'/></body></rml>");
+        attachInputHost(floating, 180, 100,
+                        "<rml><head><style>body { width:180px; height:100px; font-family:Inter; font-size:14px; }"
+                        "select { position:absolute; left:20px; top:20px; width:140px; height:30px; }"
+                        "selectbox { position:absolute; top:30px; width:140px; height:120px; }"
+                        "option { display:block; height:40px; }</style></head>"
+                        "<body><select id='scale'><option value='100'>100%</option>"
+                        "<option value='125'>125%</option><option value='150'>150%</option>"
+                        "</select></body></rml>");
+        // The host's render surface leaves room for dropdowns outside its panel bounds.
+        floating.getContext()->SetDimensions({400, 300});
+        floating.getContext()->Update();
+        floating.setFloating(true);
+        registerInputFloat();
+        auto* select = dynamic_cast<Rml::ElementFormControlSelect*>(floating.getDocument()->GetElementById("scale"));
+        ASSERT_NE(select, nullptr);
+        auto* chart = docked.getDocument()->GetElementById("chart");
+        InputEventRecorder recorder;
+        chart->AddEventListener("mousedown", &recorder);
+        chart->AddEventListener("mouseup", &recorder);
+        chart->AddEventListener("click", &recorder);
+        const auto frame = [&] {
+            manager().beginFrameCursorTracking();
+            forwardHost(docked, 0, 0);
+            forwardHost(floating, 100, 60);
+        };
+        frame();
+        frame();
+
+        click(140, 95);
+        EXPECT_TRUE(select->IsSelectBoxVisible());
+        EXPECT_EQ(recorder.countOf("chart:mousedown"), 0) << recorder.joined();
+        EXPECT_EQ(recorder.countOf("chart:mouseup"), 0) << recorder.joined();
+        EXPECT_EQ(recorder.countOf("chart:click"), 0) << recorder.joined();
+
+        floating.getContext()->Update();
+        floating.getContext()->Render();
+        frame();
+        frame();
+        ASSERT_TRUE(select->IsSelectBoxVisible());
+        auto* option = select->GetOption(2);
+        const auto position = option->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const int option_x = 100 + static_cast<int>(position.x) + 5;
+        const int option_y = 60 + static_cast<int>(position.y) + 5;
+        ASSERT_GT(option_y, 160); // The dropdown extends beyond the floating panel.
+        click(option_x, option_y);
+        EXPECT_EQ(select->GetValue(), "150");
+        EXPECT_FALSE(select->IsSelectBoxVisible());
+        EXPECT_EQ(recorder.countOf("chart:mousedown"), 0) << recorder.joined();
+        EXPECT_EQ(recorder.countOf("chart:mouseup"), 0) << recorder.joined();
+        frame();
+        frame();
+
+        // Blank panel space also occludes, while a point outside still reaches the chart.
+        click(260, 145);
+        EXPECT_EQ(recorder.countOf("chart:mousedown"), 0);
+        click(330, 240);
+        EXPECT_EQ(recorder.countOf("chart:mousedown"), 1);
+        EXPECT_EQ(recorder.countOf("chart:mouseup"), 1);
+        EXPECT_EQ(recorder.countOf("chart:click"), 1);
+
+        gui::PanelRegistry::instance().set_panel_enabled("test.input_float", false);
+        manager().deactivateInput(floating.getContext());
+        click(140, 95);
+        EXPECT_EQ(recorder.countOf("chart:click"), 2);
+        chart->RemoveEventListener("mousedown", &recorder);
+        chart->RemoveEventListener("mouseup", &recorder);
+        chart->RemoveEventListener("click", &recorder);
+    }
+
+    TEST_F(WindowInputDispatchTest, FloatingOcclusionPreservesDockedGestureOwnership) {
+        gui::RmlPanelHost docked(&manager(), "test-input-drag", "");
+        attachInputHost(docked, 400, 300,
+                        "<rml><head><style>body { width:400px; height:300px; }"
+                        "div { width:400px; height:300px; }</style></head>"
+                        "<body><div id='chart'/></body></rml>");
+        registerInputFloat();
+        forwardHost(docked, 0, 0);
+        auto* chart = docked.getDocument()->GetElementById("chart");
+        InputEventRecorder recorder;
+        chart->AddEventListener("mousedown", &recorder);
+        chart->AddEventListener("mouseup", &recorder);
+        const auto button = [&](bool down, float x, float y) {
+            SDL_Event event{};
+            event.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+            event.button.button = SDL_BUTTON_LEFT;
+            event.button.x = x;
+            event.button.y = y;
+            dispatch(event);
+        };
+        button(true, 140, 95);
+        button(false, 330, 240);
+        EXPECT_EQ(recorder.countOf("chart:mousedown"), 0);
+        EXPECT_EQ(recorder.countOf("chart:mouseup"), 0);
+        button(true, 330, 240);
+        button(false, 140, 95);
+        EXPECT_EQ(recorder.countOf("chart:mousedown"), 1);
+        EXPECT_EQ(recorder.countOf("chart:mouseup"), 1);
+
+        SDL_Event motion{};
+        motion.type = SDL_EVENT_MOUSE_MOTION;
+        motion.motion.y = 240.f;
+        const auto start = std::chrono::steady_clock::now();
+        constexpr int updates = 10000;
+        for (int i = 0; i < updates; ++i) {
+            motion.motion.x = 320.f + static_cast<float>(i % 10);
+            dispatch(motion);
+        }
+        const auto elapsed = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start);
+        RecordProperty("pointer_update_us", std::to_string(elapsed.count() / updates));
+        EXPECT_EQ(docked.getContext()->GetHoverElement(), chart);
+        chart->RemoveEventListener("mousedown", &recorder);
+        chart->RemoveEventListener("mouseup", &recorder);
     }
 
     TEST_F(WindowInputDispatchTest, DispatchReusesEventStorage) {

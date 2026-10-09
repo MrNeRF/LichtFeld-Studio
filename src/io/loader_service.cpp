@@ -263,8 +263,6 @@ namespace lfs::io {
             return make_error(ErrorCode::UNSUPPORTED_FORMAT, message, path);
         }
 
-        LOG_INFO("Using {} loader for: {}", loader->name(), lfs::core::path_to_utf8(path));
-
         // Perform the load - let the loader return proper errors
         auto result = loader->load(path, options);
 

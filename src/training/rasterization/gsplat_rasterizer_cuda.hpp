@@ -16,6 +16,7 @@ namespace lfs::training {
 
     // Forward pass context - holds raw pointers needed for backward (arena allocated)
     struct GsplatRasterizeContext {
+        core::Tensor camera_rays;
         // Raw pointers to arena-allocated intermediate buffers
         float* render_colors_ptr = nullptr;  // [C, channels, H, W]
         float* render_alphas_ptr = nullptr;  // [C, 1, H, W]

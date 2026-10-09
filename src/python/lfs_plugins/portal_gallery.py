@@ -646,6 +646,7 @@ class PortalGalleryClient:
         explicit_deadline = self.processing_deadline is not None
         monotonic_deadline = time.monotonic() + max(0, min(PROCESSING_TIMEOUT, deadline - time.time()))
         poll = 0
+        logged_stage = None
         while upload.get("status") == "processing":
             if _identifier(upload.get("id")) != upload_id:
                 raise PortalProtocolError("The portal returned a different upload.")
@@ -665,8 +666,10 @@ class PortalGalleryClient:
                     raise PortalProtocolError('Invalid portal processing start time') from None
             self.processing_deadline = deadline
             poll += 1
-            log_stage("processing_wait", upload_id=upload_id, poll=poll, status=upload.get("status"),
-                      stage=state["stage"], progress=f"{state['bytesProcessed']}/{size}")
+            if state["stage"] != logged_stage:
+                logged_stage = state["stage"]
+                log_stage("processing_wait", upload_id=upload_id, poll=poll, status=upload.get("status"),
+                          stage=state["stage"], progress=f"{state['bytesProcessed']}/{size}")
             on_processing({"stage": state["stage"], "completed": state["bytesProcessed"], "total": size})
             if time.time() >= deadline or time.monotonic() >= monotonic_deadline:
                 raise GalleryProcessingTimeout('Portal is taking longer than expected · Retry / Keep waiting')

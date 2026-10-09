@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "lfs/training/ops/geometry_vulkan.hpp"
+#include "geometry_camera.hpp"
 
 #include "core/assert.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
@@ -39,8 +40,10 @@ namespace lfs::training {
             uint32_t prior;
             float fx, fy, cx, cy, loss_weight, lambda_grad, quant_step, floor_override;
             float anchor_scale, anchor_shift, anchor_floor, min_count, min_weight, near_plane;
+            uint64_t rays;
+            uint32_t wrap_horizontal;
         };
-        static_assert(sizeof(Push) == 232);
+        static_assert(sizeof(Push) == 248);
         static_assert(offsetof(Push, width) == 136);
         static_assert(offsetof(Push, fx) == 172);
 
@@ -212,7 +215,7 @@ namespace lfs::training {
         }
 
         void depth_normal(In normal_map, In depth_map, In alpha, In pixel_weight, Out grad_normal, Out grad_depth,
-                          Out grad_alpha, Out loss, Out partials, const Intrinsics& intrinsics, float weight, bool prior) {
+                          Out grad_alpha, Out loss, Out partials, const GeometryCamera& intrinsics, float weight, bool prior) {
             const uint32_t width = count32(depth_map.shape()[1]), height = count32(depth_map.shape()[0]);
             Push p = base(alpha, pixel_weight, loss, partials, width, height, k::normal_consistency_slots::kSlotCount,
                           k::normal_consistency_partial_count(static_cast<size_t>(width) * height), "normal consistency");
@@ -221,6 +224,8 @@ namespace lfs::training {
             p.grad_normal = grad_normal.is_valid() ? vk::address(ref(grad_normal)) : 0;
             p.grad_depth = vk::address(ref(grad_depth));
             p.grad_alpha = vk::address(ref(grad_alpha));
+            p.rays = intrinsics.rays.is_valid() ? vk::address(ref(intrinsics.rays)) : 0;
+            p.wrap_horizontal = intrinsics.wrap_horizontal;
             p.fx = intrinsics.fx;
             p.fy = intrinsics.fy;
             p.cx = intrinsics.cx;
@@ -231,6 +236,8 @@ namespace lfs::training {
             p.min_weight = k::kNormalConsistencyMinValidWeight;
             const auto context = acquire_vulkan_context();
             std::vector<StorageRef> reads{ref(depth_map), ref(alpha), ref(partials)};
+            if (intrinsics.rays.is_valid())
+                reads.push_back(ref(intrinsics.rays));
             if (normal_map.is_valid())
                 reads.push_back(ref(normal_map));
             if (pixel_weight.is_valid())
@@ -245,60 +252,19 @@ namespace lfs::training {
         }
 
         void consistency(In normal_map, In depth_map, In alpha, In pixel_weight, Out grad_normal, Out grad_depth,
-                         Out grad_alpha, Out loss, Out partials, Intrinsics intrinsics, float weight) {
+                         Out grad_alpha, Out loss, Out partials, GeometryCamera intrinsics, float weight) {
             depth_normal(normal_map, depth_map, alpha, pixel_weight, grad_normal, grad_depth, grad_alpha, loss, partials, intrinsics, weight, false);
         }
         void prior_depth(In prior_normal, In depth_map, In alpha, In pixel_weight, Out grad_depth, Out grad_alpha,
-                         Out loss, Out partials, Intrinsics intrinsics, float weight) {
+                         Out loss, Out partials, GeometryCamera intrinsics, float weight) {
             Tensor absent_gradient;
             depth_normal(prior_normal, depth_map, alpha, pixel_weight, absent_gradient, grad_depth, grad_alpha, loss, partials, intrinsics, weight, true);
         }
 
-        std::vector<AnchorSample> collect_anchor_samples(In points, In view, In prior, const AnchorParams& params) {
-            const size_t count = points.shape()[0];
-            if (!count)
-                return {};
-            LFS_ASSERT_MSG(count <= UINT32_MAX / 3, "Vulkan anchor point list exceeds 32-bit indexing");
-            const size_t stride = std::max<size_t>(1, count / kMaxAnchorSamples), samples = (count + stride - 1) / stride;
-            Tensor pairs = Tensor::empty({kMaxAnchorSamples, 2}, core::Device::GPU);
-            Tensor sample_count = Tensor::zeros({1}, core::Device::GPU, core::DataType::Int32);
-            Push p{};
-            p.points = vk::address(ref(points));
-            p.view = vk::address(ref(view));
-            p.target = vk::address(ref(prior));
-            p.pairs = vk::address(ref(pairs));
-            p.sample_count = vk::address(ref(sample_count));
-            p.lo_x = params.aabb_lo[0];
-            p.lo_y = params.aabb_lo[1];
-            p.lo_z = params.aabb_lo[2];
-            p.hi_x = params.aabb_hi[0];
-            p.hi_y = params.aabb_hi[1];
-            p.hi_z = params.aabb_hi[2];
-            p.width = count32(prior.shape()[1]);
-            p.height = count32(prior.shape()[0]);
-            p.samples = count32(samples);
-            p.stride = count32(stride);
-            p.capacity = kMaxAnchorSamples;
-            p.fx = params.intrinsics.fx;
-            p.fy = params.intrinsics.fy;
-            p.cx = params.intrinsics.cx;
-            p.cy = params.intrinsics.cy;
-            p.near_plane = params.near_plane;
-            const auto context = acquire_vulkan_context();
-            std::vector<StorageRef> reads{ref(points), ref(view), ref(prior)}, writes{ref(pairs), ref(sample_count)};
-            launch(context, p, 14, reads, writes, vk::dispatch_groups(*context, samples));
-            const int found = std::min(sample_count.item<int>(), static_cast<int>(kMaxAnchorSamples));
-            if (found < k::kMinAnchorSamples)
-                return {};
-            const Tensor host = pairs.slice(0, 0, static_cast<size_t>(found)).cpu().contiguous();
-            std::vector<AnchorSample> result(static_cast<size_t>(found));
-            std::memcpy(result.data(), host.data_ptr(), result.size() * sizeof(AnchorSample));
-            return result;
-        }
     } // namespace
 
     const lfs::gpu_ops::GeometryLossOps& vulkan_geometry_ops() {
-        static const lfs::gpu_ops::GeometryLossOps ops{depth, normal, consistency, prior_depth, collect_anchor_samples};
+        static const lfs::gpu_ops::GeometryLossOps ops{depth, normal, consistency, prior_depth, collect_camera_anchor_samples};
         return ops;
     }
 } // namespace lfs::training

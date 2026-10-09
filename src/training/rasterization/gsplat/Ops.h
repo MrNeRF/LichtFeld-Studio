@@ -45,10 +45,6 @@ namespace gsplat_lfs {
         uint32_t color_stride = 3,
         cudaStream_t stream = nullptr);
 
-    void rasterization_pack_depth_colors(
-        const float* depths, float* colors, uint32_t count, uint32_t channels,
-        cudaStream_t stream = nullptr);
-
     //=========================================================================
     // Tile Intersection
     //=========================================================================

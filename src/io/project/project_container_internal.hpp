@@ -166,6 +166,10 @@ namespace lfs::io::project::detail {
         std::optional<std::filesystem::path> backup_path;
     };
 
+    // Stable short stem for long names; recovery uses the same key to associate
+    // artifacts without treating a truncated filename as a different master.
+    [[nodiscard]] std::filesystem::path temporary_project_stem(const std::filesystem::path& destination);
+
     [[nodiscard]] std::filesystem::path
     make_sibling_temp_path(const std::filesystem::path& destination, std::string_view tag);
     [[nodiscard]] lfs::Result<void>

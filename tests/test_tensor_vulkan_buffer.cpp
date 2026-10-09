@@ -12,6 +12,7 @@
 #include "core/tensor_readback.hpp"
 #include "core/tensor_upload.hpp"
 #include "core/tensor_vulkan_interop.hpp"
+#include "core/vulkan_queue_sync.hpp"
 
 #include <gtest/gtest.h>
 
@@ -282,7 +283,7 @@ namespace {
             submit_info.pCommandBuffers = &command;
             submit_info.signalSemaphoreCount = 1;
             submit_info.pSignalSemaphores = &completion;
-            return vkQueueSubmit(queue, 1, &submit_info, VK_NULL_HANDLE);
+            return lfs::rendering::vk_queue_submit_synced(queue, 1, &submit_info, VK_NULL_HANDLE);
         };
         const auto record = [&](auto&& write) {
             VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -332,7 +333,7 @@ namespace {
         readback.wait(std::as_writable_bytes(std::span(values)));
         for (size_t i = 0; i < values.size(); ++i)
             EXPECT_FLOAT_EQ(values[i], i < 28 ? 2.5f : 3.5f);
-        ASSERT_EQ(vkQueueWaitIdle(queue), VK_SUCCESS);
+        ASSERT_EQ(lfs::rendering::vk_queue_wait_idle_synced(queue), VK_SUCCESS);
         interop.release_timeline(completion);
         vkDestroySemaphore(device, completion, nullptr);
         vkDestroyCommandPool(device, pool, nullptr);
@@ -467,7 +468,7 @@ namespace {
             submit.pCommandBuffers = &command;
             submit.signalSemaphoreCount = 1;
             submit.pSignalSemaphores = &written;
-            ASSERT_EQ(vkQueueSubmit(static_cast<VkQueue>(handles.queue), 1, &submit, VK_NULL_HANDLE), VK_SUCCESS);
+            ASSERT_EQ(lfs::rendering::vk_queue_submit_synced(static_cast<VkQueue>(handles.queue), 1, &submit, VK_NULL_HANDLE), VK_SUCCESS);
 
             auto waited = std::async(std::launch::async, [&] { interop.wait(tensors, {written, 1}); });
             const bool queued = waited.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
@@ -486,7 +487,7 @@ namespace {
                 for (const float value : read.get())
                     EXPECT_FLOAT_EQ(value, 7.25f);
             }
-            ASSERT_EQ(vkQueueWaitIdle(static_cast<VkQueue>(handles.queue)), VK_SUCCESS);
+            ASSERT_EQ(lfs::rendering::vk_queue_wait_idle_synced(static_cast<VkQueue>(handles.queue)), VK_SUCCESS);
         }
         vkDestroyCommandPool(device, pool, nullptr);
         vkDestroySemaphore(device, written, nullptr);

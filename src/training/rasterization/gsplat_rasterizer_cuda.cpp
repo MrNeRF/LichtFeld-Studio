@@ -10,6 +10,7 @@
 #include "core/logger.hpp"
 #include "core/sh_layout.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "gsplat/GeometryFeatures.h"
 #include "gsplat/Ops.h"
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/vram_ledger.hpp"
@@ -96,6 +97,9 @@ namespace lfs::training {
             core::Tensor image_chw;
             core::Tensor alpha_chw;
             core::Tensor depth_chw;
+            core::Tensor camera_rays;
+            core::Tensor geometry_bg;
+            core::Tensor geometry_bg_image;
             core::Tensor shN_dequant;
         };
 
@@ -403,6 +407,36 @@ namespace lfs::training {
                 channels = 1;
             } else if (render_mode == GsplatRenderMode::RGB_D || render_mode == GsplatRenderMode::RGB_ED) {
                 channels = 4;
+            } else if (render_mode == GsplatRenderMode::RGB_D_N) {
+                channels = 8;
+            }
+
+            // Geometry has zero background; only RGB contributes background color.
+            core::Tensor feature_bg, feature_bg_image;
+            if (channels != 3) {
+                auto& cached_bg = caches.geometry_bg;
+                if (!cached_bg.is_valid() || cached_bg.numel() != channels)
+                    cached_bg = core::Tensor::empty({channels}, core::Device::GPU);
+                feature_bg = cached_bg;
+                feature_bg.set_stream(fwd_stream);
+                feature_bg.zero_();
+                if (channels > 1 && bg_color_ptr) {
+                    LFS_CUDA_CHECK(cudaMemcpyAsync(feature_bg.ptr<float>(), bg_color_ptr, 3 * sizeof(float), cudaMemcpyDeviceToDevice, fwd_stream));
+                }
+                bg_color_ptr = feature_bg.ptr<float>();
+                if (use_bg_image) {
+                    auto& cached_bg_image = caches.geometry_bg_image;
+                    const core::TensorShape shape{channels, H, W};
+                    if (!cached_bg_image.is_valid() || cached_bg_image.shape() != shape)
+                        cached_bg_image = core::Tensor::empty(shape, core::Device::GPU);
+                    feature_bg_image = cached_bg_image;
+                    feature_bg_image.set_stream(fwd_stream);
+                    feature_bg_image.zero_();
+                    if (channels > 1) {
+                        LFS_CUDA_CHECK(cudaMemcpyAsync(feature_bg_image.ptr<float>(), bg_image_ptr, 3ULL * H * W * sizeof(float), cudaMemcpyDeviceToDevice, fwd_stream));
+                    }
+                    bg_image_ptr = feature_bg_image.ptr<float>();
+                }
             }
 
             // Calculate total memory needed (with alignment)
@@ -565,6 +599,9 @@ namespace lfs::training {
                 render_output.depth = cached_image_chw.div(cached_alpha_chw.clamp_min(1e-10f));
                 break;
             }
+            case GsplatRenderMode::RGB_D_N:
+                render_output.normal = cached_image_chw.slice(0, 4, 7);
+                [[fallthrough]];
             case GsplatRenderMode::RGB_D:
                 render_output.image = cached_image_chw.slice(0, 0, 3);
                 render_output.depth = cached_image_chw.slice(0, 3, 4);
@@ -585,6 +622,16 @@ namespace lfs::training {
 
             // Build context for backward - store raw pointers
             GsplatRasterizeContext ctx;
+            if (channels == 8) {
+                auto& rays = caches.camera_rays;
+                const core::TensorShape shape{H, W, 3UL};
+                if (!rays.is_valid() || rays.shape() != shape)
+                    rays = core::Tensor::empty(shape, core::Device::GPU);
+                ctx.camera_rays = rays;
+                ctx.camera_rays.set_stream(fwd_stream);
+                gsplat_lfs::geometry_camera_rays(ctx.camera_rays.ptr<float>(), W, H, K_ptr,
+                                                 camera_model, radial_ptr, tangential_ptr, thin_prism_ptr, fwd_stream);
+            }
 
             // Store raw pointers directly (arena memory stays valid until end_frame)
             ctx.render_colors_ptr = render_colors_ptr_out;
@@ -622,8 +669,8 @@ namespace lfs::training {
             ctx.viewmat_ptr = viewmat_ptr;
             ctx.K_ptr = K_ptr;
             ctx.K_tensor = K_tensor;
-            ctx.bg_color = bg_color;
-            ctx.bg_image = bg_image; // Save bg_image for backward pass
+            ctx.bg_color = channels == 3 ? bg_color : feature_bg;
+            ctx.bg_image = channels == 3 ? bg_image : feature_bg_image; // Save bg_image for backward pass
 
             // Distortion coefficients
             ctx.radial_ptr = radial_ptr;
@@ -663,6 +710,8 @@ namespace lfs::training {
             output.image = std::move(render_output.image);
             output.alpha = std::move(render_output.alpha);
             output.depth = std::move(render_output.depth);
+            output.normal = std::move(render_output.normal);
+            saved.camera_rays = ctx.camera_rays;
             state.frame = std::move(ctx);
             state.live = true;
             return {lfs::gpu_ops::RasterResult::Code::Success, true, {}};
@@ -688,6 +737,9 @@ namespace lfs::training {
         const lfs::gpu_ops::GsplatGradients& gradients, core::Tensor& densification,
         const core::Tensor& pixel_error_map, const core::Tensor& edge_weight_map,
         core::Tensor& edge_scores, core::Tensor& max_screen_share) {
+        const auto& grad_depth = gradients.depth;
+        const auto& grad_normal = gradients.normal;
+        const float flatten_weight = gradients.flatten_weight;
         auto edge_score_out = edge_scores;
         auto& state = state_of(saved);
         const auto& ctx = state.frame;
@@ -708,6 +760,13 @@ namespace lfs::training {
         if (densification.is_valid())
             densification.set_stream(stream);
         try {
+            // A caller may produce loss gradients on a different stream from
+            // the saved forward context. Order every raw-pointer read explicitly.
+            for (const auto* gradient : {&grad_image, &grad_alpha, &grad_depth, &grad_normal}) {
+                if (gradient->is_valid() && gradient->numel() > 0) {
+                    gradient->sync_to_stream(stream);
+                }
+            }
 
             const uint32_t N = ctx.N;
             const uint32_t K = ctx.K_sh;
@@ -720,8 +779,9 @@ namespace lfs::training {
                 return (size + alignment - 1) & ~(alignment - 1);
             };
 
-            const bool have_color_grad = grad_image.is_valid() && grad_image.numel() > 0;
-            const bool have_alpha_grad = grad_alpha.is_valid() && grad_alpha.numel() > 0;
+            const bool have_color_grad = channels == 3 && grad_image.is_valid() && grad_image.numel() > 0;
+            const bool expected_depth = ctx.render_mode == GsplatRenderMode::ED || ctx.render_mode == GsplatRenderMode::RGB_ED;
+            const bool have_alpha_grad = !expected_depth && grad_alpha.is_valid() && grad_alpha.numel() > 0;
             size_t v_render_colors_size = have_color_grad ? 0 : align(H * W * channels * sizeof(float));
             size_t v_render_alphas_size = have_alpha_grad ? 0 : align(H * W * sizeof(float));
             size_t v_means_size = align(N * 3 * sizeof(float));
@@ -775,6 +835,38 @@ namespace lfs::training {
                 cudaMemsetAsync(bwd_blob, 0, total_bwd_size, stream),
                 "gsplat backward gradient arena clear");
 
+            if (channels != 3) {
+                const size_t plane_bytes = static_cast<size_t>(H) * W * sizeof(float);
+                auto copy_grad = [&](const core::Tensor& grad, int offset, int count) {
+                    if (!grad.is_valid() || grad.numel() == 0)
+                        return;
+                    LFS_ASSERT_MSG(grad.numel() == static_cast<size_t>(count) * H * W && grad.is_contiguous(), "GUT geometry gradient shape mismatch");
+                    core::pin_operands({&grad});
+                    LFS_CUDA_CHECK(cudaMemcpyAsync(v_render_colors_ptr + static_cast<size_t>(offset) * H * W,
+                                                   grad.ptr<float>(), count * plane_bytes, cudaMemcpyDeviceToDevice, stream));
+                };
+                if (grad_image.is_valid() && grad_image.numel()) {
+                    if (channels == 1) {
+                        copy_grad(grad_image, 0, 1);
+                    } else if (grad_image.numel() == static_cast<size_t>(channels) * H * W) {
+                        copy_grad(grad_image, 0, channels);
+                    } else {
+                        copy_grad(grad_image, 0, 3);
+                    }
+                }
+                copy_grad(grad_depth, channels == 1 ? 0 : 3, 1);
+                if (channels == 8)
+                    copy_grad(grad_normal, 4, 3);
+                if (expected_depth) {
+                    if (grad_alpha.is_valid() && grad_alpha.numel()) {
+                        core::pin_operands({&grad_alpha});
+                        LFS_CUDA_CHECK(cudaMemcpyAsync(v_render_alphas_ptr, grad_alpha.ptr<float>(), plane_bytes, cudaMemcpyDeviceToDevice, stream));
+                    }
+                    const size_t depth_offset = channels == 1 ? 0 : 3ULL * H * W;
+                    gsplat_lfs::expected_depth_bwd(ctx.render_colors_ptr + depth_offset, ctx.render_alphas_ptr,
+                                                   v_render_colors_ptr + depth_offset, v_render_alphas_ptr, H * W, stream);
+                }
+            }
             UnscentedTransformParameters ut_params;
 
             // Get background color and image pointers (same as forward)
@@ -891,6 +983,8 @@ namespace lfs::training {
                 edge_weight_map_ptr,
                 edge_score_out_ptr,
                 stream, ctx.batches, ctx.tiles_per_gauss_ptr);
+
+            gsplat_lfs::flatten_scale_grad(ctx.scales.ptr<float>(), v_scales_ptr, N, flatten_weight, stream);
 
             // ============ Accumulate gradients into optimizer using CUDA kernels ============
             // This avoids any tensor operations that might allocate from memory pool
@@ -1015,6 +1109,10 @@ namespace lfs::training {
         caches.alpha_chw = {};
         caches.depth_chw = {};
         caches.shN_dequant = {};
+        caches.camera_rays = {};
+        caches.geometry_bg = {};
+        caches.geometry_bg_image = {};
+        saved.camera_rays = {};
         const bool workspace_released = static_cast<CudaGsplatState&>(*saved.backend).workspace.release();
         return !caches.K.is_valid() && !caches.image_chw.is_valid() &&
                !caches.alpha_chw.is_valid() && !caches.depth_chw.is_valid() && workspace_released;

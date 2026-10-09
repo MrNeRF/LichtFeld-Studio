@@ -115,12 +115,6 @@ namespace lfs::training {
             state.current = 0;
             state.peak = 0;
         }
-        void dump_arena_statistics() {
-            Arena& state = arena();
-            std::lock_guard lock(state.mutex);
-            LOG_INFO("Vulkan training arena capacity={} required={} current={} peak={}",
-                     state.capacity, state.required, state.current, state.peak);
-        }
         std::optional<lfs::gpu_ops::ArenaMemoryInfo> arena_memory_info() {
             Arena& state = arena();
             std::lock_guard lock(state.mutex);
@@ -218,7 +212,6 @@ namespace lfs::training {
             .profile = profile,
             .resize_arena = resize_arena,
             .reset_arena = reset_arena,
-            .dump_arena_statistics = dump_arena_statistics,
             .arena_memory_info = arena_memory_info,
             .log_arena_failure = log_arena_failure,
             .set_arena_timeout = set_arena_timeout,

@@ -78,6 +78,8 @@ namespace lfs::io {
         // warning naming the file) so auto-generate can overwrite it. When false,
         // the load fails with NORMAL_SIZE_MISMATCH as before.
         bool normal_auto_generate = false;
+        // Same contract for depth maps when depth auto-generate is on.
+        bool depth_auto_generate = false;
         CentralizeDataset centralize = CentralizeDataset::Off;
         ProgressCallback progress = nullptr;
         CancelCallback cancel_requested = nullptr;

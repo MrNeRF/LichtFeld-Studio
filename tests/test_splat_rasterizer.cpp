@@ -184,6 +184,18 @@ namespace {
         selected = query.query(inputs, parameters, output);
         ASSERT_TRUE(selected) << selected.error().detail();
         EXPECT_EQ(download<uint8_t>(output, deleted.size()), expected);
+
+        parameters.scene[2] = 1;
+        const std::array<uint8_t, 1> hidden{0};
+        inputs.visibility = std::as_bytes(std::span(hidden));
+        selected = query.query(inputs, parameters, output);
+        ASSERT_TRUE(selected) << selected.error().detail();
+        EXPECT_EQ(download<uint8_t>(output, deleted.size()), (std::vector<uint8_t>(deleted.size(), 0)));
+        const std::array<uint8_t, 1> visible{1};
+        inputs.visibility = std::as_bytes(std::span(visible));
+        selected = query.query(inputs, parameters, output);
+        ASSERT_TRUE(selected) << selected.error().detail();
+        EXPECT_EQ(download<uint8_t>(output, deleted.size()), expected);
     }
 
     // A completed dense frame of the same source count switches to source

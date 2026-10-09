@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Execute the production LOD selector against trees whose projected sizes are
-// non-monotone. Usage: c++ -std=c++20 scripts/verify_lod_gpu_cut.cpp -lvulkan -o
+// non-monotone. Usage: c++ -std=c++20 -Isrc/core/include scripts/verify_lod_gpu_cut.cpp
+// src/core/vulkan_queue_sync.cpp -lvulkan -pthread -o
 // /tmp/verify_lod_gpu_cut && /tmp/verify_lod_gpu_cut path/to/lod_select_threshold.spv
 // Add --single-pass when checking the old shader with its original dispatch sequence.
+#include "core/vulkan_queue_sync.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -61,7 +63,7 @@ int main(int argc, char** argv) {
     VkDevice device;
     check(vkCreateDevice(physical, &dci, nullptr, &device));
     VkQueue queue;
-    vkGetDeviceQueue(device, family, 0, &queue);
+    lfs::rendering::vk_get_device_queue_synced(device, family, 0, &queue);
     std::array<VkBuffer, 12> buffers{};
     std::array<VkDeviceMemory, 12> memory{};
     std::array<void*, 12> mapped{};
@@ -221,8 +223,8 @@ int main(int argc, char** argv) {
         VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
         submit.commandBufferCount = 1;
         submit.pCommandBuffers = &command;
-        check(vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE));
-        check(vkQueueWaitIdle(queue));
+        check(lfs::rendering::vk_queue_submit_synced(queue, 1, &submit, VK_NULL_HANDLE));
+        check(lfs::rendering::vk_queue_wait_idle_synced(queue));
         std::set<uint32_t> selected;
         for (uint32_t i = 0; i < std::min(words(3)[0], uniforms[1]); ++i)
             selected.insert(words(5)[i]);
@@ -245,7 +247,7 @@ int main(int argc, char** argv) {
         vkDestroyBuffer(device, buffers[i], nullptr);
         vkFreeMemory(device, memory[i], nullptr);
     }
-    vkDestroyDevice(device, nullptr);
+    lfs::rendering::vk_destroy_device_synced(device, nullptr);
     vkDestroyInstance(instance, nullptr);
     return passed ? 0 : 1;
 }

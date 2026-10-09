@@ -553,3 +553,5 @@ set_target_properties(lfs_training_vulkan PROPERTIES
     CXX_STANDARD 23
     CXX_STANDARD_REQUIRED ON
     POSITION_INDEPENDENT_CODE ON)
+
+target_link_libraries(lfs_training_vulkan PRIVATE lfs_geometry_camera)

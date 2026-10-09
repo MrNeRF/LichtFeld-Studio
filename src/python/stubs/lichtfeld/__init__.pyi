@@ -2625,6 +2625,15 @@ class OptimizationParams:
     def depth_loss_mode(self, arg: str, /) -> None: ...
 
     @property
+    def depth_auto_generate(self) -> bool:
+        """
+        Generate missing or size-mismatched depth maps with MoGe-2 from the full-resolution images/ folder
+        """
+
+    @depth_auto_generate.setter
+    def depth_auto_generate(self, arg: bool, /) -> None: ...
+
+    @property
     def use_normal_loss(self) -> bool:
         """Load normal maps and use normal-map supervision during training"""
 

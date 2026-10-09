@@ -8,17 +8,40 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "core/vulkan_queue_sync.hpp"
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <shared_mutex>
 #include <stop_token>
 #include <string_view>
+#include <utility>
 #include <vulkan/vulkan.h>
 
 namespace lfs::rendering {
+
+    namespace detail {
+        template <class Operation>
+        decltype(auto) with_device_queue_access(std::shared_mutex* const mutex, Operation&& operation) {
+            if (mutex == nullptr) {
+                return std::forward<Operation>(operation)();
+            }
+            const std::shared_lock lock(*mutex);
+            return std::forward<Operation>(operation)();
+        }
+
+        template <class Operation>
+        decltype(auto) with_device_idle_access(std::shared_mutex* const mutex, Operation&& operation) {
+            if (mutex == nullptr) {
+                return std::forward<Operation>(operation)();
+            }
+            const std::unique_lock lock(*mutex);
+            return std::forward<Operation>(operation)();
+        }
+    } // namespace detail
 
     // ---------------------------------------------------------------------------
     // Frozen wait policy / outcomes (spec §0.1 verbatim semantics)
@@ -168,23 +191,6 @@ namespace lfs::rendering {
         // Production symbols. Safe to call once; returns a fully filled table.
         [[nodiscard]] static VulkanDispatch real() noexcept;
     };
-
-    // External synchronization for window graphics, present and compute queues.
-    // Sparse binds and page uploads may be issued by background workers.
-    LFS_RENDERING_API void set_graphics_queue_external_sync(std::mutex* mutex,
-                                                            VkQueue graphics,
-                                                            VkQueue present,
-                                                            VkQueue compute = VK_NULL_HANDLE) noexcept;
-    LFS_RENDERING_API VkResult vk_queue_submit_synced(VkQueue queue,
-                                                      uint32_t submit_count,
-                                                      const VkSubmitInfo* submits,
-                                                      VkFence fence);
-    LFS_RENDERING_API VkResult vk_queue_present_synced(VkQueue queue, const VkPresentInfoKHR* present_info);
-    LFS_RENDERING_API VkResult vk_queue_wait_idle_synced(VkQueue queue);
-    LFS_RENDERING_API VkResult vk_queue_bind_sparse_synced(VkQueue queue,
-                                                           uint32_t bind_info_count,
-                                                           const VkBindSparseInfo* bind_infos,
-                                                           VkFence fence);
 
     // Injectable clock for fake-time unit tests (spec §4.2 / AMB 9).
     using ClockNow = std::function<std::chrono::steady_clock::time_point()>;

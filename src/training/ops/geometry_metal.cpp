@@ -3,6 +3,7 @@
 
 // Metal GeometryLossOps; see ops/geometry_cuda.cpp for the reference behaviour.
 
+#include "geometry_camera.hpp"
 #include "metal_families.hpp"
 #include "metal_kernels.hpp"
 
@@ -33,6 +34,8 @@ namespace lfs::training {
             float anchor_scale, anchor_shift, anchor_floor;
             float min_count, min_weight;
             uint32_t prior;
+            uint64_t rays;
+            uint32_t wrap_horizontal;
         };
 
         // The partials buffer: slot_count float finals, then the block statistics.
@@ -62,7 +65,9 @@ namespace lfs::training {
             return params;
         }
 
-        void set_intrinsics(GeomParams& params, const Intrinsics& intrinsics) {
+        void set_intrinsics(GeomParams& params, const GeometryCamera& intrinsics) {
+            params.rays = mk::address(intrinsics.rays);
+            params.wrap_horizontal = intrinsics.wrap_horizontal;
             params.fx = intrinsics.fx;
             params.fy = intrinsics.fy;
             params.cx = intrinsics.cx;
@@ -129,7 +134,7 @@ namespace lfs::training {
         // normal and also writes grad_normal; prior depth compares it with the
         // normal prior. Both add into the caller's gradients.
         void depth_normal(In normal, In depth, In alpha, In pixel_weight, Out grad_normal, Out grad_depth,
-                          Out grad_alpha, Out loss, Out partials, const Intrinsics& intrinsics, const float weight,
+                          Out grad_alpha, Out loss, Out partials, const GeometryCamera& intrinsics, const float weight,
                           const bool prior) {
             const int width = static_cast<int>(depth.shape()[1]), height = static_cast<int>(depth.shape()[0]);
             const size_t pixels = static_cast<size_t>(width) * height;
@@ -149,7 +154,7 @@ namespace lfs::training {
             set_intrinsics(params, intrinsics);
             const auto run = [&](const std::string_view function, const uint32_t groups) {
                 mk::launch(function, params,
-                           {&normal, &depth, &alpha, &pixel_weight, &grad_normal, &grad_depth, &grad_alpha, &loss, &partials},
+                           {&intrinsics.rays, &normal, &depth, &alpha, &pixel_weight, &grad_normal, &grad_depth, &grad_alpha, &loss, &partials},
                            groups, kThreads);
             };
             run("geom_depth_normal_stats", params.num_blocks);
@@ -159,65 +164,22 @@ namespace lfs::training {
         }
 
         void consistency(In normal, In depth, In alpha, In pixel_weight, Out grad_normal, Out grad_depth,
-                         Out grad_alpha, Out loss, Out partials, Intrinsics intrinsics, float weight) {
+                         Out grad_alpha, Out loss, Out partials, GeometryCamera intrinsics, float weight) {
             depth_normal(normal, depth, alpha, pixel_weight, grad_normal, grad_depth, grad_alpha, loss, partials,
                          intrinsics, weight, false);
         }
 
         void prior_depth(In prior_normal, In depth, In alpha, In pixel_weight, Out grad_depth, Out grad_alpha,
-                         Out loss, Out partials, Intrinsics intrinsics, float weight) {
+                         Out loss, Out partials, GeometryCamera intrinsics, float weight) {
             Tensor no_normal_gradient;
             depth_normal(prior_normal, depth, alpha, pixel_weight, no_normal_gradient, grad_depth, grad_alpha, loss,
                          partials, intrinsics, weight, true);
         }
 
-        std::vector<AnchorSample> collect_anchor_samples(In points, In view, In prior, const AnchorParams& p) {
-            const size_t num_points = points.shape()[0];
-            if (num_points == 0)
-                return {};
-            LFS_ASSERT_MSG(num_points <= UINT32_MAX / 3,
-                           std::format("anchor sampling supports at most 2^32/3 points (points={})", num_points));
-            const size_t stride = std::max<size_t>(1, num_points / kMaxAnchorSamples);
-            const size_t samples = (num_points + stride - 1) / stride;
-            Tensor pairs = Tensor::empty({kMaxAnchorSamples, 2}, core::Device::GPU);
-            Tensor count = Tensor::zeros({1}, core::Device::GPU, core::DataType::Int32);
-            struct {
-                uint64_t points, w2c, prior, pairs, count;
-                mk::Float4 aabb_lo, aabb_hi;
-                uint32_t samples, stride;
-                int32_t width, height, capacity;
-                float fx, fy, cx, cy, near_plane;
-            } const params{mk::address(points),
-                           mk::address(view),
-                           mk::address(prior),
-                           mk::address(pairs),
-                           mk::address(count),
-                           {p.aabb_lo[0], p.aabb_lo[1], p.aabb_lo[2], 0.f},
-                           {p.aabb_hi[0], p.aabb_hi[1], p.aabb_hi[2], 0.f},
-                           static_cast<uint32_t>(samples),
-                           static_cast<uint32_t>(stride),
-                           static_cast<int32_t>(prior.shape()[1]),
-                           static_cast<int32_t>(prior.shape()[0]),
-                           static_cast<int32_t>(kMaxAnchorSamples),
-                           p.intrinsics.fx,
-                           p.intrinsics.fy,
-                           p.intrinsics.cx,
-                           p.intrinsics.cy,
-                           p.near_plane};
-            mk::launch_items("geom_anchor_collect", params, {&points, &view, &prior, &pairs, &count}, samples);
-            // Startup-only readback, as the CUDA path synchronizes here too.
-            const int found = std::min(count.item<int>(), static_cast<int>(kMaxAnchorSamples));
-            if (found < k::kMinAnchorSamples)
-                return {};
-            const Tensor host = pairs.slice(0, 0, static_cast<size_t>(found)).cpu().contiguous();
-            std::vector<AnchorSample> result(static_cast<size_t>(found));
-            std::memcpy(result.data(), host.data_ptr(), result.size() * sizeof(AnchorSample));
-            return result;
-        }
     } // namespace
 
     const lfs::gpu_ops::GeometryLossOps& metal_geometry_ops() {
-        static const lfs::gpu_ops::GeometryLossOps ops{depth, normal, consistency, prior_depth, collect_anchor_samples};
+        static const lfs::gpu_ops::GeometryLossOps ops{depth, normal, consistency, prior_depth, collect_camera_anchor_samples};
         return ops;
     }
 } // namespace lfs::training

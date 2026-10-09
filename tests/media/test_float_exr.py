@@ -18,6 +18,10 @@ def run(command, data=None):
         raise AssertionError(result.stderr.decode("utf-8", errors="replace"))
     return result.stdout
 
+def setparams_chroma_location():
+    """FFmpeg 7.1+ takes the encoder siting from the filtered frame and ignores -chroma_sample_location."""
+    return b"chroma_location" in run([FFMPEG,"-hide_banner","-h","filter=setparams"])
+
 def uncompressed_exr(path):
     """Minimal independent reader for the single-part uncompressed test profile."""
     data = path.read_bytes()
@@ -279,6 +283,7 @@ class FloatEXR(unittest.TestCase):
                     for code,value in zip(yy,pixels[name]):
                         self.assertAlmostEqual(value,(code-16*scale)/(219*scale),delta=2e-6)
         # Native H.264/HEVC and raw-code references exercise actual subsampling.
+        frame_siting=setparams_chroma_location()
         for depth in [8, 10]:
             for chroma_h in [1, 2]:
                 for siting in ["left", "center", "topleft"]:
@@ -292,7 +297,10 @@ class FloatEXR(unittest.TestCase):
                         raw=bytes(values) if depth==8 else struct.pack("<"+"H"*len(values),*values)
                         source=self.root/f"sub-{depth}-{chroma_h}-{siting}.mkv"
                         run([FFMPEG,"-v","error","-f","rawvideo","-pixel_format",fmt,"-video_size","16x8","-framerate","10","-i","pipe:0",
-                             "-vf","setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=limited","-c:v","ffv1","-level","3","-chroma_sample_location",siting,"-color_range","tv",source],raw)
+                             "-vf","setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=limited"+(f":chroma_location={siting}" if frame_siting else ""),
+                             "-c:v","ffv1","-level","3","-chroma_sample_location",siting,"-color_range","tv",source],raw)
+                        probe=json.loads(run([FFPROBE,"-v","error","-show_entries","stream=chroma_location","-of","json",source]))["streams"][0]
+                        self.assertEqual(probe.get("chroma_location"),siting)
                         self.assertEqual(run([FFMPEG,"-v","error","-i",source,"-f","rawvideo","-pix_fmt",fmt,"pipe:1"]),raw)
                         output=self.root/f"sub-out-{depth}-{chroma_h}-{siting}"
                         self.invoke("extract",source,"--output",output,"--format","exr","--exr-precision","float","--exr-compression","none","--quiet")

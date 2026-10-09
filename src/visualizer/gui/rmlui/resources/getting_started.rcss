@@ -17,7 +17,7 @@
 }
 
 .video-card {
-    flex: 1 1 160dp;
+    flex: 0 0 31%;
     min-width: 0;
     padding: 0;
     text-align: left;

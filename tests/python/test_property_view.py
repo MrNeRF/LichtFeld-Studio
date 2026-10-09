@@ -411,6 +411,10 @@ EXPECTED_CHECKBOX_ROWS = {
         "training_params.use_depth_loss",
         "training.tooltip.use_depth_loss",
     ),
+    "depth_auto_generate": (
+        "training_params.depth_auto_generate",
+        "training.tooltip.depth_auto_generate",
+    ),
     "use_normal_loss": (
         "training_params.use_normal_loss",
         "training.tooltip.use_normal_loss",
@@ -573,13 +577,13 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 66
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 66
+    assert len(property_view.MIGRATED_PROP_IDS) == 67
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 67
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 93  # Backend has a bespoke selector.
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 94  # Backend has a bespoke selector.
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 
@@ -1281,3 +1285,47 @@ def test_select_creation_echo_keeps_restored_values_clean(saved_mode):
     assert binding.set_value("mode", "invalid") is False
     assert binding.set_value("mode", 2) is False
     assert writes == [("mode", changed)]
+
+
+def _run_template_blocks(rml, run_id):
+    blocks = []
+    for opening in re.finditer(rf'<div[^>]*data-for="row : pv_{run_id}_rows"[^>]*>', rml):
+        depth, pos = 1, opening.end()
+        while depth:
+            tag = re.compile(r"<div\b|</div>").search(rml, pos)
+            depth += 1 if tag.group(0) == "<div" else -1
+            pos = tag.end()
+        blocks.append((opening.group(0), rml[opening.start() : pos]))
+    return blocks
+
+
+def test_run_templates_render_every_row_kind_they_contain(lf):
+    # Catches a run gaining a property of a new kind while its RML template
+    # still renders only the old widget (a bool row drawn as a number input).
+    rml = TRAINING_RML.read_text()
+    group_info = lf.ui.property_group_info("optimization")
+    kind_by_type = {
+        "float": "number", "int": "number", "size_t": "number",
+        "bool": "checkbox", "enum": "select",
+    }
+    kind_of = {
+        meta["id"]: kind_by_type[meta["type"]]
+        for meta in group_info["properties"] if meta["type"] in kind_by_type
+    }
+    widget_of = {
+        "number": r'<input type="text" class="number-input"[^>]*',
+        "checkbox": r'<input type="checkbox"[^>]*',
+        "select": r"<select[^>]*",
+    }
+    for run in property_view.resolve_runs(group_info):
+        kinds = {kind_of[prop] for prop in run.prop_ids}
+        blocks = _run_template_blocks(rml, run.id)
+        assert blocks, run.id
+        for kind in kinds:
+            selector = f"row.kind == '{kind}'"
+            assert any(
+                re.search(widget_of[kind] + re.escape(selector), block)
+                or (selector in opening and re.search(widget_of[kind], block))
+                or (len(kinds) == 1 and "row.kind" not in block and re.search(widget_of[kind], block))
+                for opening, block in blocks
+            ), (run.id, kind)

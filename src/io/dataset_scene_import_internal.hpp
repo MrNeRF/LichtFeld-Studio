@@ -49,10 +49,7 @@ namespace lfs::training {
                 LOG_INFO("Adjusted training model SH degree: {} -> {}", before, splat.get_max_sh_degree());
             }
             if (splat.get_max_sh_degree() > 0 && splat.get_active_sh_degree() != 0) {
-                const int active_before = splat.get_active_sh_degree();
                 splat.set_active_sh_degree(0);
-                LOG_INFO("Training SH schedule active degree: {} -> 0 (max {})",
-                         active_before, splat.get_max_sh_degree());
             }
         }
 

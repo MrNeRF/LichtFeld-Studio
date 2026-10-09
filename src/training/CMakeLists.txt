@@ -2,6 +2,14 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+add_library(lfs_geometry_camera STATIC ops/geometry_camera.cpp)
+target_include_directories(lfs_geometry_camera PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(lfs_geometry_camera PUBLIC lfs_core)
+set_target_properties(lfs_geometry_camera PROPERTIES POSITION_INDEPENDENT_CODE ON)
+lfs_add_gpu_program(lfs_geometry_camera geometry_camera_program SOURCE ops/geometry_camera.slang COMPUTE setup collect
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/gsplat_common.slangh"
+            "${CMAKE_SOURCE_DIR}/src/core/tensor/backend/vulkan/shaders/sh_decode.slangh")
+
 if(LFS_HAS_CUDA)
 # Add fastlfs backend
 add_subdirectory(rasterization/fastgs)
@@ -241,6 +249,7 @@ endif()
 
 # lfs_training - Training module with optimizer
 add_library(lfs_training STATIC ${TRAINING_NEW_SOURCES})
+target_link_libraries(lfs_training PRIVATE lfs_geometry_camera)
 
 target_include_directories(lfs_training
     PUBLIC

@@ -525,6 +525,7 @@ namespace lfs::python {
 
         // Combined model
         std::optional<PySplatData> combined_model();
+        void apply_crop_filter(PyTensor& mask);
         std::optional<PySplatData> training_model();
         void set_training_model_node(const std::string& name);
         std::string training_model_node_name() const {

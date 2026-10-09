@@ -1148,8 +1148,7 @@ namespace lfs::vis::gui {
                 const auto* saved = input_;
                 input_ = &event;
                 render_needed_ |= forwardInput(panel_x, panel_y);
-                input_ = saved;
-            }))
+                input_ = saved; }, false, [this](float x, float y) { return !floating_ && PanelRegistry::instance().isPositionOverFloatingPanel(x, y); }))
             return false;
         bool had_input = false;
         const auto& input = *input_;

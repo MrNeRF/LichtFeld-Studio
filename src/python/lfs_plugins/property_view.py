@@ -77,6 +77,7 @@ BOOL_PROPS = (
     "invert_masks",
     "use_alpha_as_mask",
     "use_depth_loss",
+    "depth_auto_generate",
     "use_normal_loss",
     "normal_auto_generate",
     "enable_sparsity",
@@ -149,11 +150,12 @@ BASIC_RUNS = (
     ),
     _run(
         "basic_depth_weight",
+        "depth_auto_generate",
         "depth_loss_weight",
         visibility_condition_id="dep_depth_loss",
     ),
-    _run("basic_depth_toggle", "use_depth_loss", disabled_condition_id="gut_depth_supervision_disabled"),
-    _run("basic_normal_toggle", "use_normal_loss", disabled_condition_id="gut_normal_supervision_disabled"),
+    _run("basic_depth_toggle", "use_depth_loss"),
+    _run("basic_normal_toggle", "use_normal_loss"),
     _run(
         "basic_normal_weights",
         "normal_auto_generate",

@@ -24,10 +24,6 @@ extern "C" {
 #include <nlohmann/json.hpp>
 #include <stb_image.h>
 
-extern "C" {
-#include <libavformat/avformat.h>
-}
-
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -35,6 +31,7 @@ extern "C" {
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -69,28 +66,16 @@ namespace {
         std::filesystem::path path;
     };
 
-    struct CudaFloatBuffer {
-        explicit CudaFloatBuffer(const std::size_t count) {
-            status = cudaMalloc(reinterpret_cast<void**>(&ptr), count * sizeof(float));
-        }
-
-        ~CudaFloatBuffer() {
-            if (ptr)
-                cudaFree(ptr);
-        }
-
-        float* ptr = nullptr;
-        cudaError_t status = cudaSuccess;
-    };
-
     bool writeEncodedVideo(const std::filesystem::path& video_path,
                            const int frame_count,
                            const int framerate,
-                           std::string& error) {
+                           std::string& error,
+                           const int width = kWidth,
+                           const int height = kHeight) {
         lfs::io::video::VideoExportOptions options;
         options.preset = lfs::io::video::VideoPreset::CUSTOM;
-        options.width = kWidth;
-        options.height = kHeight;
+        options.width = width;
+        options.height = height;
         options.framerate = framerate;
         options.crf = 23;
 
@@ -100,36 +85,23 @@ namespace {
             return false;
         }
 
-        std::vector<float> frame(static_cast<std::size_t>(kWidth) * kHeight * kChannels);
-        CudaFloatBuffer device_frame(frame.size());
-        if (device_frame.status != cudaSuccess) {
-            error = cudaGetErrorString(device_frame.status);
-            return false;
-        }
-
+        std::vector<float> frame(static_cast<std::size_t>(width) * height * kChannels);
         for (int frame_index = 0; frame_index < frame_count; ++frame_index) {
             const float red = static_cast<float>(frame_index + 1) /
                               static_cast<float>(frame_count);
-            for (int y = 0; y < kHeight; ++y) {
-                for (int x = 0; x < kWidth; ++x) {
+            for (int y = 0; y < height; ++y) {
+                for (int x = 0; x < width; ++x) {
                     const std::size_t offset =
-                        (static_cast<std::size_t>(y) * kWidth + x) * kChannels;
+                        (static_cast<std::size_t>(y) * width + x) * kChannels;
                     frame[offset + 0] = red;
-                    frame[offset + 1] = static_cast<float>(x) / static_cast<float>(kWidth - 1);
-                    frame[offset + 2] = static_cast<float>(y) / static_cast<float>(kHeight - 1);
+                    frame[offset + 1] = static_cast<float>(x) / static_cast<float>(width - 1);
+                    frame[offset + 2] = static_cast<float>(y) / static_cast<float>(height - 1);
                 }
             }
 
-            const cudaError_t copy_status = cudaMemcpy(
-                device_frame.ptr, frame.data(), frame.size() * sizeof(float), cudaMemcpyHostToDevice);
-            if (copy_status != cudaSuccess) {
-                error = cudaGetErrorString(copy_status);
-                return false;
-            }
-
-            const auto tensor = lfs::core::Tensor::from_blob(
-                device_frame.ptr, {kHeight, kWidth, kChannels},
-                lfs::core::Device::GPU, lfs::core::DataType::Float32);
+            const auto tensor = lfs::core::Tensor::from_vector(
+                frame, {static_cast<size_t>(height), static_cast<size_t>(width), size_t{kChannels}},
+                lfs::core::Device::GPU);
             if (const auto written = encoder.writeFrame(tensor); !written) {
                 error = written.error();
                 return false;
@@ -308,6 +280,52 @@ TEST(VideoExtractorDialogTrim, SharpnessWindowKeepsThePreviewEnd) {
         const auto request = lfs::gui::VideoExtractorDialogTestAccess::request(dialog, output_dir, interval, false);
         ASSERT_TRUE(request.sharpness_enabled && request.sharpness_window_mode);
         EXPECT_DOUBLE_EQ(request.end_time, expected_end);
+    }
+}
+
+TEST(VideoEncoderTimingTest, EncodedFramesHaveRequestedDurationAndRate) {
+    if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend()))
+        GTEST_SKIP() << "GPU backend unavailable";
+
+    TempDir temp("encoder_timing");
+    for (const int fps : {2, 24}) {
+        for (const int frame_count : {1, 2, 7}) {
+            SCOPED_TRACE(::testing::Message() << "fps=" << fps << " frames=" << frame_count);
+            const auto path = temp.path / (std::to_string(fps) + "_" + std::to_string(frame_count) + ".mp4");
+            std::string error;
+            ASSERT_TRUE(writeEncodedVideo(path, frame_count, fps, error, 160, 90)) << error;
+            AVFormatContext* context = nullptr;
+            ASSERT_EQ(avformat_open_input(&context, path.string().c_str(), nullptr, nullptr), 0);
+            const auto close_context = [](AVFormatContext* ctx) { avformat_close_input(&ctx); };
+            std::unique_ptr<AVFormatContext, decltype(close_context)> owner(context, close_context);
+            ASSERT_GE(avformat_find_stream_info(context, nullptr), 0);
+            const int index = av_find_best_stream(context, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+            ASSERT_GE(index, 0);
+            const auto* stream = context->streams[index];
+            EXPECT_EQ(stream->nb_frames, frame_count);
+            EXPECT_DOUBLE_EQ(av_q2d(stream->avg_frame_rate), fps);
+            EXPECT_NEAR(stream->duration * av_q2d(stream->time_base),
+                        static_cast<double>(frame_count) / fps, 1e-6);
+
+            AVPacket* packet = av_packet_alloc();
+            ASSERT_NE(packet, nullptr);
+            const auto free_packet = [](AVPacket* p) { av_packet_free(&p); };
+            std::unique_ptr<AVPacket, decltype(free_packet)> packet_owner(packet, free_packet);
+            std::vector<double> timestamps;
+            int received = 0;
+            while (av_read_frame(context, packet) >= 0) {
+                if (packet->stream_index == index) {
+                    timestamps.push_back(packet->pts * av_q2d(stream->time_base));
+                    EXPECT_NEAR(packet->duration * av_q2d(stream->time_base), 1.0 / fps, 1e-6);
+                    ++received;
+                }
+                av_packet_unref(packet);
+            }
+            EXPECT_EQ(received, frame_count);
+            std::sort(timestamps.begin(), timestamps.end());
+            for (size_t i = 0; i < timestamps.size(); ++i)
+                EXPECT_NEAR(timestamps[i], static_cast<double>(i) / fps, 1e-6);
+        }
     }
 }
 

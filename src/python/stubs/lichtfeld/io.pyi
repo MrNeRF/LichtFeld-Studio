@@ -773,6 +773,21 @@ class ProjectRepairResult:
     @property
     def saves_recovered(self) -> int: ...
 
+class ProjectHeadIdentity:
+    @property
+    def project_uuid(self) -> str: ...
+
+    @property
+    def commit_uuid(self) -> str: ...
+
+    @property
+    def generation(self) -> int: ...
+
+def inspect_project_head(path: str | os.PathLike) -> ProjectHeadIdentity:
+    """
+    Read the project and commit identity from the head slots without opening the project.
+    """
+
 def classify_project(path: str | os.PathLike) -> ProjectOpenClassification:
     """Classify a .licht path without throwing for damaged heads."""
 

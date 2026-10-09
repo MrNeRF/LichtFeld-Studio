@@ -2475,6 +2475,76 @@ TEST_F(UndoHistoryTest, SceneSnapshotTopologyReplayUsesUuidAcrossRename) {
     EXPECT_TRUE(node->payload_diverged);
 }
 
+TEST_F(UndoHistoryTest, ScopedDeleteUndoIgnoresSequencerProjectionNodes) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+    const auto parent = scene.addGroup("Parent");
+    const auto projection = scene.addKeyframeGroup("Keyframes");
+    const auto key = scene.addKeyframe("Keyframe 1", projection,
+                                       std::make_unique<lfs::core::KeyframeData>());
+    const auto nested_key = scene.addKeyframe("Nested Keyframe", parent,
+                                              std::make_unique<lfs::core::KeyframeData>());
+    ASSERT_NE(key, lfs::core::NULL_NODE);
+    ASSERT_NE(nested_key, lfs::core::NULL_NODE);
+    auto projection_uuid = scene.getNodeUuid(projection);
+    auto key_uuid = scene.getNodeUuid(key);
+    const auto nested_key_uuid = scene.getNodeUuid(nested_key);
+    const auto sibling = scene.addGroup("Sibling", parent);
+    const auto child_order = scene.getNodeById(parent)->children;
+    ASSERT_EQ(child_order, (std::vector<lfs::core::NodeId>{nested_key, sibling}));
+    const auto temporary = scene.addGroup("Temporary");
+    const auto temporary_uuid = scene.getNodeUuid(temporary);
+    const auto transform = glm::translate(glm::mat4{1.0f}, {0.1f, 0.0f, 0.0f});
+    scene.setNodeTransform(temporary, transform);
+    scene.setNodeVisibility(temporary, false);
+
+    ASSERT_TRUE(scene_manager->removeNodesByIdsWithResult({temporary}, false));
+    // Camera-key edits can come and go before the scene deletion is undone.
+    const auto added_key = scene.addKeyframe("Added Keyframe", projection,
+                                             std::make_unique<lfs::core::KeyframeData>());
+    scene.removeNodeById(added_key, false);
+    scene.removeNodeById(projection, false);
+    const auto rebuilt_projection = scene.addKeyframeGroup("Keyframes");
+    const auto rebuilt_key = scene.addKeyframe("Keyframe 1", rebuilt_projection,
+                                               std::make_unique<lfs::core::KeyframeData>());
+    projection_uuid = scene.getNodeUuid(rebuilt_projection);
+    key_uuid = scene.getNodeUuid(rebuilt_key);
+    for (int repeat = 0; repeat < 2; ++repeat) {
+        const auto undo = lfs::vis::op::undoHistory().undo();
+        ASSERT_TRUE(undo.success) << undo.error;
+        const auto* restored = scene.getNodeByUuid(temporary_uuid);
+        ASSERT_NE(restored, nullptr);
+        EXPECT_EQ(scene.getNodeTransform(restored->id), transform);
+        EXPECT_FALSE(restored->visible);
+        ASSERT_NE(scene.getNodeByUuid(projection_uuid), nullptr);
+        ASSERT_NE(scene.getNodeByUuid(key_uuid), nullptr);
+        ASSERT_NE(scene.getNodeByUuid(nested_key_uuid), nullptr);
+        EXPECT_EQ(scene.getNodeById(parent)->children, child_order);
+        const auto redo = lfs::vis::op::undoHistory().redo();
+        ASSERT_TRUE(redo.success) << redo.error;
+        EXPECT_EQ(scene.getNodeByUuid(temporary_uuid), nullptr);
+        EXPECT_NE(scene.getNodeByUuid(key_uuid), nullptr);
+        EXPECT_NE(scene.getNodeByUuid(nested_key_uuid), nullptr);
+        EXPECT_EQ(scene.getNodeById(parent)->children, child_order);
+    }
+}
+
+TEST_F(UndoHistoryTest, ScopedDeleteUndoStillRejectsMissingSceneNodes) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+    const auto retained = scene.addGroup("Retained");
+    const auto temporary = scene.addGroup("Temporary");
+    const auto temporary_uuid = scene.getNodeUuid(temporary);
+    ASSERT_TRUE(scene_manager->removeNodesByIdsWithResult({temporary}, false));
+    scene.removeNodeById(retained, false);
+    const auto undo = lfs::vis::op::undoHistory().undo();
+    EXPECT_FALSE(undo.success);
+    EXPECT_NE(undo.error.find("missing scoped node"), std::string::npos);
+    EXPECT_EQ(scene.getNodeByUuid(temporary_uuid), nullptr);
+}
+
 TEST_F(UndoHistoryTest, UuidKeyedPlyPathAndTrainingBindingSurviveRenameDeleteUndo) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     lfs::vis::screen::ScreenService rendering_manager_views;

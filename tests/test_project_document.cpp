@@ -173,6 +173,34 @@ namespace {
         EXPECT_EQ(trees(), Json::array());
     }
 
+    TEST(ProjectDocumentTest, SaveAsAcceptsLongDestinationFilename) {
+        TemporaryDirectory temporary;
+        const auto source = temporary.path / "source.licht";
+        auto document = make_empty_document(fixed_uuid(19'180), 100);
+        const ProjectLicense license{"CC BY", "Preserve this notice"};
+        ASSERT_TRUE(document->set_license(license));
+        ASSERT_TRUE(document->save(source, save_options(19'181, 200)));
+        for (const size_t length : {size_t{173}, size_t{174}, size_t{240}}) {
+            SCOPED_TRACE(length);
+            const auto destination = temporary.path / (std::string(length - 6, 'x') + ".licht");
+            const auto start = std::chrono::steady_clock::now();
+            auto saved = document->save_as(destination, save_options(19'182 + length, 300));
+            ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+            RecordProperty("save_as_" + std::to_string(length) + "_us",
+                           std::to_string(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count()));
+            auto original = ProjectDocument::open(source);
+            ASSERT_TRUE(original) << lfs::format_for_developer(original.error());
+            auto overwritten = original->save_as(destination, save_options(19'582 + length, 400));
+            ASSERT_TRUE(overwritten) << lfs::format_for_developer(overwritten.error());
+            auto reopened = ProjectDocument::open(destination);
+            ASSERT_TRUE(reopened) << lfs::format_for_developer(reopened.error());
+            const auto saved_license = require_result(reopened->project().license());
+            ASSERT_TRUE(saved_license);
+            EXPECT_EQ(*saved_license, license);
+            EXPECT_TRUE(fs::is_regular_file(source));
+        }
+    }
+
     TEST(ProjectDocumentTest, LicensePersistsAcrossSaveAsAndCompaction) {
         TemporaryDirectory temporary;
         const auto source = temporary.path / "license-source.licht";

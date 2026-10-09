@@ -2615,6 +2615,80 @@ namespace {
         return params;
     }
 
+    // Sparsity clamps stop_refine to the regular iterations; a run shorter than start_refine
+    // must keep the refine window valid or every project save of the run is rejected.
+    TEST_F(ProjectCheckpointTrainerInstall,
+           ShortSparsityRunKeepsRefineWindowValidForProjectSaves) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_sparsity_short_refine_window";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        auto params = make_tiny_headless_params(output_path, 4);
+        params.optimization.start_refine = 500;
+        params.optimization.stop_refine = 15000;
+        params.optimization.enable_sparsity = true;
+        params.optimization.sparsify_steps = 1;
+        params.optimization.prune_ratio = 0.25f;
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        auto trainer = std::make_unique<lfs::training::Trainer>(scene);
+        ASSERT_TRUE(trainer->initialize(params));
+        lfs::training::grant_headless_project_saves(*trainer, params);
+        auto train = trainer->train();
+        ASSERT_TRUE(train)
+            << lfs::format_for_developer(train.error());
+        trainer->shutdown();
+
+        auto document = lfs::io::project::ProjectDocument::open(output_path / "project.licht");
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(document.error());
+        EXPECT_FALSE(document->checkpoint_uuids().empty());
+
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           OutputNameNamesProjectAndExportWithoutDoubleExtension) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_output_name_files";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        auto params = make_tiny_headless_params(output_path, 2);
+        params.dataset.output_name = "scene.ply";
+        params.export_formats = {lfs::core::param::OutputFormat::PLY};
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        auto trainer = std::make_unique<lfs::training::Trainer>(scene);
+        ASSERT_TRUE(trainer->initialize(params));
+        lfs::training::grant_headless_project_saves(*trainer, params);
+        auto train = trainer->train();
+        ASSERT_TRUE(train)
+            << lfs::format_for_developer(train.error());
+        auto exported = lfs::training::export_final_splats(*trainer, params);
+        ASSERT_TRUE(exported)
+            << lfs::format_for_developer(exported.error());
+        trainer->shutdown();
+
+        std::vector<std::string> files;
+        for (const auto& entry : std::filesystem::directory_iterator(output_path))
+            if (entry.is_regular_file())
+                files.push_back(lfs::core::path_to_utf8(entry.path().filename()));
+        std::ranges::sort(files);
+        EXPECT_EQ(files, (std::vector<std::string>{"scene.licht", "scene.ply"}));
+
+        std::filesystem::remove_all(output_path, ec);
+    }
+
     TEST_F(ProjectCheckpointTrainerInstall,
            SparsityBoundaryRetainsPrePruneCheckpointAcrossSaveAs) {
         const auto output_path =
