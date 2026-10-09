@@ -3798,8 +3798,16 @@ namespace {
         require_result(detail::NativeFile::create_new(stale)).reset();
         sweep_stale_licht_artifacts_for_known_masters({destination});
         EXPECT_FALSE(detail::project_fs::exists(stale));
-        EXPECT_EQ(detail::project_fs::weakly_canonical(destination, error), fs::absolute(destination));
-        EXPECT_FALSE(error);
+        // Canonicalization expands an 8.3 temporary root (C:\Users\RUNNER~1 on CI), so the root is checked by file
+        // identity. Paths are compared as UTF-8: gtest prints fs::path through the ANSI code page, which throws on 保存.
+        const auto canonical = detail::project_fs::weakly_canonical(destination, error);
+        ASSERT_FALSE(error) << error.message();
+        const auto canonical_text = lfs::core::path_to_utf8(canonical);
+        EXPECT_FALSE(canonical.native().starts_with(L"\\\\?\\")) << canonical_text;
+        const auto tail = fs::path(std::string(100, 'a')) / std::string(100, 'b') / lfs::core::utf8_to_path("保存") / "copy.licht";
+        EXPECT_TRUE(canonical_text.ends_with(lfs::core::path_to_utf8(tail))) << canonical_text;
+        EXPECT_TRUE(fs::equivalent(detail::project_fs::native_path(canonical), detail::project_fs::native_path(destination), error))
+            << error.message();
     }
 #endif
 
