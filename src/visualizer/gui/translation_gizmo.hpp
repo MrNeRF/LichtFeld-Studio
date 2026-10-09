@@ -53,8 +53,8 @@ namespace lfs::vis::gui {
 
     LFS_VIS_API TranslationGizmoResult drawTranslationGizmo(const TranslationGizmoConfig& config);
 
-    [[nodiscard]] bool isTranslationGizmoHovered();
-    [[nodiscard]] bool isTranslationGizmoActive();
-    void cancelTranslationGizmoDrag();
+    [[nodiscard]] LFS_VIS_API bool isTranslationGizmoHovered();
+    [[nodiscard]] LFS_VIS_API bool isTranslationGizmoActive();
+    LFS_VIS_API void cancelTranslationGizmoDrag();
 
 } // namespace lfs::vis::gui

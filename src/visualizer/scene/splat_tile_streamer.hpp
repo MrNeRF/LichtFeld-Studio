@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/splat_data.hpp"
 #include "io/splat_tile_source.hpp"
 #include <condition_variable>
@@ -48,8 +49,8 @@ namespace lfs::vis {
     // A replacement is charged for the model that will remain after the swap, not the
     // old model that it releases. The old and new models may overlap temporarily to keep
     // REPLACE refinement hole-free. The minimum cut is always admitted as a budget floor.
-    [[nodiscard]] bool splat_tile_budget_allows_load(const SplatTileBudgetUsage& usage,
-                                                     std::uint64_t incoming_bytes);
+    [[nodiscard]] LFS_VIS_API bool splat_tile_budget_allows_load(const SplatTileBudgetUsage& usage,
+                                                                 std::uint64_t incoming_bytes);
 
     struct SplatTileStreamStats {
         std::size_t tiles = 0;

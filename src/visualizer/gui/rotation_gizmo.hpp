@@ -49,8 +49,8 @@ namespace lfs::vis::gui {
 
     LFS_VIS_API RotationGizmoResult drawRotationGizmo(const RotationGizmoConfig& config);
 
-    [[nodiscard]] bool isRotationGizmoHovered();
+    [[nodiscard]] LFS_VIS_API bool isRotationGizmoHovered();
     [[nodiscard]] bool isRotationGizmoActive();
-    void cancelRotationGizmoDrag();
+    LFS_VIS_API void cancelRotationGizmoDrag();
 
 } // namespace lfs::vis::gui
