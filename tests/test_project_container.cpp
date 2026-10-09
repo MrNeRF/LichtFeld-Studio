@@ -6,6 +6,7 @@
 #include "core/uuid.hpp"
 #include "io/project/crc32c.hpp"
 #include "io/project/project_container_internal.hpp"
+#include "io/project/project_path_utils.hpp"
 #include "io/project_container.hpp"
 #include "io/project_path.hpp"
 #include "io/project_recovery.hpp"
@@ -3670,6 +3671,22 @@ namespace {
         EXPECT_TRUE(fs::is_directory(lock_path));
     }
 #endif
+
+    TEST(ProjectContainerWriter, RecoveryRemovesOnlyUnheldLongNameStagingFiles) {
+        TemporaryDirectory temporary;
+        const auto master = temporary.path / "source.licht";
+        create_single_chunk_fixture(master, 1201, 1202, 1203, fixed_key("PROJ", 1204), R"({"master":"source"})");
+        const auto destination = temporary.path / (std::string(167, 'x') + ".licht");
+        const auto stale = detail::save_as_staging_path(destination, "stale-token");
+        const auto held = detail::save_as_staging_path(destination, "held-token");
+        write_file_bytes(stale, byte_vector("stale"));
+        write_file_bytes(held, byte_vector("active"));
+        auto lease = WriterLockLease::acquire(held);
+        ASSERT_TRUE(lease);
+        sweep_stale_licht_artifacts_for_known_masters({master});
+        EXPECT_FALSE(fs::exists(stale));
+        EXPECT_TRUE(fs::exists(held));
+    }
 
     TEST(ProjectContainerWriter,
          StartupSweepRemovesStaleMasterLockAndSaveasTemp) {
