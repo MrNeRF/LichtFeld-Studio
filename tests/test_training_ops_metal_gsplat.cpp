@@ -254,7 +254,9 @@ namespace {
         for (size_t g = 0; g < n; ++g) {
             const D3 mean{s.means[g * 3], s.means[g * 3 + 1], s.means[g * 3 + 2]};
             const D3 mc = rc.to_camera(mean);
-            if (mc[2] < 0.01 || mc[2] > 1e4)
+            // CUDA ProjectionUT3DGSFused uses ray distance for non-pinhole cameras.
+            const double depth = cam.model == CameraModel::PINHOLE ? mc[2] : std::sqrt(dot(mc, mc));
+            if (depth < 0.01 || depth > 1e4)
                 continue;
             const auto rot = rotation_columns(&s.quats[g * 4]);
             const double lambda = 0.01 * 3 - 3, spread = std::sqrt(3 + lambda);
@@ -298,7 +300,7 @@ namespace {
                 continue;
             auto& p = proj[g];
             p.visible = true;
-            p.depth_bits = std::bit_cast<uint32_t>(static_cast<float>(mc[2]));
+            p.depth_bits = std::bit_cast<uint32_t>(static_cast<float>(depth));
             p.x0 = std::clamp<int>(static_cast<int>(std::floor((mx - rx) / kTile)), 0, tiles_x);
             p.y0 = std::clamp<int>(static_cast<int>(std::floor((my - ry) / kTile)), 0, tiles_y);
             p.x1 = std::clamp<int>(static_cast<int>(std::ceil((mx + rx) / kTile)), 0, tiles_x);

@@ -20,6 +20,8 @@ static const uint kGsplatEquirect = 3u;
 static const uint kGsplatThinPrism = 4u;
 
 // Written once per forward by gsplat_camera_setup; read by every other kernel.
+// Keep camera addresses as integers in parameter blocks, then cast after loading.
+// Otherwise SPIRV-Cross can index the parameter block instead of its pointer member.
 struct GsplatCamera {
     float3x3 R; // world to camera rotation
     float3 t;
@@ -381,7 +383,7 @@ struct GsplatSetupParams {
     Ptr<float, Access.ReadWrite> radial;
     Ptr<float, Access.ReadWrite> tangential;
     Ptr<float, Access.ReadWrite> prism;
-    Ptr<float, Access.ReadWrite> camera;
+    uint64_t camera;
     float fx, fy, cx, cy;
     uint width, height;
     uint model;
@@ -441,7 +443,7 @@ void gsplat_camera_setup(GsplatSetupParams p) {
         cam.max_angle = min(min(max_angle, kGsplatPi), max(max_radius / p.fx, max_radius / p.fy));
         cam.backward_slope = cam.max_angle / max(res.x / 2.0f / p.fx, res.y / 2.0f / p.fy);
     }
-    gsplat_camera_store(p.camera, cam);
+    gsplat_camera_store((Ptr<float, Access.ReadWrite>)p.camera, cam);
 }
 
 // ---------------------------------------------------------------------------
@@ -576,7 +578,7 @@ static uint gsplat_sh_float_index(const uint g, const uint coeff, const uint cha
 // IntersectTile.cu first pass, spherical_harmonics_swizzled_fwd).
 
 struct GsplatProjectParams {
-    Ptr<float, Access.ReadWrite> camera;
+    uint64_t camera;
     Ptr<float, Access.ReadWrite> means;
     Ptr<float, Access.ReadWrite> scales;
     Ptr<float, Access.ReadWrite> quats;
@@ -613,7 +615,7 @@ static GsplatTileRect gsplat_tile_rect(const float2 mean, const int2 radius, con
 void gsplat_project(GsplatProjectParams p, uint g) {
     if (g >= p.count)
         return;
-    GsplatCamera cam = gsplat_camera_load(p.camera);
+    GsplatCamera cam = gsplat_camera_load((Ptr<float, Access.ReadWrite>)p.camera);
     p.radii[g * 2u] = 0;
     p.radii[g * 2u + 1u] = 0;
     p.tile_counts[g] = 0;

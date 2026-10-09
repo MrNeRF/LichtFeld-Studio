@@ -12,7 +12,7 @@ struct GsplatBinParams {
     Ptr<uint, Access.ReadWrite> control;
 };
 struct GsplatRasterParams {
-    Ptr<float, Access.ReadWrite> camera;
+    uint64_t camera;
     Ptr<float, Access.ReadWrite> means, scales, quats, opacities, colors;
     Ptr<float, Access.ReadWrite> bg_color, bg_image;
     Ptr<uint, Access.ReadWrite> offsets, ids;
@@ -60,7 +60,7 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
         }
         return;
     }
-    const GsplatCamera camera = gsplat_camera_load(p.camera);
+    const GsplatCamera camera = gsplat_camera_load((Ptr<float, Access.ReadWrite>)p.camera);
     GsplatRay ray = gsplat_pixel_ray(camera, float2(x, y) + 0.5f);
     bool done = !inside || !ray.valid;
     uint begin = p.offsets[tile], end = p.offsets[tile + 1];
@@ -136,7 +136,7 @@ result:
     };
     if(stage == 8) {
         GsplatRasterParams p=((Ptr<GsplatRasterParams, Access.Read>)push.parameters)[0];
-        const GsplatCamera cam=gsplat_camera_load(p.camera);
+        const GsplatCamera cam=gsplat_camera_load((Ptr<float, Access.ReadWrite>)p.camera);
         for(uint i=gid.x*256+lane;i<p.width*p.height;i+=grid.x*256) {
             GsplatRay ray=gsplat_pixel_ray(cam,float2(i%p.width,i/p.width)+0.5f);
             float3 r=mul(ray.dir,cam.R);
