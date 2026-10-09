@@ -1716,7 +1716,8 @@ namespace lfs::vis::gui {
             ViewportFrameDesc& params,
             const VulkanGuideView& guide_view,
             const RenderSettings& settings,
-            const lfs::core::param::OptimizationParameters& optimization) {
+            const lfs::core::param::OptimizationParameters& optimization,
+            const glm::mat4& model_to_world) {
             const glm::vec3 origin(
                 optimization.init_origin_x,
                 optimization.init_origin_y,
@@ -1728,14 +1729,14 @@ namespace lfs::vis::gui {
                                settings,
                                origin - extent,
                                origin + extent,
-                               lfs::rendering::DATA_TO_VISUALIZER_WORLD_AXES_4,
+                               model_to_world,
                                kPreviewColor,
                                2.0f);
             appendProjectedCenterCross(
                 params,
                 guide_view,
                 settings,
-                lfs::rendering::visualizerWorldPointFromDataWorld(origin),
+                glm::vec3(model_to_world * glm::vec4(origin, 1.0f)),
                 kPreviewColor);
         }
 
@@ -5554,9 +5555,20 @@ namespace lfs::vis::gui {
                         parameter_manager && parameter_manager->isLoaded()) {
                         const auto optimization = parameter_manager->copyActiveParams();
                         if (optimization.random) {
+                            glm::mat4 model_to_world =
+                                lfs::rendering::DATA_TO_VISUALIZER_WORLD_AXES_4;
+                            const auto& scene = scene_manager->getScene();
+                            for (const auto* node : scene.getNodes()) {
+                                if (node && node->type == lfs::core::NodeType::POINTCLOUD &&
+                                    node->point_cloud) {
+                                    model_to_world = lfs::vis::scene_coords::nodeVisualizerWorldTransform(
+                                        scene, node->id);
+                                    break;
+                                }
+                            }
                             for (const auto& guide_view : collectVulkanGuideViews(camera, layout)) {
                                 appendRandomInitializationPreview(
-                                    params, guide_view, settings, optimization);
+                                    params, guide_view, settings, optimization, model_to_world);
                             }
                         }
                     }
