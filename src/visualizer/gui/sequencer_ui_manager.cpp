@@ -2687,6 +2687,24 @@ namespace lfs::vis::gui {
         }
     }
 
+    glm::vec2 SequencerUIManager::pipPreviewPosition(const ViewportLayout& viewport,
+                                                     const float scaled_width, const float scaled_height) const {
+        constexpr float MARGIN = 16.0f;
+        constexpr float TITLE_HEIGHT = 18.0f;
+        const float total_height = scaled_height + TITLE_HEIGHT + 8.0f;
+
+        float left = viewport.pos.x + MARGIN;
+        float top = viewport.pos.y + viewport.size.y - total_height - MARGIN;
+        const float min_top = viewport.pos.y + MARGIN;
+        if (top < min_top)
+            top = min_top;
+        const float max_left = viewport.pos.x + viewport.size.x - scaled_width - 8.0f - MARGIN;
+        if (left > max_left)
+            left = std::max(viewport.pos.x + MARGIN, max_left);
+
+        return {left, top};
+    }
+
     void SequencerUIManager::syncPipPreviewWindow(const ViewportLayout& viewport) {
         if (!overlay_)
             return;
@@ -2718,21 +2736,10 @@ namespace lfs::vis::gui {
         }
 
         const float scale = ui_state_.pip_preview_scale;
-        constexpr float MARGIN = 16.0f;
-        constexpr float TITLE_HEIGHT = 18.0f;
         const auto preview = pipPreviewSize(ui_state_.outputWidth(), ui_state_.outputHeight());
         const float scaled_width = static_cast<float>(preview.width) * scale;
         const float scaled_height = static_cast<float>(preview.height) * scale;
-        const float total_height = scaled_height + TITLE_HEIGHT + 8.0f;
-
-        float left = viewport.pos.x + MARGIN;
-        float top = panel_->cachedPanelY() - total_height - MARGIN;
-        const float min_top = viewport.pos.y + MARGIN;
-        if (top < min_top)
-            top = min_top;
-        const float max_left = viewport.pos.x + viewport.size.x - scaled_width - 8.0f - MARGIN;
-        if (left > max_left)
-            left = std::max(viewport.pos.x + MARGIN, max_left);
+        const auto position = pipPreviewPosition(viewport, scaled_width, scaled_height);
 
         const float playhead = controller_.playhead();
         const std::string title = (is_playing || !selected.has_value())
@@ -2744,7 +2751,7 @@ namespace lfs::vis::gui {
                                                                 std::make_format_args(kf_num));
                                         }();
 
-        overlay_->showPreviewWindow(left, top, scaled_width, scaled_height,
+        overlay_->showPreviewWindow(position.x, position.y, scaled_width, scaled_height,
                                     title, is_playing,
                                     pip_texture_.rmlSrcUrl(pip_render_width_, pip_render_height_));
     }

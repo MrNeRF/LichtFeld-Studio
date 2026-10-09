@@ -2277,3 +2277,85 @@ namespace lfs::vis {
         RecordProperty("ruler_elements", static_cast<int>(childCount()));
     }
 } // namespace lfs::vis
+
+namespace lfs::vis {
+
+    using gui::ViewportLayout;
+
+    class SequencerPreviewLayoutTest : public ::SequencerHistoryRegressionTest {
+    protected:
+        static glm::vec2 position(gui::SequencerUIManager& manager, const ViewportLayout& viewport,
+                                  const float width, const float height) {
+            return manager.pipPreviewPosition(viewport, width, height);
+        }
+
+        static void cachePanelY(gui::SequencerUIManager& manager, const float y) {
+            manager.panel_->render(0.0f, y, 0.0f, 0.0f, {}, nullptr, nullptr, manager.film_strip_);
+        }
+    };
+
+    TEST_F(SequencerPreviewLayoutTest, PreviewStaysAboveDockTabsAtEveryScale) {
+        VisualizerImpl viewer(options());
+        auto& manager = viewer.getGuiManager()->sequencerUI();
+        const ViewportLayout viewport{{320.0f, 30.0f}, {1280.0f, 450.0f}};
+        const float bottom = viewport.pos.y + viewport.size.y;
+        for (const float tab_height : {24.0f, 36.0f}) {
+            cachePanelY(manager, bottom + tab_height);
+            for (const float scale : {0.5f, 1.0f, 1.5f, 2.0f}) {
+                SCOPED_TRACE(scale);
+                const auto pos = position(manager, viewport, 320.0f * scale, 180.0f * scale);
+                EXPECT_FLOAT_EQ(pos.x, viewport.pos.x + 16.0f);
+                EXPECT_FLOAT_EQ(pos.y + 180.0f * scale + 26.0f, bottom - 16.0f);
+                EXPECT_GE(pos.y, viewport.pos.y + 16.0f);
+            }
+        }
+    }
+
+    TEST_F(SequencerPreviewLayoutTest, PreviewFollowsViewportResizeAndIgnoresFloatingPanelPosition) {
+        VisualizerImpl viewer(options());
+        auto& manager = viewer.getGuiManager()->sequencerUI();
+        for (const float height : {220.0f, 400.0f, 650.0f}) {
+            const ViewportLayout viewport{{110.0f, 60.0f}, {900.0f, height}};
+            for (const float panel_y : {50.0f, 500.0f, 1000.0f}) {
+                cachePanelY(manager, panel_y);
+                const auto pos = position(manager, viewport, 160.0f, 90.0f);
+                EXPECT_FLOAT_EQ(pos.x, 126.0f);
+                EXPECT_FLOAT_EQ(pos.y, 60.0f + height - 90.0f - 26.0f - 16.0f);
+            }
+        }
+    }
+
+    TEST_F(SequencerPreviewLayoutTest, ExistingPlacementAndSmallViewportClampsArePreserved) {
+        VisualizerImpl viewer(options());
+        auto& manager = viewer.getGuiManager()->sequencerUI();
+        for (const glm::vec2 size : {glm::vec2(900.0f, 450.0f), glm::vec2(100.0f, 60.0f)}) {
+            const ViewportLayout viewport{{110.0f, 60.0f}, size};
+            const float panel_y = viewport.pos.y + viewport.size.y;
+            cachePanelY(manager, panel_y);
+            const float legacy_top = std::max(viewport.pos.y + 16.0f, panel_y - 90.0f - 26.0f - 16.0f);
+            const auto pos = position(manager, viewport, 160.0f, 90.0f);
+            EXPECT_EQ(pos, glm::vec2(viewport.pos.x + 16.0f, legacy_top));
+        }
+    }
+
+    TEST_F(SequencerPreviewLayoutTest, PlacementLatency) {
+        VisualizerImpl viewer(options());
+        auto& manager = viewer.getGuiManager()->sequencerUI();
+        cachePanelY(manager, 516.0f);
+        ViewportLayout viewport{{320.0f, 30.0f}, {1280.0f, 450.0f}};
+        std::vector<double> samples;
+        float checksum = 0.0f;
+        for (int batch = 0; batch < 9; ++batch) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 50000; ++i) {
+                viewport.size.y = 450.0f + static_cast<float>(i % 20);
+                const auto pos = position(manager, viewport, 160.0f, 90.0f);
+                checksum += pos.x + pos.y;
+            }
+            samples.push_back(std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - start).count() / 50000.0);
+        }
+        EXPECT_GT(checksum, 0.0f);
+        std::sort(samples.begin(), samples.end());
+        RecordProperty("median_position_ns", std::to_string(samples[samples.size() / 2]));
+    }
+} // namespace lfs::vis

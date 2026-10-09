@@ -40,6 +40,7 @@ namespace lfs::vis::gui {
 namespace lfs::vis {
     class SequencerFrameDemandTest_ApplyCurrentViewRecordsHistory_Test;
     class VisualizerImpl;
+    class SequencerPreviewLayoutTest;
     class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
     class SequencerFrameDemandTest_ReportsFrameFailureUntilSuccessfulRetry_Test;
 
@@ -86,6 +87,7 @@ namespace lfs::vis {
 
         private:
             friend class lfs::vis::SequencerFrameDemandTest_ApplyCurrentViewRecordsHistory_Test;
+            friend class lfs::vis::SequencerPreviewLayoutTest;
             friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
             friend class lfs::vis::SequencerFrameDemandTest_ReportsFrameFailureUntilSuccessfulRetry_Test;
 
@@ -130,6 +132,8 @@ namespace lfs::vis {
             void renderKeyframeEditOverlay(const ViewportLayout& viewport);
             void initPipPreview();
             void renderKeyframePreview(const UIContext& ctx);
+            [[nodiscard]] glm::vec2 pipPreviewPosition(const ViewportLayout& viewport,
+                                                       float scaled_width, float scaled_height) const;
             void syncPipPreviewWindow(const ViewportLayout& viewport);
 
             struct PipPreviewKey {
