@@ -292,6 +292,100 @@ TEST(VideoExportUtilsTest, HiddenDatasetSnapshotCullsImplicitNodeInPreview) {
     }
 }
 
+namespace {
+    class VideoExportBandTest : public ::testing::TestWithParam<std::tuple<bool, bool>> {
+    protected:
+        void SetUp() override {
+            ASSERT_TRUE(SDL_InitSubSystem(SDL_INIT_VIDEO)) << SDL_GetError();
+            window_.reset(SDL_CreateWindow("Export regression", 64, 64,
+                                           SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN));
+            ASSERT_TRUE(window_) << SDL_GetError();
+            ASSERT_TRUE(context_.init(window_.get(), 64, 64)) << context_.lastError();
+            lfs::rendering::setExpectedVulkanDeviceUuid(context_.deviceUUID());
+            // Include both poles, the longitude seam, and splats crossing band edges.
+            model_ = make_test_splat({0, -8, -3, 0, -3, -3, 0, 0, -3,
+                                      0, 3, -3, 0, 8, -3, 0.1f, 0, 3});
+            const auto allocator = [this](lfs::core::TensorShape shape, size_t capacity,
+                                          lfs::core::DataType dtype, std::string_view name) {
+                auto tensor = lfs::vis::makeVulkanExternalTensor(
+                    context_, std::move(shape), dtype, capacity, std::string(name).c_str());
+                if (!tensor)
+                    throw std::runtime_error(tensor.error());
+                return std::move(*tensor);
+            };
+            auto migrated = lfs::io::migrateSplatTensorsToAllocator(*model_, allocator);
+            ASSERT_TRUE(migrated) << migrated.error().format();
+        }
+
+        void TearDown() override {
+            renderer_.reset();
+            model_.reset();
+            context_.shutdown();
+            window_.reset();
+            SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        }
+
+        std::vector<uint8_t> render(int y, int rows, bool banded, bool full_frame) {
+            lfs::rendering::ViewportRenderRequest request;
+            request.frame_view.size = {1024, rows};
+            request.frame_view.subregion_origin = {0, y};
+            if (banded)
+                request.frame_view.subregion_full_size = {1024, 512};
+            request.sh_degree = 0;
+            request.gut = true;
+            request.raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgut;
+            request.equirectangular = std::get<0>(GetParam());
+            const auto slot = full_frame ? lfs::vis::VksplatViewportRenderer::OutputSlot::Preview
+                                         : lfs::vis::VksplatViewportRenderer::OutputSlot::Main;
+            auto result = renderer_->render(context_, *model_, request, false, slot, false, true);
+            EXPECT_TRUE(result) << (result ? "" : result.error());
+            if (!result)
+                return {};
+            auto image = renderer_->readOutputImageRgb8(context_, slot);
+            EXPECT_TRUE(image) << (image ? "" : image.error());
+            if (!image)
+                return {};
+            const auto* data = (*image)->ptr<uint8_t>();
+            return {data, data + (*image)->numel()};
+        }
+
+        std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window_{nullptr, SDL_DestroyWindow};
+        lfs::vis::VulkanContext context_;
+        std::unique_ptr<lfs::core::SplatData> model_;
+        std::unique_ptr<lfs::vis::VksplatViewportRenderer> renderer_ =
+            std::make_unique<lfs::vis::VksplatViewportRenderer>();
+    };
+
+    TEST_P(VideoExportBandTest, BandedEqualsFullImage) {
+        const bool full_frame = std::get<1>(GetParam());
+        const auto full = render(0, 512, false, full_frame);
+        ASSERT_EQ(full.size(), 1024u * 512u * 3u);
+        for (const int band_rows : {256, 64}) {
+            for (int y = 0; y < 512; y += band_rows) {
+                SCOPED_TRACE(::testing::Message() << "rows=" << band_rows << " y=" << y);
+                const auto band = render(y, band_rows, true, full_frame);
+                ASSERT_EQ(band.size(), 1024u * band_rows * 3u);
+                const auto first = full.begin() + y * 1024 * 3;
+                ASSERT_GT(*std::max_element(first, first + band.size()), 0);
+                int max_diff = 0;
+                size_t changed = 0;
+                for (size_t i = 0; i < band.size(); ++i) {
+                    max_diff = std::max(max_diff, std::abs(int(band[i]) - int(first[i])));
+                    changed += band[i] != first[i];
+                }
+                EXPECT_LE(max_diff, 1) << "changed channels=" << changed;
+            }
+        }
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Projection, VideoExportBandTest,
+                             ::testing::Combine(::testing::Bool(), ::testing::Bool()),
+                             [](const auto& info) {
+                                 return std::string(std::get<0>(info.param) ? "Equirectangular" : "Perspective") +
+                                        (std::get<1>(info.param) ? "FullFrame" : "BandRelative");
+                             });
+} // namespace
+
 TEST(VideoExportUtilsTest, CaptureSnapshotPrefersSplatsOverPointCloudAndKeepsMeshes) {
     lfs::vis::SceneManager scene_manager;
     auto& scene = scene_manager.getScene();

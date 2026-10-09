@@ -1200,8 +1200,12 @@ rectangle clip_to_render_grid(rectangle rect, Uniforms uniforms) {
     const uint2 lo = uint2(uniforms.render_origin_x / TILE_WIDTH,
                           uniforms.render_origin_y / TILE_HEIGHT);
     const uint2 hi = lo + uint2(uniforms.grid_width, uniforms.grid_height);
-    rect.min_x = uint16_t(clamp(uint(rect.min_x), lo.x, hi.x));
-    rect.max_x = uint16_t(clamp(uint(rect.max_x), lo.x, hi.x));
+    // Full-width panorama bands retain the wrapped interval across the seam.
+    // The tile pass reduces these x coordinates modulo the full-width grid.
+    if (base_camera_model(uniforms.camera_model) != uint(CameraModel::EQUIRECTANGULAR)) {
+        rect.min_x = uint16_t(clamp(uint(rect.min_x), lo.x, hi.x));
+        rect.max_x = uint16_t(clamp(uint(rect.max_x), lo.x, hi.x));
+    }
     rect.min_y = uint16_t(clamp(uint(rect.min_y), lo.y, hi.y));
     rect.max_y = uint16_t(clamp(uint(rect.max_y), lo.y, hi.y));
     return rect;

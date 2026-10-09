@@ -154,7 +154,8 @@ void main(
     if (wrap_x) {
         for (uint16_t y = rect.min_y; y < rect.max_y; y++) {
             for (uint16_t x = rect.min_x; x < rect.max_x && offset < offset_max; x++) {
-                uint32_t key = uint32_t(y) * grid_width + (uint32_t(x) % grid_width);
+                uint32_t key = (uint32_t(y) - tile_origin.y) * grid_width +
+                    (uint32_t(x) % grid_width) - tile_origin.x;
                 out_unsorted_keys[offset] = sortingKey_t(key);
                 out_unsorted_gauss_idx[offset] = primitive_idx;
                 offset++;
