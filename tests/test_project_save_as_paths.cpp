@@ -47,7 +47,7 @@ TEST(ProjectSaveAsPathTest, NativePathConversionPreservesShortPathsAndNormalizes
     const auto native_unc = project_fs::native_path(unc);
     EXPECT_TRUE(native_unc.native().starts_with(L"\\\\?\\UNC\\server\\share\\"));
     EXPECT_EQ(project_fs::display_path(native_unc), unc);
-    const auto relative = std::filesystem::path(std::wstring(200, L'a')) / L"scene.licht";
+    const auto relative = std::filesystem::path(std::wstring(200, L'a')) / std::wstring(100, L'b') / L"scene.licht";
     EXPECT_EQ(project_fs::display_path(project_fs::native_path(relative)), std::filesystem::absolute(relative));
 }
 #endif
