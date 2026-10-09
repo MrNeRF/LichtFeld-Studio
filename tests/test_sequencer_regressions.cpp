@@ -29,6 +29,10 @@
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/ElementInstancer.h>
 #include <RmlUi/Core/RenderInterface.h>
+
+#include <RmlUi/Core.h>
+#include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/RenderInterface.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -2159,3 +2163,117 @@ namespace {
     }
 
 } // namespace
+
+namespace {
+    TEST(SequencerMappingRegressionTest, ScaledRulerLabelsKeepTheirReservedSpansSeparate) {
+        constexpr float duration = 30.0f;
+        for (const float scale : {1.0f, 1.5f, 2.0f}) {
+            for (const float width : {600.0f, 976.0f, 1160.0f, 1920.0f}) {
+                SCOPED_TRACE(std::format("width={} scale={}", width, scale));
+                const float label_width = 30.0f * scale;
+                const float interval = lfs::vis::sequencer_ui::rulerMajorInterval(duration, width, 2.0f * label_width);
+                float previous_right = -std::numeric_limits<float>::infinity();
+                for (float time = 0.0f; time <= duration; time += interval) {
+                    const float x = lfs::vis::sequencer_ui::timeToScreenX(time, 0.0f, width, duration, 0.0f);
+                    const float center = std::clamp(x, label_width * 0.5f, width - label_width);
+                    EXPECT_GE(center - label_width * 0.5f, previous_right - 0.001f);
+                    previous_right = center + label_width * 0.5f;
+                }
+            }
+        }
+    }
+
+    TEST(SequencerMappingRegressionTest, RulerKeepsExistingIntervalsWheneverLabelsFit) {
+        for (const float duration : {0.5f, 1.0f, 2.0f, 10.0f, 30.0f, 60.0f, 120.0f}) {
+            for (const float width : {600.0f, 976.0f, 1160.0f, 1920.0f}) {
+                const float previous = lfs::vis::sequencer_ui::rulerMajorInterval(duration);
+                for (const float scale : {1.0f, 1.5f, 2.0f}) {
+                    const float spacing = 60.0f * scale;
+                    const float current = lfs::vis::sequencer_ui::rulerMajorInterval(duration, width, spacing);
+                    if (previous * width / duration >= spacing)
+                        EXPECT_FLOAT_EQ(current, previous);
+                    EXPECT_GE(current, previous);
+                    EXPECT_FLOAT_EQ(current * 4.0f, std::round(current * 4.0f));
+                }
+            }
+        }
+    }
+} // namespace
+
+namespace lfs::vis {
+    class SequencerRulerRegressionTest : public ::testing::Test {
+    protected:
+        class StubRenderer final : public Rml::RenderInterface {
+        public:
+            Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex>, Rml::Span<const int>) override { return 1; }
+            void RenderGeometry(Rml::CompiledGeometryHandle, Rml::Vector2f, Rml::TextureHandle) override {}
+            void ReleaseGeometry(Rml::CompiledGeometryHandle) override {}
+            Rml::TextureHandle LoadTexture(Rml::Vector2i& dimensions, const Rml::String&) override {
+                dimensions = {16, 16};
+                return 1;
+            }
+            Rml::TextureHandle GenerateTexture(Rml::Span<const Rml::byte>, Rml::Vector2i) override { return 1; }
+            void ReleaseTexture(Rml::TextureHandle) override {}
+            void EnableScissorRegion(bool) override {}
+            void SetScissorRegion(Rml::Rectanglei) override {}
+        };
+
+        static void SetUpTestSuite() { ASSERT_TRUE(Rml::Initialise()); }
+        static void TearDownTestSuite() { Rml::Shutdown(); }
+        void SetUp() override {
+            context_ = Rml::CreateContext("sequencer_ruler", {1040, 300}, &renderer_);
+            ASSERT_NE(context_, nullptr);
+            document_ = context_->LoadDocumentFromMemory("<rml><head/><body><div id='ruler'/></body></rml>");
+            ASSERT_NE(document_, nullptr);
+            panel_ = std::make_unique<RmlSequencerPanel>(controller_, ui_, &manager_);
+            panel_->elements_cached_ = true;
+            panel_->el_ruler_ = document_->GetElementById("ruler");
+            panel_->cached_panel_width_ = 1040.0f;
+            panel_->cached_dp_ratio_ = 2.0f;
+            rebuild();
+        }
+        void TearDown() override {
+            panel_.reset();
+            ASSERT_TRUE(Rml::RemoveContext("sequencer_ruler"));
+        }
+        void rebuild() {
+            panel_->last_ruler_width_ = -1.0f;
+            panel_->rebuildRuler();
+        }
+        void setScaleKeepingTimelineWidth(const float dp_ratio) {
+            panel_->cached_dp_ratio_ = dp_ratio;
+            panel_->cached_panel_width_ = 1008.0f + 32.0f * dp_ratio;
+            panel_->rebuildRuler();
+        }
+        size_t childCount() const { return panel_->el_ruler_->GetNumChildren(); }
+        inline static StubRenderer renderer_;
+        gui::RmlUIManager manager_;
+        SequencerController controller_;
+        gui::panels::SequencerUIState ui_;
+        std::unique_ptr<RmlSequencerPanel> panel_;
+        Rml::Context* context_ = nullptr;
+        Rml::ElementDocument* document_ = nullptr;
+    };
+
+    TEST_F(SequencerRulerRegressionTest, ScaleChangeInvalidatesRulerAtTheSamePixelWidth) {
+        setScaleKeepingTimelineWidth(1.0f);
+        const auto normal_count = childCount();
+        setScaleKeepingTimelineWidth(2.0f);
+        EXPECT_LT(childCount(), normal_count);
+        setScaleKeepingTimelineWidth(1.0f);
+        EXPECT_EQ(childCount(), normal_count);
+    }
+
+    TEST_F(SequencerRulerRegressionTest, RecordsActualRulerRebuildCost) {
+        std::array<double, 7> batches{};
+        for (auto& elapsed : batches) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 100; ++i)
+                rebuild();
+            elapsed = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / 100.0;
+        }
+        std::sort(batches.begin(), batches.end());
+        RecordProperty("ruler_rebuild_us", std::to_string(batches[3]));
+        RecordProperty("ruler_elements", static_cast<int>(childCount()));
+    }
+} // namespace lfs::vis
