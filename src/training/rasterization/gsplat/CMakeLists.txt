@@ -23,6 +23,7 @@ set(GSPLAT_SOURCES
         SphericalHarmonics.cpp
 
         # CUDA files
+        GeometryFeatures.cu
         IntersectTile.cu
         ProjectionUT3DGSFused.cu
         RasterizeToPixelsFromWorld3DGSBwd.cu

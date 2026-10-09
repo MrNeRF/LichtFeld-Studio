@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include <string>
 
 namespace lfs::vis {
@@ -12,11 +11,9 @@ namespace lfs::vis {
     struct VulkanLoaderInfo {
         bool enabled = false;
         bool loader_available = false;
-        uint32_t api_version = 0;
         std::string error;
     };
 
     [[nodiscard]] VulkanLoaderInfo probeVulkanLoader();
-    [[nodiscard]] std::string formatVulkanApiVersion(uint32_t api_version);
 
 } // namespace lfs::vis

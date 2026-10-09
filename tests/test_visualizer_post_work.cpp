@@ -27,6 +27,7 @@
 #include "gui/gizmo_manager.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/import_error.hpp"
+#include "gui/rml_sequencer_overlay.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/scene_panel_native.hpp"
 #include "gui/scene_tree_session.hpp"
@@ -49,6 +50,7 @@
 #include "python_test_support.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
+#include "rendering/rendering_manager.hpp"
 #include "rendering/vulkan_view_render_state.hpp"
 #include "scene/viewer_splat_quantize.hpp"
 #include "tools/unified_tool_registry.hpp"
@@ -1654,16 +1656,316 @@ namespace lfs::vis {
         EXPECT_NE(training_plan.view_flags[0] & DirtyFlag::SPLATS, 0u);
     }
 
+    TEST_F(VisualizerImplResetTest, AddKeyframeJustPastClipEndPreservesEndpoint) {
+        VisualizerImpl viewer(projectOptions());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& timeline = controller.timeline();
+        const float end = timeline.clipDuration();
+        viewer.getViewport().camera.t = glm::vec3(1.0f, 2.0f, 3.0f);
+        core::events::cmd::SequencerAddKeyframe{.time = end}.emit();
+        ASSERT_EQ(timeline.realKeyframeCount(), 1u);
+        const auto endpoint = *timeline.getKeyframe(0);
+
+        for (const float offset : {0.001f, 0.002f, 0.020f}) {
+            SCOPED_TRACE(offset);
+            const auto count = timeline.realKeyframeCount();
+            const std::vector<sequencer::Keyframe> previous(timeline.keyframes().begin(), timeline.keyframes().end());
+            const glm::vec3 position(offset, 3.0f, 3.0f);
+            viewer.getViewport().camera.t = position;
+            core::events::cmd::SequencerAddKeyframe{.time = end + offset}.emit();
+            EXPECT_EQ(timeline.realKeyframeCount(), count + 1);
+            EXPECT_FLOAT_EQ(timeline.clipDuration(), end + offset);
+            for (const auto& key : previous) {
+                const auto* preserved = timeline.getKeyframeById(key.id);
+                ASSERT_NE(preserved, nullptr);
+                EXPECT_EQ(preserved->position, key.position);
+                EXPECT_EQ(preserved->rotation, key.rotation);
+                EXPECT_EQ(preserved->focal_length_mm, key.focal_length_mm);
+                EXPECT_EQ(preserved->time, key.time);
+            }
+            const auto& added = timeline.keyframes().back();
+            EXPECT_NE(added.id, endpoint.id);
+            EXPECT_FLOAT_EQ(added.time, end + offset);
+            EXPECT_EQ(added.position, position);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest, AddKeyframeWithinClipKeepsReplacementTolerance) {
+        VisualizerImpl viewer(projectOptions());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& timeline = controller.timeline();
+        const float end = timeline.clipDuration();
+        for (const float time : {2.0f, end}) {
+            core::events::cmd::SequencerAddKeyframe{.time = time}.emit();
+            const auto original = timeline.keyframes().back();
+            const auto count = timeline.realKeyframeCount();
+            for (const float offset : {-0.003f, -0.001f, 0.0f}) {
+                SCOPED_TRACE(time + offset);
+                const glm::vec3 position(time, offset, 1.0f);
+                viewer.getViewport().camera.t = position;
+                core::events::cmd::SequencerAddKeyframe{.time = time + offset}.emit();
+                EXPECT_EQ(timeline.realKeyframeCount(), count);
+                const auto* replaced = timeline.getKeyframeById(original.id);
+                ASSERT_NE(replaced, nullptr);
+                EXPECT_EQ(replaced->time, time);
+                EXPECT_EQ(replaced->position, position);
+                EXPECT_EQ(timeline.clipDuration(), end);
+            }
+        }
+        controller.seek(2.002f);
+        viewer.getViewport().camera.t = glm::vec3(4.0f, 5.0f, 6.0f);
+        core::events::cmd::SequencerAddKeyframe{}.emit();
+        EXPECT_EQ(timeline.realKeyframeCount(), 2u);
+        EXPECT_EQ(timeline.getKeyframe(0)->time, 2.0f);
+        EXPECT_EQ(timeline.getKeyframe(0)->position, viewer.getViewport().camera.t);
+    }
+
     class SequencerFrameDemandTest : public VisualizerImplResetTest {
     protected:
-        static void SetUpTestSuite() {
+        void SetUp() override {
+            VisualizerImplResetTest::SetUp();
             ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
                 (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
         }
-        static void TearDownTestSuite() {
+        void TearDown() override {
             lfs::event::LocalizationManager::getInstance().reset();
+            VisualizerImplResetTest::TearDown();
         }
     };
+
+    TEST_F(SequencerFrameDemandTest, ApplyCurrentViewRecordsHistory) {
+        VisualizerImpl viewer(projectOptions());
+        auto& sequencer = viewer.getGuiManager()->sequencerUI();
+        auto& controller = sequencer.controller();
+        auto& history = op::undoHistory();
+        controller.addKeyframe(lfs::sequencer::Keyframe{});
+        lfs::sequencer::Keyframe second;
+        second.time = 2.0f;
+        second.position = {1.0f, 2.0f, 3.0f};
+        controller.addKeyframe(second);
+        sequencer.beginViewportKeyframeEdit(1);
+        history.clear();
+        const auto original = controller.saveToJson();
+        viewer.getViewport().camera.t = {7.0f, 8.0f, 9.0f};
+        viewer.getRenderingManager()->setFocalLength(73.0f);
+        sequencer.overlay_->pending_actions_.push_back({gui::RmlSequencerOverlay::Action::APPLY_EDIT});
+        sequencer.handleOverlayActions();
+        const auto applied = controller.saveToJson();
+        ASSERT_NE(applied, original);
+        ASSERT_EQ(history.undoCount(), 1u);
+        EXPECT_EQ(history.undoName(), "Update Keyframe");
+        sequencer.overlay_->pending_actions_.push_back({gui::RmlSequencerOverlay::Action::APPLY_EDIT});
+        sequencer.handleOverlayActions();
+        EXPECT_EQ(history.undoCount(), 1u);
+        viewer.getViewport().camera.t = {10.0f, 11.0f, 12.0f};
+        sequencer.overlay_->pending_actions_.push_back({gui::RmlSequencerOverlay::Action::REVERT_EDIT});
+        sequencer.handleOverlayActions();
+        EXPECT_EQ(viewer.getViewport().camera.t, glm::vec3(7.0f, 8.0f, 9.0f));
+        EXPECT_EQ(controller.saveToJson(), applied);
+        EXPECT_EQ(history.undoCount(), 1u);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_EQ(controller.saveToJson(), original);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_EQ(controller.saveToJson(), applied);
+    }
+
+    TEST_F(SequencerFrameDemandTest, ReportsFrameFailureUntilSuccessfulRetry) {
+        VisualizerImpl viewer(projectOptions());
+        auto& sequencer = viewer.getGuiManager()->sequencerUI();
+        auto& controller = sequencer.controller();
+        auto& scene = viewer.getSceneManager()->getScene();
+        scene.addSplat("frame_0", lfs::test::licht::make_splat(2));
+        scene.addSplat("frame_1", lfs::test::licht::make_splat(2));
+        controller.setPlySequence(temporary_.path, "sequence",
+                                  {temporary_.path / "frame_0.ply", temporary_.path / "frame_1.ply"},
+                                  {"frame_0", "frame_1"}, 1.0f);
+        using State = gui::SequencerUIManager::PlyStreamFrameState;
+        sequencer.ply_stream_states_.assign(2, State::Resident);
+        sequencer.last_ply_sequence_frame_ = 1;
+        const auto status = [&] { return nlohmann::json::parse(sequencer.plyPlayerStatusJson()); };
+        const auto generation = sequencer.ply_stream_generation_.load();
+        sequencer.ply_stream_completed_.push_back(
+            {.generation = generation, .frame_index = 0, .error = "Frame file is missing"});
+        sequencer.drainPlySequenceStream();
+        EXPECT_TRUE(status().value("requested_frame_failed", false));
+        EXPECT_FALSE(status()["on_target"].get<bool>());
+        EXPECT_EQ(status()["displayed_frame"], 1);
+        sequencer.requestPlySequenceFrame(0, true);
+        EXPECT_EQ(sequencer.ply_stream_states_[0], State::Queued);
+        EXPECT_TRUE(status().value("requested_frame_failed", false));
+        sequencer.ply_stream_states_[0] = State::Loading;
+        EXPECT_TRUE(status().value("requested_frame_failed", false));
+
+        controller.seek(1.0f);
+        EXPECT_FALSE(status().value("requested_frame_failed", true));
+        EXPECT_TRUE(status()["on_target"].get<bool>());
+        controller.seek(0.0f);
+        // Cancellation and stale completions cannot hide a known failure.
+        sequencer.ply_stream_completed_.push_back(
+            {.generation = generation, .frame_index = 0, .cancelled = true});
+        sequencer.ply_stream_completed_.push_back(
+            {.generation = generation + 1, .frame_index = 0, .model = lfs::test::licht::make_splat(2)});
+        sequencer.drainPlySequenceStream();
+        EXPECT_TRUE(status().value("requested_frame_failed", false));
+        sequencer.ply_stream_completed_.push_back(
+            {.generation = generation, .frame_index = 0, .model = lfs::test::licht::make_splat(2)});
+        sequencer.drainPlySequenceStream();
+        EXPECT_FALSE(status().value("requested_frame_failed", true));
+        EXPECT_EQ(sequencer.ply_stream_states_[0], State::Resident);
+
+        sequencer.ply_stream_completed_.push_back(
+            {.generation = generation, .frame_index = 0, .error = "Frame file is missing"});
+        sequencer.drainPlySequenceStream();
+        EXPECT_TRUE(status().value("requested_frame_failed", false));
+        sequencer.stopPlySequenceStreaming();
+        EXPECT_FALSE(status().value("requested_frame_failed", true));
+    }
+
+    TEST_F(SequencerFrameDemandTest, ExportUsesExactFrameAndRestoresPlayback) {
+        VisualizerImpl viewer(projectOptions());
+        auto& sequencer = viewer.getGuiManager()->sequencerUI();
+        auto& controller = sequencer.controller();
+        auto& scene = viewer.getSceneManager()->getScene();
+        const auto first = scene.addSplat("frame_0", lfs::test::licht::make_splat(2));
+        const auto second = scene.addSplat("frame_1", lfs::test::licht::make_splat(3));
+        scene.setNodeVisibility(second, false);
+        controller.setPlySequence(temporary_.path, "sequence",
+                                  {temporary_.path / "frame_0.ply", temporary_.path / "frame_1.ply"},
+                                  {"frame_0", "frame_1"}, 1.0f);
+        sequencer.ply_stream_states_ = {gui::SequencerUIManager::PlyStreamFrameState::Resident,
+                                        gui::SequencerUIManager::PlyStreamFrameState::Loading};
+        sequencer.loaded_ply_sequence_frames_ = {0};
+        sequencer.last_ply_sequence_frame_ = 0;
+        controller.play();
+        controller.seek(0.25f);
+        const auto pending = sequencer.preparePlySequenceExportFrame(1);
+        ASSERT_TRUE(pending);
+        EXPECT_FALSE(*pending);
+        EXPECT_FLOAT_EQ(controller.playhead(), 0.25f);
+        EXPECT_TRUE(controller.isPlaying());
+        sequencer.ply_stream_states_[1] = gui::SequencerUIManager::PlyStreamFrameState::Resident;
+        sequencer.loaded_ply_sequence_frames_.push_back(1);
+        const auto ready = sequencer.preparePlySequenceExportFrame(1);
+        ASSERT_TRUE(ready);
+        EXPECT_TRUE(*ready);
+        EXPECT_FALSE(scene.isNodeEffectivelyVisible(first));
+        EXPECT_TRUE(scene.isNodeEffectivelyVisible(second));
+        sequencer.tickPlaybackBeforeSceneRender();
+        EXPECT_FLOAT_EQ(controller.playhead(), 0.25f);
+        EXPECT_EQ(sequencer.last_ply_sequence_frame_, 1u);
+        sequencer.finishPlySequenceExport();
+        EXPECT_EQ(sequencer.last_ply_sequence_frame_, 0u);
+        EXPECT_TRUE(scene.isNodeEffectivelyVisible(first));
+        EXPECT_FALSE(scene.isNodeEffectivelyVisible(second));
+        EXPECT_FLOAT_EQ(controller.playhead(), 0.25f);
+        EXPECT_TRUE(controller.isPlaying());
+        controller.pause();
+        sequencer.loaded_ply_sequence_frames_ = {0};
+        sequencer.ply_stream_states_[1] = gui::SequencerUIManager::PlyStreamFrameState::Failed;
+        EXPECT_FALSE(sequencer.preparePlySequenceExportFrame(1));
+        sequencer.finishPlySequenceExport();
+        EXPECT_FALSE(controller.isPlaying());
+        EXPECT_FALSE(sequencer.preparePlySequenceExportFrame(2));
+        controller.clearPlySequence();
+        EXPECT_FALSE(sequencer.preparePlySequenceExportFrame(0));
+        controller.stop();
+        std::vector<double> reference_ns, current_ns;
+        constexpr int iterations = 10000;
+        const auto measure = [&](auto&& tick) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < iterations; ++i)
+                tick();
+            return std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - start).count() / iterations;
+        };
+        for (int trial = 0; trial < 9; ++trial) {
+            // Reference: the pre-export-override stopped playback tick.
+            reference_ns.push_back(measure([&] {
+                sequencer.last_playback_tick_time_ = std::nullopt;
+                sequencer.drainPlySequenceStream();
+                sequencer.applyPlySequenceFrame();
+            }));
+            current_ns.push_back(measure([&] { sequencer.tickPlaybackBeforeSceneRender(); }));
+        }
+        std::sort(reference_ns.begin(), reference_ns.end());
+        std::sort(current_ns.begin(), current_ns.end());
+        RecordProperty("reference_tick_ns", std::to_string(reference_ns[4]));
+        RecordProperty("current_tick_ns", std::to_string(current_ns[4]));
+    }
+
+    TEST_F(SequencerFrameDemandTest, CameraFollowSettlesAfterPlaybackStops) {
+        VisualizerImpl viewer(projectOptions());
+        auto& sequencer = viewer.getGuiManager()->sequencerUI();
+        auto& controller = sequencer.controller();
+        auto& rm = *viewer.getRenderingManager();
+        auto& viewport = viewer.getViewport();
+        rm.retainVisibleViews({rm.activeViewId()});
+        sequencer.ui_state_.follow_playback = true;
+        sequencer::Keyframe first;
+        first.position = {1.0f, 2.0f, 3.0f};
+        first.rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        first.focal_length_mm = 50.0f;
+        const auto first_id = controller.addKeyframeAtTime(first, 0.0f);
+        auto last = first;
+        last.position.x += 2.0f;
+        last.focal_length_mm = 70.0f;
+        controller.addKeyframeAtTime(last, 1.0f);
+        const auto camera_requested = [&] {
+            static_cast<void>(app_store().store().drain_dirty_into_frame());
+            // Focal-length edits are SettingsChange requests on dev; both
+            // pose and focal-length changes invalidate the camera for this view.
+            return (rm.frameDemandLedger().plan(FrameClock::now()).view_flags[0] & DirtyFlag::CAMERA) != 0u;
+        };
+        const auto expect_camera = [&] {
+            const auto state = controller.currentCameraState();
+            EXPECT_EQ(viewport.camera.t, state.position);
+            EXPECT_EQ(viewport.camera.R, glm::mat3_cast(state.rotation));
+            EXPECT_FLOAT_EQ(rm.getFocalLengthMm(), state.focal_length_mm);
+        };
+        (void)camera_requested();
+        controller.play();
+        sequencer.advancePlayback(0.25f);
+        EXPECT_TRUE(camera_requested());
+        expect_camera();
+        controller.pause();
+        for (int i = 0; i < 5; ++i) {
+            sequencer.advancePlayback(0.016f);
+            EXPECT_FALSE(camera_requested());
+            expect_camera();
+        }
+        controller.stop();
+        sequencer.advancePlayback(0.016f);
+        EXPECT_TRUE(camera_requested());
+        expect_camera();
+        for (int i = 0; i < 5; ++i) {
+            sequencer.advancePlayback(0.016f);
+            EXPECT_FALSE(camera_requested());
+            expect_camera();
+        }
+        // Camera edits at a stationary playhead still update the viewport.
+        ASSERT_TRUE(controller.setKeyframeFocalLengthById(first_id, 60.0f));
+        (void)camera_requested();
+        sequencer.advancePlayback(0.016f);
+        EXPECT_TRUE(camera_requested());
+        expect_camera();
+        ASSERT_TRUE(controller.updateKeyframeById(first_id, {3.0f, 4.0f, 5.0f},
+                                                  glm::angleAxis(0.3f, glm::vec3(0, 1, 0)), 60.0f));
+        (void)camera_requested();
+        sequencer.advancePlayback(0.016f);
+        EXPECT_TRUE(camera_requested());
+        expect_camera();
+        EXPECT_TRUE(sequencer.scrubToTime(0.75f, true));
+        EXPECT_TRUE(camera_requested());
+        expect_camera();
+        // Explicitly applying the same camera remains successful and settles.
+        EXPECT_TRUE(sequencer.applyCurrentTimelineCamera());
+        EXPECT_FALSE(camera_requested());
+        sequencer.ui_state_.follow_playback = false;
+        const auto position = viewport.camera.t;
+        controller.play();
+        sequencer.advancePlayback(0.1f);
+        EXPECT_FALSE(camera_requested());
+        EXPECT_EQ(viewport.camera.t, position);
+    }
 
     TEST_F(SequencerFrameDemandTest, PropagatesPlaybackStreamAndPreviewDemand) {
         VisualizerImpl viewer(projectOptions());
@@ -2203,6 +2505,57 @@ contract["check_selection_submode_follows_native_mode"](lf)
         const auto selected = scene_manager->getSelectedNodeNames();
         EXPECT_EQ(std::set<std::string>(selected.begin(), selected.end()),
                   (std::set<std::string>{"first", "second"}));
+    }
+
+    TEST_F(VisualizerImplResetTest, SequencerCaptureDropsRemovedTailAndPreservesExtensions) {
+        using Json = lfs::io::JsonChapterDom::Json;
+        using namespace lfs::io::project;
+        using lfs::test::licht::require_result;
+        using lfs::test::licht::require_status;
+        using lfs::vis::project::captureGuiSession;
+        auto options = projectOptions();
+        lfs::vis::VisualizerImpl viewer(options);
+        ASSERT_NE(viewer.getGuiManager(), nullptr);
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer);
+        auto& controller = viewer.getGuiManager()->sequencer();
+        nlohmann::json timeline{
+            {"version", 1},
+            {"clip_duration", 30.0},
+            {"keyframes", nlohmann::json::array()}};
+        for (int i = 0; i < 200; ++i) {
+            timeline["keyframes"].push_back({{"time", i * 0.1f}, {"position", {0.0f, 0.0f, 0.0f}}, {"rotation", {1.0f, 0.0f, 0.0f, 0.0f}}, {"focal_length_mm", 50.0f}, {"easing", 0}});
+        }
+        ASSERT_TRUE(controller.loadFromJson(timeline));
+        auto retained = require_result(captureGuiSession(viewer, ProjectSessionChapters{}, {}));
+        require_status(retained.sequencer.dom().set("vendor_extra", "keep-root"));
+        auto original = *retained.sequencer.dom().get_json("timeline.keyframes");
+        for (auto& key : original)
+            key["vendor_extra"] = "keep-key";
+        require_status(retained.sequencer.dom().set_json("timeline.keyframes", original));
+
+        // Unchanged, shortened, cleared, and newly populated paths all use
+        // the live key count while keeping extensions on surviving entries.
+        for (const size_t count : {size_t{200}, size_t{24}, size_t{0}, size_t{30}}) {
+            SCOPED_TRACE(count);
+            auto current = timeline;
+            current["keyframes"].erase(current["keyframes"].begin() + count,
+                                       current["keyframes"].end());
+            if (count >= 3) {
+                current["keyframes"][1]["easing"] = 3;
+                current["keyframes"][2]["focal_length_mm"] = 35.0f;
+            }
+            ASSERT_TRUE(controller.loadFromJson(current));
+            auto captured = require_result(captureGuiSession(viewer, retained, {}));
+            auto reopened = require_result(SequencerSessionChapter::from_bytes(captured.sequencer.to_bytes()));
+            const auto keys = *reopened.dom().get_json("timeline.keyframes");
+            ASSERT_EQ(keys.size(), count);
+            EXPECT_EQ(reopened.dom().get_json("vendor_extra"), Json("keep-root"));
+            for (size_t i = 0; i < count; ++i) {
+                auto expected = Json::parse(controller.saveToJson()["keyframes"][i].dump());
+                expected["vendor_extra"] = "keep-key";
+                EXPECT_EQ(keys[i], expected);
+            }
+        }
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -10859,7 +11212,7 @@ contract["check_selection_submode_follows_native_mode"](lf)
         parameter_manager->setActiveStrategy("mcmc");
         parameter_manager->modifyActiveParams([](auto& params) {
             params.gut = true;
-            params.use_depth_loss = true;
+            params.mip_filter = true;
         });
         viewer.input_controller_ =
             std::make_unique<InputController>(nullptr, viewer);
@@ -10880,7 +11233,7 @@ contract["check_selection_submode_follows_native_mode"](lf)
         const auto started = viewer.startTraining();
 
         ASSERT_FALSE(started.has_value());
-        EXPECT_NE(started.error().find("Depth Loss"), std::string::npos);
+        EXPECT_NE(started.error().find("Mip Filter"), std::string::npos);
         EXPECT_FALSE(lifecycle->hasSourcePath());
         EXPECT_FALSE(trainer_manager->isCompletionPending());
     }

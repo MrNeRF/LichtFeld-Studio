@@ -664,3 +664,42 @@ def test_scan_without_folder_roots_does_not_reconcile_unrelated_projects():
         reconcile_observations=lambda *args, **kwargs: pytest.fail("No folder was scanned"),
     )
     assert scan_all_asset_folders(index) == asset_watch.AssetFolderScanResult()
+
+
+def test_refresh_keeps_dataset_image_thumbnail_seen_on_open(monkeypatch, tmp_path: Path):
+    # A project without an embedded thumbnail shows its first dataset image. Opening resolves that
+    # image; the refresh after it (bulk verify without image lookup, rescan of the unchanged file)
+    # used to store "no image" and the card fell back to its old poster.
+    project_path = tmp_path / "scene.licht"
+    project_path.write_bytes(b"container")
+    first_image = tmp_path / "images" / "0001.jpg"
+    first_image.parent.mkdir()
+    first_image.write_bytes(b"jpeg")
+    project_uuid = str(uuid.uuid4())
+    inspection = _inspection(project_uuid)
+    inspection.has_checkpoint = True
+    inspection.has_dataset = True
+
+    def inspect(_path, resolve_fallback=True):
+        resolved = SimpleNamespace(**vars(inspection))
+        resolved.fallback_preview_path = str(first_image) if resolve_fallback else ""
+        resolved.preview_width, resolved.preview_height = (1600, 900) if resolve_fallback else (0, 0)
+        return resolved
+
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
+    index = AssetIndex(library_path=tmp_path / "library.json", default_folder_path=tmp_path)
+    index.load()
+    scan_all_asset_folders(index)
+    (project,) = index.list_projects()
+
+    opened = index.verify_asset(project.id)
+    assert opened.fallback_preview_path == str(first_image)
+
+    verify_catalog_projects(index, interval_s=0)
+    scan_all_asset_folders(index)
+
+    reloaded = AssetIndex(library_path=tmp_path / "library.json", default_folder_path=tmp_path)
+    assert reloaded.load() is True
+    for refreshed in (index.find_asset_by_path(str(project_path)), reloaded.list_projects()[0]):
+        assert refreshed.fallback_preview_path == str(first_image)
+        assert (refreshed.preview_width, refreshed.preview_height) == (1600, 900)

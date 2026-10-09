@@ -7,6 +7,7 @@
 #include <vector>
 
 namespace lfs::training::kernels {
+
     struct DepthAnchorCandidate {
         bool valid = false;
         float scale = 0.0f;
@@ -124,6 +125,13 @@ namespace lfs::gpu_ops {
 } // namespace lfs::gpu_ops
 
 namespace lfs::training::kernels {
+    struct DepthCameraProjection {
+        int model = 0; // CameraModelType: pinhole=0, fisheye=2, equi=3, thin-prism=4
+        float radial[6] = {};
+        float tangential[2] = {};
+        float thin_prism[4] = {};
+    };
+
     // Robust affine fits over collected samples. Host work, safe on a worker pool.
     [[nodiscard]] DepthAnchor fit_depth_anchor_from_samples(
         const std::vector<lfs::gpu_ops::AnchorSample>& pairs);

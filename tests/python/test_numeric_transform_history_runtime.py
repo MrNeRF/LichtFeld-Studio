@@ -18,16 +18,29 @@ def test_numeric_transform_native_history(count, space, tool, group):
     endpoint = os.environ.get("LFS_TEST_MCP_ENDPOINT")
     if not endpoint:
         pytest.skip("requires an isolated running app at LFS_TEST_MCP_ENDPOINT")
-    code = f'''
+    setup_code = f'''
 import lichtfeld as lf
-from lfs_plugins.transform_controls import TransformControlsController
-from types import SimpleNamespace
 scene = lf.get_scene()
 names = ["numeric_history_probe_" + str(i) for i in range({count})]
 for name in names:
     if scene.get_node(name) is None:
         scene.add_group(name)
     lf.set_node_transform(name, [1,0,0,0,0,1,0,0,0,0,1,0,.1,0,0,1])
+lf.select_nodes(names)
+'''
+    setup = _tool(endpoint, "editor_run", {
+        "code": setup_code, "show_console": False,
+        "wait_for_completion": True, "timeout_ms": 10000,
+    })
+    assert setup["completed"] and setup["success"], setup
+    assert "Traceback" not in setup["output"]["text"], setup
+    # Let the app publish selection before the panel checks editability.
+    code = f'''
+import lichtfeld as lf
+from lfs_plugins.transform_controls import TransformControlsController
+from types import SimpleNamespace
+names = ["numeric_history_probe_" + str(i) for i in range({count})]
+assert lf.can_transform_selection(), lf.get_selected_node_names()
 lf.undo.clear()
 before = [lf.get_node_transform(name) for name in names]
 panel = TransformControlsController()

@@ -2030,9 +2030,6 @@ namespace lfs::vis {
                 if (scene_upscaler_selection.fellBack() && log_fallback_transition) {
                     LOG_WARN("Scene reconstruction '{}' unavailable; using native presentation",
                              sceneUpscalerBackendId(scene_upscaler_selection.requested));
-                } else if (!scene_upscaler_selection.fellBack()) {
-                    LOG_INFO("Scene reconstruction active: {}",
-                             sceneUpscalerBackendId(scene_upscaler_selection.effective));
                 }
                 // Expected startup/backend-transition warm-up may temporarily present Native
                 // before the paired reconstruction inputs exist. Do not consume the transition

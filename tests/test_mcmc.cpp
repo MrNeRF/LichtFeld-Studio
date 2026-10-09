@@ -170,6 +170,40 @@ TEST_F(CropDampingStrategyTest, IgsPlusRejectedRowsAreNeverSampledAtZeroScale) {
     EXPECT_EQ(unit_scale_scores, unmasked_scores);
 }
 
+class ImprovedGSPlusTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(ImprovedGSPlusTest, InitializesWhenStopRefinePrecedesStartRefine) {
+    auto splat_data = create_test_splat_data(8);
+    ImprovedGSPlus strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::igs_plus_defaults();
+    opt_params.iterations = 400;
+    opt_params.start_refine = 500;
+    opt_params.stop_refine = 400;
+    opt_params.max_cap = 16;
+    EXPECT_NO_THROW(strategy.initialize(opt_params));
+}
+
+TEST_F(ImprovedGSPlusTest, RefineWithoutEdgeScoresSkipsDensification) {
+    auto splat_data = create_test_splat_data(8);
+    ImprovedGSPlus strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::igs_plus_defaults();
+    opt_params.iterations = 1000;
+    opt_params.start_refine = 100;
+    opt_params.stop_refine = 800;
+    opt_params.refine_every = 100;
+    opt_params.max_cap = 16;
+    strategy.initialize(opt_params);
+
+    constexpr int kIter = 200;
+    ASSERT_TRUE(strategy.is_refining(kIter));
+    lfs::training::RenderOutput render_output;
+    strategy.pre_step(kIter, render_output);
+    EXPECT_NO_THROW(strategy.post_backward(kIter, render_output));
+    EXPECT_EQ(splat_data.size(), 8u);
+}
+
 TEST_F(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {
     auto splat_data = create_test_splat_data(12);
     MCMC strategy(splat_data);

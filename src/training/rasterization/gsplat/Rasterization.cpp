@@ -4,6 +4,7 @@
 
 #include "Rasterization.h"
 #include "Common.h"
+#include "GeometryFeatures.h"
 #include "Ops.h"
 
 #include <cassert>
@@ -258,6 +259,8 @@ namespace gsplat_lfs {
             channels = 1; // Depth only
         } else if (render_mode == 3 || render_mode == 4) {
             channels = 4; // RGB + Depth
+        } else if (render_mode == 5) {
+            channels = 8;
         }
 
         // Use scales directly (scaling_modifier should be applied by caller if needed)
@@ -284,7 +287,7 @@ namespace gsplat_lfs {
         const auto whole = intersect({});
 
         // Step 3: Compute viewing directions and evaluate SH
-        if (render_mode == 0 || render_mode == 3 || render_mode == 4) {
+        if (render_mode == 0 || render_mode >= 3) {
             if (sh_degree > 0) {
                 compute_view_dirs(means, viewmats0, C, N, result.dirs, stream);
             }
@@ -292,11 +295,10 @@ namespace gsplat_lfs {
                 sh_degree, sh_layout_degree, sh_degree > 0 ? result.dirs : nullptr,
                 sh0, shN, nullptr, static_cast<int64_t>(C) * N,
                 result.colors, channels, stream);
-            if (channels == 4u) {
-                rasterization_pack_depth_colors(result.depths, result.colors, C * N, channels, stream);
-            }
-        } else {
-            rasterization_pack_depth_colors(result.depths, result.colors, C * N, channels, stream);
+        }
+        if (channels != 3) {
+            geometry_features_fwd(means, quats, scales, viewmats0, result.colors,
+                                  N, C, channels, camera_model, stream);
         }
 
         const float* render_backgrounds = (render_mode == 1 || render_mode == 2) ? nullptr : backgrounds;
@@ -417,6 +419,8 @@ namespace gsplat_lfs {
             channels = 1;
         } else if (render_mode == 3 || render_mode == 4) {
             channels = 4;
+        } else if (render_mode == 5) {
+            channels = 8;
         }
 
         const float* render_backgrounds = (render_mode == 1 || render_mode == 2) ? nullptr : backgrounds;
@@ -470,8 +474,13 @@ namespace gsplat_lfs {
             }
         }
 
+        if (channels != 3) {
+            geometry_features_bwd(means, quats, scales, viewmats0, v_colors, v_means, v_quats,
+                                  N, C, channels, camera_model, stream);
+        }
+
         // Backward through SH
-        if (render_mode == 0 || render_mode == 3 || render_mode == 4) {
+        if (render_mode == 0 || render_mode >= 3) {
             spherical_harmonics_swizzled_bwd(
                 K, sh_degree, sh_layout_degree,
                 dirs,

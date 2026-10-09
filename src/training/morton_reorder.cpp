@@ -385,7 +385,6 @@ namespace lfs::training::morton {
         lfs::core::Tensor::trim_memory_pool_if_reserved_unused_exceeds(
             MORTON_TRIM_UNUSED_THRESHOLD);
         result.applied = true;
-        LOG_INFO("Morton reordered {} Gaussians", n);
         return result;
     }
 

@@ -612,6 +612,11 @@ class Scene:
     def combined_model(self) -> SplatData | None:
         """Get the merged SplatData for all visible splats (None if empty)"""
 
+    def apply_crop_filter(self, mask: lichtfeld.Tensor) -> None:
+        """
+        Filter a combined-model GPU bool mask in place by enabled render crop boxes and ellipsoids. Scene selection is unchanged.
+        """
+
     def training_model(self) -> SplatData | None:
         """Get the SplatData used for training (None if unavailable)"""
 

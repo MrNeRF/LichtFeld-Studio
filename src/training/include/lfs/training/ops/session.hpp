@@ -23,7 +23,6 @@ namespace lfs::gpu_ops {
         void (*profile)(bool start);
         void (*resize_arena)(std::string_view boundary, bool release_all);
         void (*reset_arena)();
-        void (*dump_arena_statistics)();
         std::optional<ArenaMemoryInfo> (*arena_memory_info)();
         void (*log_arena_failure)(const char* context);
         uint32_t (*set_arena_timeout)(uint32_t timeout);

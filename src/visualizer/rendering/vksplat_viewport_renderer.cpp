@@ -1939,7 +1939,7 @@ namespace lfs::vis {
         stopLodStreaming("VkSplat renderer reset before LOD upload completed");
         if (context_ && context_->device() != VK_NULL_HANDLE) {
             const VkDevice device = context_->device();
-            const VkResult idle_result = vkDeviceWaitIdle(device);
+            const VkResult idle_result = lfs::rendering::vk_device_wait_idle_synced(device);
             if (idle_result != VK_SUCCESS) {
                 LOG_ERROR("Vulkan: {}",
                           formatVkCheckFailure(
@@ -3289,8 +3289,6 @@ namespace lfs::vis {
                 "vksplat.scratch.arena.grow bytes={}MiB generation={} (stable address)",
                 shared_scratch_.bytes >> 20,
                 shared_scratch_.generation);
-            LOG_INFO("VkSplat shared scratch arena grew to {} MiB (stable address)",
-                     shared_scratch_.bytes >> 20);
             return {};
         }
 
@@ -3342,9 +3340,6 @@ namespace lfs::vis {
             shared_scratch_.bytes >> 20,
             reserve_bytes >> 20,
             shared_scratch_.generation);
-        LOG_INFO("VkSplat shared scratch arena: {} MiB committed, {} MiB reserved (grows in place)",
-                 shared_scratch_.bytes >> 20,
-                 reserve_bytes >> 20);
         return {};
 
 #else
@@ -3400,8 +3395,6 @@ namespace lfs::vis {
             shared_scratch_.bytes >> 20,
             shared_scratch_.generation,
             shared_scratch_.imported_buffer.bound_chunks);
-        LOG_INFO("VkSplat shared scratch chunks bound after grow: {} MiB (no re-import)",
-                 shared_scratch_.bytes >> 20);
         return {};
 
 #else
@@ -4054,12 +4047,11 @@ namespace lfs::vis {
         const bool transform_indices_enabled = hasTransformIndices(request.scene.transform_indices, num_splats);
 
         // Compare/split view and hidden nodes of a consolidated model restrict which
-        // scene nodes may draw via request.scene.node_visibility_mask. The per-node
-        // node_mask buffer (indexed by transform_indices) carries emphasis and this
-        // culling in separate bits, so hiding a node keeps unselected nodes dimmed.
+        // scene nodes may draw via request.scene.node_visibility_mask. Without
+        // per-splat indices every splat belongs to node 0. The node_mask buffer
+        // carries emphasis and culling in separate bits.
         const auto& node_visibility_mask = request.scene.node_visibility_mask;
         const bool node_visibility_restricts =
-            transform_indices_enabled &&
             std::any_of(node_visibility_mask.begin(), node_visibility_mask.end(),
                         [](const bool visible) { return !visible; });
         const auto& emphasized_node_mask = request.overlay.emphasis.emphasized_node_mask;

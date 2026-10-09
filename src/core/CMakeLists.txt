@@ -227,7 +227,6 @@ set(CORE_SOURCES
         abi.cpp
         alloc_counter.cpp
         crash_handler.cpp
-        training_churn_metrics.cpp
         cuda_diagnostic_modes.cpp
         cuda_error.cpp
         cuda_error_typed.cpp
@@ -542,3 +541,8 @@ message(STATUS "  - Includes: tensor, core utilities, parameters, splat data")
 
 set_source_files_properties(tensor/backend/cuda/kernels/rad_page.cu PROPERTIES
     COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>")
+
+if(TARGET Vulkan::Vulkan)
+    target_sources(lfs_core PRIVATE vulkan_queue_sync.cpp)
+    target_link_libraries(lfs_core PRIVATE Vulkan::Vulkan)
+endif()

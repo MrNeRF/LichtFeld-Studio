@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 // Vulkan-owned texture export, native writes and Vulkan timeline consumption.
+#include "core/vulkan_queue_sync.hpp"
 #import <Metal/Metal.h>
 #include <array>
 #include <cstdio>
@@ -63,7 +64,7 @@ static void run() {
     VkDevice device;
     check(vkCreateDevice(physical, &device_info, nullptr, &device), "vkCreateDevice");
     VkQueue queue;
-    vkGetDeviceQueue(device, family, 0, &queue);
+    lfs::rendering::vk_get_device_queue_synced(device, family, 0, &queue);
     auto export_objects = reinterpret_cast<PFN_vkExportMetalObjectsEXT>(vkGetDeviceProcAddr(device, "vkExportMetalObjectsEXT"));
     if (!export_objects)
         throw std::runtime_error("Metal objects extension unavailable");
@@ -150,8 +151,8 @@ static void run() {
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &command;
-    check(vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE), "submit initialization");
-    check(vkQueueWaitIdle(queue), "initialize layout");
+    check(lfs::rendering::vk_queue_submit_synced(queue, 1, &submit, VK_NULL_HANDLE), "submit initialization");
+    check(lfs::rendering::vk_queue_wait_idle_synced(queue), "initialize layout");
     VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     buffer_info.size = 8 * 8 * 4 * sizeof(float);
     buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -216,7 +217,7 @@ static void run() {
     VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
     VkFence fence;
     check(vkCreateFence(device, &fence_info, nullptr, &fence), "fence");
-    check(vkQueueSubmit(queue, 1, &submit, fence), "submit interop readback");
+    check(lfs::rendering::vk_queue_submit_synced(queue, 1, &submit, fence), "submit interop readback");
     check(vkWaitForFences(device, 1, &fence, VK_TRUE, 5000000000ull), "Metal to Vulkan completion");
     void* bytes;
     check(vkMapMemory(device, storage, 0, sizeof(expected), 0, &bytes), "map output");
@@ -230,7 +231,7 @@ static void run() {
     vkFreeMemory(device, image_storage, nullptr);
     vkDestroySemaphore(device, semaphore, nullptr);
     vkDestroyCommandPool(device, pool, nullptr);
-    vkDestroyDevice(device, nullptr);
+    lfs::rendering::vk_destroy_device_synced(device, nullptr);
     vkDestroyInstance(instance, nullptr);
     std::puts("Vulkan-owned Metal texture and GPU timeline contract passed.");
 }

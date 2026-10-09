@@ -307,9 +307,7 @@ namespace lfs::vis::gui {
                 const auto& blob = font_blobs_.back();
                 Rml::Span<const Rml::byte> data{
                     reinterpret_cast<const Rml::byte*>(blob.data()), blob.size()};
-                if (Rml::LoadFontFace(data, specs[i].family, specs[i].style, specs[i].weight, specs[i].fallback)) {
-                    LOG_INFO("RmlUI: loaded font {}", loaded.path.string());
-                } else {
+                if (!Rml::LoadFontFace(data, specs[i].family, specs[i].style, specs[i].weight, specs[i].fallback)) {
                     LOG_WARN("RmlUI: failed to register {}", loaded.path.string());
                 }
             }
@@ -318,7 +316,6 @@ namespace lfs::vis::gui {
         }
 
         initialized_ = true;
-        LOG_INFO("RmlUI initialized");
         return true;
     }
 
@@ -376,7 +373,6 @@ namespace lfs::vis::gui {
                 reinterpret_cast<const Rml::byte*>(blob.data()), blob.size()};
             if (Rml::LoadFontFace(data, specs[i].family, Rml::Style::FontStyle::Normal,
                                   Rml::Style::FontWeight::Normal, true)) {
-                LOG_INFO("RmlUI: loaded CJK font {}", loaded.path.string());
                 any_loaded = true;
             } else {
                 LOG_WARN("RmlUI: failed to register {}", loaded.path.string());
@@ -510,8 +506,6 @@ namespace lfs::vis::gui {
         resize_deferring_ = false;
         frame_active_ = false;
         initialized_ = false;
-
-        LOG_INFO("RmlUI shut down");
     }
 
     void RmlUIManager::setDpRatio(float ratio) {

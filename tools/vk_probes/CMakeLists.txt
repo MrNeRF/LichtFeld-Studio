@@ -4,6 +4,7 @@ project(lfs_vk_probes LANGUAGES CXX)
 
 find_package(Vulkan REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+find_package(Threads REQUIRED)
 
 find_program(
     SLANGC
@@ -54,7 +55,8 @@ add_probe_shader(abi_probe)
 add_probe_shader(reduction_probe)
 add_custom_target(probe_shaders ALL DEPENDS ${PROBE_SHADER_OUTPUTS})
 
-add_executable(vk_probes probe_main.cpp)
+add_executable(vk_probes probe_main.cpp ../../src/core/vulkan_queue_sync.cpp)
+target_include_directories(vk_probes PRIVATE ../../src/core/include)
 add_dependencies(vk_probes probe_shaders)
 target_compile_features(vk_probes PRIVATE cxx_std_20)
 target_compile_definitions(
@@ -65,7 +67,7 @@ target_compile_definitions(
     PROBE_SLANGC="${SLANGC}"
     PROBE_SPIRV_VAL="$<IF:$<BOOL:${SPIRV_VAL}>,${SPIRV_VAL},not-found>")
 target_link_libraries(
-    vk_probes PRIVATE Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator)
+    vk_probes PRIVATE Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator Threads::Threads)
 target_compile_options(
     vk_probes PRIVATE -Wall -Wextra -Wpedantic -Werror
                       -Wno-missing-field-initializers)

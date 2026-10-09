@@ -317,10 +317,19 @@ protected:
 };
 
 namespace {
-    // CUDA/Vulkan identical-run controls varied by at most 4.177 bound / decoded-coordinate LSB
-    // (1/824 packed bytes): generic max 4.177/4.177, specialized max 1.027/1.027. Cross-path max
-    // was 4.177/4.177, within the generic same-path variation. The 5-bound-LSB and 5-coordinate-LSB
-    // tolerances below cover this codec variation.
+    float joint_adam_comparison_step(const float a_min, const float a_max,
+                                     const float b_min, const float b_max, const float qmax) {
+        if (!std::isfinite(a_min) || !std::isfinite(a_max) || !std::isfinite(b_min) || !std::isfinite(b_max))
+            throw std::runtime_error("Non-finite joint Adam bounds");
+        const float codec_step = std::max(std::abs(a_max - a_min), std::abs(b_max - b_min)) / qmax;
+        const float magnitude = std::max({std::abs(a_min), std::abs(a_max), std::abs(b_min), std::abs(b_max)});
+        // Narrow or constant codec ranges cannot resolve less than one stored float step.
+        const float float_step = std::nextafter(magnitude, std::numeric_limits<float>::infinity()) - magnitude;
+        return std::max(codec_step, float_step);
+    }
+
+    // Allow five comparison steps for reduction-order roundoff. Stored float spacing
+    // bounds the effective precision when a codec range is narrow or constant.
     void expect_joint_adam_state_equivalent(const AdamParamState& reference,
                                             const AdamParamState& optimized) {
         ASSERT_EQ(reference.joint_bits, optimized.joint_bits);
@@ -346,9 +355,9 @@ namespace {
         const float* ob = opt_bounds.ptr<float>();
         for (size_t i = 0; i < ref_bounds.numel(); ++i) {
             const size_t axis = i % 4;
-            const float range = axis < 2 ? rb[(i / 4) * 4 + 1] - rb[(i / 4) * 4]
-                                         : rb[(i / 4) * 4 + 3] - rb[(i / 4) * 4 + 2];
-            EXPECT_NEAR(rb[i], ob[i], std::max(5.0f * range / qmax, 1.0e-6f));
+            const size_t lo = (i / 4) * 4 + (axis < 2 ? 0 : 2);
+            const float step = joint_adam_comparison_step(rb[lo], rb[lo + 1], ob[lo], ob[lo + 1], qmax);
+            EXPECT_NEAR(rb[i], ob[i], std::max(5.0f * step, 1.0e-6f));
         }
 
         auto ref_packed = reference.exp_avg.to(Device::CPU);
@@ -372,8 +381,8 @@ namespace {
                 joint_adam::Codec8::us_to_g1g2(ru, rs, rm, rv);
                 joint_adam::Codec8::us_to_g1g2(ou, os, om, ov);
             }
-            const float du = std::max(rb[1] - rb[0], ob[1] - ob[0]) / qmax * 5.0f;
-            const float ds = std::max(rb[3] - rb[2], ob[3] - ob[2]) / qmax * 5.0f;
+            const float du = joint_adam_comparison_step(rb[0], rb[1], ob[0], ob[1], qmax) * 5.0f;
+            const float ds = joint_adam_comparison_step(rb[2], rb[3], ob[2], ob[3], qmax) * 5.0f;
             const float sqrt_v = std::max(std::sqrt(std::max(rv, 0.0f)),
                                           std::sqrt(std::max(ov, 0.0f)));
             const float delta_sqrt_v = (sqrt_v + joint_adam::kEps) * ds;
@@ -393,16 +402,6 @@ namespace {
         size_t different_packed_bytes = 0;
         size_t packed_bytes = 0;
     };
-
-    float joint_adam_comparison_step(float amin, float amax, float bmin, float bmax, float qmax) {
-        if (!std::isfinite(amin) || !std::isfinite(amax) || !std::isfinite(bmin) || !std::isfinite(bmax))
-            throw std::runtime_error("Non-finite joint Adam bounds");
-        const float magnitude = std::max({std::abs(amin), std::abs(amax), std::abs(bmin), std::abs(bmax)});
-        const float float_step = std::nextafter(magnitude, std::numeric_limits<float>::infinity()) - magnitude;
-        // Codec coordinates and bounds are floats. A nearly constant interval
-        // cannot resolve its nominal 16-bit code step below one float ULP.
-        return std::max(std::max(std::abs(amax - amin), std::abs(bmax - bmin)) / qmax, float_step);
-    }
 
     JointAdamStateDifference measure_joint_adam_state_difference(const AdamOptimizer& a,
                                                                  const AdamOptimizer& b) {
@@ -475,6 +474,31 @@ namespace {
     }
 } // namespace
 
+TEST(JointAdamComparisonTest, WideRangesRetainCodecStep) {
+    for (const float qmax : {255.0f, 65535.0f}) {
+        EXPECT_EQ(joint_adam_comparison_step(-2.0f, 3.0f, -1.0f, 4.0f, qmax), 5.0f / qmax);
+    }
+}
+
+TEST(JointAdamComparisonTest, NearlyConstantRangesUseFloatSpacing) {
+    const float first = 1.0f;
+    const float second = std::nextafter(first, 2.0f);
+    const float third = std::nextafter(second, 2.0f);
+    for (const float qmax : {255.0f, 65535.0f}) {
+        const float step = joint_adam_comparison_step(first, second, second, third, qmax);
+        EXPECT_EQ(step, second - first);
+        EXPECT_LE((third - first) / step, 2.0f);
+    }
+}
+
+TEST(JointAdamComparisonTest, ConstantRangesDoNotHideDrift) {
+    for (const float qmax : {255.0f, 65535.0f}) {
+        const float step = joint_adam_comparison_step(1.0f, 1.0f, 2.0f, 2.0f, qmax);
+        ASSERT_GT(step, 0.0f);
+        EXPECT_GT(1.0f / step, 5.0f);
+    }
+}
+
 // Forward kernels
 TEST_F(FastGSKernelTest, Forward_Preprocess) {
     auto r = forward();
@@ -487,26 +511,28 @@ TEST_F(FastGSKernelTest, OptimizerStateRunToRunDeterminismControl) {
         std::unique_ptr<SplatData> model;
         std::unique_ptr<AdamOptimizer> optimizer;
     };
-    // Exercise distinct visible primitives independently of the fixture RNG.
-    // First-step normalized coordinates can still be nearly constant; the
-    // comparison accounts for the precision of their float representation.
-    const size_t test_n = 8;
-    std::vector<float> means, sh0, scaling, rotation, opacity, rest;
-    for (size_t i = 0; i < test_n; ++i) {
-        const float t = static_cast<float>(i);
-        means.insert(means.end(), {-0.4f + 0.13f * t, -0.3f + 0.11f * t, 1.0f + 0.1f * t});
-        sh0.insert(sh0.end(), {0.1f + 0.03f * t, 0.2f - 0.02f * t, 0.3f + 0.01f * t});
-        scaling.insert(scaling.end(), {-2.0f - 0.1f * t, -2.2f + 0.03f * t, -2.4f + 0.02f * t});
-        rotation.insert(rotation.end(), {0.93f, 0.09f + 0.01f * t, -0.18f, 0.28f});
-        opacity.push_back(0.3f + 0.1f * t);
-        rest.insert(rest.end(), 9, 0.01f * (t + 1.0f));
+    const size_t test_n = 1;
+    // Keep this control independent of other tests' random state. A spatially varying
+    // image gradient avoids cancellation of the position gradient under a uniform image sum.
+    auto test_means = Tensor::from_vector({0.17f, -0.21f, 1.5f}, {test_n, 3}, Device::GPU);
+    auto test_sh0 = Tensor::from_vector({0.1f, 0.3f, 0.5f}, {test_n, 1, 3}, Device::GPU);
+    auto test_scaling = Tensor::from_vector({-2.0f, -2.3f, -2.6f}, {test_n, 3}, Device::GPU);
+    auto test_rotation = Tensor::from_vector({1.0f, 0.2f, -0.3f, 0.1f}, {test_n, 4}, Device::GPU);
+    test_rotation = test_rotation / test_rotation.pow(2.0f).sum(-1, true).sqrt();
+    auto test_opacity = Tensor::full({test_n}, 0.2f, Device::GPU);
+    auto sh_rest = Tensor::full({test_n, 3, 3}, 0.01f, Device::GPU);
+    std::vector<float> gradient(3 * H * W);
+    for (int channel = 0; channel < 3; ++channel) {
+        for (int y = 0; y < H; ++y) {
+            for (int x = 0; x < W; ++x) {
+                const float u = static_cast<float>(x) / W;
+                const float v = static_cast<float>(y) / H;
+                gradient[(channel * H + y) * W + x] =
+                    0.25f + 0.1f * channel + u * u + 0.37f * u * v + 0.5f * v * v;
+            }
+        }
     }
-    auto test_means = Tensor::from_vector(means, {test_n, size_t{3}}, Device::GPU);
-    auto test_sh0 = Tensor::from_vector(sh0, {test_n, size_t{1}, size_t{3}}, Device::GPU);
-    auto test_scaling = Tensor::from_vector(scaling, {test_n, size_t{3}}, Device::GPU);
-    auto test_rotation = Tensor::from_vector(rotation, {test_n, size_t{4}}, Device::GPU);
-    auto test_opacity = Tensor::from_vector(opacity, {test_n}, Device::GPU);
-    auto sh_rest = Tensor::from_vector(rest, {test_n, size_t{3}, size_t{3}}, Device::GPU);
+    const auto grad = Tensor::from_vector(gradient, {3, H, W}, Device::GPU);
     auto run = [&](bool generic) {
         Run result;
         result.model = std::make_unique<SplatData>(1, test_means.clone(), test_sh0.clone(), sh_rest.clone(),
@@ -519,7 +545,6 @@ TEST_F(FastGSKernelTest, OptimizerStateRunToRunDeterminismControl) {
         auto forward_result = fast_rasterize_forward(*camera_, *result.model, bg_, 0, 0, 0, 0, false);
         if (!forward_result)
             throw std::runtime_error("FastGS forward failed in optimizer-state determinism control");
-        const auto grad = Tensor::ones_like(forward_result->first.image);
         fast_lfs::rasterization::set_force_generic_preprocess_for_testing(generic);
         fast_rasterize_backward(forward_result->second, grad, *result.model, *result.optimizer,
                                 {}, {}, DensificationType::None, 1, {});

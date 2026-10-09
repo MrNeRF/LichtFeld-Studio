@@ -211,7 +211,11 @@ namespace lfs::training {
         const int64_t budget = _params->max_cap;
         this->_initial_points = _splat_data->size();
 
-        this->_total_steps = static_cast<int>((_params->stop_refine - _params->start_refine) / _params->refine_every) + 2;
+        // Sparsity clamps stop_refine to short runs, which can end the window before it starts.
+        const size_t refine_window = _params->stop_refine > _params->start_refine
+                                         ? _params->stop_refine - _params->start_refine
+                                         : 0;
+        this->_total_steps = static_cast<int>(refine_window / _params->refine_every) + 2;
 
         std::vector<int64_t> values;
         values.reserve(_total_steps);
@@ -653,10 +657,10 @@ namespace lfs::training {
         }
 
         if (is_refining(iter)) {
-            assert(_precompute_valid);
-
             _pending_failure_snapshot = {};
-            densify_with_score(_precomputed_scores, _error_score_max, get_current_budget());
+            // No edge scores reach the strategy while PPISP distillation freezes the Gaussians.
+            if (_precompute_valid)
+                densify_with_score(_precomputed_scores, _error_score_max, get_current_budget());
 
             opacity_prune(iter);
 

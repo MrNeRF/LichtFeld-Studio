@@ -4,6 +4,7 @@
 
 #include "vulkan_context.hpp"
 #include "core/vulkan_helpers.hpp"
+#include "core/vulkan_queue_sync.hpp"
 
 #include "core/crash_handler.hpp"
 #include "rendering/scene_upscaler_plugin.hpp"
@@ -599,10 +600,6 @@ namespace lfs::vis {
             timed("vulkan_init.createCommandPool", [&] { return createCommandPool(); }) &&
             timed("vulkan_init.createCommandBuffers", [&] { return createCommandBuffers(); }) &&
             timed("vulkan_init.createSyncObjects", [&] { return createSyncObjects(); });
-        LOG_INFO("Vulkan diagnostics: validation_layers={}, debug_utils={}, validation_errors_fatal={}",
-                 validation_enabled_ ? "active" : "inactive",
-                 debugObjectNamingEnabled() ? "active" : "inactive",
-                 validation_errors_fatal_ ? "active" : "inactive");
         return initialized;
     }
 
@@ -630,11 +627,10 @@ namespace lfs::vis {
     void VulkanContext::shutdown() {
         // AMB-B3: latch before any device wait so concurrent UI waits observe Shutdown.
         context_shutdown_started_.store(true, std::memory_order_release);
-        lfs::rendering::set_graphics_queue_external_sync(nullptr, VK_NULL_HANDLE, VK_NULL_HANDLE);
         if (device_ != VK_NULL_HANDLE) {
             // Shutdown is the one place where a whole-device wait is intentional:
             // all swapchain, UI, and external interop resources are about to be destroyed.
-            const VkResult idle_result = vkDeviceWaitIdle(device_);
+            const VkResult idle_result = lfs::rendering::vk_device_wait_idle_synced(device_);
             if (idle_result != VK_SUCCESS) {
                 LOG_ERROR("Vulkan shutdown could not retire device work before destruction (device={:#x}, pending_immediate_submits={}, frame_active={}, frame_slot={}, result={}({}))",
                           vkHandleValue(device_),
@@ -725,7 +721,7 @@ namespace lfs::vis {
         if (device_ != VK_NULL_HANDLE) {
             debug_name_writer_.reset();
             tensor_interop_.reset();
-            vkDestroyDevice(device_, nullptr);
+            lfs::rendering::vk_destroy_device_synced(device_, nullptr);
             device_ = VK_NULL_HANDLE;
         }
         if (surface_ != VK_NULL_HANDLE && instance_ != VK_NULL_HANDLE) {
@@ -2070,7 +2066,7 @@ namespace lfs::vis {
         if (device_ == VK_NULL_HANDLE) {
             return true;
         }
-        const VkResult result = vkDeviceWaitIdle(device_);
+        const VkResult result = lfs::rendering::vk_device_wait_idle_synced(device_);
         if (result != VK_SUCCESS) {
             return setVkFailure(std::format("vkDeviceWaitIdle failed: {}", vkResultToString(result)), result);
         }
@@ -2971,12 +2967,12 @@ namespace lfs::vis {
             }
         }
 
-        vkGetDeviceQueue(device_, graphics_queue_family_, 0, &graphics_queue_);
-        vkGetDeviceQueue(device_, present_queue_family_, 0, &present_queue_);
+        lfs::rendering::vk_get_device_queue_synced(device_, graphics_queue_family_, 0, &graphics_queue_);
+        lfs::rendering::vk_get_device_queue_synced(device_, present_queue_family_, 0, &present_queue_);
         tensor_backend_device_ = {};
         if (tensor_queue_family.has_value()) {
             tensor_backend_device_.queue_family = *tensor_queue_family;
-            vkGetDeviceQueue(device_, *tensor_queue_family, tensor_queue_index, &tensor_backend_device_.queue);
+            lfs::rendering::vk_get_device_queue_synced(device_, *tensor_queue_family, tensor_queue_index, &tensor_backend_device_.queue);
             tensor_backend_device_.shader_atomic_float =
                 atomic_float_features.shaderBufferFloat32AtomicAdd == VK_TRUE;
             tensor_backend_device_.shader_float64 = features2.features.shaderFloat64 == VK_TRUE;
@@ -2996,9 +2992,7 @@ namespace lfs::vis {
                  tensor_backend_device_.complete ? "available" : "unavailable",
                  tensor_backend_device_.queue_family);
         if (has_dedicated_compute_queue_) {
-            vkGetDeviceQueue(device_, compute_queue_family_, 0, &compute_queue_);
-            LOG_INFO("Vulkan: dedicated async-compute queue family {} (graphics family {})",
-                     compute_queue_family_, graphics_queue_family_);
+            lfs::rendering::vk_get_device_queue_synced(device_, compute_queue_family_, 0, &compute_queue_);
         } else {
             // Alias graphics so callers can submit unconditionally on computeQueue().
             compute_queue_ = graphics_queue_;
@@ -3006,10 +3000,7 @@ namespace lfs::vis {
                      graphics_queue_family_);
         }
         if (has_dedicated_transfer_queue_) {
-            vkGetDeviceQueue(device_, transfer_queue_family_, 0, &transfer_queue_);
-            LOG_INFO("Vulkan: dedicated transfer queue family {} (graphics family {})",
-                     transfer_queue_family_,
-                     graphics_queue_family_);
+            lfs::rendering::vk_get_device_queue_synced(device_, transfer_queue_family_, 0, &transfer_queue_);
         } else {
             transfer_queue_ = VK_NULL_HANDLE;
             LOG_INFO("Vulkan: no dedicated transfer family; image readbacks use graphics family {}",
@@ -3030,8 +3021,6 @@ namespace lfs::vis {
         external_memory_dedicated_allocation_enabled_ = enable_dedicated_allocation;
         sparse_binding_enabled_ = features2.features.sparseBinding == VK_TRUE;
         buffer_device_address_enabled_ = features12.bufferDeviceAddress == VK_TRUE;
-        lfs::rendering::set_graphics_queue_external_sync(
-            &graphics_queue_mutex_, graphics_queue_, present_queue_, compute_queue_);
 
         VkPhysicalDeviceMaintenance3Properties maint3{};
         maint3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES;
@@ -3043,13 +3032,6 @@ namespace lfs::vis {
             lfs::core::set_shareable_device_allocation_limit(
                 static_cast<std::size_t>(maint3.maxMemoryAllocationSize));
         }
-        LOG_INFO("Vulkan sparseBinding: feature={} graphics_queue_sparse={} enabled={} "
-                 "bufferDeviceAddress={} maxMemoryAllocationSize={:#x}",
-                 sparse_binding_supported,
-                 graphics_queue_sparse,
-                 sparse_binding_enabled_,
-                 buffer_device_address_enabled_,
-                 static_cast<unsigned long long>(maint3.maxMemoryAllocationSize));
         swapchain_maintenance1_enabled_ = enable_swapchain_maintenance1;
         has_push_descriptor_ = enable_push_descriptor;
         has_conditional_rendering_ = enable_conditional_rendering;
@@ -3071,24 +3053,6 @@ namespace lfs::vis {
         if (require_external_interop && !external_semaphore_interop_enabled_) {
             return fail("Vulkan external timeline-semaphore interop is required (KHR_external_semaphore + platform variant); device is missing the extension(s)");
         }
-        if (external_memory_interop_enabled_) {
-            LOG_INFO("Vulkan external memory interop enabled{}",
-                     external_memory_dedicated_allocation_enabled_ ? " with dedicated allocations" : "");
-            if (lfs::core::shareable_allocation_limited()) {
-                LOG_INFO("Vulkan external memory interop shareable ceiling: {} bytes ({})",
-                         lfs::core::max_shareable_allocation_bytes(),
-                         lfs::core::shareable_allocation_limit_from_env() ? "env override"
-                                                                          : "platform default");
-            }
-        }
-        if (external_semaphore_interop_enabled_)
-            LOG_INFO("Vulkan external timeline semaphore interop enabled");
-        LOG_INFO("Vulkan optional features: push_descriptor={} host_image_copy={} swapchain_maintenance1={} fill_mode_non_solid={} wide_lines={}",
-                 has_push_descriptor_,
-                 has_host_image_copy_,
-                 swapchain_maintenance1_enabled_,
-                 has_fill_mode_non_solid_,
-                 has_wide_lines_);
         return true;
     }
 
@@ -3624,8 +3588,8 @@ namespace lfs::vis {
         // exporter's handle. A stale handle must assert instead of being hidden
         // by the VUID-01742 suppression below.
         {
-            struct stat st_src {};
-            struct stat st_dup {};
+            struct stat st_src{};
+            struct stat st_dup{};
             const int st_src_rc = ::fstat(handle, &st_src);
             const int st_dup_rc = ::fstat(dup_fd, &st_dup);
             int kcmp_rc = 0;
@@ -4643,25 +4607,14 @@ namespace lfs::vis {
         swapchain_extent_fixed_to_surface_ = extent_fixed_to_surface;
         swapchain_present_scaling_enabled_ = use_present_scaling;
         has_hdr_ = surface_format.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-        if (old_swapchain == VK_NULL_HANDLE) {
-            LOG_INFO("Vulkan swapchain: {} images, extent {}x{}, format {}, color space {}{}{}",
-                     image_count,
-                     extent.width,
-                     extent.height,
-                     vkFormatToString(surface_format.format),
-                     vkColorSpaceToString(surface_format.colorSpace),
-                     has_hdr_ ? " (HDR-capable)" : "",
-                     use_present_scaling ? " (one-to-one present scaling)" : "");
-        } else {
-            LOG_DEBUG("Vulkan swapchain: {} images, extent {}x{}, format {}, color space {}{}{}",
-                      image_count,
-                      extent.width,
-                      extent.height,
-                      vkFormatToString(surface_format.format),
-                      vkColorSpaceToString(surface_format.colorSpace),
-                      has_hdr_ ? " (HDR-capable)" : "",
-                      use_present_scaling ? " (one-to-one present scaling)" : "");
-        }
+        LOG_DEBUG("Vulkan swapchain: {} images, extent {}x{}, format {}, color space {}{}{}",
+                  image_count,
+                  extent.width,
+                  extent.height,
+                  vkFormatToString(surface_format.format),
+                  vkColorSpaceToString(surface_format.colorSpace),
+                  has_hdr_ ? " (HDR-capable)" : "",
+                  use_present_scaling ? " (one-to-one present scaling)" : "");
 
         // One image-available semaphore per swapchain image (NOT per frame slot). The
         // active index is captured in beginFrame and held until endFrame's submit waits
@@ -5048,11 +5001,6 @@ namespace lfs::vis {
         setDebugObjectName(VK_OBJECT_TYPE_PIPELINE_CACHE,
                            pipeline_cache_,
                            "lichtfeld.pipeline_cache");
-        if (!cache_data.empty()) {
-            LOG_INFO("Loaded Vulkan pipeline cache: {} ({} bytes)",
-                     lfs::core::path_to_utf8(*path),
-                     cache_data.size());
-        }
         return true;
     }
 
@@ -5101,9 +5049,6 @@ namespace lfs::vis {
                             }
                             if (!rename_ec) {
                                 saved_pipeline_cache_hash_ = cache_hash;
-                                LOG_INFO("Saved Vulkan pipeline cache: {} ({} bytes)",
-                                         lfs::core::path_to_utf8(*path),
-                                         cache_data.size());
                             }
                         }
                     }
@@ -5296,7 +5241,7 @@ namespace lfs::vis {
         {
             LOG_TIMER_THRESHOLD("frame_pacing.vulkan_recreateSwapchain.device_wait_idle", 1.0);
             const auto wait_start = std::chrono::steady_clock::now();
-            const VkResult idle_result = vkDeviceWaitIdle(device_);
+            const VkResult idle_result = lfs::rendering::vk_device_wait_idle_synced(device_);
             LOG_DEBUG("Vulkan recreateSwapchain deviceWaitIdle result={} elapsed_ms={:.1f}",
                       vkResultToString(idle_result),
                       elapsedMs(wait_start));

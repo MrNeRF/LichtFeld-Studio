@@ -76,19 +76,21 @@ namespace lfs::training {
             uint64_t image, alpha, last_ids, depth, depths;
             uint32_t count, width, height, tiles_x, tiles_y, mode;
             uint64_t control;
+            uint64_t normal, rays;
         };
         static_assert(sizeof(SetupParams) == 80 && offsetof(SetupParams, fx) == 40);
         static_assert(sizeof(ProjectParams) == 144 && offsetof(ProjectParams, count) == 112);
         static_assert(sizeof(BinParams) == 88 && offsetof(BinParams, count) == 64);
-        static_assert(sizeof(RasterParams) == 152 && offsetof(RasterParams, count) == 120);
+        static_assert(sizeof(RasterParams) == 168 && offsetof(RasterParams, count) == 120);
         static_assert(sizeof(ScanParams) == 32 && offsetof(ScanParams, count) == 24);
         struct BackParams {
             uint64_t camera, means, scales, quats, opacities, colors, bg_color, bg_image, tile_offsets, gaussian_ids;
             uint64_t alpha, last_ids, v_image, v_alpha, grads, densification, error_map, edge_map, edge_scores;
             uint64_t v_depth, depths, rendered_depth;
             uint32_t count, width, height, tiles_x, tiles_y, edge_factor, mode;
+            uint64_t v_normal;
         };
-        static_assert(sizeof(BackParams) == 208 && offsetof(BackParams, count) == 176);
+        static_assert(sizeof(BackParams) == 216 && offsetof(BackParams, count) == 176);
         template <class P>
         void launch_backward(uint32_t stage, const P& p, std::initializer_list<const Tensor*> tensors, uint32_t groups) {
             std::vector<mk::StorageRef> refs;
@@ -103,6 +105,7 @@ namespace lfs::training {
             uint64_t camera, means, scales, opacities, grads, radii, means2d;
             uint64_t means_grad, scaling_grad, rotation_grad, opacity_grad, sh0_grad, sh_rest_grad, grad_norms, shares;
             uint32_t count, degree, layout_rest, width, height;
+            float flatten_weight;
         };
 
         static_assert(sizeof(AccumulateParams) == 144 && offsetof(AccumulateParams, count) == 120);
@@ -331,8 +334,19 @@ namespace lfs::training {
             const auto plane = [&](const size_t channels) {
                 return core::TensorShape({channels, static_cast<size_t>(f.height), static_cast<size_t>(f.width)});
             };
-            const bool rgb = params.render_mode == ops::GsplatRenderMode::RGB || params.render_mode == ops::GsplatRenderMode::RGB_D || params.render_mode == ops::GsplatRenderMode::RGB_ED;
+            const bool rgb = params.render_mode == ops::GsplatRenderMode::RGB || params.render_mode == ops::GsplatRenderMode::RGB_D || params.render_mode == ops::GsplatRenderMode::RGB_ED || params.render_mode == ops::GsplatRenderMode::RGB_D_N;
             const Tensor image = rgb ? reuse(state.image, plane(3), DataType::Float32) : Tensor{};
+            const bool geometry = params.render_mode == ops::GsplatRenderMode::RGB_D_N;
+            const Tensor normal = geometry ? reuse(state.normal, plane(3), DataType::Float32) : Tensor{};
+            saved.camera_rays = geometry ? reuse(state.camera_rays, {size_t(f.height), size_t(f.width), size_t(3)}, DataType::Float32) : Tensor{};
+            if (geometry) {
+                RasterParams rays{};
+                rays.camera = mk::address(f.camera);
+                rays.width = f.width;
+                rays.height = f.height;
+                rays.rays = mk::address(saved.camera_rays);
+                launch_items(8, rays, {&f.camera, &saved.camera_rays}, size_t(f.width) * f.height);
+            }
             const Tensor depth = params.render_mode != ops::GsplatRenderMode::RGB ? reuse(state.depth, plane(1), DataType::Float32) : Tensor{};
             f.alpha = reuse(state.alpha, plane(1), DataType::Float32);
             f.last_ids = reuse(state.last_ids, plane(1), DataType::Int32);
@@ -365,6 +379,8 @@ namespace lfs::training {
                     // As CUDA: an empty intersection list clears the outputs, background included.
                     if (image.is_valid())
                         state.image.zero_();
+                    if (normal.is_valid())
+                        state.normal.zero_();
                     if (depth.is_valid())
                         state.depth.zero_();
                     f.alpha.zero_();
@@ -393,10 +409,12 @@ namespace lfs::training {
                         .tiles_y = tiles_y,
                         .mode = static_cast<uint32_t>(params.render_mode),
                         .control = control ? mk::address(*control) : 0,
+                        .normal = mk::address(normal),
+                        .rays = 0,
                     };
                     launch(6, raster,
                            {&f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &f.colors, &f.bg_color,
-                            &f.bg_image, &f.tile_offsets, &f.gaussian_ids, &image, &depth, &f.depths, &f.alpha, &f.last_ids},
+                            &f.bg_image, &f.tile_offsets, &f.gaussian_ids, &image, &depth, &normal, &f.depths, &f.alpha, &f.last_ids},
                            std::min(tiles, core::internal::acquire_vulkan_context()->caps().max_workgroup_count[0]), control, 20);
                 }
             };
@@ -437,7 +455,7 @@ namespace lfs::training {
             output.image = image;
             output.alpha = f.alpha;
             output.depth = depth;
-            output.normal = {};
+            output.normal = normal;
             state.frame = std::move(f);
             state.live = true;
             return {ops::RasterResult::Code::Success, true, {}};
@@ -460,6 +478,7 @@ namespace lfs::training {
             const auto plane = [&](const size_t channels) {
                 return core::TensorShape({channels, static_cast<size_t>(f.height), static_cast<size_t>(f.width)});
             };
+            const Tensor v_normal = gradients.normal.is_valid() ? float_input(gradients.normal, pixels * 3, "normal gradient") : Tensor{};
             Tensor v_image = Tensor::zeros(plane(3), Device::GPU, DataType::Float32), v_depth;
             if (grad_image.is_valid() && grad_image.numel()) {
                 if (grad_image.numel() == 3 * pixels)
@@ -473,6 +492,8 @@ namespace lfs::training {
                     v_depth = float_input(grad_image, pixels, "depth gradient");
                 }
             }
+            if (gradients.depth.is_valid())
+                v_depth = float_input(gradients.depth, pixels, "depth gradient");
             const Tensor v_alpha = grad_alpha.is_valid() && grad_alpha.numel() > 0
                                        ? float_input(grad_alpha, pixels, "alpha gradient")
                                        : Tensor::zeros(plane(1), Device::GPU, DataType::Float32);
@@ -535,12 +556,13 @@ namespace lfs::training {
                     .tiles_y = tiles_y,
                     .edge_factor = f.mode == ops::GsplatRenderMode::RGB ? 32u : 1u,
                     .mode = static_cast<uint32_t>(f.mode),
+                    .v_normal = mk::address(v_normal),
                 };
                 // Two pixels per thread.
                 launch_backward(0, raster,
                                 {&f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &f.colors, &f.bg_color,
                                  &f.bg_image, &f.tile_offsets, &f.gaussian_ids, &f.alpha, &f.last_ids, &v_image,
-                                 &v_alpha, &grads, &densification, &errors, &edges, &edge_scores, &v_depth, &f.depths, &state.depth},
+                                 &v_alpha, &grads, &densification, &errors, &edges, &edge_scores, &v_depth, &v_normal, &f.depths, &state.depth},
                                 std::min(tiles_x * tiles_y, core::internal::acquire_vulkan_context()->caps().max_workgroup_count[0]));
             }
 
@@ -583,6 +605,7 @@ namespace lfs::training {
                 .layout_rest = f.layout_rest,
                 .width = f.width,
                 .height = f.height,
+                .flatten_weight = gradients.flatten_weight,
             };
             launch_backward(1, accumulate,
                             {&f.camera, &f.means, &f.scales, &f.opacities, &grads, &f.radii, &f.means2d, &means_grad,
@@ -640,6 +663,9 @@ namespace lfs::training {
             state.alpha = {};
             state.last_ids = {};
             state.depth = {};
+            state.normal = {};
+            state.camera_rays = {};
+            saved.camera_rays = {};
             state.radii = {};
             state.means2d = {};
             state.colors = {};

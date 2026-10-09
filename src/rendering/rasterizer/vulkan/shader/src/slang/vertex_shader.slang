@@ -378,7 +378,7 @@ SplatActiveState compute_splat_active_state(
     }
 
     float4 visibility_flags = overlay_params[OVERLAY_PARAM_VISIBILITY_FLAGS];
-    if (active && overlay_enabled(visibility_flags.x) && node_data_enabled && node_idx >= 0 && node_idx < node_count) {
+    if (active && overlay_enabled(visibility_flags.x) && node_idx >= 0 && node_idx < node_count) {
         if ((read_byte(node_mask, uint(node_idx)) & 2u) == 0u) {
             active = false;
         }

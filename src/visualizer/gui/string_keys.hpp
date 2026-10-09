@@ -917,6 +917,8 @@ namespace lichtfeld::Strings {
         inline constexpr const char* TASK_ENCODE_ERROR = "runtime.task_encode_error";
         inline constexpr const char* TASK_FINALIZING = "runtime.task_finalizing";
         inline constexpr const char* TASK_FAILED_DETAIL = "runtime.task_failed_detail";
+        inline constexpr const char* VIDEO_EXPORT_SEQUENCE_CHANGED = "runtime.video_export_sequence_changed";
+        inline constexpr const char* VIDEO_EXPORT_SEQUENCE_FRAME_TIMEOUT = "runtime.video_export_sequence_frame_timeout";
         inline constexpr const char* EXPORT_CANCELLED = "runtime.export_cancelled";
         inline constexpr const char* NO_SPLAT_DATA = "runtime.no_splat_data";
         inline constexpr const char* EXPORT_STREAMED_LOD = "runtime.export_streamed_lod";

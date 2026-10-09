@@ -94,7 +94,7 @@ bool project_query(uint id, SelectionParameters parameters, bool ring,
     if (id < parameters.scene.w && p.deleted[id] != 0u)
         return false;
     int object = parameters.scene.y != 0u ? p.indices[id] : 0;
-    if (parameters.scene.y != 0u && parameters.scene.z != 0u && (object < 0 || uint(object) >= parameters.scene.z || p.visibility[object] == 0u))
+    if (parameters.scene.z != 0u && (object < 0 || uint(object) >= parameters.scene.z || p.visibility[object] == 0u))
         return false;
     Matrix4 model;
     model.c0 = float4(1, 0, 0, 0);

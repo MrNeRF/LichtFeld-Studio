@@ -237,7 +237,7 @@ static bool gsplat_camera_to_image(GsplatCamera cam, const float3 p, out float2 
                        (elevation / kGsplatPi + 0.5f) * float(cam.resolution.y));
         return true;
     }
-    if (p.z <= 0.0f)
+    if (p.z <= 0.0f && (cam.model == kGsplatPinhole || (p.x == 0.0f && p.y == 0.0f)))
         return false;
     if (cam.model == kGsplatPinhole) {
         const float2 uv = p.xy / p.z;
@@ -274,7 +274,7 @@ static bool gsplat_camera_to_image(GsplatCamera cam, const float3 p, out float2 
         const float yd = radial_scale * p.y + prism.y;
         image = cam.focal * float2(xd, yd) + cam.principal;
     }
-    return gsplat_in_bounds(image, cam.resolution) && theta <= cam.max_angle;
+    return gsplat_in_bounds(image, cam.resolution) && theta_full < cam.max_angle;
 }
 
 // Newton undistortion of the OpenCV pinhole model, at most 5 iterations.
@@ -438,7 +438,7 @@ void gsplat_camera_setup(GsplatSetupParams p) {
             }
             max_angle = (!converged || x <= 0.0f) ? 3.402823466e38f : x;
         }
-        cam.max_angle = min(max_angle, max(max_radius / p.fx, max_radius / p.fy));
+        cam.max_angle = min(min(max_angle, kGsplatPi), max(max_radius / p.fx, max_radius / p.fy));
         cam.backward_slope = cam.max_angle / max(res.x / 2.0f / p.fx, res.y / 2.0f / p.fy);
     }
     gsplat_camera_store(p.camera, cam);
@@ -622,7 +622,7 @@ void gsplat_project(GsplatProjectParams p, uint g) {
     const float3 mean = gsplat_load3(p.means, g);
     const float3x3 view_R = cam.R;
     const float3 mean_c = mul(mean, view_R) + cam.t;
-    if ((mean_c.z < kGsplatNear && cam.model != kGsplatEquirect) || mean_c.z > kGsplatFar)
+    if ((cam.model==kGsplatPinhole?mean_c.z:length(mean_c)) < kGsplatNear || (cam.model==kGsplatPinhole?mean_c.z:length(mean_c)) > kGsplatFar)
         return;
 
     const float3 scale = exp(gsplat_load3(p.scales, g));
@@ -689,7 +689,7 @@ void gsplat_project(GsplatProjectParams p, uint g) {
     p.radii[g * 2u + 1u] = radius.y;
     p.means2d[g * 2u] = image_mean.x;
     p.means2d[g * 2u + 1u] = image_mean.y;
-    p.depth_keys[g] = asuint(mean_c.z);
+    p.depth_keys[g] = asuint(cam.model == kGsplatPinhole ? mean_c.z : length(mean_c));
     if (radius.x > 0 && radius.y > 0) {
         const GsplatTileRect rect = gsplat_tile_rect(image_mean, radius, p.tiles_x, p.tiles_y);
         p.tile_counts[g] = int((rect.y1 - rect.y0) * (rect.x1 - rect.x0));
@@ -706,4 +706,13 @@ void gsplat_project(GsplatProjectParams p, uint g) {
         }
         p.colors[g * 3u + c] = color + 0.5f;
     }
+}
+
+// The smallest scale defines the surface normal; orient it toward the camera.
+uint gsplat_normal_axis(float3 scales) { return scales.x <= scales.y && scales.x <= scales.z ? 0u : scales.y <= scales.z ? 1u : 2u; }
+float3 gsplat_geometry_normal(GsplatCamera cam,float3 mean,float3 scales,float4 quat) {
+    float3 world=gsplat_quat_to_rotmat(quat)[gsplat_normal_axis(scales)];
+    float3 normal=mul(world,cam.R);
+    float3 position=mul(mean,cam.R)+cam.t;
+    return normal*(dot(normal,position)>0 ? -1.f : 1.f);
 }

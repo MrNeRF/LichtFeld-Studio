@@ -854,7 +854,6 @@ namespace lfs::mcp {
         }
         if (was_running) {
             appendSessionLog({{"event", "state"}, {"state", "stopped"}});
-            LOG_INFO("MCP HTTP server stopped");
         }
         stopListenerAndJoin();
         has_applied_config_ = false;

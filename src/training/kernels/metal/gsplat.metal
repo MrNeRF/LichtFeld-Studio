@@ -160,7 +160,7 @@ static bool gsplat_camera_to_image(device const GsplatCamera& cam, const float3 
                        (elevation / kGsplatPi + 0.5f) * float(cam.resolution.y));
         return true;
     }
-    if (p.z <= 0.0f)
+    if (p.z <= 0.0f && (cam.model == kGsplatPinhole || (p.x == 0.0f && p.y == 0.0f)))
         return false;
     if (cam.model == kGsplatPinhole) {
         const float2 uv = p.xy / p.z;
@@ -197,7 +197,7 @@ static bool gsplat_camera_to_image(device const GsplatCamera& cam, const float3 
         const float yd = radial_scale * p.y + prism.y;
         image = cam.focal * float2(xd, yd) + cam.principal;
     }
-    return gsplat_in_bounds(image, cam.resolution) && theta <= cam.max_angle;
+    return gsplat_in_bounds(image, cam.resolution) && theta_full < cam.max_angle;
 }
 
 // Newton undistortion of the OpenCV pinhole model, at most 5 iterations.
@@ -359,7 +359,7 @@ kernel void gsplat_camera_setup(constant GsplatSetupParams& p [[buffer(0)]]) {
             }
             max_angle = (!converged || x <= 0.0f) ? FLT_MAX : x;
         }
-        cam.max_angle = fmin(max_angle, fmax(max_radius / p.fx, max_radius / p.fy));
+        cam.max_angle = fmin(fmin(max_angle,kGsplatPi), fmax(max_radius / p.fx, max_radius / p.fy));
         cam.backward_slope = cam.max_angle / fmax(res.x / 2.0f / p.fx, res.y / 2.0f / p.fy);
     }
     *p.camera = cam;
@@ -542,7 +542,7 @@ kernel void gsplat_project(constant GsplatProjectParams& p [[buffer(0)]], uint g
     const float3 mean = gsplat_load3(p.means, g);
     const float3x3 view_R = cam.R;
     const float3 mean_c = view_R * mean + cam.t;
-    if ((mean_c.z < kGsplatNear && cam.model != kGsplatEquirect) || mean_c.z > kGsplatFar)
+    if ((cam.model==kGsplatPinhole?mean_c.z:length(mean_c)) < kGsplatNear || (cam.model==kGsplatPinhole?mean_c.z:length(mean_c)) > kGsplatFar)
         return;
 
     const float3 scale = exp(gsplat_load3(p.scales, g));
@@ -609,7 +609,7 @@ kernel void gsplat_project(constant GsplatProjectParams& p [[buffer(0)]], uint g
     p.radii[g * 2u + 1u] = radius.y;
     p.means2d[g * 2u] = image_mean.x;
     p.means2d[g * 2u + 1u] = image_mean.y;
-    p.depth_keys[g] = as_type<uint>(mean_c.z);
+    p.depth_keys[g] = as_type<uint>(cam.model==kGsplatPinhole?mean_c.z:length(mean_c));
     if (radius.x > 0 && radius.y > 0) {
         const GsplatTileRect rect = gsplat_tile_rect(image_mean, radius, p.tiles_x, p.tiles_y);
         p.tile_counts[g] = int((rect.y1 - rect.y0) * (rect.x1 - rect.x0));
@@ -802,6 +802,12 @@ struct GsplatRasterParams {
     uint count;
     uint width, height;
     uint tiles_x;
+    device float* depth;
+    device float* normal;
+    device float* rays;
+    device const float* v_depth;
+    device const float* v_normal;
+    uint mode;
 };
 
 static float gsplat_background(constant GsplatRasterParams& p, const uint channel, const uint pixel) {
@@ -826,6 +832,20 @@ static void gsplat_stage(constant GsplatRasterParams& p, const uint g, const uin
     rgb[slot] = float4(gsplat_load3(p.colors, g), as_type<float>(g));
 }
 
+static uint gsplat_normal_axis(float3 scales) { return scales.x<=scales.y && scales.x<=scales.z?0u:scales.y<=scales.z?1u:2u; }
+static float3 gsplat_geometry_normal(GsplatCamera cam,float3 mean,float3 scales,float4 quat) {
+    float3 world=gsplat_quat_to_rotmat(quat)[gsplat_normal_axis(scales)];
+    float3 normal=cam.R*world, position=cam.R*mean+cam.t;
+    return normal*(dot(normal,position)>0?-1.f:1.f);
+}
+kernel void gsplat_geometry_rays(constant GsplatRasterParams& p [[buffer(0)]],uint i [[thread_position_in_grid]]) {
+    if(i>=p.width*p.height) return;
+    const GsplatCamera cam=*p.camera;
+    GsplatRay ray=gsplat_pixel_ray(cam,float2(i%p.width,i/p.width)+0.5f);
+    float3 r=cam.R*ray.dir;
+    r=cam.model==kGsplatPinhole?r/r.z:normalize(r);
+    for(uint c=0;c<3;++c) p.rays[3*i+c]=ray.valid?r[c]:as_type<float>(0x7fc00000u);
+}
 kernel void gsplat_rasterize_forward(constant GsplatRasterParams& p [[buffer(0)]],
                                      uint2 group [[threadgroup_position_in_grid]],
                                      uint2 local [[thread_position_in_threadgroup]],
@@ -846,7 +866,8 @@ kernel void gsplat_rasterize_forward(constant GsplatRasterParams& p [[buffer(0)]
     const int range_end = p.tile_offsets[tile_id + 1u];
     float T = 1.0f;
     uint cur_idx = 0u;
-    float3 pix = float3(0.0f);
+    float3 pix = float3(0.0f), normal=0;
+    float depth=0;
     for (int batch_start = range_start; batch_start < range_end; batch_start += int(kGsplatBatch)) {
         const bool simd_done = simd_all(done);
         if (simd_is_first())
@@ -878,6 +899,9 @@ kernel void gsplat_rasterize_forward(constant GsplatRasterParams& p [[buffer(0)]
                 break;
             }
             pix += s_rgb[t].xyz * (alpha * T);
+            float3 mc=p.camera->R*xyzo.xyz+p.camera->t;
+            depth+=(p.camera->model==kGsplatPinhole?mc.z:length(mc))*(alpha*T);
+            if(p.normal) normal+=gsplat_geometry_normal(*p.camera,xyzo.xyz,float3(s_m0[t].w,s_m1[t].w,s_m2[t].w),s_quat[t])*(alpha*T);
             cur_idx = uint(batch_start) + t;
             T = next_T;
         }
@@ -886,8 +910,10 @@ kernel void gsplat_rasterize_forward(constant GsplatRasterParams& p [[buffer(0)]
         return;
     const uint pixel = i * p.width + j;
     const uint plane = p.width * p.height;
+    if(p.depth) p.depth[pixel]=(p.mode==2 || p.mode==4)?depth/max(1.f-T,1e-10f):depth;
+    if(p.normal) for(uint c=0;c<3;++c) p.normal[c*plane+pixel]=normal[c];
     p.alpha[pixel] = 1.0f - T;
-    for (uint c = 0; c < 3u; ++c)
+    if(p.image) for (uint c = 0; c < 3u; ++c)
         p.image[c * plane + pixel] = pix[c] + T * gsplat_background(p, c, pixel);
     p.last_ids[pixel] = int(cur_idx);
 }
@@ -898,7 +924,10 @@ static void gsplat_atomic_add(device float* address, const float value) {
 
 // One pixel of the backward walk.
 struct GsplatPixel {
-    float3 origin, dir, v_c, buffer;
+    float3 origin, dir, v_c, buffer, depth_axis, v_normal, normal_buffer;
+    float3x3 camera_R;
+    bool radial_depth;
+    float v_depth, depth_buffer;
     float T, T_final, v_a, bg_accum, error, edge_weight;
     int bin_final;
     bool active;
@@ -909,6 +938,13 @@ static GsplatPixel gsplat_pixel(constant GsplatRasterParams& p, const uint i, co
     const uint pixel = min(i * p.width + j, plane - 1u);
     const GsplatRay ray = gsplat_pixel_ray(*p.camera, float2(float(j) + 0.5f, float(i) + 0.5f));
     GsplatPixel px;
+    px.camera_R=p.camera->R;
+    px.radial_depth=p.camera->model!=kGsplatPinhole;
+    px.depth_axis=float3(p.camera->R[0][2],p.camera->R[1][2],p.camera->R[2][2]);
+    px.v_depth=p.v_depth?p.v_depth[pixel]:0;
+    px.depth_buffer=0;
+    px.v_normal=p.v_normal?float3(p.v_normal[pixel],p.v_normal[plane+pixel],p.v_normal[2*plane+pixel]):float3(0.f);
+    px.normal_buffer=0;
     px.origin = ray.origin;
     px.dir = ray.dir;
     px.active = i < p.height && j < p.width && ray.valid;
@@ -917,6 +953,10 @@ static GsplatPixel gsplat_pixel(constant GsplatRasterParams& p, const uint i, co
     px.bin_final = px.active ? p.last_ids[pixel] : 0;
     px.v_c = float3(p.v_image[pixel], p.v_image[plane + pixel], p.v_image[2u * plane + pixel]);
     px.v_a = p.v_alpha[pixel];
+    if(p.v_depth && (p.mode==2 || p.mode==4)) {
+        px.v_depth/=max(p.alpha[pixel],1e-10f);
+        if(p.alpha[pixel]>1e-10f) px.v_a-=px.v_depth*p.depth[pixel];
+    }
     px.bg_accum = 0.0f;
     if (p.bg_image != nullptr || p.bg_color != nullptr) {
         for (uint c = 0; c < 3u; ++c)
@@ -957,12 +997,23 @@ static bool gsplat_contribute(thread GsplatPixel& px, const int isect, const flo
     px.T *= ra;
     const float fac = alpha * px.T;
     grad.rgb += fac * px.v_c;
+    const float3 delta=xyzo.xyz-px.origin;
+    const float depth=px.radial_depth?length(delta):dot(delta,px.depth_axis);
+    grad.mean+=(fac*px.v_depth)*(px.radial_depth?normalize(delta):px.depth_axis);
+    const uint axis=gsplat_normal_axis(float3(m0.w,m1.w,m2.w));
+    const float3 world_normal=gsplat_quat_to_rotmat(quat)[axis];
+    const float facing=dot(world_normal,delta)>0?-1.f:1.f;
+    const float3 normal=px.camera_R*world_normal*facing;
+    float3x3 v_R=float3x3(0.f);
+    v_R[axis]=transpose(px.camera_R)*px.v_normal*(fac*facing);
+    gsplat_quat_to_rotmat_vjp(quat,v_R,grad.quat);
     grad.dens_w += fac;
     grad.dens_e += fac * px.error;
     const float edge_contribution = fac * px.edge_weight;
     if (px.edge_weight > 0.0f && isfinite(edge_contribution))
         grad.edge += edge_contribution;
     float v_alpha = dot(rgb * px.T - px.buffer * ra, px.v_c) + px.T_final * ra * px.v_a;
+    v_alpha+=(depth*px.T-px.depth_buffer*ra)*px.v_depth+dot(normal*px.T-px.normal_buffer*ra,px.v_normal);
     if (have_bg)
         v_alpha += -px.T_final * ra * px.bg_accum;
     if (opac * vis <= 0.999f) {
@@ -978,6 +1029,8 @@ static bool gsplat_contribute(thread GsplatPixel& px, const int isect, const flo
         grad.opacity += vis * v_alpha;
     }
     px.buffer += rgb * fac;
+    px.depth_buffer+=depth*fac;
+    px.normal_buffer+=normal*fac;
     return true;
 }
 
@@ -1068,6 +1121,7 @@ struct GsplatAccumulateParams {
     uint degree;
     uint layout_rest;
     uint width, height;
+    float flatten_weight;
 };
 
 kernel void gsplat_accumulate(constant GsplatAccumulateParams& p [[buffer(0)]], uint g [[thread_position_in_grid]]) {
@@ -1080,6 +1134,8 @@ kernel void gsplat_accumulate(constant GsplatAccumulateParams& p [[buffer(0)]], 
         p.means_grad[g * 3u + k] += v[k];
         p.scaling_grad[g * 3u + k] += v[3u + k] * scale[k];
     }
+    uint axis=gsplat_normal_axis(scale);
+    p.scaling_grad[g*3+axis]+=p.flatten_weight*scale[axis]/float(p.count);
     for (uint k = 0; k < 4u; ++k)
         p.rotation_grad[g * 4u + k] += v[6u + k];
     p.opacity_grad[g] += v[10] * opacity * (1.0f - opacity);

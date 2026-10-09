@@ -96,14 +96,14 @@ TEST(NormalAutoGenerateIntegration, GeneratesOnlyMissingAndAssociatesCameras) {
     params.optimization.normal_loss_weight = 0.05f;
 
     std::vector<fs::path> requested;
-    const auto outcome = lfs::training::ensure_training_normal_maps(
+    const auto outcome = lfs::training::ensure_training_prior_maps(
         params, cameras,
-        [&](const std::span<const lfs::training::NormalAutoGenerateJob> jobs,
-            const lfs::training::NormalGenerateProgress& progress)
+        [&](const std::span<const lfs::training::PriorMapJob> jobs,
+            const lfs::training::PriorMapProgress& progress)
             -> std::expected<void, lfs::Error> {
             for (std::size_t i = 0; i < jobs.size(); ++i) {
                 requested.push_back(jobs[i].image_path);
-                write_file(jobs[i].output_path, "normal");
+                write_file(jobs[i].normal_output_path, "normal");
                 if (progress)
                     progress(i + 1, jobs.size(), jobs[i].image_path.filename().string());
             }
@@ -122,10 +122,10 @@ TEST(NormalAutoGenerateIntegration, GeneratesOnlyMissingAndAssociatesCameras) {
     EXPECT_TRUE(fs::is_regular_file(normals / "c.png"));
 
     requested.clear();
-    const auto second = lfs::training::ensure_training_normal_maps(
+    const auto second = lfs::training::ensure_training_prior_maps(
         params, cameras,
-        [&](const std::span<const lfs::training::NormalAutoGenerateJob> jobs,
-            const lfs::training::NormalGenerateProgress&)
+        [&](const std::span<const lfs::training::PriorMapJob> jobs,
+            const lfs::training::PriorMapProgress&)
             -> std::expected<void, lfs::Error> {
             for (const auto& job : jobs)
                 requested.push_back(job.image_path);
@@ -133,7 +133,7 @@ TEST(NormalAutoGenerateIntegration, GeneratesOnlyMissingAndAssociatesCameras) {
         });
     EXPECT_FALSE(second.generated);
     EXPECT_TRUE(requested.empty());
-    EXPECT_EQ(second.existing_count, 3u);
+    EXPECT_EQ(second.normal.existing, 3u);
 
     fs::remove_all(root);
 }
@@ -163,10 +163,10 @@ TEST(NormalAutoGenerateIntegration, FailingEstimatorLeavesTrainingWithoutPrior) 
             warnings.emplace_back(message);
     });
 
-    const auto outcome = lfs::training::ensure_training_normal_maps(
+    const auto outcome = lfs::training::ensure_training_prior_maps(
         params, cameras,
-        [](const std::span<const lfs::training::NormalAutoGenerateJob>,
-           const lfs::training::NormalGenerateProgress&)
+        [](const std::span<const lfs::training::PriorMapJob>,
+           const lfs::training::PriorMapProgress&)
             -> std::expected<void, lfs::Error> {
             return std::unexpected(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::Internal,
@@ -216,15 +216,15 @@ TEST(NormalAutoGenerateIntegration, PrefersFullResolutionImagesFolder) {
     params.optimization.normal_auto_generate = true;
     params.optimization.normal_loss_weight = 0.05f;
 
-    std::vector<lfs::training::NormalAutoGenerateJob> seen;
-    const auto outcome = lfs::training::ensure_training_normal_maps(
+    std::vector<lfs::training::PriorMapJob> seen;
+    const auto outcome = lfs::training::ensure_training_prior_maps(
         params, cameras,
-        [&](const std::span<const lfs::training::NormalAutoGenerateJob> jobs,
-            const lfs::training::NormalGenerateProgress&)
+        [&](const std::span<const lfs::training::PriorMapJob> jobs,
+            const lfs::training::PriorMapProgress&)
             -> std::expected<void, lfs::Error> {
             for (const auto& job : jobs) {
                 seen.push_back(job);
-                write_file(job.output_path, "normal");
+                write_file(job.normal_output_path, "normal");
             }
             return {};
         });
@@ -233,7 +233,7 @@ TEST(NormalAutoGenerateIntegration, PrefersFullResolutionImagesFolder) {
     EXPECT_TRUE(outcome.generated);
     ASSERT_EQ(seen.size(), 1u);
     EXPECT_EQ(seen[0].image_path, orig_a);
-    EXPECT_EQ(seen[0].output_path, root / "normals" / "a.png");
+    EXPECT_EQ(seen[0].normal_output_path, root / "normals" / "a.png");
     EXPECT_TRUE(cam->has_normal());
 
     fs::remove_all(root);
@@ -258,14 +258,14 @@ TEST(NormalAutoGenerateIntegration, FallsBackToTrainingFolderWhenImagesMissing) 
     params.optimization.normal_loss_weight = 0.05f;
 
     std::vector<fs::path> requested;
-    const auto outcome = lfs::training::ensure_training_normal_maps(
+    const auto outcome = lfs::training::ensure_training_prior_maps(
         params, cameras,
-        [&](const std::span<const lfs::training::NormalAutoGenerateJob> jobs,
-            const lfs::training::NormalGenerateProgress&)
+        [&](const std::span<const lfs::training::PriorMapJob> jobs,
+            const lfs::training::PriorMapProgress&)
             -> std::expected<void, lfs::Error> {
             for (const auto& job : jobs) {
                 requested.push_back(job.image_path);
-                write_file(job.output_path, "normal");
+                write_file(job.normal_output_path, "normal");
             }
             return {};
         });
@@ -299,14 +299,14 @@ TEST(NormalAutoGenerateIntegration, OverwritesExistingMapWhenCameraHasNone) {
     params.optimization.normal_loss_weight = 0.05f;
 
     std::vector<fs::path> outputs;
-    const auto outcome = lfs::training::ensure_training_normal_maps(
+    const auto outcome = lfs::training::ensure_training_prior_maps(
         params, cameras,
-        [&](const std::span<const lfs::training::NormalAutoGenerateJob> jobs,
-            const lfs::training::NormalGenerateProgress&)
+        [&](const std::span<const lfs::training::PriorMapJob> jobs,
+            const lfs::training::PriorMapProgress&)
             -> std::expected<void, lfs::Error> {
             for (const auto& job : jobs) {
-                outputs.push_back(job.output_path);
-                write_file(job.output_path, "fresh");
+                outputs.push_back(job.normal_output_path);
+                write_file(job.normal_output_path, "fresh");
             }
             return {};
         });
@@ -323,14 +323,14 @@ TEST(NormalAutoGenerateIntegration, OverwritesExistingMapWhenCameraHasNone) {
     fs::remove_all(root);
 }
 
-TEST(NormalAutoGenerate, PriorLoadingRequiresNormalChannel) {
+TEST(NormalAutoGenerate, PriorLoadingEnabledForBothBackends) {
     lfs::core::param::OptimizationParameters opt;
     opt.use_normal_loss = true;
     opt.normal_loss_weight = 0.05f;
     opt.gut = false;
     EXPECT_TRUE(lfs::training::training_normal_priors_enabled(opt));
     opt.gut = true;
-    EXPECT_FALSE(lfs::training::training_normal_priors_enabled(opt));
+    EXPECT_TRUE(lfs::training::training_normal_priors_enabled(opt));
     EXPECT_TRUE(opt.use_normal_loss);
     opt.gut = false;
     opt.normal_loss_weight = 0.0f;
@@ -340,27 +340,159 @@ TEST(NormalAutoGenerate, PriorLoadingRequiresNormalChannel) {
     EXPECT_FALSE(lfs::training::training_normal_priors_enabled(opt));
 }
 
-TEST(NormalAutoGenerateIntegration, GutSkipsEstimatorAndKeepsConfig) {
+TEST(NormalAutoGenerateIntegration, GutGeneratesMissingPriorsAndKeepsConfig) {
+    const auto root = fs::temp_directory_path() / "lfs_normal_generate_gut";
+    fs::remove_all(root);
+    write_file(root / "images/missing.jpg");
     lfs::core::param::TrainingParameters params;
+    params.dataset.data_path = root;
     params.optimization.gut = true;
     params.optimization.use_normal_loss = true;
     params.optimization.normal_auto_generate = true;
     params.optimization.normal_loss_weight = 0.05f;
     std::vector<std::shared_ptr<lfs::core::Camera>> cameras{
-        make_camera("missing.jpg", "missing.jpg")};
+        make_camera("missing.jpg", root / "images/missing.jpg")};
     bool called = false;
-    const auto outcome = lfs::training::ensure_training_normal_maps(
+    const auto outcome = lfs::training::ensure_training_prior_maps(
         params, cameras,
-        [&](std::span<const lfs::training::NormalAutoGenerateJob>,
-            const lfs::training::NormalGenerateProgress&) -> std::expected<void, lfs::Error> {
+        [&](std::span<const lfs::training::PriorMapJob> jobs,
+            const lfs::training::PriorMapProgress&) -> std::expected<void, lfs::Error> {
+            called = true;
+            for (const auto& job : jobs)
+                write_file(job.normal_output_path);
+            return {};
+        });
+    EXPECT_TRUE(called);
+    EXPECT_TRUE(outcome.attempted);
+    EXPECT_TRUE(outcome.generated);
+    EXPECT_FALSE(outcome.failed);
+    EXPECT_TRUE(cameras.front()->has_normal());
+    EXPECT_TRUE(params.optimization.use_normal_loss);
+    EXPECT_FLOAT_EQ(params.optimization.normal_loss_weight, 0.05f);
+    fs::remove_all(root);
+}
+
+TEST(PriorAutoGenerateIntegration, GeneratesMissingDepthIntoExistingDepthsFolder) {
+    const auto root = fs::temp_directory_path() / "lfs_depth_auto_generate_missing";
+    fs::remove_all(root);
+    write_file(root / "images/a.jpg");
+    write_file(root / "images/b.jpg");
+    write_file(root / "depths/a.png", "depth");
+
+    auto cam_a = make_camera("a.jpg", root / "images/a.jpg");
+    cam_a->set_depth_path(root / "depths/a.png");
+    auto cam_b = make_camera("b.jpg", root / "images/b.jpg");
+    std::vector<std::shared_ptr<lfs::core::Camera>> cameras{cam_a, cam_b};
+
+    lfs::core::param::TrainingParameters params;
+    params.dataset.data_path = root;
+    params.optimization.use_depth_loss = true;
+    params.optimization.depth_loss_weight = 0.5f;
+    params.optimization.depth_auto_generate = true;
+
+    std::vector<lfs::training::PriorMapJob> seen;
+    const auto outcome = lfs::training::ensure_training_prior_maps(
+        params, cameras,
+        [&](const std::span<const lfs::training::PriorMapJob> jobs,
+            const lfs::training::PriorMapProgress&) -> std::expected<void, lfs::Error> {
+            for (const auto& job : jobs) {
+                seen.push_back(job);
+                write_file(job.depth_output_path, "depth");
+            }
+            return {};
+        });
+
+    ASSERT_FALSE(outcome.failed);
+    EXPECT_TRUE(outcome.generated);
+    ASSERT_EQ(seen.size(), 1u);
+    EXPECT_EQ(seen[0].image_path, root / "images/b.jpg");
+    EXPECT_EQ(seen[0].depth_output_path, root / "depths" / "b.png");
+    EXPECT_TRUE(seen[0].normal_output_path.empty());
+    EXPECT_EQ(cam_a->depth_path(), root / "depths/a.png");
+    EXPECT_TRUE(cam_b->has_depth());
+    EXPECT_EQ(outcome.depth.existing, 2u);
+    EXPECT_EQ(outcome.depth.missing, 0u);
+    EXPECT_FALSE(cam_b->has_normal());
+
+    fs::remove_all(root);
+}
+
+TEST(PriorAutoGenerateIntegration, OneJobPerImageCarriesOnlyMissingMaps) {
+    const auto root = fs::temp_directory_path() / "lfs_prior_auto_generate_both";
+    fs::remove_all(root);
+    write_file(root / "images/a.jpg");
+    write_file(root / "images/b.jpg");
+    write_file(root / "normals/a.png", "normal");
+
+    auto cam_a = make_camera("a.jpg", root / "images/a.jpg", root / "normals/a.png");
+    auto cam_b = make_camera("b.jpg", root / "images/b.jpg");
+    std::vector<std::shared_ptr<lfs::core::Camera>> cameras{cam_a, cam_b};
+
+    lfs::core::param::TrainingParameters params;
+    params.dataset.data_path = root;
+    params.optimization.use_depth_loss = true;
+    params.optimization.depth_loss_weight = 0.5f;
+    params.optimization.use_normal_loss = true;
+    params.optimization.normal_loss_weight = 0.05f;
+
+    std::vector<lfs::training::PriorMapJob> seen;
+    const auto outcome = lfs::training::ensure_training_prior_maps(
+        params, cameras,
+        [&](const std::span<const lfs::training::PriorMapJob> jobs,
+            const lfs::training::PriorMapProgress&) -> std::expected<void, lfs::Error> {
+            for (const auto& job : jobs) {
+                seen.push_back(job);
+                if (!job.depth_output_path.empty())
+                    write_file(job.depth_output_path, "depth");
+                if (!job.normal_output_path.empty())
+                    write_file(job.normal_output_path, "normal");
+            }
+            return {};
+        });
+
+    ASSERT_FALSE(outcome.failed);
+    ASSERT_EQ(seen.size(), 2u);
+    EXPECT_EQ(seen[0].depth_output_path, root / "depth" / "a.png");
+    EXPECT_TRUE(seen[0].normal_output_path.empty());
+    EXPECT_EQ(seen[1].depth_output_path, root / "depth" / "b.png");
+    EXPECT_EQ(seen[1].normal_output_path, root / "normals" / "b.png");
+    for (const auto& cam : cameras) {
+        EXPECT_TRUE(cam->has_depth()) << cam->image_name();
+        EXPECT_TRUE(cam->has_normal()) << cam->image_name();
+    }
+    std::ifstream kept(root / "normals/a.png");
+    std::string body;
+    kept >> body;
+    EXPECT_EQ(body, "normal");
+
+    fs::remove_all(root);
+}
+
+TEST(PriorAutoGenerateIntegration, DepthAutoGenerateOffKeepsDepthMissing) {
+    const auto root = fs::temp_directory_path() / "lfs_depth_auto_generate_off";
+    fs::remove_all(root);
+    write_file(root / "images/a.jpg");
+    std::vector<std::shared_ptr<lfs::core::Camera>> cameras{make_camera("a.jpg", root / "images/a.jpg")};
+
+    lfs::core::param::TrainingParameters params;
+    params.dataset.data_path = root;
+    params.optimization.use_depth_loss = true;
+    params.optimization.depth_loss_weight = 0.5f;
+    params.optimization.depth_auto_generate = false;
+
+    bool called = false;
+    const auto outcome = lfs::training::ensure_training_prior_maps(
+        params, cameras,
+        [&](std::span<const lfs::training::PriorMapJob>,
+            const lfs::training::PriorMapProgress&) -> std::expected<void, lfs::Error> {
             called = true;
             return {};
         });
+
     EXPECT_FALSE(called);
     EXPECT_FALSE(outcome.attempted);
-    EXPECT_FALSE(outcome.generated);
-    EXPECT_FALSE(outcome.failed);
-    EXPECT_FALSE(cameras.front()->has_normal());
-    EXPECT_TRUE(params.optimization.use_normal_loss);
-    EXPECT_FLOAT_EQ(params.optimization.normal_loss_weight, 0.05f);
+    EXPECT_EQ(outcome.depth.missing, 1u);
+    EXPECT_FALSE(cameras.front()->has_depth());
+
+    fs::remove_all(root);
 }

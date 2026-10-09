@@ -1854,7 +1854,9 @@ namespace {
         auto opacity = Tensor::full({count, 1}, -0.7f, Device::GPU);
         auto sh0 = Tensor::full({count, 1, 3}, 0.25f, Device::GPU);
         auto shN = Tensor::from_vector(rest, {rest.size()}, Device::GPU);
-        auto view = Tensor::eye(4, Device::GPU);
+        auto view = mode == ops::GsplatRenderMode::RGB_D_N
+                        ? Tensor::from_vector({0.9848078f, 0.f, 0.1736482f, 0.f, 0.f, 1.f, 0.f, 0.f, -0.1736482f, 0.f, 0.9848078f, 0.f, 0.f, 0.f, 0.f, 1.f}, {4, 4}, Device::GPU)
+                        : Tensor::eye(4, Device::GPU);
         auto background = Tensor::from_vector({0.12f, 0.07f, 0.18f}, {3}, Device::GPU);
         Tensor empty;
         const auto bg_image = background_image ? pattern({3, height, width}, 0.1f, 17) : Tensor{};
@@ -1881,14 +1883,19 @@ namespace {
         keep(out.snapshot, backend, "gsplat.contract.alpha", alpha, kRaster);
         keep(out.snapshot, backend, "gsplat.contract.depth", depth, kRaster);
         const bool rgb = mode == ops::GsplatRenderMode::RGB || mode == ops::GsplatRenderMode::RGB_D ||
-                         mode == ops::GsplatRenderMode::RGB_ED;
+                         mode == ops::GsplatRenderMode::RGB_ED || mode == ops::GsplatRenderMode::RGB_D_N;
+        if (mode == ops::GsplatRenderMode::RGB_D_N) {
+            EXPECT_TRUE(normal.is_valid());
+            keep(out.snapshot, backend, "gsplat.contract.normal", normal, kRaster);
+            keep(out.snapshot, backend, "gsplat.contract.camera_rays", saved.camera_rays, kRaster);
+        }
         EXPECT_EQ(image.is_valid(), rgb);
         EXPECT_EQ(depth.is_valid(), mode != ops::GsplatRenderMode::RGB);
         EXPECT_GT(alpha.max().item<float>(), 0.1f);
         // The table accepts packed raster-channel gradients. Compare RGB and
         // alpha backward here; depth outputs are compared above in every mode.
-        const size_t channels = mode == ops::GsplatRenderMode::RGB ? 3 : rgb ? 4
-                                                                             : 1;
+        const size_t channels = mode == ops::GsplatRenderMode::RGB || mode == ops::GsplatRenderMode::RGB_D_N ? 3 : rgb ? 4
+                                                                                                                       : 1;
         auto image_grad = Tensor::zeros({channels, height, width}, Device::GPU);
         if (rgb)
             image_grad.slice(0, 0, 3).fill_(0.001f);
@@ -1898,7 +1905,8 @@ namespace {
                                         Tensor::zeros_like(sh0), Tensor::zeros_like(shN)};
         const ops::GsplatGradients destination{&gradients, [](void* owner, ops::AdamSlot slot) -> Tensor& {
                                                    return (*static_cast<std::array<Tensor, 6>*>(owner))[static_cast<size_t>(slot)];
-                                               }};
+                                               },
+                                               mode == ops::GsplatRenderMode::RGB_D_N ? Tensor::full({height, width}, 0.003f, Device::GPU) : Tensor{}, mode == ops::GsplatRenderMode::RGB_D_N ? pattern({3, height, width}, 0.002f, 13) : Tensor{}, mode == ops::GsplatRenderMode::RGB_D_N ? 0.01f : 0.f};
         auto densification = Tensor::zeros({2, count}, Device::GPU);
         auto scores = Tensor::zeros({count}, Device::GPU);
         auto share = Tensor::zeros({count}, Device::GPU);
@@ -1947,7 +1955,6 @@ namespace {
         // The baseline is the native context size, which differs per backend.
         (void)table->device_baseline_bytes();
         table->sample_memory();
-        table->dump_arena_statistics();
         table->log_arena_failure("training-ops-parity");
         table->profile(true);
         table->profile(false);
@@ -2189,6 +2196,21 @@ namespace {
         }
     }
 
+    TEST(TrainingOpsGsplatParity, ThinPrismGeometryChannelsAndGradientsMatchCuda) {
+        if (!lfs::core::gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA reference unavailable";
+        const auto expected = capture_gsplat_contract(GpuBackend::CUDA, 4u, ops::GsplatRenderMode::RGB_D_N, true, true);
+        ASSERT_TRUE(expected.error.empty()) << expected.error;
+        for (const auto backend : {GpuBackend::Vulkan, GpuBackend::Metal}) {
+            if (!lfs::core::gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            const auto actual = capture_gsplat_contract(backend, 4u, ops::GsplatRenderMode::RGB_D_N, true, true);
+            ASSERT_TRUE(actual.error.empty()) << actual.error;
+            expect_match(actual, expected, false);
+        }
+    }
+
     class GsplatFixedContractParity
         : public ::testing::TestWithParam<std::tuple<uint32_t, ops::GsplatRenderMode, bool>> {};
 
@@ -2221,7 +2243,7 @@ namespace {
         ::testing::Combine(::testing::Values(4u, 9u),
                            ::testing::Values(ops::GsplatRenderMode::RGB, ops::GsplatRenderMode::D,
                                              ops::GsplatRenderMode::ED, ops::GsplatRenderMode::RGB_D,
-                                             ops::GsplatRenderMode::RGB_ED),
+                                             ops::GsplatRenderMode::RGB_ED, ops::GsplatRenderMode::RGB_D_N),
                            ::testing::Bool()));
 
     // On a CUDA machine with LFS_TRAINING_OPS_GOLDEN set, records every family's

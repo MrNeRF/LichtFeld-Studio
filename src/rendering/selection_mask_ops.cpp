@@ -150,7 +150,7 @@ namespace lfs::rendering {
     void filter_selection_by_crop(Tensor& selection, const Tensor& means, const Tensor* box_transform,
                                   const Tensor* box_min, const Tensor* box_max, bool box_inverse,
                                   const Tensor* ellipsoid_transform, const Tensor* ellipsoid_radii,
-                                  bool ellipsoid_inverse, const Tensor* transforms, const Tensor* indices) {
+                                  bool ellipsoid_inverse, const Tensor* transforms, const Tensor* indices, const int scope_node_index) {
         if (!selection.is_valid() || !means.is_valid() || selection.numel() == 0 || means.size(0) != selection.numel())
             return;
         const auto complete = [](const Tensor* t, size_t n) { return t && t->is_valid() && t->numel() >= n; };
@@ -181,7 +181,12 @@ namespace lfs::rendering {
             filter.ellipsoid_transform = &et;
             filter.ellipsoid_radii = &radii;
         }
+        if (scope_node_index >= 0 && !ids.is_valid() && scope_node_index != 0)
+            return;
+        const auto original = scope_node_index >= 0 && ids.is_valid() ? selection.clone() : Tensor{};
         lfs::core::filter_points(selection, &points, filter);
+        if (original.is_valid())
+            selection.copy_from(Tensor::where(ids == scope_node_index, selection, original));
     }
 
     void filter_selection_by_screen_window(Tensor& selection, const Tensor& means, const std::array<float, 9>& rotation,

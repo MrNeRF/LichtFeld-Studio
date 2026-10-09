@@ -265,6 +265,50 @@ TEST_F(SelectionRasterizationOpsTest, CropFilterKeepsOnlyPointsInsideCropBox) {
     EXPECT_EQ(selection.cpu().to_vector_bool(), (std::vector<bool>{true, false, true, true}));
 }
 
+TEST_F(SelectionRasterizationOpsTest, ScopedCropLeavesOtherNodesAndExistingExclusionsUnchanged) {
+    const auto means = make_float32_values({0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 0, 0}, {4, 3});
+    const auto indices = make_int32_values({0, 0, 1, 1});
+    const auto transform = make_float32_values(
+        {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, {4, 4});
+    const auto min = make_float32_values({-1, -1, -1}, {3});
+    const auto max = make_float32_values({1, 1, 1}, {3});
+    for (const bool inverse : {false, true}) {
+        auto selection = make_bool_mask({1, 1, 1, 0});
+        lfs::rendering::filter_selection_by_crop(
+            selection, means, &transform, &min, &max, inverse,
+            nullptr, nullptr, false, nullptr, &indices, 0);
+        EXPECT_EQ(selection.cpu().to_vector_bool(), (std::vector<bool>{!inverse, inverse, true, false}));
+    }
+}
+
+TEST_F(SelectionRasterizationOpsTest, ScopedEllipsoidIncludesBoundaryAndSupportsInverse) {
+    const auto means = make_float32_values({1, 0, 0, 2, 0, 0, 2, 0, 0, 0, 0, 0}, {4, 3});
+    const auto indices = make_int32_values({1, 1, 0, 1});
+    const auto transform = make_float32_values(
+        {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, {4, 4});
+    const auto radii = make_float32_values({1, 1, 1}, {3});
+    for (const bool inverse : {false, true}) {
+        auto selection = make_bool_mask({1, 1, 1, 0});
+        lfs::rendering::filter_selection_by_crop(
+            selection, means, nullptr, nullptr, nullptr, false,
+            &transform, &radii, inverse, nullptr, &indices, 1);
+        EXPECT_EQ(selection.cpu().to_vector_bool(), (std::vector<bool>{!inverse, inverse, true, false}));
+    }
+}
+
+TEST_F(SelectionRasterizationOpsTest, ScopedCropDefaultsToFirstNodeWithoutIndexStorage) {
+    const auto means = make_float32_values({0, 0, 0, 2, 0, 0}, {2, 3});
+    const auto transform = make_float32_values(
+        {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, {4, 4});
+    const auto min = make_float32_values({-1, -1, -1}, {3});
+    const auto max = make_float32_values({1, 1, 1}, {3});
+    auto selection = make_bool_mask({1, 1});
+    lfs::rendering::filter_selection_by_crop(
+        selection, means, &transform, &min, &max, false,
+        nullptr, nullptr, false, nullptr, nullptr, 0);
+    EXPECT_EQ(selection.cpu().to_vector_bool(), (std::vector<bool>{true, false}));
+}
+
 TEST_F(SelectionRasterizationOpsTest, DepthFilterKeepsOnlyPointsInsideCameraSpaceRange) {
     auto selection = make_bool_mask({1, 1, 1, 1, 1});
     const auto means = make_float32_values(

@@ -513,7 +513,7 @@ namespace lfs::training {
         _densify_child_required_peak_bytes = 0;
         _densify_child_allocated_peak_bytes = 0;
         if (optimParams.gut && optimParams.opacity_decay_rendered_only)
-            LOG_WARN("opacity_decay_rendered_only has no effect with GUT");
+            LOG_INFO("opacity_decay_rendered_only has no effect with GUT");
         auto resolved_params = optimParams;
         resolved_params.resolve_mrnf_capacity_defaults();
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(
@@ -626,8 +626,6 @@ namespace lfs::training {
         // A point cloud that already fills the capacity leaves no room for seeds, so skip capturing views for them.
         if (n > 0 && (_params->max_cap <= 0 || static_cast<int64_t>(n) < int64_t{_params->max_cap}))
             _blob_seeder = std::make_unique<BlobSeeder>(_splat_data->means());
-
-        LOG_INFO("MRNF strategy initialized with {} Gaussians", n);
     }
 
     void MRNF::set_training_dataset(std::shared_ptr<CameraDataset> views) {
@@ -2514,7 +2512,7 @@ namespace lfs::training {
         resolved_params.resolve_mrnf_capacity_defaults();
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(std::move(resolved_params));
         if ((support_changed || renderer_changed) && params.gut && params.opacity_decay_rendered_only)
-            LOG_WARN("opacity_decay_rendered_only has no effect with GUT");
+            LOG_INFO("opacity_decay_rendered_only has no effect with GUT");
         if (_splat_data && (support_changed || renderer_changed)) {
             if (params.opacity_decay_rendered_only && !params.gut)
                 reset_vector_buffer(_rendered_count, _splat_data->size(), _splat_data->means().device(), splat_reserved_capacity(*_splat_data));

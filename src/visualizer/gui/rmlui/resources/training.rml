@@ -416,7 +416,7 @@
     <div class="training-subsection-title" data-if="pv_section_depth_visible || pv_section_normal_visible">@tr:training.section.supervision</div>
     <div data-if="pv_section_depth_visible" data-class-disabled-overlay="live_disabled">
       <div class="setting-row" data-for="row : pv_basic_depth_toggle_rows"
-           data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="gut_depth_supervision_disabled">
+           data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
@@ -435,21 +435,23 @@
         </div>
         <div class="setting-row" data-for="row : pv_basic_depth_weight_rows" data-if="dep_depth_loss"
           data-attr-data-tooltip="row.tooltip_key">
+          <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
+            data-event-click="pv_value_change(row.id, !row.checked)" />
           <span class="prop-label">{{row.label}}</span>
-          <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+          <input type="text" class="number-input" data-if="row.kind == 'number'" data-pv-input="1" data-value="row.text"
             data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
             data-event-change="pv_change(row.id, ev.value)"
             data-event-blur="pv_blur(row.id, row.text)"
             data-event-escapecancel="pv_escape(row.id)" />
-          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+          <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
+          <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
         </div>
 
 
 </div></div></div>
     <div data-if="pv_section_normal_visible" data-class-disabled-overlay="live_disabled">
       <div class="setting-row" data-for="row : pv_basic_normal_toggle_rows"
-           data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="gut_normal_supervision_disabled">
+           data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />

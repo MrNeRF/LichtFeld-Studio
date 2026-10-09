@@ -11,7 +11,6 @@
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor/internal/allocation_profiler.hpp"
 #include "core/tensor_cuda_interop.hpp"
-#include "core/training_churn_metrics.hpp"
 #include "cuda_event_pool.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gpu_slab_allocator.hpp"
@@ -85,7 +84,6 @@ namespace lfs::core {
             bool expected = false;
             if (!shutdown_.compare_exchange_strong(expected, true))
                 return;
-            LOG_INFO("Shutting down CudaMemoryPool...");
             if (suspend_deallocations_.load(std::memory_order_acquire)) {
                 return;
             }
@@ -585,15 +583,7 @@ namespace lfs::core {
         }
 
         void trim_cached_memory() {
-            const auto trim_start = std::chrono::steady_clock::now();
-            const auto record_trim = [&trim_start]() noexcept {
-                TrainingChurnMetrics::instance().record_trim(static_cast<std::uint64_t>(
-                    std::chrono::duration_cast<std::chrono::microseconds>(
-                        std::chrono::steady_clock::now() - trim_start)
-                        .count()));
-            };
             if (suspend_deallocations_.load(std::memory_order_acquire)) {
-                record_trim();
                 return;
             }
             const cudaError_t sync_status = cudaDeviceSynchronize();
@@ -601,7 +591,6 @@ namespace lfs::core {
                 ensure_cuda_success(
                     sync_status, "cudaDeviceSynchronize(memory-pool trim)", {},
                     LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
-                record_trim();
                 return;
             }
             // The calling thread's finite-check cache owns a live slab block.
@@ -624,7 +613,6 @@ namespace lfs::core {
 #if CUDART_VERSION >= 12080
             trim_default_pool("cached-memory trim");
 #endif
-            record_trim();
         }
 
         // Used by the Morton reorder path: preserve the post-reorder trim when

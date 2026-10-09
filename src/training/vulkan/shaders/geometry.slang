@@ -20,6 +20,8 @@ struct Parameters {
     uint prior;
     float fx, fy, cx, cy, lossWeight, lambdaGrad, quantStep, floorOverride;
     float anchorScale, anchorShift, anchorFloor, minCount, minWeight, nearPlane;
+    uint64_t rays;
+    uint wrapHorizontal;
 };
 groupshared real reduction[256];
 
@@ -161,6 +163,8 @@ NormalSample normalSample(Parameters p, uint i, uint pixels) {
     return s;
 }
 float3 ray(Parameters p, int x, int y) {
+    if(p.wrapHorizontal!=0) x=(x+int(p.width))%int(p.width);
+    if(p.rays!=0) { uint i=3*(y*p.width+x); return float3(rd(p.rays,i),rd(p.rays,i+1),rd(p.rays,i+2)); }
     float px = float(x) + 0.5f - p.cx, py = float(y) + 0.5f - p.cy;
     return float3(px / p.fx, py / p.fy, 1.0f);
 }
@@ -181,13 +185,13 @@ struct DepthNormal {
 };
 DepthNormal depthNormal(Parameters p, int x, int y) {
     DepthNormal s = (DepthNormal)0;
-    if (x <= 0 || y <= 0 || x >= int(p.width) - 1 || y >= int(p.height) - 1)
+    if ((!p.wrapHorizontal && (x <= 0 || x >= int(p.width) - 1)) || y <= 0 || y >= int(p.height) - 1)
         return s;
     uint w = p.width, i = uint(y) * w + uint(x);
     float ec, ac;
     if (!expectedDepth(p, i, ec, ac))
         return s;
-    uint ids[4] = {i + 1, i - 1, i + w, i - w};
+    uint ids[4] = {uint(y)*w+(uint(x)+1)%w, uint(y)*w+(uint(x)+w-1)%w, i+w, i-w};
     float jump = 0.05f * ec;
     for (uint k = 0; k < 4; ++k)
         if (!expectedDepth(p, ids[k], s.ne[k], s.na[k]) || abs(s.ne[k] - ec) > jump)
@@ -204,7 +208,7 @@ DepthNormal depthNormal(Parameters p, int x, int y) {
                       fma(s.tx.z, s.ty.x, -s.tx.x * s.ty.z),
                       fma(s.tx.x, s.ty.y, -s.tx.y * s.ty.x));
     float ns = fma(n.z, n.z, fma(n.y, n.y, n.x * n.x));
-    if (ns < 1e-24f)
+    if (!finitef(ns) || ns < 1e-24f)
         return s;
     float3 r = ray(p, x, y);
     float face = fma(n.z, r.z, fma(n.y, r.y, n.x * r.x));
@@ -260,7 +264,7 @@ void scatterDepthNormal(Parameters p, DepthNormal s, float3 target, float cosine
     float3 gx = cross(s.ty, raw), gy = cross(raw, s.tx);
     float3 rxp = ray(p, x + 1, y), rxm = ray(p, x - 1, y), ryp = ray(p, x, y + 1), rym = ray(p, x, y - 1);
     float ge[4] = {dot(gx, rxp), -dot(gx, rxm), dot(gy, ryp), -dot(gy, rym)};
-    uint w = p.width, i = uint(y) * w + uint(x), ids[4] = {i + 1, i - 1, i + w, i - w};
+    uint w = p.width, i = uint(y) * w + uint(x), ids[4] = {uint(y)*w+(uint(x)+1)%w, uint(y)*w+(uint(x)+w-1)%w, i+w, i-w};
     for (uint k = 0; k < 4; ++k) {
         float inv = 1.0f / s.na[k];
         atomicFloat(p.gradDepth, ids[k], ge[k] * inv);

@@ -105,9 +105,6 @@ namespace lfs::vis::gui {
         case Rml::Log::LT_WARNING:
             LOG_WARN("[RmlUI] {}", message);
             break;
-        case Rml::Log::LT_INFO:
-            LOG_INFO("[RmlUI] {}", message);
-            break;
         default:
             LOG_DEBUG("[RmlUI] {}", message);
             break;

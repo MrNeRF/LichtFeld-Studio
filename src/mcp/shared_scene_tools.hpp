@@ -31,7 +31,7 @@ namespace lfs::mcp {
             std::function<std::expected<void, std::string>(bool overwrite)>;
         // A size the capture source cannot satisfy fails as InvalidArgument.
         using RenderCaptureHandler =
-            std::function<lfs::Result<std::string>(int width, int height, bool presented)>;
+            std::function<lfs::Result<std::string>(std::optional<int> camera_index, int width, int height, bool presented)>;
         using GaussianCountHandler =
             std::function<std::expected<int64_t, std::string>()>;
         using LastTrainingErrorHandler =

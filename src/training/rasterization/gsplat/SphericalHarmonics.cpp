@@ -59,13 +59,4 @@ namespace gsplat_lfs {
             v_coeffs, v_dirs, stream);
     }
 
-    void rasterization_pack_depth_colors(
-        const float* depths,
-        float* colors,
-        uint32_t count,
-        uint32_t channels,
-        cudaStream_t stream) {
-        launch_rasterization_pack_depth_colors(depths, colors, count, channels, stream);
-    }
-
 } // namespace gsplat_lfs

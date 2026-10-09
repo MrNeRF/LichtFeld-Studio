@@ -688,8 +688,6 @@ namespace lfs::vis::editor {
                 return false;
             }
 
-            LOG_INFO("PythonLspClient: starting {}", command.label);
-
             {
                 std::scoped_lock lock(mutex);
                 state = State::Starting;

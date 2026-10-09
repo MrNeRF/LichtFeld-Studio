@@ -963,8 +963,11 @@ TEST(SceneCombinedEncode, QuantizedBandsMatchMasterEncodedBytesAndBounds) {
             }
         }
     }
-    for (auto stream : producers)
+    for (auto stream : producers) {
+        lfs::core::release_cuda_stream(stream);
         EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+    }
+    lfs::core::release_cuda_stream(build_stream);
     EXPECT_EQ(cudaStreamDestroy(build_stream), cudaSuccess);
 }
 

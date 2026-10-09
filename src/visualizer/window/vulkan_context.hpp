@@ -24,6 +24,7 @@
 #include <format>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <source_location>
 #include <span>
 #include <string>

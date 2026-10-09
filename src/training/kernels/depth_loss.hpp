@@ -13,6 +13,7 @@ namespace lfs::training::kernels {
     // Projects the anchor cloud into the prior and
     // returns the raw (prior value, camera-space depth) sample pairs. Empty when
     // too few samples land in view. Synchronizes the stream; startup use only.
+
     [[nodiscard]] std::vector<lfs::gpu_ops::AnchorSample> collect_depth_anchor_samples(
         const float* points_xyz, // [N,3] CUDA
         size_t num_points,
@@ -27,7 +28,8 @@ namespace lfs::training::kernels {
         float near_plane,
         const float aabb_lo[3],
         const float aabb_hi[3],
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        const DepthCameraProjection& projection = {});
 
     // Scale-and-shift-invariant depth supervision on alpha-normalized expected
     // depth in inverse-depth space using a fixed per-camera anchor alignment.
