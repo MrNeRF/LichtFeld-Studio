@@ -1018,17 +1018,19 @@ namespace {
         auto means = pattern_mrnf({n, 3}, 0.5f, 1);
         const Tensor frozen = bool_mask(n, 4);
         table->noise(means, opacity, visibility, frozen, {.seed = kSeed, .lr_mean = 1.f, .noise_weight = 4.f, .median_scale = 1.f});
-        keep(out.snapshot, backend, "mrnf.noise", means, kExact);
+        // Philox words are exact, but Box-Muller and the opacity weight's
+        // pow(..., 150) amplify backend-specific transcendental rounding.
+        keep(out.snapshot, backend, "mrnf.noise", means, kReduce);
         auto raw = pattern_mrnf({n}, 1.5f, 9);
         auto log_scales = pattern_mrnf({n, 3}, 0.4f, 11);
         table->decay(raw, log_scales, frozen, {.opacity_decay = 0.02f, .scale_decay = 0.01f, .train_t = 0.4f});
-        keep(out.snapshot, backend, "mrnf.decay.opacity", raw, kExact);
-        keep(out.snapshot, backend, "mrnf.decay.scales", log_scales, kExact);
+        keep(out.snapshot, backend, "mrnf.decay.opacity", raw, kAdam);
+        keep(out.snapshot, backend, "mrnf.decay.scales", log_scales, kAdam);
         const Tensor rendered = bool_mask(n, 3).to(DataType::Float32);
         table->decay(raw, log_scales, frozen,
                      {.opacity_decay = 0.02f, .scale_decay = 0.01f, .train_t = 0.4f, .rendered_count = rendered});
-        keep(out.snapshot, backend, "mrnf.rendered_decay.opacity", raw, kExact);
-        keep(out.snapshot, backend, "mrnf.rendered_decay.scales", log_scales, kExact);
+        keep(out.snapshot, backend, "mrnf.rendered_decay.opacity", raw, kAdam);
+        keep(out.snapshot, backend, "mrnf.rendered_decay.scales", log_scales, kAdam);
 
         constexpr size_t bounds_n = 129;
         auto bound_means = pattern_mrnf({bounds_n, 3}, 3.f, 2);
@@ -2297,6 +2299,18 @@ namespace {
         flipped.fields[1].bytes[0] ^= 0x1;
         EXPECT_FALSE(compare_snapshots(flipped, original, true).empty());
         EXPECT_TRUE(compare_snapshots(original, original, true).empty());
+    }
+
+    TEST(TrainingOpsParity, MrnfBudgetPreservesExactSelfChecks) {
+        Snapshot original;
+        keep_f(original, "mrnf.noise", 1.f, kReduce);
+        Snapshot rounded;
+        keep_f(rounded, "mrnf.noise", std::nextafter(1.f, 2.f), kReduce);
+        EXPECT_TRUE(compare_snapshots(rounded, original, false).empty());
+        EXPECT_FALSE(compare_snapshots(rounded, original, true).empty());
+        Snapshot perturbed;
+        keep_f(perturbed, "mrnf.noise", 1.f + 1e-4f, kReduce);
+        EXPECT_FALSE(compare_snapshots(perturbed, original, false).empty());
     }
 
     TEST(TrainingOpsParity, SelfCheck) {
