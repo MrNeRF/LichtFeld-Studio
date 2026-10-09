@@ -285,6 +285,7 @@ namespace lfs::core {
             bool use_depth_loss = false;         // Use dataset depth maps when available
             float depth_loss_weight = 2.0f;      // Depth supervision weight (decays over training)
             std::string depth_loss_mode = "ssi"; // ssi (auto prior), ssi-disparity, or ssi-depth
+            bool depth_auto_generate = true;     // Generate missing/mismatched maps from images/ with MoGe-2
 
             // Normal supervision
             bool use_normal_loss = false;             // Use dataset normal maps when available
@@ -695,6 +696,7 @@ namespace lfs::core {
             bool no_download = false;
             bool download_only = false;
             std::vector<std::filesystem::path> image_paths; // Empty = scan images_folder
+            std::string depth_folder = "depth";
             std::string normals_folder = "normals";
         };
 

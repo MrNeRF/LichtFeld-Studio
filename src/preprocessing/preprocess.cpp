@@ -1058,8 +1058,8 @@ namespace {
         for (const auto& image_path : plan.images) {
             PreprocessJob job{
                 .image_path = image_path,
-                .depth_path = output_path_for(plan.dataset_root, "depth", image_path, plan.images_dir),
-                .normals_path = output_path_for(plan.dataset_root, "normals", image_path, plan.images_dir),
+                .depth_path = output_path_for(plan.dataset_root, params.depth_folder, image_path, plan.images_dir),
+                .normals_path = output_path_for(plan.dataset_root, params.normals_folder, image_path, plan.images_dir),
             };
             job.write_depth = should_write_output(needs_depth(params.mode), params.overwrite, job.depth_path);
             job.write_normals = should_write_output(needs_normals(params.mode), params.overwrite, job.normals_path);

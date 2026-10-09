@@ -16,6 +16,7 @@
   "dc_reg": 0.0010000000474974513,
   "densify_error_map": "ssim_cs",
   "densify_structure_weight": 1.0,
+  "depth_auto_generate": true,
   "depth_loss_mode": "ssi",
   "depth_loss_weight": 2.0,
   "enable_eval": false,

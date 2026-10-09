@@ -1589,6 +1589,27 @@ TEST(ArgumentParserTest, TrainingConfigRejectsUnknownBackgroundMode) {
     EXPECT_NE(parsed.error().find("modulation"), std::string::npos) << parsed.error();
 }
 
+TEST(ArgumentParserTest, TrainingParsesNoDepthAutoGenerate) {
+    const auto data_path = make_test_path("lfs_arg_parser_no_depth_auto_data");
+    const auto output_path = make_test_path("lfs_arg_parser_no_depth_auto_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--use-depth-loss",
+        "--no-depth-auto-generate"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.use_depth_loss);
+    EXPECT_FALSE((*parsed)->optimization.depth_auto_generate);
+    EXPECT_TRUE((*parsed)->optimization.normal_auto_generate);
+}
+
 TEST(ArgumentParserTest, TrainingParsesNoNormalAutoGenerate) {
     const auto data_path = make_test_path("lfs_arg_parser_no_normal_auto_data");
     const auto output_path = make_test_path("lfs_arg_parser_no_normal_auto_output");

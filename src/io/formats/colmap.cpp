@@ -3087,16 +3087,25 @@ namespace lfs::io {
                     auto [img_w, img_h, img_c] = get_image_info_cached();
                     auto [depth_w, depth_h, depth_c] = lfs::core::get_image_info(depth_path);
                     if (depth_c != 1 || !sidecar_dimensions_match_contract(depth_w, depth_h, img_w, img_h)) {
-                        errors[i] = make_error(
-                                        ErrorCode::DEPTH_SIZE_MISMATCH,
-                                        std::format("Depth map '{}' is {}x{} but image '{}' is {}x{}; expected a 1-channel map with aspect ratio within 1%",
-                                                    lfs::core::path_to_utf8(depth_path.filename()), depth_w, depth_h,
-                                                    img.name, img_w, img_h),
-                                        depth_path)
-                                        .error();
-                        return;
+                        if (!options.depth_auto_generate) {
+                            errors[i] = make_error(
+                                            ErrorCode::DEPTH_SIZE_MISMATCH,
+                                            std::format("Depth map '{}' is {}x{} but image '{}' is {}x{}; expected a 1-channel map with aspect ratio within 1%",
+                                                        lfs::core::path_to_utf8(depth_path.filename()), depth_w, depth_h,
+                                                        img.name, img_w, img_h),
+                                            depth_path)
+                                            .error();
+                            return;
+                        }
+                        LOG_WARN("Depth map '{}' is {}x{} but image '{}' is {}x{}; "
+                                 "ignoring it so auto-generate can overwrite that file",
+                                 lfs::core::path_to_utf8(depth_path.filename()),
+                                 depth_w, depth_h, img.name, img_w, img_h);
+                        output.depth_matched = false;
+                        depth_path.clear();
+                    } else {
+                        output.depth_sizes = {depth_w, depth_h, img_w, img_h};
                     }
-                    output.depth_sizes = {depth_w, depth_h, img_w, img_h};
                 }
                 if (image_file_present && options.load_normals && !normal_path.empty()) {
                     auto [img_w, img_h, img_c] = get_image_info_cached();

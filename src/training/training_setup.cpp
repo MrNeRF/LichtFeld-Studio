@@ -757,6 +757,7 @@ namespace lfs::training {
             .load_normals = training_normal_priors_enabled(params.optimization) ||
                             params.optimization.enable_eval,
             .normal_auto_generate = params.optimization.normal_auto_generate,
+            .depth_auto_generate = params.optimization.depth_auto_generate,
             .centralize = parse_centralize(params.dataset.centralize_dataset),
             .progress = [&data_path](float percentage, const std::string& message) {
                 LOG_DEBUG("[{:5.1f}%] {}", percentage, message);
@@ -1146,7 +1147,8 @@ namespace lfs::training {
             .load_depths = params.optimization.use_depth_loss &&
                            params.optimization.depth_loss_weight > 0.0f,
             .load_normals = training_normal_priors_enabled(params.optimization),
-            .normal_auto_generate = params.optimization.normal_auto_generate};
+            .normal_auto_generate = params.optimization.normal_auto_generate,
+            .depth_auto_generate = params.optimization.depth_auto_generate};
 
         auto result = data_loader->load(params.dataset.data_path, load_options);
         if (!result) {

@@ -1154,6 +1154,11 @@ namespace lfs::python {
                 [](PyOptimizationParams&, const std::string& v) { modify_params([v](auto& p) { p.depth_loss_mode = v; }); },
                 "Depth prior convention: 'ssi' (auto-detect), 'ssi-disparity', or 'ssi-depth'")
             .def_prop_rw(
+                "depth_auto_generate",
+                [](PyOptimizationParams& self) { return self.params().depth_auto_generate; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.depth_auto_generate = v; }); },
+                "Generate missing or size-mismatched depth maps with MoGe-2 from the full-resolution images/ folder")
+            .def_prop_rw(
                 "use_normal_loss",
                 [](PyOptimizationParams& self) { return self.params().use_normal_loss; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.use_normal_loss = v; }); },
