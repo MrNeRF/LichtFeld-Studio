@@ -222,7 +222,22 @@ namespace {
             for (int d = 0; d < 3; ++d)
                 expected[i * 3 + d] += std::clamp(noise[d] * weight, -params.median_scale, params.median_scale);
         }
-        expect_close(host_f(means_gpu), expected, "mrnf.noise");
+        const auto actual = host_f(means_gpu);
+        expect_close(actual, expected, "mrnf.noise");
+        auto replay = gpu_rows(means, 3);
+        mrnf().noise(replay, gpu(opacity), gpu(visibility), gpu_bool(frozen), params);
+        const auto replay_values = host_f(replay);
+        for (size_t i = 0; i < actual.size(); ++i) {
+            EXPECT_EQ(std::bit_cast<uint32_t>(actual[i]), std::bit_cast<uint32_t>(replay_values[i])) << i;
+            const size_t row = i / 3;
+            if ((row < frozen.size() && frozen[row]) || visibility[row] <= 0.f)
+                EXPECT_EQ(std::bit_cast<uint32_t>(actual[i]), std::bit_cast<uint32_t>(means[i])) << i;
+        }
+        auto different_seed = params;
+        ++different_seed.seed;
+        auto resampled = gpu_rows(means, 3);
+        mrnf().noise(resampled, gpu(opacity), gpu(visibility), gpu_bool(frozen), different_seed);
+        EXPECT_NE(host_f(resampled), actual);
     }
 
     TEST_P(PortableDensifyOps, MrnfDecay) {
@@ -250,8 +265,17 @@ namespace {
                 expected_scales[i * 3 + d] =
                     std::log(std::max(std::exp(log_scales[i * 3 + d]) * (1.0f - params.scale_decay * t), 1e-12f));
         }
-        expect_close(host_f(raw_gpu), expected_raw, "mrnf.decay.opacity");
-        expect_close(host_f(scales_gpu), expected_scales, "mrnf.decay.scales");
+        const auto actual_raw = host_f(raw_gpu);
+        const auto actual_scales = host_f(scales_gpu);
+        expect_close(actual_raw, expected_raw, "mrnf.decay.opacity");
+        expect_close(actual_scales, expected_scales, "mrnf.decay.scales");
+        for (size_t i = 0; i < n; ++i) {
+            if (!frozen[i])
+                continue;
+            EXPECT_EQ(std::bit_cast<uint32_t>(actual_raw[i]), std::bit_cast<uint32_t>(raw[i])) << i;
+            for (size_t d = 0; d < 3; ++d)
+                EXPECT_EQ(std::bit_cast<uint32_t>(actual_scales[3 * i + d]), std::bit_cast<uint32_t>(log_scales[3 * i + d])) << i;
+        }
     }
 
     TEST_P(PortableDensifyOps, MrnfPercentileBoundsSelectCubOrder) {
