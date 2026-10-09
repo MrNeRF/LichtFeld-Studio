@@ -2262,6 +2262,57 @@ contract["check_selection_submode_follows_native_mode"](lf)
                   (std::set<std::string>{"first", "second"}));
     }
 
+    TEST_F(VisualizerImplResetTest, SequencerCaptureDropsRemovedTailAndPreservesExtensions) {
+        using Json = lfs::io::JsonChapterDom::Json;
+        using namespace lfs::io::project;
+        using lfs::test::licht::require_result;
+        using lfs::test::licht::require_status;
+        using lfs::vis::project::captureGuiSession;
+        auto options = projectOptions();
+        lfs::vis::VisualizerImpl viewer(options);
+        ASSERT_NE(viewer.getGuiManager(), nullptr);
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        auto& controller = viewer.getGuiManager()->sequencer();
+        nlohmann::json timeline{
+            {"version", 1},
+            {"clip_duration", 30.0},
+            {"keyframes", nlohmann::json::array()}};
+        for (int i = 0; i < 200; ++i) {
+            timeline["keyframes"].push_back({{"time", i * 0.1f}, {"position", {0.0f, 0.0f, 0.0f}}, {"rotation", {1.0f, 0.0f, 0.0f, 0.0f}}, {"focal_length_mm", 50.0f}, {"easing", 0}});
+        }
+        ASSERT_TRUE(controller.loadFromJson(timeline));
+        auto retained = require_result(captureGuiSession(viewer, ProjectSessionChapters{}, {}));
+        require_status(retained.sequencer.dom().set("vendor_extra", "keep-root"));
+        auto original = *retained.sequencer.dom().get_json("timeline.keyframes");
+        for (auto& key : original)
+            key["vendor_extra"] = "keep-key";
+        require_status(retained.sequencer.dom().set_json("timeline.keyframes", original));
+
+        // Unchanged, shortened, cleared, and newly populated paths all use
+        // the live key count while keeping extensions on surviving entries.
+        for (const size_t count : {size_t{200}, size_t{24}, size_t{0}, size_t{30}}) {
+            SCOPED_TRACE(count);
+            auto current = timeline;
+            current["keyframes"].erase(current["keyframes"].begin() + count,
+                                       current["keyframes"].end());
+            if (count >= 3) {
+                current["keyframes"][1]["easing"] = 3;
+                current["keyframes"][2]["focal_length_mm"] = 35.0f;
+            }
+            ASSERT_TRUE(controller.loadFromJson(current));
+            auto captured = require_result(captureGuiSession(viewer, retained, {}));
+            auto reopened = require_result(SequencerSessionChapter::from_bytes(captured.sequencer.to_bytes()));
+            const auto keys = *reopened.dom().get_json("timeline.keyframes");
+            ASSERT_EQ(keys.size(), count);
+            EXPECT_EQ(reopened.dom().get_json("vendor_extra"), Json("keep-root"));
+            for (size_t i = 0; i < count; ++i) {
+                auto expected = Json::parse(controller.saveToJson()["keyframes"][i].dump());
+                expected["vendor_extra"] = "keep-key";
+                EXPECT_EQ(keys[i], expected);
+            }
+        }
+    }
+
     TEST_F(VisualizerImplResetTest,
            CaptureOmitsPlySequenceClipAndCollapsedUuid) {
         using Json = lfs::io::JsonChapterDom::Json;
