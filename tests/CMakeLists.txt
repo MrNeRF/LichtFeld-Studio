@@ -878,7 +878,13 @@ if(NOT LFS_HAS_CUDA)
     else()
         add_test(NAME lichtfeld_tests COMMAND lichtfeld_tests --tensor-backend=metal)
     endif()
-    set_tests_properties(lichtfeld_tests PROPERTIES TIMEOUT 300)
+    if(APPLE)
+        # This timeout covers the entire suite, including throughput tests
+        # that take longer on hosted macOS paravirtual GPUs.
+        set_tests_properties(lichtfeld_tests PROPERTIES TIMEOUT 600)
+    else()
+        set_tests_properties(lichtfeld_tests PROPERTIES TIMEOUT 300)
+    endif()
 
     # Metal vs Vulkan tensor benchmark, built on demand and not registered with ctest.
     if(LFS_TENSOR_METAL AND LFS_TENSOR_VULKAN)
