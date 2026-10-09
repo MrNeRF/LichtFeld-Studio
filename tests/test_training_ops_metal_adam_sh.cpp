@@ -1185,6 +1185,25 @@ namespace {
         }
     }
 
+    TEST(MetalTrainingLifetime, CachedKernelsSurviveBackendRestart) {
+        if (!lfs::core::gpu_backend_available(GpuBackend::Metal))
+            GTEST_SKIP() << "Metal device unavailable";
+        const lfs::core::GpuBackendScope scope(GpuBackend::Metal);
+        const auto* sh = lfs::training::training_ops(GpuBackend::Metal).sh;
+        ASSERT_NE(sh, nullptr);
+        for (const uint8_t value : {uint8_t{0xA5}, uint8_t{0x3C}, uint8_t{0x71}}) {
+            SCOPED_TRACE(value);
+            {
+                auto output = Tensor::zeros({257}, Device::GPU, DataType::UInt8);
+                sh->fill_bytes(output, 253, value);
+                std::vector<uint8_t> expected(257, 0);
+                std::fill_n(expected.begin(), 253, value);
+                expect_equal(host<uint8_t>(output), expected, "fill after backend restart");
+            }
+            ASSERT_TRUE(lfs::core::shutdown_gpu_backend(GpuBackend::Metal));
+        }
+    }
+
     INSTANTIATE_TEST_SUITE_P(Backends, PortableAdamShMorton, testing::Values(GpuBackend::Metal, GpuBackend::Vulkan),
                              [](const auto& info) { return std::string(lfs::core::gpu_backend_name(info.param)); });
 

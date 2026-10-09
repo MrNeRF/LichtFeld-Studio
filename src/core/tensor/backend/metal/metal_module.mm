@@ -20,12 +20,11 @@ namespace lfs::core::internal {
         class Module final : public MetalModule {
         public:
             Module(std::string source, const bool fast_math)
-                : context_(metal::acquire_context()),
-                  source_(std::move(source)),
+                : source_(std::move(source)),
                   fast_math_(fast_math) {}
 
             uint64_t address(const StorageRef& storage) override {
-                const auto at = context_->locate(storage);
+                const auto at = metal::acquire_context()->locate(storage);
                 return at.address + at.offset;
             }
 
@@ -34,8 +33,9 @@ namespace lfs::core::internal {
                         const std::array<uint32_t, 3> groups, const std::array<uint32_t, 3> group) override {
                 if (groups[0] == 0 || groups[1] == 0 || groups[2] == 0)
                     return;
-                const auto state = pipeline(function, constants);
-                context_->dispatch(uses, {.pipeline = state,
+                const auto context = metal::acquire_context();
+                const auto state = pipeline(context, function, constants);
+                context->dispatch(uses, {.pipeline = state,
                                           .buffers = {},
                                           .params = params,
                                           .grid = MTLSizeMake(groups[0], groups[1], groups[2]),
@@ -43,11 +43,19 @@ namespace lfs::core::internal {
             }
 
         private:
-            id<MTLComputePipelineState> pipeline(const std::string_view function,
+            id<MTLComputePipelineState> pipeline(const std::shared_ptr<metal::Context>& context,
+                                                 const std::string_view function,
                                                  const std::span<const std::pair<uint32_t, uint32_t>> constants) {
                 std::vector<std::pair<uint32_t, uint32_t>> key_constants(constants.begin(), constants.end());
                 auto key = std::pair{std::string(function), std::move(key_constants)};
                 std::lock_guard lock(mutex_);
+                // Cached trainer modules outlive backend shutdown; their launches
+                // must follow the reopened tensor context's submission timeline.
+                if (context_id_ != context->context_id()) {
+                    pipelines_.clear();
+                    library_ = nil;
+                    context_id_ = context->context_id();
+                }
                 if (const auto found = pipelines_.find(key); found != pipelines_.end())
                     return found->second;
                 if (!library_) {
@@ -55,7 +63,7 @@ namespace lfs::core::internal {
                     options.languageVersion = MTLLanguageVersion4_0;
                     options.mathMode = fast_math_ ? MTLMathModeFast : MTLMathModeSafe;
                     NSError* error = nil;
-                    library_ = [context_->device() newLibraryWithSource:@(source_.c_str()) options:options error:&error];
+                    library_ = [context->device() newLibraryWithSource:@(source_.c_str()) options:options error:&error];
                     if (!library_)
                         throw TensorError(std::format("Metal kernel module failed to compile: {}",
                                                       error ? error.localizedDescription.UTF8String : "unknown error"));
@@ -69,7 +77,7 @@ namespace lfs::core::internal {
                                                               encoding:NSUTF8StringEncoding];
                 id<MTLFunction> const kernel = [library_ newFunctionWithName:name constantValues:values error:&error];
                 id<MTLComputePipelineState> const state =
-                    kernel ? [context_->device() newComputePipelineStateWithFunction:kernel error:&error] : nil;
+                    kernel ? [context->device() newComputePipelineStateWithFunction:kernel error:&error] : nil;
                 if (!state)
                     throw TensorError(std::format("Metal kernel '{}' failed: {}", function,
                                                   error ? error.localizedDescription.UTF8String : "unknown error"));
@@ -77,7 +85,7 @@ namespace lfs::core::internal {
                 return state;
             }
 
-            std::shared_ptr<metal::Context> context_;
+            uint64_t context_id_ = 0;
             std::string source_;
             bool fast_math_;
             std::mutex mutex_;
