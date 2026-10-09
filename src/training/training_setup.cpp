@@ -121,18 +121,6 @@ namespace lfs::training {
                      *scene_scale);
         }
 
-        std::optional<std::filesystem::path> gaussianSplatInitPath(
-            const lfs::core::param::TrainingParameters& params) {
-            if (!params.init_path.has_value() || params.init_path->empty()) {
-                return std::nullopt;
-            }
-            const std::filesystem::path init_file = lfs::core::utf8_to_path(*params.init_path);
-            if (isPlainPointCloudPly(init_file)) {
-                return std::nullopt;
-            }
-            return init_file;
-        }
-
         bool evalMaskNeedsInitialPoints(const lfs::core::param::TrainingParameters& params) {
             return params.optimization.enable_eval &&
                    lfs::core::param::is_eval_mask_points(params.optimization.eval_mask);
@@ -316,6 +304,18 @@ namespace lfs::training {
         }
 
     } // namespace
+
+    std::optional<std::filesystem::path> gaussianSplatInitPath(
+        const lfs::core::param::TrainingParameters& params) {
+        if (!params.init_path.has_value() || params.init_path->empty()) {
+            return std::nullopt;
+        }
+        const std::filesystem::path init_file = lfs::core::utf8_to_path(*params.init_path);
+        if (isPlainPointCloudPly(init_file)) {
+            return std::nullopt;
+        }
+        return init_file;
+    }
 
     TrainingModelGraphCapture captureTrainingModelGraph(lfs::core::Scene& scene) {
         TrainingModelGraphCapture context;

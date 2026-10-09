@@ -27,6 +27,10 @@ namespace lfs::io::project {
 namespace lfs::training {
     class Trainer;
 
+    /// Returns Gaussian splat init file path
+    [[nodiscard]] std::optional<std::filesystem::path> gaussianSplatInitPath(
+        const lfs::core::param::TrainingParameters& params);
+
     /// Scene-graph payload produced by prepareTrainingModel(). Heavy tensor work
     /// is finished; the owner thread still has to replace the POINTCLOUD node.
     struct TrainingModelGraphInstall {

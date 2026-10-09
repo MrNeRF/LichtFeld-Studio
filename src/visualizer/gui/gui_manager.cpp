@@ -69,6 +69,7 @@
 #include "tools/align_tool.hpp"
 
 #include "core/camera_metrics.hpp"
+#include "core/data_loading_service.hpp"
 #include "core/events.hpp"
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
@@ -90,6 +91,7 @@
 #include "tools/selection_tool.hpp"
 #if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
+#include "training/training_setup.hpp"
 #endif
 #include "core/training_manager.hpp"
 #include "visualizer/app_store.hpp"
@@ -5553,8 +5555,18 @@ namespace lfs::vis::gui {
                     viewer_->getEditorContext().forcePointCloudMode()) {
                     if (const auto* const parameter_manager = viewer_->getParameterManager();
                         parameter_manager && parameter_manager->isLoaded()) {
+#if LFS_BUILD_TRAINER
                         const auto optimization = parameter_manager->copyActiveParams();
-                        if (optimization.random) {
+                        const auto& training_params = viewer_->getDataLoader()->getParameters();
+                        const auto init_path = training_params.init_path
+                                                   ? lfs::core::utf8_to_path(*training_params.init_path)
+                                                   : std::filesystem::path{};
+                        if (init_path != random_init_preview_cached_init_path_) {
+                            random_init_preview_cached_init_path_ = init_path;
+                            random_init_preview_has_gaussian_init_ =
+                                lfs::training::gaussianSplatInitPath(training_params).has_value();
+                        }
+                        if (optimization.random && !random_init_preview_has_gaussian_init_) {
                             glm::mat4 model_to_world =
                                 lfs::rendering::DATA_TO_VISUALIZER_WORLD_AXES_4;
                             const auto& scene = scene_manager->getScene();
@@ -5571,6 +5583,7 @@ namespace lfs::vis::gui {
                                     params, guide_view, settings, optimization, model_to_world);
                             }
                         }
+#endif
                     }
                 }
                 appendVulkanViewportGizmoOverlay(params,
