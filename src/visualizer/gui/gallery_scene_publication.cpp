@@ -74,7 +74,7 @@ namespace lfs::vis::gui {
         // Each gallery SSOG level halves the splats until the coarsest fits half of a phone's 1M performance budget.
         constexpr std::uint64_t kGalleryCoarsestRows = 500'000;
         constexpr int kGalleryMaxLodLevels = 8;
-        constexpr int kGalleryChunkCountK = 256;
+        constexpr int kGalleryChunkCountK = 64;
 
         [[nodiscard]] int galleryLodLevels(const std::uint64_t rows) noexcept {
             int levels = 1;
