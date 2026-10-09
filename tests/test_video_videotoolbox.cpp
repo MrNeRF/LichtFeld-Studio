@@ -226,6 +226,7 @@ TEST(VideoToolboxExtractor, SoftwareFallback) {
     TempDir temp;
     const auto raw = temp.path / "software.nut";
     ASSERT_TRUE(writeRawVideo(raw));
+    // writeRawVideo writes two frames and the extractor keeps the last one.
     EXPECT_TRUE(extractAndCheck(raw, temp.path / "software_frames",
-                                "ffmpeg_software", 1, -1.0));
+                                "ffmpeg_software", 2, -1.0));
 }
