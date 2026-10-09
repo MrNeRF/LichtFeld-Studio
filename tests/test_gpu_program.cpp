@@ -647,11 +647,3 @@ namespace {
                              [](const auto& info) { return gpu_backend_name(info.param); });
 } // namespace
 
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    const int result = RUN_ALL_TESTS();
-    // Match the app and test_main.cpp: release GPU holders before pools, then
-    // avoid static destructors re-entering already released GPU storage.
-    lfs::core::teardown_gpu_before_exit();
-    lfs::core::flush_and_exit(result);
-}
