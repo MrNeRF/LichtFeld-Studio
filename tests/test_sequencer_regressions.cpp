@@ -2033,10 +2033,10 @@ namespace {
             std::ifstream file(path);
             return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
         }
-        void load(int width, float scale = 1.0f, const std::string& language = "en") {
+        void load(int width, float scale = 1.0f, const std::string& language = "en", int height = 640) {
             if (document_)
                 context_->UnloadDocument(document_);
-            context_->SetDimensions({width, 640});
+            context_->SetDimensions({width, height});
             context_->SetDensityIndependentPixelRatio(scale);
             const auto root = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui";
             const auto resources = root / "rmlui/resources";
@@ -2099,6 +2099,32 @@ namespace {
                     expectReachable(id);
             }
         }
+    }
+
+    TEST_F(SequencerToolbarLayoutTest, CompactPanelAtDoubleScaleKeepsControlsReachable) {
+        load(1040, 2.0f, "en", 286);
+        document_->GetElementById("duration")->SetInnerRML(" / 0:01.00");
+        context_->Update();
+        for (const auto* id : {"btn-play", "btn-speed", "sequence-fps-field", "quality-scrub",
+                               "btn-export", "btn-clear", "btn-dock-toggle"})
+            expectReachable(id);
+        auto* last_transport_button = document_->GetElementById("btn-add");
+        auto* display = document_->GetElementById("time-display");
+        EXPECT_LE(right(last_transport_button), display->GetAbsoluteOffset(Rml::BoxArea::Border).x);
+        EXPECT_LE(right(display), document_->GetElementById("btn-speed")->GetAbsoluteOffset(Rml::BoxArea::Border).x);
+
+        EXPECT_GE(document_->GetElementById("timeline")->GetOffsetHeight(), 112.0f);
+        auto* panel = document_->GetElementById("body");
+        auto* strip = document_->GetElementById("film-strip-panel");
+        ASSERT_GT(panel->GetScrollHeight(), panel->GetClientHeight());
+        ASSERT_GT(panel->GetOffsetWidth() - panel->GetClientWidth(), 2.0f);
+        panel->SetScrollTop(panel->GetScrollHeight());
+        context_->Update();
+        const auto panel_y = panel->GetAbsoluteOffset().y;
+        const auto strip_y = strip->GetAbsoluteOffset(Rml::BoxArea::Border).y;
+        EXPECT_GE(strip_y, panel_y);
+        EXPECT_LE(strip_y + strip->GetOffsetHeight(), panel_y + panel->GetClientHeight());
+        EXPECT_FLOAT_EQ(strip->GetOffsetHeight(), 112.0f);
     }
 
     TEST_F(SequencerToolbarLayoutTest, WideToolbarNeedsNoScrollingAndKeepsTimelinePosition) {
