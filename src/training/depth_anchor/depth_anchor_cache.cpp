@@ -27,7 +27,7 @@
 namespace lfs::training {
     namespace {
 
-        constexpr int kSchemaVersion = 2;
+        constexpr int kSchemaVersion = 3;
 
         void hash_bytes(std::uint64_t& hash, const void* data, const std::size_t size) {
             const auto* bytes = static_cast<const unsigned char*>(data);
@@ -249,14 +249,30 @@ namespace lfs::training {
             const float sx = static_cast<float>(prior_w) / static_cast<float>(cam->camera_width());
             const float sy = static_cast<float>(prior_h) / static_cast<float>(cam->camera_height());
 
+            // The camera's own SfM observations are the points it sees. Projecting the whole cloud also
+            // pairs points hidden behind the visible surface with that surface's prior value, which biased
+            // every fit toward larger depths.
+            const auto& observations = cam->sfm_observations();
+            lfs::core::Tensor observed_points;
+            if (!observations.empty()) {
+                std::vector<float> xyz;
+                xyz.reserve(observations.size() * 3);
+                for (const auto& observation : observations) {
+                    xyz.insert(xyz.end(), {observation.x, observation.y, observation.z});
+                }
+                observed_points = lfs::core::Tensor::from_vector(
+                    xyz, lfs::core::TensorShape({observations.size(), std::size_t{3}}), lfs::core::Device::CUDA);
+            }
+            const bool use_observations = observed_points.is_valid();
+
             // The prior's lazy ops materialize on their own stream; the collect
             // kernel reads raw pointers, so settle the device first (startup only).
             prior.ptr<float>();
             cudaDeviceSynchronize();
 
             auto samples = lfs::training::kernels::collect_depth_anchor_samples(
-                means.ptr<float>(),
-                num_points,
+                use_observations ? observed_points.ptr<float>() : means.ptr<float>(),
+                use_observations ? observations.size() : num_points,
                 cam->world_view_transform_ptr(),
                 cam->focal_x() * sx,
                 cam->focal_y() * sy,

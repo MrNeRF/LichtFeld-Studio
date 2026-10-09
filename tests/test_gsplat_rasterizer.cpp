@@ -9,6 +9,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/vmm_device_buffer.hpp"
 #include "core/environment.hpp"
+#include "core/image_io.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
@@ -17,6 +18,7 @@
 #include "lfs/training/sh_value_storage.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "training/components/ppisp.hpp"
+#include "training/depth_anchor/depth_anchor_cache.hpp"
 #include "training/kernels/densification_kernels.hpp"
 #include "training/kernels/depth_loss.hpp"
 #include "training/kernels/normal_consistency_loss.hpp"
@@ -1923,6 +1925,61 @@ TEST_F(GsplatRasterizerTest, GeometryAnchorsAndDepthNormalsFollowCameraRays) {
         if (equi)
             EXPECT_EQ(stats.ptr<float>()[kernels::normal_consistency_slots::kCount], float(w * (h - 2)));
     }
+}
+
+// The anchor must come from the surface the camera sees. The sparse cloud also holds points behind that surface on
+// the same rays; fitting the prior against them made every target too far. Here the hidden points are the
+// majority, so an anchor fitted against the whole cloud lands on them (shift near 3) instead of the surface.
+TEST(DepthAnchorFit, UsesOnlyThePointsTheCameraObserved) {
+    constexpr int width = 64;
+    constexpr int height = 48;
+    constexpr float focal = 50.0f;
+    const auto surface_depth = [](const float u) { return 2.0f + 2.0f * u / width; };
+
+    const auto directory = std::filesystem::temp_directory_path() / "lfs_depth_anchor_visible";
+    std::filesystem::create_directories(directory);
+    const auto depth_path = directory / "view.png";
+    std::vector<std::uint16_t> prior(static_cast<size_t>(width) * height);
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x)
+            prior[static_cast<size_t>(y) * width + x] =
+                static_cast<std::uint16_t>(std::lround(surface_depth(x + 0.5f) / 10.0f * 65535.0f));
+    ASSERT_TRUE(lfs::core::save_png(depth_path, prior.data(), width, height, 1, 16, 1));
+
+    auto R = Tensor::from_vector(std::vector<float>{1, 0, 0, 0, 1, 0, 0, 0, 1}, {3, 3}, Device::CPU);
+    auto T = Tensor::zeros({3}, Device::CPU);
+    auto camera = std::make_shared<lfs::core::Camera>(
+        R, T, focal, focal, width / 2.0f, height / 2.0f, Tensor(), Tensor(), lfs::core::CameraModelType::PINHOLE,
+        "view.png", std::filesystem::path{}, std::filesystem::path{}, width, height, 0, 0, depth_path);
+    camera->set_image_dimensions(width, height);
+
+    std::vector<lfs::core::Camera::SfmObservation> observations;
+    std::vector<float> cloud;
+    for (int y = 1; y < height; y += 2) {
+        for (int x = 1; x < width; x += 2) {
+            const float u = x + 0.5f;
+            const float v = y + 0.5f;
+            const float rx = (u - width / 2.0f) / focal;
+            const float ry = (v - height / 2.0f) / focal;
+            const float z = surface_depth(u);
+            observations.push_back({u, v, rx * z, ry * z, z});
+            cloud.insert(cloud.end(), {rx * z, ry * z, z});
+            for (int k = 0; k < 3; ++k) {
+                const float hidden = z + 3.0f + 0.01f * k;
+                cloud.insert(cloud.end(), {rx * hidden, ry * hidden, hidden});
+            }
+        }
+    }
+    camera->set_sfm_observations(std::move(observations));
+    const auto means = Tensor::from_vector(cloud, {cloud.size() / 3, size_t{3}}, Device::CUDA);
+
+    const auto anchors = lfs::training::computeRawDepthAnchors(means, {camera}, -1, 0);
+    std::filesystem::remove_all(directory);
+    ASSERT_TRUE(anchors.contains("view.png"));
+    const auto& depth = anchors.at("view.png").depth;
+    ASSERT_TRUE(depth.valid);
+    EXPECT_NEAR(depth.scale, 10.0f, 0.1f);
+    EXPECT_NEAR(depth.shift, 0.0f, 0.05f);
 }
 
 TEST_F(GsplatRasterizerTest, ExpectedRadialDepthBehindCameraHasCorrectGradients) {
