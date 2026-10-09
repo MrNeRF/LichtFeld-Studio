@@ -7,6 +7,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "gui/panel_registry.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
@@ -364,6 +365,8 @@ namespace lfs::vis::gui {
         set_text("lang-label", lichtfeld::Strings::Preferences::LANGUAGE);
         set_text("discord-link", lichtfeld::Strings::Startup::DISCORD);
         set_text("donate-link", lichtfeld::Strings::Startup::DONATE);
+        set_text("getting-started-link", lichtfeld::Strings::GettingStarted::TITLE);
+        set_text("preferences-link", lichtfeld::Strings::Preferences::TITLE);
         has_applied_plugin_load_state_ = false;
         updateClickHintUI();
     }
@@ -580,16 +583,21 @@ namespace lfs::vis::gui {
         return startupOverlayBlocksPointer(*card, languageDropdownRect(), window_x, window_y);
     }
 
-    bool StartupOverlay::isLinkHit(const float local_x, const float local_y) const {
+    std::string StartupOverlay::attributeAt(const float local_x, const float local_y,
+                                            const char* const attribute) const {
         if (!rml_context_ || !document_)
-            return false;
+            return {};
 
         for (auto* el = rml_context_->GetElementAtPoint(Rml::Vector2f(local_x, local_y)); el;
              el = el->GetParentNode()) {
-            if (!el->GetAttribute("data-url", Rml::String("")).empty())
-                return true;
+            if (auto value = el->GetAttribute(attribute, Rml::String("")); !value.empty())
+                return value;
         }
-        return false;
+        return {};
+    }
+
+    bool StartupOverlay::isLinkHit(const float local_x, const float local_y) const {
+        return !attributeAt(local_x, local_y, "data-url").empty();
     }
 
     void StartupOverlay::ensureLanguageDropdownFontsLoaded() {
@@ -835,12 +843,15 @@ namespace lfs::vis::gui {
         bool clicked_language_select = false;
         bool clicked_language_dropdown = false;
         bool clicked_link = false;
+        std::string clicked_panel;
         if (input_) {
             const float local_x = input_->mouse_x - window_x;
             const float local_y = input_->mouse_y - window_y;
             clicked_language_select = input_->mouse_clicked[0] && isLanguageSelectHit(local_x, local_y);
             clicked_language_dropdown = input_->mouse_clicked[0] && isLanguageDropdownHit(local_x, local_y);
             clicked_link = input_->mouse_clicked[0] && isLinkHit(local_x, local_y);
+            if (input_->mouse_clicked[0])
+                clicked_panel = attributeAt(local_x, local_y, "data-panel");
         }
 
         if (shown_frames_ > 2 && !drag_hovering && input_) {
@@ -850,6 +861,12 @@ namespace lfs::vis::gui {
                 !clicked_language_dropdown && !clicked_link) {
                 LOG_DEBUG("StartupOverlay: dismissed by mouse click");
                 dismiss();
+                // The overlay closes on press, before RmlUi would deliver a click to the link.
+                if (!clicked_panel.empty()) {
+                    auto& panels = PanelRegistry::instance();
+                    panels.set_panel_enabled(clicked_panel, true);
+                    panels.bring_panel_to_front(clicked_panel);
+                }
             }
         }
 
