@@ -3120,42 +3120,6 @@ class HistogramPanel(Panel):
             return set(base_bins) - drag_bins
         return None
 
-    def _toggle_histogram_bin_selection(self, bin_index: int, preview_scene: bool = False) -> bool:
-        base_mask = self._drag_selection_base_mask
-        if base_mask is None:
-            base_mask = self._current_selection_mask_for_source("histogram")
-        if base_mask is None:
-            return False
-
-        bin_mask = self._selection_mask_for_histogram_bin_bounds(bin_index, bin_index)
-        normalized_base = self._normalize_selection_mask(base_mask, self._primary_values)
-        if normalized_base is None or bin_mask is None:
-            return False
-
-        if not self._any_true(normalized_base & bin_mask):
-            return False
-
-        next_mask = normalized_base & ~bin_mask
-        self._commit_histogram_mask_selection(
-            next_mask,
-            apply_scene=not preview_scene,
-            preview_scene=preview_scene,
-        )
-        return True
-
-    def _maybe_promote_histogram_drag_selection_mode(self, event) -> bool:
-        if self._drag_selection_mode != "replace":
-            return False
-        mode = self._selection_mode_from_event(event)
-        if mode == "replace":
-            return False
-        self._drag_selection_mode = mode
-        if self._drag_selection_base_mask is None:
-            self._drag_selection_base_mask = self._current_selection_mask_for_source("histogram")
-        if self._drag_selection_base_bins is None:
-            self._drag_selection_base_bins = self._selected_histogram_bins_from_mask(self._drag_selection_base_mask)
-        return True
-
     def _commit_scene_selection_preview(self):
         if not self._scene_selection_preview_active:
             return
@@ -3603,9 +3567,14 @@ class HistogramPanel(Panel):
         except Exception:
             pass
 
+        # Like the viewport selection tools, the modifiers at press time decide the mode:
+        # none replaces, Shift adds, Ctrl removes.
         self._drag_selection_mode = self._selection_mode_from_event(event)
-        self._drag_selection_base_mask = self._current_selection_mask_for_source("histogram")
-        self._drag_selection_base_bins = self._selected_histogram_bins_from_mask(self._drag_selection_base_mask)
+        self._drag_selection_base_mask = None
+        self._drag_selection_base_bins = None
+        if self._drag_selection_mode != "replace":
+            self._drag_selection_base_mask = self._current_selection_mask_for_source("histogram")
+            self._drag_selection_base_bins = self._selected_histogram_bins_from_mask(self._drag_selection_base_mask)
         self._clear_compare_mark(clear_scene=False)
         bin_index = self._bin_index_for_mouse_x(self._event_mouse_x(event))
         self._dragging_mark = True
@@ -3706,9 +3675,8 @@ class HistogramPanel(Panel):
             return
 
         if self._dragging_mark and self._chart_el is not None:
-            mode_changed = self._maybe_promote_histogram_drag_selection_mode(event)
             bin_index = self._bin_index_for_mouse_x(self._event_mouse_x(event))
-            if bin_index == self._marked_bin_end and not mode_changed:
+            if bin_index == self._marked_bin_end:
                 return
             self._marked_bin_end = bin_index
             self._sync_marked_range(apply_scene=False, preview_scene=True)
@@ -3744,15 +3712,7 @@ class HistogramPanel(Panel):
             return
 
         if self._dragging_mark:
-            self._maybe_promote_histogram_drag_selection_mode(event)
-            toggled = (
-                self._drag_selection_mode == "replace" and
-                self._marked_bin_start is not None and
-                self._marked_bin_start == self._marked_bin_end and
-                self._toggle_histogram_bin_selection(self._marked_bin_start, preview_scene=True)
-            )
-            if not toggled:
-                self._sync_marked_range(apply_scene=False, preview_scene=True)
+            self._sync_marked_range(apply_scene=False, preview_scene=True)
             self._commit_scene_selection_preview()
             self._dragging_mark = False
             self._drag_selection_mode = "replace"
