@@ -13,7 +13,7 @@ struct Parameters {
 void setup(uint3 id:SV_DispatchThreadID) {
     if(id.x) return;
     GsplatSetupParams q;
-    q.view=(uint64_t)p.view; q.radial=p.radial; q.tangential=p.tangent; q.prism=p.prism; q.camera=p.camera;
+    q.view=(uint64_t)p.view; q.radial=p.radial; q.tangential=p.tangent; q.prism=p.prism; q.camera=(uint64_t)p.camera;
     q.fx=p.fx; q.fy=p.fy; q.cx=p.cx; q.cy=p.cy; q.width=p.width; q.height=p.height; q.model=p.model;
     q.radial_count=6; q.tangential_count=2; q.prism_count=4;
     gsplat_camera_setup(q);

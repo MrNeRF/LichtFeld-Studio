@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "gsplat_common.slangh"
 struct GsplatRasterParams {
-    Ptr<float, Access.ReadWrite> camera, means, scales, quats, opacities, colors;
+    uint64_t camera;
+    Ptr<float, Access.ReadWrite> means, scales, quats, opacities, colors;
     Ptr<float, Access.ReadWrite> bg_color, bg_image;
     Ptr<int, Access.ReadWrite> tile_offsets;
     Ptr<uint, Access.ReadWrite> gaussian_ids;
@@ -48,7 +49,7 @@ struct GsplatPixel {
 static GsplatPixel gsplat_pixel(GsplatRasterParams p, const uint i, const uint j) {
     const uint plane = p.width * p.height;
     const uint pixel = min(i * p.width + j, plane - 1u);
-    const GsplatCamera camera = gsplat_camera_load(p.camera);
+    const GsplatCamera camera = gsplat_camera_load((Ptr<float, Access.ReadWrite>)p.camera);
     const GsplatRay ray = gsplat_pixel_ray(camera, float2(float(j) + 0.5f, float(i) + 0.5f));
     GsplatPixel px;
     px.camera_R=camera.R;
@@ -148,7 +149,7 @@ static bool gsplat_contribute(inout GsplatPixel px, const int isect, const float
 }
 
 struct GsplatAccumulateParams {
-    Ptr<float, Access.ReadWrite> camera;
+    uint64_t camera;
     Ptr<float, Access.ReadWrite> means;
     Ptr<float, Access.ReadWrite> scales;
     Ptr<float, Access.ReadWrite> opacities;
@@ -187,7 +188,7 @@ void gsplat_accumulate(GsplatAccumulateParams p, uint g) {
     p.opacity_grad[g] += v[10] * opacity * (1.0f - opacity);
 
     float basis[16];
-    gsplat_sh_basis(gsplat_load3(p.means, g) - gsplat_camera_load(p.camera).origin, p.degree, basis);
+    gsplat_sh_basis(gsplat_load3(p.means, g) - gsplat_camera_load((Ptr<float, Access.ReadWrite>)p.camera).origin, p.degree, basis);
     const uint bases = (p.degree + 1u) * (p.degree + 1u);
     for (uint c = 0; c < 3u; ++c) {
         const float v_color = v[11u + c];
