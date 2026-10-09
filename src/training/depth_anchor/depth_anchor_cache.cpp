@@ -29,25 +29,6 @@ namespace lfs::training {
 
         constexpr int kSchemaVersion = 2;
 
-        kernels::DepthCameraProjection depth_projection(const lfs::core::Camera& cam) {
-            kernels::DepthCameraProjection p;
-            if (cam.is_undistort_prepared())
-                return p;
-            p.model = static_cast<int>(cam.camera_model_type());
-            auto copy = [](const lfs::core::Tensor& tensor, float* out, size_t count) {
-                if (!tensor.is_valid() || !tensor.numel())
-                    return;
-                const auto host = tensor.cpu().contiguous();
-                std::copy_n(host.ptr<float>(), std::min(count, host.numel()), out);
-            };
-            copy(cam.radial_distortion(), p.radial, 6);
-            if (cam.camera_model_type() == lfs::core::CameraModelType::THIN_PRISM_FISHEYE)
-                copy(cam.tangential_distortion(), p.thin_prism, 4);
-            else
-                copy(cam.tangential_distortion(), p.tangential, 2);
-            return p;
-        }
-
         void hash_bytes(std::uint64_t& hash, const void* data, const std::size_t size) {
             const auto* bytes = static_cast<const unsigned char*>(data);
             for (std::size_t i = 0; i < size; ++i) {
@@ -108,6 +89,25 @@ namespace lfs::training {
         }
 
     } // namespace
+
+    kernels::DepthCameraProjection depth_camera_projection(const lfs::core::Camera& cam) {
+        kernels::DepthCameraProjection p;
+        if (cam.is_undistort_prepared())
+            return p;
+        p.model = static_cast<int>(cam.camera_model_type());
+        auto copy = [](const lfs::core::Tensor& tensor, float* out, size_t count) {
+            if (!tensor.is_valid() || !tensor.numel())
+                return;
+            const auto host = tensor.cpu().contiguous();
+            std::copy_n(host.ptr<float>(), std::min(count, host.numel()), out);
+        };
+        copy(cam.radial_distortion(), p.radial, 6);
+        if (cam.camera_model_type() == lfs::core::CameraModelType::THIN_PRISM_FISHEYE)
+            copy(cam.tangential_distortion(), p.thin_prism, 4);
+        else
+            copy(cam.tangential_distortion(), p.tangential, 2);
+        return p;
+    }
 
     RawDepthAnchorMap computeRawDepthAnchors(
         const lfs::core::Tensor& means_in,
@@ -267,7 +267,7 @@ namespace lfs::training {
                 prior_h,
                 0.01f,
                 aabb_lo,
-                aabb_hi, nullptr, depth_projection(*cam));
+                aabb_hi, nullptr, depth_camera_projection(*cam));
             cam->release_depth_cache();
 
             if (samples.empty()) {
@@ -323,7 +323,7 @@ namespace lfs::training {
             hash_scalar(hash, cam->center_y());
             hash_scalar(hash, cam->camera_width());
             hash_scalar(hash, cam->camera_height());
-            const auto projection = depth_projection(*cam);
+            const auto projection = depth_camera_projection(*cam);
             hash_scalar(hash, projection.model);
             for (float v : projection.radial)
                 hash_scalar(hash, v);

@@ -660,6 +660,7 @@ set(TEST_FILES
     test_fastgs_analytical_gradients.cpp
     test_normal_prior_decode.cpp
     test_normal_auto_generate.cpp
+    test_lens_priors.cpp
     test_metrics_evaluator.cpp
     test_metrics_eval_mask.cpp
     test_background_image.cpp
@@ -840,6 +841,7 @@ target_include_directories(lichtfeld_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/tests
     ${CMAKE_SOURCE_DIR}/src/training   # For training headers
     ${CMAKE_SOURCE_DIR}/src            # For module headers
+    ${CMAKE_SOURCE_DIR}/src/preprocessing/include
     ${CMAKE_SOURCE_DIR}/src/app/include
     ${CMAKE_SOURCE_DIR}/src/visualizer # For visualizer-relative headers (e.g. gui/ui_widgets.hpp)
     ${CMAKE_SOURCE_DIR}/external/spz   # SPZ library headers
