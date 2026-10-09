@@ -104,6 +104,55 @@ namespace {
 
 } // namespace
 
+TEST(VideoExportUtilsTest, ImmediateSequenceCaptureUsesCurrentGeometryWithoutCopying) {
+    lfs::vis::SceneManager manager;
+    auto& scene = manager.getScene();
+    const auto first = scene.addSplat("frame_0", make_test_splat({1.0f, 2.0f, 3.0f}));
+    const auto second = scene.addSplat("frame_1", make_test_splat({4.0f, 5.0f, 6.0f}));
+    scene.setNodeVisibility(second, false);
+    auto owned = lfs::vis::gui::captureVideoExportSceneSnapshot(manager);
+    ASSERT_TRUE(owned);
+    ASSERT_TRUE(owned->combined_model);
+    EXPECT_EQ(owned->borrowed_model, nullptr);
+    EXPECT_NE(owned->gaussianModel()->means().data_ptr(), manager.getModelForRendering()->means().data_ptr());
+    for (const bool show_first : {true, false, true}) {
+        scene.setNodeVisibility(first, show_first);
+        scene.setNodeVisibility(second, !show_first);
+        auto current = lfs::vis::gui::captureVideoExportSceneSnapshot(
+            manager, lfs::vis::gui::VideoExportCapture::ImmediateRender);
+        ASSERT_TRUE(current);
+        EXPECT_FALSE(current->combined_model);
+        EXPECT_EQ(current->gaussianModel(), manager.getModelForRendering());
+        EXPECT_EQ(current->gaussianModel()->means().data_ptr(), manager.getModelForRendering()->means().data_ptr());
+        EXPECT_FLOAT_EQ(current->gaussianModel()->means().to(lfs::core::Device::CPU).ptr<float>()[0], show_first ? 1.0f : 4.0f);
+    }
+    // The owned path remains immutable across sequence switches.
+    EXPECT_FLOAT_EQ(owned->gaussianModel()->means().to(lfs::core::Device::CPU).ptr<float>()[0], 1.0f);
+}
+
+TEST(VideoExportUtilsTest, ImmediateCaptureBorrowsPointCloudAndMeshWithTheirTransforms) {
+    lfs::vis::SceneManager manager;
+    auto& scene = manager.getScene();
+    const auto cloud = make_test_point_cloud();
+    const auto mesh = make_test_mesh();
+    scene.addPointCloud("cloud", cloud);
+    scene.addMesh("mesh", mesh);
+    scene.setNodeTransform("cloud", glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)));
+    auto owned = lfs::vis::gui::captureVideoExportSceneSnapshot(manager);
+    auto borrowed = lfs::vis::gui::captureVideoExportSceneSnapshot(manager, lfs::vis::gui::VideoExportCapture::ImmediateRender);
+    ASSERT_TRUE(owned);
+    ASSERT_TRUE(borrowed);
+    ASSERT_TRUE(borrowed->pointCloud());
+    EXPECT_FALSE(borrowed->point_cloud);
+    EXPECT_EQ(borrowed->pointCloud()->means.data_ptr(), cloud->means.data_ptr());
+    EXPECT_NE(owned->pointCloud()->means.data_ptr(), cloud->means.data_ptr());
+    EXPECT_EQ(borrowed->point_cloud_transform, owned->point_cloud_transform);
+    ASSERT_EQ(borrowed->meshes.size(), 1u);
+    EXPECT_EQ(borrowed->meshes[0].meshData(), mesh.get());
+    EXPECT_FALSE(borrowed->meshes[0].mesh);
+    EXPECT_NE(owned->meshes[0].meshData(), mesh.get());
+}
+
 TEST(VideoExportUtilsTest, CaptureSnapshotUsesRenderableModelAndTransforms) {
     lfs::vis::SceneManager scene_manager;
     auto& scene = scene_manager.getScene();

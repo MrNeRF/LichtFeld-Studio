@@ -874,7 +874,8 @@ namespace lfs::vis::gui {
             return;
 
         auto& state = ply_stream_states_[frame_index];
-        if (state == PlyStreamFrameState::Resident || state == PlyStreamFrameState::Loading)
+        if (state == PlyStreamFrameState::Resident || state == PlyStreamFrameState::Loading ||
+            (export_ply_frame_ && state == PlyStreamFrameState::Failed))
             return;
 
         if (state == PlyStreamFrameState::Queued) {
@@ -1152,7 +1153,7 @@ namespace lfs::vis::gui {
         auto& scene = scene_manager->getScene();
         const uint64_t active_generation = ply_stream_generation_.load(std::memory_order_acquire);
         bool current_frame_loaded = false;
-        const auto current_frame = controller_.currentPlySequenceFrameIndex();
+        const auto current_frame = requestedPlySequenceFrame();
 
         while (!completed.empty()) {
             auto result = std::move(completed.front());
@@ -1371,6 +1372,11 @@ namespace lfs::vis::gui {
     }
 
     void SequencerUIManager::tickPlaybackBeforeSceneRender() {
+        if (export_ply_frame_) {
+            last_playback_tick_time_ = std::nullopt;
+            applyPlySequenceFrame();
+            return;
+        }
         if (!controller_.isPlaying()) {
             last_playback_tick_time_ = std::nullopt;
             drainPlySequenceStream();
@@ -1387,7 +1393,7 @@ namespace lfs::vis::gui {
         const auto* const sequence = controller_.plySequence();
         if (!sequence)
             return {};
-        const auto current_frame = controller_.currentPlySequenceFrameIndex();
+        const auto current_frame = requestedPlySequenceFrame();
 
         size_t resident = 0;
         size_t queued = 0;
@@ -1471,7 +1477,7 @@ namespace lfs::vis::gui {
         const bool already_ticked = playback_ticked_before_scene_;
         const float delta_time = already_ticked ? last_panel_delta_time_ : advancePanelClock();
         playback_ticked_before_scene_ = false;
-        if (!already_ticked) {
+        if (!already_ticked && !export_ply_frame_) {
             if (controller_.isPlaying()) {
                 advancePlayback(advancePlaybackClock());
             } else {
@@ -2379,11 +2385,39 @@ namespace lfs::vis::gui {
         return {};
     }
 
+    lfs::Result<bool> SequencerUIManager::preparePlySequenceExportFrame(const size_t frame) {
+        const auto fail = [](const lfs::ErrorCode code, std::string message) -> lfs::Result<bool> {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::Sequencer,
+                .user_message = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT()});
+        };
+        const auto* sequence = controller_.plySequence();
+        if (!sequence || frame >= sequence->frames.size())
+            return fail(lfs::ErrorCode::FailedPrecondition, "PLY sequence changed during video export");
+        export_ply_frame_ = frame;
+        // Inspect failure before the interactive player can retry the request.
+        {
+            std::lock_guard lock(ply_stream_mutex_);
+            if (frame < ply_stream_states_.size() && ply_stream_states_[frame] == PlyStreamFrameState::Failed)
+                return fail(lfs::ErrorCode::DataLoss, "Failed to load PLY sequence frame for video export");
+        }
+        applyPlySequenceFrame();
+        return last_ply_sequence_frame_ == frame;
+    }
+
+    void SequencerUIManager::finishPlySequenceExport() {
+        export_ply_frame_.reset();
+        last_playback_tick_time_ = std::nullopt;
+        applyPlySequenceFrame();
+    }
+
     void SequencerUIManager::applyPlySequenceFrame() {
         drainPlySequenceStream();
         auto* const scene_manager = viewer_->getSceneManager();
         const auto* const sequence = controller_.plySequence();
-        const auto frame_index = controller_.currentPlySequenceFrameIndex();
+        const auto frame_index = requestedPlySequenceFrame();
         if (!scene_manager || !sequence || !frame_index.has_value()) {
             last_ply_sequence_frame_ = std::nullopt;
             return;

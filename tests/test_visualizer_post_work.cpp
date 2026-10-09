@@ -1815,6 +1815,77 @@ namespace lfs::vis {
         EXPECT_FALSE(status().value("requested_frame_failed", true));
     }
 
+    TEST_F(SequencerFrameDemandTest, ExportUsesExactFrameAndRestoresPlayback) {
+        VisualizerImpl viewer(projectOptions());
+        auto& sequencer = viewer.getGuiManager()->sequencerUI();
+        auto& controller = sequencer.controller();
+        auto& scene = viewer.getSceneManager()->getScene();
+        const auto first = scene.addSplat("frame_0", lfs::test::licht::make_splat(2));
+        const auto second = scene.addSplat("frame_1", lfs::test::licht::make_splat(3));
+        scene.setNodeVisibility(second, false);
+        controller.setPlySequence(temporary_.path, "sequence",
+                                  {temporary_.path / "frame_0.ply", temporary_.path / "frame_1.ply"},
+                                  {"frame_0", "frame_1"}, 1.0f);
+        sequencer.ply_stream_states_ = {gui::SequencerUIManager::PlyStreamFrameState::Resident,
+                                        gui::SequencerUIManager::PlyStreamFrameState::Loading};
+        sequencer.loaded_ply_sequence_frames_ = {0};
+        sequencer.last_ply_sequence_frame_ = 0;
+        controller.play();
+        controller.seek(0.25f);
+        const auto pending = sequencer.preparePlySequenceExportFrame(1);
+        ASSERT_TRUE(pending);
+        EXPECT_FALSE(*pending);
+        EXPECT_FLOAT_EQ(controller.playhead(), 0.25f);
+        EXPECT_TRUE(controller.isPlaying());
+        sequencer.ply_stream_states_[1] = gui::SequencerUIManager::PlyStreamFrameState::Resident;
+        sequencer.loaded_ply_sequence_frames_.push_back(1);
+        const auto ready = sequencer.preparePlySequenceExportFrame(1);
+        ASSERT_TRUE(ready);
+        EXPECT_TRUE(*ready);
+        EXPECT_FALSE(scene.isNodeEffectivelyVisible(first));
+        EXPECT_TRUE(scene.isNodeEffectivelyVisible(second));
+        sequencer.tickPlaybackBeforeSceneRender();
+        EXPECT_FLOAT_EQ(controller.playhead(), 0.25f);
+        EXPECT_EQ(sequencer.last_ply_sequence_frame_, 1u);
+        sequencer.finishPlySequenceExport();
+        EXPECT_EQ(sequencer.last_ply_sequence_frame_, 0u);
+        EXPECT_TRUE(scene.isNodeEffectivelyVisible(first));
+        EXPECT_FALSE(scene.isNodeEffectivelyVisible(second));
+        EXPECT_FLOAT_EQ(controller.playhead(), 0.25f);
+        EXPECT_TRUE(controller.isPlaying());
+        controller.pause();
+        sequencer.loaded_ply_sequence_frames_ = {0};
+        sequencer.ply_stream_states_[1] = gui::SequencerUIManager::PlyStreamFrameState::Failed;
+        EXPECT_FALSE(sequencer.preparePlySequenceExportFrame(1));
+        sequencer.finishPlySequenceExport();
+        EXPECT_FALSE(controller.isPlaying());
+        EXPECT_FALSE(sequencer.preparePlySequenceExportFrame(2));
+        controller.clearPlySequence();
+        EXPECT_FALSE(sequencer.preparePlySequenceExportFrame(0));
+        controller.stop();
+        std::vector<double> reference_ns, current_ns;
+        constexpr int iterations = 10000;
+        const auto measure = [&](auto&& tick) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < iterations; ++i)
+                tick();
+            return std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - start).count() / iterations;
+        };
+        for (int trial = 0; trial < 9; ++trial) {
+            // Reference: the pre-export-override stopped playback tick.
+            reference_ns.push_back(measure([&] {
+                sequencer.last_playback_tick_time_ = std::nullopt;
+                sequencer.drainPlySequenceStream();
+                sequencer.applyPlySequenceFrame();
+            }));
+            current_ns.push_back(measure([&] { sequencer.tickPlaybackBeforeSceneRender(); }));
+        }
+        std::sort(reference_ns.begin(), reference_ns.end());
+        std::sort(current_ns.begin(), current_ns.end());
+        RecordProperty("reference_tick_ns", std::to_string(reference_ns[4]));
+        RecordProperty("current_tick_ns", std::to_string(current_ns[4]));
+    }
+
     TEST_F(SequencerFrameDemandTest, PropagatesPlaybackStreamAndPreviewDemand) {
         VisualizerImpl viewer(projectOptions());
         auto& gui = *viewer.getGuiManager();
