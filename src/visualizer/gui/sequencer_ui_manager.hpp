@@ -45,6 +45,7 @@ namespace lfs::vis {
     class SequencerFrameDemandTest_ReportsFrameFailureUntilSuccessfulRetry_Test;
 
     class SequencerFrameDemandTest_ExportUsesExactFrameAndRestoresPlayback_Test;
+    class SequencerFrameDemandTest_CameraFollowSettlesAfterPlaybackStops_Test;
 
     namespace gui {
 
@@ -92,6 +93,7 @@ namespace lfs::vis {
             friend class lfs::vis::SequencerFrameDemandTest_ReportsFrameFailureUntilSuccessfulRetry_Test;
 
             friend class lfs::vis::SequencerFrameDemandTest_ExportUsesExactFrameAndRestoresPlayback_Test;
+            friend class lfs::vis::SequencerFrameDemandTest_CameraFollowSettlesAfterPlaybackStops_Test;
             void renderSequencerPanel(const UIContext& ctx, const ViewportLayout& viewport,
                                       float panel_x, float panel_y, float panel_width,
                                       float panel_height, const PanelInputState& panel_input);

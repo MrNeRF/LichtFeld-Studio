@@ -1886,6 +1886,77 @@ namespace lfs::vis {
         RecordProperty("current_tick_ns", std::to_string(current_ns[4]));
     }
 
+    TEST_F(SequencerFrameDemandTest, CameraFollowSettlesAfterPlaybackStops) {
+        VisualizerImpl viewer(projectOptions());
+        auto& sequencer = viewer.getGuiManager()->sequencerUI();
+        auto& controller = sequencer.controller();
+        auto& rm = *viewer.getRenderingManager();
+        auto& viewport = viewer.getViewport();
+        sequencer.ui_state_.follow_playback = true;
+        sequencer::Keyframe first;
+        first.position = {1.0f, 2.0f, 3.0f};
+        first.rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        first.focal_length_mm = 50.0f;
+        const auto first_id = controller.addKeyframeAtTime(first, 0.0f);
+        auto last = first;
+        last.position.x += 2.0f;
+        last.focal_length_mm = 70.0f;
+        controller.addKeyframeAtTime(last, 1.0f);
+        const auto camera_requested = [&] {
+            return rm.frameDemandLedger().plan(FrameClock::now()).reasons.test(static_cast<size_t>(FrameReason::CameraMotion));
+        };
+        const auto expect_camera = [&] {
+            const auto state = controller.currentCameraState();
+            EXPECT_EQ(viewport.camera.t, state.position);
+            EXPECT_EQ(viewport.camera.R, glm::mat3_cast(state.rotation));
+            EXPECT_FLOAT_EQ(rm.getFocalLengthMm(), state.focal_length_mm);
+        };
+        (void)camera_requested();
+        controller.play();
+        sequencer.advancePlayback(0.25f);
+        EXPECT_TRUE(camera_requested());
+        expect_camera();
+        controller.pause();
+        for (int i = 0; i < 5; ++i) {
+            sequencer.advancePlayback(0.016f);
+            EXPECT_FALSE(camera_requested());
+            expect_camera();
+        }
+        controller.stop();
+        sequencer.advancePlayback(0.016f);
+        EXPECT_TRUE(camera_requested());
+        expect_camera();
+        for (int i = 0; i < 5; ++i) {
+            sequencer.advancePlayback(0.016f);
+            EXPECT_FALSE(camera_requested());
+            expect_camera();
+        }
+        // Camera edits at a stationary playhead still update the viewport.
+        ASSERT_TRUE(controller.setKeyframeFocalLengthById(first_id, 60.0f));
+        (void)camera_requested();
+        sequencer.advancePlayback(0.016f);
+        EXPECT_TRUE(camera_requested());
+        expect_camera();
+        ASSERT_TRUE(controller.updateKeyframeById(first_id, {3.0f, 4.0f, 5.0f},
+                                                  glm::angleAxis(0.3f, glm::vec3(0, 1, 0)), 60.0f));
+        (void)camera_requested();
+        sequencer.advancePlayback(0.016f);
+        EXPECT_TRUE(camera_requested());
+        expect_camera();
+        EXPECT_TRUE(sequencer.scrubToTime(0.75f, true));
+        EXPECT_TRUE(camera_requested());
+        expect_camera();
+        // Explicitly applying the same camera remains successful and settles.
+        EXPECT_TRUE(sequencer.applyCurrentTimelineCamera());
+        EXPECT_FALSE(camera_requested());
+        sequencer.ui_state_.follow_playback = false;
+        const auto position = viewport.camera.t;
+        controller.play();
+        sequencer.advancePlayback(0.1f);
+        EXPECT_FALSE(camera_requested());
+        EXPECT_EQ(viewport.camera.t, position);
+    }
+
     TEST_F(SequencerFrameDemandTest, PropagatesPlaybackStreamAndPreviewDemand) {
         VisualizerImpl viewer(projectOptions());
         auto& gui = *viewer.getGuiManager();
