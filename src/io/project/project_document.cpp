@@ -13,6 +13,7 @@
 #include "io/loader.hpp"
 #include "io/project_recovery.hpp"
 #include "project_container_internal.hpp"
+#include "project_filesystem.hpp"
 #include "project_framing.hpp"
 #include "project_path_utils.hpp"
 #include "span_streambuf.hpp"
@@ -156,7 +157,7 @@ namespace lfs::io::project {
             std::error_code error;
             auto absolute = std::filesystem::absolute(path, error);
             if (!error)
-                absolute = std::filesystem::weakly_canonical(absolute, error);
+                absolute = detail::project_fs::weakly_canonical(absolute, error);
             if (error) {
                 return fail<std::filesystem::path>(
                     lfs::ErrorCode::InvalidArgument,
@@ -521,7 +522,7 @@ namespace lfs::io::project {
         const std::filesystem::path& path,
         const bool allow_existing_destination_replacement) {
         std::error_code error;
-        const bool exists = std::filesystem::exists(path, error);
+        const bool exists = detail::project_fs::exists(path, error);
         if (error) {
             return fail<void>(
                 lfs::ErrorCode::PermissionDenied,
@@ -4821,7 +4822,7 @@ namespace lfs::io::project {
 
         std::error_code error;
         static_cast<void>(
-            std::filesystem::exists(
+            detail::project_fs::exists(
                 *normalized, error));
         if (error) {
             return fail<ProjectDocumentSaveReport>(
@@ -4842,7 +4843,7 @@ namespace lfs::io::project {
 
         const auto remove_temporary = [&temporary] {
             std::error_code error;
-            if (!std::filesystem::remove(temporary, error) &&
+            if (!detail::project_fs::remove(temporary, error) &&
                 error) {
                 LOG_WARN(
                     "Could not remove Save As staging file {}: {}",
@@ -4852,7 +4853,7 @@ namespace lfs::io::project {
             auto lock_path = temporary;
             lock_path += ".lock";
             std::error_code lock_error;
-            std::filesystem::remove(lock_path, lock_error);
+            detail::project_fs::remove(lock_path, lock_error);
         };
         const auto file_uuid =
             options.file_uuid.is_nil()
@@ -4887,7 +4888,7 @@ namespace lfs::io::project {
             autosave_sidecar_path(original_path);
         error.clear();
         const bool preserve_source_autosave =
-            std::filesystem::is_regular_file(
+            detail::project_fs::is_regular_file(
                 source_autosave, error);
         if (error == std::errc::no_such_file_or_directory) {
             error.clear();
@@ -4907,7 +4908,7 @@ namespace lfs::io::project {
             // available there. Save As uses the live document below, so
             // compact a private copy of the master without touching either
             // source file; save() then writes the live state to this copy.
-            if (!std::filesystem::copy_file(
+            if (!detail::project_fs::copy_file(
                     original_path, temporary,
                     std::filesystem::copy_options::none, error)) {
                 remove_temporary();
@@ -4935,7 +4936,7 @@ namespace lfs::io::project {
             // make the private source snapshot that the old Save As path
             // used, then compact that snapshot under its own writer lock.
             error.clear();
-            if (!std::filesystem::copy_file(
+            if (!detail::project_fs::copy_file(
                     original_path, temporary,
                     std::filesystem::copy_options::none, error)) {
                 remove_temporary();

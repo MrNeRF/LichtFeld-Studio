@@ -154,6 +154,10 @@ namespace {
             ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
             RecordProperty("save_as_" + std::to_string(length) + "_us",
                            std::to_string(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count()));
+            auto original = ProjectDocument::open(source);
+            ASSERT_TRUE(original) << lfs::format_for_developer(original.error());
+            auto overwritten = (*original)->save_as(destination, save_options(19'582 + length, 400));
+            ASSERT_TRUE(overwritten) << lfs::format_for_developer(overwritten.error());
             auto reopened = ProjectDocument::open(destination);
             ASSERT_TRUE(reopened) << lfs::format_for_developer(reopened.error());
             const auto saved_license = require_result(reopened->project().license());

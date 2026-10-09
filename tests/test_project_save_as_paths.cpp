@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "core/path_utils.hpp"
+#include "io/project/project_filesystem.hpp"
 #include "io/project/project_path_utils.hpp"
 
 TEST(ProjectSaveAsPathTest, PreservesUnicodeDestinationFilename) {
@@ -31,3 +32,22 @@ TEST(ProjectSaveAsPathTest, LongNamesLeaveRoomForNestedTemporaryFiles) {
         EXPECT_NE(staging, lfs::io::project::detail::save_as_staging_path(destination, "different-token"));
     }
 }
+
+#ifdef _WIN32
+TEST(ProjectSaveAsPathTest, NativePathConversionPreservesShortPathsAndNormalizesLongPaths) {
+    namespace project_fs = lfs::io::project::detail::project_fs;
+    const std::filesystem::path short_path = L"C:\\projects\\scene.licht";
+    EXPECT_EQ(project_fs::native_path(short_path), short_path);
+    const auto long_path = std::filesystem::path(L"C:\\projects") / std::wstring(200, L'a') / std::wstring(100, L'b') / std::wstring(100, L'c') / L".." / L"scene.licht";
+    const auto native = project_fs::native_path(long_path);
+    EXPECT_TRUE(native.native().starts_with(L"\\\\?\\C:\\"));
+    EXPECT_EQ(project_fs::display_path(native), long_path.lexically_normal());
+    EXPECT_EQ(project_fs::native_path(native), native);
+    const auto unc = std::filesystem::path(L"\\\\server\\share") / std::wstring(200, L'a') / std::wstring(100, L'b') / L"scene.licht";
+    const auto native_unc = project_fs::native_path(unc);
+    EXPECT_TRUE(native_unc.native().starts_with(L"\\\\?\\UNC\\server\\share\\"));
+    EXPECT_EQ(project_fs::display_path(native_unc), unc);
+    const auto relative = std::filesystem::path(std::wstring(200, L'a')) / L"scene.licht";
+    EXPECT_EQ(project_fs::display_path(project_fs::native_path(relative)), std::filesystem::absolute(relative));
+}
+#endif
