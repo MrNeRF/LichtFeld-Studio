@@ -19,6 +19,7 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <vector>
 namespace lfs::io {
     std::unique_ptr<media::detail::LinearVideoRenderer> createLinearTensorRenderer();
 }
@@ -51,8 +52,16 @@ namespace {
             for (int index = 0; index < 12; ++index) {
                 // Alternate CPU/GPU producers and strided views; reopening at a
                 // different extent must also discard the previous plane cache.
-                auto frame = core::Tensor::full({96, static_cast<size_t>(width) * 2, 3}, (32 + index * 16) / 255.f,
-                                                index < 6 ? device : core::Device::CPU)
+                // Different channels expose layout mistakes; zero padding makes
+                // an incorrectly packed read of this strided view observable.
+                std::vector<float> values(static_cast<size_t>(96 * width * 2 * 3), 0.f);
+                for (int row = 0; row < 96; ++row)
+                    for (int column = 0; column < width; ++column)
+                        for (int channel = 0; channel < 3; ++channel)
+                            values[(row * width * 2 + column) * 3 + channel] =
+                                (32 + index * 16 + (channel - 1) * 16) / 255.f;
+                auto frame = core::Tensor::from_vector(values, {96, static_cast<size_t>(width) * 2, 3},
+                                                       index < 6 ? device : core::Device::CPU)
                                  .slice(1, 0, width);
                 const auto written = encoder.writeFrame(frame);
                 if (!written)
@@ -73,7 +82,7 @@ namespace {
                 double error = 0;
                 for (size_t pixel = 0; pixel < static_cast<size_t>(width) * 96; ++pixel)
                     for (int channel = 0; channel < 3; ++channel)
-                        error += std::abs(int(pixels[pixel * player.currentFrameChannels() + channel]) - (32 + index * 16));
+                        error += std::abs(int(pixels[pixel * player.currentFrameChannels() + channel]) - (32 + index * 16 + (channel - 1) * 16));
                 if (error / (width * 96 * 3) >= 6)
                     throw std::runtime_error("Reused video planes contain stale or incorrect pixels: frame=" +
                                              std::to_string(index) + ", time=" + std::to_string(player.currentTime()) +
