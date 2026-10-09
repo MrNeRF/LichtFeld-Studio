@@ -147,6 +147,7 @@ namespace lfs::training {
         [[nodiscard]] float exchange_importance_decay() const;
         [[nodiscard]] int exchange_warmup_windows() const;
         void update_exchange_importance();
+        // Frees up to count least important splats; nothing while growth has no demand.
         size_t exchange_least_important(size_t count);
         // Newly grown rows start with full importance, so they are not exchanged before
         // they have been seen.

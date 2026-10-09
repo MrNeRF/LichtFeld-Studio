@@ -1006,10 +1006,11 @@ namespace lfs::training {
             update_exchange_importance();
             // Exchanged slots are left to error-guided growth (the cap - active budget);
             // only pruned slots go through the opacity-weighted replacement below.
-            if (_exchange_windows > exchange_warmup_windows() && _params->max_cap > 0 &&
-                static_cast<double>(active_count()) >= 0.98 * static_cast<double>(_params->max_cap)) {
-                const size_t exchanged = exchange_least_important(static_cast<size_t>(
-                    std::floor(_params->growth_exchange * static_cast<double>(active_count()))));
+            const size_t active = active_count();
+            if (_exchange_windows > exchange_warmup_windows() &&
+                static_cast<double>(active) >= 0.98 * static_cast<double>(_params->max_cap)) {
+                const size_t exchanged = exchange_least_important(
+                    static_cast<size_t>(std::floor(_params->growth_exchange * static_cast<double>(active))));
                 LOG_DEBUG("MRNF: exchanged {} splats at iter {}", exchanged, iter);
             }
             _exchange_free_before_growth = _free_mask.is_valid()
@@ -1100,7 +1101,8 @@ namespace lfs::training {
     }
 
     bool MRNF::growth_exchange_active(const int iter) const {
-        return _params && _params->growth_exchange > 0.0f && !_topology_frozen &&
+        // Without a finite cap growth always has budget, so there is nothing to exchange.
+        return _params && _params->growth_exchange > 0.0f && _params->max_cap > 0 && !_topology_frozen &&
                iter < static_cast<int>(_params->grow_until_iter) &&
                iter < static_cast<int>(_params->stop_refine);
     }
@@ -1167,27 +1169,41 @@ namespace lfs::training {
         if (count == 0 || !_exchange_importance.is_valid() || _exchange_importance.numel() != n) {
             return 0;
         }
-        Tensor candidates = _free_mask.is_valid() ? _free_mask.slice(0, 0, n).logical_not()
-                                                  : Tensor::ones_bool({n}, Device::CUDA);
+        Tensor eligible = _free_mask.is_valid() ? _free_mask.slice(0, 0, n).logical_not()
+                                                : Tensor::ones_bool({n}, Device::CUDA);
         if (auto trainable = make_trainable_mask(*_splat_data, n, _splat_data->means().device());
             trainable.is_valid()) {
-            candidates = candidates.logical_and(trainable);
+            eligible = eligible.logical_and(trainable);
         }
-        count = std::min(count, static_cast<size_t>(candidates.count_nonzero()));
+        count = std::min(count, static_cast<size_t>(eligible.count_nonzero()));
         if (count == 0) {
             return 0;
         }
         // Lowest importance first; free and frozen rows sort last.
-        const auto scores = _exchange_importance.masked_fill(candidates.logical_not(),
+        const auto scores = _exchange_importance.masked_fill(eligible.logical_not(),
                                                              std::numeric_limits<float>::infinity());
-        soft_delete_rows(scores.sort(0, /*descending=*/false).second.slice(0, 0, count).contiguous());
+        const auto victims = scores.sort(0, /*descending=*/false).second.slice(0, 0, count).contiguous();
+
+        // Exchange only while growth can respend the slots: grow_and_split grows grow_fraction x
+        // its candidates, so with grow_fraction 0 or no candidates the model would just shrink.
+        // Slots that growth does not fill at once are refilled over the next refines, and the
+        // caller's 98% guard pauses the exchange while the model is below the cap. (Capping each
+        // refine to its own growth demand removed most of the benefit on garden.)
+        Tensor victim_mask = Tensor::zeros_bool({n}, Device::CUDA);
+        victim_mask.index_put_(victims, Tensor::ones_bool({count}, Device::CUDA));
+        const auto growth_candidates =
+            compute_refine_candidates().logical_and(eligible).logical_and(victim_mask.logical_not());
+        if (std::round(static_cast<double>(growth_candidates.count_nonzero()) *
+                       static_cast<double>(_params->grow_fraction)) < 1.0) {
+            return 0;
+        }
+        soft_delete_rows(victims);
         LFS_COUNTER_ADD("strategy.mrnf.exchanged", static_cast<int64_t>(count));
         return count;
     }
 
     void MRNF::protect_exchange_newborns() {
         using namespace lfs::core;
-        constexpr float NEWBORN_IMPORTANCE = 1.0f; // blend weights stay below 1
         const size_t before = _exchange_free_before_growth.numel();
         const size_t n = static_cast<size_t>(_splat_data->size());
         if (!_exchange_free_before_growth.is_valid() || !_exchange_importance.is_valid() ||
@@ -1203,7 +1219,10 @@ namespace lfs::training {
             _exchange_importance = Tensor::cat(std::vector<Tensor>{_exchange_importance, Tensor::zeros({n - before}, Device::CUDA)}, 0);
             born = Tensor::cat(std::vector<Tensor>{born, Tensor::ones_bool({n - before}, Device::CUDA)}, 0);
         }
-        _exchange_importance = _exchange_importance.masked_fill(born, NEWBORN_IMPORTANCE);
+        // Start newborns at the top of the current signal scale: a peak blend weight stays
+        // below 1, but the summed-visibility fallback routinely exceeds it.
+        const float newborn_importance = std::max(1.0f, _exchange_importance.max().item<float>());
+        _exchange_importance = _exchange_importance.masked_fill(born, newborn_importance);
         _exchange_free_before_growth = Tensor();
     }
 
