@@ -80,7 +80,8 @@ class StudioBackends(unittest.TestCase):
         probe = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_streams",
                                                     "-show_format", "-show_frames", "-of", "json", str(path)]))
         self.assertEqual((probe["streams"][0]["width"], probe["streams"][0]["height"]), (320, 240))
-        self.assertEqual(len(probe["frames"]), 3)
+        self.assertEqual(actual["frames"], 12)
+        self.assertEqual(len(probe["frames"]), 12)
         # The Studio adapter, not the leaf module, prepares application provenance.
         self.assertIsInstance(json.loads(probe["format"]["tags"]["comment"]), dict)
         for index, frame in enumerate(probe["frames"]):
@@ -88,10 +89,10 @@ class StudioBackends(unittest.TestCase):
         pixels = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(path),
                                            "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
         frame_bytes = 320 * 240 * 3
-        self.assertEqual(len(pixels), 3 * frame_bytes)
-        for index in range(3):
+        self.assertEqual(len(pixels), 12 * frame_bytes)
+        for index in range(12):
             frame = pixels[index * frame_bytes:(index + 1) * frame_bytes]
-            error = sum(abs(value - (64 + index * 64)) for value in frame) / len(frame)
+            error = sum(abs(value - (64 + index * 12)) for value in frame) / len(frame)
             self.assertLess(error, 6, f"Studio producer {index} color error {error}")
 
     def test_cuda_handoff_waits_on_streams_and_exception_unwind(self):

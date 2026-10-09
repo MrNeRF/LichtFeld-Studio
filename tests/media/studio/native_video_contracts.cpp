@@ -201,6 +201,7 @@ nlohmann::json runNativeVideoContracts(const nlohmann::json& request) {
     options.height = 240;
     options.framerate = 10;
     options.crf = 18;
+    CudaStream stream;
     io::video::VideoEncoder encoder;
     auto opened = encoder.open(core::utf8_to_path(request.at("output").get<std::string>()), options);
     if (!opened)
@@ -211,15 +212,23 @@ nlohmann::json runNativeVideoContracts(const nlohmann::json& request) {
     auto first = encoder.writeFrame(rgba, options.width, options.height);
     if (!first)
         throw std::runtime_error(first.error());
-    for (int index = 1; index < 3; ++index) {
-        auto tensor = core::Tensor::ones({240, 320, 3}, index == 1 ? core::Device::GPU : core::Device::CPU)
-                          .mul(static_cast<float>(64 + index * 64) / 255.0f);
-        if (index == 1) {
+    for (int index = 1; index < 12; ++index) {
+        auto tensor = core::Tensor::ones({240, 320, 3}, index == 11 ? core::Device::CPU : core::Device::GPU)
+                          .mul(static_cast<float>(64 + index * 12) / 255.0f);
+        if (index % 2 == 1) {
             // A cropped view must be materialized before the flat CUDA kernel;
             // the adjacent black half detects an incorrect source row stride.
             tensor = core::Tensor::cat({tensor, core::Tensor::zeros_like(tensor)}, 1).slice(1, 0, 320);
             require(!tensor.is_contiguous(), "native encoder exercises strided RGB input");
         }
+        // Reuse planes for several frames, then change streams and return to
+        // the default stream. Distinct decoded luma detects stale/racing reuse.
+        const auto execution_stream = index >= 4 && index < 8 ? stream.value : nullptr;
+        if (execution_stream) {
+            require(cudaDeviceSynchronize() == cudaSuccess, "encoder input preparation");
+            tensor.set_stream(execution_stream);
+        }
+        core::CUDAStreamGuard execution(execution_stream);
         auto written = encoder.writeFrame(tensor);
         if (!written)
             throw std::runtime_error(written.error());
@@ -228,5 +237,5 @@ nlohmann::json runNativeVideoContracts(const nlohmann::json& request) {
     if (!closed)
         throw std::runtime_error(closed.error());
     require(!encoder.isOpen() && encoder.close().has_value(), "native encoder close");
-    return {{"success", true}, {"backend", "nvenc"}, {"frames", 3}};
+    return {{"success", true}, {"backend", "nvenc"}, {"frames", 12}};
 }

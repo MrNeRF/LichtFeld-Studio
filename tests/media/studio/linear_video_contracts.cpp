@@ -7,7 +7,9 @@
 #include "core/tensor_color.hpp"
 #include "core/tensor_upload.hpp"
 #include "io/image_output.hpp"
+#include "io/video/video_encoder.hpp"
 #include "media/video_color.hpp"
+#include "media/video_player.hpp"
 #include "visualizer/rendering/float_color_readback.hpp"
 #include <algorithm>
 #include <chrono>
@@ -21,6 +23,62 @@ namespace lfs::io {
     std::unique_ptr<media::detail::LinearVideoRenderer> createLinearTensorRenderer();
 }
 namespace {
+    void videoOutputContracts(lfs::core::Device device) {
+        using namespace lfs;
+        const auto path = std::filesystem::temp_directory_path() /
+                          ("lfs-video-reuse-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".mp4");
+        struct Cleanup {
+            std::filesystem::path path;
+            ~Cleanup() {
+                std::error_code ignored;
+                std::filesystem::remove(path, ignored);
+            }
+        } cleanup{path};
+        io::video::VideoEncoder encoder;
+        for (const auto width : {320, 160}) {
+            io::video::VideoExportOptions options;
+            options.preset = io::video::VideoPreset::CUSTOM;
+            options.width = width;
+            options.height = 96;
+            options.framerate = 10;
+            const auto opened = encoder.open(path, options);
+            if (!opened)
+                throw std::runtime_error(opened.error());
+            for (int index = 0; index < 12; ++index) {
+                // Alternate CPU/GPU producers and strided views; reopening at a
+                // different extent must also discard the previous plane cache.
+                auto frame = core::Tensor::full({96, static_cast<size_t>(width) * 2, 3}, (32 + index * 16) / 255.f,
+                                                index < 6 ? device : core::Device::CPU)
+                                 .slice(1, 0, width);
+                const auto written = encoder.writeFrame(frame);
+                if (!written)
+                    throw std::runtime_error(written.error());
+            }
+            const auto closed = encoder.close();
+            if (!closed || encoder.isOpen() || !encoder.close())
+                throw std::runtime_error("Video producer did not close idempotently");
+            io::VideoPlayer player;
+            if (!player.open(path) || player.width() != width || player.height() != 96)
+                throw std::runtime_error("Reopened video has incorrect extent");
+            for (int index = 0; index < 12; ++index) {
+                player.seek(index / 10.);
+                const auto* pixels = player.currentFrameData();
+                const auto count = static_cast<size_t>(width) * 96 * player.currentFrameChannels();
+                if (!pixels || !count || !player.takeError().empty())
+                    throw std::runtime_error("Cannot decode reused video planes");
+                double error = 0;
+                for (size_t pixel = 0; pixel < static_cast<size_t>(width) * 96; ++pixel)
+                    for (int channel = 0; channel < 3; ++channel)
+                        error += std::abs(int(pixels[pixel * player.currentFrameChannels() + channel]) - (32 + index * 16));
+                if (error / (width * 96 * 3) >= 6)
+                    throw std::runtime_error("Reused video planes contain stale or incorrect pixels: frame=" +
+                                             std::to_string(index) + ", time=" + std::to_string(player.currentTime()) +
+                                             ", first=" + std::to_string(pixels[0]) + ", mean error=" +
+                                             std::to_string(error / (width * 96 * 3)));
+            }
+        }
+    }
+
     void imageOutputContracts(lfs::core::Device device) {
         using namespace lfs;
         const auto path = std::filesystem::temp_directory_path() /
@@ -117,6 +175,11 @@ int main(int argc, char** argv) {
             ~Shutdown() { core::teardown_gpu_before_exit(); }
         } shutdown;
         imageOutputContracts(cpu ? core::Device::CPU : core::Device::GPU);
+        // CUDA builds select NVENC by default even for a CPU source. Keep the
+        // CPU-only contract independent of hardware; GPU profiles also exercise
+        // CPU sources above, while non-CUDA builds cover the CPU producer here.
+        if (!cpu || !LFS_HAS_CUDA)
+            videoOutputContracts(cpu ? core::Device::CPU : core::Device::GPU);
         auto renderer = cpu ? nullptr : io::createLinearTensorRenderer();
         if (!cpu && !renderer)
             throw std::runtime_error("Linear tensor op unavailable on an available GPU backend");
