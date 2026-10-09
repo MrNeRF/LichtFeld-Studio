@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/mesh_data.hpp"
+#include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -627,6 +628,60 @@ TEST(VideoEncoderValidationTest, AcceptsMp4CaseVariantsAndExtensionlessNames) {
         EXPECT_TRUE(std::filesystem::is_regular_file(directory.path / name));
     }
 }
+
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+}
+
+namespace {
+    class VideoEncoderColorTest : public ::testing::TestWithParam<bool> {};
+
+    TEST_P(VideoEncoderColorTest, TagsLimitedRangeBt601) {
+        int devices = 0;
+        if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)
+            GTEST_SKIP() << "CUDA is required by the RGB conversion";
+        // NVENC rejects a 16x16 frame; exercise the actual software fallback.
+        const bool hardware = GetParam();
+        if (hardware && !avcodec_find_encoder_by_name("h264_nvenc"))
+            GTEST_SKIP() << "NVENC is not compiled in";
+        const int width = hardware ? 160 : 16;
+        const int height = hardware ? 96 : 16;
+        VideoOutputDirectory directory;
+        const auto path = directory.path / "color.mp4";
+        lfs::io::video::VideoEncoder encoder;
+        auto opened = encoder.open(path, {.preset = lfs::io::video::VideoPreset::CUSTOM,
+                                          .width = width,
+                                          .height = height,
+                                          .framerate = 4});
+        ASSERT_TRUE(opened) << opened.error();
+        std::vector<float> pixels(width * height * 3, 0.0f);
+        for (size_t i = 0; i < pixels.size(); i += 3)
+            pixels[i] = 1.0f;
+        auto frame = Tensor::from_vector(pixels, {size_t(height), size_t(width), size_t{3}}, Device::CUDA);
+        for (int i = 0; i < 6; ++i) {
+            const auto written = encoder.writeFrameGpu(frame.ptr<float>(), width, height);
+            ASSERT_TRUE(written) << written.error();
+        }
+        const auto closed = encoder.close();
+        ASSERT_TRUE(closed) << closed.error();
+        AVFormatContext* raw_format = nullptr;
+        ASSERT_EQ(avformat_open_input(&raw_format, lfs::core::path_to_utf8(path).c_str(), nullptr, nullptr), 0);
+        const auto close_format = [](AVFormatContext* format) { avformat_close_input(&format); };
+        std::unique_ptr<AVFormatContext, decltype(close_format)> format(raw_format, close_format);
+        ASSERT_GE(avformat_find_stream_info(format.get(), nullptr), 0);
+        const int stream = av_find_best_stream(format.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+        ASSERT_GE(stream, 0);
+        const auto* params = format->streams[stream]->codecpar;
+        EXPECT_EQ(params->color_space, AVCOL_SPC_SMPTE170M);
+        EXPECT_EQ(params->color_range, AVCOL_RANGE_MPEG);
+        EXPECT_EQ(params->color_primaries, AVCOL_PRI_UNSPECIFIED);
+        EXPECT_EQ(params->color_trc, AVCOL_TRC_UNSPECIFIED);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Backend, VideoEncoderColorTest, ::testing::Bool(),
+                             [](const auto& info) { return info.param ? "Hardware" : "Software"; });
+} // namespace
 
 namespace {
     // Keep the regression runnable against the old API to prove the image failure.

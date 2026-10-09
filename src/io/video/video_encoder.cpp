@@ -185,6 +185,8 @@ namespace lfs::io::video {
             codec_ctx_->time_base = AVRational{1, framerate_};
             codec_ctx_->framerate = AVRational{framerate_, 1};
             codec_ctx_->pix_fmt = AV_PIX_FMT_CUDA;
+            codec_ctx_->colorspace = AVCOL_SPC_SMPTE170M;
+            codec_ctx_->color_range = AVCOL_RANGE_MPEG;
             codec_ctx_->gop_size = framerate_;
             codec_ctx_->max_b_frames = 0;
 
@@ -305,6 +307,8 @@ namespace lfs::io::video {
             codec_ctx_->time_base = AVRational{1, framerate_};
             codec_ctx_->framerate = AVRational{framerate_, 1};
             codec_ctx_->pix_fmt = AV_PIX_FMT_YUV420P;
+            codec_ctx_->colorspace = AVCOL_SPC_SMPTE170M;
+            codec_ctx_->color_range = AVCOL_RANGE_MPEG;
             codec_ctx_->gop_size = framerate_;
             codec_ctx_->max_b_frames = 2;
             codec_ctx_->thread_count = 0;
@@ -476,6 +480,11 @@ namespace lfs::io::video {
         }
 
         std::expected<void, std::string> encodeFrame(AVFrame* const frame) {
+            // Both RGB conversion paths produce BT.601 limited-range planes.
+            if (frame) {
+                frame->colorspace = AVCOL_SPC_SMPTE170M;
+                frame->color_range = AVCOL_RANGE_MPEG;
+            }
             int ret = avcodec_send_frame(codec_ctx_, frame);
             if (ret < 0) {
                 char err[AV_ERROR_MAX_STRING_SIZE];
