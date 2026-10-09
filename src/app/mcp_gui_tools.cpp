@@ -286,17 +286,46 @@ namespace lfs::app {
                     }));
         }
 
-        std::expected<std::string, std::string> render_scene_to_base64(
-            core::Scene& scene,
-            int camera_index = 0,
-            int width = 0,
-            int height = 0) {
-            (void)scene;
-            (void)camera_index;
-            (void)width;
-            (void)height;
-            return std::unexpected(
-                "Camera-index CUDA scene rendering has been removed; use live Vulkan viewport capture");
+        // The viewer is pinhole: lens cameras render with their pose and vertical field of view.
+        std::expected<std::string, std::string> render_dataset_camera_to_base64(
+            vis::Visualizer* viewer,
+            const int camera_uid,
+            const int width,
+            const int height) {
+            auto* const scene_manager = viewer->getSceneManager();
+            auto* const rendering_manager = viewer->getRenderingManager();
+            if (!scene_manager || !rendering_manager)
+                return std::unexpected("Viewport rendering is not initialized");
+
+            const auto& scene = scene_manager->getScene();
+            const auto camera = scene.getCameraByUid(camera_uid);
+            if (!camera)
+                return std::unexpected("Camera UID not found: " + std::to_string(camera_uid));
+
+            const auto R = camera->R().cpu().contiguous();
+            const auto T = camera->T().cpu().contiguous();
+            glm::mat4 scene_transform(1.0f);
+            if (const auto transform = scene.getCameraSceneTransformByUid(camera_uid))
+                scene_transform = lfs::rendering::dataWorldTransformToVisualizerWorld(*transform);
+            const auto pose = lfs::rendering::visualizerCameraPoseFromDataWorldToCamera(
+                lfs::rendering::mat3FromRowMajor3x3(R.ptr<float>()),
+                glm::vec3(T.ptr<float>()[0], T.ptr<float>()[1], T.ptr<float>()[2]),
+                scene_transform);
+
+            const int camera_width = camera->image_width();
+            const int camera_height = camera->image_height();
+            const float focal_y = std::get<1>(camera->get_intrinsics());
+            if (camera_width <= 0 || camera_height <= 0 || !(focal_y > 0.0f))
+                return std::unexpected("Camera UID " + std::to_string(camera_uid) + " has no image size");
+            const float fov_y_degrees =
+                glm::degrees(2.0f * std::atan(static_cast<float>(camera_height) / (2.0f * focal_y)));
+
+            const auto image = rendering_manager->renderPreviewImage(
+                scene_manager, pose.rotation, pose.translation,
+                lfs::rendering::vFovToFocalLength(fov_y_degrees), camera_width, camera_height);
+            if (!image || !image->is_valid())
+                return std::unexpected("Rendering camera UID " + std::to_string(camera_uid) + " failed");
+            return mcp::encode_render_tensor_to_base64(*image, width, height);
         }
 
         template <typename F>
@@ -2667,7 +2696,7 @@ namespace lfs::app {
                     // inside capture_live_viewport_to_base64 needs an active GUI frame.
                     return capture_after_gui_render(viewer, [viewer, camera_index, width, height]() {
                         if (camera_index)
-                            return render_scene_to_base64(viewer->getScene(), *camera_index, width, height);
+                            return render_dataset_camera_to_base64(viewer, *camera_index, width, height);
                         return capture_live_viewport_to_base64(viewer, width, height);
                     });
                 },
@@ -5563,7 +5592,7 @@ namespace lfs::app {
                 if (include_render) {
                     int camera_index = args.value("camera_index", 0);
                     auto render_result = post_and_wait(viewer, [viewer, camera_index]() {
-                        return render_scene_to_base64(viewer->getScene(), camera_index);
+                        return render_dataset_camera_to_base64(viewer, camera_index, 0, 0);
                     });
                     if (render_result)
                         base64_render = *render_result;
@@ -5612,7 +5641,7 @@ namespace lfs::app {
                 const std::string description = args["description"].get<std::string>();
 
                 auto render_result = post_and_wait(viewer_impl, [viewer_impl, camera_index]() {
-                    return render_scene_to_base64(viewer_impl->getScene(), camera_index);
+                    return render_dataset_camera_to_base64(viewer_impl, camera_index, 0, 0);
                 });
                 if (!render_result)
                     return json{{"error", render_result.error()}};
@@ -5818,7 +5847,7 @@ namespace lfs::app {
                 }
 
                 auto result = post_and_wait(viewer, [viewer, camera_index]() {
-                    return render_scene_to_base64(viewer->getScene(), camera_index);
+                    return render_dataset_camera_to_base64(viewer, camera_index, 0, 0);
                 });
                 if (!result)
                     return std::unexpected(result.error());
