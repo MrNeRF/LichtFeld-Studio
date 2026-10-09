@@ -44,6 +44,16 @@ if(NOT GIT_TAGGED_VERSION)
     set(GIT_TAGGED_VERSION "unknown")
 endif()
 
+# A build past the last release tag is work toward the version the project declares, so it is named after that
+# version: v0.5.5-dev-12-g1a2b3c4 instead of v0.5.4-12-g1a2b3c4. A build exactly at a release tag keeps the tag.
+if(NOT DEFINED LFS_PROJECT_VERSION AND DEFINED PROJECT_VERSION)
+    set(LFS_PROJECT_VERSION "${PROJECT_VERSION}")
+endif()
+if(DEFINED LFS_PROJECT_VERSION AND NOT LFS_PROJECT_VERSION STREQUAL "" AND
+   GIT_TAGGED_VERSION MATCHES "^v[0-9][0-9.]*-([0-9]+)-g([0-9a-f]+)(-dirty)?$")
+    set(GIT_TAGGED_VERSION "v${LFS_PROJECT_VERSION}-dev-${CMAKE_MATCH_1}-g${CMAKE_MATCH_2}${CMAKE_MATCH_3}")
+endif()
+
 set(GIT_VERSION_CONTENT
     "#pragma once\n#define GIT_COMMIT_HASH_SHORT \"${GIT_COMMIT_HASH_SHORT}\"\n#define GIT_TAGGED_VERSION \"${GIT_TAGGED_VERSION}\"\n")
 

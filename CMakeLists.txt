@@ -94,7 +94,7 @@ endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/VcpkgProfiles.cmake")
 lfs_validate_vcpkg_profile()
 
-project(LichtFeld-Studio VERSION 0.5.4 LANGUAGES CUDA CXX C)
+project(LichtFeld-Studio VERSION 0.5.5 LANGUAGES CUDA CXX C)
 
 if(WIN32)
     # Public headers can include windows.h in consumers such as the test targets.
@@ -167,6 +167,7 @@ add_custom_target(lfs_git_version ALL
     COMMAND ${CMAKE_COMMAND}
             "-DGIT_SRC_DIR=${CMAKE_SOURCE_DIR}"
             "-DGIT_VERSION_HEADER=${CMAKE_BINARY_DIR}/include/git_version.h"
+            "-DLFS_PROJECT_VERSION=${PROJECT_VERSION}"
             -P "${CMAKE_SOURCE_DIR}/cmake/GenerateGitVersion.cmake"
     COMMENT "Refreshing git_version.h"
     VERBATIM
