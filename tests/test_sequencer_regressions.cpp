@@ -13,6 +13,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "scene/scene_manager.hpp"
 #include "sequencer/animation_clip.hpp"
+#include "sequencer/interpolation.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/rml_sequencer_panel.hpp"
 #include "sequencer/sequencer_controller.hpp"
@@ -581,6 +582,82 @@ namespace {
             const std::string name = entry.path().filename().string();
             EXPECT_FALSE(name.starts_with(temp_prefix) && name.ends_with(".tmp"));
         }
+    }
+
+    TEST(SequencerTimelineRegressionTest, JsonRoundTripPreservesEqualTimeOrderAndMotion) {
+        for (const bool duplicate_times : {false, true}) {
+            SCOPED_TRACE(duplicate_times);
+            nlohmann::json saved = Timeline{}.saveToJson();
+            std::vector<Keyframe> reference;
+            for (int i = 0; i < 200; ++i) {
+                auto key = makeKeyframe(duplicate_times && i == 46 ? 4.5f : i * 0.1f,
+                                        {float(i), float(i % 3), 0.0f}, 25.0f + i % 20);
+                key.easing = static_cast<EasingType>(i % 4);
+                reference.push_back(key);
+                saved["keyframes"].push_back({{"time", key.time}, {"position", {key.position.x, key.position.y, key.position.z}}, {"rotation", {1.0f, 0.0f, 0.0f, 0.0f}}, {"focal_length_mm", key.focal_length_mm}, {"easing", i % 4}});
+            }
+            const auto expected = saved;
+            // Unsorted JSON remains supported; equal-time records retain file order.
+            for (const bool reverse_input : {false, true}) {
+                auto input = saved;
+                if (reverse_input) {
+                    std::reverse(input["keyframes"].begin(), input["keyframes"].end());
+                    if (duplicate_times)
+                        std::swap(input["keyframes"][153], input["keyframes"][154]);
+                }
+                for (int cycle = 0; cycle < 3; ++cycle) {
+                    Timeline loaded;
+                    ASSERT_TRUE(loaded.loadFromJson(input));
+                    EXPECT_EQ(loaded.saveToJson(), expected);
+                    for (const float time : {4.499f, 4.49999f, 4.5f, 4.50001f, 4.501f}) {
+                        const auto want = lfs::sequencer::interpolateSpline(reference, time);
+                        const auto got = loaded.evaluate(time);
+                        expectVec3Eq(got.position, want.position);
+                        EXPECT_EQ(got.rotation, want.rotation);
+                        EXPECT_FLOAT_EQ(got.focal_length_mm, want.focal_length_mm);
+                    }
+                    input = loaded.saveToJson();
+                }
+            }
+        }
+    }
+
+    TEST(SequencerTimelineRegressionTest, SortingOrderedKeysAndAddingLoopPointKeepEqualTimeOrder) {
+        Timeline timeline;
+        for (int i = 0; i < 200; ++i)
+            timeline.addKeyframe(makeKeyframe(i == 46 ? 4.5f : i * 0.1f, {float(i), 0.0f, 0.0f}));
+        const auto before = timeline.saveToJson();
+        timeline.sortKeyframes();
+        EXPECT_EQ(timeline.saveToJson(), before);
+        auto loop = makeKeyframe(30.0f);
+        loop.is_loop_point = true;
+        timeline.addKeyframe(loop);
+        EXPECT_EQ(timeline.saveToJson(), before);
+        std::array<double, 7> timings{};
+        for (auto& elapsed : timings) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int repeat = 0; repeat < 1000; ++repeat)
+                timeline.sortKeyframes();
+            elapsed = std::chrono::duration<double, std::nano>(
+                          std::chrono::steady_clock::now() - start)
+                          .count() /
+                      1000;
+        }
+        std::sort(timings.begin(), timings.end());
+        RecordProperty("ordered_sort_median_ns", std::to_string(timings[timings.size() / 2]));
+        for (auto& elapsed : timings) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int repeat = 0; repeat < 100; ++repeat) {
+                Timeline loaded;
+                ASSERT_TRUE(loaded.loadFromJson(before));
+            }
+            elapsed = std::chrono::duration<double, std::micro>(
+                          std::chrono::steady_clock::now() - start)
+                          .count() /
+                      100;
+        }
+        std::sort(timings.begin(), timings.end());
+        RecordProperty("json_load_median_us", std::to_string(timings[timings.size() / 2]));
     }
 
     TEST(SequencerTimelineRegressionTest, SavedTimelineLoadsBackFromTheSameFile) {
