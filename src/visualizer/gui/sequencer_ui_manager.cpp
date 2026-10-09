@@ -1155,6 +1155,13 @@ namespace lfs::vis::gui {
         bool current_frame_loaded = false;
         const auto current_frame = requestedPlySequenceFrame();
 
+        // Loading or unloading a frame shifts the selection offsets of every later
+        // node. Keep the selection by node and restore it once the topology settles.
+        const auto selection = scene.hasSelection() ? scene.capturePerNodeSelectionSlices()
+                                                    : core::Scene::PerNodeSelectionSlices{};
+        core::Scene::Transaction transaction(scene);
+        bool topology_changed = false;
+
         while (!completed.empty()) {
             auto result = std::move(completed.front());
             completed.pop_front();
@@ -1203,6 +1210,7 @@ namespace lfs::vis::gui {
             const size_t gaussian_count = result.model->size();
             auto old_model = scene.swapNodeModel(node_name, std::move(result.model));
             old_model.reset();
+            topology_changed = true;
             scene.setNodeVisibility(*resolved_node, false);
             scene_manager->setPlyPath(frame_node->uuid, frame.path);
 
@@ -1237,50 +1245,58 @@ namespace lfs::vis::gui {
             last_ply_sequence_frame_ = std::nullopt;
         if (auto* const rm = viewer_->getRenderingManager())
             rm->markDirty(DirtyFlag::SPLATS, lfs::vis::FrameReason::SceneChange);
-        if (current_frame.has_value())
-            evictPlySequenceFrames(*current_frame);
+        if (current_frame.has_value() && evictPlySequenceFrames(*current_frame, selection))
+            topology_changed = true;
+        if (topology_changed && !selection.empty())
+            scene.applyPerNodeSelectionSlices(selection);
     }
 
-    void SequencerUIManager::evictPlySequenceFrames(const size_t keep_frame_index) {
+    bool SequencerUIManager::evictPlySequenceFrames(const size_t keep_frame_index,
+                                                    const core::Scene::PerNodeSelectionSlices& selection) {
         const auto* const sequence = controller_.plySequence();
         auto* const scene_manager = viewer_->getSceneManager();
         if (!sequence || !scene_manager)
-            return;
+            return false;
 
         auto& scene = scene_manager->getScene();
         const size_t frame_count = sequence->frames.size();
         const size_t budget = std::min(MAX_STREAM_RESIDENT_FRAMES, frame_count);
         if (loaded_ply_sequence_frames_.size() <= budget)
-            return;
+            return false;
 
-        // Selection offsets change when a preceding frame is unloaded. Retain
-        // selected payloads and restore their masks after the topology changes.
-        const auto selection = scene.hasSelection() ? scene.capturePerNodeSelectionSlices()
-                                                    : core::Scene::PerNodeSelectionSlices{};
-        core::Scene::Transaction transaction(scene);
+        // A frame without a node holds no payload; drop it so it does not take a slot.
+        std::erase_if(loaded_ply_sequence_frames_, [&](const size_t frame_index) {
+            if (frame_index >= frame_count)
+                return true;
+            const auto& frame = sequence->frames[frame_index];
+            const auto resolved = resolvePlySequenceNode(scene, frame.node_uuid, frame.node_name);
+            if (!resolved)
+                LOG_ERROR("Cannot evict PLY sequence frame {}: {}", frame_index, resolved.error().message);
+            return !resolved;
+        });
+
         bool evicted = false;
         while (loaded_ply_sequence_frames_.size() > budget) {
             auto victim_it = loaded_ply_sequence_frames_.end();
             bool victim_outside_window = false;
             size_t victim_distance = 0;
+            core::NodeId victim_id = core::NULL_NODE;
 
             for (auto it = loaded_ply_sequence_frames_.begin(); it != loaded_ply_sequence_frames_.end(); ++it) {
                 const size_t candidate = *it;
                 if (candidate == keep_frame_index ||
-                    (last_ply_sequence_frame_.has_value() && candidate == *last_ply_sequence_frame_) ||
-                    candidate >= frame_count) {
+                    (last_ply_sequence_frame_.has_value() && candidate == *last_ply_sequence_frame_)) {
                     continue;
                 }
 
                 const auto& frame = sequence->frames[candidate];
                 const auto resolved = resolvePlySequenceNode(scene, frame.node_uuid, frame.node_name);
-                if (!resolved)
-                    continue;
+                assert(resolved);
                 const auto* node = scene.getNodeById(*resolved);
                 assert(node);
                 const auto source = scene_manager->getPlyPath(node->uuid);
                 // Reload uses frame.path, so a missing or changed source cannot
-                // recover this payload. Edited frames must stay resident too.
+                // recover this payload. Edited and selected frames stay resident too.
                 if (node->payload_diverged || selection.contains(node->uuid) ||
                     frame.path.empty() || !source || *source != frame.path)
                     continue;
@@ -1293,6 +1309,7 @@ namespace lfs::vis::gui {
                     victim_it = it;
                     victim_outside_window = outside_window;
                     victim_distance = distance;
+                    victim_id = *resolved;
                 }
             }
 
@@ -1302,29 +1319,18 @@ namespace lfs::vis::gui {
 
             const size_t victim = *victim_it;
             loaded_ply_sequence_frames_.erase(victim_it);
-            if (victim >= frame_count)
-                continue;
-
-            const auto& victim_frame = sequence->frames[victim];
-            const auto resolved_node = resolvePlySequenceNode(
-                scene, victim_frame.node_uuid, victim_frame.node_name);
-            if (!resolved_node) {
-                LOG_ERROR("Cannot evict PLY sequence frame {}: {}", victim, resolved_node.error().message);
-                continue;
-            }
-            const auto* victim_node = scene.getNodeById(*resolved_node);
+            const auto* victim_node = scene.getNodeById(victim_id);
             assert(victim_node);
             auto old_model = scene.swapNodeModel(victim_node->name, nullptr);
             old_model.reset();
             evicted = true;
-            scene.setNodeVisibility(*resolved_node, false);
+            scene.setNodeVisibility(victim_id, false);
             std::lock_guard lock(ply_stream_mutex_);
             if (victim < ply_stream_states_.size())
                 ply_stream_states_[victim] = PlyStreamFrameState::Empty;
             ++ply_stream_eviction_count_;
         }
-        if (evicted && !selection.empty())
-            scene.applyPerNodeSelectionSlices(selection);
+        return evicted;
     }
 
     float SequencerUIManager::advancePanelClock() {

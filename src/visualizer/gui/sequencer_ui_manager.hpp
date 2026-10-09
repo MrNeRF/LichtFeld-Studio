@@ -118,7 +118,7 @@ namespace lfs::vis {
             void requestPlySequenceFrame(size_t frame_index, bool priority);
             void requestPlySequenceWindow(size_t frame_index);
             void prunePlySequenceRequests(size_t frame_index);
-            void evictPlySequenceFrames(size_t keep_frame_index);
+            bool evictPlySequenceFrames(size_t keep_frame_index, const core::Scene::PerNodeSelectionSlices& selection);
             [[nodiscard]] std::optional<size_t> selectPlySequenceDisplayFrame(size_t requested_frame) const;
             [[nodiscard]] bool isPlySequenceFrameInWindow(size_t frame_index, size_t center_frame, size_t frame_count) const;
             [[nodiscard]] bool isPlySequenceFrameInWindow(size_t frame_index,

@@ -2586,11 +2586,45 @@ namespace lfs::vis {
         }
 
         static void evict(VisualizerImpl& viewer) {
-            viewer.getGuiManager()->sequencerUI().evictPlySequenceFrames(0);
+            (void)viewer.getGuiManager()->sequencerUI().evictPlySequenceFrames(0, {});
+        }
+
+        static void unload(VisualizerImpl& viewer, const size_t frame) {
+            auto& sequencer = viewer.getGuiManager()->sequencerUI();
+            (void)viewer.getSceneManager()->getScene().swapNodeModel(std::format("frame_{}", frame), nullptr);
+            std::erase(sequencer.loaded_ply_sequence_frames_, frame);
+            sequencer.ply_stream_states_[frame] = gui::SequencerUIManager::PlyStreamFrameState::Empty;
+        }
+
+        // Delivers a streamed frame through the production drain, which loads it and then evicts.
+        static void stream(VisualizerImpl& viewer, const size_t frame) {
+            auto& sequencer = viewer.getGuiManager()->sequencerUI();
+            gui::SequencerUIManager::PlyStreamResult result;
+            result.generation = sequencer.ply_stream_generation_.load();
+            result.frame_index = frame;
+            result.model = lfs::test::licht::make_splat(1);
+            {
+                std::lock_guard lock(sequencer.ply_stream_mutex_);
+                sequencer.ply_stream_completed_.push_back(std::move(result));
+            }
+            sequencer.drainPlySequenceStream();
+        }
+
+        static void selectOnly(core::Scene& scene, const size_t index) {
+            std::vector<int> values(scene.getSelectionGaussianCount(), 0);
+            values.at(index) = 1;
+            auto mask = core::Tensor::from_vector(values, core::TensorShape{values.size()}, core::Device::CPU)
+                            .to(core::DataType::UInt8);
+            scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(mask)));
         }
 
         static size_t residentCount(VisualizerImpl& viewer) {
             return viewer.getGuiManager()->sequencerUI().loaded_ply_sequence_frames_.size();
+        }
+
+        static bool isLoaded(VisualizerImpl& viewer, const size_t frame) {
+            const auto& loaded = viewer.getGuiManager()->sequencerUI().loaded_ply_sequence_frames_;
+            return std::ranges::find(loaded, frame) != loaded.end();
         }
     };
 
@@ -2628,21 +2662,48 @@ namespace lfs::vis {
     TEST_F(SequencerFrameIntegrityTest, EvictionPreservesSelectedFrameAndItsMaskAcrossOffsetChanges) {
         VisualizerImpl viewer(options());
         populate(viewer);
+        unload(viewer, 64);
         auto& scene = viewer.getSceneManager()->getScene();
         const auto* selected = scene.getNode("frame_65");
         const auto* original = selected->model.get();
-        std::vector<int> values(FRAME_COUNT, 0);
-        values.back() = 1;
-        auto mask = core::Tensor::from_vector(values, core::TensorShape{FRAME_COUNT}, core::Device::CPU)
-                        .to(core::DataType::UInt8);
-        scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(mask)));
-        evict(viewer);
+        selectOnly(scene, FRAME_COUNT - 2);
+        stream(viewer, 64);
         EXPECT_EQ(selected->model.get(), original);
         EXPECT_EQ(residentCount(viewer), 64u);
         const auto slices = scene.capturePerNodeSelectionSlices();
         ASSERT_EQ(slices.size(), 1u);
         ASSERT_TRUE(slices.contains(selected->uuid));
         EXPECT_EQ(slices.at(selected->uuid).count_nonzero(), 1u);
+    }
+
+    TEST_F(SequencerFrameIntegrityTest, SelectionSurvivesAnEarlierFrameStreamingIn) {
+        VisualizerImpl viewer(options());
+        populate(viewer);
+        unload(viewer, 0);
+        auto& scene = viewer.getSceneManager()->getScene();
+        const auto* selected = scene.getNode("frame_65");
+        const auto* original = selected->model.get();
+        selectOnly(scene, FRAME_COUNT - 2);
+        // Looping playback streams the first frame back in ahead of every other node.
+        stream(viewer, 0);
+        EXPECT_NE(scene.getNode("frame_0")->model, nullptr);
+        EXPECT_EQ(selected->model.get(), original);
+        const auto slices = scene.capturePerNodeSelectionSlices();
+        ASSERT_EQ(slices.size(), 1u);
+        ASSERT_TRUE(slices.contains(selected->uuid));
+        EXPECT_EQ(slices.at(selected->uuid).count_nonzero(), 1u);
+    }
+
+    TEST_F(SequencerFrameIntegrityTest, FramesWithoutANodeLeaveTheResidentSet) {
+        VisualizerImpl viewer(options());
+        populate(viewer);
+        auto& scene = viewer.getSceneManager()->getScene();
+        scene.removeNode("frame_30");
+        evict(viewer);
+        EXPECT_FALSE(isLoaded(viewer, 30));
+        EXPECT_EQ(residentCount(viewer), 64u);
+        EXPECT_EQ(scene.getNode("frame_65")->model, nullptr);
+        EXPECT_NE(scene.getNode("frame_64")->model, nullptr);
     }
 
     TEST_F(SequencerFrameIntegrityTest, EvictionPreservesFramesWhoseSourceChanged) {
