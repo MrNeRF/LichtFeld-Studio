@@ -97,6 +97,11 @@ namespace lfs::io::video {
                 return result;
             auto stamp = options.provenance ? *options.provenance : core::make_minimal_provenance_stamp();
             media::VideoEncodeOptions request{.width = options.width, .height = options.height, .framerate = options.framerate, .crf = options.crf, .comment = core::provenance_to_json(stamp)};
+            // The shared tensor converter produces BT.601 limited-range planes.
+            // Primaries and transfer remain unspecified: the producer does not
+            // establish them merely by selecting an output resolution.
+            request.matrix = media::ColorMatrix::Smpte170M;
+            request.range = media::ColorRange::Limited;
 #if LFS_HAS_CUDA
             if (core::default_gpu_backend() == core::GpuBackend::CUDA)
                 request.preferred_backend = media::VideoEncodeBackend::Cuda;

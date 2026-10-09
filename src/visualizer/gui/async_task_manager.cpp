@@ -615,7 +615,9 @@ namespace lfs::vis::gui {
                                                cam_state.position,
                                                cam_state.focal_length_mm,
                                                width,
-                                               height)
+                                               height,
+                                               std::nullopt, std::nullopt,
+                                               render_settings.equirectangular)
                                      : snapshot.borrowed_model
                                          // Sequence switches must not inherit interactive depth-tie order.
                                          ? rendering_manager.renderPreviewImageRgb8(
@@ -625,7 +627,9 @@ namespace lfs::vis::gui {
                                                cam_state.position,
                                                cam_state.focal_length_mm,
                                                width,
-                                               height)
+                                               height,
+                                               std::nullopt, std::nullopt, std::nullopt,
+                                               render_settings.equirectangular)
                                          : rendering_manager.renderPreviewImage(
                                                *snapshot.gaussianModel(),
                                                std::move(scene_state),
@@ -633,7 +637,9 @@ namespace lfs::vis::gui {
                                                cam_state.position,
                                                cam_state.focal_length_mm,
                                                width,
-                                               height);
+                                               height,
+                                               std::nullopt, std::nullopt, std::nullopt,
+                                               render_settings.equirectangular);
                 auto video_frame = makeGaussianPreviewVideoFrame(preview_image);
                 if (!video_frame) {
                     return std::unexpected(video_frame.error());

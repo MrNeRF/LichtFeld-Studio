@@ -8,6 +8,7 @@
 #include "core/tensor_upload.hpp"
 #include "io/image_output.hpp"
 #include "io/video/video_encoder.hpp"
+#include "media/media_probe.hpp"
 #include "media/video_color.hpp"
 #include "media/video_player.hpp"
 #include "visualizer/rendering/float_color_readback.hpp"
@@ -35,6 +36,9 @@ namespace {
                 std::filesystem::remove(path, ignored);
             }
         } cleanup{path};
+        // Saturated patches distinguish BT.601 from BT.709; neutral ramps alone
+        // cannot detect a wrong matrix or an inferred HD color interpretation.
+        constexpr std::array<std::array<int, 3>, 12> colors{{{255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 0}, {0, 255, 255}, {255, 0, 255}, {0, 0, 0}, {255, 255, 255}, {32, 64, 96}, {64, 96, 128}, {128, 160, 192}, {192, 224, 240}}};
         io::video::VideoEncoder encoder;
         for (const auto width : {320, 160}) {
             io::video::VideoExportOptions options;
@@ -59,7 +63,7 @@ namespace {
                     for (int column = 0; column < width; ++column)
                         for (int channel = 0; channel < 3; ++channel)
                             values[(row * width * 2 + column) * 3 + channel] =
-                                (32 + index * 16 + (channel - 1) * 16) / 255.f;
+                                colors[index][channel] / 255.f;
                 auto frame = core::Tensor::from_vector(values, {96, static_cast<size_t>(width) * 2, 3},
                                                        index < 6 ? device : core::Device::CPU)
                                  .slice(1, 0, width);
@@ -70,6 +74,12 @@ namespace {
             const auto closed = encoder.close();
             if (!closed || encoder.isOpen() || !encoder.close())
                 throw std::runtime_error("Video producer did not close idempotently");
+            const auto description = media::MediaProbe::inspect(path);
+            if (!description || !description->selected_video_stream)
+                throw std::runtime_error("Cannot inspect encoded color interpretation");
+            const auto& color = description->streams.at(*description->selected_video_stream).color;
+            if (color.matrix != "smpte170m" || color.range != "tv" || color.primaries || color.transfer)
+                throw std::runtime_error("Encoded color tags do not describe the supplied BT.601 limited-range planes");
             io::VideoPlayer player;
             if (!player.open(path) || player.width() != width || player.height() != 96)
                 throw std::runtime_error("Reopened video has incorrect extent");
@@ -82,7 +92,7 @@ namespace {
                 double error = 0;
                 for (size_t pixel = 0; pixel < static_cast<size_t>(width) * 96; ++pixel)
                     for (int channel = 0; channel < 3; ++channel)
-                        error += std::abs(int(pixels[pixel * player.currentFrameChannels() + channel]) - (32 + index * 16 + (channel - 1) * 16));
+                        error += std::abs(int(pixels[pixel * player.currentFrameChannels() + channel]) - colors[index][channel]);
                 if (error / (width * 96 * 3) >= 6)
                     throw std::runtime_error("Reused video planes contain stale or incorrect pixels: frame=" +
                                              std::to_string(index) + ", time=" + std::to_string(player.currentTime()) +

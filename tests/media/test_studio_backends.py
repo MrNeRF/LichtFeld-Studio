@@ -80,6 +80,8 @@ class StudioBackends(unittest.TestCase):
         probe = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_streams",
                                                     "-show_format", "-show_frames", "-of", "json", str(path)]))
         self.assertEqual((probe["streams"][0]["width"], probe["streams"][0]["height"]), (320, 240))
+        self.assertEqual(probe["streams"][0].get("color_space"), "smpte170m")
+        self.assertEqual(probe["streams"][0].get("color_range"), "tv")
         self.assertEqual(actual["frames"], 12)
         self.assertEqual(len(probe["frames"]), 12)
         # The Studio adapter, not the leaf module, prepares application provenance.

@@ -825,7 +825,8 @@ namespace lfs::vis {
                                                                             const int height,
                                                                             std::optional<glm::vec3> background_color_override,
                                                                             std::optional<bool> orthographic_override,
-                                                                            std::optional<float> ortho_scale_override) {
+                                                                            std::optional<float> ortho_scale_override,
+                                                                            const bool equirectangular) {
         if (width <= 0 || height <= 0) {
             return {};
         }
@@ -843,7 +844,7 @@ namespace lfs::vis {
                 background_color_override,
                 orthographic_override,
                 ortho_scale_override,
-                PreviewImageReadback::FloatRgb));
+                PreviewImageReadback::FloatRgb, 1.0f, equirectangular));
         }
 
         return legacyPreviewImage(renderPreviewImageWithState(
@@ -860,7 +861,7 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            PreviewImageReadback::FloatRgb));
+            PreviewImageReadback::FloatRgb, 1.0f, equirectangular));
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgb8(const lfs::core::SplatData& model,
@@ -872,7 +873,8 @@ namespace lfs::vis {
                                                                                 const int height,
                                                                                 std::optional<glm::vec3> background_color_override,
                                                                                 std::optional<bool> orthographic_override,
-                                                                                std::optional<float> ortho_scale_override) {
+                                                                                std::optional<float> ortho_scale_override,
+                                                                                const bool equirectangular) {
         if (width <= 0 || height <= 0) {
             return {};
         }
@@ -890,7 +892,7 @@ namespace lfs::vis {
                 background_color_override,
                 orthographic_override,
                 ortho_scale_override,
-                PreviewImageReadback::UInt8Rgb));
+                PreviewImageReadback::UInt8Rgb, 1.0f, equirectangular));
         }
 
         return legacyPreviewImage(renderPreviewImageWithState(
@@ -907,7 +909,7 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            PreviewImageReadback::UInt8Rgb));
+            PreviewImageReadback::UInt8Rgb, 1.0f, equirectangular));
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgba8(const lfs::core::SplatData& model,
@@ -918,7 +920,8 @@ namespace lfs::vis {
                                                                                  const int width,
                                                                                  const int height,
                                                                                  std::optional<bool> orthographic_override,
-                                                                                 std::optional<float> ortho_scale_override) {
+                                                                                 std::optional<float> ortho_scale_override,
+                                                                                 const bool equirectangular) {
         if (width <= 0 || height <= 0) {
             return {};
         }
@@ -936,7 +939,7 @@ namespace lfs::vis {
                 std::nullopt,
                 orthographic_override,
                 ortho_scale_override,
-                PreviewImageReadback::UInt8Rgba));
+                PreviewImageReadback::UInt8Rgba, 1.0f, equirectangular));
         }
 
         return legacyPreviewImage(renderPreviewImageWithState(
@@ -953,7 +956,7 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             std::nullopt,
-            PreviewImageReadback::UInt8Rgba));
+            PreviewImageReadback::UInt8Rgba, 1.0f, equirectangular));
     }
 
     void RenderingManager::releasePreviewImageResources() {
@@ -1267,7 +1270,7 @@ namespace lfs::vis {
         std::optional<float> ortho_scale_override,
         std::optional<glm::vec3> background_color_override,
         const PreviewImageReadback readback,
-        const float rasterization_scale) {
+        const float rasterization_scale, const bool equirectangular) {
         const auto readback_config =
             previewImageReadbackConfig(readback, background_color_override.has_value());
 
@@ -1292,7 +1295,7 @@ namespace lfs::vis {
             background_color_override,
             readback_config.transparent_background_override,
             rasterization_scale,
-            readback != PreviewImageReadback::FloatRgb, readback_config.capture_float_color);
+            readback != PreviewImageReadback::FloatRgb, readback_config.capture_float_color, equirectangular);
         if (!rendered) {
             if (!intrinsics_override && isTileInstanceOverflow(rendered.error()) &&
                 height > kMinPreviewSubdivisionHeight) {
@@ -1310,7 +1313,7 @@ namespace lfs::vis {
                     orthographic_override,
                     ortho_scale_override,
                     readback,
-                    rasterization_scale);
+                    rasterization_scale, equirectangular);
             }
             LOG_ERROR("Gaussian preview image render failed: {}", rendered.error());
             return previewImageFailure(ErrorCode::InvalidArgument, "Invalid preview dimensions");
@@ -1357,7 +1360,7 @@ namespace lfs::vis {
         std::optional<glm::vec3> background_color_override,
         std::optional<bool> transparent_background_override,
         const float rasterization_scale,
-        const bool deterministic_export, const bool capture_float_color) {
+        const bool deterministic_export, const bool capture_float_color, const bool equirectangular) {
         if (width <= 0 || height <= 0) {
             return std::unexpected("invalid preview render dimensions");
         }
@@ -1382,7 +1385,7 @@ namespace lfs::vis {
             lfs::rendering::MIN_FOCAL_LENGTH_MM,
             lfs::rendering::MAX_FOCAL_LENGTH_MM);
         preview_settings.split_view_mode = SplitViewMode::Disabled;
-        preview_settings.equirectangular = false;
+        preview_settings.equirectangular = equirectangular;
         if (background_color_override) {
             preview_settings.background_color = *background_color_override;
         }
@@ -1469,7 +1472,7 @@ namespace lfs::vis {
         std::optional<bool> orthographic_override,
         std::optional<float> ortho_scale_override,
         const PreviewImageReadback readback,
-        const float rasterization_scale) {
+        const float rasterization_scale, const bool equirectangular) {
         if (width <= 0 || height <= 0) {
             return previewImageFailure(ErrorCode::InvalidArgument, "Invalid tiled preview dimensions");
         }
@@ -1508,10 +1511,9 @@ namespace lfs::vis {
         std::optional<std::uint64_t> outstanding_export_ticket;
         for (int tile_y = 0; tile_y < height;) {
             int tile_height = std::min(band_height_limit, height - tile_y);
-            const auto intrinsics = previewTileIntrinsics(
-                width,
-                height,
-                focal_length_mm);
+            const std::optional<lfs::rendering::CameraIntrinsics> intrinsics = equirectangular
+                                                                                   ? std::nullopt
+                                                                                   : std::make_optional(previewTileIntrinsics(width, height, focal_length_mm));
             while (true) {
                 auto rendered = renderPreviewImageToPreviewSlotWithState(
                     getSettings(),
@@ -1532,7 +1534,7 @@ namespace lfs::vis {
                     background_color_override,
                     readback_config.transparent_background_override,
                     rasterization_scale,
-                    true, readback_config.capture_float_color);
+                    true, readback_config.capture_float_color, equirectangular);
                 if (rendered) {
                     break;
                 }

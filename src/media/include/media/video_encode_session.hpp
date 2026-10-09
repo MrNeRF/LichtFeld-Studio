@@ -4,6 +4,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "media/decoded_video_frame.hpp"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +27,9 @@ namespace lfs::media {
         VideoEncodeBackend preferred_backend = VideoEncodeBackend::Software;
         // Prepared by the producer; no application metadata factory is needed.
         std::string comment;
+        // Describes the planes supplied by the producer; never inferred from extent.
+        ColorMatrix matrix = ColorMatrix::Unspecified;
+        ColorRange range = ColorRange::Unspecified;
     };
     struct VideoEncodePlane {
         std::uint8_t* data = nullptr;
