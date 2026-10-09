@@ -10,7 +10,12 @@
 #include "io/video/video_export_options.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
+#include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "scene/scene_manager.hpp"
+
+#include "rendering/rendering_manager.hpp"
+#include "scene/scene_manager.hpp"
 #include "sequencer/animation_clip.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/rml_sequencer_panel.hpp"
@@ -111,6 +116,90 @@ namespace {
         std::optional<std::string> previous_home_;
     };
 
+    TEST_F(SequencerHistoryRegressionTest, ClearKeyframesPreservesPlySequence) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencer();
+        controller.setPlySequence("frames", "sequence",
+                                  {"frame_0.ply", "frame_1.ply", "frame_2.ply", "frame_3.ply"},
+                                  {"frame_0", "frame_1", "frame_2", "frame_3"}, 5.0f);
+        const auto* sequence = controller.plySequence();
+        ASSERT_NE(sequence, nullptr);
+        const auto* frames = sequence->frames.data();
+        for (int repeat = 0; repeat < 2; ++repeat) {
+            const auto id = controller.addKeyframe(makeKeyframe(0.0f));
+            controller.addKeyframe(makeKeyframe(1.0f));
+            controller.selectKeyframeById(id);
+            controller.play();
+            lfs::python::clear_keyframes();
+            EXPECT_EQ(controller.timeline().realKeyframeCount(), 0u);
+            EXPECT_FALSE(controller.hasSelection());
+            EXPECT_FALSE(controller.isPlaying());
+            ASSERT_TRUE(controller.hasPlySequence());
+            EXPECT_EQ(controller.plySequence(), sequence);
+            EXPECT_EQ(controller.plySequence()->frames.data(), frames);
+            EXPECT_EQ(sequence->directory, "frames");
+            EXPECT_EQ(sequence->node_name, "sequence");
+            EXPECT_EQ(sequence->frames.size(), 4u);
+            EXPECT_FLOAT_EQ(controller.plySequenceFps(), 5.0f);
+            EXPECT_FLOAT_EQ(controller.timeline().clipDuration(), 0.8f);
+            controller.seek(0.6f);
+            EXPECT_EQ(controller.currentPlySequenceFrameIndex(), 3u);
+            controller.play();
+            EXPECT_TRUE(controller.isPlaying());
+        }
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, ClearKeyframesLatency) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencer();
+        std::vector<double> samples;
+        for (int repeat = 0; repeat < 101; ++repeat) {
+            controller.setPlySequence("frames", "sequence", {"frame_0.ply", "frame_1.ply"},
+                                      {"frame_0", "frame_1"}, 5.0f);
+            controller.addKeyframe(makeKeyframe(0.0f));
+            controller.addKeyframe(makeKeyframe(1.0f));
+            const auto start = std::chrono::steady_clock::now();
+            lfs::python::clear_keyframes();
+            samples.push_back(std::chrono::duration<double, std::micro>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count());
+            ASSERT_EQ(controller.timeline().realKeyframeCount(), 0u);
+        }
+        std::sort(samples.begin(), samples.end());
+        RecordProperty("median_clear_us", std::to_string(samples[samples.size() / 2]));
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, ClearKeyframesWithoutSequenceKeepsResetBehavior) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencer();
+        const auto id = controller.addKeyframe(makeKeyframe(0.0f));
+        controller.addKeyframe(makeKeyframe(2.0f));
+        controller.timeline().ensureAnimationClip();
+        controller.selectKeyframeById(id);
+        controller.play();
+        lfs::python::clear_keyframes();
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 0u);
+        EXPECT_FALSE(controller.timeline().hasAnimationClip());
+        EXPECT_FALSE(controller.hasPlySequence());
+        EXPECT_FALSE(controller.hasSelection());
+        EXPECT_FALSE(controller.isPlaying());
+        EXPECT_FLOAT_EQ(controller.timeline().clipDuration(), lfs::sequencer::DEFAULT_CLIP_DURATION_SECONDS);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, SceneClearStillDropsKeysAndPlySequence) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencer();
+        controller.setPlySequence("frames", "sequence", {"frame_0.ply", "frame_1.ply"},
+                                  {"frame_0", "frame_1"}, 5.0f);
+        controller.addKeyframe(makeKeyframe(0.0f));
+        controller.play();
+        lfs::core::events::state::SceneCleared{}.emit();
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 0u);
+        EXPECT_FALSE(controller.hasPlySequence());
+        EXPECT_FALSE(controller.isPlaying());
+        EXPECT_FLOAT_EQ(controller.timeline().clipDuration(), lfs::sequencer::DEFAULT_CLIP_DURATION_SECONDS);
+    }
+
     TEST_F(SequencerHistoryRegressionTest, AddCommandParticipatesInSharedUndoHistory) {
         lfs::vis::VisualizerImpl viewer(options());
         auto& controller = viewer.getGuiManager()->sequencerUI().controller();
@@ -132,6 +221,693 @@ namespace {
         EXPECT_EQ(restored.position, added.position);
         EXPECT_EQ(restored.rotation, added.rotation);
         EXPECT_EQ(restored.focal_length_mm, added.focal_length_mm);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, DeleteCommandRestoresExactKeyAndPreservesOtherTimelineContent) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        const auto first = controller.addKeyframe(makeKeyframe(0.0f, {1.0f, 2.0f, 3.0f}));
+        auto key = makeKeyframe(4.5f, {3.0f, 5.0f, 7.0f}, 73.0f);
+        key.rotation = glm::angleAxis(0.73f, glm::normalize(glm::vec3(1.0f, 2.0f, 3.0f)));
+        key.easing = EasingType::EASE_OUT;
+        const auto deleted = controller.addKeyframe(key);
+        const auto captured = *controller.timeline().getKeyframeById(deleted);
+        const auto other = controller.addKeyframe(makeKeyframe(8.0f));
+        auto* clip = &controller.timeline().ensureAnimationClip();
+        controller.setLoopMode(LoopMode::LOOP);
+        const float duration = controller.clipDuration();
+        history.clear();
+        lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = 1}.emit();
+        ASSERT_EQ(controller.timeline().getKeyframeById(deleted), nullptr);
+        ASSERT_EQ(history.undoCount(), 1u);
+        EXPECT_EQ(history.undoName(), "Delete Keyframe");
+        for (int repetition = 0; repetition < 2; ++repetition) {
+            ASSERT_TRUE(history.undo().success);
+            const auto* restored = controller.timeline().getKeyframeById(deleted);
+            ASSERT_NE(restored, nullptr);
+            EXPECT_EQ(restored->id, captured.id);
+            EXPECT_EQ(restored->time, captured.time);
+            EXPECT_EQ(restored->position, captured.position);
+            EXPECT_EQ(restored->rotation, captured.rotation);
+            EXPECT_EQ(restored->focal_length_mm, captured.focal_length_mm);
+            EXPECT_EQ(restored->easing, captured.easing);
+            EXPECT_EQ(controller.timeline().animationClip(), clip);
+            EXPECT_EQ(controller.loopMode(), LoopMode::LOOP);
+            EXPECT_EQ(controller.clipDuration(), duration);
+            EXPECT_NE(controller.timeline().getKeyframeById(first), nullptr);
+            EXPECT_NE(controller.timeline().getKeyframeById(other), nullptr);
+            EXPECT_EQ(history.undoCount(), 0u);
+            EXPECT_EQ(history.redoCount(), 1u);
+            ASSERT_TRUE(history.redo().success);
+            EXPECT_EQ(controller.timeline().getKeyframeById(deleted), nullptr);
+            EXPECT_EQ(history.undoCount(), 1u);
+            EXPECT_EQ(history.redoCount(), 0u);
+        }
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, DeleteUndoPrecedesEarlierSceneVisibilityChange) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f));
+        const auto deleted = controller.addKeyframe(makeKeyframe(1.0f));
+        auto* manager = viewer.getSceneManager();
+        const auto group = manager->getScene().addGroup("group");
+        manager->setNodeVisibility(group, false);
+        ASSERT_EQ(history.undoName(), "Set Visibility");
+        lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = 1}.emit();
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_FALSE(static_cast<bool>(manager->getScene().getNodeById(group)->visible));
+        EXPECT_NE(controller.timeline().getKeyframeById(deleted), nullptr);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_TRUE(static_cast<bool>(manager->getScene().getNodeById(group)->visible));
+        ASSERT_TRUE(history.redo().success);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_EQ(controller.timeline().getKeyframeById(deleted), nullptr);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, ProtectedAndMissingDeleteCommandsDoNotCreateHistory) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        const auto first = controller.addKeyframe(makeKeyframe(0.0f));
+        auto& history = lfs::vis::op::undoHistory();
+        lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = 0}.emit();
+        lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = 99}.emit();
+        EXPECT_NE(controller.timeline().getKeyframeById(first), nullptr);
+        EXPECT_EQ(history.undoCount(), 0u);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, GroupedControllerDeletionIsOneUndoStep) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f));
+        const auto second = controller.addKeyframe(makeKeyframe(1.0f));
+        const auto third = controller.addKeyframe(makeKeyframe(2.0f));
+        {
+            lfs::vis::op::TransactionGuard transaction("Delete Keyframes");
+            ASSERT_TRUE(controller.removeKeyframeById(second));
+            ASSERT_TRUE(controller.removeKeyframeById(third));
+            transaction.commit();
+        }
+        ASSERT_EQ(history.undoCount(), 1u);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_NE(controller.timeline().getKeyframeById(second), nullptr);
+        EXPECT_NE(controller.timeline().getKeyframeById(third), nullptr);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 1u);
+        EXPECT_EQ(history.undoCount(), 1u);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, DeleteHistoryCannotAccessDestroyedSequencer) {
+        auto& history = lfs::vis::op::undoHistory();
+        {
+            lfs::vis::VisualizerImpl viewer(options());
+            auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+            controller.addKeyframe(makeKeyframe(0.0f));
+            controller.addKeyframe(makeKeyframe(1.0f));
+            lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = 1}.emit();
+            ASSERT_EQ(history.undoCount(), 1u);
+        }
+        EXPECT_FALSE(history.undo().success);
+        EXPECT_EQ(history.undoCount(), 0u);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, DeleteCommandLatency) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        std::vector<double> samples;
+        for (int batch = 0; batch < 9; ++batch) {
+            controller.clear();
+            history.clear();
+            for (int i = 0; i < 51; ++i)
+                controller.addKeyframe(makeKeyframe(static_cast<float>(i)));
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 50; i > 0; --i)
+                lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = static_cast<size_t>(i)}.emit();
+            samples.push_back(std::chrono::duration<double, std::micro>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count() /
+                              50.0);
+            ASSERT_EQ(controller.timeline().realKeyframeCount(), 1u);
+        }
+        std::sort(samples.begin(), samples.end());
+        RecordProperty("median_delete_us", std::to_string(samples[samples.size() / 2]));
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, KeyframeTimeEditUsesSharedHistory) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        lfs::core::events::cmd::SequencerAddKeyframe{.time = 0.0f}.emit();
+        const auto id = controller.addKeyframe(makeKeyframe(1.0f, {1.0f, 2.0f, 3.0f}));
+        const auto before = *controller.timeline().getKeyframeById(id);
+        ASSERT_TRUE(controller.setKeyframeTime(1, 6.5f));
+        ASSERT_EQ(history.undoCount(), 2u);
+        ASSERT_TRUE(history.undo().success);
+        ASSERT_NE(controller.timeline().getKeyframeById(id), nullptr);
+        EXPECT_EQ(controller.timeline().getKeyframeById(id)->time, before.time);
+        EXPECT_EQ(controller.timeline().getKeyframeById(id)->position, before.position);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_FLOAT_EQ(controller.timeline().getKeyframeById(id)->time, 6.5f);
+        ASSERT_TRUE(history.undo().success);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 1u);
+        EXPECT_FLOAT_EQ(controller.timeline().getKeyframeById(id)->time, 1.0f);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, KeyframeTimeDragCommitsOneHistoryEntry) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f));
+        const auto id = controller.addKeyframe(makeKeyframe(1.0f));
+        controller.setLoopMode(LoopMode::LOOP);
+        for (const float time : {2.0f, 3.0f, 4.0f}) {
+            ASSERT_TRUE(controller.previewKeyframeTimeById(id, time));
+            EXPECT_FALSE(history.canUndo());
+        }
+        ASSERT_TRUE(controller.commitKeyframeTimeById(id));
+        ASSERT_EQ(history.undoCount(), 1u);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_FLOAT_EQ(controller.timeline().getKeyframeById(id)->time, 1.0f);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 30.0f);
+        EXPECT_FLOAT_EQ(controller.timeline().keyframes().back().time, 30.0f);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_FLOAT_EQ(controller.timeline().getKeyframeById(id)->time, 4.0f);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 30.0f);
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 2u);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, KeyframeTimeNoOpsDoNotRecordHistory) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        const auto id = controller.addKeyframe(makeKeyframe(1.0f));
+        (void)controller.setKeyframeTimeById(id, 1.0f);
+        EXPECT_FALSE(controller.setKeyframeTimeById(id, std::numeric_limits<float>::infinity()));
+        EXPECT_FALSE(controller.previewKeyframeTimeById(id, std::numeric_limits<float>::quiet_NaN()));
+        ASSERT_TRUE(controller.previewKeyframeTimeById(id, 2.0f));
+        ASSERT_TRUE(controller.previewKeyframeTimeById(id, 1.0f));
+        ASSERT_TRUE(controller.commitKeyframeTimeById(id));
+        ASSERT_TRUE(controller.commitKeyframeTimeById(id));
+        EXPECT_FALSE(history.canUndo());
+        EXPECT_FLOAT_EQ(controller.timeline().getKeyframeById(id)->time, 1.0f);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, KeyframeTimeHistoryPreservesOtherEdits) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        const auto first_id = controller.addKeyframe(makeKeyframe(0.0f));
+        const auto id = controller.addKeyframe(makeKeyframe(1.0f));
+        controller.setLoopMode(LoopMode::LOOP);
+        auto* const clip = &controller.timeline().ensureAnimationClip();
+        ASSERT_TRUE(controller.setKeyframeTimeById(id, 3.0f));
+        ASSERT_TRUE(controller.updateKeyframeById(id, {4.0f, 5.0f, 6.0f}, lfs::sequencer::IDENTITY_ROTATION, 60.0f));
+        controller.selectKeyframeById(first_id);
+        controller.setClipDuration(80.0f);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_FLOAT_EQ(controller.timeline().getKeyframeById(id)->time, 1.0f);
+        EXPECT_EQ(controller.timeline().getKeyframeById(id)->position, glm::vec3(4.0f, 5.0f, 6.0f));
+        EXPECT_FLOAT_EQ(controller.timeline().getKeyframeById(id)->focal_length_mm, 60.0f);
+        EXPECT_EQ(controller.selectedKeyframeId(), first_id);
+        EXPECT_EQ(controller.timeline().animationClip(), clip);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 80.0f);
+        EXPECT_FLOAT_EQ(controller.timeline().keyframes().back().time, 80.0f);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_FLOAT_EQ(controller.timeline().getKeyframeById(id)->time, 3.0f);
+        EXPECT_EQ(controller.timeline().getKeyframeById(id)->position, glm::vec3(4.0f, 5.0f, 6.0f));
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, KeyframeTimeHistoryPreservesNegativeTimeAndReordering) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f, {1.0f, 2.0f, 3.0f}));
+        const auto id = controller.addKeyframe(makeKeyframe(1.0f, {4.0f, 5.0f, 6.0f}));
+        const auto before = controller.saveToJson();
+        ASSERT_TRUE(controller.setKeyframeTimeById(id, -1.0f));
+        EXPECT_EQ(controller.timeline().getKeyframe(0)->id, id);
+        const auto edited = controller.saveToJson();
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_EQ(controller.saveToJson(), before);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_EQ(controller.saveToJson(), edited);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, KeyframeTimeHistoryRejectsReloadedTimeline) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        const auto id = controller.addKeyframe(makeKeyframe(1.0f));
+        ASSERT_TRUE(controller.setKeyframeTimeById(id, 3.0f));
+        const auto replacement = controller.saveToJson();
+        ASSERT_TRUE(controller.loadFromJson(replacement));
+        ASSERT_TRUE(history.canUndo());
+        EXPECT_FALSE(history.undo().success);
+        EXPECT_FLOAT_EQ(controller.timeline().getKeyframeById(id)->time, 3.0f);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, KeyframeTimeHistoryCannotAccessDestroyedSequencer) {
+        auto& history = lfs::vis::op::undoHistory();
+        {
+            lfs::vis::VisualizerImpl viewer(options());
+            auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+            const auto id = controller.addKeyframe(makeKeyframe(1.0f));
+            ASSERT_TRUE(controller.setKeyframeTimeById(id, 3.0f));
+            ASSERT_TRUE(history.canUndo());
+        }
+        EXPECT_FALSE(history.undo().success);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, KeyframeTimePreviewLatency) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        controller.addKeyframe(makeKeyframe(0.0f));
+        const auto id = controller.addKeyframe(makeKeyframe(1.0f));
+        std::vector<double> samples;
+        for (int batch = 0; batch < 11; ++batch) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 10000; ++i)
+                (void)controller.previewKeyframeTimeById(id, 1.0f + (i % 2));
+            samples.push_back(std::chrono::duration<double, std::nano>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count() /
+                              10000.0);
+            ASSERT_TRUE(controller.commitKeyframeTimeById(id));
+        }
+        std::sort(samples.begin(), samples.end());
+        RecordProperty("median_preview_ns", std::to_string(samples[samples.size() / 2]));
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, EasingCommandParticipatesInSharedUndoHistory) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f, {1.0f, 2.0f, 3.0f}, 73.0f));
+        const auto second = controller.addKeyframe(makeKeyframe(4.5f, {3.0f, 5.0f, 7.0f}, 45.0f));
+        controller.selectKeyframeById(second);
+        auto* clip = &controller.timeline().ensureAnimationClip();
+        controller.setLoopMode(LoopMode::LOOP);
+        const auto original = controller.saveToJson();
+        for (size_t index = 0; index < 2; ++index) {
+            for (int mode = 1; mode <= 3; ++mode) {
+                history.clear();
+                lfs::core::events::cmd::SequencerSetKeyframeEasing{.keyframe_index = index, .easing_type = mode}.emit();
+                const auto edited = controller.saveToJson();
+                ASSERT_NE(edited, original);
+                ASSERT_EQ(history.undoCount(), 1u);
+                EXPECT_EQ(history.undoName(), "Set Keyframe Easing");
+                for (int repetition = 0; repetition < 2; ++repetition) {
+                    ASSERT_TRUE(history.undo().success);
+                    EXPECT_EQ(controller.saveToJson(), original);
+                    EXPECT_EQ(history.undoCount(), 0u);
+                    ASSERT_TRUE(history.redo().success);
+                    EXPECT_EQ(controller.saveToJson(), edited);
+                    EXPECT_EQ(history.undoCount(), 1u);
+                }
+                ASSERT_TRUE(history.undo().success);
+                EXPECT_EQ(controller.timeline().animationClip(), clip);
+                EXPECT_EQ(controller.selectedKeyframeId(), second);
+                EXPECT_EQ(controller.loopMode(), LoopMode::LOOP);
+            }
+        }
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, EasingUndoPrecedesEarlierVisibilityChange) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        const auto key = controller.addKeyframe(makeKeyframe(0.0f));
+        auto* manager = viewer.getSceneManager();
+        const auto group = manager->getScene().addGroup("group");
+        manager->setNodeVisibility(group, false);
+        lfs::core::events::cmd::SequencerSetKeyframeEasing{.keyframe_index = 0, .easing_type = 1}.emit();
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_EQ(controller.timeline().getKeyframeById(key)->easing, EasingType::LINEAR);
+        EXPECT_FALSE(static_cast<bool>(manager->getScene().getNodeById(group)->visible));
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_TRUE(static_cast<bool>(manager->getScene().getNodeById(group)->visible));
+        ASSERT_TRUE(history.redo().success);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_EQ(controller.timeline().getKeyframeById(key)->easing, EasingType::EASE_IN);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, UnchangedAndInvalidEasingDoesNotCreateHistory) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        const auto key = controller.addKeyframe(makeKeyframe(0.0f));
+        const auto original = controller.saveToJson();
+        EXPECT_TRUE(controller.setKeyframeEasingById(key, EasingType::LINEAR));
+        EXPECT_FALSE(controller.setKeyframeEasingById(key, static_cast<EasingType>(99)));
+        EXPECT_FALSE(controller.setKeyframeEasingById(99999, EasingType::EASE_IN));
+        EXPECT_EQ(controller.saveToJson(), original);
+        EXPECT_EQ(history.undoCount(), 0u);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, EasingHistoryCannotOverwriteLaterKeyEdit) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        const auto key = controller.addKeyframe(makeKeyframe(0.0f));
+        ASSERT_TRUE(controller.setKeyframeEasingById(key, EasingType::EASE_IN));
+        ASSERT_EQ(history.undoCount(), 1u);
+        ASSERT_TRUE(controller.setKeyframeFocalLengthById(key, 73.0f));
+        const auto edited = controller.saveToJson();
+        EXPECT_FALSE(history.undo().success);
+        EXPECT_EQ(controller.saveToJson(), edited);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, EasingHistoryCannotAccessDestroyedSequencer) {
+        auto& history = lfs::vis::op::undoHistory();
+        {
+            lfs::vis::VisualizerImpl viewer(options());
+            auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+            const auto key = controller.addKeyframe(makeKeyframe(0.0f));
+            ASSERT_TRUE(controller.setKeyframeEasingById(key, EasingType::EASE_IN));
+            ASSERT_EQ(history.undoCount(), 1u);
+        }
+        EXPECT_FALSE(history.undo().success);
+        EXPECT_EQ(history.undoCount(), 0u);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, EasingCommandLatency) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f));
+        controller.addKeyframe(makeKeyframe(1.0f));
+        std::vector<double> samples;
+        for (int batch = 0; batch < 9; ++batch) {
+            history.clear();
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 50; ++i)
+                lfs::core::events::cmd::SequencerSetKeyframeEasing{.keyframe_index = 0, .easing_type = 1 + i % 2}.emit();
+            samples.push_back(std::chrono::duration<double, std::micro>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count() /
+                              50.0);
+        }
+        std::sort(samples.begin(), samples.end());
+        RecordProperty("median_easing_us", std::to_string(samples[samples.size() / 2]));
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, ClipDurationEditUsesSharedHistory) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f, {1.0f, 2.0f, 3.0f}));
+        controller.addKeyframe(makeKeyframe(1.0f, {4.0f, 5.0f, 6.0f}));
+        controller.setClipDuration(1.0f);
+        const auto keys = controller.saveToJson()["keyframes"];
+        controller.editClipDuration(2.0f);
+        ASSERT_FLOAT_EQ(controller.clipDuration(), 2.0f);
+        ASSERT_EQ(history.undoCount(), 1u);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 1.0f);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 2.0f);
+        controller.editClipDuration(3.0f);
+        ASSERT_EQ(history.undoCount(), 2u);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 2.0f);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 1.0f);
+        ASSERT_TRUE(history.redo().success);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 3.0f);
+        EXPECT_EQ(controller.saveToJson()["keyframes"], keys);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, ClipDurationEditFollowsEarlierHistory) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        lfs::core::events::cmd::SequencerAddKeyframe{.time = 0.0f}.emit();
+        controller.addKeyframe(makeKeyframe(1.0f));
+        controller.setClipDuration(1.0f);
+        controller.editClipDuration(3.0f);
+        ASSERT_EQ(history.undoCount(), 2u);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 1.0f);
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 2u);
+        EXPECT_EQ(history.undoName(), "Add Keyframe");
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 3.0f);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, ClipDurationEditKeepsClampLoopAndNoOpBehavior) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f));
+        controller.addKeyframe(makeKeyframe(1.0f));
+        controller.setClipDuration(3.0f);
+        controller.setLoopMode(LoopMode::LOOP);
+        controller.seek(2.5f);
+        controller.editClipDuration(3.0f);
+        EXPECT_FALSE(history.canUndo());
+        EXPECT_THROW(controller.editClipDuration(std::numeric_limits<float>::infinity()), std::invalid_argument);
+        EXPECT_FALSE(history.canUndo());
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 3.0f);
+        controller.editClipDuration(0.25f);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 1.0f);
+        EXPECT_FLOAT_EQ(controller.playhead(), 1.0f);
+        EXPECT_FLOAT_EQ(controller.timeline().keyframes().back().time, 1.0f);
+        controller.editClipDuration(0.25f);
+        ASSERT_EQ(history.undoCount(), 1u);
+        controller.seek(0.5f);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 3.0f);
+        EXPECT_FLOAT_EQ(controller.playhead(), 0.5f);
+        EXPECT_FLOAT_EQ(controller.timeline().keyframes().back().time, 3.0f);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 1.0f);
+        EXPECT_FLOAT_EQ(controller.playhead(), 0.5f);
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 2u);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, ClipDurationHistoryPreservesOtherTimelineContent) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        const auto id = controller.addKeyframe(makeKeyframe(0.0f));
+        controller.addKeyframe(makeKeyframe(1.0f));
+        controller.setPlySequence("frames", "Sequence", {"frame0.ply", "frame1.ply"}, {"Frame 0", "Frame 1"}, 2.0f);
+        controller.setClipDuration(1.0f);
+        const auto* sequence = controller.plySequence();
+        const auto* frames = sequence->frames.data();
+        auto* clip = &controller.timeline().ensureAnimationClip();
+        controller.editClipDuration(3.0f);
+        controller.selectKeyframeById(id);
+        controller.updateKeyframeById(id, {4.0f, 5.0f, 6.0f}, lfs::sequencer::IDENTITY_ROTATION, 60.0f);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 1.0f);
+        EXPECT_EQ(controller.plySequence(), sequence);
+        EXPECT_EQ(controller.plySequence()->frames.data(), frames);
+        EXPECT_EQ(controller.timeline().animationClip(), clip);
+        EXPECT_EQ(controller.selectedKeyframeId(), id);
+        EXPECT_EQ(controller.timeline().getKeyframeById(id)->position, glm::vec3(4.0f, 5.0f, 6.0f));
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 3.0f);
+        EXPECT_EQ(controller.plySequence()->frames.data(), frames);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, ClipDurationHistoryRejectsReloadAndLaterConflictingKeys) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f));
+        controller.addKeyframe(makeKeyframe(1.0f));
+        controller.setClipDuration(1.0f);
+        controller.editClipDuration(3.0f);
+        controller.addKeyframe(makeKeyframe(2.0f));
+        ASSERT_TRUE(history.canUndo());
+        EXPECT_FALSE(history.undo().success);
+        EXPECT_FLOAT_EQ(controller.clipDuration(), 3.0f);
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 3u);
+        history.clear();
+        controller.editClipDuration(4.0f);
+        const auto replacement = controller.saveToJson();
+        ASSERT_TRUE(controller.loadFromJson(replacement));
+        ASSERT_TRUE(history.canUndo());
+        EXPECT_FALSE(history.undo().success);
+        EXPECT_EQ(controller.saveToJson(), replacement);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, ClipDurationHistoryCannotAccessDestroyedSequencer) {
+        auto& history = lfs::vis::op::undoHistory();
+        {
+            lfs::vis::VisualizerImpl viewer(options());
+            viewer.getGuiManager()->sequencerUI().controller().editClipDuration(40.0f);
+            ASSERT_TRUE(history.canUndo());
+        }
+        EXPECT_FALSE(history.undo().success);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, ClipDurationEditLatency) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f));
+        controller.addKeyframe(makeKeyframe(1.0f));
+        std::vector<double> samples;
+        for (int i = 0; i < 101; ++i) {
+            history.clear();
+            controller.setClipDuration(1.0f);
+            const auto start = std::chrono::steady_clock::now();
+            controller.editClipDuration(2.0f);
+            samples.push_back(std::chrono::duration<double, std::micro>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count());
+        }
+        std::sort(samples.begin(), samples.end());
+        RecordProperty("median_duration_edit_us", std::to_string(samples[samples.size() / 2]));
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, CurrentViewUpdateRestoresExactPoseAndFocalLength) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f, {1.0f, 2.0f, 3.0f}, 41.0f));
+        controller.addKeyframe(makeKeyframe(4.5f, {3.0f, 5.0f, 7.0f}, 73.0f));
+        controller.setKeyframeEasing(0, EasingType::EASE_IN);
+        controller.setKeyframeEasing(1, EasingType::EASE_OUT);
+        auto* clip = &controller.timeline().ensureAnimationClip();
+        controller.setLoopMode(LoopMode::LOOP);
+        const auto original = controller.saveToJson();
+        for (size_t index = 0; index < 2; ++index) {
+            history.clear();
+            ASSERT_TRUE(controller.selectKeyframe(index));
+            const auto id = *controller.selectedKeyframeId();
+            auto& camera = viewer.getViewport().camera;
+            camera.t = {9.0f, 8.0f, 7.0f};
+            camera.R = glm::mat3_cast(glm::angleAxis(0.73f, glm::normalize(glm::vec3(1.0f, 2.0f, 3.0f))));
+            viewer.getRenderingManager()->setFocalLength(63.0f);
+            lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+            const auto edited = controller.saveToJson();
+            ASSERT_NE(edited, original);
+            const auto* updated = controller.timeline().getKeyframeById(id);
+            ASSERT_NE(updated, nullptr);
+            EXPECT_EQ(updated->position, camera.t);
+            EXPECT_EQ(updated->rotation, glm::normalize(glm::quat_cast(camera.R)));
+            EXPECT_EQ(updated->focal_length_mm, 63.0f);
+            ASSERT_EQ(history.undoCount(), 1u);
+            EXPECT_EQ(history.undoName(), "Update Keyframe");
+            lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+            EXPECT_EQ(history.undoCount(), 1u);
+            for (int repetition = 0; repetition < 2; ++repetition) {
+                ASSERT_TRUE(history.undo().success);
+                EXPECT_EQ(controller.saveToJson(), original);
+                EXPECT_EQ(history.undoCount(), 0u);
+                ASSERT_TRUE(history.redo().success);
+                EXPECT_EQ(controller.saveToJson(), edited);
+                EXPECT_EQ(history.undoCount(), 1u);
+            }
+            ASSERT_TRUE(history.undo().success);
+            EXPECT_EQ(controller.timeline().animationClip(), clip);
+            EXPECT_EQ(controller.selectedKeyframeId(), id);
+            EXPECT_EQ(controller.loopMode(), LoopMode::LOOP);
+            EXPECT_EQ(camera.t, glm::vec3(9.0f, 8.0f, 7.0f));
+        }
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, CurrentViewUpdateUndoPrecedesVisibilityChange) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f));
+        controller.addKeyframe(makeKeyframe(1.0f));
+        ASSERT_TRUE(controller.selectKeyframe(1));
+        const auto original = controller.saveToJson();
+        auto* manager = viewer.getSceneManager();
+        const auto group = manager->getScene().addGroup("group");
+        manager->setNodeVisibility(group, false);
+        viewer.getViewport().camera.t = {7.0f, 8.0f, 9.0f};
+        lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_EQ(controller.saveToJson(), original);
+        EXPECT_FALSE(static_cast<bool>(manager->getScene().getNodeById(group)->visible));
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_TRUE(static_cast<bool>(manager->getScene().getNodeById(group)->visible));
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, UnchangedInvalidAndUnselectedViewUpdatesDoNotCreateHistory) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        auto& camera = viewer.getViewport().camera;
+        auto key = makeKeyframe(0.0f, camera.t, viewer.getRenderingManager()->getFocalLengthMm());
+        key.rotation = glm::quat_cast(camera.R);
+        controller.addKeyframe(key);
+        ASSERT_TRUE(controller.selectKeyframe(0));
+        const auto original = controller.saveToJson();
+        lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+        EXPECT_EQ(history.undoCount(), 0u);
+        camera.t.x = std::numeric_limits<float>::quiet_NaN();
+        lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+        controller.deselectKeyframe();
+        camera.t = {9.0f, 8.0f, 7.0f};
+        lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+        EXPECT_EQ(controller.saveToJson(), original);
+        EXPECT_EQ(history.undoCount(), 0u);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, CurrentViewHistoryCannotOverwriteLaterKeyEdit) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        const auto key = controller.addKeyframe(makeKeyframe(0.0f));
+        ASSERT_TRUE(controller.selectKeyframe(0));
+        viewer.getViewport().camera.t = {7.0f, 8.0f, 9.0f};
+        lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+        ASSERT_EQ(history.undoCount(), 1u);
+        ASSERT_TRUE(controller.setKeyframeFocalLengthById(key, 73.0f));
+        const auto edited = controller.saveToJson();
+        EXPECT_FALSE(history.undo().success);
+        EXPECT_EQ(controller.saveToJson(), edited);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, CurrentViewHistoryCannotAccessDestroyedSequencer) {
+        auto& history = lfs::vis::op::undoHistory();
+        {
+            lfs::vis::VisualizerImpl viewer(options());
+            auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+            controller.addKeyframe(makeKeyframe(0.0f));
+            ASSERT_TRUE(controller.selectKeyframe(0));
+            viewer.getViewport().camera.t = {7.0f, 8.0f, 9.0f};
+            lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+            ASSERT_EQ(history.undoCount(), 1u);
+        }
+        EXPECT_FALSE(history.undo().success);
+    }
+
+    TEST_F(SequencerHistoryRegressionTest, CurrentViewUpdateLatency) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& controller = viewer.getGuiManager()->sequencerUI().controller();
+        auto& history = lfs::vis::op::undoHistory();
+        controller.addKeyframe(makeKeyframe(0.0f));
+        controller.addKeyframe(makeKeyframe(1.0f));
+        ASSERT_TRUE(controller.selectKeyframe(1));
+        std::vector<double> samples;
+        for (int batch = 0; batch < 9; ++batch) {
+            history.clear();
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 50; ++i) {
+                viewer.getViewport().camera.t.x = static_cast<float>(i);
+                lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+            }
+            samples.push_back(std::chrono::duration<double, std::micro>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count() /
+                              50.0);
+        }
+        std::sort(samples.begin(), samples.end());
+        RecordProperty("median_update_us", std::to_string(samples[samples.size() / 2]));
     }
 
     TEST_F(SequencerHistoryRegressionTest, AddCommandLatency) {
