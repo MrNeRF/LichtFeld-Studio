@@ -121,3 +121,35 @@ Renders are rounded to the precision of the reference before scoring, so a perfe
 | `float` | Full precision, values clamped to [0, 1]. |
 
 The bit depth used for each image is recorded as `bit_depth` in `per_image_metrics.json` (32 for float).
+
+## Comparing image sets
+
+`compare` scores images made elsewhere, for example renders from another tool, against reference images with the same metrics and masks as evaluation:
+
+```bash
+LichtFeld-Studio compare plates/ renders/ -o scores
+LichtFeld-Studio compare gt_dataset/ render_dataset/ --eval-mask mesh:hero.obj --eval-flip --save-images
+LichtFeld-Studio compare gt_dataset/ render_dataset/ --eval-mask splat:init.ply --eval-space undistorted
+LichtFeld-Studio compare plates/ renders/ --colmap sparse/0 --eval-mask masks:mattes/ --undistort
+```
+
+The reference and the test are each an image, a folder of images, or a COLMAP dataset folder with `images/` and `sparse/0` (or `sparse/`). Images are paired by file name without extension, ignoring case, so `shot_0101.png` matches `shot_0101.exr`; inside datasets the path below `images/` counts too. Files without a counterpart are listed and skipped. A test set at another resolution with the same aspect ratio is compared at the smaller of the two resolutions, both downscaled with the Lanczos filter training uses; any other size mismatch skips the pair.
+
+The reference cameras come from the reference dataset, from `--colmap`, or, for a reference folder without cameras, from the test dataset. Every mask except `masks:<folder>` needs them. When both sets are datasets, the test cameras tell how the test images were made:
+
+- The same lens as the reference (at any resolution): both images are compared as they are with `--eval-space distorted` (default), or both are undistorted the same way with `--eval-space undistorted`.
+- A pinhole camera while the reference has lens distortion: the test was rendered undistorted. `distorted` warps it into the reference lens and leaves pixels it does not cover unscored; `undistorted` undistorts the reference onto the test's pinhole grid.
+
+Any other lens difference stops the comparison. Test cameras placed elsewhere than their reference cameras are reported; masks follow the reference cameras. For a test folder without cameras, `--undistort` says it was rendered with the reference cameras undistorted by LichtFeld Studio. When no camera has lens distortion, both spaces are the same.
+
+| Flag | Meaning |
+|---|---|
+| `-o <folder>` | Where the reports go; default `<test>_compare` next to the test images. |
+| `--eval-mask`, `--eval-mask-invert`, `--eval-mask-opacity` | `masks:<folder>`, `mesh:<file>`, `bbox:...`, `points:<file>` or `splat:<file>`, as in training. The crop box, depth and initial point masks need a trained model. |
+| `--colmap <sparse>` | COLMAP model with the cameras of a reference folder that is not a dataset, matched by image name. |
+| `--eval-space` | `distorted` or `undistorted`, see above. |
+| `--undistort` | The test folder was rendered with the undistorted reference cameras. |
+| `--eval-bit-depth`, `--eval-flip` | As in training. |
+| `--save-images` | Save reference and test side by side to `compare_images/` (three rows with a mask), and FLIP error maps with `--eval-flip`. |
+
+The scores go to `compare.json` (the settings, the mean scores and each image's PSNR, SSIM, LPIPS, FLIP, size, bit depth and scored pixel fraction) and `compare_report.txt` (the table the command prints); a rerun into the same folder replaces them and `compare_images/`. Both image sets are read with the same decoder, so identical files score PSNR 100 and SSIM 1. Values are compared as stored: a linear EXR and an sRGB PNG of the same image do not match.

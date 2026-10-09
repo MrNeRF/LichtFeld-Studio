@@ -228,6 +228,15 @@ namespace {
         return steps;
     }
 
+    const std::unordered_map<std::string, lfs::core::param::EvalSpace> EVAL_SPACES{
+        {"distorted", lfs::core::param::EvalSpace::Distorted},
+        {"undistorted", lfs::core::param::EvalSpace::Undistorted}};
+    const std::unordered_map<std::string, lfs::core::param::EvalBitDepth> EVAL_BIT_DEPTHS{
+        {"auto", lfs::core::param::EvalBitDepth::Auto},
+        {"8", lfs::core::param::EvalBitDepth::Eight},
+        {"16", lfs::core::param::EvalBitDepth::Sixteen},
+        {"float", lfs::core::param::EvalBitDepth::Float}};
+
     lfs::Result<std::string> parse_eval_mask(const std::string_view spec) {
         constexpr std::string_view expected =
             "Expected mesh:<file>, bbox:x0,y0,z0,x1,y1,z1, cropbox, masks:<folder>, depth:near,far, points:radius,close, "
@@ -668,6 +677,7 @@ namespace {
                 "LichtFeld Studio: High-performance CUDA implementation of 3D Gaussian Splatting algorithm.\n",
                 "\nSUBCOMMANDS:\n"
                 "convert -- Convert between .ply, .sog, .ssog, .spz, .usd/.usda/.usdc, .html\n"
+                "compare -- Score test images against reference images\n"
                 "eval -- Score a finished model or splat file against its images\n"
                 "mesh2splat -- Convert a mesh file to Gaussian splats\n"
                 "preprocess -- Generate depth and/or normal maps for an image dataset\n"
@@ -685,6 +695,7 @@ namespace {
                 "lichtfeld-studio --render-camera-path path.json --render-load model.ply --render-output out.mp4\n"
                 "lichtfeld-studio -v model.ply\n"
                 "lichtfeld-studio convert in.ply out.spz\n"
+                "lichtfeld-studio compare plates/ renders/ -o scores\n"
                 "lichtfeld-studio eval output/project.licht -o output/eval\n"
                 "lichtfeld-studio mesh2splat model.obj -o model_splat.ply\n"
                 "lichtfeld-studio preprocess ./data/scene --mode both\n"
@@ -877,19 +888,11 @@ namespace {
             ::args::Flag eval_all(output_group, "eval_all", lfs::core::args::optimization_cli_help("--eval-all"), {"eval-all"});
             ::args::Flag eval_flip(output_group, "eval_flip", lfs::core::args::optimization_cli_help("--eval-flip"), {"eval-flip"});
             ::args::MapFlag<std::string, lfs::core::param::EvalSpace> eval_space(
-                output_group, "eval_space", lfs::core::args::optimization_cli_help("--eval-space"),
-                {"eval-space"},
-                std::unordered_map<std::string, lfs::core::param::EvalSpace>{
-                    {"distorted", lfs::core::param::EvalSpace::Distorted},
-                    {"undistorted", lfs::core::param::EvalSpace::Undistorted}});
+                output_group, "eval_space", lfs::core::args::optimization_cli_help("--eval-space"), {"eval-space"},
+                EVAL_SPACES);
             ::args::MapFlag<std::string, lfs::core::param::EvalBitDepth> eval_bit_depth(
                 output_group, "eval_bit_depth", lfs::core::args::optimization_cli_help("--eval-bit-depth"),
-                {"eval-bit-depth"},
-                std::unordered_map<std::string, lfs::core::param::EvalBitDepth>{
-                    {"auto", lfs::core::param::EvalBitDepth::Auto},
-                    {"8", lfs::core::param::EvalBitDepth::Eight},
-                    {"16", lfs::core::param::EvalBitDepth::Sixteen},
-                    {"float", lfs::core::param::EvalBitDepth::Float}});
+                {"eval-bit-depth"}, EVAL_BIT_DEPTHS);
             ::args::ValueFlag<std::string> eval_mask(output_group, "source", lfs::core::args::optimization_cli_help("--eval-mask"), {"eval-mask"});
             ::args::Flag eval_mask_invert(output_group, "eval_mask_invert", lfs::core::args::optimization_cli_help("--eval-mask-invert"), {"eval-mask-invert"});
             ::args::ValueFlag<float> eval_mask_opacity(output_group, "opacity", lfs::core::args::optimization_cli_help("--eval-mask-opacity"), {"eval-mask-opacity"});
@@ -1953,7 +1956,7 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
     if (args.size() >= 2 && !args[1].starts_with('-') &&
         args[1] != "convert" && args[1] != "mesh2splat" &&
         args[1] != "mesh-to-splat" && args[1] != "preprocess" &&
-        args[1] != "plugin") {
+        args[1] != "compare" && args[1] != "plugin") {
         const std::filesystem::path p = lfs::core::utf8_to_path(args[1]);
         std::error_code ec;
         if (std::filesystem::exists(p, ec))
@@ -2433,6 +2436,117 @@ dataset options work as in training; see the Evaluation page of the docs.
         return core_args::Mesh2SplatMode{params};
     }
 
+    constexpr const char* COMPARE_HELP_HEADER =
+        "LichtFeld Studio - Score test images against reference images (PSNR, SSIM, LPIPS, optionally FLIP)\n";
+    constexpr const char* COMPARE_HELP_FOOTER =
+        "\n"
+        "Reference and test are each an image, a folder of images, or a COLMAP dataset folder (images/ and sparse/).\n"
+        "Images are paired by file name without extension, so renders saved as PNG match EXR or JPEG references.\n"
+        "Cameras come from the reference dataset or --colmap; masks other than masks: need them.\n"
+        "A test dataset's cameras tell whether it was rendered in the reference lens or undistorted.\n"
+        "--eval-space picks where both are compared: in the reference lens or on its undistorted grid.\n"
+        "Results go to the output folder as compare.json (settings, means and each image's scores) and compare_report.txt.\n"
+        "\n"
+        "EXAMPLES:\n"
+        "lichtfeld-studio compare plates/ renders/ -o scores\n"
+        "lichtfeld-studio compare gt_dataset/ render_dataset/ --eval-mask mesh:hero.obj --eval-flip --save-images\n"
+        "lichtfeld-studio compare gt_dataset/ render_dataset/ --eval-mask splat:init.ply --eval-space undistorted\n"
+        "lichtfeld-studio compare plates/ renders/ --colmap sparse/0 --eval-mask masks:mattes/ --undistort\n";
+
+    lfs::Result<lfs::core::args::ParsedArgs> parseCompareArgs(const int argc, const char* const argv[]) {
+        namespace core_args = lfs::core::args;
+        namespace param = lfs::core::param;
+        const auto invalid = [](std::string message) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Core,
+                .user_message = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        };
+
+        ::args::ArgumentParser parser(COMPARE_HELP_HEADER, COMPARE_HELP_FOOTER);
+        ::args::HelpFlag help(parser, "help", "Display help menu", {'h', "help"});
+        ::args::Positional<std::string> reference(parser, "reference", "Reference image, folder or COLMAP dataset");
+        ::args::Positional<std::string> test(parser, "test", "Test image, folder or COLMAP dataset");
+        ::args::ValueFlag<std::string> output(parser, "path", "Output folder (default: <test>_compare next to the test images)", {'o', "output"});
+        ::args::ValueFlag<std::string> colmap(parser, "path", "COLMAP sparse model with the reference cameras, when the reference is a plain folder", {"colmap"});
+        ::args::ValueFlag<std::string> eval_mask(parser, "masks:<folder>|mesh:<file>|bbox:x0,y0,z0,x1,y1,z1|points:<file>|splat:<file>", "Score only the selected pixels; all but masks: need cameras", {"eval-mask"});
+        ::args::Flag eval_mask_invert(parser, "eval_mask_invert", lfs::core::args::optimization_cli_help("--eval-mask-invert"), {"eval-mask-invert"});
+        ::args::ValueFlag<float> eval_mask_opacity(parser, "opacity", lfs::core::args::optimization_cli_help("--eval-mask-opacity"), {"eval-mask-opacity"});
+        ::args::Flag undistort(parser, "undistort", "Test images without cameras of their own were rendered with the undistorted reference cameras", {"undistort"});
+        ::args::MapFlag<std::string, param::EvalSpace> eval_space(parser, "eval_space", "Compare in the reference lens (distorted, default) or on its undistorted pinhole grid (undistorted)", {"eval-space"}, EVAL_SPACES);
+        ::args::MapFlag<std::string, param::EvalBitDepth> eval_bit_depth(parser, "eval_bit_depth", lfs::core::args::optimization_cli_help("--eval-bit-depth"), {"eval-bit-depth"}, EVAL_BIT_DEPTHS);
+        ::args::Flag eval_flip(parser, "eval_flip", lfs::core::args::optimization_cli_help("--eval-flip"), {"eval-flip"});
+        ::args::Flag save_images(parser, "save_images", "Save reference and test side by side (three rows with a mask), and FLIP error maps with --eval-flip", {"save-images"});
+        ::args::Flag no_download(parser, "no_download", "Do not download the LPIPS weights", {"no-download"});
+        LogLevelFlag log_level(parser);
+
+        std::vector<std::string> args_vec(argv + 1, argv + argc);
+        args_vec[0] = std::string(argv[0]) + " compare";
+        parser.Prog(args_vec[0]);
+
+        try {
+            parser.ParseArgs(std::vector<std::string>(args_vec.begin() + 1, args_vec.end()));
+        } catch (const ::args::Help&) {
+            std::print("{}", parser.Help());
+            return core_args::HelpMode{};
+        } catch (const ::args::ParseError& e) {
+            return invalid(std::format("{}\n\n{}", e.what(), parser.Help()));
+        }
+        if (!reference || !test)
+            return invalid(std::format("compare needs a reference and a test path\n\n{}", parser.Help()));
+        if (std::string log_level_error; !log_level.apply(log_level_error))
+            return invalid(std::move(log_level_error));
+
+        param::CompareParameters params;
+        params.reference_path = lfs::core::utf8_to_path(::args::get(reference));
+        params.test_path = lfs::core::utf8_to_path(::args::get(test));
+        for (const auto& path : {params.reference_path, params.test_path}) {
+            if (!std::filesystem::exists(path))
+                return invalid(std::format("Not found: {}", lfs::core::path_to_utf8(path)));
+        }
+        if (std::filesystem::is_directory(params.reference_path) != std::filesystem::is_directory(params.test_path))
+            return invalid("compare needs two images or two folders");
+        if (output) {
+            params.output_path = lfs::core::utf8_to_path(::args::get(output));
+        } else {
+            const auto test_path = std::filesystem::weakly_canonical(params.test_path);
+            params.output_path = test_path.parent_path() / (lfs::core::path_to_utf8(test_path.stem()) + "_compare");
+        }
+        if (colmap) {
+            params.colmap_path = lfs::core::utf8_to_path(::args::get(colmap));
+            if (!std::filesystem::is_directory(params.colmap_path))
+                return invalid(std::format("COLMAP model not found: {}", ::args::get(colmap)));
+        }
+        if (eval_mask) {
+            const auto spec = ::args::get(eval_mask);
+            if (param::is_eval_mask_cropbox(spec) || param::is_eval_mask_depth(spec) ||
+                (param::is_eval_mask_points(spec) && !param::eval_mask_points_file(spec)))
+                return invalid("compare cannot use crop box, depth or initial point masks: they need a trained model");
+            auto parsed = parse_eval_mask(spec);
+            if (!parsed)
+                return parsed.error();
+            params.evaluation.eval_mask = std::move(*parsed);
+        }
+        auto& evaluation = params.evaluation;
+        evaluation.enable_eval = true;
+        evaluation.eval_mask_invert = eval_mask_invert;
+        if (eval_mask_opacity)
+            evaluation.eval_mask_opacity = ::args::get(eval_mask_opacity);
+        evaluation.undistort = undistort;
+        if (eval_space)
+            evaluation.eval_space = ::args::get(eval_space);
+        if (eval_bit_depth)
+            evaluation.eval_bit_depth = ::args::get(eval_bit_depth);
+        evaluation.eval_flip = eval_flip;
+        evaluation.enable_save_eval_images = save_images;
+        if (const auto error = evaluation.validate(); !error.empty())
+            return invalid(error);
+        params.no_download = no_download;
+        return core_args::CompareMode{std::move(params)};
+    }
+
     std::expected<lfs::core::args::ParsedArgs, std::string> parsePreprocessArgs(const int argc, const char* const argv[]) {
         namespace core_args = lfs::core::args;
         namespace param = lfs::core::param;
@@ -2618,6 +2732,11 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
             return parseMesh2SplatArgs(argc, argv);
         } else if (arg1 == "preprocess") {
             return parsePreprocessArgs(argc, argv);
+        } else if (arg1 == "compare") {
+            auto parsed = parseCompareArgs(argc, argv);
+            if (!parsed)
+                return std::unexpected(std::string(parsed.error().user_message()));
+            return std::move(*parsed);
         } else if (arg1 == "licht") {
             std::string error;
             if (auto parsed = parseLichtArgs(argc, argv, error)) {

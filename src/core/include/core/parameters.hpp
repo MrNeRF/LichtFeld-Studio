@@ -678,6 +678,18 @@ namespace lfs::core {
             bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
         };
 
+        // Parameters for the compare command
+        struct LFS_CORE_API CompareParameters {
+            std::filesystem::path reference_path; // An image, a folder of images or a COLMAP dataset folder
+            std::filesystem::path test_path;      // The same kind as reference_path
+            std::filesystem::path output_path;
+            std::filesystem::path colmap_path; // Cameras of a reference folder that is no COLMAP dataset
+            // The eval_* options and enable_save_eval_images as in training; undistort says that test images
+            // without cameras of their own were rendered with the undistorted reference cameras.
+            OptimizationParameters evaluation{.enable_save_eval_images = false};
+            bool no_download = false;
+        };
+
         enum class PreprocessOutputMode { Depth,
                                           Normals,
                                           Both };

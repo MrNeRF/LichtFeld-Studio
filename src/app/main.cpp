@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/application.hpp"
+#include "app/compare.hpp"
 #include "app/converter.hpp"
 #include "app/licht_command.hpp"
 #include "core/abi.hpp"
@@ -153,6 +154,9 @@ namespace {
             } else if constexpr (std::is_same_v<T, lfs::core::args::PreprocessMode>) {
                 preflightGpuOrExit(false);
                 return lfs::preprocessing::run_preprocess(mode.params);
+            } else if constexpr (std::is_same_v<T, lfs::core::args::CompareMode>) {
+                preflightGpuOrExit(false);
+                return lfs::app::run_compare(mode.params);
             } else if constexpr (std::is_same_v<T, lfs::core::args::PluginMode>) {
                 return lfs::python::run_plugin_command(mode);
             } else if constexpr (std::is_same_v<T, lfs::core::args::LichtMode>) {

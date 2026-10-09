@@ -238,6 +238,21 @@ namespace lfs::training {
 
     using EvaluationRenderFn =
         std::function<lfs::Result<EvaluationRenderResult>(lfs::core::Camera&, float)>;
+    // Receives the dataset view and the camera to render it with, which differs once undistorted or resized.
+    using EvaluationViewRenderFn =
+        std::function<lfs::Result<EvaluationRenderResult>(lfs::core::Camera&, lfs::core::Camera&, float)>;
+
+    // Renders warped into a distorted lens are made at this multiple of the warp's pinhole grid.
+    inline constexpr int kEvaluationWarpSupersample = 2;
+
+    // What MetricsEvaluator::evaluate_views scores against each view's reference image.
+    struct EvaluationViewSource {
+        EvaluationViewRenderFn render;
+        int num_gaussians = 0;
+        // Images that exist at one size, like files, are warped at that size.
+        int warp_supersample = kEvaluationWarpSupersample;
+        std::filesystem::path image_dir; // Where images are saved; empty = <output>/eval_step_<iteration>
+    };
 
     [[nodiscard]] lfs::Error evaluation_error(std::string detail, lfs::core::SourceSite site);
 
@@ -253,7 +268,18 @@ namespace lfs::training {
         const EvaluationViewInputs* cached_inputs = nullptr,
         lfs::io::PipelinedImageLoader* image_loader = nullptr,
         const EvaluationMaskSources& mask_sources = {},
-        const lfs::core::Tensor& background = {});
+        const lfs::core::Tensor& background = {},
+        int warp_supersample = kEvaluationWarpSupersample);
+
+    // A loader sized for decoding one evaluation image at a time.
+    [[nodiscard]] std::unique_ptr<lfs::io::PipelinedImageLoader> make_eval_image_loader(
+        const lfs::core::param::TrainingParameters& params);
+
+    // Load parameters that decode path the way camera's reference image is decoded for evaluation, so identical
+    // files score identically. undistort=false keeps the image in its own lens when the reference is undistorted.
+    [[nodiscard]] lfs::io::LoadParams evaluation_load_params_like_reference(
+        const std::filesystem::path& path, const lfs::core::Camera& camera,
+        const lfs::core::param::TrainingParameters& params, bool undistort);
 
     [[nodiscard]] std::optional<float> mean_normal_angle_deg(
         const lfs::core::Tensor& rendered_normal,
@@ -329,6 +355,10 @@ namespace lfs::training {
         }
         void set_eval_points(EvaluationPoints points) { _eval_points = std::move(points); }
         void set_eval_splat(EvaluationSplat splat) { _eval_splat = std::move(splat); }
+        // Installs the configured eval_mask when it is a splat or point PLY, a mask folder, a box or a mesh, with
+        // files in a frame whose origin is training_origin. False for masks that need the trained scene: the crop
+        // box, the initial points and depth.
+        [[nodiscard]] lfs::Result<bool> install_eval_mask_source(const std::array<float, 3>& training_origin);
         [[nodiscard]] EvaluationMaskSources mask_sources() const {
             return {.mesh = eval_mesh(),
                     .points = _eval_points ? &*_eval_points : nullptr,
@@ -355,6 +385,13 @@ namespace lfs::training {
                              std::shared_ptr<CameraDataset> val_dataset,
                              lfs::core::Tensor& background,
                              lfs::io::PipelinedImageLoader* image_loader = nullptr);
+
+        // Scores what source.render returns for each view against the view's reference image.
+        EvalMetrics evaluate_views(int iteration,
+                                   std::shared_ptr<CameraDataset> val_dataset,
+                                   const EvaluationViewSource& source,
+                                   const lfs::core::Tensor& background,
+                                   lfs::io::PipelinedImageLoader* image_loader = nullptr);
 
         // Save final report
         void save_report() const {

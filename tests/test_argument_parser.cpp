@@ -135,6 +135,46 @@ TEST(ArgumentParserTest,
         (*resume_parsed)->resume_checkpoint);
 }
 
+// Catches the compare subcommand falling through to training, losing its flags, or accepting masks it cannot
+// build without a trained model.
+TEST(ArgumentParserTest, CompareSubcommandParsesAndRejectsTrainedModelMasks) {
+    const auto directory = std::filesystem::path(make_test_path("lfs_arg_parser_compare"));
+    std::filesystem::create_directories(directory / "reference");
+    std::filesystem::create_directories(directory / "test");
+    const auto reference = (directory / "reference").string();
+    const auto test = (directory / "test").string();
+    const auto splat = (directory / "init.ply").string();
+    std::ofstream(splat).put('\n');
+    const auto splat_spec = "splat:" + splat;
+
+    const char* argv[] = {"LichtFeld-Studio", "compare", reference.c_str(), test.c_str(), "--eval-mask",
+                          splat_spec.c_str(), "--eval-mask-opacity", "0.5", "--eval-space", "undistorted",
+                          "--eval-flip", "--eval-bit-depth", "16", "--save-images"};
+    const auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    const auto* mode = std::get_if<lfs::core::args::CompareMode>(&*parsed);
+    ASSERT_NE(mode, nullptr);
+    const auto& evaluation = mode->params.evaluation;
+    EXPECT_EQ(evaluation.eval_mask, "splat:" + lfs::core::path_to_utf8(std::filesystem::weakly_canonical(splat)));
+    EXPECT_FLOAT_EQ(evaluation.eval_mask_opacity, 0.5f);
+    EXPECT_EQ(evaluation.eval_space, lfs::core::param::EvalSpace::Undistorted);
+    EXPECT_TRUE(evaluation.eval_flip);
+    EXPECT_TRUE(evaluation.enable_save_eval_images);
+    EXPECT_EQ(evaluation.eval_bit_depth, lfs::core::param::EvalBitDepth::Sixteen);
+    EXPECT_EQ(mode->params.output_path, std::filesystem::weakly_canonical(directory) / "test_compare");
+
+    for (const std::vector<const char*>& bad : std::vector<std::vector<const char*>>{
+             {"LichtFeld-Studio", "compare", reference.c_str(), test.c_str(), "--eval-mask", "cropbox"},
+             {"LichtFeld-Studio", "compare", reference.c_str(), test.c_str(), "--eval-mask", "depth:1,2"},
+             {"LichtFeld-Studio", "compare", reference.c_str(), test.c_str(), "--eval-mask", "points:2,3"},
+             {"LichtFeld-Studio", "compare", reference.c_str(), test.c_str(), "--eval-mask", splat_spec.c_str(),
+              "--eval-mask-opacity", "1.5"},
+             {"LichtFeld-Studio", "compare", reference.c_str(), test.c_str(), "--eval-mask-invert"},
+             {"LichtFeld-Studio", "compare", reference.c_str(), splat.c_str()}}) {
+        EXPECT_FALSE(lfs::core::args::parse_args(static_cast<int>(bad.size()), bad.data())) << bad.back();
+    }
+}
+
 // Catches rejecting --eval-space on a resume, where --undistort comes from the project.
 TEST(ArgumentParserTest, EvalSpaceOnResumeTrustsTheProjectsUndistort) {
     const auto project = std::filesystem::path(make_test_path("lfs_arg_parser_resume_eval_space")) / "session.licht";
