@@ -1367,6 +1367,117 @@ def test_histogram_shift_click_adds_a_bin_like_selection_tools(histogram_panel_m
     assert panel._histogram_overlay_bounds == (5, 5)
 
 
+def _three_bin_panel(histogram_panel_module, lf, numpy, monkeypatch):
+    panel = histogram_panel_module.HistogramPanel()
+    panel._show_chart = True
+    panel._metric_id = "opacity"
+    panel._chart_el = SimpleNamespace(absolute_left=0.0, absolute_width=160.0)
+
+    values = lf.Tensor.from_numpy(numpy.array([0.05, 0.15, 0.35], dtype=numpy.float32))
+    finite_mask = values.isfinite()
+    panel._primary_values = values
+    panel._primary_finite_mask = finite_mask
+    panel._primary_valid_values = values[finite_mask]
+    panel._primary_histogram_min = 0.0
+    panel._primary_histogram_max = 1.0
+    panel._histogram_bin_count = 16
+    panel._rebuild_histogram_from_cache()
+
+    scene = _SceneSelectionStub()
+    monkeypatch.setattr(lf, "get_scene", lambda: scene)
+    return panel, scene
+
+
+def _click_bin(panel, bin_index, **modifiers):
+    x = bin_index * 10.0 + 1.0
+    panel._on_chart_mousedown(_MouseEventStub(mouse_x=x, **modifiers))
+    panel._on_document_mouseup(_MouseEventStub(mouse_x=x))
+
+
+def test_histogram_consecutive_shift_clicks_keep_every_added_bin(histogram_panel_module, lf, numpy, monkeypatch):
+    panel, scene = _three_bin_panel(histogram_panel_module, lf, numpy, monkeypatch)
+
+    _click_bin(panel, 0)
+    _click_bin(panel, 2, shift=True)
+    _click_bin(panel, 5, shift=True)
+
+    numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), numpy.array([True, True, True], dtype=bool))
+    assert panel._selected_histogram_bins == {0, 2, 5}
+
+
+def test_histogram_consecutive_ctrl_clicks_keep_every_removed_bin(histogram_panel_module, lf, numpy, monkeypatch):
+    panel, scene = _three_bin_panel(histogram_panel_module, lf, numpy, monkeypatch)
+
+    panel._marked_bin_start = 0
+    panel._marked_bin_end = 5
+    panel._sync_marked_range(apply_scene=True)
+    _click_bin(panel, 0, ctrl=True)
+    _click_bin(panel, 2, ctrl=True)
+
+    numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), numpy.array([False, False, True], dtype=bool))
+    assert panel._selected_histogram_bins == {5}
+
+
+def _settle_on_update(panel, module, lf, monkeypatch, selection_generation):
+    panel._scene_generation = 0
+    panel._scene_data_generation = 0
+    panel._history_generation = 0
+    panel._selection_generation = selection_generation - 1
+    panel._last_lang = "en"
+    panel._trainer_state = module.RuntimeState.trainer_state.value
+    panel._selected_nodes_signature = ()
+    monkeypatch.setattr(lf, "get_scene_generation", lambda: 0)
+    monkeypatch.setattr(panel, "_scene_data_generation_value", lambda: 0)
+    monkeypatch.setattr(panel, "_history_generation_value", lambda: 0)
+    monkeypatch.setattr(panel, "_selection_generation_value", lambda: selection_generation)
+    monkeypatch.setattr(panel, "_scene_node_selection_signature", lambda: ())
+    monkeypatch.setattr(panel, "_sync_panel_space_state", lambda: False)
+    monkeypatch.setattr(lf.ui, "get_current_language", lambda: "en")
+    panel.on_update(None)
+
+
+def test_histogram_ctrl_click_unhighlights_the_removed_bin_at_once(histogram_panel_module, lf, numpy, monkeypatch):
+    panel, scene = _three_bin_panel(histogram_panel_module, lf, numpy, monkeypatch)
+    panel._handle = _UpdateHandleStub()
+
+    _click_bin(panel, 0)
+    _click_bin(panel, 5, shift=True)
+    _click_bin(panel, 0, ctrl=True)
+
+    # The bars the panel last pushed, not a fresh rebuild.
+    highlighted = {index for index, record in enumerate(panel._handle.records["bins"]) if record["selected"]}
+    assert panel._selected_histogram_bins == {5}
+    assert highlighted == {5}
+
+
+def test_histogram_follows_selection_changes_made_outside_the_panel(histogram_panel_module, lf, numpy, monkeypatch):
+    panel, scene = _three_bin_panel(histogram_panel_module, lf, numpy, monkeypatch)
+    _click_bin(panel, 0)
+    assert panel._selected_histogram_bins == {0}
+
+    # A viewport tool selects the second Gaussian instead.
+    scene.selection_mask = lf.Tensor.from_numpy(numpy.array([False, True, False], dtype=bool))
+    _settle_on_update(panel, histogram_panel_module, lf, monkeypatch, selection_generation=5)
+    assert panel._selected_histogram_bins == {2}
+
+    # Clearing the selection elsewhere clears the chart too.
+    scene.clear_selection()
+    _settle_on_update(panel, histogram_panel_module, lf, monkeypatch, selection_generation=6)
+    assert panel._selected_histogram_bins == set()
+
+
+def test_histogram_shift_click_adds_to_a_selection_made_outside_the_panel(histogram_panel_module, lf, numpy, monkeypatch):
+    panel, scene = _three_bin_panel(histogram_panel_module, lf, numpy, monkeypatch)
+    _click_bin(panel, 0)
+
+    scene.selection_mask = lf.Tensor.from_numpy(numpy.array([False, True, False], dtype=bool))
+    _settle_on_update(panel, histogram_panel_module, lf, monkeypatch, selection_generation=5)
+    _click_bin(panel, 5, shift=True)
+
+    numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), numpy.array([False, True, True], dtype=bool))
+    assert panel._selected_histogram_bins == {2, 5}
+
+
 def test_histogram_ctrl_click_removes_a_bin_like_selection_tools(histogram_panel_module, lf, numpy, monkeypatch):
     panel = histogram_panel_module.HistogramPanel()
     panel._show_chart = True
@@ -1459,7 +1570,7 @@ def test_histogram_owned_modifier_selection_survives_two_follow_up_updates(histo
     panel._histogram_bin_count = 16
     panel._rebuild_histogram_from_cache()
 
-    scene = _SceneSelectionStub(lf.Tensor.from_numpy(numpy.array([True, False, False], dtype=bool)))
+    scene = _SceneSelectionStub(lf.Tensor.from_numpy(numpy.array([True, False, True], dtype=bool)))
     monkeypatch.setattr(lf, "get_scene", lambda: scene)
 
     panel._commit_histogram_mask_selection(
@@ -1468,7 +1579,6 @@ def test_histogram_owned_modifier_selection_survives_two_follow_up_updates(histo
         overlay_bounds=(5, 5),
     )
     panel._selection_owned = True
-    panel._pending_selection_commit = 2
 
     scene_generations = iter([1, 1])
     history_generations = iter([0, 1])

@@ -231,7 +231,6 @@ class HistogramPanel(Panel):
         self._compare_x_edges: list[float] | None = None
         self._compare_y_edges: list[float] | None = None
         self._selection_owned = False
-        self._pending_selection_commit = 0
         self._active_mark_source: str | None = None
         self._panel_selection_mask: lf.Tensor | None = None
         self._selected_histogram_bins: set[int] = set()
@@ -484,15 +483,12 @@ class HistogramPanel(Panel):
             self._trainer_state = trainer_state
             if self._scene_selection_preview_active:
                 self._selection_owned = True
-                self._pending_selection_commit = max(self._pending_selection_commit, 2)
             return False
 
         if scene_changed or history_changed or selection_changed:
-            if self._pending_selection_commit > 0:
-                self._pending_selection_commit -= 1
-            else:
-                self._selection_owned = False
-                sync_selection_from_scene = True
+            # The panel's own commits leave the scene equal to its mask and are skipped
+            # there, so tool selections, clears and undo always reach the chart.
+            sync_selection_from_scene = True
 
         if nodes_changed:
             self._clear_all_marks(clear_scene=False)
@@ -1977,16 +1973,11 @@ class HistogramPanel(Panel):
         return records
 
     def _build_bin_records(self, counts: list[int], edges: list[float]) -> Iterable[dict[str, object]]:
+        # The marked range is the last stroke, which a Ctrl stroke removes; only the
+        # selected bins are highlighted.
         selected_bins = self._selected_histogram_bins
-        marked_lo, marked_hi = self._marked_bounds()
         for index, record in enumerate(self._static_bin_records(counts, edges)):
-            yield {
-                **record,
-                "selected": (
-                    index in selected_bins or
-                    (marked_lo is not None and marked_lo <= index <= marked_hi)
-                ),
-            }
+            yield {**record, "selected": index in selected_bins}
 
     def _update_bin_records(self):
         if self._handle is None or self._hist_counts is None or self._hist_edges is None:
@@ -2670,14 +2661,34 @@ class HistogramPanel(Panel):
         scene_mask = getattr(scene, "selection_mask", None)
         if scene_mask is None:
             # Nothing selected (or selection cleared) -> clear panel highlight too.
+            self._selection_owned = False
             if self._has_any_mark():
                 self._reset_marked_state(clear_scene=False)
             return
 
-        if self._show_compare_chart and self._compare_finite_mask is not None and self._compare_values is not None:
+        source = (
+            "compare"
+            if self._show_compare_chart and self._compare_finite_mask is not None and self._compare_values is not None
+            else "histogram"
+        )
+        if self._scene_selection_matches_panel(scene_mask, source):
+            return
+        self._selection_owned = False
+        if source == "compare":
             self._commit_compare_mask_selection(scene_mask, apply_scene=False)
         elif self._primary_finite_mask is not None and self._primary_values is not None:
             self._commit_histogram_mask_selection(scene_mask, apply_scene=False)
+
+    def _scene_selection_matches_panel(self, scene_mask: lf.Tensor, source: str) -> bool:
+        """True when the scene holds the panel's own last selection within the panel's domain."""
+        panel_mask = self._panel_selection_mask
+        if panel_mask is None or self._active_mark_source != source:
+            return False
+        reference, domain_mask = self._selection_mode_state(source)
+        normalized = self._normalize_selection_mask(scene_mask, reference)
+        if normalized is None or domain_mask is None or normalized.numel != panel_mask.numel:
+            return False
+        return not self._any_true((normalized & domain_mask) != panel_mask)
 
     def _selection_mode_state(self, source: str) -> tuple[lf.Tensor | None, lf.Tensor | None]:
         if source == "compare":
@@ -2956,7 +2967,6 @@ class HistogramPanel(Panel):
 
         peak = max(max(display_counts, default=0.0), 1.0)
         selected_cells = self._selected_compare_cells
-        x_lo, x_hi, y_lo, y_hi = self._compare_marked_bounds()
         records = []
         cell_width = 100.0 / max(self._compare_x_bin_count, 1)
         cell_height = 100.0 / max(self._compare_y_bin_count, 1)
@@ -2977,14 +2987,7 @@ class HistogramPanel(Panel):
                             f"height: {cell_height:.4f}%;"
                         ),
                         "opacity_style": f"{opacity:.3f}",
-                        "selected": (
-                            (x_bin, y_bin) in selected_cells or
-                            (
-                                x_lo is not None and y_lo is not None and
-                                x_lo <= x_bin <= x_hi and
-                                y_lo <= y_bin <= y_hi
-                            )
-                        ),
+                        "selected": (x_bin, y_bin) in selected_cells,
                         "tooltip": _trf(
                             "histogram.compare.bin_tooltip",
                             "X {x_range} | Y {y_range} | {count} Gaussians",
@@ -3161,7 +3164,6 @@ class HistogramPanel(Panel):
 
         self._scene_selection_preview_active = False
         self._selection_owned = True
-        self._pending_selection_commit = 2
 
     def _cancel_scene_selection_preview(self):
         if not self._scene_selection_preview_active:
@@ -3178,13 +3180,11 @@ class HistogramPanel(Panel):
 
         self._scene_selection_preview_active = False
         self._selection_owned = False
-        self._pending_selection_commit = 0
 
     def _apply_scene_selection_mask(self, mask: lf.Tensor | None, preview: bool = False):
         scene = lf.get_scene()
         if scene is None or not scene.is_valid():
             self._selection_owned = False
-            self._pending_selection_commit = 0
             return
 
         reference = self._primary_values if self._primary_values is not None else self._compare_values
@@ -3194,7 +3194,6 @@ class HistogramPanel(Panel):
         if normalized is None:
             scene.clear_selection()
             self._selection_owned = False
-            self._pending_selection_commit = 0
             return
 
         try:
@@ -3214,15 +3213,10 @@ class HistogramPanel(Panel):
             else:
                 scene.clear_selection()
                 self._selection_owned = False
-                self._pending_selection_commit = 0
                 return
             self._selection_owned = True
-            # A histogram commit can trigger separate scene and undo/history updates.
-            # Keep ownership across both so we do not immediately resync stale scene state.
-            self._pending_selection_commit = 2
         except Exception:
             self._selection_owned = False
-            self._pending_selection_commit = 0
 
     def _clear_histogram_overlay(self):
         self._histogram_overlay_bounds = None
@@ -4016,7 +4010,6 @@ class HistogramPanel(Panel):
             self._clear_owned_scene_selection()
         else:
             self._selection_owned = False
-            self._pending_selection_commit = 0
 
     def _reset_marked_state(self, clear_scene: bool):
         self._reset_footer_mark_state(clear_scene=clear_scene)
@@ -4117,7 +4110,6 @@ class HistogramPanel(Panel):
         if scene is not None and scene.is_valid() and self._selection_owned:
             scene.clear_selection()
         self._selection_owned = False
-        self._pending_selection_commit = 0
 
     @staticmethod
     def _history_generation_value() -> int:
