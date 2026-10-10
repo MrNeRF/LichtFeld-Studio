@@ -436,6 +436,9 @@ namespace lfs::vis::gui {
         ctor.Bind("gpu_mem_text", &model_.gpu_mem_text);
         ctor.Bind("gpu_mem_color", &model_.gpu_mem_color);
         ctor.Bind("fps_value", &model_.fps_value);
+        ctor.Bind("fps_view_value", &model_.fps_view_value);
+        ctor.Bind("fps_ui_label", &model_.fps_ui_label);
+        ctor.Bind("fps_view_label", &model_.fps_view_label);
         ctor.Bind("fps_color", &model_.fps_color);
         ctor.Bind("fps_label", &model_.fps_label);
         ctor.Bind("preview_reduced", &model_.preview_reduced);
@@ -1583,12 +1586,12 @@ namespace lfs::vis::gui {
         const auto rates = rm ? rm->guiFrameRates() : FrameRates{};
         const float scene_fps = rates.view;
         const float presented_fps = rates.ui;
-        setModelString("fps_value", model_.fps_value,
-                       std::format("{} {:.0f} · {} {:.0f}", LOC("status_bar.ui"), presented_fps,
-                                   LOC("status_bar.view"), scene_fps));
-        setModelString("fps_color", model_.fps_color, colorToRml(p.text_dim));
-        setModelString("fps_label", model_.fps_label,
-                       std::format(" {}", LOC(lichtfeld::Strings::Status::FPS)));
+        setModelString("fps_value", model_.fps_value, std::format("{:.0f}", presented_fps));
+        setModelString("fps_view_value", model_.fps_view_value, std::format("{:.0f}", scene_fps));
+        setModelString("fps_ui_label", model_.fps_ui_label, LOC("status_bar.ui"));
+        setModelString("fps_view_label", model_.fps_view_label, LOC("status_bar.view"));
+        setModelString("fps_color", model_.fps_color, colorToRml(p.text));
+        setModelString("fps_label", model_.fps_label, LOC(lichtfeld::Strings::Status::FPS));
         setModelString("git_commit", model_.git_commit, GIT_COMMIT_HASH_SHORT);
 
         section_signature_ =

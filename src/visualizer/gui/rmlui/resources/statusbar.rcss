@@ -383,14 +383,26 @@ body {
     margin-right: 0;
 }
 
-#fps-value {
-    margin-left: 16dp;
-    min-width: 128dp;
-    text-align: right;
+#fps-group {
+    margin-left: 12dp;
+    gap: 8dp;
 }
 
-#fps-label {
-    margin-left: 0;
+.fps-metric {
+    display: flex;
+    align-items: center;
+    gap: 4dp;
+}
+
+.fps-caption {
+    font-size: 10dp;
+    position: relative;
+    top: -2dp;
+}
+
+.fps-number {
+    min-width: 26dp;
+    text-align: right;
 }
 
 #git-commit {
@@ -457,7 +469,6 @@ body.fit-3 #time-metric {
 }
 
 body.fit-4 #eval-metric,
-body.fit-4 #fps-label,
 body.fit-4 #wasd-section,
 body.fit-4 #zoom-section {
     display: none;
@@ -528,4 +539,4 @@ body.fit-9 #gpu-mem {
 body.fit-8 #mcp-summary { display: none; }
 body.fit-8 #mcp-compact { display: block; }
 body.fit-8 #mcp-chip { margin-right: 4dp; padding: 0 3dp; }
-body.fit-8 #fps-value { margin-left: 6dp; min-width: 110dp; }
+body.fit-8 #fps-group { margin-left: 6dp; gap: 6dp; }

@@ -143,9 +143,12 @@ namespace {
         std::string gpu_model_text = "NVIDIA GeForce RTX 5090";
         std::string gpu_mem_text = "GPU 18.75/31.99 GiB";
         std::string gpu_mem_color = "#ffffff";
-        std::string fps_value = "UI 144 · View 144";
+        std::string fps_value = "144";
+        std::string fps_view_value = "144";
+        std::string fps_ui_label = "UI";
+        std::string fps_view_label = "View";
         std::string fps_color = "#ffffff";
-        std::string fps_label = " FPS";
+        std::string fps_label = "FPS";
         std::string git_commit = "abcdef12";
         bool mcp_details_expanded = false;
         std::string mcp_summary = "MCP Local";
@@ -276,6 +279,9 @@ namespace {
             bound &= constructor.Bind("gpu_mem_text", &model_.gpu_mem_text);
             bound &= constructor.Bind("gpu_mem_color", &model_.gpu_mem_color);
             bound &= constructor.Bind("fps_value", &model_.fps_value);
+            bound &= constructor.Bind("fps_view_value", &model_.fps_view_value);
+            bound &= constructor.Bind("fps_ui_label", &model_.fps_ui_label);
+            bound &= constructor.Bind("fps_view_label", &model_.fps_view_label);
             bound &= constructor.Bind("fps_color", &model_.fps_color);
             bound &= constructor.Bind("fps_label", &model_.fps_label);
             bound &= constructor.Bind("git_commit", &model_.git_commit);
@@ -355,6 +361,31 @@ namespace {
         EXPECT_LT(expanded_fit_level, previous_fit_level);
         assertNoVerticalOverflow(document_);
         assertFlexSiblingsDoNotOverlap(document_);
+    }
+
+    TEST_F(StatusBarFitTest, FpsValuesReserveIndependentWidthsAndKeepUnitVisible) {
+        context_->SetDimensions({2400, 22});
+        context_->Update();
+        auto* ui = document_->GetElementById("fps-value");
+        auto* view = document_->GetElementById("fps-view-value");
+        auto* unit = document_->GetElementById("fps-label");
+        ASSERT_NE(ui, nullptr);
+        ASSERT_NE(view, nullptr);
+        ASSERT_NE(unit, nullptr);
+        const auto ui_width = ui->GetOffsetWidth();
+        const auto view_position = view->GetAbsoluteOffset().x;
+        model_.fps_value = "0";
+        model_.fps_view_value = "9";
+        model_handle_.DirtyVariable("fps_value");
+        model_handle_.DirtyVariable("fps_view_value");
+        context_->Update();
+        EXPECT_FLOAT_EQ(ui->GetOffsetWidth(), ui_width);
+        EXPECT_FLOAT_EQ(view->GetAbsoluteOffset().x, view_position);
+        assertNoVerticalOverflow(document_);
+        assertFlexSiblingsDoNotOverlap(document_);
+        document_->SetClass("fit-8", true);
+        context_->Update();
+        EXPECT_GT(unit->GetOffsetWidth(), 0.0f);
     }
 
     TEST_F(StatusBarFitTest, McpDetailsReserveOnlyTheirMeasuredOverlayArea) {

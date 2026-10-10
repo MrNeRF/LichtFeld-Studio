@@ -247,6 +247,9 @@ namespace lfs::vis::gui {
             std::string gpu_mem_text;
             std::string gpu_mem_color;
             std::string fps_value;
+            std::string fps_view_value;
+            std::string fps_ui_label;
+            std::string fps_view_label;
             std::string fps_color;
             std::string fps_label;
             bool preview_reduced = false;
