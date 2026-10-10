@@ -12,7 +12,7 @@ import pytest
 
 @pytest.mark.parametrize("worker", [False, True], ids=["main-thread", "worker-thread"])
 def test_external_interpreter_scripts(tmp_path, worker):
-    lf = pytest.importorskip("lichtfeld")
+    import lichtfeld as lf
     module_dir = Path(lf.__file__).resolve().parent
     env = dict(os.environ, LFS_HOME=str(tmp_path / "home"), LFS_SAFE_MODE="0")
     code = f"""

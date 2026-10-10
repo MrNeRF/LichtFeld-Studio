@@ -182,6 +182,10 @@ jobs:
         shell: cmd
         run: ctest --test-dir %BUILD_DIR% --output-on-failure --no-tests=error -R "^lichtfeld\.sdl_coordinates$"
 
+      - name: Run Python runtime DLL boundary tests
+        shell: cmd
+        run: ctest --test-dir %BUILD_DIR% --output-on-failure --no-tests=error -R "^lichtfeld\.python_runtime_state$"
+
       - name: Build and run CPU-only format tests
         shell: cmd
         run: |
