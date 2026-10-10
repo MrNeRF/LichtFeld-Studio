@@ -3277,7 +3277,7 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "training.params.set",
-                .description = "Set training parameters by id, e.g. {\"values\": {\"thin_structure_weight\": 1.0}}. Options are passed by name. Live-update parameters also change a running training",
+                .description = "Set training parameters by id, e.g. {\"values\": {\"thin_structure_weight\": 1.0}}. Options are passed by name. Live-update parameters also change the current run of the same strategy; deferred_parameters lists settings saved for the next run",
                 .input_schema = {
                     .type = "object",
                     .properties = json{{"values", json{{"type", "object"}}}},
@@ -3291,6 +3291,11 @@ namespace lfs::app {
                     if (!params)
                         return json{{"error", "Training parameters are not available"}};
                     auto& registry = core::prop::PropertyRegistry::instance();
+                    const auto* const manager = viewer_impl->getTrainerManager();
+                    const auto* const trainer = manager ? manager->getTrainer() : nullptr;
+                    const bool has_current_run = trainer && (trainer->isInitialized() || manager->isTrainingActive());
+                    if (has_current_run && trainer->getParams().resume_checkpoint.has_value())
+                        return json{{"error", "Training parameters are locked for a checkpoint-backed run"}};
 
                     struct Change {
                         core::prop::PropertyMeta meta;
@@ -3350,6 +3355,17 @@ namespace lfs::app {
                         registry.notify("optimization", changes[i].meta.id, previous[i], changes[i].value);
 
                     auto result = optimization_params_json(params->copyActiveParams(), false);
+                    result["deferred_parameters"] = json::array();
+                    if (has_current_run) {
+                        const auto active = trainer->getParams();
+                        const bool defer_all = core::param::canonical_strategy_name(active.optimization.strategy) !=
+                                               params->getActiveStrategy();
+                        for (const auto& [id, value] : values.items()) {
+                            const auto meta = registry.get_property("optimization", id);
+                            if (defer_all || !meta->is_live_update())
+                                result["deferred_parameters"].push_back(id);
+                        }
+                    }
                     result["success"] = true;
                     return result;
                 });

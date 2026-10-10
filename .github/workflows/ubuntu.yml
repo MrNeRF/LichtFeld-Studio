@@ -212,6 +212,8 @@ jobs:
           clean: false
       - name: Build the GUI executable
         run: cmake --build build --target LichtFeld-Studio -j6
+      - name: Run generated training parameter regression
+        run: ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld\.python\.training_live_params$'
       - name: Start Xvfb when needed
         run: |
           if ! xdpyinfo -display :92 >/dev/null 2>&1; then

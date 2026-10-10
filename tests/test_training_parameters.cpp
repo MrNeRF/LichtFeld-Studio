@@ -35,6 +35,63 @@ using lfs::core::prop::PropType;
 
 namespace {
 
+    TEST(TrainingLiveParametersTest, KeepsInitializationSettingsAndCopiesOnlyLiveProperties) {
+        using namespace lfs::core::param;
+        ensure_optimization_properties_registered();
+        auto active = OptimizationParameters::mrnf_defaults();
+        auto edited = active;
+        edited.iterations = 1500;
+        edited.max_cap = 2000000;
+        edited.enable_sparsity = true;
+        edited.sparsify_steps = 2000;
+        edited.gut = true;
+        edited.sh_degree = 1;
+        edited.enable_eval = !active.enable_eval;
+        edited.bg_color = {0.1f, 0.2f, 0.3f};
+        auto expected = active;
+        auto source = PropertyObjectRef::cpp(&edited);
+        auto destination = PropertyObjectRef::cpp(&expected);
+        const auto group = PropertyRegistry::instance().get_group_snapshot("optimization");
+        ASSERT_TRUE(group);
+        size_t live_count = 0;
+        for (const auto& property : group->properties) {
+            if (!property.is_live_update())
+                continue;
+            ASSERT_EQ(property.type, PropType::Float);
+            const float value = std::any_cast<float>(property.getter(source)) + 0.00001f;
+            property.setter(source, value);
+            property.setter(destination, value);
+            ++live_count;
+        }
+        ASSERT_GT(live_count, 0);
+        const auto editable_before = edited.to_json();
+        apply_live_optimization_updates(active, edited);
+        EXPECT_EQ(active.to_json(), expected.to_json());
+        EXPECT_EQ(edited.to_json(), editable_before);
+    }
+
+    TEST(TrainingLiveParametersTest, SwitchingNextRunStrategyKeepsCurrentRunUnchanged) {
+        using namespace lfs::core::param;
+        auto active = OptimizationParameters::mrnf_defaults();
+        const auto before = active.to_json();
+        auto edited = OptimizationParameters::mcmc_defaults();
+        edited.means_lr = 0.0001f;
+        apply_live_optimization_updates(active, edited);
+        EXPECT_EQ(active.to_json(), before);
+    }
+
+    TEST(TrainingLiveParametersTest, UnchangedResolvedSettingsRemainIdenticalForEveryStrategy) {
+        using namespace lfs::core::param;
+        for (const auto* strategy : {"mrnf", "mcmc", "igs+"}) {
+            auto active = OptimizationParameters::defaults_for_strategy(strategy);
+            active.resolve_mrnf_capacity_defaults();
+            const auto before = active.to_json();
+            const auto edited = active;
+            apply_live_optimization_updates(active, edited);
+            EXPECT_EQ(active.to_json(), before);
+        }
+    }
+
     PropertyMeta optimization_meta(const std::string& id) {
         auto meta = PropertyRegistry::instance().get_property("optimization", id);
         if (!meta)
