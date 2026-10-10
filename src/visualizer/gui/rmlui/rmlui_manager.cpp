@@ -1501,7 +1501,7 @@ namespace lfs::vis::gui {
                         vulkan_render_interface_->BeginCacheCapture(left, top, vis_w, vis_h);
                         vulkan_render_interface_->SetContextOffset(command.offset_x, command.offset_y);
                         vulkan_render_interface_->SetContextClipRect(fleft, ftop, fright, fbottom);
-                        const Rml::LayerHandle layer = vulkan_render_interface_->PushLayer();
+                        const Rml::LayerHandle layer = vulkan_render_interface_->PushContextLayer();
                         if (layer != 0) {
                             command.context->Render();
                             const Rml::TextureHandle saved_texture =
@@ -1586,7 +1586,7 @@ namespace lfs::vis::gui {
                                                                  0.0f,
                                                                  static_cast<float>(command.cache_width),
                                                                  static_cast<float>(command.cache_height));
-                    const Rml::LayerHandle layer = vulkan_render_interface_->PushLayer();
+                    const Rml::LayerHandle layer = vulkan_render_interface_->PushContextLayer();
                     if (layer != 0) {
                         command.context->Render();
                         const Rml::TextureHandle saved_texture =

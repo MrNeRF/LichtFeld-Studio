@@ -100,7 +100,7 @@ public:
 
     // Restrict layer render-pass area (and thus loadOp clears / scissor bounds) to the
     // capture clip rect while recording a cached-panel refresh. Pair with EndCacheCapture.
-    // Nested PushLayer during the capture inherits the same restricted area. Normal
+    // Nested PushContextLayer during the capture inherits the same restricted area. Normal
     // (non-capture) layer usage is unaffected when capture is inactive.
     void BeginCacheCapture(int x, int y, int width, int height);
     void EndCacheCapture();
@@ -149,8 +149,12 @@ public:
     /// Called by RmlUi when it wants to set or modify the contents of the clip mask.
     void RenderToClipMask(Rml::ClipMaskOperation operation, Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation) override;
 
-    /// Called by RmlUi when it wants to render to an offscreen layer.
+    /// Called by RmlUi when it wants to render to an offscreen layer. The layer is in render-target
+    /// coordinates (origin 0,0): the context offset and clip do not apply inside it.
     Rml::LayerHandle PushLayer() override;
+    /// Pushes a layer that keeps the current context frame (offset, clip, cache-capture area).
+    /// Used for cached panel captures. PopLayer restores the frame that was current before the push.
+    Rml::LayerHandle PushContextLayer();
     /// Called by RmlUi when it wants to composite one layer onto another.
     void CompositeLayers(Rml::LayerHandle source, Rml::LayerHandle destination, Rml::BlendMode blend_mode,
                          Rml::Span<const Rml::CompiledFilterHandle> filters) override;
@@ -257,6 +261,20 @@ private:
         VmaAllocation m_p_vma_allocation;
     };
 
+    // Context/clip/scissor state that defines the coordinate frame of one render target.
+    struct frame_state_t {
+        Rml::Vector2f context_offset{};
+        Rml::Matrix4f context_transform = Rml::Matrix4f::Identity();
+        bool context_clip_enabled = false;
+        VkRect2D context_clip_scissor{};
+        bool cache_capture_active = false;
+        VkRect2D cache_capture_render_area{};
+        bool scissor_specified = false;
+        Rml::Rectanglei scissor_region{};
+        VkRect2D scissor{};
+        VkRect2D scissor_requested{};
+    };
+
     struct render_layer_t {
         texture_data_t m_color{};
         texture_data_t m_depth_stencil{};
@@ -264,6 +282,8 @@ private:
         VkImageLayout m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         int width = 0;
         int height = 0;
+        // Frame of the render target that was active when this layer was pushed; PopLayer restores it.
+        frame_state_t saved_frame{};
     };
 
     enum class active_render_target_t { None,
@@ -640,6 +660,13 @@ private:
     void BeginLayerRendering(Rml::LayerHandle layer_handle, bool clear);
     void BeginSwapchainRendering(VkAttachmentLoadOp color_load_op, VkAttachmentLoadOp depth_load_op);
     void EndActiveRendering();
+    // Derives m_scissor and m_scissor_requested from an RmlUi region under the current context offset and clip.
+    void ComputeScissorForRegion(Rml::Rectanglei region);
+    [[nodiscard]] frame_state_t CaptureFrameState() const;
+    void RestoreFrameState(const frame_state_t& state);
+    // Makes the next layer use its own coordinates: RmlUi's render target origin, without the context offset.
+    void EnterLayerFrame();
+    Rml::LayerHandle PushLayerInFrame(bool neutral_frame);
     bool CopySwapchainToLayer(Rml::LayerHandle destination);
     void TransitionImageLayout(VkImage image, std::uint64_t generation, VkImageAspectFlags aspect_mask, VkImageLayout old_layout, VkImageLayout new_layout);
     VkImageAspectFlags DepthStencilAspectMask() const noexcept;
@@ -702,6 +729,8 @@ private:
     VkSampler m_p_sampler_nearest;
     VkRect2D m_scissor;
     VkRect2D m_scissor_requested;
+    // Last region passed to SetScissorRegion, in RmlUi (render target) coordinates.
+    Rml::Rectanglei m_scissor_region{};
 
     // @ means it captures the window size full width and full height, offset equals both x and y to 0
     VkRect2D m_scissor_original;
