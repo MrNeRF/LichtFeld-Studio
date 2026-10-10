@@ -1964,6 +1964,7 @@
     "height": "Hoogte",
     "output_res": "Uitvoer: {}x{}",
     "naming": "Uitvoernaamgeving",
+    "naming_preset": "Voorinstelling:",
     "naming_video_frame": "Videonaam + frame + nummer",
     "naming_video_number": "Videonaam + nummer",
     "naming_frame_number": "Frame + nummer",

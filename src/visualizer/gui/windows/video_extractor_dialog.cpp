@@ -1758,7 +1758,8 @@ namespace lfs::gui {
             const std::string stem = io::formatFrameFilenameStem(pattern, number);
             bool invalid = stem.empty() || stem.find('\0') != std::string::npos || stem.find('/') != std::string::npos;
 #ifdef _WIN32
-            invalid |= !stem.empty() && (stem.back() == '.' || stem.back() == ' ');
+            // The writer appends the image extension, so a trailing dot or space
+            // in the stem is internal to the final filename and is valid.
             invalid |= std::any_of(stem.begin(), stem.end(), [](const unsigned char c) {
                 return c < 32 || std::string_view("<>:\"\\|?*").find(static_cast<char>(c)) != std::string_view::npos;
             });

@@ -203,15 +203,6 @@ namespace lfs::gui {
         }
         static double end(const VideoExtractorDialog& dialog) { return dialog.trim_end_; }
 
-        static bool attach(VideoExtractorDialog& dialog, Rml::ElementDocument* document) {
-            dialog.document_ = document;
-            dialog.cacheElements();
-            dialog.syncLocale();
-            dialog.syncControls();
-            return dialog.elements_cached_;
-        }
-
-        static void sync(VideoExtractorDialog& dialog) { dialog.syncControls(); }
         static float fps(const VideoExtractorDialog& dialog) { return dialog.fps_; }
 
         static void reset(VideoExtractorDialog& dialog) { dialog.handleClick("btn-trim-reset"); }
@@ -718,7 +709,7 @@ namespace {
             EXPECT_FALSE(error.empty());
         }
         std::string pattern, error;
-        for (const auto& custom : {"C:\\frame_%d", "CON.%d", "x_%d.", "x_%d ", "CONIN$.%d", "COM\xc2\xb9.%d"}) {
+        for (const auto& custom : {"C:\\frame_%d", "CON.%d", "CONIN$.%d", "COM\xc2\xb9.%d"}) {
 #ifdef _WIN32
             EXPECT_FALSE(NamingAccess::naming(dialog, 4, custom, "video.mp4", pattern, error));
 #else
@@ -729,6 +720,25 @@ namespace {
         ASSERT_TRUE(NamingAccess::naming(dialog, 4, custom, "video.mp4", pattern, error));
         EXPECT_EQ(pattern, custom);
     }
+    TEST(VideoExtractorNaming, StemEndingInDotOrSpaceProducesValidFilenames) {
+        TempDir temp("naming_stem_suffix");
+        const auto source = temp.path / "clip.mp4";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 5, 0));
+        lfs::gui::VideoExtractorDialog dialog;
+        for (const auto* custom : {"x_%d.", "x_%d "}) {
+            VideoFrameExtractor::Params params;
+            params.video_path = source;
+            params.output_dir = temp.path / (custom[4] == '.' ? "dot" : "space");
+            params.mode = ExtractionMode::INTERVAL;
+            params.frame_interval = 1;
+            std::string error;
+            ASSERT_TRUE(NamingAccess::naming(dialog, 4, custom, source, params.filename_pattern, error));
+            VideoFrameExtractor extractor;
+            ASSERT_TRUE(extractor.extract(params, error)) << error;
+            EXPECT_TRUE(std::filesystem::exists(params.output_dir / (lfs::io::formatFrameFilenameStem(params.filename_pattern, 1) + ".png")));
+        }
+    }
+
     TEST(VideoExtractorNaming, ResolvedPresetProducesRealFilesAndMetadata) {
         TempDir temp("naming_real_files");
         const auto source = temp.path / "100%05d.mp4";

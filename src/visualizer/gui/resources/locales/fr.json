@@ -1964,6 +1964,7 @@
     "height": "Hauteur",
     "output_res": "Sortie : {}x{}",
     "naming": "Nommage de sortie",
+    "naming_preset": "Préréglage :",
     "naming_video_frame": "Nom vidéo + frame + numéro",
     "naming_video_number": "Nom vidéo + numéro",
     "naming_frame_number": "Frame + numéro",

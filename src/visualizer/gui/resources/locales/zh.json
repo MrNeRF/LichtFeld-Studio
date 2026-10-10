@@ -1964,6 +1964,7 @@
     "height": "高度",
     "output_res": "输出: {}x{}",
     "naming": "输出命名",
+    "naming_preset": "预设：",
     "naming_video_frame": "视频名 + frame + 编号",
     "naming_video_number": "视频名 + 编号",
     "naming_frame_number": "Frame + 编号",

@@ -628,7 +628,7 @@ select:disabled {
     min-width: 80dp;
 }
 
-.naming-select, .pattern-input {
+.pattern-input {
     flex: 1;
     min-width: 0;
 }

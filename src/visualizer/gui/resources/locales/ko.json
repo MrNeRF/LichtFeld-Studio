@@ -1964,6 +1964,7 @@
     "height": "높이",
     "output_res": "출력: {}x{}",
     "naming": "출력 이름 지정",
+    "naming_preset": "프리셋:",
     "naming_video_frame": "동영상 이름 + frame + 번호",
     "naming_video_number": "동영상 이름 + 번호",
     "naming_frame_number": "Frame + 번호",
