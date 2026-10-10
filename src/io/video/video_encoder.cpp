@@ -11,6 +11,7 @@
 #include <array>
 #include <exception>
 #include <format>
+#include <optional>
 #if LFS_HAS_CUDA
 #include <cuda_runtime.h>
 #endif
@@ -86,6 +87,7 @@ namespace lfs::io::video {
         media::VideoEncodeSession session_;
         int width_ = 0, height_ = 0;
         int64_t frame_count_ = 0;
+        std::optional<YuvPlanes> planes_;
 
     public:
         std::expected<void, std::string> open(const std::filesystem::path& path, const VideoExportOptions& options) {
@@ -95,6 +97,11 @@ namespace lfs::io::video {
                 return result;
             auto stamp = options.provenance ? *options.provenance : core::make_minimal_provenance_stamp();
             media::VideoEncodeOptions request{.width = options.width, .height = options.height, .framerate = options.framerate, .crf = options.crf, .comment = core::provenance_to_json(stamp)};
+            // The shared tensor converter produces BT.601 limited-range planes.
+            // Primaries and transfer remain unspecified: the producer does not
+            // establish them merely by selecting an output resolution.
+            request.matrix = media::ColorMatrix::Smpte170M;
+            request.range = media::ColorRange::Limited;
 #if LFS_HAS_CUDA
             if (core::default_gpu_backend() == core::GpuBackend::CUDA)
                 request.preferred_backend = media::VideoEncodeBackend::Cuda;
@@ -106,6 +113,7 @@ namespace lfs::io::video {
             width_ = options.width;
             height_ = options.height;
             frame_count_ = 0;
+            planes_.reset();
             return {};
         }
         std::expected<void, std::string> writeFrame(const core::Tensor& rgb_hwc) {
@@ -120,8 +128,17 @@ namespace lfs::io::video {
                 const auto frame = session_.backend() == media::VideoEncodeBackend::Cuda && rgb_hwc.device() == core::Device::CPU
                                        ? rgb_hwc.gpu()
                                        : rgb_hwc;
-                const auto planes = rgbToYuv420p(frame.contiguous());
-                PlaneWriter writer(planes, width_, height_);
+                // The writer completes its transfers before returning. Reuse only
+                // on the same device, backend and stream so a new producer cannot
+                // race an earlier conversion or inherit another backend's storage.
+                if (!planes_ || planes_->y.device() != frame.device() ||
+                    core::gpu_backend_of(planes_->y) != core::gpu_backend_of(frame) ||
+                    planes_->y.stream() != frame.stream()) {
+                    planes_ = rgbToYuv420p(frame);
+                } else if (auto converted = core::rgb_to_yuv420p_into(frame, *planes_); !converted) {
+                    throw lfs::Exception(converted.error());
+                }
+                PlaneWriter writer(*planes_, width_, height_);
                 auto result = session_.writeFrame(writer);
                 if (writer.producer_error)
                     std::rethrow_exception(writer.producer_error);
@@ -138,7 +155,11 @@ namespace lfs::io::video {
                 return std::unexpected(std::string(e.what()));
             }
         }
-        std::expected<void, std::string> close() { return legacyResult(session_.close()); }
+        std::expected<void, std::string> close() {
+            auto result = session_.close();
+            planes_.reset();
+            return legacyResult(result);
+        }
         bool isOpen() const { return session_.isOpen(); }
         media::VideoEncodeBackend backend() const { return session_.backend(); }
     };

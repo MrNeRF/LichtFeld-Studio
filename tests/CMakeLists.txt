@@ -308,6 +308,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_screen.cpp
         test_view_render_state.cpp
         test_python_editor_input.cpp
+        test_python_runtime_callbacks.cpp
         test_startup_overlay_geometry.cpp
         test_status_bar_fit.cpp
         test_viewer_backend_metadata.cpp

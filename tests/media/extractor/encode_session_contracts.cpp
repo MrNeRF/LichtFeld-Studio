@@ -23,6 +23,7 @@ namespace {
         bool throwing = false;
         bool typed_exception = false;
         bool nonstandard_exception = false;
+        lfs::media::VideoEncodeBackend expected_backend = lfs::media::VideoEncodeBackend::Software;
         lfs::Result<void> write(const lfs::media::VideoEncodeTarget& target) override {
             ++calls;
             if (reenter) {
@@ -48,9 +49,9 @@ namespace {
                 require(reenter->isOpen(), "reentrant calls preserve active session");
                 reentrant_checked = true;
             }
-            require(target.backend == lfs::media::VideoEncodeBackend::Software &&
+            require(target.backend == expected_backend &&
                         target.layout == lfs::media::VideoEncodeLayout::YUV420P,
-                    "CPU producer must receive software YUV420P planes");
+                    "CPU producer must receive YUV420P planes with the actual encoder backend");
             if (throwing)
                 throw std::runtime_error("writer failure");
             if (typed_exception)
@@ -83,12 +84,19 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
     const auto path = lfs::core::utf8_to_path(request.at("output").get<std::string>());
     VideoEncodeSession session;
     VideoEncodeOptions options{.width = 64, .height = 48, .framerate = 10, .crf = 18, .comment = "media session é 日本語"};
+    options.width = request.value("width", options.width);
+    options.height = request.value("height", options.height);
+    if (request.value("videotoolbox", false)) {
+        options.preferred_backend = VideoEncodeBackend::VideoToolbox;
+        options.matrix = ColorMatrix::Smpte170M;
+        options.range = ColorRange::Limited;
+    }
     Writer writer;
     require(!session.isOpen(), "new session closed");
     require(session.writeFrame(writer).error().code() == lfs::ErrorCode::FailedPrecondition && writer.calls == 0,
             "inactive write never calls producer");
     require(session.close().has_value(), "inactive close is idempotent");
-    for (int variant = 0; variant < 6; ++variant) {
+    for (int variant = 0; variant < 10; ++variant) {
         auto invalid = options;
         if (variant == 0)
             invalid.width = 0;
@@ -102,6 +110,14 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
             invalid.crf = 52;
         if (variant == 5)
             invalid.preferred_backend = static_cast<VideoEncodeBackend>(99);
+        if (variant == 6)
+            invalid.matrix = static_cast<ColorMatrix>(999);
+        if (variant == 7)
+            invalid.range = static_cast<ColorRange>(999);
+        if (variant == 8)
+            invalid.matrix = static_cast<ColorMatrix>(3);
+        if (variant == 9)
+            invalid.matrix = static_cast<ColorMatrix>(15);
         auto result = session.open(path, invalid);
         require(!result && result.error().code() == lfs::ErrorCode::InvalidArgument,
                 "invalid options rejected before opening output");
@@ -121,7 +137,11 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
     auto opened = session.open(path, options);
     if (!opened)
         throw std::runtime_error(std::string(opened.error().detail()));
-    require(session.isOpen() && session.backend() == VideoEncodeBackend::Software, "software session open");
+    require(session.isOpen(), "session open");
+    const auto backend = session.backend();
+    if (!request.value("videotoolbox", false))
+        require(backend == VideoEncodeBackend::Software, "software session open");
+    writer.expected_backend = backend;
     require(session.open(path, options).error().code() == lfs::ErrorCode::FailedPrecondition, "overlapping open rejected");
     writer.reenter = &session;
     writer.options = &options;
@@ -158,5 +178,21 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
     require(writer.reentrant_checked, "callback reentrancy exercised");
     require(destination.close().has_value() && !destination.isOpen() && destination.close().has_value(), "flush and repeat close");
     require(destination.writeFrame(writer).error().code() == lfs::ErrorCode::FailedPrecondition, "write after close rejected");
-    return {{"success", true}, {"frames", 4}, {"writer_calls", writer.calls}, {"comment", options.comment}};
+    nlohmann::json report{{"success", true}, {"frames", 4}, {"writer_calls", writer.calls}, {"comment", options.comment}, {"backend", static_cast<int>(backend)}};
+    if (request.value("verify_apple_recovery", false)) {
+        require(backend == VideoEncodeBackend::VideoToolboxSoftware, "8K must use Apple's software encoder");
+        auto small = options;
+        small.width = 64;
+        small.height = 48;
+        const auto recovery_path = path.parent_path() / "apple-recovery.mp4";
+        require(destination.open(recovery_path, small).has_value(), "same session reopens at a hardware-supported extent");
+        require(destination.backend() == VideoEncodeBackend::VideoToolbox, "same session returns to Apple hardware after fallback");
+        Writer recovery_writer;
+        recovery_writer.expected_backend = VideoEncodeBackend::VideoToolbox;
+        require(destination.writeFrame(recovery_writer).has_value(), "recovered hardware session accepts a frame");
+        require(destination.close().has_value(), "recovered hardware session flushes");
+        report["recovery_backend"] = static_cast<int>(VideoEncodeBackend::VideoToolbox);
+        report["recovery_output"] = lfs::core::path_to_utf8(recovery_path);
+    }
+    return report;
 }

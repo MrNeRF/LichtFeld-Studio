@@ -4,6 +4,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "media/decoded_video_frame.hpp"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -14,7 +15,9 @@
 namespace lfs::media {
     enum class VideoEncodeBackend { Software,
                                     Cuda,
-                                    VideoToolbox };
+                                    VideoToolbox,
+                                    // Result-only: explicitly selected Apple software fallback.
+                                    VideoToolboxSoftware };
     enum class VideoEncodeLayout { YUV420P,
                                    NV12 };
     struct VideoEncodeOptions {
@@ -26,6 +29,9 @@ namespace lfs::media {
         VideoEncodeBackend preferred_backend = VideoEncodeBackend::Software;
         // Prepared by the producer; no application metadata factory is needed.
         std::string comment;
+        // Describes the planes supplied by the producer; never inferred from extent.
+        ColorMatrix matrix = ColorMatrix::Unspecified;
+        ColorRange range = ColorRange::Unspecified;
     };
     struct VideoEncodePlane {
         std::uint8_t* data = nullptr;

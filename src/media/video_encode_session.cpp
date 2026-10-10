@@ -15,6 +15,7 @@ extern "C" {
 #include <libavutil/dict.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/opt.h>
+#include <libavutil/pixdesc.h>
 }
 namespace lfs::media {
     namespace {
@@ -46,10 +47,10 @@ namespace lfs::media {
             width_ = opts.width;
             height_ = opts.height;
             framerate_ = opts.framerate;
-            const bool hardware = opts.preferred_backend == VideoEncodeBackend::Cuda
-                                      ? tryInitNvenc(path, opts)
-                                      : opts.preferred_backend == VideoEncodeBackend::VideoToolbox && tryInitVideoToolbox(path, opts);
-            if (!hardware) {
+            const bool initialized = opts.preferred_backend == VideoEncodeBackend::Cuda
+                                         ? tryInitNvenc(path, opts)
+                                         : opts.preferred_backend == VideoEncodeBackend::VideoToolbox && tryInitVideoToolbox(path, opts);
+            if (!initialized) {
                 cleanup();
                 if (opts.preferred_backend != VideoEncodeBackend::Software)
                     LOG_INFO("Hardware H.264 encoding unavailable, falling back to software H.264");
@@ -90,6 +91,10 @@ namespace lfs::media {
             }
             if (auto result = writer.write(target); !result)
                 return result;
+            // NVENC may replace the AVFrame storage above. Restore the known
+            // plane interpretation for every submitted frame, including reopen.
+            frame_->colorspace = codec_ctx_->colorspace;
+            frame_->color_range = codec_ctx_->color_range;
             frame_->pts = frame_count_;
             if (auto result = encodeFrame(frame_); !result)
                 return result;
@@ -162,6 +167,8 @@ namespace lfs::media {
             codec_ctx_->pix_fmt = AV_PIX_FMT_CUDA;
             codec_ctx_->gop_size = framerate_;
             codec_ctx_->max_b_frames = 0;
+            codec_ctx_->colorspace = static_cast<AVColorSpace>(opts.matrix);
+            codec_ctx_->color_range = static_cast<AVColorRange>(opts.range);
 
             av_opt_set(codec_ctx_->priv_data, "preset", "p4", 0);
             av_opt_set(codec_ctx_->priv_data, "tune", "hq", 0);
@@ -253,8 +260,8 @@ namespace lfs::media {
             return true;
         }
 
-        // The Mac's media engine encodes the same YUV420P frames as the
-        // software path, from system memory.
+        // Both Apple encoders consume the same YUV420P planes. Prefer the media
+        // engine, then Apple's software encoder for unsupported hardware extents.
         bool tryInitVideoToolbox(const std::filesystem::path& path, const VideoEncodeOptions& opts) {
             const AVCodec* const codec = avcodec_find_encoder_by_name("h264_videotoolbox");
             if (!codec) {
@@ -262,8 +269,13 @@ namespace lfs::media {
                 return false;
             }
             if (const auto result = initH264(path, opts, codec); !result) {
-                LOG_DEBUG("VideoToolbox H.264 encoder failed: {}", result.error().detail());
-                return false;
+                LOG_DEBUG("Hardware VideoToolbox H.264 encoder failed: {}", result.error().detail());
+                cleanup();
+                LOG_INFO("Hardware VideoToolbox H.264 unavailable, trying Apple software H.264");
+                if (const auto software = initH264(path, opts, codec, true); !software) {
+                    LOG_DEBUG("Software VideoToolbox H.264 encoder failed: {}", software.error().detail());
+                    return false;
+                }
             }
             return true;
         }
@@ -273,7 +285,8 @@ namespace lfs::media {
         Result<void> initH264(
             const std::filesystem::path& path,
             const VideoEncodeOptions& opts,
-            const AVCodec* const codec) {
+            const AVCodec* const codec,
+            const bool apple_software = false) {
 
             const std::string path_utf8 = lfs::core::path_to_utf8(path);
 
@@ -285,7 +298,8 @@ namespace lfs::media {
             if (!codec) {
                 return encodeError(ErrorCode::Unavailable, "H.264 encoder not found");
             }
-            const bool hardware = std::string_view(codec->name) == "h264_videotoolbox";
+            const bool videotoolbox = std::string_view(codec->name) == "h264_videotoolbox";
+            const bool hardware = videotoolbox && !apple_software;
 
             stream_ = avformat_new_stream(fmt_ctx_, nullptr);
             if (!stream_) {
@@ -304,16 +318,21 @@ namespace lfs::media {
             codec_ctx_->framerate = AVRational{framerate_, 1};
             codec_ctx_->pix_fmt = AV_PIX_FMT_YUV420P;
             codec_ctx_->gop_size = framerate_;
-            codec_ctx_->max_b_frames = hardware ? 0 : 2;
+            codec_ctx_->max_b_frames = videotoolbox ? 0 : 2;
             codec_ctx_->thread_count = 0;
+            codec_ctx_->colorspace = static_cast<AVColorSpace>(opts.matrix);
+            codec_ctx_->color_range = static_cast<AVColorRange>(opts.range);
 
             // Map CRF 18 to 0.1 bits per pixel per frame, with a 250 kbps floor and linear quality scaling.
             const int64_t crf_scale = 51 - opts.crf;
             codec_ctx_->bit_rate = std::max<int64_t>(
                 250'000, static_cast<int64_t>(width_) * height_ * framerate_ * crf_scale / 330);
-            if (hardware) {
-                // Fail rather than fall back to Apple's own software encoder.
-                av_opt_set_int(codec_ctx_->priv_data, "allow_sw", 0, 0);
+            if (videotoolbox) {
+                // Select explicitly so backend() and producer targets describe
+                // the actual encoder, including the Apple software fallback.
+                if (av_opt_set_int(codec_ctx_->priv_data, "allow_sw", apple_software, 0) < 0 ||
+                    av_opt_set_int(codec_ctx_->priv_data, "require_sw", apple_software, 0) < 0)
+                    return encodeError(ErrorCode::Unavailable, "VideoToolbox encoder selection failed");
                 av_opt_set(codec_ctx_->priv_data, "profile", "high", 0);
             } else {
                 av_opt_set(codec_ctx_->priv_data, "rc_mode", "bitrate", 0);
@@ -372,7 +391,8 @@ namespace lfs::media {
                 return encodeError(ErrorCode::Unavailable, "Packet allocation failed");
             }
 
-            backend_ = hardware ? VideoEncodeBackend::VideoToolbox : VideoEncodeBackend::Software;
+            backend_ = videotoolbox ? (hardware ? VideoEncodeBackend::VideoToolbox : VideoEncodeBackend::VideoToolboxSoftware)
+                                    : VideoEncodeBackend::Software;
             LOG_INFO("{} H.264 ({}): {}x{} @ {} fps, bitrate {} bps", hardware ? "Hardware" : "Software", codec->name,
                      width_, height_, framerate_, codec_ctx_->bit_rate);
             return {};
@@ -504,6 +524,29 @@ namespace lfs::media {
             options.preferred_backend != VideoEncodeBackend::Cuda &&
             options.preferred_backend != VideoEncodeBackend::VideoToolbox)
             return encodeError(ErrorCode::InvalidArgument, std::format("Unknown video encoder backend (got {})", static_cast<int>(options.preferred_backend)));
+        switch (options.matrix) {
+        case ColorMatrix::Rgb:
+        case ColorMatrix::Bt709:
+        case ColorMatrix::Unspecified:
+        case ColorMatrix::Fcc:
+        case ColorMatrix::Bt470Bg:
+        case ColorMatrix::Smpte170M:
+        case ColorMatrix::Smpte240M:
+        case ColorMatrix::Ycgco:
+        case ColorMatrix::Bt2020Ncl:
+        case ColorMatrix::Bt2020Cl:
+        case ColorMatrix::Smpte2085:
+        case ColorMatrix::ChromaNcl:
+        case ColorMatrix::ChromaCl:
+        case ColorMatrix::Ictcp:
+        case ColorMatrix::YcgcoRe:
+        case ColorMatrix::YcgcoRo:
+            break;
+        default:
+            return encodeError(ErrorCode::InvalidArgument, std::format("Unknown video color matrix (got {})", static_cast<int>(options.matrix)));
+        }
+        if (options.range != ColorRange::Unspecified && options.range != ColorRange::Limited && options.range != ColorRange::Full)
+            return encodeError(ErrorCode::InvalidArgument, std::format("Unknown video color range (got {})", static_cast<int>(options.range)));
         auto extension = core::path_to_utf8(path.extension());
         std::transform(extension.begin(), extension.end(), extension.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });

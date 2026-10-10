@@ -539,11 +539,12 @@ namespace lfs::vis::gui {
         if (normalize_uint8) {
             frame = frame / 255.0f;
         }
-        frame = frame.permute({2, 0, 1}).contiguous();
         if (frame.device() != lfs::core::Device::GPU) {
             frame = frame.gpu();
         }
-        return frame.contiguous();
+        // Keep the HWC storage for direct encoding; the composite boundary below
+        // still materializes the CHW tensor expected by the rendering engine.
+        return frame.permute({2, 0, 1});
     }
 
     rendering::FrameMetadata makeVideoExportFrameMetadata(const rendering::FrameView& frame_view) {
@@ -614,7 +615,9 @@ namespace lfs::vis::gui {
                                                cam_state.position,
                                                cam_state.focal_length_mm,
                                                width,
-                                               height)
+                                               height,
+                                               std::nullopt, std::nullopt,
+                                               render_settings.equirectangular)
                                      : snapshot.borrowed_model
                                          // Sequence switches must not inherit interactive depth-tie order.
                                          ? rendering_manager.renderPreviewImageRgb8(
@@ -624,7 +627,9 @@ namespace lfs::vis::gui {
                                                cam_state.position,
                                                cam_state.focal_length_mm,
                                                width,
-                                               height)
+                                               height,
+                                               std::nullopt, std::nullopt, std::nullopt,
+                                               render_settings.equirectangular)
                                          : rendering_manager.renderPreviewImage(
                                                *snapshot.gaussianModel(),
                                                std::move(scene_state),
@@ -632,7 +637,9 @@ namespace lfs::vis::gui {
                                                cam_state.position,
                                                cam_state.focal_length_mm,
                                                width,
-                                               height);
+                                               height,
+                                               std::nullopt, std::nullopt, std::nullopt,
+                                               render_settings.equirectangular);
                 auto video_frame = makeGaussianPreviewVideoFrame(preview_image);
                 if (!video_frame) {
                     return std::unexpected(video_frame.error());
@@ -642,7 +649,7 @@ namespace lfs::vis::gui {
                     return std::move(*video_frame);
                 }
 
-                auto frame_image = std::make_shared<lfs::core::Tensor>(std::move(*video_frame));
+                auto frame_image = std::make_shared<lfs::core::Tensor>(video_frame->contiguous());
                 auto materialized = engine.materializeGpuFrame(
                     frame_image,
                     makeVideoExportFrameMetadata(frame_view),
@@ -3431,7 +3438,7 @@ namespace lfs::vis::gui {
                         break;
                     }
 
-                    auto export_frame = frame_tensor->contiguous();
+                    const auto& export_frame = *frame_tensor;
                     auto image_hwc = export_frame.permute({1, 2, 0}).contiguous();
 
                     if (frame == 0) {

@@ -97,6 +97,51 @@ class ExtractionContracts(unittest.TestCase):
             luma = pixels[index * 4608:index * 4608 + 3072]
             self.assertLessEqual(max(abs(value - (32 + index * 32)) for value in luma), 5)
 
+    @unittest.skipUnless(os.environ.get("LFS_MEDIA_TEST_VIDEOTOOLBOX_8K") == "1",
+                         "requires an explicit native Mac VideoToolbox 8K run")
+    def test_videotoolbox_8k_session_roundtrip_and_recovery(self):
+        work = Path(tempfile.mkdtemp(prefix="apple-encode-session-", dir=self.root))
+        # Reuse the lifecycle contract: failed open, producer rejection,
+        # reentrancy, move ownership and flush also exercise the fallback.
+        for width, height in ((8192, 4096), (64, 48)):
+            with self.subTest(extent=(width, height)):
+                video = work / f"apple-{width}.mp4"
+                request = work / "encode.json"
+                request.write_text(json.dumps({"operation": "encode-session", "output": str(video),
+                                               "width": width, "height": height, "videotoolbox": True,
+                                               "verify_apple_recovery": width == 8192}),
+                                   encoding="utf-8")
+                result = subprocess.run([str(RUNNER), str(request)], capture_output=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                report = json.loads(result.stdout)
+                self.assertTrue(report["success"])
+                self.assertEqual(report["backend"], 3 if width == 8192 else 2)
+                if width == 8192:
+                    self.assertEqual(report["recovery_backend"], 2)
+                    recovery = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_frames",
+                                                                  "-show_streams", "-of", "json", report["recovery_output"]]))
+                    self.assertEqual(len(recovery["frames"]), 1)
+                    self.assertEqual((recovery["streams"][0]["width"], recovery["streams"][0]["height"]), (64, 48))
+                self.assertEqual(report["writer_calls"], 8)
+                decoded = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_frames",
+                                                              "-show_streams", "-show_format", "-of", "json", str(video)]))
+                self.assertEqual(len(decoded["frames"]), 4)
+                self.assertEqual(decoded["streams"][0]["codec_name"], "h264")
+                self.assertEqual((decoded["streams"][0]["width"], decoded["streams"][0]["height"]), (width, height))
+                self.assertEqual(decoded["format"]["tags"]["comment"], report["comment"])
+                self.assertEqual(decoded["streams"][0]["color_range"], "tv")
+                self.assertEqual(decoded["streams"][0]["color_space"], "smpte170m")
+                for index, frame in enumerate(decoded["frames"]):
+                    self.assertAlmostEqual(float(frame["best_effort_timestamp_time"]), index / 10)
+                pixels = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(video), "-vf", "scale=64:48",
+                                                  "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"])
+                self.assertEqual(len(pixels), 4 * 4608)
+                for index in range(4):
+                    luma = pixels[index * 4608:index * 4608 + 3072]
+                    # Hardware H.264 can have localized inter-frame artifacts;
+                    # mean error still detects stale or incorrectly ranged planes.
+                    self.assertLess(sum(abs(value - (32 + index * 32)) for value in luma) / len(luma), 2)
+
     def test_optional_jpeg_backend_failures_and_cpu_fallback(self):
         reference, files = self.extract(format="jpg")
         self.assertTrue(reference["success"], reference["error"])
