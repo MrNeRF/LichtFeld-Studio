@@ -59,12 +59,17 @@ namespace lfs::vis {
 
     void DataLoadingService::handleLoadFileCommand(
         const lfs::core::events::cmd::LoadFile& cmd) {
-        // User drops, including single files, wait for the current import. API
-        // requests keep their busy rejection; checkpoints keep their own flow.
-        // Resolve replacement when dequeued. Confirmation retries follow the
-        // normal admission path; discard_changes grants no queue priority.
+        // user_batch marks UI-drop origin, including single files and their
+        // confirmation continuations. API requests retain busy rejection.
+        // New drops wait for the backlog and modal, even between imports. A
+        // confirmed drop resumes ahead of later arrivals once the loader is idle.
         if (cmd.user_batch && !cmd.is_dataset && !isCheckpointFile(cmd.path) && viewer_ && viewer_->getGuiManager() &&
-            viewer_->getGuiManager()->asyncTasks().isImporting()) {
+            (viewer_->getGuiManager()->asyncTasks().isImporting() ||
+             (!cmd.discard_changes &&
+              (!pending_imports_.empty() ||
+               (viewer_->getGuiManager()->modalOverlay() &&
+                (viewer_->getGuiManager()->modalOverlay()->isOpen() ||
+                 viewer_->getGuiManager()->modalOverlay()->hasPendingRequest())))))) {
             pending_imports_.push_back(cmd);
             return;
         }
@@ -117,8 +122,17 @@ namespace lfs::vis {
                     .emit();
                 return;
             }
-            if (viewer_ && !viewer_->resetUntitledSessionForReplaceLoad()) {
-                return;
+            if (viewer_) {
+                // The confirmed UI-drop head replaces the scene, but later drops
+                // still belong to its queue. Explicit API/project clears retain
+                // their normal cancellation behavior.
+                auto queued_drops = cmd.user_batch ? std::move(pending_imports_)
+                                                   : decltype(pending_imports_){};
+                const bool reset = viewer_->resetUntitledSessionForReplaceLoad();
+                if (cmd.user_batch)
+                    pending_imports_ = std::move(queued_drops);
+                if (!reset)
+                    return;
             }
         }
 
