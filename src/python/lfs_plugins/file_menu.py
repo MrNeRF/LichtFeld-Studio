@@ -963,9 +963,6 @@ class FileMenu:
             menu_operator(ExportOperator),
             menu_operator(ExportConfigOperator),
             menu_separator(),
-            menu_operator(Mesh2SplatOperator),
-            menu_operator(ExtractVideoFramesOperator),
-            menu_separator(),
             menu_operator(ExitOperator),
         ]
 
