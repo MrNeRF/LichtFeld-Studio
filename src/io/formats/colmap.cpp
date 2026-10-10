@@ -4512,7 +4512,7 @@ namespace lfs::io {
     }
 
     Result<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>
-    read_colmap_cameras_only(const std::filesystem::path& sparse_path, float scale_factor) {
+    read_colmap_cameras_only(const std::filesystem::path& sparse_path, float scale_factor, int first_uid) {
         LOG_TIMER_TRACE("Read COLMAP cameras only");
         try {
 
@@ -4734,7 +4734,7 @@ namespace lfs::io {
                     fs::path{}, // Empty mask path
                     cam_data.width,
                     cam_data.height,
-                    static_cast<int>(cameras.size()));
+                    first_uid + static_cast<int>(cameras.size()));
 
                 cameras.push_back(std::move(camera));
             }

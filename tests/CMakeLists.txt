@@ -718,6 +718,7 @@ set(TEST_FILES
     test_colmap_points3d_text.cpp
     test_colmap_binary_error_taxonomy.cpp
     test_colmap_binary_parallel_parse.cpp
+    test_colmap_camera_import.cpp
     test_splat_simplify.cpp
     test_rml_text_input_handler.cpp
     test_rml_text_input_native_keys.cpp

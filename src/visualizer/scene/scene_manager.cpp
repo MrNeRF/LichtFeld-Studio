@@ -3218,7 +3218,13 @@ namespace lfs::vis {
         LOG_TIMER("SceneManager::loadColmapCamerasOnly");
 
         try {
-            auto result = lfs::io::read_colmap_cameras_only(sparse_path);
+            // Camera uids key the viewport caches and selection, so an additive import must not reuse them.
+            int first_uid = 0;
+            for (const auto& camera : scene_.getAllCameras()) {
+                if (camera)
+                    first_uid = std::max(first_uid, camera->uid() + 1);
+            }
+            auto result = lfs::io::read_colmap_cameras_only(sparse_path, 1.0f, first_uid);
             if (!result) {
                 LOG_ERROR("Failed to load COLMAP cameras: {}", result.error().format());
                 state::FileDropFailed{
