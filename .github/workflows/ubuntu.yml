@@ -222,6 +222,8 @@ jobs:
               sleep 0.2
             done
           fi
+      - name: Run generated dataset admission regression
+        run: ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld\.python\.dataset_load_training$'
       - name: Run render-on-demand GPU idle test
         env:
           LFS_RENDER_IDLE_SHOTS: ${{ runner.temp }}/render-on-demand-shots
