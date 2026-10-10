@@ -94,7 +94,8 @@
             </select>
             <div id="fps-row" class="inline-control">
               <input id="fps-slider" class="value-slider" type="range" min="0.1" max="30.0" step="0.1" value="1.0" />
-              <span id="fps-value" class="value-readout">1.0 FPS</span>
+              <input id="fps-value" class="fps-input" type="text" value="1.0" />
+              <span class="interval-unit">@tr:video_extractor.fps_label</span>
             </div>
             <div id="interval-row" class="inline-control interval-control">
               <span class="interval-label">@tr:video_extractor.every_label</span>

@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -40,6 +41,14 @@ namespace lfs::gui {
         constexpr std::array<float, 4> SCALE_VALUES{0.25f, 0.5f, 0.75f, 1.0f};
         constexpr float MIN_TRIM_SECONDS = 0.1f;
         constexpr int MAX_TIMELINE_MARKERS = 180;
+
+        [[nodiscard]] float maximumExtractionFps(const io::VideoPlayer& player) {
+            const double source_fps = player.isOpen() ? player.fps() : 0.0;
+            if (!std::isfinite(source_fps) || source_fps <= 0.0 ||
+                source_fps > std::numeric_limits<float>::max())
+                return 30.0f;
+            return std::max(0.1f, static_cast<float>(source_fps));
+        }
 
         [[nodiscard]] std::string formatTime(const double seconds) {
             if (!std::isfinite(seconds) || seconds < 0.0)
@@ -872,6 +881,7 @@ namespace lfs::gui {
         listen_change(mode_select_el_);
         listen_change(fps_slider_el_);
         listen_input(fps_slider_el_);
+        listen_change(fps_value_el_);
         listen_change(interval_input_el_);
         listen_change(format_select_el_);
         listen_change(quality_slider_el_);
@@ -934,6 +944,7 @@ namespace lfs::gui {
         changed |= setCachedAttribute(trim_end_set_el_, "title", LOC(VideoExtractor::SET_END));
         changed |= setCachedAttribute(browse_output_el_, "title", LOC(VideoExtractor::SELECT_FOLDER));
         changed |= setCachedAttribute(fps_slider_el_, "title", LOC(VideoExtractor::FPS_TOOLTIP));
+        changed |= setCachedAttribute(fps_value_el_, "title", LOC(VideoExtractor::FPS_TOOLTIP));
         changed |= setCachedAttribute(interval_input_el_, "title", LOC(VideoExtractor::INTERVAL_TOOLTIP));
         changed |= setCachedAttribute(quality_slider_el_, "title", LOC(VideoExtractor::QUALITY_LABEL));
         changed |= setCachedAttribute(custom_width_input_el_, "title", LOC(VideoExtractor::WIDTH));
@@ -1224,8 +1235,14 @@ namespace lfs::gui {
             changed |= setCachedText(sharpness_threshold_value_el_, std::to_string(val) + "%");
         }
 
-        changed |= setCachedControlValue(fps_slider_el_, std::format("{:.1f}", fps_));
-        changed |= setCachedText(fps_value_el_, std::format("{:.1f} {}", fps_, LOC(VideoExtractor::FPS_LABEL)));
+        // RmlUi range controls emit change while their value attribute is being updated.
+        // Synchronizing the slider must not change the requested FPS.
+        const float maximum_fps = maximumExtractionFps(*player_);
+        const float requested_fps = std::clamp(fps_, 0.1f, maximum_fps);
+        changed |= setCachedAttribute(fps_slider_el_, "max", std::format("{}", maximum_fps));
+        changed |= setCachedControlValue(fps_slider_el_, std::format("{}", requested_fps));
+        fps_ = requested_fps;
+        changed |= setCachedControlValue(fps_value_el_, std::format("{}", fps_));
         changed |= setCachedControlValue(interval_input_el_, std::to_string(frame_interval_));
         changed |= setCachedText(interval_value_el_, LOC(VideoExtractor::FRAMES_UNIT));
         changed |= setCachedControlValue(quality_slider_el_, std::to_string(jpg_quality_));
@@ -1370,6 +1387,11 @@ namespace lfs::gui {
         if (event_id == Rml::EventId::Change || event_id == Rml::EventId::Blur ||
             event.GetType() == "input") {
             handleChange(id, event_id != Rml::EventId::Blur);
+            if (id == "fps-slider" && event_id == Rml::EventId::Change) {
+                const float value = event.GetParameter<float>("value", fps_);
+                if (std::isfinite(value))
+                    fps_ = std::clamp(value, 0.1f, maximumExtractionFps(*player_));
+            }
             event.StopPropagation();
         }
     }
@@ -1500,8 +1522,16 @@ namespace lfs::gui {
         } else if (id == "scale-select") {
             scale_selection_ = scale_select_el_ ? scale_select_el_->GetSelection() : scale_selection_;
         } else if (id == "fps-slider") {
-            fps_ = std::clamp(readFloatValue(fps_slider_el_, fps_), 0.1f, 30.0f);
+            fps_ = std::clamp(readFloatValue(fps_slider_el_, fps_), 0.1f, maximumExtractionFps(*player_));
             changed_control = fps_slider_el_;
+        } else if (id == "fps-value") {
+            const std::string value = controlValue(fps_value_el_);
+            float parsed = 0.0f;
+            const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsed);
+            if (error == std::errc{} && end == value.data() + value.size() && std::isfinite(parsed)) {
+                fps_ = std::clamp(parsed, 0.1f, maximumExtractionFps(*player_));
+            }
+            changed_control = fps_value_el_;
         } else if (id == "interval-input") {
             frame_interval_ = std::clamp(readIntValue(interval_input_el_, frame_interval_), 1, 100);
             changed_control = interval_input_el_;

@@ -8,7 +8,9 @@
 #include "io/video_player.hpp"
 
 #include <RmlUi/Core.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
+#include <RmlUi/Core/RenderInterface.h>
 #include <gtest/gtest.h>
 
 extern "C" {
@@ -174,6 +176,17 @@ namespace lfs::gui {
     public:
         static double end(const VideoExtractorDialog& dialog) { return dialog.trim_end_; }
 
+        static bool attach(VideoExtractorDialog& dialog, Rml::ElementDocument* document) {
+            dialog.document_ = document;
+            dialog.cacheElements();
+            dialog.syncLocale();
+            dialog.syncControls();
+            return dialog.elements_cached_;
+        }
+
+        static void sync(VideoExtractorDialog& dialog) { dialog.syncControls(); }
+        static float fps(const VideoExtractorDialog& dialog) { return dialog.fps_; }
+
         static void reset(VideoExtractorDialog& dialog) { dialog.handleClick("btn-trim-reset"); }
 
         static void syncEndInput(VideoExtractorDialog& dialog, Rml::Element* input) {
@@ -206,6 +219,177 @@ namespace lfs::gui {
         }
     };
 } // namespace lfs::gui
+
+namespace {
+    bool writeProbedVideoWithRate(const std::filesystem::path& path, const char* container,
+                                  AVCodecID codec_id, int frame_count, int leading_frames,
+                                  int rate_numerator, int rate_denominator);
+
+    class FpsTestRenderInterface final : public Rml::RenderInterface {
+    public:
+        Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex>, Rml::Span<const int>) override { return 1; }
+        void RenderGeometry(Rml::CompiledGeometryHandle, Rml::Vector2f, Rml::TextureHandle) override {}
+        void ReleaseGeometry(Rml::CompiledGeometryHandle) override {}
+        Rml::TextureHandle LoadTexture(Rml::Vector2i& dimensions, const Rml::String&) override {
+            dimensions = {16, 16};
+            return 1;
+        }
+        Rml::TextureHandle GenerateTexture(Rml::Span<const Rml::byte>, Rml::Vector2i) override { return 1; }
+        void ReleaseTexture(Rml::TextureHandle) override {}
+        void EnableScissorRegion(bool) override {}
+        void SetScissorRegion(Rml::Rectanglei) override {}
+    };
+
+    class VideoExtractorFpsInputTest : public ::testing::Test {
+    protected:
+        using Access = lfs::gui::VideoExtractorDialogTestAccess;
+        void SetUp() override {
+            ASSERT_TRUE(Rml::Initialise());
+            const auto root = std::filesystem::path(PROJECT_ROOT_PATH);
+            ASSERT_TRUE(Rml::LoadFontFace((root / "src/visualizer/gui/assets/fonts/Inter-Regular.ttf").string()));
+            context = Rml::CreateContext("video_fps_input", {640, 900}, &renderer);
+            ASSERT_NE(context, nullptr);
+            document = context->LoadDocument((root / "src/visualizer/gui/rmlui/resources/video_extractor.rml").string());
+            ASSERT_NE(document, nullptr);
+            dialog = std::make_unique<lfs::gui::VideoExtractorDialog>();
+            ASSERT_TRUE(Access::attach(*dialog, document));
+            input = dynamic_cast<Rml::ElementFormControlInput*>(document->GetElementById("fps-value"));
+            slider = dynamic_cast<Rml::ElementFormControlInput*>(document->GetElementById("fps-slider"));
+            ASSERT_NE(input, nullptr);
+            ASSERT_NE(slider, nullptr);
+            document->Show();
+            context->Update();
+        }
+        void TearDown() override {
+            // Keep listeners alive until the document has been destroyed.
+            if (context)
+                Rml::RemoveContext("video_fps_input");
+            if (dialog)
+                dialog->shutdown();
+            dialog.reset();
+            Rml::Shutdown();
+        }
+        void enter(const std::string& value) {
+            input->SetValue(value);
+            input->DispatchEvent(Rml::EventId::Change, {});
+            Access::sync(*dialog);
+            context->Update();
+        }
+        FpsTestRenderInterface renderer;
+        Rml::Context* context = nullptr;
+        Rml::ElementDocument* document = nullptr;
+        Rml::ElementFormControlInput* input = nullptr;
+        Rml::ElementFormControlInput* slider = nullptr;
+        std::unique_ptr<lfs::gui::VideoExtractorDialog> dialog;
+    };
+
+    TEST_F(VideoExtractorFpsInputTest, TypedValueAndSliderStaySynchronized) {
+        EXPECT_EQ(input->GetValue(), "1");
+        enter("2");
+        EXPECT_NEAR(Access::fps(*dialog), 2.0f, 1e-5f);
+        EXPECT_EQ(input->GetValue(), "2");
+        EXPECT_NEAR(std::stof(slider->GetValue()), 2.0f, 1e-5f);
+        enter("2.3");
+        EXPECT_NEAR(Access::fps(*dialog), 2.3f, 1e-5f);
+        EXPECT_EQ(input->GetValue(), "2.3");
+        slider->SetValue("4.0");
+        slider->DispatchEvent(Rml::EventId::Change, {});
+        Access::sync(*dialog);
+        EXPECT_EQ(input->GetValue(), "4");
+    }
+
+    TEST_F(VideoExtractorFpsInputTest, ClampKeepsFallbackRangeAndTypedPrecision) {
+        for (const auto& [text, expected] : std::vector<std::pair<std::string, float>>{
+                 {"0", 0.1f},
+                 {"-2", 0.1f},
+                 {"100", 30.0f},
+                 {"0.1", 0.1f},
+                 {"30", 30.0f},
+                 {"2.36", 2.36f}}) {
+            SCOPED_TRACE(text);
+            enter(text);
+            EXPECT_NEAR(Access::fps(*dialog), expected, 1e-5f);
+            EXPECT_EQ(input->GetValue(), std::format("{}", expected));
+            EXPECT_NEAR(std::stof(slider->GetValue()), expected, 0.051f);
+        }
+    }
+
+    TEST_F(VideoExtractorFpsInputTest, InvalidTextPreservesTheLastValidValue) {
+        enter("2");
+        for (const auto& text : {"", "-", ".", "abc", "2fps", "2,5", "nan", "inf", "1e999"}) {
+            SCOPED_TRACE(text);
+            enter(text);
+            EXPECT_NEAR(Access::fps(*dialog), 2.0f, 1e-5f);
+            EXPECT_EQ(input->GetValue(), "2");
+        }
+    }
+
+    TEST_F(VideoExtractorFpsInputTest, KeyboardEditingSurvivesRefreshAndCommitsOnBlur) {
+        ASSERT_TRUE(input->Focus());
+        input->SetSelectionRange(0, static_cast<int>(input->GetValue().size()));
+        context->ProcessTextInput("2.");
+        Access::sync(*dialog);
+        EXPECT_EQ(input->GetValue(), "2.");
+        context->ProcessTextInput("3");
+        Access::sync(*dialog);
+        EXPECT_EQ(input->GetValue(), "2.3");
+        EXPECT_NEAR(Access::fps(*dialog), 2.3f, 1e-5f);
+        input->SetSelectionRange(0, static_cast<int>(input->GetValue().size()));
+        context->ProcessTextInput("100");
+        Access::sync(*dialog);
+        EXPECT_EQ(input->GetValue(), "100");
+        ASSERT_TRUE(slider->Focus());
+        Access::sync(*dialog);
+        EXPECT_EQ(input->GetValue(), "30");
+        EXPECT_NEAR(Access::fps(*dialog), 30.0f, 1e-5f);
+    }
+
+    TEST_F(VideoExtractorFpsInputTest, ModeSwitchPreservesTypedFpsAndInterval) {
+        enter("2");
+        auto* mode = dynamic_cast<Rml::ElementFormControlSelect*>(document->GetElementById("mode-select"));
+        ASSERT_NE(mode, nullptr);
+        mode->SetSelection(1);
+        Access::sync(*dialog);
+        EXPECT_EQ(document->GetElementById("fps-row")->GetProperty<Rml::Style::Display>("display"), Rml::Style::Display::None);
+        mode->SetSelection(0);
+        Access::sync(*dialog);
+        EXPECT_NEAR(Access::fps(*dialog), 2.0f, 1e-5f);
+        EXPECT_EQ(input->GetValue(), "2");
+        EXPECT_EQ(document->GetElementById("interval-input")->GetAttribute<Rml::String>("value", ""), "1");
+    }
+
+    TEST_F(VideoExtractorFpsInputTest, MaximumTracksTheLoadedVideoAndClampsOnSourceChange) {
+        TempDir temp("source_fps_limit");
+        for (const auto [numerator, denominator] : {std::pair{30000, 1001}, std::pair{60, 1}, std::pair{24, 1}}) {
+            const float rate = static_cast<float>(numerator) / denominator;
+            const auto source = temp.path / (std::to_string(numerator) + ".mp4");
+            ASSERT_TRUE(writeProbedVideoWithRate(source, "mp4", AV_CODEC_ID_MPEG4, 4, 0, numerator, denominator));
+            ASSERT_TRUE(dialog->openVideoPath(source));
+            Access::sync(*dialog);
+            EXPECT_LE(Access::fps(*dialog), rate + 1e-5f);
+            EXPECT_NEAR(std::stof(slider->GetAttribute<Rml::String>("max", "")), rate, 0.001f);
+            enter("120");
+            EXPECT_NEAR(Access::fps(*dialog), rate, 0.001f);
+            enter("29.97");
+            EXPECT_NEAR(Access::fps(*dialog), std::min(29.97f, rate), 1e-5f);
+        }
+    }
+
+    TEST_F(VideoExtractorFpsInputTest, ExtractionRequestUsesTypedFps) {
+        TempDir temp("typed_fps_request");
+        const auto video_path = temp.path / "source.mp4";
+        const auto output_dir = temp.path / "frames";
+        std::filesystem::create_directories(output_dir);
+        std::ofstream(output_dir / "frame_1.png").put('x');
+        ASSERT_TRUE(writeProbedVideo(video_path, "mp4", AV_CODEC_ID_MPEG4, 50, 0));
+        ASSERT_TRUE(dialog->openVideoPath(video_path));
+        enter("2");
+        const auto request = Access::request(*dialog, output_dir, false, false);
+        EXPECT_DOUBLE_EQ(request.fps, 2.0);
+        EXPECT_EQ(request.mode, ExtractionMode::FPS);
+        EXPECT_TRUE(std::filesystem::exists(output_dir / "frame_1.png"));
+    }
+} // namespace
 
 TEST(VideoExtractorDialogTrim, FpsFullRangeKeepsThePreviewEnd) {
     TempDir temp("dialog_fps_end");
@@ -462,8 +646,9 @@ TEST(VideoFrameExtractorOutputNaming, RepeatedSourceFramesAreWrittenOnce) {
 namespace {
     // Writes a small CPU-encoded video whose container header may need packet probing to expose
     // the video stream (MPEG-TS, or MPEG-4 Part 2 in MP4 with leading frames before an edit list).
-    bool writeProbedVideo(const std::filesystem::path& path, const char* const container,
-                          const AVCodecID codec_id, const int frame_count, const int leading_frames) {
+    bool writeProbedVideoWithRate(const std::filesystem::path& path, const char* const container,
+                                  const AVCodecID codec_id, const int frame_count, const int leading_frames,
+                                  const int rate_numerator, const int rate_denominator) {
         AVFormatContext* format = nullptr;
         const std::string path_utf8 = path.string();
         if (avformat_alloc_output_context2(&format, nullptr, container, path_utf8.c_str()) < 0 || !format)
@@ -476,8 +661,8 @@ namespace {
             encoder->width = 64;
             encoder->height = 48;
             encoder->pix_fmt = AV_PIX_FMT_YUV420P;
-            encoder->time_base = AVRational{1, 25};
-            encoder->framerate = AVRational{25, 1};
+            encoder->time_base = AVRational{rate_denominator, rate_numerator > 0 ? rate_numerator : 25};
+            encoder->framerate = AVRational{rate_numerator > 0 ? rate_numerator : 25, rate_denominator};
             encoder->gop_size = 10;
             encoder->max_b_frames = 0;
             if (format->oformat->flags & AVFMT_GLOBALHEADER)
@@ -494,6 +679,8 @@ namespace {
         AVPacket* packet = av_packet_alloc();
         const auto drain = [&] {
             while (avcodec_receive_packet(encoder, packet) == 0) {
+                if (rate_numerator > 0 && packet->duration == 0)
+                    packet->duration = 1;
                 av_packet_rescale_ts(packet, encoder->time_base, stream->time_base);
                 packet->stream_index = stream->index;
                 ok = av_interleaved_write_frame(format, packet) >= 0 && ok;
@@ -530,6 +717,13 @@ namespace {
             avio_closep(&format->pb);
         avformat_free_context(format);
         return ok;
+    }
+} // namespace
+
+namespace {
+    bool writeProbedVideo(const std::filesystem::path& path, const char* container,
+                          AVCodecID codec_id, int frame_count, int leading_frames) {
+        return writeProbedVideoWithRate(path, container, codec_id, frame_count, leading_frames, 0, 1);
     }
 } // namespace
 

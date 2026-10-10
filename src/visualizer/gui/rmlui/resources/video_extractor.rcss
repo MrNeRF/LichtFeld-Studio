@@ -475,6 +475,12 @@ body {
     white-space: nowrap;
 }
 
+.fps-input {
+    width: 64dp;
+    min-width: 64dp;
+    text-align: center;
+}
+
 .interval-input {
     width: 42dp;
     min-width: 42dp;
