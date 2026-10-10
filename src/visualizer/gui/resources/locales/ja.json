@@ -949,11 +949,16 @@
     "input": "入力",
     "key_bindings": "キー割り当て",
     "camera_navigation": "カメラ操作",
+    "new_project_navigation_up": "新規プロジェクトの上方向",
+    "new_project_navigation_help": "新規プロジェクトにのみ適用されます。既存のプロジェクトは保存済みの設定を維持します。",
+    "new_project_align_grid": "新規プロジェクトのグリッドを整列",
+    "navigation_project_hint": "この選択を保持するにはプロジェクトを保存してください。データ座標は変更されません。",
     "navigation_up_axis": "ナビゲーションの上方向（プロジェクト）",
     "navigation_up_legacy_y": "Y上向き（従来の動作）",
     "navigation_up_data_z": "+Z上向き（データ座標）",
     "navigation_up_help": "プロジェクトに保存されます。ナビゲーションのみを変更し、データの座標とスケールは変更しません。",
     "align_navigation_grid": "グリッドを上方向に合わせる",
+    "align_grid_short": "整列",
     "navigation_mode": "ナビゲーションモード",
     "zoom_speed": "ズーム速度",
     "zoom_speed_tooltip": "マウスホイールでカメラをズームする際の既定の速度。",
@@ -1371,9 +1376,9 @@
         "custom": "最後に読み込んだカスタム HDRI"
       },
       "grid_plane": {
-        "yz": "YZ 平面にグリッドを表示（右側ビュー）",
-        "xz": "XZ 平面にグリッドを表示（トップビュー）",
-        "xy": "XY 平面にグリッドを表示（フロントビュー）"
+        "yz": "YZ 平面にグリッドを表示",
+        "xz": "XZ 平面にグリッドを表示",
+        "xy": "XY 平面にグリッドを表示"
       },
       "sh_degree": {
         "0": "拡散反射のみ — ビュー依存ライティングなし",
@@ -2423,9 +2428,9 @@
     "solid_color": "単色",
     "equirectangular_hdri": "正距円筒HDRI",
     "off": "オフ",
-    "grid_plane_yz": "YZ（右）",
-    "grid_plane_xz": "XZ（上）",
-    "grid_plane_xy": "XY（前）",
+    "grid_plane_yz": "YZ",
+    "grid_plane_xz": "XZ",
+    "grid_plane_xy": "XY",
     "psnr": "PSNR",
     "psnr_ssim": "PSNR + SSIM",
     "manual": "手動",

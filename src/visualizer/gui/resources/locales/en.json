@@ -945,11 +945,16 @@
     "input": "Input",
     "key_bindings": "Key Bindings",
     "camera_navigation": "Camera Navigation",
+    "new_project_navigation_up": "Vertical for new projects",
+    "new_project_navigation_help": "Applies only to new projects. Existing projects keep their saved settings.",
+    "new_project_align_grid": "Align grid in new projects",
+    "navigation_project_hint": "Save the project to keep this choice. Data coordinates stay unchanged.",
     "navigation_up_axis": "Navigation vertical (project)",
     "navigation_up_legacy_y": "Y-up (current behavior)",
     "navigation_up_data_z": "+Z-up (data coordinates)",
     "navigation_up_help": "Saved in this project. Changes navigation only; data coordinates and scale stay unchanged.",
     "align_navigation_grid": "Align grid to navigation vertical",
+    "align_grid_short": "Align",
     "navigation_mode": "Navigation Mode",
     "zoom_speed": "Zoom speed",
     "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
@@ -1369,9 +1374,9 @@
         "custom": "Last loaded custom HDRI"
       },
       "grid_plane": {
-        "yz": "Show grid on the YZ plane (right view)",
-        "xz": "Show grid on the XZ plane (top view)",
-        "xy": "Show grid on the XY plane (front view)"
+        "yz": "Show grid on the YZ plane",
+        "xz": "Show grid on the XZ plane",
+        "xy": "Show grid on the XY plane"
       },
       "sh_degree": {
         "0": "Diffuse only — no view-dependent lighting",
@@ -2422,9 +2427,9 @@
     "solid_color": "Solid Color",
     "equirectangular_hdri": "Equirectangular HDRI",
     "off": "Off",
-    "grid_plane_yz": "YZ (Right)",
-    "grid_plane_xz": "XZ (Top)",
-    "grid_plane_xy": "XY (Front)",
+    "grid_plane_yz": "YZ",
+    "grid_plane_xz": "XZ",
+    "grid_plane_xy": "XY",
     "psnr": "PSNR",
     "psnr_ssim": "PSNR + SSIM",
     "manual": "Manual",

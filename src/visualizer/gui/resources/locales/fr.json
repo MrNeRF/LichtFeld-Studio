@@ -949,11 +949,16 @@
     "input": "Entrée",
     "key_bindings": "Liaisons de touches",
     "camera_navigation": "Navigation de la caméra",
+    "new_project_navigation_up": "Verticale des nouveaux projets",
+    "new_project_navigation_help": "S’applique uniquement aux nouveaux projets. Les projets existants conservent leurs réglages enregistrés.",
+    "new_project_align_grid": "Aligner la grille des nouveaux projets",
+    "navigation_project_hint": "Enregistrez le projet pour conserver ce choix. Les coordonnées des données restent inchangées.",
     "navigation_up_axis": "Verticale de navigation (projet)",
     "navigation_up_legacy_y": "Y vers le haut (comportement actuel)",
     "navigation_up_data_z": "+Z vers le haut (coordonnées des données)",
     "navigation_up_help": "Enregistré dans le projet. Modifie uniquement la navigation ; les coordonnées et l’échelle des données restent inchangées.",
     "align_navigation_grid": "Aligner la grille sur la verticale",
+    "align_grid_short": "Aligner",
     "navigation_mode": "Mode de navigation",
     "zoom_speed": "Vitesse de zoom",
     "zoom_speed_tooltip": "Vitesse par défaut pour zoomer avec la molette de la souris.",
@@ -1371,9 +1376,9 @@
         "custom": "Dernier HDRI personnalisé chargé"
       },
       "grid_plane": {
-        "yz": "Afficher la grille sur le plan YZ (vue de droite)",
-        "xz": "Afficher la grille sur le plan XZ (vue de dessus)",
-        "xy": "Afficher la grille sur le plan XY (vue de face)"
+        "yz": "Afficher la grille sur le plan YZ",
+        "xz": "Afficher la grille sur le plan XZ",
+        "xy": "Afficher la grille sur le plan XY"
       },
       "sh_degree": {
         "0": "Diffus uniquement — pas d'éclairage dépendant de la vue",
@@ -2423,9 +2428,9 @@
     "solid_color": "Couleur unie",
     "equirectangular_hdri": "HDRI équirectangulaire",
     "off": "Désactivé",
-    "grid_plane_yz": "YZ (droite)",
-    "grid_plane_xz": "XZ (haut)",
-    "grid_plane_xy": "XY (avant)",
+    "grid_plane_yz": "YZ",
+    "grid_plane_xz": "XZ",
+    "grid_plane_xy": "XY",
     "psnr": "PSNR",
     "psnr_ssim": "PSNR + SSIM",
     "manual": "Manuel",

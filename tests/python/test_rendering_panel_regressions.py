@@ -78,6 +78,8 @@ def _install_lf_stub(monkeypatch):
         is_windows_platform=lambda: False,
         toggle_system_console=lambda: None,
     )
+    lf_stub.get_navigation_up_axis = lambda: "legacy_y"
+    lf_stub.set_navigation_up_axis = lambda *_args, **_kwargs: None
     lf_stub.get_render_settings = lambda: SimpleNamespace()
     lf_stub.get_current_view = lambda: SimpleNamespace(width=1920, height=1080)
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
@@ -354,3 +356,24 @@ def test_rendering_rml_only_exposes_3dgs_backends():
 
     assert '<option value="3dgs">3DGS</option>' in content
     assert '<option value="3dgut">3DGUT</option>' in content
+
+
+def test_project_navigation_vertical_does_not_change_global_defaults(rendering_panel_module):
+    module = rendering_panel_module
+    state = {"axis": "legacy_y"}
+    calls = []
+    module.lf.get_navigation_up_axis = lambda: state["axis"]
+    def set_axis(axis, align_grid=False):
+        state["axis"] = axis
+        calls.append((axis, align_grid))
+    module.lf.set_navigation_up_axis = set_axis
+    panel = module.RenderingPanel()
+    assert panel._navigation_up_index() == "0"
+    panel._set_navigation_up_index("1")
+    assert panel._navigation_up_index() == "1"
+    assert calls == [("data_z", False)]
+    panel._set_navigation_up_index("invalid")
+    panel._set_navigation_up_index("2")
+    assert len(calls) == 1
+    panel._align_navigation_grid()
+    assert calls[-1] == ("data_z", True)

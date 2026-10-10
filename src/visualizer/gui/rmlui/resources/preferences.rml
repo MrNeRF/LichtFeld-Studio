@@ -215,17 +215,19 @@
               <option data-for="mode : navigation_modes" data-attr-value="mode.index">{{ mode.label }}</option>
             </select>
           </div>
-          <div class="setting-row" data-tooltip="preferences.navigation_up_help">
-            <span class="preferences-label">@tr:preferences.navigation_up_axis</span>
+          <div class="setting-row" data-tooltip="preferences.new_project_navigation_help">
+            <span class="preferences-label">@tr:preferences.new_project_navigation_up</span>
             <select class="preferences-select" data-value="navigation_up_idx">
               <option value="0">@tr:preferences.navigation_up_legacy_y</option>
               <option value="1">@tr:preferences.navigation_up_data_z</option>
             </select>
           </div>
           <div class="setting-row">
-            <button class="btn btn--secondary" data-event-click="align_navigation_grid">@tr:preferences.align_navigation_grid</button>
+            <span class="preferences-label">@tr:preferences.new_project_align_grid</span>
+            <input type="checkbox" data-checked="new_project_align_grid" />
           </div>
-          <div class="setting-row setting-row--aligned" data-tooltip="preferences.zoom_speed_tooltip">
+          <span class="preferences-description">@tr:preferences.new_project_navigation_help</span>
+            <div class="setting-row setting-row--aligned" data-tooltip="preferences.zoom_speed_tooltip">
             <span class="setting-row__label-col">@tr:preferences.zoom_speed</span>
             <div class="setting-row__control-col setting-row__control-col--slider">
               <input type="range" class="setting-slider" data-value="zoom_speed" min="1" max="100" step="1" />
