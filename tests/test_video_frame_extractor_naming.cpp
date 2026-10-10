@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/image_io.hpp"
 #include "gui/windows/video_extractor_dialog.hpp"
 #include "io/video/video_encoder.hpp"
 #include "io/video_frame_extractor.hpp"
@@ -16,6 +17,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libswscale/swscale.h>
 }
 
 #include <cuda_runtime.h>
@@ -1246,4 +1248,171 @@ TEST(VideoFrameExtractorTrim, PlayerFullRangeKeepsTheLastFrame) {
     VideoFrameExtractor extractor;
     ASSERT_TRUE(extractor.extract(params, error)) << error;
     EXPECT_EQ(countPngFiles(output_dir), static_cast<std::size_t>(frame_count));
+}
+
+namespace {
+    // Independent software decode: compare image contents, not just the output count.
+    std::vector<std::vector<uint8_t>> decodeVp9Reference(const std::filesystem::path& source) {
+        std::vector<std::vector<uint8_t>> result;
+        AVFormatContext* format = nullptr;
+        if (avformat_open_input(&format, source.string().c_str(), nullptr, nullptr) < 0)
+            return result;
+        avformat_find_stream_info(format, nullptr);
+        const int stream = av_find_best_stream(format, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+        const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_VP9);
+        AVCodecContext* context = avcodec_alloc_context3(codec);
+        avcodec_parameters_to_context(context, format->streams[stream]->codecpar);
+        context->pkt_timebase = format->streams[stream]->time_base;
+        if (avcodec_open2(context, codec, nullptr) >= 0) {
+            AVPacket* packet = av_packet_alloc();
+            AVFrame* frame = av_frame_alloc();
+            SwsContext* scaler = nullptr;
+            const auto drain = [&] {
+                while (avcodec_receive_frame(context, frame) == 0) {
+                    scaler = sws_getCachedContext(scaler, frame->width, frame->height,
+                                                  static_cast<AVPixelFormat>(frame->format),
+                                                  frame->width, frame->height, AV_PIX_FMT_RGB24,
+                                                  SWS_BILINEAR, nullptr, nullptr, nullptr);
+                    auto& rgb = result.emplace_back(frame->width * frame->height * 3);
+                    uint8_t* planes[] = {rgb.data(), nullptr, nullptr, nullptr};
+                    int strides[] = {frame->width * 3, 0, 0, 0};
+                    sws_scale(scaler, frame->data, frame->linesize, 0, frame->height, planes, strides);
+                    av_frame_unref(frame);
+                }
+            };
+            while (av_read_frame(format, packet) >= 0) {
+                if (packet->stream_index == stream) {
+                    avcodec_send_packet(context, packet);
+                    drain();
+                }
+                av_packet_unref(packet);
+            }
+            avcodec_send_packet(context, nullptr);
+            drain();
+            sws_freeContext(scaler);
+            av_frame_free(&frame);
+            av_packet_free(&packet);
+        }
+        avcodec_free_context(&context);
+        avformat_close_input(&format);
+        return result;
+    }
+} // namespace
+
+TEST(VideoFrameExtractorOutputNaming, Vp9KeepsEverySourceTimestamp) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "CUDA device required for NVDEC timestamp regression";
+    TempDir temp("vp9_timestamps");
+    const auto source = std::filesystem::path(PROJECT_ROOT_PATH) /
+                        "tests/data/video/vp9_timestamps.webm";
+    const auto reference = decodeVp9Reference(source);
+    ASSERT_EQ(reference.size(), 185u);
+    auto params = extractionParams(source, temp.path);
+    params.end_time = -1.0;
+    VideoFrameExtractor extractor;
+    std::string error;
+    ASSERT_TRUE(extractor.extract(params, error)) << error;
+    const auto metadata = readMetadata(temp.path);
+    ASSERT_EQ(metadata["processing"]["decoder"]["backend"], "nvdec");
+    EXPECT_EQ(countPngFiles(temp.path), reference.size());
+    for (int index = 1; index <= 185; ++index) {
+        SCOPED_TRACE(index);
+        const auto path = temp.path /
+                          (lfs::io::formatFrameFilenameStem(params.filename_pattern, index) + ".png");
+        EXPECT_TRUE(std::filesystem::exists(path));
+        if (!std::filesystem::exists(path))
+            continue;
+        const auto [pixels, width, height, channels] = lfs::core::load_image(path);
+        ASSERT_NE(pixels, nullptr);
+        const std::unique_ptr<unsigned char, decltype(&lfs::core::free_image)> image(pixels, lfs::core::free_image);
+        ASSERT_EQ(width, 128);
+        ASSERT_EQ(height, 128);
+        ASSERT_EQ(channels, 3);
+        const auto& expected = reference[index - 1];
+        double difference = 0.0;
+        for (std::size_t pixel = 0; pixel < expected.size(); ++pixel)
+            difference += std::abs(static_cast<int>(pixels[pixel]) - expected[pixel]);
+        EXPECT_LT(difference / expected.size(), 4.0);
+        for (int candidate = std::max(1, index - 2); candidate <= std::min(185, index + 2); ++candidate) {
+            double other_difference = 0.0;
+            const auto& other = reference[candidate - 1];
+            for (std::size_t pixel = 0; pixel < other.size(); ++pixel)
+                other_difference += std::abs(static_cast<int>(pixels[pixel]) - other[pixel]);
+            EXPECT_LE(difference, other_difference) << "better matching source frame " << candidate;
+        }
+    }
+}
+
+TEST(VideoFrameExtractorOutputNaming, ContainerTimeBasesPreserveIntervalFrames) {
+    for (const char* container : {"mp4", "matroska"}) {
+        for (const int denominator : {1000, 1001}) {
+            SCOPED_TRACE(container);
+            SCOPED_TRACE(denominator);
+            TempDir temp("time_base_guard");
+            const auto source = temp.path / "source.video";
+            ASSERT_TRUE(writeProbedVideoWithRate(source, container, AV_CODEC_ID_MPEG4,
+                                                 60, 0, 30000, denominator));
+            auto params = extractionParams(source, temp.path / "all");
+            params.end_time = -1.0;
+            VideoFrameExtractor extractor;
+            std::string error;
+            ASSERT_TRUE(extractor.extract(params, error)) << error;
+            ASSERT_EQ(countPngFiles(params.output_dir), 60u);
+            const auto reference = params.output_dir;
+            params.output_dir = temp.path / "interval";
+            params.frame_interval = 3;
+            ASSERT_TRUE(extractor.extract(params, error)) << error;
+            EXPECT_EQ(countPngFiles(params.output_dir), 20u);
+            for (int index = 1; index <= 60; index += 3) {
+                const auto name = lfs::io::formatFrameFilenameStem(params.filename_pattern, index) + ".png";
+                std::ifstream expected(reference / name, std::ios::binary);
+                std::ifstream actual(params.output_dir / name, std::ios::binary);
+                ASSERT_TRUE(expected.is_open());
+                ASSERT_TRUE(actual.is_open());
+                EXPECT_EQ(std::string(std::istreambuf_iterator<char>(expected), {}),
+                          std::string(std::istreambuf_iterator<char>(actual), {}))
+                    << index;
+            }
+        }
+    }
+}
+
+TEST(VideoFrameExtractorOutputNaming, SmallVp9KeepsSoftwareFallback) {
+    TempDir temp("vp9_software");
+    const auto source = std::filesystem::path(PROJECT_ROOT_PATH) /
+                        "tests/data/video/vp9_small.webm";
+    auto params = extractionParams(source, temp.path);
+    params.end_time = -1.0;
+    VideoFrameExtractor extractor;
+    std::string error;
+    ASSERT_TRUE(extractor.extract(params, error)) << error;
+    EXPECT_EQ(countPngFiles(temp.path), 10u);
+    for (int index = 1; index <= 10; ++index)
+        EXPECT_TRUE(std::filesystem::exists(temp.path /
+                                            (lfs::io::formatFrameFilenameStem(params.filename_pattern, index) + ".png")))
+            << index;
+}
+
+TEST(VideoFrameExtractorOutputNaming, Vp9SamplingKeepsSourceFrameNumbers) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "CUDA device required for NVDEC timestamp regression";
+    TempDir temp("vp9_sampling");
+    const auto source = std::filesystem::path(PROJECT_ROOT_PATH) /
+                        "tests/data/video/vp9_timestamps.webm";
+    for (const bool sparse : {false, true}) {
+        auto params = extractionParams(source, temp.path / (sparse ? "fps" : "interval"));
+        params.end_time = -1.0;
+        params.mode = sparse ? ExtractionMode::FPS : ExtractionMode::INTERVAL;
+        params.fps = 1.0;
+        params.frame_interval = 3;
+        VideoFrameExtractor extractor;
+        std::string error;
+        ASSERT_TRUE(extractor.extract(params, error)) << error;
+        EXPECT_EQ(countPngFiles(params.output_dir), sparse ? 7u : 62u);
+        const int step = sparse ? 30 : 3;
+        for (int index = 1; index <= 185; index += step)
+            EXPECT_TRUE(std::filesystem::exists(params.output_dir /
+                                                (lfs::io::formatFrameFilenameStem(params.filename_pattern, index) + ".png")))
+                << index;
+    }
 }
