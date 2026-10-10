@@ -2846,15 +2846,24 @@ namespace lfs::training {
                         "Scene has no cameras with image files available for training");
                 }
 
+                const bool hold_out = params.optimization.holds_out_eval_images();
+                const bool keep_project_split = params.resume_project && hold_out &&
+                                                std::ranges::any_of(scene_->getAllCameras(), [](const auto& camera) {
+                                                    return camera->split() == lfs::core::CameraSplit::Eval;
+                                                });
                 if (params.overrides.has_dataset_key("test_every") ||
-                    params.overrides.has_optimization_key("enable_eval") ||
-                    params.overrides.has_optimization_key("eval_all")) {
+                    (!keep_project_split &&
+                     (params.overrides.has_optimization_key("enable_eval") ||
+                      params.overrides.has_optimization_key("eval_all")))) {
+                    if (params.resume_project)
+                        LOG_INFO("Updating project camera split from explicit evaluation options");
                     std::sort(
                         source_cameras.begin(), source_cameras.end(),
-                        [](const auto& lhs, const auto& rhs) {
+                        [&](const auto& lhs, const auto& rhs) {
+                            if (hold_out && !params.resume_checkpoint && lhs->image_name() != rhs->image_name())
+                                return lhs->image_name() < rhs->image_name();
                             return lhs->uid() < rhs->uid();
                         });
-                    const bool hold_out = params.optimization.holds_out_eval_images();
                     const int test_every = std::max(1, params.dataset.test_every);
                     for (size_t i = 0; i < source_cameras.size(); ++i) {
                         const bool is_val =

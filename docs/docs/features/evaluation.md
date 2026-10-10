@@ -6,11 +6,13 @@ LichtFeld Studio can score a reconstruction against its input images while it tr
 
 | Flag | Meaning |
 |---|---|
-| `--eval` | Hold out every 8th image (`--test-every N` changes the interval) and evaluate those images. |
+| `--eval` | Hold out every 8th image in image-name order (`--test-every N` changes the interval) and evaluate those images. |
 | `--eval-all` | Train on every image and evaluate all of them. The scores then show fit, not generalization. |
 | `--eval-steps 7000,30000` | Iterations to evaluate at. The last iteration is always evaluated. |
 | `--eval-flip` | Also compute FLIP and save its error maps. |
 | `--no-save-eval-images` | Skip the comparison images. |
+
+Fresh datasets use case-sensitive lexicographic image-name order, starting with the first image. A `.licht` project keeps its saved holdout when resumed or evaluated; explicitly passing `--test-every` rebuilds it in image-name order. Legacy `.resume` checkpoints retain record-order splitting.
 
 In the GUI the same options sit in the **Dataset** section of the training panel once **Evaluate** is enabled.
 
