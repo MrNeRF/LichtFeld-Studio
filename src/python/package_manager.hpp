@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "python_runtime_api.hpp"
+
 #include "uv_runner.hpp"
 
 #include <filesystem>
@@ -27,7 +29,7 @@ namespace lfs::python {
         std::string error;
     };
 
-    class PackageManager {
+    class LFS_PYTHON_RUNTIME_API PackageManager {
     public:
         static PackageManager& instance();
 

@@ -21,15 +21,7 @@
 #include <thread>
 #include <vector>
 
-#ifdef _WIN32
-#ifdef LFS_PYTHON_RUNTIME_EXPORTS
-#define LFS_PYTHON_RUNTIME_API __declspec(dllexport)
-#else
-#define LFS_PYTHON_RUNTIME_API __declspec(dllimport)
-#endif
-#else
-#define LFS_PYTHON_RUNTIME_API
-#endif
+#include "python_runtime_api.hpp"
 
 namespace lfs::core {
     class IOperatorCallbacks;

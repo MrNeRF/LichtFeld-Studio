@@ -35,7 +35,7 @@ namespace lfs::python {
 
     // Cheap, thread-safe query of the latched init state. Lock-free fast path;
     // takes the error mutex only to copy the Error when Failed.
-    [[nodiscard]] PyInitStatus init_state() noexcept;
+    [[nodiscard]] LFS_PYTHON_RUNTIME_API PyInitStatus init_state() noexcept;
 
     /**
      * @brief Execute a list of Python script files. Each script is expected to import `lichtfeld`
@@ -44,18 +44,18 @@ namespace lfs::python {
      * @return lfs::Result<void>: the latched init failure, or a typed IO/Python error on a
      *         missing script or execution failure. Success is a default Status.
      */
-    [[nodiscard]] lfs::Result<void> run_scripts(const std::vector<std::filesystem::path>& scripts);
+    [[nodiscard]] LFS_PYTHON_RUNTIME_API lfs::Result<void> run_scripts(const std::vector<std::filesystem::path>& scripts);
 
     /**
      * @brief Set the callback for Python stdout/stderr capture.
      * @param callback Function(text, is_error) called when Python prints output.
      */
-    void set_output_callback(std::function<void(const std::string&, bool)> callback);
+    LFS_PYTHON_RUNTIME_API void set_output_callback(std::function<void(const std::string&, bool)> callback);
 
     /**
      * @brief Write text to the output callback (used by package manager async output).
      */
-    void write_output(const std::string& text, bool is_error = false);
+    LFS_PYTHON_RUNTIME_API void write_output(const std::string& text, bool is_error = false);
 
     /**
      * @brief Initialize the Python interpreter if not already done.
@@ -63,19 +63,19 @@ namespace lfs::python {
      *         every call once Failed (interpreter or lichtfeld-bridge init failed).
      *         Native application services must not wait for this state.
      */
-    [[nodiscard]] lfs::Status ensure_initialized();
+    [[nodiscard]] LFS_PYTHON_RUNTIME_API lfs::Status ensure_initialized();
 
     // Test-only (process-isolated). While armed, ensure_initialized() latches the
     // Failed state without touching the real interpreter or the init once-flag.
     // reset restores the latch to its pre-forced value (Ready if a real init
     // already succeeded, else Uninitialized) and disarms. Documented tests-only.
-    void force_python_init_failure_for_testing(bool should_fail) noexcept;
-    void reset_python_init_state_for_testing() noexcept;
+    LFS_PYTHON_RUNTIME_API void force_python_init_failure_for_testing(bool should_fail) noexcept;
+    LFS_PYTHON_RUNTIME_API void reset_python_init_state_for_testing() noexcept;
 
     /**
      * @brief Register built-in Python UI once the retained GUI runtime is available.
      */
-    void ensure_builtin_ui_registered();
+    LFS_PYTHON_RUNTIME_API void ensure_builtin_ui_registered();
 
     /**
      * @brief Allow or deny loading user plugins for this process.
@@ -83,7 +83,7 @@ namespace lfs::python {
      * Safe mode sets this to false before the visualizer reaches its first
      * frame. Built-in Python UI remains available in both modes.
      */
-    void set_user_plugin_loading_enabled(bool enabled) noexcept;
+    LFS_PYTHON_RUNTIME_API void set_user_plugin_loading_enabled(bool enabled) noexcept;
 
     /**
      * @brief Load user plugins configured for startup.
@@ -91,17 +91,17 @@ namespace lfs::python {
      * @param wait_for_completion Allow a headless caller to wait even when
      *        the Python UI module identified the current thread as graphics.
      */
-    [[nodiscard]] bool ensure_plugins_loaded(bool wait_for_completion = false);
+    [[nodiscard]] LFS_PYTHON_RUNTIME_API bool ensure_plugins_loaded(bool wait_for_completion = false);
 
     // Invoked from finish_plugin_preload after load becomes terminal.
     // Headless training reasserts SIGINT/SIGTERM here. nullptr clears.
-    void set_plugin_preload_completion_hook(void (*hook)());
+    LFS_PYTHON_RUNTIME_API void set_plugin_preload_completion_hook(void (*hook)());
 
     /**
      * @brief Schedule plugin autoload after startup.
      *        The complete load pipeline runs on one owned background worker.
      */
-    void preload_user_plugins_async();
+    LFS_PYTHON_RUNTIME_API void preload_user_plugins_async();
 
     /**
      * @brief True while startup plugin preload is running.
@@ -109,43 +109,43 @@ namespace lfs::python {
      * UI code uses this to avoid blocking Python calls while startup imports
      * are in progress.
      */
-    bool is_plugin_preload_running();
+    LFS_PYTHON_RUNTIME_API bool is_plugin_preload_running();
 
     /// @brief True while startup plugin preload may block Python calls.
-    bool is_plugin_preload_blocking_python();
+    LFS_PYTHON_RUNTIME_API bool is_plugin_preload_blocking_python();
 
     /**
      * @brief Request cooperative cancellation of startup plugin loading.
      *        Safe to call from the render thread without acquiring the GIL.
      */
-    void request_plugin_preload_stop();
+    LFS_PYTHON_RUNTIME_API void request_plugin_preload_stop();
 
     /**
      * @brief Stop and join startup plugin loading before Python teardown.
      */
-    void join_plugin_preload();
+    LFS_PYTHON_RUNTIME_API void join_plugin_preload();
 
     /**
      * @brief Start an embedded Python REPL on a background thread.
      * @param read_fd File descriptor for stdin. Ownership transferred.
      * @param write_fd File descriptor for stdout/stderr. Ownership transferred.
      */
-    void start_embedded_repl(int read_fd, int write_fd);
+    LFS_PYTHON_RUNTIME_API void start_embedded_repl(int read_fd, int write_fd);
 
     /// @brief Stop the embedded REPL thread if running.
-    void stop_embedded_repl();
+    LFS_PYTHON_RUNTIME_API void stop_embedded_repl();
 
-    bool start_debugpy(int port = 5678);
+    LFS_PYTHON_RUNTIME_API bool start_debugpy(int port = 5678);
 
     /**
      * @brief Install Python stdout/stderr redirect. Call after Python is initialized.
      */
-    void install_output_redirect();
+    LFS_PYTHON_RUNTIME_API void install_output_redirect();
 
     /**
      * @brief Finalize Python interpreter. Call before program exit to avoid cleanup issues.
      */
-    void finalize();
+    LFS_PYTHON_RUNTIME_API void finalize();
 
     /**
      * @brief Check if Python was used in this session.
@@ -162,62 +162,62 @@ namespace lfs::python {
      * @param code The Python code to format.
      * @return FormatResult with formatted code or error message.
      */
-    FormatResult format_python_code(const std::string& code);
+    LFS_PYTHON_RUNTIME_API FormatResult format_python_code(const std::string& code);
 
     /**
      * @brief Best-effort cleanup for pasted Python snippets, then format using black.
      * @param code The Python code to clean and format.
      * @return FormatResult with cleaned code or error message.
      */
-    FormatResult clean_python_code(const std::string& code);
+    LFS_PYTHON_RUNTIME_API FormatResult clean_python_code(const std::string& code);
 
     /**
      * @brief Set a callback to be called each frame. Used for animations.
      * @param callback Function(delta_time) called each frame.
      */
-    void set_frame_callback(std::function<void(float)> callback, std::optional<double> duration_s = std::nullopt);
+    LFS_PYTHON_RUNTIME_API void set_frame_callback(std::function<void(float)> callback, std::optional<double> duration_s = std::nullopt);
 
     /**
      * @brief Clear the frame callback.
      */
-    void clear_frame_callback();
+    LFS_PYTHON_RUNTIME_API void clear_frame_callback();
 
     /**
      * @brief Call the frame callback if set. Called by the visualizer each frame.
      * @param dt Delta time since last frame in seconds.
      */
-    void tick_frame_callback(float dt);
+    LFS_PYTHON_RUNTIME_API void tick_frame_callback(float dt);
 
     /**
      * @brief Check if a frame callback is set.
      */
-    bool has_frame_callback();
+    LFS_PYTHON_RUNTIME_API bool has_frame_callback();
 
     /**
      * @brief Set a callback evaluated at an absolute scene clip time.
      * @param callback Function(clip_time) called with time in seconds.
      */
-    void set_scene_time_callback(std::function<void(float)> callback);
+    LFS_PYTHON_RUNTIME_API void set_scene_time_callback(std::function<void(float)> callback);
 
     /**
      * @brief Clear the scene-time callback.
      */
-    void clear_scene_time_callback();
+    LFS_PYTHON_RUNTIME_API void clear_scene_time_callback();
 
     /**
      * @brief Call the scene-time callback if set.
      * @param clip_time Absolute clip time in seconds.
      */
-    void tick_scene_time_callback(float clip_time);
+    LFS_PYTHON_RUNTIME_API void tick_scene_time_callback(float clip_time);
 
     /**
      * @brief Check if a scene-time callback is set.
      */
-    bool has_scene_time_callback();
+    LFS_PYTHON_RUNTIME_API bool has_scene_time_callback();
 
-    std::filesystem::path get_user_packages_dir();
+    LFS_PYTHON_RUNTIME_API std::filesystem::path get_user_packages_dir();
 
-    void update_python_path();
+    LFS_PYTHON_RUNTIME_API void update_python_path();
 
     struct CapabilityResult {
         bool success = false;
@@ -237,19 +237,19 @@ namespace lfs::python {
      * @param args_json JSON string of arguments.
      * @return Result with JSON result or error.
      */
-    CapabilityResult invoke_capability(const std::string& name, const std::string& args_json);
+    LFS_PYTHON_RUNTIME_API CapabilityResult invoke_capability(const std::string& name, const std::string& args_json);
 
     /**
      * @brief Check if a capability is registered.
      * @param name Capability name.
      * @return true if the capability exists.
      */
-    bool has_capability(const std::string& name);
+    LFS_PYTHON_RUNTIME_API bool has_capability(const std::string& name);
 
     /**
      * @brief List all registered capabilities.
      * @return Vector of capability info.
      */
-    std::vector<CapabilityInfo> list_capabilities();
+    LFS_PYTHON_RUNTIME_API std::vector<CapabilityInfo> list_capabilities();
 
 } // namespace lfs::python

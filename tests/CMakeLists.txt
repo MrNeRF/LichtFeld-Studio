@@ -35,6 +35,25 @@ endif()
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+# Exercise a real EXE/DLL boundary: linking the same static runner into both
+# modules would pass same-module tests but split callback and initialization state.
+if(WIN32 AND BUILD_TESTS AND TARGET lfs_python_utils)
+    add_library(lichtfeld_python_state_helper SHARED python_runtime_state_helper.cpp)
+    target_compile_features(lichtfeld_python_state_helper PRIVATE cxx_std_23)
+    target_compile_definitions(lichtfeld_python_state_helper PRIVATE LFS_TEST_PYTHON_STATE_EXPORTS)
+    target_link_libraries(lichtfeld_python_state_helper PRIVATE lfs_python_utils)
+
+    add_executable(lichtfeld_python_state_tests test_python_runtime_state.cpp)
+    target_compile_features(lichtfeld_python_state_tests PRIVATE cxx_std_23)
+    target_link_libraries(lichtfeld_python_state_tests PRIVATE
+        lfs_python_utils lichtfeld_python_state_helper GTest::gtest_main)
+    add_test(NAME lichtfeld.python_runtime_state COMMAND lichtfeld_python_state_tests)
+    set_tests_properties(lichtfeld.python_runtime_state PROPERTIES
+        LABELS "python;windows" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_python_runtime>;PATH=path_list_prepend:${Torch_DIR}/../../../lib;PATH=path_list_prepend:${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin")
+endif()
+
 # Headless SDL boundary regression tests, also built in the CPU-only CI configuration.
 # Do not link SDL itself: this isolated executable provides the four SDL state
 # queries used by the production coordinate helpers and frame finalization.

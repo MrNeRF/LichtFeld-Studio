@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "python_runtime_api.hpp"
+
 #include "subprocess.hpp"
 
 #include <atomic>
@@ -13,7 +15,7 @@
 
 namespace lfs::python {
 
-    class UvRunner {
+    class LFS_PYTHON_RUNTIME_API UvRunner {
     public:
         using OutputCallback = std::function<void(const std::string&, bool is_stderr, bool is_line_update)>;
         using RawOutputCallback = std::function<void(const std::string&)>;
