@@ -35,6 +35,7 @@ namespace lfs::vis::gui {
             status_bar.document_ = document;
             status_bar.fit_level_ = 0;
             status_bar.applyFitLevel(0);
+            status_bar.updateFpsReservedWidths();
         }
 
         static int fit(RmlStatusBar& status_bar, const bool allow_expand = false) {
@@ -146,7 +147,7 @@ namespace {
         std::string fps_value = "144";
         std::string fps_view_value = "144";
         std::string fps_ui_label = "UI";
-        std::string fps_view_label = "View";
+        std::string fps_view_label = "3D";
         std::string fps_color = "#ffffff";
         std::string fps_label = "FPS";
         std::string git_commit = "abcdef12";
@@ -381,6 +382,11 @@ namespace {
         context_->Update();
         EXPECT_FLOAT_EQ(ui->GetOffsetWidth(), ui_width);
         EXPECT_FLOAT_EQ(view->GetAbsoluteOffset().x, view_position);
+        // The reservation is a minimum: four-digit rates must remain visible.
+        model_.fps_value = "1234";
+        model_handle_.DirtyVariable("fps_value");
+        context_->Update();
+        EXPECT_GT(ui->GetOffsetWidth(), ui_width);
         assertNoVerticalOverflow(document_);
         assertFlexSiblingsDoNotOverlap(document_);
         document_->SetClass("fit-8", true);

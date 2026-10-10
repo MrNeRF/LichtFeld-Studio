@@ -85,6 +85,7 @@ namespace lfs::vis::gui {
 
     private:
         friend class RmlStatusBarTestAccess;
+        void updateFpsReservedWidths();
 
         struct ProgressBarGeometry {
             float x = 0.0f;

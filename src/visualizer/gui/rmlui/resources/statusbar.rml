@@ -114,6 +114,7 @@
                 <span class="fps-caption dim">{{ fps_ui_label }}</span>
                 <span id="fps-value" class="fps-number" data-style-color="fps_color">{{ fps_value }}</span>
             </div>
+            <span class="dim">&#183;</span>
             <div class="fps-metric">
                 <span class="fps-caption dim">{{ fps_view_label }}</span>
                 <span id="fps-view-value" class="fps-number" data-style-color="fps_color">{{ fps_view_value }}</span>

@@ -32,6 +32,7 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/FontEngineInterface.h>
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_video.h>
 #include <cassert>
@@ -1589,7 +1590,7 @@ namespace lfs::vis::gui {
         setModelString("fps_value", model_.fps_value, std::format("{:.0f}", presented_fps));
         setModelString("fps_view_value", model_.fps_view_value, std::format("{:.0f}", scene_fps));
         setModelString("fps_ui_label", model_.fps_ui_label, LOC("status_bar.ui"));
-        setModelString("fps_view_label", model_.fps_view_label, LOC("status_bar.view"));
+        setModelString("fps_view_label", model_.fps_view_label, "3D");
         setModelString("fps_color", model_.fps_color, colorToRml(p.text));
         setModelString("fps_label", model_.fps_label, LOC(lichtfeld::Strings::Status::FPS));
         setModelString("git_commit", model_.git_commit, GIT_COMMIT_HASH_SHORT);
@@ -1745,6 +1746,25 @@ namespace lfs::vis::gui {
         });
     }
 
+    void RmlStatusBar::updateFpsReservedWidths() {
+        // Reserve three digits in the actual font, rather than a fixed dp width.
+        if (auto* engine = Rml::GetFontEngineInterface()) {
+            for (const char* id : {"fps-value", "fps-view-value"}) {
+                if (auto* value = document_->GetElementById(id)) {
+                    const auto face = value->GetFontFaceHandle();
+                    if (!face)
+                        continue;
+                    int width = 0;
+                    const Rml::TextShapingContext shaping{Rml::String{}};
+                    for (char digit = '0'; digit <= '9'; ++digit)
+                        width = std::max(width, engine->GetStringWidth(face, std::string(3, digit), shaping));
+                    value->SetProperty("min-width", std::format("{}px", width));
+                }
+            }
+            rml_context_->Update();
+        }
+    }
+
     void RmlStatusBar::render(const PanelDrawContext& ctx, const float x, const float y,
                               const float w_px, const float h_px,
                               const int screen_w, const int screen_h) {
@@ -1796,6 +1816,8 @@ namespace lfs::vis::gui {
                 last_document_h_ = render_h;
             }
             rml_context_->Update();
+            if (size_changed || dp_changed || theme_changed)
+                updateFpsReservedWidths();
             fitToAvailableWidth(size_changed || dp_changed || theme_changed || section_signature_changed);
 
             rml_animation_active_ = rml_context_->GetNextUpdateDelay() == 0;

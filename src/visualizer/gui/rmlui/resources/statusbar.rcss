@@ -395,20 +395,17 @@ body {
 }
 
 .fps-caption {
-    font-size: 10dp;
-    position: relative;
-    top: -2dp;
+    font-size: 12dp;
 }
 
 .fps-number {
-    min-width: 26dp;
+    min-width: 1.8em;
     text-align: left;
     font-weight: bold;
 }
 
 #fps-label {
-    font-size: 10dp;
-    font-weight: bold;
+    font-size: 12dp;
 }
 
 #git-commit {
