@@ -248,6 +248,8 @@ def _install_lf_stub(monkeypatch):
     lf_stub = ModuleType("lichtfeld")
     lf_stub.keymap = keymap
     lf_stub.get_camera_navigation_mode = lambda: "orbit"
+    lf_stub.get_new_project_navigation_up_axis = lambda: "legacy_y"
+    lf_stub.get_new_project_align_grid = lambda: True
     lf_stub.get_camera_view_snap_enabled = lambda: False
     lf_stub.ui = SimpleNamespace(
         PanelSpace=panel_space,
