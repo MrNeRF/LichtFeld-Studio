@@ -263,7 +263,8 @@ namespace lfs::io {
                 temp = std::getenv("TMP");
             return temp ? std::filesystem::path(temp) : std::filesystem::path("C:/Temp");
 #else
-            return std::filesystem::path("/tmp");
+            const char* temp = std::getenv("TMPDIR");
+            return temp && *temp ? std::filesystem::path(temp) : std::filesystem::path("/tmp");
 #endif
         }
 
