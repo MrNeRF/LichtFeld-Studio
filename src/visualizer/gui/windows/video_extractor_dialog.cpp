@@ -262,6 +262,23 @@ namespace lfs::gui {
             return static_cast<int>(std::clamp<long>(parsed, 1, 65535));
         }
 
+        // Frames and metadata an extraction with `pattern` writes into `dir`. Other files,
+        // such as photos already in the folder, are never part of the list.
+        std::vector<std::filesystem::path> generatedExtractionFiles(const std::filesystem::path& dir,
+                                                                    const std::string& pattern) {
+            std::vector<std::filesystem::path> files;
+            std::error_code ec;
+            for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+                std::error_code type_ec;
+                if (!it->is_regular_file(type_ec))
+                    continue;
+                const std::string name = lfs::core::path_to_utf8(it->path().filename());
+                if (name == "extraction_metadata.json" || io::isGeneratedFrameFilename(pattern, name))
+                    files.push_back(it->path());
+            }
+            return files;
+        }
+
     } // namespace
 
     VideoExtractorDialog::VideoExtractorDialog()
@@ -1483,23 +1500,11 @@ namespace lfs::gui {
             beginExtractionFromUi();
         } else if (id == "overwrite-yes") {
             if (pending_params_set_) {
-                // Clear the folder
-                const auto& dir = pending_params_.output_dir;
-                if (std::filesystem::exists(dir)) {
-                    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
-                        if (!entry.is_regular_file())
-                            continue;
-                        const auto ext = entry.path().extension().string();
-                        std::string lower;
-                        lower.reserve(ext.size());
-                        for (auto c : ext)
-                            lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-                        if (lower == ".jpg" || lower == ".jpeg" || lower == ".png" ||
-                            entry.path().filename() == "extraction_metadata.json") {
-                            std::error_code ec;
-                            std::filesystem::remove(entry.path(), ec);
-                        }
-                    }
+                // Remove only what this extraction would write; other files stay.
+                for (const auto& path : generatedExtractionFiles(pending_params_.output_dir,
+                                                                 pending_params_.filename_pattern)) {
+                    std::error_code ec;
+                    std::filesystem::remove(path, ec);
                 }
                 pending_params_set_ = false;
                 if (overwrite_overlay_el_)
@@ -1835,30 +1840,13 @@ namespace lfs::gui {
         params.convert_hdr_to_sdr = hdr_to_sdr_;
         params.rotation = rotation_deg_;
 
-        // Check if output folder already contains generated extraction files
-        if (std::filesystem::exists(output_dir_)) {
-            bool has_generated = false;
-            for (const auto& entry : std::filesystem::directory_iterator(output_dir_)) {
-                if (!entry.is_regular_file())
-                    continue;
-                const auto ext = entry.path().extension().string();
-                std::string ext_lower;
-                ext_lower.reserve(ext.size());
-                for (auto c : ext)
-                    ext_lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-                if (ext_lower == ".jpg" || ext_lower == ".jpeg" || ext_lower == ".png" ||
-                    entry.path().filename() == "extraction_metadata.json") {
-                    has_generated = true;
-                    break;
-                }
-            }
-            if (has_generated) {
-                pending_params_ = params;
-                pending_params_set_ = true;
-                if (overwrite_overlay_el_)
-                    overwrite_overlay_el_->SetClass("hidden", false);
-                return;
-            }
+        // Ask before replacing frames or metadata that an extraction with this naming wrote.
+        if (!generatedExtractionFiles(output_dir_, params.filename_pattern).empty()) {
+            pending_params_ = params;
+            pending_params_set_ = true;
+            if (overwrite_overlay_el_)
+                overwrite_overlay_el_->SetClass("hidden", false);
+            return;
         }
 
         stop_extraction_requested_.store(false);
