@@ -680,6 +680,7 @@ set(TEST_FILES
     test_context_menu_placement.cpp
     test_rml_static_style_boundaries.cpp
     test_sequencer_regressions.cpp
+    test_timeline_save_budget.cpp
     test_tensor_storage_version.cpp
     test_modal_registry_regression.cpp
     test_tensor_nn_ops.cpp

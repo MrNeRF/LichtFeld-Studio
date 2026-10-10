@@ -318,6 +318,11 @@ namespace lfs::sequencer {
 
     bool Timeline::saveToJson(const std::string& path) const {
         try {
+            const auto json_bytes = saveToJson().dump(2);
+            if (json_bytes.size() > MAX_TIMELINE_JSON_BYTES) {
+                LOG_ERROR("Timeline output exceeds the 16 MiB file budget: {}", path);
+                return false;
+            }
             const std::filesystem::path path_fs = lfs::core::utf8_to_path(path);
             if (auto result = lfs::io::ensure_output_parent_directory(path_fs); !result) {
                 LOG_ERROR("Failed to prepare timeline output '{}': {}", path, result.error().format());
@@ -333,7 +338,7 @@ namespace lfs::sequencer {
                 LOG_ERROR("Failed to open timeline file: {}", path);
                 return false;
             }
-            file << saveToJson().dump(2);
+            file << json_bytes;
             file.close();
             if (!file) {
                 LOG_ERROR("Failed to write complete timeline file: {}", path);
