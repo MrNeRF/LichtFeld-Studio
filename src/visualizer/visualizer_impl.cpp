@@ -3298,14 +3298,7 @@ namespace lfs::vis {
         if (trainer_manager_ &&
             (trainer_manager_->isTrainingActive() ||
              trainer_manager_->isCompletionPending())) {
-            cmd::LoadFile{
-                .path = path,
-                .is_dataset = false,
-                .stop_training = true,
-                .discard_changes = true,
-                .replace = true}
-                .emit();
-            return {};
+            return std::unexpected("Cannot replace the scene until training has stopped.");
         }
         return data_loader_->loadPLY(path);
     }

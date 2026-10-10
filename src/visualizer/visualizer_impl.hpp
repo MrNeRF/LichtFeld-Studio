@@ -288,6 +288,8 @@ namespace lfs::vis {
         JobRegistry job_registry_;
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
+        friend class VisualizerImplResetTest_DirectSplatLoadRejectsActiveTrainingWithoutConsent_Test;
+        friend class VisualizerImplResetTest_DirectSplatLoadWithoutActiveTrainingStillReplacesScene_Test;
         friend class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
         friend class VisualizerImplResetTest_AsyncTrainingBindReturnsBeforeSlowWriteAndCoalescesStarts_Test;
         friend class VisualizerImplResetTest_AsyncTrainingBindFailureDoesNotStart_Test;
