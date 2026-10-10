@@ -361,6 +361,13 @@ def preferences_panel_module(monkeypatch):
         return False
 
     lf_stub.get_render_settings = lambda: state.render_settings
+    state.navigation_up_axis = "legacy_y"
+    state.navigation_up_calls = []
+    lf_stub.get_navigation_up_axis = lambda: state.navigation_up_axis
+    def set_navigation_up_axis(axis, align_grid=False):
+        state.navigation_up_axis = axis
+        state.navigation_up_calls.append((axis, align_grid))
+    lf_stub.set_navigation_up_axis = set_navigation_up_axis
     lf_stub.get_camera_navigation_mode = lambda: "orbit"
     lf_stub.set_camera_navigation_mode = lambda _mode: None
     lf_stub.get_camera_view_snap_enabled = lambda: False
@@ -1141,3 +1148,18 @@ def test_preferences_keymap_rows_are_created_when_expanded(preferences_panel_mod
 
     assert panel._keymap._rows_built is True
     assert records["binding_rows"]
+
+
+def test_navigation_vertical_is_project_scoped_and_rejects_invalid_selection(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    assert panel._navigation_up_index() == "0"
+    panel._set_navigation_up_index("1")
+    assert state.navigation_up_calls == [("data_z", False)]
+    assert panel._navigation_up_index() == "1"
+    panel._set_navigation_up_index("invalid")
+    panel._set_navigation_up_index("2")
+    assert len(state.navigation_up_calls) == 1
+    panel._set_navigation_up_index("0")
+    assert state.navigation_up_calls[-1] == ("legacy_y", False)

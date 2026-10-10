@@ -100,11 +100,15 @@ namespace lfs::vis {
         [[nodiscard]] CameraNavigationMode cameraNavigationMode() const { return camera_navigation_mode_; }
         void setCameraNavigationMode(CameraNavigationMode mode);
         void applyNavigationSpeedPreferences(float zoom_speed, float navigation_speed);
+        NavigationUpAxis navigationUpAxis() const { return viewport_.camera.navigationUpAxis(); }
+        void setNavigationUpAxis(NavigationUpAxis axis, bool align_grid = false);
         [[nodiscard]] bool cameraViewSnapEnabled() const { return camera_view_snap_enabled_; }
         void setCameraViewSnapEnabled(bool enabled) { camera_view_snap_enabled_ = enabled; }
         void restoreProjectNavigation(
             CameraNavigationMode mode,
-            bool view_snap_enabled) {
+            bool view_snap_enabled,
+            NavigationUpAxis up_axis = NavigationUpAxis::LegacyY) {
+            setNavigationUpAxis(up_axis);
             setCameraNavigationMode(mode);
             camera_view_snap_enabled_ =
                 view_snap_enabled;

@@ -2943,6 +2943,23 @@ NB_MODULE(lichtfeld, m) {
         },
         nb::arg("mode"), "Set the active camera navigation mode");
     m.def(
+        "get_navigation_up_axis", []() -> std::string {
+            const auto* controller = lfs::vis::InputController::instance();
+            return std::string(lfs::vis::navigationUpAxisName(
+                controller ? controller->navigationUpAxis() : lfs::vis::NavigationUpAxis::LegacyY));
+        },
+        "Get the project navigation vertical: legacy_y or data_z");
+    m.def(
+        "set_navigation_up_axis", [](const std::string& axis, bool align_grid) {
+            const auto parsed = lfs::vis::navigationUpAxisFromName(axis);
+            if (!parsed)
+                throw std::invalid_argument("navigation up axis must be legacy_y or data_z");
+            if (auto* controller = lfs::vis::InputController::instance())
+                controller->setNavigationUpAxis(*parsed, align_grid);
+        },
+        nb::arg("axis"), nb::arg("align_grid") = false,
+        "Set the project navigation vertical without transforming scene data or camera poses; optionally align both panel grids");
+    m.def(
         "get_camera_view_snap_enabled", []() -> bool {
             const auto* controller = lfs::vis::InputController::instance();
             return controller ? controller->cameraViewSnapEnabled() : false;

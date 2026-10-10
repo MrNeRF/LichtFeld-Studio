@@ -554,6 +554,24 @@ namespace lfs::vis {
         }
     }
 
+    void InputController::setNavigationUpAxis(const NavigationUpAxis axis, const bool align_grid) {
+        clearViewportDragState();
+        clearWasdMomentumViewport();
+        orbit_coast_viewport_ = nullptr;
+        pan_coast_viewport_ = nullptr;
+        viewport_.camera.setNavigationUpAxis(axis);
+        if (viewer_) {
+            if (auto* rendering = viewer_->getRenderingManager()) {
+                rendering->projectSecondaryViewport().camera.setNavigationUpAxis(axis);
+                if (align_grid) {
+                    const int plane = axis == NavigationUpAxis::DataZ ? 2 : 1;
+                    rendering->setGridPlaneForPanel(SplitViewPanelId::Left, plane);
+                    rendering->setGridPlaneForPanel(SplitViewPanelId::Right, plane);
+                }
+            }
+        }
+    }
+
     void InputController::applyNavigationSpeedPreferences(const float zoom_speed,
                                                           const float navigation_speed) {
         viewport_.camera.setZoomSpeed(zoom_speed);
