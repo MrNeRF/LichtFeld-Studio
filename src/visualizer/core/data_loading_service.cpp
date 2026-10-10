@@ -10,6 +10,7 @@
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/rml_modal_overlay.hpp"
 #include "io/splat_path.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer_impl.hpp"
@@ -58,13 +59,21 @@ namespace lfs::vis {
 
     void DataLoadingService::handleLoadFileCommand(
         const lfs::core::events::cmd::LoadFile& cmd) {
-        // Resolve replacement only when this batch reaches the front. An earlier
-        // import may still be establishing the first scene node.
-        if (cmd.user_batch && cmd.paths.size() > 1 && !cmd.is_dataset && viewer_ && viewer_->getGuiManager() &&
-            viewer_->getGuiManager()->asyncTasks().isImporting()) {
+        // User drops, including single files, wait for the current import. API
+        // requests keep their busy rejection; checkpoints keep their own flow.
+        // Resolve replacement only when the drop reaches the front. A confirmed
+        // head resumes ahead of later drops once the loader is idle.
+        if (cmd.user_batch && !cmd.is_dataset && !isCheckpointFile(cmd.path) && viewer_ && viewer_->getGuiManager() &&
+            (viewer_->getGuiManager()->asyncTasks().isImporting() ||
+             (!pending_imports_.empty() && !cmd.discard_changes))) {
             pending_imports_.push_back(cmd);
             return;
         }
+        startLoadFileCommand(cmd);
+    }
+
+    void DataLoadingService::startLoadFileCommand(
+        const lfs::core::events::cmd::LoadFile& cmd) {
         if (viewer_ && viewer_->preflightLoadFileWipe(cmd)) {
             return;
         }
@@ -136,11 +145,15 @@ namespace lfs::vis {
     }
 
     void DataLoadingService::processPendingImports() {
-        while (!pending_imports_.empty() && viewer_ && viewer_->getGuiManager() &&
-               !viewer_->getGuiManager()->asyncTasks().isImporting()) {
+        // A confirmation may defer the head request without starting an import.
+        // Do not drain later drops through that modal or in the same poll.
+        if (!pending_imports_.empty() && viewer_ && viewer_->getGuiManager() &&
+            !viewer_->getGuiManager()->asyncTasks().isImporting() &&
+            (!viewer_->getGuiManager()->modalOverlay() ||
+             !viewer_->getGuiManager()->modalOverlay()->isOpen())) {
             auto command = std::move(pending_imports_.front());
             pending_imports_.pop_front();
-            handleLoadFileCommand(command);
+            startLoadFileCommand(command);
         }
     }
 

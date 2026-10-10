@@ -52,6 +52,7 @@ namespace lfs::vis {
     private:
         void setupEventHandlers();
         void handleLoadFileCommand(const lfs::core::events::cmd::LoadFile& cmd);
+        void startLoadFileCommand(const lfs::core::events::cmd::LoadFile& cmd);
         void handleLoadCheckpointForTrainingCommand(
             const std::filesystem::path& checkpoint_path,
             const std::filesystem::path& dataset_path,

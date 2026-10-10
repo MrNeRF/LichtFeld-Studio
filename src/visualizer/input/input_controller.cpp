@@ -2560,7 +2560,7 @@ namespace lfs::vis {
                 .paths = splat_files,
                 .is_dataset = false,
                 .replace = false,
-                .user_batch = splat_files.size() > 1}
+                .user_batch = true}
                 .emit();
             LOG_INFO(
                 "Requesting confirmation before loading {} dropped splat/mesh file(s)",
@@ -2570,7 +2570,7 @@ namespace lfs::vis {
                 cmd::LoadFile{.path = splat_files.front(),
                               .is_dataset = false,
                               .paths = splat_files,
-                              .user_batch = splat_files.size() > 1}
+                              .user_batch = true}
                     .emit();
             }
         }
