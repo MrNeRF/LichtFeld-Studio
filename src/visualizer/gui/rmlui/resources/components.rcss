@@ -1161,6 +1161,7 @@ crf-curve {
 .disabled-overlay {
     opacity: 0.4;
     pointer-events: none;
+    focus: none;
 }
 
 /* ── Status text ───────────────────────────────────────── */

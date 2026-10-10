@@ -136,6 +136,13 @@ namespace lfs::vis::gui::rml_input {
             return value;
         };
         auto* focused = context.GetFocusElement();
+        // A control can become locked after it acquired focus. RmlUi retains that
+        // focus, so release it before dispatching queued text or key events.
+        if (focused && focused->GetComputedValues().focus() == Rml::Style::Focus::None) {
+            if (auto* document = focused->GetOwnerDocument())
+                document->Focus();
+            return consumed(true);
+        }
         const bool editable = isTextEditableElement(focused);
         if (event.kind == FrameInputEventKind::TextEditing) {
             return consumed(editable && handler && handler->handleTextEditing(event.text, event.editing_start, event.editing_length));
