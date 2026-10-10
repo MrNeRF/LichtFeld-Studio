@@ -168,7 +168,7 @@ namespace lfs::vis {
                                : lfs::rendering::normalizeViewerRasterBackend(requested_backend, p.gut);
         s.gut = lfs::rendering::isGutBackend(s.raster_backend);
         s.equirectangular = p.equirectangular;
-        enforceProjectionBackend(s);
+        enforceProjectionBackend(s, true);
         s.orthographic = p.orthographic;
         s.ortho_scale = p.ortho_scale;
         s.depth_view = p.depth_view;

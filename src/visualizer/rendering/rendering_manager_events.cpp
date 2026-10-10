@@ -203,7 +203,7 @@ namespace lfs::vis {
         }
         if (event.equirectangular) {
             settings_.equirectangular = *event.equirectangular;
-            enforceProjectionBackend(settings_);
+            enforceProjectionBackend(settings_, true);
             LOG_TRACE("Equirectangular rendering: {}", settings_.equirectangular ? "enabled" : "disabled");
         }
         markDirty(DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::BACKGROUND, lfs::vis::FrameReason::SceneChange);
@@ -272,6 +272,7 @@ namespace lfs::vis {
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
+            settings_.raster_backend_before_equirectangular.reset();
             result = split_view_service_.handleSceneCleared(settings_);
             syncGridPlanesLocked(settings_.grid_plane);
         }

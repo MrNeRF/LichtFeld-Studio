@@ -755,11 +755,7 @@ class RenderingPanel(Panel):
         settings = lf.get_render_settings()
         if not settings:
             return
-        enabled = bool(value)
-        current_backend = _normalize_raster_backend(getattr(settings, "raster_backend", ""))
-        if enabled and current_backend != "3dgut":
-            settings.raster_backend = "3dgut"
-        settings.equirectangular = enabled
+        settings.equirectangular = bool(value)
         self._sync_projection_state()
 
     def _environment_map_is_custom(self):
