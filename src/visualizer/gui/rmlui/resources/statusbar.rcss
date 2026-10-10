@@ -385,13 +385,13 @@ body {
 
 #fps-group {
     margin-left: 12dp;
-    gap: 8dp;
+    gap: 6dp;
 }
 
 .fps-metric {
     display: flex;
     align-items: center;
-    gap: 4dp;
+    gap: 3dp;
 }
 
 .fps-caption {
@@ -402,7 +402,13 @@ body {
 
 .fps-number {
     min-width: 26dp;
-    text-align: right;
+    text-align: left;
+    font-weight: bold;
+}
+
+#fps-label {
+    font-size: 10dp;
+    font-weight: bold;
 }
 
 #git-commit {
