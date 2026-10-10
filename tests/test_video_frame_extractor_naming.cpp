@@ -195,6 +195,12 @@ namespace lfs::gui {
             dialog.syncOutputPreview();
         }
         static void extracting(VideoExtractorDialog& dialog, bool active) { dialog.extracting_.store(active); }
+        static bool begin(VideoExtractorDialog& dialog, const std::filesystem::path& output) {
+            dialog.output_dir_ = output;
+            dialog.pending_params_set_ = false;
+            dialog.beginExtractionFromUi();
+            return dialog.pending_params_set_ || dialog.extracting_.load();
+        }
         static double end(const VideoExtractorDialog& dialog) { return dialog.trim_end_; }
 
         static bool attach(VideoExtractorDialog& dialog, Rml::ElementDocument* document) {
@@ -687,7 +693,9 @@ namespace {
                  {"100%%_%05d", "100%_00007"},
                  {"frame_%0000d", "frame_00007"},
                  {"", "frame_7"},
-                 {"%d_%06d", "7_000007"}}) {
+                 {"%d_%06d", "7_000007"},
+                 {"{{video}}_%d", "{video}_7"},
+                 {"{{{video}}}_%d", "{video}_7"}}) {
             std::string pattern, error;
             ASSERT_TRUE(NamingAccess::naming(dialog, 4, custom, "video.mp4", pattern, error));
             EXPECT_EQ(lfs::io::formatFrameFilenameStem(pattern, 7), result);
@@ -704,15 +712,20 @@ namespace {
     TEST(VideoExtractorNaming, RejectsInvalidPatternsWithoutTruncatingValidLongInput) {
         lfs::gui::VideoExtractorDialog dialog;
         for (const auto& custom : {std::string("{unknown}_%d"), std::string("{video_%d"),
-                                   std::string("../frame_%d"), std::string("C:\\frame_%d"),
-                                   std::string("CON.%d"), std::string("x_%d."), std::string("x_%d "),
-                                   std::string("bad\0name_%d", 11), std::string(250, 'a') + "%d"}) {
+                                   std::string("../frame_%d"), std::string("bad\0name_%d", 11)}) {
             std::string pattern, error;
             EXPECT_FALSE(NamingAccess::naming(dialog, 4, custom, "video.mp4", pattern, error)) << custom;
             EXPECT_FALSE(error.empty());
         }
         std::string pattern, error;
-        const std::string custom = std::string(80, 'a') + "_%05d";
+        for (const auto& custom : {"C:\\frame_%d", "CON.%d", "x_%d.", "x_%d ", "CONIN$.%d", "COM\xc2\xb9.%d"}) {
+#ifdef _WIN32
+            EXPECT_FALSE(NamingAccess::naming(dialog, 4, custom, "video.mp4", pattern, error));
+#else
+            EXPECT_TRUE(NamingAccess::naming(dialog, 4, custom, "video.mp4", pattern, error));
+#endif
+        }
+        const std::string custom = std::string(250, 'a') + "_%05d";
         ASSERT_TRUE(NamingAccess::naming(dialog, 4, custom, "video.mp4", pattern, error));
         EXPECT_EQ(pattern, custom);
     }
@@ -825,6 +838,46 @@ namespace {
         EXPECT_TRUE(input->HasAttribute("disabled"));
         NamingAccess::extracting(*dialog, false);
     }
+    TEST_F(VideoExtractorNamingUiTest, KeyboardEditingAndBlurPreserveCustomPattern) {
+        choose(4);
+        ASSERT_TRUE(input->Focus());
+        input->SetSelectionRange(0, static_cast<int>(input->GetValue().size()));
+        context->ProcessTextInput("{{label}}_{video}_%06d");
+        sync();
+        EXPECT_EQ(input->GetValue(), "{{label}}_{video}_%06d");
+        ASSERT_TRUE(select->Focus());
+        sync();
+        choose(2);
+        choose(4);
+        EXPECT_EQ(input->GetValue(), "{{label}}_{video}_%06d");
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, SourceChangesRefreshPreviewAndInvalidPatternBlocksRealStart) {
+        TempDir temp("naming_source_change");
+        const auto first = temp.path / "first.mp4";
+        const auto second = temp.path / "second.mp4";
+        ASSERT_TRUE(writeProbedVideo(first, "mp4", AV_CODEC_ID_MPEG4, 50, 0));
+        ASSERT_TRUE(writeProbedVideo(second, "mp4", AV_CODEC_ID_MPEG4, 50, 0));
+        choose(4);
+        enter("{video}_custom_%05d");
+        ASSERT_TRUE(dialog->openVideoPath(first));
+        sync();
+        EXPECT_NE(document->GetElementById("pattern-example")->GetInnerRML().find("first_custom_00001.png"), std::string::npos);
+        ASSERT_TRUE(dialog->openVideoPath(second));
+        sync();
+        EXPECT_EQ(input->GetValue(), "{video}_custom_%05d");
+        EXPECT_NE(document->GetElementById("pattern-example")->GetInnerRML().find("second_custom_00001.png"), std::string::npos);
+        const auto output = temp.path / "frames";
+        std::filesystem::create_directories(output);
+        enter("{invalid}_%d");
+        EXPECT_FALSE(NamingAccess::begin(*dialog, output));
+        sync();
+        EXPECT_TRUE(document->GetElementById("btn-start")->HasAttribute("disabled"));
+        EXPECT_TRUE(std::filesystem::is_empty(output));
+        enter("{video}_%05d");
+        EXPECT_FALSE(document->GetElementById("btn-start")->HasAttribute("disabled"));
+    }
+
     TEST_F(VideoExtractorNamingUiTest, RealRequestMatchesPreviewAndFormat) {
         TempDir temp("naming_gui_request");
         const auto source = temp.path / "100%05d.mp4";

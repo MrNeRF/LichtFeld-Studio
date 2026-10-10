@@ -1734,7 +1734,10 @@ namespace lfs::gui {
         pattern.clear();
         error.clear();
         for (size_t i = 0; i < source.size();) {
-            if (source.substr(i, 7) == "{video}") {
+            if (source.substr(i, 2) == "{{" || source.substr(i, 2) == "}}") {
+                pattern += source[i];
+                i += 2;
+            } else if (source.substr(i, 7) == "{video}") {
                 // Insert the source stem literally: percent signs must not become frame tokens.
                 for (const char c : video_name) {
                     pattern += c;
@@ -1749,28 +1752,29 @@ namespace lfs::gui {
                 pattern += source[i++];
             }
         }
-        // Validate complete generated components, including the longest existing frame index.
+        // Keep platform-specific filesystem limits with the existing writer. In particular,
+        // a UTF-8 byte limit would incorrectly reject valid Unicode names on Windows.
         for (const int number : {1, std::numeric_limits<int>::max()}) {
             const std::string stem = io::formatFrameFilenameStem(pattern, number);
-            if (stem.size() > 251) {
-                error = LOC("video_extractor.naming_error_length");
-                return false;
-            }
-            if (stem.empty() || stem.back() == '.' || stem.back() == ' ' ||
-                std::any_of(stem.begin(), stem.end(), [](const unsigned char c) {
-                    return c < 32 || std::string_view("<>:\"/\\|?*").find(static_cast<char>(c)) != std::string_view::npos;
-                })) {
-                error = LOC("video_extractor.naming_error_filename");
-                return false;
-            }
+            bool invalid = stem.empty() || stem.find('\0') != std::string::npos || stem.find('/') != std::string::npos;
+#ifdef _WIN32
+            invalid |= !stem.empty() && (stem.back() == '.' || stem.back() == ' ');
+            invalid |= std::any_of(stem.begin(), stem.end(), [](const unsigned char c) {
+                return c < 32 || std::string_view("<>:\"\\|?*").find(static_cast<char>(c)) != std::string_view::npos;
+            });
             std::string base = stem.substr(0, stem.find('.'));
             while (!base.empty() && base.back() == ' ')
                 base.pop_back();
             for (char& c : base)
                 c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-            if (base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" ||
-                (base.size() == 4 && (base.starts_with("COM") || base.starts_with("LPT")) &&
-                 base[3] >= '1' && base[3] <= '9')) {
+            const std::string_view suffix = base.size() >= 3 ? std::string_view(base).substr(3) : std::string_view{};
+            invalid |= base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" ||
+                       base == "CONIN$" || base == "CONOUT$" ||
+                       ((base.starts_with("COM") || base.starts_with("LPT")) &&
+                        ((suffix.size() == 1 && suffix[0] >= '1' && suffix[0] <= '9') ||
+                         suffix == "\xc2\xb9" || suffix == "\xc2\xb2" || suffix == "\xc2\xb3"));
+#endif
+            if (invalid) {
                 error = LOC("video_extractor.naming_error_filename");
                 return false;
             }
