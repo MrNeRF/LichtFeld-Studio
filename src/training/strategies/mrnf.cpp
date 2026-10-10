@@ -505,6 +505,11 @@ namespace lfs::training {
         _strategy_required_peak_bytes = 0;
         _strategy_allocated_peak_bytes = 0;
         _topology_frozen = false;
+        _exchange_importance = Tensor();
+        _exchange_dominance = Tensor();
+        _exchange_free_before_growth = Tensor();
+        _exchange_windows = 0;
+        _exchange_dominance_written = false;
         _densify_n_required_peak_bytes = 0;
         _densify_n_allocated_peak_bytes = 0;
         _densify_child_required_peak_bytes = 0;
@@ -625,6 +630,10 @@ namespace lfs::training {
         // A point cloud that already fills the capacity leaves no room for seeds, so skip capturing views for them.
         if (n > 0 && (_params->max_cap <= 0 || static_cast<int64_t>(n) < int64_t{_params->max_cap}))
             _blob_seeder = std::make_unique<BlobSeeder>(_splat_data->means());
+        if (_params->growth_exchange > 0.0f) {
+            LOG_DEBUG("MRNF: growth exchange {:.1f}% of splats per refine at the cap until iter {}",
+                      100.0f * _params->growth_exchange, _params->grow_until_iter);
+        }
     }
 
     void MRNF::set_training_dataset(std::shared_ptr<CameraDataset> views) {
@@ -908,6 +917,8 @@ namespace lfs::training {
         morton::permute_row_tensor(_precomputed_edge_scores, perm);
         morton::permute_row_tensor(_edge_score_sum, perm);
         morton::permute_row_tensor(_free_mask, perm);
+        morton::permute_row_tensor(_exchange_importance, perm);
+        morton::permute_row_tensor(_exchange_dominance, perm);
         morton::permute_row_tensor(_far_field_mask, perm);
         publish_mean_step_far_mask();
     }
@@ -983,25 +994,32 @@ namespace lfs::training {
         const int pruned_count = static_cast<int>(host_counts[0]);
 
         if (pruned_count > 0) {
-            auto prune_indices = compact_bool_indices(prune_mask, static_cast<size_t>(pruned_count));
-            mark_as_free(prune_indices);
-            set_deleted_mask_rows(*_splat_data, _free_mask, prune_indices, true);
-
-            // Zero quaternion so deleted rows exit early in preprocessing.
-            auto zero_rotation = Tensor::zeros({static_cast<size_t>(pruned_count), 4}, _splat_data->rotation_raw().device());
-            _splat_data->rotation_raw().index_put_(prune_indices, zero_rotation);
-
-            const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
-            reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, prune_indices);
-            reset_optimizer_state_at_indices(*_optimizer, ParamType::Sh0, prune_indices);
-            reset_optimizer_state_at_indices(*_optimizer, ParamType::ShN, prune_indices, layout_rest);
-            reset_optimizer_state_at_indices(*_optimizer, ParamType::Scaling, prune_indices);
-            reset_optimizer_state_at_indices(*_optimizer, ParamType::Rotation, prune_indices);
-            reset_optimizer_state_at_indices(*_optimizer, ParamType::Opacity, prune_indices);
+            soft_delete_rows(compact_bool_indices(prune_mask, static_cast<size_t>(pruned_count)));
 
             LOG_DEBUG("MRNF: soft-pruned {} splats at iter {} (active: {}, total slots: {})",
                       pruned_count, iter, active_count(), _splat_data->size());
             LFS_COUNTER_ADD("strategy.mrnf.pruned", pruned_count);
+        }
+
+        const bool exchanging = growth_exchange_active(iter);
+        if (exchanging) {
+            update_exchange_importance();
+            // Exchanged slots are left to error-guided growth (the cap - active budget);
+            // only pruned slots go through the opacity-weighted replacement below.
+            const size_t active = active_count();
+            if (_exchange_windows > exchange_warmup_windows() &&
+                static_cast<double>(active) >= 0.98 * static_cast<double>(_params->max_cap)) {
+                const size_t exchanged = exchange_least_important(
+                    static_cast<size_t>(std::floor(_params->growth_exchange * static_cast<double>(active))));
+                LOG_DEBUG("MRNF: exchanged {} splats at iter {}", exchanged, iter);
+            }
+            _exchange_free_before_growth = _free_mask.is_valid()
+                                               ? _free_mask.slice(0, 0, n).clone()
+                                               : Tensor::zeros_bool({n}, Device::CUDA);
+        } else if (_exchange_importance.is_valid()) {
+            _exchange_importance = Tensor();
+            _exchange_dominance = Tensor();
+            _exchange_free_before_growth = Tensor();
         }
 
         grow_and_split(iter, pruned_count);
@@ -1015,6 +1033,9 @@ namespace lfs::training {
         } else if (_blob_seeder && (_blob_seeder->budget_exhausted() ||
                                     iter > static_cast<int>(_views ? _views->size() : 0))) {
             start_blob_seeding();
+        }
+        if (exchanging) {
+            protect_exchange_newborns();
         }
 
         enforce_max_cap();
@@ -1056,6 +1077,153 @@ namespace lfs::training {
         if (!morton_next) {
             lfs::core::Tensor::trim_memory_pool();
         }
+    }
+
+    void MRNF::soft_delete_rows(const lfs::core::Tensor& indices) {
+        using namespace lfs::core;
+        if (!indices.is_valid() || indices.numel() == 0) {
+            return;
+        }
+        mark_as_free(indices);
+        set_deleted_mask_rows(*_splat_data, _free_mask, indices, true);
+
+        // Zero quaternion so deleted rows exit early in preprocessing.
+        auto zero_rotation = Tensor::zeros({static_cast<size_t>(indices.numel()), 4}, _splat_data->rotation_raw().device());
+        _splat_data->rotation_raw().index_put_(indices, zero_rotation);
+
+        const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, indices);
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::Sh0, indices);
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::ShN, indices, layout_rest);
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::Scaling, indices);
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::Rotation, indices);
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::Opacity, indices);
+    }
+
+    bool MRNF::growth_exchange_active(const int iter) const {
+        // Without a finite cap growth always has budget, so there is nothing to exchange.
+        return _params && _params->growth_exchange > 0.0f && _params->max_cap > 0 && !_topology_frozen &&
+               iter < static_cast<int>(_params->grow_until_iter) &&
+               iter < static_cast<int>(_params->stop_refine);
+    }
+
+    float MRNF::exchange_importance_decay() const {
+        // Half-life of one pass over the training views.
+        const size_t views = _views ? _views->size() : 0;
+        if (views == 0) {
+            return 0.5f;
+        }
+        return std::pow(0.5f, static_cast<float>(_params->refine_every) / static_cast<float>(views));
+    }
+
+    int MRNF::exchange_warmup_windows() const {
+        // Rank only after the memory has seen every training view once.
+        constexpr int MIN_WINDOWS = 2;
+        const size_t views = _views ? _views->size() : 0;
+        const size_t every = std::max<size_t>(1, _params->refine_every);
+        return std::max(MIN_WINDOWS, static_cast<int>((views + every - 1) / every));
+    }
+
+    lfs::core::Tensor MRNF::dominance_scratch(const int iter) {
+        if (!growth_exchange_active(iter) || !_splat_data || _splat_data->size() == 0) {
+            return {};
+        }
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (!_exchange_dominance.is_valid() || _exchange_dominance.numel() != n) {
+            _exchange_dominance = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
+        }
+        return _exchange_dominance;
+    }
+
+    void MRNF::on_dominance_accumulated(const int /*iter*/) {
+        _exchange_dominance_written = true;
+    }
+
+    void MRNF::update_exchange_importance() {
+        using namespace lfs::core;
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        Tensor window;
+        if (_exchange_dominance_written && _exchange_dominance.is_valid() && _exchange_dominance.numel() == n) {
+            window = _exchange_dominance.clone();
+            _exchange_dominance.zero_();
+        } else {
+            window = visibility_accumulator(); // rasterizers without the dominance output
+        }
+        _exchange_dominance_written = false;
+        if (!window.is_valid() || window.numel() != n) {
+            return;
+        }
+        if (!_exchange_importance.is_valid() || _exchange_importance.numel() != n) {
+            // (Re)seeded, e.g. after a compaction: rank only after a fresh warm-up.
+            _exchange_importance = window.clone();
+            _exchange_windows = 1;
+            return;
+        }
+        _exchange_importance = window.maximum(_exchange_importance.mul(exchange_importance_decay()));
+        ++_exchange_windows;
+    }
+
+    size_t MRNF::exchange_least_important(size_t count) {
+        using namespace lfs::core;
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (count == 0 || !_exchange_importance.is_valid() || _exchange_importance.numel() != n) {
+            return 0;
+        }
+        Tensor eligible = _free_mask.is_valid() ? _free_mask.slice(0, 0, n).logical_not()
+                                                : Tensor::ones_bool({n}, Device::CUDA);
+        if (auto trainable = make_trainable_mask(*_splat_data, n, _splat_data->means().device());
+            trainable.is_valid()) {
+            eligible = eligible.logical_and(trainable);
+        }
+        count = std::min(count, static_cast<size_t>(eligible.count_nonzero()));
+        if (count == 0) {
+            return 0;
+        }
+        // Lowest importance first; free and frozen rows sort last.
+        const auto scores = _exchange_importance.masked_fill(eligible.logical_not(),
+                                                             std::numeric_limits<float>::infinity());
+        const auto victims = scores.sort(0, /*descending=*/false).second.slice(0, 0, count).contiguous();
+
+        // Exchange only while growth can respend the slots: grow_and_split grows grow_fraction x
+        // its candidates, so with grow_fraction 0 or no candidates the model would just shrink.
+        // Slots that growth does not fill at once are refilled over the next refines, and the
+        // caller's 98% guard pauses the exchange while the model is below the cap. (Capping each
+        // refine to its own growth demand removed most of the benefit on garden.)
+        Tensor victim_mask = Tensor::zeros_bool({n}, Device::CUDA);
+        victim_mask.index_put_(victims, Tensor::ones_bool({count}, Device::CUDA));
+        const auto growth_candidates =
+            compute_refine_candidates().logical_and(eligible).logical_and(victim_mask.logical_not());
+        if (std::round(static_cast<double>(growth_candidates.count_nonzero()) *
+                       static_cast<double>(_params->grow_fraction)) < 1.0) {
+            return 0;
+        }
+        soft_delete_rows(victims);
+        LFS_COUNTER_ADD("strategy.mrnf.exchanged", static_cast<int64_t>(count));
+        return count;
+    }
+
+    void MRNF::protect_exchange_newborns() {
+        using namespace lfs::core;
+        const size_t before = _exchange_free_before_growth.numel();
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (!_exchange_free_before_growth.is_valid() || !_exchange_importance.is_valid() ||
+            _exchange_importance.numel() != before || n < before) {
+            _exchange_free_before_growth = Tensor();
+            return;
+        }
+        // Children landed in previously free slots or in appended rows.
+        Tensor born = _free_mask.is_valid()
+                          ? _exchange_free_before_growth.logical_and(_free_mask.slice(0, 0, before).logical_not())
+                          : Tensor::zeros_bool({before}, Device::CUDA);
+        if (n > before) {
+            _exchange_importance = Tensor::cat(std::vector<Tensor>{_exchange_importance, Tensor::zeros({n - before}, Device::CUDA)}, 0);
+            born = Tensor::cat(std::vector<Tensor>{born, Tensor::ones_bool({n - before}, Device::CUDA)}, 0);
+        }
+        // Start newborns at the top of the current signal scale: a peak blend weight stays
+        // below 1, but the summed-visibility fallback routinely exceeds it.
+        const float newborn_importance = std::max(1.0f, _exchange_importance.max().item<float>());
+        _exchange_importance = _exchange_importance.masked_fill(born, newborn_importance);
+        _exchange_free_before_growth = Tensor();
     }
 
     lfs::core::Tensor MRNF::visibility_accumulator() const {
@@ -2430,6 +2598,12 @@ namespace lfs::training {
 
     void MRNF::deserialize(std::istream& is) {
         cancel_blob_seeding();
+        // Growth exchange importance is transient: after a resume it warms up again.
+        _exchange_importance = lfs::core::Tensor();
+        _exchange_dominance = lfs::core::Tensor();
+        _exchange_free_before_growth = lfs::core::Tensor();
+        _exchange_windows = 0;
+        _exchange_dominance_written = false;
         uint32_t magic = 0, version = 0;
         lfs::core::serialization_detail::read_exact(is, &magic, sizeof(magic), "MRNF magic");
         lfs::core::serialization_detail::read_exact(is, &version, sizeof(version), "MRNF version");
@@ -2567,6 +2741,11 @@ namespace lfs::training {
         std::swap(_edge_view_scores, source._edge_view_scores);
         std::swap(_edge_sample_count, source._edge_sample_count);
         std::swap(_free_mask, source._free_mask);
+        std::swap(_exchange_importance, source._exchange_importance);
+        std::swap(_exchange_dominance, source._exchange_dominance);
+        std::swap(_exchange_free_before_growth, source._exchange_free_before_growth);
+        std::swap(_exchange_windows, source._exchange_windows);
+        std::swap(_exchange_dominance_written, source._exchange_dominance_written);
         std::swap(_far_field_mask, source._far_field_mask);
         std::swap(_cam_centroid, source._cam_centroid);
         std::swap(_orbit_radius, source._orbit_radius);

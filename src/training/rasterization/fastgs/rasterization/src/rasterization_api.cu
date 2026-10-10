@@ -477,7 +477,8 @@ namespace fast_lfs::rasterization {
         unsigned shN_value_n_cells,
         unsigned shN_value_bits,
         const float* edge_weight_map,
-        float* edge_score_out) {
+        float* edge_score_out,
+        float* dominance_out) {
 
         // The forward chose the stream and chained the arena frame on it; the
         // backward shares the same context/arena frame and must match.
@@ -541,6 +542,7 @@ namespace fast_lfs::rasterization {
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(grad_w2c_ptr, "grad_w2c_ptr");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(edge_weight_map, "edge_weight_map");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(edge_score_out, "edge_score_out");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(dominance_out, "dominance_out");
         } catch (const std::exception& e) {
             release_forward_context(forward_ctx);
             last_backward_error = e.what();
@@ -671,6 +673,7 @@ namespace fast_lfs::rasterization {
                 shN_value_bits,
                 edge_weight_map,
                 edge_score_out,
+                dominance_out,
                 stream);
 
             // Mark frame as complete
