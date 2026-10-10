@@ -2788,6 +2788,7 @@ namespace lfs::io {
             bool depth_matched = false;
             bool normal_matched = false;
             std::array<int, 4> depth_sizes{}, normal_sizes{};
+            std::optional<Diagnostic> image_aspect_warning;
             size_t undistort_crop_failures = 0;
             size_t undistort_fisheye_crop_failures = 0;
         };
@@ -3000,6 +3001,29 @@ namespace lfs::io {
                     }
                     return *image_info;
                 };
+                // Advisory only: retain existing import behavior when a header cannot be probed.
+                if (image_file_present) {
+                    try {
+                        const auto [img_w, img_h, img_c] = get_image_info_cached();
+                        if (img_w > 0 && img_h > 0) {
+                            const double aspect_scale = (static_cast<double>(img_w) * cam_data.height) /
+                                                        (static_cast<double>(img_h) * cam_data.width);
+                            if (std::abs(aspect_scale - 1.0) > 0.01) {
+                                output.image_aspect_warning = Diagnostic{
+                                    .code = lfs::ErrorCode::InvalidArgument,
+                                    .message = std::format(
+                                        "Image '{}' is {}x{} but COLMAP camera {} is {}x{} (aspect ratio differs by {:.1f}%). "
+                                        "Intrinsics will be scaled independently in x and y; check for cropping or incorrect camera metadata.",
+                                        img.name, img_w, img_h, img.camera_id, cam_data.width, cam_data.height,
+                                        std::abs(aspect_scale - 1.0) * 100.0),
+                                    .fields = lfs::SmallFields{},
+                                };
+                            }
+                        }
+                    } catch (const std::exception& e) {
+                        LOG_DEBUG("Could not check image aspect ratio for '{}': {}", img.name, e.what());
+                    }
+                }
                 if (image_file_present && options.load_masks && !mask_path.empty()) {
                     auto [img_w, img_h, img_c] = get_image_info_cached();
                     auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(mask_path);
@@ -3223,6 +3247,28 @@ namespace lfs::io {
         }
 
         std::vector<Diagnostic> warnings;
+        // A whole cropped dataset would otherwise add one warning per image.
+        size_t aspect_mismatches = 0;
+        for (auto& output : assembled) {
+            if (!output.image_aspect_warning)
+                continue;
+            if (++aspect_mismatches > kMaxSkipSamples) {
+                LOG_DEBUG("{}", output.image_aspect_warning->message);
+                continue;
+            }
+            LOG_WARN("{}", output.image_aspect_warning->message);
+            warnings.push_back(std::move(*output.image_aspect_warning));
+        }
+        if (aspect_mismatches > kMaxSkipSamples) {
+            auto summary = std::format("{} more image(s) differ in aspect ratio from their COLMAP camera",
+                                       aspect_mismatches - kMaxSkipSamples);
+            LOG_WARN("{}", summary);
+            warnings.push_back(Diagnostic{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .message = std::move(summary),
+                .fields = lfs::SmallFields{}.add("count", static_cast<std::int64_t>(aspect_mismatches)),
+            });
+        }
         if (auto diagnostic = image_tally.to_diagnostic(
                 lfs::ErrorCode::DataLoss, "image(s) with an unusable camera")) {
             warnings.push_back(std::move(*diagnostic));
