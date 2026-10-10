@@ -33,6 +33,8 @@ extern "C" {
 #include <system_error>
 #include <vector>
 
+#include "core/event_bridge/localization_manager.hpp"
+
 namespace {
 
     using lfs::io::ExtractionMode;
@@ -174,6 +176,25 @@ namespace {
 namespace lfs::gui {
     class VideoExtractorDialogTestAccess {
     public:
+        static bool naming(VideoExtractorDialog& dialog, int selection, const std::string& custom,
+                           const std::filesystem::path& video, std::string& pattern, std::string& error) {
+            dialog.naming_selection_ = selection;
+            dialog.filename_pattern_ = custom;
+            dialog.video_path_ = video;
+            return dialog.resolveFilenamePattern(pattern, error);
+        }
+        static bool attach(VideoExtractorDialog& dialog, Rml::ElementDocument* document) {
+            dialog.document_ = document;
+            dialog.cacheElements();
+            dialog.syncLocale();
+            sync(dialog);
+            return dialog.elements_cached_;
+        }
+        static void sync(VideoExtractorDialog& dialog) {
+            dialog.syncControls();
+            dialog.syncOutputPreview();
+        }
+        static void extracting(VideoExtractorDialog& dialog, bool active) { dialog.extracting_.store(active); }
         static double end(const VideoExtractorDialog& dialog) { return dialog.trim_end_; }
 
         static bool attach(VideoExtractorDialog& dialog, Rml::ElementDocument* document) {
@@ -648,6 +669,182 @@ TEST(VideoFrameExtractorOutcome, ReportsExplicitCancellation) {
     EXPECT_EQ(extractor.lastOutcome(), lfs::io::ExtractionOutcome::Completed);
     EXPECT_TRUE(error.empty());
 }
+
+namespace {
+    using NamingAccess = lfs::gui::VideoExtractorDialogTestAccess;
+    TEST(VideoExtractorNaming, PresetsAndCustomPatternsPreserveLegacyNumbering) {
+        lfs::gui::VideoExtractorDialog dialog;
+        const std::array expected{"clip.test_frame_00001", "clip.test_00001", "frame_00001", "00001"};
+        for (int preset = 0; preset < 4; ++preset) {
+            std::string pattern, error;
+            ASSERT_TRUE(NamingAccess::naming(dialog, preset, "unused", "clip.test.mp4", pattern, error));
+            EXPECT_EQ(lfs::io::formatFrameFilenameStem(pattern, 1), expected[preset]);
+            EXPECT_NE(lfs::io::formatFrameFilenameStem(pattern, 13).find("00013"), std::string::npos);
+        }
+        for (const auto& [custom, result] : std::vector<std::pair<std::string, std::string>>{
+                 {"vacanza", "vacanza7"},
+                 {"%%", "%7"},
+                 {"100%%_%05d", "100%_00007"},
+                 {"frame_%0000d", "frame_00007"},
+                 {"", "frame_7"},
+                 {"%d_%06d", "7_000007"}}) {
+            std::string pattern, error;
+            ASSERT_TRUE(NamingAccess::naming(dialog, 4, custom, "video.mp4", pattern, error));
+            EXPECT_EQ(lfs::io::formatFrameFilenameStem(pattern, 7), result);
+        }
+    }
+    TEST(VideoExtractorNaming, SourceNameIsLiteralAndUnicodeWorks) {
+        lfs::gui::VideoExtractorDialog dialog;
+        std::string pattern, error;
+        ASSERT_TRUE(NamingAccess::naming(dialog, 4, "{video}_{video}_%06d", "100%05d{unknown}.mp4", pattern, error));
+        EXPECT_EQ(lfs::io::formatFrameFilenameStem(pattern, 7), "100%05d{unknown}_100%05d{unknown}_000007");
+        ASSERT_TRUE(NamingAccess::naming(dialog, 0, "", std::filesystem::u8path("caf\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac.test.mp4"), pattern, error));
+        EXPECT_EQ(lfs::io::formatFrameFilenameStem(pattern, 7), "caf\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac.test_frame_00007");
+    }
+    TEST(VideoExtractorNaming, RejectsInvalidPatternsWithoutTruncatingValidLongInput) {
+        lfs::gui::VideoExtractorDialog dialog;
+        for (const auto& custom : {std::string("{unknown}_%d"), std::string("{video_%d"),
+                                   std::string("../frame_%d"), std::string("C:\\frame_%d"),
+                                   std::string("CON.%d"), std::string("x_%d."), std::string("x_%d "),
+                                   std::string("bad\0name_%d", 11), std::string(250, 'a') + "%d"}) {
+            std::string pattern, error;
+            EXPECT_FALSE(NamingAccess::naming(dialog, 4, custom, "video.mp4", pattern, error)) << custom;
+            EXPECT_FALSE(error.empty());
+        }
+        std::string pattern, error;
+        const std::string custom = std::string(80, 'a') + "_%05d";
+        ASSERT_TRUE(NamingAccess::naming(dialog, 4, custom, "video.mp4", pattern, error));
+        EXPECT_EQ(pattern, custom);
+    }
+    TEST(VideoExtractorNaming, ResolvedPresetProducesRealFilesAndMetadata) {
+        TempDir temp("naming_real_files");
+        const auto source = temp.path / "100%05d.mp4";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 50, 0));
+        lfs::gui::VideoExtractorDialog dialog;
+        VideoFrameExtractor::Params params;
+        params.video_path = source;
+        params.output_dir = temp.path / "frames";
+        params.mode = ExtractionMode::INTERVAL;
+        params.frame_interval = 5;
+        params.end_time = 0.5;
+        params.generate_metadata = true;
+        std::string error;
+        ASSERT_TRUE(NamingAccess::naming(dialog, 0, "", source, params.filename_pattern, error));
+        VideoFrameExtractor extractor;
+        ASSERT_TRUE(extractor.extract(params, error)) << error;
+        EXPECT_TRUE(std::filesystem::exists(params.output_dir / "100%05d_frame_00001.png"));
+        EXPECT_TRUE(std::filesystem::exists(params.output_dir / "100%05d_frame_00006.png"));
+        EXPECT_FALSE(std::filesystem::exists(params.output_dir / "100%05d_frame_00002.png"));
+        std::ifstream metadata_file(params.output_dir / "extraction_metadata.json");
+        ASSERT_TRUE(metadata_file.good());
+        const auto metadata = nlohmann::json::parse(metadata_file);
+        EXPECT_EQ(metadata.at("filename_pattern").get<std::string>(), params.filename_pattern);
+    }
+
+    class NamingTestRenderInterface final : public Rml::RenderInterface {
+    public:
+        Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex>, Rml::Span<const int>) override { return 1; }
+        void RenderGeometry(Rml::CompiledGeometryHandle, Rml::Vector2f, Rml::TextureHandle) override {}
+        void ReleaseGeometry(Rml::CompiledGeometryHandle) override {}
+        Rml::TextureHandle LoadTexture(Rml::Vector2i& dimensions, const Rml::String&) override {
+            dimensions = {16, 16};
+            return 1;
+        }
+        Rml::TextureHandle GenerateTexture(Rml::Span<const Rml::byte>, Rml::Vector2i) override { return 1; }
+        void ReleaseTexture(Rml::TextureHandle) override {}
+        void EnableScissorRegion(bool) override {}
+        void SetScissorRegion(Rml::Rectanglei) override {}
+    };
+
+    class VideoExtractorNamingUiTest : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            ASSERT_TRUE(Rml::Initialise());
+            const auto root = std::filesystem::path(PROJECT_ROOT_PATH);
+            ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize((root / "src/visualizer/gui/resources/locales").string()));
+            ASSERT_TRUE(Rml::LoadFontFace((root / "src/visualizer/gui/assets/fonts/Inter-Regular.ttf").string()));
+            context = Rml::CreateContext("video_naming", {640, 900}, &renderer);
+            ASSERT_NE(context, nullptr);
+            document = context->LoadDocument((root / "src/visualizer/gui/rmlui/resources/video_extractor.rml").string());
+            ASSERT_NE(document, nullptr);
+            dialog = std::make_unique<lfs::gui::VideoExtractorDialog>();
+            ASSERT_TRUE(NamingAccess::attach(*dialog, document));
+            select = dynamic_cast<Rml::ElementFormControlSelect*>(document->GetElementById("naming-select"));
+            input = dynamic_cast<Rml::ElementFormControlInput*>(document->GetElementById("pattern-input"));
+            ASSERT_NE(select, nullptr);
+            ASSERT_NE(input, nullptr);
+            document->Show();
+            context->Update();
+        }
+        void TearDown() override {
+            if (context)
+                Rml::RemoveContext("video_naming");
+            if (dialog)
+                dialog->shutdown();
+            dialog.reset();
+            Rml::Shutdown();
+        }
+        void sync() {
+            NamingAccess::sync(*dialog);
+            context->Update();
+        }
+        void choose(int preset) {
+            select->SetSelection(preset);
+            sync();
+        }
+        void enter(const std::string& value) {
+            input->SetValue(value);
+            input->DispatchEvent(Rml::EventId::Change, {});
+            sync();
+        }
+        NamingTestRenderInterface renderer;
+        Rml::Context* context = nullptr;
+        Rml::ElementDocument* document = nullptr;
+        Rml::ElementFormControlSelect* select = nullptr;
+        Rml::ElementFormControlInput* input = nullptr;
+        std::unique_ptr<lfs::gui::VideoExtractorDialog> dialog;
+    };
+    TEST_F(VideoExtractorNamingUiTest, VisibilityCustomMemoryAndValidation) {
+        EXPECT_EQ(select->GetSelection(), 2);
+        auto* row = document->GetElementById("custom-pattern-row");
+        EXPECT_EQ(row->GetProperty<Rml::Style::Display>("display"), Rml::Style::Display::None);
+        choose(4);
+        EXPECT_NE(row->GetProperty<Rml::Style::Display>("display"), Rml::Style::Display::None);
+        enter("camera_%06d");
+        choose(0);
+        choose(4);
+        EXPECT_EQ(input->GetValue(), "camera_%06d");
+        enter("{unknown}");
+        EXPECT_NE(document->GetElementById("naming-error")->GetProperty<Rml::Style::Display>("display"), Rml::Style::Display::None);
+        EXPECT_TRUE(document->GetElementById("btn-start")->HasAttribute("disabled"));
+        choose(2);
+        EXPECT_EQ(document->GetElementById("naming-error")->GetProperty<Rml::Style::Display>("display"), Rml::Style::Display::None);
+        NamingAccess::extracting(*dialog, true);
+        sync();
+        EXPECT_TRUE(select->HasAttribute("disabled"));
+        EXPECT_TRUE(input->HasAttribute("disabled"));
+        NamingAccess::extracting(*dialog, false);
+    }
+    TEST_F(VideoExtractorNamingUiTest, RealRequestMatchesPreviewAndFormat) {
+        TempDir temp("naming_gui_request");
+        const auto source = temp.path / "100%05d.mp4";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 50, 0));
+        ASSERT_TRUE(dialog->openVideoPath(source));
+        const auto output = temp.path / "output";
+        std::filesystem::create_directories(output);
+        std::ofstream(output / "existing.png").put('x');
+        choose(0);
+        const auto request = NamingAccess::request(*dialog, output, false, false);
+        EXPECT_EQ(lfs::io::formatFrameFilenameStem(request.filename_pattern, 1), "100%05d_frame_00001");
+        EXPECT_NE(document->GetElementById("pattern-example")->GetInnerRML().find("100%05d_frame_00001"), std::string::npos);
+        auto* format = dynamic_cast<Rml::ElementFormControlSelect*>(document->GetElementById("format-select"));
+        ASSERT_NE(format, nullptr);
+        format->SetSelection(1);
+        sync();
+        EXPECT_NE(document->GetElementById("pattern-example")->GetInnerRML().find(".jpg"), std::string::npos);
+        EXPECT_EQ(std::filesystem::file_size(output / "existing.png"), 1);
+    }
+} // namespace
 
 TEST(VideoFrameExtractorOutputNaming, TrimmedRangeKeepsOriginalSourceFrameNumbers) {
     if (!cudaAvailable())
