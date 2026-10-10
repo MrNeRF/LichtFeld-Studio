@@ -202,6 +202,7 @@ namespace lfs::io::video {
         LFS_CUDA_LAUNCH_CHECK(stream, "io.video.rgb_to_yuv420p");
     }
 
+    template <bool FullRange>
     __global__ void nv12ToRgbKernel(
         const uint8_t* __restrict__ y_plane,
         const uint8_t* __restrict__ uv_plane,
@@ -229,13 +230,13 @@ namespace lfs::io::video {
         // R = 1.164 * (Y - 16) + 1.596 * (V - 128)
         // G = 1.164 * (Y - 16) - 0.813 * (V - 128) - 0.391 * (U - 128)
         // B = 1.164 * (Y - 16) + 2.018 * (U - 128)
-        const int c = y_val - 16;
+        const int c = FullRange ? y_val : y_val - 16;
         const int d = u - 128;
         const int e = v - 128;
 
-        const int r = (298 * c + 409 * e + 128) >> 8;
-        const int g = (298 * c - 100 * d - 208 * e + 128) >> 8;
-        const int b = (298 * c + 516 * d + 128) >> 8;
+        const int r = FullRange ? (256 * c + 359 * e + 128) >> 8 : (298 * c + 409 * e + 128) >> 8;
+        const int g = FullRange ? (256 * c - 88 * d - 183 * e + 128) >> 8 : (298 * c - 100 * d - 208 * e + 128) >> 8;
+        const int b = FullRange ? (256 * c + 454 * d + 128) >> 8 : (298 * c + 516 * d + 128) >> 8;
 
         const int rgb_idx = (y * width + x) * 3;
         rgb[rgb_idx] = clampU8(r);
@@ -251,7 +252,8 @@ namespace lfs::io::video {
         const int height,
         const int y_pitch,
         const int uv_pitch,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const bool full_range) {
 
         const int effective_y_pitch = (y_pitch > 0) ? y_pitch : width;
         const int effective_uv_pitch = (uv_pitch > 0) ? uv_pitch : width;
@@ -260,9 +262,15 @@ namespace lfs::io::video {
         const dim3 grid((width + BLOCK_SIZE - 1) / BLOCK_SIZE,
                         (height + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
-        nv12ToRgbKernel<<<grid, block, 0, stream>>>(
-            y_src, uv_src, rgb_dst, width, height, effective_y_pitch, effective_uv_pitch);
-        LFS_CUDA_LAUNCH_CHECK(stream, "io.video.nv12_to_rgb");
+        if (full_range) {
+            nv12ToRgbKernel<true><<<grid, block, 0, stream>>>(
+                y_src, uv_src, rgb_dst, width, height, effective_y_pitch, effective_uv_pitch);
+            LFS_CUDA_LAUNCH_CHECK(stream, "io.video.nv12_to_rgb");
+        } else {
+            nv12ToRgbKernel<false><<<grid, block, 0, stream>>>(
+                y_src, uv_src, rgb_dst, width, height, effective_y_pitch, effective_uv_pitch);
+            LFS_CUDA_LAUNCH_CHECK(stream, "io.video.nv12_to_rgb");
+        }
     }
 
     __global__ void rotateRgbKernel(

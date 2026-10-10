@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/windows/video_extractor_dialog.hpp"
+#include "io/video/frame_color_range.hpp"
 #include "io/video/video_encoder.hpp"
 #include "io/video_frame_extractor.hpp"
 #include "io/video_player.hpp"
@@ -36,6 +37,7 @@ extern "C" {
 #include <vector>
 
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/image_io.hpp"
 
 namespace {
 
@@ -174,6 +176,90 @@ namespace {
     }
 
 } // namespace
+
+class VideoColorRange : public ::testing::TestWithParam<const char*> {};
+
+TEST_P(VideoColorRange, PreviewAndExtractionPreserveLuminance) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "Requires NVDEC";
+    const std::string name = GetParam();
+    const auto path = std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/video" / name;
+    constexpr int width = 256;
+    constexpr int height = 256;
+    const auto check = [&](const uint8_t* pixels, int channels, int tolerance) {
+        ASSERT_NE(pixels, nullptr);
+        int max_error = 0;
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                const int expected = x;
+                for (int c = 0; c < 3; ++c)
+                    max_error = std::max(max_error, std::abs(pixels[(y * width + x) * channels + c] - expected));
+            }
+        }
+        EXPECT_LE(max_error, tolerance);
+    };
+    lfs::io::VideoPlayer player;
+    ASSERT_TRUE(player.open(path)) << player.takeError();
+    ASSERT_EQ(player.width(), width);
+    ASSERT_EQ(player.height(), height);
+    check(player.currentFrameData(), player.currentFrameChannels(), 2);
+    player.close();
+
+    TempDir temp("color_range");
+    for (const auto format : {lfs::io::ImageFormat::PNG, lfs::io::ImageFormat::JPG}) {
+        SCOPED_TRACE(format == lfs::io::ImageFormat::PNG ? "PNG" : "JPEG");
+        const auto output = temp.path / (format == lfs::io::ImageFormat::PNG ? "png" : "jpg");
+        std::filesystem::create_directories(output);
+        auto params = extractionParams(path, output);
+        params.end_time = -1.0;
+        params.format = format;
+        params.jpg_quality = 100;
+        VideoFrameExtractor extractor;
+        std::string error;
+        ASSERT_TRUE(extractor.extract(params, error)) << error;
+        const auto first = output / (format == lfs::io::ImageFormat::PNG ? "frame_1.png" : "frame_1.jpg");
+        auto [pixels, image_width, image_height, channels] = lfs::core::load_image(first);
+        ASSERT_NE(pixels, nullptr);
+        EXPECT_EQ(image_width, width);
+        EXPECT_EQ(image_height, height);
+        if (image_width == width && image_height == height)
+            check(pixels, channels, 2);
+        lfs::core::free_image(pixels);
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(Codecs, VideoColorRange,
+                         ::testing::Values("vp9_full.webm", "av1_full.mkv", "vp9_limited.webm",
+                                           "av1_limited.mkv", "h264_full.mp4", "hevc_full.mp4"));
+
+TEST(VideoColorRangeMetadata, OnlyRepairsFullRangeCuvidVp9AndAv1) {
+    for (const char* name : {"vp9_cuvid", "av1_cuvid", "h264_cuvid", "hevc_cuvid", "vp9", "libdav1d"}) {
+        SCOPED_TRACE(name);
+        AVCodec codec{};
+        codec.name = name;
+        AVCodecContext decoder{};
+        decoder.codec = &codec;
+        for (const auto stream_range : {AVCOL_RANGE_UNSPECIFIED, AVCOL_RANGE_MPEG, AVCOL_RANGE_JPEG}) {
+            for (const auto frame_range : {AVCOL_RANGE_UNSPECIFIED, AVCOL_RANGE_MPEG, AVCOL_RANGE_JPEG}) {
+                AVCodecParameters stream{};
+                stream.color_range = stream_range;
+                AVFrame frame{};
+                frame.color_range = frame_range;
+                frame.colorspace = AVCOL_SPC_BT709;
+                frame.color_trc = AVCOL_TRC_BT709;
+                frame.pts = 123;
+                lfs::io::video::restoreCuvidFullRange(&frame, &decoder, &stream);
+                const bool repair = (std::string_view(name) == "vp9_cuvid" ||
+                                     std::string_view(name) == "av1_cuvid") &&
+                                    stream_range == AVCOL_RANGE_JPEG && frame_range == AVCOL_RANGE_MPEG;
+                EXPECT_EQ(frame.color_range, repair ? AVCOL_RANGE_JPEG : frame_range);
+                EXPECT_EQ(frame.colorspace, AVCOL_SPC_BT709);
+                EXPECT_EQ(frame.color_trc, AVCOL_TRC_BT709);
+                EXPECT_EQ(frame.pts, 123);
+            }
+        }
+    }
+}
 
 namespace lfs::gui {
     class VideoExtractorDialogTestAccess {

@@ -7,6 +7,7 @@
 #include "core/path_utils.hpp"
 #include "hdr_libplacebo.hpp"
 #include "hdr_tonemap.hpp"
+#include "video/frame_color_range.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -943,6 +944,8 @@ namespace lfs::io {
                 av_frame_unref(frame_);
                 const int receive_result = avcodec_receive_frame(codec_ctx_, frame_);
                 if (receive_result == 0) {
+                    video::restoreCuvidFullRange(frame_, codec_ctx_,
+                                                 fmt_ctx_->streams[video_stream_idx_]->codecpar);
                     return convertFrameToBuffer() ? DecodeResult::Frame : DecodeResult::Error;
                 }
                 if (receive_result == AVERROR_EOF)
