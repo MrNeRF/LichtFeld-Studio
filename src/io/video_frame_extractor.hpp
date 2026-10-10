@@ -16,6 +16,9 @@ namespace lfs::io {
 
     // Supports %d, %0Nd zero-padding, %% escaping, and legacy %000 zero-padding.
     [[nodiscard]] std::string formatFrameFilenameStem(std::string_view pattern, int frame_number);
+    // True when the extractor writes `filename` (name only) for `pattern`: a frame stem with any
+    // positive frame number and padding width, followed by .png or .jpg.
+    [[nodiscard]] bool isGeneratedFrameFilename(std::string_view pattern, std::string_view filename);
     [[nodiscard]] std::size_t calculateFpsSampleCount(double start_time, double end_time,
                                                       double target_fps);
     [[nodiscard]] double fpsSampleTime(double start_time, double end_time,

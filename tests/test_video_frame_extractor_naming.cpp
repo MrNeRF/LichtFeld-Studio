@@ -27,10 +27,12 @@ extern "C" {
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 #include "core/event_bridge/localization_manager.hpp"
@@ -200,6 +202,17 @@ namespace lfs::gui {
             dialog.pending_params_set_ = false;
             dialog.beginExtractionFromUi();
             return dialog.pending_params_set_ || dialog.extracting_.load();
+        }
+        static bool pending(const VideoExtractorDialog& dialog) { return dialog.pending_params_set_; }
+        static void confirmOverwrite(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-yes"); }
+        static bool waitIdle(const VideoExtractorDialog& dialog) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+            while (dialog.extracting_.load()) {
+                if (std::chrono::steady_clock::now() > deadline)
+                    return false;
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            return true;
         }
         static double end(const VideoExtractorDialog& dialog) { return dialog.trim_end_; }
 
@@ -739,6 +752,62 @@ namespace {
         }
     }
 
+    TEST(VideoExtractorNaming, GeneratedFrameNamesFollowThePattern) {
+        using lfs::io::isGeneratedFrameFilename;
+        for (const auto* name : {"frame_00001.png", "frame_00012.jpg", "frame_1.png", "frame_1234567.png"})
+            EXPECT_TRUE(isGeneratedFrameFilename("frame_%05d", name)) << name;
+        for (const auto* name : {"frame_00000.png", "frame_00001.PNG", "frame_00001.jpeg", "frame_final_edit.png",
+                                 "frame_.png", "xframe_00001.png", "frame_00001x.png", "frame_00001.png.bak",
+                                 "IMG_1234.JPG", "holiday.png", "_DSC8679.JPG", "my_garden.jpeg",
+                                 "extraction_metadata.json"})
+            EXPECT_FALSE(isGeneratedFrameFilename("frame_%05d", name)) << name;
+        EXPECT_TRUE(isGeneratedFrameFilename("clip 50%%_{x}_frame_%05d", "clip 50%_{x}_frame_00003.png"));
+        EXPECT_FALSE(isGeneratedFrameFilename("clip 50%%_{x}_frame_%05d", "clip 50%%_{x}_frame_00003.png"));
+        EXPECT_TRUE(isGeneratedFrameFilename("shot_", "shot_7.png"));
+        EXPECT_FALSE(isGeneratedFrameFilename("shot_", "shot_.png"));
+        EXPECT_TRUE(isGeneratedFrameFilename("img2%03d", "img2001.png"));
+        EXPECT_FALSE(isGeneratedFrameFilename("img2%03d", "img2.png"));
+        for (const std::string pattern : {"frame_%05d", "%05d", "a%db%d", "x_%%_%0003", "{y}_%d_end", "plain"}) {
+            for (const int number : {1, 7, 99999, 123456, std::numeric_limits<int>::max()}) {
+                EXPECT_TRUE(isGeneratedFrameFilename(pattern, lfs::io::formatFrameFilenameStem(pattern, number) + ".png"))
+                    << pattern << ' ' << number;
+            }
+        }
+    }
+
+    TEST(VideoExtractorNaming, ExistingImagesInTheOutputFolderAreKept) {
+        TempDir temp("naming_keep_existing_images");
+        const auto source = temp.path / "clip.mp4";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 5, 0));
+        const auto output = temp.path / "frames";
+        std::filesystem::create_directories(output);
+        const std::vector<std::string> existing{"IMG_1234.JPG", "holiday.png", "frame_final_edit.png", "notes.txt"};
+        for (const auto& name : existing)
+            std::ofstream(output / name) << "existing";
+        lfs::gui::VideoExtractorDialog dialog;
+        ASSERT_TRUE(dialog.openVideoPath(source));
+
+        // Without earlier frames there is nothing to replace: the run starts without asking.
+        ASSERT_TRUE(NamingAccess::begin(dialog, output));
+        EXPECT_FALSE(NamingAccess::pending(dialog));
+        ASSERT_TRUE(NamingAccess::waitIdle(dialog));
+        EXPECT_TRUE(std::filesystem::exists(output / "frame_00001.png"));
+        for (const auto& name : existing)
+            EXPECT_TRUE(std::filesystem::exists(output / name)) << name;
+
+        // Earlier frames and metadata ask first; confirming removes only those.
+        std::ofstream(output / "frame_00099.jpg") << "earlier";
+        std::ofstream(output / "extraction_metadata.json") << "{}";
+        ASSERT_TRUE(NamingAccess::begin(dialog, output));
+        ASSERT_TRUE(NamingAccess::pending(dialog));
+        NamingAccess::confirmOverwrite(dialog);
+        ASSERT_TRUE(NamingAccess::waitIdle(dialog));
+        EXPECT_FALSE(std::filesystem::exists(output / "frame_00099.jpg"));
+        EXPECT_TRUE(std::filesystem::exists(output / "frame_00001.png"));
+        for (const auto& name : existing)
+            EXPECT_TRUE(std::filesystem::exists(output / name)) << name;
+    }
+
     TEST(VideoExtractorNaming, ResolvedPresetProducesRealFilesAndMetadata) {
         TempDir temp("naming_real_files");
         const auto source = temp.path / "100%05d.mp4";
@@ -896,6 +965,8 @@ namespace {
         const auto output = temp.path / "output";
         std::filesystem::create_directories(output);
         std::ofstream(output / "existing.png").put('x');
+        // An earlier frame with this naming captures the pending request.
+        std::ofstream(output / "100%05d_frame_00042.png").put('x');
         choose(0);
         const auto request = NamingAccess::request(*dialog, output, false, false);
         EXPECT_EQ(lfs::io::formatFrameFilenameStem(request.filename_pattern, 1), "100%05d_frame_00001");
