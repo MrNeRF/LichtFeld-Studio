@@ -64,6 +64,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_PendingCloseSuppressesBackgroundAutosave_Test;
     class VisualizerImplResetTest_StoppingTrainerBlocksAutosave_Test;
     class VisualizerImplResetTest_IdleMaintenanceKeepsEverySave_Test;
+    class VisualizerImplResetTest_NavigationVerticalRoundTripPreservesPosesAndGridChoices_Test;
     class VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptOrArmAutosave_Test;
     class VisualizerImplResetTest_SceneEditStillPromptsAndArmsAutosave_Test;
     class VisualizerImplResetTest_ParametersUnchangedRoundTripStaysClean_Test;
@@ -397,6 +398,7 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_PendingCloseSuppressesBackgroundAutosave_Test;
         friend class lfs::vis::VisualizerImplResetTest_StoppingTrainerBlocksAutosave_Test;
         friend class lfs::vis::VisualizerImplResetTest_IdleMaintenanceKeepsEverySave_Test;
+        friend class lfs::vis::VisualizerImplResetTest_NavigationVerticalRoundTripPreservesPosesAndGridChoices_Test;
         friend class lfs::vis::VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptOrArmAutosave_Test;
         friend class lfs::vis::VisualizerImplResetTest_SceneEditStillPromptsAndArmsAutosave_Test;
         friend class lfs::vis::VisualizerImplResetTest_ParametersUnchangedRoundTripStaysClean_Test;

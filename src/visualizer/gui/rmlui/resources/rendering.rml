@@ -107,6 +107,16 @@
         <input type="checkbox" data-checked="show_pivot" />
       </label>
     </div>
+    <div class="setting-row setting-row--aligned" data-tooltip="preferences.navigation_up_help">
+      <span class="setting-row__label-col">@tr:preferences.navigation_up_axis</span>
+      <div class="setting-row__control-col setting-row__control-col--fill">
+        <select data-value="navigation_up_idx">
+          <option value="0">@tr:preferences.navigation_up_legacy_y</option>
+          <option value="1">@tr:preferences.navigation_up_data_z</option>
+        </select>
+      </div>
+    </div>
+    <div class="text-muted">@tr:preferences.navigation_project_hint</div>
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.grid" data-keymap-action="toggle_grid">
       <span class="setting-row__label-col">{{label_show_grid}}</span>
       <label class="setting-row__control-col setting-row__control-col--checkbox">
@@ -116,12 +126,13 @@
     <div data-if="show_grid">
       <div class="setting-row setting-row--aligned" data-tooltip="tooltip.grid_plane">
         <span class="setting-row__label-col">{{label_grid_plane}}</span>
-        <div class="setting-row__control-col setting-row__control-col--fill">
+        <div class="setting-row__control-col setting-row__control-col--fill rendering-grid-plane">
           <select data-value="grid_plane">
             <option value="0" data-tooltip="tooltip.opt.grid_plane.yz">@tr:ui.grid_plane_yz</option>
             <option value="1" data-tooltip="tooltip.opt.grid_plane.xz">@tr:ui.grid_plane_xz</option>
             <option value="2" data-tooltip="tooltip.opt.grid_plane.xy">@tr:ui.grid_plane_xy</option>
           </select>
+          <button class="btn btn--secondary" data-event-click="align_navigation_grid" data-tooltip="preferences.align_navigation_grid">@tr:preferences.align_grid_short</button>
         </div>
       </div>
       <div class="setting-row setting-row--aligned" data-tooltip="tooltip.grid_opacity">

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "preferences.hpp"
+#include "visualizer/navigation_up_axis.hpp"
 
 #include "core/environment.hpp"
 #include "core/error.hpp"
@@ -459,6 +460,31 @@ namespace lfs::vis {
         impl_->values.erase("language");
         impl_->saveLocked();
     }
+    void UserPreferences::setNewProjectNavigation(const std::string_view axis, const bool align_grid) {
+        if (!navigationUpAxisFromName(axis))
+            throw std::invalid_argument("navigation up axis must be legacy_y or data_z");
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["new_project_navigation_up_axis"] = axis;
+        impl_->values["new_project_align_grid"] = align_grid;
+        impl_->saveLocked();
+    }
+    std::string UserPreferences::newProjectNavigationUpAxis() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("new_project_navigation_up_axis");
+        if (it == impl_->values.end() || !it->is_string())
+            return "legacy_y";
+        const auto axis = it->get<std::string>();
+        return navigationUpAxisFromName(axis) ? axis : "legacy_y";
+    }
+    bool UserPreferences::alignNewProjectGrid() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("new_project_align_grid");
+        return it != impl_->values.end() && it->is_boolean() ? it->get<bool>() : true;
+    }
+
     void UserPreferences::setCameraNavigation(const std::string& value) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();

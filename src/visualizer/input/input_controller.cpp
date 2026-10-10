@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "input/input_controller.hpp"
+#include "visualizer/app_store.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -463,6 +464,7 @@ namespace lfs::vis {
 
     void InputController::initialize() {
         instance_ = this;
+        applyNewProjectNavigationDefaults();
 
         // The GUI is initialized before this controller exists.
         if (const auto mode = cameraNavigationModeFromName(loadCameraNavigationPreference())) {
@@ -563,6 +565,12 @@ namespace lfs::vis {
         }
     }
 
+    void InputController::applyNewProjectNavigationDefaults() {
+        auto& preferences = UserPreferences::instance();
+        setNavigationUpAxis(navigationUpAxisFromName(preferences.newProjectNavigationUpAxis()).value_or(NavigationUpAxis::LegacyY),
+                            preferences.alignNewProjectGrid());
+    }
+
     void InputController::setNavigationUpAxis(const NavigationUpAxis axis, const bool align_grid) {
         clearViewportDragState();
         clearWasdMomentumViewport();
@@ -579,6 +587,8 @@ namespace lfs::vis {
                 }
             }
         }
+        auto& generation = app_store().render_settings_generation;
+        generation.set(generation.get() + 1);
     }
 
     void InputController::applyNavigationSpeedPreferences(const float zoom_speed,

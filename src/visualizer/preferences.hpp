@@ -42,6 +42,10 @@ namespace lfs::vis {
         [[nodiscard]] std::string language();
         void clearLanguage();
 
+        void setNewProjectNavigation(std::string_view axis, bool align_grid);
+        [[nodiscard]] std::string newProjectNavigationUpAxis();
+        [[nodiscard]] bool alignNewProjectGrid();
+
         void setCameraNavigation(const std::string& value);
         [[nodiscard]] std::string cameraNavigation();
         void setRememberCameraNavigation(bool enabled);

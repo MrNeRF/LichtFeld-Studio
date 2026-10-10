@@ -102,6 +102,7 @@ namespace lfs::vis {
         void applyNavigationSpeedPreferences(float zoom_speed, float navigation_speed);
         NavigationUpAxis navigationUpAxis() const { return viewport_.camera.navigationUpAxis(); }
         void setNavigationUpAxis(NavigationUpAxis axis, bool align_grid = false);
+        void applyNewProjectNavigationDefaults();
         [[nodiscard]] bool cameraViewSnapEnabled() const { return camera_view_snap_enabled_; }
         void setCameraViewSnapEnabled(bool enabled) { camera_view_snap_enabled_ = enabled; }
         void restoreProjectNavigation(

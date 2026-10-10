@@ -172,3 +172,12 @@ body {
     display: block;
     min-width: 0;
 }
+
+.rendering-grid-plane {
+    gap: 4dp;
+}
+
+.rendering-grid-plane > button {
+    flex-shrink: 0;
+    padding: 2dp 4dp;
+}
