@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """One set of Gallery verbs for cards, rows, menus, review and transfers."""
 from .gallery_messages import tr
+from .gallery_storage import gallery_quota, storage_requirement, GalleryStorageError, storage_message
 
 
 FILE_PROBLEMS = {"MISSING", "READING", "UNVERIFIED", "UNREADABLE", "UNSUPPORTED", "REPAIR_ONLY",
@@ -9,12 +10,17 @@ FILE_PROBLEMS = {"MISSING", "READING", "UNVERIFIED", "UNREADABLE", "UNSUPPORTED"
                  "DUPLICATE", "AMBIGUOUS"}
 
 
-def gallery_quota(facts):
-    quota, used, reserved = (facts.get(key) for key in ("quotaBytes", "usedBytes", "reservedBytes"))
-    if type(quota) is not int or quota < 0 or type(used) is not int or used < 0:
-        return None, 0, None
-    used += reserved if type(reserved) is int and reserved >= 0 else 0
-    return quota, used, max(0, quota - used)
+
+def prepared_upload_size(entry, facts):
+    size = entry.get("publication", {}).get("preparedBytes")
+    for job in reversed(facts.get("jobs", [])):
+        if (entry.get("commit_uuid") and job.get("project") == entry.get("id")
+                and job.get("commitUuid") == entry["commit_uuid"]
+                and job.get("kind") == "upload" and job.get("packaged")
+                and job.get("status") in ("completed", "error")
+                and (not facts.get("upload_format") or facts["upload_format"] == job.get("uploadFormat"))):
+            return job.get("total")
+    return size
 
 
 def gallery_eligibility(entry, facts):
@@ -36,8 +42,6 @@ def gallery_eligibility(entry, facts):
                 and job.get("kind") == "upload" and job.get("packaged")
                 and job.get("status") == "completed"):
             publication["checked"] = True
-            if not facts.get("upload_format") or facts["upload_format"] == job.get("uploadFormat"):
-                publication["preparedBytes"] = job.get("total")
             break
     failure = facts.get("preparationFailure") or facts.get("job") or {}
     if (commit and failure.get("project") == entry.get("id") and failure.get("commitUuid") == commit):
@@ -51,16 +55,20 @@ def gallery_eligibility(entry, facts):
         reasons.append("no_splats")
     if publication.get("externalPayloads"):
         reasons.append("external_payloads")
-    _, _, remaining = gallery_quota(facts)
-    if remaining is not None:
-        size = publication.get("preparedBytes")
-        replaced = facts.get("replacedBytes", 0)
-        replaced = replaced if type(replaced) is int and replaced >= 0 else 0
-        if (type(size) is int and max(0, size - replaced) > remaining) or (remaining == 0 and not replaced):
-            reasons.append("space")
+    quota, used, remaining = gallery_quota(facts)
+    size = prepared_upload_size(entry, facts)
+    # The native publisher embeds the selected encoding in a .licht package.
+    needed = storage_requirement(size, facts, facts.get("source_format", "licht"), facts.get("replacedBytes", 0))
+    space_reason = ""
+    if remaining is not None and needed is not None and (needed > remaining or used > quota):
+        reasons.append("space")
+        space_reason = storage_message(GalleryStorageError(needed, remaining, quota))
+    elif remaining == 0 and not facts.get("replacedBytes"):
+        reasons.append("space")
+        space_reason = tr("error.gallery_storage")
     return {"status": "blocked" if reasons else "eligible" if publication.get("checked") else "not_checked",
-            "reasons": reasons, "reason": "\n".join(tr("eligibility." + key) for key in reasons),
-            "remainingBytes": remaining}
+            "reasons": reasons, "reason": "\n".join(space_reason if key == "space" else tr("eligibility." + key) for key in reasons),
+            "remainingBytes": remaining, "spaceReason": space_reason}
 
 
 def gallery_actions(entry, facts):
@@ -183,7 +191,7 @@ def gallery_actions(entry, facts):
             blocked = [reason for reason in eligibility["reasons"] if reason != "connect"]
             label = connection_label_key if not connected else None
             add(verb, enabled=not busy and (not publishing or not blocked),
-                reason="\n".join(tr("eligibility." + reason) for reason in blocked) if publishing else "",
+                reason="\n".join(eligibility["spaceReason"] if reason == "space" else tr("eligibility." + reason) for reason in blocked) if publishing else "",
                 account=not publishing, label=label)
     if entry.get("remote_only"):
         add("pull_open", enabled=not busy)

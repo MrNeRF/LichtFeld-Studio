@@ -107,6 +107,18 @@ def transfer_rows(snapshot, history_limit=30):
                "can_resume": status in ("paused", "error", "queued") and job.get("retryable") is not False
                              and not job.get("batchQueued") and not snapshot.get("busy"),
                "can_cancel": status not in ("completed", "canceled")}
+        checkpoint = job.get("checkpoint") or {}
+        if job.get("kind", "upload") == "upload" and phase in ("error", "conflict", "paused", "interrupted") and checkpoint.get("uploadId"):
+            reserved = checkpoint.get("reservedBytes")
+            if reserved is None and not job.get("metadata", {}).get("replaceSceneId"):
+                reserved = total
+            detail = gallery_tr("info.reserves", size=format_size(reserved)) if reserved is not None else gallery_tr("info.reserves_unknown")
+            row["detail"] = " ".join(filter(None, (row["detail"], detail)))
+        elif phase == "error":
+            from .gallery_storage import is_localized_storage_message, is_storage_error
+            message = job.get("message", "")
+            if (is_storage_error(message) or is_localized_storage_message(message)) and not job.get("preparedRemoved"):
+                row["detail"] = gallery_tr("info.storage_retry")
         facts = dict(snapshot, job=job, activity=phase, freshness="diverged" if status == "conflict" else "unknown",
                      relationship="replaced" if job.get("handoffIntent") else "linked",
                      undoAvailable=job["id"] in snapshot.get("undoHistory", {}),

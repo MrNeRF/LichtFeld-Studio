@@ -252,7 +252,7 @@ class GalleryFilePanel(Panel):
             "show_format": lambda: not self._is_pull() and (self._review or {}).get("mode") == "publish",
             "connection_reason": lambda: tr("eligibility.connect") if not self._state.get("signed_in") or self._state.get("relink_required") else "",
             "eligibility_reason": self._eligibility_reason,
-            "estimate": lambda: tr("review.estimate", size=self._estimate()),
+            "estimate": self._upload_size_label,
             "checkpoint_warning": lambda: tr("conflict.checkpoint_loss") if any(row["id"] == "content" for row in (self._review or {}).get("groups", [])) else "",
             "replacement_warning": lambda: tr("replacement.warning", path=(self._review or {}).get("asset", {}).get("path", ""), title=((self._review or {}).get("scene") or {}).get("title", "")),
             "can_submit": self._can_submit,
@@ -264,12 +264,12 @@ class GalleryFilePanel(Panel):
             "show_unlinked_hint": lambda: bool((self._review or {}).get("unlinked")),
             "unlinked_copy": lambda: tr("review.unlinked_copy"),
             "submit_label": self._submit_label,
-            "format_hint": lambda: tr("format." + self._fields.get("upload_format", "auto") + "_hint"),
+            "format_hint": self._format_hint,
             "phone_warning": self._phone_warning,
             "show_phone_warning": lambda: bool(self._phone_warning()),
             "includes": lambda: (self._review or {}).get("includes", ""),
             "quota": lambda: (self._review or {}).get("quota", ""),
-            "warning": lambda: (self._review or {}).get("warning", ""),
+            "warning": self._space_warning,
             "error": lambda: self._error,
             "has_error": lambda: bool(self._error),
             "waiting": lambda: bool(self._state.get("busy")),
@@ -391,8 +391,20 @@ class GalleryFilePanel(Panel):
             return ""
         return tr("review.phone_limit", count=f"{count / 1e6:.1f}")
 
-    def _estimate(self):
+    def _format_hint(self):
+        text = tr("format." + self._fields.get("upload_format", "auto") + "_hint")
+        return text + " " + tr("review.ssog_levels") if self._resolved_format() == "ssog" else text
+
+    def _prepared_size(self):
+        from .gallery_actions import prepared_upload_size
+        return prepared_upload_size((self._review or {}).get("asset", {}), self._eligibility_facts())
+
+    def _upload_size_label(self):
         from .asset_format import format_size
+        size = self._prepared_size()
+        return tr("review.upload_size", size=format_size(size)) if size is not None else tr("review.estimate", size=self._estimate())
+
+    def _estimated_bytes(self):
         asset = (self._review or {}).get("asset", {})
         size = asset.get("publication", {}).get("estimatedBytes")
         link = self._state.get("links", {}).get(asset.get("id"), {})
@@ -400,7 +412,21 @@ class GalleryFilePanel(Panel):
             size = ((self._review or {}).get("scene") or {}).get("contentLength")
         if not size:
             size = estimate_upload_size(asset.get("publication", {}), self._resolved_format())
+        return size
+
+    def _estimate(self):
+        from .asset_format import format_size
+        size = self._estimated_bytes()
         return format_size(size) if size else tr("review.estimate_pending")
+
+    def _space_warning(self):
+        from .gallery_storage import gallery_quota
+        warning = (self._review or {}).get("warning", "")
+        if warning or self._prepared_size() is not None:
+            return warning
+        _, _, remaining = gallery_quota(self._state)
+        size = self._estimated_bytes()
+        return tr("quota.warning") if remaining is not None and size and size > remaining else ""
 
     def _finish(self, submitted):
         review, self._review = self._review, None

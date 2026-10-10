@@ -27,6 +27,7 @@ from .portal_security import redact, safe_filename
 from .credential_storage import FileBackend
 from .project_identity import ProjectPathIdentity
 from . import gallery_validation, gallery_preparation
+from .gallery_storage import is_storage_error
 from .gallery_logging import failure as log_failure, safe_url, safe_text, stage as log_stage
 
 
@@ -185,7 +186,7 @@ def friendly_error(exc):
                 "Embedded project asset checksum failed."):
             return "The downloaded file is damaged or was changed on the portal."
         if exc.status == 400 and portal_sentence(exc):
-            return redact(portal_sentence(exc))
+            return "gallery_portal:" + redact(portal_sentence(exc))
     if isinstance(status, int):
         key = {401: "authorization_expired", 403: "access", 404: "not_found",
                409: "http_conflict", 413: "too_large", 429: "portal_busy"}.get(status)
@@ -232,6 +233,7 @@ class GallerySync:
         self._quota_bytes = None
         self._used_bytes = None
         self._reserved_bytes = None
+        self._wrap_overhead_bytes = None
         self._hdr_backgrounds = None
         self._change_sequence = None
         self._completion = None
@@ -309,6 +311,7 @@ class GallerySync:
                     self._retire_update_download(job)
             pending_cleanup = [job for bucket in self._data["accounts"].values() for job in bucket["jobs"]
                                if job["status"] in ("error", "completed", "canceled") and job.get("ownedExport")
+                               and not (job["status"] == "error" and is_storage_error(job.get("message", "")))
                                and (not job.get("preparedRemoved") or job.get("cleanupPending"))]
             for job in pending_cleanup:
                 if job["status"] == "error":
@@ -428,6 +431,7 @@ class GallerySync:
                 "quotaBytes": self._quota_bytes if same else None,
                 "usedBytes": self._used_bytes if same else None,
                 "reservedBytes": self._reserved_bytes if same else None,
+                "wrapOverheadBytes": self._wrap_overhead_bytes if same else None,
                 "hdrBackgrounds": self._hdr_backgrounds if same else None,
                 "changeSequence": self._change_sequence if same else None,
                 "established": bool(same and self._owner and self._checked_at),
@@ -582,7 +586,7 @@ class GallerySync:
                             cache = {}
                     except (OSError, ValueError):
                         cache = {}
-                    self._quota_bytes = self._used_bytes = self._reserved_bytes = None
+                    self._quota_bytes = self._used_bytes = self._reserved_bytes = self._wrap_overhead_bytes = None
                     self._source_formats = []
                 cached = self.scenes if same else copy.deepcopy(cache.get("scenes", []))
                 sequence = self._change_sequence if same else cache.get("changeSequence")
@@ -641,6 +645,7 @@ class GallerySync:
                 self._quota_bytes = capabilities.get("quotaBytes")
                 self._used_bytes = capabilities.get("usedBytes")
                 self._reserved_bytes = capabilities.get("reservedBytes")
+                self._wrap_overhead_bytes = capabilities.get("wrapOverheadBytes")
                 self._hdr_backgrounds = capabilities.get("hdrBackgrounds")
                 self._change_sequence = getattr(client, "change_sequence", None)
                 version = capabilities.get("revisionDomains", 0)
@@ -1208,7 +1213,8 @@ class GallerySync:
                     exc = (ConnectionError("Gallery download connection closed before completion")
                         if job.get("kind") == "download" else GalleryTransferInvalid(
                             "The portal closed the upload without acknowledging it. Start a new upload."))
-                elif isinstance(exc, PortalHTTPError) and exc.status == 400 and portal_sentence(exc):
+                elif (isinstance(exc, PortalHTTPError) and exc.status == 400 and portal_sentence(exc)
+                      and not is_storage_error(portal_sentence(exc))):
                     exc = GalleryTransferInvalid(friendly_error(exc))
                 with self._lock:
                     job["failureReason"] = safe_text(f"{type(exc).__name__}: {exc}")
@@ -1232,7 +1238,7 @@ class GallerySync:
                     elif isinstance(exc, GalleryTransferCanceled) and job.get("preparation") and not job.get("packaged"):
                         job["message"] = "Preparation paused. Resume to prepare the saved scene and upload it."
                     self.message = job["message"]
-                    if job["status"] == "error" and job.get("ownedExport"):
+                    if job["status"] == "error" and job.get("ownedExport") and not is_storage_error(job["message"]):
                         job.update(requiresPreparation=True, retryable=True)
                 self._save()
                 if job.get("requiresPreparation"):
