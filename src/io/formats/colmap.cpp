@@ -1140,76 +1140,6 @@ namespace lfs::io {
     }
 
     // -----------------------------------------------------------------------------
-    //  Helper to scale camera intrinsics
-    // -----------------------------------------------------------------------------
-    static void scale_camera_intrinsics(CAMERA_MODEL model, std::vector<float>& params, float factor) {
-        switch (model) {
-        case CAMERA_MODEL::SIMPLE_PINHOLE:
-            params[0] /= factor; // f
-            params[1] /= factor; // cx
-            params[2] /= factor; // cy
-            break;
-
-        case CAMERA_MODEL::PINHOLE:
-            params[0] /= factor; // fx
-            params[1] /= factor; // fy
-            params[2] /= factor; // cx
-            params[3] /= factor; // cy
-            break;
-
-        case CAMERA_MODEL::SIMPLE_RADIAL:
-        case CAMERA_MODEL::RADIAL:
-            params[0] /= factor; // f
-            params[1] /= factor; // cx
-            params[2] /= factor; // cy
-            break;
-
-        case CAMERA_MODEL::OPENCV:
-        case CAMERA_MODEL::OPENCV_FISHEYE:
-        case CAMERA_MODEL::FULL_OPENCV:
-            params[0] /= factor; // fx
-            params[1] /= factor; // fy
-            params[2] /= factor; // cx
-            params[3] /= factor; // cy
-            break;
-
-        case CAMERA_MODEL::SIMPLE_RADIAL_FISHEYE:
-        case CAMERA_MODEL::RADIAL_FISHEYE:
-            params[0] /= factor; // f
-            params[1] /= factor; // cx
-            params[2] /= factor; // cy
-            break;
-
-        case CAMERA_MODEL::FOV:
-            params[0] /= factor; // fx
-            params[1] /= factor; // fy
-            params[2] /= factor; // cx
-            params[3] /= factor; // cy
-            break;
-
-        case CAMERA_MODEL::THIN_PRISM_FISHEYE:
-            params[0] /= factor; // fx
-            params[1] /= factor; // fy
-            params[2] /= factor; // cx
-            params[3] /= factor; // cy
-            break;
-
-        case CAMERA_MODEL::EQUIRECTANGULAR:
-            params[0] /= factor; // width
-            params[1] /= factor; // height
-            break;
-
-        default:
-            LOG_WARN("Unknown camera model for scaling");
-            if (params.size() >= 4) {
-                params[2] /= factor; // cx
-                params[3] /= factor; // cy
-            }
-            break;
-        }
-    }
-
-    // -----------------------------------------------------------------------------
     //  Helper to extract scale factor from folder name
     // -----------------------------------------------------------------------------
     static float extract_scale_from_folder(const std::string& images_folder) {
@@ -1497,10 +1427,6 @@ namespace lfs::io {
             for (int j = 0; j < param_cnt; j++) {
                 cam.params[j] = static_cast<float>(read_f64(cur, end, "cameras.bin parameter"));
                 valid = valid && std::isfinite(cam.params[j]);
-            }
-
-            if (scale_factor != 1.0f) {
-                scale_camera_intrinsics(it->second.first, cam.params, scale_factor);
             }
 
             if (!valid) {
@@ -2263,10 +2189,6 @@ namespace lfs::io {
                 }
                 continue;
             }
-            if (scale_factor != 1.0f) {
-                scale_camera_intrinsics(it->second.first, cam.params, scale_factor);
-            }
-
             const auto [_, inserted] = cams.emplace(cam.camera_id, std::move(cam));
             if (!inserted) {
                 throw_colmap_error(lfs::ErrorCode::DataLoss,
@@ -2799,6 +2721,15 @@ namespace lfs::io {
         case CAMERA_MODEL::FOV:
         default:
             return std::nullopt;
+        }
+        // Expand shared focal lengths before applying the exact ratio for each axis.
+        if (model != CAMERA_MODEL::EQUIRECTANGULAR) {
+            const float x_scale = static_cast<float>(cam_data.width) / static_cast<float>(cam_data.original_width);
+            const float y_scale = static_cast<float>(cam_data.height) / static_cast<float>(cam_data.original_height);
+            calibration.focal_x *= x_scale;
+            calibration.focal_y *= y_scale;
+            calibration.center_x *= x_scale;
+            calibration.center_y *= y_scale;
         }
         return calibration;
     }
@@ -4775,6 +4706,15 @@ namespace lfs::io {
                 default:
                     image_tally.record(img.name);
                     continue;
+                }
+
+                if (model != CAMERA_MODEL::EQUIRECTANGULAR) {
+                    const float x_scale = static_cast<float>(cam_data.width) / static_cast<float>(cam_data.original_width);
+                    const float y_scale = static_cast<float>(cam_data.height) / static_cast<float>(cam_data.original_height);
+                    focal_x *= x_scale;
+                    focal_y *= y_scale;
+                    center_x *= x_scale;
+                    center_y *= y_scale;
                 }
 
                 camera_positions.push_back(cam_pos[0]);
