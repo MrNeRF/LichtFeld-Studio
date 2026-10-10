@@ -2496,6 +2496,145 @@ contract["check_selection_submode_follows_native_mode"](lf)
                   (std::set<std::string>{"first", "second"}));
     }
 
+    TEST_F(VisualizerImplResetTest, NavigationVerticalRoundTripPreservesPosesAndGridChoices) {
+        using namespace lfs::io::project;
+        using namespace lfs::vis::project;
+        using lfs::test::licht::require_result;
+        using lfs::test::licht::require_status;
+        auto& preferences = UserPreferences::instance();
+        struct RestoreDefaults {
+            std::string axis;
+            bool align_grid;
+            ~RestoreDefaults() { UserPreferences::instance().setNewProjectNavigation(axis, align_grid); }
+        } restore{preferences.newProjectNavigationUpAxis(), preferences.alignNewProjectGrid()};
+        preferences.setNewProjectNavigation("data_z", true);
+        VisualizerImpl viewer(projectOptions());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        viewer.input_controller_->setViewer(&viewer);
+        auto& input = *viewer.input_controller_;
+        auto& rendering = *viewer.getRenderingManager();
+        auto initial_settings = rendering.getSettings();
+        initial_settings.split_view_mode = SplitViewMode::IndependentDual;
+        rendering.updateSettings(initial_settings);
+        auto& primary = viewer.getViewport();
+        auto& secondary = rendering.projectSecondaryViewport();
+        primary.ortho_scale_override = rendering.getSettings().ortho_scale;
+        secondary.ortho_scale_override = rendering.getSettings().ortho_scale;
+        const auto primary_pose = capturePanelCameraProjectState(primary, rendering.getSettings().ortho_scale);
+        const auto secondary_pose = capturePanelCameraProjectState(secondary, rendering.getSettings().ortho_scale);
+        rendering.setGridPlaneForPanel(SplitViewPanelId::Left, 0);
+        rendering.setGridPlaneForPanel(SplitViewPanelId::Right, 1);
+        nlohmann::json populated_timeline{
+            {"version", 1}, {"clip_duration", 30.0},
+            {"keyframes", nlohmann::json::array({
+                {{"time", 0.0}, {"position", {1.0, 2.0, 3.0}}, {"rotation", {1.0, 0.0, 0.0, 0.0}}, {"focal_length_mm", 50.0}, {"easing", 0}},
+                {{"time", 2.0}, {"position", {4.0, 5.0, 6.0}}, {"rotation", {1.0, 0.0, 0.0, 0.0}}, {"focal_length_mm", 35.0}, {"easing", 0}}
+            })}};
+        ASSERT_TRUE(viewer.getGuiManager()->sequencer().loadFromJson(populated_timeline));
+        const auto timeline = viewer.getGuiManager()->sequencer().saveToJson();
+        auto& history = op::undoHistory();
+        history.push(std::make_unique<NoopUndoEntry>());
+        const auto undo_count = history.undoCount();
+        input.setNavigationUpAxis(NavigationUpAxis::DataZ);
+        EXPECT_EQ(history.undoCount(), undo_count);
+        ASSERT_TRUE(history.undo().success);
+        const auto redo_count = history.redoCount();
+        input.setNavigationUpAxis(NavigationUpAxis::LegacyY, true);
+        EXPECT_EQ(history.redoCount(), redo_count);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_EQ(history.undoCount(), undo_count);
+        input.setNavigationUpAxis(NavigationUpAxis::DataZ);
+        rendering.setGridPlaneForPanel(SplitViewPanelId::Left, 0);
+        rendering.setGridPlaneForPanel(SplitViewPanelId::Right, 1);
+        EXPECT_EQ(primary_pose, capturePanelCameraProjectState(primary, rendering.getSettings().ortho_scale));
+        EXPECT_EQ(secondary_pose, capturePanelCameraProjectState(secondary, rendering.getSettings().ortho_scale));
+        EXPECT_EQ(secondary.camera.navigationUpAxis(), NavigationUpAxis::DataZ);
+        EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Left), 0);
+        EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Right), 1);
+        auto captured = require_result(captureGuiSession(viewer, ProjectSessionChapters{}, {}));
+        EXPECT_EQ(captured.view.dom().get_json("navigation.up_axis"), lfs::io::JsonChapterDom::Json("data_z"));
+        auto prepared = require_result(prepareGuiSessionRestore(captured));
+        input.setNavigationUpAxis(NavigationUpAxis::LegacyY, true);
+        std::vector<CameraBookmarkProjectState> bookmarks;
+        applyGuiSession(viewer, prepared, bookmarks);
+        EXPECT_EQ(input.navigationUpAxis(), NavigationUpAxis::DataZ);
+        EXPECT_EQ(secondary.camera.navigationUpAxis(), NavigationUpAxis::DataZ);
+        EXPECT_EQ(primary_pose, capturePanelCameraProjectState(primary, rendering.getSettings().ortho_scale));
+        EXPECT_EQ(secondary_pose, capturePanelCameraProjectState(secondary, rendering.getSettings().ortho_scale));
+        EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Left), 0);
+        EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Right), 1);
+        EXPECT_EQ(viewer.getGuiManager()->sequencer().saveToJson(), timeline);
+        input.setNavigationUpAxis(NavigationUpAxis::DataZ, true);
+        EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Left), 2);
+        EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Right), 2);
+        auto legacy_root = *captured.view.dom().get_json("navigation");
+        legacy_root.erase("up_axis");
+        require_status(captured.view.dom().set_json("navigation", legacy_root));
+        applyGuiSession(viewer, require_result(prepareGuiSessionRestore(captured)), bookmarks);
+        EXPECT_EQ(input.navigationUpAxis(), NavigationUpAxis::LegacyY);
+        EXPECT_EQ(secondary.camera.navigationUpAxis(), NavigationUpAxis::LegacyY);
+        input.setNavigationUpAxis(NavigationUpAxis::DataZ);
+        viewer.resetProjectState(false);
+        EXPECT_EQ(input.navigationUpAxis(), NavigationUpAxis::LegacyY);
+        EXPECT_EQ(secondary.camera.navigationUpAxis(), NavigationUpAxis::LegacyY);
+        // Global defaults never modify the current project. New documents alone adopt them.
+        EXPECT_THROW(preferences.setNewProjectNavigation("invalid", false), std::invalid_argument);
+        EXPECT_EQ(preferences.newProjectNavigationUpAxis(), "data_z");
+        require_status(viewer.project_lifecycle_->newProject(ProjectSwitchDisposition::DiscardChanges));
+        EXPECT_EQ(input.navigationUpAxis(), NavigationUpAxis::DataZ);
+        EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Left), 2);
+        preferences.setNewProjectNavigation("legacy_y", false);
+        EXPECT_EQ(input.navigationUpAxis(), NavigationUpAxis::DataZ);
+        require_status(viewer.project_lifecycle_->newProject(ProjectSwitchDisposition::DiscardChanges));
+        EXPECT_EQ(input.navigationUpAxis(), NavigationUpAxis::LegacyY);
+        preferences.setNewProjectNavigation("data_z", false);
+        auto split_settings = rendering.getSettings();
+        split_settings.split_view_mode = SplitViewMode::IndependentDual;
+        rendering.updateSettings(split_settings);
+        rendering.setGridPlaneForPanel(SplitViewPanelId::Left, 0);
+        rendering.setGridPlaneForPanel(SplitViewPanelId::Right, 1);
+        ASSERT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Left), 0);
+        ASSERT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Right), 1);
+        require_status(viewer.project_lifecycle_->newProject(ProjectSwitchDisposition::DiscardChanges));
+        EXPECT_EQ(input.navigationUpAxis(), NavigationUpAxis::DataZ);
+        EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Left), 0);
+        // NewProject closes independent split mode, keeping the primary plane.
+        // An older project retains historical Y even with a global Z default.
+        applyGuiSession(viewer, require_result(prepareGuiSessionRestore(captured)), bookmarks);
+        EXPECT_EQ(input.navigationUpAxis(), NavigationUpAxis::LegacyY);
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_NE(viewer.getScene().addGroup("Saved geometry"), lfs::core::NULL_NODE);
+        const auto master = temporary_.path / "navigation.licht";
+        const auto recovered = temporary_.path / "navigation-recovered.licht";
+        const auto sidecar = autosave_sidecar_path(master);
+        input.setNavigationUpAxis(NavigationUpAxis::DataZ, true);
+        require_status(viewer.projectSaveAs(master, false));
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+        }));
+        input.setNavigationUpAxis(NavigationUpAxis::LegacyY);
+        // Session-only changes follow master's existing autosave policy.
+        require_status(viewer.project_lifecycle_->startAutosave());
+        EXPECT_FALSE(std::filesystem::exists(sidecar));
+        ASSERT_NE(viewer.getScene().addGroup("Autosaved geometry"), lfs::core::NULL_NODE);
+        require_status(viewer.project_lifecycle_->startAutosave());
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+        }));
+        ASSERT_TRUE(std::filesystem::is_regular_file(sidecar));
+        require_status(materialize_recovered_project(master, sidecar, recovered));
+        auto saved_document = require_result(ProjectDocument::open(master));
+        auto recovered_document = require_result(ProjectDocument::open(recovered));
+        EXPECT_EQ(saved_document.view().dom().get_json("navigation.up_axis"), lfs::io::JsonChapterDom::Json("data_z"));
+        EXPECT_EQ(recovered_document.view().dom().get_json("navigation.up_axis"), lfs::io::JsonChapterDom::Json("legacy_y"));
+        require_status(viewer.projectSave(false));
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+        }));
+        auto explicitly_saved = require_result(ProjectDocument::open(master));
+        EXPECT_EQ(explicitly_saved.view().dom().get_json("navigation.up_axis"), lfs::io::JsonChapterDom::Json("legacy_y"));
+    }
+
     TEST_F(VisualizerImplResetTest, SequencerCaptureDropsRemovedTailAndPreservesExtensions) {
         using Json = lfs::io::JsonChapterDom::Json;
         using namespace lfs::io::project;

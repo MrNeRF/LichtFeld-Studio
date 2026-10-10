@@ -111,6 +111,65 @@ namespace {
         return node;
     }
 
+    TEST(P5SessionChapterTest, NavigationVerticalSurvivesLichtSaveOpenAndSaveAs) {
+        TemporaryDirectory temporary;
+        for (const std::string axis : {"legacy_y", "data_z", "absent"}) {
+            SCOPED_TRACE(axis);
+            auto document = lfs::test::licht::make_empty_document(lfs::core::generate_uuid_v4());
+            ProjectSessionChapters session;
+            session.view = document->view();
+            session.gui_layout = document->gui_layout();
+            session.editor = document->editor();
+            session.sequencer = document->sequencer();
+            session.metrics = document->metrics();
+            auto view = json_root(session.view.dom());
+            if (axis == "absent")
+                view["navigation"].erase("up_axis");
+            else
+                view["navigation"]["up_axis"] = axis;
+            session.view = require_result(ViewSessionChapter::parse(view.dump()));
+            document->edit_view() = session.view;
+            document->edit_gui_layout() = session.gui_layout;
+            document->edit_editor() = session.editor;
+            document->edit_sequencer() = session.sequencer;
+            const auto source = temporary.path / (axis + ".licht");
+            const auto destination = temporary.path / (axis + "-copy.licht");
+            auto saved = document->save(source);
+            ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+            auto reopened = require_result(ProjectDocument::open(source));
+            EXPECT_EQ(json_root(reopened.view().dom()), view);
+            ASSERT_TRUE(reopened.save_as(destination));
+            auto copied = require_result(ProjectDocument::open(destination));
+            EXPECT_EQ(json_root(copied.view().dom()), view);
+            session.view = copied.view();
+            EXPECT_TRUE(prepareGuiSessionRestore(session));
+        }
+    }
+
+    TEST(P5SessionChapterTest, NavigationVerticalIsOptionalValidatedAndPreservedByEarlierWriters) {
+        auto session = make_populated_session_chapters();
+        auto view = json_root(session.view.dom());
+        view["navigation"].erase("up_axis");
+        session.view = require_result(ViewSessionChapter::parse(view.dump()));
+        EXPECT_TRUE(prepareGuiSessionRestore(session));
+        view["navigation"]["up_axis"] = "data_z";
+        session.view = require_result(ViewSessionChapter::parse(view.dump()));
+        EXPECT_TRUE(prepareGuiSessionRestore(session));
+        // An earlier writer knows mode/view_snap only. Its normal merge must
+        // preserve the additive vertical field without changing chapter version.
+        Json earlier_state = view;
+        earlier_state["navigation"].erase("up_axis");
+        require_status(session.view.merge_known_state(earlier_state));
+        auto reopened = require_result(ViewSessionChapter::from_bytes(session.view.to_bytes()));
+        EXPECT_EQ(json_root(reopened.dom())["navigation"]["up_axis"], "data_z");
+        EXPECT_EQ(json_root(reopened.dom())["version"], view["version"]);
+        for (const Json invalid : {Json("unknown"), Json(2), Json(nullptr)}) {
+            view["navigation"]["up_axis"] = invalid;
+            session.view = require_result(ViewSessionChapter::parse(view.dump()));
+            EXPECT_FALSE(prepareGuiSessionRestore(session));
+        }
+    }
+
     TEST(P5SessionChapterTest,
          GuilUsesFrozenAreaTreeAndStripsExcludedStateOnLoad) {
         GuiLayoutChapter chapter;

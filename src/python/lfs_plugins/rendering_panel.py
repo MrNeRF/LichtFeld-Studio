@@ -416,6 +416,8 @@ class RenderingPanel(Panel):
             return
 
         s = lf.get_render_settings
+        model.bind("navigation_up_idx", self._navigation_up_index, self._set_navigation_up_index)
+        model.bind_event("align_navigation_grid", self._align_navigation_grid)
 
         for prop_id in BOOL_PROPS:
             if prop_id == "equirectangular":
@@ -658,6 +660,21 @@ class RenderingPanel(Panel):
 
         self._handle = model.get_handle()
         self._selection_groups.attach(self._handle)
+
+    def _navigation_up_index(self):
+        return "1" if lf.get_navigation_up_axis() == "data_z" else "0"
+
+    def _set_navigation_up_index(self, value):
+        axis = {"0": "legacy_y", "1": "data_z"}.get(str(value))
+        if axis is not None:
+            lf.set_navigation_up_axis(axis)
+            if self._handle:
+                self._handle.dirty("navigation_up_idx")
+
+    def _align_navigation_grid(self, *_):
+        lf.set_navigation_up_axis(lf.get_navigation_up_axis(), align_grid=True)
+        if self._handle:
+            self._handle.dirty("grid_plane")
 
     def on_update(self, doc):
         s = lf.get_render_settings()

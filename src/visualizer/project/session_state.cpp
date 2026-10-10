@@ -1270,6 +1270,15 @@ namespace lfs::vis::project {
                         std::move(parsed).error());
             }
 
+            if (const auto navigation = root.find("navigation"); navigation != root.end() && navigation->is_object()) {
+                if (const auto up = navigation->find("up_axis"); up != navigation->end()) {
+                    if (!up->is_string() || !navigationUpAxisFromName(up->get<std::string>()))
+                        return fail<void>(lfs::ErrorCode::DataLoss,
+                                          "Navigation up axis must be legacy_y or data_z",
+                                          "VIEW.navigation.up_axis");
+                }
+            }
+
             const auto bookmarks =
                 find_required_array(
                     root, "camera_bookmarks");
@@ -2337,6 +2346,7 @@ namespace lfs::vis::project {
                  {"view_snap",
                   input_controller
                       ->cameraViewSnapEnabled()},
+                 {"up_axis", std::string(navigationUpAxisName(input_controller->navigationUpAxis()))},
              }},
             {"split",
              {
@@ -3370,7 +3380,8 @@ namespace lfs::vis::project {
                     scalar<bool>(
                         *navigation,
                         "view_snap")
-                        .value_or(false));
+                        .value_or(false),
+                    navigationUpAxisFromName(scalar<std::string>(*navigation, "up_axis").value_or("legacy_y")).value_or(NavigationUpAxis::LegacyY));
             }
 
             bookmarks.clear();

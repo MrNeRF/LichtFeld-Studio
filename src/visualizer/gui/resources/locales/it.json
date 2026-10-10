@@ -949,6 +949,16 @@
     "input": "Input",
     "key_bindings": "Associazioni tasti",
     "camera_navigation": "Navigazione della camera",
+    "new_project_navigation_up": "Verticale per i nuovi progetti",
+    "new_project_navigation_help": "Si applica solo ai nuovi progetti. I progetti esistenti mantengono le impostazioni salvate.",
+    "new_project_align_grid": "Allinea griglia nei nuovi progetti",
+    "navigation_project_hint": "Salva il progetto per conservare la scelta. Le coordinate dei dati non cambiano.",
+    "navigation_up_axis": "Verticale navigazione (progetto)",
+    "navigation_up_legacy_y": "Y-up (comportamento attuale)",
+    "navigation_up_data_z": "+Z-up (coordinate dati)",
+    "navigation_up_help": "Salvato nel progetto. Cambia solo la navigazione; coordinate e scala dei dati restano invariate.",
+    "align_navigation_grid": "Allinea griglia alla verticale",
+    "align_grid_short": "Allinea",
     "navigation_mode": "Modalità di navigazione",
     "zoom_speed": "Velocità di zoom",
     "zoom_speed_tooltip": "Velocità predefinita per lo zoom con la rotellina del mouse.",
@@ -1366,9 +1376,9 @@
         "custom": "Ultimo HDRI personalizzato caricato"
       },
       "grid_plane": {
-        "yz": "Mostra griglia sul piano YZ (vista destra)",
-        "xz": "Mostra griglia sul piano XZ (vista dall'alto)",
-        "xy": "Mostra griglia sul piano XY (vista frontale)"
+        "yz": "Mostra griglia sul piano YZ",
+        "xz": "Mostra griglia sul piano XZ",
+        "xy": "Mostra griglia sul piano XY"
       },
       "sh_degree": {
         "0": "Solo diffuso — nessuna illuminazione vista-dipendente",
@@ -2418,9 +2428,9 @@
     "solid_color": "Colore uniforme",
     "equirectangular_hdri": "HDRI equirettangolare",
     "off": "Disattivato",
-    "grid_plane_yz": "YZ (destra)",
-    "grid_plane_xz": "XZ (alto)",
-    "grid_plane_xy": "XY (fronte)",
+    "grid_plane_yz": "YZ",
+    "grid_plane_xz": "XZ",
+    "grid_plane_xy": "XY",
     "psnr": "PSNR",
     "psnr_ssim": "PSNR + SSIM",
     "manual": "Manuale",

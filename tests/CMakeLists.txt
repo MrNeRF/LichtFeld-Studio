@@ -669,6 +669,7 @@ set(TEST_FILES
     test_point_cloud_raster_orientation.cpp
     test_theme_registry.cpp
     test_viewport.cpp
+    test_navigation_up_axis.cpp
     test_input_controller_focus.cpp
     test_ordered_input_dispatch.cpp
     test_python_editor_input.cpp

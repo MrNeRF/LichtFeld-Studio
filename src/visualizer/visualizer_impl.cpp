@@ -3892,6 +3892,8 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::resetProjectState(const bool reset_panel_registry) {
+        if (input_controller_)
+            input_controller_->setNavigationUpAxis(NavigationUpAxis::LegacyY);
         if (trainer_manager_) {
             trainer_manager_->clearRestoredProjectMetrics();
         }

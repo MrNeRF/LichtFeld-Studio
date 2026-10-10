@@ -949,6 +949,16 @@
     "input": "Sterowanie",
     "key_bindings": "Przypisania klawiszy",
     "camera_navigation": "Nawigacja kamery",
+    "new_project_navigation_up": "Pion dla nowych projektów",
+    "new_project_navigation_help": "Dotyczy tylko nowych projektów. Istniejące projekty zachowują zapisane ustawienia.",
+    "new_project_align_grid": "Wyrównaj siatkę w nowych projektach",
+    "navigation_project_hint": "Zapisz projekt, aby zachować wybór. Współrzędne danych pozostają bez zmian.",
+    "navigation_up_axis": "Pion nawigacji (projekt)",
+    "navigation_up_legacy_y": "Y w górę (obecne działanie)",
+    "navigation_up_data_z": "+Z w górę (współrzędne danych)",
+    "navigation_up_help": "Zapisywane w projekcie. Zmienia tylko nawigację; współrzędne i skala danych pozostają bez zmian.",
+    "align_navigation_grid": "Wyrównaj siatkę do pionu",
+    "align_grid_short": "Wyrównaj",
     "navigation_mode": "Tryb nawigacji",
     "zoom_speed": "Prędkość powiększania",
     "zoom_speed_tooltip": "Domyślna prędkość przybliżania kamery kółkiem myszy.",
@@ -1366,9 +1376,9 @@
         "custom": "Ostatnio załadowane niestandardowe HDRI"
       },
       "grid_plane": {
-        "yz": "Pokaż siatkę na płaszczyźnie YZ (widok z prawej)",
-        "xz": "Pokaż siatkę na płaszczyźnie XZ (widok z góry)",
-        "xy": "Pokaż siatkę na płaszczyźnie XY (widok z przodu)"
+        "yz": "Pokaż siatkę na płaszczyźnie YZ",
+        "xz": "Pokaż siatkę na płaszczyźnie XZ",
+        "xy": "Pokaż siatkę na płaszczyźnie XY"
       },
       "sh_degree": {
         "0": "Tylko rozpraszanie — brak oświetlenia zależnego od widoku",
@@ -2418,9 +2428,9 @@
     "solid_color": "Jednolity kolor",
     "equirectangular_hdri": "HDRI ekwiprostokątne",
     "off": "Wył.",
-    "grid_plane_yz": "YZ (prawa)",
-    "grid_plane_xz": "XZ (góra)",
-    "grid_plane_xy": "XY (przód)",
+    "grid_plane_yz": "YZ",
+    "grid_plane_xz": "XZ",
+    "grid_plane_xy": "XY",
     "psnr": "PSNR",
     "psnr_ssim": "PSNR + SSIM",
     "manual": "Ręcznie",

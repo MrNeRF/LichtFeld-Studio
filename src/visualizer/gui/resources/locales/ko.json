@@ -949,6 +949,16 @@
     "input": "입력",
     "key_bindings": "키 바인딩",
     "camera_navigation": "카메라 탐색",
+    "new_project_navigation_up": "새 프로젝트의 위쪽 축",
+    "new_project_navigation_help": "새 프로젝트에만 적용됩니다. 기존 프로젝트는 저장된 설정을 유지합니다.",
+    "new_project_align_grid": "새 프로젝트의 그리드 정렬",
+    "navigation_project_hint": "선택을 유지하려면 프로젝트를 저장하세요. 데이터 좌표는 변경되지 않습니다.",
+    "navigation_up_axis": "탐색 수직축 (프로젝트)",
+    "navigation_up_legacy_y": "Y 위쪽 (기존 동작)",
+    "navigation_up_data_z": "+Z 위쪽 (데이터 좌표)",
+    "navigation_up_help": "프로젝트에 저장됩니다. 탐색만 변경하며 데이터 좌표와 배율은 유지됩니다.",
+    "align_navigation_grid": "그리드를 수직축에 맞추기",
+    "align_grid_short": "정렬",
     "navigation_mode": "탐색 모드",
     "zoom_speed": "줌 속도",
     "zoom_speed_tooltip": "마우스 휠로 카메라를 줌할 때의 기본 속도입니다.",
@@ -1366,9 +1376,9 @@
         "custom": "마지막으로 로드한 사용자 정의 HDRI"
       },
       "grid_plane": {
-        "yz": "YZ 평면에 그리드 표시 (오른쪽 뷰)",
-        "xz": "XZ 평면에 그리드 표시 (위쪽 뷰)",
-        "xy": "XY 평면에 그리드 표시 (앞쪽 뷰)"
+        "yz": "YZ 평면에 그리드 표시",
+        "xz": "XZ 평면에 그리드 표시",
+        "xy": "XY 평면에 그리드 표시"
       },
       "sh_degree": {
         "0": "확산만 — 시점 의존 조명 없음",
@@ -2418,9 +2428,9 @@
     "solid_color": "단색",
     "equirectangular_hdri": "등각원통 HDRI",
     "off": "끔",
-    "grid_plane_yz": "YZ (오른쪽)",
-    "grid_plane_xz": "XZ (위)",
-    "grid_plane_xy": "XY (앞)",
+    "grid_plane_yz": "YZ",
+    "grid_plane_xz": "XZ",
+    "grid_plane_xy": "XY",
     "psnr": "PSNR",
     "psnr_ssim": "PSNR + SSIM",
     "manual": "수동",

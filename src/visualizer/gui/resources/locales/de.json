@@ -949,6 +949,16 @@
     "input": "Eingabe",
     "key_bindings": "Tastenbelegung",
     "camera_navigation": "Kameranavigation",
+    "new_project_navigation_up": "Vertikale für neue Projekte",
+    "new_project_navigation_help": "Gilt nur für neue Projekte. Bestehende Projekte behalten ihre gespeicherten Einstellungen.",
+    "new_project_align_grid": "Raster in neuen Projekten ausrichten",
+    "navigation_project_hint": "Projekt speichern, um die Auswahl zu behalten. Datenkoordinaten bleiben unverändert.",
+    "navigation_up_axis": "Navigationsvertikale (Projekt)",
+    "navigation_up_legacy_y": "Y oben (bisheriges Verhalten)",
+    "navigation_up_data_z": "+Z oben (Datenkoordinaten)",
+    "navigation_up_help": "Wird im Projekt gespeichert. Ändert nur die Navigation; Datenkoordinaten und Maßstab bleiben unverändert.",
+    "align_navigation_grid": "Raster an Vertikale ausrichten",
+    "align_grid_short": "Ausrichten",
     "navigation_mode": "Navigationsmodus",
     "zoom_speed": "Zoomgeschwindigkeit",
     "zoom_speed_tooltip": "Standardgeschwindigkeit für das Zoomen der Kamera mit dem Mausrad.",
@@ -1366,9 +1376,9 @@
         "custom": "Zuletzt geladenes benutzerdefiniertes HDRI"
       },
       "grid_plane": {
-        "yz": "Gitter in der YZ-Ebene anzeigen (Rechte Ansicht)",
-        "xz": "Gitter in der XZ-Ebene anzeigen (Draufsicht)",
-        "xy": "Gitter in der XY-Ebene anzeigen (Vorderansicht)"
+        "yz": "Gitter in der YZ-Ebene anzeigen",
+        "xz": "Gitter in der XZ-Ebene anzeigen",
+        "xy": "Gitter in der XY-Ebene anzeigen"
       },
       "sh_degree": {
         "0": "Nur diffus — keine blickrichtungsabhängige Beleuchtung",
@@ -2418,9 +2428,9 @@
     "solid_color": "Einheitliche Farbe",
     "equirectangular_hdri": "Equirectangular-HDRI",
     "off": "Aus",
-    "grid_plane_yz": "YZ (Rechts)",
-    "grid_plane_xz": "XZ (Oben)",
-    "grid_plane_xy": "XY (Vorne)",
+    "grid_plane_yz": "YZ",
+    "grid_plane_xz": "XZ",
+    "grid_plane_xy": "XY",
     "psnr": "PSNR",
     "psnr_ssim": "PSNR + SSIM",
     "manual": "Manuell",

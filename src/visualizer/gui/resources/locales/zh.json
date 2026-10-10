@@ -949,6 +949,16 @@
     "input": "输入",
     "key_bindings": "按键绑定",
     "camera_navigation": "相机导航",
+    "new_project_navigation_up": "新项目的向上轴",
+    "new_project_navigation_help": "仅适用于新项目。现有项目保留已保存的设置。",
+    "new_project_align_grid": "对齐新项目的网格",
+    "navigation_project_hint": "保存项目以保留此选择。数据坐标保持不变。",
+    "navigation_up_axis": "导航向上方向（项目）",
+    "navigation_up_legacy_y": "Y 向上（当前行为）",
+    "navigation_up_data_z": "+Z 向上（数据坐标）",
+    "navigation_up_help": "保存在项目中。仅改变导航方式，数据坐标和比例保持不变。",
+    "align_navigation_grid": "将网格对齐到向上方向",
+    "align_grid_short": "对齐",
     "navigation_mode": "导航模式",
     "zoom_speed": "缩放速度",
     "zoom_speed_tooltip": "使用鼠标滚轮缩放相机的默认速度。",
@@ -1366,9 +1376,9 @@
         "custom": "最近加载的自定义 HDRI"
       },
       "grid_plane": {
-        "yz": "在 YZ 平面显示网格（右视图）",
-        "xz": "在 XZ 平面显示网格（顶视图）",
-        "xy": "在 XY 平面显示网格（前视图）"
+        "yz": "在 YZ 平面显示网格",
+        "xz": "在 XZ 平面显示网格",
+        "xy": "在 XY 平面显示网格"
       },
       "sh_degree": {
         "0": "仅漫反射 — 无视角相关光照",
@@ -2418,9 +2428,9 @@
     "solid_color": "纯色",
     "equirectangular_hdri": "等距圆柱 HDRI",
     "off": "关闭",
-    "grid_plane_yz": "YZ（右）",
-    "grid_plane_xz": "XZ（上）",
-    "grid_plane_xy": "XY（前）",
+    "grid_plane_yz": "YZ",
+    "grid_plane_xz": "XZ",
+    "grid_plane_xy": "XY",
     "psnr": "PSNR",
     "psnr_ssim": "PSNR + SSIM",
     "manual": "手动",

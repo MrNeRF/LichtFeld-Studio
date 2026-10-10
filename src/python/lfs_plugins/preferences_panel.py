@@ -192,6 +192,8 @@ class PreferencesPanel(Panel):
         )
         model.bind("language_idx", self._language_index, self._set_language_index)
         model.bind("navigation_idx", self._navigation_index, self._set_navigation_index)
+        model.bind("navigation_up_idx", self._navigation_up_index, self._set_navigation_up_index)
+        model.bind("new_project_align_grid", lf.get_new_project_align_grid, self._set_new_project_align_grid)
         model.bind("zoom_speed", lf.ui.get_zoom_speed_preference, self._set_zoom_speed)
         model.bind(
             "navigation_speed",
@@ -372,6 +374,8 @@ class PreferencesPanel(Panel):
             self._scene_upscaler_preset(),
             lf.ui.get_current_language(),
             lf.get_camera_navigation_mode(),
+            lf.get_new_project_navigation_up_axis(),
+            lf.get_new_project_align_grid(),
             float(lf.ui.get_zoom_speed_preference()),
             float(lf.ui.get_navigation_speed_preference()),
             lf.get_camera_view_snap_enabled(),
@@ -777,6 +781,19 @@ class PreferencesPanel(Panel):
         if 0 <= index < len(self.NAVIGATION_OPTIONS):
             lf.set_camera_navigation_mode(self.NAVIGATION_OPTIONS[index][0])
             self._refresh_selection()
+
+    def _navigation_up_index(self):
+        return "1" if lf.get_new_project_navigation_up_axis() == "data_z" else "0"
+
+    def _set_navigation_up_index(self, value):
+        axis = {"0": "legacy_y", "1": "data_z"}.get(str(value))
+        if axis is not None:
+            lf.set_new_project_navigation_defaults(axis, lf.get_new_project_align_grid())
+            self._refresh_selection()
+
+    def _set_new_project_align_grid(self, enabled):
+        lf.set_new_project_navigation_defaults(lf.get_new_project_navigation_up_axis(), bool(enabled))
+        self._refresh_selection()
 
     def _set_zoom_speed(self, value):
         lf.ui.set_zoom_speed_preference(float(value))
@@ -1559,6 +1576,7 @@ class PreferencesPanel(Panel):
             lf.ui.reset_scene_reconstruction_preferences()
             self._sync_scene_upscaler_preset_records()
         elif section == "input":
+            lf.set_new_project_navigation_defaults("legacy_y", True)
             lf.ui.set_zoom_speed_preference(11.0)
             lf.ui.set_navigation_speed_preference(10.0)
             lf.ui.set_remember_camera_navigation(False)
@@ -1594,6 +1612,8 @@ class PreferencesPanel(Panel):
             self._handle.dirty("scene_upscaler_has_preset")
             self._handle.dirty("language_idx")
             self._handle.dirty("navigation_idx")
+            self._handle.dirty("navigation_up_idx")
+            self._handle.dirty("new_project_align_grid")
             self._handle.dirty("zoom_speed")
             self._handle.dirty("navigation_speed")
             self._handle.dirty("view_snap")

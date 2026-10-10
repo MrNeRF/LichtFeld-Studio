@@ -5,6 +5,7 @@
 #pragma once
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/render_constants.hpp"
+#include "visualizer/navigation_up_axis.hpp"
 #include "visualizer/preferences.hpp"
 #include <algorithm>
 #include <chrono>
@@ -62,6 +63,17 @@ class Viewport {
 
         CameraMotion() = default;
 
+        lfs::vis::NavigationUpAxis navigationUpAxis() const { return navigation_up_axis_; }
+        glm::vec3 navigationUp() const { return lfs::vis::navigationFrame(navigation_up_axis_)[1]; }
+        void setNavigationUpAxis(lfs::vis::NavigationUpAxis axis) {
+            if (navigation_up_axis_ == axis)
+                return;
+            clearTransientMotion();
+            resetRollTarget();
+            navigation_up_axis_ = axis;
+            drone_synced = false;
+        }
+
         // Compute camera-to-world rotation that looks from 'from' toward 'to'
         static glm::mat3 computeLookAtRotation(const glm::vec3& from, const glm::vec3& to) {
             return lfs::rendering::makeVisualizerLookAtRotation(from, to);
@@ -102,7 +114,7 @@ class Viewport {
             const glm::vec3 backward = lfs::rendering::cameraBackward(R);
             t = center + backward * distance;
             pivot = center;
-            R = computeLookAtRotation(t, pivot);
+            R = lfs::rendering::makeVisualizerLookAtRotation(t, pivot, navigationUp());
             resetRollTarget();
             clearTransientMotion();
         }
@@ -120,14 +132,14 @@ class Viewport {
 
             float y = -delta.x * rotateSpeed;
             float p = -delta.y * rotateSpeed;
-            glm::vec3 upVec = enforceUpright ? glm::vec3(0.0f, 1.0f, 0.0f) : R[1];
+            glm::vec3 upVec = enforceUpright ? navigationUp() : R[1];
 
             if (enforceUpright) {
                 // Clamp pitch short of vertical: at the poles the upright basis
                 // (right = forward x world-up) degenerates and the view flips.
                 constexpr float MAX_PITCH = glm::radians(89.0f);
                 const glm::vec3 fwd = lfs::rendering::cameraForward(R);
-                const float current_pitch = std::asin(glm::clamp(fwd.y, -1.0f, 1.0f));
+                const float current_pitch = std::asin(glm::clamp(glm::dot(fwd, navigationUp()), -1.0f, 1.0f));
                 p = glm::clamp(p, -MAX_PITCH - current_pitch, MAX_PITCH - current_pitch);
             }
 
@@ -270,8 +282,8 @@ class Viewport {
 
             const float sin_yaw = std::sin(drone_yaw);
             const float cos_yaw = std::cos(drone_yaw);
-            const glm::vec3 fwd_h(-sin_yaw, 0.0f, -cos_yaw);
-            const glm::vec3 right_h(cos_yaw, 0.0f, -sin_yaw);
+            const glm::vec3 fwd_h = navigationVector(glm::vec3(-sin_yaw, 0.0f, -cos_yaw));
+            const glm::vec3 right_h = navigationVector(glm::vec3(cos_yaw, 0.0f, -sin_yaw));
 
             glm::vec3 dir_h(0.0f);
             if (forward != backward)
@@ -317,7 +329,7 @@ class Viewport {
             if (!std::isfinite(pivot_distance) || pivot_distance < 0.1f)
                 pivot_distance = 5.0f;
 
-            const glm::vec3 movement = movement_h + glm::vec3(0.0f, movement_v, 0.0f);
+            const glm::vec3 movement = movement_h + navigationUp() * movement_v;
             t += movement;
 
             // Tilt tracks the velocity error (proportional to acceleration for
@@ -616,6 +628,10 @@ class Viewport {
         }
 
     private:
+        lfs::vis::NavigationUpAxis navigation_up_axis_ = lfs::vis::NavigationUpAxis::LegacyY;
+        glm::vec3 navigationVector(const glm::vec3& vector) const {
+            return navigation_up_axis_ == lfs::vis::NavigationUpAxis::LegacyY ? vector : lfs::vis::navigationFrame(navigation_up_axis_) * vector;
+        }
         float roll_target = 0.0f;
         glm::vec3 glide_target_t{0.0f};
         float glide_time_left = 0.0f;
@@ -666,12 +682,13 @@ class Viewport {
         // any roll in R) and zeroes all motion; used on mode entry and
         // whenever another system rotated the camera behind the drone's back.
         void syncDroneFromR() {
-            const glm::vec3 f = lfs::rendering::cameraForward(R);
+            const glm::mat3 local_rotation = navigation_up_axis_ == lfs::vis::NavigationUpAxis::LegacyY ? R : glm::transpose(lfs::vis::navigationFrame(navigation_up_axis_)) * R;
+            const glm::vec3 f = lfs::rendering::cameraForward(local_rotation);
             drone_pitch = glm::clamp(std::asin(glm::clamp(f.y, -1.0f, 1.0f)),
                                      -kDroneMaxGimbalPitchRad, kDroneMaxGimbalPitchRad);
             drone_yaw = glm::length(glm::vec2(f.x, f.z)) > 1e-4f
                             ? std::atan2(-f.x, -f.z)
-                            : std::atan2(-R[0].z, R[0].x);
+                            : std::atan2(-local_rotation[0].z, local_rotation[0].x);
             drone_yaw_target = drone_yaw;
             drone_pitch_target = drone_pitch;
             drone_vel_h = glm::vec3(0.0f);
@@ -693,6 +710,8 @@ class Viewport {
             const glm::mat3 Rx = glm::mat3(glm::rotate(glm::mat4(1.0f), pitch_total, glm::vec3(1.0f, 0.0f, 0.0f)));
             const glm::mat3 Rz = glm::mat3(glm::rotate(glm::mat4(1.0f), drone_tilt_roll, glm::vec3(0.0f, 0.0f, 1.0f)));
             R = Ry * Rx * Rz;
+            if (navigation_up_axis_ != lfs::vis::NavigationUpAxis::LegacyY)
+                R = lfs::vis::navigationFrame(navigation_up_axis_) * R;
             drone_last_R = R;
         }
 
@@ -806,7 +825,12 @@ class Viewport {
             }
         }
 
-        [[nodiscard]] static glm::vec3 axisViewUp(const int axis, const bool negative) {
+        [[nodiscard]] glm::vec3 axisViewUp(const int axis, const bool negative) const {
+            if (navigation_up_axis_ != lfs::vis::NavigationUpAxis::LegacyY) {
+                const auto forward = axisViewForward(axis, negative);
+                const auto up = navigationUp();
+                return std::abs(glm::dot(forward, up)) < 0.99f ? up : navigationVector(glm::vec3(0, 0, -glm::dot(forward, up)));
+            }
             const float sign = negative ? -1.0f : 1.0f;
             switch (axis) {
             case 0: return glm::vec3(0.0f, 1.0f, 0.0f);
@@ -816,7 +840,7 @@ class Viewport {
             }
         }
 
-        [[nodiscard]] static glm::mat3 axisViewRotation(const int axis, const bool negative) {
+        [[nodiscard]] glm::mat3 axisViewRotation(const int axis, const bool negative) const {
             return lfs::rendering::makeVisualizerLookAtRotation(
                 glm::vec3(0.0f),
                 axisViewForward(axis, negative),
@@ -862,13 +886,13 @@ class Viewport {
             return value / length;
         }
 
-        [[nodiscard]] static glm::mat3 makeRollStableOrbitRotation(const glm::vec3& eye,
-                                                                   const glm::vec3& target,
-                                                                   const glm::vec3& transported_right,
-                                                                   const glm::mat3& fallback_rotation,
-                                                                   const float step_angle,
-                                                                   const float roll_target_angle) {
-            constexpr glm::vec3 WORLD_UP(0.0f, 1.0f, 0.0f);
+        [[nodiscard]] glm::mat3 makeRollStableOrbitRotation(const glm::vec3& eye,
+                                                            const glm::vec3& target,
+                                                            const glm::vec3& transported_right,
+                                                            const glm::mat3& fallback_rotation,
+                                                            const float step_angle,
+                                                            const float roll_target_angle) const {
+            const glm::vec3 WORLD_UP = navigationUp();
 
             const glm::vec3 view = target - eye;
             const float view_length = glm::length(view);
@@ -926,7 +950,7 @@ class Viewport {
         }
 
         void applyRotationAroundCenter(const float yaw, const float pitch) {
-            constexpr glm::vec3 WORLD_UP(0.0f, 1.0f, 0.0f);
+            const glm::vec3 WORLD_UP = navigationUp();
             // Just short of vertical: keeps the upright re-orthogonalization
             // below well-conditioned (right length >= 0.014) while allowing a
             // near-top-down view.
@@ -941,7 +965,7 @@ class Viewport {
             // with the current frame, so leaving the pole never flips either.
             const float max_elevation = std::asin(MAX_VERTICAL_DOT);
             const glm::vec3 fwd = lfs::rendering::cameraForward(R);
-            const float elevation = std::asin(glm::clamp(fwd.y, -1.0f, 1.0f));
+            const float elevation = std::asin(glm::clamp(glm::dot(fwd, navigationUp()), -1.0f, 1.0f));
             const float limit = std::max(max_elevation, std::abs(elevation));
             const float clamped_pitch = glm::clamp(pitch, -limit - elevation, limit - elevation);
 
