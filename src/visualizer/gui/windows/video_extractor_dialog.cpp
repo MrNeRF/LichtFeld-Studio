@@ -1249,7 +1249,11 @@ namespace lfs::gui {
         changed |= setCachedAttribute(fps_slider_el_, "max", std::format("{}", maximum_fps));
         changed |= setCachedControlValue(fps_slider_el_, std::format("{}", requested_fps));
         fps_ = requested_fps;
-        changed |= setCachedControlValue(fps_value_el_, std::format("{}", fps_));
+        // At the source limit, match the range control's step-rounded display
+        // without changing the exact FPS used for extraction.
+        changed |= setCachedControlValue(fps_value_el_, fps_ == maximum_fps
+                                                            ? std::format("{}", readFloatValue(fps_slider_el_, fps_))
+                                                            : std::format("{}", fps_));
         changed |= setCachedControlValue(interval_input_el_, std::to_string(frame_interval_));
         changed |= setCachedText(interval_value_el_, LOC(VideoExtractor::FRAMES_UNIT));
         changed |= setCachedControlValue(quality_slider_el_, std::to_string(jpg_quality_));

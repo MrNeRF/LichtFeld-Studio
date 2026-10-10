@@ -381,6 +381,26 @@ namespace {
         }
     }
 
+    TEST_F(VideoExtractorFpsInputTest, FractionalSourceLimitUsesTheSliderDisplayWithoutChangingTheRate) {
+        TempDir temp("fps_fractional_limit");
+        const auto source = temp.path / "source.mp4";
+        ASSERT_TRUE(writeProbedVideoWithRate(source, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 1801, 60));
+        ASSERT_TRUE(dialog->openVideoPath(source));
+        Access::sync(*dialog);
+        const float source_rate = std::stof(slider->GetAttribute<Rml::String>("max", ""));
+        ASSERT_GT(source_rate, 30.0f);
+        ASSERT_LT(source_rate, 30.05f);
+        enter("120");
+        EXPECT_FLOAT_EQ(std::stof(input->GetValue()), std::stof(slider->GetValue()));
+        EXPECT_EQ(input->GetValue(), "30");
+        EXPECT_FLOAT_EQ(Access::fps(*dialog), source_rate);
+        Access::sync(*dialog);
+        EXPECT_EQ(input->GetValue(), "30");
+        enter("2.36");
+        EXPECT_EQ(input->GetValue(), "2.36");
+        EXPECT_FLOAT_EQ(Access::fps(*dialog), 2.36f);
+    }
+
     TEST_F(VideoExtractorFpsInputTest, ControlsRequireALoadedVideo) {
         EXPECT_TRUE(input->HasAttribute("disabled"));
         EXPECT_TRUE(slider->HasAttribute("disabled"));
@@ -412,6 +432,7 @@ namespace {
         slider->DispatchEvent(Rml::EventId::Change, parameters);
         Access::sync(*dialog);
         EXPECT_FLOAT_EQ(Access::fps(*dialog), static_cast<float>(30000.0 / 1001.0));
+        EXPECT_FLOAT_EQ(std::stof(input->GetValue()), std::stof(slider->GetValue()));
         enter("2.36");
         EXPECT_EQ(input->GetValue(), "2.36");
         EXPECT_FLOAT_EQ(Access::fps(*dialog), 2.36f);
