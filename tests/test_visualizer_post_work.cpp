@@ -2496,6 +2496,66 @@ contract["check_selection_submode_follows_native_mode"](lf)
                   (std::set<std::string>{"first", "second"}));
     }
 
+    TEST_F(VisualizerImplResetTest, NavigationVerticalRoundTripPreservesPosesAndGridChoices) {
+        using namespace lfs::io::project;
+        using namespace lfs::vis::project;
+        using lfs::test::licht::require_result;
+        using lfs::test::licht::require_status;
+        VisualizerImpl viewer(projectOptions());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        viewer.input_controller_->setViewer(&viewer);
+        auto& input = *viewer.input_controller_;
+        auto& rendering = *viewer.getRenderingManager();
+        auto& primary = viewer.getViewport();
+        auto& secondary = rendering.projectSecondaryViewport();
+        primary.ortho_scale_override = rendering.getSettings().ortho_scale;
+        secondary.ortho_scale_override = rendering.getSettings().ortho_scale;
+        const auto primary_pose = capturePanelCameraProjectState(primary, rendering.getSettings().ortho_scale);
+        const auto secondary_pose = capturePanelCameraProjectState(secondary, rendering.getSettings().ortho_scale);
+        rendering.setGridPlaneForPanel(SplitViewPanelId::Left, 0);
+        rendering.setGridPlaneForPanel(SplitViewPanelId::Right, 0);
+        nlohmann::json populated_timeline{
+            {"version", 1}, {"clip_duration", 30.0},
+            {"keyframes", nlohmann::json::array({
+                {{"time", 0.0}, {"position", {1.0, 2.0, 3.0}}, {"rotation", {1.0, 0.0, 0.0, 0.0}}, {"focal_length_mm", 50.0}, {"easing", 0}},
+                {{"time", 2.0}, {"position", {4.0, 5.0, 6.0}}, {"rotation", {1.0, 0.0, 0.0, 0.0}}, {"focal_length_mm", 35.0}, {"easing", 0}}
+            })}};
+        ASSERT_TRUE(viewer.getGuiManager()->sequencer().loadFromJson(populated_timeline));
+        const auto timeline = viewer.getGuiManager()->sequencer().saveToJson();
+        input.setNavigationUpAxis(NavigationUpAxis::DataZ);
+        EXPECT_EQ(primary_pose, capturePanelCameraProjectState(primary, rendering.getSettings().ortho_scale));
+        EXPECT_EQ(secondary_pose, capturePanelCameraProjectState(secondary, rendering.getSettings().ortho_scale));
+        EXPECT_EQ(secondary.camera.navigationUpAxis(), NavigationUpAxis::DataZ);
+        EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Left), 0);
+        EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Right), 0);
+        auto captured = require_result(captureGuiSession(viewer, ProjectSessionChapters{}, {}));
+        EXPECT_EQ(captured.view.dom().get_json("navigation.up_axis"), lfs::io::JsonChapterDom::Json("data_z"));
+        auto prepared = require_result(prepareGuiSessionRestore(captured));
+        input.setNavigationUpAxis(NavigationUpAxis::LegacyY, true);
+        std::vector<CameraBookmarkProjectState> bookmarks;
+        applyGuiSession(viewer, prepared, bookmarks);
+        EXPECT_EQ(input.navigationUpAxis(), NavigationUpAxis::DataZ);
+        EXPECT_EQ(secondary.camera.navigationUpAxis(), NavigationUpAxis::DataZ);
+        EXPECT_EQ(primary_pose, capturePanelCameraProjectState(primary, rendering.getSettings().ortho_scale));
+        EXPECT_EQ(secondary_pose, capturePanelCameraProjectState(secondary, rendering.getSettings().ortho_scale));
+        EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Left), 0);
+        EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Right), 0);
+        EXPECT_EQ(viewer.getGuiManager()->sequencer().saveToJson(), timeline);
+        input.setNavigationUpAxis(NavigationUpAxis::DataZ, true);
+        EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Left), 2);
+        EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Right), 2);
+        auto legacy_root = *captured.view.dom().get_json("navigation");
+        legacy_root.erase("up_axis");
+        require_status(captured.view.dom().set_json("navigation", legacy_root));
+        applyGuiSession(viewer, require_result(prepareGuiSessionRestore(captured)), bookmarks);
+        EXPECT_EQ(input.navigationUpAxis(), NavigationUpAxis::LegacyY);
+        EXPECT_EQ(secondary.camera.navigationUpAxis(), NavigationUpAxis::LegacyY);
+        input.setNavigationUpAxis(NavigationUpAxis::DataZ);
+        viewer.resetProjectState(false);
+        EXPECT_EQ(input.navigationUpAxis(), NavigationUpAxis::LegacyY);
+        EXPECT_EQ(secondary.camera.navigationUpAxis(), NavigationUpAxis::LegacyY);
+    }
+
     TEST_F(VisualizerImplResetTest, SequencerCaptureDropsRemovedTailAndPreservesExtensions) {
         using Json = lfs::io::JsonChapterDom::Json;
         using namespace lfs::io::project;
