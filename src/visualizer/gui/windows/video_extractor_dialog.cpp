@@ -50,6 +50,11 @@ namespace lfs::gui {
             return std::max(0.1f, static_cast<float>(source_fps));
         }
 
+        [[nodiscard]] float sliderExtractionFps(const float value, const io::VideoPlayer& player) {
+            const double rounded = std::round(static_cast<double>(value) * 10.0) / 10.0;
+            return static_cast<float>(std::clamp(rounded, 0.1, static_cast<double>(maximumExtractionFps(player))));
+        }
+
         [[nodiscard]] std::string formatTime(const double seconds) {
             if (!std::isfinite(seconds) || seconds < 0.0)
                 return "--:--.--";
@@ -1237,6 +1242,8 @@ namespace lfs::gui {
 
         // RmlUi range controls emit change while their value attribute is being updated.
         // Synchronizing the slider must not change the requested FPS.
+        changed |= setCachedDisabled(fps_slider_el_, !has_video || extracting);
+        changed |= setCachedDisabled(fps_value_el_, !has_video || extracting);
         const float maximum_fps = maximumExtractionFps(*player_);
         const float requested_fps = std::clamp(fps_, 0.1f, maximum_fps);
         changed |= setCachedAttribute(fps_slider_el_, "max", std::format("{}", maximum_fps));
@@ -1390,7 +1397,7 @@ namespace lfs::gui {
             if (id == "fps-slider" && event_id == Rml::EventId::Change) {
                 const float value = event.GetParameter<float>("value", fps_);
                 if (std::isfinite(value))
-                    fps_ = std::clamp(value, 0.1f, maximumExtractionFps(*player_));
+                    fps_ = sliderExtractionFps(value, *player_);
             }
             event.StopPropagation();
         }
@@ -1522,7 +1529,7 @@ namespace lfs::gui {
         } else if (id == "scale-select") {
             scale_selection_ = scale_select_el_ ? scale_select_el_->GetSelection() : scale_selection_;
         } else if (id == "fps-slider") {
-            fps_ = std::clamp(readFloatValue(fps_slider_el_, fps_), 0.1f, maximumExtractionFps(*player_));
+            fps_ = sliderExtractionFps(readFloatValue(fps_slider_el_, fps_), *player_);
             changed_control = fps_slider_el_;
         } else if (id == "fps-value") {
             const std::string value = controlValue(fps_value_el_);

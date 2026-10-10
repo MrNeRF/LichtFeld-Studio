@@ -325,6 +325,12 @@ namespace {
     }
 
     TEST_F(VideoExtractorFpsInputTest, KeyboardEditingSurvivesRefreshAndCommitsOnBlur) {
+        TempDir temp("fps_keyboard_video");
+        const auto source = temp.path / "source.mp4";
+        ASSERT_TRUE(writeProbedVideoWithRate(source, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
+        ASSERT_TRUE(dialog->openVideoPath(source));
+        Access::sync(*dialog);
+        context->Update();
         ASSERT_TRUE(input->Focus());
         input->SetSelectionRange(0, static_cast<int>(input->GetValue().size()));
         context->ProcessTextInput("2.");
@@ -373,6 +379,42 @@ namespace {
             enter("29.97");
             EXPECT_NEAR(Access::fps(*dialog), std::min(29.97f, rate), 1e-5f);
         }
+    }
+
+    TEST_F(VideoExtractorFpsInputTest, ControlsRequireALoadedVideo) {
+        EXPECT_TRUE(input->HasAttribute("disabled"));
+        EXPECT_TRUE(slider->HasAttribute("disabled"));
+        TempDir temp("fps_controls_video");
+        const auto source = temp.path / "source.mp4";
+        ASSERT_TRUE(writeProbedVideoWithRate(source, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 16, 1));
+        ASSERT_TRUE(dialog->openVideoPath(source));
+        Access::sync(*dialog);
+        EXPECT_FALSE(input->HasAttribute("disabled"));
+        EXPECT_FALSE(slider->HasAttribute("disabled"));
+        EXPECT_FLOAT_EQ(std::stof(slider->GetAttribute<Rml::String>("max", "")), 16.0f);
+    }
+
+    TEST_F(VideoExtractorFpsInputTest, SliderEventsNormalizeDecimalsWithoutRoundingTypedValues) {
+        TempDir temp("fps_slider_precision");
+        const auto source = temp.path / "source.mp4";
+        ASSERT_TRUE(writeProbedVideoWithRate(source, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30000, 1001));
+        ASSERT_TRUE(dialog->openVideoPath(source));
+        Access::sync(*dialog);
+        for (const float value : {2.3000002f, 4.6999998f, 15.100001f}) {
+            Rml::Dictionary parameters;
+            parameters["value"] = value;
+            slider->DispatchEvent(Rml::EventId::Change, parameters);
+            Access::sync(*dialog);
+            EXPECT_EQ(input->GetValue(), std::format("{:.1f}", value));
+        }
+        Rml::Dictionary parameters;
+        parameters["value"] = 30.0f;
+        slider->DispatchEvent(Rml::EventId::Change, parameters);
+        Access::sync(*dialog);
+        EXPECT_FLOAT_EQ(Access::fps(*dialog), static_cast<float>(30000.0 / 1001.0));
+        enter("2.36");
+        EXPECT_EQ(input->GetValue(), "2.36");
+        EXPECT_FLOAT_EQ(Access::fps(*dialog), 2.36f);
     }
 
     TEST_F(VideoExtractorFpsInputTest, ExtractionRequestUsesTypedFps) {
