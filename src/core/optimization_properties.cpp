@@ -918,4 +918,25 @@ namespace lfs::core::param {
             register_optimization_properties();
     }
 
+    void apply_live_optimization_updates(
+        OptimizationParameters& current, const OptimizationParameters& edited) {
+        if (canonical_strategy_name(current.strategy) != canonical_strategy_name(edited.strategy))
+            return;
+
+        static const auto live_properties = [] {
+            ensure_optimization_properties_registered();
+            std::vector<PropertyMeta> properties;
+            const auto group = PropertyRegistry::instance().get_group_snapshot("optimization");
+            for (const auto& property : group->properties) {
+                if (property.is_live_update() && property.getter && property.setter)
+                    properties.push_back(property);
+            }
+            return properties;
+        }();
+        auto destination = PropertyObjectRef::cpp(&current);
+        const auto source = PropertyObjectRef::cpp(const_cast<OptimizationParameters*>(&edited));
+        for (const auto& property : live_properties)
+            property.setter(destination, property.getter(source));
+    }
+
 } // namespace lfs::core::param

@@ -10,6 +10,7 @@
 #include "core/events.hpp"
 #include "core/guarded_task.hpp"
 #include "core/logger.hpp"
+#include "core/optimization_properties.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
 #include "core/reactive/store.hpp"
@@ -2850,6 +2851,15 @@ namespace lfs::vis {
         if (!first_start && !canChangeStrategy(params.optimization.strategy))
             return;
 
+        if (trainer_->isInitialized()) {
+            auto active = previous_params.optimization;
+            lfs::core::param::apply_live_optimization_updates(active, params.optimization);
+            // Save-step editing is a separate supported control, outside the
+            // optimization property registry. Preserve its evaluation schedule.
+            active.save_steps = params.optimization.save_steps;
+            active.eval_steps = params.optimization.eval_steps;
+            params.optimization = std::move(active);
+        }
         const bool evaluation_split_changed =
             previous_params.optimization.holds_out_eval_images() != params.optimization.holds_out_eval_images() ||
             previous_params.dataset.test_every != params.dataset.test_every;
