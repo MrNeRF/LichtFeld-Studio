@@ -1221,7 +1221,9 @@ def test_menu_bar_transfer_operator_shows_overlay(monkeypatch):
     assert calls == ['overlay']
 
 
-def test_registered_load_confirmation_keeps_batch_after_prompt(monkeypatch):
+@pytest.mark.parametrize("paths", [["/tmp/first.ply"], ["/tmp/first.ply", "/tmp/second.ply"]])
+@pytest.mark.parametrize("choice", ["discard", "cancel", "save_failed"])
+def test_registered_load_confirmation_keeps_batch_after_prompt(monkeypatch, paths, choice):
     file_menu = _load_file_menu(monkeypatch)
     callbacks = {}
     file_menu.lf.register_class = lambda _cls: None
@@ -1237,15 +1239,24 @@ def test_registered_load_confirmation_keeps_batch_after_prompt(monkeypatch):
     calls = []
     file_menu.lf.load_files = lambda *args, **kwargs: calls.append((args, kwargs))
     callbacks["on_show_load_file_confirmation_with_batch"](
-        ["/tmp/first.ply", "/tmp/second.ply"], False, True, True
+        paths, False, True, True
     )
     assert calls == []
     assert len(file_menu.lf.confirm_dialogs) == 1
     _title, _message, buttons, on_result = file_menu.lf.confirm_dialogs[0]
     assert "tr:unsaved_work.continue_without_saving" in buttons
-    on_result("tr:unsaved_work.continue_without_saving")
+    if choice == "save_failed":
+        file_menu.lf.project_save = lambda **_kwargs: False
+        on_result(buttons[0])
+    elif choice == "cancel":
+        on_result("tr:common.cancel")
+    else:
+        on_result("tr:unsaved_work.continue_without_saving")
+    if choice != "discard":
+        assert calls == []
+        return
     assert calls == [
-        ((["/tmp/first.ply", "/tmp/second.ply"],),
+        ((paths,),
          {"discard_changes": True, "replace": True,
           "stop_training": False, "_user_batch": True})
     ]

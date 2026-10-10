@@ -6667,6 +6667,14 @@ contract["check_selection_submode_follows_native_mode"](lf)
             EXPECT_EQ(event.paths, (std::vector<std::filesystem::path>{replacement}));
             EXPECT_TRUE(event.replace);
             EXPECT_TRUE(event.user_batch);
+            core::ModalRequest request;
+            request.title = "Replace scene?";
+            request.buttons = {{"Continue", "primary"}, {"Cancel", "secondary"}};
+            request.on_result = [&](const core::ModalResult& result) {
+                if (result.button_label == "Continue")
+                    core::events::cmd::LoadFile{.path = replacement, .is_dataset = false, .discard_changes = true, .replace = true, .paths = {replacement}, .user_batch = true}.emit();
+            };
+            viewer.getGuiManager()->modalOverlay()->enqueue(std::move(request));
         });
         controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("single-before-replace"))});
         core::events::cmd::LoadFile{.path = replacement, .is_dataset = false, .replace = true, .paths = {replacement}, .user_batch = true}.emit();
@@ -6683,10 +6691,14 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_FALSE(tasks.isImporting());
         EXPECT_NE(viewer.getScene().getNode("single-before-replace"), nullptr);
         EXPECT_EQ(viewer.getScene().getNode("single-after-prompt"), nullptr);
-        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("single-late-drop"))});
+        // Poll real overlay state repeatedly, including a request not rendered
+        // yet in this headless viewer. Later drops must remain queued.
+        for (int i = 0; i < 5; ++i)
+            tasks.pollImportCompletion();
+        EXPECT_TRUE(viewer.getDataLoader()->hasPendingImports());
         EXPECT_FALSE(tasks.isImporting());
-        // Re-submit the confirmed head exactly as the UI does.
-        core::events::cmd::LoadFile{.path = replacement, .is_dataset = false, .discard_changes = true, .replace = true, .paths = {replacement}, .user_batch = true}.emit();
+        EXPECT_EQ(viewer.getScene().getNode("single-after-prompt"), nullptr);
+        ASSERT_TRUE(viewer.getGuiManager()->modalOverlay()->dismiss("Continue"));
         ASSERT_TRUE(waitUntil([&] {
             tasks.pollImportCompletion();
             return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
@@ -6694,6 +6706,61 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(prompts, 1u);
         EXPECT_NE(viewer.getScene().getNode("single-replacement"), nullptr);
         EXPECT_EQ(viewer.getScene().getNode("single-before-replace"), nullptr);
+    }
+
+    TEST_F(VisualizerImplResetTest, QueuedSingleReplaceCancellationResumesLaterDrops) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.getParameterManager()->modifyActiveParams([](auto& params) { ++params.iterations; });
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        const auto replacement = makeSplatFixture("single-replacement");
+        size_t prompts = 0;
+        core::events::cmd::ShowLoadFileConfirmation::when([&](const auto& event) {
+            ++prompts;
+            EXPECT_EQ(event.paths, (std::vector<std::filesystem::path>{replacement}));
+            EXPECT_TRUE(event.replace);
+            EXPECT_TRUE(event.user_batch);
+            core::ModalRequest request;
+            request.title = "Replace scene?";
+            request.buttons = {{"Continue", "primary"}, {"Cancel", "secondary"}};
+            request.on_result = [&](const core::ModalResult& result) {
+                if (result.button_label == "Continue")
+                    core::events::cmd::LoadFile{.path = replacement, .is_dataset = false, .discard_changes = true, .replace = true, .paths = {replacement}, .user_batch = true}.emit();
+            };
+            viewer.getGuiManager()->modalOverlay()->enqueue(std::move(request));
+        });
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("single-before-replace"))});
+        core::events::cmd::LoadFile{.path = replacement, .is_dataset = false, .replace = true, .paths = {replacement}, .user_batch = true}.emit();
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("single-after-prompt"))});
+        ASSERT_EQ(prompts, 0u);
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            if (prompts == 0)
+                tasks.pollImportCompletion();
+            return prompts != 0;
+        }));
+        EXPECT_EQ(prompts, 1u);
+        EXPECT_TRUE(viewer.getDataLoader()->hasPendingImports());
+        EXPECT_FALSE(tasks.isImporting());
+        EXPECT_NE(viewer.getScene().getNode("single-before-replace"), nullptr);
+        EXPECT_EQ(viewer.getScene().getNode("single-after-prompt"), nullptr);
+        // Poll real overlay state repeatedly, including a request not rendered
+        // yet in this headless viewer. Later drops must remain queued.
+        for (int i = 0; i < 5; ++i)
+            tasks.pollImportCompletion();
+        EXPECT_TRUE(viewer.getDataLoader()->hasPendingImports());
+        EXPECT_FALSE(tasks.isImporting());
+        EXPECT_EQ(viewer.getScene().getNode("single-after-prompt"), nullptr);
+        ASSERT_TRUE(viewer.getGuiManager()->modalOverlay()->dismiss("Cancel"));
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        EXPECT_EQ(prompts, 1u);
+        EXPECT_EQ(viewer.getScene().getNode("single-replacement"), nullptr);
+        EXPECT_NE(viewer.getScene().getNode("single-before-replace"), nullptr);
+        EXPECT_NE(viewer.getScene().getNode("single-after-prompt"), nullptr);
     }
 
     TEST_F(VisualizerImplResetTest, SecondDropQueuesUntilFirstImportAttaches) {

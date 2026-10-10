@@ -61,11 +61,10 @@ namespace lfs::vis {
         const lfs::core::events::cmd::LoadFile& cmd) {
         // User drops, including single files, wait for the current import. API
         // requests keep their busy rejection; checkpoints keep their own flow.
-        // Resolve replacement only when the drop reaches the front. A confirmed
-        // head resumes ahead of later drops once the loader is idle.
+        // Resolve replacement when dequeued. Confirmation retries follow the
+        // normal admission path; discard_changes grants no queue priority.
         if (cmd.user_batch && !cmd.is_dataset && !isCheckpointFile(cmd.path) && viewer_ && viewer_->getGuiManager() &&
-            (viewer_->getGuiManager()->asyncTasks().isImporting() ||
-             (!pending_imports_.empty() && !cmd.discard_changes))) {
+            viewer_->getGuiManager()->asyncTasks().isImporting()) {
             pending_imports_.push_back(cmd);
             return;
         }
@@ -150,7 +149,8 @@ namespace lfs::vis {
         if (!pending_imports_.empty() && viewer_ && viewer_->getGuiManager() &&
             !viewer_->getGuiManager()->asyncTasks().isImporting() &&
             (!viewer_->getGuiManager()->modalOverlay() ||
-             !viewer_->getGuiManager()->modalOverlay()->isOpen())) {
+             (!viewer_->getGuiManager()->modalOverlay()->isOpen() &&
+              !viewer_->getGuiManager()->modalOverlay()->hasPendingRequest()))) {
             auto command = std::move(pending_imports_.front());
             pending_imports_.pop_front();
             startLoadFileCommand(command);
