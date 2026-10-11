@@ -27,6 +27,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <limits>
 #include <mutex>
+#include <stdexcept>
 #include <vector>
 
 namespace lfs::rendering {
@@ -134,6 +135,15 @@ namespace lfs::rendering {
         cache.image = image;
         LOG_INFO("Loaded tensor environment map {}", path_utf8);
         return image;
+    }
+
+    void probeEnvironmentImage(const std::filesystem::path& environment_path) {
+        const auto resolved_path = resolveEnvironmentPath(environment_path);
+        if (resolved_path.empty())
+            throw std::runtime_error("Environment map path is empty");
+        const auto [width, height, channels] = lfs::core::probe_image_info(resolved_path);
+        if (width <= 0 || height <= 0 || channels <= 0)
+            throw std::runtime_error("Invalid environment map dimensions");
     }
 
     std::expected<EnvironmentImage, std::string> loadEnvironmentImage(

@@ -2521,6 +2521,7 @@
     "perf_hud_tooltip": "Pokaż lub ukryj HUD wydajności"
   },
   "runtime": {
+    "environment_map_failed": "Nie można odczytać mapy środowiska „{}”. Zachowano poprzednie środowisko.",
     "training_save_no_memory": "Nie udało się zapisać projektu: {}",
     "autosave_deferred_no_memory": "Autozapis został wstrzymany: za mało wolnej pamięci ({}). Trening jest kontynuowany; autozapis wznowi się, gdy pamięć zostanie zwolniona.",
     "grouped_changes": "Zgrupowane zmiany",

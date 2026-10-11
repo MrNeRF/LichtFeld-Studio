@@ -2520,6 +2520,7 @@
     "perf_hud_tooltip": "Show or hide the performance HUD"
   },
   "runtime": {
+    "environment_map_failed": "Could not read environment map \"{}\". The previous environment was kept.",
     "training_save_no_memory": "Project save failed: {}",
     "autosave_deferred_no_memory": "Autosave is paused: not enough free memory ({}). Training continues; autosave resumes when memory frees up.",
     "grouped_changes": "Grouped changes",

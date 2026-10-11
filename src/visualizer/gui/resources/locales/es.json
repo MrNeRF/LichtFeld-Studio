@@ -2521,6 +2521,7 @@
     "perf_hud_tooltip": "Mostrar u ocultar el HUD de rendimiento"
   },
   "runtime": {
+    "environment_map_failed": "No se pudo leer el mapa de entorno «{}». Se ha conservado el entorno anterior.",
     "training_save_no_memory": "No se pudo guardar el proyecto: {}",
     "autosave_deferred_no_memory": "El guardado automático está en pausa: no hay suficiente memoria libre ({}). El entrenamiento continúa; el guardado automático se reanudará cuando se libere memoria.",
     "grouped_changes": "Cambios agrupados",
