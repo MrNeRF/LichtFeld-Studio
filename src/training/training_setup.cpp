@@ -41,9 +41,10 @@
 namespace lfs::training {
 
     namespace {
-        std::shared_ptr<lfs::core::PointCloud> createRandomPointCloud() {
-            constexpr size_t N = 10000;
-            auto positions = lfs::core::Tensor::rand({N, 3}, lfs::core::Device::CPU) * 2.0f - 1.0f;
+        std::shared_ptr<lfs::core::PointCloud> createRandomPointCloud(const lfs::core::param::TrainingParameters& params) {
+            const auto N = static_cast<size_t>(params.optimization.init_num_pts);
+            const float extent = params.optimization.init_extent;
+            auto positions = (lfs::core::Tensor::rand({N, 3}, lfs::core::Device::CPU) * 2.0f - 1.0f) * extent;
             auto colors = lfs::core::Tensor::randint({N, 3}, 0, 256, lfs::core::Device::CPU, lfs::core::DataType::UInt8);
             return std::make_shared<lfs::core::PointCloud>(positions, colors);
         }
@@ -296,10 +297,9 @@ namespace lfs::training {
             } else if (data.point_cloud && data.point_cloud->size() > 0) {
                 point_cloud = data.point_cloud;
             } else {
-                if (verbose) {
-                    LOG_INFO("No point cloud, using random initialization");
-                }
-                point_cloud = createRandomPointCloud();
+                LOG_WARN("No sparse points available; using random initialization with {} points and extent {}",
+                         params.optimization.init_num_pts, params.optimization.init_extent);
+                point_cloud = createRandomPointCloud(params);
                 if (verbose) {
                     LOG_INFO("Adding {} random points to scene", point_cloud->size());
                 }
@@ -1034,8 +1034,9 @@ namespace lfs::training {
                 point_cloud_to_use.colors = point_cloud_to_use.colors.cpu();
             }
         } else {
-            LOG_INFO("No point cloud provided, using random initialization");
-            point_cloud_to_use = *createRandomPointCloud();
+            LOG_WARN("No sparse points available; using random initialization with {} points and extent {}",
+                     params.optimization.init_num_pts, params.optimization.init_extent);
+            point_cloud_to_use = *createRandomPointCloud(params);
         }
 
         if (!params.optimization.random && max_cap > 0 &&
