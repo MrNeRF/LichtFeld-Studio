@@ -2,14 +2,28 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Point-cloud handles retain owned data and resolve live scene identity safely."""
 
+import os
 import time
 
 import pytest
 
-from test_api_camera_project_runtime import camera_runtime, _editor
+from test_api_camera_project_runtime import camera_runtime as _app_runtime, _editor
 from test_render_on_demand_idle import _tool
 
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
+
+
+@pytest.fixture
+def camera_runtime(_app_runtime, tmp_path):
+    yield _app_runtime
+    if os.environ.get("ASAN_OPTIONS"):
+        time.sleep(.2)
+        log = (tmp_path / "app.log").read_text(encoding="utf-8", errors="replace")
+        if "ERROR: AddressSanitizer" in log:
+            # Preserve the reporting process long enough to finish its stack trace.
+            time.sleep(10)
+            log = (tmp_path / "app.log").read_text(encoding="utf-8", errors="replace")
+        assert "ERROR: AddressSanitizer" not in log, log
 
 
 @pytest.mark.parametrize("reset", ["remove", "clear"])
@@ -184,3 +198,115 @@ for access in (lambda: old_cloud.size,
         raise AssertionError("old reference resolved a different project's cloud")
 ''')
     assert not rejected_export.exists()
+
+
+def test_point_cloud_export_survives_source_removal(camera_runtime, tmp_path):
+    exported = tmp_path / "concurrent.ply"
+    _editor(camera_runtime, f'''
+import lichtfeld as lf, threading, time, os
+scene = lf.get_scene()
+scene.add_point_cloud("export cloud", lf.Tensor.zeros([2000000, 3], device="cpu"),
+                      lf.Tensor.ones([2000000, 3], device="cpu"))
+cloud = scene.get_node("export cloud").point_cloud()
+export_errors = []
+def export_cloud():
+    try:
+        lf.io.save_point_cloud_ply(cloud, {str(exported)!r})
+    except BaseException as error:
+        export_errors.append(repr(error))
+export_thread = threading.Thread(target=export_cloud)
+export_thread.start()
+deadline = time.monotonic() + 10
+while not os.path.exists({str(exported)!r}) and export_thread.is_alive():
+    assert time.monotonic() < deadline, "export did not open its output"
+    time.sleep(.001)
+assert export_thread.is_alive(), "export finished before overlap could be exercised"
+scene.remove_node("export cloud")
+export_thread.join(10)
+assert not export_thread.is_alive(), "export did not finish"
+assert not export_errors, export_errors
+try:
+    cloud.size
+except RuntimeError:
+    pass
+else:
+    raise AssertionError("removed export source remains accessible")
+''')
+    with exported.open("rb") as stream:
+        header = []
+        while True:
+            line = stream.readline()
+            assert line, "incomplete PLY header"
+            header.append(line)
+            if line.strip() == b"end_header":
+                break
+        assert b"element vertex 2000000\n" in header or b"element vertex 2000000\r\n" in header
+        sizes = {b"float": 4, b"uchar": 1}
+        stride = sum(sizes[line.split()[1]] for line in header if line.startswith(b"property "))
+        assert stride >= 3 * 4 + 3
+        assert len(stream.read()) == 2000000 * stride
+
+
+def test_point_cloud_handles_allow_graceful_exit(request, monkeypatch, tmp_path):
+    import subprocess
+
+    children = []
+    original_popen = subprocess.Popen
+
+    def track_popen(*args, **kwargs):
+        process = original_popen(*args, **kwargs)
+        children.append(process)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", track_popen)
+    endpoint = request.getfixturevalue("camera_runtime")
+    assert len(children) == 1
+    _editor(endpoint, '''
+import lichtfeld as lf, threading
+scene = lf.get_scene()
+scene.add_point_cloud("exit cloud", lf.Tensor.zeros([3, 3], device="cpu"),
+                      lf.Tensor.ones([3, 3], device="cpu"))
+exit_cloud = scene.get_node("exit cloud").point_cloud()
+exit_tensor = exit_cloud.means
+''')
+    _tool(endpoint, "project_save_as", {"path": str(tmp_path / "exit.licht")})
+    _editor(endpoint, "threading.Timer(.75, lf.request_exit).start()")
+    assert children[0].wait(timeout=30) == 0
+
+
+def test_python_history_playback_dispatch_and_callbacks(camera_runtime):
+    _editor(camera_runtime, '''
+import lichtfeld as lf, threading
+lf.undo.clear()
+caller_thread = threading.get_ident()
+callback_threads = []
+counter = [11]
+def change(delta):
+    callback_threads.append(threading.get_ident())
+    counter[0] += delta
+lf.undo.push("test.first", lambda: change(-1), lambda: change(1))
+lf.undo.push("test.second", lambda: change(-10), lambda: change(10))
+result = lf.undo.jump("undo", 2)
+assert result["success"] and result["steps_performed"] == 2, result
+assert counter == [0]
+result = lf.undo.jump("redo", 2)
+assert result["success"] and result["steps_performed"] == 2, result
+assert counter == [11]
+assert lf.undo.undo() and counter == [1]
+assert lf.undo.redo() and counter == [11]
+assert len(set(callback_threads)) == 1
+assert callback_threads[0] != caller_thread
+finished = threading.Event()
+callback_errors = []
+def undo_on_ui():
+    try:
+        assert lf.undo.undo()
+    except BaseException as error:
+        callback_errors.append(repr(error))
+    finally:
+        finished.set()
+lf.ui.schedule_on_ui_thread(undo_on_ui)
+assert finished.wait(5), "viewer-thread playback deadlocked"
+assert not callback_errors, callback_errors
+assert counter == [1]
+''')
