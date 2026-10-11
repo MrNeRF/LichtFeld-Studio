@@ -2026,7 +2026,7 @@ namespace lfs::vis {
         });
 
         state::TrainingPaused::when([this](const auto& event) {
-            training_progress_publisher_.publishFinal(event.iteration);
+            training_progress_publisher_.publishFinal(event.iteration, trainer_manager_->getNumSplats());
             auto& store = app_store();
             lfs::core::reactive::BatchUpdate batch(store.store());
             store.training_running.set(false);
@@ -2043,7 +2043,7 @@ namespace lfs::vis {
         });
 
         state::TrainingCompleted::when([this](const auto& event) {
-            training_progress_publisher_.publishFinal(event.iteration);
+            training_progress_publisher_.publishFinal(event.iteration, trainer_manager_->getNumSplats());
             const char* state = !event.success       ? "error"
                                 : event.user_stopped ? "stopped"
                                                      : "completed";
