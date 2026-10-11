@@ -249,7 +249,8 @@ class Ellipsoid:
         """List available attributes"""
 
 class PointCloud:
-    """Point-cloud data owned by a load result or referenced by scene node identity.
+    """
+    Point-cloud data owned by a load result or referenced by scene node identity.
 
     Loaded data remains usable after its LoadResult is released. Scene-backed
     handles raise RuntimeError while their source node is absent; undo restoring

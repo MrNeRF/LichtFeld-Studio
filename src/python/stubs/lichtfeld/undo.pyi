@@ -1,4 +1,5 @@
-"""Undo/redo system.
+"""
+Undo/redo system.
 
 With an active viewer, undo(), redo() and jump() wait for playback on the
 viewer thread, where registered Python callbacks also execute. Standalone

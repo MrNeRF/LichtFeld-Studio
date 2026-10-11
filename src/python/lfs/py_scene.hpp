@@ -127,45 +127,18 @@ namespace lfs::python {
             assert(scene_ != nullptr);
         }
 
-        PyTensor means() const { return PyTensor(data()->means, false); }
-        PyTensor colors() const { return PyTensor(data()->colors, false); }
-
-        std::optional<PyTensor> normals() const {
-            if (!data()->normals.is_valid())
-                return std::nullopt;
-            return PyTensor(data()->normals, false);
-        }
-        std::optional<PyTensor> sh0() const {
-            if (!data()->sh0.is_valid())
-                return std::nullopt;
-            return PyTensor(data()->sh0, false);
-        }
-        std::optional<PyTensor> shN() const {
-            if (!data()->shN.is_valid())
-                return std::nullopt;
-            return PyTensor(data()->shN, false);
-        }
-        std::optional<PyTensor> opacity() const {
-            if (!data()->opacity.is_valid())
-                return std::nullopt;
-            return PyTensor(data()->opacity, false);
-        }
-        std::optional<PyTensor> scaling() const {
-            if (!data()->scaling.is_valid())
-                return std::nullopt;
-            return PyTensor(data()->scaling, false);
-        }
-        std::optional<PyTensor> rotation() const {
-            if (!data()->rotation.is_valid())
-                return std::nullopt;
-            return PyTensor(data()->rotation, false);
-        }
-
-        int64_t size() const { return data()->size(); }
-        bool is_gaussian() const { return data()->is_gaussian(); }
-        std::vector<std::string> attribute_names() const { return data()->attribute_names; }
-
-        void normalize_colors() { data()->normalize_colors(); }
+        PyTensor means() const;
+        PyTensor colors() const;
+        std::optional<PyTensor> normals() const;
+        std::optional<PyTensor> sh0() const;
+        std::optional<PyTensor> shN() const;
+        std::optional<PyTensor> opacity() const;
+        std::optional<PyTensor> scaling() const;
+        std::optional<PyTensor> rotation() const;
+        int64_t size() const;
+        bool is_gaussian() const;
+        std::vector<std::string> attribute_names() const;
+        void normalize_colors();
 
         // Filter points by boolean mask - keeps points where mask is True
         int64_t filter(const PyTensor& keep_mask);
@@ -178,13 +151,9 @@ namespace lfs::python {
         void set_colors(const PyTensor& colors);
         void set_means(const PyTensor& points);
 
-        core::PointCloud* data() { return resolve_data(); }
-        const core::PointCloud* data() const { return resolve_data(); }
-
         std::shared_ptr<core::PointCloud> retain_data() const;
 
     private:
-        core::PointCloud* resolve_data() const;
         core::SceneNode& resolve_node() const;
 
         std::shared_ptr<core::PointCloud> owner_;

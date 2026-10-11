@@ -15,6 +15,7 @@
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/operation/undo_entry.hpp"
 #include "visualizer/operation/undo_history.hpp"
+#include "visualizer/post_work_utils.hpp"
 #include "visualizer/rendering/vulkan_external_tensor.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/training/training_manager.hpp"
@@ -24,10 +25,45 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <nanobind/ndarray.h>
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
 
 namespace lfs::python {
 
     namespace {
+        template <typename F>
+        auto point_cloud_access(core::Scene* scene, F&& access) -> std::invoke_result_t<F> {
+            using T = std::invoke_result_t<F>;
+            auto* viewer = scene ? get_visualizer() : nullptr;
+            if (!viewer || viewer->isOnViewerThread())
+                return access();
+            const core::TaskContext context{
+                .name = "python.point_cloud.access",
+                .domain = lfs::ErrorDomain::Python,
+                .operation_id = lfs::OperationId::generate(),
+                .site = LFS_SOURCE_SITE_CURRENT(),
+            };
+            const auto cancelled = lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Cancelled,
+                .domain = lfs::ErrorDomain::Python,
+                .severity = lfs::Severity::Warning,
+                .detail = "Viewer is shutting down",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+            nb::gil_scoped_release release;
+            return unwrap(vis::post_guarded_and_wait<T>(
+                *viewer, context,
+                [&access]() -> lfs::Result<T> {
+                    if constexpr (std::is_void_v<T>) {
+                        access();
+                        return {};
+                    } else {
+                        return access();
+                    }
+                },
+                cancelled));
+        }
+
         void register_scene_node_properties() {
             using namespace lfs::core::prop;
             PropertyGroupBuilder<core::SceneNode>("scene_node", "Scene Node")
@@ -199,11 +235,12 @@ namespace lfs::python {
     }
 
     std::optional<PyPointCloud> PySceneNode::point_cloud() {
-        auto& live = node();
-        if (live.type != core::NodeType::POINTCLOUD || !live.point_cloud) {
-            return std::nullopt;
-        }
-        return PyPointCloud(&live, scene_);
+        return point_cloud_access(scene_, [&]() -> std::optional<PyPointCloud> {
+            auto& live = node();
+            if (live.type != core::NodeType::POINTCLOUD || !live.point_cloud)
+                return std::nullopt;
+            return PyPointCloud(&live, scene_);
+        });
     }
 
     std::optional<PyMeshInfo> PySceneNode::mesh() {
@@ -225,124 +262,226 @@ namespace lfs::python {
         throw std::runtime_error("PointCloud source node has been deleted or is no longer available");
     }
 
-    core::PointCloud* PyPointCloud::resolve_data() const {
-        if (owner_)
-            return owner_.get();
-        return resolve_node().point_cloud.get();
+    std::shared_ptr<core::PointCloud> PyPointCloud::retain_data() const {
+        return point_cloud_access(scene_, [&] {
+            return owner_ ? owner_ : resolve_node().point_cloud;
+        });
     }
 
-    std::shared_ptr<core::PointCloud> PyPointCloud::retain_data() const {
-        return owner_ ? owner_ : resolve_node().point_cloud;
+    PyTensor PyPointCloud::means() const {
+        return point_cloud_access(scene_, [&] {
+            const auto pc = retain_data();
+            return PyTensor(pc->means, false);
+        });
+    }
+
+    PyTensor PyPointCloud::colors() const {
+        return point_cloud_access(scene_, [&] {
+            const auto pc = retain_data();
+            return PyTensor(pc->colors, false);
+        });
+    }
+
+    std::optional<PyTensor> PyPointCloud::normals() const {
+        return point_cloud_access(scene_, [&]() -> std::optional<PyTensor> {
+            const auto pc = retain_data();
+            if (!pc->normals.is_valid())
+                return std::nullopt;
+            return PyTensor(pc->normals, false);
+        });
+    }
+
+    std::optional<PyTensor> PyPointCloud::sh0() const {
+        return point_cloud_access(scene_, [&]() -> std::optional<PyTensor> {
+            const auto pc = retain_data();
+            if (!pc->sh0.is_valid())
+                return std::nullopt;
+            return PyTensor(pc->sh0, false);
+        });
+    }
+
+    std::optional<PyTensor> PyPointCloud::shN() const {
+        return point_cloud_access(scene_, [&]() -> std::optional<PyTensor> {
+            const auto pc = retain_data();
+            if (!pc->shN.is_valid())
+                return std::nullopt;
+            return PyTensor(pc->shN, false);
+        });
+    }
+
+    std::optional<PyTensor> PyPointCloud::opacity() const {
+        return point_cloud_access(scene_, [&]() -> std::optional<PyTensor> {
+            const auto pc = retain_data();
+            if (!pc->opacity.is_valid())
+                return std::nullopt;
+            return PyTensor(pc->opacity, false);
+        });
+    }
+
+    std::optional<PyTensor> PyPointCloud::scaling() const {
+        return point_cloud_access(scene_, [&]() -> std::optional<PyTensor> {
+            const auto pc = retain_data();
+            if (!pc->scaling.is_valid())
+                return std::nullopt;
+            return PyTensor(pc->scaling, false);
+        });
+    }
+
+    std::optional<PyTensor> PyPointCloud::rotation() const {
+        return point_cloud_access(scene_, [&]() -> std::optional<PyTensor> {
+            const auto pc = retain_data();
+            if (!pc->rotation.is_valid())
+                return std::nullopt;
+            return PyTensor(pc->rotation, false);
+        });
+    }
+
+    int64_t PyPointCloud::size() const {
+        return point_cloud_access(scene_, [&] {
+            const auto pc = retain_data();
+            return pc->size();
+        });
+    }
+
+    bool PyPointCloud::is_gaussian() const {
+        return point_cloud_access(scene_, [&] {
+            const auto pc = retain_data();
+            return pc->is_gaussian();
+        });
+    }
+
+    std::vector<std::string> PyPointCloud::attribute_names() const {
+        return point_cloud_access(scene_, [&] {
+            const auto pc = retain_data();
+            return pc->attribute_names;
+        });
+    }
+
+    void PyPointCloud::normalize_colors() {
+        return point_cloud_access(scene_, [&] {
+            const auto pc = retain_data();
+            return pc->normalize_colors();
+        });
     }
 
     int64_t PyPointCloud::filter(const PyTensor& keep_mask) {
-        auto* const pc = resolve_data();
-        const auto& mask = keep_mask.tensor();
-        assert(mask.dtype() == core::DataType::Bool && "Mask must be boolean");
-        assert(mask.shape().rank() == 1 && "Mask must be 1D");
-        assert(static_cast<size_t>(mask.shape()[0]) == static_cast<size_t>(pc->size()) && "Mask size must match point count");
+        return point_cloud_access(scene_, [&] {
+            const auto pc = retain_data();
+            const auto& mask = keep_mask.tensor();
+            assert(mask.dtype() == core::DataType::Bool && "Mask must be boolean");
+            assert(mask.shape().rank() == 1 && "Mask must be 1D");
+            assert(static_cast<size_t>(mask.shape()[0]) == static_cast<size_t>(pc->size()) && "Mask size must match point count");
 
-        // Ensure mask is on same device as data
-        const auto device = pc->means.device();
-        const auto mask_dev = mask.device() == device ? mask : mask.to(device);
+            // Ensure mask is on same device as data
+            const auto device = pc->means.device();
+            const auto mask_dev = mask.device() == device ? mask : mask.to(device);
 
-        const int64_t old_size = pc->size();
-        pc->means = pc->means.is_valid() ? pc->means[mask_dev] : pc->means;
-        pc->colors = pc->colors.is_valid() ? pc->colors[mask_dev] : pc->colors;
-        pc->normals = pc->normals.is_valid() ? pc->normals[mask_dev] : pc->normals;
-        pc->sh0 = pc->sh0.is_valid() ? pc->sh0[mask_dev] : pc->sh0;
-        pc->shN = pc->shN.is_valid() ? pc->shN[mask_dev] : pc->shN;
-        pc->opacity = pc->opacity.is_valid() ? pc->opacity[mask_dev] : pc->opacity;
-        pc->scaling = pc->scaling.is_valid() ? pc->scaling[mask_dev] : pc->scaling;
-        pc->rotation = pc->rotation.is_valid() ? pc->rotation[mask_dev] : pc->rotation;
+            const int64_t old_size = pc->size();
+            pc->means = pc->means.is_valid() ? pc->means[mask_dev] : pc->means;
+            pc->colors = pc->colors.is_valid() ? pc->colors[mask_dev] : pc->colors;
+            pc->normals = pc->normals.is_valid() ? pc->normals[mask_dev] : pc->normals;
+            pc->sh0 = pc->sh0.is_valid() ? pc->sh0[mask_dev] : pc->sh0;
+            pc->shN = pc->shN.is_valid() ? pc->shN[mask_dev] : pc->shN;
+            pc->opacity = pc->opacity.is_valid() ? pc->opacity[mask_dev] : pc->opacity;
+            pc->scaling = pc->scaling.is_valid() ? pc->scaling[mask_dev] : pc->scaling;
+            pc->rotation = pc->rotation.is_valid() ? pc->rotation[mask_dev] : pc->rotation;
 
-        if (scene_) {
-            scene_->setPointCloudModified(true);
-            scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
-        }
-        return old_size - pc->size();
+            if (scene_) {
+                scene_->setPointCloudModified(true);
+                scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+            }
+            return old_size - pc->size();
+        });
     }
 
     int64_t PyPointCloud::filter_indices(const PyTensor& indices) {
-        auto* const pc = resolve_data();
-        const auto& idx = indices.tensor();
-        assert(idx.shape().rank() == 1 && "Indices must be 1D");
+        return point_cloud_access(scene_, [&] {
+            const auto pc = retain_data();
+            const auto& idx = indices.tensor();
+            assert(idx.shape().rank() == 1 && "Indices must be 1D");
 
-        const auto device = pc->means.device();
-        const auto idx_dev = idx.device() == device ? idx : idx.to(device);
+            const auto device = pc->means.device();
+            const auto idx_dev = idx.device() == device ? idx : idx.to(device);
 
-        const int64_t old_size = pc->size();
-        pc->means = pc->means.is_valid() ? pc->means[idx_dev] : pc->means;
-        pc->colors = pc->colors.is_valid() ? pc->colors[idx_dev] : pc->colors;
-        pc->normals = pc->normals.is_valid() ? pc->normals[idx_dev] : pc->normals;
-        pc->sh0 = pc->sh0.is_valid() ? pc->sh0[idx_dev] : pc->sh0;
-        pc->shN = pc->shN.is_valid() ? pc->shN[idx_dev] : pc->shN;
-        pc->opacity = pc->opacity.is_valid() ? pc->opacity[idx_dev] : pc->opacity;
-        pc->scaling = pc->scaling.is_valid() ? pc->scaling[idx_dev] : pc->scaling;
-        pc->rotation = pc->rotation.is_valid() ? pc->rotation[idx_dev] : pc->rotation;
+            const int64_t old_size = pc->size();
+            pc->means = pc->means.is_valid() ? pc->means[idx_dev] : pc->means;
+            pc->colors = pc->colors.is_valid() ? pc->colors[idx_dev] : pc->colors;
+            pc->normals = pc->normals.is_valid() ? pc->normals[idx_dev] : pc->normals;
+            pc->sh0 = pc->sh0.is_valid() ? pc->sh0[idx_dev] : pc->sh0;
+            pc->shN = pc->shN.is_valid() ? pc->shN[idx_dev] : pc->shN;
+            pc->opacity = pc->opacity.is_valid() ? pc->opacity[idx_dev] : pc->opacity;
+            pc->scaling = pc->scaling.is_valid() ? pc->scaling[idx_dev] : pc->scaling;
+            pc->rotation = pc->rotation.is_valid() ? pc->rotation[idx_dev] : pc->rotation;
 
-        if (scene_) {
-            scene_->setPointCloudModified(true);
-            scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
-        }
-        return old_size - pc->size();
+            if (scene_) {
+                scene_->setPointCloudModified(true);
+                scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+            }
+            return old_size - pc->size();
+        });
     }
 
     void PyPointCloud::set_data(const PyTensor& points, const PyTensor& colors) {
-        auto* const pc = resolve_data();
-        auto* const node = scene_ ? &resolve_node() : nullptr;
-        const auto& pts = points.tensor();
-        const auto& cols = colors.tensor();
-        assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
-        assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
-        assert(pts.shape()[0] == cols.shape()[0]);
+        return point_cloud_access(scene_, [&] {
+            const auto pc = retain_data();
+            auto* const node = scene_ ? &resolve_node() : nullptr;
+            const auto& pts = points.tensor();
+            const auto& cols = colors.tensor();
+            assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
+            assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
+            assert(pts.shape()[0] == cols.shape()[0]);
 
-        pc->means = pts.to(core::Device::CUDA);
-        pc->colors = cols.to(core::Device::CUDA);
+            pc->means = pts.to(core::Device::CUDA);
+            pc->colors = cols.to(core::Device::CUDA);
 
-        const int64_t n = pc->size();
-        if (node) {
-            node->gaussian_count.store(static_cast<size_t>(n), std::memory_order_release);
-            if (n > 0) {
+            const int64_t n = pc->size();
+            if (node) {
+                node->gaussian_count.store(static_cast<size_t>(n), std::memory_order_release);
+                if (n > 0) {
+                    auto centroid = pc->means.mean(0).cpu();
+                    auto acc = centroid.accessor<float, 1>();
+                    node->centroid = glm::vec3(acc(0), acc(1), acc(2));
+                }
+            }
+            if (scene_) {
+                scene_->setPointCloudModified(true);
+                scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+            }
+        });
+    }
+
+    void PyPointCloud::set_colors(const PyTensor& colors) {
+        return point_cloud_access(scene_, [&] {
+            const auto pc = retain_data();
+            const auto& cols = colors.tensor();
+            assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
+            assert(cols.shape()[0] == pc->size());
+            pc->colors = cols.to(pc->means.device());
+            if (scene_) {
+                scene_->setPointCloudModified(true);
+                scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+            }
+        });
+    }
+
+    void PyPointCloud::set_means(const PyTensor& points) {
+        return point_cloud_access(scene_, [&] {
+            const auto pc = retain_data();
+            auto* const node = scene_ ? &resolve_node() : nullptr;
+            const auto& pts = points.tensor();
+            assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
+            assert(pts.shape()[0] == pc->size());
+            pc->means = pts.to(pc->colors.device());
+            if (node && pc->size() > 0) {
                 auto centroid = pc->means.mean(0).cpu();
                 auto acc = centroid.accessor<float, 1>();
                 node->centroid = glm::vec3(acc(0), acc(1), acc(2));
             }
-        }
-        if (scene_) {
-            scene_->setPointCloudModified(true);
-            scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
-        }
-    }
-
-    void PyPointCloud::set_colors(const PyTensor& colors) {
-        auto* const pc = resolve_data();
-        const auto& cols = colors.tensor();
-        assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
-        assert(cols.shape()[0] == pc->size());
-        pc->colors = cols.to(pc->means.device());
-        if (scene_) {
-            scene_->setPointCloudModified(true);
-            scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
-        }
-    }
-
-    void PyPointCloud::set_means(const PyTensor& points) {
-        auto* const pc = resolve_data();
-        auto* const node = scene_ ? &resolve_node() : nullptr;
-        const auto& pts = points.tensor();
-        assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
-        assert(pts.shape()[0] == pc->size());
-        pc->means = pts.to(pc->colors.device());
-        if (node && pc->size() > 0) {
-            auto centroid = pc->means.mean(0).cpu();
-            auto acc = centroid.accessor<float, 1>();
-            node->centroid = glm::vec3(acc(0), acc(1), acc(2));
-        }
-        if (scene_) {
-            scene_->setPointCloudModified(true);
-            scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
-        }
+            if (scene_) {
+                scene_->setPointCloudModified(true);
+                scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+            }
+        });
     }
 
     std::optional<PyCropBox> PySceneNode::cropbox() {
@@ -1288,7 +1427,11 @@ namespace lfs::python {
             .def("__dir__", &PyEllipsoid::python_dir, "List available attributes");
 
         // PointCloud class
-        nb::class_<PyPointCloud>(m, "PointCloud")
+        nb::class_<PyPointCloud>(m, "PointCloud",
+                                 "Point-cloud data owned by a load result or referenced by scene node identity.\n\n"
+                                 "Loaded data remains usable after its LoadResult is released. Scene-backed\n"
+                                 "handles raise RuntimeError while their source node is absent; undo restoring\n"
+                                 "the same node makes the handle usable again.")
             .def_prop_ro("means", &PyPointCloud::means, "Position tensor [N, 3]")
             .def_prop_ro("colors", &PyPointCloud::colors, "Color tensor [N, 3]")
             .def_prop_ro("normals", &PyPointCloud::normals, "Normal tensor [N, 3]")

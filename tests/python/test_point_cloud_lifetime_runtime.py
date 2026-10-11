@@ -310,3 +310,76 @@ assert finished.wait(5), "viewer-thread playback deadlocked"
 assert not callback_errors, callback_errors
 assert counter == [1]
 ''')
+
+
+def test_point_cloud_access_during_viewer_clear_and_replacement(camera_runtime):
+    _editor(camera_runtime, r'''
+import lichtfeld as lf, threading, time
+scene = lf.get_scene()
+ready = threading.Event()
+finished = threading.Event()
+errors = []
+handles = []
+reads = [0]
+
+def replace_cloud():
+    try:
+        scene.clear()
+        scene.add_point_cloud("replace cloud", lf.Tensor.zeros([3, 3], device="cpu"),
+                              lf.Tensor.ones([3, 3], device="cpu"))
+        cloud = scene.get_node("replace cloud").point_cloud()
+        assert cloud.size == 3  # Also exercises direct viewer-thread access.
+        handles.append(cloud)
+    except BaseException as error:
+        errors.append(repr(error))
+    finally:
+        ready.set()
+
+lf.ui.schedule_on_ui_thread(replace_cloud)
+assert ready.wait(5)
+assert not errors, errors
+saved = handles[0].means
+
+def read_clouds():
+    try:
+        while not finished.is_set():
+            cloud = handles[-1]
+            try:
+                assert cloud.size == 3
+                assert cloud.means.numel == 9
+                assert cloud.colors.numel == 9
+                cloud.attribute_names
+                cloud.is_gaussian()
+                reads[0] += 1
+            except RuntimeError as error:
+                assert "PointCloud" in str(error), error
+    except BaseException as error:
+        errors.append(repr(error))
+
+reader = threading.Thread(target=read_clouds)
+reader.start()
+try:
+    deadline = time.monotonic() + 5
+    while reads[0] < 2:
+        assert time.monotonic() < deadline, "reader did not complete an access"
+        time.sleep(.001)
+    for _ in range(12):
+        ready.clear()
+        lf.ui.schedule_on_ui_thread(replace_cloud)
+        assert ready.wait(5), "clear/replacement deadlocked"
+        assert not errors, errors
+finally:
+    finished.set()
+    reader.join(5)
+assert not reader.is_alive(), "PointCloud reader deadlocked"
+assert not errors, errors
+assert reads[0] >= 2
+assert saved.numel == 9
+for old_cloud in handles[:-1]:
+    try:
+        old_cloud.size
+    except RuntimeError as error:
+        assert "PointCloud" in str(error), error
+    else:
+        raise AssertionError("old handle resolved replacement cloud")
+''')

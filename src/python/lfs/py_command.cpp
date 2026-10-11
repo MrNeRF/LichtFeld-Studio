@@ -233,7 +233,11 @@ namespace lfs::python {
         };
 
         // lf.undo submodule - main undo API
-        auto undo = m.def_submodule("undo", "Undo/redo system");
+        auto undo = m.def_submodule("undo",
+                                    "Undo/redo system.\n\n"
+                                    "With an active viewer, undo(), redo() and jump() wait for playback on the\n"
+                                    "viewer thread, where registered Python callbacks also execute. Standalone\n"
+                                    "interpreters execute playback on the calling thread.");
 
         undo.def(
             "push",

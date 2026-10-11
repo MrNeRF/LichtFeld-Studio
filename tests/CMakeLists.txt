@@ -1347,6 +1347,19 @@ set_tests_properties(lichtfeld.python.nightly PROPERTIES
     TIMEOUT 1800
 )
 
+# App-backed lifetime coverage requires a real renderer and its own process.
+add_test(NAME lichtfeld.python.point_cloud_lifetime
+    COMMAND ${Python_EXECUTABLE} -m pytest -q
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_point_cloud_lifetime_runtime.py
+)
+set_tests_properties(lichtfeld.python.point_cloud_lifetime PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    LABELS "nightly;gpu;integration"
+    TIMEOUT 300
+    RUN_SERIAL TRUE
+    ENVIRONMENT_MODIFICATION "LFS_EXECUTABLE=set:$<TARGET_FILE:${PROJECT_NAME}>"
+)
+
 add_test(NAME lichtfeld.python.gpu
     COMMAND ${Python_EXECUTABLE} -m pytest -q
         -m gpu
