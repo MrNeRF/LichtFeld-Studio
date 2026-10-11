@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cmath>
 #include <cuda_runtime.h>
 #include <format>
 #include <stdexcept>
@@ -219,6 +220,7 @@ namespace lfs::core {
           _normal_loaded(other._normal_loaded),
           _undistort_precomputed(other._undistort_precomputed),
           _undistort_prepared(other._undistort_prepared),
+          _undistort_destination(other._undistort_destination),
           _undistort_params(other._undistort_params),
           _stream(other._stream),
           _sfm_observations(std::move(other._sfm_observations)),
@@ -232,6 +234,7 @@ namespace lfs::core {
         other._normal_loaded = false;
         other._undistort_precomputed = false;
         other._undistort_prepared = false;
+        other._undistort_destination = UndistortDestination::Calibration;
     }
 
     Camera& Camera::operator=(Camera&& other) noexcept {
@@ -285,6 +288,7 @@ namespace lfs::core {
             _normal_loaded = other._normal_loaded;
             _undistort_precomputed = other._undistort_precomputed;
             _undistort_prepared = other._undistort_prepared;
+            _undistort_destination = other._undistort_destination;
             _undistort_params = other._undistort_params;
             _sfm_observations = std::move(other._sfm_observations);
             _sfm_observation_source = std::move(other._sfm_observation_source);
@@ -299,6 +303,7 @@ namespace lfs::core {
             other._normal_loaded = false;
             other._undistort_precomputed = false;
             other._undistort_prepared = false;
+            other._undistort_destination = UndistortDestination::Calibration;
         }
         return *this;
     }
@@ -337,6 +342,7 @@ namespace lfs::core {
         _sfm_observation_count = other._sfm_observation_count;
         _undistort_precomputed = other._undistort_precomputed;
         _undistort_prepared = other._undistort_prepared;
+        _undistort_destination = other._undistort_destination;
         _undistort_params = other._undistort_params;
 
         // Non-blocking so image loading doesn't serialize with the legacy stream.
@@ -950,8 +956,9 @@ namespace lfs::core {
         _undistort_precomputed = true;
     }
 
-    void Camera::adopt_undistortion(const UndistortParams& params) noexcept {
+    void Camera::adopt_undistortion(const UndistortParams& params, const UndistortDestination destination) noexcept {
         _undistort_params = params;
+        _undistort_destination = destination;
         _undistort_precomputed = true;
     }
 
@@ -962,6 +969,31 @@ namespace lfs::core {
         precompute_undistortion(blank_pixels);
         if (!_undistort_precomputed)
             return;
+
+        // The calibration can describe a larger image than the selected image folder.
+        // Keep the source calibration intact, but size the shared destination grid
+        // at the file's resolution before applying the training resize and cap.
+        if (_undistort_destination == UndistortDestination::Calibration &&
+            _has_image && std::filesystem::exists(_image_path)) {
+            const auto [width, height, channels] = get_image_info(_image_path);
+            auto& params = _undistort_params;
+            if (width < params.src_width || height < params.src_height) {
+                const int dst_width = std::max(1, static_cast<int>(std::lround(
+                                                      static_cast<double>(params.dst_width) *
+                                                      std::min(width, params.src_width) / params.src_width)));
+                const int dst_height = std::max(1, static_cast<int>(std::lround(
+                                                       static_cast<double>(params.dst_height) *
+                                                       std::min(height, params.src_height) / params.src_height)));
+                const float scale_x = static_cast<float>(dst_width) / params.dst_width;
+                const float scale_y = static_cast<float>(dst_height) / params.dst_height;
+                params.dst_fx *= scale_x;
+                params.dst_fy *= scale_y;
+                params.dst_cx *= scale_x;
+                params.dst_cy *= scale_y;
+                params.dst_width = dst_width;
+                params.dst_height = dst_height;
+            }
+        }
 
         _focal_x = _undistort_params.dst_fx;
         _focal_y = _undistort_params.dst_fy;

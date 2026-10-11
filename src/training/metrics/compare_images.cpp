@@ -349,7 +349,8 @@ namespace lfs::training {
                     LFS_SOURCE_SITE_CURRENT());
             case TestLens::Pinhole:
                 if (test_camera)
-                    camera->adopt_undistortion(undistortion_onto(*camera, *test_camera));
+                    camera->adopt_undistortion(undistortion_onto(*camera, *test_camera),
+                                               lfs::core::Camera::UndistortDestination::Explicit);
                 camera->prepare_undistortion();
                 ++pinhole_tests;
                 break;

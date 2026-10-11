@@ -259,9 +259,14 @@ namespace lfs::core {
         void translate(const Tensor& trans);
 
         void precompute_undistortion(float blank_pixels = 0.0f);
+        enum class UndistortDestination { Calibration,
+                                          Explicit };
+
         // Install parameters computed for an equivalent camera record without
         // repeating the distortion solve or its device-to-host copies.
-        void adopt_undistortion(const UndistortParams& params) noexcept;
+        // An explicit destination keeps its grid regardless of the source file resolution.
+        void adopt_undistortion(const UndistortParams& params,
+                                UndistortDestination destination = UndistortDestination::Calibration) noexcept;
         bool is_undistort_precomputed() const noexcept { return _undistort_precomputed; }
         void prepare_undistortion(float blank_pixels = 0.0f);
         bool is_undistort_prepared() const noexcept { return _undistort_prepared; }
@@ -337,6 +342,7 @@ namespace lfs::core {
         // Undistortion state
         bool _undistort_precomputed = false;
         bool _undistort_prepared = false;
+        UndistortDestination _undistort_destination = UndistortDestination::Calibration;
         UndistortParams _undistort_params{};
 
         // CUDA stream for async operations
