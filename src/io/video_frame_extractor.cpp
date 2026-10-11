@@ -1072,6 +1072,10 @@ namespace lfs::io {
                     video_fps = validFrameRate(video_stream->r_frame_rate);
                 if (video_fps <= 0.0)
                     video_fps = 30.0;
+                // Source numbers use the timestamp grid, not the average cadence of a VFR stream.
+                double source_frame_fps = validFrameRate(video_stream->r_frame_rate);
+                if (source_frame_fps <= 0.0)
+                    source_frame_fps = video_fps;
                 double video_duration = validDurationSeconds(fmt_ctx->duration, AVRational{1, AV_TIME_BASE});
                 if (video_duration <= 0.0)
                     video_duration = validDurationSeconds(video_stream->duration, video_stream->time_base);
@@ -1518,7 +1522,7 @@ namespace lfs::io {
 
                 const auto source_frame_for_time = [&](const double frame_time) {
                     return std::max(
-                        1, static_cast<int>(std::llround(frame_time * video_fps)) + 1);
+                        1, static_cast<int>(std::llround(frame_time * source_frame_fps)) + 1);
                 };
 
                 auto reserve_output_filename = [&](const std::filesystem::path& filename,
@@ -2220,6 +2224,10 @@ namespace lfs::io {
 
                 // Flush remaining window candidates at end of video
                 flush_window();
+
+                // Completion reports files actually written, including delayed encoder batches.
+                if (params.progress_callback)
+                    params.progress_callback(written_count + skipped_count, written_count + skipped_count, skipped_count);
 
                 if (params.generate_metadata && !saved_frames.empty()) {
                     try {

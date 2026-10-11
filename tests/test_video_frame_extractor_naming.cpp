@@ -340,7 +340,7 @@ namespace lfs::gui {
 namespace {
     bool writeProbedVideoWithRate(const std::filesystem::path& path, const char* container,
                                   AVCodecID codec_id, int frame_count, int leading_frames,
-                                  int rate_numerator, int rate_denominator);
+                                  int rate_numerator, int rate_denominator, bool variable_rate = false);
 
     class FpsTestRenderInterface final : public Rml::RenderInterface {
     public:
@@ -1107,6 +1107,10 @@ TEST(VideoFrameExtractorOutputNaming, RepeatedSourceFramesAreWrittenOnce) {
     params.fps = 30.0;
     params.start_time = 0.0;
     params.end_time = 0.5;
+    int completed = -1;
+    params.progress_callback = [&](int current, int, int discarded) {
+        completed = current - discarded;
+    };
 
     VideoFrameExtractor extractor;
     ASSERT_TRUE(extractor.extract(params, error)) << error;
@@ -1116,6 +1120,7 @@ TEST(VideoFrameExtractorOutputNaming, RepeatedSourceFramesAreWrittenOnce) {
     EXPECT_TRUE(std::filesystem::exists(output_dir / "frame_4.png"));
     EXPECT_TRUE(std::filesystem::exists(output_dir / "frame_5.png"));
     EXPECT_EQ(5u, countPngFiles(output_dir));
+    EXPECT_EQ(5, completed);
 
     const nlohmann::json metadata = readMetadata(output_dir);
     ASSERT_TRUE(metadata.contains("frames"));
@@ -1128,7 +1133,7 @@ namespace {
     // the video stream (MPEG-TS, or MPEG-4 Part 2 in MP4 with leading frames before an edit list).
     bool writeProbedVideoWithRate(const std::filesystem::path& path, const char* const container,
                                   const AVCodecID codec_id, const int frame_count, const int leading_frames,
-                                  const int rate_numerator, const int rate_denominator) {
+                                  const int rate_numerator, const int rate_denominator, const bool variable_rate) {
         AVFormatContext* format = nullptr;
         const std::string path_utf8 = path.string();
         if (avformat_alloc_output_context2(&format, nullptr, container, path_utf8.c_str()) < 0 || !format)
@@ -1181,7 +1186,7 @@ namespace {
                 for (int y = 0; y < frame->height / 2; ++y)
                     for (int x = 0; x < frame->width / 2; ++x)
                         frame->data[plane][y * frame->linesize[plane] + x] = 128;
-            frame->pts = index - leading_frames;
+            frame->pts = (variable_rate && index >= 90 ? 90 + (index - 90) * 2 : index) - leading_frames;
             ok = ok && avcodec_send_frame(encoder, frame) >= 0;
             drain();
         }
@@ -1199,6 +1204,49 @@ namespace {
         return ok;
     }
 } // namespace
+
+TEST(VideoFrameExtractorOutputNaming, VariableRateUsesNominalTimestampNumbers) {
+    for (const bool variable_rate : {false, true}) {
+        for (const auto* container : {"mp4", "matroska"}) {
+            SCOPED_TRACE(container);
+            SCOPED_TRACE(variable_rate);
+            TempDir temp("timestamp_numbers");
+            const auto source = temp.path / "source.video";
+            constexpr int frame_count = 185;
+            ASSERT_TRUE(writeProbedVideoWithRate(source, container, AV_CODEC_ID_MPEG4,
+                                                 frame_count, 0, 30, 1, variable_rate));
+            for (const int interval : {1, 3}) {
+                SCOPED_TRACE(interval);
+                const auto output = temp.path / std::to_string(interval);
+                auto params = extractionParams(source, output);
+                params.end_time = -1.0;
+                params.frame_interval = interval;
+                int completed = -1;
+                params.progress_callback = [&](int current, int, int discarded) {
+                    completed = current - discarded;
+                };
+                VideoFrameExtractor extractor;
+                std::string error;
+                ASSERT_TRUE(extractor.extract(params, error)) << error;
+                const int expected_count = (frame_count + interval - 1) / interval;
+                EXPECT_EQ(countPngFiles(output), expected_count);
+                EXPECT_EQ(completed, expected_count);
+                const auto metadata = readMetadata(output);
+                EXPECT_EQ(metadata["frames"].size(), expected_count);
+                if (metadata["frames"].size() != expected_count)
+                    continue;
+                for (int index = 0; index < frame_count; index += interval) {
+                    const int number = (variable_rate && index >= 90 ? 90 + (index - 90) * 2 : index) + 1;
+                    const auto& frame = metadata["frames"][index / interval];
+                    EXPECT_EQ(frame["source_frame"], number);
+                    EXPECT_EQ(frame["file"], "frame_" + std::to_string(number) + ".png");
+                    EXPECT_NEAR(frame["timestamp"].get<double>(), (number - 1) / 30.0, 0.001);
+                    EXPECT_TRUE(std::filesystem::exists(output / frame["file"].get<std::string>()));
+                }
+            }
+        }
+    }
+}
 
 namespace {
     bool writeProbedVideo(const std::filesystem::path& path, const char* container,
