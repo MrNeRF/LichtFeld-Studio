@@ -586,6 +586,7 @@ set(TEST_FILES
     test_job_registry.cpp
     test_p5_session_chapters.cpp
     test_training_terminal_state.cpp
+    test_training_camera_errors.cpp
     test_training_command_masks.cpp
     test_headless_run_coordinator.cpp
     test_argument_parser.cpp

@@ -40,7 +40,8 @@ namespace lfs::vis::gui {
                                                 const char* operation, const lfs::core::SourceSite site,
                                                 const lfs::ErrorSurface surface = lfs::ErrorSurface::Modal,
                                                 std::vector<lfs::ErrorAction> actions =
-                                                    operationFailureActions()) {
+                                                    operationFailureActions(),
+                                                lfs::SmallFields fields = {}) {
             lfs::Error base = lfs::make_error(lfs::ErrorInit{
                 .code = code,
                 .domain = domain,
@@ -50,7 +51,7 @@ namespace lfs::vis::gui {
                 .user_message = message,
                 .detail = std::move(message),
                 .detection = site,
-                .fields = lfs::SmallFields{},
+                .fields = std::move(fields),
                 .native = std::nullopt,
             });
 
@@ -115,8 +116,12 @@ namespace lfs::vis::gui {
         if (isHostMemorySaveMessage(message)) {
             message = LOCF("runtime.training_save_no_memory", message);
         }
+        lfs::SmallFields fields;
+        if (!e.error_message_key.empty())
+            fields.add("message_key", std::string_view(e.error_message_key));
         return makeNotification(code, lfs::ErrorDomain::Training, lfs::Severity::Error,
-                                std::move(message), error_op::kTrain, LFS_SOURCE_SITE_CURRENT());
+                                std::move(message), error_op::kTrain, LFS_SOURCE_SITE_CURRENT(),
+                                lfs::ErrorSurface::Modal, operationFailureActions(), std::move(fields));
     }
 
     std::optional<lfs::ErrorNotification>

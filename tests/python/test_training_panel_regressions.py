@@ -1943,3 +1943,45 @@ def test_live_iteration_rate_matches_existing_window(training_panel_module, monk
         assert status() == (
             f"status.iteration {shown_iteration:,} ({expected:.1f} training_panel.iters_per_sec)"
         )
+
+
+@pytest.mark.parametrize("key", ["messages.err_distorted_images", "messages.err_non_pinhole"])
+def test_camera_error_resolves_locale_when_presented(training_panel_module, monkeypatch, key):
+    panel = training_panel_module.TrainingPanel()
+    model = _ModelStub()
+    panel._bind_status(model, lambda: None)
+    monkeypatch.setattr(training_panel_module.lf, "trainer_error", lambda: "Readable English guidance", raising=False)
+    monkeypatch.setattr(training_panel_module.lf, "trainer_error_key", lambda: key, raising=False)
+    get_message = model.bindings["error_message"][0]
+    for translation in ("Aktivieren Sie GUT im Trainingspanel.", "Activez GUT dans le panneau Entraînement."):
+        monkeypatch.setattr(training_panel_module.lf.ui, "tr", lambda value: translation if value == key else value)
+        assert get_message() == translation
+    monkeypatch.setattr(training_panel_module.lf, "trainer_error", lambda: "Other diagnostic")
+    monkeypatch.setattr(training_panel_module.lf, "trainer_error_key", lambda: None)
+    assert get_message() == "Other diagnostic"
+    monkeypatch.setattr(training_panel_module.lf, "trainer_error_key", lambda: "unknown.key")
+    assert get_message() == "Other diagnostic"
+    monkeypatch.setattr(training_panel_module.lf, "trainer_error", lambda: None)
+
+    def unexpected_key_lookup():
+        pytest.fail("No localization lookup is needed without an error")
+
+    monkeypatch.setattr(training_panel_module.lf, "trainer_error_key", unexpected_key_lookup)
+    assert get_message() == ""
+
+
+def test_camera_guidance_locales_use_gui_options():
+    locale_dir = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
+    locales = list(locale_dir.glob("*.json"))
+    assert len(locales) == 10
+    for path in locales:
+        messages = json.loads(path.read_text())["messages"]
+        for key in ("err_distorted_images", "err_non_pinhole"):
+            assert "--gut" not in messages[key], path.name
+            assert "--undistort" not in messages[key], path.name
+            assert "GUT" in messages[key], path.name
+
+
+def test_trainer_error_api_without_manager(lf):
+    assert lf.trainer_error() is None
+    assert lf.trainer_error_key() is None

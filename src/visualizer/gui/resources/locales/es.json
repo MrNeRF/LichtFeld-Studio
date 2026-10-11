@@ -2682,9 +2682,9 @@
     "training_error": "Error de Entrenamiento",
     "param_manager_unavailable": "ParameterManager no disponible",
     "failed_to_load_params": "Error al cargar los parámetros:",
-    "err_distorted_images": "Se detectaron imágenes distorsionadas. Activa --gut o --undistort para entrenar con cámaras con distorsión.",
+    "err_distorted_images": "Se detectaron imágenes distorsionadas. Activa GUT o Corregir distorsión en el panel de entrenamiento para entrenar con cámaras con distorsión.",
     "err_ortho_not_supported": "El entrenamiento con cámaras de modelo ortográfico aún no es compatible.",
-    "err_non_pinhole": "Activa --gut o --undistort para entrenar con cámaras de modelo no estenopeico."
+    "err_non_pinhole": "Activa GUT o Corregir distorsión en el panel de entrenamiento para entrenar con cámaras de modelo no estenopeico."
   },
   "projects.gallery.sidebar.title": "Galería",
   "projects.gallery.sidebar.refresh": "Comprobar galería",

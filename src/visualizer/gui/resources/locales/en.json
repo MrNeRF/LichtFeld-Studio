@@ -2681,9 +2681,9 @@
     "training_error": "Training Error",
     "param_manager_unavailable": "ParameterManager not available",
     "failed_to_load_params": "Failed to load params:",
-    "err_distorted_images": "Distorted images detected. Enable --gut or --undistort to train on cameras with distortion.",
+    "err_distorted_images": "Distorted images detected. Enable GUT or Undistort in the Training panel to train on cameras with distortion.",
     "err_ortho_not_supported": "Training on cameras with ortho model is not supported yet.",
-    "err_non_pinhole": "Enable --gut or --undistort to train on cameras with non-pinhole model."
+    "err_non_pinhole": "Enable GUT or Undistort in the Training panel to train on cameras with a non-pinhole model."
   },
   "projects.gallery.sidebar.title": "Gallery",
   "projects.gallery.sidebar.refresh": "Check gallery",

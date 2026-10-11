@@ -6094,16 +6094,26 @@ namespace lfs::training {
                         return lfs::make_error(lfs::ErrorInit{
                             .code = lfs::ErrorCode::InvalidArgument,
                             .domain = lfs::ErrorDomain::Training,
-                            .user_message = "Distorted images detected. Use --gut or --undistort to train on cameras with distortion.",
+                            .user_message = params_.optimization.headless
+                                                ? "Distorted images detected. Use --gut or --undistort to train on cameras with distortion."
+                                                : "Distorted images detected. Enable GUT or Undistort in the Training panel to train on cameras with distortion.",
                             .detection = LFS_SOURCE_SITE_CURRENT(),
+                            .fields = params_.optimization.headless
+                                          ? lfs::SmallFields{}
+                                          : lfs::SmallFields{}.add("message_key", std::string_view("messages.err_distorted_images")),
                         });
                     }
                     if (cam->camera_model_type() != core::CameraModelType::PINHOLE) {
                         return lfs::make_error(lfs::ErrorInit{
                             .code = lfs::ErrorCode::InvalidArgument,
                             .domain = lfs::ErrorDomain::Training,
-                            .user_message = "Use --gut or --undistort to train on cameras with non-pinhole model.",
+                            .user_message = params_.optimization.headless
+                                                ? "Use --gut or --undistort to train on cameras with non-pinhole model."
+                                                : "Enable GUT or Undistort in the Training panel to train on cameras with a non-pinhole model.",
                             .detection = LFS_SOURCE_SITE_CURRENT(),
+                            .fields = params_.optimization.headless
+                                          ? lfs::SmallFields{}
+                                          : lfs::SmallFields{}.add("message_key", std::string_view("messages.err_non_pinhole")),
                         });
                     }
                 }

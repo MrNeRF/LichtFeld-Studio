@@ -491,6 +491,7 @@ namespace lfs::training {
         friend struct TrainerBilateralGridTestAccess;
         friend struct TrainerHoldoutAppearanceTestAccess;
         friend struct TrainerRetryTestAccess;
+        friend struct TrainerCameraErrorTestAccess;
         friend struct TrainerCropboxMaskTestAccess;
         friend struct TrainerPausedProgressTestAccess;
 

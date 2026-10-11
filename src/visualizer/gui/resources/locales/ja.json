@@ -2682,9 +2682,9 @@
     "training_error": "トレーニングエラー",
     "param_manager_unavailable": "パラメータマネージャーが利用できません",
     "failed_to_load_params": "パラメータの読み込みに失敗しました:",
-    "err_distorted_images": "歪みのある画像が検出されました。歪みのあるカメラで学習するには --gut または --undistort を有効にしてください。",
+    "err_distorted_images": "歪みのある画像が検出されました。歪みのあるカメラで学習するには、トレーニングパネルで GUT または歪み補正を有効にしてください。",
     "err_ortho_not_supported": "正射影カメラモデルでの学習はまだサポートされていません。",
-    "err_non_pinhole": "非ピンホールカメラで学習するには --gut または --undistort を有効にしてください。"
+    "err_non_pinhole": "非ピンホールカメラで学習するには、トレーニングパネルで GUT または歪み補正を有効にしてください。"
   },
   "projects.gallery.sidebar.title": "ギャラリー",
   "projects.gallery.sidebar.refresh": "ギャラリーを確認",

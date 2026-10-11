@@ -1218,7 +1218,15 @@ class TrainingPanel(Panel):
             return f"{it:,}/{mx:,}" if mx > 0 else ""
 
         def _error_message():
-            return lf.trainer_error() or ""
+            message = lf.trainer_error() or ""
+            if not message:
+                return ""
+            key = lf.trainer_error_key()
+            if key == "messages.err_distorted_images":
+                return lf.ui.tr("messages.err_distorted_images")
+            if key == "messages.err_non_pinhole":
+                return lf.ui.tr("messages.err_non_pinhole")
+            return message
 
         model.bind_func("status_mode", _status_mode)
         model.bind_func("status_iteration", _status_iteration)

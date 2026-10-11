@@ -2682,9 +2682,9 @@
     "training_error": "Errore di Training",
     "param_manager_unavailable": "Gestore parametri non disponibile",
     "failed_to_load_params": "Caricamento parametri fallito:",
-    "err_distorted_images": "Rilevate immagini distorte. Attivare --gut o --undistort per addestrare con fotocamere con distorsione.",
+    "err_distorted_images": "Rilevate immagini distorte. Attivare GUT o Rimuovi distorsione nel pannello Training per addestrare con fotocamere con distorsione.",
     "err_ortho_not_supported": "Il Training con modello fotocamera ortografico non è ancora supportato.",
-    "err_non_pinhole": "Attivare --gut o --undistort per addestrare con fotocamere non-pinhole."
+    "err_non_pinhole": "Attivare GUT o Rimuovi distorsione nel pannello Training per addestrare con fotocamere con modello non stenopeico."
   },
   "projects.gallery.sidebar.title": "Galleria",
   "projects.gallery.sidebar.refresh": "Controlla galleria",
