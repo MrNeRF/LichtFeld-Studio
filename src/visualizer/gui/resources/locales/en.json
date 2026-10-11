@@ -2094,6 +2094,8 @@
     "strategy_default": "Default",
     "split": "Split:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "Interface frames presented per second.",
+    "view_fps_tooltip": "3D viewport frames rendered per second. A static view can show 0 while the interface remains responsive.",
     "ui": "UI",
     "view": "View"
   },

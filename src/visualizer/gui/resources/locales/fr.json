@@ -2096,6 +2096,8 @@
     "strategy_default": "Défaut",
     "split": "Division :",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "Images de l’interface affichées par seconde.",
+    "view_fps_tooltip": "Images de la vue 3D calculées par seconde. Une vue statique peut afficher 0 alors que l’interface reste réactive.",
     "ui": "IU",
     "view": "Vue"
   },

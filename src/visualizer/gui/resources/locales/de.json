@@ -2096,6 +2096,8 @@
     "strategy_default": "Standard",
     "split": "Teilung:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "Pro Sekunde angezeigte Benutzeroberflächen-Frames.",
+    "view_fps_tooltip": "Pro Sekunde gerenderte Frames der 3D-Ansicht. Eine statische Ansicht kann 0 anzeigen, während die Oberfläche weiterhin reagiert.",
     "ui": "UI",
     "view": "Ansicht"
   },

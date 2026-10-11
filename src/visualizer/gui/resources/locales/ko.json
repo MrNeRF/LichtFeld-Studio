@@ -2096,6 +2096,8 @@
     "strategy_default": "기본값",
     "split": "분할:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "초당 표시되는 인터페이스 프레임 수입니다.",
+    "view_fps_tooltip": "초당 렌더링되는 3D 뷰 프레임 수입니다. 정적인 뷰는 인터페이스가 응답하는 동안에도 0으로 표시될 수 있습니다.",
     "ui": "UI",
     "view": "뷰"
   },

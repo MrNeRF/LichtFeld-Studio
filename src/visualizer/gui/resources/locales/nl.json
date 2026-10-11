@@ -2096,6 +2096,8 @@
     "strategy_default": "Standaard",
     "split": "Splitsing:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "Weergegeven interfaceframes per seconde.",
+    "view_fps_tooltip": "Gerenderde frames van de 3D-weergave per seconde. Een statische weergave kan 0 tonen terwijl de interface blijft reageren.",
     "ui": "UI",
     "view": "Beeld"
   },

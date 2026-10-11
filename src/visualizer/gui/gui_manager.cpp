@@ -7104,6 +7104,8 @@ namespace lfs::vis::gui {
             if (status_input) {
                 rml_status_bar_.processInput(panel_input, status_bar_x, status_bar_y,
                                              status_bar_w, status_bar_height);
+            } else {
+                rml_status_bar_.clearTooltip();
             }
             rml_status_bar_.render(draw_ctx, status_bar_x, status_bar_y,
                                    status_bar_w, status_bar_height,
