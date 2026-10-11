@@ -711,6 +711,12 @@
   },
   "rendering": "Renderowanie",
   "scene": {
+    "summary_model_one": "{} model",
+    "summary_model_few": "{} modele",
+    "summary_model_other": "{} modeli",
+    "summary_node_one": "{} węzeł",
+    "summary_node_few": "{} węzły",
+    "summary_node_other": "{} węzłów",
     "add_ply": "Dodaj PLY...",
     "add_group": "Dodaj Grupę",
     "add_group_ellipsis": "Dodaj Grupę...",

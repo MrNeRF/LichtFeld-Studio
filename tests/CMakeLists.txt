@@ -114,6 +114,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_align_transform.cpp
         test_orthographic_zoom.cpp
         test_ui_visibility_transition.cpp
+        test_summary_labels.cpp
         test_menu_bar_title.cpp
         test_panel_layout_render_demand.cpp
         test_preferences_migration.cpp
@@ -747,6 +748,7 @@ set(TEST_FILES
     test_scene_graph_dnd.cpp
     test_rml_im_mode_layout.cpp
     test_rml_python_listener_lifetime.cpp
+    test_summary_labels.cpp
     test_status_bar_fit.cpp
     test_gallery_file_panel_layout.cpp
     test_histogram_layout.cpp

@@ -20,6 +20,7 @@
 #include "gui/status_bar_mining.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_context.hpp"
+#include "gui/utils/summary_labels.hpp"
 #include "internal/resource_paths.hpp"
 #include "preferences.hpp"
 #include "python_runtime.hpp"
@@ -118,15 +119,8 @@ namespace lfs::vis::gui {
             return std::format("{}:{:02d}", m, s);
         }
 
-        std::string stripColon(const std::string& s) {
-            auto end = s.find_last_not_of(": ");
-            if (end == std::string::npos)
-                return s;
-            return s.substr(0, end + 1);
-        }
-
         std::string formatStepLabel(const size_t step) {
-            return std::format("{} {}", stripColon(LOC(lichtfeld::Strings::Status::STEP)), lfs::core::format_count(step));
+            return std::format("{} {}", stripLabelColon(LOC(lichtfeld::Strings::Status::STEP)), lfs::core::format_count(step));
         }
 
         // Width the element's content box would need to show everything on one line.
@@ -1330,7 +1324,7 @@ namespace lfs::vis::gui {
         setModelString("step_label", model_.step_label, LOC(lichtfeld::Strings::Status::STEP));
         setModelString("loss_label", model_.loss_label, LOC(lichtfeld::Strings::Status::LOSS));
         setModelString("gaussians_label", model_.gaussians_label,
-                       stripColon(LOC(lichtfeld::Strings::Status::GAUSSIANS)));
+                       stripLabelColon(LOC(lichtfeld::Strings::Status::GAUSSIANS)));
         setModelString("eta_label", model_.eta_label, LOC(lichtfeld::Strings::Status::ETA));
 
         if (show_training && tm) {
@@ -1461,7 +1455,7 @@ namespace lfs::vis::gui {
         if (show_splats) {
             auto splat_rml = std::format("{} {}",
                                          fmtCount(static_cast<int64_t>(total_gaussians)),
-                                         stripColon(LOC(lichtfeld::Strings::Status::GAUSSIANS)));
+                                         stripLabelColon(LOC(lichtfeld::Strings::Status::GAUSSIANS)));
             setModelString("splat_text", model_.splat_text, std::move(splat_rml));
             setModelString("splat_color", model_.splat_color, colorToRml(p.text));
         } else {
@@ -1500,7 +1494,7 @@ namespace lfs::vis::gui {
 
         if (wasd_visible) {
             auto wasd_rml = std::format("{}: {:.0f}",
-                                        stripColon(LOC(lichtfeld::Strings::Controls::WASD)),
+                                        stripLabelColon(LOC(lichtfeld::Strings::Controls::WASD)),
                                         wasd_speed);
             setModelBool("show_wasd", model_.show_wasd, true);
             setModelString("wasd_text", model_.wasd_text, std::move(wasd_rml));
@@ -1516,7 +1510,7 @@ namespace lfs::vis::gui {
 
         if (zoom_visible) {
             auto zoom_rml = std::format("{}: {:.0f}",
-                                        stripColon(LOC(lichtfeld::Strings::Controls::ZOOM)),
+                                        stripLabelColon(LOC(lichtfeld::Strings::Controls::ZOOM)),
                                         zoom_speed);
             setModelBool("show_zoom", model_.show_zoom, true);
             setModelString("zoom_text", model_.zoom_text, std::move(zoom_rml));

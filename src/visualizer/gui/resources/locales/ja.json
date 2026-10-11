@@ -711,6 +711,12 @@
   },
   "rendering": "レンダリング",
   "scene": {
+    "summary_model_one": "{} モデル",
+    "summary_model_few": "{} モデル",
+    "summary_model_other": "{} モデル",
+    "summary_node_one": "{} ノード",
+    "summary_node_few": "{} ノード",
+    "summary_node_other": "{} ノード",
     "add_ply": "PLYを追加...",
     "add_group": "グループを追加",
     "add_group_ellipsis": "グループを追加...",

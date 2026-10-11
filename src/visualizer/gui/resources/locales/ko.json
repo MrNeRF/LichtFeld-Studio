@@ -711,6 +711,12 @@
   },
   "rendering": "렌더링",
   "scene": {
+    "summary_model_one": "{} 모델",
+    "summary_model_few": "{} 모델",
+    "summary_model_other": "{} 모델",
+    "summary_node_one": "{} 노드",
+    "summary_node_few": "{} 노드",
+    "summary_node_other": "{} 노드",
     "add_ply": "PLY 추가...",
     "add_group": "그룹 추가",
     "add_group_ellipsis": "그룹 추가...",
