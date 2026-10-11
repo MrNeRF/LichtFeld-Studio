@@ -1243,6 +1243,7 @@ namespace lfs::vis::gui {
                 distance_to_pivot = glm::length(pivot - eye);
             }
             rm->setOrthographic(!ortho, viewport_height, distance_to_pivot);
+            lfs::vis::apply_set_ortho_scale(std::nullopt);
         } else if (action == "toggle_depth_view") {
             if (!rm)
                 return;

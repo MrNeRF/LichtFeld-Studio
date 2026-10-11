@@ -3,14 +3,18 @@
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/path_utils.hpp"
+#include "core/services.hpp"
 #include "gui/rml_menu_bar.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "input/input_bindings.hpp"
+#include "ipc/view_context.hpp"
 #include "python/python_runtime.hpp"
+#include "rendering/render_pass.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/visualizer.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
@@ -22,12 +26,16 @@
 #include <gtest/gtest.h>
 #include <sstream>
 #include <thread>
+#include <vector>
 
 namespace lfs::vis::gui {
     // Attach a CPU Rml context instead of creating the Vulkan-backed GUI manager.
     // Model registration, resources, layout, updates and hit tests are production code.
     class RmlMenuBarTestAccess {
     public:
+        static void toggleProjection(RmlMenuBar& bar) {
+            bar.dispatchToolbarAction("toggle_projection", "");
+        }
         static void bind(RmlMenuBar& bar, Rml::Context* context) {
             bar.rml_context_ = context;
             bar.bindModel();
@@ -190,6 +198,112 @@ namespace {
         lfs::vis::gui::RmlUIManager manager_;
         lfs::vis::gui::RmlMenuBar bar_;
     };
+
+    class MenuBarProjectionTest : public MenuBarTitleTest {
+    protected:
+        void SetUp() override {
+            MenuBarTitleTest::SetUp();
+            lfs::vis::services().set(&rendering_);
+            auto settings = rendering_.getSettings();
+            settings.focal_length_mm = 50.0f;
+            settings.orthographic = false;
+            rendering_.updateSettings(settings);
+            lfs::vis::set_view_callback([this] {
+                return lfs::vis::ViewInfo{.translation = {0.0f, 0.0f, 7.5f},
+                                          .pivot = {0.0f, 0.0f, 0.0f},
+                                          .width = 1600,
+                                          .height = height_};
+            });
+            lfs::vis::set_set_ortho_scale_callback([this](std::optional<float> scale) {
+                viewport_.ortho_scale_override = scale;
+                rendering_.markCameraPoseChanged();
+            });
+        }
+        void TearDown() override {
+            lfs::vis::set_view_callback(nullptr);
+            lfs::vis::set_set_ortho_scale_callback(nullptr);
+            lfs::vis::services().clear();
+            MenuBarTitleTest::TearDown();
+        }
+        void toggle() { RmlMenuBarTestAccess::toggleProjection(bar_); }
+        float renderedScale() const {
+            lfs::vis::FrameContext context{.viewport = viewport_,
+                                           .settings = rendering_.getSettings(),
+                                           .render_size = viewport_.windowSize};
+            return context.makeFrameView().ortho_scale;
+        }
+        Viewport viewport_{1600, 900};
+        lfs::vis::RenderingManager rendering_;
+        int height_ = 900;
+    };
+
+    TEST_F(MenuBarProjectionTest, EnterUsesMatchingScaleAfterRestoredOrWheelOverride) {
+        for (const float stale_scale : {100.0f, 1.0f}) {
+            viewport_.ortho_scale_override = stale_scale;
+            toggle();
+            const auto settings = rendering_.getSettings();
+            ASSERT_TRUE(settings.orthographic);
+            EXPECT_FLOAT_EQ(renderedScale(), settings.ortho_scale);
+            EXPECT_FALSE(viewport_.ortho_scale_override);
+            toggle();
+        }
+    }
+
+    TEST_F(MenuBarProjectionTest, FreshViewKeepsMatchingScaleAndPose) {
+        const auto eye = viewport_.camera.t;
+        const auto pivot = viewport_.camera.pivot;
+        const float expected = 900.0f / (15.0f * std::tan(
+                                                     glm::radians(lfs::rendering::focalLengthToVFov(50.0f)) * 0.5f));
+        toggle();
+        EXPECT_FLOAT_EQ(renderedScale(), expected);
+        EXPECT_FALSE(viewport_.ortho_scale_override);
+        EXPECT_EQ(viewport_.camera.t, eye);
+        EXPECT_EQ(viewport_.camera.pivot, pivot);
+        toggle();
+        EXPECT_FALSE(rendering_.getSettings().orthographic);
+        EXPECT_FLOAT_EQ(rendering_.getSettings().focal_length_mm, 50.0f);
+    }
+
+    TEST_F(MenuBarProjectionTest, InvalidViewUsesFallbackWithoutStaleOverride) {
+        height_ = 0;
+        viewport_.ortho_scale_override = 1.0f;
+        toggle();
+        EXPECT_TRUE(rendering_.getSettings().orthographic);
+        EXPECT_FLOAT_EQ(renderedScale(), 100.0f);
+    }
+
+    TEST_F(MenuBarProjectionTest, TogglePreservesIndependentSecondaryZoom) {
+        rendering_.restoreSplitViewMode(lfs::vis::SplitViewMode::IndependentDual, viewport_);
+        auto& secondary = rendering_.projectSecondaryViewport();
+        secondary.ortho_scale_override = 240.0f;
+        viewport_.ortho_scale_override = 1.0f;
+        toggle();
+        EXPECT_FLOAT_EQ(renderedScale(), rendering_.getSettings().ortho_scale);
+        ASSERT_TRUE(secondary.ortho_scale_override);
+        EXPECT_FLOAT_EQ(*secondary.ortho_scale_override, 240.0f);
+        toggle();
+        EXPECT_FLOAT_EQ(*secondary.ortho_scale_override, 240.0f);
+    }
+
+    TEST_F(MenuBarProjectionTest, RepeatedToggleKeepsFreshViewScaleStable) {
+        constexpr int updates = 20000;
+        std::vector<double> samples;
+        for (int batch = 0; batch < 7; ++batch) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < updates; ++i)
+                toggle();
+            const auto elapsed = std::chrono::steady_clock::now() - start;
+            samples.push_back(std::chrono::duration<double, std::nano>(elapsed).count() / updates);
+            const auto plan = rendering_.frameDemandLedger().plan(lfs::vis::FrameClock::now());
+            EXPECT_EQ(plan.render_views, 1u);
+            EXPECT_TRUE(rendering_.frameDemandLedger().plan(lfs::vis::FrameClock::now()).empty());
+        }
+        std::sort(samples.begin(), samples.end());
+        RecordProperty("median_ns_per_toggle", std::to_string(samples[samples.size() / 2]));
+        EXPECT_FALSE(rendering_.getSettings().orthographic);
+        EXPECT_FALSE(viewport_.ortho_scale_override);
+        EXPECT_FLOAT_EQ(renderedScale(), rendering_.getSettings().ortho_scale);
+    }
 
     class ToolbarSystemInterface final : public Rml::SystemInterface {
     public:
