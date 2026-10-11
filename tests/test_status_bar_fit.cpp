@@ -5,6 +5,7 @@
 
 #include "gui/rml_status_bar.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "gui/status_bar_training.hpp"
 #include "visualizer/app_store.hpp"
 
 #include <RmlUi/Core.h>
@@ -419,4 +420,43 @@ namespace {
         EXPECT_FALSE(lfs::vis::toggleMcpRuntimeBinding());
     }
 
+} // namespace
+
+namespace {
+    class StatusBarTrainingTest : public ::testing::Test {
+    protected:
+        lfs::vis::ThemePalette palette_{};
+
+        void SetUp() override {
+            palette_.success = {0.1f, 0.8f, 0.2f, 1.0f};
+            palette_.text_dim = {0.4f, 0.4f, 0.4f, 1.0f};
+            palette_.error = {0.9f, 0.1f, 0.1f, 1.0f};
+        }
+
+        void expectStatus(lfs::vis::FinishReason reason, const char* key,
+                          const lfs::vis::ThemeColor& color) {
+            const auto status = lfs::vis::gui::finishedTrainingStatus(reason, palette_);
+            EXPECT_STREQ(status.label_key, key);
+            EXPECT_EQ(status.color.x, color.x);
+            EXPECT_EQ(status.color.y, color.y);
+            EXPECT_EQ(status.color.z, color.z);
+            EXPECT_EQ(status.color.w, color.w);
+        }
+    };
+
+    TEST_F(StatusBarTrainingTest, UserStopIsNotCompletion) {
+        expectStatus(lfs::vis::FinishReason::UserStopped, "status.stopped", palette_.text_dim);
+    }
+
+    TEST_F(StatusBarTrainingTest, ErrorIsNotCompletion) {
+        expectStatus(lfs::vis::FinishReason::Error, "status.error", palette_.error);
+    }
+
+    TEST_F(StatusBarTrainingTest, CompletedRunKeepsSuccessPresentation) {
+        expectStatus(lfs::vis::FinishReason::Completed, "status.complete", palette_.success);
+    }
+
+    TEST_F(StatusBarTrainingTest, StoredCompletedSessionWithoutTrainerKeepsSuccessPresentation) {
+        expectStatus(lfs::vis::FinishReason::None, "status.complete", palette_.success);
+    }
 } // namespace
