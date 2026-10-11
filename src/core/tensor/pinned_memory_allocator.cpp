@@ -148,6 +148,14 @@ namespace lfs::core {
             return ((bytes + 511) / 512) * 512;
         }
 
+        constexpr size_t large_bucket_granularity = 64 * MIB;
+        if (bytes > 128 * MIB) {
+            if (bytes > std::numeric_limits<size_t>::max() - (large_bucket_granularity - 1)) {
+                return bytes;
+            }
+            return ((bytes + large_bucket_granularity - 1) / large_bucket_granularity) * large_bucket_granularity;
+        }
+
         size_t rounded = MIB;
         while (rounded < bytes) {
             if (rounded > std::numeric_limits<size_t>::max() / 2) {

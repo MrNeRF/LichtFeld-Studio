@@ -1007,6 +1007,7 @@ add_executable(tensor_hardening_tests
     test_tensor_hardening_theme_e.cpp
     test_tensor_hardening_theme_f.cpp
     test_tensor_sort_stream.cpp
+    test_pinned_memory_allocator.cpp
 )
 
 set_target_properties(tensor_hardening_tests PROPERTIES
