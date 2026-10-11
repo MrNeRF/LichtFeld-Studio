@@ -3177,7 +3177,8 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             std::vector<unsigned char> temp(numel());
-            LFS_CUDA_CHECK(cudaMemcpy(temp.data(), data_ptr(), bytes(), cudaMemcpyDeviceToHost));
+            LFS_CUDA_CHECK(memcpy_ordered(temp.data(), data_ptr(), bytes(),
+                                          cudaMemcpyDeviceToHost, stream()));
             for (size_t i = 0; i < numel(); ++i) {
                 result[i] = temp[i] != 0;
             }

@@ -1006,6 +1006,7 @@ add_executable(tensor_hardening_tests
     test_tensor_hardening_theme_d.cpp
     test_tensor_hardening_theme_e.cpp
     test_tensor_hardening_theme_f.cpp
+    test_tensor_sort_stream.cpp
 )
 
 set_target_properties(tensor_hardening_tests PROPERTIES
@@ -1019,6 +1020,10 @@ target_include_directories(tensor_hardening_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/tests
     ${CUDAToolkit_INCLUDE_DIRS}
+)
+
+target_compile_definitions(tensor_hardening_tests PRIVATE
+    PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
 )
 
 target_link_libraries(tensor_hardening_tests PRIVATE
