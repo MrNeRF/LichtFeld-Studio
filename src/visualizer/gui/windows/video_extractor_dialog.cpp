@@ -1184,8 +1184,9 @@ namespace lfs::gui {
         }
         changed |= setCachedInnerRml(timeline_markers_el_, markers);
 
-        changed |= setCachedControlValue(trim_start_input_el_, std::format("{:.1f}", start));
-        changed |= setCachedControlValue(trim_end_input_el_, std::format("{:.1f}", end));
+        // These editable values are parsed again on blur and Start; preserve float precision.
+        changed |= setCachedControlValue(trim_start_input_el_, std::format("{}", start));
+        changed |= setCachedControlValue(trim_end_input_el_, std::format("{}", end));
         changed |= setCachedText(estimated_frames_el_, LOCF(VideoExtractor::ESTIMATED_FRAMES, lfs::core::format_count(frame_count)));
 
         if (changed)
@@ -1480,13 +1481,13 @@ namespace lfs::gui {
             markContentDirty();
         } else if (id == "btn-trim-start-set" && player_->isOpen()) {
             trim_start_ = std::clamp(static_cast<float>(player_->currentTime()), 0.0f,
-                                     trim_end_ - MIN_TRIM_SECONDS);
+                                     std::max(0.0f, trim_end_ - MIN_TRIM_SECONDS));
             controls_dirty_ = true;
             markContentDirty();
         } else if (id == "btn-trim-end-set" && player_->isOpen()) {
             trim_end_is_auto_ = false;
             trim_end_ = std::clamp(static_cast<float>(player_->currentTime()),
-                                   trim_start_ + MIN_TRIM_SECONDS,
+                                   std::min(trim_start_ + MIN_TRIM_SECONDS, static_cast<float>(player_->duration())),
                                    static_cast<float>(player_->duration()));
             controls_dirty_ = true;
             markContentDirty();
@@ -1702,10 +1703,10 @@ namespace lfs::gui {
         const float time = t * duration;
 
         if (target == TimelineDragTarget::TrimStart)
-            trim_start_ = std::clamp(time, 0.0f, trim_end_ - MIN_TRIM_SECONDS);
+            trim_start_ = std::clamp(time, 0.0f, std::max(0.0f, trim_end_ - MIN_TRIM_SECONDS));
         else if (target == TimelineDragTarget::TrimEnd) {
             trim_end_is_auto_ = false;
-            trim_end_ = std::clamp(time, trim_start_ + MIN_TRIM_SECONDS, duration);
+            trim_end_ = std::clamp(time, std::min(trim_start_ + MIN_TRIM_SECONDS, duration), duration);
         }
 
         controls_dirty_ = true;
@@ -1715,10 +1716,10 @@ namespace lfs::gui {
     void VideoExtractorDialog::applyTextInput(const std::string& id) {
         if (id == "trim-start-input" && player_->isOpen()) {
             trim_start_ = std::clamp(readFloatValue(trim_start_input_el_, trim_start_), 0.0f,
-                                     trim_end_ - MIN_TRIM_SECONDS);
+                                     std::max(0.0f, trim_end_ - MIN_TRIM_SECONDS));
         } else if (id == "trim-end-input" && player_->isOpen()) {
             trim_end_ = std::clamp(readFloatValue(trim_end_input_el_, trim_end_),
-                                   trim_start_ + MIN_TRIM_SECONDS,
+                                   std::min(trim_start_ + MIN_TRIM_SECONDS, static_cast<float>(player_->duration())),
                                    static_cast<float>(player_->duration()));
         } else if (id == "custom-width-input") {
             custom_width_ = std::max(16, readIntValue(custom_width_input_el_, custom_width_));

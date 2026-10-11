@@ -302,6 +302,16 @@ namespace lfs::gui {
         }
         static double end(const VideoExtractorDialog& dialog) { return dialog.trim_end_; }
 
+        static void timeline(VideoExtractorDialog& dialog) { dialog.syncTimeline(); }
+        static void click(VideoExtractorDialog& dialog, const std::string& id) { dialog.handleClick(id); }
+        static void dragTrim(VideoExtractorDialog& dialog, bool end, float fraction) {
+            auto* const timeline = dialog.timeline_el_;
+            const float x = timeline->GetAbsoluteLeft() + fraction * timeline->GetBox().GetSize(Rml::BoxArea::Border).x;
+            dialog.setTrimFromTimeline(end ? VideoExtractorDialog::TimelineDragTarget::TrimEnd
+                                           : VideoExtractorDialog::TimelineDragTarget::TrimStart,
+                                       x);
+        }
+
         static float fps(const VideoExtractorDialog& dialog) { return dialog.fps_; }
 
         static void reset(VideoExtractorDialog& dialog) { dialog.handleClick("btn-trim-reset"); }
@@ -553,6 +563,116 @@ namespace {
         enter("2.36");
         EXPECT_EQ(input->GetValue(), "2.36");
         EXPECT_FLOAT_EQ(Access::fps(*dialog), 2.36f);
+    }
+
+    TEST_F(VideoExtractorFpsInputTest, UneditedTrimPreservesEverySourceFrame) {
+        for (const int frames : {1, 2, 3, 182, 184, 185}) {
+            SCOPED_TRACE(frames);
+            TempDir temp("trim_precision");
+            const auto source = temp.path / "source.mp4";
+            const auto output = temp.path / "frames";
+            std::filesystem::create_directories(output);
+            std::ofstream(output / "frame_1.png").put('x');
+            ASSERT_TRUE(writeProbedVideoWithRate(source, "mp4", AV_CODEC_ID_MPEG4, frames, 0, 30, 1));
+            ASSERT_TRUE(dialog->openVideoPath(source));
+            const double expected_end = Access::end(*dialog);
+            for (const bool interval : {false, true}) {
+                SCOPED_TRACE(interval);
+                Access::reset(*dialog);
+                Access::timeline(*dialog);
+                // Focusing and leaving either field must not quantize its value.
+                for (const auto* id : {"trim-start-input", "trim-end-input"})
+                    document->GetElementById(id)->DispatchEvent(Rml::EventId::Blur, {});
+                Access::timeline(*dialog);
+                const auto request = Access::request(*dialog, output, interval, false);
+                EXPECT_DOUBLE_EQ(request.start_time, 0.0);
+                EXPECT_DOUBLE_EQ(Access::end(*dialog), expected_end);
+                EXPECT_DOUBLE_EQ(request.end_time, interval ? -1.0 : expected_end);
+            }
+        }
+    }
+
+    TEST_F(VideoExtractorFpsInputTest, ExplicitFractionalTrimSurvivesBlurAndStart) {
+        TempDir temp("explicit_trim_precision");
+        const auto source = temp.path / "source.mp4";
+        const auto output = temp.path / "frames";
+        std::filesystem::create_directories(output);
+        std::ofstream(output / "frame_1.png").put('x');
+        ASSERT_TRUE(writeProbedVideoWithRate(source, "mp4", AV_CODEC_ID_MPEG4, 185, 0, 30, 1));
+        ASSERT_TRUE(dialog->openVideoPath(source));
+        for (const auto& [start, end] : std::vector<std::pair<float, float>>{{2.0f, 3.0f}, {2.0333333f, 3.0666667f}}) {
+            Access::reset(*dialog);
+            Access::timeline(*dialog);
+            for (const auto& [id, value] : std::vector<std::pair<const char*, float>>{
+                     {"trim-start-input", start},
+                     {"trim-end-input", end}}) {
+                auto* field = dynamic_cast<Rml::ElementFormControlInput*>(document->GetElementById(id));
+                ASSERT_NE(field, nullptr);
+                field->SetValue(std::format("{}", value));
+                field->DispatchEvent(Rml::EventId::Change, {});
+                Access::timeline(*dialog);
+                field->DispatchEvent(Rml::EventId::Blur, {});
+                Access::timeline(*dialog);
+            }
+            for (const bool interval : {false, true}) {
+                const auto request = Access::request(*dialog, output, interval, false);
+                EXPECT_DOUBLE_EQ(request.start_time, static_cast<double>(start));
+                EXPECT_DOUBLE_EQ(request.end_time, static_cast<double>(end));
+            }
+        }
+    }
+
+    TEST_F(VideoExtractorFpsInputTest, ShortVideoTrimButtonsKeepAValidRange) {
+        for (const int frames : {1, 2, 3}) {
+            SCOPED_TRACE(frames);
+            TempDir temp("short_trim_buttons");
+            const auto source = temp.path / "source.mp4";
+            const auto output = temp.path / "frames";
+            std::filesystem::create_directories(output);
+            std::ofstream(output / "frame_1.png").put('x');
+            ASSERT_TRUE(writeProbedVideoWithRate(source, "mp4", AV_CODEC_ID_MPEG4, frames, 0, 30, 1));
+            ASSERT_TRUE(dialog->openVideoPath(source));
+            const double duration = Access::end(*dialog);
+            for (const auto* id : {"btn-trim-start-set", "btn-trim-end-set", "btn-trim-reset"}) {
+                Access::reset(*dialog);
+                Access::click(*dialog, id);
+                Access::timeline(*dialog);
+                const auto request = Access::request(*dialog, output, false, false);
+                EXPECT_DOUBLE_EQ(request.start_time, 0.0);
+                EXPECT_DOUBLE_EQ(request.end_time, duration);
+            }
+        }
+    }
+
+    TEST_F(VideoExtractorFpsInputTest, ShortVideoTrimFieldsAndTimelineKeepAValidRange) {
+        TempDir temp("short_trim_edits");
+        const auto source = temp.path / "source.mp4";
+        const auto output = temp.path / "frames";
+        std::filesystem::create_directories(output);
+        std::ofstream(output / "frame_1.png").put('x');
+        ASSERT_TRUE(writeProbedVideoWithRate(source, "mp4", AV_CODEC_ID_MPEG4, 1, 0, 30, 1));
+        ASSERT_TRUE(dialog->openVideoPath(source));
+        const double duration = Access::end(*dialog);
+        for (const bool end : {false, true}) {
+            for (const bool timeline : {false, true}) {
+                Access::reset(*dialog);
+                Access::timeline(*dialog);
+                context->Update();
+                if (timeline) {
+                    Access::dragTrim(*dialog, end, end ? 0.0f : 1.0f);
+                } else {
+                    auto* field = dynamic_cast<Rml::ElementFormControlInput*>(
+                        document->GetElementById(end ? "trim-end-input" : "trim-start-input"));
+                    ASSERT_NE(field, nullptr);
+                    field->SetValue(end ? "-1" : "99");
+                    field->DispatchEvent(Rml::EventId::Change, {});
+                }
+                Access::timeline(*dialog);
+                const auto request = Access::request(*dialog, output, false, false);
+                EXPECT_DOUBLE_EQ(request.start_time, 0.0);
+                EXPECT_DOUBLE_EQ(request.end_time, duration);
+            }
+        }
     }
 
     TEST_F(VideoExtractorFpsInputTest, ExtractionRequestUsesTypedFps) {
