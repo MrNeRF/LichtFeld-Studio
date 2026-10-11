@@ -1665,12 +1665,22 @@ namespace lfs::vis::gui {
     }
 
     float RmlStatusBar::overlayHeight() const {
+        float tooltip_height = 0.0f;
+        if (tooltip_.hasActiveState() && document_) {
+            if (auto* const element = document_->GetElementById("frame-tooltip");
+                element && element->IsVisible()) {
+                // Match the tooltip's 10px cursor gap and 4px edge margin.
+                // Pending tooltips need no surface until apply() lays them out.
+                tooltip_height = std::min(tooltip_max_overlay_height_,
+                                          std::ceil(element->GetOffsetHeight() + 14.0f));
+            }
+        }
         if (!model_.mcp_details_expanded)
-            return tooltip_.hasActiveState() ? tooltip_overlay_height_ : 0.0f;
+            return tooltip_height;
         const float dp_ratio = rml_context_
                                    ? rml_context_->GetDensityIndependentPixelRatio()
                                    : 1.0f;
-        const float fallback_height = 150.0f * dp_ratio;
+        const float fallback_height = std::max(150.0f * dp_ratio, tooltip_height);
         if (!document_)
             return fallback_height;
 
@@ -1682,8 +1692,7 @@ namespace lfs::vis::gui {
         // but grow the render/input surface when localized text, an error, or
         // multiple network endpoints make the actual popup taller.
         const float measured_height = popup->GetOffsetHeight() + 20.0f * dp_ratio;
-        return std::max({fallback_height, measured_height,
-                         tooltip_.hasActiveState() ? tooltip_overlay_height_ : 0.0f});
+        return std::max(fallback_height, measured_height);
     }
 
     bool RmlStatusBar::isOverlayPoint(const float local_x, const float local_y,
@@ -1774,6 +1783,22 @@ namespace lfs::vis::gui {
         }
     }
 
+    void RmlStatusBar::positionTooltip(const float previous_overlay, const float overlay_height,
+                                       const bool place_above) {
+        auto* const element = document_->GetElementById("frame-tooltip");
+        if (!element || !element->IsVisible())
+            return;
+        // apply() has written the final position, but layout may still expose
+        // the offscreen measurement position. Read the pending pixel property.
+        const auto* const pending_top = element->GetLocalProperty(Rml::PropertyId::Top);
+        const float current_top = pending_top ? pending_top->Get<float>() : element->GetOffsetTop();
+        const float top = place_above
+                              ? std::max(4.0f, overlay_height + tooltip_mouse_y_ -
+                                                   10.0f - element->GetOffsetHeight())
+                              : current_top + overlay_height - previous_overlay;
+        element->SetProperty(Rml::PropertyId::Top, Rml::Property(top, Rml::Unit::PX));
+    }
+
     void RmlStatusBar::render(const PanelDrawContext& ctx, const float x, const float y,
                               const float w_px, const float h_px,
                               const int screen_w, const int screen_h) {
@@ -1794,32 +1819,44 @@ namespace lfs::vis::gui {
             return;
         }
 
-        tooltip_overlay_height_ = std::max(0.0f, static_cast<float>(screen_h) - h_px);
-        const float overlay_height = overlayHeight();
+        tooltip_max_overlay_height_ = std::max(0.0f, static_cast<float>(screen_h) - h_px);
         const int render_w = static_cast<int>(w_px);
-        const int render_h = static_cast<int>(h_px + overlay_height);
-        const bool size_changed = (render_w != last_render_w_ || render_h != last_render_h_);
         const float dp_ratio = rml_context_->GetDensityIndependentPixelRatio();
         const bool dp_changed = dp_ratio != last_dp_ratio_;
         const bool had_pending_model_dirty = model_dirty_;
         const bool theme_changed = updateTheme();
         const auto now = std::chrono::steady_clock::now();
-        const bool refresh_due =
-            size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
-            next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
-            now >= next_refresh_at_;
+        const auto refresh_at = next_refresh_at_;
         const bool content_changed = updateContent(ctx);
         const bool section_signature_changed = section_signature_ != last_section_signature_;
-        rml_context_->SetDimensions(Rml::Vector2i(render_w, render_h));
-        if (render_h != last_document_h_) {
-            document_->SetProperty("height", std::format("{}px", render_h));
-            last_document_h_ = render_h;
+
+        if (tooltip_.hasActiveState() &&
+            (render_w != last_render_w_ || dp_changed || theme_changed)) {
+            rml_context_->SetDimensions({render_w, std::max(last_render_h_, static_cast<int>(h_px))});
             rml_context_->Update();
         }
+
+        // Reveal and measure in the existing surface before sizing the cache.
+        // The tooltip controller lays out new text even when the strip is short.
+        const float previous_overlay = std::max(0.0f, last_render_h_ - h_px);
         const bool tooltip_changed = tooltip_.apply(document_->GetElementById("body"),
-                                                     tooltip_mouse_x_,
-                                                     tooltip_mouse_y_ + static_cast<int>(overlay_height),
-                                                     render_w, render_h);
+                                                    tooltip_mouse_x_,
+                                                    tooltip_mouse_y_ + static_cast<int>(previous_overlay),
+                                                    render_w, static_cast<int>(h_px + previous_overlay));
+        const float overlay_height = overlayHeight();
+        const int render_h = static_cast<int>(h_px + overlay_height);
+        const bool size_changed = (render_w != last_render_w_ || render_h != last_render_h_);
+        const bool refresh_due =
+            size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
+            refresh_at == std::chrono::steady_clock::time_point{} ||
+            now >= refresh_at;
+        if (tooltip_.hasActiveState() && (tooltip_changed || size_changed || dp_changed || theme_changed)) {
+            // Revealing from the strip needs a new position after measurement.
+            // Preserve below-cursor placement when the MCP popup already provided space.
+            const bool place_above = (tooltip_changed && previous_overlay <= 0.0f) ||
+                                     ((dp_changed || theme_changed) && tooltip_mouse_y_ >= 0);
+            positionTooltip(previous_overlay, overlay_height, place_above);
+        }
         rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.hasActiveState());
         rml_manager_->setContextTooltipRevealDeadline(rml_context_, tooltip_.revealDeadline());
         const bool needs_render = tooltip_changed || size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
@@ -1838,9 +1875,9 @@ namespace lfs::vis::gui {
                 last_document_h_ = render_h;
             }
             rml_context_->Update();
-            if (size_changed || dp_changed || theme_changed)
+            if (dp_changed || theme_changed)
                 updateFpsReservedWidths();
-            fitToAvailableWidth(size_changed || dp_changed || theme_changed || section_signature_changed);
+            fitToAvailableWidth(render_w != last_render_w_ || dp_changed || theme_changed || section_signature_changed);
 
             rml_animation_active_ = rml_context_->GetNextUpdateDelay() == 0;
             animation_active_ = model_animation_active_ || rml_animation_active_;

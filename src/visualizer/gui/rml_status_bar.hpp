@@ -8,8 +8,8 @@
 #include "gui/error_surface_types.hpp"
 #include "gui/gpu_memory_query.hpp"
 #include "gui/panel_registry.hpp"
-#include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/status_bar_mining.hpp"
 #include "visualizer/rendering/rendering_types.hpp"
 #include "visualizer/visualizer.hpp"
@@ -78,8 +78,8 @@ namespace lfs::vis::gui {
             std::chrono::steady_clock::time_point now) const;
         [[nodiscard]] LFS_VIS_API std::optional<double> secondsUntilAnimationFrame(
             std::chrono::steady_clock::time_point now) const;
-        void processInput(const PanelInputState& input, float bar_x, float bar_y,
-                          float bar_w, float bar_h);
+        LFS_VIS_API void processInput(const PanelInputState& input, float bar_x, float bar_y,
+                                      float bar_w, float bar_h);
         void clearTooltip() { tooltip_.setHover({}, nullptr); }
         [[nodiscard]] LFS_VIS_API float overlayHeight() const;
         [[nodiscard]] LFS_VIS_API bool isOverlayPoint(float local_x, float local_y,
@@ -87,11 +87,12 @@ namespace lfs::vis::gui {
 
     private:
         friend class RmlStatusBarTestAccess;
-        void updateFpsReservedWidths();
+        LFS_VIS_API void updateFpsReservedWidths();
+        LFS_VIS_API void positionTooltip(float previous_overlay, float overlay_height, bool place_above);
         RmlTooltipController tooltip_;
         int tooltip_mouse_x_ = 0;
         int tooltip_mouse_y_ = 0;
-        float tooltip_overlay_height_ = 0.0f;
+        float tooltip_max_overlay_height_ = 0.0f;
 
         struct ProgressBarGeometry {
             float x = 0.0f;
