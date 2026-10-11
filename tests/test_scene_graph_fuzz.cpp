@@ -494,6 +494,38 @@ namespace {
         EXPECT_TRUE(scene.getNodeById(a)->visible);
     }
 
+    TEST_F(SceneGraphFuzzTest, UngroupLastEmptyGroupSupportsRepeatedUndoRedo) {
+        auto& scene = manager_->getScene();
+        const auto group = scene.addGroup("empty group");
+        const auto uuid = scene.getNodeById(group)->uuid;
+        manager_->selectNode(group);
+        const auto before = scene_state(*manager_, false);
+        ASSERT_TRUE(manager_->ungroupNode(group));
+        ASSERT_EQ(scene.getNodeCount(), 0u);
+        const auto after = scene_state(*manager_, false);
+        for (int repeat = 0; repeat < 3; ++repeat) {
+            ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+            EXPECT_EQ(scene_state(*manager_, false), before);
+            ASSERT_NE(scene.getNodeByUuid(uuid), nullptr);
+            ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+            EXPECT_EQ(scene_state(*manager_, false), after);
+            EXPECT_EQ(scene.getNodeCount(), 0u);
+        }
+    }
+
+    TEST_F(SceneGraphFuzzTest, UngroupUndoRejectsUntrackedReseedWithoutChangingScene) {
+        auto& scene = manager_->getScene();
+        ASSERT_TRUE(manager_->ungroupNode(scene.addGroup("empty group")));
+        ASSERT_EQ(scene.getNodeCount(), 0u);
+        seed_scene();
+        const auto before = scene_state(*manager_);
+        const auto result = lfs::vis::op::undoHistory().undo();
+        EXPECT_FALSE(result.success);
+        EXPECT_NE(result.error.find("topology changed"), std::string::npos);
+        EXPECT_EQ(scene_state(*manager_), before);
+        check_scene_invariants(*manager_);
+    }
+
     TEST_F(SceneGraphFuzzTest, GroupSelectedAllowsGroupAndSplatSiblings) {
         auto& scene = manager_->getScene();
         const NodeId first_group = scene.addGroup("first");
@@ -957,7 +989,9 @@ namespace {
 
             for (int operation = 0; operation < operations_per_seed; ++operation) {
                 auto nodes = manager_->getScene().getNodes();
-                if (nodes.empty()) {
+                // Direct reseeding changes topology outside history. Keep an empty
+                // scene intact while the model can still replay undo or redo.
+                if (nodes.empty() && undo_frames.empty() && redo_frames.empty()) {
                     seed_scene();
                     nodes = manager_->getScene().getNodes();
                 }
