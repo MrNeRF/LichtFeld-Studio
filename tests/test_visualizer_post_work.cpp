@@ -6570,6 +6570,10 @@ contract["check_selection_submode_follows_native_mode"](lf)
         ASSERT_NE(manager->getScene().addGroup("before-batch"), lfs::core::NULL_NODE);
         ASSERT_TRUE(viewer.getDataLoader()->loadSplatFiles({first, second, third}));
         auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            const auto job = viewer.jobs().active(JobType::Import);
+            return job && job->status == JobStatus::CompletionPending;
+        }));
         ASSERT_TRUE(waitUntil(
             [&] {
                 tasks.pollImportCompletion();
@@ -6578,6 +6582,8 @@ contract["check_selection_submode_follows_native_mode"](lf)
 
         ASSERT_NE(manager->getScene().getNode("async-second"), nullptr);
         ASSERT_NE(manager->getScene().getNode("async-third"), nullptr);
+        EXPECT_NE(manager->getScene().getNode("async-second")->model, nullptr);
+        EXPECT_NE(manager->getScene().getNode("async-third")->model, nullptr);
         EXPECT_EQ(manager->getScene().getNode("before-batch"), nullptr);
         ASSERT_EQ(manager->getScene().getNodes().size(), 2u);
         EXPECT_EQ(manager->getScene().getNodes()[0]->name, "async-second");
@@ -6933,12 +6939,12 @@ contract["check_selection_submode_follows_native_mode"](lf)
             EXPECT_NE(node->model, nullptr);
     }
 
-    TEST_F(VisualizerImplResetTest, LegacyMultiFileLoadStillConsolidates) {
+    TEST_F(VisualizerImplResetTest, LegacyMultiFileLoadKeepsNodePayloads) {
         VisualizerImpl viewer(projectOptions());
         ASSERT_TRUE(viewer.getDataLoader()->loadSplatFiles({makeSplatFixture("legacy-first"), makeSplatFixture("legacy-second")}));
         auto& tasks = viewer.getGuiManager()->asyncTasks();
-        // Check the legacy final-consolidation policy with all files staged,
-        // independently of the worker/main-thread completion timing.
+        // Check final batch attachment with all files staged, independently
+        // of the worker/main-thread completion timing.
         ASSERT_TRUE(waitUntil([&] {
             const auto job = viewer.jobs().active(JobType::Import);
             return job && job->status == JobStatus::CompletionPending;
@@ -6949,7 +6955,7 @@ contract["check_selection_submode_follows_native_mode"](lf)
         }));
         ASSERT_EQ(viewer.getScene().getNodes().size(), 2u);
         for (const auto* node : viewer.getScene().getNodes())
-            EXPECT_EQ(node->model, nullptr);
+            EXPECT_NE(node->model, nullptr);
         ASSERT_NE(viewer.getScene().getCombinedModel(), nullptr);
         EXPECT_EQ(viewer.getScene().getCombinedModel()->size(), 4u);
     }
@@ -7071,6 +7077,119 @@ contract["check_selection_submode_follows_native_mode"](lf)
         }));
         EXPECT_EQ(viewer.getSceneManager()->getSelectedNodeName(), "user-choice");
         EXPECT_EQ(viewer.getScene().getNode("selection-second"), nullptr);
+    }
+
+    class AsyncSplatPayloadTest : public VisualizerImplResetTest {
+    protected:
+        void checkPayloads(const bool batch, const bool user_batch, const bool append) {
+            const auto first = makeSplatFixture("payload-first");
+            const auto second = makeSplatFixture("payload-second");
+            VisualizerImpl viewer(projectOptions());
+            auto* manager = viewer.getSceneManager();
+            manager->loadSplatFile(first);
+            const auto reference = manager->getScene().getNode("payload-first")->model->clone();
+            ASSERT_TRUE(viewer.clearScene());
+            if (append) {
+                manager->loadSplatFile(makeSplatFixture("payload-existing"));
+                manager->getScene().setNodeVisibility("payload-existing", false);
+                manager->getScene().setNodeTransform("payload-existing", glm::translate(glm::mat4(1.0f), glm::vec3(2, 3, 4)));
+            }
+            auto& tasks = viewer.getGuiManager()->asyncTasks();
+            const auto wait = [&] {
+                return waitUntil([&] {
+                    tasks.pollImportCompletion();
+                    return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+                });
+            };
+            if (batch) {
+                core::events::cmd::LoadFile{.path = first, .is_dataset = false, .paths = {first, second}, .user_batch = user_batch}
+                    .emit();
+                if (!user_batch) {
+                    // Exercise final batch attachment independently of worker timing.
+                    ASSERT_TRUE(waitUntil([&] {
+                        const auto job = viewer.jobs().active(JobType::Import);
+                        return job && job->status == JobStatus::CompletionPending;
+                    }));
+                }
+                ASSERT_TRUE(wait());
+            } else {
+                for (const auto& path : {first, second}) {
+                    core::events::cmd::LoadFile{.path = path, .is_dataset = false}.emit();
+                    ASSERT_TRUE(wait());
+                }
+            }
+            auto& scene = manager->getScene();
+            ASSERT_EQ(scene.getNodes().size(), append ? 3u : 2u);
+            ASSERT_NE(scene.getCombinedModel(), nullptr);
+            const bool all_nodes_cache = batch && !user_batch;
+            EXPECT_EQ(scene.getCombinedModel()->size(), append && all_nodes_cache ? 6 : 4);
+            if (append && all_nodes_cache)
+                EXPECT_EQ(scene.getNodeVisibilityMask(), (std::vector<bool>{false, true, true}));
+            for (const auto* node : scene.getNodes()) {
+                SCOPED_TRACE(node->name);
+                ASSERT_NE(node->model, nullptr);
+                const auto& model = *node->model;
+                EXPECT_EQ(model.means_raw().to_vector(), reference.means_raw().to_vector());
+                EXPECT_EQ(model.sh0_raw().to_vector(), reference.sh0_raw().to_vector());
+                EXPECT_EQ(model.shN_canonical().to_vector(), reference.shN_canonical().to_vector());
+                EXPECT_EQ(model.scaling_raw().to_vector(), reference.scaling_raw().to_vector());
+                EXPECT_EQ(model.rotation_raw().to_vector(), reference.rotation_raw().to_vector());
+                EXPECT_EQ(model.opacity_raw().to_vector(), reference.opacity_raw().to_vector());
+                EXPECT_EQ(model.get_active_sh_degree(), reference.get_active_sh_degree());
+                EXPECT_TRUE(lfs::io::save_ply(model, {.output_path = temporary_.path / (node->name + "-export.ply"), .binary = true, .async = false}));
+            }
+            if (append) {
+                const auto* existing = scene.getNode("payload-existing");
+                EXPECT_FALSE(existing->visible);
+                EXPECT_EQ(existing->transform(), glm::translate(glm::mat4(1.0f), glm::vec3(2, 3, 4)));
+            }
+        }
+    };
+
+    TEST_F(AsyncSplatPayloadTest, ApiBatchRequestsBackgroundCombinedBuild) {
+        std::atomic<bool> worker_allocated{false};
+        const auto main_thread = std::this_thread::get_id();
+        VisualizerImpl viewer(projectOptions());
+        core::events::state::PLYAdded::when([&](const auto&) {
+            // Attachment installs its own allocator before emitting PLYAdded.
+            viewer.getScene().setCombinedModelAllocator(
+                [&](core::TensorShape shape, size_t, core::DataType dtype, std::string_view) {
+                    if (std::this_thread::get_id() != main_thread)
+                        worker_allocated.store(true);
+                    return core::Tensor::empty(std::move(shape), core::Device::CUDA, dtype);
+                });
+        });
+        const auto first = makeSplatFixture("background-first");
+        const auto second = makeSplatFixture("background-second");
+        core::events::cmd::LoadFile{.path = first, .is_dataset = false, .paths = {first, second}}.emit();
+        ASSERT_TRUE(waitUntil([&] {
+            const auto job = viewer.jobs().active(JobType::Import);
+            return job && job->status == JobStatus::CompletionPending;
+        }));
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        EXPECT_TRUE(worker_allocated.load());
+        ASSERT_NE(viewer.getScene().getCombinedModel(), nullptr);
+        EXPECT_EQ(viewer.getScene().getCombinedModel()->size(), 4);
+    }
+
+    TEST_F(AsyncSplatPayloadTest, ApiBatchKeepsReadableExportableModels) {
+        checkPayloads(true, false, false);
+    }
+
+    TEST_F(AsyncSplatPayloadTest, ApiBatchKeepsHiddenExistingModel) {
+        checkPayloads(true, false, true);
+    }
+
+    TEST_F(AsyncSplatPayloadTest, SeparateSingleLoadsKeepExactPayloads) {
+        checkPayloads(false, false, true);
+    }
+
+    TEST_F(AsyncSplatPayloadTest, UserBatchKeepsExactPayloads) {
+        checkPayloads(true, true, true);
     }
 
     TEST_F(VisualizerImplResetTest, MultiFileDropIntoEmptySceneLoadsEveryNode) {

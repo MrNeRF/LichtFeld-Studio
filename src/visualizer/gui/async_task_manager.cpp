@@ -1433,8 +1433,6 @@ namespace lfs::vis::gui {
                 publishImportOverlayState();
                 return;
             }
-            if (!splat_load_state_.gallery)
-                scene_manager->consolidateNodeModels();
             splat_load_state_.consolidation_pending = false;
         }
         if (!splat_load_state_.failures.empty()) {

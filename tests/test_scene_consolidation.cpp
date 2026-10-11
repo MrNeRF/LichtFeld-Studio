@@ -977,6 +977,87 @@ TEST(SceneCombinedEncode, QuantizedBandsMatchMasterEncodedBytesAndBounds) {
     EXPECT_EQ(cudaStreamDestroy(build_stream), cudaSuccess);
 }
 
+TEST(SceneCombinedBuild, AllNodeCacheKeepsVisibilityAndSlotMetadataWithoutRebuilding) {
+    for (bool use_worker : {false, true}) {
+        SCOPED_TRACE(use_worker);
+        Scene scene;
+        const auto group = scene.addGroup("group");
+        std::vector<lfs::core::NodeId> ids;
+        for (int i = 0; i < 3; ++i) {
+            auto model = make_alias_test_model(static_cast<float>(i));
+            model->set_active_sh_degree(i % 2);
+            ids.push_back(scene.addSplat(std::to_string(i), std::move(model)));
+            scene.setNodeTransform(std::to_string(i), glm::translate(glm::mat4(1), glm::vec3(i, 0, 0)));
+        }
+        ASSERT_TRUE(scene.reparent(ids[0], group));
+        scene.setNodeVisibility(group, false);
+        std::atomic<int> allocations{0};
+        scene.setCombinedModelAllocator([&](lfs::core::TensorShape shape, size_t, lfs::core::DataType dtype, std::string_view) {
+            ++allocations;
+            return Tensor::empty(std::move(shape), Device::CUDA, dtype);
+        });
+        if (use_worker) {
+            scene.requestCombinedModelBuild(true);
+            while (scene.combinedModelBuildPending()) {
+                (void)scene.combinedModelBuildError();
+                std::this_thread::yield();
+            }
+        } else {
+            auto inputs = scene.captureCombinedModelBuild(true);
+            auto built = Scene::buildCombinedModelCache(std::move(inputs.inputs), inputs.full_selection_count,
+                                                        inputs.allocator, inputs.generation, true);
+            ASSERT_TRUE(scene.installCombinedModelCache(std::move(built)));
+        }
+        const auto* combined = scene.getCombinedModel();
+        ASSERT_NE(combined, nullptr);
+        ASSERT_EQ(combined->size(), 6u);
+        const auto indices = scene.getTransformIndices();
+        const auto selection_indices = scene.getVisibleSelectionIndices();
+        const int initial_allocations = allocations.load();
+        EXPECT_FALSE(scene.isConsolidated());
+        for (bool shown : {false, true, false, true}) {
+            scene.setNodeVisibility(group, shown);
+            EXPECT_EQ(scene.getCombinedModel(), combined);
+            EXPECT_FALSE(scene.combinedModelBuildPending());
+            EXPECT_EQ(allocations.load(), initial_allocations);
+            EXPECT_EQ(scene.getTransformIndices(), indices);
+            EXPECT_EQ(scene.getVisibleSelectionIndices(), selection_indices);
+            EXPECT_EQ(scene.getNodeVisibilityMask(), (std::vector<bool>{shown, true, true}));
+            EXPECT_EQ(scene.getVisibleNodeActiveShDegrees(), (std::vector<int>{0, 1, 0}));
+            const auto transforms = scene.getVisibleNodeTransforms();
+            ASSERT_EQ(transforms.size(), 3u);
+            for (int i = 0; i < 3; ++i) {
+                EXPECT_EQ(transforms[i][3].x, i);
+                EXPECT_NE(scene.getNodeById(ids[i])->model, nullptr);
+            }
+            const auto slots = scene.getVisibleSplatNodeSlots();
+            ASSERT_EQ(slots.size(), shown ? 3u : 2u);
+            EXPECT_EQ(slots.back().slot_index, 2u);
+            EXPECT_EQ(scene.getVisibleNodeIndex(ids[2]), 2);
+            EXPECT_EQ(scene.getVisibleNodeIndex("2"), 2);
+            EXPECT_EQ(scene.getVisibleNodeIndex(ids[0]), shown ? 0 : -1);
+            EXPECT_EQ(scene.getSelectedNodeMask(std::string("2")), (std::vector<bool>{false, false, true}));
+            EXPECT_EQ(scene.getSelectedNodeMask(std::vector<std::string>{"group", "2"}), (std::vector<bool>{true, false, true}));
+            EXPECT_EQ(scene.getSelectedNodeMask(std::string{}), (std::vector<bool>{false, false, false}));
+        }
+        // A pending replacement must not omit newly added source payloads from exports.
+        std::atomic<bool> release_worker{false};
+        scene.setCombinedModelAllocator([&](lfs::core::TensorShape shape, size_t, lfs::core::DataType dtype, std::string_view) {
+            while (!release_worker.load())
+                std::this_thread::yield();
+            return Tensor::empty(std::move(shape), Device::CUDA, dtype);
+        });
+        scene.addSplat("new", make_alias_test_model(3.0f));
+        scene.requestCombinedModelBuild(true);
+        EXPECT_EQ(scene.getVisibleSplatNodeSlots().size(), 4u);
+        release_worker.store(true);
+        while (scene.combinedModelBuildPending()) {
+            (void)scene.combinedModelBuildError();
+            std::this_thread::yield();
+        }
+    }
+}
+
 TEST(SceneCombinedImport, FailedBuildReportsOnceAndAllowsExplicitRetry) {
     Scene scene;
     scene.setImportValidation(true);

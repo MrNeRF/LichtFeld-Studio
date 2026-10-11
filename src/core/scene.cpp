@@ -286,7 +286,8 @@ namespace lfs::core {
             invalidateTransformCache();
             break;
         case MutationType::VISIBILITY_CHANGED:
-            if (isConsolidated())
+            if (isConsolidated() || (model_cache_valid_.load(std::memory_order_acquire) &&
+                                     cached_combined_ && cached_combined_includes_hidden_))
                 invalidateTransformCache();
             else
                 invalidateCache();
@@ -1929,10 +1930,10 @@ namespace lfs::core {
     }
 
     std::vector<bool> Scene::getNodeVisibilityMask() const {
-        if (const auto pending_ids = pendingRebuildSlotIds(); !pending_ids.empty()) {
+        if (const auto slot_ids = retainedModelSlotIds(); !slot_ids.empty()) {
             std::vector<bool> mask;
-            mask.reserve(pending_ids.size());
-            for (const NodeId id : pending_ids) {
+            mask.reserve(slot_ids.size());
+            for (const NodeId id : slot_ids) {
                 mask.push_back(getNodeById(id) && isNodeEffectivelyVisible(id));
             }
             return mask;
@@ -2442,6 +2443,18 @@ namespace lfs::core {
     std::vector<Scene::VisibleSplatNodeSlot> Scene::getVisibleSplatNodeSlots() const {
         std::vector<VisibleSplatNodeSlot> visible;
 
+        if (const auto slot_ids = (model_cache_valid_.load(std::memory_order_acquire) ? retainedModelSlotIds() : std::span<const NodeId>{}); !slot_ids.empty()) {
+            visible.reserve(slot_ids.size());
+            for (size_t i = 0; i < slot_ids.size(); ++i) {
+                const auto* node = getNodeById(slot_ids[i]);
+                if (node && node->type == NodeType::SPLAT &&
+                    node->gaussian_count.load(std::memory_order_acquire) > 0 &&
+                    isNodeEffectivelyVisible(node->id))
+                    visible.push_back({.node = node, .slot_index = i});
+            }
+            return visible;
+        }
+
         if (consolidated_ && !consolidated_node_slots_.empty()) {
             visible.reserve(consolidated_node_slots_.size());
             for (size_t slot_index = 0; slot_index < consolidated_node_slots_.size(); ++slot_index) {
@@ -2861,13 +2874,18 @@ namespace lfs::core {
         transform_cache_valid_.store(false, std::memory_order_release);
     }
 
-    std::vector<NodeId> Scene::pendingRebuildSlotIds() const {
-        if (consolidated_ || model_cache_valid_.load(std::memory_order_acquire) ||
-            !combinedModelBuildPending())
+    std::span<const NodeId> Scene::retainedModelSlotIds() const {
+        if (consolidated_)
+            return {};
+        if (model_cache_valid_.load(std::memory_order_acquire))
+            return cached_combined_ && cached_combined_includes_hidden_
+                       ? std::span<const NodeId>(cached_combined_node_ids_)
+                       : std::span<const NodeId>{};
+        if (!combinedModelBuildPending())
             return {};
         if (single_node_model_)
-            return {single_node_id_};
-        if (cached_combined_ && !cached_combined_includes_hidden_)
+            return {&single_node_id_, 1};
+        if (cached_combined_)
             return cached_combined_node_ids_;
         return {};
     }
@@ -2877,9 +2895,9 @@ namespace lfs::core {
             return;
 
         cached_transforms_.clear();
-        if (const auto pending_ids = pendingRebuildSlotIds(); !pending_ids.empty()) {
-            cached_transforms_.reserve(pending_ids.size());
-            for (const NodeId id : pending_ids) {
+        if (const auto slot_ids = retainedModelSlotIds(); !slot_ids.empty()) {
+            cached_transforms_.reserve(slot_ids.size());
+            for (const NodeId id : slot_ids) {
                 cached_transforms_.push_back(getNodeById(id) ? getWorldTransform(id) : glm::mat4(1.0f));
             }
             transform_cache_valid_.store(true, std::memory_order_release);
@@ -2918,9 +2936,9 @@ namespace lfs::core {
         std::vector<int> degrees;
         // Same slot ordering as getVisibleNodeTransforms, including retained
         // holes after consolidation. Never truncate inactive source SH data.
-        if (const auto pending_ids = pendingRebuildSlotIds(); !pending_ids.empty()) {
-            degrees.reserve(pending_ids.size());
-            for (const NodeId id : pending_ids) {
+        if (const auto slot_ids = retainedModelSlotIds(); !slot_ids.empty()) {
+            degrees.reserve(slot_ids.size());
+            for (const NodeId id : slot_ids) {
                 const auto* node = getNodeById(id);
                 degrees.push_back(node && node->model ? node->model->get_active_sh_degree() : 0);
             }
@@ -3004,6 +3022,15 @@ namespace lfs::core {
     }
 
     int Scene::getVisibleNodeIndex(const std::string& name) const {
+        if (const auto slot_ids = (model_cache_valid_.load(std::memory_order_acquire) ? retainedModelSlotIds() : std::span<const NodeId>{}); !slot_ids.empty()) {
+            for (size_t i = 0; i < slot_ids.size(); ++i) {
+                const auto* node = getNodeById(slot_ids[i]);
+                if (node && node->name == name && isNodeEffectivelyVisible(node->id))
+                    return static_cast<int>(i);
+            }
+            return -1;
+        }
+
         if (consolidated_ && !consolidated_node_slots_.empty()) {
             for (size_t index = 0; index < consolidated_node_slots_.size(); ++index) {
                 const auto& slot = consolidated_node_slots_[index];
@@ -3030,6 +3057,15 @@ namespace lfs::core {
         if (node_id == NULL_NODE)
             return -1;
 
+        if (const auto slot_ids = (model_cache_valid_.load(std::memory_order_acquire) ? retainedModelSlotIds() : std::span<const NodeId>{}); !slot_ids.empty()) {
+            for (size_t i = 0; i < slot_ids.size(); ++i) {
+                const auto* node = getNodeById(slot_ids[i]);
+                if (node && node->id == node_id && isNodeEffectivelyVisible(node->id))
+                    return static_cast<int>(i);
+            }
+            return -1;
+        }
+
         if (consolidated_ && !consolidated_node_slots_.empty()) {
             for (size_t index = 0; index < consolidated_node_slots_.size(); ++index) {
                 const auto& slot = consolidated_node_slots_[index];
@@ -3053,16 +3089,22 @@ namespace lfs::core {
     }
 
     std::vector<bool> Scene::getSelectedNodeMask(const std::string& selected_node_name) const {
+        const auto slot_ids = (model_cache_valid_.load(std::memory_order_acquire) ? retainedModelSlotIds() : std::span<const NodeId>{});
         const auto consolidated_visible_count = [&]() -> std::optional<size_t> {
             if (consolidated_ && !consolidated_node_slots_.empty()) {
                 return consolidated_node_slots_.size();
             }
             return std::nullopt;
         }();
-        const size_t visible_count = std::count_if(nodes_.begin(), nodes_.end(),
-                                                   [this](const auto& n) {
-                                                       return n->model && isNodeEffectivelyVisible(n->id);
-                                                   });
+        const size_t visible_count = [&] {
+            if (!slot_ids.empty())
+                return slot_ids.size();
+            if (consolidated_visible_count)
+                return *consolidated_visible_count;
+            return static_cast<size_t>(std::count_if(nodes_.begin(), nodes_.end(), [this](const auto& n) {
+                return n->model && isNodeEffectivelyVisible(n->id);
+            }));
+        }();
         const size_t mask_count = consolidated_visible_count.value_or(visible_count);
 
         if (selected_node_name.empty()) {
@@ -3089,6 +3131,15 @@ namespace lfs::core {
             return false;
         };
 
+        if (!slot_ids.empty()) {
+            std::vector<bool> mask(slot_ids.size(), false);
+            for (size_t i = 0; i < slot_ids.size(); ++i) {
+                const auto* node = getNodeById(slot_ids[i]);
+                mask[i] = node && isSelectedOrDescendant(node);
+            }
+            return mask;
+        }
+
         if (consolidated_visible_count) {
             std::vector<bool> mask(consolidated_node_slots_.size(), false);
             for (size_t slot_index = 0; slot_index < consolidated_node_slots_.size(); ++slot_index) {
@@ -3110,16 +3161,22 @@ namespace lfs::core {
     }
 
     std::vector<bool> Scene::getSelectedNodeMask(const std::vector<std::string>& selected_node_names) const {
+        const auto slot_ids = (model_cache_valid_.load(std::memory_order_acquire) ? retainedModelSlotIds() : std::span<const NodeId>{});
         const auto consolidated_visible_count = [&]() -> std::optional<size_t> {
             if (consolidated_ && !consolidated_node_slots_.empty()) {
                 return consolidated_node_slots_.size();
             }
             return std::nullopt;
         }();
-        const size_t visible_count = std::count_if(nodes_.begin(), nodes_.end(),
-                                                   [this](const auto& n) {
-                                                       return n->model && isNodeEffectivelyVisible(n->id);
-                                                   });
+        const size_t visible_count = [&] {
+            if (!slot_ids.empty())
+                return slot_ids.size();
+            if (consolidated_visible_count)
+                return *consolidated_visible_count;
+            return static_cast<size_t>(std::count_if(nodes_.begin(), nodes_.end(), [this](const auto& n) {
+                return n->model && isNodeEffectivelyVisible(n->id);
+            }));
+        }();
         const size_t mask_count = consolidated_visible_count.value_or(visible_count);
 
         if (selected_node_names.empty()) {
@@ -3151,6 +3208,15 @@ namespace lfs::core {
             }
             return false;
         };
+
+        if (!slot_ids.empty()) {
+            std::vector<bool> mask(slot_ids.size(), false);
+            for (size_t i = 0; i < slot_ids.size(); ++i) {
+                const auto* node = getNodeById(slot_ids[i]);
+                mask[i] = node && isSelectedOrDescendant(node);
+            }
+            return mask;
+        }
 
         if (consolidated_visible_count) {
             std::vector<bool> mask(consolidated_node_slots_.size(), false);

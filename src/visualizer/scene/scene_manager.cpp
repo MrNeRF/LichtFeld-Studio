@@ -1971,7 +1971,6 @@ namespace lfs::vis {
 
         const auto history_before = op::SceneGraphMetadataEntry::captureNodes(*this, {name});
         scene_.setNodeVisibility(id, visible);
-        scene_.invalidateCache();
         selection_.invalidateNodeMask();
 
         if (visible) {
@@ -1993,7 +1992,6 @@ namespace lfs::vis {
         }
 
         scene_.setNodeVisibility(id, visible);
-        scene_.invalidateCache();
         selection_.invalidateNodeMask();
         if (visible) {
             if (const auto* updated = scene_.getNodeById(id))

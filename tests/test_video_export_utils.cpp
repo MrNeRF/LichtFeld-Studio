@@ -30,6 +30,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 using lfs::core::Device;
@@ -184,6 +185,105 @@ TEST(VideoExportUtilsTest, CaptureSnapshotUsesRenderableModelAndTransforms) {
 
     ASSERT_TRUE(snapshot.transform_indices);
     EXPECT_EQ(snapshot.transform_indices->cpu().to_vector_int(), (std::vector<int>{0, 1}));
+}
+
+TEST(VideoExportUtilsTest, UnconsolidatedAllNodeCacheVisibilityReachesCudaAndVulkan) {
+    if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
+        GTEST_SKIP() << SDL_GetError();
+    struct VideoGuard {
+        ~VideoGuard() { SDL_QuitSubSystem(SDL_INIT_VIDEO); }
+    } video_guard;
+    std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(
+        SDL_CreateWindow("Cache visibility test", 64, 64, SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN),
+        SDL_DestroyWindow);
+    ASSERT_TRUE(window) << SDL_GetError();
+    lfs::vis::VulkanContext context;
+    ASSERT_TRUE(context.init(window.get(), 64, 64)) << context.lastError();
+    lfs::rendering::setExpectedVulkanDeviceUuid(context.deviceUUID());
+    lfs::vis::SceneManager manager;
+    auto& scene = manager.getScene();
+    const auto first = scene.addSplat("first", make_test_splat({-0.5f, 0.0f, 3.0f}));
+    const auto second = scene.addSplat("second", make_test_splat({0.5f, 0.0f, 3.0f}));
+    scene.setNodeVisibility(first, false);
+    scene.setCombinedModelAllocator([&context](lfs::core::TensorShape shape, size_t capacity,
+                                               lfs::core::DataType dtype, std::string_view name) {
+        auto tensor = lfs::vis::makeVulkanExternalTensor(context, std::move(shape), dtype, capacity,
+                                                         std::string(name).c_str());
+        if (!tensor)
+            throw std::runtime_error(tensor.error());
+        return std::move(*tensor);
+    });
+    scene.requestCombinedModelBuild(true);
+    while (scene.combinedModelBuildPending()) {
+        (void)scene.combinedModelBuildError();
+        std::this_thread::yield();
+    }
+    const auto* model = scene.getCombinedModel();
+    ASSERT_TRUE(model);
+    ASSERT_EQ(model->size(), 2u);
+    ASSERT_FALSE(scene.isConsolidated());
+    auto transforms = scene.getVisibleNodeTransforms();
+    for (auto& transform : transforms)
+        transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
+    const auto indices = scene.getTransformIndices();
+    ASSERT_EQ(transforms.size(), 2u);
+    lfs::vis::VksplatViewportRenderer renderer;
+    auto cuda_renderer = lfs::rendering::RenderingEngine::create();
+    ASSERT_TRUE(cuda_renderer->initialize());
+    const auto slot = lfs::vis::VksplatViewportRenderer::OutputSlot::Preview;
+    for (int backend = 0; backend < 3; ++backend) {
+        SCOPED_TRACE(backend); // CUDA point rendering, Vulkan 3DGS and 3DGUT.
+        const auto render = [&]() -> std::vector<float> {
+            EXPECT_EQ(scene.getCombinedModel(), model);
+            const auto mask = scene.getNodeVisibilityMask();
+            if (backend == 0) {
+                lfs::rendering::PointCloudRenderRequest request;
+                request.frame_view.size = {64, 64};
+                request.render.voxel_size = 0.1f;
+                request.scene = {&transforms, indices, mask};
+                auto image = cuda_renderer->renderPointCloudImage(*model, request);
+                EXPECT_TRUE(image) << (image ? "" : image.error());
+                return image ? image->image->cpu().to_vector() : std::vector<float>{};
+            }
+            lfs::rendering::ViewportRenderRequest request;
+            request.frame_view.size = {64, 64};
+            request.sh_degree = 0;
+            request.scene = {&transforms, indices, mask};
+            request.raster_backend = backend == 1 ? lfs::rendering::GaussianRasterBackend::ThreeDgs
+                                                  : lfs::rendering::GaussianRasterBackend::ThreeDgut;
+            request.gut = backend == 2;
+            auto result = renderer.render(context, *model, request, false, slot, false, true);
+            EXPECT_TRUE(result) << (result ? "" : result.error());
+            if (!result)
+                return {};
+            auto image = renderer.readOutputImageRgb8(context, slot);
+            EXPECT_TRUE(image) << (image ? "" : image.error());
+            if (!image)
+                return {};
+            const auto* bytes = (*image)->ptr<uint8_t>();
+            return {bytes, bytes + (*image)->numel()};
+        };
+        manager.setNodeVisibility(first, true);
+        ASSERT_EQ(scene.getCombinedModel(), model);
+        const auto shown = render();
+        ASSERT_FALSE(shown.empty());
+        EXPECT_GT(*std::max_element(shown.begin(), shown.end()), 0);
+        manager.setNodeVisibility(first, false);
+        ASSERT_EQ(scene.getCombinedModel(), model);
+        const auto hidden = render();
+        EXPECT_NE(hidden, shown);
+        manager.setNodeVisibilityTransient(second, false);
+        ASSERT_EQ(scene.getCombinedModel(), model);
+        const auto empty = render();
+        EXPECT_TRUE(std::all_of(empty.begin(), empty.end(), [](float v) { return v == 0; }));
+        manager.setNodeVisibilityTransient(second, true);
+        ASSERT_EQ(scene.getCombinedModel(), model);
+        EXPECT_EQ(render(), hidden);
+        manager.setNodeVisibility(first, true);
+        ASSERT_EQ(scene.getCombinedModel(), model);
+        EXPECT_EQ(render(), shown);
+    }
+    cuda_renderer->shutdown();
 }
 
 TEST(VideoExportUtilsTest, HiddenDatasetSnapshotCullsImplicitNodeInPreview) {

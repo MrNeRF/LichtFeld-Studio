@@ -20,6 +20,7 @@
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -894,9 +895,9 @@ namespace lfs::core {
         [[nodiscard]] std::unique_ptr<lfs::core::SplatData>
         retireCombinedModelIfInFlight(
             std::unique_ptr<lfs::core::SplatData> model) const;
-        // Slot layout of the geometry getCombinedModel() keeps serving while a worker rebuild is
-        // pending; empty when the served geometry already matches the visible nodes.
-        [[nodiscard]] std::vector<NodeId> pendingRebuildSlotIds() const;
+        // Slot layout for an all-node cache or geometry retained during a worker rebuild.
+        // Empty when the visible-node ordering or consolidated slot table applies.
+        [[nodiscard]] std::span<const NodeId> retainedModelSlotIds() const;
         void rebuildTransformCacheIfNeeded() const;
         void updateWorldTransform(const SceneNode& node) const;
         void removeNodeInternal(NodeId id, bool keep_children);
