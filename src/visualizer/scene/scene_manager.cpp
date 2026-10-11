@@ -5327,7 +5327,8 @@ namespace lfs::vis {
                 continue;
 
             ClipboardEntry entry;
-            entry.transform = node->local_transform.get();
+            // Clipboard entries are pasted at the scene root; retain their world placement.
+            entry.transform = scene_.getWorldTransform(node->id);
             entry.hierarchy = copyNodeHierarchy(node);
 
             if (node->type == core::NodeType::MESH && node->mesh) {
@@ -5706,7 +5707,7 @@ namespace lfs::vis {
                     const auto* pasted_group = scene_.getNodeById(pasted_id);
                     if (pasted_group) {
                         auto* mutable_group = scene_.getMutableNode(pasted_group->name);
-                        mutable_group->local_transform.setQuiet(entry.hierarchy->local_transform);
+                        mutable_group->local_transform.setQuiet(entry.transform);
                         mutable_group->visible.setQuiet(entry.hierarchy->visible);
                         mutable_group->locked.setQuiet(entry.hierarchy->locked);
                         mutable_group->transform_dirty = true;
