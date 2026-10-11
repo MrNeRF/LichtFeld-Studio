@@ -401,7 +401,9 @@ namespace lfs::io {
             case AV_CODEC_ID_VP8:
                 return "vp8_cuvid";
             case AV_CODEC_ID_VP9:
-                return "vp9_cuvid";
+                // Keep FFmpeg's VP9 presentation timing, including show-existing frames,
+                // while using its CUDA hardware acceleration instead of the CUVID parser.
+                return "vp9";
             case AV_CODEC_ID_AV1:
                 return "av1_cuvid";
             case AV_CODEC_ID_MPEG1VIDEO:
@@ -421,6 +423,21 @@ namespace lfs::io {
             for (const AVPixelFormat* p = pix_fmts; *p != -1; p++) {
                 if (*p == AV_PIX_FMT_CUDA)
                     return *p;
+            }
+            return AV_PIX_FMT_NONE;
+        }
+
+        AVPixelFormat get_vp9_format(AVCodecContext* context, const AVPixelFormat* formats) {
+            const auto hardware_format = get_hw_format(context, formats);
+            auto& using_hardware = *static_cast<bool*>(context->opaque);
+            using_hardware = hardware_format != AV_PIX_FMT_NONE;
+            if (using_hardware)
+                return hardware_format;
+            // Native decoders negotiate hardware support on the first frame, not at open.
+            for (const AVPixelFormat* format = formats; *format != AV_PIX_FMT_NONE; ++format) {
+                const AVPixFmtDescriptor* descriptor = av_pix_fmt_desc_get(*format);
+                if (descriptor && !(descriptor->flags & AV_PIX_FMT_FLAG_HWACCEL))
+                    return *format;
             }
             return AV_PIX_FMT_NONE;
         }
@@ -1023,6 +1040,11 @@ namespace lfs::io {
                             return false;
                         }
                         codec_ctx->get_format = get_hw_format;
+                        if (codec_id == AV_CODEC_ID_VP9) {
+                            codec_ctx->pkt_timebase = video_stream->time_base;
+                            codec_ctx->opaque = &using_hw_decode;
+                            codec_ctx->get_format = get_vp9_format;
+                        }
                     } else {
                         const unsigned int hardware_threads = std::max(1U, std::thread::hardware_concurrency());
                         codec_ctx->thread_count = std::min(MAX_SW_DECODE_THREADS,
