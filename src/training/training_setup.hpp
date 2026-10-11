@@ -102,6 +102,10 @@ namespace lfs::training {
             recovery_session = std::nullopt,
         lfs::core::SplatTensorAllocator tensor_allocator = {});
 
+    /// Parse training data without changing the active scene or trainer.
+    [[nodiscard]] lfs::io::Result<lfs::io::LoadResult> loadTrainingData(
+        const lfs::core::param::TrainingParameters& params);
+
     /**
      * @brief Load training data into Scene
      *

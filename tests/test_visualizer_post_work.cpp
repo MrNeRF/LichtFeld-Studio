@@ -8543,6 +8543,112 @@ contract["check_selection_submode_follows_native_mode"](lf)
         }
     }
 
+    TEST_F(VisualizerImplResetTest, RejectedDatasetPreservesProjectScene) {
+        const auto project = temporary_.path / "existing.licht";
+        write_splt_project(project, lfs::test::licht::make_splat(2), "First",
+                           lfs::test::licht::make_splat(3), "Second");
+        const auto original_bytes = lfs::test::licht::read_file_bytes(project);
+        const auto dataset = temporary_.path / "dataset";
+        write_minimal_transforms_dataset(dataset);
+        nlohmann::json valid;
+        std::ifstream(dataset / "transforms.json") >> valid;
+
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        for (const auto& invalid : std::vector<nlohmann::json>{
+                 {{"fl_y", 0}},
+                 {{"fl_y", -1}},
+                 {{"camera_angle_x", 0}},
+                 {{"camera_angle_x", 3.141592653589793}}}) {
+            SCOPED_TRACE(invalid.dump());
+            auto transforms = valid;
+            transforms.update(invalid);
+            if (invalid.contains("camera_angle_x"))
+                transforms.erase("fl_x");
+            std::ofstream(dataset / "transforms.json") << transforms.dump();
+            ASSERT_TRUE(viewer.projectOpen(project, ProjectSwitchDisposition::DiscardChanges));
+            ASSERT_TRUE(waitUntil([&] {
+                viewer.pumpPostedWorkForProjectWrite();
+                const auto info = viewer.projectGetInfo();
+                return info && info->hydration_state == "complete";
+            }));
+            auto* const manager = viewer.getSceneManager();
+            manager->selectNode("First");
+            const auto before = viewer.projectGetInfo();
+            ASSERT_TRUE(before);
+            ASSERT_FALSE(before->dirty);
+            const auto* first = viewer.getScene().getNode("First");
+            const auto* second = viewer.getScene().getNode("Second");
+            ASSERT_NE(first, nullptr);
+            ASSERT_NE(second, nullptr);
+            core::param::TrainingParameters params;
+            params.no_download = true;
+            const auto rejected = manager->loadDataset(dataset, params);
+            ASSERT_FALSE(rejected);
+            EXPECT_NE(rejected.error().find("Transforms"), std::string::npos);
+            EXPECT_EQ(viewer.getScene().getNode("First"), first);
+            EXPECT_EQ(viewer.getScene().getNode("Second"), second);
+            EXPECT_EQ(manager->getSelectedNodeName(), "First");
+            const auto after = viewer.projectGetInfo();
+            ASSERT_TRUE(after);
+            EXPECT_FALSE(after->dirty);
+            EXPECT_EQ(after->path, before->path);
+            EXPECT_EQ(after->project_uuid, before->project_uuid);
+            ASSERT_EQ(after->payloads.size(), before->payloads.size());
+            for (size_t i = 0; i < before->payloads.size(); ++i) {
+                EXPECT_EQ(after->payloads[i].node_uuid, before->payloads[i].node_uuid);
+                EXPECT_EQ(after->payloads[i].hydration_state, before->payloads[i].hydration_state);
+            }
+            EXPECT_EQ(lfs::test::licht::read_file_bytes(project), original_bytes);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest, RejectedCheckpointDatasetPreservesScene) {
+        const auto dataset = temporary_.path / "dataset";
+        write_minimal_transforms_dataset(dataset);
+        nlohmann::json transforms;
+        std::ifstream(dataset / "transforms.json") >> transforms;
+        transforms["fl_y"] = 0;
+        std::ofstream(dataset / "transforms.json") << transforms.dump();
+        const auto checkpoint = temporary_.path / "model.resume";
+        const auto payload = make_training_autosave_checkpoint_payload(core::generate_uuid_v4(), dataset);
+        std::vector<std::byte> bytes(payload.size());
+        ASSERT_TRUE(payload.read_at(0, bytes));
+        lfs::test::licht::write_file_bytes(checkpoint, bytes);
+
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        const auto id = viewer.getScene().addGroup("Existing");
+        auto* const existing = viewer.getScene().getNodeById(id);
+        core::param::TrainingParameters params;
+        params.no_download = true;
+        EXPECT_THROW(viewer.getSceneManager()->loadCheckpointForTraining(checkpoint, params), std::runtime_error);
+        EXPECT_EQ(viewer.getScene().getNode("Existing"), existing);
+    }
+
+    TEST_F(VisualizerImplResetTest, DatasetReplacementKeepsSuccessfulAndEarlyRejectionBehavior) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        auto* const manager = viewer.getSceneManager();
+        const auto id = viewer.getScene().addGroup("Existing");
+        core::param::TrainingParameters params;
+        params.no_download = true;
+        params.optimization.init_num_pts = 8;
+        EXPECT_FALSE(manager->loadDataset(temporary_.path / "missing", params));
+        EXPECT_NE(viewer.getScene().getNodeById(id), nullptr);
+
+        const auto dataset = temporary_.path / "valid";
+        write_minimal_transforms_dataset(dataset);
+        const auto loaded = manager->loadDataset(dataset, params);
+        ASSERT_TRUE(loaded) << loaded.error();
+        EXPECT_EQ(viewer.getScene().getNode("Existing"), nullptr);
+        EXPECT_EQ(viewer.getScene().getAllCameras().size(), 1u);
+        ASSERT_NE(viewer.getScene().getInitialPointCloud(), nullptr);
+        EXPECT_EQ(viewer.getScene().getInitialPointCloud()->size(), 10000);
+        EXPECT_TRUE(viewer.getTrainerManager()->hasTrainer());
+        EXPECT_EQ(manager->getContentType(), SceneManager::ContentType::Dataset);
+    }
+
     TEST_F(VisualizerImplResetTest,
            LoadDatasetApiDoesNotDeferOrPrompt) {
         auto options = projectOptions();

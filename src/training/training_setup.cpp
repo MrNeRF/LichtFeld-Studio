@@ -739,9 +739,8 @@ namespace lfs::training {
         return migrateTrainingModelToAllocatorImpl(params, model, tensor_allocator, force_reallocation);
     }
 
-    std::expected<void, std::string> loadTrainingDataIntoScene(
-        const lfs::core::param::TrainingParameters& params,
-        lfs::core::Scene& scene) {
+    lfs::io::Result<lfs::io::LoadResult> loadTrainingData(
+        const lfs::core::param::TrainingParameters& params) {
 
         auto data_loader = lfs::io::Loader::create();
 
@@ -770,7 +769,13 @@ namespace lfs::training {
             }};
 
         LOG_INFO("Loading dataset from: {}", lfs::core::path_to_utf8(params.dataset.data_path));
-        auto load_result = data_loader->load(params.dataset.data_path, load_options);
+        return data_loader->load(params.dataset.data_path, load_options);
+    }
+
+    std::expected<void, std::string> loadTrainingDataIntoScene(
+        const lfs::core::param::TrainingParameters& params,
+        lfs::core::Scene& scene) {
+        auto load_result = loadTrainingData(params);
         if (!load_result) {
             return std::unexpected(std::format("Failed to load dataset: {}", load_result.error().format()));
         }
