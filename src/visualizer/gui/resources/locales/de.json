@@ -711,6 +711,12 @@
   },
   "rendering": "Rendering",
   "scene": {
+    "summary_model_one": "{} Modell",
+    "summary_model_few": "{} Modelle",
+    "summary_model_other": "{} Modelle",
+    "summary_node_one": "{} Knoten",
+    "summary_node_few": "{} Knoten",
+    "summary_node_other": "{} Knoten",
     "add_ply": "PLY hinzufügen...",
     "add_group": "Gruppe hinzufügen",
     "add_group_ellipsis": "Gruppe hinzufügen...",

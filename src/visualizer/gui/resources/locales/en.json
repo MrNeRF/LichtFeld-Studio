@@ -707,6 +707,12 @@
   },
   "rendering": "Rendering",
   "scene": {
+    "summary_model_one": "{} model",
+    "summary_model_few": "{} models",
+    "summary_model_other": "{} models",
+    "summary_node_one": "{} node",
+    "summary_node_few": "{} nodes",
+    "summary_node_other": "{} nodes",
     "add_ply": "Add PLY...",
     "add_group": "Add Group",
     "add_group_ellipsis": "Add Group...",

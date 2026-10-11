@@ -711,6 +711,12 @@
   },
   "rendering": "渲染",
   "scene": {
+    "summary_model_one": "{} 个模型",
+    "summary_model_few": "{} 个模型",
+    "summary_model_other": "{} 个模型",
+    "summary_node_one": "{} 个节点",
+    "summary_node_few": "{} 个节点",
+    "summary_node_other": "{} 个节点",
     "add_ply": "添加PLY...",
     "add_group": "添加组",
     "add_group_ellipsis": "添加组...",

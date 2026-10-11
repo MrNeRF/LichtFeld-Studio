@@ -711,6 +711,12 @@
   },
   "rendering": "Renderizado",
   "scene": {
+    "summary_model_one": "{} modelo",
+    "summary_model_few": "{} modelos",
+    "summary_model_other": "{} modelos",
+    "summary_node_one": "{} nodo",
+    "summary_node_few": "{} nodos",
+    "summary_node_other": "{} nodos",
     "add_ply": "Añadir PLY...",
     "add_group": "Añadir Grupo",
     "add_group_ellipsis": "Añadir Grupo...",
