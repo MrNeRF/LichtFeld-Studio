@@ -8,6 +8,7 @@
 #include "training/strategies/improved_gs_plus.hpp"
 #include "training/strategies/mcmc.hpp"
 #include <algorithm>
+#include <cmath>
 #include <gtest/gtest.h>
 #include <limits>
 #include <vector>
@@ -195,6 +196,76 @@ TEST(ImprovedGSPlusTest, RefineWithoutEdgeScoresSkipsDensification) {
     strategy.pre_step(kIter, render_output);
     EXPECT_NO_THROW(strategy.post_backward(kIter, render_output));
     EXPECT_EQ(splat_data.size(), 8u);
+}
+
+TEST(ImprovedGSPlusTest, FinalIterationPreservesOpacityAtResetBoundary) {
+    for (const int iterations : {3000, 6000, 9000, 12000}) {
+        SCOPED_TRACE(iterations);
+        auto splat_data = create_test_splat_data(8);
+        ImprovedGSPlus strategy(splat_data);
+        auto params = param::OptimizationParameters::igs_plus_defaults();
+        params.iterations = iterations;
+        params.max_cap = 16;
+        strategy.initialize(params);
+        const auto before = splat_data.opacity_raw().to_vector();
+
+        RenderOutput render_output;
+        strategy.pre_step(iterations, render_output);
+        strategy.post_backward(iterations, render_output);
+        strategy.step(iterations);
+
+        EXPECT_EQ(splat_data.opacity_raw().to_vector(), before);
+        EXPECT_EQ(splat_data.size(), 8u);
+    }
+}
+
+TEST(ImprovedGSPlusTest, OpacityResetSchedulePreservesExistingBoundaries) {
+    // Non-final reset, adjacent steps, zero, and the refinement cutoff.
+    for (const int iter : {0, 2999, 3000, 3001, 5990, 6000, 15000, 18000}) {
+        SCOPED_TRACE(iter);
+        auto splat_data = create_test_splat_data(8);
+        ImprovedGSPlus strategy(splat_data);
+        auto params = param::OptimizationParameters::igs_plus_defaults();
+        params.iterations = iter == 5990 ? 5990 : 30000;
+        params.max_cap = 16;
+        strategy.initialize(params);
+        splat_data.set_frozen_ranges({{0, 1}});
+        const std::vector<float> opacity{0.5f, -4.0f, -3.0f, -2.0f, -1.0f, 0.0f, 1.0f, 2.0f};
+        splat_data.opacity_raw() = Tensor::from_vector(opacity, {8, 1}, Device::CUDA);
+        auto expected = opacity;
+        if (iter > 0 && iter < params.stop_refine && iter % params.reset_every == 0) {
+            const float reset_logit = std::log(0.1f / 0.9f);
+            for (size_t row = 1; row < expected.size(); ++row)
+                expected[row] = std::min(expected[row], reset_logit);
+        }
+
+        RenderOutput render_output;
+        strategy.pre_step(iter, render_output);
+        strategy.post_backward(iter, render_output);
+
+        EXPECT_EQ(splat_data.opacity_raw().to_vector(), expected);
+    }
+}
+
+TEST(ImprovedGSPlusTest, OpacityResetUsesUpdatedIterationLimit) {
+    auto splat_data = create_test_splat_data(8);
+    ImprovedGSPlus strategy(splat_data);
+    auto params = param::OptimizationParameters::igs_plus_defaults();
+    params.max_cap = 16;
+    strategy.initialize(params);
+    params.iterations = 6000;
+    strategy.set_optimization_params(params);
+    const auto before = splat_data.opacity_raw().to_vector();
+    RenderOutput render_output;
+    strategy.post_backward(6000, render_output);
+    EXPECT_EQ(splat_data.opacity_raw().to_vector(), before);
+
+    params.iterations = 9000;
+    strategy.set_optimization_params(params);
+    strategy.post_backward(6000, render_output);
+    const auto after = splat_data.opacity_raw().to_vector();
+    for (const float value : after)
+        EXPECT_FLOAT_EQ(value, std::log(0.1f / 0.9f));
 }
 
 TEST(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {

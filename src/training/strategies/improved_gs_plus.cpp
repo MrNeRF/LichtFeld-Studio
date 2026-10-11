@@ -719,7 +719,9 @@ namespace lfs::training {
             _precompute_valid = false;
         }
 
-        if (((iter % _params->reset_every) == 0) && (iter < _params->stop_refine) && (iter > 0)) {
+        // A final-step reset leaves no training iterations to recover opacity.
+        if (((iter % _params->reset_every) == 0) && (iter < _params->stop_refine) &&
+            (iter < _params->iterations) && (iter > 0)) {
             reset_opacity();
         }
 
