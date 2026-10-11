@@ -6302,9 +6302,10 @@ namespace lfs::training {
 
                 bool fastgs_strategy_hooks_at_start = false;
                 const bool refining_this_step =
-                    strategy_ && strategy_->is_refining(iter);
-                const bool morton_due = morton_reorder_due(iter);
-                if (fastgs_path && !in_sparsification) {
+                    update_gaussians_this_iter && strategy_ && strategy_->is_refining(iter);
+                const bool morton_due = update_gaussians_this_iter && morton_reorder_due(iter);
+                // Strategy hooks also mutate Gaussians through refinement, decay and SH updates.
+                if (fastgs_path && update_gaussians_this_iter && !in_sparsification) {
                     current_phase = StepPhase::RefinementCommit;
                     LFS_VRAM_SCOPE("train.strategy.fastgs_pre_step");
                     LOG_VRAM_DIFF("train.strategy.fastgs_pre_step");
@@ -7907,7 +7908,7 @@ namespace lfs::training {
                     }
 
                     nvtxRangePop(); // End rasterize
-                    if (strategy_ && !in_sparsification) {
+                    if (update_gaussians_this_iter && strategy_ && !in_sparsification) {
                         strategy_->post_render(iter, r_output);
                     }
                 }
@@ -8114,7 +8115,7 @@ namespace lfs::training {
                     submitLossReadback(total_loss, iter);
                 }
 
-                if (!in_sparsification && !fastgs_strategy_hooks_at_start) {
+                if (update_gaussians_this_iter && !in_sparsification && !fastgs_strategy_hooks_at_start) {
                     strategy_->pre_step(iter, r_output);
                 }
 
@@ -8145,7 +8146,7 @@ namespace lfs::training {
                         // reading), so the CPU write-lock is needed only for reallocation.
                         std::unique_lock<std::shared_mutex> lock(render_mutex_, std::defer_lock);
                         std::unique_lock<std::shared_mutex> model_write_lock(model_access_mutex_, std::defer_lock);
-                        const bool refining = strategy_->is_refining(iter);
+                        const bool refining = update_gaussians_this_iter && strategy_->is_refining(iter);
                         const bool morton_here =
                             morton_due && !fastgs_strategy_hooks_at_start && !in_sparsification;
                         const bool need_exclusive = refining || morton_here;
@@ -8214,7 +8215,7 @@ namespace lfs::training {
                             lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::PreOptimizerStep, ctx);
                         }
 
-                        if (!in_sparsification && !fastgs_strategy_hooks_at_start) {
+                        if (update_gaussians_this_iter && !in_sparsification && !fastgs_strategy_hooks_at_start) {
                             current_phase = StepPhase::RefinementCommit;
                             ++mutation_epoch_;
                             persistent_commit = true;
@@ -8225,13 +8226,7 @@ namespace lfs::training {
                             install_cropbox_step_damping(model, strategy_->get_optimizer());
                         }
 
-                        // Skip strategy step if we're in controller distillation phase and freeze is enabled
-                        const int ppisp_activation_step = params_.optimization.resolved_ppisp_controller_activation_step(get_total_iterations());
-                        const bool freeze_gaussians = ppisp_controller_pool_ &&
-                                                      params_.optimization.ppisp_use_controller &&
-                                                      params_.optimization.ppisp_freeze_gaussians_on_distill &&
-                                                      iter >= ppisp_activation_step;
-                        if (!freeze_gaussians) {
+                        if (update_gaussians_this_iter) {
                             current_phase = strategy_->is_refining(iter)
                                                 ? StepPhase::RefinementCommit
                                                 : StepPhase::OptimizerCommit;
