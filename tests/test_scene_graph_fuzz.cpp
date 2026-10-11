@@ -887,6 +887,60 @@ namespace {
         EXPECT_EQ(scene.getNode(pasted.front())->local_transform.get(), glm::mat4(1.f));
     }
 
+    TEST_F(SceneGraphFuzzTest, CopyPasteMultipleNestedNodesKeepsRelativeWorldPlacement) {
+        seed_scene();
+        auto& scene = manager_->getScene();
+        const auto parent = scene.getNodeIdByName("left");
+        scene.setNodeTransform(parent, glm::translate(glm::mat4(1.f), glm::vec3(5.f, 2.f, -3.f)));
+        const auto nested = scene.getNodeIdByName("nested");
+        scene.setNodeTransform(nested, glm::rotate(glm::mat4(1.f), 0.4f, glm::vec3(0.f, 0.f, 1.f)));
+        scene.setNodeTransform(scene.getNodeIdByName("c"),
+                               glm::translate(glm::mat4(1.f), glm::vec3(1.f, 2.f, 3.f)));
+        const auto expected_a = scene.getWorldTransform(scene.getNodeIdByName("a"));
+        const auto expected_c = scene.getWorldTransform(scene.getNodeIdByName("c"));
+        manager_->selectNodes({"a", "c"});
+        ASSERT_TRUE(manager_->copySelectedNodes());
+        ASSERT_TRUE(manager_->removeNodeWithResult(parent));
+        const auto before = scene_state(*manager_);
+        for (int repeat = 0; repeat < 2; ++repeat) {
+            const auto pasted = manager_->pasteNodes();
+            ASSERT_EQ(pasted.size(), 2u);
+            bool found_a = false;
+            bool found_c = false;
+            for (const auto& name : pasted) {
+                const auto* node = scene.getNode(name);
+                ASSERT_NE(node, nullptr);
+                EXPECT_EQ(node->parent_id, lfs::core::NULL_NODE);
+                const auto world = scene.getWorldTransform(node->id);
+                found_a = found_a || world == expected_a;
+                found_c = found_c || world == expected_c;
+            }
+            EXPECT_TRUE(found_a);
+            EXPECT_TRUE(found_c);
+            ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+            EXPECT_EQ(scene_state(*manager_), before);
+        }
+    }
+
+    TEST_F(SceneGraphFuzzTest, CopyPasteNestedGroupPreservesSingularWorldTransform) {
+        seed_scene();
+        auto& scene = manager_->getScene();
+        const auto parent = scene.getNodeIdByName("left");
+        const auto nested = scene.getNodeIdByName("nested");
+        scene.setNodeTransform(parent, glm::scale(glm::mat4(1.f), glm::vec3(0.f, -2.f, 3.f)));
+        scene.setNodeTransform(nested, glm::translate(glm::mat4(1.f), glm::vec3(1.f, 2.f, 3.f)));
+        const auto expected = scene.getWorldTransform(nested);
+        const auto expected_child = scene.getWorldTransform(scene.getNodeIdByName("c"));
+        manager_->selectNode(nested);
+        ASSERT_TRUE(manager_->copySelectedNodes());
+        const auto pasted = manager_->pasteNodes();
+        ASSERT_EQ(pasted.size(), 1u);
+        const auto* root = scene.getNode(pasted.front());
+        EXPECT_EQ(scene.getWorldTransform(root->id), expected);
+        ASSERT_EQ(root->children.size(), 1u);
+        EXPECT_EQ(scene.getWorldTransform(root->children.front()), expected_child);
+    }
+
     TEST_F(SceneGraphFuzzTest, CopyPasteGroupHierarchyCanBeRepeatedAfterSourceDelete) {
         seed_scene();
         const auto& scene = manager_->getScene();
