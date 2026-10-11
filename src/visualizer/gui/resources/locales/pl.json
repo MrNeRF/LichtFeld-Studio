@@ -2674,6 +2674,7 @@
     "right_click_to_add": "Kliknij prawym przyciskiem, aby dodać...",
     "training_complete": "Trening Ukończony",
     "training_stopped": "Trening Zatrzymany",
+    "training_stopped_body": "Użytkownik zatrzymał trening na iteracji {}.\n\nZapisz projekt, aby zachować ten stan. Otwórz ponownie zapisany projekt, aby wznowić trening.",
     "training_error": "Błąd Treningu",
     "param_manager_unavailable": "Menedżer parametrów niedostępny",
     "failed_to_load_params": "Nie udało się załadować parametrów:",

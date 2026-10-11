@@ -2673,6 +2673,7 @@
     "right_click_to_add": "Right-click to add...",
     "training_complete": "Training Complete",
     "training_stopped": "Training Stopped",
+    "training_stopped_body": "Training stopped by user at iteration {}.\n\nSave the project to keep this state. Reopen the saved project to resume training.",
     "training_error": "Training Error",
     "param_manager_unavailable": "ParameterManager not available",
     "failed_to_load_params": "Failed to load params:",
