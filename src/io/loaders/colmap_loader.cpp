@@ -364,6 +364,10 @@ namespace lfs::io {
                 point_cloud = std::make_shared<PointCloud>();
             }
 
+            if (point_cloud->size() == 0) {
+                warnings.push_back("No sparse points available - using random initialization");
+            }
+
             // Centralize scene
             std::optional<ImportGeoreference> import_georeference;
             {
@@ -395,10 +399,6 @@ namespace lfs::io {
                 .load_time = load_time,
                 .warnings = std::move(warnings),
                 .georeference = std::move(import_georeference)};
-
-            if (!has_points && !has_points_text && !has_points_ply) {
-                result.warnings.push_back("No sparse point cloud found - using random initialization");
-            }
 
             LOG_DEBUG("  - Scene center: [{:.3f}, {:.3f}, {:.3f}]",
                       sc_ptr[0], sc_ptr[1], sc_ptr[2]);

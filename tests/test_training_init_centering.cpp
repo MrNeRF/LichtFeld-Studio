@@ -8,6 +8,7 @@
 #include "io/loader.hpp"
 #include "training/training_setup.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cuda_runtime.h>
 #include <filesystem>
@@ -224,6 +225,121 @@ namespace {
         ASSERT_TRUE(prepared) << prepared.error();
         ASSERT_TRUE(prepared->has_value());
         check_positions((**prepared).model->means(), init_points, glm::vec3{12, 22, -40}, scene);
+    }
+
+    void check_random_positions(const Tensor& positions, const int count, const float extent) {
+        ASSERT_EQ(positions.size(0), static_cast<size_t>(count));
+        const auto cpu = positions.cpu().contiguous();
+        const auto* values = cpu.ptr<float>();
+        const auto [minimum, maximum] = std::minmax_element(values, values + cpu.numel());
+        EXPECT_GE(*minimum, -extent);
+        EXPECT_LE(*maximum, extent);
+        EXPECT_LT(*minimum, -0.9f * extent);
+        EXPECT_GT(*maximum, 0.9f * extent);
+    }
+
+    TEST_F(TrainingInitCentering, EmptySparsePointsUseConfiguredRandomInitialization) {
+        for (const int kind : {0, 1, 2, 3}) {
+            SCOPED_TRACE(kind);
+            fs::remove(root / "sparse/0/points3D.bin");
+            fs::remove(root / "sparse/0/points3D.txt");
+            if (kind == 0) {
+                std::ofstream(root / "sparse/0/points3D.txt") << "# Empty sparse model\n";
+            } else if (kind == 1) {
+                const std::array<char, 8> zero_count{};
+                std::ofstream(root / "sparse/0/points3D.bin", std::ios::binary)
+                    .write(zero_count.data(), zero_count.size());
+            } else if (kind == 3) {
+                std::ofstream(root / "sparse/0/points3D.txt") << "1 10 20 0 128 128 128 0 1 0 2 0\n";
+            }
+            for (const bool defaults : {false, true}) {
+                for (const bool async : {false, true}) {
+                    SCOPED_TRACE(defaults);
+                    SCOPED_TRACE(async);
+                    param::TrainingParameters params;
+                    params.dataset.data_path = root;
+                    params.dataset.min_track_length = kind == 3 ? 3 : 0;
+                    if (!defaults) {
+                        params.optimization.init_num_pts = 512;
+                        params.optimization.init_extent = 8.0f;
+                    }
+                    Scene scene;
+                    if (async) {
+                        lfs::io::LoadOptions options;
+                        options.min_track_length = params.dataset.min_track_length;
+                        auto loaded = lfs::io::Loader::create()->load(root, options);
+                        ASSERT_TRUE(loaded) << loaded.error().format();
+                        EXPECT_TRUE(std::ranges::any_of(loaded->warnings, [](const auto& warning) {
+                            return warning.find("random initialization") != std::string::npos;
+                        }));
+                        const auto applied = lfs::training::applyLoadResultToScene(params, scene, std::move(*loaded));
+                        ASSERT_TRUE(applied) << applied.error();
+                    } else {
+                        const auto loaded = lfs::training::loadTrainingDataIntoScene(params, scene);
+                        ASSERT_TRUE(loaded) << loaded.error();
+                    }
+                    const auto cloud = scene.getInitialPointCloud();
+                    ASSERT_TRUE(cloud);
+                    check_random_positions(cloud->means, params.optimization.init_num_pts, params.optimization.init_extent);
+                    EXPECT_EQ(cloud->colors.shape(), cloud->means.shape());
+                    EXPECT_EQ(cloud->colors.dtype(), DataType::UInt8);
+                }
+            }
+        }
+    }
+
+    TEST_F(TrainingInitCentering, MissingPreviewUsesConfiguredRandomInitializationForTraining) {
+        for (const bool captured : {false, true}) {
+            Scene scene;
+            param::TrainingParameters params;
+            params.optimization.init_num_pts = 512;
+            params.optimization.init_extent = 8.0f;
+            params.optimization.max_cap = 512;
+            params.optimization.sh_degree = 0;
+            const auto capture = lfs::training::captureTrainingModelGraph(scene);
+            auto prepared = lfs::training::prepareTrainingModel(params, scene, {}, captured ? &capture : nullptr);
+            ASSERT_TRUE(prepared) << prepared.error();
+            ASSERT_TRUE(prepared->has_value());
+            check_random_positions((**prepared).model->means(), 512, 8.0f);
+        }
+    }
+
+    TEST_F(TrainingInitCentering, SparseAndExplicitInitPointsIgnoreRandomFallbackSettings) {
+        for (const int kind : {0, 1, 2}) {
+            for (const bool async : {false, true}) {
+                SCOPED_TRACE(kind);
+                SCOPED_TRACE(async);
+                param::TrainingParameters params;
+                params.dataset.data_path = root;
+                params.optimization.init_num_pts = 512;
+                params.optimization.init_extent = 8.0f;
+                params.optimization.max_cap = 100;
+                params.optimization.sh_degree = 0;
+                if (kind != 0)
+                    params.init_path = (root / (kind == 1 ? "points.ply" : "splat.ply")).string();
+                auto loaded = lfs::io::Loader::create()->load(root);
+                ASSERT_TRUE(loaded) << loaded.error().format();
+                EXPECT_FALSE(std::ranges::any_of(loaded->warnings, [](const auto& warning) {
+                    return warning.find("random initialization") != std::string::npos;
+                }));
+                Scene scene;
+                const auto applied = async
+                                         ? lfs::training::applyLoadResultToScene(params, scene, std::move(*loaded))
+                                         : lfs::training::loadTrainingDataIntoScene(params, scene);
+                ASSERT_TRUE(applied) << applied.error();
+                ASSERT_TRUE(scene.getInitialPointCloud());
+                ASSERT_EQ(scene.getInitialPointCloud()->size(), 4);
+                const auto& expected = kind == 0 ? dataset_points : init_points;
+                check_positions(scene.getInitialPointCloud()->means, expected, glm::vec3{0}, scene);
+                auto prepared = lfs::training::prepareTrainingModel(params, scene);
+                ASSERT_TRUE(prepared) << prepared.error();
+                ASSERT_TRUE(prepared->has_value());
+                ASSERT_EQ((**prepared).model->size(), 4);
+                check_positions((**prepared).model->means(), expected, glm::vec3{0}, scene);
+                if (kind == 2)
+                    check_gaussian_attributes(*(**prepared).model, 0);
+            }
+        }
     }
 
     INSTANTIATE_TEST_SUITE_P(LoadPaths, TrainingInitCentering,
