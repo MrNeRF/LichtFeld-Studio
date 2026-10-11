@@ -17227,6 +17227,10 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(manager->getCurrentIteration(), 11);
         EXPECT_EQ(manager->getTotalIterations(), 11);
         EXPECT_EQ(manager->getState(), TrainingState::Finished);
+        EXPECT_FALSE(manager->canResume());
+        EXPECT_FALSE(manager->canStart());
+        EXPECT_FALSE(manager->canPause());
+        EXPECT_FALSE(manager->canStop());
         EXPECT_STREQ(manager->getStrategyType(), "mrnf");
         EXPECT_EQ(manager->getNumSplats(), 2);
     }
@@ -17281,6 +17285,10 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(manager->getCurrentIteration(), 11);
         EXPECT_EQ(manager->getTotalIterations(), 30000);
         EXPECT_EQ(manager->getState(), TrainingState::Paused);
+        EXPECT_TRUE(manager->canResume());
+        EXPECT_FALSE(manager->canStart());
+        EXPECT_FALSE(manager->canPause());
+        EXPECT_TRUE(manager->canStop());
         EXPECT_STREQ(manager->getStrategyType(), "mrnf");
         EXPECT_EQ(manager->getNumSplats(), 2);
     }
