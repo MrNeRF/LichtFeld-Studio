@@ -1711,6 +1711,28 @@ namespace lfs::training {
             params_.optimization.invert_masks = false;
         }
 
+        // AlphaConsistent evaluation does not use masks. With eval_all, the
+        // validation cameras are already included in the training set.
+        const bool validate_eval = !opt.eval_all && opt.mask_mode != lfs::core::param::MaskMode::AlphaConsistent;
+        for (const auto* dataset : {train_dataset_.get(), validate_eval ? val_dataset_.get() : nullptr}) {
+            if (!dataset)
+                continue;
+            for (const auto& cam : dataset->get_cameras()) {
+                if (!cam || cam->has_in_memory_mask() || !cam->has_mask())
+                    continue;
+                // Masks can be enabled after loading. Compare actual file sizes,
+                // since camera metadata may describe a larger source image.
+                const auto [img_w, img_h, img_c] = lfs::core::get_image_info(cam->image_path());
+                const auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(cam->mask_path());
+                if (img_w != mask_w || img_h != mask_h) {
+                    return std::unexpected(std::format(
+                        "Mask '{}' is {}x{} but image '{}' is {}x{}",
+                        lfs::core::path_to_utf8(cam->mask_path().filename()), mask_w, mask_h,
+                        cam->image_name(), img_w, img_h));
+                }
+            }
+        }
+
         size_t alpha_count = 0;
         size_t masks_found = 0;
         for (const auto& cam : train_dataset_->get_cameras()) {
