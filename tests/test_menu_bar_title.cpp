@@ -4,6 +4,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/path_utils.hpp"
 #include "gui/rml_menu_bar.hpp"
+#include "gui/rmlui/rml_theme.hpp"
 #include "input/input_bindings.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/app_store.hpp"
@@ -167,6 +168,75 @@ namespace {
         lfs::vis::gui::RmlUIManager manager_;
         lfs::vis::gui::RmlMenuBar bar_;
     };
+
+    class ToolbarSystemInterface final : public Rml::SystemInterface {
+    public:
+        double GetElapsedTime() override { return time; }
+        double time = 1.0;
+    };
+
+    class MenuBarToolbarTest : public MenuBarTitleTest {
+    protected:
+        static void SetUpTestSuite() {
+            Rml::SetSystemInterface(&clock_);
+            MenuBarTitleTest::SetUpTestSuite();
+        }
+        static void TearDownTestSuite() {
+            MenuBarTitleTest::TearDownTestSuite();
+            Rml::SetSystemInterface(nullptr);
+        }
+        void SetUp() override {
+            clock_.time = 1.0;
+            MenuBarTitleTest::SetUp();
+            lfs::vis::gui::rml_theme::applyTheme(document_, resource("menubar.rcss"),
+                                                 resource("menubar.theme.rcss"));
+            context_->Update();
+        }
+        void expectImmediateSelection(Rml::Element* button) {
+            ASSERT_NE(button, nullptr);
+            const auto plain = button->GetProperty("background-color")->ToString();
+            for (bool selected : {true, true, false, false, true, false}) {
+                SCOPED_TRACE(::testing::Message() << button->GetId() << " selected=" << selected);
+                button->SetClass("selected", selected);
+                context_->Update();
+                const auto immediate = button->GetProperty("background-color")->ToString();
+                // A cached menu must already have its final color on the change frame.
+                clock_.time += 1.0;
+                context_->Update();
+                const auto settled = button->GetProperty("background-color")->ToString();
+                EXPECT_EQ(immediate, settled);
+                if (selected)
+                    EXPECT_NE(settled, plain);
+                else
+                    EXPECT_EQ(settled, plain);
+            }
+        }
+        inline static ToolbarSystemInterface clock_;
+    };
+
+    TEST_F(MenuBarToolbarTest, SplitSelectionIsImmediateInBothDirections) {
+        expectImmediateSelection(el("menu-window-split-view"));
+    }
+
+    TEST_F(MenuBarToolbarTest, UiVisibilitySelectionIsImmediateInBothDirections) {
+        expectImmediateSelection(el("menu-window-toggle-ui"));
+    }
+
+    TEST_F(MenuBarToolbarTest, ModeSelectionRemainsImmediateInBothDirections) {
+        Rml::ElementList buttons;
+        document_->GetElementsByClassName(buttons, "menu-toolbar-btn");
+        ASSERT_FALSE(buttons.empty());
+        for (auto* button : buttons)
+            expectImmediateSelection(button);
+    }
+
+    TEST_F(MenuBarToolbarTest, WindowControlsKeepTheirHoverTransition) {
+        for (const auto* id : {"menu-window-minimize", "menu-window-maximize", "menu-window-close"}) {
+            const auto transition = el(id)->GetProperty("transition")->ToString();
+            EXPECT_NE(transition.find("background-color"), std::string::npos);
+            EXPECT_NE(transition.find("0.12s"), std::string::npos);
+        }
+    }
 
     TEST_F(MenuBarTitleTest, HiddenToolbarKeepsItsWidthAcrossScaleChanges) {
         resize(1600, 1.0f, true);
