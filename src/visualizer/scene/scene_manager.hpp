@@ -419,6 +419,7 @@ namespace lfs::vis {
                 bool visible = true;
                 bool locked = false;
                 std::unique_ptr<lfs::core::SplatData> data;
+                std::shared_ptr<lfs::core::MeshData> mesh;
                 std::unique_ptr<core::CropBoxData> cropbox;
                 std::unique_ptr<core::EllipsoidData> ellipsoid;
                 std::vector<HierarchyNode> children;
