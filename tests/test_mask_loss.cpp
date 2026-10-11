@@ -13,12 +13,18 @@
  * - SSIM map masking (like legacy fused_ssim_map)
  */
 
+#include "core/camera.hpp"
+#include "core/logger.hpp"
 #include "core/parameters.hpp"
+#include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "mask_loss_reference.hpp"
 #include "training/losses/mask_loss.hpp"
+#include "training/trainer.hpp"
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <gtest/gtest.h>
 
 using namespace lfs::core;
@@ -636,3 +642,131 @@ TEST_F(MaskLossTest, PerPixelGradMapVsScalarGradient) {
     EXPECT_GT(ratio, numel * 0.5f);
     EXPECT_LT(ratio, numel * 2.0f);
 }
+
+namespace lfs::training {
+    struct TrainerMaskSupervisionTestAccess {
+        static auto loss(Trainer& trainer, const Tensor& image, const Tensor& target,
+                         const Tensor& mask, const param::OptimizationParameters& params,
+                         const Tensor& raw = {}, const Tensor& structure = {}) {
+            return trainer.compute_photometric_loss_with_mask(
+                image, target, mask, {}, {}, params, raw, structure);
+        }
+    };
+} // namespace lfs::training
+
+class TrainerMaskSupervisionTest : public ::testing::TestWithParam<int> {
+protected:
+    Scene scene;
+    std::unique_ptr<lfs::training::Trainer> trainer;
+    param::OptimizationParameters params;
+    Tensor image, target, raw;
+    std::vector<std::string> warnings;
+    LogHandlerToken handler{};
+
+    void SetUp() override {
+        const auto group = scene.addCameraGroup("Training", scene.addGroup("Cameras"), 1);
+        scene.addCamera("camera.png", group, std::make_shared<Camera>(Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU), 32.0f, 32.0f, 16.0f, 16.0f, Tensor{}, Tensor{}, CameraModelType::PINHOLE, "camera.png", std::filesystem::path{}, std::filesystem::path{}, 32, 32, 0));
+        trainer = std::make_unique<lfs::training::Trainer>(scene);
+        params.mask_mode = param::MaskMode::Ignore;
+        params.lambda_dssim = GetParam() == 0 ? 0.0f : 0.2f;
+        image = Tensor::full({3, 32, 32}, 0.4f, Device::CUDA);
+        target = Tensor::full({3, 32, 32}, 0.7f, Device::CUDA);
+        if (GetParam() == 2)
+            raw = image.clone();
+        handler = Logger::get().add_log_handler([this](LogLevel level, const auto&, std::string_view message) {
+            if (level == LogLevel::Warn && message.find("no photometric supervision") != std::string_view::npos)
+                warnings.emplace_back(message);
+        });
+    }
+    void TearDown() override {
+        Logger::get().remove_log_handler(handler);
+    }
+    auto loss(const Tensor& mask, const Tensor& structure = {}) {
+        return lfs::training::TrainerMaskSupervisionTestAccess::loss(
+            *trainer, image, target, mask, params, raw, structure);
+    }
+};
+
+TEST_P(TrainerMaskSupervisionTest, EmptyIgnoreMaskWarnsOnceAndKeepsZeroGradient) {
+    const auto mask = Tensor::zeros({32, 32}, Device::CUDA);
+    for (int i = 0; i < 3; ++i) {
+        const auto result = loss(mask);
+        ASSERT_TRUE(result);
+        EXPECT_EQ(result->loss.item<float>(), 0.0f);
+        EXPECT_EQ(result->grad_corrected.abs().max().item<float>(), 0.0f);
+    }
+    ASSERT_EQ(warnings.size(), 1u);
+    EXPECT_NE(warnings.front().find("threshold"), std::string::npos);
+    EXPECT_NE(warnings.front().find("inversion"), std::string::npos);
+}
+
+TEST_P(TrainerMaskSupervisionTest, EmptyIgnoreMaskWithStructureWeightWarns) {
+    params.thin_structure_weight = 2.0f;
+    ASSERT_TRUE(loss(Tensor::zeros({32, 32}, Device::CUDA), Tensor::ones({32, 32}, Device::CUDA)));
+    EXPECT_EQ(warnings.size(), 1u);
+}
+
+TEST_P(TrainerMaskSupervisionTest, UsableMasksKeepReferenceLossAndGradientWithoutWarning) {
+    for (const float coverage : {1.0f, 0.5f}) {
+        auto mask = Tensor::ones({32, 32}, Device::CUDA);
+        if (coverage < 1.0f)
+            mask.slice(0, 0, 16).fill_(0.0f);
+        Tensor reference_loss, reference_gradient;
+        // The unchanged kernel path is the reference for the trainer diagnostic.
+        lfs::training::kernels::MaskedFusedL1SSIMWorkspace fused;
+        lfs::training::kernels::MaskedDecoupledFusedL1SSIMWorkspace decoupled;
+        if (raw.is_valid()) {
+            auto [value, context] = lfs::training::kernels::masked_decoupled_fused_l1_ssim_forward(
+                image, raw, target, mask, params.lambda_dssim, decoupled);
+            reference_loss = value;
+            reference_gradient = lfs::training::kernels::masked_decoupled_fused_l1_ssim_backward(context, decoupled).grad_corrected;
+        } else {
+            auto [value, context] = lfs::training::kernels::masked_fused_l1_ssim_forward(
+                image, target, mask, params.lambda_dssim, fused);
+            reference_loss = value;
+            reference_gradient = lfs::training::kernels::masked_fused_l1_ssim_backward(context, fused);
+        }
+        const auto result = loss(mask);
+        ASSERT_TRUE(result);
+        EXPECT_EQ(result->loss.item<float>(), reference_loss.item<float>());
+        EXPECT_EQ(result->grad_corrected.cpu().to_vector(), reference_gradient.cpu().to_vector());
+    }
+    EXPECT_TRUE(warnings.empty());
+}
+
+TEST_P(TrainerMaskSupervisionTest, OtherModesAndMissingMasksDoNotWarn) {
+    const auto mask = Tensor::zeros({32, 32}, Device::CUDA);
+    ASSERT_TRUE(loss({}));
+    for (const auto mode : {param::MaskMode::None, param::MaskMode::Segment,
+                            param::MaskMode::SegmentAndIgnore, param::MaskMode::AlphaConsistent}) {
+        params.mask_mode = mode;
+        ASSERT_TRUE(loss(mask));
+    }
+    EXPECT_TRUE(warnings.empty());
+}
+
+TEST_P(TrainerMaskSupervisionTest, MixedEmptyAndUsableViewsRemainAccepted) {
+    ASSERT_TRUE(loss(Tensor::zeros({32, 32}, Device::CUDA)));
+    const auto result = loss(Tensor::ones({32, 32}, Device::CUDA));
+    ASSERT_TRUE(result);
+    EXPECT_GT(result->loss.item<float>(), 0.0f);
+    EXPECT_EQ(warnings.size(), 1u);
+}
+
+TEST_P(TrainerMaskSupervisionTest, MeasureWarmLossUpdates) {
+    if (!std::getenv("LFS_MASK_TIMING"))
+        GTEST_SKIP() << "Set LFS_MASK_TIMING for a locked before/after timing run";
+    const auto mask = Tensor::ones({32, 32}, Device::CUDA);
+    for (int i = 0; i < 100; ++i)
+        ASSERT_TRUE(loss(mask));
+    for (int repeat = 0; repeat < 5; ++repeat) {
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < 1000; ++i)
+            ASSERT_TRUE(loss(mask));
+        static_cast<void>(image.sum().item<float>());
+        const auto us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count();
+        std::cout << "mask_loss_update_us=" << us / 1000 << '\n';
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(LossBranches, TrainerMaskSupervisionTest, ::testing::Values(0, 1, 2));
