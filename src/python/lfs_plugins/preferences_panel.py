@@ -1559,6 +1559,7 @@ class PreferencesPanel(Panel):
             lf.ui.reset_scene_reconstruction_preferences()
             self._sync_scene_upscaler_preset_records()
         elif section == "input":
+            self._keymap.reset_to_default()
             lf.ui.set_zoom_speed_preference(11.0)
             lf.ui.set_navigation_speed_preference(10.0)
             lf.ui.set_remember_camera_navigation(False)
