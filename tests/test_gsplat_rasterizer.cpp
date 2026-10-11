@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -1925,6 +1926,66 @@ TEST_F(GsplatRasterizerTest, GeometryAnchorsAndDepthNormalsFollowCameraRays) {
         if (equi)
             EXPECT_EQ(stats.ptr<float>()[kernels::normal_consistency_slots::kCount], float(w * (h - 2)));
     }
+}
+
+class DepthAnchorSetupTest : public ::testing::Test {
+protected:
+    std::filesystem::path directory;
+    Tensor means;
+
+    void SetUp() override {
+        directory = std::filesystem::temp_directory_path() /
+                    ("lfs_anchor_setup_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(directory);
+        means = Tensor::from_vector({0.f, 0.f, 2.f}, {1, 3}, Device::CUDA);
+    }
+
+    void TearDown() override { std::filesystem::remove_all(directory); }
+
+    std::shared_ptr<Camera> camera(const std::filesystem::path& depth_path) {
+        auto rotation = Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, Device::CPU);
+        auto cam = std::make_shared<Camera>(
+            rotation, Tensor::zeros({3}, Device::CPU), 50, 50, 32, 24, Tensor(), Tensor(),
+            lfs::core::CameraModelType::PINHOLE, "view.png", std::filesystem::path{}, std::filesystem::path{},
+            64, 48, 0, 0, depth_path);
+        cam->set_image_dimensions(64, 48);
+        return cam;
+    }
+};
+
+TEST_F(DepthAnchorSetupTest, DamagedDepthPropagatesDecodeError) {
+    const auto path = directory / "view.tiff";
+    std::ofstream(path) << "not an image\n";
+    auto cam = camera(path);
+    // The caller must receive the decoder error after the fit workers have joined.
+    EXPECT_THROW((void)computeRawDepthAnchors(means, {cam}, -1, 0), std::exception);
+}
+
+TEST_F(DepthAnchorSetupTest, ProgressFailurePropagatesWithIdleWorkers) {
+    const auto path = directory / "view.png";
+    std::vector<std::uint16_t> prior(64 * 48, 0);
+    ASSERT_TRUE(save_png(path, prior.data(), 64, 48, 1, 16, 1));
+    auto cam = camera(path);
+    EXPECT_THROW((void)computeRawDepthAnchors(means, {cam}, -1, 0,
+                                              [](std::size_t, std::size_t) { throw std::runtime_error("progress failed"); }),
+                 std::runtime_error);
+}
+
+TEST_F(DepthAnchorSetupTest, MissingAndZeroDepthRemainEmpty) {
+    EXPECT_TRUE(computeRawDepthAnchors(means, {nullptr, camera({})}, -1, 0).empty());
+    const auto path = directory / "view.png";
+    std::vector<std::uint16_t> prior(64 * 48, 0);
+    ASSERT_TRUE(save_png(path, prior.data(), 64, 48, 1, 16, 1));
+    std::size_t calls = 0;
+    EXPECT_TRUE(computeRawDepthAnchors(means, {nullptr, camera({}), camera(path)}, -1, 0,
+                                       [&](std::size_t completed, std::size_t total) {
+                                           EXPECT_EQ(completed, 1);
+                                           EXPECT_EQ(total, 1);
+                                           ++calls;
+                                       })
+                    .empty());
+    EXPECT_EQ(calls, 1);
+    EXPECT_TRUE(computeRawDepthAnchors(Tensor(), {camera(path)}, -1, 0).empty());
 }
 
 // The anchor must come from the surface the camera sees. The sparse cloud also holds points behind that surface on

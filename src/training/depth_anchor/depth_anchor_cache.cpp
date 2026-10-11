@@ -209,6 +209,30 @@ namespace lfs::training {
         };
 
         std::vector<std::thread> workers;
+        // Producer failures (including depth decoding and partial pool startup)
+        // must wake and join the workers before the exception reaches the caller.
+        struct WorkerJoiner {
+            std::vector<std::thread>& workers;
+            std::mutex& mutex;
+            std::condition_variable& cv;
+            bool& producing;
+
+            void join() {
+                if (!producing) {
+                    return;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    producing = false;
+                }
+                cv.notify_all();
+                for (auto& thread : workers) {
+                    thread.join();
+                }
+            }
+
+            ~WorkerJoiner() { join(); }
+        } joiner{workers, queue_mutex, queue_cv, producing};
         workers.reserve(worker_count);
         for (std::size_t i = 0; i < worker_count; ++i) {
             workers.emplace_back(worker);
@@ -297,14 +321,7 @@ namespace lfs::training {
             queue_cv.notify_one();
         }
 
-        {
-            std::lock_guard<std::mutex> lock(queue_mutex);
-            producing = false;
-        }
-        queue_cv.notify_all();
-        for (auto& t : workers) {
-            t.join();
-        }
+        joiner.join();
 
         return anchors;
     }
