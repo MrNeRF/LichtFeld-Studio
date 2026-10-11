@@ -221,10 +221,23 @@
             <span class="section-rule__line"></span>
           </div>
           <div class="settings-row">
-            <span class="field-label">@tr:video_extractor.pattern</span>
-            <input id="pattern-input" class="pattern-input" type="text" value="frame_%d" />
-            <span id="pattern-example" class="inline-note">@tr:video_extractor.example</span>
+            <span class="field-label">@tr:video_extractor.naming_preset</span>
+            <select id="naming-select" class="wide-select">
+              <option value="0">@tr:video_extractor.naming_video_frame</option>
+              <option value="1">@tr:video_extractor.naming_video_number</option>
+              <option value="2" selected="selected">@tr:video_extractor.naming_frame_number</option>
+              <option value="3">@tr:video_extractor.naming_number</option>
+              <option value="4">@tr:video_extractor.naming_custom</option>
+            </select>
           </div>
+          <div id="custom-pattern-row" class="settings-row">
+            <span class="field-label">@tr:video_extractor.pattern</span>
+            <input id="pattern-input" class="pattern-input" type="text" value="frame_%05d" />
+          </div>
+          <div id="naming-help" class="naming-note">@tr:video_extractor.naming_help</div>
+          <div class="naming-note">@tr:video_extractor.naming_number_help</div>
+          <div id="pattern-example" class="naming-note inline-note"></div>
+          <div id="naming-error" class="naming-note inline-warning"></div>
         </div>
 
       </div>

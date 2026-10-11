@@ -1,0 +1,26 @@
+name: Ask a question
+description: Get help with a workflow or something you are unsure about.
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Not sure how something works, or whether a result is expected? Ask here.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: >-
+        What are you trying to do, and what would you like to understand?
+        If you have already tried something, tell us briefly.
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Additional details (optional)
+      description: >-
+        If relevant, include your app version, operating system and GPU,
+        settings, or screenshots. Remove private information before sharing.
+    validations:
+      required: false

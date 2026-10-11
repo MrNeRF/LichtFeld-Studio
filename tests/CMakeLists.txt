@@ -572,6 +572,7 @@ set(TEST_FILES
     test_compare_images.cpp
     test_roi_weighted_losses.cpp
     test_checkpoint_resume.cpp
+    test_evaluation_split.cpp
     test_component_config_serialization.cpp
     test_training_snapshot_service.cpp
     test_atomic_output.cpp
@@ -739,6 +740,7 @@ set(TEST_FILES
     test_colmap_points3d_text.cpp
     test_colmap_binary_error_taxonomy.cpp
     test_colmap_binary_parallel_parse.cpp
+    test_colmap_camera_import.cpp
     test_splat_simplify.cpp
     test_rml_text_input_handler.cpp
     test_rml_text_input_native_keys.cpp
@@ -1077,6 +1079,7 @@ string(CONCAT LFS_NIGHTLY_TEST_FILTER
 string(CONCAT LFS_SLOW_TEST_FILTER
     "*CheckpointResumeTest.TrainSaveLoadResume/tiny_*:"
     "TrainingSetupRegressionTest.*:"
+    "EvaluationSplitTest.*:"
     "PipelinedImageLoaderTest.*:"
     "ImageResizeParallelTest.*:"
     "PythonIOTest.LoadCOLMAPDataset:"
@@ -1195,6 +1198,7 @@ endif()
 # Keep every Python tier explicit so new modules cannot silently drift out of
 # the curated suite.
 set(LFS_PYTHON_FAST_TESTS
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gallery_storage.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_asset_identity.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_bug_report.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_core_abi_stamp.py

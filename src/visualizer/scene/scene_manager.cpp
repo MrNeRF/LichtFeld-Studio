@@ -3218,7 +3218,13 @@ namespace lfs::vis {
         LOG_TIMER("SceneManager::loadColmapCamerasOnly");
 
         try {
-            auto result = lfs::io::read_colmap_cameras_only(sparse_path);
+            // Camera uids key the viewport caches and selection, so an additive import must not reuse them.
+            int first_uid = 0;
+            for (const auto& camera : scene_.getAllCameras()) {
+                if (camera)
+                    first_uid = std::max(first_uid, camera->uid() + 1);
+            }
+            auto result = lfs::io::read_colmap_cameras_only(sparse_path, 1.0f, first_uid);
             if (!result) {
                 LOG_ERROR("Failed to load COLMAP cameras: {}", result.error().format());
                 state::FileDropFailed{
@@ -3373,6 +3379,7 @@ namespace lfs::vis {
             // === Phase 3: Load data ===
             // Clear init_path to prevent loading the initial PLY again - we use the checkpoint model instead
             checkpoint_params.init_path = std::nullopt;
+            checkpoint_params.resume_checkpoint = path;
             const auto load_result = lfs::training::loadTrainingDataIntoScene(checkpoint_params, scene_);
             if (!load_result) {
                 throw std::runtime_error("Failed to load training data: " + load_result.error());
@@ -3405,9 +3412,6 @@ namespace lfs::vis {
 
             scene_.setTrainingModel(std::move(splat_data), MODEL_NAME);
             selection_.invalidateNodeMask();
-
-            // Mark as checkpoint restore for sparsity handling
-            checkpoint_params.resume_checkpoint = path;
 
             auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
             trainer->setSplatTensorAllocator(tensor_allocator);

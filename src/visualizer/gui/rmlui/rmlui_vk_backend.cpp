@@ -543,32 +543,37 @@ void RenderInterface_VK::EnableScissorRegion(bool enable) {
     }
 }
 
-void RenderInterface_VK::SetScissorRegion(Rml::Rectanglei region) {
-    if (m_is_use_scissor_specified) {
-        const float left_f = static_cast<float>(region.Left()) + m_context_offset.x;
-        const float top_f = static_cast<float>(region.Top()) + m_context_offset.y;
-        const float right_f = left_f + static_cast<float>(region.Width());
-        const float bottom_f = top_f + static_cast<float>(region.Height());
-        const int requested_left = static_cast<int>(std::floor(left_f));
-        const int requested_top = static_cast<int>(std::floor(top_f));
-        const int requested_right = static_cast<int>(std::ceil(right_f));
-        const int requested_bottom = static_cast<int>(std::ceil(bottom_f));
-        m_scissor_requested.offset = {requested_left, requested_top};
-        m_scissor_requested.extent = {
-            static_cast<uint32_t>(std::max(0, requested_right - requested_left)),
-            static_cast<uint32_t>(std::max(0, requested_bottom - requested_top)),
-        };
+void RenderInterface_VK::ComputeScissorForRegion(const Rml::Rectanglei region) {
+    const float left_f = static_cast<float>(region.Left()) + m_context_offset.x;
+    const float top_f = static_cast<float>(region.Top()) + m_context_offset.y;
+    const float right_f = left_f + static_cast<float>(region.Width());
+    const float bottom_f = top_f + static_cast<float>(region.Height());
+    const int requested_left = static_cast<int>(std::floor(left_f));
+    const int requested_top = static_cast<int>(std::floor(top_f));
+    const int requested_right = static_cast<int>(std::ceil(right_f));
+    const int requested_bottom = static_cast<int>(std::ceil(bottom_f));
+    m_scissor_requested.offset = {requested_left, requested_top};
+    m_scissor_requested.extent = {
+        static_cast<uint32_t>(std::max(0, requested_right - requested_left)),
+        static_cast<uint32_t>(std::max(0, requested_bottom - requested_top)),
+    };
 
-        // Enclose the translated rect; fractional panel offsets otherwise clip text edges.
-        const int left = Rml::Math::Clamp(requested_left, 0, m_width);
-        const int top = Rml::Math::Clamp(requested_top, 0, m_height);
-        const int right = Rml::Math::Clamp(requested_right, 0, m_width);
-        const int bottom = Rml::Math::Clamp(requested_bottom, 0, m_height);
-        m_scissor.offset.x = left;
-        m_scissor.offset.y = top;
-        m_scissor.extent.width = static_cast<uint32_t>(std::max(0, right - left));
-        m_scissor.extent.height = static_cast<uint32_t>(std::max(0, bottom - top));
-        m_scissor = ClampToCacheCaptureArea(IntersectContextClip(m_scissor));
+    // Enclose the translated rect; fractional panel offsets otherwise clip text edges.
+    const int left = Rml::Math::Clamp(requested_left, 0, m_width);
+    const int top = Rml::Math::Clamp(requested_top, 0, m_height);
+    const int right = Rml::Math::Clamp(requested_right, 0, m_width);
+    const int bottom = Rml::Math::Clamp(requested_bottom, 0, m_height);
+    m_scissor.offset.x = left;
+    m_scissor.offset.y = top;
+    m_scissor.extent.width = static_cast<uint32_t>(std::max(0, right - left));
+    m_scissor.extent.height = static_cast<uint32_t>(std::max(0, bottom - top));
+    m_scissor = ClampToCacheCaptureArea(IntersectContextClip(m_scissor));
+}
+
+void RenderInterface_VK::SetScissorRegion(Rml::Rectanglei region) {
+    m_scissor_region = region;
+    if (m_is_use_scissor_specified) {
+        ComputeScissorForRegion(region);
 
 #ifdef RMLUI_VK_DEBUG
         VkDebugUtilsLabelEXT info{};
@@ -630,13 +635,25 @@ void RenderInterface_VK::RenderToClipMask(Rml::ClipMaskOperation operation, Rml:
 }
 
 Rml::LayerHandle RenderInterface_VK::PushLayer() {
+    return PushLayerInFrame(true);
+}
+
+Rml::LayerHandle RenderInterface_VK::PushContextLayer() {
+    return PushLayerInFrame(false);
+}
+
+Rml::LayerHandle RenderInterface_VK::PushLayerInFrame(const bool neutral_frame) {
     if (m_p_current_command_buffer == nullptr || m_width <= 0 || m_height <= 0)
         return {};
 
     const Rml::LayerHandle layer_handle = static_cast<Rml::LayerHandle>(m_render_layer_stack_size + 1);
     EnsureRenderLayer(layer_handle);
+    if (render_layer_t* layer = GetRenderLayer(layer_handle))
+        layer->saved_frame = CaptureFrameState();
 
     EndActiveRendering();
+    if (neutral_frame)
+        EnterLayerFrame();
     BeginLayerRendering(layer_handle, true);
 
     m_render_layer_stack_size += 1;
@@ -675,17 +692,24 @@ void RenderInterface_VK::CompositeLayers(Rml::LayerHandle source, Rml::LayerHand
         return;
     }
 
+    // The source was drawn in the frame it was pushed from. Compose it with that frame's offset,
+    // clip and scissor, then restore the current frame for the rest of the rendering.
+    const frame_state_t current_frame = CaptureFrameState();
+    const frame_state_t source_frame = source_layer->saved_frame;
+
     EndActiveRendering();
     TransitionImageLayout(source_layer->m_color.m_p_vk_image, source_layer->m_color.m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, source_layer->m_color_layout,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     source_layer->m_color_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
+    RestoreFrameState(source_frame);
     if (destination == 0)
         BeginSwapchainRendering(VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_LOAD_OP_LOAD);
     else
         BeginLayerRendering(destination, false);
 
     RenderFullscreenTexture(source_layer->m_color, blend_mode);
+    RestoreFrameState(current_frame);
 
     const Rml::LayerHandle top_layer = m_render_layer_stack_size > 0 ? static_cast<Rml::LayerHandle>(m_render_layer_stack_size) : Rml::LayerHandle{};
     if (top_layer != 0 && destination != top_layer) {
@@ -699,6 +723,8 @@ void RenderInterface_VK::PopLayer() {
         return;
 
     EndActiveRendering();
+    if (render_layer_t* layer = GetRenderLayer(static_cast<Rml::LayerHandle>(m_render_layer_stack_size)))
+        RestoreFrameState(layer->saved_frame);
     m_render_layer_stack_size -= 1;
     m_active_layer = {};
 
@@ -3027,6 +3053,47 @@ void RenderInterface_VK::TransitionImageLayout(VkImage image, std::uint64_t gene
 
     m_image_barriers.registerImage(image, generation, aspect_mask, old_layout);
     m_image_barriers.transitionImage(m_p_current_command_buffer, image, generation, aspect_mask, new_layout);
+}
+
+RenderInterface_VK::frame_state_t RenderInterface_VK::CaptureFrameState() const {
+    frame_state_t state;
+    state.context_offset = m_context_offset;
+    state.context_transform = m_context_transform;
+    state.context_clip_enabled = m_context_clip_enabled;
+    state.context_clip_scissor = m_context_clip_scissor;
+    state.cache_capture_active = m_cache_capture_active;
+    state.cache_capture_render_area = m_cache_capture_render_area;
+    state.scissor_specified = m_is_use_scissor_specified;
+    state.scissor_region = m_scissor_region;
+    state.scissor = m_scissor;
+    state.scissor_requested = m_scissor_requested;
+    return state;
+}
+
+void RenderInterface_VK::RestoreFrameState(const frame_state_t& state) {
+    m_context_offset = state.context_offset;
+    m_context_transform = state.context_transform;
+    m_context_clip_enabled = state.context_clip_enabled;
+    m_context_clip_scissor = state.context_clip_scissor;
+    m_cache_capture_active = state.cache_capture_active;
+    m_cache_capture_render_area = state.cache_capture_render_area;
+    m_is_use_scissor_specified = state.scissor_specified;
+    m_scissor_region = state.scissor_region;
+    m_scissor = state.scissor;
+    m_scissor_requested = state.scissor_requested;
+    ApplyTransformState();
+}
+
+void RenderInterface_VK::EnterLayerFrame() {
+    m_context_offset = Rml::Vector2f(0.0f, 0.0f);
+    m_context_transform = Rml::Matrix4f::Identity();
+    m_context_clip_enabled = false;
+    m_context_clip_scissor = {};
+    m_cache_capture_active = false;
+    m_cache_capture_render_area = {};
+    if (m_is_use_scissor_specified)
+        ComputeScissorForRegion(m_scissor_region);
+    ApplyTransformState();
 }
 
 void RenderInterface_VK::ResetDynamicRenderState() {

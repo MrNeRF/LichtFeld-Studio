@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation and FAQ
+    url: https://github.com/MrNeRF/LichtFeld-Studio/wiki/Frequently-Asked-Questions
+    about: Installation help, system requirements, and common questions.

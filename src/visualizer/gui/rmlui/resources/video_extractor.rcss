@@ -627,3 +627,18 @@ select:disabled {
 .confirm-buttons .btn {
     min-width: 80dp;
 }
+
+.pattern-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.naming-note {
+    color: #a6adc8;
+    font-size: 11dp;
+    margin-top: 4dp;
+}
+
+#naming-error {
+    color: #f9e2af;
+}

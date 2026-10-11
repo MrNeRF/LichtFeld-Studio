@@ -193,6 +193,7 @@ namespace lfs::io {
      * @brief Read COLMAP cameras only (no image file validation required)
      * @param sparse_path Path to COLMAP sparse reconstruction folder
      * @param scale_factor Scale factor for camera intrinsics (default: 1.0)
+     * @param first_uid Uid of the first imported camera; the rest follow consecutively
      * @return Result containing tuple of (vector of Camera, scene_center tensor [3])
      *
      * Unlike read_colmap_cameras_and_images, this function:
@@ -203,7 +204,8 @@ namespace lfs::io {
      */
     Result<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>
     read_colmap_cameras_only(const std::filesystem::path& sparse_path,
-                             float scale_factor = 1.0f);
+                             float scale_factor = 1.0f,
+                             int first_uid = 0);
 
     enum class ColmapWriteFormat {
         Auto,

@@ -1,0 +1,30 @@
+name: Suggest an improvement
+description: Share an idea that would make LichtFeld Studio more useful.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Describe what you would like to do.
+        You do not need to propose a technical solution.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like to improve?
+      description: >-
+        What are you trying to achieve, and how could LichtFeld Studio help?
+        A concrete example is useful.
+      placeholder: |
+        When I..., I need to...
+        Currently, ...
+        It would help if...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Examples or additional context (optional)
+      description: >-
+        Add screenshots, references, or a workaround you currently use, if helpful.
+    validations:
+      required: false

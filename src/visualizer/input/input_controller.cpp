@@ -2553,26 +2553,14 @@ namespace lfs::vis {
         }
 
         // Load splat and mesh files supported by the generic loader path.
-        if (!splat_files.empty() && viewer_ &&
-            viewer_->loadFileWipeWouldNeedConfirmation(
-                false, false, false)) {
-            cmd::ShowLoadFileConfirmation{
-                .paths = splat_files,
-                .is_dataset = false,
-                .replace = false,
-                .user_batch = splat_files.size() > 1}
+        // The loading service owns admission and confirmation so later drops
+        // cannot open a separate confirmation ahead of its pending queue.
+        if (!splat_files.empty()) {
+            cmd::LoadFile{.path = splat_files.front(),
+                          .is_dataset = false,
+                          .paths = splat_files,
+                          .user_batch = true}
                 .emit();
-            LOG_INFO(
-                "Requesting confirmation before loading {} dropped splat/mesh file(s)",
-                splat_files.size());
-        } else {
-            if (!splat_files.empty()) {
-                cmd::LoadFile{.path = splat_files.front(),
-                              .is_dataset = false,
-                              .paths = splat_files,
-                              .user_batch = splat_files.size() > 1}
-                    .emit();
-            }
         }
 
         if (dataset_path) {

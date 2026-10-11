@@ -199,7 +199,7 @@ namespace lfs::vis {
         ASSERT_TRUE(load_file.has_value());
         EXPECT_EQ(load_file->path, drop_path);
         EXPECT_FALSE(load_file->is_dataset);
-        EXPECT_FALSE(load_file->user_batch);
+        EXPECT_TRUE(load_file->user_batch);
         EXPECT_FALSE(video_extractor_requested);
     }
 

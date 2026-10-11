@@ -4800,8 +4800,8 @@ def test_scope_and_filter_controls_are_above_results():
     assert root.find('.//*[@id="asset-sidebar"]') is None
     assert root.find('.//*[@data-resize="navigator"]') is None
 
-@pytest.mark.parametrize('size,expected', [(0, '0.0 B'), (9, '9.0 B'), (10, '10 B'), (1024, '1.0 KB'),
-    (137114, '134 KB'), (10 * 1024, '10 KB'), (1024**2, '1.0 MB'), (42 * 1024**2, '42 MB'), (1024**3, '1.0 GB')])
+@pytest.mark.parametrize('size,expected', [(0, '0.0 B'), (9, '9.0 B'), (10, '10 B'), (999, '999 B'), (1000, '1.0 KB'),
+    (137114, '137 KB'), (10 * 1000, '10 KB'), (1000**2, '1.0 MB'), (42 * 1000**2, '42 MB'), (1000**3, '1.0 GB'), (281213248, '281 MB')])
 def test_A4_adaptive_sizes_match_overlay_cards_and_info(panel_module, monkeypatch, size, expected):
     from lfs_plugins.asset_format import format_size
     from lfs_plugins.gallery_transfer_ui import transfer_rows

@@ -312,6 +312,7 @@ namespace lfs::app {
                 return std::unexpected(std::format("Dataset validation failed: {}", result.error()));
             }
 
+            checkpoint_params.resume_checkpoint = *params.resume_checkpoint;
             if (const auto result = training::loadTrainingDataIntoScene(checkpoint_params, scene); !result) {
                 return std::unexpected(std::format("Failed to load training data: {}", result.error()));
             }
@@ -335,7 +336,6 @@ namespace lfs::app {
             }
             scene.setTrainingModelNode(model_id);
 
-            checkpoint_params.resume_checkpoint = *params.resume_checkpoint;
             return checkpoint_params;
         }
 

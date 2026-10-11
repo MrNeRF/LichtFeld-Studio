@@ -1970,7 +1970,7 @@ NB_MODULE(lichtfeld, m) {
                 .stop_training = stop_training,
                 .discard_changes = discard_changes,
                 .replace = replace,
-                .user_batch = user_batch && paths.size() > 1};
+                .user_batch = user_batch};
             for (const auto& path : paths)
                 command.paths.push_back(python_utf8_path(path));
             nb::gil_scoped_release release;

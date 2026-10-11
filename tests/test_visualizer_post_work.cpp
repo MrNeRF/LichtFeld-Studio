@@ -6563,15 +6563,315 @@ contract["check_selection_submode_follows_native_mode"](lf)
         controller.handleFileDrop({core::path_to_utf8(first), core::path_to_utf8(second)});
         // File > Import, Python and MCP emit the same unmarked LoadFile command.
         core::events::cmd::LoadFile{.path = rejected, .is_dataset = false}.emit();
-        controller.handleFileDrop({core::path_to_utf8(rejected)});
         // Paths alone do not confer user-batch provenance.
         core::events::cmd::LoadFile{.path = rejected, .is_dataset = false, .paths = {rejected, rejected}}.emit();
-        ASSERT_EQ(failures, (std::vector<std::string>(3, "Import already in progress")));
+        ASSERT_EQ(failures, (std::vector<std::string>(2, "Import already in progress")));
         EXPECT_FALSE(viewer.getDataLoader()->hasPendingImports());
         auto& tasks = viewer.getGuiManager()->asyncTasks();
         ASSERT_TRUE(waitUntil([&] { tasks.pollImportCompletion(); return !tasks.isImporting(); }));
         EXPECT_EQ(viewer.getScene().getNodes().size(), 2u);
         EXPECT_EQ(viewer.getScene().getNode("busy-rejected"), nullptr);
+    }
+
+    TEST_F(VisualizerImplResetTest, SingleDropsQueueInArrivalOrderWithoutBusyErrors) {
+        VisualizerImpl viewer(projectOptions());
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        std::vector<std::string> failures;
+        core::events::state::SplatFileLoadFailed::when([&](const auto& e) { failures.push_back(e.error); });
+        for (const auto* name : {"single-first", "single-second", "single-third"})
+            controller.handleFileDrop({core::path_to_utf8(makeSplatFixture(name))});
+        ASSERT_TRUE(viewer.getDataLoader()->hasPendingImports());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        const auto nodes = viewer.getScene().getNodes();
+        ASSERT_EQ(nodes.size(), 3u);
+        EXPECT_EQ(nodes[0]->name, "single-first");
+        EXPECT_EQ(nodes[1]->name, "single-second");
+        EXPECT_EQ(nodes[2]->name, "single-third");
+        EXPECT_EQ(viewer.getScene().getTotalGaussianCount(), 6u);
+        EXPECT_TRUE(failures.empty());
+    }
+
+    TEST_F(VisualizerImplResetTest, CancelPendingSinglesPreservesActiveImport) {
+        VisualizerImpl viewer(projectOptions());
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("cancel-current"))});
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("cancel-pending"))});
+        ASSERT_TRUE(viewer.getDataLoader()->hasPendingImports());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        viewer.getDataLoader()->cancelPendingImports();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        EXPECT_FALSE(viewer.getDataLoader()->hasPendingImports());
+        EXPECT_EQ(viewer.getScene().getNode("cancel-pending"), nullptr);
+        EXPECT_NE(viewer.getScene().getNode("cancel-current"), nullptr);
+    }
+
+    TEST_F(VisualizerImplResetTest, HistoryClearDropsQueuedSingleRequests) {
+        VisualizerImpl viewer(projectOptions());
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("clear-current"))});
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("clear-pending"))});
+        ASSERT_TRUE(viewer.getDataLoader()->hasPendingImports());
+        core::events::state::SceneCleared{.from_history = true}.emit();
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        EXPECT_FALSE(viewer.getDataLoader()->hasPendingImports());
+        EXPECT_EQ(viewer.getScene().getNode("clear-pending"), nullptr);
+    }
+
+    TEST_F(VisualizerImplResetTest, QueuedSingleFailureKeepsEarlierDropAndSingleErrorReporting) {
+        VisualizerImpl viewer(projectOptions());
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        const auto bad = temporary_.path / "invalid-single.ply";
+        std::ofstream(bad) << "invalid payload";
+        size_t singles = 0, batches = 0;
+        core::events::state::SplatFileLoadFailed::when([&](const auto&) { ++singles; });
+        core::events::state::SplatBatchLoadFailed::when([&](const auto&) { ++batches; });
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("single-kept"))});
+        controller.handleFileDrop({core::path_to_utf8(bad)});
+        ASSERT_TRUE(viewer.getDataLoader()->hasPendingImports());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        ASSERT_NE(viewer.getScene().getNode("single-kept"), nullptr);
+        EXPECT_EQ(viewer.getScene().getNodes().size(), 1u);
+        EXPECT_EQ(singles, 1u);
+        EXPECT_EQ(batches, 0u);
+    }
+
+    TEST_F(VisualizerImplResetTest, QueuedSingleReplaceWaitsForDirtySceneConfirmation) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.getParameterManager()->modifyActiveParams([](auto& params) { ++params.iterations; });
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        const auto replacement = makeSplatFixture("single-replacement");
+        size_t prompts = 0;
+        core::events::cmd::ShowLoadFileConfirmation::when([&](const auto& event) {
+            ++prompts;
+            EXPECT_EQ(event.paths, (std::vector<std::filesystem::path>{replacement}));
+            EXPECT_TRUE(event.replace);
+            EXPECT_TRUE(event.user_batch);
+            core::ModalRequest request;
+            request.title = "Replace scene?";
+            request.buttons = {{"Continue", "primary"}, {"Cancel", "secondary"}};
+            request.on_result = [&](const core::ModalResult& result) {
+                if (result.button_label == "Continue")
+                    core::events::cmd::LoadFile{.path = replacement, .is_dataset = false, .discard_changes = true, .replace = true, .paths = {replacement}, .user_batch = true}.emit();
+            };
+            viewer.getGuiManager()->modalOverlay()->enqueue(std::move(request));
+        });
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("single-before-replace"))});
+        core::events::cmd::LoadFile{.path = replacement, .is_dataset = false, .replace = true, .paths = {replacement}, .user_batch = true}.emit();
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("single-after-prompt"))});
+        ASSERT_EQ(prompts, 0u);
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            if (prompts == 0)
+                tasks.pollImportCompletion();
+            return prompts != 0;
+        }));
+        EXPECT_EQ(prompts, 1u);
+        EXPECT_TRUE(viewer.getDataLoader()->hasPendingImports());
+        EXPECT_FALSE(tasks.isImporting());
+        EXPECT_NE(viewer.getScene().getNode("single-before-replace"), nullptr);
+        EXPECT_EQ(viewer.getScene().getNode("single-after-prompt"), nullptr);
+        // Poll real overlay state repeatedly, including a request not rendered
+        // yet in this headless viewer. Later drops must remain queued.
+        for (int i = 0; i < 5; ++i)
+            tasks.pollImportCompletion();
+        EXPECT_TRUE(viewer.getDataLoader()->hasPendingImports());
+        EXPECT_FALSE(tasks.isImporting());
+        EXPECT_EQ(viewer.getScene().getNode("single-after-prompt"), nullptr);
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("single-late-drop"))});
+        EXPECT_FALSE(tasks.isImporting());
+        EXPECT_EQ(prompts, 1u);
+        EXPECT_EQ(viewer.getScene().getNode("single-late-drop"), nullptr);
+        ASSERT_TRUE(viewer.getGuiManager()->modalOverlay()->dismiss("Continue"));
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions() && !viewer.getDataLoader()->hasPendingImports();
+        }));
+        EXPECT_EQ(prompts, 1u);
+        EXPECT_NE(viewer.getScene().getNode("single-replacement"), nullptr);
+        EXPECT_EQ(viewer.getScene().getNode("single-before-replace"), nullptr);
+        const auto nodes = viewer.getScene().getNodes();
+        ASSERT_EQ(nodes.size(), 3u);
+        EXPECT_EQ(nodes[0]->name, "single-replacement");
+        EXPECT_EQ(nodes[1]->name, "single-after-prompt");
+        EXPECT_EQ(nodes[2]->name, "single-late-drop");
+    }
+
+    TEST_F(VisualizerImplResetTest, SingleDropWaitsForConfirmationEvenWithoutABacklog) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.getParameterManager()->modifyActiveParams([](auto& params) { ++params.iterations; });
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        const auto replacement = makeSplatFixture("single-replacement");
+        size_t prompts = 0;
+        core::events::cmd::ShowLoadFileConfirmation::when([&](const auto& event) {
+            ++prompts;
+            EXPECT_EQ(event.paths, (std::vector<std::filesystem::path>{replacement}));
+            EXPECT_TRUE(event.replace);
+            EXPECT_TRUE(event.user_batch);
+            core::ModalRequest request;
+            request.title = "Replace scene?";
+            request.buttons = {{"Continue", "primary"}, {"Cancel", "secondary"}};
+            request.on_result = [&](const core::ModalResult& result) {
+                if (result.button_label == "Continue")
+                    core::events::cmd::LoadFile{.path = replacement, .is_dataset = false, .discard_changes = true, .replace = true, .paths = {replacement}, .user_batch = true}.emit();
+            };
+            viewer.getGuiManager()->modalOverlay()->enqueue(std::move(request));
+        });
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("single-before-replace"))});
+        core::events::cmd::LoadFile{.path = replacement, .is_dataset = false, .replace = true, .paths = {replacement}, .user_batch = true}.emit();
+        ASSERT_EQ(prompts, 0u);
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            if (prompts == 0)
+                tasks.pollImportCompletion();
+            return prompts != 0;
+        }));
+        EXPECT_EQ(prompts, 1u);
+        EXPECT_FALSE(viewer.getDataLoader()->hasPendingImports());
+        EXPECT_FALSE(tasks.isImporting());
+        EXPECT_NE(viewer.getScene().getNode("single-before-replace"), nullptr);
+        EXPECT_EQ(viewer.getScene().getNode("single-after-prompt"), nullptr);
+        // Poll real overlay state repeatedly, including a request not rendered
+        // yet in this headless viewer. Later drops must remain queued.
+        for (int i = 0; i < 5; ++i)
+            tasks.pollImportCompletion();
+        EXPECT_FALSE(viewer.getDataLoader()->hasPendingImports());
+        EXPECT_FALSE(tasks.isImporting());
+        EXPECT_EQ(viewer.getScene().getNode("single-after-prompt"), nullptr);
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("single-late-drop"))});
+        EXPECT_FALSE(tasks.isImporting());
+        EXPECT_EQ(prompts, 1u);
+        EXPECT_EQ(viewer.getScene().getNode("single-late-drop"), nullptr);
+        ASSERT_TRUE(viewer.getGuiManager()->modalOverlay()->dismiss("Continue"));
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions() && !viewer.getDataLoader()->hasPendingImports();
+        }));
+        EXPECT_EQ(prompts, 1u);
+        EXPECT_NE(viewer.getScene().getNode("single-replacement"), nullptr);
+        EXPECT_EQ(viewer.getScene().getNode("single-before-replace"), nullptr);
+        const auto nodes = viewer.getScene().getNodes();
+        ASSERT_EQ(nodes.size(), 2u);
+        EXPECT_EQ(nodes[0]->name, "single-replacement");
+        EXPECT_EQ(nodes[1]->name, "single-late-drop");
+    }
+
+    TEST_F(VisualizerImplResetTest, DropsOntoDirtyDatasetShareTheLoaderConfirmationQueue) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.getParameterManager()->modifyActiveParams([](auto& params) { ++params.iterations; });
+        viewer.getScene().addGroup("Dataset cameras");
+        viewer.getSceneManager()->changeContentType(SceneManager::ContentType::Dataset);
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.setViewer(&viewer);
+        std::vector<std::filesystem::path> prompts;
+        core::events::cmd::ShowLoadFileConfirmation::when([&](const auto& event) {
+            ASSERT_EQ(event.paths.size(), 1u);
+            prompts.push_back(event.paths.front());
+            core::ModalRequest request;
+            request.title = "Replace dataset?";
+            request.buttons = {{"Cancel", "secondary"}};
+            viewer.getGuiManager()->modalOverlay()->enqueue(std::move(request));
+        });
+        const auto first = makeSplatFixture("dirty-first");
+        const auto second = makeSplatFixture("dirty-second");
+        controller.handleFileDrop({core::path_to_utf8(first)});
+        ASSERT_EQ(prompts, (std::vector<std::filesystem::path>{first}));
+        controller.handleFileDrop({core::path_to_utf8(second)});
+        EXPECT_EQ(prompts.size(), 1u);
+        EXPECT_TRUE(viewer.getDataLoader()->hasPendingImports());
+        EXPECT_FALSE(viewer.getGuiManager()->asyncTasks().isImporting());
+        ASSERT_TRUE(viewer.getGuiManager()->modalOverlay()->dismiss("Cancel"));
+        viewer.getDataLoader()->processPendingImports();
+        EXPECT_EQ(prompts, (std::vector<std::filesystem::path>{first, second}));
+        ASSERT_TRUE(viewer.getGuiManager()->modalOverlay()->dismiss("Cancel"));
+        EXPECT_FALSE(viewer.getDataLoader()->hasPendingImports());
+    }
+
+    TEST_F(VisualizerImplResetTest, QueuedSingleReplaceCancellationResumesLaterDrops) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.getParameterManager()->modifyActiveParams([](auto& params) { ++params.iterations; });
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        const auto replacement = makeSplatFixture("single-replacement");
+        size_t prompts = 0;
+        core::events::cmd::ShowLoadFileConfirmation::when([&](const auto& event) {
+            ++prompts;
+            EXPECT_EQ(event.paths, (std::vector<std::filesystem::path>{replacement}));
+            EXPECT_TRUE(event.replace);
+            EXPECT_TRUE(event.user_batch);
+            core::ModalRequest request;
+            request.title = "Replace scene?";
+            request.buttons = {{"Continue", "primary"}, {"Cancel", "secondary"}};
+            request.on_result = [&](const core::ModalResult& result) {
+                if (result.button_label == "Continue")
+                    core::events::cmd::LoadFile{.path = replacement, .is_dataset = false, .discard_changes = true, .replace = true, .paths = {replacement}, .user_batch = true}.emit();
+            };
+            viewer.getGuiManager()->modalOverlay()->enqueue(std::move(request));
+        });
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("single-before-replace"))});
+        core::events::cmd::LoadFile{.path = replacement, .is_dataset = false, .replace = true, .paths = {replacement}, .user_batch = true}.emit();
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("single-after-prompt"))});
+        ASSERT_EQ(prompts, 0u);
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            if (prompts == 0)
+                tasks.pollImportCompletion();
+            return prompts != 0;
+        }));
+        EXPECT_EQ(prompts, 1u);
+        EXPECT_TRUE(viewer.getDataLoader()->hasPendingImports());
+        EXPECT_FALSE(tasks.isImporting());
+        EXPECT_NE(viewer.getScene().getNode("single-before-replace"), nullptr);
+        EXPECT_EQ(viewer.getScene().getNode("single-after-prompt"), nullptr);
+        // Poll real overlay state repeatedly, including a request not rendered
+        // yet in this headless viewer. Later drops must remain queued.
+        for (int i = 0; i < 5; ++i)
+            tasks.pollImportCompletion();
+        EXPECT_TRUE(viewer.getDataLoader()->hasPendingImports());
+        EXPECT_FALSE(tasks.isImporting());
+        EXPECT_EQ(viewer.getScene().getNode("single-after-prompt"), nullptr);
+        ASSERT_TRUE(viewer.getGuiManager()->modalOverlay()->dismiss("Cancel"));
+        // The modal is closed and no import is active, but the backlog still owns order.
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("single-after-cancel"))});
+        EXPECT_FALSE(tasks.isImporting());
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions() && !viewer.getDataLoader()->hasPendingImports();
+        }));
+        EXPECT_EQ(prompts, 1u);
+        EXPECT_EQ(viewer.getScene().getNode("single-replacement"), nullptr);
+        EXPECT_NE(viewer.getScene().getNode("single-before-replace"), nullptr);
+        EXPECT_NE(viewer.getScene().getNode("single-after-prompt"), nullptr);
+        const auto nodes = viewer.getScene().getNodes();
+        ASSERT_EQ(nodes.size(), 3u);
+        EXPECT_EQ(nodes[0]->name, "single-before-replace");
+        EXPECT_EQ(nodes[1]->name, "single-after-prompt");
+        EXPECT_EQ(nodes[2]->name, "single-after-cancel");
     }
 
     TEST_F(VisualizerImplResetTest, SecondDropQueuesUntilFirstImportAttaches) {

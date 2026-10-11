@@ -613,16 +613,14 @@ def _splat_publication(nodes) -> dict:
 def _open_unlinked_gallery_review() -> None:
     from .gallery_controller import get_gallery_controller
     from .gallery_file_panel import open_gallery_file_panel
-    from .gallery_actions import gallery_quota
+    from .gallery_storage import quota_message
     from .gallery_messages import tr as gallery_tr
 
     nodes = _visible_splats()
     name = nodes[0].name if len(nodes) == 1 else lf.ui.tr("menu.file.untitled_scene")
     controller = get_gallery_controller()
     state = controller.snapshot()
-    quota_bytes, used_bytes, _ = gallery_quota(state)
-    quota = (gallery_tr("quota.used", used=f"{used_bytes / 1e9:.1f}", quota=f"{quota_bytes / 1e9:g}")
-             if quota_bytes is not None else "")
+    quota = quota_message(state)
     asset = {"id": str(uuid.uuid4()), "path": "", "name": name, "exists": True,
              "status": "AVAILABLE",
              "publication": dict(_splat_publication(nodes), visibleSplats=len(nodes))}
@@ -793,10 +791,9 @@ def _publish_current_project_to_gallery(*, refresh_once: bool = True) -> None:
             "upload_format": controller.upload_format,
         }
         from .gallery_actions import gallery_quota
-        quota_bytes, used_bytes, remaining_bytes = gallery_quota(state)
-        quota = (gallery_tr("quota.used", used=f"{used_bytes / 1e9:.1f}",
-                            quota=f"{quota_bytes / 1e9:g}")
-                 if quota_bytes is not None else "")
+        _, _, remaining_bytes = gallery_quota(state)
+        from .gallery_storage import quota_message
+        quota = quota_message(state)
         warning = (gallery_tr("quota.warning")
                    if remaining_bytes is not None and asset["file_size_bytes"] > remaining_bytes
                    else "")
@@ -962,9 +959,6 @@ class FileMenu:
             ),
             menu_operator(ExportOperator),
             menu_operator(ExportConfigOperator),
-            menu_separator(),
-            menu_operator(Mesh2SplatOperator),
-            menu_operator(ExtractVideoFramesOperator),
             menu_separator(),
             menu_operator(ExitOperator),
         ]
