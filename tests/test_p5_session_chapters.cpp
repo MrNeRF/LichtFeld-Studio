@@ -113,7 +113,7 @@ namespace {
 
     TEST(P5SessionChapterTest, NavigationVerticalSurvivesLichtSaveOpenAndSaveAs) {
         TemporaryDirectory temporary;
-        for (const std::string axis : {"legacy_y", "data_z", "absent"}) {
+        for (const std::string axis : {"legacy_y", "data_z", "absent", "future_up"}) {
             SCOPED_TRACE(axis);
             auto document = lfs::test::licht::make_empty_document(lfs::core::generate_uuid_v4());
             ProjectSessionChapters session;
@@ -146,7 +146,7 @@ namespace {
         }
     }
 
-    TEST(P5SessionChapterTest, NavigationVerticalIsOptionalValidatedAndPreservedByEarlierWriters) {
+    TEST(P5SessionChapterTest, NavigationVerticalIsOptionalAndPreservesUnknownValues) {
         auto session = make_populated_session_chapters();
         auto view = json_root(session.view.dom());
         view["navigation"].erase("up_axis");
@@ -163,10 +163,11 @@ namespace {
         auto reopened = require_result(ViewSessionChapter::from_bytes(session.view.to_bytes()));
         EXPECT_EQ(json_root(reopened.dom())["navigation"]["up_axis"], "data_z");
         EXPECT_EQ(json_root(reopened.dom())["version"], view["version"]);
-        for (const Json invalid : {Json("unknown"), Json(2), Json(nullptr)}) {
-            view["navigation"]["up_axis"] = invalid;
+        for (const Json unknown : {Json("future_up"), Json(2), Json(nullptr), Json(true), Json::array(), Json::object()}) {
+            view["navigation"]["up_axis"] = unknown;
             session.view = require_result(ViewSessionChapter::parse(view.dump()));
-            EXPECT_FALSE(prepareGuiSessionRestore(session));
+            EXPECT_TRUE(prepareGuiSessionRestore(session));
+            EXPECT_EQ(json_root(session.view.dom())["navigation"]["up_axis"], unknown);
         }
     }
 
@@ -828,7 +829,7 @@ namespace {
             lfs::vis::RenderSettings settings;
             settings.environment_map_path = path;
             const auto json = renderSettingsToProjectJson(settings);
-            EXPECT_EQ(json["environment_builtin"], path);
+            EXPECT_EQ(json["environment_builtin"].get<std::string>(), path);
             EXPECT_TRUE(json["environment_reference_uuid"].is_null());
             const auto restored = renderSettingsFromProjectJson(json);
             ASSERT_TRUE(restored);

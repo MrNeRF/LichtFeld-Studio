@@ -26,7 +26,7 @@ def test_project_folder_remove_label_uses_sentence_case_in_all_locales():
         "zh": "移除文件夹",
     }
     locales = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
-    assert {path.stem: json.loads(path.read_text())["projects"]["action.remove_folder"]
+    assert {path.stem: json.loads(path.read_text(encoding="utf-8"))["projects"]["action.remove_folder"]
             for path in locales.glob("*.json")} == expected
 
 
@@ -1171,6 +1171,9 @@ def test_input_reset_restores_bindings_and_refreshes_rows(
     panel._refresh_selection = lambda: None
     panel._set_zoom_speed(42)
     panel._set_navigation_speed(73)
+    panel._set_navigation_up_index("1")
+    panel._set_new_project_align_grid(False)
+    state.navigation_up_axis = "data_z"
     defaults = {"forward": "W", "backward": "S", "left": "A"}
     bindings = {"forward": "S", "backward": "Unbound", "left": "A"}
     reset_calls = []
@@ -1215,6 +1218,10 @@ def test_input_reset_restores_bindings_and_refreshes_rows(
     reset_input = confirmed and reset_scope != "bindings"
     assert state.zoom_speed == (11 if reset_input else 42)
     assert state.navigation_speed == (10 if reset_input else 73)
+    assert panel._navigation_up_index() == ("0" if reset_input else "1")
+    assert state.new_project_align_grid is reset_input
+    assert state.navigation_up_axis == "data_z"
+    assert state.navigation_up_calls == []
 
 
 @pytest.mark.parametrize("section", ["general", "appearance", "interface", "mcp", "portal"])
@@ -1237,8 +1244,6 @@ def test_other_section_resets_preserve_key_bindings(preferences_panel_module, se
     assert panel._keymap._last_state_key == ("custom bindings",)
     assert state.zoom_speed == 42
     assert state.navigation_speed == 73
-
-
 
 
 def test_navigation_defaults_do_not_modify_current_project(preferences_panel_module):

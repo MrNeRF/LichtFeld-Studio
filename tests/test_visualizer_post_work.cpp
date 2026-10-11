@@ -2525,11 +2525,10 @@ contract["check_selection_submode_follows_native_mode"](lf)
         rendering.setGridPlaneForPanel(SplitViewPanelId::Left, 0);
         rendering.setGridPlaneForPanel(SplitViewPanelId::Right, 1);
         nlohmann::json populated_timeline{
-            {"version", 1}, {"clip_duration", 30.0},
-            {"keyframes", nlohmann::json::array({
-                {{"time", 0.0}, {"position", {1.0, 2.0, 3.0}}, {"rotation", {1.0, 0.0, 0.0, 0.0}}, {"focal_length_mm", 50.0}, {"easing", 0}},
-                {{"time", 2.0}, {"position", {4.0, 5.0, 6.0}}, {"rotation", {1.0, 0.0, 0.0, 0.0}}, {"focal_length_mm", 35.0}, {"easing", 0}}
-            })}};
+            {"version", 1},
+            {"clip_duration", 30.0},
+            {"keyframes", nlohmann::json::array({{{"time", 0.0}, {"position", {1.0, 2.0, 3.0}}, {"rotation", {1.0, 0.0, 0.0, 0.0}}, {"focal_length_mm", 50.0}, {"easing", 0}},
+                                                 {{"time", 2.0}, {"position", {4.0, 5.0, 6.0}}, {"rotation", {1.0, 0.0, 0.0, 0.0}}, {"focal_length_mm", 35.0}, {"easing", 0}}})}};
         ASSERT_TRUE(viewer.getGuiManager()->sequencer().loadFromJson(populated_timeline));
         const auto timeline = viewer.getGuiManager()->sequencer().saveToJson();
         auto& history = op::undoHistory();
@@ -2573,6 +2572,25 @@ contract["check_selection_submode_follows_native_mode"](lf)
         applyGuiSession(viewer, require_result(prepareGuiSessionRestore(captured)), bookmarks);
         EXPECT_EQ(input.navigationUpAxis(), NavigationUpAxis::LegacyY);
         EXPECT_EQ(secondary.camera.navigationUpAxis(), NavigationUpAxis::LegacyY);
+        // Future values and malformed optional values fall back independently of
+        // the user's new-project default, without losing the rest of the view.
+        for (const auto unknown : {nlohmann::json("future_up"), nlohmann::json(2),
+                                   nlohmann::json(nullptr), nlohmann::json(true),
+                                   nlohmann::json::array(), nlohmann::json::object()}) {
+            SCOPED_TRACE(unknown.dump());
+            require_status(captured.view.dom().set_json("navigation.up_axis", unknown));
+            input.setNavigationUpAxis(NavigationUpAxis::DataZ);
+            auto fallback = prepareGuiSessionRestore(captured);
+            ASSERT_TRUE(fallback);
+            applyGuiSession(viewer, fallback.value(), bookmarks);
+            EXPECT_EQ(input.navigationUpAxis(), NavigationUpAxis::LegacyY);
+            EXPECT_EQ(secondary.camera.navigationUpAxis(), NavigationUpAxis::LegacyY);
+            EXPECT_EQ(primary_pose, capturePanelCameraProjectState(primary, rendering.getSettings().ortho_scale));
+            EXPECT_EQ(secondary_pose, capturePanelCameraProjectState(secondary, rendering.getSettings().ortho_scale));
+            EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Left), 0);
+            EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Right), 1);
+            EXPECT_EQ(viewer.getGuiManager()->sequencer().saveToJson(), timeline);
+        }
         input.setNavigationUpAxis(NavigationUpAxis::DataZ);
         viewer.resetProjectState(false);
         EXPECT_EQ(input.navigationUpAxis(), NavigationUpAxis::LegacyY);
@@ -2633,6 +2651,38 @@ contract["check_selection_submode_follows_native_mode"](lf)
         }));
         auto explicitly_saved = require_result(ProjectDocument::open(master));
         EXPECT_EQ(explicitly_saved.view().dom().get_json("navigation.up_axis"), lfs::io::JsonChapterDom::Json("legacy_y"));
+        // Exercise the real project-open/save path as well as session preflight.
+        int index = 0;
+        for (const auto unknown : {nlohmann::json("future_up"), nlohmann::json(2),
+                                   nlohmann::json(nullptr), nlohmann::json(true),
+                                   nlohmann::json::array(), nlohmann::json::object()}) {
+            SCOPED_TRACE(unknown.dump());
+            auto document = lfs::test::licht::make_empty_document(lfs::core::generate_uuid_v4());
+            require_status(document->edit_view().dom().set_json("navigation.up_axis", unknown));
+            require_status(document->edit_view().dom().set_json("navigation.future_option", "preserved"));
+            const auto path = temporary_.path / ("future-up-" + std::to_string(index++) + ".licht");
+            ASSERT_TRUE(document->save(path));
+            VisualizerImpl viewer(projectOptions());
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+            viewer.input_controller_->setViewer(&viewer);
+            viewer.input_controller_->setNavigationUpAxis(NavigationUpAxis::DataZ);
+            auto opened = viewer.projectOpen(path, ProjectSwitchDisposition::DiscardChanges);
+            ASSERT_TRUE(opened);
+            EXPECT_EQ(*opened, ProjectOpenOutcome::Opened);
+            ASSERT_TRUE(waitForHydrationComplete(viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+            viewer.input_controller_->setNavigationUpAxis(NavigationUpAxis::DataZ);
+            viewer.noteGuiSessionRestoreOwnerReady(1);
+            EXPECT_EQ(viewer.input_controller_->navigationUpAxis(), NavigationUpAxis::LegacyY);
+            require_status(viewer.projectSave(false));
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+            }));
+            auto saved = ProjectDocument::open(path);
+            ASSERT_TRUE(saved);
+            EXPECT_EQ(saved->view().dom().get_json("navigation.up_axis"), nlohmann::json("legacy_y"));
+            EXPECT_EQ(saved->view().dom().get_json("navigation.future_option"), nlohmann::json("preserved"));
+        }
     }
 
     TEST_F(VisualizerImplResetTest, SequencerCaptureDropsRemovedTailAndPreservesExtensions) {

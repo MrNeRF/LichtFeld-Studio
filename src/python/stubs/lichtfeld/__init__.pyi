@@ -631,6 +631,25 @@ def get_camera_navigation_mode() -> str:
 def set_camera_navigation_mode(mode: str) -> None:
     """Set the active camera navigation mode"""
 
+def get_new_project_navigation_up_axis() -> str:
+    """Get the navigation vertical used only for new projects"""
+
+def get_new_project_align_grid() -> bool:
+    """
+    Get whether new projects start with a grid perpendicular to their navigation vertical
+    """
+
+def set_new_project_navigation_defaults(axis: str, align_grid: bool) -> None:
+    """Set new-project defaults without modifying the current project"""
+
+def get_navigation_up_axis() -> str:
+    """Get the project navigation vertical: legacy_y or data_z"""
+
+def set_navigation_up_axis(axis: str, align_grid: bool = False) -> None:
+    """
+    Set the project navigation vertical without transforming scene data or camera poses; optionally align both panel grids
+    """
+
 def get_camera_view_snap_enabled() -> bool:
     """Check whether camera axis-view snapping is enabled"""
 
