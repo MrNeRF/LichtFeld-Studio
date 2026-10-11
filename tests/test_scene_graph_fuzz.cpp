@@ -872,7 +872,11 @@ namespace {
         manager_->selectNode(group);
         ASSERT_TRUE(manager_->copySelectedNodes());
         // The clipboard must own the values at copy time, not live source buffers.
-        mesh->vertices = Tensor::zeros({3, 3}, Device::CPU);
+        mesh->vertices.ptr<float>()[3] = 99.f;
+        mesh->indices.ptr<int32_t>()[2] = 0;
+        mesh->normals.ptr<float>()[0] = 99.f;
+        mesh->materials.front().roughness = 0.9f;
+        mesh->submeshes.front().index_count = 0;
         mesh->texture_images.front().pixels.front() = 99;
 
         const auto before = scene_state(*manager_);
@@ -909,7 +913,8 @@ namespace {
         ASSERT_NE(scene.getNodeByUuid(copied_uuid), nullptr);
         EXPECT_EQ(scene.getNodeByUuid(copied_uuid)->mesh->texture_images.front().pixels.front(), 12);
 
-        scene.getNodeByUuid(copied_uuid)->mesh->vertices = Tensor::zeros({3, 3}, Device::CPU);
+        scene.getNodeByUuid(copied_uuid)->mesh->vertices.ptr<float>()[3] = 42.f;
+        scene.getNodeByUuid(copied_uuid)->mesh->texture_images.front().pixels.front() = 42;
         scene.removeNodeById(group);
         ASSERT_EQ(manager_->pasteNodes().size(), 1u);
         const auto* repeated = scene.getNode("nested mesh");
@@ -940,6 +945,33 @@ namespace {
         const auto second = manager_->pasteNodes();
         ASSERT_EQ(second.size(), 1u);
         EXPECT_EQ(scene.getNode(second.front())->mesh->vertices.to_vector(), std::vector<float>(9, 1.f));
+    }
+
+    TEST_F(SceneGraphFuzzTest, CopyPasteMeshOnlyGroupKeepsDeviceAndIndependentStorage) {
+        auto& scene = manager_->getScene();
+        for (const auto device : {Device::CPU, Device::CUDA}) {
+            const auto group = scene.addGroup(device == Device::CPU ? "cpu group" : "gpu group");
+            auto mesh = std::make_shared<lfs::core::MeshData>();
+            mesh->vertices = Tensor::ones({3, 3}, device);
+            mesh->indices = Tensor::from_vector(std::vector<int32_t>{0, 1, 2}, {1, 3}, device);
+            const auto source = scene.addMesh(device == Device::CPU ? "cpu mesh" : "gpu mesh", mesh, group);
+            manager_->selectNode(group);
+            ASSERT_TRUE(manager_->copySelectedNodes());
+            const auto first = manager_->pasteNodes();
+            ASSERT_EQ(first.size(), 1u);
+            const auto* root = scene.getNode(first.front());
+            ASSERT_EQ(root->children.size(), 1u);
+            const auto* copied = scene.getNodeById(root->children.front());
+            ASSERT_NE(copied->mesh, nullptr);
+            EXPECT_EQ(copied->mesh->vertices.device(), device);
+            EXPECT_NE(copied->mesh->vertices.ptr<float>(), mesh->vertices.ptr<float>());
+            EXPECT_NE(copied->mesh->indices.ptr<int32_t>(), mesh->indices.ptr<int32_t>());
+            EXPECT_EQ(copied->mesh->vertices.cpu().to_vector(), std::vector<float>(9, 1.f));
+            EXPECT_NE(copied->mesh->id(), mesh->id());
+            ASSERT_TRUE(manager_->removeNodeWithResult(source));
+            ASSERT_EQ(manager_->pasteNodes().size(), 1u);
+            check_scene_invariants(*manager_);
+        }
     }
 
     TEST_F(SceneGraphFuzzTest, MergeBakesChildWorldTransforms) {
