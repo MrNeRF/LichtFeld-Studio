@@ -25,6 +25,7 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
+#include "core/image_io.hpp"
 #include "core/parameters.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/point_cloud.hpp"
@@ -250,6 +251,138 @@ namespace lfs::python {
         params.optimization.use_exposure_correction = false;
         params.optimization.use_ppisp = use_ppisp;
         return params;
+    }
+
+    class TrainerMaskValidationTest : public ::testing::Test {
+    protected:
+        ScopedTestDirectory directory_{"lfs_trainer_mask_validation"};
+        core::Scene scene_;
+        core::NodeId cameras_ = scene_.addGroup("Cameras");
+
+        void SetUp() override {
+            scene_.addSplat("Model", make_construction_splat());
+            scene_.setTrainingModelNode("Model");
+        }
+
+        std::shared_ptr<core::Camera> add_camera(int mask_width, int mask_height, int id = 0) {
+            const auto image = directory_.path() / ("image_" + std::to_string(id) + ".png");
+            const auto mask = directory_.path() / ("mask_" + std::to_string(id) + ".png");
+            const std::vector<uint8_t> pixels(64 * 48 * 3, 255);
+            EXPECT_TRUE(core::save_png(image, pixels.data(), 64, 48, 3, 8, 1));
+            if (mask_width > 0) {
+                const std::vector<uint8_t> mask_pixels(mask_width * mask_height, 255);
+                EXPECT_TRUE(core::save_png(mask, mask_pixels.data(), mask_width, mask_height, 1, 8, 1));
+            }
+            // Camera metadata can describe the original, larger source image.
+            auto camera = std::make_shared<core::Camera>(
+                core::Tensor::eye(3, core::Device::CPU),
+                core::Tensor::zeros({3}, core::Device::CPU),
+                100.0f, 100.0f, 64.0f, 48.0f,
+                core::Tensor(), core::Tensor(), core::CameraModelType::PINHOLE,
+                image.filename().string(), image, mask, 128, 96, id);
+            scene_.addCamera(camera->image_name(), cameras_, camera);
+            return camera;
+        }
+
+        core::param::TrainingParameters parameters(core::param::MaskMode mode) {
+            auto params = make_construction_params(false, directory_.path());
+            params.optimization.mask_mode = mode;
+            params.optimization.use_alpha_as_mask = false;
+            return params;
+        }
+    };
+
+    TEST_F(TrainerMaskValidationTest, RejectsWrongWidthAndHeightBeforeTraining) {
+        auto camera = add_camera(65, 48);
+        for (const auto mode : {core::param::MaskMode::Ignore, core::param::MaskMode::Segment,
+                                core::param::MaskMode::SegmentAndIgnore, core::param::MaskMode::AlphaConsistent}) {
+            for (const auto size : {std::pair{65, 48}, std::pair{64, 49}}) {
+                SCOPED_TRACE(static_cast<int>(mode));
+                SCOPED_TRACE(size.second);
+                const std::vector<uint8_t> pixels(size.first * size.second, 255);
+                ASSERT_TRUE(core::save_png(camera->mask_path(), pixels.data(), size.first, size.second, 1, 8, 1));
+                training::Trainer trainer(scene_);
+                const auto result = trainer.initialize(parameters(mode));
+                ASSERT_FALSE(result);
+                EXPECT_NE(result.error().find("Mask 'mask_0.png' is " + std::to_string(size.first) + "x" + std::to_string(size.second)), std::string::npos);
+                EXPECT_NE(result.error().find("image 'image_0.png' is 64x48"), std::string::npos);
+                EXPECT_FALSE(trainer.isInitialized());
+            }
+        }
+    }
+
+    TEST_F(TrainerMaskValidationTest, ChecksLaterCamerasBeforeTraining) {
+        add_camera(64, 48);
+        add_camera(65, 48, 1);
+        training::Trainer trainer(scene_);
+        const auto result = trainer.initialize(parameters(core::param::MaskMode::Ignore));
+        ASSERT_FALSE(result);
+        EXPECT_NE(result.error().find("mask_1.png"), std::string::npos);
+    }
+
+    TEST_F(TrainerMaskValidationTest, ChecksHeldOutCamerasBeforeTraining) {
+        add_camera(65, 48)->set_split(core::CameraSplit::Eval);
+        add_camera(64, 48, 1);
+        training::Trainer trainer(scene_);
+        auto params = parameters(core::param::MaskMode::Ignore);
+        params.optimization.enable_eval = true;
+        params.dataset.test_every = 2;
+        const auto result = trainer.initialize(params);
+        ASSERT_FALSE(result);
+        EXPECT_NE(result.error().find("mask_0.png"), std::string::npos) << result.error();
+    }
+
+    TEST_F(TrainerMaskValidationTest, PreservesUnmaskedAlphaConsistentEvaluation) {
+        add_camera(65, 48)->set_split(core::CameraSplit::Eval);
+        add_camera(64, 48, 1);
+        training::Trainer trainer(scene_);
+        auto params = parameters(core::param::MaskMode::AlphaConsistent);
+        params.optimization.enable_eval = true;
+        const auto result = trainer.initialize(params);
+        ASSERT_TRUE(result) << result.error();
+    }
+
+    TEST_F(TrainerMaskValidationTest, AcceptsMatchingFilesWithResizeAndPartialCoverage) {
+        add_camera(64, 48);
+        add_camera(0, 0, 1);
+        training::Trainer trainer(scene_);
+        auto params = parameters(core::param::MaskMode::Ignore);
+        params.dataset.resize_factor = 2;
+        const auto result = trainer.initialize(params);
+        ASSERT_TRUE(result) << result.error();
+    }
+
+    TEST_F(TrainerMaskValidationTest, IgnoresSidecarDimensionsWhenMasksDisabled) {
+        add_camera(65, 48);
+        training::Trainer trainer(scene_);
+        const auto result = trainer.initialize(parameters(core::param::MaskMode::None));
+        ASSERT_TRUE(result) << result.error();
+    }
+
+    TEST_F(TrainerMaskValidationTest, InMemoryMaskOverridesWrongSizedSidecar) {
+        auto camera = add_camera(65, 48);
+        camera->set_mask_tensor(core::Tensor::ones({48, 64}, core::Device::CUDA));
+        training::Trainer trainer(scene_);
+        const auto result = trainer.initialize(parameters(core::param::MaskMode::Ignore));
+        ASSERT_TRUE(result) << result.error();
+    }
+
+    TEST_F(TrainerMaskValidationTest, PreservesAlphaOnlyMasks) {
+        auto camera = add_camera(0, 0);
+        camera->set_has_alpha(true);
+        training::Trainer trainer(scene_);
+        auto params = parameters(core::param::MaskMode::Ignore);
+        params.optimization.use_alpha_as_mask = true;
+        const auto result = trainer.initialize(params);
+        ASSERT_TRUE(result) << result.error();
+    }
+
+    TEST_F(TrainerMaskValidationTest, PreservesMissingMaskError) {
+        add_camera(0, 0);
+        training::Trainer trainer(scene_);
+        const auto result = trainer.initialize(parameters(core::param::MaskMode::Ignore));
+        ASSERT_FALSE(result);
+        EXPECT_NE(result.error().find("no masks found"), std::string::npos);
     }
 
     TEST(TrainerConstructionTest, EvalAppearanceHookPresentIffUsePpisp) {
