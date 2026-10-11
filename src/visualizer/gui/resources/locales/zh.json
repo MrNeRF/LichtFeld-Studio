@@ -1463,6 +1463,7 @@
     "create": "创建"
   },
   "notification": {
+    "split_view_requires_two_models": "分屏视图需要两个可见的 Splat 模型。",
     "merge_nodes_kept": "合并保留了 {} 个非 splat 节点。",
     "duplicate_training_data_skipped": "复制时已跳过训练数据（数据集、相机和图像）。",
     "dropped_not_recognized": "拖放的",

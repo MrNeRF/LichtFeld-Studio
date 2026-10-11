@@ -1463,6 +1463,7 @@
     "create": "만들기"
   },
   "notification": {
+    "split_view_requires_two_models": "분할 보기에는 표시된 스플랫 모델이 두 개 필요합니다.",
     "merge_nodes_kept": "병합 시 스플랫이 아닌 노드 {}개를 유지했습니다.",
     "duplicate_training_data_skipped": "복제 중 학습 데이터(데이터 세트, 카메라 및 이미지)는 건너뛰었습니다.",
     "dropped_not_recognized": "드롭된",

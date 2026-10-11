@@ -1463,6 +1463,7 @@
     "create": "Crea"
   },
   "notification": {
+    "split_view_requires_two_models": "La vista divisa richiede due modelli splat visibili.",
     "merge_nodes_kept": "L’unione ha mantenuto {} nodi non splat.",
     "duplicate_training_data_skipped": "I dati di addestramento (dataset, fotocamere e immagini) sono stati esclusi dalla duplicazione.",
     "dropped_not_recognized": "L'elemento trascinato",

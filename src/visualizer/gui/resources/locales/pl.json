@@ -1463,6 +1463,7 @@
     "create": "Utwórz"
   },
   "notification": {
+    "split_view_requires_two_models": "Widok podzielony wymaga dwóch widocznych modeli splatów.",
     "merge_nodes_kept": "Scalanie zachowało {} węzłów innych niż splaty.",
     "duplicate_training_data_skipped": "Dane treningowe (zbiory danych, kamery i obrazy) zostały pominięte podczas duplikowania.",
     "dropped_not_recognized": "Upuszczony",

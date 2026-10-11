@@ -1463,6 +1463,7 @@
     "create": "Maken"
   },
   "notification": {
+    "split_view_requires_two_models": "Voor de gesplitste weergave zijn twee zichtbare splatmodellen nodig.",
     "merge_nodes_kept": "Bij het samenvoegen zijn {} niet-splat-knooppunten behouden.",
     "duplicate_training_data_skipped": "Trainingsgegevens (datasets, camera’s en afbeeldingen) zijn overgeslagen bij het dupliceren.",
     "dropped_not_recognized": "Het gesleepte",
