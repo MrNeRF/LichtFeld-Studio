@@ -9,6 +9,7 @@
 #include "visualizer/app_store.hpp"
 #include "visualizer/visualizer.hpp"
 #include <algorithm>
+#include <chrono>
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
@@ -44,6 +45,27 @@ namespace lfs::vis::gui {
             bar.project_title_container_ = doc->GetElementById("project-title");
             bar.project_title_el_ = doc->GetElementById("project-title-content");
         }
+        static void fullToolbar(RmlMenuBar& bar) {
+            bar.camera_buttons_.resize(4);
+            bar.render_buttons_.resize(4);
+            bar.projection_buttons_.resize(3);
+            int index = 0;
+            for (auto* buttons : {&bar.camera_buttons_, &bar.render_buttons_, &bar.projection_buttons_}) {
+                for (auto& button : *buttons) {
+                    button.button_id = "toolbar-test-" + std::to_string(index++);
+                    button.action = "test-action";
+                }
+            }
+            for (const auto* name : {"menu_camera_buttons", "menu_render_buttons", "menu_projection_buttons"})
+                bar.menu_model_.DirtyVariable(name);
+        }
+        static void toolbarLayout(RmlMenuBar& bar, int width, float dp) {
+            bar.updateToolbarLayout(width, dp);
+        }
+        static Rml::Element* toolbarHit(const RmlMenuBar& bar, float x, float y) {
+            return bar.toolbarButtonAtPoint(x, y);
+        }
+        static float heightDp(const RmlMenuBar& bar) { return bar.bar_height_; }
         static RmlTooltipController& tooltip(RmlMenuBar& bar) { return bar.tooltip_; }
         static void portalLabel(RmlMenuBar& bar, std::string label) {
             bar.portal_connection_label_ = std::move(label);
@@ -61,7 +83,7 @@ namespace lfs::vis::gui {
         static void toolbar(RmlMenuBar& bar, bool visible, float right) {
             bar.toolbar_fits_ = visible;
             bar.applied_toolbar_right_ = right;
-            bar.menu_toolbar_->SetClass("hidden", !visible);
+            bar.menu_toolbar_->SetProperty("visibility", visible ? "visible" : "hidden");
             bar.menu_toolbar_->SetProperty("right", std::to_string(right) + "px");
         }
     };
@@ -167,6 +189,100 @@ namespace {
         lfs::vis::gui::RmlUIManager manager_;
         lfs::vis::gui::RmlMenuBar bar_;
     };
+
+    TEST_F(MenuBarTitleTest, ToolbarStaysReachableAcrossWindowSizesAndScales) {
+        bar_.updateLabels({"File", "Edit", "Select", "Tools", "View", "Help"},
+                          {"file", "edit", "select", "tools", "view", "help"});
+        RmlMenuBarTestAccess::fullToolbar(bar_);
+        for (float dp : {1.0f, 1.5f, 1.75f, 2.0f, 1.0f}) {
+            for (int width : {1920, 1600, 900, 800, 640, 1600}) {
+                SCOPED_TRACE(::testing::Message() << width << " dp=" << dp);
+                context_->SetDensityIndependentPixelRatio(dp);
+                context_->SetDimensions({width, 300});
+                RmlMenuBarTestAccess::layout(bar_, width, dp);
+                context_->Update();
+                RmlMenuBarTestAccess::toolbarLayout(bar_, width, dp);
+                context_->Update();
+                const auto toolbar = bounds(el("menu-toolbar"));
+                const auto menus = bounds(el("menu-items"));
+                const auto controls = bounds(el("menu-window-controls"));
+                EXPECT_TRUE(el("menu-toolbar")->IsVisible());
+                EXPECT_GE(menus.top, 0);
+                EXPECT_LE(menus.bottom, 30 * dp + 0.5f);
+                EXPECT_GE(controls.top, 0);
+                EXPECT_LE(controls.bottom, 30 * dp + 0.5f);
+                EXPECT_GE(toolbar.left, 0);
+                EXPECT_LE(toolbar.right, width);
+                EXPECT_LE(toolbar.bottom, RmlMenuBarTestAccess::heightDp(bar_) * dp + 0.5f);
+                EXPECT_TRUE(toolbar.top >= menus.bottom - 0.5f ||
+                            (toolbar.left >= menus.right && toolbar.right <= controls.left));
+                for (int i = 0; i < 11; ++i) {
+                    auto* button = el(("toolbar-test-" + std::to_string(i)).c_str());
+                    ASSERT_NE(button, nullptr);
+                    auto rect = bounds(button);
+                    EXPECT_TRUE(button->IsVisible());
+                    EXPECT_EQ(RmlMenuBarTestAccess::toolbarHit(bar_, (rect.left + rect.right) / 2,
+                                                               (rect.top + rect.bottom) / 2),
+                              button);
+                }
+                const auto stable = toolbar;
+                for (int frame = 0; frame < 4; ++frame) {
+                    RmlMenuBarTestAccess::toolbarLayout(bar_, width, dp);
+                    context_->Update();
+                    EXPECT_FLOAT_EQ(bounds(el("menu-toolbar")).left, stable.left);
+                    EXPECT_FLOAT_EQ(bounds(el("menu-toolbar")).top, stable.top);
+                }
+            }
+        }
+    }
+
+    TEST_F(MenuBarTitleTest, ResizeUpdatesShellHeightAndInputBeforeDrawing) {
+        bar_.updateLabels({"File", "Edit", "Select", "Tools", "View", "Help"},
+                          {"file", "edit", "select", "tools", "view", "help"});
+        RmlMenuBarTestAccess::fullToolbar(bar_);
+        context_->Update();
+        lfs::vis::gui::PanelInputState input{};
+        input.screen_w = 800;
+        input.screen_h = 600;
+        bar_.processInput(input);
+        EXPECT_FLOAT_EQ(bar_.barHeight(), 60);
+        for (int i = 0; i < 11; ++i) {
+            const auto button = bounds(el(("toolbar-test-" + std::to_string(i)).c_str()));
+            input.mouse_x = (button.left + button.right) / 2;
+            input.mouse_y = (button.top + button.bottom) / 2;
+            bar_.processInput(input);
+            EXPECT_TRUE(bar_.wantsInput());
+        }
+        input.screen_w = 1600;
+        bar_.processInput(input);
+        EXPECT_FLOAT_EQ(bar_.barHeight(), 30);
+    }
+
+    TEST_F(MenuBarTitleTest, WideToolbarKeepsOriginalPlacementAndUpdateCost) {
+        RmlMenuBarTestAccess::fullToolbar(bar_);
+        resize(1600);
+        const float menus_right = bounds(el("menu-items")).right;
+        const float toolbar_width = el("menu-toolbar")->GetOffsetWidth();
+        const float min_right = 1600 - bounds(el("menu-window-controls")).left + 4;
+        for (float viewport_edge : {0.0f, 1200.0f, 1550.0f}) {
+            bar_.setViewportRightEdge(viewport_edge);
+            const float expected_right = std::min(std::max(min_right, viewport_edge > 0 ? 1600 - viewport_edge + 8 : min_right),
+                                                  1600 - toolbar_width - menus_right - 12);
+            RmlMenuBarTestAccess::toolbarLayout(bar_, 1600, 1);
+            context_->Update();
+            EXPECT_FLOAT_EQ(bounds(el("menu-toolbar")).right, 1600 - expected_right);
+            EXPECT_FLOAT_EQ(bounds(el("menu-toolbar")).top, 0);
+            EXPECT_FLOAT_EQ(RmlMenuBarTestAccess::heightDp(bar_), 30);
+        }
+        constexpr int iterations = 100000;
+        for (int sample = 0; sample < 5; ++sample) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < iterations; ++i)
+                RmlMenuBarTestAccess::toolbarLayout(bar_, 1600, 1);
+            const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+            std::cout << "toolbar layout ns/update: " << double(ns) / iterations << '\n';
+        }
+    }
 
     TEST_F(MenuBarTitleTest, HiddenToolbarKeepsItsWidthAcrossScaleChanges) {
         resize(1600, 1.0f, true);
