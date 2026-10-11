@@ -11,6 +11,7 @@
 #include "nvcodec_image_loader.hpp"
 #include "video/color_convert.cuh"
 #include "video/cuda_frame_handoff.hpp"
+#include "video/frame_color_range.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -263,8 +264,11 @@ namespace lfs::io {
                 while (true) {
                     av_frame_unref(frame);
                     const int receive_result = avcodec_receive_frame(codec_context_, frame);
-                    if (receive_result == 0)
+                    if (receive_result == 0) {
+                        video::restoreCuvidFullRange(frame, codec_context_,
+                                                     format_context_->streams[stream_index_]->codecpar);
                         return DecoderPumpResult::Frame;
+                    }
                     if (receive_result == AVERROR_EOF)
                         return DecoderPumpResult::EndOfStream;
                     if (receive_result != AVERROR(EAGAIN)) {
@@ -1645,7 +1649,10 @@ namespace lfs::io {
                         const int uv_pitch = hw_frame->linesize[1];
 
                         video::nv12ToRgbCuda(y_plane, uv_plane, gpu_rgb_buffer,
-                                             src_width, src_height, y_pitch, uv_pitch, nullptr);
+                                             src_width, src_height, y_pitch, uv_pitch, nullptr,
+                                             hw_frame->color_range == AVCOL_RANGE_JPEG ||
+                                                 (hw_frame->color_range == AVCOL_RANGE_UNSPECIFIED &&
+                                                  source_range == AVCOL_RANGE_JPEG));
                         requireCudaSuccess(cudaGetLastError(),
                                            "CUDA NV12-to-RGB conversion failed");
 
