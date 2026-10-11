@@ -78,15 +78,38 @@ namespace lfs::io {
             return mat;
         }
 
-        MeshData convert_ai_mesh(const aiMesh* ai_mesh, const bool geometry_only) {
+        MeshData convert_ai_mesh(const aiMesh* ai_mesh, const bool geometry_only,
+                                 const aiMatrix4x4& transform) {
             assert(ai_mesh);
             const int nv = static_cast<int>(ai_mesh->mNumVertices);
             assert(nv > 0);
 
+            const bool transform_positions = transform != aiMatrix4x4();
+            const aiMatrix3x3 linear(transform);
+            const bool transform_directions = linear != aiMatrix3x3();
+            const float determinant = linear.Determinant();
+            const bool mirrored = determinant < 0.0f;
+            const bool singular = determinant == 0.0f;
+            aiMatrix3x3 normal_transform;
+            if (!singular) {
+                normal_transform = aiMatrix3x3(linear).Inverse().Transpose();
+            } else {
+                // Cofactor columns transform oriented areas even when no inverse exists.
+                const aiVector3D x(linear.a1, linear.b1, linear.c1);
+                const aiVector3D y(linear.a2, linear.b2, linear.c2);
+                const aiVector3D z(linear.a3, linear.b3, linear.c3);
+                const auto cx = y ^ z;
+                const auto cy = z ^ x;
+                const auto cz = x ^ y;
+                normal_transform = aiMatrix3x3(cx.x, cy.x, cz.x,
+                                               cx.y, cy.y, cz.y,
+                                               cx.z, cy.z, cz.z);
+            }
+
             auto vertices = Tensor::empty({static_cast<size_t>(nv), size_t{3}}, Device::CPU, DataType::Float32);
             auto vacc = vertices.accessor<float, 2>();
             for (int i = 0; i < nv; ++i) {
-                const auto& v = ai_mesh->mVertices[i];
+                const auto v = transform_positions ? transform * ai_mesh->mVertices[i] : ai_mesh->mVertices[i];
                 vacc(i, 0) = v.x;
                 vacc(i, 1) = v.y;
                 vacc(i, 2) = v.z;
@@ -111,19 +134,48 @@ namespace lfs::io {
                 if (face.mNumIndices != 3)
                     continue;
                 iacc(ti, 0) = static_cast<int32_t>(face.mIndices[0]);
-                iacc(ti, 1) = static_cast<int32_t>(face.mIndices[1]);
-                iacc(ti, 2) = static_cast<int32_t>(face.mIndices[2]);
+                iacc(ti, 1) = static_cast<int32_t>(face.mIndices[mirrored ? 2 : 1]);
+                iacc(ti, 2) = static_cast<int32_t>(face.mIndices[mirrored ? 1 : 2]);
                 ++ti;
             }
             assert(ti == tri_count);
 
             MeshData mesh(std::move(vertices), std::move(indices));
 
+            // Only build geometric fallbacks if a singular transform erases a normal.
+            std::vector<aiVector3D> geometric_normals;
+            const auto geometric_normal = [&](const int vertex) {
+                if (geometric_normals.empty()) {
+                    geometric_normals.resize(nv);
+                    for (int face = 0; face < tri_count; ++face) {
+                        const auto a = iacc(face, 0);
+                        const auto b = iacc(face, 1);
+                        const auto c = iacc(face, 2);
+                        const aiVector3D p(vacc(a, 0), vacc(a, 1), vacc(a, 2));
+                        const aiVector3D q(vacc(b, 0), vacc(b, 1), vacc(b, 2));
+                        const aiVector3D r(vacc(c, 0), vacc(c, 1), vacc(c, 2));
+                        const auto normal = (q - p) ^ (r - p);
+                        for (const auto index : {a, b, c}) {
+                            if (geometric_normals[index].SquareLength() == 0.0f)
+                                geometric_normals[index] = normal;
+                        }
+                    }
+                }
+                return geometric_normals[vertex];
+            };
+
             if (!geometry_only && ai_mesh->HasNormals()) {
                 mesh.normals = Tensor::empty({static_cast<size_t>(nv), size_t{3}}, Device::CPU, DataType::Float32);
                 auto nacc = mesh.normals.accessor<float, 2>();
                 for (int i = 0; i < nv; ++i) {
-                    const auto& n = ai_mesh->mNormals[i];
+                    auto n = transform_directions ? normal_transform * ai_mesh->mNormals[i] : ai_mesh->mNormals[i];
+                    if (singular && n.SquareLength() == 0.0f) {
+                        n = geometric_normal(i);
+                        if (n.SquareLength() == 0.0f)
+                            n = ai_mesh->mNormals[i];
+                    }
+                    if (transform_directions)
+                        n.NormalizeSafe();
                     nacc(i, 0) = n.x;
                     nacc(i, 1) = n.y;
                     nacc(i, 2) = n.z;
@@ -133,15 +185,32 @@ namespace lfs::io {
             if (!geometry_only && ai_mesh->HasTangentsAndBitangents()) {
                 mesh.tangents = Tensor::empty({static_cast<size_t>(nv), size_t{4}}, Device::CPU, DataType::Float32);
                 auto tacc = mesh.tangents.accessor<float, 2>();
+                const auto* normals = mesh.normals.ptr<float>();
                 for (int i = 0; i < nv; ++i) {
-                    const auto& t = ai_mesh->mTangents[i];
-                    const auto& b = ai_mesh->mBitangents[i];
-                    const auto& n = ai_mesh->mNormals[i];
-                    const float handedness = (n.x * (t.y * b.z - t.z * b.y) -
-                                              n.y * (t.x * b.z - t.z * b.x) +
-                                              n.z * (t.x * b.y - t.y * b.x)) < 0.0f
-                                                 ? -1.0f
-                                                 : 1.0f;
+                    auto t = transform_directions ? (linear * ai_mesh->mTangents[i]).NormalizeSafe() : ai_mesh->mTangents[i];
+                    auto b = transform_directions ? (linear * ai_mesh->mBitangents[i]).NormalizeSafe() : ai_mesh->mBitangents[i];
+                    const aiVector3D n(normals[3 * i], normals[3 * i + 1], normals[3 * i + 2]);
+                    if (singular) {
+                        const float orientation = (ai_mesh->mNormals[i] * (ai_mesh->mTangents[i] ^ ai_mesh->mBitangents[i])) < 0.0f ? -1.0f : 1.0f;
+                        if (t.SquareLength() == 0.0f) {
+                            t = geometric_normal(i).SquareLength() != 0.0f ? (b ^ n) * orientation : ai_mesh->mTangents[i];
+                            if (t.SquareLength() == 0.0f)
+                                t = ai_mesh->mTangents[i];
+                            t.NormalizeSafe();
+                        }
+                        if (b.SquareLength() == 0.0f) {
+                            b = geometric_normal(i).SquareLength() != 0.0f ? (n ^ t) * orientation : ai_mesh->mBitangents[i];
+                            if (b.SquareLength() == 0.0f)
+                                b = ai_mesh->mBitangents[i];
+                            b.NormalizeSafe();
+                        }
+                    }
+                    float orientation = n.x * (t.y * b.z - t.z * b.y) -
+                                        n.y * (t.x * b.z - t.z * b.x) +
+                                        n.z * (t.x * b.y - t.y * b.x);
+                    if (singular && orientation == 0.0f)
+                        orientation = ai_mesh->mNormals[i] * (ai_mesh->mTangents[i] ^ ai_mesh->mBitangents[i]);
+                    const float handedness = orientation < 0.0f ? -1.0f : 1.0f;
                     tacc(i, 0) = t.x;
                     tacc(i, 1) = t.y;
                     tacc(i, 2) = t.z;
@@ -370,12 +439,31 @@ namespace lfs::io {
         std::vector<unsigned int> mesh_material_indices;
         sub_meshes.reserve(scene->mNumMeshes);
         mesh_material_indices.reserve(scene->mNumMeshes);
-        for (unsigned int i = 0; i < scene->mNumMeshes; ++i) {
-            sub_meshes.push_back(convert_ai_mesh(scene->mMeshes[i], options.mesh_geometry_only));
+        const auto append_mesh = [&](const unsigned int i, const aiMatrix4x4& transform) {
+            sub_meshes.push_back(convert_ai_mesh(scene->mMeshes[i], options.mesh_geometry_only, transform));
             mesh_material_indices.push_back(scene->mMeshes[i]->mMaterialIndex);
             LOG_DEBUG("  mesh[{}]: {} verts, {} faces, material_index={}",
                       i, scene->mMeshes[i]->mNumVertices, scene->mMeshes[i]->mNumFaces,
                       scene->mMeshes[i]->mMaterialIndex);
+        };
+        if (options.mesh_geometry_only) {
+            // This path already uses Assimp's pre-transformed geometry.
+            for (unsigned int i = 0; i < scene->mNumMeshes; ++i) {
+                append_mesh(i, aiMatrix4x4());
+            }
+        } else {
+            // Mesh definitions may be referenced by several nodes. Bake every
+            // instance's accumulated placement into the merged mesh.
+            const auto visit = [&](auto&& self, const aiNode* node, const aiMatrix4x4& parent) -> void {
+                const aiMatrix4x4 world = parent * node->mTransformation;
+                for (unsigned int i = 0; i < node->mNumMeshes; ++i) {
+                    append_mesh(node->mMeshes[i], world);
+                }
+                for (unsigned int i = 0; i < node->mNumChildren; ++i) {
+                    self(self, node->mChildren[i], world);
+                }
+            };
+            visit(visit, scene->mRootNode, aiMatrix4x4());
         }
 
         if (options.progress) {

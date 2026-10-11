@@ -16,6 +16,7 @@
 #include <fstream>
 #include <glm/gtc/quaternion.hpp>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <variant>
 
 using namespace lfs::core;
@@ -41,6 +42,65 @@ namespace {
         }
 
         void TearDown() override { std::filesystem::remove_all(temp_dir_); }
+
+        std::filesystem::path write_scene(const nlohmann::json& nodes, bool two_materials = false) {
+            const std::array<float, 36> attributes{
+                0, 0, 0, 1, 0, 1, 0, 1, 1,
+                -0.577350269f, -0.577350269f, 0.577350269f,
+                -0.577350269f, -0.577350269f, 0.577350269f,
+                -0.577350269f, -0.577350269f, 0.577350269f,
+                0, 0, 1, 0, 0, 1,
+                1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1};
+            const std::array<uint16_t, 3> indices{0, 1, 2};
+            std::ofstream binary(temp_dir_ / "scene.bin", std::ios::binary);
+            binary.write(reinterpret_cast<const char*>(attributes.data()), sizeof(attributes));
+            binary.write(reinterpret_cast<const char*>(indices.data()), sizeof(indices));
+            binary.close();
+            auto scene = nlohmann::json::parse(R"({
+                "asset":{"version":"2.0"},
+                "buffers":[{"uri":"scene.bin","byteLength":150}],
+                "bufferViews":[
+                    {"buffer":0,"byteOffset":0,"byteLength":36},
+                    {"buffer":0,"byteOffset":36,"byteLength":36},
+                    {"buffer":0,"byteOffset":72,"byteLength":24},
+                    {"buffer":0,"byteOffset":96,"byteLength":48},
+                    {"buffer":0,"byteOffset":144,"byteLength":6}],
+                "accessors":[
+                    {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,1]},
+                    {"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},
+                    {"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},
+                    {"bufferView":3,"componentType":5126,"count":3,"type":"VEC4"},
+                    {"bufferView":4,"componentType":5123,"count":3,"type":"SCALAR"}],
+                "materials":[{"name":"red","pbrMetallicRoughness":{"baseColorFactor":[1,0,0,1]}},
+                             {"name":"blue","pbrMetallicRoughness":{"baseColorFactor":[0,0,1,1]}}],
+                "meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2,"COLOR_0":3},"indices":4,"material":0}]}],
+                "scenes":[{"nodes":[0]}],"scene":0})");
+            scene["nodes"] = nodes;
+            if (two_materials) {
+                auto primitive = scene["meshes"][0]["primitives"][0];
+                primitive["material"] = 1;
+                scene["meshes"][0]["primitives"].push_back(primitive);
+            }
+            const auto path = temp_dir_ / "scene.gltf";
+            std::ofstream(path) << scene.dump();
+            return path;
+        }
+
+        std::filesystem::path write_planar_scene(const nlohmann::json& nodes,
+                                                 const glm::vec3 normal = {0, 0, 1}) {
+            const auto path = write_scene(nodes);
+            const std::array<float, 18> attributes{
+                0, 0, 0, 1, 0, 0, 0, 1, 0,
+                normal.x, normal.y, normal.z,
+                normal.x, normal.y, normal.z,
+                normal.x, normal.y, normal.z};
+            std::fstream binary(temp_dir_ / "scene.bin", std::ios::in | std::ios::out | std::ios::binary);
+            binary.write(reinterpret_cast<const char*>(attributes.data()), sizeof(attributes));
+            auto scene = nlohmann::json::parse(std::ifstream(path));
+            scene["accessors"][0]["max"] = {1, 1, 0};
+            std::ofstream(path) << scene.dump();
+            return path;
+        }
 
         lfs::io::MeshLoader loader_;
         std::filesystem::path temp_dir_;
@@ -99,7 +159,7 @@ TEST_F(MeshLoaderTest, MissingFileReturnsError) {
     EXPECT_FALSE(loader_.load(temp_dir_ / "missing.obj").has_value());
 }
 
-// Catches changing default GUI imports or retaining render-only data in geometry-only loads.
+// Both import modes bake placement; geometry-only loads omit render attributes.
 TEST_F(MeshLoaderTest, GeometryOnlyBakesNodeTransformAndSkipsRenderAttributes) {
     const auto gltf_path = temp_dir_ / "transformed.gltf";
     const auto bin_path = temp_dir_ / "transformed.bin";
@@ -143,7 +203,7 @@ TEST_F(MeshLoaderTest, GeometryOnlyBakesNodeTransformAndSkipsRenderAttributes) {
     EXPECT_TRUE((*normal_mesh)->has_normals());
     EXPECT_TRUE((*normal_mesh)->has_texcoords());
     auto normal_vertices = (*normal_mesh)->vertices.accessor<float, 2>();
-    EXPECT_NEAR(normal_vertices(0, 0), 0.0f, 1e-6f);
+    EXPECT_NEAR(normal_vertices(0, 0), 3.0f, 1e-6f);
 
     lfs::io::LoadOptions options;
     options.mesh_geometry_only = true;
@@ -230,4 +290,198 @@ TEST_F(MeshLoaderTest, MeshToSplatPreservesCoordinatesThroughPlyExport) {
             ASSERT_NEAR(std::abs(glm::dot(thin_axis, normal)), 1.0f, 2e-5f);
         }
     }
+}
+
+TEST_F(MeshLoaderTest, ImportsNestedInstancesWithParentTransform) {
+    const auto path = write_scene(nlohmann::json::parse(R"([
+        {"translation":[0,2,0],"children":[1,2]},
+        {"mesh":0,"translation":[3,0,0]},
+        {"mesh":0,"translation":[-3,0,0],"scale":[0.5,0.5,0.5]}])"));
+    for (const bool geometry_only : {false, true}) {
+        SCOPED_TRACE(geometry_only);
+        lfs::io::LoadOptions options;
+        options.mesh_geometry_only = geometry_only;
+        const auto result = loader_.load(path, options);
+        ASSERT_TRUE(result.has_value());
+        const auto mesh = std::get<std::shared_ptr<MeshData>>(result->data);
+        ASSERT_EQ(mesh->vertex_count(), 6);
+        ASSERT_EQ(mesh->face_count(), 2);
+        auto vertices = mesh->vertices.accessor<float, 2>();
+        const std::array<std::array<float, 3>, 6> expected{{{3, 2, 0}, {4, 2, 1}, {3, 3, 1}, {-3, 2, 0}, {-2.5, 2, 0.5}, {-3, 2.5, 0.5}}};
+        for (int i = 0; i < 6; ++i)
+            for (int axis = 0; axis < 3; ++axis)
+                EXPECT_FLOAT_EQ(vertices(i, axis), expected[i][axis]);
+        auto indices = mesh->indices.accessor<int32_t, 2>();
+        for (int face = 0; face < 2; ++face)
+            for (int corner = 0; corner < 3; ++corner)
+                EXPECT_EQ(indices(face, corner), face * 3 + corner);
+    }
+}
+
+TEST_F(MeshLoaderTest, ImportsEveryCoincidentInstance) {
+    const auto path = write_scene(nlohmann::json::parse(R"([
+        {"children":[1,2]},{"mesh":0},{"mesh":0}])"));
+    const auto result = loader_.load(path);
+    ASSERT_TRUE(result.has_value());
+    const auto mesh = std::get<std::shared_ptr<MeshData>>(result->data);
+    EXPECT_EQ(mesh->vertex_count(), 6);
+    EXPECT_EQ(mesh->face_count(), 2);
+    ASSERT_EQ(mesh->submeshes.size(), 2);
+    EXPECT_EQ(mesh->submeshes[0].material_index, mesh->submeshes[1].material_index);
+}
+
+TEST_F(MeshLoaderTest, ImportsMatrixRotationScaleAndReflectionWithShadingFrame) {
+    for (const float scale_x : {2.0f, -2.0f}) {
+        SCOPED_TRACE(scale_x);
+        const auto identity_path = write_scene(nlohmann::json::parse(R"([{"mesh":0}])"));
+        const auto identity_result = loader_.load(identity_path);
+        ASSERT_TRUE(identity_result.has_value());
+        const auto identity = std::get<std::shared_ptr<MeshData>>(identity_result->data);
+        auto nodes = nlohmann::json::parse(R"([
+            {"matrix":[0,1,0,0,-1,0,0,0,0,0,1,0,3,4,5,1],"children":[1]},
+            {"mesh":0,"scale":[2,3,4]}])");
+        nodes[1]["scale"][0] = scale_x;
+        const auto result = loader_.load(write_scene(nodes));
+        ASSERT_TRUE(result.has_value());
+        const auto mesh = std::get<std::shared_ptr<MeshData>>(result->data);
+        ASSERT_EQ(mesh->vertex_count(), 3);
+        ASSERT_TRUE(mesh->has_normals());
+        ASSERT_TRUE(mesh->has_tangents());
+        auto vertices = mesh->vertices.accessor<float, 2>();
+        auto normals = mesh->normals.accessor<float, 2>();
+        auto tangents = mesh->tangents.accessor<float, 2>();
+        auto old_vertices = identity->vertices.accessor<float, 2>();
+        auto old_normals = identity->normals.accessor<float, 2>();
+        auto old_tangents = identity->tangents.accessor<float, 2>();
+        for (int i = 0; i < 3; ++i) {
+            const glm::vec3 expected_position(3 - 3 * old_vertices(i, 1),
+                                              4 + scale_x * old_vertices(i, 0), 5 + 4 * old_vertices(i, 2));
+            const auto expected_normal = glm::normalize(glm::vec3(-old_normals(i, 1) / 3,
+                                                                  old_normals(i, 0) / scale_x, old_normals(i, 2) / 4));
+            const auto expected_tangent = glm::normalize(glm::vec3(-3 * old_tangents(i, 1),
+                                                                   scale_x * old_tangents(i, 0), 4 * old_tangents(i, 2)));
+            for (int axis = 0; axis < 3; ++axis) {
+                EXPECT_NEAR(vertices(i, axis), expected_position[axis], 1e-5f);
+                EXPECT_NEAR(normals(i, axis), expected_normal[axis], 1e-5f);
+                EXPECT_NEAR(tangents(i, axis), expected_tangent[axis], 1e-5f);
+            }
+            EXPECT_FLOAT_EQ(tangents(i, 3), old_tangents(i, 3) * (scale_x < 0 ? -1 : 1));
+        }
+        auto indices = mesh->indices.accessor<int32_t, 2>();
+        const glm::vec3 a(vertices(indices(0, 0), 0), vertices(indices(0, 0), 1), vertices(indices(0, 0), 2));
+        const glm::vec3 b(vertices(indices(0, 1), 0), vertices(indices(0, 1), 1), vertices(indices(0, 1), 2));
+        const glm::vec3 c(vertices(indices(0, 2), 0), vertices(indices(0, 2), 1), vertices(indices(0, 2), 2));
+        EXPECT_GT(glm::dot(glm::cross(b - a, c - a), glm::vec3(normals(0, 0), normals(0, 1), normals(0, 2))), 0);
+    }
+}
+
+TEST_F(MeshLoaderTest, PlanarZeroScalePreservesShadingFrame) {
+    // The rotated case exercises off-diagonal cofactors as well as a collapsed axis.
+    for (const bool rotated : {false, true}) {
+        SCOPED_TRACE(rotated);
+        auto nodes = nlohmann::json::parse(R"([{"mesh":0,"scale":[1,1,0]}])");
+        if (rotated)
+            nodes[0] = nlohmann::json::parse(R"({"mesh":0,"matrix":[2,0,0,0,0,0,3,0,0,0,0,0,0,0,0,1]})");
+        const auto result = loader_.load(write_planar_scene(nodes));
+        ASSERT_TRUE(result.has_value());
+        const auto mesh = std::get<std::shared_ptr<MeshData>>(result->data);
+        ASSERT_EQ(mesh->vertex_count(), 3);
+        ASSERT_EQ(mesh->face_count(), 1);
+        ASSERT_TRUE(mesh->has_normals());
+        ASSERT_TRUE(mesh->has_tangents());
+        auto vertices = mesh->vertices.accessor<float, 2>();
+        auto normals = mesh->normals.accessor<float, 2>();
+        auto tangents = mesh->tangents.accessor<float, 2>();
+        for (int i = 0; i < 3; ++i) {
+            const glm::vec3 expected_position(i == 1 ? (rotated ? 2 : 1) : 0, !rotated && i == 2 ? 1 : 0,
+                                              rotated && i == 2 ? 3 : 0);
+            const glm::vec3 expected_normal = rotated ? glm::vec3(0, -1, 0) : glm::vec3(0, 0, 1);
+            for (int axis = 0; axis < 3; ++axis) {
+                EXPECT_FLOAT_EQ(vertices(i, axis), expected_position[axis]);
+                EXPECT_NEAR(normals(i, axis), expected_normal[axis], 1e-6f);
+                EXPECT_NEAR(tangents(i, axis), axis == 0 ? 1.0f : 0.0f, 1e-6f);
+            }
+        }
+    }
+}
+
+TEST_F(MeshLoaderTest, SingularNormalFallsBackToTransformedFace) {
+    const auto nodes = nlohmann::json::parse(R"([{"mesh":0,"scale":[1,1,0]}])");
+    const auto result = loader_.load(write_planar_scene(nodes, {1, 0, 0}));
+    ASSERT_TRUE(result.has_value());
+    const auto mesh = std::get<std::shared_ptr<MeshData>>(result->data);
+    ASSERT_TRUE(mesh->has_normals());
+    auto normals = mesh->normals.accessor<float, 2>();
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_FLOAT_EQ(normals(i, 0), 0);
+        EXPECT_FLOAT_EQ(normals(i, 1), 0);
+        EXPECT_FLOAT_EQ(normals(i, 2), 1);
+    }
+}
+
+TEST_F(MeshLoaderTest, DegenerateZeroScaleKeepsOriginalShadingDirections) {
+    const auto cases = nlohmann::json::parse(R"([
+        [{"mesh":0,"scale":[0,0,0]}],
+        [{"mesh":0,"scale":[0,1,0]}],
+        [{"mesh":0,"matrix":[1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,1]}]
+    ])");
+    for (const auto& nodes : cases) {
+        SCOPED_TRACE(nodes.dump());
+        const auto result = loader_.load(write_planar_scene(nodes));
+        ASSERT_TRUE(result.has_value());
+        const auto mesh = std::get<std::shared_ptr<MeshData>>(result->data);
+        ASSERT_TRUE(mesh->has_normals());
+        ASSERT_TRUE(mesh->has_tangents());
+        auto normals = mesh->normals.accessor<float, 2>();
+        auto tangents = mesh->tangents.accessor<float, 2>();
+        for (int i = 0; i < 3; ++i) {
+            for (int axis = 0; axis < 3; ++axis) {
+                EXPECT_FLOAT_EQ(normals(i, axis), axis == 2 ? 1 : 0);
+                EXPECT_FLOAT_EQ(tangents(i, axis), axis == 0 ? 1 : 0);
+            }
+            EXPECT_FLOAT_EQ(tangents(i, 3), -1);
+        }
+    }
+}
+
+TEST_F(MeshLoaderTest, IdentityImportPreservesAttributesAndMaterialRanges) {
+    const auto result = loader_.load(write_scene(nlohmann::json::parse(R"([{"mesh":0}])"), true));
+    ASSERT_TRUE(result.has_value());
+    const auto mesh = std::get<std::shared_ptr<MeshData>>(result->data);
+    ASSERT_EQ(mesh->vertex_count(), 6);
+    ASSERT_EQ(mesh->face_count(), 2);
+    ASSERT_TRUE(mesh->has_normals());
+    ASSERT_TRUE(mesh->has_tangents());
+    ASSERT_TRUE(mesh->has_texcoords());
+    ASSERT_TRUE(mesh->has_colors());
+    ASSERT_EQ(mesh->submeshes.size(), 2);
+    for (int part = 0; part < 2; ++part) {
+        const auto& submesh = mesh->submeshes[part];
+        EXPECT_EQ(submesh.start_index, part * 3);
+        EXPECT_EQ(submesh.index_count, 3);
+        ASSERT_LT(submesh.material_index, mesh->materials.size());
+        EXPECT_EQ(mesh->materials[submesh.material_index].name, part == 0 ? "red" : "blue");
+        auto vertices = mesh->vertices.accessor<float, 2>();
+        auto indices = mesh->indices.accessor<int32_t, 2>();
+        auto colors = mesh->colors.accessor<float, 2>();
+        auto uv = mesh->texcoords.accessor<float, 2>();
+        for (int i = 0; i < 3; ++i) {
+            EXPECT_EQ(indices(part, i), part * 3 + i);
+            EXPECT_FLOAT_EQ(vertices(part * 3 + i, 0), i == 1 ? 1 : 0);
+            EXPECT_FLOAT_EQ(vertices(part * 3 + i, 1), i == 2 ? 1 : 0);
+            EXPECT_FLOAT_EQ(vertices(part * 3 + i, 2), i == 0 ? 0 : 1);
+            EXPECT_FLOAT_EQ(uv(part * 3 + i, 0), i == 1 ? 1 : 0);
+            EXPECT_FLOAT_EQ(uv(part * 3 + i, 1), i == 2 ? 1 : 0);
+            for (int channel = 0; channel < 4; ++channel)
+                EXPECT_FLOAT_EQ(colors(part * 3 + i, channel), channel == i || channel == 3 ? 1 : 0);
+        }
+    }
+}
+
+TEST_F(MeshLoaderTest, AppliesSmallNodeTranslations) {
+    const auto result = loader_.load(write_scene(nlohmann::json::parse(R"([{"mesh":0,"translation":[0.0001,0,0]}])")));
+    ASSERT_TRUE(result.has_value());
+    const auto mesh = std::get<std::shared_ptr<MeshData>>(result->data);
+    auto vertices = mesh->vertices.accessor<float, 2>();
+    EXPECT_NEAR(vertices(0, 0), 0.0001f, 1e-8f);
 }
