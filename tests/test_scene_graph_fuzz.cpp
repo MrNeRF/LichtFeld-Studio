@@ -243,6 +243,13 @@ namespace {
             lfs::event::EventBridge::instance().clear_all();
         }
 
+        void reseed_if_empty(const size_t undo_count, const size_t redo_count) {
+            // Direct reseeding changes topology outside history. Keep an empty
+            // scene intact while the model can still replay undo or redo.
+            if (manager_->getScene().getNodes().empty() && undo_count == 0 && redo_count == 0)
+                seed_scene();
+        }
+
         void seed_scene() {
             auto& scene = manager_->getScene();
             const NodeId left = scene.addGroup("left");
@@ -492,6 +499,53 @@ namespace {
 
         ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
         EXPECT_TRUE(scene.getNodeById(a)->visible);
+    }
+
+    TEST_F(SceneGraphFuzzTest, EmptySceneReseedPreservesPendingUndoAndRedo) {
+        auto& scene = manager_->getScene();
+        auto& history = lfs::vis::op::undoHistory();
+        const auto options = lfs::vis::op::SceneGraphCaptureOptions{
+            .mode = lfs::vis::op::SceneGraphCaptureMode::FULL,
+            .include_selected_nodes = false,
+            .include_scene_context = false,
+        };
+        auto before = lfs::vis::op::SceneGraphPatchEntry::captureStateByIds(
+            *manager_, scene.getRootNodes(), options);
+        const auto group = scene.addGroup("empty group");
+        const auto uuid = scene.getNodeById(group)->uuid;
+        auto after = lfs::vis::op::SceneGraphPatchEntry::captureStateByIds(
+            *manager_, scene.getRootNodes(), options);
+        history.push(std::make_unique<lfs::vis::op::SceneGraphPatchEntry>(
+            *manager_, "Create empty group", std::move(before), std::move(after)));
+        ASSERT_TRUE(manager_->ungroupNode(group));
+        ASSERT_EQ(scene.getNodeCount(), 0u);
+        ASSERT_EQ(history.undoCount(), 2u);
+        ASSERT_EQ(history.redoCount(), 0u);
+        const auto empty = scene_state(*manager_, false);
+
+        reseed_if_empty(history.undoCount(), history.redoCount());
+        ASSERT_EQ(scene_state(*manager_, false), empty);
+        ASSERT_TRUE(history.undo().success);
+        ASSERT_NE(scene.getNodeByUuid(uuid), nullptr);
+        ASSERT_TRUE(history.undo().success);
+        ASSERT_EQ(scene.getNodeCount(), 0u);
+        ASSERT_EQ(history.undoCount(), 0u);
+        ASSERT_EQ(history.redoCount(), 2u);
+
+        reseed_if_empty(history.undoCount(), history.redoCount());
+        ASSERT_EQ(scene_state(*manager_, false), empty);
+        ASSERT_TRUE(history.redo().success);
+        ASSERT_NE(scene.getNodeByUuid(uuid), nullptr);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_EQ(scene_state(*manager_, false), empty);
+        check_scene_invariants(*manager_);
+
+        history.clear();
+        reseed_if_empty(history.undoCount(), history.redoCount());
+        EXPECT_GT(scene.getNodeCount(), 0u);
+        EXPECT_EQ(history.undoCount(), 0u);
+        EXPECT_EQ(history.redoCount(), 0u);
+        check_scene_invariants(*manager_);
     }
 
     TEST_F(SceneGraphFuzzTest, UngroupLastEmptyGroupSupportsRepeatedUndoRedo) {
@@ -989,12 +1043,8 @@ namespace {
 
             for (int operation = 0; operation < operations_per_seed; ++operation) {
                 auto nodes = manager_->getScene().getNodes();
-                // Direct reseeding changes topology outside history. Keep an empty
-                // scene intact while the model can still replay undo or redo.
-                if (nodes.empty() && undo_frames.empty() && redo_frames.empty()) {
-                    seed_scene();
-                    nodes = manager_->getScene().getNodes();
-                }
+                reseed_if_empty(undo_frames.size(), redo_frames.size());
+                nodes = manager_->getScene().getNodes();
                 const auto pick = [&](const bool group_only = false) -> const lfs::core::SceneNode* {
                     std::vector<const lfs::core::SceneNode*> candidates;
                     for (const auto* node : nodes)
