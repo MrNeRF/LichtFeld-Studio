@@ -400,12 +400,14 @@ body {
 
 .fps-number {
     min-width: 1.8em;
-    text-align: left;
-    font-weight: bold;
+    text-align: right;
+    font-weight: normal;
 }
 
 #fps-label {
     font-size: 12dp;
+    font-weight: bold;
+    margin-right: 2dp;
 }
 
 #git-commit {

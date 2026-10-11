@@ -2085,6 +2085,8 @@
     "strategy_default": "默认",
     "split": "分割：",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "每秒显示的界面帧数。",
+    "view_fps_tooltip": "每秒渲染的3D视图帧数。静止视图可能显示为0，此时界面仍可正常响应。",
     "ui": "界面",
     "view": "视图"
   },

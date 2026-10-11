@@ -499,6 +499,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlStatusBar::shutdown() {
+        tooltip_ = {};
         if (document_registered_)
             lfs::python::unregister_rml_document("status_bar");
         document_registered_ = false;
@@ -535,6 +536,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlStatusBar::reloadResources() {
+        tooltip_ = {};
         if (!rml_context_)
             return;
 
@@ -1632,11 +1634,14 @@ namespace lfs::vis::gui {
                           bar_y - overlay_height - input.screen_y);
         const float local_x = input.mouse_x - bar_x;
         const float local_y = input.mouse_y - (bar_y - overlay_height);
+        tooltip_mouse_x_ = static_cast<int>(local_x);
+        tooltip_mouse_y_ = static_cast<int>(input.mouse_y - bar_y);
         const bool is_inside = local_x >= 0.0f && local_x < bar_w &&
                                local_y >= 0.0f && local_y < bar_h + overlay_height;
         if (!is_inside && !input.mouse_released[0] && !input.mouse_released[1] &&
             !save_step_interaction_.dragging) {
             clearSaveStepHover();
+            clearTooltip();
             return;
         }
 
@@ -1645,6 +1650,9 @@ namespace lfs::vis::gui {
         const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
                                       input.key_alt, input.key_super);
         rml_context_->ProcessMouseMove(static_cast<int>(local_x), static_cast<int>(local_y), mods);
+        auto* hover = rml_context_->GetHoverElement();
+        tooltip_.setHover(is_inside ? resolveRmlTooltip(hover) : std::string{},
+                          is_inside ? hover : nullptr);
 
         if (is_inside && input.mouse_clicked[0])
             rml_context_->ProcessMouseButtonDown(0, mods);
@@ -1658,7 +1666,7 @@ namespace lfs::vis::gui {
 
     float RmlStatusBar::overlayHeight() const {
         if (!model_.mcp_details_expanded)
-            return 0.0f;
+            return tooltip_.hasActiveState() ? tooltip_overlay_height_ : 0.0f;
         const float dp_ratio = rml_context_
                                    ? rml_context_->GetDensityIndependentPixelRatio()
                                    : 1.0f;
@@ -1674,7 +1682,8 @@ namespace lfs::vis::gui {
         // but grow the render/input surface when localized text, an error, or
         // multiple network endpoints make the actual popup taller.
         const float measured_height = popup->GetOffsetHeight() + 20.0f * dp_ratio;
-        return std::max(fallback_height, measured_height);
+        return std::max({fallback_height, measured_height,
+                         tooltip_.hasActiveState() ? tooltip_overlay_height_ : 0.0f});
     }
 
     bool RmlStatusBar::isOverlayPoint(const float local_x, const float local_y,
@@ -1785,6 +1794,7 @@ namespace lfs::vis::gui {
             return;
         }
 
+        tooltip_overlay_height_ = std::max(0.0f, static_cast<float>(screen_h) - h_px);
         const float overlay_height = overlayHeight();
         const int render_w = static_cast<int>(w_px);
         const int render_h = static_cast<int>(h_px + overlay_height);
@@ -1800,7 +1810,19 @@ namespace lfs::vis::gui {
             now >= next_refresh_at_;
         const bool content_changed = updateContent(ctx);
         const bool section_signature_changed = section_signature_ != last_section_signature_;
-        const bool needs_render = size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
+        rml_context_->SetDimensions(Rml::Vector2i(render_w, render_h));
+        if (render_h != last_document_h_) {
+            document_->SetProperty("height", std::format("{}px", render_h));
+            last_document_h_ = render_h;
+            rml_context_->Update();
+        }
+        const bool tooltip_changed = tooltip_.apply(document_->GetElementById("body"),
+                                                     tooltip_mouse_x_,
+                                                     tooltip_mouse_y_ + static_cast<int>(overlay_height),
+                                                     render_w, render_h);
+        rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.hasActiveState());
+        rml_manager_->setContextTooltipRevealDeadline(rml_context_, tooltip_.revealDeadline());
+        const bool needs_render = tooltip_changed || size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
                                   content_changed ||
                                   (animation_active_ && refresh_due);
         if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface()) {

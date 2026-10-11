@@ -2085,6 +2085,8 @@
     "strategy_default": "Domyślny",
     "split": "Podział:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "Liczba wyświetlanych klatek interfejsu na sekundę.",
+    "view_fps_tooltip": "Liczba renderowanych klatek widoku 3D na sekundę. Statyczny widok może pokazywać 0, gdy interfejs nadal reaguje.",
     "ui": "UI",
     "view": "Widok"
   },

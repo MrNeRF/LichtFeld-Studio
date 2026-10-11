@@ -47,6 +47,10 @@ namespace lfs::vis::gui {
             status_bar.model_.mcp_details_expanded = expanded;
         }
 
+        static bool tooltipPending(const RmlStatusBar& status_bar) {
+            return status_bar.tooltip_.revealDeadline().has_value();
+        }
+
         static void trackRenderedFrame(RmlStatusBar& status_bar,
                                        RmlUIManager& manager,
                                        const float bar_x,
@@ -334,6 +338,28 @@ namespace {
         StatusBarModel model_;
         lfs::vis::gui::RmlStatusBar status_bar_;
     };
+
+    TEST_F(StatusBarFitTest, TooltipHoverStartsAndClearsForBothFpsMetrics) {
+        using lfs::vis::gui::RmlStatusBarTestAccess;
+        for (const char* id : {"fps-value", "fps-view-value"}) {
+            auto* value = document_->GetElementById(id);
+            ASSERT_TRUE(value);
+            auto* metric = value->GetParentNode();
+            EXPECT_FALSE(metric->GetAttribute<Rml::String>("data-tooltip", "").empty());
+            metric->SetAttribute("title", "Frame rate details");
+            const auto offset = value->GetAbsoluteOffset(Rml::BoxArea::Border);
+            lfs::vis::gui::PanelInputState input{};
+            input.mouse_x = offset.x + value->GetOffsetWidth() / 2;
+            input.mouse_y = offset.y + value->GetOffsetHeight() / 2;
+            status_bar_.processInput(input, 0, 0, 2400, 22);
+            EXPECT_TRUE(RmlStatusBarTestAccess::tooltipPending(status_bar_));
+            status_bar_.clearTooltip();
+            EXPECT_FALSE(RmlStatusBarTestAccess::tooltipPending(status_bar_));
+            input.mouse_y = -100;
+            status_bar_.processInput(input, 0, 0, 2400, 22);
+            EXPECT_FALSE(RmlStatusBarTestAccess::tooltipPending(status_bar_));
+        }
+    }
 
     TEST_F(StatusBarFitTest, KeepsSingleLineNonOverlappingLayoutAcrossWidths) {
         const std::vector<int> widths = {2400, 1600, 1200, 900, 700, 500, 320};

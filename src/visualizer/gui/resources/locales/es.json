@@ -2085,6 +2085,8 @@
     "strategy_default": "Predeterminado",
     "split": "División:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "Fotogramas de la interfaz presentados por segundo.",
+    "view_fps_tooltip": "Fotogramas de la vista 3D renderizados por segundo. Una vista estática puede indicar 0 mientras la interfaz sigue respondiendo.",
     "ui": "IU",
     "view": "Vista"
   },
