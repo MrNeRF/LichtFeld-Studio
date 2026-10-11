@@ -36,6 +36,7 @@
 #include "training/training_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "visualizer/preferences.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
 #include <SDL3/SDL.h>
@@ -462,6 +463,12 @@ namespace lfs::vis {
 
     void InputController::initialize() {
         instance_ = this;
+
+        // The GUI is initialized before this controller exists.
+        if (const auto mode = cameraNavigationModeFromName(loadCameraNavigationPreference())) {
+            setCameraNavigationMode(*mode);
+        }
+        setCameraViewSnapEnabled(loadCameraViewSnapPreference());
 
         // Get initial mouse position
         float fx, fy;
