@@ -955,6 +955,85 @@ namespace {
         check_scene_invariants(*manager_);
     }
 
+    TEST_F(SceneGraphFuzzTest, CopyPasteMeshBelowTransformedAncestorsPreservesWorldVertices) {
+        auto& scene = manager_->getScene();
+        auto& history = lfs::vis::op::undoHistory();
+        for (const auto device : {Device::CPU, Device::CUDA}) {
+            for (const bool copy_group : {false, true}) {
+                SCOPED_TRACE(copy_group ? "nested group" : "mesh directly");
+                SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
+                manager_->clearSelection();
+                history.clear();
+                scene.clear();
+                const auto outer = scene.addGroup("outer");
+                const auto inner = scene.addGroup("inner", outer);
+                auto mesh = std::make_shared<lfs::core::MeshData>();
+                const std::vector<float> vertices{0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f};
+                mesh->vertices = Tensor::from_vector(vertices, {3, 3}, device);
+                mesh->indices = Tensor::from_vector(std::vector<int32_t>{0, 1, 2}, {1, 3}, device);
+                const auto source = scene.addMesh("mesh", mesh, inner);
+                const auto outer_transform =
+                    glm::translate(glm::mat4(1.f), glm::vec3(4.f, -3.f, 2.f)) *
+                    glm::rotate(glm::mat4(1.f), 0.6f, glm::vec3(0.f, 1.f, 0.f)) *
+                    glm::scale(glm::mat4(1.f), glm::vec3(-2.f, 3.f, 0.5f));
+                scene.setNodeTransform(outer, outer_transform);
+                scene.setNodeTransform(inner,
+                                       glm::translate(glm::mat4(1.f), glm::vec3(1.f, 2.f, -3.f)) *
+                                           glm::rotate(glm::mat4(1.f), 0.3f, glm::vec3(1.f, 0.f, 0.f)));
+                scene.setNodeTransform(source,
+                                       glm::translate(glm::mat4(1.f), glm::vec3(-1.f, 0.5f, 2.f)) *
+                                           glm::scale(glm::mat4(1.f), glm::vec3(0.5f, 2.f, 1.f)));
+                const auto expected_world = scene.getWorldTransform(source);
+                manager_->selectNode(copy_group ? inner : source);
+                ASSERT_TRUE(manager_->copySelectedNodes());
+                // Pasting must use copy-time placement even if an ancestor moves.
+                scene.setNodeTransform(outer, glm::translate(outer_transform, glm::vec3(9.f, 1.f, -2.f)));
+                const auto before = scene_state(*manager_);
+                const auto history_before = history.undoCount();
+                const auto pasted = manager_->pasteNodes();
+                ASSERT_EQ(pasted.size(), 1u);
+                ASSERT_EQ(history.undoCount(), history_before + 1);
+                const auto* root = scene.getNode(pasted.front());
+                ASSERT_NE(root, nullptr);
+                EXPECT_EQ(root->parent_id, lfs::core::NULL_NODE);
+                if (copy_group)
+                    ASSERT_EQ(root->children.size(), 1u);
+                const auto* copied = copy_group ? scene.getNodeById(root->children.front()) : root;
+                ASSERT_NE(copied, nullptr);
+                const auto uuid = copied->uuid;
+                const auto verify_mesh = [&] {
+                    const auto* node = scene.getNodeByUuid(uuid);
+                    ASSERT_NE(node, nullptr);
+                    ASSERT_NE(node->mesh, nullptr);
+                    EXPECT_NE(node->mesh.get(), mesh.get());
+                    EXPECT_EQ(node->mesh->vertices.device(), device);
+                    const auto actual_vertices = node->mesh->vertices.cpu().to_vector();
+                    ASSERT_EQ(actual_vertices, vertices);
+                    const auto indices = node->mesh->indices.cpu();
+                    ASSERT_EQ(indices.numel(), 3u);
+                    for (int i = 0; i < 3; ++i)
+                        EXPECT_EQ(indices.ptr<int32_t>()[i], i);
+                    const auto world = scene.getWorldTransform(node->id);
+                    for (size_t i = 0; i < vertices.size(); i += 3) {
+                        const auto expected = expected_world * glm::vec4(vertices[i], vertices[i + 1], vertices[i + 2], 1.f);
+                        const auto actual = world * glm::vec4(actual_vertices[i], actual_vertices[i + 1], actual_vertices[i + 2], 1.f);
+                        for (int axis = 0; axis < 3; ++axis)
+                            EXPECT_NEAR(actual[axis], expected[axis], 1e-5f);
+                    }
+                    check_scene_invariants(*manager_);
+                };
+                verify_mesh();
+                for (int repeat = 0; repeat < 3; ++repeat) {
+                    ASSERT_TRUE(history.undo().success);
+                    EXPECT_EQ(scene_state(*manager_), before);
+                    EXPECT_EQ(scene.getNodeByUuid(uuid), nullptr);
+                    ASSERT_TRUE(history.redo().success);
+                    verify_mesh();
+                }
+            }
+        }
+    }
+
     TEST_F(SceneGraphFuzzTest, CopyPasteMixedGroupKeepsIndependentMeshPayloadsAndHistory) {
         seed_scene();
         auto& scene = manager_->getScene();
