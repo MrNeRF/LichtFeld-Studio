@@ -1254,7 +1254,7 @@
                 <span class="status-error" data-if="job.reason != ''">{{job.reason}}</span>
                 <div class="viewport-transfer-actions">
                     <button class="btn btn--secondary" data-if="job.can_pause" data-event-click="gallery_transfer_action('pause', job.id)">{{gallery_transfer_pause_label}}</button>
-                    <button class="btn btn--success" data-if="job.can_resume" data-event-click="gallery_transfer_action('resume', job.id)">{{gallery_transfer_resume_label}}</button>
+                    <button class="btn btn--success" data-if="job.can_resume" data-event-click="gallery_transfer_action('resume', job.id)">{{job.action_label}}</button>
                     <button class="btn btn--secondary" data-if="job.can_cancel" data-event-click="gallery_transfer_action('cancel', job.id)">{{gallery_transfer_cancel_label}}</button>
                 </div>
             </div>
