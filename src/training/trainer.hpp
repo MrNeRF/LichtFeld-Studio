@@ -543,6 +543,7 @@ namespace lfs::training {
         void clear_thin_structure_cache();
         friend struct TrainerThinStructureTestAccess;
         friend struct TrainerGradientResidualTestAccess;
+        friend struct TrainerMaskSupervisionTestAccess;
 
         // Release GPU state that is only needed while a train step is active.
         // The model, optimizer, and source background image remain resident so
@@ -949,6 +950,7 @@ namespace lfs::training {
         // Mask preprocess workspace: photometric weight / opacity penalty / alpha-consistent
         // (fused kernels; grow-only for allocation-free steady state when masks/ROI on).
         lfs::training::losses::MaskPreprocessWorkspace mask_preprocess_workspace_;
+        bool empty_ignore_mask_warned_ = false;
 
         // Pre-allocated error map buffer for densification (avoids per-iteration allocation)
         core::Tensor densification_error_map_;

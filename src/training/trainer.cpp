@@ -1811,11 +1811,13 @@ namespace lfs::training {
             opt_params.lambda_dssim > 0.0f;
 
         if (photometric_weight.is_valid()) {
+            float mask_normalization = 0.0f;
             if (use_decoupled_appearance_loss) {
                 auto& masked_decoupled_ws = photometric_loss_.arena().masked_decoupled();
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_decoupled_fused_l1_ssim_forward(
                     corrected, raw_rendered, gt_image, photometric_weight, opt_params.lambda_dssim,
                     masked_decoupled_ws, base_denominator);
+                mask_normalization = ctx.mask_sum_value;
                 auto grads = lfs::training::kernels::masked_decoupled_fused_l1_ssim_backward(
                     ctx, masked_decoupled_ws);
 
@@ -1830,12 +1832,22 @@ namespace lfs::training {
                 auto& masked_ws = photometric_loss_.arena().masked_fused();
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_fused_l1_ssim_forward(
                     corrected, gt_image, photometric_weight, opt_params.lambda_dssim, masked_ws, base_denominator);
+                mask_normalization = ctx.mask_sum_value;
                 grad_corrected = lfs::training::kernels::masked_fused_l1_ssim_backward(ctx, masked_ws);
                 loss = loss_tensor;
 
                 if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
                     grad_corrected = grad_corrected.squeeze(0);
                 }
+            }
+
+            // The loss already reads this normalization; epsilon alone means no contributing pixels.
+            if (has_user_mask && mode == param::MaskMode::Ignore && !empty_ignore_mask_warned_ &&
+                mask_normalization <= kernels::SSIM_EPSILON) {
+                empty_ignore_mask_warned_ = true;
+                LOG_WARN("Effective ignore mask excludes every pixel in a training view: no photometric supervision. "
+                         "If all views are masked out, zero loss does not indicate a trained model. "
+                         "Check mask threshold and inversion.");
             }
 
             if (has_user_mask &&
@@ -8627,6 +8639,7 @@ namespace lfs::training {
         }
 
         training_complete_ = false;
+        empty_ignore_mask_warned_ = false;
         pending_snapshot_finish_reason_ =
             lfs::io::project::TrainingFinishReason::None;
         ready_to_start_ = false; // Reset the flag
