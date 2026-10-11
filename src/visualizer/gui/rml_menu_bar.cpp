@@ -607,6 +607,7 @@ namespace lfs::vis::gui {
         applied_project_title_left_ = -1.0f;
         applied_project_title_width_ = -1.0f;
         toolbar_fits_ = true;
+        bar_height_ = 30.0f;
         last_window_split_view_ = false;
         last_ui_hidden_ = false;
         last_window_maximized_ = false;
@@ -693,6 +694,17 @@ namespace lfs::vis::gui {
     void RmlMenuBar::processInput(const PanelInputState& input) {
         if (!menu_items_ || !document_)
             return;
+
+        // Resolve row changes before the shell reads barHeight() and before hit testing.
+        // Vulkan draws this surface after the panels have already been laid out.
+        const float layout_dp = rml_manager_->getDpRatio();
+        if (input.screen_w != last_ctx_w_ || layout_dp != last_dp_ratio_) {
+            updateCompactLayout(input.screen_w, layout_dp);
+            rml_context_->SetDimensions({input.screen_w, std::max(1, last_ctx_h_)});
+            rml_context_->Update();
+            updateToolbarLayout(input.screen_w, layout_dp);
+            rml_context_->Update();
+        }
 
         if (rml_manager_->routeInput(rml_context_, input, [this](const PanelInputState& event) { processInput(event); }, isOpen()))
             return;
@@ -1291,10 +1303,8 @@ namespace lfs::vis::gui {
             return nullptr;
         };
 
-        if (toolbar_fits_) {
-            if (auto* button = find_button(menu_toolbar_))
-                return button;
-        }
+        if (auto* button = find_button(menu_toolbar_))
+            return button;
         return find_button(menu_window_controls_);
     }
 
@@ -1314,6 +1324,56 @@ namespace lfs::vis::gui {
             const bool compact = screen_w < 760.0f * dp_ratio;
             if (body->IsClassSet("compact") != compact) {
                 body->SetClass("compact", compact);
+                render_needed_ = true;
+            }
+        }
+    }
+
+    void RmlMenuBar::updateToolbarLayout(const int screen_w, const float dp_ratio) {
+        // Right-align the render/projection toolbar to the viewport edge, but
+        // keep it clear of the window-control cluster when there is no dock panel.
+        if (menu_toolbar_) {
+            const float inset = 8.0f * dp_ratio;
+            constexpr float kFallbackRightClusterReserveDp = 184.0f;
+            float min_right_px = kFallbackRightClusterReserveDp * dp_ratio;
+            if (menu_window_controls_) {
+                const auto offset = menu_window_controls_->GetAbsoluteOffset(Rml::BoxArea::Border);
+                if (offset.x > 0.0f)
+                    min_right_px = static_cast<float>(screen_w) - offset.x + 4.0f * dp_ratio;
+            }
+            float right_px = min_right_px;
+            if (viewport_right_edge_ > 0.0f)
+                right_px = std::max(right_px, static_cast<float>(screen_w) - viewport_right_edge_ + inset);
+
+            // The toolbar is out of flow, so viewport alignment alone would let it slide over the
+            // menu labels. Move it to a second row once even the cap collides.
+            const float menus_right_px =
+                menu_items_ ? menu_items_->GetAbsoluteOffset(Rml::BoxArea::Border).x +
+                                  menu_items_->GetOffsetWidth()
+                            : 0.0f;
+            const float clear_of_menus_px = static_cast<float>(screen_w) -
+                                            menu_toolbar_->GetOffsetWidth() - menus_right_px -
+                                            12.0f * dp_ratio;
+            // Asymmetric threshold so a window parked on the boundary cannot flicker.
+            const float show_slack_px = toolbar_fits_ ? 0.0f : 8.0f * dp_ratio;
+            const bool toolbar_fits = clear_of_menus_px >= min_right_px + show_slack_px;
+            if (toolbar_fits)
+                right_px = std::min(right_px, clear_of_menus_px);
+            else
+                right_px = inset;
+
+            if (toolbar_fits != toolbar_fits_) {
+                menu_toolbar_->SetClass("second-row", !toolbar_fits);
+                if (auto* row = document_->GetElementById("menu-row"))
+                    row->SetClass("two-rows", !toolbar_fits);
+                bar_height_ = toolbar_fits ? 30.0f : 60.0f;
+                toolbar_fits_ = toolbar_fits;
+                render_needed_ = true;
+                LOG_DEBUG("Menu toolbar {} at {} px", toolbar_fits ? "inline" : "second row", screen_w);
+            }
+            if (std::abs(right_px - applied_toolbar_right_) > 0.5f) {
+                menu_toolbar_->SetProperty("right", std::format("{:.1f}px", right_px));
+                applied_toolbar_right_ = right_px;
                 render_needed_ = true;
             }
         }
@@ -1410,8 +1470,7 @@ namespace lfs::vis::gui {
         std::vector<lfs::vis::WindowManager::HitTestRect> excluded_rects;
         excluded_rects.reserve(3);
         append_element(excluded_rects, menu_items_);
-        if (toolbar_fits_)
-            append_element(excluded_rects, menu_toolbar_);
+        append_element(excluded_rects, menu_toolbar_);
         append_element(excluded_rects, menu_window_controls_);
         wm->setTitlebarDragRegion(bar_height_px, std::move(excluded_rects));
     }
@@ -1571,7 +1630,7 @@ namespace lfs::vis::gui {
         }
 
         const float dp_ratio = rml_manager_->getDpRatio();
-        const int bar_h = static_cast<int>(bar_height_ * dp_ratio);
+        int bar_h = static_cast<int>(bar_height_ * dp_ratio);
         updateCompactLayout(screen_w, dp_ratio);
         if (dp_ratio != last_dp_ratio_)
             render_needed_ = true;
@@ -1584,48 +1643,8 @@ namespace lfs::vis::gui {
             rml_context_->Update();
         }
 
-        // Right-align the render/projection toolbar to the viewport edge, but
-        // keep it clear of the window-control cluster when there is no dock panel.
-        if (menu_toolbar_) {
-            const float inset = 8.0f * dp_ratio;
-            constexpr float kFallbackRightClusterReserveDp = 184.0f;
-            float min_right_px = kFallbackRightClusterReserveDp * dp_ratio;
-            if (menu_window_controls_) {
-                const auto offset = menu_window_controls_->GetAbsoluteOffset(Rml::BoxArea::Border);
-                if (offset.x > 0.0f)
-                    min_right_px = static_cast<float>(screen_w) - offset.x + 4.0f * dp_ratio;
-            }
-            float right_px = min_right_px;
-            if (viewport_right_edge_ > 0.0f)
-                right_px = std::max(right_px, static_cast<float>(screen_w) - viewport_right_edge_ + inset);
-
-            // The toolbar is out of flow, so viewport alignment alone would let it slide over the
-            // menu labels. Cap how far left it may travel, and drop it once even the cap collides.
-            const float menus_right_px =
-                menu_items_ ? menu_items_->GetAbsoluteOffset(Rml::BoxArea::Border).x +
-                                  menu_items_->GetOffsetWidth()
-                            : 0.0f;
-            const float clear_of_menus_px = static_cast<float>(screen_w) -
-                                            menu_toolbar_->GetOffsetWidth() - menus_right_px -
-                                            12.0f * dp_ratio;
-            // Asymmetric threshold so a window parked on the boundary cannot flicker.
-            const float show_slack_px = toolbar_fits_ ? 0.0f : 8.0f * dp_ratio;
-            const bool toolbar_fits = clear_of_menus_px >= min_right_px + show_slack_px;
-            if (toolbar_fits)
-                right_px = std::min(right_px, clear_of_menus_px);
-
-            if (toolbar_fits != toolbar_fits_) {
-                menu_toolbar_->SetClass("hidden", !toolbar_fits);
-                toolbar_fits_ = toolbar_fits;
-                render_needed_ = true;
-                LOG_DEBUG("Menu toolbar {} at {} px", toolbar_fits ? "shown" : "hidden", screen_w);
-            }
-            if (toolbar_fits && std::abs(right_px - applied_toolbar_right_) > 0.5f) {
-                menu_toolbar_->SetProperty("right", std::format("{:.1f}px", right_px));
-                applied_toolbar_right_ = right_px;
-                render_needed_ = true;
-            }
-        }
+        updateToolbarLayout(screen_w, dp_ratio);
+        bar_h = static_cast<int>(bar_height_ * dp_ratio);
         updateProjectTitleLayout(screen_w, dp_ratio);
 
         int ctx_w = screen_w;

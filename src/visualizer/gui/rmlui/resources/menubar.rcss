@@ -101,8 +101,12 @@ body {
     margin-left: 2dp;
 }
 
-#menu-toolbar.hidden {
-    visibility: hidden;
+#menu-row.two-rows {
+    padding-bottom: 30dp;
+}
+
+#menu-toolbar.second-row {
+    top: 30dp;
 }
 
 .menu-portal-connection {
