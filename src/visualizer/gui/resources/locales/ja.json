@@ -711,6 +711,12 @@
   },
   "rendering": "レンダリング",
   "scene": {
+    "summary_model_one": "{} モデル",
+    "summary_model_few": "{} モデル",
+    "summary_model_other": "{} モデル",
+    "summary_node_one": "{} ノード",
+    "summary_node_few": "{} ノード",
+    "summary_node_other": "{} ノード",
     "add_ply": "PLYを追加...",
     "add_group": "グループを追加",
     "add_group_ellipsis": "グループを追加...",
@@ -1463,6 +1469,7 @@
     "create": "作成"
   },
   "notification": {
+    "split_view_requires_two_models": "分割ビューには、表示中のスプラットモデルが2つ必要です。",
     "merge_nodes_kept": "統合時にスプラット以外のノードを {} 個保持しました。",
     "duplicate_training_data_skipped": "複製時に学習データ（データセット、カメラ、画像）はスキップされました。",
     "dropped_not_recognized": "ドロップされた",
@@ -2096,6 +2103,8 @@
     "strategy_default": "デフォルト",
     "split": "分割:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "1秒あたりに表示されるインターフェースのフレーム数。",
+    "view_fps_tooltip": "1秒あたりにレンダリングされる3Dビューのフレーム数。静止したビューでは、インターフェースが応答していても0と表示されることがあります。",
     "ui": "UI",
     "view": "ビュー"
   },
@@ -2521,6 +2530,7 @@
     "perf_hud_tooltip": "パフォーマンス HUD の表示/非表示"
   },
   "runtime": {
+    "environment_map_failed": "環境マップ「{}」を読み込めませんでした。前の環境を保持しました。",
     "training_save_no_memory": "プロジェクトを保存できませんでした: {}",
     "autosave_deferred_no_memory": "自動保存は一時停止中です: 空きメモリが不足しています（{}）。トレーニングは継続します。メモリが解放されると自動保存を再開します。",
     "grouped_changes": "グループ化された変更",
@@ -2674,12 +2684,13 @@
     "right_click_to_add": "右クリックして追加...",
     "training_complete": "トレーニング完了",
     "training_stopped": "トレーニング停止",
+    "training_stopped_body": "ユーザーが反復 {} でトレーニングを停止しました。\n\nこの状態を保持するには、プロジェクトを保存してください。トレーニングを再開するには、保存したプロジェクトを開き直してください。",
     "training_error": "トレーニングエラー",
     "param_manager_unavailable": "パラメータマネージャーが利用できません",
     "failed_to_load_params": "パラメータの読み込みに失敗しました:",
-    "err_distorted_images": "歪みのある画像が検出されました。歪みのあるカメラで学習するには --gut または --undistort を有効にしてください。",
+    "err_distorted_images": "歪みのある画像が検出されました。歪みのあるカメラで学習するには、トレーニングパネルで GUT または歪み補正を有効にしてください。",
     "err_ortho_not_supported": "正射影カメラモデルでの学習はまだサポートされていません。",
-    "err_non_pinhole": "非ピンホールカメラで学習するには --gut または --undistort を有効にしてください。"
+    "err_non_pinhole": "非ピンホールカメラで学習するには、トレーニングパネルで GUT または歪み補正を有効にしてください。"
   },
   "projects.gallery.sidebar.title": "ギャラリー",
   "projects.gallery.sidebar.refresh": "ギャラリーを確認",

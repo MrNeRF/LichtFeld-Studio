@@ -206,6 +206,34 @@ TEST(CompareImages, ClassifiesTheTestLens) {
               TestLens::Reference);
 }
 
+TEST(CompareImages, DownscaledReferencePreservesExplicitPinholeGrid) {
+    if (!torch::cuda::is_available())
+        GTEST_SKIP() << "CUDA not available";
+    install_image_loader();
+    const auto root = fresh_directory("lfs_compare_explicit_grid");
+    const auto reference = root / "reference";
+    const auto test = root / "test";
+    const auto write_dataset = [](const fs::path& dataset, const std::string& calibration) {
+        fs::create_directories(dataset / "images");
+        fs::create_directories(dataset / "sparse" / "0");
+        const std::vector<uint8_t> pixels(320 * 240 * 3, 128);
+        ASSERT_TRUE(lfs::core::save_png(dataset / "images" / "view.png", pixels.data(), 320, 240, 3, 8, 1));
+        std::ofstream(dataset / "sparse" / "0" / "cameras.txt") << "1 " << calibration << '\n';
+        std::ofstream(dataset / "sparse" / "0" / "images.txt") << "1 1 0 0 0 0 0 0 1 view.png\n\n";
+        std::ofstream(dataset / "sparse" / "0" / "points3D.txt").put('\n');
+    };
+    write_dataset(reference, "OPENCV 640 480 500 500 320 240 -0.05 0.01 0 0");
+    write_dataset(test, "PINHOLE 320 240 250 250 160 120");
+    auto params = compare(reference, test, root / "output");
+    params.evaluation.eval_space = EvalSpace::Undistorted;
+    const auto result = lfs::training::compare_image_sets(params, std::nullopt);
+    ASSERT_TRUE(result) << result.error().detail();
+    ASSERT_EQ(result->metrics.views.size(), 1u);
+    EXPECT_EQ(result->metrics.views[0].width, 320);
+    EXPECT_EQ(result->metrics.views[0].height, 240);
+    fs::remove_all(root);
+}
+
 // Catches images above the training width cap being downscaled, a larger test set not being resized to its
 // references, a smaller one being upsampled instead of the references downscaled, identical sets not scoring
 // perfectly, the reports not being written, and a rerun

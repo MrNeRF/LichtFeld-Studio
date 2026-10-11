@@ -623,6 +623,14 @@ namespace lfs::core {
         return {target_width, target_height};
     }
 
+    std::tuple<int, int, int> probe_image_info(const std::filesystem::path& p) {
+        image_codecs::Probe probe;
+        std::string error;
+        if (!image_codecs::probe(p, probe, error))
+            throw std::runtime_error("Image probe failed: " + lfs::core::path_to_utf8(p) + (error.empty() ? "" : " : " + error));
+        return {probe.width, probe.height, probe.channels};
+    }
+
     std::tuple<int, int, int> get_image_info(std::filesystem::path p) {
         image_codecs::Probe probe;
         std::string error;

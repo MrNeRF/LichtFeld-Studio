@@ -1070,6 +1070,25 @@ NB_MODULE(lichtfeld, m) {
         "Get trainer error message");
 
     m.def(
+        "trainer_error_key",
+        []() -> std::optional<std::string> {
+            const auto* const tm = lfs::python::get_trainer_manager();
+            if (!tm || tm->getLastError().empty())
+                return std::nullopt;
+            const auto error = tm->lastTrainingError();
+            if (error && !error->frames().empty()) {
+                for (const auto& field : error->frames().front().fields.entries()) {
+                    if (field.key == "message_key") {
+                        if (const auto* key = std::get_if<std::string>(&field.value))
+                            return *key;
+                    }
+                }
+            }
+            return std::nullopt;
+        },
+        "Get the optional localization key for the trainer error message");
+
+    m.def(
         "prepare_training_from_scene", []() {
             nb::gil_scoped_release release;
             lfs::core::events::cmd::PrepareTrainingFromScene{}.emit();
@@ -1929,7 +1948,8 @@ NB_MODULE(lichtfeld, m) {
            std::optional<int> min_track_length,
            bool stop_training,
            bool discard_changes,
-           bool replace) {
+           bool replace,
+           const std::string& images_folder) {
             nb::gil_scoped_release release;
             lfs::core::events::cmd::LoadFile command{
                 .path = python_utf8_path(path),
@@ -1942,7 +1962,8 @@ NB_MODULE(lichtfeld, m) {
                 .apply_auto_crop = apply_auto_crop,
                 .stop_training = stop_training,
                 .discard_changes = discard_changes,
-                .replace = replace};
+                .replace = replace,
+                .images_folder = images_folder};
             emit_project_cmd_marshaled(
                 "python.load_file",
                 [command = std::move(command)] { command.emit(); });
@@ -1956,6 +1977,7 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("stop_training") = false,
         nb::arg("discard_changes") = false,
         nb::arg("replace") = false,
+        nb::arg("images_folder") = "",
         "Load a file (PLY, checkpoint) or dataset into the scene.");
 
     m.def(

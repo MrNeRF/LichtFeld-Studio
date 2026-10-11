@@ -277,6 +277,11 @@ namespace lfs::training {
 
         // Get current training state
         int get_current_iteration() const { return current_iteration_.load(); }
+        // A paused step has not run yet. Report the model's completed step,
+        // while retaining the executing iteration for hooks and schedules.
+        int get_progress_iteration() const {
+            return is_running() ? project_snapshot_iteration() : get_current_iteration();
+        }
         int get_total_iterations() const;
         std::filesystem::path get_output_path() const { return getParams().dataset.output_path; }
         float get_current_loss() const { return current_loss_.load(); }
@@ -486,7 +491,9 @@ namespace lfs::training {
         friend struct TrainerBilateralGridTestAccess;
         friend struct TrainerHoldoutAppearanceTestAccess;
         friend struct TrainerRetryTestAccess;
+        friend struct TrainerCameraErrorTestAccess;
         friend struct TrainerCropboxMaskTestAccess;
+        friend struct TrainerPausedProgressTestAccess;
 
         // Helper for deferred event emission to prevent deadlocks
         struct DeferredEvents {
@@ -543,6 +550,7 @@ namespace lfs::training {
         void clear_thin_structure_cache();
         friend struct TrainerThinStructureTestAccess;
         friend struct TrainerGradientResidualTestAccess;
+        friend struct TrainerMaskSupervisionTestAccess;
 
         // Release GPU state that is only needed while a train step is active.
         // The model, optimizer, and source background image remain resident so
@@ -949,6 +957,7 @@ namespace lfs::training {
         // Mask preprocess workspace: photometric weight / opacity penalty / alpha-consistent
         // (fused kernels; grow-only for allocation-free steady state when masks/ROI on).
         lfs::training::losses::MaskPreprocessWorkspace mask_preprocess_workspace_;
+        bool empty_ignore_mask_warned_ = false;
 
         // Pre-allocated error map buffer for densification (avoids per-iteration allocation)
         core::Tensor densification_error_map_;

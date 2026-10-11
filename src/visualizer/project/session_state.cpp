@@ -61,6 +61,11 @@ namespace lfs::vis::project {
 
         using Json = SessionJson;
 
+        bool is_builtin_environment(const std::string_view path) {
+            return path == lfs::vis::kDefaultEnvironmentMapPath ||
+                   path == "environments/alps_field_1k.hdr";
+        }
+
         lfs::Error session_state_error(
             const lfs::ErrorCode code,
             std::string detail,
@@ -664,8 +669,7 @@ namespace lfs::vis::project {
                 custom_field<RenderSettings>(
                     "environment_builtin",
                     [](const RenderSettings& settings) {
-                        return settings.environment_map_path ==
-                                       lfs::vis::kDefaultEnvironmentMapPath
+                        return is_builtin_environment(settings.environment_map_path)
                                    ? Json(settings.environment_map_path)
                                    : Json(nullptr);
                     },
@@ -2272,8 +2276,7 @@ namespace lfs::vis::project {
         auto project_render_settings =
             renderSettingsToProjectJson(settings);
         if (!settings.environment_map_path.empty() &&
-            settings.environment_map_path !=
-                lfs::vis::kDefaultEnvironmentMapPath) {
+            !is_builtin_environment(settings.environment_map_path)) {
             std::optional<lfs::core::Uuid>
                 retained_uuid;
             const auto retained_reference =

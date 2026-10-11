@@ -2,6 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/error_bus.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/scene.hpp"
@@ -81,6 +83,25 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleSplitView() {
+        if (!isPLYComparisonActive()) {
+            const auto* const scene_manager = services().sceneOrNull();
+            if (!scene_manager || scene_manager->getScene().getVisibleSplatNodeSlots().size() < 2) {
+                lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                    .error = lfs::make_error({
+                        .code = lfs::ErrorCode::FailedPrecondition,
+                        .domain = lfs::ErrorDomain::Rendering,
+                        .severity = lfs::Severity::Info,
+                        .user_message = LOC("notification.split_view_requires_two_models"),
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    }),
+                    .surface = lfs::ErrorSurface::StatusOnly,
+                    .actions = {},
+                    .operation_id = lfs::OperationId::generate(),
+                });
+                return;
+            }
+        }
+
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
@@ -203,7 +224,7 @@ namespace lfs::vis {
         }
         if (event.equirectangular) {
             settings_.equirectangular = *event.equirectangular;
-            enforceProjectionBackend(settings_);
+            enforceProjectionBackend(settings_, true);
             LOG_TRACE("Equirectangular rendering: {}", settings_.equirectangular ? "enabled" : "disabled");
         }
         markDirty(DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::BACKGROUND, lfs::vis::FrameReason::SceneChange);
@@ -272,6 +293,7 @@ namespace lfs::vis {
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
+            settings_.raster_backend_before_equirectangular.reset();
             result = split_view_service_.handleSceneCleared(settings_);
             syncGridPlanesLocked(settings_.grid_plane);
         }

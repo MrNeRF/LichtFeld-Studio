@@ -11,6 +11,8 @@
 #include "nvcodec_image_loader.hpp"
 #include "video/color_convert.cuh"
 #include "video/cuda_frame_handoff.hpp"
+#include "video/frame_color_range.hpp"
+#include "video/sws_packed_rgb.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -263,8 +265,11 @@ namespace lfs::io {
                 while (true) {
                     av_frame_unref(frame);
                     const int receive_result = avcodec_receive_frame(codec_context_, frame);
-                    if (receive_result == 0)
+                    if (receive_result == 0) {
+                        video::restoreCuvidFullRange(frame, codec_context_,
+                                                     format_context_->streams[stream_index_]->codecpar);
                         return DecoderPumpResult::Frame;
+                    }
                     if (receive_result == AVERROR_EOF)
                         return DecoderPumpResult::EndOfStream;
                     if (receive_result != AVERROR(EAGAIN)) {
@@ -384,12 +389,14 @@ namespace lfs::io {
             return success;
         }
 
-        void write_jpeg_to_file(const std::filesystem::path& path, const std::vector<uint8_t>& data) {
+        bool write_jpeg_to_file(const std::filesystem::path& path, const std::vector<uint8_t>& data) {
             std::ofstream file(path, std::ios::binary);
-            if (file) {
-                file.write(reinterpret_cast<const char*>(data.data()),
-                           static_cast<std::streamsize>(data.size()));
-            }
+            if (!file)
+                return false;
+            file.write(reinterpret_cast<const char*>(data.data()),
+                       static_cast<std::streamsize>(data.size()));
+            file.close();
+            return static_cast<bool>(file);
         }
 
         const char* get_hw_decoder_name(AVCodecID codec_id) {
@@ -853,6 +860,7 @@ namespace lfs::io {
             uint8_t* gpu_rotated_buffer = nullptr;
             uint8_t* cpu_contiguous_buffer = nullptr;
             std::vector<uint8_t> rot_buf;
+            std::vector<uint8_t> rgb_scratch;
             std::unique_ptr<NvCodecImageLoader> nvcodec;
             bool using_hw_decode = false;
 
@@ -1066,6 +1074,10 @@ namespace lfs::io {
                     video_fps = validFrameRate(video_stream->r_frame_rate);
                 if (video_fps <= 0.0)
                     video_fps = 30.0;
+                // Source numbers use the timestamp grid, not the average cadence of a VFR stream.
+                double source_frame_fps = validFrameRate(video_stream->r_frame_rate);
+                if (source_frame_fps <= 0.0)
+                    source_frame_fps = video_fps;
                 double video_duration = validDurationSeconds(fmt_ctx->duration, AVRational{1, AV_TIME_BASE});
                 if (video_duration <= 0.0)
                     video_duration = validDurationSeconds(video_stream->duration, video_stream->time_base);
@@ -1379,10 +1391,8 @@ namespace lfs::io {
                         error = "Failed to configure video color conversion";
                         return false;
                     }
-                    uint8_t* dst_data[4] = {cpu_contiguous_buffer, nullptr, nullptr, nullptr};
-                    int dst_linesize[4] = {out_width * 3, 0, 0, 0};
-                    if (sws_scale(sws_ctx, source->data, source->linesize, 0,
-                                  source_height, dst_data, dst_linesize) <= 0) {
+                    if (scaleToPackedRgb24(sws_ctx, source->data, source->linesize, source_height,
+                                           cpu_contiguous_buffer, out_width, out_height, rgb_scratch) <= 0) {
                         error = "Video color conversion failed";
                         return false;
                     }
@@ -1486,7 +1496,10 @@ namespace lfs::io {
                     for (size_t i = 0; i < encoded.size(); i++) {
                         if (!encoded[i].empty()) {
                             const auto jpeg_write_started = std::chrono::steady_clock::now();
-                            write_jpeg_to_file(batch_filenames[i], encoded[i]);
+                            if (!write_jpeg_to_file(batch_filenames[i], encoded[i])) {
+                                throw std::runtime_error("Failed to write extracted frame: " +
+                                                         lfs::core::path_to_utf8(batch_filenames[i]));
+                            }
                             jpeg_write_seconds += elapsedSeconds(jpeg_write_started);
                             ++written_count;
                             if (params.generate_metadata && i < batch_meta.size()) {
@@ -1514,7 +1527,7 @@ namespace lfs::io {
 
                 const auto source_frame_for_time = [&](const double frame_time) {
                     return std::max(
-                        1, static_cast<int>(std::llround(frame_time * video_fps)) + 1);
+                        1, static_cast<int>(std::llround(frame_time * source_frame_fps)) + 1);
                 };
 
                 auto reserve_output_filename = [&](const std::filesystem::path& filename,
@@ -1602,8 +1615,8 @@ namespace lfs::io {
                     if (!write_image_file(fname, write_w, write_h,
                                           write_data, params.format,
                                           params.jpg_quality)) {
-                        LOG_WARN("Failed to write sharpest window frame: {}",
-                                 lfs::core::path_to_utf8(fname));
+                        throw std::runtime_error("Failed to write sharpest window frame: " +
+                                                 lfs::core::path_to_utf8(fname));
                     } else {
                         ++written_count;
                         if (params.generate_metadata) {
@@ -1645,7 +1658,10 @@ namespace lfs::io {
                         const int uv_pitch = hw_frame->linesize[1];
 
                         video::nv12ToRgbCuda(y_plane, uv_plane, gpu_rgb_buffer,
-                                             src_width, src_height, y_pitch, uv_pitch, nullptr);
+                                             src_width, src_height, y_pitch, uv_pitch, nullptr,
+                                             hw_frame->color_range == AVCOL_RANGE_JPEG ||
+                                                 (hw_frame->color_range == AVCOL_RANGE_UNSPECIFIED &&
+                                                  source_range == AVCOL_RANGE_JPEG));
                         requireCudaSuccess(cudaGetLastError(),
                                            "CUDA NV12-to-RGB conversion failed");
 
@@ -1837,7 +1853,8 @@ namespace lfs::io {
                                                         frame_score});
                             }
                         } else {
-                            LOG_WARN("Failed to write extracted frame: {}", lfs::core::path_to_utf8(filename));
+                            throw std::runtime_error("Failed to write extracted frame: " +
+                                                     lfs::core::path_to_utf8(filename));
                         }
                     }
 
@@ -1957,7 +1974,8 @@ namespace lfs::io {
                                                     frame_score});
                         }
                     } else {
-                        LOG_WARN("Failed to write extracted frame: {}", lfs::core::path_to_utf8(filename));
+                        throw std::runtime_error("Failed to write extracted frame: " +
+                                                 lfs::core::path_to_utf8(filename));
                     }
 
                     finish_selected_frame();
@@ -2214,7 +2232,13 @@ namespace lfs::io {
                 // Flush remaining window candidates at end of video
                 flush_window();
 
+                // Completion reports files actually written, including delayed encoder batches.
+                if (params.progress_callback)
+                    params.progress_callback(written_count + skipped_count, written_count + skipped_count, skipped_count);
+
                 if (params.generate_metadata && !saved_frames.empty()) {
+                    const std::filesystem::path meta_path =
+                        params.output_dir / "extraction_metadata.json";
                     try {
                         nlohmann::json root;
                         root["schema_version"] = 2;
@@ -2388,14 +2412,14 @@ namespace lfs::io {
                                               {"sharpness_score", f.sharpness_score}});
                         }
 
-                        const std::filesystem::path meta_path =
-                            params.output_dir / "extraction_metadata.json";
                         std::ofstream meta_file(meta_path, std::ios::binary);
-                        if (meta_file) {
-                            meta_file << root.dump(2);
-                        }
+                        meta_file << root.dump(2);
+                        meta_file.close();
+                        if (!meta_file)
+                            throw std::runtime_error("Could not write output file");
                     } catch (const std::exception& e) {
-                        LOG_WARN("Failed to write extraction metadata: {}", e.what());
+                        throw std::runtime_error("Failed to write extraction metadata " +
+                                                 lfs::core::path_to_utf8(meta_path) + ": " + e.what());
                     }
                 }
 

@@ -250,6 +250,11 @@ body {
     height: 18dp;
 }
 
+.menu-window-utility-btn {
+    /* State changes must reach their final color before the menu is cached. */
+    transition: none;
+}
+
 .menu-window-separator {
     width: 1dp;
     height: 18dp;

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/error_bus.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/events.hpp"
 #include "core/path_utils.hpp"
@@ -15,6 +16,7 @@
 #include "tools/tool_base.hpp"
 
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
 
 namespace lfs::vis {
@@ -26,13 +28,20 @@ namespace lfs::vis {
                 lfs::event::EventBridge::instance().clear_all();
                 services().clear();
                 gui::guiFocusState().reset();
+                environment_path_ = std::filesystem::temp_directory_path() / "drag_drop_environment.hdr";
+                std::ofstream file(environment_path_, std::ios::binary);
+                file << "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 1\n";
+                const unsigned char pixel[] = {64, 128, 192, 129};
+                file.write(reinterpret_cast<const char*>(pixel), sizeof(pixel));
             }
 
             void TearDown() override {
+                std::filesystem::remove(environment_path_);
                 gui::guiFocusState().reset();
                 services().clear();
                 lfs::event::EventBridge::instance().clear_all();
             }
+            std::filesystem::path environment_path_;
         };
 
         std::shared_ptr<core::PointCloud> makePointCloud(const std::vector<float>& positions) {
@@ -102,6 +111,86 @@ namespace lfs::vis {
         const auto settings = rendering_manager.getSettings();
         EXPECT_EQ(settings.environment_mode, EnvironmentBackgroundMode::Equirectangular);
         EXPECT_EQ(lfs::core::utf8_to_path(settings.environment_map_path), drop_path);
+    }
+
+    TEST_F(InputControllerDatasetLoadTest, InvalidEnvironmentDropKeepsPreviousSettings) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        RenderingManager rendering_manager;
+        services().set(&rendering_manager);
+        const auto previous = rendering_manager.getSettings();
+        const auto path = std::filesystem::temp_directory_path() / "invalid_drop_environment.hdr";
+        std::filesystem::remove(path);
+        for (const auto& contents : {std::optional<std::string>{}, std::optional<std::string>{""},
+                                     std::optional<std::string>{std::string(5000, 'x')}}) {
+            SCOPED_TRACE(contents ? std::to_string(contents->size()) : "missing");
+            if (contents) {
+                std::ofstream file(path, std::ios::binary);
+                file << *contents;
+            }
+            controller.handleFileDrop({lfs::core::path_to_utf8(path)});
+            const auto actual = rendering_manager.getSettings();
+            EXPECT_EQ(actual.environment_map_path, previous.environment_map_path);
+            EXPECT_EQ(actual.environment_mode, previous.environment_mode);
+        }
+        std::filesystem::remove(path);
+    }
+
+    TEST_F(InputControllerDatasetLoadTest, UserEnvironmentChangesAreAtomicAndReportErrors) {
+        class Consumer final : public lfs::NativeErrorConsumer {
+        public:
+            void on_error(const lfs::ErrorNotification& notification,
+                          const lfs::ErrorDeliveryInfo&) noexcept override {
+                ++count;
+                code = notification.error.code();
+                surface = notification.surface;
+            }
+            int count = 0;
+            lfs::ErrorCode code = lfs::ErrorCode::Internal;
+            lfs::ErrorSurface surface = lfs::ErrorSurface::StatusOnly;
+        } consumer;
+        auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
+        RenderingManager manager;
+        auto valid = manager.getSettings();
+        valid.environment_mode = EnvironmentBackgroundMode::Equirectangular;
+        valid.environment_map_path = lfs::core::path_to_utf8(environment_path_);
+        ASSERT_TRUE(manager.updateSettingsFromUser(valid));
+        EXPECT_EQ(consumer.count, 0);
+        auto invalid = valid;
+        invalid.environment_map_path.clear();
+        invalid.environment_exposure = 3.0f;
+        const auto result = manager.updateSettingsFromUser(invalid);
+        ASSERT_FALSE(result);
+        EXPECT_EQ(result.error().code(), lfs::ErrorCode::InvalidArgument);
+        EXPECT_EQ(consumer.count, 1);
+        EXPECT_EQ(consumer.surface, lfs::ErrorSurface::Toast);
+        EXPECT_EQ(manager.getSettings().environment_map_path, valid.environment_map_path);
+        EXPECT_EQ(manager.getSettings().environment_exposure, valid.environment_exposure);
+
+        valid.environment_rotation_degrees = 90.0f;
+        valid.environment_exposure = 2.0f;
+        // Changing other settings must not reopen an already selected map.
+        std::filesystem::remove(environment_path_);
+        ASSERT_TRUE(manager.updateSettingsFromUser(valid));
+        EXPECT_EQ(manager.getSettings().environment_rotation_degrees, 90.0f);
+        EXPECT_EQ(manager.getSettings().environment_exposure, 2.0f);
+        valid.environment_mode = EnvironmentBackgroundMode::SolidColor;
+        ASSERT_TRUE(manager.updateSettingsFromUser(valid));
+        EXPECT_EQ(manager.getSettings().environment_mode, EnvironmentBackgroundMode::SolidColor);
+        EXPECT_EQ(consumer.count, 1);
+    }
+
+    TEST_F(InputControllerDatasetLoadTest, InternalSettingsRestoreDoesNotValidateEnvironmentFiles) {
+        RenderingManager manager;
+        auto settings = manager.getSettings();
+        settings.environment_mode = EnvironmentBackgroundMode::Equirectangular;
+        settings.environment_map_path = "unavailable_saved_environment.hdr";
+        manager.updateSettings(settings);
+        EXPECT_EQ(manager.getSettings().environment_map_path, settings.environment_map_path);
+        EXPECT_EQ(manager.getSettings().environment_mode, settings.environment_mode);
+        settings.environment_exposure = 1.0f;
+        EXPECT_TRUE(manager.updateSettingsFromUser(settings));
+        EXPECT_EQ(manager.getSettings().environment_exposure, 1.0f);
     }
 
     TEST_F(InputControllerDatasetLoadTest, SingleDroppedVideoShowsVideoExtractor) {

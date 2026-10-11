@@ -283,7 +283,10 @@ namespace lfs::vis {
 
         void setOverlayAnimationActive(const bool active) { animation_state_.setOverlayAnimationActive(active); }
 
-        // Settings management
+        // Interactive edits validate changed environment maps before committing settings.
+        [[nodiscard]] lfs::Result<void> updateSettingsFromUser(const RenderSettings& settings);
+
+        // Settings management (also used for restoring saved state).
         void updateSettings(const RenderSettings& settings);
         void updateSettings(const RenderSettings& settings, DirtyMask dirty_flags);
         RenderSettings getSettings() const;

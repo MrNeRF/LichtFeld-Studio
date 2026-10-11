@@ -707,6 +707,12 @@
   },
   "rendering": "Rendering",
   "scene": {
+    "summary_model_one": "{} model",
+    "summary_model_few": "{} models",
+    "summary_model_other": "{} models",
+    "summary_node_one": "{} node",
+    "summary_node_few": "{} nodes",
+    "summary_node_other": "{} nodes",
     "add_ply": "Add PLY...",
     "add_group": "Add Group",
     "add_group_ellipsis": "Add Group...",
@@ -1461,6 +1467,7 @@
     "create": "Create"
   },
   "notification": {
+    "split_view_requires_two_models": "Split view requires two visible splat models.",
     "merge_nodes_kept": "Merge kept {} non-splat nodes.",
     "duplicate_training_data_skipped": "Training data (datasets, cameras and images) was skipped during duplication.",
     "dropped_not_recognized": "The dropped",
@@ -2094,6 +2101,8 @@
     "strategy_default": "Default",
     "split": "Split:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "Interface frames presented per second.",
+    "view_fps_tooltip": "3D viewport frames rendered per second. A static view can show 0 while the interface remains responsive.",
     "ui": "UI",
     "view": "View"
   },
@@ -2520,6 +2529,7 @@
     "perf_hud_tooltip": "Show or hide the performance HUD"
   },
   "runtime": {
+    "environment_map_failed": "Could not read environment map \"{}\". The previous environment was kept.",
     "training_save_no_memory": "Project save failed: {}",
     "autosave_deferred_no_memory": "Autosave is paused: not enough free memory ({}). Training continues; autosave resumes when memory frees up.",
     "grouped_changes": "Grouped changes",
@@ -2673,12 +2683,13 @@
     "right_click_to_add": "Right-click to add...",
     "training_complete": "Training Complete",
     "training_stopped": "Training Stopped",
+    "training_stopped_body": "Training stopped by user at iteration {}.\n\nSave the project to keep this state. Reopen the saved project to resume training.",
     "training_error": "Training Error",
     "param_manager_unavailable": "ParameterManager not available",
     "failed_to_load_params": "Failed to load params:",
-    "err_distorted_images": "Distorted images detected. Enable --gut or --undistort to train on cameras with distortion.",
+    "err_distorted_images": "Distorted images detected. Enable GUT or Undistort in the Training panel to train on cameras with distortion.",
     "err_ortho_not_supported": "Training on cameras with ortho model is not supported yet.",
-    "err_non_pinhole": "Enable --gut or --undistort to train on cameras with non-pinhole model."
+    "err_non_pinhole": "Enable GUT or Undistort in the Training panel to train on cameras with a non-pinhole model."
   },
   "projects.gallery.sidebar.title": "Gallery",
   "projects.gallery.sidebar.refresh": "Check gallery",

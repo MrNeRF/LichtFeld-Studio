@@ -154,6 +154,8 @@ namespace lfs::core {
         size_t cache_limit_bytes() const;
 
     private:
+        friend class PinnedMemoryAllocatorTest;
+
         PinnedMemoryAllocator();
         ~PinnedMemoryAllocator();
 
@@ -164,8 +166,8 @@ namespace lfs::core {
         /**
          * @brief Round size up to allocation bucket size
          *
-         * Uses power-of-2 rounding for sizes > 4KB to reduce fragmentation.
-         * Small sizes (< 4KB) use exact matching.
+         * Exact below 4 KiB, 512-byte buckets below 1 MiB, power-of-two buckets
+         * through 128 MiB, and 64 MiB granularity above that.
          */
         static size_t round_size(size_t bytes);
 

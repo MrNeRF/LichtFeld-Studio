@@ -109,8 +109,16 @@
         </div>
         <span id="gpu-mem" data-style-color="gpu_mem_color">{{ gpu_mem_text }}</span>
         <div id="fps-group" class="status-item">
-            <span id="fps-value" data-style-color="fps_color">{{ fps_value }}</span>
-            <span id="fps-label" class="dim">{{ fps_label }}</span>
+            <span id="fps-label" class="dim">{{ fps_label }}:</span>
+            <div class="fps-metric" data-tooltip="status_bar.ui_fps_tooltip">
+                <span class="fps-caption dim">{{ fps_ui_label }}</span>
+                <span id="fps-value" class="fps-number" data-style-color="fps_color">{{ fps_value }}</span>
+            </div>
+            <span class="dim">&#183;</span>
+            <div class="fps-metric" data-tooltip="status_bar.view_fps_tooltip">
+                <span class="fps-caption dim">{{ fps_view_label }}</span>
+                <span id="fps-view-value" class="fps-number" data-style-color="fps_color">{{ fps_view_value }}</span>
+            </div>
         </div>
         <span id="git-commit" class="dim">{{ git_commit }}</span>
     </div>

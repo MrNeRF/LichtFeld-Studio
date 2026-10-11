@@ -25,6 +25,7 @@
 #include "tools/tool_base.hpp"
 #include "visualizer/visualizer.hpp"
 #include <algorithm>
+#include <nlohmann/json.hpp>
 
 #include <cstdint>
 #include <cstdlib>
@@ -123,6 +124,91 @@ namespace lfs::vis {
             }
         };
     } // namespace
+
+    TEST_F(InputControllerFocusTest, InitializationRestoresRememberedCameraControls) {
+        const auto root = std::filesystem::temp_directory_path() / "lfs_InitializationRestoresRememberedCameraControls";
+        std::filesystem::remove_all(root);
+        const ScopedEnvironmentVariable home("LFS_HOME", root.string());
+        const auto paths = core::UserPaths::resolve();
+        ASSERT_TRUE(paths);
+        ASSERT_TRUE(paths->ensureDirectories());
+        for (const auto* mode : {"orbit", "trackball", "fpv", "drone"}) {
+            for (const bool snap : {false, true}) {
+                SCOPED_TRACE(std::string(mode) + (snap ? "/snap" : "/free"));
+                const ScopedEnvironmentVariable case_home("LFS_HOME", (paths->rootDir() / (std::string(mode) + (snap ? "_snap" : "_free"))).string());
+                const auto case_paths = core::UserPaths::resolve();
+                ASSERT_TRUE(case_paths);
+                ASSERT_TRUE(case_paths->ensureDirectories());
+                const nlohmann::json preferences = {
+                    {"schema_version", 1},
+                    {"project_location", ""},
+                    {"remember_camera_navigation", true},
+                    {"camera_navigation_mode", mode},
+                    {"remember_camera_view_snap", true},
+                    {"camera_view_snap", snap}};
+                {
+                    std::ofstream output(case_paths->preferencesFile());
+                    output << preferences;
+                }
+                Viewport viewport(200, 200);
+                InputController controller(nullptr, viewport);
+                controller.initialize();
+                EXPECT_EQ(controller.cameraNavigationMode(),
+                          *InputController::cameraNavigationModeFromName(mode));
+                EXPECT_EQ(controller.cameraViewSnapEnabled(), snap);
+                std::ifstream input(case_paths->preferencesFile());
+                EXPECT_EQ(nlohmann::json::parse(input), preferences);
+            }
+        }
+    }
+
+    TEST_F(InputControllerFocusTest, InitializationHonorsIndependentRememberFlags) {
+        const auto root = std::filesystem::temp_directory_path() / "lfs_InitializationHonorsIndependentRememberFlags";
+        std::filesystem::remove_all(root);
+        const ScopedEnvironmentVariable home("LFS_HOME", root.string());
+        const auto paths = core::UserPaths::resolve();
+        ASSERT_TRUE(paths);
+        ASSERT_TRUE(paths->ensureDirectories());
+        for (const bool remember_navigation : {false, true}) {
+            for (const bool remember_snap : {false, true}) {
+                const ScopedEnvironmentVariable case_home("LFS_HOME", (paths->rootDir() / (std::to_string(remember_navigation) + std::to_string(remember_snap))).string());
+                const auto case_paths = core::UserPaths::resolve();
+                ASSERT_TRUE(case_paths);
+                ASSERT_TRUE(case_paths->ensureDirectories());
+                const nlohmann::json preferences = {
+                    {"schema_version", 1},
+                    {"project_location", ""},
+                    {"remember_camera_navigation", remember_navigation},
+                    {"camera_navigation_mode", "fpv"},
+                    {"remember_camera_view_snap", remember_snap},
+                    {"camera_view_snap", true}};
+                {
+                    std::ofstream output(case_paths->preferencesFile());
+                    output << preferences;
+                }
+                Viewport viewport(200, 200);
+                InputController controller(nullptr, viewport);
+                controller.initialize();
+                EXPECT_EQ(controller.cameraNavigationMode(), remember_navigation
+                                                                 ? InputController::CameraNavigationMode::FPV
+                                                                 : InputController::CameraNavigationMode::Orbit);
+                EXPECT_EQ(controller.cameraViewSnapEnabled(), remember_snap);
+                std::ifstream input(case_paths->preferencesFile());
+                EXPECT_EQ(nlohmann::json::parse(input), preferences);
+            }
+        }
+    }
+
+    TEST_F(InputControllerFocusTest, InitializationKeepsDefaultControlsWithoutPreferences) {
+        const auto root = std::filesystem::temp_directory_path() / "lfs_InitializationKeepsDefaultControlsWithoutPreferences";
+        std::filesystem::remove_all(root);
+        const ScopedEnvironmentVariable home("LFS_HOME", root.string());
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.initialize();
+        EXPECT_EQ(controller.cameraNavigationMode(), InputController::CameraNavigationMode::Orbit);
+        EXPECT_FALSE(controller.cameraViewSnapEnabled());
+    }
 
     TEST_F(InputControllerFocusTest, HeldOrbitRequestsFramesOnlyWhenTheCameraChanges) {
         Viewport viewport(200, 200);

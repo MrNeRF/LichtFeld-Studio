@@ -1,10 +1,15 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cuda_runtime.h>
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
+#include <limits>
 #include <string>
 
 #include "core/error.hpp"
@@ -176,4 +181,136 @@ TEST(PlyExportCancel, CancelMidWriteDoesNotCrash) {
 
     fs::remove(ply_path, ec);
     fs::remove_all(out_dir, ec);
+}
+
+namespace {
+
+    class ExportPathTest : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            previous_ = fs::current_path();
+            root_ = fs::temp_directory_path() /
+                    ("lfs_export_paths_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+            fs::create_directories(root_);
+            fs::current_path(root_);
+        }
+
+        void TearDown() override {
+            fs::current_path(previous_);
+            std::error_code ec;
+            fs::remove_all(root_, ec);
+        }
+
+        static std::string bytes(const fs::path& path) {
+            std::ifstream input(path, std::ios::binary);
+            return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+        }
+
+        fs::path previous_;
+        fs::path root_;
+    };
+
+} // namespace
+
+TEST_F(ExportPathTest, DiskSpaceFindsCurrentDirectoryAboveMissingRelativeParents) {
+    for (const fs::path path : {"missing/file.ply", "nested/missing/file.sog"}) {
+        SCOPED_TRACE(path.string());
+        const auto result = check_disk_space(path, 1);
+        ASSERT_TRUE(result) << result.error().format();
+        EXPECT_GT(*result, 0u);
+        EXPECT_FALSE(fs::exists(path.parent_path()));
+    }
+}
+
+TEST_F(ExportPathTest, DiskSpacePreservesExistingAndAbsolutePathChecks) {
+    fs::create_directory("existing");
+    std::ofstream("existing/file.ply") << "existing content";
+    for (const fs::path& path : {fs::path("file.ply"), fs::path("existing/file.ply"),
+                                 fs::path("existing"), fs::path("./missing/file.ply"),
+                                 root_ / "absolute/missing/file.ply", root_}) {
+        SCOPED_TRACE(path.string());
+        const auto result = check_disk_space(path, 1);
+        ASSERT_TRUE(result) << result.error().format();
+        EXPECT_GT(*result, 0u);
+        const auto full = check_disk_space(path, std::numeric_limits<std::uintmax_t>::max() / 2, 1.0f);
+        ASSERT_FALSE(full);
+        EXPECT_EQ(full.error().code, ErrorCode::INSUFFICIENT_DISK_SPACE);
+    }
+    EXPECT_EQ(bytes("existing/file.ply"), "existing content");
+    EXPECT_FALSE(fs::exists("missing"));
+    EXPECT_FALSE(fs::exists("absolute"));
+}
+
+TEST_F(ExportPathTest, PlyRelativePathsMatchAbsoluteExportBytes) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+        GTEST_SKIP() << "Requires CUDA for splat encoding";
+    }
+
+    const auto splat = make_synthetic_splat(64, 1);
+    for (const bool binary : {false, true}) {
+        const auto reference = root_ / "reference.ply";
+        const auto saved = save_ply(splat, {.output_path = reference, .binary = binary});
+        ASSERT_TRUE(saved) << saved.error().format();
+        const auto expected = bytes(reference);
+        ASSERT_FALSE(expected.empty());
+        const auto prefix = binary ? "binary" : "ascii";
+        for (const fs::path& output : {fs::path(std::string(prefix) + ".ply"),
+                                       fs::path(prefix) / "missing/file.ply",
+                                       fs::path(".") / prefix / "dotted/file.ply",
+                                       root_ / prefix / "absolute/file.ply"}) {
+            SCOPED_TRACE(output.string());
+            const auto result = save_ply(splat, {.output_path = output, .binary = binary});
+            EXPECT_TRUE(result) << result.error().format();
+            if (result) {
+                EXPECT_EQ(bytes(output), expected);
+                const auto overwrite = save_ply(splat, {.output_path = output, .binary = binary});
+                ASSERT_TRUE(overwrite) << overwrite.error().format();
+                EXPECT_EQ(bytes(output), expected);
+            }
+        }
+    }
+}
+
+TEST_F(ExportPathTest, SogRelativePathsMatchAbsoluteExport) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+        GTEST_SKIP() << "Requires CUDA for splat encoding";
+    }
+
+    const auto splat = make_synthetic_splat(64, 0);
+    const auto reference = root_ / "reference.sog";
+    const auto saved = save_sog(splat, {.output_path = reference, .kmeans_iterations = 3});
+    ASSERT_TRUE(saved) << saved.error().format();
+    auto loader = Loader::create();
+    const auto baseline = loader->load(reference);
+    ASSERT_TRUE(baseline) << baseline.error().format();
+    const auto& expected = *std::get<std::shared_ptr<SplatData>>(baseline->data);
+    for (const fs::path& output : {fs::path("bare.sog"), fs::path("nested/missing/file.sog"),
+                                   fs::path("./dotted/file.sog"), root_ / "absolute/file.sog"}) {
+        SCOPED_TRACE(output.string());
+        const auto result = save_sog(splat, {.output_path = output, .kmeans_iterations = 3});
+        EXPECT_TRUE(result) << result.error().format();
+        if (!result)
+            continue;
+        const auto loaded = loader->load(output);
+        ASSERT_TRUE(loaded) << loaded.error().format();
+        const auto& actual = *std::get<std::shared_ptr<SplatData>>(loaded->data);
+        EXPECT_EQ(actual.size(), expected.size());
+        EXPECT_EQ(max_abs_diff(actual.means(), expected.means(), 64 * 3), 0.0);
+        EXPECT_EQ(max_abs_diff(actual.sh0(), expected.sh0(), 64 * 3), 0.0);
+        EXPECT_EQ(max_abs_diff(actual.get_scaling(), expected.get_scaling(), 64 * 3), 0.0);
+        EXPECT_EQ(max_abs_diff(actual.get_rotation(), expected.get_rotation(), 64 * 4), 0.0);
+        EXPECT_EQ(max_abs_diff(actual.get_opacity(), expected.get_opacity(), 64), 0.0);
+    }
+}
+
+TEST_F(ExportPathTest, PlyRejectsNonDirectoryParentWithoutChangingExistingFile) {
+    const auto parent = root_ / "existing";
+    std::ofstream(parent) << "existing content";
+    const auto splat = make_synthetic_splat(64, 0);
+    const auto result = save_ply(splat, {.output_path = parent / "file.ply"});
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code, ErrorCode::PERMISSION_DENIED);
+    EXPECT_EQ(bytes(parent), "existing content");
 }

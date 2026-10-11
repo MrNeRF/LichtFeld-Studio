@@ -4146,12 +4146,15 @@ namespace lfs::io {
             }
 
             // Create parent directories
+            const auto parent = options.output_path.parent_path();
             std::error_code ec;
-            std::filesystem::create_directories(options.output_path.parent_path(), ec);
+            if (!parent.empty()) {
+                std::filesystem::create_directories(parent, ec);
+            }
             if (ec) {
                 return make_error(ErrorCode::PERMISSION_DENIED,
                                   std::format("Cannot create directory: {}", ec.message()),
-                                  options.output_path.parent_path());
+                                  parent);
             }
         }
 

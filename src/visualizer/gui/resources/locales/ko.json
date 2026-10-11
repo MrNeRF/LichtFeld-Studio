@@ -711,6 +711,12 @@
   },
   "rendering": "렌더링",
   "scene": {
+    "summary_model_one": "{} 모델",
+    "summary_model_few": "{} 모델",
+    "summary_model_other": "{} 모델",
+    "summary_node_one": "{} 노드",
+    "summary_node_few": "{} 노드",
+    "summary_node_other": "{} 노드",
     "add_ply": "PLY 추가...",
     "add_group": "그룹 추가",
     "add_group_ellipsis": "그룹 추가...",
@@ -1463,6 +1469,7 @@
     "create": "만들기"
   },
   "notification": {
+    "split_view_requires_two_models": "분할 보기에는 표시된 스플랫 모델이 두 개 필요합니다.",
     "merge_nodes_kept": "병합 시 스플랫이 아닌 노드 {}개를 유지했습니다.",
     "duplicate_training_data_skipped": "복제 중 학습 데이터(데이터 세트, 카메라 및 이미지)는 건너뛰었습니다.",
     "dropped_not_recognized": "드롭된",
@@ -2096,6 +2103,8 @@
     "strategy_default": "기본값",
     "split": "분할:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "초당 표시되는 인터페이스 프레임 수입니다.",
+    "view_fps_tooltip": "초당 렌더링되는 3D 뷰 프레임 수입니다. 정적인 뷰는 인터페이스가 응답하는 동안에도 0으로 표시될 수 있습니다.",
     "ui": "UI",
     "view": "뷰"
   },
@@ -2521,6 +2530,7 @@
     "perf_hud_tooltip": "성능 HUD 표시 또는 숨기기"
   },
   "runtime": {
+    "environment_map_failed": "환경 맵 \"{}\"을(를) 읽을 수 없습니다. 이전 환경이 유지되었습니다.",
     "training_save_no_memory": "프로젝트를 저장하지 못했습니다: {}",
     "autosave_deferred_no_memory": "자동 저장이 일시 중지되었습니다: 여유 메모리가 부족합니다({}). 학습은 계속되며, 메모리가 확보되면 자동 저장이 재개됩니다.",
     "grouped_changes": "그룹화된 변경 사항",
@@ -2674,12 +2684,13 @@
     "right_click_to_add": "추가하려면 우클릭...",
     "training_complete": "학습 완료",
     "training_stopped": "학습 중지됨",
+    "training_stopped_body": "사용자가 반복 {}에서 학습을 중지했습니다.\n\n이 상태를 유지하려면 프로젝트를 저장하세요. 학습을 재개하려면 저장한 프로젝트를 다시 여세요.",
     "training_error": "학습 오류",
     "param_manager_unavailable": "파라미터 관리자를 사용할 수 없음",
     "failed_to_load_params": "파라미터 로드 실패:",
-    "err_distorted_images": "왜곡된 이미지가 감지되었습니다. 왜곡이 있는 카메라로 학습하려면 --gut 또는 --undistort를 활성화하세요.",
+    "err_distorted_images": "왜곡된 이미지가 감지되었습니다. 왜곡이 있는 카메라로 학습하려면 학습 패널에서 GUT 또는 왜곡 보정을 활성화하세요.",
     "err_ortho_not_supported": "직교 카메라 모델로의 학습은 아직 지원되지 않습니다.",
-    "err_non_pinhole": "비 핀홀 카메라로 학습하려면 --gut 또는 --undistort를 활성화하세요."
+    "err_non_pinhole": "비 핀홀 카메라로 학습하려면 학습 패널에서 GUT 또는 왜곡 보정을 활성화하세요."
   },
   "projects.gallery.sidebar.title": "갤러리",
   "projects.gallery.sidebar.refresh": "갤러리 확인",

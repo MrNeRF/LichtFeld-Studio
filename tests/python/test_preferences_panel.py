@@ -1141,3 +1141,82 @@ def test_preferences_keymap_rows_are_created_when_expanded(preferences_panel_mod
 
     assert panel._keymap._rows_built is True
     assert records["binding_rows"]
+
+
+@pytest.mark.parametrize("reset_scope", ["section", "all", "bindings"])
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_input_reset_restores_bindings_and_refreshes_rows(
+    preferences_panel_module, reset_scope, confirmed,
+):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section = "input"
+    panel._refresh_selection = lambda: None
+    panel._set_zoom_speed(42)
+    panel._set_navigation_speed(73)
+    defaults = {"forward": "W", "backward": "S", "left": "A"}
+    bindings = {"forward": "S", "backward": "Unbound", "left": "A"}
+    reset_calls = []
+
+    def reset_bindings():
+        reset_calls.append(True)
+        bindings.update(defaults)
+
+    module.lf.keymap.reset_to_default = reset_bindings
+    module.lf.ui.confirm_dialog = lambda _title, _body, buttons, callback: callback(
+        buttons[1 if confirmed else 0]
+    )
+    module.lf.ui.message_dialog = lambda *_args: None
+    module.lf.ui.set_theme = lambda _theme: None
+    module.lf.ui.reset_layout = lambda: None
+    module.lf.ui.reset_window_state = lambda: None
+    module.lf.ui.set_scene_graph_selection_markers = lambda _enabled: None
+    dirty = []
+    panel._keymap._handle = SimpleNamespace(dirty=dirty.append)
+    panel._keymap._last_state_key = ("old bindings",)
+    panel._keymap._pending_conflict = {"old": "conflict"}
+
+    if reset_scope == "section":
+        panel._on_reset_current_section(None, None, None)
+    elif reset_scope == "all":
+        panel._on_reset_all_settings(None, None, None)
+    elif confirmed:
+        panel._keymap._on_reset_default(None, None, None)
+
+    if confirmed:
+        assert bindings == defaults
+        assert reset_calls == [True]
+        assert panel._keymap._last_state_key is None
+        assert panel._keymap._pending_conflict is None
+        assert {"profile_idx", "mode_idx", "is_capturing", "bindings_hint"} <= set(dirty)
+    else:
+        assert bindings == {"forward": "S", "backward": "Unbound", "left": "A"}
+        assert reset_calls == []
+        assert panel._keymap._last_state_key == ("old bindings",)
+        assert dirty == []
+
+    reset_input = confirmed and reset_scope != "bindings"
+    assert state.zoom_speed == (11 if reset_input else 42)
+    assert state.navigation_speed == (10 if reset_input else 73)
+
+
+@pytest.mark.parametrize("section", ["general", "appearance", "interface", "mcp", "portal"])
+def test_other_section_resets_preserve_key_bindings(preferences_panel_module, section):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    reset_calls = []
+    module.lf.keymap.reset_to_default = lambda: reset_calls.append(True)
+    module.lf.ui.set_theme = lambda _theme: None
+    module.lf.ui.reset_layout = lambda: None
+    module.lf.ui.set_scene_graph_selection_markers = lambda _enabled: None
+    panel._keymap._last_state_key = ("custom bindings",)
+    panel._set_zoom_speed(42)
+    panel._set_navigation_speed(73)
+
+    panel._reset_section(section)
+
+    assert reset_calls == []
+    assert panel._keymap._last_state_key == ("custom bindings",)
+    assert state.zoom_speed == 42
+    assert state.navigation_speed == 73

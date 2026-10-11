@@ -711,6 +711,12 @@
   },
   "rendering": "Rendu",
   "scene": {
+    "summary_model_one": "{} modèle",
+    "summary_model_few": "{} modèles",
+    "summary_model_other": "{} modèles",
+    "summary_node_one": "{} nœud",
+    "summary_node_few": "{} nœuds",
+    "summary_node_other": "{} nœuds",
     "add_ply": "Ajouter PLY...",
     "add_group": "Ajouter un Groupe",
     "add_group_ellipsis": "Ajouter un Groupe...",
@@ -1463,6 +1469,7 @@
     "create": "Créer"
   },
   "notification": {
+    "split_view_requires_two_models": "La vue partagée nécessite deux modèles de splats visibles.",
     "merge_nodes_kept": "La fusion a conservé {} nœuds autres que des splats.",
     "duplicate_training_data_skipped": "Les données d’entraînement (jeux de données, caméras et images) ont été ignorées lors de la duplication.",
     "dropped_not_recognized": "L'élément déposé",
@@ -2096,6 +2103,8 @@
     "strategy_default": "Défaut",
     "split": "Division :",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "Images de l’interface affichées par seconde.",
+    "view_fps_tooltip": "Images de la vue 3D calculées par seconde. Une vue statique peut afficher 0 alors que l’interface reste réactive.",
     "ui": "IU",
     "view": "Vue"
   },
@@ -2521,6 +2530,7 @@
     "perf_hud_tooltip": "Afficher ou masquer le HUD de performances"
   },
   "runtime": {
+    "environment_map_failed": "Impossible de lire la carte d’environnement « {} ». L’environnement précédent a été conservé.",
     "training_save_no_memory": "Échec de l'enregistrement du projet : {}",
     "autosave_deferred_no_memory": "L'enregistrement automatique est en pause : mémoire libre insuffisante ({}). L'entraînement continue ; l'enregistrement automatique reprendra dès que de la mémoire sera libérée.",
     "grouped_changes": "Modifications groupées",
@@ -2674,12 +2684,13 @@
     "right_click_to_add": "Clic droit pour ajouter...",
     "training_complete": "Entraînement Terminé",
     "training_stopped": "Entraînement Arrêté",
+    "training_stopped_body": "L’utilisateur a arrêté l’entraînement à l’itération {}.\n\nEnregistrez le projet pour conserver cet état. Rouvrez le projet enregistré pour reprendre l’entraînement.",
     "training_error": "Erreur d'Entraînement",
     "param_manager_unavailable": "Gestionnaire de paramètres indisponible",
     "failed_to_load_params": "Échec du chargement des paramètres :",
-    "err_distorted_images": "Images distordues détectées. Activez --gut ou --undistort pour entraîner avec des caméras à distorsion.",
+    "err_distorted_images": "Images distordues détectées. Activez GUT ou Corriger la distorsion dans le panneau Entraînement pour entraîner avec des caméras à distorsion.",
     "err_ortho_not_supported": "L'entraînement avec le modèle de caméra orthographique n'est pas encore supporté.",
-    "err_non_pinhole": "Activez --gut ou --undistort pour entraîner avec des caméras non-pinhole."
+    "err_non_pinhole": "Activez GUT ou Corriger la distorsion dans le panneau Entraînement pour entraîner avec des caméras dont le modèle n’est pas sténopé."
   },
   "projects.gallery.sidebar.title": "Galerie",
   "projects.gallery.sidebar.refresh": "Vérifier la galerie",

@@ -47,6 +47,7 @@ body.floating-panel {
     display: block;
     font-size: 12dp;
     line-height: 18dp;
+    word-break: break-word;
     opacity: 0.8;
 }
 

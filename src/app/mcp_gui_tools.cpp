@@ -66,6 +66,7 @@
 #include <numbers>
 #include <optional>
 #include <shared_mutex>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -2638,11 +2639,16 @@ namespace lfs::app {
             .runtime = "gui",
             .thread_affinity = "gui_thread",
             .load_dataset =
-                [viewer](const std::filesystem::path& path,
-                         const core::param::TrainingParameters& params) {
+                [viewer, viewer_impl](const std::filesystem::path& path,
+                                      const core::param::TrainingParameters& params) {
                     auto immediate_params = params;
                     immediate_params.dataset.data_path.clear();
-                    return post_and_wait(viewer, [viewer, params = std::move(immediate_params), path]() {
+                    return post_and_wait(viewer, [viewer, viewer_impl, params = std::move(immediate_params), path]() -> mcp::SharedSceneToolBackend::LoadDatasetHandler::result_type {
+                        // Admission must precede parameter changes and trainer teardown.
+                        if (const auto* trainer = viewer_impl->getTrainerManager();
+                            trainer && (trainer->isTrainingActive() || trainer->isCompletionPending())) {
+                            return std::unexpected("Cannot load a dataset while training is active or stopping. Stop training and wait for completion first.");
+                        }
                         viewer->setParameters(params);
                         return viewer->loadDataset(path);
                     });
@@ -3210,7 +3216,11 @@ namespace lfs::app {
                     if (auto result = apply_render_settings_patch(args, *settings); !result)
                         return json{{"error", result.error()}};
 
-                    vis::update_render_settings(*settings);
+                    try {
+                        vis::update_render_settings(*settings);
+                    } catch (const std::invalid_argument& error) {
+                        return mcp::invalid_argument_result(error.what(), "environment_map_path");
+                    }
 
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     auto* const rendering_manager = viewer_impl->getRenderingManager();

@@ -211,6 +211,9 @@ class KeymapBindingsSection:
         lf.keymap.save_profile(lf.keymap.get_current_profile())
 
     def _on_reset_default(self, _handle, _ev, _args):
+        self.reset_to_default()
+
+    def reset_to_default(self):
         self._clear_pending_conflict()
         lf.keymap.reset_to_default()
         self._last_state_key = None

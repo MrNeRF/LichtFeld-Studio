@@ -6,11 +6,14 @@
 #include "core/image_io.hpp"
 #include "gut_camera_model_cuda.hpp"
 #include "io/formats/colmap.hpp"
+#include "io/pipelined_image_loader.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <iostream>
@@ -1516,6 +1519,212 @@ TEST(UndistortCenter, CenterPixelPreserved) {
     }
     EXPECT_NEAR(max_x, static_cast<int>(params.dst_cx), 3);
     EXPECT_NEAR(max_y, static_cast<int>(params.dst_cy), 3);
+}
+
+class UndistortImageResolution : public ::testing::Test {
+protected:
+    void SetUp() override {
+        path_ = std::filesystem::temp_directory_path() /
+                ("undistort_resolution_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".png");
+    }
+
+    void TearDown() override {
+        std::error_code error;
+        std::filesystem::remove(path_, error);
+    }
+
+    void write_image(int width, int height) {
+        const std::vector<uint8_t> pixels(width * height * 3, 128);
+        ASSERT_TRUE(save_png(path_, pixels.data(), width, height, 3, 8, 1));
+    }
+
+    Camera make_camera(bool distorted = true) {
+        return Camera(Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+                      TEST_FX, TEST_FY, TEST_CX, TEST_CY,
+                      distorted ? Tensor::from_vector({-0.05f, 0.01f}, {2}, Device::CPU) : Tensor(),
+                      Tensor(), CameraModelType::PINHOLE, "image.png", path_, "",
+                      TEST_W, TEST_H, 0);
+    }
+
+    std::filesystem::path path_;
+};
+
+TEST_F(UndistortImageResolution, DownscaledFilesSetDestinationResolution) {
+    // Include independently rounded axes, as found in downscaled image folders.
+    for (const auto [width, height] : {std::pair{80, 60}, std::pair{81, 59}}) {
+        write_image(width, height);
+        for (const bool adopted : {false, true}) {
+            SCOPED_TRACE(adopted);
+            auto camera = make_camera();
+            camera.precompute_undistortion();
+            const auto native = camera.undistort_params();
+            if (adopted)
+                camera.adopt_undistortion(native);
+            camera.prepare_undistortion();
+            const auto& prepared = camera.undistort_params();
+            const int expected_width = std::max(1, static_cast<int>(std::lround(
+                                                       double(native.dst_width) * width / TEST_W)));
+            const int expected_height = std::max(1, static_cast<int>(std::lround(
+                                                        double(native.dst_height) * height / TEST_H)));
+            EXPECT_EQ(prepared.dst_width, expected_width);
+            EXPECT_EQ(prepared.dst_height, expected_height);
+            // The source calibration remains native for project round trips and evaluation.
+            auto expected = native;
+            expected.dst_width = expected_width;
+            expected.dst_height = expected_height;
+            const float sx = float(expected_width) / native.dst_width;
+            const float sy = float(expected_height) / native.dst_height;
+            expected.dst_fx *= sx;
+            expected.dst_fy *= sy;
+            expected.dst_cx *= sx;
+            expected.dst_cy *= sy;
+            expect_params_equal(prepared, expected);
+            for (const auto [resize, cap] : {std::pair{1, 3840}, std::pair{2, 0}, std::pair{1, 40}}) {
+                const auto grid = compute_undistort_grid(expected, resize, cap);
+                camera.load_image_size(resize, cap);
+                EXPECT_EQ(camera.image_width(), grid.width);
+                EXPECT_EQ(camera.image_height(), grid.height);
+                EXPECT_EQ(camera.get_num_bytes_from_file(resize, cap), size_t(grid.width) * grid.height * 3);
+                const auto warp = prepare_undistort_params(prepared, width, height, resize, cap);
+                EXPECT_EQ(warp.dst_width, grid.width);
+                EXPECT_EQ(warp.dst_height, grid.height);
+                const auto [fx, fy, cx, cy] = camera.get_intrinsics();
+                EXPECT_FLOAT_EQ(fx, warp.dst_fx);
+                EXPECT_FLOAT_EQ(fy, warp.dst_fy);
+                EXPECT_FLOAT_EQ(cx, warp.dst_cx);
+                EXPECT_FLOAT_EQ(cy, warp.dst_cy);
+            }
+            camera.prepare_undistortion();
+            expect_params_equal(camera.undistort_params(), expected);
+        }
+    }
+}
+
+TEST_F(UndistortImageResolution, ExplicitDestinationSurvivesCameraTransfers) {
+    write_image(320, 240);
+    auto camera = make_camera();
+    camera.precompute_undistortion();
+    auto explicit_grid = camera.undistort_params();
+    explicit_grid.dst_width = 320;
+    explicit_grid.dst_height = 240;
+    explicit_grid.dst_fx = 250.0f;
+    explicit_grid.dst_fy = 245.0f;
+    explicit_grid.dst_cx = 159.5f;
+    explicit_grid.dst_cy = 118.5f;
+    camera.adopt_undistortion(explicit_grid, Camera::UndistortDestination::Explicit);
+
+    Camera transformed(camera, camera.world_view_transform());
+    Camera moved(std::move(camera));
+    Camera assigned;
+    assigned = std::move(moved);
+    auto direct = make_camera();
+    direct.adopt_undistortion(explicit_grid, Camera::UndistortDestination::Explicit);
+    for (auto* candidate : {&direct, &transformed, &assigned}) {
+        candidate->prepare_undistortion();
+        expect_params_equal(candidate->undistort_params(), explicit_grid);
+        candidate->load_image_size(1, 0);
+        EXPECT_EQ(candidate->image_width(), 320);
+        EXPECT_EQ(candidate->image_height(), 240);
+        const auto [fx, fy, cx, cy] = candidate->get_intrinsics();
+        EXPECT_FLOAT_EQ(fx, explicit_grid.dst_fx);
+        EXPECT_FLOAT_EQ(fy, explicit_grid.dst_fy);
+        EXPECT_FLOAT_EQ(cx, explicit_grid.dst_cx);
+        EXPECT_FLOAT_EQ(cy, explicit_grid.dst_cy);
+        candidate->prepare_undistortion();
+        expect_params_equal(candidate->undistort_params(), explicit_grid);
+    }
+}
+
+TEST_F(UndistortImageResolution, CombinedResizeAndCapMatchesOrdinaryLoadingWithoutCrop) {
+    write_image(320, 240);
+    Camera undistorted(Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+                       TEST_FX, TEST_FY, TEST_CX, TEST_CY,
+                       Tensor::zeros({2}, Device::CPU), Tensor(), CameraModelType::PINHOLE,
+                       "image.png", path_, "", TEST_W, TEST_H, 0);
+    undistorted.prepare_undistortion();
+    ASSERT_TRUE(undistorted.is_undistort_prepared());
+    ASSERT_EQ(undistorted.undistort_params().dst_width, 320);
+    ASSERT_EQ(undistorted.undistort_params().dst_height, 240);
+    lfs::io::PipelinedImageLoader loader;
+    for (const auto [resize, cap] : {std::pair{2, 120}, std::pair{2, 200},
+                                     std::pair{4, 60}, std::pair{4, 100}, std::pair{8, 20}}) {
+        SCOPED_TRACE(::testing::Message() << "resize=" << resize << " cap=" << cap);
+        auto ordinary = make_camera(false);
+        ordinary.load_image_size(resize, cap);
+        undistorted.load_image_size(resize, cap);
+        const auto [pixels, width, height, channels] = load_image(path_, resize, cap);
+        std::free(pixels);
+        EXPECT_EQ(ordinary.image_width(), width);
+        EXPECT_EQ(ordinary.image_height(), height);
+        EXPECT_EQ(undistorted.image_width(), width);
+        EXPECT_EQ(undistorted.image_height(), height);
+        const auto warp = prepare_undistort_params(undistorted.undistort_params(), 320, 240, resize, cap);
+        EXPECT_EQ(warp.dst_width, width);
+        EXPECT_EQ(warp.dst_height, height);
+        const auto loaded = loader.load_image_immediate(
+            path_, {.resize_factor = resize, .max_width = cap, .undistort = &undistorted.undistort_params(), .skip_blob_cache = true});
+        ASSERT_EQ(loaded.ndim(), 3u);
+        EXPECT_EQ(loaded.shape()[2], width);
+        EXPECT_EQ(loaded.shape()[1], height);
+    }
+}
+
+TEST_F(UndistortImageResolution, CombinedResizeAndCapPreservesExistingRounding) {
+    write_image(81, 59);
+    Camera undistorted(Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+                       TEST_FX, TEST_FY, TEST_CX, TEST_CY,
+                       Tensor::zeros({2}, Device::CPU), Tensor(), CameraModelType::PINHOLE,
+                       "image.png", path_, "", TEST_W, TEST_H, 0);
+    undistorted.prepare_undistortion();
+    undistorted.load_image_size(2, 30);
+    // The warp rounds once after choosing the smaller scale. Ordinary loading
+    // truncates after division and again after the cap; keep both established policies.
+    EXPECT_EQ(undistorted.image_width(), 30);
+    EXPECT_EQ(undistorted.image_height(), 22);
+    auto ordinary = make_camera(false);
+    ordinary.load_image_size(2, 30);
+    const auto [pixels, width, height, channels] = load_image(path_, 2, 30);
+    std::free(pixels);
+    EXPECT_EQ(width, 30);
+    EXPECT_EQ(height, 21);
+    EXPECT_EQ(ordinary.image_width(), width);
+    EXPECT_EQ(ordinary.image_height(), height);
+    lfs::io::PipelinedImageLoader loader;
+    const auto loaded = loader.load_image_immediate(
+        path_, {.resize_factor = 2, .max_width = 30, .undistort = &undistorted.undistort_params(), .skip_blob_cache = true});
+    ASSERT_EQ(loaded.ndim(), 3u);
+    EXPECT_EQ(loaded.shape()[2], 30u);
+    EXPECT_EQ(loaded.shape()[1], 22u);
+}
+
+TEST_F(UndistortImageResolution, NativeFilesKeepExistingParameters) {
+    write_image(TEST_W, TEST_H);
+    auto camera = make_camera();
+    camera.precompute_undistortion();
+    const auto native = camera.undistort_params();
+    camera.prepare_undistortion();
+    expect_params_equal(camera.undistort_params(), native);
+}
+
+TEST_F(UndistortImageResolution, MissingFilesKeepExistingParameters) {
+    for (const bool has_image : {false, true}) {
+        auto camera = make_camera();
+        camera.set_has_image(has_image);
+        camera.precompute_undistortion();
+        const auto native = camera.undistort_params();
+        camera.prepare_undistortion();
+        expect_params_equal(camera.undistort_params(), native);
+    }
+}
+
+TEST_F(UndistortImageResolution, PinholeFilesKeepExistingResolution) {
+    write_image(80, 60);
+    auto camera = make_camera(false);
+    camera.prepare_undistortion();
+    EXPECT_FALSE(camera.is_undistort_prepared());
+    camera.load_image_size(2, 0);
+    EXPECT_EQ(camera.image_width(), 40);
+    EXPECT_EQ(camera.image_height(), 30);
 }
 
 // ====================== Camera class integration (bicycle data) ======================

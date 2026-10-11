@@ -711,6 +711,12 @@
   },
   "rendering": "渲染",
   "scene": {
+    "summary_model_one": "{} 个模型",
+    "summary_model_few": "{} 个模型",
+    "summary_model_other": "{} 个模型",
+    "summary_node_one": "{} 个节点",
+    "summary_node_few": "{} 个节点",
+    "summary_node_other": "{} 个节点",
     "add_ply": "添加PLY...",
     "add_group": "添加组",
     "add_group_ellipsis": "添加组...",
@@ -1463,6 +1469,7 @@
     "create": "创建"
   },
   "notification": {
+    "split_view_requires_two_models": "分屏视图需要两个可见的 Splat 模型。",
     "merge_nodes_kept": "合并保留了 {} 个非 splat 节点。",
     "duplicate_training_data_skipped": "复制时已跳过训练数据（数据集、相机和图像）。",
     "dropped_not_recognized": "拖放的",
@@ -2096,6 +2103,8 @@
     "strategy_default": "默认",
     "split": "分割：",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "每秒显示的界面帧数。",
+    "view_fps_tooltip": "每秒渲染的3D视图帧数。静止视图可能显示为0，此时界面仍可正常响应。",
     "ui": "界面",
     "view": "视图"
   },
@@ -2521,6 +2530,7 @@
     "perf_hud_tooltip": "显示或隐藏性能 HUD"
   },
   "runtime": {
+    "environment_map_failed": "无法读取环境贴图“{}”。已保留之前的环境。",
     "training_save_no_memory": "项目保存失败：{}",
     "autosave_deferred_no_memory": "自动保存已暂停：可用内存不足（{}）。训练将继续；内存释放后自动保存会恢复。",
     "grouped_changes": "已分组的更改",
@@ -2674,12 +2684,13 @@
     "right_click_to_add": "右键单击以添加...",
     "training_complete": "训练完成",
     "training_stopped": "训练已停止",
+    "training_stopped_body": "用户在第 {} 次迭代时停止了训练。\n\n请保存项目以保留此状态。重新打开已保存的项目即可继续训练。",
     "training_error": "训练错误",
     "param_manager_unavailable": "参数管理器不可用",
     "failed_to_load_params": "加载参数失败：",
-    "err_distorted_images": "检测到畸变图像。请启用 --gut 或 --undistort 以使用有畸变的相机进行训练。",
+    "err_distorted_images": "检测到畸变图像。请在训练面板中启用 GUT 或去畸变，以使用有畸变的相机进行训练。",
     "err_ortho_not_supported": "暂不支持使用正交相机模型进行训练。",
-    "err_non_pinhole": "请启用 --gut 或 --undistort 以使用非针孔相机进行训练。"
+    "err_non_pinhole": "请在训练面板中启用 GUT 或去畸变，以使用非针孔相机进行训练。"
   },
   "projects.gallery.sidebar.title": "图库",
   "projects.gallery.sidebar.refresh": "检查图库",

@@ -3,6 +3,7 @@
 
 #include "core/camera.hpp"
 #include "core/editor_context.hpp"
+#include "core/error_bus.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
@@ -3003,6 +3004,71 @@ namespace lfs::vis {
         expect_one_redraw(0);
     }
 
+    TEST_F(RenderingManagerEventsTest, SceneReconstructionReadinessRequestsOneFollowupFrame) {
+        RenderingManager manager;
+        auto settings = manager.getSettings();
+        settings.scene_upscaler = "spatial";
+        settings.scene_upscaler_preset = "balanced";
+        manager.updateSettings(settings);
+        auto& ledger = manager.frameDemandLedger();
+        // The settings frame rendered before presentation prepared reconstruction.
+        (void)ledger.plan(FrameClock::now());
+
+        const auto ready = resolveSceneUpscalerSelection(SceneUpscalerBackend::Spatial, true);
+        manager.reportSceneUpscalerRuntimeSelection(ready);
+        EXPECT_EQ(manager.sceneUpscalerRuntimeSelection(), ready);
+        const auto plan = ledger.plan(FrameClock::now());
+        EXPECT_TRUE(plan.present);
+        EXPECT_NE(plan.view_flags[0] & DirtyFlag::VIEWPORT, 0u);
+        EXPECT_FLOAT_EQ(manager.getSettings().scene_upscaler_scale, 0.67f);
+
+        for (int i = 0; i < 3; ++i) {
+            manager.reportSceneUpscalerRuntimeSelection(ready);
+            EXPECT_TRUE(ledger.plan(FrameClock::now()).empty());
+            EXPECT_FALSE(ledger.nextDeadline(FrameClock::now()).has_value());
+        }
+    }
+
+    TEST_F(RenderingManagerEventsTest, SceneReconstructionFallbackAndRecoveryRequestFrames) {
+        RenderingManager manager;
+        auto& ledger = manager.frameDemandLedger();
+        (void)ledger.plan(FrameClock::now());
+        const auto ready = resolveSceneUpscalerSelection(SceneUpscalerBackend::Spatial, true);
+        const auto fallback = resolveSceneUpscalerSelection(SceneUpscalerBackend::Spatial, false);
+        const auto native = resolveSceneUpscalerSelection(SceneUpscalerBackend::Native, true);
+        for (const auto selection : {ready, fallback, ready, native}) {
+            manager.reportSceneUpscalerRuntimeSelection(selection);
+            EXPECT_EQ(manager.sceneUpscalerRuntimeSelection(), selection);
+            const auto plan = ledger.plan(FrameClock::now());
+            EXPECT_TRUE(plan.present);
+            EXPECT_NE(plan.view_flags[0] & DirtyFlag::VIEWPORT, 0u);
+            manager.reportSceneUpscalerRuntimeSelection(selection);
+            EXPECT_TRUE(ledger.plan(FrameClock::now()).empty());
+        }
+    }
+
+    TEST_F(RenderingManagerEventsTest, SceneReconstructionUnchangedFeedbackPreservesIdleAndPresetUpdates) {
+        RenderingManager manager;
+        auto& ledger = manager.frameDemandLedger();
+        (void)ledger.plan(FrameClock::now());
+        manager.reportSceneUpscalerRuntimeSelection({});
+        EXPECT_TRUE(ledger.plan(FrameClock::now()).empty());
+
+        const auto ready = resolveSceneUpscalerSelection(SceneUpscalerBackend::Spatial, true);
+        manager.reportSceneUpscalerRuntimeSelection(ready);
+        (void)ledger.plan(FrameClock::now());
+        for (const auto& preset : sceneUpscalerDescriptor(SceneUpscalerBackend::Spatial).presets) {
+            auto settings = manager.getSettings();
+            settings.scene_upscaler = "spatial";
+            settings.scene_upscaler_preset = preset.id;
+            manager.updateSettings(settings);
+            EXPECT_TRUE(ledger.plan(FrameClock::now()).present);
+            EXPECT_FLOAT_EQ(manager.getSettings().scene_upscaler_scale, preset.input_scale);
+            manager.reportSceneUpscalerRuntimeSelection(ready);
+            EXPECT_TRUE(ledger.plan(FrameClock::now()).empty());
+        }
+    }
+
     TEST(RenderAnimationStateTest, PivotAndExplicitOverlayAnimationsStillRequestFrames) {
         RenderAnimationState state;
         EXPECT_EQ(state.pollDirtyState(), 0u);
@@ -3032,6 +3098,91 @@ namespace lfs::vis {
             .emit();
 
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+    }
+
+    TEST_F(RenderingManagerEventsTest, PlyComparisonRequiresTwoVisibleModelsAndExplainsWhy) {
+        struct Consumer : lfs::NativeErrorConsumer {
+            int notices = 0;
+            void on_error(const lfs::ErrorNotification& notification,
+                          const lfs::ErrorDeliveryInfo&) noexcept override {
+                EXPECT_EQ(notification.error.code(), lfs::ErrorCode::FailedPrecondition);
+                EXPECT_EQ(notification.surface, lfs::ErrorSurface::StatusOnly);
+                EXPECT_FALSE(notification.error.user_message().empty());
+                ++notices;
+            }
+        } consumer;
+        auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
+        RenderingManager manager;
+        const auto reject = [&] {
+            const auto before = consumer.notices;
+            lfs::core::events::cmd::ToggleSplitView{}.emit();
+            EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+            EXPECT_EQ(consumer.notices, before + 1);
+        };
+        reject();
+        SceneManager scene_manager;
+        services().set(&scene_manager);
+        reject();
+        auto& scene = scene_manager.getScene();
+        scene.addSplat("first", makeTestSplat(0.0f));
+        reject();
+        const auto second = scene.addSplat("second", makeTestSplat(1.0f));
+        scene.setNodeVisibility(second, false);
+        reject();
+        const auto group = scene.addGroup("hidden group");
+        ASSERT_TRUE(scene.reparent(second, group));
+        scene.setNodeVisibility(second, true);
+        scene.setNodeVisibility(group, false);
+        reject();
+    }
+
+    TEST_F(RenderingManagerEventsTest, PlyComparisonStillTogglesAndCanAlwaysExit) {
+        SceneManager scene_manager;
+        services().set(&scene_manager);
+        RenderingManager manager;
+        auto& scene = scene_manager.getScene();
+        scene.addSplat("first", makeTestSplat(0.0f));
+        const auto second = scene.addSplat("second", makeTestSplat(1.0f));
+        auto settings = manager.getSettings();
+        settings.split_position = 0.35f;
+        settings.split_view_offset = 7;
+        manager.updateSettings(settings);
+        lfs::core::events::cmd::ToggleSplitView{}.emit();
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::PLYComparison);
+        EXPECT_FLOAT_EQ(manager.getSettings().split_position, 0.35f);
+        EXPECT_EQ(manager.getSettings().split_view_offset, 0u);
+        lfs::core::events::cmd::ToggleSplitView{}.emit();
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+        lfs::core::events::cmd::ToggleSplitView{}.emit();
+        scene.setNodeVisibility(second, false);
+        lfs::core::events::cmd::ToggleSplitView{}.emit();
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+    }
+
+    TEST_F(RenderingManagerEventsTest, RejectedPlyComparisonPreservesIndependentView) {
+        SceneManager scene_manager;
+        services().set(&scene_manager);
+        scene_manager.getScene().addSplat("model", makeTestSplat(0.0f));
+        RenderingManager manager;
+        Viewport viewport(800, 600);
+        lfs::core::events::cmd::ToggleIndependentSplitView{.viewport = &viewport}.emit();
+        lfs::core::events::cmd::ToggleSplitView{}.emit();
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::IndependentDual);
+    }
+
+    TEST_F(RenderingManagerEventsTest, RejectedPlyComparisonPreservesGroundTruthView) {
+        SceneManager scene_manager;
+        addDatasetCameraWithImage(scene_manager);
+        services().set(&scene_manager);
+        RenderingManager manager;
+        lfs::core::events::cmd::ToggleGTComparison{}.emit();
+        ASSERT_EQ(manager.getSettings().split_view_mode, SplitViewMode::GTComparison);
+        const auto before = manager.getSettings();
+        lfs::core::events::cmd::ToggleSplitView{}.emit();
+        const auto after = manager.getSettings();
+        EXPECT_EQ(after.split_view_mode, SplitViewMode::GTComparison);
+        EXPECT_EQ(after.equirectangular, before.equirectangular);
+        EXPECT_EQ(after.show_camera_frustums, before.show_camera_frustums);
     }
 
     TEST_F(RenderingManagerEventsTest, ViewerCannotEnterGtComparisonThroughCommand) {
@@ -3150,6 +3301,43 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Left), 0);
         EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Right), 2);
         EXPECT_EQ(manager.getSettings().grid_plane, 2);
+    }
+
+    TEST_F(RenderingManagerEventsTest, SceneClearedDiscardsTemporaryProjectionBackend) {
+        using Backend = lfs::rendering::GaussianRasterBackend;
+        RenderingManager manager;
+        auto event = lfs::core::events::ui::RenderSettingsChanged{};
+        event.equirectangular = true;
+        event.emit();
+        lfs::core::events::state::SceneCleared{}.emit();
+
+        auto settings = manager.getSettings();
+        settings.equirectangular = false;
+        settings.raster_backend = Backend::ThreeDgut;
+        settings.gut = true;
+        manager.updateSettings(settings);
+        EXPECT_EQ(manager.getSettings().raster_backend, Backend::ThreeDgut);
+        EXPECT_TRUE(manager.getSettings().gut);
+    }
+
+    TEST_F(RenderingManagerEventsTest, RenderSettingsChangedEquirectangularRestoresBackend) {
+        using Backend = lfs::rendering::GaussianRasterBackend;
+        for (const auto backend : {Backend::ThreeDgs, Backend::ThreeDgut}) {
+            RenderingManager manager;
+            auto settings = manager.getSettings();
+            settings.raster_backend = backend;
+            settings.gut = lfs::rendering::isGutBackend(backend);
+            manager.updateSettings(settings);
+            for (int cycle = 0; cycle < 3; ++cycle) {
+                for (const bool enabled : {true, true, false, false}) {
+                    auto event = lfs::core::events::ui::RenderSettingsChanged{};
+                    event.equirectangular = enabled;
+                    event.emit();
+                    EXPECT_EQ(manager.getSettings().raster_backend, enabled ? Backend::ThreeDgut : backend);
+                    EXPECT_EQ(manager.getSettings().gut, enabled || lfs::rendering::isGutBackend(backend));
+                }
+            }
+        }
     }
 
     TEST_F(RenderingManagerEventsTest, RenderSettingsChangedEquirectangularForcesGutBackend) {

@@ -5979,6 +5979,70 @@ contract["check_selection_submode_follows_native_mode"](lf)
         tasks.import_state_.job = {};
     }
 
+    TEST_F(VisualizerImplResetTest, DirectSplatLoadRejectsActiveTrainingWithoutConsent) {
+        for (const auto state : {TrainingState::Starting, TrainingState::Running, TrainingState::Paused}) {
+            SCOPED_TRACE(static_cast<int>(state));
+            VisualizerImpl viewer(projectOptions());
+            // The entry point is exercised without creating a native window.
+            viewer.fully_initialized_ = true;
+            auto& scene = viewer.getScene();
+            const auto original = scene.addGroup("unsaved-run");
+            scene.addCamera("camera.png", original, make_project_request_test_camera());
+            auto* const manager = viewer.getTrainerManager();
+            manager->setTrainer(std::make_unique<lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            auto& machine = const_cast<TrainingStateMachine&>(manager->getStateMachine());
+            if (machine.getState() == TrainingState::Idle)
+                ASSERT_TRUE(machine.transitionTo(TrainingState::Ready));
+            ASSERT_TRUE(machine.transitionTo(TrainingState::Starting));
+            if (state != TrainingState::Starting)
+                ASSERT_TRUE(machine.transitionTo(TrainingState::Running));
+            if (state == TrainingState::Paused)
+                ASSERT_TRUE(machine.transitionTo(TrainingState::Paused));
+
+            const auto result = viewer.loadPLY(temporary_.path / "replacement.ply");
+            EXPECT_FALSE(result);
+            if (!result)
+                EXPECT_NE(result.error().find("training"), std::string::npos);
+            EXPECT_EQ(manager->getState(), state);
+            EXPECT_EQ(viewer.getTrainer(), trainer);
+            ASSERT_NE(scene.getNode("unsaved-run"), nullptr);
+            EXPECT_EQ(scene.getNode("unsaved-run")->id, original);
+            EXPECT_TRUE(viewer.pending_load_files_.empty());
+            EXPECT_EQ(viewer.pending_training_action_, VisualizerImpl::PendingTrainingAction::None);
+            EXPECT_FALSE(viewer.getGuiManager()->asyncTasks().isImporting());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest, DirectSplatLoadWithoutActiveTrainingStillReplacesScene) {
+        const auto path = makeSplatFixture("direct-replacement");
+        for (const auto state : {TrainingState::Idle, TrainingState::Ready, TrainingState::Finished}) {
+            SCOPED_TRACE(static_cast<int>(state));
+            VisualizerImpl viewer(projectOptions());
+            viewer.fully_initialized_ = true;
+            viewer.getScene().addGroup("previous-scene");
+            auto& machine = const_cast<TrainingStateMachine&>(viewer.getTrainerManager()->getStateMachine());
+            if (state != TrainingState::Idle)
+                ASSERT_TRUE(machine.transitionTo(TrainingState::Ready));
+            if (state == TrainingState::Finished) {
+                ASSERT_TRUE(machine.transitionTo(TrainingState::Starting));
+                ASSERT_TRUE(machine.transitionTo(TrainingState::Running));
+                ASSERT_TRUE(machine.transitionTo(TrainingState::Stopping));
+                ASSERT_TRUE(machine.transitionToFinished(FinishReason::Completed));
+            }
+            ASSERT_TRUE(viewer.loadPLY(path));
+            auto& tasks = viewer.getGuiManager()->asyncTasks();
+            ASSERT_TRUE(waitUntil([&] {
+                tasks.pollImportCompletion();
+                return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+            }));
+            EXPECT_EQ(viewer.getScene().getNode("previous-scene"), nullptr);
+            ASSERT_NE(viewer.getScene().getNode("direct-replacement"), nullptr);
+            EXPECT_EQ(viewer.getScene().getTotalGaussianCount(), 2u);
+            EXPECT_EQ(viewer.getSceneManager()->getSelectedNodeName(), "direct-replacement");
+        }
+    }
+
     TEST_F(VisualizerImplResetTest, AsyncSplatLoadAttachesAndSelectsNode) {
         const auto path = temporary_.path / "async-single.ply";
         ASSERT_TRUE(lfs::io::save_ply(*lfs::test::licht::make_splat(2), {
@@ -6126,6 +6190,25 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(completed->status, JobStatus::Completed);
         EXPECT_EQ(viewer.getScene().getAllCameras().size(), 1u);
         EXPECT_EQ(viewer.getScene().getNode("gallery-group"), nullptr);
+    }
+
+    TEST_F(VisualizerImplResetTest, DatasetImportHonorsRequestedImageFolder) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        const auto dataset = temporary_.path / "image-folder-dataset";
+        write_minimal_transforms_dataset(dataset);
+        for (const std::string folder : {"", "images", "images_8", "."}) {
+            core::events::cmd::LoadFile{
+                .path = dataset,
+                .is_dataset = true,
+                .discard_changes = true,
+                .images_folder = folder}
+                .emit();
+            ASSERT_TRUE(waitUntil([&] { tasks.pollImportCompletion(); return !tasks.isImporting(); }));
+            EXPECT_EQ(viewer.getDataLoader()->getParameters().dataset.images,
+                      folder.empty() ? "images" : folder);
+            EXPECT_EQ(viewer.getScene().getAllCameras().size(), 1u);
+        }
     }
 
     // Catches the startup dataset import dropping --add-splat, which trained the viewer's model
@@ -17227,6 +17310,10 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(manager->getCurrentIteration(), 11);
         EXPECT_EQ(manager->getTotalIterations(), 11);
         EXPECT_EQ(manager->getState(), TrainingState::Finished);
+        EXPECT_FALSE(manager->canResume());
+        EXPECT_FALSE(manager->canStart());
+        EXPECT_FALSE(manager->canPause());
+        EXPECT_FALSE(manager->canStop());
         EXPECT_STREQ(manager->getStrategyType(), "mrnf");
         EXPECT_EQ(manager->getNumSplats(), 2);
     }
@@ -17281,6 +17368,10 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(manager->getCurrentIteration(), 11);
         EXPECT_EQ(manager->getTotalIterations(), 30000);
         EXPECT_EQ(manager->getState(), TrainingState::Paused);
+        EXPECT_TRUE(manager->canResume());
+        EXPECT_FALSE(manager->canStart());
+        EXPECT_FALSE(manager->canPause());
+        EXPECT_TRUE(manager->canStop());
         EXPECT_STREQ(manager->getStrategyType(), "mrnf");
         EXPECT_EQ(manager->getNumSplats(), 2);
     }

@@ -242,6 +242,9 @@ def finish_reason() -> str | None:
 def trainer_error() -> str | None:
     """Get trainer error message"""
 
+def trainer_error_key() -> str | None:
+    """Get the optional localization key for the trainer error message"""
+
 def prepare_training_from_scene() -> None:
     """Initialize trainer from existing scene cameras and point cloud"""
 
@@ -388,7 +391,7 @@ def clear_scene() -> None:
 def switch_to_edit_mode() -> None:
     """Switch from training to edit mode"""
 
-def load_file(path: str, is_dataset: bool = False, output_path: str = '', init_path: str = '', centralize_dataset: str = 'off', max_width: int | None = None, apply_auto_crop: bool = False, min_track_length: int | None = None, stop_training: bool = False, discard_changes: bool = False, replace: bool = False) -> None:
+def load_file(path: str, is_dataset: bool = False, output_path: str = '', init_path: str = '', centralize_dataset: str = 'off', max_width: int | None = None, apply_auto_crop: bool = False, min_track_length: int | None = None, stop_training: bool = False, discard_changes: bool = False, replace: bool = False, images_folder: str = '') -> None:
     """Load a file (PLY, checkpoint) or dataset into the scene."""
 
 def load_files(paths: Sequence[str], stop_training: bool = False, discard_changes: bool = False, replace: bool = False, _user_batch: bool = False) -> None:

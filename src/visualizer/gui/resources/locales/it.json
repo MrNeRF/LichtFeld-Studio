@@ -711,6 +711,12 @@
   },
   "rendering": "Rendering",
   "scene": {
+    "summary_model_one": "{} modello",
+    "summary_model_few": "{} modelli",
+    "summary_model_other": "{} modelli",
+    "summary_node_one": "{} nodo",
+    "summary_node_few": "{} nodi",
+    "summary_node_other": "{} nodi",
     "add_ply": "Aggiungi PLY...",
     "add_group": "Aggiungi Gruppo",
     "add_group_ellipsis": "Aggiungi Gruppo...",
@@ -1463,6 +1469,7 @@
     "create": "Crea"
   },
   "notification": {
+    "split_view_requires_two_models": "La vista divisa richiede due modelli splat visibili.",
     "merge_nodes_kept": "L’unione ha mantenuto {} nodi non splat.",
     "duplicate_training_data_skipped": "I dati di addestramento (dataset, fotocamere e immagini) sono stati esclusi dalla duplicazione.",
     "dropped_not_recognized": "L'elemento trascinato",
@@ -2096,6 +2103,8 @@
     "strategy_default": "Predefinito",
     "split": "Divisione:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "Fotogrammi dell’interfaccia presentati al secondo.",
+    "view_fps_tooltip": "Fotogrammi della vista 3D renderizzati al secondo. Una vista statica può indicare 0 mentre l’interfaccia rimane reattiva.",
     "ui": "UI",
     "view": "Vista"
   },
@@ -2521,6 +2530,7 @@
     "perf_hud_tooltip": "Mostra o nascondi l'HUD delle prestazioni"
   },
   "runtime": {
+    "environment_map_failed": "Impossibile leggere la mappa ambiente «{}». È stato mantenuto l’ambiente precedente.",
     "training_save_no_memory": "Salvataggio del progetto non riuscito: {}",
     "autosave_deferred_no_memory": "Il salvataggio automatico è in pausa: memoria libera insufficiente ({}). L'addestramento continua; il salvataggio automatico riprenderà quando si libererà memoria.",
     "grouped_changes": "Modifiche raggruppate",
@@ -2674,12 +2684,13 @@
     "right_click_to_add": "Clic destro per aggiungere...",
     "training_complete": "Training Completato",
     "training_stopped": "Training Interrotto",
+    "training_stopped_body": "L’utente ha interrotto l’addestramento all’iterazione {}.\n\nSalva il progetto per conservare questo stato. Riapri il progetto salvato per riprendere l’addestramento.",
     "training_error": "Errore di Training",
     "param_manager_unavailable": "Gestore parametri non disponibile",
     "failed_to_load_params": "Caricamento parametri fallito:",
-    "err_distorted_images": "Rilevate immagini distorte. Attivare --gut o --undistort per addestrare con fotocamere con distorsione.",
+    "err_distorted_images": "Rilevate immagini distorte. Attivare GUT o Rimuovi distorsione nel pannello Training per addestrare con fotocamere con distorsione.",
     "err_ortho_not_supported": "Il Training con modello fotocamera ortografico non è ancora supportato.",
-    "err_non_pinhole": "Attivare --gut o --undistort per addestrare con fotocamere non-pinhole."
+    "err_non_pinhole": "Attivare GUT o Rimuovi distorsione nel pannello Training per addestrare con fotocamere con modello non stenopeico."
   },
   "projects.gallery.sidebar.title": "Galleria",
   "projects.gallery.sidebar.refresh": "Controlla galleria",

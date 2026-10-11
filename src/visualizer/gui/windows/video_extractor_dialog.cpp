@@ -521,7 +521,15 @@ namespace lfs::gui {
     }
 
     bool VideoExtractorDialog::openVideo(const std::filesystem::path& path) {
+        if (extracting_.load() || pending_params_set_)
+            return false;
+
+        // A finished worker must publish its status before the new source clears it.
+        joinExtractionThread();
         if (!player_->open(path)) {
+            video_path_.clear();
+            output_dir_.clear();
+            controls_dirty_ = true;
             syncHdrControls();
             setExtractionError(std::format("Failed to open {}", lfs::core::path_to_utf8(path)));
             return false;
@@ -1213,6 +1221,8 @@ namespace lfs::gui {
         changed |= setCachedDisabled(start_btn_el_, !can_start || !naming_valid);
         changed |= setCachedDisabled(stop_btn_el_, !extracting || stop_requested);
         changed |= setCachedDisabled(cancel_btn_el_, false);
+        changed |= setCachedDisabled(browse_video_el_, extracting || pending_params_set_);
+        changed |= setCachedDisabled(browse_output_el_, extracting || pending_params_set_);
 
         changed |= setCachedSelect(naming_select_el_, naming_selection_);
         changed |= setCachedDisabled(naming_select_el_, extracting);
@@ -1456,10 +1466,14 @@ namespace lfs::gui {
         } else if (id == "btn-stop") {
             requestStopExtraction();
         } else if (id == "btn-browse-video") {
+            if (extracting_.load() || pending_params_set_)
+                return;
             const auto path = lfs::vis::gui::OpenVideoFileDialog(video_path_);
             if (!path.empty())
                 (void)openVideo(path);
         } else if (id == "btn-browse-output") {
+            if (extracting_.load() || pending_params_set_)
+                return;
             const auto path = lfs::vis::gui::PickFolderDialog(output_dir_);
             if (!path.empty()) {
                 output_dir_ = path;

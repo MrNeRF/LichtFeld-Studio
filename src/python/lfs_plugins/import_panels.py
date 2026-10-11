@@ -764,6 +764,10 @@ class NewProjectPanel(_ImportDialogPanel):
         apply_auto_crop = self._apply_auto_crop
         min_track_length = self._min_track_length
         embed_dataset = self._embed_dataset
+        images_folder = ""
+        if source_kind == "dataset" and self._dataset_info is not None:
+            images_folder = str(Path(self._dataset_info.images_path).relative_to(
+                Path(self._dataset_info.base_path)))
 
         def _commit(stop_training: bool, overwrite: bool) -> None:
             if (
@@ -813,6 +817,7 @@ class NewProjectPanel(_ImportDialogPanel):
                 load_kwargs = {
                     "path": source_path,
                     "is_dataset": True,
+                    "images_folder": images_folder,
                     "init_path": init_path,
                     "centralize_dataset": centralize_dataset,
                     "max_width": max_width,

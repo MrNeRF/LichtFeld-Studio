@@ -711,6 +711,12 @@
   },
   "rendering": "Renderizado",
   "scene": {
+    "summary_model_one": "{} modelo",
+    "summary_model_few": "{} modelos",
+    "summary_model_other": "{} modelos",
+    "summary_node_one": "{} nodo",
+    "summary_node_few": "{} nodos",
+    "summary_node_other": "{} nodos",
     "add_ply": "Añadir PLY...",
     "add_group": "Añadir Grupo",
     "add_group_ellipsis": "Añadir Grupo...",
@@ -1463,6 +1469,7 @@
     "create": "Crear"
   },
   "notification": {
+    "split_view_requires_two_models": "La vista dividida requiere dos modelos de splats visibles.",
     "merge_nodes_kept": "La fusión conservó {} nodos que no son splats.",
     "duplicate_training_data_skipped": "Se omitieron los datos de entrenamiento (conjuntos de datos, cámaras e imágenes) al duplicar.",
     "dropped_not_recognized": "El elemento soltado",
@@ -2096,6 +2103,8 @@
     "strategy_default": "Predeterminado",
     "split": "División:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "Fotogramas de la interfaz presentados por segundo.",
+    "view_fps_tooltip": "Fotogramas de la vista 3D renderizados por segundo. Una vista estática puede indicar 0 mientras la interfaz sigue respondiendo.",
     "ui": "IU",
     "view": "Vista"
   },
@@ -2521,6 +2530,7 @@
     "perf_hud_tooltip": "Mostrar u ocultar el HUD de rendimiento"
   },
   "runtime": {
+    "environment_map_failed": "No se pudo leer el mapa de entorno «{}». Se ha conservado el entorno anterior.",
     "training_save_no_memory": "No se pudo guardar el proyecto: {}",
     "autosave_deferred_no_memory": "El guardado automático está en pausa: no hay suficiente memoria libre ({}). El entrenamiento continúa; el guardado automático se reanudará cuando se libere memoria.",
     "grouped_changes": "Cambios agrupados",
@@ -2674,12 +2684,13 @@
     "right_click_to_add": "Clic derecho para añadir...",
     "training_complete": "Entrenamiento Completado",
     "training_stopped": "Entrenamiento Detenido",
+    "training_stopped_body": "El usuario detuvo el entrenamiento en la iteración {}.\n\nGuarda el proyecto para conservar este estado. Vuelve a abrir el proyecto guardado para reanudar el entrenamiento.",
     "training_error": "Error de Entrenamiento",
     "param_manager_unavailable": "ParameterManager no disponible",
     "failed_to_load_params": "Error al cargar los parámetros:",
-    "err_distorted_images": "Se detectaron imágenes distorsionadas. Activa --gut o --undistort para entrenar con cámaras con distorsión.",
+    "err_distorted_images": "Se detectaron imágenes distorsionadas. Activa GUT o Corregir distorsión en el panel de entrenamiento para entrenar con cámaras con distorsión.",
     "err_ortho_not_supported": "El entrenamiento con cámaras de modelo ortográfico aún no es compatible.",
-    "err_non_pinhole": "Activa --gut o --undistort para entrenar con cámaras de modelo no estenopeico."
+    "err_non_pinhole": "Activa GUT o Corregir distorsión en el panel de entrenamiento para entrenar con cámaras de modelo no estenopeico."
   },
   "projects.gallery.sidebar.title": "Galería",
   "projects.gallery.sidebar.refresh": "Comprobar galería",

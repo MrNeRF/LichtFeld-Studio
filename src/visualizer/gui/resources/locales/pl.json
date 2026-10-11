@@ -711,6 +711,12 @@
   },
   "rendering": "Renderowanie",
   "scene": {
+    "summary_model_one": "{} model",
+    "summary_model_few": "{} modele",
+    "summary_model_other": "{} modeli",
+    "summary_node_one": "{} węzeł",
+    "summary_node_few": "{} węzły",
+    "summary_node_other": "{} węzłów",
     "add_ply": "Dodaj PLY...",
     "add_group": "Dodaj Grupę",
     "add_group_ellipsis": "Dodaj Grupę...",
@@ -1463,6 +1469,7 @@
     "create": "Utwórz"
   },
   "notification": {
+    "split_view_requires_two_models": "Widok podzielony wymaga dwóch widocznych modeli splatów.",
     "merge_nodes_kept": "Scalanie zachowało {} węzłów innych niż splaty.",
     "duplicate_training_data_skipped": "Dane treningowe (zbiory danych, kamery i obrazy) zostały pominięte podczas duplikowania.",
     "dropped_not_recognized": "Upuszczony",
@@ -2096,6 +2103,8 @@
     "strategy_default": "Domyślny",
     "split": "Podział:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "Liczba wyświetlanych klatek interfejsu na sekundę.",
+    "view_fps_tooltip": "Liczba renderowanych klatek widoku 3D na sekundę. Statyczny widok może pokazywać 0, gdy interfejs nadal reaguje.",
     "ui": "UI",
     "view": "Widok"
   },
@@ -2521,6 +2530,7 @@
     "perf_hud_tooltip": "Pokaż lub ukryj HUD wydajności"
   },
   "runtime": {
+    "environment_map_failed": "Nie można odczytać mapy środowiska „{}”. Zachowano poprzednie środowisko.",
     "training_save_no_memory": "Nie udało się zapisać projektu: {}",
     "autosave_deferred_no_memory": "Autozapis został wstrzymany: za mało wolnej pamięci ({}). Trening jest kontynuowany; autozapis wznowi się, gdy pamięć zostanie zwolniona.",
     "grouped_changes": "Zgrupowane zmiany",
@@ -2674,12 +2684,13 @@
     "right_click_to_add": "Kliknij prawym przyciskiem, aby dodać...",
     "training_complete": "Trening Ukończony",
     "training_stopped": "Trening Zatrzymany",
+    "training_stopped_body": "Użytkownik zatrzymał trening na iteracji {}.\n\nZapisz projekt, aby zachować ten stan. Otwórz ponownie zapisany projekt, aby wznowić trening.",
     "training_error": "Błąd Treningu",
     "param_manager_unavailable": "Menedżer parametrów niedostępny",
     "failed_to_load_params": "Nie udało się załadować parametrów:",
-    "err_distorted_images": "Wykryto zniekształcone obrazy. Włącz --gut lub --undistort, aby trenować z kamerami ze zniekształceniami.",
+    "err_distorted_images": "Wykryto zniekształcone obrazy. Włącz GUT lub korekcję zniekształceń w panelu treningu, aby trenować z kamerami ze zniekształceniami.",
     "err_ortho_not_supported": "Trening z ortograficznym modelem kamery nie jest jeszcze obsługiwany.",
-    "err_non_pinhole": "Włącz --gut lub --undistort, aby trenować z kamerami innymi niż pinhole."
+    "err_non_pinhole": "Włącz GUT lub korekcję zniekształceń w panelu treningu, aby trenować z kamerami o modelu innym niż otworkowy."
   },
   "projects.gallery.sidebar.title": "Galeria",
   "projects.gallery.sidebar.refresh": "Sprawdź galerię",

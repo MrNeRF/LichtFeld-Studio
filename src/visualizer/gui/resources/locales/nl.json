@@ -711,6 +711,12 @@
   },
   "rendering": "Renderen",
   "scene": {
+    "summary_model_one": "{} model",
+    "summary_model_few": "{} modellen",
+    "summary_model_other": "{} modellen",
+    "summary_node_one": "{} knooppunt",
+    "summary_node_few": "{} knooppunten",
+    "summary_node_other": "{} knooppunten",
     "add_ply": "PLY Toevoegen...",
     "add_group": "Groep Toevoegen",
     "add_group_ellipsis": "Groep Toevoegen...",
@@ -1463,6 +1469,7 @@
     "create": "Maken"
   },
   "notification": {
+    "split_view_requires_two_models": "Voor de gesplitste weergave zijn twee zichtbare splatmodellen nodig.",
     "merge_nodes_kept": "Bij het samenvoegen zijn {} niet-splat-knooppunten behouden.",
     "duplicate_training_data_skipped": "Trainingsgegevens (datasets, camera’s en afbeeldingen) zijn overgeslagen bij het dupliceren.",
     "dropped_not_recognized": "Het gesleepte",
@@ -2096,6 +2103,8 @@
     "strategy_default": "Standaard",
     "split": "Splitsing:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "Weergegeven interfaceframes per seconde.",
+    "view_fps_tooltip": "Gerenderde frames van de 3D-weergave per seconde. Een statische weergave kan 0 tonen terwijl de interface blijft reageren.",
     "ui": "UI",
     "view": "Beeld"
   },
@@ -2521,6 +2530,7 @@
     "perf_hud_tooltip": "Prestatie-HUD tonen of verbergen"
   },
   "runtime": {
+    "environment_map_failed": "Omgevingskaart ‘{}’ kon niet worden gelezen. De vorige omgeving is behouden.",
     "training_save_no_memory": "Project opslaan mislukt: {}",
     "autosave_deferred_no_memory": "Automatisch opslaan is gepauzeerd: onvoldoende vrij geheugen ({}). De training gaat door; automatisch opslaan wordt hervat zodra er geheugen vrijkomt.",
     "grouped_changes": "Gegroepeerde wijzigingen",
@@ -2674,12 +2684,13 @@
     "right_click_to_add": "Rechtsklik om toe te voegen...",
     "training_complete": "Training Voltooid",
     "training_stopped": "Training Gestopt",
+    "training_stopped_body": "De training is door de gebruiker gestopt bij iteratie {}.\n\nSla het project op om deze toestand te bewaren. Open het opgeslagen project opnieuw om de training te hervatten.",
     "training_error": "Training Fout",
     "param_manager_unavailable": "ParameterManager niet beschikbaar",
     "failed_to_load_params": "Laden van params mislukt:",
-    "err_distorted_images": "Vervormde beelden gedetecteerd. Activeer --gut of --undistort om te trainen met vervormde camera's.",
+    "err_distorted_images": "Vervormde beelden gedetecteerd. Schakel GUT of Vervorming corrigeren in het trainingspaneel in om te trainen met camera’s met vervorming.",
     "err_ortho_not_supported": "Training met orthografisch cameramodel wordt nog niet ondersteund.",
-    "err_non_pinhole": "Activeer --gut of --undistort om te trainen met niet-pinhole camera's."
+    "err_non_pinhole": "Schakel GUT of Vervorming corrigeren in het trainingspaneel in om te trainen met camera’s zonder pinholemodel."
   },
   "projects.gallery.sidebar.title": "Galerij",
   "projects.gallery.sidebar.refresh": "Galerij controleren",

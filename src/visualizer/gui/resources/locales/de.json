@@ -711,6 +711,12 @@
   },
   "rendering": "Rendering",
   "scene": {
+    "summary_model_one": "{} Modell",
+    "summary_model_few": "{} Modelle",
+    "summary_model_other": "{} Modelle",
+    "summary_node_one": "{} Knoten",
+    "summary_node_few": "{} Knoten",
+    "summary_node_other": "{} Knoten",
     "add_ply": "PLY hinzufügen...",
     "add_group": "Gruppe hinzufügen",
     "add_group_ellipsis": "Gruppe hinzufügen...",
@@ -1463,6 +1469,7 @@
     "create": "Erstellen"
   },
   "notification": {
+    "split_view_requires_two_models": "Die geteilte Ansicht benötigt zwei sichtbare Splat-Modelle.",
     "merge_nodes_kept": "Beim Zusammenführen wurden {} Nicht-Splat-Knoten beibehalten.",
     "duplicate_training_data_skipped": "Trainingsdaten (Datensätze, Kameras und Bilder) wurden beim Duplizieren übersprungen.",
     "dropped_not_recognized": "Das abgelegte",
@@ -2096,6 +2103,8 @@
     "strategy_default": "Standard",
     "split": "Teilung:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "Pro Sekunde angezeigte Benutzeroberflächen-Frames.",
+    "view_fps_tooltip": "Pro Sekunde gerenderte Frames der 3D-Ansicht. Eine statische Ansicht kann 0 anzeigen, während die Oberfläche weiterhin reagiert.",
     "ui": "UI",
     "view": "Ansicht"
   },
@@ -2521,6 +2530,7 @@
     "perf_hud_tooltip": "Leistungs-HUD ein- oder ausblenden"
   },
   "runtime": {
+    "environment_map_failed": "Die Umgebungskarte „{}“ konnte nicht gelesen werden. Die bisherige Umgebung wurde beibehalten.",
     "training_save_no_memory": "Projekt konnte nicht gespeichert werden: {}",
     "autosave_deferred_no_memory": "Automatisches Speichern ist pausiert: nicht genug freier Speicher ({}). Das Training läuft weiter; das automatische Speichern wird fortgesetzt, sobald wieder Speicher frei ist.",
     "grouped_changes": "Gruppierte Änderungen",
@@ -2674,12 +2684,13 @@
     "right_click_to_add": "Rechtsklick zum Hinzufügen...",
     "training_complete": "Training abgeschlossen",
     "training_stopped": "Training gestoppt",
+    "training_stopped_body": "Training wurde bei Iteration {} vom Benutzer gestoppt.\n\nSpeichern Sie das Projekt, um diesen Zustand zu behalten. Öffnen Sie das gespeicherte Projekt erneut, um das Training fortzusetzen.",
     "training_error": "Trainingsfehler",
     "param_manager_unavailable": "ParameterManager nicht verfügbar",
     "failed_to_load_params": "Parameter laden fehlgeschlagen:",
-    "err_distorted_images": "Verzerrte Bilder erkannt. Aktivieren Sie --gut oder --undistort, um mit verzerrten Kameras zu trainieren.",
+    "err_distorted_images": "Verzerrte Bilder erkannt. Aktivieren Sie GUT oder Entzerren im Trainingspanel, um mit Kameras mit Verzerrung zu trainieren.",
     "err_ortho_not_supported": "Training mit orthographischem Kameramodell wird noch nicht unterstützt.",
-    "err_non_pinhole": "Aktivieren Sie --gut oder --undistort, um mit Nicht-Pinhole-Kameras zu trainieren."
+    "err_non_pinhole": "Aktivieren Sie GUT oder Entzerren im Trainingspanel, um mit Kameras ohne Lochkameramodell zu trainieren."
   },
   "projects.gallery.sidebar.title": "Galerie",
   "projects.gallery.sidebar.refresh": "Galerie prüfen",
