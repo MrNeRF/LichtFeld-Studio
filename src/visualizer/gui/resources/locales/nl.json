@@ -711,6 +711,12 @@
   },
   "rendering": "Renderen",
   "scene": {
+    "summary_model_one": "{} model",
+    "summary_model_few": "{} modellen",
+    "summary_model_other": "{} modellen",
+    "summary_node_one": "{} knooppunt",
+    "summary_node_few": "{} knooppunten",
+    "summary_node_other": "{} knooppunten",
     "add_ply": "PLY Toevoegen...",
     "add_group": "Groep Toevoegen",
     "add_group_ellipsis": "Groep Toevoegen...",

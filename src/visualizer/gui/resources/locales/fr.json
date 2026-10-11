@@ -711,6 +711,12 @@
   },
   "rendering": "Rendu",
   "scene": {
+    "summary_model_one": "{} modèle",
+    "summary_model_few": "{} modèles",
+    "summary_model_other": "{} modèles",
+    "summary_node_one": "{} nœud",
+    "summary_node_few": "{} nœuds",
+    "summary_node_other": "{} nœuds",
     "add_ply": "Ajouter PLY...",
     "add_group": "Ajouter un Groupe",
     "add_group_ellipsis": "Ajouter un Groupe...",
