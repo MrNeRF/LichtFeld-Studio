@@ -34,6 +34,7 @@ extern "C" {
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include "core/event_bridge/localization_manager.hpp"
@@ -765,6 +766,138 @@ TEST(VideoFrameExtractorOutcome, ReportsExplicitCancellation) {
     EXPECT_EQ(extractor.lastOutcome(), lfs::io::ExtractionOutcome::Completed);
     EXPECT_TRUE(error.empty());
 }
+
+namespace {
+    class VideoFrameExtractorWriteTest : public ::testing::TestWithParam<std::tuple<lfs::io::ImageFormat, bool>> {
+    protected:
+        void SetUp() override {
+            ASSERT_TRUE(writeProbedVideoWithRate(temp.path / "source.mp4", "mp4", AV_CODEC_ID_MPEG4, 3, 0, 25, 1));
+            params = extractionParams(temp.path / "source.mp4", temp.path / "frames");
+            params.end_time = -1.0;
+            params.format = std::get<0>(GetParam());
+            params.sharpness.enabled = std::get<1>(GetParam());
+            params.sharpness.window_mode = params.sharpness.enabled;
+            params.sharpness.window_candidates_target = 0;
+            std::filesystem::create_directories(params.output_dir);
+        }
+
+        std::filesystem::path framePath(int frame) const {
+            return params.output_dir / ("frame_" + std::to_string(frame) +
+                                        (params.format == lfs::io::ImageFormat::PNG ? ".png" : ".jpg"));
+        }
+
+        void expectFailure(const std::filesystem::path& failed_path) {
+            std::string error;
+            EXPECT_FALSE(extractor.extract(params, error));
+            EXPECT_EQ(extractor.lastOutcome(), lfs::io::ExtractionOutcome::Failed);
+            EXPECT_NE(error.find(failed_path.filename().string()), std::string::npos) << error;
+        }
+
+        TempDir temp{"write"};
+        VideoFrameExtractor::Params params;
+        VideoFrameExtractor extractor;
+    };
+
+    TEST_P(VideoFrameExtractorWriteTest, UnwritableFrameFailsAndCanRetry) {
+        const auto blocked = framePath(1);
+        std::filesystem::create_directory(blocked);
+        expectFailure(blocked);
+        EXPECT_FALSE(std::filesystem::exists(params.output_dir / "extraction_metadata.json"));
+
+        std::filesystem::remove(blocked);
+        std::string error;
+        ASSERT_TRUE(extractor.extract(params, error)) << error;
+        EXPECT_EQ(extractor.lastOutcome(), lfs::io::ExtractionOutcome::Completed);
+        EXPECT_TRUE(error.empty());
+        const auto metadata = readMetadata(params.output_dir);
+        ASSERT_EQ(metadata["frames"].size(), 3u);
+        for (int frame = 1; frame <= 3; ++frame) {
+            EXPECT_GT(std::filesystem::file_size(framePath(frame)), 0u);
+            EXPECT_EQ(metadata["frames"][frame - 1]["source_frame"], frame);
+        }
+    }
+
+    TEST_P(VideoFrameExtractorWriteTest, LaterWriteFailurePreservesSavedFrames) {
+        std::filesystem::create_directory(framePath(2));
+        expectFailure(framePath(2));
+        EXPECT_GT(std::filesystem::file_size(framePath(1)), 0u);
+        EXPECT_FALSE(std::filesystem::exists(framePath(3)));
+    }
+
+    TEST_P(VideoFrameExtractorWriteTest, WritableOutputKeepsFramesAndMetadataConsistent) {
+        std::string error;
+        ASSERT_TRUE(extractor.extract(params, error)) << error;
+        EXPECT_EQ(extractor.lastOutcome(), lfs::io::ExtractionOutcome::Completed);
+        const auto metadata = readMetadata(params.output_dir);
+        ASSERT_EQ(metadata["frames"].size(), 3u);
+        std::vector<std::string> reference;
+        for (int frame = 1; frame <= 3; ++frame) {
+            EXPECT_EQ(metadata["frames"][frame - 1]["file"], framePath(frame).filename().string());
+            EXPECT_EQ(metadata["frames"][frame - 1]["source_frame"], frame);
+            std::ifstream file(framePath(frame), std::ios::binary);
+            reference.emplace_back(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+            EXPECT_FALSE(reference.back().empty());
+        }
+        params.generate_metadata = false;
+        ASSERT_TRUE(extractor.extract(params, error)) << error;
+        for (int frame = 1; frame <= 3; ++frame) {
+            std::ifstream file(framePath(frame), std::ios::binary);
+            const std::string bytes{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+            EXPECT_EQ(bytes, reference[frame - 1]);
+        }
+    }
+
+    TEST_P(VideoFrameExtractorWriteTest, RequestedMetadataWriteFailureIsReported) {
+        const auto metadata = params.output_dir / "extraction_metadata.json";
+        std::filesystem::create_directory(metadata);
+        expectFailure(metadata);
+        for (int frame = 1; frame <= 3; ++frame)
+            EXPECT_GT(std::filesystem::file_size(framePath(frame)), 0u);
+
+        params.generate_metadata = false;
+        std::string error;
+        EXPECT_TRUE(extractor.extract(params, error)) << error;
+        EXPECT_EQ(extractor.lastOutcome(), lfs::io::ExtractionOutcome::Completed);
+    }
+
+#ifndef _WIN32
+    TEST_P(VideoFrameExtractorWriteTest, FullDeviceWriteFails) {
+        if (!std::filesystem::exists("/dev/full"))
+            GTEST_SKIP() << "A full device is required";
+        std::filesystem::create_symlink("/dev/full", framePath(1));
+        expectFailure(framePath(1));
+    }
+
+    TEST_P(VideoFrameExtractorWriteTest, FullDeviceMetadataWriteFails) {
+        if (!std::filesystem::exists("/dev/full"))
+            GTEST_SKIP() << "A full device is required";
+        const auto metadata = params.output_dir / "extraction_metadata.json";
+        std::filesystem::create_symlink("/dev/full", metadata);
+        expectFailure(metadata);
+    }
+
+    TEST_P(VideoFrameExtractorWriteTest, ReadOnlyOutputDirectoryFails) {
+        std::filesystem::permissions(params.output_dir, std::filesystem::perms::owner_read |
+                                                            std::filesystem::perms::owner_exec);
+        struct RestorePermissions {
+            std::filesystem::path path;
+            ~RestorePermissions() {
+                std::error_code ec;
+                std::filesystem::permissions(path, std::filesystem::perms::owner_all, ec);
+            }
+        } restore{params.output_dir};
+        std::ofstream probe(params.output_dir / "probe");
+        if (probe)
+            GTEST_SKIP() << "Process can bypass directory permissions";
+        expectFailure(framePath(1));
+        EXPECT_TRUE(std::filesystem::is_empty(params.output_dir));
+    }
+#endif
+
+    INSTANTIATE_TEST_SUITE_P(FormatsAndSelection, VideoFrameExtractorWriteTest,
+                             ::testing::Combine(::testing::Values(lfs::io::ImageFormat::PNG, lfs::io::ImageFormat::JPG),
+                                                ::testing::Bool()));
+} // namespace
 
 namespace {
     using NamingAccess = lfs::gui::VideoExtractorDialogTestAccess;

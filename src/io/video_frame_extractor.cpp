@@ -389,12 +389,14 @@ namespace lfs::io {
             return success;
         }
 
-        void write_jpeg_to_file(const std::filesystem::path& path, const std::vector<uint8_t>& data) {
+        bool write_jpeg_to_file(const std::filesystem::path& path, const std::vector<uint8_t>& data) {
             std::ofstream file(path, std::ios::binary);
-            if (file) {
-                file.write(reinterpret_cast<const char*>(data.data()),
-                           static_cast<std::streamsize>(data.size()));
-            }
+            if (!file)
+                return false;
+            file.write(reinterpret_cast<const char*>(data.data()),
+                       static_cast<std::streamsize>(data.size()));
+            file.close();
+            return static_cast<bool>(file);
         }
 
         const char* get_hw_decoder_name(AVCodecID codec_id) {
@@ -1490,7 +1492,10 @@ namespace lfs::io {
                     for (size_t i = 0; i < encoded.size(); i++) {
                         if (!encoded[i].empty()) {
                             const auto jpeg_write_started = std::chrono::steady_clock::now();
-                            write_jpeg_to_file(batch_filenames[i], encoded[i]);
+                            if (!write_jpeg_to_file(batch_filenames[i], encoded[i])) {
+                                throw std::runtime_error("Failed to write extracted frame: " +
+                                                         lfs::core::path_to_utf8(batch_filenames[i]));
+                            }
                             jpeg_write_seconds += elapsedSeconds(jpeg_write_started);
                             ++written_count;
                             if (params.generate_metadata && i < batch_meta.size()) {
@@ -1606,8 +1611,8 @@ namespace lfs::io {
                     if (!write_image_file(fname, write_w, write_h,
                                           write_data, params.format,
                                           params.jpg_quality)) {
-                        LOG_WARN("Failed to write sharpest window frame: {}",
-                                 lfs::core::path_to_utf8(fname));
+                        throw std::runtime_error("Failed to write sharpest window frame: " +
+                                                 lfs::core::path_to_utf8(fname));
                     } else {
                         ++written_count;
                         if (params.generate_metadata) {
@@ -1844,7 +1849,8 @@ namespace lfs::io {
                                                         frame_score});
                             }
                         } else {
-                            LOG_WARN("Failed to write extracted frame: {}", lfs::core::path_to_utf8(filename));
+                            throw std::runtime_error("Failed to write extracted frame: " +
+                                                     lfs::core::path_to_utf8(filename));
                         }
                     }
 
@@ -1964,7 +1970,8 @@ namespace lfs::io {
                                                     frame_score});
                         }
                     } else {
-                        LOG_WARN("Failed to write extracted frame: {}", lfs::core::path_to_utf8(filename));
+                        throw std::runtime_error("Failed to write extracted frame: " +
+                                                 lfs::core::path_to_utf8(filename));
                     }
 
                     finish_selected_frame();
@@ -2222,6 +2229,8 @@ namespace lfs::io {
                 flush_window();
 
                 if (params.generate_metadata && !saved_frames.empty()) {
+                    const std::filesystem::path meta_path =
+                        params.output_dir / "extraction_metadata.json";
                     try {
                         nlohmann::json root;
                         root["schema_version"] = 2;
@@ -2395,14 +2404,14 @@ namespace lfs::io {
                                               {"sharpness_score", f.sharpness_score}});
                         }
 
-                        const std::filesystem::path meta_path =
-                            params.output_dir / "extraction_metadata.json";
                         std::ofstream meta_file(meta_path, std::ios::binary);
-                        if (meta_file) {
-                            meta_file << root.dump(2);
-                        }
+                        meta_file << root.dump(2);
+                        meta_file.close();
+                        if (!meta_file)
+                            throw std::runtime_error("Could not write output file");
                     } catch (const std::exception& e) {
-                        LOG_WARN("Failed to write extraction metadata: {}", e.what());
+                        throw std::runtime_error("Failed to write extraction metadata " +
+                                                 lfs::core::path_to_utf8(meta_path) + ": " + e.what());
                     }
                 }
 
