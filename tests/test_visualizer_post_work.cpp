@@ -6192,6 +6192,25 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(viewer.getScene().getNode("gallery-group"), nullptr);
     }
 
+    TEST_F(VisualizerImplResetTest, DatasetImportHonorsRequestedImageFolder) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        const auto dataset = temporary_.path / "image-folder-dataset";
+        write_minimal_transforms_dataset(dataset);
+        for (const std::string folder : {"", "images", "images_8", "."}) {
+            core::events::cmd::LoadFile{
+                .path = dataset,
+                .is_dataset = true,
+                .discard_changes = true,
+                .images_folder = folder}
+                .emit();
+            ASSERT_TRUE(waitUntil([&] { tasks.pollImportCompletion(); return !tasks.isImporting(); }));
+            EXPECT_EQ(viewer.getDataLoader()->getParameters().dataset.images,
+                      folder.empty() ? "images" : folder);
+            EXPECT_EQ(viewer.getScene().getAllCameras().size(), 1u);
+        }
+    }
+
     // Catches the startup dataset import dropping --add-splat, which trained the viewer's model
     // without the added splats while headless training kept them.
     TEST_F(VisualizerImplResetTest, DatasetImportKeepsAddedSplatSettings) {
