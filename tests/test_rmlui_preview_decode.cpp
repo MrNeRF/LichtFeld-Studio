@@ -4,14 +4,22 @@
  */
 
 #include "core/logger.hpp"
+#include "core/tensor.hpp"
 #include "gui/rmlui/rmlui_vk_backend.hpp"
+#include "gui/vulkan_ui_texture.hpp"
+#include "rendering/cuda_vulkan_interop.hpp"
+#include "window/vulkan_context.hpp"
 
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 class RenderInterfaceVKTestAccess {
@@ -485,6 +493,154 @@ namespace {
         backend.EndCacheCapture();
 
         EndFrame(backend, panel_texture);
+    }
+
+} // namespace
+
+namespace {
+    class VulkanUiTextureSourceTest : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
+                GTEST_SKIP() << "SDL video unavailable: " << SDL_GetError();
+            window_.reset(SDL_CreateWindow("UI texture test", 64, 64, SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN));
+            if (!window_)
+                GTEST_SKIP() << "Vulkan window unavailable: " << SDL_GetError();
+            if (!context_->init(window_.get(), 64, 64))
+                GTEST_SKIP() << "Vulkan unavailable: " << context_->lastError();
+            lfs::rendering::setExpectedVulkanDeviceUuid(context_->deviceUUID());
+            lfs::vis::gui::setVulkanUiTextureContext(context_.get());
+        }
+        void TearDown() override {
+            lfs::vis::gui::setVulkanUiTextureContext(nullptr);
+            context_.reset();
+            window_.reset();
+            SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        }
+        std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window_{nullptr, SDL_DestroyWindow};
+        std::unique_ptr<lfs::vis::VulkanContext> context_ = std::make_unique<lfs::vis::VulkanContext>();
+    };
+
+    TEST_F(VulkanUiTextureSourceTest, ResizedImagesNeverReuseCachedSources) {
+        lfs::vis::gui::VulkanUiTexture texture;
+        std::unordered_set<std::string> sources;
+        for (int i = 0; i < 64; ++i) {
+            const int width = i % 2 ? 320 : 648;
+            const int height = i % 2 ? 210 : 420;
+            std::vector<uint8_t> pixels(width * height * 3, static_cast<uint8_t>(i));
+            ASSERT_TRUE(texture.upload(pixels.data(), width, height, 3));
+            ASSERT_TRUE(context_->deviceWaitIdle());
+            const auto source = texture.rmlSrcUrl(width, height);
+            ASSERT_FALSE(source.empty());
+            ASSERT_TRUE(sources.insert(source).second) << "Reused the cache key of a retired image at resize " << i << ": " << source;
+        }
+    }
+
+    TEST_F(VulkanUiTextureSourceTest, RecreatedTexturesNeverReuseCachedSources) {
+        std::unordered_set<std::string> sources;
+        const std::vector<uint8_t> pixels(64 * 64 * 4, 255);
+        for (int i = 0; i < 64; ++i) {
+            lfs::vis::gui::VulkanUiTexture texture;
+            ASSERT_TRUE(texture.upload(pixels.data(), 64, 64, 4));
+            const auto source = texture.rmlSrcUrl(64, 64);
+            ASSERT_FALSE(source.empty());
+            ASSERT_TRUE(sources.insert(source).second) << "Reused the cache key of a destroyed texture at creation " << i << ": " << source;
+        }
+    }
+
+    TEST_F(VulkanUiTextureSourceTest, FrameUploadsRegionsAndMovesKeepCurrentSource) {
+        lfs::vis::gui::VulkanUiTexture texture;
+        EXPECT_TRUE(texture.rmlSrcUrl(64, 64).empty());
+        std::vector<uint8_t> pixels(64 * 64 * 4, 127);
+        ASSERT_TRUE(texture.upload(pixels.data(), 64, 64, 4));
+        const auto source = texture.rmlSrcUrl(64, 64);
+        const auto descriptor = texture.textureId();
+        for (int i = 0; i < 8; ++i) {
+            pixels.front() = static_cast<uint8_t>(i);
+            ASSERT_TRUE(texture.upload(pixels.data(), 64, 64, 4));
+            EXPECT_EQ(texture.rmlSrcUrl(64, 64), source);
+            EXPECT_EQ(texture.textureId(), descriptor);
+        }
+        ASSERT_TRUE(texture.uploadRegion(pixels.data(), 64, 64, 4, 4, 8, 8, 4));
+        EXPECT_EQ(texture.rmlSrcUrl(64, 64), source);
+        lfs::vis::gui::VulkanUiTexture moved(std::move(texture));
+        EXPECT_EQ(moved.rmlSrcUrl(64, 64), source);
+        EXPECT_TRUE(texture.rmlSrcUrl(64, 64).empty());
+        moved.reset();
+        EXPECT_TRUE(moved.rmlSrcUrl(64, 64).empty());
+        ASSERT_TRUE(moved.upload(pixels.data(), 64, 64, 4));
+        EXPECT_NE(moved.rmlSrcUrl(64, 64), source);
+    }
+    TEST_F(VulkanUiTextureSourceTest, CachedSourceSurvivesUnchangedUploadsAndMoveAssignment) {
+        lfs::vis::gui::VulkanUiTexture texture;
+        std::vector<uint8_t> pixels(64 * 64 * 4, 127);
+        ASSERT_TRUE(texture.upload(pixels.data(), 64, 64, 4));
+        const auto& cached = texture.rmlSrcUrl(64, 64);
+        const auto source = cached;
+        const auto* storage = cached.data();
+        for (int i = 0; i < 8; ++i) {
+            ASSERT_TRUE(texture.upload(pixels.data(), 64, 64, 4));
+            EXPECT_EQ(texture.rmlSrcUrl(64, 64), source);
+            EXPECT_EQ(texture.rmlSrcUrl(64, 64).data(), storage);
+        }
+        const lfs::vis::gui::VulkanUiTexture::Region regions[] = {
+            {pixels.data(), 64, 64, 0, 0, 8, 8, 4},
+            {pixels.data(), 64, 64, 16, 16, 8, 8, 4},
+        };
+        ASSERT_TRUE(texture.uploadRegions(regions));
+        EXPECT_EQ(texture.rmlSrcUrl(64, 64), source);
+        EXPECT_EQ(texture.rmlSrcUrl(64, 64).data(), storage);
+        EXPECT_FALSE(texture.upload(nullptr, 64, 64, 4));
+        EXPECT_FALSE(texture.uploadRegion(pixels.data(), 64, 64, 63, 63, 8, 8, 4));
+        EXPECT_TRUE(texture.rmlSrcUrl(0, 64).empty());
+        EXPECT_EQ(texture.rmlSrcUrl(64, 64).data(), storage);
+
+        lfs::vis::gui::VulkanUiTexture assigned;
+        ASSERT_TRUE(assigned.upload(pixels.data(), 64, 64, 4));
+        assigned = std::move(texture);
+        EXPECT_TRUE(texture.rmlSrcUrl(64, 64).empty());
+        EXPECT_EQ(assigned.rmlSrcUrl(64, 64), source);
+        EXPECT_EQ(assigned.rmlSrcUrl(64, 64).data(), storage);
+        ASSERT_TRUE(texture.upload(pixels.data(), 64, 64, 4));
+        EXPECT_NE(texture.rmlSrcUrl(64, 64), source);
+        assigned.reset();
+        assigned.reset();
+        EXPECT_TRUE(assigned.rmlSrcUrl(64, 64).empty());
+        ASSERT_TRUE(assigned.upload(pixels.data(), 64, 64, 4));
+        EXPECT_NE(assigned.rmlSrcUrl(64, 64), source);
+    }
+
+    TEST_F(VulkanUiTextureSourceTest, DisplayDimensionsRemainPartOfTheSource) {
+        lfs::vis::gui::VulkanUiTexture texture;
+        const std::vector<uint8_t> pixels(64 * 64 * 4, 127);
+        ASSERT_TRUE(texture.upload(pixels.data(), 64, 64, 4));
+        const auto source = texture.rmlSrcUrl(64, 64);
+        const auto scaled = texture.rmlSrcUrl(32, 48);
+        EXPECT_NE(source, scaled);
+        EXPECT_NE(scaled.find("&w=32&h=48"), std::string::npos);
+        const auto& cached_scaled = texture.rmlSrcUrl(32, 48);
+        EXPECT_EQ(texture.rmlSrcUrl(32, 48).data(), cached_scaled.data());
+        EXPECT_EQ(texture.rmlSrcUrl(64, 64), source);
+        EXPECT_TRUE(texture.rmlSrcUrl(0, 64).empty());
+        EXPECT_TRUE(texture.rmlSrcUrl(64, -1).empty());
+    }
+
+    TEST_F(VulkanUiTextureSourceTest, CudaFramesKeepTheirSourceUntilImageRecreation) {
+        if (!context_->externalMemoryInteropEnabled() || !context_->externalSemaphoreInteropEnabled())
+            GTEST_SKIP() << "CUDA interop unavailable";
+        lfs::vis::gui::VulkanUiTexture texture;
+        std::unordered_set<std::string> sources;
+        for (int i = 0; i < 16; ++i) {
+            const int width = i % 2 ? 64 : 32;
+            auto frame = lfs::core::Tensor::zeros({32, static_cast<size_t>(width), 4},
+                                                  lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+            ASSERT_TRUE(texture.upload(frame, width, 32));
+            ASSERT_EQ(texture.textureId(), 0u) << "Expected CUDA interop, not CPU fallback";
+            const auto source = texture.rmlSrcUrl(width, 32);
+            ASSERT_TRUE(sources.insert(source).second) << "Reused a retired CUDA image source at resize " << i << ": " << source;
+            ASSERT_TRUE(texture.upload(frame, width, 32));
+            EXPECT_EQ(texture.rmlSrcUrl(width, 32), source);
+        }
     }
 
 } // namespace

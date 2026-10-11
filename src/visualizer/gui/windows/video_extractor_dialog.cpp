@@ -1053,8 +1053,8 @@ namespace lfs::gui {
         changed |= setCachedProperty(preview_image_el_, "display", has_preview ? "block" : "none");
 
         if (has_preview) {
-            const std::string src = preview_texture_->rmlSrcUrl(preview_texture_width_,
-                                                                preview_texture_height_);
+            const std::string& src = preview_texture_->rmlSrcUrl(preview_texture_width_,
+                                                                 preview_texture_height_);
             if (!src.empty() && src != preview_src_) {
                 preview_image_el_->SetAttribute("src", src);
                 preview_src_ = src;
