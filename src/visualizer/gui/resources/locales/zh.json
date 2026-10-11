@@ -2674,6 +2674,7 @@
     "right_click_to_add": "右键单击以添加...",
     "training_complete": "训练完成",
     "training_stopped": "训练已停止",
+    "training_stopped_body": "用户在第 {} 次迭代时停止了训练。\n\n请保存项目以保留此状态。重新打开已保存的项目即可继续训练。",
     "training_error": "训练错误",
     "param_manager_unavailable": "参数管理器不可用",
     "failed_to_load_params": "加载参数失败：",

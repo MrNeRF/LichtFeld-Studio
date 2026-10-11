@@ -2674,6 +2674,7 @@
     "right_click_to_add": "Clic destro per aggiungere...",
     "training_complete": "Training Completato",
     "training_stopped": "Training Interrotto",
+    "training_stopped_body": "L’utente ha interrotto l’addestramento all’iterazione {}.\n\nSalva il progetto per conservare questo stato. Riapri il progetto salvato per riprendere l’addestramento.",
     "training_error": "Errore di Training",
     "param_manager_unavailable": "Gestore parametri non disponibile",
     "failed_to_load_params": "Caricamento parametri fallito:",

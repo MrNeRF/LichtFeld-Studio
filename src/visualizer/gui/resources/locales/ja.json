@@ -2674,6 +2674,7 @@
     "right_click_to_add": "右クリックして追加...",
     "training_complete": "トレーニング完了",
     "training_stopped": "トレーニング停止",
+    "training_stopped_body": "ユーザーが反復 {} でトレーニングを停止しました。\n\nこの状態を保持するには、プロジェクトを保存してください。トレーニングを再開するには、保存したプロジェクトを開き直してください。",
     "training_error": "トレーニングエラー",
     "param_manager_unavailable": "パラメータマネージャーが利用できません",
     "failed_to_load_params": "パラメータの読み込みに失敗しました:",

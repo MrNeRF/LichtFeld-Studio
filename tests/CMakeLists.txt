@@ -704,6 +704,7 @@ set(TEST_FILES
     test_timeline_save_budget.cpp
     test_tensor_storage_version.cpp
     test_modal_registry_regression.cpp
+    test_training_notifications.cpp
     test_tensor_nn_ops.cpp
     test_nn_ops.cpp
     test_weight_file_paths.cpp
@@ -829,6 +830,7 @@ list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_modal_registry.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_operator_properties.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_ui_modals.cpp
+    ${CMAKE_SOURCE_DIR}/src/python/lfs/notification_bridge.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/rml_im_mode_layout.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_sequencer_tools.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_operator_schema.cpp

@@ -2674,6 +2674,7 @@
     "right_click_to_add": "Rechtsklick zum Hinzufügen...",
     "training_complete": "Training abgeschlossen",
     "training_stopped": "Training gestoppt",
+    "training_stopped_body": "Training wurde bei Iteration {} vom Benutzer gestoppt.\n\nSpeichern Sie das Projekt, um diesen Zustand zu behalten. Öffnen Sie das gespeicherte Projekt erneut, um das Training fortzusetzen.",
     "training_error": "Trainingsfehler",
     "param_manager_unavailable": "ParameterManager nicht verfügbar",
     "failed_to_load_params": "Parameter laden fehlgeschlagen:",

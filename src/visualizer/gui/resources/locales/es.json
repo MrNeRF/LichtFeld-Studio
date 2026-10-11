@@ -2674,6 +2674,7 @@
     "right_click_to_add": "Clic derecho para añadir...",
     "training_complete": "Entrenamiento Completado",
     "training_stopped": "Entrenamiento Detenido",
+    "training_stopped_body": "El usuario detuvo el entrenamiento en la iteración {}.\n\nGuarda el proyecto para conservar este estado. Vuelve a abrir el proyecto guardado para reanudar el entrenamiento.",
     "training_error": "Error de Entrenamiento",
     "param_manager_unavailable": "ParameterManager no disponible",
     "failed_to_load_params": "Error al cargar los parámetros:",

@@ -2674,6 +2674,7 @@
     "right_click_to_add": "추가하려면 우클릭...",
     "training_complete": "학습 완료",
     "training_stopped": "학습 중지됨",
+    "training_stopped_body": "사용자가 반복 {}에서 학습을 중지했습니다.\n\n이 상태를 유지하려면 프로젝트를 저장하세요. 학습을 재개하려면 저장한 프로젝트를 다시 여세요.",
     "training_error": "학습 오류",
     "param_manager_unavailable": "파라미터 관리자를 사용할 수 없음",
     "failed_to_load_params": "파라미터 로드 실패:",

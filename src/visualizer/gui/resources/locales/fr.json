@@ -2674,6 +2674,7 @@
     "right_click_to_add": "Clic droit pour ajouter...",
     "training_complete": "Entraînement Terminé",
     "training_stopped": "Entraînement Arrêté",
+    "training_stopped_body": "L’utilisateur a arrêté l’entraînement à l’itération {}.\n\nEnregistrez le projet pour conserver cet état. Rouvrez le projet enregistré pour reprendre l’entraînement.",
     "training_error": "Erreur d'Entraînement",
     "param_manager_unavailable": "Gestionnaire de paramètres indisponible",
     "failed_to_load_params": "Échec du chargement des paramètres :",
