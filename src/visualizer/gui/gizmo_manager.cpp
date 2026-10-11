@@ -122,13 +122,6 @@ namespace lfs::vis::gui {
                 cancelBoundsGizmoDrag();
         }
 
-        struct ViewportGizmoMarker {
-            int encoded_axis = -1;
-            glm::vec2 screen_pos{0.0f};
-            float radius = 0.0f;
-            bool visible = false;
-        };
-
         struct ViewportGizmoLayoutData {
             glm::vec2 top_left{0.0f};
             glm::vec2 center{0.0f};
@@ -140,7 +133,6 @@ namespace lfs::vis::gui {
         constexpr float VIEWPORT_GIZMO_FOV_DEGREES = 38.0f;
         constexpr float VIEWPORT_GIZMO_SPHERE_RADIUS = 0.198f;
         constexpr float VIEWPORT_GIZMO_LABEL_DISTANCE = 0.63f;
-        constexpr float VIEWPORT_GIZMO_HIT_RADIUS_SCALE = 2.5f;
 
         [[nodiscard]] float viewportGizmoUiScale() {
             return std::max(1.0f, lfs::python::get_shared_dpi_scale());
@@ -200,22 +192,6 @@ namespace lfs::vis::gui {
                 layout.markers[static_cast<size_t>(axis + 3)] = project_marker(axis, true);
             }
             return layout;
-        }
-
-        [[nodiscard]] int hitTestViewportGizmoLayout(
-            const ViewportGizmoLayoutData& layout,
-            const glm::vec2& mouse_pos) {
-            for (const auto& marker : layout.markers) {
-                if (!marker.visible) {
-                    continue;
-                }
-                const glm::vec2 delta = mouse_pos - marker.screen_pos;
-                const float radius = marker.radius * VIEWPORT_GIZMO_HIT_RADIUS_SCALE;
-                if (glm::dot(delta, delta) <= radius * radius) {
-                    return marker.encoded_axis;
-                }
-            }
-            return -1;
         }
 
         [[nodiscard]] std::vector<ViewportGizmoPanelTarget> collectViewportGizmoPanels(
@@ -3189,7 +3165,7 @@ namespace lfs::vis::gui {
 
                 if (const auto layout = buildViewportGizmoLayout(
                         panel, gizmo_size, gizmo_margin_x, gizmo_margin_y)) {
-                    hovered_axis = hitTestViewportGizmoLayout(*layout, glm::vec2(mouse_x, mouse_y));
+                    hovered_axis = hitTestViewportGizmoMarkers(layout->markers, glm::vec2(mouse_x, mouse_y));
                 }
                 hovered_panel = &panel;
                 break;
