@@ -1087,7 +1087,7 @@ namespace lfs::vis::project {
             const int iteration =
                 cached_bound_checkpoint_iteration_.value_or(0);
             const int max_iterations =
-                static_cast<int>(params.iterations);
+                params.resolved_total_iterations();
             const bool completed = storedSessionCompleted(
                 iteration,
                 max_iterations,
