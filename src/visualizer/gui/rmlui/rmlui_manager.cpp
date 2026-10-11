@@ -16,6 +16,7 @@
 #include "gui/rmlui/elements/python_editor_element.hpp"
 #include "gui/rmlui/elements/scene_graph_element.hpp"
 #include "gui/rmlui/elements/terminal_element.hpp"
+#include "gui/rmlui/elements/viewport_select.hpp"
 #include "gui/rmlui/elements/vram_timeline_element.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
@@ -232,6 +233,8 @@ namespace lfs::vis::gui {
         static Rml::ElementInstancerGeneric<TextFieldNotingEmoji<Rml::ElementFormControlTextArea>> textarea_instancer;
         Rml::Factory::RegisterElementInstancer("input", &input_instancer);
         Rml::Factory::RegisterElementInstancer("textarea", &textarea_instancer);
+        static Rml::ElementInstancerGeneric<ViewportSelect> select_instancer;
+        Rml::Factory::RegisterElementInstancer("select", &select_instancer);
         static Rml::ElementInstancerGeneric<ChromaticityElement> chromaticity_instancer;
         static Rml::ElementInstancerGeneric<ColorPickerElement> color_picker_instancer;
         static Rml::ElementInstancerGeneric<CRFCurveElement> crf_curve_instancer;
@@ -1441,6 +1444,19 @@ namespace lfs::vis::gui {
         for (const auto& command : queue) {
             if (!command.context)
                 continue;
+
+            // Popup layout must use the visible window, not the shadow-padded
+            // context. Full-context caches retain their native coordinate space.
+            const bool visible_region = !command.cache || command.cache_visible_region;
+            const float viewport_top = visible_region
+                                           ? std::max(0.0f, command.clip_enabled ? command.clip_y1 : 0.0f) - command.offset_y
+                                           : 0.0f;
+            const float viewport_bottom = visible_region
+                                              ? std::min(static_cast<float>(vulkan_frame_extent_.height),
+                                                         command.clip_enabled ? command.clip_y2 : static_cast<float>(vulkan_frame_extent_.height)) -
+                                                    command.offset_y
+                                              : static_cast<float>(command.context->GetDimensions().y);
+            const SelectViewportScope select_viewport(viewport_top, viewport_bottom);
 
             const std::string timer_name = std::string("gui_render.rmlui_record.") +
                                            (foreground ? "foreground.context." : "background.context.") +
