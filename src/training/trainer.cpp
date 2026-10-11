@@ -811,6 +811,11 @@ namespace lfs::training {
             scene->syncTrainingModelTopology(static_cast<size_t>(model.size()));
         }
 
+        size_t reported_gaussian_count(const lfs::core::SplatData& model) {
+            const size_t count = model.size();
+            return count - std::min(count, model.deleted_count());
+        }
+
         [[nodiscard]] std::array<float, 3> lerp_color(const std::array<float, 3>& a,
                                                       const std::array<float, 3>& b,
                                                       const float t) {
@@ -1952,12 +1957,16 @@ namespace lfs::training {
             return std::unexpected(mask_result.error());
         }
 
-        const int n_before = static_cast<int>(splat_data.size());
+        // Strategies may keep pruned rows as reusable slots. Publish the active
+        // count here, once, so progress and UI polling need no GPU reduction.
+        splat_data.refresh_deleted_count();
+        const size_t n_before = reported_gaussian_count(splat_data);
         strategy_->remove_gaussians(*mask_result);
-        const int n_after = static_cast<int>(splat_data.size());
+        splat_data.refresh_deleted_count();
+        const size_t n_after = reported_gaussian_count(splat_data);
 
         LOG_INFO("Sparsity pruning: {} -> {} Gaussians ({}% reduction)",
-                 n_before, n_after, static_cast<int>(100.0f * (n_before - n_after) / n_before));
+                 n_before, n_after, n_before > 0 ? static_cast<int>(100.0f * (n_before - n_after) / n_before) : 0);
 
         sparsity_optimizer_.reset();
         return {};
@@ -2223,13 +2232,13 @@ namespace lfs::training {
                 progress_->update(
                     slot.iter,
                     loss_value,
-                    static_cast<int>(strategy_->get_model().size()),
+                    static_cast<int>(reported_gaussian_count(strategy_->get_model())),
                     get_progress_phase(slot.iter, in_controller_phase));
             }
             lfs::core::events::state::TrainingProgress{
                 .iteration = slot.iter,
                 .loss = loss_value,
-                .num_gaussians = static_cast<int>(strategy_->get_model().size()),
+                .num_gaussians = static_cast<int>(reported_gaussian_count(strategy_->get_model())),
                 .is_refining = strategy_->is_refining(slot.iter)}
                 .emit();
         }
@@ -3221,7 +3230,7 @@ namespace lfs::training {
                 lfs::training::HookContext ctx{
                     .iteration = current_iteration_.load(),
                     .loss = current_loss_.load(),
-                    .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
+                    .num_gaussians = strategy_ ? reported_gaussian_count(strategy_->get_model()) : 0,
                     .is_refining = strategy_ ? strategy_->is_refining(current_iteration_.load()) : false,
                     .trainer = this};
                 lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
@@ -5637,7 +5646,7 @@ namespace lfs::training {
                 progress_->resume(
                     iter,
                     current_loss_.load(),
-                    static_cast<int>(strategy_->get_model().size()),
+                    static_cast<int>(reported_gaussian_count(strategy_->get_model())),
                     get_progress_phase(iter));
             }
             LOG_INFO("Training resumed at iteration {}", iter);
@@ -6108,7 +6117,7 @@ namespace lfs::training {
                     lfs::training::HookContext ctx{
                         .iteration = iter,
                         .loss = current_loss_.load(),
-                        .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
+                        .num_gaussians = strategy_ ? reported_gaussian_count(strategy_->get_model()) : 0,
                         .is_refining = strategy_ ? strategy_->is_refining(iter) : false,
                         .trainer = this};
                     lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::IterationStart);
@@ -8141,7 +8150,7 @@ namespace lfs::training {
                             lfs::training::HookContext ctx{
                                 .iteration = iter,
                                 .loss = current_loss_.load(),
-                                .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
+                                .num_gaussians = strategy_ ? reported_gaussian_count(strategy_->get_model()) : 0,
                                 .is_refining = strategy_ ? strategy_->is_refining(iter) : false,
                                 .trainer = this};
                             lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::OptimizerStep);
@@ -8395,7 +8404,7 @@ namespace lfs::training {
                     lfs::training::HookContext ctx{
                         .iteration = iter,
                         .loss = current_loss_.load(),
-                        .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
+                        .num_gaussians = strategy_ ? reported_gaussian_count(strategy_->get_model()) : 0,
                         .is_refining = strategy_ ? strategy_->is_refining(iter) : false,
                         .trainer = this};
                     lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
@@ -8667,7 +8676,7 @@ namespace lfs::training {
                 lfs::training::HookContext ctx{
                     .iteration = 0,
                     .loss = current_loss_.load(),
-                    .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
+                    .num_gaussians = strategy_ ? reported_gaussian_count(strategy_->get_model()) : 0,
                     .is_refining = strategy_ ? strategy_->is_refining(0) : false,
                     .trainer = this};
                 lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
@@ -8693,7 +8702,7 @@ namespace lfs::training {
                 progress_->update(
                     iter,
                     current_loss_.load(),
-                    static_cast<int>(strategy_->get_model().size()),
+                    static_cast<int>(reported_gaussian_count(strategy_->get_model())),
                     get_progress_phase(iter));
             }
 
@@ -9350,7 +9359,7 @@ namespace lfs::training {
             lfs::training::HookContext ctx{
                 .iteration = terminal_iteration,
                 .loss = current_loss_.load(),
-                .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
+                .num_gaussians = strategy_ ? reported_gaussian_count(strategy_->get_model()) : 0,
                 .is_refining = strategy_ ? strategy_->is_refining(terminal_iteration) : false,
                 .trainer = this};
             command_center.set_phase(lfs::training::TrainingPhase::SafeControl);

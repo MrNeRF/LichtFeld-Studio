@@ -1242,6 +1242,40 @@ namespace lfs::python {
         EXPECT_EQ(dummy_scene_.getTrainingModelGaussianCount(), count);
     }
 
+    TEST_F(SceneValidityTest, TrainingModelCountsExcludePublishedSoftDeletions) {
+        constexpr size_t count = 10;
+        const auto id = dummy_scene_.addSplat("Model", make_test_splat(count));
+        dummy_scene_.setTrainingModelNode(id);
+        auto* model = dummy_scene_.getTrainingModel();
+        ASSERT_NE(model, nullptr);
+
+        auto mask = core::Tensor::zeros_bool({count}, core::Device::CPU);
+        std::fill_n(mask.ptr<uint8_t>(), 6, uint8_t{1});
+        model->soft_delete(mask);
+        model->refresh_deleted_count();
+
+        // Presentation excludes deleted rows, but topology still includes the
+        // reusable slots needed by selection, rendering and the optimizer.
+        EXPECT_EQ(model->size(), count);
+        EXPECT_EQ(dummy_scene_.getNodeById(id)->gaussian_count.load(), count);
+        EXPECT_EQ(dummy_scene_.getTrainingModelGaussianCount(), 4u);
+        EXPECT_EQ(dummy_scene_.getVisibleGaussianCount(), 4u);
+        EXPECT_EQ(dummy_scene_.getActiveGaussianCountsByNode().at(id), 4u);
+
+        model->undelete(mask);
+        model->refresh_deleted_count();
+        EXPECT_EQ(dummy_scene_.getTrainingModelGaussianCount(), count);
+        EXPECT_EQ(dummy_scene_.getActiveGaussianCountsByNode().at(id), count);
+
+        model->soft_delete(core::Tensor::ones_bool({count}, core::Device::CPU));
+        model->refresh_deleted_count();
+        EXPECT_EQ(dummy_scene_.getTrainingModelGaussianCount(), 0u);
+        EXPECT_EQ(dummy_scene_.getActiveGaussianCountsByNode().at(id), 0u);
+
+        model->clear_deleted();
+        EXPECT_EQ(dummy_scene_.getTrainingModelGaussianCount(), count);
+    }
+
     TEST_F(SceneValidityTest, SplatDataSetSHDegreeSupportsAllDegrees) {
         constexpr size_t count = 4;
 

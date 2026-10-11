@@ -214,9 +214,14 @@ TEST(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {
     ASSERT_TRUE(strategy.get_model().has_deleted_mask());
     EXPECT_EQ(strategy.get_model().visible_count(), 9);
 
+    strategy.get_model().refresh_deleted_count();
+    EXPECT_EQ(strategy.get_model().deleted_count(), 3u);
+
     const int relocated = strategy.relocate_gs_test();
     EXPECT_EQ(relocated, 3);
     EXPECT_EQ(strategy.get_model().visible_count(), 12);
+    strategy.get_model().refresh_deleted_count();
+    EXPECT_EQ(strategy.get_model().deleted_count(), 0u);
 
     const auto deleted = strategy.get_model().deleted().to(DataType::Int32).cpu().to_vector();
     ASSERT_EQ(deleted.size(), 12);
