@@ -617,7 +617,12 @@ namespace lfs::vis {
     void RenderingManager::reportSceneUpscalerRuntimeSelection(
         const SceneUpscalerSelection selection) {
         std::lock_guard lock(settings_mutex_);
+        if (scene_upscaler_runtime_selection_ == selection)
+            return;
         scene_upscaler_runtime_selection_ = selection;
+        // Presentation prepares reconstruction after the scene render. Schedule
+        // the next render to use the reported resolution, even with an idle camera.
+        markDirty(DirtyFlag::VIEWPORT, FrameReason::SettingsChange);
     }
 
     SceneUpscalerSelection RenderingManager::sceneUpscalerRuntimeSelection() const {
