@@ -1188,8 +1188,18 @@ class TrainingPanel(Panel):
 
         def _status_iteration():
             it = RuntimeState.iteration.value
+            has_trainer = RuntimeState.has_trainer.value
+            session = _training_session_state() if not has_trainer or it <= 0 else {}
             if it <= 0:
-                it = int(_training_session_state().get("iteration") or 0)
+                it = int(session.get("iteration") or 0)
+            if (
+                not has_trainer
+                and session.get("available")
+                and not session.get("hydrated")
+            ):
+                # Restored counters are not iterations performed in this sampling window.
+                _rate_tracker.clear()
+                return f"{tr('status.iteration')} {it:,}"
             _rate_tracker.add_sample(it)
             rate = _rate_tracker.get_rate()
             return f"{tr('status.iteration')} {it:,} ({rate:.1f} {tr('training_panel.iters_per_sec')})"
