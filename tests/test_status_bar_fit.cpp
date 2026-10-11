@@ -6,6 +6,7 @@
 #include "gui/rml_status_bar.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "visualizer/app_store.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
@@ -20,6 +21,7 @@
 #include <gtest/gtest.h>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace lfs::vis::gui {
@@ -217,6 +219,8 @@ namespace {
             const auto font_path = std::filesystem::path(PROJECT_ROOT_PATH) /
                                    "src/visualizer/gui/assets/fonts/Inter-Regular.ttf";
             ASSERT_TRUE(Rml::LoadFontFace(font_path.string()));
+            for (const char* name : {"NotoSansJP-Regular.ttf", "NotoSansKR-Regular.ttf"})
+                ASSERT_TRUE(Rml::LoadFontFace((font_path.parent_path() / name).string(), true));
         }
 
         static void TearDownTestSuite() {
@@ -359,6 +363,82 @@ namespace {
             status_bar_.processInput(input, 0, 0, 2400, 22);
             EXPECT_FALSE(RmlStatusBarTestAccess::tooltipPending(status_bar_));
         }
+    }
+
+    TEST_F(StatusBarFitTest, LayoutAndDigitReservationFollowDensityChanges) {
+        for (const float scale : {1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f, 4.0f}) {
+            SCOPED_TRACE(scale);
+            context_->SetDensityIndependentPixelRatio(scale);
+            const int height = static_cast<int>(22 * scale + 0.5f);
+            document_->SetProperty("height", std::format("{}px", height));
+            context_->SetDimensions({static_cast<int>(2400 * scale), height});
+            context_->Update();
+            lfs::vis::gui::RmlStatusBarTestAccess::attach(status_bar_, context_, document_);
+            auto* ui = document_->GetElementById("fps-value");
+            model_.fps_value = "144";
+            model_handle_.DirtyVariable("fps_value");
+            context_->Update();
+            const float width = ui->GetOffsetWidth();
+            model_.fps_value = "0";
+            model_handle_.DirtyVariable("fps_value");
+            context_->Update();
+            EXPECT_FLOAT_EQ(ui->GetOffsetWidth(), width);
+            for (const int dp_width : {2400, 1600, 1200, 900, 700, 500, 320}) {
+                SCOPED_TRACE(dp_width);
+                const int px_width = static_cast<int>(dp_width * scale);
+                context_->SetDimensions({px_width, height});
+                context_->Update();
+                lfs::vis::gui::RmlStatusBarTestAccess::fit(status_bar_);
+                assertNoVerticalOverflow(document_);
+                assertFlexSiblingsDoNotOverlap(document_);
+                EXPECT_LE(ui->GetAbsoluteOffset().x + ui->GetOffsetWidth(), px_width + 0.5f);
+            }
+        }
+    }
+
+    TEST_F(StatusBarFitTest, LocalizedTooltipsStayInsideScaledNarrowWindow) {
+        auto& loc = lfs::event::LocalizationManager::getInstance();
+        const auto locales = std::filesystem::path(PROJECT_ROOT_PATH) /
+                             "src/visualizer/gui/resources/locales";
+        ASSERT_TRUE(loc.initialize(locales.string()));
+        lfs::vis::gui::RmlTooltipController tooltip;
+        for (const float scale : {1.0f, 1.25f, 1.5f, 2.0f, 3.0f, 4.0f}) {
+            SCOPED_TRACE(scale);
+            const int width = static_cast<int>(400 * scale);
+            const int height = static_cast<int>(300 * scale);
+            context_->SetDensityIndependentPixelRatio(scale);
+            context_->SetDimensions({width, height});
+            document_->SetProperty("height", std::format("{}px", height));
+            context_->Update();
+            for (const auto& language : loc.getAvailableLanguages()) {
+                SCOPED_TRACE(language);
+                ASSERT_TRUE(loc.setLanguage(language));
+                for (const char* id : {"fps-value", "fps-view-value"}) {
+                    auto* value = document_->GetElementById(id);
+                    const std::string text = lfs::vis::gui::resolveRmlTooltip(value);
+                    ASSERT_FALSE(text.empty());
+                    EXPECT_NE(text, value->GetParentNode()->GetAttribute<Rml::String>("data-tooltip", ""));
+                    tooltip.setHover(text, value);
+                    if (const auto deadline = tooltip.revealDeadline())
+                        std::this_thread::sleep_until(*deadline + std::chrono::milliseconds(2));
+                    ASSERT_TRUE(tooltip.apply(document_, width - 5, height - 5, width, height));
+                    context_->Update();
+                    auto* element = document_->GetElementById("frame-tooltip");
+                    ASSERT_TRUE(element);
+                    ASSERT_TRUE(element->IsVisible());
+                    const auto offset = element->GetAbsoluteOffset(Rml::BoxArea::Border);
+                    EXPECT_GE(offset.x, 0);
+                    EXPECT_GE(offset.y, 0);
+                    EXPECT_LE(offset.x + element->GetOffsetWidth(), width + 0.5f);
+                    EXPECT_LE(offset.y + element->GetOffsetHeight(), height + 0.5f);
+                    tooltip.setHover({}, nullptr);
+                    EXPECT_TRUE(tooltip.apply(document_, 0, 0, width, height));
+                    context_->Update();
+                    EXPECT_FALSE(element->IsVisible());
+                }
+            }
+        }
+        loc.reset();
     }
 
     TEST_F(StatusBarFitTest, KeepsSingleLineNonOverlappingLayoutAcrossWidths) {
