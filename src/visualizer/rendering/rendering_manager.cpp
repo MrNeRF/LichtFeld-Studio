@@ -610,6 +610,10 @@ namespace lfs::vis {
 
             const auto previous_backend = settings_.raster_backend;
             const bool previous_gut = settings_.gut;
+            if (settings_.environment_map_path != sanitized_settings.environment_map_path) {
+                environment_map_path_ =
+                    std::make_shared<const std::filesystem::path>(sanitized_settings.environment_map_path);
+            }
             settings_ = sanitized_settings;
             const bool gut_toggle_only =
                 settings_.raster_backend == previous_backend && settings_.gut != previous_gut;

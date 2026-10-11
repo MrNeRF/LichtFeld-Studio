@@ -890,21 +890,21 @@ namespace lfs::vis {
                 load_failed_for_path = false;
                 return;
             }
-            if (params.map_path == loaded_path && image != VK_NULL_HANDLE) {
-                rebindDescriptor(descriptor);
-                return;
-            }
-            if (params.map_path.empty()) {
+            if (!params.map_path || params.map_path->empty()) {
                 retireAndDestroyImage("empty environment path");
                 return;
             }
-            // Skip retry of a path we've already failed once for, until it changes.
-            if (load_failed_for_path && params.map_path == loaded_path) {
+            if (*params.map_path == loaded_path && image != VK_NULL_HANDLE) {
+                rebindDescriptor(descriptor);
                 return;
             }
-            const bool ok = loadFromPath(params.map_path);
+            // Skip retry of a path we've already failed once for, until it changes.
+            if (load_failed_for_path && *params.map_path == loaded_path) {
+                return;
+            }
+            const bool ok = loadFromPath(*params.map_path);
             load_failed_for_path = !ok;
-            loaded_path = params.map_path;
+            loaded_path = *params.map_path;
             if (ok) {
                 rebindDescriptor(descriptor);
             }

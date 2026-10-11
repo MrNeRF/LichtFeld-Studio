@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/tensor_fwd.hpp"
+#include "vulkan_environment_pass.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -36,6 +37,8 @@ namespace lfs::vis {
         // Set only for a panel rendered at the reconstruction input resolution.
         // Reference and ground-truth panels must remain unfiltered.
         bool spatial_filter = false;
+        // Scene-panel sky camera, shared by presentation and lazy capture.
+        VulkanEnvironmentParams environment{};
     };
 
     struct VulkanSplitViewParams {

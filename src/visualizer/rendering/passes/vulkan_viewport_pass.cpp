@@ -2273,6 +2273,21 @@ namespace lfs::vis {
                 params.frame_slot,
                 params.environment.enabled,
                 environment_pass.hasTexture(params.frame_slot));
+            if (sceneSplitActive(params) && params.split_view.left.normalize_x_to_panel &&
+                params.split_view.left.environment.enabled && params.split_view.right.environment.enabled) {
+                for (const auto* panel : {&params.split_view.left, &params.split_view.right}) {
+                    const int left = static_cast<int>(std::lround(panel->start_position * rect.width));
+                    const int right = static_cast<int>(std::lround(panel->end_position * rect.width));
+                    if (right > left) {
+                        environment_pass.record(command_buffer,
+                                                VkRect2D{{rect.x + left, rect.y},
+                                                         {static_cast<std::uint32_t>(right - left),
+                                                          static_cast<std::uint32_t>(rect.height)}},
+                                                panel->environment, params.frame_slot);
+                    }
+                }
+                return;
+            }
             environment_pass.record(command_buffer,
                                     VkRect2D{
                                         .offset = {rect.x, rect.y},

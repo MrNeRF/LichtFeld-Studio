@@ -1000,6 +1000,8 @@ namespace lfs::vis {
 
         // Settings
         RenderSettings settings_;
+        std::shared_ptr<const std::filesystem::path> environment_map_path_ =
+            std::make_shared<const std::filesystem::path>(settings_.environment_map_path);
         SceneUpscalerSelection scene_upscaler_runtime_selection_{};
         std::array<int, 2> panel_grid_planes_{{1, 1}};
         mutable std::mutex settings_mutex_;

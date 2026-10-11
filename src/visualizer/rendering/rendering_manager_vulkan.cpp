@@ -16,6 +16,8 @@
 #include "io/pipelined_image_loader.hpp"
 #include "model_renderability.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
+#include "rendering/environment_image.hpp"
+#include "rendering/environment_math.hpp"
 #include "rendering/image_layout.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
@@ -697,6 +699,19 @@ namespace lfs::vis {
             apply_tight_cpu_uv(left_panel, std::get<1>(*left_data), std::get<2>(*left_data));
             apply_tight_cpu_uv(right_panel, std::get<1>(*right_data), std::get<2>(*right_data));
 
+            const auto load_environment = [](const VulkanEnvironmentParams& environment) {
+                std::shared_ptr<const lfs::rendering::EnvironmentImage> image;
+                if (environment.enabled && environment.map_path) {
+                    auto loaded = lfs::rendering::loadEnvironmentImageShared(*environment.map_path);
+                    if (loaded) {
+                        image = *loaded;
+                    }
+                }
+                return image;
+            };
+            const auto left_environment = load_environment(params.left.environment);
+            const auto right_environment = load_environment(params.right.environment);
+
             const int width = output_size.x;
             const int height = output_size.y;
             if (width <= 0 || height <= 0) {
@@ -804,6 +819,38 @@ namespace lfs::vis {
                         color = glm::clamp(sharpened,
                                            glm::min(color, glm::min(glm::min(left, right), glm::min(up, down))),
                                            glm::max(color, glm::max(glm::max(left, right), glm::max(up, down))));
+                    }
+                    if (panel.environment.enabled) {
+                        const auto& environment = panel.environment;
+                        const auto& image = use_left ? left_environment : right_environment;
+                        glm::vec3 background{0.0f};
+                        if (image) {
+                            namespace math = lfs::rendering::envmath;
+                            auto direction = math::environmentWorldDirection(
+                                panel_u * environment.viewport_size.x - 0.5f,
+                                v * environment.viewport_size.y - 0.5f,
+                                environment.viewport_size.x, environment.viewport_size.y,
+                                environment.equirectangular_view,
+                                environment.intrinsics.x, environment.intrinsics.y,
+                                environment.intrinsics.z, environment.intrinsics.w,
+                                &environment.camera_to_world[0][0]);
+                            direction = math::rotateAroundY(direction, environment.rotation_radians);
+                            const auto uv = math::equirectUvForDirection(direction);
+                            const auto radiance = math::sampleEnvironmentBilinear(
+                                [&](const int sx, const int sy) {
+                                    const auto offset = (static_cast<std::size_t>(sy) * image->width + sx) * 3;
+                                    return math::Vec3{image->pixels[offset], image->pixels[offset + 1], image->pixels[offset + 2]};
+                                },
+                                uv.u, uv.v, image->width, image->height);
+                            const auto shaded = math::shadeEnvironmentRadiance(radiance, std::exp2(environment.exposure));
+                            background = {shaded.x, shaded.y, shaded.z};
+                        }
+                        const float alpha = std::get<3>(data) >= 4
+                                                ? std::clamp(sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                                                                    texture_uv.x, texture_uv.y, 3),
+                                                             0.0f, 1.0f)
+                                                : 1.0f;
+                        color = color * alpha + background * (1.0f - alpha);
                     }
                     write(idx, color);
 
@@ -932,13 +979,39 @@ namespace lfs::vis {
             return metadata;
         }
 
+        [[nodiscard]] VulkanEnvironmentParams makeEnvironmentParams(
+            const lfs::rendering::FrameView& frame_view, const RenderSettings& settings,
+            const std::shared_ptr<const std::filesystem::path>& environment_map_path) {
+            VulkanEnvironmentParams environment;
+            environment.enabled = environmentBackgroundEnabled(settings);
+            environment.map_path = environment_map_path;
+            environment.camera_to_world = frame_view.rotation;
+            environment.viewport_size =
+                glm::vec2(static_cast<float>(frame_view.size.x), static_cast<float>(frame_view.size.y));
+            if (frame_view.intrinsics_override.has_value() && !frame_view.orthographic) {
+                const auto& intr = *frame_view.intrinsics_override;
+                environment.intrinsics =
+                    glm::vec4(intr.focal_x, intr.focal_y, intr.center_x, intr.center_y);
+            } else {
+                const auto [fx, fy] =
+                    lfs::rendering::computePixelFocalLengths(frame_view.size, frame_view.focal_length_mm);
+                environment.intrinsics =
+                    glm::vec4(fx, fy, frame_view.size.x * 0.5f, frame_view.size.y * 0.5f);
+            }
+            environment.exposure = settings.environment_exposure;
+            environment.rotation_radians = glm::radians(settings.environment_rotation_degrees);
+            environment.equirectangular_view = settings.equirectangular;
+            return environment;
+        }
+
         // Per-frame mesh-pass payload (without depth blit). The Vulkan splat path
         // publishes this every frame so the viewport pass sees the current camera;
         // otherwise the mesh stays anchored to whichever frame last set it.
         [[nodiscard]] RenderingManager::VulkanMeshFrame populateMeshFrame(
             const FrameContext& frame_ctx,
             const RenderSettings& settings,
-            const VulkanSplitViewParams& split_view_params) {
+            const VulkanSplitViewParams& split_view_params,
+            const std::shared_ptr<const std::filesystem::path>& environment_map_path) {
             RenderingManager::VulkanMeshFrame frame;
             const auto vp_data = frame_ctx.makeViewportData();
             frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
@@ -946,24 +1019,7 @@ namespace lfs::vis {
             frame.items = buildViewportMeshDrawItems(frame_ctx.scene_state, settings, vp_data.translation);
 
             const auto frame_view = frame_ctx.makeFrameView();
-            frame.environment.enabled = environmentBackgroundEnabled(settings);
-            frame.environment.map_path = settings.environment_map_path;
-            frame.environment.camera_to_world = vp_data.rotation;
-            frame.environment.viewport_size =
-                glm::vec2(static_cast<float>(frame_view.size.x), static_cast<float>(frame_view.size.y));
-            if (frame_view.intrinsics_override.has_value() && !frame_view.orthographic) {
-                const auto& intr = *frame_view.intrinsics_override;
-                frame.environment.intrinsics =
-                    glm::vec4(intr.focal_x, intr.focal_y, intr.center_x, intr.center_y);
-            } else {
-                const auto [fx, fy] =
-                    lfs::rendering::computePixelFocalLengths(frame_view.size, frame_view.focal_length_mm);
-                frame.environment.intrinsics =
-                    glm::vec4(fx, fy, frame_view.size.x * 0.5f, frame_view.size.y * 0.5f);
-            }
-            frame.environment.exposure = settings.environment_exposure;
-            frame.environment.rotation_radians = glm::radians(settings.environment_rotation_degrees);
-            frame.environment.equirectangular_view = settings.equirectangular;
+            frame.environment = makeEnvironmentParams(frame_view, settings, environment_map_path);
 
             frame.split_view = split_view_params;
 
@@ -1798,8 +1854,10 @@ namespace lfs::vis {
             lfs::core::GlobalArenaManager::instance().clear_external_backing();
             vksplat_viewport_renderer_->releaseScratchOnIdle(true);
         }
-        RenderSettings frame_settings = [this] {
+        std::shared_ptr<const std::filesystem::path> environment_map_path;
+        RenderSettings frame_settings = [this, &environment_map_path] {
             std::lock_guard lock(settings_mutex_);
+            environment_map_path = environment_map_path_;
             return settings_;
         }();
         if (context.preparing_import && splitViewUsesPLYComparison(frame_settings.split_view_mode) && context.scene_manager) {
@@ -3751,6 +3809,21 @@ namespace lfs::vis {
             pending_split_view.left.spatial_filter = filter_reconstructed_panels;
             pending_split_view.right.spatial_filter = filter_reconstructed_panels;
             pending_split_view.coordinate_extent = render_size;
+            if (environmentBackgroundUsesTransparentViewerCompositing(frame_settings)) {
+                const bool independent = splitViewUsesIndependentPanels(frame_settings.split_view_mode);
+                const auto panel_environment = [&](const Viewport& viewport, const VulkanSplitViewPanel& panel) {
+                    const glm::ivec2 size = independent
+                                                ? glm::ivec2{std::max(static_cast<int>(std::lround(
+                                                                          (panel.end_position - panel.start_position) * render_size.x)),
+                                                                      1),
+                                                             render_size.y}
+                                                : render_size;
+                    return makeEnvironmentParams(frame_ctx.makeFrameView(viewport, size), frame_settings, environment_map_path);
+                };
+                pending_split_view.left.environment = panel_environment(context.viewport, pending_split_view.left);
+                pending_split_view.right.environment = panel_environment(
+                    independent ? split_view_service_.secondaryViewport() : context.viewport, pending_split_view.right);
+            }
         }
 
         const bool render_point_cloud = frame_settings.point_cloud_mode || !has_visible_gaussian_model;
@@ -3969,7 +4042,7 @@ namespace lfs::vis {
 
                 if (!frame_ctx.scene_state.meshes.empty() ||
                     environmentBackgroundEnabled(frame_settings)) {
-                    auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
+                    auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view, environment_map_path);
                     populate_independent_split_mesh_panels(mesh_frame);
                     if (render_result->depth_image_view != VK_NULL_HANDLE) {
                         // Hardware depth attachment stores Vulkan-native NDC z; the
@@ -4255,7 +4328,7 @@ namespace lfs::vis {
                                 environmentBackgroundEnabled(frame_settings) ||
                                 render_result.depth_image_view != VK_NULL_HANDLE;
                             if (publish_mesh_frame) {
-                                auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
+                                auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view, environment_map_path);
                                 populate_independent_split_mesh_panels(mesh_frame);
                                 if (render_result.depth_image_view != VK_NULL_HANDLE) {
                                     mesh_frame.depth_blit.external_image_view = render_result.depth_image_view;
@@ -4612,7 +4685,7 @@ namespace lfs::vis {
         if ((rendered_image || render_error.empty() || pending_split_view.enabled) &&
             (environmentBackgroundEnabled(frame_settings) || !frame_ctx.scene_state.meshes.empty() ||
              pending_split_view.enabled)) {
-            VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
+            VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view, environment_map_path);
             populate_independent_split_mesh_panels(gpu_mesh_frame);
 
             // Splat depth -> mesh-pass z-test source. Only meaningful when the
@@ -4668,14 +4741,14 @@ namespace lfs::vis {
                                 capture_params = vulkan_mesh_frame_.split_view;
                             }
                         }
-                        const auto read_panel = [this](const VksplatViewportRenderer::OutputSlot slot)
+                        const auto read_panel = [this](const VksplatViewportRenderer::OutputSlot slot, const bool transparent_background)
                             -> std::shared_ptr<lfs::core::Tensor> {
                             if (!vksplat_viewport_renderer_ || !last_vulkan_context_) {
                                 return {};
                             }
-                            auto image = vksplat_viewport_renderer_->readOutputImage(
-                                *last_vulkan_context_,
-                                slot);
+                            auto image = transparent_background
+                                             ? vksplat_viewport_renderer_->readOutputImageRgba(*last_vulkan_context_, slot)
+                                             : vksplat_viewport_renderer_->readOutputImage(*last_vulkan_context_, slot);
                             if (!image) {
                                 LOG_ERROR("Failed to capture VkSplat split-view panel: {}", image.error());
                                 return {};
@@ -4685,12 +4758,12 @@ namespace lfs::vis {
                         if (!capture_params.left.image &&
                             capture_params.left.external_image_view != VK_NULL_HANDLE) {
                             capture_params.left.image =
-                                read_panel(VksplatViewportRenderer::OutputSlot::SplitLeft);
+                                read_panel(VksplatViewportRenderer::OutputSlot::SplitLeft, capture_params.left.environment.enabled);
                         }
                         if (!capture_params.right.image &&
                             capture_params.right.external_image_view != VK_NULL_HANDLE) {
                             capture_params.right.image =
-                                read_panel(VksplatViewportRenderer::OutputSlot::SplitRight);
+                                read_panel(VksplatViewportRenderer::OutputSlot::SplitRight, capture_params.right.environment.enabled);
                         }
                         if (!capture_params.left.image || !capture_params.right.image) {
                             return {};

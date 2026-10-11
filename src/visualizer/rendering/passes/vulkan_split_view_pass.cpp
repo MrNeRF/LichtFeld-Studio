@@ -52,7 +52,7 @@ namespace lfs::vis {
         }
 
         struct SplitPush {
-            float split[4];               // x = position, y = left_flip_y, z = right_flip_y, w = pad
+            float split[4];               // x = position, y = left_flip_y, z = right_flip_y, w = composite alpha
             float rect[4];                // x, y, w, h
             float panel_norm[4];          // left_start, left_end, right_start, right_end
             float panel_flags[4];         // left_normalize, right_normalize, left_filter, right_filter
@@ -156,6 +156,7 @@ namespace lfs::vis {
         std::vector<FrameDescriptor> frame_descriptors;
         VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
+        VkPipeline alpha_pipeline = VK_NULL_HANDLE;
         VkBuffer screen_quad_buffer = VK_NULL_HANDLE;
 
         struct PanelImage {
@@ -231,6 +232,10 @@ namespace lfs::vis {
             if (pipeline != VK_NULL_HANDLE) {
                 vkDestroyPipeline(device, pipeline, nullptr);
                 pipeline = VK_NULL_HANDLE;
+            }
+            if (alpha_pipeline != VK_NULL_HANDLE) {
+                vkDestroyPipeline(device, alpha_pipeline, nullptr);
+                alpha_pipeline = VK_NULL_HANDLE;
             }
             if (pipeline_layout != VK_NULL_HANDLE) {
                 vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
@@ -520,7 +525,17 @@ namespace lfs::vis {
             pi.pDynamicState = &dynamic;
             pi.layout = pipeline_layout;
 
-            const VkResult r = vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pi, nullptr, &pipeline);
+            VkResult r = vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pi, nullptr, &pipeline);
+            if (r == VK_SUCCESS) {
+                blend_attachment.blendEnable = VK_TRUE;
+                blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+                blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
+                blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+                r = vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pi, nullptr, &alpha_pipeline);
+            }
             vkDestroyShaderModule(device, vert, nullptr);
             vkDestroyShaderModule(device, frag, nullptr);
             if (r != VK_SUCCESS) {
@@ -537,6 +552,7 @@ namespace lfs::vis {
             context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE,
                                         pipeline,
                                         "split_view.pipeline");
+            context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE, alpha_pipeline, "split_view.alpha_pipeline");
             return true;
         }
 
@@ -1158,7 +1174,8 @@ namespace lfs::vis {
             vkCmdSetViewport(cb, 0, 1, &vp);
             vkCmdSetScissor(cb, 0, 1, &panel_rect);
 
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            const bool composite_environment = params.left.environment.enabled || params.right.environment.enabled;
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, composite_environment ? alpha_pipeline : pipeline);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
                                     0, 1, &descriptor.set, 0, nullptr);
             VkDeviceSize off = 0;
@@ -1168,6 +1185,7 @@ namespace lfs::vis {
             push.split[0] = std::clamp(params.split_position, 0.0f, 1.0f);
             push.split[1] = params.left.flip_y ? 1.0f : 0.0f;
             push.split[2] = params.right.flip_y ? 1.0f : 0.0f;
+            push.split[3] = composite_environment ? 1.0f : 0.0f;
 
             const float rect_x = static_cast<float>(params.content_rect.x);
             const float rect_y = static_cast<float>(params.content_rect.y);

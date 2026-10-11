@@ -485,7 +485,7 @@ namespace lfs::vis {
     [[nodiscard]] inline bool environmentBackgroundUsesTransparentViewerCompositing(
         const RenderSettings& settings) {
         return environmentBackgroundEnabled(settings) &&
-               !splitViewEnabled(settings.split_view_mode);
+               !splitViewUsesGTComparison(settings.split_view_mode);
     }
 
     struct SplitViewInfo {

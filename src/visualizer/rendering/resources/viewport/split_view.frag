@@ -13,7 +13,7 @@ layout(push_constant) uniform Push {
     // x = split_position (0..1 in viewport space)
     // y = left_flip_y (0/1)
     // z = right_flip_y (0/1)
-    // w = padding
+    // w = composite panel alpha over the environment
     vec4 split;
 
     // Viewport pixel rect (x, y, width, height) — letterboxed content extent.
@@ -42,7 +42,7 @@ layout(push_constant) uniform Push {
     vec4 right_texcoord_scale_offset;
 } pc;
 
-vec3 sample_panel(sampler2D tex, vec2 uv, float start, float end, float normalize, float flip_y,
+vec4 sample_panel(sampler2D tex, vec2 uv, float start, float end, float normalize, float flip_y,
                   float spatial_filter, vec2 uv_scale, vec2 uv_clamp_max,
                   vec2 texcoord_scale, vec2 texcoord_offset) {
     float u = uv.x;
@@ -52,7 +52,7 @@ vec3 sample_panel(sampler2D tex, vec2 uv, float start, float end, float normaliz
     }
     float v = flip_y > 0.5 ? 1.0 - uv.y : uv.y;
     vec2 st = min((vec2(u, v) * texcoord_scale + texcoord_offset) * uv_scale, uv_clamp_max);
-    vec3 center = texture(tex, st).rgb;
+    vec4 center = texture(tex, st);
     if (spatial_filter < 0.5) {
         return center;
     }
@@ -63,11 +63,11 @@ vec3 sample_panel(sampler2D tex, vec2 uv, float start, float end, float normaliz
     vec3 right = texture(tex, clamp(st + vec2(texel.x, 0.0), vec2(0.0), uv_clamp_max)).rgb;
     vec3 up = texture(tex, clamp(st - vec2(0.0, texel.y), vec2(0.0), uv_clamp_max)).rgb;
     vec3 down = texture(tex, clamp(st + vec2(0.0, texel.y), vec2(0.0), uv_clamp_max)).rgb;
-    vec3 sharpened = center * (1.0 + 4.0 * strength) -
+    vec3 sharpened = center.rgb * (1.0 + 4.0 * strength) -
                      (left + right + up + down) * strength;
-    vec3 neighborhood_min = min(center, min(min(left, right), min(up, down)));
-    vec3 neighborhood_max = max(center, max(max(left, right), max(up, down)));
-    return clamp(sharpened, neighborhood_min, neighborhood_max);
+    vec3 neighborhood_min = min(center.rgb, min(min(left, right), min(up, down)));
+    vec3 neighborhood_max = max(center.rgb, max(max(left, right), max(up, down)));
+    return vec4(clamp(sharpened, neighborhood_min, neighborhood_max), center.a);
 }
 
 void main() {
@@ -93,7 +93,7 @@ void main() {
     float divider_pixel = pc.rect.x + floor(pc.split.x * pc.rect.z + 0.5);
     bool use_left = px.x < divider_pixel;
 
-    vec3 color = use_left
+    vec4 color = use_left
         ? sample_panel(u_left, content_uv, pc.panel_norm.x, pc.panel_norm.y,
                        pc.panel_flags.x, pc.split.y, pc.panel_flags.z,
                        pc.left_uv_scale_clamp.xy, pc.left_uv_scale_clamp.zw,
@@ -142,5 +142,5 @@ void main() {
         return;
     }
 
-    frag_color = vec4(color, 1.0);
+    frag_color = vec4(color.rgb, pc.split.w > 0.5 ? color.a : 1.0);
 }
