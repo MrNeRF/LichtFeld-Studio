@@ -116,54 +116,56 @@ namespace lfs::python {
 
     class PyPointCloud {
     public:
-        explicit PyPointCloud(core::PointCloud* pc, bool owns = false,
-                              core::SceneNode* node = nullptr, core::Scene* scene = nullptr)
-            : pc_(pc),
-              owns_(owns),
-              node_(node),
-              scene_(scene) {
-            assert(pc_ != nullptr);
+        explicit PyPointCloud(std::shared_ptr<core::PointCloud> owner)
+            : owner_(std::move(owner)) {
+            assert(owner_ != nullptr);
         }
 
-        PyTensor means() const { return PyTensor(pc_->means, false); }
-        PyTensor colors() const { return PyTensor(pc_->colors, false); }
+        PyPointCloud(core::SceneNode* node, core::Scene* scene)
+            : node_uuid_(node->uuid), scene_(scene) {
+            assert(node->point_cloud != nullptr);
+            assert(scene_ != nullptr);
+        }
+
+        PyTensor means() const { return PyTensor(data()->means, false); }
+        PyTensor colors() const { return PyTensor(data()->colors, false); }
 
         std::optional<PyTensor> normals() const {
-            if (!pc_->normals.is_valid())
+            if (!data()->normals.is_valid())
                 return std::nullopt;
-            return PyTensor(pc_->normals, false);
+            return PyTensor(data()->normals, false);
         }
         std::optional<PyTensor> sh0() const {
-            if (!pc_->sh0.is_valid())
+            if (!data()->sh0.is_valid())
                 return std::nullopt;
-            return PyTensor(pc_->sh0, false);
+            return PyTensor(data()->sh0, false);
         }
         std::optional<PyTensor> shN() const {
-            if (!pc_->shN.is_valid())
+            if (!data()->shN.is_valid())
                 return std::nullopt;
-            return PyTensor(pc_->shN, false);
+            return PyTensor(data()->shN, false);
         }
         std::optional<PyTensor> opacity() const {
-            if (!pc_->opacity.is_valid())
+            if (!data()->opacity.is_valid())
                 return std::nullopt;
-            return PyTensor(pc_->opacity, false);
+            return PyTensor(data()->opacity, false);
         }
         std::optional<PyTensor> scaling() const {
-            if (!pc_->scaling.is_valid())
+            if (!data()->scaling.is_valid())
                 return std::nullopt;
-            return PyTensor(pc_->scaling, false);
+            return PyTensor(data()->scaling, false);
         }
         std::optional<PyTensor> rotation() const {
-            if (!pc_->rotation.is_valid())
+            if (!data()->rotation.is_valid())
                 return std::nullopt;
-            return PyTensor(pc_->rotation, false);
+            return PyTensor(data()->rotation, false);
         }
 
-        int64_t size() const { return pc_->size(); }
-        bool is_gaussian() const { return pc_->is_gaussian(); }
-        std::vector<std::string> attribute_names() const { return pc_->attribute_names; }
+        int64_t size() const { return data()->size(); }
+        bool is_gaussian() const { return data()->is_gaussian(); }
+        std::vector<std::string> attribute_names() const { return data()->attribute_names; }
 
-        void normalize_colors() { pc_->normalize_colors(); }
+        void normalize_colors() { data()->normalize_colors(); }
 
         // Filter points by boolean mask - keeps points where mask is True
         int64_t filter(const PyTensor& keep_mask);
@@ -176,13 +178,15 @@ namespace lfs::python {
         void set_colors(const PyTensor& colors);
         void set_means(const PyTensor& points);
 
-        core::PointCloud* data() { return pc_; }
-        const core::PointCloud* data() const { return pc_; }
+        core::PointCloud* data() { return resolve_data(); }
+        const core::PointCloud* data() const { return resolve_data(); }
 
     private:
-        core::PointCloud* pc_;
-        bool owns_;
-        core::SceneNode* node_ = nullptr;
+        core::PointCloud* resolve_data() const;
+        core::SceneNode& resolve_node() const;
+
+        std::shared_ptr<core::PointCloud> owner_;
+        core::Uuid node_uuid_;
         core::Scene* scene_ = nullptr;
     };
 

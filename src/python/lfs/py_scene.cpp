@@ -203,7 +203,7 @@ namespace lfs::python {
         if (live.type != core::NodeType::POINTCLOUD || !live.point_cloud) {
             return std::nullopt;
         }
-        return PyPointCloud(live.point_cloud.get(), false, &live, scene_);
+        return PyPointCloud(&live, scene_);
     }
 
     std::optional<PyMeshInfo> PySceneNode::mesh() {
@@ -214,74 +214,95 @@ namespace lfs::python {
         return PyMeshInfo(live.mesh);
     }
 
+    core::SceneNode& PyPointCloud::resolve_node() const {
+        // A scene-backed handle follows node UUID identity, never a freed node pointer.
+        if (scene_ && get_application_scene() == scene_) {
+            if (auto* node = scene_->getNodeByUuid(node_uuid_);
+                node && node->type == core::NodeType::POINTCLOUD && node->point_cloud) {
+                return *node;
+            }
+        }
+        throw std::runtime_error("PointCloud source node has been deleted or is no longer available");
+    }
+
+    core::PointCloud* PyPointCloud::resolve_data() const {
+        if (owner_)
+            return owner_.get();
+        return resolve_node().point_cloud.get();
+    }
+
     int64_t PyPointCloud::filter(const PyTensor& keep_mask) {
+        auto* const pc = resolve_data();
         const auto& mask = keep_mask.tensor();
         assert(mask.dtype() == core::DataType::Bool && "Mask must be boolean");
         assert(mask.shape().rank() == 1 && "Mask must be 1D");
-        assert(static_cast<size_t>(mask.shape()[0]) == static_cast<size_t>(pc_->size()) && "Mask size must match point count");
+        assert(static_cast<size_t>(mask.shape()[0]) == static_cast<size_t>(pc->size()) && "Mask size must match point count");
 
         // Ensure mask is on same device as data
-        const auto device = pc_->means.device();
+        const auto device = pc->means.device();
         const auto mask_dev = mask.device() == device ? mask : mask.to(device);
 
-        const int64_t old_size = pc_->size();
-        pc_->means = pc_->means.is_valid() ? pc_->means[mask_dev] : pc_->means;
-        pc_->colors = pc_->colors.is_valid() ? pc_->colors[mask_dev] : pc_->colors;
-        pc_->normals = pc_->normals.is_valid() ? pc_->normals[mask_dev] : pc_->normals;
-        pc_->sh0 = pc_->sh0.is_valid() ? pc_->sh0[mask_dev] : pc_->sh0;
-        pc_->shN = pc_->shN.is_valid() ? pc_->shN[mask_dev] : pc_->shN;
-        pc_->opacity = pc_->opacity.is_valid() ? pc_->opacity[mask_dev] : pc_->opacity;
-        pc_->scaling = pc_->scaling.is_valid() ? pc_->scaling[mask_dev] : pc_->scaling;
-        pc_->rotation = pc_->rotation.is_valid() ? pc_->rotation[mask_dev] : pc_->rotation;
+        const int64_t old_size = pc->size();
+        pc->means = pc->means.is_valid() ? pc->means[mask_dev] : pc->means;
+        pc->colors = pc->colors.is_valid() ? pc->colors[mask_dev] : pc->colors;
+        pc->normals = pc->normals.is_valid() ? pc->normals[mask_dev] : pc->normals;
+        pc->sh0 = pc->sh0.is_valid() ? pc->sh0[mask_dev] : pc->sh0;
+        pc->shN = pc->shN.is_valid() ? pc->shN[mask_dev] : pc->shN;
+        pc->opacity = pc->opacity.is_valid() ? pc->opacity[mask_dev] : pc->opacity;
+        pc->scaling = pc->scaling.is_valid() ? pc->scaling[mask_dev] : pc->scaling;
+        pc->rotation = pc->rotation.is_valid() ? pc->rotation[mask_dev] : pc->rotation;
 
         if (scene_) {
             scene_->setPointCloudModified(true);
             scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         }
-        return old_size - pc_->size();
+        return old_size - pc->size();
     }
 
     int64_t PyPointCloud::filter_indices(const PyTensor& indices) {
+        auto* const pc = resolve_data();
         const auto& idx = indices.tensor();
         assert(idx.shape().rank() == 1 && "Indices must be 1D");
 
-        const auto device = pc_->means.device();
+        const auto device = pc->means.device();
         const auto idx_dev = idx.device() == device ? idx : idx.to(device);
 
-        const int64_t old_size = pc_->size();
-        pc_->means = pc_->means.is_valid() ? pc_->means[idx_dev] : pc_->means;
-        pc_->colors = pc_->colors.is_valid() ? pc_->colors[idx_dev] : pc_->colors;
-        pc_->normals = pc_->normals.is_valid() ? pc_->normals[idx_dev] : pc_->normals;
-        pc_->sh0 = pc_->sh0.is_valid() ? pc_->sh0[idx_dev] : pc_->sh0;
-        pc_->shN = pc_->shN.is_valid() ? pc_->shN[idx_dev] : pc_->shN;
-        pc_->opacity = pc_->opacity.is_valid() ? pc_->opacity[idx_dev] : pc_->opacity;
-        pc_->scaling = pc_->scaling.is_valid() ? pc_->scaling[idx_dev] : pc_->scaling;
-        pc_->rotation = pc_->rotation.is_valid() ? pc_->rotation[idx_dev] : pc_->rotation;
+        const int64_t old_size = pc->size();
+        pc->means = pc->means.is_valid() ? pc->means[idx_dev] : pc->means;
+        pc->colors = pc->colors.is_valid() ? pc->colors[idx_dev] : pc->colors;
+        pc->normals = pc->normals.is_valid() ? pc->normals[idx_dev] : pc->normals;
+        pc->sh0 = pc->sh0.is_valid() ? pc->sh0[idx_dev] : pc->sh0;
+        pc->shN = pc->shN.is_valid() ? pc->shN[idx_dev] : pc->shN;
+        pc->opacity = pc->opacity.is_valid() ? pc->opacity[idx_dev] : pc->opacity;
+        pc->scaling = pc->scaling.is_valid() ? pc->scaling[idx_dev] : pc->scaling;
+        pc->rotation = pc->rotation.is_valid() ? pc->rotation[idx_dev] : pc->rotation;
 
         if (scene_) {
             scene_->setPointCloudModified(true);
             scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         }
-        return old_size - pc_->size();
+        return old_size - pc->size();
     }
 
     void PyPointCloud::set_data(const PyTensor& points, const PyTensor& colors) {
+        auto* const pc = resolve_data();
+        auto* const node = scene_ ? &resolve_node() : nullptr;
         const auto& pts = points.tensor();
         const auto& cols = colors.tensor();
         assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
         assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
         assert(pts.shape()[0] == cols.shape()[0]);
 
-        pc_->means = pts.to(core::Device::CUDA);
-        pc_->colors = cols.to(core::Device::CUDA);
+        pc->means = pts.to(core::Device::CUDA);
+        pc->colors = cols.to(core::Device::CUDA);
 
-        const int64_t n = pc_->size();
-        if (node_) {
-            node_->gaussian_count.store(static_cast<size_t>(n), std::memory_order_release);
+        const int64_t n = pc->size();
+        if (node) {
+            node->gaussian_count.store(static_cast<size_t>(n), std::memory_order_release);
             if (n > 0) {
-                auto centroid = pc_->means.mean(0).cpu();
+                auto centroid = pc->means.mean(0).cpu();
                 auto acc = centroid.accessor<float, 1>();
-                node_->centroid = glm::vec3(acc(0), acc(1), acc(2));
+                node->centroid = glm::vec3(acc(0), acc(1), acc(2));
             }
         }
         if (scene_) {
@@ -291,10 +312,11 @@ namespace lfs::python {
     }
 
     void PyPointCloud::set_colors(const PyTensor& colors) {
+        auto* const pc = resolve_data();
         const auto& cols = colors.tensor();
         assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
-        assert(cols.shape()[0] == pc_->size());
-        pc_->colors = cols.to(pc_->means.device());
+        assert(cols.shape()[0] == pc->size());
+        pc->colors = cols.to(pc->means.device());
         if (scene_) {
             scene_->setPointCloudModified(true);
             scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
@@ -302,14 +324,16 @@ namespace lfs::python {
     }
 
     void PyPointCloud::set_means(const PyTensor& points) {
+        auto* const pc = resolve_data();
+        auto* const node = scene_ ? &resolve_node() : nullptr;
         const auto& pts = points.tensor();
         assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
-        assert(pts.shape()[0] == pc_->size());
-        pc_->means = pts.to(pc_->colors.device());
-        if (node_ && pc_->size() > 0) {
-            auto centroid = pc_->means.mean(0).cpu();
+        assert(pts.shape()[0] == pc->size());
+        pc->means = pts.to(pc->colors.device());
+        if (node && pc->size() > 0) {
+            auto centroid = pc->means.mean(0).cpu();
             auto acc = centroid.accessor<float, 1>();
-            node_->centroid = glm::vec3(acc(0), acc(1), acc(2));
+            node->centroid = glm::vec3(acc(0), acc(1), acc(2));
         }
         if (scene_) {
             scene_->setPointCloudModified(true);

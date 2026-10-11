@@ -218,7 +218,7 @@ namespace lfs::python {
 
             std::optional<PyPointCloud> get_point_cloud() const {
                 if (point_cloud)
-                    return PyPointCloud(point_cloud.get());
+                    return PyPointCloud(point_cloud);
                 return std::nullopt;
             }
 
