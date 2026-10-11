@@ -15,6 +15,24 @@
 #include <limits>
 #include <memory>
 
+namespace lfs::training {
+    struct TrainerPausedProgressTestAccess {
+        static void set_iteration(Trainer& trainer, const int iteration, const bool paused, const bool running = true) {
+            trainer.current_iteration_.store(iteration);
+            trainer.is_paused_.store(paused);
+            trainer.is_running_.store(running);
+        }
+
+        static int snapshot_iteration(const Trainer& trainer) {
+            return trainer.project_snapshot_iteration();
+        }
+
+        static void handle_controls(Trainer& trainer, const int iteration) {
+            trainer.handle_control_requests(iteration, {});
+        }
+    };
+} // namespace lfs::training
+
 namespace {
 
     [[nodiscard]] std::shared_ptr<lfs::core::Camera> make_command_camera() {
@@ -46,6 +64,56 @@ namespace {
         lfs::core::Scene scene_;
         std::unique_ptr<lfs::training::Trainer> trainer_;
     };
+
+    TEST_F(TrainingTerminalStateTest, PausedProgressMatchesCompletedSnapshotIteration) {
+        using Access = lfs::training::TrainerPausedProgressTestAccess;
+        for (const int upcoming : {1, 2, 1400, 30000}) {
+            Access::set_iteration(*trainer_, upcoming, true);
+            EXPECT_EQ(Access::snapshot_iteration(*trainer_), upcoming - 1);
+            EXPECT_EQ(trainer_->get_progress_iteration(), upcoming - 1);
+            EXPECT_EQ(trainer_->get_current_iteration(), upcoming);
+        }
+    }
+
+    TEST_F(TrainingTerminalStateTest, UnpausedProgressAndSnapshotIterationStayUnchanged) {
+        using Access = lfs::training::TrainerPausedProgressTestAccess;
+        // Fresh, running, loaded checkpoint, and completed trainers keep their counter.
+        for (const int iteration : {0, 1, 1399, 30000}) {
+            Access::set_iteration(*trainer_, iteration, false);
+            EXPECT_EQ(trainer_->get_progress_iteration(), iteration);
+            EXPECT_EQ(trainer_->get_current_iteration(), iteration);
+            EXPECT_EQ(Access::snapshot_iteration(*trainer_), iteration);
+        }
+        Access::set_iteration(*trainer_, 0, true);
+        EXPECT_EQ(trainer_->get_progress_iteration(), 0);
+        EXPECT_EQ(trainer_->get_current_iteration(), 0);
+        EXPECT_EQ(Access::snapshot_iteration(*trainer_), 0);
+        // A paused trainer without a worker has no upcoming step to subtract.
+        Access::set_iteration(*trainer_, 1399, true, false);
+        EXPECT_EQ(trainer_->get_progress_iteration(), 1399);
+        EXPECT_EQ(trainer_->get_current_iteration(), 1399);
+    }
+
+    TEST_F(TrainingTerminalStateTest, PauseNotificationReportsCompletedStepAndResumeKeepsUpcomingStep) {
+        using Access = lfs::training::TrainerPausedProgressTestAccess;
+        Access::set_iteration(*trainer_, 1400, false);
+        int paused_iteration = -1;
+        trainer_->setOnPaused([&](const int iteration) { paused_iteration = iteration; });
+        trainer_->request_pause();
+        Access::handle_controls(*trainer_, 1400);
+        ASSERT_TRUE(trainer_->is_paused());
+        EXPECT_EQ(paused_iteration, 1399);
+        EXPECT_EQ(trainer_->get_progress_iteration(), 1399);
+        EXPECT_EQ(trainer_->get_current_iteration(), 1400);
+        EXPECT_EQ(Access::snapshot_iteration(*trainer_), 1399);
+
+        trainer_->request_resume();
+        Access::handle_controls(*trainer_, 1400);
+        EXPECT_FALSE(trainer_->is_paused());
+        EXPECT_EQ(trainer_->get_progress_iteration(), 1400);
+        EXPECT_EQ(trainer_->get_current_iteration(), 1400);
+        EXPECT_EQ(Access::snapshot_iteration(*trainer_), 1400);
+    }
 
     TEST_F(TrainingTerminalStateTest, UnregisterCancelsAlreadyPendingCallback) {
         auto& boundary = lfs::training::ControlBoundary::instance();

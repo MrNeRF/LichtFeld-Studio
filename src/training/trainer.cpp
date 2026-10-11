@@ -5623,12 +5623,12 @@ namespace lfs::training {
                 progress_->pause();
             }
             if (on_paused_) {
-                on_paused_(iter);
+                on_paused_(get_progress_iteration());
             }
             // B3: the previous step is complete; release the production loss arena.
             photometric_loss_.arena().reset();
             resize_rasterizer_arena_at_boundary("B3 pause", true);
-            LOG_INFO("Training paused at iteration {}", iter);
+            LOG_INFO("Training paused at iteration {}", get_progress_iteration());
             lfs::diagnostics::VramProfiler::instance().mark("training_pause");
             LOG_DEBUG("Click 'Resume Training' to continue.");
         } else if (!pause_requested_.load() && is_paused_.load()) {
@@ -6106,7 +6106,7 @@ namespace lfs::training {
                 // Python hook: iteration start (safe, pre-forward)
                 {
                     lfs::training::HookContext ctx{
-                        .iteration = iter,
+                        .iteration = get_progress_iteration(),
                         .loss = current_loss_.load(),
                         .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
                         .is_refining = strategy_ ? strategy_->is_refining(iter) : false,
@@ -6115,6 +6115,9 @@ namespace lfs::training {
                     lfs::training::CommandCenter::instance().update_snapshot(
                         ctx, get_total_iterations(), is_paused_.load(), is_running_.load(), stop_requested_.load(),
                         lfs::training::TrainingPhase::IterationStart);
+                    // The hook still addresses the upcoming step, even when
+                    // the published progress describes the paused model.
+                    ctx.iteration = iter;
                     lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::IterationStart, ctx);
                     auto view = lfs::training::CommandCenter::instance().snapshot();
                     lfs::training::CommandCenter::instance().drain_enqueued(view);

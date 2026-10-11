@@ -277,6 +277,11 @@ namespace lfs::training {
 
         // Get current training state
         int get_current_iteration() const { return current_iteration_.load(); }
+        // A paused step has not run yet. Report the model's completed step,
+        // while retaining the executing iteration for hooks and schedules.
+        int get_progress_iteration() const {
+            return is_running() ? project_snapshot_iteration() : get_current_iteration();
+        }
         int get_total_iterations() const;
         std::filesystem::path get_output_path() const { return getParams().dataset.output_path; }
         float get_current_loss() const { return current_loss_.load(); }
@@ -487,6 +492,7 @@ namespace lfs::training {
         friend struct TrainerHoldoutAppearanceTestAccess;
         friend struct TrainerRetryTestAccess;
         friend struct TrainerCropboxMaskTestAccess;
+        friend struct TrainerPausedProgressTestAccess;
 
         // Helper for deferred event emission to prevent deadlocks
         struct DeferredEvents {

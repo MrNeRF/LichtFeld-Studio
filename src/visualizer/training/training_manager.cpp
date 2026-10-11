@@ -1823,7 +1823,7 @@ namespace lfs::vis {
 
     int TrainerManager::getCurrentIteration() const {
         if (trainer_) {
-            return trainer_->get_current_iteration();
+            return trainer_->get_progress_iteration();
         }
         if (stored_session_presentation_active_) {
             return stored_session_presentation_iteration_;
