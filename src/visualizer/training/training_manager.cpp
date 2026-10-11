@@ -858,7 +858,7 @@ namespace lfs::vis {
         if (viewer_ && viewer_->isTrainingStartPending()) {
             return action == TrainingAction::Stop;
         }
-        if (action == TrainingAction::Stop && !trainer_ && viewer_ &&
+        if ((action == TrainingAction::Stop || action == TrainingAction::Resume) && !trainer_ && viewer_ &&
             getState() == TrainingState::Paused) {
             const auto session = viewer_->projectTrainingSessionState();
             return session.available && !session.hydrated && !session.restoring;
