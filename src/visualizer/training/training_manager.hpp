@@ -25,6 +25,7 @@
 #include <mutex>
 #include <optional>
 #include <stop_token>
+#include <string_view>
 #include <thread>
 #include <typeindex>
 #include <utility>
@@ -77,6 +78,7 @@ namespace lfs::vis {
             return trainer_generation_.load(std::memory_order_acquire);
         }
         [[nodiscard]] bool isDatasetEditable() const;
+        [[nodiscard]] bool canChangeStrategy(std::string_view strategy) const;
 
         // Link to viewer for notifications
         void setViewer(VisualizerImpl* viewer) { viewer_ = viewer; }

@@ -1441,6 +1441,17 @@ if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
         RUN_SERIAL TRUE
         ENVIRONMENT "LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR};LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>"
     )
+    add_test(NAME lichtfeld.python.training_strategy_update
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_strategy_update.py
+    )
+    set_tests_properties(lichtfeld.python.training_strategy_update PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RUN_SERIAL TRUE
+        ENVIRONMENT "LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR};LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>"
+    )
 endif()
 
 # Custom targets for convenience

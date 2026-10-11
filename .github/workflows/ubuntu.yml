@@ -226,6 +226,8 @@ jobs:
         run: ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld\.python\.capture_environment$'
       - name: Run generated dataset admission regression
         run: ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld\.python\.dataset_load_training$'
+      - name: Run generated training strategy regression
+        run: ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld\.python\.training_strategy_update$'
       - name: Run render-on-demand GPU idle test
         env:
           LFS_RENDER_IDLE_SHOTS: ${{ runner.temp }}/render-on-demand-shots

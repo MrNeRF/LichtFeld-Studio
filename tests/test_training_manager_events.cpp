@@ -114,6 +114,41 @@ namespace {
         EXPECT_EQ(manager_.getMaxGaussians(), 5000000);
     }
 
+    TEST_F(TrainingManagerPresentationTest, PausedTrainerRejectsDifferentStrategyParameters) {
+        installTrainer(true);
+        const auto before = manager_.getTrainer()->getParams();
+        params_.setActiveStrategy("mcmc");
+        params_.modifyActiveParams([](auto& params) {
+            params.iterations = 12345;
+            params.max_cap = 123456;
+        });
+        manager_.applyPendingParams();
+        EXPECT_EQ(manager_.getTrainer()->getParams().optimization.to_json(),
+                  before.optimization.to_json());
+    }
+
+    TEST_F(TrainingManagerPresentationTest, PausedTrainerKeepsSameStrategyUpdates) {
+        installTrainer(true);
+        params_.modifyActiveParams([](auto& params) {
+            params.means_lr = 0.00012f;
+        });
+        const auto expected = params_.copyActiveParams();
+        manager_.applyPendingParams();
+        EXPECT_EQ(manager_.getTrainer()->getParams().optimization.to_json(), expected.to_json());
+    }
+
+    TEST_F(TrainingManagerPresentationTest, ReadyTrainerAcceptsDifferentStrategyParameters) {
+        installTrainer();
+        params_.setActiveStrategy("mcmc");
+        params_.modifyActiveParams([](auto& params) {
+            params.iterations = 12345;
+            params.max_cap = 123456;
+        });
+        const auto expected = params_.copyActiveParams();
+        manager_.applyPendingParams();
+        EXPECT_EQ(manager_.getTrainer()->getParams().optimization.to_json(), expected.to_json());
+    }
+
     // Fails if a destroyed manager leaves its handlers on the process-wide bridge: the next training run would
     // deliver its progress to the freed manager.
     TEST(TrainingManagerEvents, DestroyedManagerLeavesNoHandlers) {

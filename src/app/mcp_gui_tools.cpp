@@ -14,6 +14,7 @@
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/event_bridge/command_center_bridge.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/json_utils.hpp"
@@ -3326,6 +3327,11 @@ namespace lfs::app {
                         changes.push_back({std::move(*meta), std::move(*converted)});
                     }
 
+                    if (strategy) {
+                        const auto* trainer = viewer_impl->getTrainerManager();
+                        if (trainer && !trainer->canChangeStrategy(*strategy))
+                            return json{{"error", LOC("training.reset_before_strategy_change")}};
+                    }
                     const auto before = params->copyActiveParams();
                     if (strategy) {
                         params->modifyActiveParams([&](auto&) {

@@ -1149,6 +1149,32 @@ result_values = [1.0 if outcome is lf.ProjectOpenOutcome.RECOVERY_PROMPT_PENDING
     EXPECT_EQ(viewer.post_work_calls, 1);
 }
 
+TEST_F(PythonIntegrationTest, StrategyMutationRunsOnViewerThread) {
+    using namespace std::chrono_literals;
+    for (const auto* setter : {"p.set_strategy('mcmc')", "p.set('strategy', 'mcmc')"}) {
+        TestVisualizer viewer;
+        viewer.queue_posted_work = true;
+        const ScopedVisualizer scoped_viewer(&viewer);
+        bool work_ran = false;
+        std::jthread viewer_worker([&]() {
+            if (viewer.waitForQueuedWork(1s)) {
+                // Also prove that the waiting Python caller releases its GIL.
+                const lfs::python::GilAcquire gil;
+                viewer.on_viewer_thread = true;
+                work_ran = viewer.runNextQueuedWork();
+            }
+        });
+        const auto result = runPythonTensorSnippet(
+            std::string("import lichtfeld as lf\np = lf.optimization_params()\n") + setter +
+            "\nresult_shape = (1,)\nresult_values = [float(p.strategy == 'mcmc')]\n");
+        viewer_worker.join();
+        EXPECT_TRUE(work_ran) << setter;
+        EXPECT_EQ(viewer.post_work_calls, 1) << setter;
+        ASSERT_EQ(result.values.size(), 1u);
+        EXPECT_FLOAT_EQ(result.values[0], 1.0F);
+    }
+}
+
 TEST_F(PythonIntegrationTest, ProjectWritePollRunsOnViewerThread) {
     using namespace std::chrono_literals;
     TestVisualizer viewer;

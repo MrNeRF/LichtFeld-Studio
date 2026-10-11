@@ -6,12 +6,14 @@
 
 #include "control/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/path_utils.hpp"
 #include "python/python_runtime.hpp"
 #include "training/trainer.hpp"
 #include "visualizer/core/parameter_manager.hpp"
+#include "visualizer/post_work_utils.hpp"
 #include "visualizer/training/training_manager.hpp"
 
 #include <nanobind/stl/optional.h>
@@ -233,9 +235,22 @@ namespace lfs::python {
         }
 
         void set_active_strategy(const std::string_view strategy) {
+            if (auto* viewer = get_visualizer(); viewer && !viewer->isOnViewerThread()) {
+                // Admission and preset mutation must share the viewer queue with
+                // trainer reset/replacement. Own the argument while the worker waits.
+                const std::string requested(strategy);
+                nb::gil_scoped_release release;
+                vis::post_work_and_wait(
+                    [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                    [requested] { set_active_strategy(requested); },
+                    []() {});
+                return;
+            }
             const auto canonical_strategy = core::param::canonical_strategy_name(strategy);
             if (canonical_strategy.empty())
                 throw std::invalid_argument("Strategy must be 'mcmc', 'mrnf', or 'igs+'");
+            if (const auto* tm = get_trainer_manager(); tm && !tm->canChangeStrategy(canonical_strategy))
+                throw std::invalid_argument(LOC("training.reset_before_strategy_change"));
 
             if (auto* pm = get_parameter_manager()) {
                 pm->modifyActiveParams([&](auto&) {

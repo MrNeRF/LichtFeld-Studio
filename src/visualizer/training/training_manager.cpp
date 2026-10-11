@@ -2601,6 +2601,17 @@ namespace lfs::vis {
         return !hasTrainer() || (getState() == TrainingState::Ready && getCurrentIteration() == 0);
     }
 
+    bool TrainerManager::canChangeStrategy(const std::string_view strategy) const {
+        if (!trainer_)
+            return true;
+        const auto canonical = core::param::canonical_strategy_name(strategy);
+        if (trainer_->isInitialized())
+            return canonical == trainer_->get_strategy().strategy_type();
+        if (isDatasetEditable())
+            return true;
+        return canonical == core::param::canonical_strategy_name(trainer_->getParams().optimization.strategy);
+    }
+
     lfs::core::param::TrainingParameters TrainerManager::getEditableTrainingParams(
         const ParameterManager& parameter_manager) const {
         const auto& configured_dataset = parameter_manager.getDatasetConfig();
@@ -2645,6 +2656,12 @@ namespace lfs::vis {
             params.dataset = pending_dataset_params_;
             params.optimization = pending_opt_params_;
         }
+
+        // A different preset belongs to the next run. The current strategy owns
+        // optimizer/refinement state that cannot consume another strategy's settings.
+        const bool first_start = !trainer_->isInitialized() && getState() == TrainingState::Starting;
+        if (!first_start && !canChangeStrategy(params.optimization.strategy))
+            return;
 
         const bool evaluation_split_changed =
             previous_params.optimization.holds_out_eval_images() != params.optimization.holds_out_eval_images() ||

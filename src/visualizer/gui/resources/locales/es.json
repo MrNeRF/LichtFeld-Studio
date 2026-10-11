@@ -1,4 +1,5 @@
 {
+  "training.reset_before_strategy_change": "Reinicia el entrenamiento antes de cambiar de estrategia.",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "Memoria GPU del proceso según el sistema operativo o el controlador GPU.",
   "ui.vram_process_unavailable_tooltip": "La memoria GPU del proceso no está disponible. El uso del dispositivo incluye otras aplicaciones.",
