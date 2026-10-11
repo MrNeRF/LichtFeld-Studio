@@ -181,6 +181,8 @@ namespace lfs::python {
         core::PointCloud* data() { return resolve_data(); }
         const core::PointCloud* data() const { return resolve_data(); }
 
+        std::shared_ptr<core::PointCloud> retain_data() const;
+
     private:
         core::PointCloud* resolve_data() const;
         core::SceneNode& resolve_node() const;

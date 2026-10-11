@@ -598,6 +598,8 @@ namespace lfs::vis {
         LOG_DEBUG("SceneManager initialized");
     }
     SceneManager::~SceneManager() {
+        if (python::get_application_scene() == &scene_)
+            python::set_application_scene(nullptr);
         if (consolidated_compaction_thread_.joinable()) {
             consolidated_compaction_thread_.request_stop();
             consolidated_compaction_thread_.join();

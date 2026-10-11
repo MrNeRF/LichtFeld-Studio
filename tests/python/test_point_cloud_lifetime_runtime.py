@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Point-cloud handles retain owned data and resolve live scene identity safely."""
 
+import time
+
 import pytest
 
 from test_api_camera_project_runtime import camera_runtime, _editor
+from test_render_on_demand_idle import _tool
 
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
 
@@ -59,7 +62,7 @@ assert saved_means.cpu().tolist() == [[0., 0., 0.]] * 3
 ''')
 
 
-def test_retained_point_cloud_follows_undo_and_live_updates(camera_runtime):
+def test_retained_point_cloud_follows_undo_and_live_updates(camera_runtime, tmp_path):
     _editor(camera_runtime, '''
 import lichtfeld as lf
 scene = lf.get_scene()
@@ -81,6 +84,11 @@ assert restored.uuid == uuid
 assert cloud.size == 4
 cloud.set_means(lf.Tensor.ones([4, 3], device="cpu"))
 assert restored.centroid == (1., 1., 1.)
+''')
+    exported = tmp_path / "restored.ply"
+    _editor(camera_runtime, f"lf.io.save_point_cloud_ply(cloud, {str(exported)!r})")
+    assert exported.is_file()
+    _editor(camera_runtime, '''
 assert lf.undo.redo()
 try:
     cloud.size
@@ -129,3 +137,50 @@ assert cloud.means.cpu().tolist() == expected
 lf.io.save_point_cloud_ply(cloud, {str(exported)!r})
 ''')
     assert exported.is_file()
+
+
+def test_retained_point_cloud_rejects_different_project(camera_runtime, tmp_path):
+    endpoint = camera_runtime
+    _editor(endpoint, '''
+import lichtfeld as lf
+scene = lf.get_scene()
+scene.add_point_cloud("same name", lf.Tensor.ones([2, 3], device="cpu"),
+                      lf.Tensor.ones([2, 3], device="cpu"))
+other_uuid = scene.get_node("same name").uuid
+''')
+    project = tmp_path / "other.licht"
+    _tool(endpoint, "project_save_as", {"path": str(project)})
+    _editor(endpoint, '''
+scene.clear()
+scene.add_point_cloud("same name", lf.Tensor.zeros([3, 3], device="cpu"),
+                      lf.Tensor.ones([3, 3], device="cpu"))
+old_cloud = scene.get_node("same name").point_cloud()
+assert old_cloud.size == 3
+assert scene.get_node("same name").uuid != other_uuid
+''')
+    _tool(endpoint, "project_open", {"path": str(project), "discard_changes": True})
+    deadline = time.monotonic() + 20
+    while True:
+        # Opening is asynchronous; query the public Python scene on the editor thread.
+        ready = _editor(endpoint, '''
+node = lf.get_scene().get_node("same name")
+print("PROJECT_READY" if node and node.uuid == other_uuid and node.point_cloud() is not None
+      else "PROJECT_WAIT")
+''')
+        if "PROJECT_READY" in ready:
+            break
+        assert time.monotonic() < deadline, "project did not finish opening"
+        time.sleep(.05)
+    rejected_export = tmp_path / "stale.ply"
+    _editor(endpoint, f'''
+assert lf.get_scene().get_node("same name").point_cloud().size == 2
+for access in (lambda: old_cloud.size,
+               lambda: lf.io.save_point_cloud_ply(old_cloud, {str(rejected_export)!r})):
+    try:
+        access()
+    except RuntimeError as error:
+        assert "PointCloud" in str(error)
+    else:
+        raise AssertionError("old reference resolved a different project's cloud")
+''')
+    assert not rejected_export.exists()

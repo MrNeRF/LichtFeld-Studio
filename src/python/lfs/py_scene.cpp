@@ -231,6 +231,10 @@ namespace lfs::python {
         return resolve_node().point_cloud.get();
     }
 
+    std::shared_ptr<core::PointCloud> PyPointCloud::retain_data() const {
+        return owner_ ? owner_ : resolve_node().point_cloud;
+    }
+
     int64_t PyPointCloud::filter(const PyTensor& keep_mask) {
         auto* const pc = resolve_data();
         const auto& mask = keep_mask.tensor();
