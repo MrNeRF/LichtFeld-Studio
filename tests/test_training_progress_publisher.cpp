@@ -52,12 +52,43 @@ namespace {
         publisher.offer({.iteration = 1010, .loss = 0.4f, .num_gaussians = 11},
                         t0 + milliseconds(30));
 
-        publisher.publishFinal(1017);
+        publisher.publishFinal(1017, 12);
 
         EXPECT_EQ(publishedIteration(), 1017);
+        EXPECT_EQ(lfs::vis::app_store().num_gaussians.get(), 12);
         EXPECT_FALSE(publisher.secondsUntilDue(t0 + milliseconds(30)).has_value());
         publisher.flushDue(t0 + TrainingProgressPublisher::kInterval);
         EXPECT_EQ(publishedIteration(), 1017);
+        EXPECT_EQ(lfs::vis::app_store().num_gaussians.get(), 12);
+    }
+
+    TEST(TrainingProgressPublisherTest, CancelBeforeFirstProgressPublishesInitialGaussianCount) {
+        auto& store = lfs::vis::app_store();
+        store.iteration.set(0);
+        store.num_gaussians.set(0);
+        TrainingProgressPublisher publisher;
+
+        publisher.publishFinal(0, 138766);
+
+        EXPECT_EQ(publishedIteration(), 0);
+        EXPECT_EQ(store.num_gaussians.get(), 138766);
+        EXPECT_FALSE(publisher.secondsUntilDue(Clock::now()).has_value());
+    }
+
+    TEST(TrainingProgressPublisherTest, FinalCountCanDecreaseOrBecomeEmpty) {
+        auto& store = lfs::vis::app_store();
+        TrainingProgressPublisher publisher;
+        const auto t0 = Clock::now();
+        publisher.offer({.iteration = 10, .loss = 0.5f, .num_gaussians = 100}, t0);
+        publisher.publishFinal(12, 80);
+        EXPECT_EQ(publishedIteration(), 12);
+        EXPECT_EQ(store.num_gaussians.get(), 80);
+        EXPECT_FLOAT_EQ(store.loss.get(), 0.5f);
+
+        publisher.publishFinal(0, 0);
+        EXPECT_EQ(publishedIteration(), 0);
+        EXPECT_EQ(store.num_gaussians.get(), 0);
+        EXPECT_FLOAT_EQ(store.loss.get(), 0.5f);
     }
 
     // Races training threads offering progress against the UI thread flushing
