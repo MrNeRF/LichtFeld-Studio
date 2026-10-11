@@ -149,6 +149,7 @@ namespace lfs::io {
             migrated.set_active_sh_degree(active_sh, std::move(shN_bounds));
             if (deleted.is_valid()) {
                 migrated.deleted() = std::move(deleted);
+                migrated.refresh_deleted_count();
             }
             auto lod_tree = std::move(model.lod_tree);
             model = std::move(migrated);

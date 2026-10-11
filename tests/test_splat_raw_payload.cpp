@@ -213,6 +213,15 @@ namespace {
         EXPECT_TRUE(std::ranges::any_of(deleted, [](const bool value) {
             return value;
         }));
+        EXPECT_EQ((*hydrated)->deleted_count(), std::min<std::size_t>(count, 64));
+
+        std::string bytes(reinterpret_cast<const char*>(captured->bytes().data()),
+                          captured->bytes().size());
+        std::istringstream stream(bytes, std::ios::binary);
+        auto streamed = SplatChapterPayload::hydrate_lfsp_stream(stream, bytes.size());
+        ASSERT_TRUE(streamed.has_value()) << lfs::format_for_developer(streamed.error());
+        EXPECT_EQ(streamed->splat->deleted_count(), std::min<std::size_t>(count, 64));
+        EXPECT_EQ(streamed->splat->deleted().cpu().to_vector_bool(), deleted);
     }
 
     TEST_F(SplatRawPayloadTest, AsyncGeneratedCaptureMatchesSynchronousBytes) {

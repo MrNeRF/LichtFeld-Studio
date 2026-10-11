@@ -699,6 +699,7 @@ namespace lfs::training {
                 migrated.set_active_sh_degree(active_sh, std::move(shN_bounds));
                 if (deleted.is_valid()) {
                     migrated.deleted() = std::move(deleted);
+                    migrated.refresh_deleted_count();
                 }
                 if (densification_info.is_valid()) {
                     migrated._densification_info = std::move(densification_info);

@@ -2410,23 +2410,20 @@ namespace lfs::core {
         }
 
         Tensor loaded_deleted;
+        size_t loaded_deleted_count = 0;
         if (has_deleted) {
             Tensor deleted_host = deleted.device() == Device::CPU ? deleted : deleted.cpu();
             if (!deleted_host.is_contiguous()) {
                 deleted_host = deleted_host.contiguous();
             }
-            bool any_deleted = false;
             if (deleted_host.numel() > 0) {
                 const auto* const bytes =
                     static_cast<const unsigned char*>(deleted_host.data_ptr());
                 for (size_t i = 0, count = deleted_host.numel(); i < count; ++i) {
-                    if (bytes[i] != 0) {
-                        any_deleted = true;
-                        break;
-                    }
+                    loaded_deleted_count += bytes[i] != 0;
                 }
             }
-            if (any_deleted) {
+            if (loaded_deleted_count > 0) {
                 upload_keep_alive.push_back(deleted_host.to(DataType::Bool));
                 loaded_deleted = upload_keep_alive.back().to(Device::CUDA, upload_stream);
                 if (!loaded_deleted.is_contiguous()) {
@@ -2465,6 +2462,7 @@ namespace lfs::core {
         _opacity = std::move(loaded_opacity);
         _shN = std::move(loaded_shN);
         _deleted = std::move(loaded_deleted);
+        _deleted_count.store(loaded_deleted_count, std::memory_order_relaxed);
         _densification_info = std::move(loaded_densification);
         _frozen_ranges = std::move(loaded_frozen_ranges);
         _max_sh_degree = max_sh;
@@ -2686,8 +2684,12 @@ namespace lfs::core {
                     shN_canonical.cuda(), result->_shN, n,
                     static_cast<std::size_t>(sh_rest_coefficients_for_degree(max_sh_degree)),
                     static_cast<std::size_t>(sh_rest_coefficients_for_degree(max_sh_degree)));
-            if (deleted.is_valid())
-                result->_deleted = std::move(deleted).to(DataType::Bool).cuda();
+            if (deleted.is_valid()) {
+                auto deleted_bool = std::move(deleted).to(DataType::Bool);
+                result->_deleted_count.store(
+                    static_cast<size_t>(deleted_bool.sum_scalar()), std::memory_order_relaxed);
+                result->_deleted = std::move(deleted_bool).cuda();
+            }
             if (densification.is_valid() && densification.numel() > 0)
                 result->_densification_info = std::move(densification).cuda();
             result->_frozen_ranges = std::move(frozen_ranges);
