@@ -9,6 +9,8 @@
 #include <RmlUi/Core/EventListener.h>
 #include <RmlUi/Core/RenderInterface.h>
 
+#include "gui/rmlui/rml_input_utils.hpp"
+
 #include <filesystem>
 #include <gtest/gtest.h>
 
@@ -103,6 +105,32 @@ namespace {
             input_ = nullptr;
         }
 
+        void loadLockableControls() {
+            document_->Close();
+            const auto resource_path = std::filesystem::path(PROJECT_ROOT_PATH) /
+                                       "src/visualizer/gui/rmlui/resources/test.rml";
+            document_ = context_->LoadDocumentFromMemory(R"RML(
+<rml><head><link type="text/rcss" href="components.rcss"/></head><body>
+    <input id="search" type="text"/>
+    <div id="locked" class="disabled-overlay">
+        <select id="strategy"><option>First</option><option>Second</option></select>
+        <button id="lock">Lock</button>
+        <div><input id="iterations" type="text" value="30000"/></div>
+        <input id="toggle" type="checkbox"/>
+        <button id="step">+</button>
+    </div>
+    <input id="after" type="text"/>
+</body></rml>)RML",
+                                                         resource_path.string());
+            ASSERT_NE(document_, nullptr);
+            context_->SetDimensions({640, 480});
+            document_->Show();
+            context_->Update();
+            input_ = rmlui_dynamic_cast<Rml::ElementFormControlInput*>(
+                document_->GetElementById("iterations"));
+            ASSERT_NE(input_, nullptr);
+        }
+
         inline static StubRenderInterface render_interface_;
         Rml::Context* context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
@@ -127,6 +155,63 @@ namespace {
         EXPECT_EQ(listener.value, "ello");
 
         input_->RemoveEventListener(Rml::EventId::Change, &listener);
+    }
+
+    TEST_F(RmlTextInputNativeKeysTest, DisabledOverlaySkipsAllControlsInBothTabDirections) {
+        loadLockableControls();
+        auto* search = document_->GetElementById("search");
+        auto* after = document_->GetElementById("after");
+        ASSERT_TRUE(search->Focus());
+        context_->ProcessKeyDown(Rml::Input::KI_TAB, 0);
+        EXPECT_EQ(context_->GetFocusElement(), after);
+        context_->ProcessKeyDown(Rml::Input::KI_TAB, Rml::Input::KM_SHIFT);
+        EXPECT_EQ(context_->GetFocusElement(), search);
+        for (const char* id : {"strategy", "lock", "iterations", "toggle", "step"}) {
+            EXPECT_FALSE(document_->GetElementById(id)->Focus()) << id;
+        }
+        EXPECT_EQ(input_->GetValue(), "30000");
+    }
+
+    TEST_F(RmlTextInputNativeKeysTest, DisabledOverlayBlocksMouseAndUnlockRestoresKeyboardEditing) {
+        loadLockableControls();
+        auto* search = document_->GetElementById("search");
+        ASSERT_TRUE(search->Focus());
+        const auto position = input_->GetAbsoluteOffset(Rml::BoxArea::Content);
+        context_->ProcessMouseMove(static_cast<int>(position.x + 2), static_cast<int>(position.y + 2), 0);
+        context_->ProcessMouseButtonDown(0, 0);
+        context_->ProcessMouseButtonUp(0, 0);
+        EXPECT_NE(context_->GetFocusElement(), input_);
+        document_->GetElementById("locked")->SetClass("disabled-overlay", false);
+        context_->Update();
+        ASSERT_TRUE(search->Focus());
+        context_->ProcessKeyDown(Rml::Input::KI_TAB, 0);
+        EXPECT_EQ(context_->GetFocusElement(), document_->GetElementById("strategy"));
+        ASSERT_TRUE(input_->Focus());
+        input_->SetSelectionRange(0, 5);
+        context_->ProcessTextInput("5000");
+        EXPECT_EQ(input_->GetValue(), "5000");
+    }
+
+    TEST_F(RmlTextInputNativeKeysTest, LockingFocusedControlRejectsQueuedKeyboardInput) {
+        using namespace lfs::vis;
+        loadLockableControls();
+        auto* locked = document_->GetElementById("locked");
+        for (const auto kind : {FrameInputEventKind::Text, FrameInputEventKind::TextEditing,
+                                FrameInputEventKind::KeyDown, FrameInputEventKind::KeyUp}) {
+            locked->SetClass("disabled-overlay", false);
+            context_->Update();
+            ASSERT_TRUE(input_->Focus());
+            input_->SetValue("30000");
+            input_->SetSelectionRange(0, 5);
+            locked->SetClass("disabled-overlay", true);
+            context_->Update();
+            InputEventDispatch dispatch;
+            FrameInputEvent event{.kind = kind, .scancode = SDL_SCANCODE_BACKSPACE, .text = "5000", .dispatch = &dispatch};
+            EXPECT_TRUE(gui::rml_input::processKeyboardEvent(*context_, event));
+            EXPECT_TRUE(dispatch.consumed);
+            EXPECT_EQ(input_->GetValue(), "30000");
+            EXPECT_NE(context_->GetFocusElement(), input_);
+        }
     }
 
 } // namespace
