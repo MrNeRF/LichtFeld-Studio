@@ -11,6 +11,7 @@
 #include "nvcodec_image_loader.hpp"
 #include "video/color_convert.cuh"
 #include "video/cuda_frame_handoff.hpp"
+#include "video/sws_packed_rgb.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -853,6 +854,7 @@ namespace lfs::io {
             uint8_t* gpu_rotated_buffer = nullptr;
             uint8_t* cpu_contiguous_buffer = nullptr;
             std::vector<uint8_t> rot_buf;
+            std::vector<uint8_t> rgb_scratch;
             std::unique_ptr<NvCodecImageLoader> nvcodec;
             bool using_hw_decode = false;
 
@@ -1379,10 +1381,8 @@ namespace lfs::io {
                         error = "Failed to configure video color conversion";
                         return false;
                     }
-                    uint8_t* dst_data[4] = {cpu_contiguous_buffer, nullptr, nullptr, nullptr};
-                    int dst_linesize[4] = {out_width * 3, 0, 0, 0};
-                    if (sws_scale(sws_ctx, source->data, source->linesize, 0,
-                                  source_height, dst_data, dst_linesize) <= 0) {
+                    if (scaleToPackedRgb24(sws_ctx, source->data, source->linesize, source_height,
+                                           cpu_contiguous_buffer, out_width, out_height, rgb_scratch) <= 0) {
                         error = "Video color conversion failed";
                         return false;
                     }
