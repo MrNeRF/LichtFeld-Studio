@@ -6967,6 +6967,8 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(completed->status, JobStatus::Completed);
         EXPECT_EQ(viewer.getScene().getAllCameras().size(), 1u);
         EXPECT_EQ(viewer.getScene().getNode("gallery-group"), nullptr);
+        EXPECT_EQ(viewer.getDataLoader()->getParameters().dataset.output_path,
+                  dataset / "output");
     }
 
     TEST_F(VisualizerImplResetTest, DatasetImportHonorsRequestedImageFolder) {
@@ -9636,6 +9638,11 @@ contract["check_selection_submode_follows_native_mode"](lf)
                     return !viewer.jobs().anyRunning(
                         JobType::Import);
                 }));
+
+            EXPECT_EQ(viewer.getDataLoader()->getParameters().dataset.output_path,
+                      temporary / "titled-dataset-replace.output");
+            EXPECT_EQ(viewer.getParameterManager()->getDatasetConfig().output_path,
+                      temporary / "titled-dataset-replace.output");
 
             EXPECT_FALSE(lifecycle->hasSourcePath());
             EXPECT_FALSE(lifecycle->isScratchBoundSession());
