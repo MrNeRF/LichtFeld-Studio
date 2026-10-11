@@ -580,7 +580,7 @@ namespace lfs::vis {
                                            : lfs::rendering::normalizeViewerRasterBackend(
                                                  settings_.raster_backend, settings_.gut);
             settings_.gut = lfs::rendering::isGutBackend(settings_.raster_backend);
-            enforceProjectionBackend(settings_);
+            enforceProjectionBackend(settings_, true);
             sanitizeDepthViewSettings(settings_);
             sanitizeGTComparisonSettings(settings_);
             settings_.grid_plane = clampGridPlane(settings_.grid_plane);

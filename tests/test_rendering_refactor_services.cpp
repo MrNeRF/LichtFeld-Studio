@@ -3152,6 +3152,43 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getSettings().grid_plane, 2);
     }
 
+    TEST_F(RenderingManagerEventsTest, SceneClearedDiscardsTemporaryProjectionBackend) {
+        using Backend = lfs::rendering::GaussianRasterBackend;
+        RenderingManager manager;
+        auto event = lfs::core::events::ui::RenderSettingsChanged{};
+        event.equirectangular = true;
+        event.emit();
+        lfs::core::events::state::SceneCleared{}.emit();
+
+        auto settings = manager.getSettings();
+        settings.equirectangular = false;
+        settings.raster_backend = Backend::ThreeDgut;
+        settings.gut = true;
+        manager.updateSettings(settings);
+        EXPECT_EQ(manager.getSettings().raster_backend, Backend::ThreeDgut);
+        EXPECT_TRUE(manager.getSettings().gut);
+    }
+
+    TEST_F(RenderingManagerEventsTest, RenderSettingsChangedEquirectangularRestoresBackend) {
+        using Backend = lfs::rendering::GaussianRasterBackend;
+        for (const auto backend : {Backend::ThreeDgs, Backend::ThreeDgut}) {
+            RenderingManager manager;
+            auto settings = manager.getSettings();
+            settings.raster_backend = backend;
+            settings.gut = lfs::rendering::isGutBackend(backend);
+            manager.updateSettings(settings);
+            for (int cycle = 0; cycle < 3; ++cycle) {
+                for (const bool enabled : {true, true, false, false}) {
+                    auto event = lfs::core::events::ui::RenderSettingsChanged{};
+                    event.equirectangular = enabled;
+                    event.emit();
+                    EXPECT_EQ(manager.getSettings().raster_backend, enabled ? Backend::ThreeDgut : backend);
+                    EXPECT_EQ(manager.getSettings().gut, enabled || lfs::rendering::isGutBackend(backend));
+                }
+            }
+        }
+    }
+
     TEST_F(RenderingManagerEventsTest, RenderSettingsChangedEquirectangularForcesGutBackend) {
         using Backend = lfs::rendering::GaussianRasterBackend;
 

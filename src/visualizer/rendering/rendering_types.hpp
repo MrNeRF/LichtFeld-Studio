@@ -364,6 +364,8 @@ namespace lfs::vis {
         lfs::rendering::GaussianRasterBackend raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgs;
         bool gut = false;
         bool equirectangular = false;
+        // Live projection override only; excluded from proxies and project serialization.
+        std::optional<lfs::rendering::GaussianRasterBackend> raster_backend_before_equirectangular;
         bool orthographic = false;
         float ortho_scale = 100.0f; // Pixels per world unit (larger = more zoomed in)
         bool depth_view = false;
@@ -451,11 +453,27 @@ namespace lfs::vis {
         }
     }
 
-    inline void enforceProjectionBackend(RenderSettings& settings) {
+    inline void enforceProjectionBackend(RenderSettings& settings, const bool remember_backend = false) {
+        using Backend = lfs::rendering::GaussianRasterBackend;
+        auto& previous_backend = settings.raster_backend_before_equirectangular;
+        // Full settings restoration must use its saved backend, without a live override.
+        if (!remember_backend) {
+            previous_backend.reset();
+        }
         if (!settings.equirectangular) {
+            if (previous_backend) {
+                if (settings.raster_backend == Backend::ThreeDgut) {
+                    settings.raster_backend = *previous_backend;
+                }
+                settings.gut = lfs::rendering::isGutBackend(settings.raster_backend);
+                previous_backend.reset();
+            }
             return;
         }
-        settings.raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgut;
+        if (remember_backend && !previous_backend && settings.raster_backend != Backend::ThreeDgut) {
+            previous_backend = settings.raster_backend;
+        }
+        settings.raster_backend = Backend::ThreeDgut;
         settings.gut = true;
     }
 

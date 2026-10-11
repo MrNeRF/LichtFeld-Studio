@@ -188,7 +188,7 @@ def test_rendering_panel_raster_backend_uses_3dgs_ids(rendering_panel_module):
     assert settings.raster_backend == "3dgut"
 
 
-def test_rendering_panel_equirectangular_enables_3dgut(rendering_panel_module):
+def test_rendering_panel_equirectangular_delegates_backend_to_native_settings(rendering_panel_module):
     module = rendering_panel_module
     settings = SimpleNamespace(raster_backend="3dgs", equirectangular=False)
     module.lf.get_render_settings = lambda: settings
@@ -202,12 +202,12 @@ def test_rendering_panel_equirectangular_enables_3dgut(rendering_panel_module):
 
     equirectangular_setter(True)
     assert settings.equirectangular is True
-    assert settings.raster_backend == "3dgut"
+    assert settings.raster_backend == "3dgs"
     assert "raster_backend" in model.handle.dirty_fields
 
     equirectangular_setter(False)
     assert settings.equirectangular is False
-    assert settings.raster_backend == "3dgut"
+    assert settings.raster_backend == "3dgs"
 
 
 def test_rendering_panel_projection_sync_updates_backend_dropdown(rendering_panel_module):
