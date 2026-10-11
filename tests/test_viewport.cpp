@@ -7,6 +7,7 @@
 #include "visualizer/rendering/viewport_request_builder.hpp"
 
 #include <gtest/gtest.h>
+#include <limits>
 
 namespace {
 
@@ -621,4 +622,83 @@ TEST(ViewportTest, DroneBanksIntoYawTurnWhileFlyingForward) {
         max_left_bank = std::max(max_left_bank, viewport.camera.R[0].y);
     }
     EXPECT_GT(max_left_bank, 0.05f);
+}
+
+TEST(ViewportTest, RepeatedZoomOutStaysBoundedAndCanZoomBackIn) {
+    for (const float speed : {11.0f, 100.0f}) {
+        Viewport viewport(200, 200);
+        auto& camera = viewport.camera;
+        camera.setZoomSpeed(speed);
+        const glm::vec3 pivot = camera.pivot;
+        for (int i = 0; i < 900; ++i)
+            camera.zoom(-1.0f);
+
+        const float distance = glm::distance(camera.t, camera.pivot);
+        ASSERT_TRUE(std::isfinite(distance));
+        EXPECT_LE(distance, lfs::rendering::DEFAULT_FAR_PLANE * 1.000001f);
+        EXPECT_GT(distance, 1000.0f);
+        EXPECT_EQ(camera.pivot, pivot);
+        const glm::vec3 stopped = camera.t;
+        camera.zoom(-1.0f);
+        EXPECT_EQ(camera.t, stopped);
+        camera.zoom(1.0f);
+        EXPECT_LT(glm::distance(camera.t, camera.pivot), distance);
+        camera.resetToHome();
+        EXPECT_EQ(camera.t, camera.home_t);
+        EXPECT_EQ(camera.pivot, camera.home_pivot);
+    }
+}
+
+TEST(ViewportTest, LargeZoomOutDeltaStaysBounded) {
+    Viewport viewport(200, 200);
+    viewport.camera.setZoomSpeed(100.0f);
+    viewport.camera.zoom(-std::numeric_limits<float>::max());
+    const float distance = glm::distance(viewport.camera.t, viewport.camera.pivot);
+    ASSERT_TRUE(std::isfinite(distance));
+    EXPECT_LE(distance, lfs::rendering::DEFAULT_FAR_PLANE * 1.000001f);
+}
+
+TEST(ViewportTest, ZoomOutBeyondLimitDoesNotJumpAnExistingCamera) {
+    Viewport viewport(200, 200);
+    viewport.camera.setZoomSpeed(11.0f);
+    viewport.camera.t = glm::vec3(0.0f, 0.0f, 2.0f * lfs::rendering::DEFAULT_FAR_PLANE);
+    viewport.camera.pivot = glm::vec3(0.0f);
+    viewport.camera.R = glm::mat3(1.0f);
+    const glm::vec3 original = viewport.camera.t;
+    viewport.camera.zoom(-1.0f);
+    EXPECT_EQ(viewport.camera.t, original);
+    viewport.camera.zoom(1.0f);
+    EXPECT_FLOAT_EQ(viewport.camera.t.z, original.z * 0.89f);
+}
+
+TEST(ViewportTest, OrdinaryZoomMatchesPreviousMovementIncludingPivotCarry) {
+    // Reference the previous algorithm to guard normal scroll, off-axis pivots,
+    // close-range pivot pushing, and FPV/drone translation in both directions.
+    for (const bool carry_pivot : {false, true}) {
+        for (const float speed : {1.0f, 11.0f, 100.0f}) {
+            for (const float delta : {-2.0f, -0.25f, 0.0f, 0.25f, 1.0f, 2.0f}) {
+                for (const glm::vec3 pivot : {glm::vec3(0.0f), glm::vec3(1.0f, 2.0f, 0.0f)}) {
+                    Viewport viewport(200, 200);
+                    auto& camera = viewport.camera;
+                    camera.setZoomSpeed(speed);
+                    camera.t = glm::vec3(0.0f, 0.0f, 5.0f);
+                    camera.pivot = pivot;
+                    camera.R = glm::mat3(1.0f);
+                    glm::vec3 expected_t = camera.t;
+                    glm::vec3 expected_pivot = pivot;
+                    const glm::vec3 forward = lfs::rendering::cameraForward(camera.R);
+                    const float adaptive_speed = speed * 0.01f * glm::length(pivot - expected_t);
+                    const glm::vec3 movement = delta * adaptive_speed * forward;
+                    expected_t += movement;
+                    if (carry_pivot)
+                        expected_pivot += movement;
+                    else if (delta > 0.0f && glm::dot(expected_pivot - expected_t, forward) < 0.1f)
+                        expected_pivot = expected_t + forward * 0.1f;
+                    camera.zoom(delta, carry_pivot);
+                    EXPECT_EQ(camera.t, expected_t);
+                    EXPECT_EQ(camera.pivot, expected_pivot);
+                }
+            }
+        }
+    }
 }

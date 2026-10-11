@@ -175,7 +175,15 @@ class Viewport {
             // level 100 matches the previous fastest setting (full distance).
             constexpr float kZoomFractionPerLevel = 0.01f;
             const float adaptiveSpeed = zoomSpeed * kZoomFractionPerLevel * distToPivot;
-            const glm::vec3 movement = delta * adaptiveSpeed * forward;
+            float distance = delta * adaptiveSpeed;
+            if (delta < 0.0f && !carry_pivot) {
+                // Bound orbit/trackball zoom before multiplying the direction:
+                // repeated outward steps otherwise overflow the camera position.
+                // Do not snap cameras already beyond the limit back toward it.
+                constexpr float kMaxDistance = lfs::rendering::DEFAULT_FAR_PLANE;
+                distance = std::max(distance, -std::max(0.0f, kMaxDistance - distToPivot));
+            }
+            const glm::vec3 movement = distance * forward;
 
             t += movement;
             if (carry_pivot) {
