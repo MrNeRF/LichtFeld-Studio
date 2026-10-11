@@ -262,8 +262,8 @@ namespace lfs::vis {
         return result;
     }
 
-    SplitViewService::ModeChangeResult SplitViewService::handlePLYRemoved(RenderSettings& settings,
-                                                                          SceneManager* scene_manager) {
+    SplitViewService::ModeChangeResult SplitViewService::handleVisiblePLYsChanged(RenderSettings& settings,
+                                                                                  SceneManager* scene_manager) {
         if (!splitViewUsesPLYComparison(settings.split_view_mode) || !scene_manager) {
             return {};
         }

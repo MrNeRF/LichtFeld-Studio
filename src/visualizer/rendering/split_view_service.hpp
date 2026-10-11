@@ -54,7 +54,7 @@ namespace lfs::vis {
                                                   const Viewport* primary_viewport = nullptr);
         [[nodiscard]] ModeChangeResult handleSceneLoaded(RenderSettings& settings);
         [[nodiscard]] ModeChangeResult handleSceneCleared(RenderSettings& settings);
-        [[nodiscard]] ModeChangeResult handlePLYRemoved(RenderSettings& settings, SceneManager* scene_manager);
+        [[nodiscard]] ModeChangeResult handleVisiblePLYsChanged(RenderSettings& settings, SceneManager* scene_manager);
         void advanceSplitOffset(RenderSettings& settings);
         [[nodiscard]] SplitViewInfo getInfo() const;
         [[nodiscard]] std::optional<SplitViewInfo> getInfoIfChanged(std::uint64_t& generation) const;

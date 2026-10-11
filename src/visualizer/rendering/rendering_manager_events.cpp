@@ -284,7 +284,21 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleSceneChanged(const uint32_t mutation_flags) {
-        markDirty(dirtyMaskForSceneMutations(mutation_flags), lfs::vis::FrameReason::SceneChange);
+        auto dirty = dirtyMaskForSceneMutations(mutation_flags);
+        using Mutation = lfs::core::Scene::MutationType;
+        if (hasSceneMutation(mutation_flags, Mutation::VISIBILITY_CHANGED) ||
+            hasSceneMutation(mutation_flags, Mutation::NODE_REPARENTED)) {
+            SplitViewService::ModeChangeResult result;
+            {
+                std::lock_guard<std::mutex> lock(settings_mutex_);
+                result = split_view_service_.handleVisiblePLYsChanged(settings_, services().sceneOrNull());
+            }
+            applySplitModeChange(result);
+            if (result.mode_changed) {
+                dirty |= DirtyFlag::SPLIT_VIEW;
+            }
+        }
+        markDirty(dirty, lfs::vis::FrameReason::SceneChange);
     }
 
     void RenderingManager::handleSceneCleared() {
@@ -316,7 +330,7 @@ namespace lfs::vis {
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            result = split_view_service_.handlePLYRemoved(settings_, services().sceneOrNull());
+            result = split_view_service_.handleVisiblePLYsChanged(settings_, services().sceneOrNull());
             markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY | DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SceneChange);
         }
         applySplitModeChange(result);
