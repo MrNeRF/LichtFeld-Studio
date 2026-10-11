@@ -289,6 +289,37 @@ namespace lfs::gui {
             dialog.beginExtractionFromUi();
             return dialog.pending_params_set_ || dialog.extracting_.load();
         }
+        static nlohmann::json sourceState(const VideoExtractorDialog& dialog) {
+            const auto status = dialog.getExtractionStatusSnapshot();
+            return {
+                {"video", dialog.video_path_.string()},
+                {"output", dialog.output_dir_.string()},
+                {"start", dialog.trim_start_},
+                {"end", dialog.trim_end_},
+                {"auto_end", dialog.trim_end_is_auto_},
+                {"duration", dialog.player_->duration()},
+                {"player_open", dialog.player_->isOpen()},
+                {"rotation", dialog.rotation_deg_},
+                {"current", dialog.current_frame_.load()},
+                {"total", dialog.total_frames_.load()},
+                {"discarded", dialog.discarded_frames_.load()},
+                {"error", status.error_message},
+                {"status", static_cast<int>(status.status_message)},
+            };
+        }
+        static void progress(VideoExtractorDialog& dialog) { dialog.updateProgress(17, 50, 2); }
+        static void stop(VideoExtractorDialog& dialog) { dialog.requestStopExtraction(); }
+        static bool stopping(const VideoExtractorDialog& dialog) { return dialog.stop_extraction_requested_.load(); }
+        static bool active(const VideoExtractorDialog& dialog) { return dialog.extracting_.load(); }
+        static void finish(VideoExtractorDialog& dialog, int outcome) {
+            if (outcome == 0)
+                dialog.setExtractionComplete();
+            else if (outcome == 1)
+                dialog.setExtractionStopped();
+            else
+                dialog.setExtractionError("Extraction failed");
+        }
+        static void cancelOverwrite(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-no"); }
         static bool pending(const VideoExtractorDialog& dialog) { return dialog.pending_params_set_; }
         static void confirmOverwrite(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-yes"); }
         static bool waitIdle(const VideoExtractorDialog& dialog) {
@@ -1041,6 +1072,109 @@ namespace {
         EXPECT_TRUE(std::filesystem::is_empty(output));
         enter("{video}_%05d");
         EXPECT_FALSE(document->GetElementById("btn-start")->HasAttribute("disabled"));
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, SourceReplacementDuringExtractionPreservesJobIdentity) {
+        TempDir temp("busy_source");
+        const auto first = temp.path / "first.mp4";
+        const auto second = temp.path / "second.mp4";
+        ASSERT_TRUE(writeProbedVideo(first, "mp4", AV_CODEC_ID_MPEG4, 50, 0));
+        ASSERT_TRUE(writeProbedVideo(second, "mp4", AV_CODEC_ID_MPEG4, 20, 0));
+        ASSERT_TRUE(dialog->openVideoPath(first));
+        NamingAccess::extracting(*dialog, true);
+        NamingAccess::progress(*dialog);
+        sync();
+        const auto expected = NamingAccess::sourceState(*dialog);
+        for (const auto& path : {second, first, temp.path / "missing.mp4"}) {
+            EXPECT_FALSE(dialog->openVideoPath(path));
+            EXPECT_EQ(NamingAccess::sourceState(*dialog), expected);
+            EXPECT_TRUE(NamingAccess::active(*dialog));
+        }
+        NamingAccess::finish(*dialog, 0);
+        EXPECT_EQ(NamingAccess::sourceState(*dialog)["video"], first.string());
+        EXPECT_EQ(NamingAccess::sourceState(*dialog)["output"], (temp.path / "first_frames").string());
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, StopRequestKeepsSourceUntilWorkerFinishes) {
+        TempDir temp("stopping_source");
+        const auto source = temp.path / "source.mp4";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 50, 0));
+        ASSERT_TRUE(dialog->openVideoPath(source));
+        NamingAccess::extracting(*dialog, true);
+        NamingAccess::stop(*dialog);
+        const auto expected = NamingAccess::sourceState(*dialog);
+        EXPECT_FALSE(dialog->openVideoPath(temp.path / "missing.mp4"));
+        EXPECT_TRUE(NamingAccess::active(*dialog));
+        EXPECT_TRUE(NamingAccess::stopping(*dialog));
+        EXPECT_EQ(NamingAccess::sourceState(*dialog), expected);
+        NamingAccess::finish(*dialog, 1);
+        EXPECT_TRUE(dialog->openVideoPath(source));
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, PendingOverwriteKeepsSourceUntilCancelled) {
+        TempDir temp("pending_source");
+        const auto first = temp.path / "first.mp4";
+        const auto second = temp.path / "second.mp4";
+        ASSERT_TRUE(writeProbedVideo(first, "mp4", AV_CODEC_ID_MPEG4, 50, 0));
+        ASSERT_TRUE(writeProbedVideo(second, "mp4", AV_CODEC_ID_MPEG4, 20, 0));
+        ASSERT_TRUE(dialog->openVideoPath(first));
+        const auto output = temp.path / "custom_output";
+        std::filesystem::create_directories(output);
+        std::ofstream(output / "frame_00001.png").put('x');
+        ASSERT_TRUE(NamingAccess::begin(*dialog, output));
+        ASSERT_TRUE(NamingAccess::pending(*dialog));
+        const auto expected = NamingAccess::sourceState(*dialog);
+        EXPECT_FALSE(dialog->openVideoPath(second));
+        EXPECT_EQ(NamingAccess::sourceState(*dialog), expected);
+        EXPECT_EQ(std::filesystem::file_size(output / "frame_00001.png"), 1);
+        NamingAccess::cancelOverwrite(*dialog);
+        EXPECT_TRUE(dialog->openVideoPath(second));
+        EXPECT_EQ(NamingAccess::sourceState(*dialog)["output"], (temp.path / "second_frames").string());
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, SourceCanChangeAfterEveryTerminalOutcome) {
+        TempDir temp("finished_source");
+        const auto first = temp.path / "first.mp4";
+        const auto second = temp.path / "second.mp4";
+        ASSERT_TRUE(writeProbedVideo(first, "mp4", AV_CODEC_ID_MPEG4, 50, 0));
+        ASSERT_TRUE(writeProbedVideo(second, "mp4", AV_CODEC_ID_MPEG4, 20, 0));
+        for (int outcome = 0; outcome < 3; ++outcome) {
+            ASSERT_TRUE(dialog->openVideoPath(first));
+            NamingAccess::extracting(*dialog, true);
+            NamingAccess::finish(*dialog, outcome);
+            ASSERT_TRUE(dialog->openVideoPath(second));
+            const auto state = NamingAccess::sourceState(*dialog);
+            EXPECT_EQ(state["video"], second.string());
+            EXPECT_EQ(state["output"], (temp.path / "second_frames").string());
+            EXPECT_EQ(state["error"], "");
+            EXPECT_EQ(state["status"], 0);
+            EXPECT_TRUE(state["player_open"].get<bool>());
+        }
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, RepeatedRefreshPreservesActiveSource) {
+        TempDir temp("refresh_source");
+        const auto source = temp.path / "source.mp4";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 50, 0));
+        ASSERT_TRUE(dialog->openVideoPath(source));
+        NamingAccess::extracting(*dialog, true);
+        NamingAccess::progress(*dialog);
+        sync();
+        const auto expected = NamingAccess::sourceState(*dialog);
+        const auto start = std::chrono::steady_clock::now();
+        constexpr int updates = 1000;
+        for (int i = 0; i < updates; ++i)
+            sync();
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        RecordProperty("refresh_ns", std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count() / updates));
+        EXPECT_EQ(NamingAccess::sourceState(*dialog), expected);
+        EXPECT_TRUE(document->GetElementById("btn-start")->HasAttribute("disabled"));
+        EXPECT_TRUE(document->GetElementById("btn-browse-video")->HasAttribute("disabled"));
+        EXPECT_TRUE(document->GetElementById("btn-browse-output")->HasAttribute("disabled"));
+        NamingAccess::extracting(*dialog, false);
+        sync();
+        EXPECT_FALSE(document->GetElementById("btn-browse-video")->HasAttribute("disabled"));
+        EXPECT_FALSE(document->GetElementById("btn-browse-output")->HasAttribute("disabled"));
     }
 
     TEST_F(VideoExtractorNamingUiTest, RealRequestMatchesPreviewAndFormat) {
