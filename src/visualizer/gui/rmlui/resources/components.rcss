@@ -390,8 +390,7 @@ progress fill {
     margin: 0;
 }
 
-/* One label column for every row: on a narrow panel it narrows as a whole, so the
-   fields stay aligned and number fields keep space for their digits. */
+/* Compact property columns keep number fields aligned and leave room for digits. */
 .prop-label,
 .setting-row__label-col {
     width: 40%;
@@ -443,15 +442,25 @@ progress fill {
     min-width: 0;
 }
 
+/* Aligned settings share the row with their controls. Checkbox labels can use
+   the spare width; other controls retain their proportional column. */
 .setting-row__label-col {
+    max-width: none;
+    flex-grow: 1;
+    white-space: normal;
+    word-break: break-word;
     margin-right: 10dp;
 }
 
 .setting-row__control-col {
     display: flex;
     align-items: center;
-    flex: 1;
+    flex: 1 1 60%;
     min-width: 0;
+}
+
+.setting-row__control-col--checkbox {
+    flex: 0 0 auto;
 }
 
 .setting-row__control-col--checkbox > input[type="checkbox"] {
