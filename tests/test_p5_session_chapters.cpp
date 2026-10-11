@@ -762,6 +762,45 @@ namespace {
             lfs::ErrorCode::DataLoss);
     }
 
+    TEST(P5SessionChapterTest, BuiltinEnvironmentsRoundTripWithoutExternalReferences) {
+        for (const auto path : {lfs::vis::kDefaultEnvironmentMapPath,
+                                std::string_view("environments/alps_field_1k.hdr")}) {
+            SCOPED_TRACE(path);
+            lfs::vis::RenderSettings settings;
+            settings.environment_map_path = path;
+            const auto json = renderSettingsToProjectJson(settings);
+            EXPECT_EQ(json["environment_builtin"], path);
+            EXPECT_TRUE(json["environment_reference_uuid"].is_null());
+            const auto restored = renderSettingsFromProjectJson(json);
+            ASSERT_TRUE(restored);
+            EXPECT_EQ(restored->environment_map_path, path);
+        }
+    }
+
+    TEST(P5SessionChapterTest, ExternalEnvironmentsKeepReferenceEncoding) {
+        for (const auto path : {"", "custom.hdr", "/tmp/custom.hdr",
+                                "environments/custom.hdr", "/tmp/environments/alps_field_1k.hdr"}) {
+            SCOPED_TRACE(path);
+            lfs::vis::RenderSettings settings;
+            settings.environment_map_path = path;
+            const auto json = renderSettingsToProjectJson(settings);
+            EXPECT_TRUE(json["environment_builtin"].is_null());
+            EXPECT_TRUE(json["environment_reference_uuid"].is_null());
+        }
+    }
+
+    TEST(P5SessionChapterTest, BuiltinEnvironmentUsesExistingReaderContract) {
+        auto json = renderSettingsToProjectJson(lfs::vis::RenderSettings{});
+        json["environment_builtin"] = "environments/alps_field_1k.hdr";
+        auto restored = renderSettingsFromProjectJson(json);
+        ASSERT_TRUE(restored);
+        EXPECT_EQ(restored->environment_map_path, "environments/alps_field_1k.hdr");
+        json.erase("environment_builtin");
+        restored = renderSettingsFromProjectJson(json);
+        ASSERT_TRUE(restored);
+        EXPECT_EQ(restored->environment_map_path, lfs::vis::kDefaultEnvironmentMapPath);
+    }
+
     TEST(P5SessionChapterTest,
          RenderBackendAndPanelRotationRoundTripCanonically) {
         lfs::vis::RenderSettings settings;
