@@ -19,6 +19,7 @@
 #include <expected>
 #include <filesystem>
 #include <iosfwd>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -30,6 +31,16 @@ namespace lfs::training {
     class PPISP;
     class PPISPControllerPool;
     class ADMMSparsityOptimizer;
+
+    struct CheckpointAppearance {
+        std::unique_ptr<PPISP> ppisp;
+        std::unique_ptr<PPISPControllerPool> controller;
+    };
+
+    // Read appearance from an existing CKPT stream without restoring the model,
+    // optimizer or live trainer. No checkpoint bytes are changed.
+    [[nodiscard]] lfs::Result<CheckpointAppearance> load_checkpoint_appearance(
+        std::istream& source, std::uint64_t source_bytes);
 
     struct CheckpointStreamResult {
         lfs::core::CheckpointHeader header;

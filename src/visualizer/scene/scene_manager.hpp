@@ -312,13 +312,15 @@ namespace lfs::vis {
         void completePendingSelectionCounts() const;
 
         void setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp,
-                                std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool = nullptr);
+                                std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool = nullptr,
+                                bool training_viewport = false);
         void clearAppearanceModel();
         [[nodiscard]] lfs::training::PPISP* getAppearancePPISP() { return appearance_ppisp_.get(); }
         [[nodiscard]] const lfs::training::PPISP* getAppearancePPISP() const { return appearance_ppisp_.get(); }
         [[nodiscard]] lfs::training::PPISPControllerPool* getAppearanceControllerPool() { return appearance_controller_pool_.get(); }
         [[nodiscard]] const lfs::training::PPISPControllerPool* getAppearanceControllerPool() const { return appearance_controller_pool_.get(); }
         [[nodiscard]] bool hasAppearanceController() const { return appearance_controller_pool_ != nullptr; }
+        [[nodiscard]] bool appearanceUsesTrainingViewport() const { return appearance_training_viewport_; }
         [[nodiscard]] bool hasAppearanceModel() const { return appearance_ppisp_ != nullptr; }
 
         // Drop the GUI's borrowed scene-image tensor and drain the GPU so no
@@ -441,6 +443,7 @@ namespace lfs::vis {
         ClipboardEntry::HierarchyNode copyNodeHierarchy(const core::SceneNode* node);
         void pasteNodeHierarchy(const ClipboardEntry::HierarchyNode& src, core::NodeId parent_id);
 
+        bool appearance_training_viewport_ = false;
         std::unique_ptr<lfs::training::PPISP> appearance_ppisp_;
         std::unique_ptr<lfs::training::PPISPControllerPool> appearance_controller_pool_;
 

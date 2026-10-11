@@ -4,7 +4,11 @@
 #include "components/bilateral_grid.hpp"
 #include "components/ppisp.hpp"
 #include "core/tensor.hpp"
+#include "licht_test_support.hpp"
 #include "tensor_hardening_test_utils.hpp"
+#include "training/checkpoint.hpp"
+#include "training/components/ppisp_controller_pool.hpp"
+#include "training/strategies/strategy_factory.hpp"
 
 #include <cmath>
 #include <gtest/gtest.h>
@@ -67,6 +71,89 @@ namespace {
     }
 
     class PPISPCheckpointRoundtripTest : public tensor_hardening::CudaTest {};
+
+    TEST_F(PPISPCheckpointRoundtripTest, AppearanceOnlyLoadPreservesAllStrategiesAndOptionalComponents) {
+        using namespace lfs::training;
+        for (const std::string strategy_name : {"mcmc", "mrnf", "igs+"}) {
+            for (const bool with_grid : {false, true}) {
+                for (const bool with_controller : {false, true}) {
+                    SCOPED_TRACE(strategy_name + " grid=" + std::to_string(with_grid) + " controller=" + std::to_string(with_controller));
+                    auto model = lfs::test::licht::make_splat(8);
+                    for (auto* tensor : {&model->means(), &model->sh0(), &model->scaling_raw(),
+                                         &model->rotation_raw(), &model->opacity_raw()}) {
+                        *tensor = tensor->cuda();
+                    }
+                    auto strategy = StrategyFactory::instance().create(strategy_name, *model);
+                    ASSERT_TRUE(strategy);
+                    lfs::core::param::TrainingParameters params;
+                    params.optimization = strategy_name == "mcmc"   ? lfs::core::param::OptimizationParameters::mcmc_defaults()
+                                          : strategy_name == "mrnf" ? lfs::core::param::OptimizationParameters::mrnf_defaults()
+                                                                    : lfs::core::param::OptimizationParameters::igs_plus_defaults();
+                    params.optimization.iterations = 100;
+                    params.optimization.max_cap = 16;
+                    params.optimization.sh_degree = 0;
+                    params.optimization.use_ppisp = true;
+                    (*strategy)->initialize(params.optimization);
+                    PPISP ppisp(100);
+                    register_test_frames(ppisp);
+                    train_nontrivial_state(ppisp);
+                    BilateralGrid grid(3, 2, 2, 2, 100);
+                    PPISPControllerPool controller(2, 100);
+                    std::stringstream source;
+                    auto saved = serialize_checkpoint(source, 11, **strategy, params,
+                                                      with_grid ? &grid : nullptr, &ppisp,
+                                                      with_controller ? &controller : nullptr, nullptr);
+                    ASSERT_TRUE(saved);
+                    const auto bytes = source.str();
+                    source.seekg(0);
+                    auto loaded = load_checkpoint_appearance(source, bytes.size());
+                    ASSERT_TRUE(loaded) << lfs::format_for_developer(loaded.error());
+                    ASSERT_TRUE(loaded->ppisp);
+                    EXPECT_EQ(static_cast<bool>(loaded->controller), with_controller);
+                    std::stringstream original, expected, actual;
+                    ppisp.serialize(original);
+                    original.seekg(0);
+                    PPISP reference(1);
+                    reference.deserialize(original);
+                    // Compare against the existing reader; unordered-map insertion
+                    // order can differ from the original registration order.
+                    reference.serialize(expected);
+                    loaded->ppisp->serialize(actual);
+                    EXPECT_EQ(actual.str(), expected.str());
+                    for (const int uid : {101, 102, 201}) {
+                        const auto input = make_input(0.15f);
+                        const int camera = ppisp.camera_for_frame(uid);
+                        EXPECT_EQ(ppisp.apply(input, camera, uid).cpu().to_vector(),
+                                  loaded->ppisp->apply(input, camera, uid).cpu().to_vector());
+                    }
+                    if (with_controller) {
+                        std::stringstream expected_controller, actual_controller;
+                        controller.serialize_inference(expected_controller);
+                        loaded->controller->serialize_inference(actual_controller);
+                        EXPECT_EQ(actual_controller.str(), expected_controller.str());
+                        const auto input = Tensor::full({1, 3, 32, 32}, 0.25f, Device::CUDA);
+                        controller.allocate_buffers(32, 32);
+                        loaded->controller->allocate_buffers(32, 32);
+                        EXPECT_EQ(controller.predict(0, input).cpu().to_vector(),
+                                  loaded->controller->predict(0, input).cpu().to_vector());
+                    }
+                    EXPECT_EQ(source.str(), bytes);
+                    std::stringstream plain;
+                    auto plain_saved = serialize_checkpoint(plain, 11, **strategy, params,
+                                                            with_grid ? &grid : nullptr, nullptr, nullptr, nullptr);
+                    ASSERT_TRUE(plain_saved);
+                    const auto plain_bytes = plain.str();
+                    plain.seekg(0);
+                    auto no_appearance = load_checkpoint_appearance(plain, plain_bytes.size());
+                    ASSERT_TRUE(no_appearance) << lfs::format_for_developer(no_appearance.error());
+                    EXPECT_FALSE(no_appearance->ppisp);
+                    EXPECT_FALSE(no_appearance->controller);
+                    std::stringstream truncated(bytes.substr(0, bytes.size() / 2));
+                    EXPECT_FALSE(load_checkpoint_appearance(truncated, bytes.size() / 2));
+                }
+            }
+        }
+    }
 
     TEST_F(PPISPCheckpointRoundtripTest, AdoptCheckpointStatePreservesColorMeanRegularizer) {
         PPISPConfig config;

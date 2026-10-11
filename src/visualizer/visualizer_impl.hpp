@@ -305,6 +305,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_AsyncPausedExplicitPreparationAdoptsItsSnapshot_Test;
 
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnSave_Test;
+        friend class VisualizerImplResetTest_LazyCheckpointReopenPreservesAppearance_Test;
         friend class VisualizerImplResetTest_StoredSessionAtPrmsIterationsReportsCompleted_Test;
         friend class VisualizerImplResetTest_StoredSessionBelowPrmsIterationsReportsNotCompleted_Test;
         friend class VisualizerImplResetTest_StopStoredSessionWithoutResumingKeepsCheckpointAndEntersEditMode_Test;

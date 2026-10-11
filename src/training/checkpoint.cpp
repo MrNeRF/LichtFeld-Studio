@@ -6,10 +6,12 @@
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
 #include "components/sparsity_optimizer.hpp"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor/internal/tensor_serialization.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "strategies/istrategy.hpp"
 #include "strategies/strategy_factory.hpp"
@@ -76,6 +78,174 @@ namespace lfs::training {
     using lfs::core::CheckpointFlags;
     using lfs::core::CheckpointHeader;
     using lfs::core::has_flag;
+
+    namespace {
+        // This cursor visits existing checkpoint sections without materializing the
+        // Gaussian model or its optimizer. The ordinary resume reader is unchanged.
+        template <typename T>
+        T appearance_read(std::istream& source) {
+            T value{};
+            lfs::core::serialization_detail::read_exact(source, &value, sizeof(value), "appearance checkpoint cursor");
+            return value;
+        }
+
+        void appearance_skip(std::istream& source, const uint64_t bytes) {
+            lfs::core::serialization_detail::require_remaining_bytes(source, bytes, "appearance checkpoint cursor");
+            source.seekg(static_cast<std::streamoff>(bytes), std::ios::cur);
+            if (!source)
+                throw std::runtime_error("Cannot seek in appearance checkpoint");
+        }
+
+        void appearance_skip_name(std::istream& source) {
+            const auto bytes = appearance_read<uint32_t>(source);
+            if (bytes > lfs::core::MAX_CHECKPOINT_STRATEGY_NAME_BYTES)
+                throw std::runtime_error("Appearance checkpoint name is too long");
+            appearance_skip(source, bytes);
+        }
+
+        void appearance_skip_optimizer(std::istream& source) {
+            if (appearance_read<uint32_t>(source) != 0x4C464144)
+                throw std::runtime_error("Invalid appearance checkpoint optimizer");
+            const auto version = appearance_read<uint32_t>(source);
+            if (version < 1 || version > 3)
+                throw std::runtime_error("Unsupported appearance checkpoint optimizer version");
+            appearance_skip(source, sizeof(float) * 2 + sizeof(double) * 3 + sizeof(size_t));
+            const auto lr_count = appearance_read<uint32_t>(source);
+            if (lr_count > AdamOptimizer::all_param_types().size())
+                throw std::runtime_error("Invalid appearance checkpoint learning-rate count");
+            for (uint32_t i = 0; i < lr_count; ++i) {
+                appearance_skip_name(source);
+                appearance_skip(source, sizeof(double));
+            }
+            const auto states = appearance_read<uint32_t>(source);
+            if (states > AdamOptimizer::all_param_types().size())
+                throw std::runtime_error("Invalid appearance checkpoint optimizer state count");
+            for (uint32_t i = 0; i < states; ++i) {
+                appearance_skip_name(source);
+                appearance_skip(source, sizeof(int64_t) + sizeof(size_t) * 2);
+                const auto bits = version >= 3 ? appearance_read<int32_t>(source) : 0;
+                if (bits != 0 && bits != 8 && bits != 16)
+                    throw std::runtime_error("Invalid appearance checkpoint moment codec");
+                const int tensors = version == 1 || bits != 0 ? 2 : 4;
+                for (int j = 0; j < tensors; ++j)
+                    lfs::core::serialization_detail::skip_serialized_tensor(source);
+            }
+        }
+
+        void appearance_skip_strategy(std::istream& source, const std::string_view strategy) {
+            const auto start = source.tellg();
+            const auto magic = appearance_read<uint32_t>(source);
+            const auto version = appearance_read<uint32_t>(source);
+            if (strategy == "igs+" && magic != 0x4C464947) {
+                // Legacy igs+ checkpoints contain no strategy section.
+                source.seekg(start);
+                return;
+            }
+            if (!((strategy == "mcmc" && magic == 0x4C464D43 && version == 1) ||
+                  (strategy == "mrnf" && magic == 0x4C464252 && version >= 1 && version <= 3) ||
+                  (strategy == "igs+" && magic == 0x4C464947 && version <= 1)))
+                throw std::runtime_error("Unsupported appearance checkpoint strategy");
+            if (appearance_read<uint8_t>(source))
+                appearance_skip_optimizer(source);
+            if (appearance_read<uint8_t>(source)) {
+                if (appearance_read<uint32_t>(source) != 0x4C465345 || appearance_read<uint32_t>(source) != 1)
+                    throw std::runtime_error("Unsupported appearance checkpoint scheduler");
+                appearance_skip(source, sizeof(double));
+                const auto count = appearance_read<uint32_t>(source);
+                if (count > AdamOptimizer::all_param_types().size())
+                    throw std::runtime_error("Invalid appearance checkpoint scheduler parameter count");
+                appearance_skip(source, count);
+            }
+            if (strategy == "igs+") {
+                appearance_skip(source, sizeof(int64_t) + sizeof(int) * 2);
+                const auto count = appearance_read<uint32_t>(source);
+                appearance_skip(source, uint64_t{count} * sizeof(int64_t));
+            }
+            if (strategy == "igs+" || (strategy == "mrnf" && version >= 2)) {
+                if (appearance_read<uint8_t>(source))
+                    lfs::core::serialization_detail::skip_serialized_tensor(source);
+            }
+            if (strategy == "mrnf" && version >= 3)
+                appearance_skip(source, sizeof(double) * 2);
+        }
+
+        void appearance_skip_grid(std::istream& source) {
+            if (appearance_read<uint32_t>(source) != 0x4C464247)
+                throw std::runtime_error("Invalid appearance checkpoint grid");
+            const auto version = appearance_read<uint32_t>(source);
+            if (version < 1 || version > 3)
+                throw std::runtime_error("Unsupported appearance checkpoint grid version");
+            const auto images = appearance_read<int>(source);
+            if (images <= 0)
+                throw std::runtime_error("Invalid appearance checkpoint grid image count");
+            appearance_skip(source, sizeof(int) * 3);
+            if (version == 1) {
+                struct LegacyConfig {
+                    double lr, beta1, beta2, eps;
+                    int warmup_steps;
+                    double warmup_start_factor, final_lr_factor;
+                };
+                appearance_skip(source, sizeof(LegacyConfig));
+            } else {
+                (void)appearance_read<uint32_t>(source);
+                const auto bytes = appearance_read<uint32_t>(source);
+                appearance_skip(source, bytes);
+            }
+            appearance_skip(source, sizeof(int64_t) + sizeof(double) * 2 + sizeof(int));
+            for (int i = 0; i < 3; ++i)
+                lfs::core::serialization_detail::skip_serialized_tensor(source);
+            if (version >= 3)
+                appearance_skip(source, uint64_t{static_cast<uint32_t>(images)} * sizeof(int64_t));
+        }
+    } // namespace
+
+    lfs::Result<CheckpointAppearance> load_checkpoint_appearance(
+        std::istream& source, const uint64_t source_bytes) {
+        const auto failure = [](std::string detail) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::DataLoss,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = "Could not restore appearance correction.",
+                .detail = std::move(detail),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        };
+        try {
+            auto header = lfs::core::load_checkpoint_header(source, source_bytes);
+            if (!header)
+                return failure(header.error());
+            CheckpointAppearance result;
+            if (!has_flag(header->flags, CheckpointFlags::HAS_PPISP))
+                return result;
+            source.seekg(sizeof(CheckpointHeader));
+            const auto name_bytes = appearance_read<uint32_t>(source);
+            if (name_bytes == 0 || name_bytes > lfs::core::MAX_CHECKPOINT_STRATEGY_NAME_BYTES)
+                return failure("Invalid appearance checkpoint strategy name");
+            std::string strategy(name_bytes, '\0');
+            lfs::core::serialization_detail::read_exact(source, strategy.data(), name_bytes, "appearance strategy name");
+            lfs::core::SplatData::skip_serialized(source);
+            appearance_skip_strategy(source, lfs::core::param::canonical_strategy_name(strategy));
+            if (has_flag(header->flags, CheckpointFlags::HAS_BILATERAL_GRID))
+                appearance_skip_grid(source);
+            result.ppisp = std::make_unique<PPISP>(1);
+            result.ppisp->deserialize(source);
+            if (has_flag(header->flags, CheckpointFlags::HAS_PPISP_CONTROLLER)) {
+                result.controller = std::make_unique<PPISPControllerPool>(result.ppisp->num_cameras(), 1);
+                result.controller->deserialize(source);
+            }
+            // Publish the restored tensors to the viewport thread only after upload.
+            LFS_CUDA_CHECK(cudaDeviceSynchronize());
+            return result;
+        } catch (const std::exception& error) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::DataLoss,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = "Could not restore appearance correction.",
+                .detail = error.what(),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+    }
 
     lfs::Result<CheckpointStreamResult>
     serialize_checkpoint(

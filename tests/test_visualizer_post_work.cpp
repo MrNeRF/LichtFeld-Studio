@@ -44,6 +44,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/viewport_appearance_correction.hpp"
 #include "scene/viewer_splat_quantize.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/checkpoint.hpp"
@@ -944,7 +945,8 @@ namespace {
     make_training_autosave_checkpoint_payload(
         const lfs::core::Uuid& checkpoint_uuid,
         const std::filesystem::path& dataset_path = {},
-        const int sh_degree = 0) {
+        const int sh_degree = 0,
+        const lfs::training::PPISP* appearance = nullptr) {
         const std::size_t count = sh_degree > 0 ? 8 : 2;
         auto model = sh_degree > 0
                          ? make_degree1_splat(count)
@@ -955,6 +957,7 @@ namespace {
             lfs::core::param::OptimizationParameters::
                 mcmc_defaults();
         parameters.optimization.sh_degree = sh_degree;
+        parameters.optimization.use_ppisp = appearance != nullptr;
         parameters.optimization.max_cap =
             static_cast<int>(count);
         parameters.dataset.data_path = dataset_path;
@@ -964,7 +967,7 @@ namespace {
         (void)lfs::test::licht::require_result(
             lfs::training::serialize_checkpoint(
                 stream, 11, strategy, parameters,
-                nullptr, nullptr, nullptr, nullptr));
+                nullptr, appearance, nullptr, nullptr));
         const auto encoded = stream.str();
         std::vector<std::byte> bytes(encoded.size());
         std::memcpy(
@@ -1108,7 +1111,8 @@ namespace {
         const int sh_degree = 0,
         const int prms_iterations = -1,
         const bool enable_sparsity = false,
-        const int sparsify_steps = 15000) {
+        const int sparsify_steps = 15000,
+        const lfs::training::PPISP* appearance = nullptr) {
         auto document = lfs::test::licht::make_empty_document(
             lfs::core::generate_uuid_v4(), 1);
         lfs::core::Scene source;
@@ -1158,7 +1162,7 @@ namespace {
                 checkpoint_uuid,
                 make_training_autosave_checkpoint_payload(
                     checkpoint_uuid, dataset_path,
-                    sh_degree)));
+                    sh_degree, appearance)));
         if (finish_reason !=
             lfs::io::project::TrainingFinishReason::
                 None) {
@@ -18099,6 +18103,126 @@ contract["check_selection_submode_follows_native_mode"](lf)
             checkpoint_identity(project_path);
         EXPECT_EQ(after_save.first, before.first);
         EXPECT_EQ(after_save.second, before.second);
+    }
+
+    TEST(ViewportAppearanceCorrectionTest, StandaloneModesPreservePixelsAndUpdateCost) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        SceneManager scene;
+        auto appearance = std::make_unique<lfs::training::PPISP>(100);
+        appearance->register_frame(0, 0);
+        appearance->register_frame(1, 0);
+        appearance->finalize();
+        appearance->seed_exposure({{0, 2.0f}, {1, -2.0f}});
+        auto* ppisp = appearance.get();
+        scene.setAppearanceModel(std::move(appearance));
+        auto input = std::make_shared<lfs::core::Tensor>(
+            lfs::core::Tensor::full({3, 420, 648}, 0.25f, lfs::core::Device::CUDA));
+        RenderSettings settings;
+        settings.apply_appearance_correction = false;
+        EXPECT_EQ(applyViewportAppearanceCorrection(input, &scene, settings, 0), input);
+        settings.apply_appearance_correction = true;
+        for (const int uid : {0, -1}) {
+            const auto expected = (uid == 0 ? ppisp->apply(*input, 0, 0)
+                                            : ppisp->apply_with_exposure(*input, 0, 0.0f))
+                                      .cpu()
+                                      .to_vector();
+            EXPECT_EQ(applyViewportAppearanceCorrection(input, &scene, settings, uid)->cpu().to_vector(), expected);
+        }
+        settings.ppisp_mode = RenderSettings::PPISPMode::MANUAL;
+        settings.ppisp_overrides.exposure_offset = 0.5f;
+        lfs::training::PPISPRenderOverrides overrides;
+        overrides.exposure_offset = 0.5f;
+        const auto expected = ppisp->apply_with_overrides(*input, 0, 0, overrides).cpu().to_vector();
+        EXPECT_EQ(applyViewportAppearanceCorrection(input, &scene, settings, 0)->cpu().to_vector(), expected);
+        for (int i = 0; i < 10; ++i)
+            (void)applyViewportAppearanceCorrection(input, &scene, settings, 0);
+        cudaDeviceSynchronize();
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < 200; ++i)
+            (void)applyViewportAppearanceCorrection(input, &scene, settings, 0);
+        cudaDeviceSynchronize();
+        std::cout << "appearance_update_us="
+                  << std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / 200
+                  << '\n';
+        std::stringstream snapshot;
+        ppisp->serialize(snapshot);
+        snapshot.seekg(0);
+        auto restored = std::make_unique<lfs::training::PPISP>(1);
+        restored->deserialize(snapshot);
+        SceneManager reopened;
+        reopened.setAppearanceModel(std::move(restored), nullptr, true);
+        // The stored training viewport keeps the live trainer's first-frame
+        // fallback for novel views, including manual controls.
+        EXPECT_EQ(applyViewportAppearanceCorrection(input, &reopened, settings, -1)->cpu().to_vector(), expected);
+        settings.ppisp_mode = RenderSettings::PPISPMode::AUTO;
+        const auto training_default = ppisp->apply(*input, 0, 0).cpu().to_vector();
+        EXPECT_EQ(applyViewportAppearanceCorrection(input, &reopened, settings, -1)->cpu().to_vector(), training_default);
+        settings.ppisp_mode = RenderSettings::PPISPMode::MANUAL;
+        for (int i = 0; i < 10; ++i)
+            (void)applyViewportAppearanceCorrection(input, &reopened, settings, 0);
+        cudaDeviceSynchronize();
+        const auto restored_start = std::chrono::steady_clock::now();
+        for (int i = 0; i < 200; ++i)
+            (void)applyViewportAppearanceCorrection(input, &reopened, settings, 0);
+        cudaDeviceSynchronize();
+        std::cout << "restored_appearance_update_us="
+                  << std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - restored_start).count() / 200
+                  << '\n';
+        scene.clearAppearanceModel();
+        EXPECT_EQ(applyViewportAppearanceCorrection(input, &scene, settings, 0), input);
+    }
+
+    TEST_F(VisualizerImplResetTest, LazyCheckpointReopenPreservesAppearance) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path = temporary_.path / "appearance.licht";
+        const auto dataset_path = temporary_.path / "dataset";
+        write_minimal_transforms_dataset(dataset_path);
+        lfs::training::PPISP appearance(100);
+        appearance.register_frame(0, 0);
+        appearance.register_frame(1, 0);
+        appearance.finalize();
+        appearance.seed_exposure({{0, 2.0f}, {1, -2.0f}});
+        write_resumable_project_with_checkpoint(
+            project_path, lfs::core::generate_uuid_v4(),
+            lfs::core::generate_uuid_v4(), dataset_path,
+            lfs::io::project::TrainingFinishReason::None, 0, -1, false, 15000, &appearance);
+        const auto before = checkpoint_identity(project_path);
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(waitForHydrationComplete(viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+        EXPECT_FALSE(viewer.getTrainerManager()->hasTrainer());
+        EXPECT_FALSE(viewer.projectTrainingSessionState().hydrated);
+        auto* scene = viewer.getSceneManager();
+        ASSERT_TRUE(scene->hasAppearanceModel());
+        auto input = std::make_shared<lfs::core::Tensor>(
+            lfs::core::Tensor::full({3, 8, 8}, 0.25f, lfs::core::Device::CUDA));
+        RenderSettings settings;
+        settings.apply_appearance_correction = true;
+        const auto expected = appearance.apply(*input, 0, 0).cpu().to_vector();
+        EXPECT_EQ(applyViewportAppearanceCorrection(input, scene, settings, 0)->cpu().to_vector(), expected);
+        settings.apply_appearance_correction = false;
+        EXPECT_EQ(applyViewportAppearanceCorrection(input, scene, settings, 0), input);
+        const auto saved = viewer.projectSave(false);
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+        }));
+        EXPECT_EQ(checkpoint_identity(project_path), before);
+        ASSERT_TRUE(restoreTrainerAndWait(viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            return !scene->hasAppearanceModel();
+        }));
+        ASSERT_TRUE(viewer.getTrainerManager()->getTrainer()->hasPPISP());
+        settings.apply_appearance_correction = true;
+        EXPECT_EQ(applyViewportAppearanceCorrection(input, scene, settings, 0)->cpu().to_vector(), expected);
     }
 
     TEST_F(VisualizerImplResetTest,

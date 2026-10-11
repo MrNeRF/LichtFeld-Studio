@@ -5856,12 +5856,15 @@ namespace lfs::vis {
     }
 
     void SceneManager::setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp,
-                                          std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool) {
+                                          std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool,
+                                          const bool training_viewport) {
+        appearance_training_viewport_ = training_viewport;
         appearance_ppisp_ = std::move(ppisp);
         appearance_controller_pool_ = std::move(controller_pool);
     }
 
     void SceneManager::clearAppearanceModel() {
+        appearance_training_viewport_ = false;
         appearance_ppisp_.reset();
         appearance_controller_pool_.reset();
     }
