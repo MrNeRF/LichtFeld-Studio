@@ -700,6 +700,7 @@ set(TEST_FILES
     test_rml_drag_payload.cpp
     test_context_menu_placement.cpp
     test_rml_static_style_boundaries.cpp
+    test_preferences_hint_layout.cpp
     test_sequencer_regressions.cpp
     test_timeline_save_budget.cpp
     test_tensor_storage_version.cpp
