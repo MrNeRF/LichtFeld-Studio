@@ -8463,6 +8463,103 @@ contract["check_selection_submode_follows_native_mode"](lf)
     }
 
     TEST_F(VisualizerImplResetTest,
+           DatasetApiReplacementKeepsPreviousProjectFile) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto first_dataset = temporary_.path / "first-dataset";
+        const auto second_dataset = temporary_.path / "second-dataset";
+        const auto project_path = temporary_.path / "first.licht";
+        write_minimal_transforms_dataset(first_dataset);
+        write_transforms_dataset_with_cameras(second_dataset, 2);
+        write_dataset_project_without_checkpoint(project_path, first_dataset);
+        const auto original_bytes = read_binary_file(project_path);
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.projectOpen(project_path));
+        ASSERT_TRUE(waitForHydrationComplete(
+            viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+        const auto original_info = viewer.projectGetInfo();
+        ASSERT_TRUE(original_info);
+        ASSERT_TRUE(original_info->path);
+
+        // Invalid input must leave the current scene and binding intact.
+        EXPECT_FALSE(viewer.loadDataset(temporary_.path / "missing"));
+        ASSERT_TRUE(viewer.projectHasPath().value());
+        EXPECT_EQ(viewer.getScene().getAllCameras().size(), 1u);
+        EXPECT_TRUE(read_binary_file(project_path) == original_bytes);
+
+        auto params = viewer.getDataLoader()->getParameters();
+        params.optimization.iterations = 47;
+        viewer.setParameters(params);
+        const auto loaded = viewer.loadDataset(second_dataset);
+        ASSERT_TRUE(loaded) << loaded.error();
+        EXPECT_EQ(viewer.getScene().getAllCameras().size(), 2u);
+        EXPECT_EQ(viewer.getDataLoader()->getParameters().optimization.iterations, 47);
+        const auto replacement_info = viewer.projectGetInfo();
+        ASSERT_TRUE(replacement_info);
+        EXPECT_FALSE(replacement_info->path);
+        EXPECT_NE(replacement_info->project_uuid, original_info->project_uuid);
+        EXPECT_TRUE(read_binary_file(project_path) == original_bytes);
+        // An untitled replacement cannot silently append to the old project.
+        const auto saved = viewer.projectSave(false);
+        EXPECT_FALSE(saved);
+        if (saved) {
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                const auto write = viewer.projectPollWrite();
+                return write && !write->running;
+            }));
+        }
+        EXPECT_TRUE(read_binary_file(project_path) == original_bytes);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           DatasetApiLoadIntoBlankProjectKeepsBinding) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto dataset_path = temporary_.path / "dataset";
+        const auto project_path = temporary_.path / "blank.licht";
+        write_minimal_transforms_dataset(dataset_path);
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        const auto created = viewer.projectCreateAt(project_path);
+        ASSERT_TRUE(created) << lfs::format_for_developer(created.error());
+        const auto original_info = viewer.projectGetInfo();
+        ASSERT_TRUE(original_info);
+        const auto loaded = viewer.loadDataset(dataset_path);
+        ASSERT_TRUE(loaded) << loaded.error();
+        const auto info = viewer.projectGetInfo();
+        ASSERT_TRUE(info);
+        EXPECT_EQ(info->path, original_info->path);
+        EXPECT_EQ(info->project_uuid, original_info->project_uuid);
+        EXPECT_EQ(viewer.getScene().getAllCameras().size(), 1u);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           DatasetApiReplacementWithoutBindingKeepsSession) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto first_dataset = temporary_.path / "first-dataset";
+        const auto second_dataset = temporary_.path / "second-dataset";
+        write_minimal_transforms_dataset(first_dataset);
+        write_transforms_dataset_with_cameras(second_dataset, 2);
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.loadDataset(first_dataset));
+        const auto original_info = viewer.projectGetInfo();
+        ASSERT_TRUE(original_info);
+        ASSERT_FALSE(original_info->path);
+
+        ASSERT_TRUE(viewer.loadDataset(second_dataset));
+        const auto info = viewer.projectGetInfo();
+        ASSERT_TRUE(info);
+        EXPECT_FALSE(info->path);
+        EXPECT_EQ(info->project_uuid, original_info->project_uuid);
+        EXPECT_EQ(viewer.getScene().getAllCameras().size(), 2u);
+    }
+
+    TEST_F(VisualizerImplResetTest,
            LoadFileWipeGateDirtyDatasetDiscardAndSplatAdd) {
         const auto splat_path = makeSplatFixture("bicycle_ref");
         ASSERT_TRUE(std::filesystem::exists(splat_path));

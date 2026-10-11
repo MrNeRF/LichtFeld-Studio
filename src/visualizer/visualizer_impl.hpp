@@ -471,6 +471,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_LoadFileStopTrainingDefersSplatLoadUntilTrainerStops_Test;
         friend class VisualizerImplResetTest_LoadFileStopTrainingDefersWholeBatchInOrder_Test;
         friend class VisualizerImplResetTest_LoadDatasetApiDoesNotDeferOrPrompt_Test;
+        friend class VisualizerImplResetTest_DatasetApiReplacementKeepsPreviousProjectFile_Test;
+        friend class VisualizerImplResetTest_DatasetApiLoadIntoBlankProjectKeepsBinding_Test;
         friend class VisualizerImplResetTest_ForceExitDiscardOnAutoCreatedProjectLeavesProjectAndNoAutosave_Test;
         friend class VisualizerImplResetTest_DatasetLoadIntoTitledProjectStartsUntitledSessionAndKeepsProjectFile_Test;
         friend class VisualizerImplResetTest_DatasetLoadPreservesImportParameters_Test;

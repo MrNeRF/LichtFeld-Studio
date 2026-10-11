@@ -49,6 +49,7 @@
 #include "tools/builtin_tools.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
+#include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
 #include "window/vulkan_context.hpp"
 #include <SDL3/SDL_events.h>
@@ -3326,6 +3327,23 @@ namespace lfs::vis {
         }
 
         LOG_INFO("Loading dataset: {}", lfs::core::path_to_utf8(path));
+        if (trainer_manager_ &&
+            (trainer_manager_->isTrainingActive() ||
+             trainer_manager_->isCompletionPending())) {
+            return std::unexpected("Cannot replace the scene until training has stopped.");
+        }
+        if (project_lifecycle_ &&
+            project_lifecycle_->hasSourcePath() &&
+            !project_lifecycle_->isBlankProject()) {
+            // Keep invalid imports from discarding the current project. The
+            // loader below still reports validation failures through its events.
+            auto params = data_loader_->getParameters();
+            params.dataset.data_path = path;
+            if (lfs::training::validateDatasetPath(params) &&
+                !resetUntitledSessionForReplaceLoad()) {
+                return std::unexpected("Failed to reset the project for dataset replacement.");
+            }
+        }
         return data_loader_->loadDataset(path);
     }
 
