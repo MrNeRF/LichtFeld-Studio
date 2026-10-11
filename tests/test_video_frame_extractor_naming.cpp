@@ -379,7 +379,9 @@ namespace lfs::gui {
                 dialog.handleChange("trim-end-input");
             dialog.beginExtractionFromUi();
             EXPECT_TRUE(dialog.pending_params_set_);
-            return dialog.pending_params_;
+            const auto params = dialog.pending_params_;
+            dialog.pending_params_set_ = false;
+            return params;
         }
     };
 } // namespace lfs::gui
