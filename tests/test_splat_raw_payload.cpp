@@ -3,6 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <optional>
@@ -10,11 +13,14 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
+#include <cuda.h>
 #include <gtest/gtest.h>
 
+#include "core/tensor/internal/memory_pool.hpp"
 #include "io/formats/ply.hpp"
 #include "io/project_chapters.hpp"
 #include "io/splat_chapter.hpp"
@@ -57,6 +63,168 @@ namespace {
                      << (8 * i);
         return value;
     }
+
+    // A host-mapped semaphore keeps the snapshot blocked until the test releases it.
+    // A watchdog only prevents a broken host-asynchronous contract from hanging.
+    struct SnapshotGate {
+        unsigned int* value = nullptr;
+        unsigned int* device_value = nullptr;
+        std::atomic<bool> released = false;
+        std::atomic<bool> timed_out = false;
+        std::thread watchdog;
+
+        SnapshotGate() {
+            EXPECT_EQ(cudaHostAlloc(reinterpret_cast<void**>(&value), sizeof(*value), cudaHostAllocMapped), cudaSuccess);
+            EXPECT_EQ(cudaHostGetDevicePointer(reinterpret_cast<void**>(&device_value), value, 0), cudaSuccess);
+            *value = 0;
+            watchdog = std::thread([this] {
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                while (!released.load() && std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::yield();
+                if (!released.load()) {
+                    timed_out = true;
+                    release();
+                }
+            });
+            lfs::io::project::detail::set_splat_capture_stream_hook_for_testing(
+                [this](cudaStream_t stream) {
+                    EXPECT_EQ(cuStreamWaitValue32(stream, reinterpret_cast<CUdeviceptr>(device_value),
+                                                  1, CU_STREAM_WAIT_VALUE_GEQ),
+                              CUDA_SUCCESS);
+                });
+        }
+
+        void release() {
+            if (!released.exchange(true)) {
+                std::atomic_ref<unsigned int>(*value).store(1, std::memory_order_release);
+            }
+        }
+
+        ~SnapshotGate() {
+            lfs::io::project::detail::set_splat_capture_stream_hook_for_testing({});
+            release();
+            watchdog.join();
+            cudaFreeHost(value);
+        }
+    };
+
+    struct CaptureHeadroomGuard {
+        explicit CaptureHeadroomGuard(bool no_headroom) {
+            lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(no_headroom);
+        }
+        ~CaptureHeadroomGuard() {
+            lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(std::nullopt);
+        }
+    };
+
+    class SplatChapterSnapshotTest : public ::testing::TestWithParam<bool> {};
+
+    TEST_P(SplatChapterSnapshotTest, OrdersEverySourceStreamBeforeMutation) {
+        using namespace lfs::core;
+        int devices = 0;
+        if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)
+            GTEST_SKIP() << "CUDA device required";
+        ShValueQuantOverrideGuard quant_override;
+        CaptureHeadroomGuard headroom(false);
+        constexpr std::size_t count = 600;
+        auto model = SplatData(3,
+                               Tensor::full({count, 3}, 1.0f, Device::CUDA),
+                               Tensor::full({count, 1, 3}, 2.0f, Device::CUDA),
+                               Tensor::full({count, 15, 3}, 0.25f, Device::CUDA),
+                               Tensor::full({count, 3}, 3.0f, Device::CUDA),
+                               Tensor::full({count, 4}, 4.0f, Device::CUDA),
+                               Tensor::full({count, 1}, 5.0f, Device::CUDA), 1.0f);
+        if (GetParam())
+            ASSERT_TRUE(lfs::training::sh_value::apply_shN_value_quant(model));
+        model.deleted() = Tensor::ones({count}, Device::CUDA, DataType::Bool);
+        model._densification_info = Tensor::ones({count}, Device::CUDA);
+        model._max_screen_share = Tensor::ones({count}, Device::CUDA);
+        const auto tensors = std::array<Tensor*, 10>{
+            &model.means(), &model.sh0(), &model.shN(), &model.shN_value_bounds(),
+            &model.scaling_raw(), &model.rotation_raw(), &model.opacity_raw(),
+            &model.deleted(), &model._densification_info, &model._max_screen_share};
+        struct Streams {
+            std::array<cudaStream_t, 10> values{};
+            ~Streams() {
+                for (auto stream : values) {
+                    if (stream) {
+                        cudaStreamSynchronize(stream);
+                        CudaMemoryPool::instance().release_stream(stream);
+                        cudaStreamDestroy(stream);
+                    }
+                }
+            }
+        } streams;
+        // Include the legacy stream and a distinct nonblocking home for every
+        // other tensor, including the quantization bounds and deleted mask.
+        for (std::size_t i = 1; i < tensors.size(); ++i) {
+            if (!tensors[i]->is_valid())
+                continue;
+            ASSERT_EQ(cudaStreamCreateWithFlags(&streams.values[i], cudaStreamNonBlocking), cudaSuccess);
+            tensors[i]->set_stream(streams.values[i]);
+        }
+        std::vector<double> enqueue_us;
+        for (int repeat = 0; repeat < 3; ++repeat) {
+            SCOPED_TRACE(repeat);
+            auto before = SplatChapterPayload::capture(model, lfs::io::project::SplatSourceKind::Generated, false);
+            ASSERT_TRUE(before.has_value());
+            // Warm allocations before closing the semaphore.
+            const auto started = std::chrono::steady_clock::now();
+            auto warm = SplatChapterPayload::start_async_capture(model, lfs::io::project::SplatSourceKind::Generated, false);
+            enqueue_us.push_back(std::chrono::duration<double, std::micro>(
+                                     std::chrono::steady_clock::now() - started)
+                                     .count());
+            ASSERT_TRUE(warm.has_value() && *warm);
+            auto unchanged = (*warm)->complete();
+            ASSERT_TRUE(unchanged.has_value());
+            EXPECT_TRUE(std::ranges::equal(before->bytes(), unchanged->bytes()));
+
+            SnapshotGate gate;
+            auto pending = SplatChapterPayload::start_async_capture(model, lfs::io::project::SplatSourceKind::Generated, false);
+            ASSERT_TRUE(pending.has_value() && *pending);
+            EXPECT_FALSE(gate.timed_out.load()) << "start_async_capture waited on the host";
+            for (auto* tensor : tensors) {
+                if (tensor->is_valid() && tensor->bytes())
+                    ASSERT_EQ(cudaMemsetAsync(tensor->data_ptr(), 0, tensor->bytes(), tensor->stream()), cudaSuccess);
+            }
+            // Give unfenced writes a chance to finish while copies cannot run.
+            // Correctness is also checked by byte equality after opening the gate.
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(20);
+            while (std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            for (auto* tensor : tensors) {
+                if (tensor->is_valid() && tensor->bytes())
+                    EXPECT_EQ(cudaStreamQuery(tensor->stream()), cudaErrorNotReady);
+            }
+            gate.release();
+            auto captured = (*pending)->complete();
+            ASSERT_TRUE(captured.has_value());
+            EXPECT_TRUE(std::ranges::equal(before->bytes(), captured->bytes()));
+            ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+            // Reset bytes so every iteration distinguishes snapshot and mutation.
+            for (auto* tensor : tensors) {
+                if (tensor->is_valid() && tensor->bytes())
+                    ASSERT_EQ(cudaMemsetAsync(tensor->data_ptr(), 0x3c, tensor->bytes(), tensor->stream()), cudaSuccess);
+            }
+        }
+        std::ranges::sort(enqueue_us);
+        RecordProperty("median_enqueue_us", std::to_string(enqueue_us[enqueue_us.size() / 2]));
+        // The caller performs synchronous capture if headroom is unavailable.
+        CaptureHeadroomGuard no_headroom(true);
+        auto fallback = SplatChapterPayload::start_async_capture(model, lfs::io::project::SplatSourceKind::Generated, false);
+        ASSERT_TRUE(fallback.has_value());
+        EXPECT_FALSE(*fallback);
+        auto before = SplatChapterPayload::capture(model, lfs::io::project::SplatSourceKind::Generated, false);
+        auto again = SplatChapterPayload::capture(model, lfs::io::project::SplatSourceKind::Generated, false);
+        ASSERT_TRUE(before.has_value() && again.has_value());
+        EXPECT_TRUE(std::ranges::equal(before->bytes(), again->bytes()));
+        for (auto* tensor : tensors) {
+            if (tensor->is_valid())
+                tensor->set_stream(nullptr);
+        }
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Storage, SplatChapterSnapshotTest, ::testing::Bool());
 
     class SplatRawPayloadTest : public ::testing::Test {
     protected:

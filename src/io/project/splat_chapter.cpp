@@ -100,6 +100,7 @@ namespace lfs::io::project {
         constexpr std::size_t RAW_STREAM_WINDOW_BYTES = 16ull * 1024ull * 1024ull;
         constexpr std::uint64_t RAW_STREAM_MAX_MANIFEST_BYTES = 32ull * 1024ull * 1024ull;
 
+        std::function<void(cudaStream_t)> splat_capture_stream_hook;
         std::optional<bool> splat_capture_no_headroom_override;
         std::optional<bool> splat_capture_stream_creation_failure_override;
         std::optional<std::size_t> splat_stream_window_override;
@@ -511,6 +512,9 @@ namespace lfs::io::project {
         }
         lfs::core::SplatData cloned;
         try {
+            if (splat_capture_stream_hook) {
+                splat_capture_stream_hook(impl->stream);
+            }
             cloned = model.clone_async(impl->stream);
         } catch (const std::bad_alloc& error) {
             LOG_WARN(
@@ -542,6 +546,30 @@ namespace lfs::io::project {
                     "The splat snapshot could not be queued.",
                     std::format("CUDA event record failed: {}",
                                 cudaGetErrorString(record_status)));
+            }
+            // The clone waits for earlier source writes. Close the dependency in
+            // the other direction before returning, so later writes cannot race
+            // its reads. Allocation lifetime tracking alone does not order them.
+            std::array<cudaStream_t, tensors.size()> fenced_streams{};
+            std::size_t fenced_count = 0;
+            for (const auto* tensor : tensors) {
+                if (!tensor->is_valid() || tensor->device() != lfs::core::Device::CUDA) {
+                    continue;
+                }
+                const auto stream = tensor->stream();
+                const auto end = fenced_streams.begin() + fenced_count;
+                if (std::find(fenced_streams.begin(), end, stream) != end) {
+                    continue;
+                }
+                if (const auto wait_status = cudaStreamWaitEvent(stream, impl->ready, 0);
+                    wait_status != cudaSuccess) {
+                    return splat_error(
+                        lfs::core::cuda_status_to_error_code(wait_status),
+                        "The splat snapshot could not be queued.",
+                        std::format("CUDA source stream wait failed: {}",
+                                    cudaGetErrorString(wait_status)));
+                }
+                fenced_streams[fenced_count++] = stream;
             }
         } catch (const std::bad_alloc& error) {
             return splat_error(
@@ -1010,6 +1038,11 @@ namespace lfs::io::project {
     void detail::set_splat_stream_window_bytes_for_testing(
         const std::optional<std::size_t> window_bytes) {
         splat_stream_window_override = window_bytes;
+    }
+
+    void detail::set_splat_capture_stream_hook_for_testing(
+        std::function<void(cudaStream_t)> hook) {
+        splat_capture_stream_hook = std::move(hook);
     }
 
     void detail::set_splat_capture_no_headroom_for_testing(
