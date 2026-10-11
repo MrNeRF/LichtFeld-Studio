@@ -43,6 +43,7 @@
 #include <memory>
 #include <mutex>
 #include <numbers>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -1569,6 +1570,46 @@ TEST_F(PythonIntegrationTest, ConcurrentEnsureInitializedLatchesOnceUnderRace) {
     // guarantee against sibling tests in a shared process; it is covered by the
     // single-threaded forced-failure path instead.
     EXPECT_LE(consumer.count.load(), 1);
+}
+
+TEST_F(PythonIntegrationTest, RejectedRenderSettingsRestoreReusableProxy) {
+    lfs::vis::RenderSettingsProxy applied;
+    applied.environment_map_path = "previous.hdr";
+    lfs::vis::set_render_settings_callbacks(
+        [&]() -> std::optional<lfs::vis::RenderSettingsProxy> { return applied; },
+        [&](const lfs::vis::RenderSettingsProxy& candidate) {
+            if (candidate.environment_map_path == "invalid.hdr") {
+                throw std::invalid_argument("Environment map cannot be read");
+            }
+            applied = candidate;
+        });
+    struct ResetCallbacks {
+        ~ResetCallbacks() { lfs::vis::set_render_settings_callbacks(nullptr, nullptr); }
+    } reset;
+    const lfs::python::GilAcquire gil;
+    std::unique_ptr<PyObject, decltype(&Py_DecRef)> globals(PyDict_New(), Py_DecRef);
+    ASSERT_NE(globals, nullptr);
+    PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins());
+    auto* result = PyRun_String(R"PY(
+import lichtfeld as lf
+settings = lf.get_render_settings()
+try:
+    settings.environment_map_path = 'invalid.hdr'
+except ValueError:
+    pass
+else:
+    raise AssertionError('invalid map was accepted')
+assert settings.environment_map_path == 'previous.hdr'
+settings.environment_rotation_degrees = 90.0
+assert settings.environment_map_path == 'previous.hdr'
+assert settings.environment_rotation_degrees == 90.0
+)PY",
+                                Py_file_input, globals.get(), globals.get());
+    if (!result)
+        ADD_FAILURE() << consumePythonError();
+    Py_XDECREF(result);
+    EXPECT_EQ(applied.environment_map_path, "previous.hdr");
+    EXPECT_EQ(applied.environment_rotation_degrees, 90.0f);
 }
 
 // NOTE: Tests that actually execute Python scripts require the lichtfeld module

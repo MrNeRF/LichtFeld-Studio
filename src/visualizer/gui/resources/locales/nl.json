@@ -2521,6 +2521,7 @@
     "perf_hud_tooltip": "Prestatie-HUD tonen of verbergen"
   },
   "runtime": {
+    "environment_map_failed": "Omgevingskaart ‘{}’ kon niet worden gelezen. De vorige omgeving is behouden.",
     "training_save_no_memory": "Project opslaan mislukt: {}",
     "autosave_deferred_no_memory": "Automatisch opslaan is gepauzeerd: onvoldoende vrij geheugen ({}). De training gaat door; automatisch opslaan wordt hervat zodra er geheugen vrijkomt.",
     "grouped_changes": "Gegroepeerde wijzigingen",

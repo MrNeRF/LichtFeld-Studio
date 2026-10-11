@@ -2521,6 +2521,7 @@
     "perf_hud_tooltip": "パフォーマンス HUD の表示/非表示"
   },
   "runtime": {
+    "environment_map_failed": "環境マップ「{}」を読み込めませんでした。前の環境を保持しました。",
     "training_save_no_memory": "プロジェクトを保存できませんでした: {}",
     "autosave_deferred_no_memory": "自動保存は一時停止中です: 空きメモリが不足しています（{}）。トレーニングは継続します。メモリが解放されると自動保存を再開します。",
     "grouped_changes": "グループ化された変更",

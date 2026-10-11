@@ -138,7 +138,9 @@ namespace lfs::vis {
             auto settings = rendering_manager->getSettings();
             settings.environment_mode = EnvironmentBackgroundMode::Equirectangular;
             settings.environment_map_path = lfs::core::path_to_utf8(environment_map_path);
-            rendering_manager->updateSettings(settings);
+            if (!rendering_manager->updateSettingsFromUser(settings)) {
+                return;
+            }
 
             LOG_INFO("Applied environment map via drag-and-drop: {}",
                      lfs::core::path_to_utf8(environment_map_path.filename()));

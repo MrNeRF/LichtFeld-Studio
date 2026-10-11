@@ -2521,6 +2521,7 @@
     "perf_hud_tooltip": "Afficher ou masquer le HUD de performances"
   },
   "runtime": {
+    "environment_map_failed": "Impossible de lire la carte d’environnement « {} ». L’environnement précédent a été conservé.",
     "training_save_no_memory": "Échec de l'enregistrement du projet : {}",
     "autosave_deferred_no_memory": "L'enregistrement automatique est en pause : mémoire libre insuffisante ({}). L'entraînement continue ; l'enregistrement automatique reprendra dès que de la mémoire sera libérée.",
     "grouped_changes": "Modifications groupées",

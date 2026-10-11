@@ -2521,6 +2521,7 @@
     "perf_hud_tooltip": "Mostra o nascondi l'HUD delle prestazioni"
   },
   "runtime": {
+    "environment_map_failed": "Impossibile leggere la mappa ambiente «{}». È stato mantenuto l’ambiente precedente.",
     "training_save_no_memory": "Salvataggio del progetto non riuscito: {}",
     "autosave_deferred_no_memory": "Il salvataggio automatico è in pausa: memoria libera insufficiente ({}). L'addestramento continua; il salvataggio automatico riprenderà quando si libererà memoria.",
     "grouped_changes": "Modifiche raggruppate",

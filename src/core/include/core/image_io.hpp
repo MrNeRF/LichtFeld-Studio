@@ -25,6 +25,9 @@ namespace lfs::core {
 
     LFS_CORE_API std::tuple<int, int, int>
     get_image_info(std::filesystem::path p);
+    // Header-only validation; unlike get_image_info, never falls back to pixel decoding.
+    LFS_CORE_API std::tuple<int, int, int>
+    probe_image_info(const std::filesystem::path& p);
     // Target size for the resize_factor/max_width rules shared by every image loader.
     LFS_CORE_API std::pair<int, int>
     resized_image_dimensions(int source_width, int source_height, int resize_factor, int max_width);

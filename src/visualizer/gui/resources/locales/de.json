@@ -2521,6 +2521,7 @@
     "perf_hud_tooltip": "Leistungs-HUD ein- oder ausblenden"
   },
   "runtime": {
+    "environment_map_failed": "Die Umgebungskarte „{}“ konnte nicht gelesen werden. Die bisherige Umgebung wurde beibehalten.",
     "training_save_no_memory": "Projekt konnte nicht gespeichert werden: {}",
     "autosave_deferred_no_memory": "Automatisches Speichern ist pausiert: nicht genug freier Speicher ({}). Das Training läuft weiter; das automatische Speichern wird fortgesetzt, sobald wieder Speicher frei ist.",
     "grouped_changes": "Gruppierte Änderungen",

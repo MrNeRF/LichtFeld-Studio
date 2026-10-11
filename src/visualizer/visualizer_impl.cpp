@@ -1134,7 +1134,10 @@ namespace lfs::vis {
                 const std::string previous_upscaler = s.scene_upscaler;
                 const std::string previous_preset = s.scene_upscaler_preset;
                 vis::apply_proxy(s, proxy);
-                rendering_manager_->updateSettings(s);
+                if (const auto result = rendering_manager_->updateSettingsFromUser(s); !result) {
+                    wakeMainLoop();
+                    throw std::invalid_argument(std::string(result.error().user_message()));
+                }
                 const auto& applied = rendering_manager_->getSettings();
                 if (applied.scene_upscaler != previous_upscaler ||
                     applied.scene_upscaler_preset != previous_preset) {

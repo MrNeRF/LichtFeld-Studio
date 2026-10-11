@@ -29,6 +29,9 @@ namespace lfs::rendering {
     std::expected<std::shared_ptr<const EnvironmentImage>, std::string>
     loadEnvironmentImageShared(const std::filesystem::path& environment_path);
 
+    // Validate the resolved image header without decoding or caching pixels.
+    void probeEnvironmentImage(const std::filesystem::path& environment_path);
+
     // Compatibility/value API for callers that need independent ownership.
     std::expected<EnvironmentImage, std::string> loadEnvironmentImage(const std::filesystem::path& environment_path);
     void releaseEnvironmentImageCache();
