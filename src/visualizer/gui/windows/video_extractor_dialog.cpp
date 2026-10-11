@@ -522,6 +522,9 @@ namespace lfs::gui {
 
     bool VideoExtractorDialog::openVideo(const std::filesystem::path& path) {
         if (!player_->open(path)) {
+            video_path_.clear();
+            output_dir_.clear();
+            controls_dirty_ = true;
             syncHdrControls();
             setExtractionError(std::format("Failed to open {}", lfs::core::path_to_utf8(path)));
             return false;
