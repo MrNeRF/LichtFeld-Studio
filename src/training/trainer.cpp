@@ -4199,6 +4199,8 @@ namespace lfs::training {
         const std::uint64_t request_id,
         const std::string_view message) {
         if (request_id == 0) {
+            // Synchronous and scheduled saves have no tracked request ID.
+            last_project_writer_error_ = message;
             return;
         }
         if (last_completed_project_request_id_ >=
@@ -4228,14 +4230,19 @@ namespace lfs::training {
     void Trainer::abandon_pending_project_requests(
         const std::string_view reason) {
         std::lock_guard lock(project_snapshot_mutex_);
-        if (requested_project_request_id_) {
+        // Zero also denotes an unused slot; only terminalize tracked requests.
+        if (requested_project_request_id_ && *requested_project_request_id_ != 0) {
             fail_project_request_locked(
                 *requested_project_request_id_, reason);
         }
-        fail_project_request_locked(
-            prepared_project_request_id_, reason);
-        fail_project_request_locked(
-            prestaged_project_request_id_, reason);
+        if (prepared_project_request_id_ != 0) {
+            fail_project_request_locked(
+                prepared_project_request_id_, reason);
+        }
+        if (prestaged_project_request_id_ != 0) {
+            fail_project_request_locked(
+                prestaged_project_request_id_, reason);
+        }
         requested_project_path_.reset();
         requested_project_preview_png_.clear();
         requested_project_request_id_.reset();

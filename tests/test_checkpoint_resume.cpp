@@ -2715,6 +2715,88 @@ namespace {
     }
 
     TEST_F(ProjectCheckpointTrainerInstall,
+           FailedSnapshotPreparationDoesNotReusePreviousSaveSuccess) {
+        using namespace lfs::io::project;
+        using namespace lfs::test::licht;
+        TemporaryDirectory temporary;
+        auto params = make_tiny_headless_params(temporary.path, 1);
+        params.optimization.enable_eval = false;
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        lfs::training::Trainer trainer(scene);
+        ASSERT_TRUE(trainer.initialize(params));
+        lfs::training::grant_headless_project_saves(trainer, params);
+        const auto path = temporary.path / "project.licht";
+        ASSERT_TRUE(trainer.save_project_to(path, 0));
+        const auto before = require_result(ProjectReader::open(path)).commit().generation;
+        const auto before_hash = require_result(hash_dataset_file(path));
+
+        // An empty model fails during preparation, before the writer starts.
+        auto& means = trainer.get_strategy_mutable().get_model().means();
+        auto original_means = std::move(means);
+        means = lfs::core::Tensor::zeros({0, 3}, lfs::core::Device::CUDA);
+        for (const auto& destination : {path, temporary.path / "new.licht"}) {
+            const auto saved = trainer.save_project_to(destination, 1);
+            EXPECT_FALSE(saved);
+            if (!saved) {
+                EXPECT_NE(saved.error().find("Gaussian count is out of bounds"), std::string::npos)
+                    << saved.error();
+            }
+            EXPECT_NE(trainer.get_project_snapshot_metrics().last_writer_error.find(
+                          "Gaussian count is out of bounds"),
+                      std::string::npos);
+            EXPECT_EQ(trainer.get_project_snapshot_metrics().last_failed_request_id, 0u);
+        }
+        EXPECT_EQ(require_result(hash_dataset_file(path)), before_hash);
+        EXPECT_FALSE(std::filesystem::exists(temporary.path / "new.licht"));
+
+        means = std::move(original_means);
+        ASSERT_TRUE(trainer.save_project_to(path, 1));
+        EXPECT_TRUE(trainer.get_project_snapshot_metrics().last_writer_error.empty());
+        EXPECT_GT(require_result(ProjectReader::open(path)).commit().generation, before);
+        trainer.shutdown();
+        EXPECT_TRUE(trainer.get_project_snapshot_metrics().last_writer_error.empty());
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           EmptyFinalSparsitySnapshotFailsTrainingAndPreservesRegularCheckpoint) {
+        using namespace lfs::io::project;
+        using namespace lfs::test::licht;
+        TemporaryDirectory temporary;
+        auto params = make_tiny_headless_params(temporary.path, 4);
+        params.optimization.strategy = "mrnf";
+        params.optimization.enable_eval = false;
+        params.optimization.enable_sparsity = true;
+        params.optimization.sparsify_steps = 1;
+        params.optimization.prune_ratio = 1.0f;
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        lfs::training::Trainer trainer(scene);
+        ASSERT_TRUE(trainer.initialize(params));
+        lfs::training::grant_headless_project_saves(trainer, params);
+        const auto trained = trainer.train();
+        EXPECT_EQ(scene.getTrainingModel()->size(), 0u);
+        EXPECT_FALSE(trained);
+        if (!trained) {
+            EXPECT_NE(lfs::format_for_developer(trained.error()).find("Gaussian count is out of bounds"),
+                      std::string::npos);
+        }
+        trainer.shutdown();
+
+        auto document = require_result_ptr(ProjectDocument::open(temporary.path / "project.licht"));
+        lfs::core::Scene restored;
+        const auto hydration = require_result(document->hydrate(restored));
+        ASSERT_TRUE(hydration.checkpoint_header);
+        EXPECT_EQ(hydration.checkpoint_header->iteration, 4);
+        ASSERT_NE(restored.getTrainingModel(), nullptr);
+        EXPECT_GT(restored.getTrainingModel()->size(), 0u);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
            OutputNameNamesProjectAndExportWithoutDoubleExtension) {
         const auto output_path =
             std::filesystem::temp_directory_path() /
