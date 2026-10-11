@@ -1883,3 +1883,63 @@ def test_restored_control_echo_is_not_an_edit(
     assert getattr(params, prop) == changed
     setter(*args, changed)
     assert params.writes == [(prop, changed)]
+
+
+@pytest.mark.parametrize("completed", [False, True])
+@pytest.mark.parametrize("runtime_iteration", [0, 1776])
+def test_stored_session_iteration_does_not_report_a_live_rate(
+    training_panel_module, monkeypatch, completed, runtime_iteration
+):
+    module = training_panel_module
+    runtime = SimpleNamespace(iteration=_make_signal(0), has_trainer=_make_signal(False))
+    monkeypatch.setattr(module, "RuntimeState", runtime)
+    now = [10.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
+    panel = module.TrainingPanel()
+    model = _ModelStub()
+    panel._bind_status(model, lambda: None)
+    status = model.bindings["status_iteration"][0]
+    status()  # The panel is evaluated before a project is opened.
+    session = _stub_stored_session(
+        module, monkeypatch, iteration=1776, completed=completed
+    )
+    runtime.iteration.value = runtime_iteration
+    now[0] += 0.4
+
+    assert status() == "status.iteration 1,776"
+    assert module._rate_tracker.samples == []
+
+    # Hydrating and resuming starts a fresh measurement at the stored counter.
+    session["hydrated"] = True
+    runtime.has_trainer.value = True
+    runtime.iteration.value = 1776
+    assert "(0.0 training_panel.iters_per_sec)" in status()
+    now[0] += 1.0
+    runtime.iteration.value += 373
+    assert "(373.0 training_panel.iters_per_sec)" in status()
+
+
+def test_live_iteration_rate_matches_existing_window(training_panel_module, monkeypatch):
+    module = training_panel_module
+    runtime = SimpleNamespace(iteration=_make_signal(0), has_trainer=_make_signal(True))
+    monkeypatch.setattr(module, "RuntimeState", runtime)
+    # Saving a live run also exposes a stored session. It must not hide live rates.
+    _stub_stored_session(module, monkeypatch, iteration=373, hydrated=False)
+    now = [0.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
+    model = _ModelStub()
+    module.TrainingPanel()._bind_status(model, lambda: None)
+    status = model.bindings["status_iteration"][0]
+    samples = []
+    for elapsed, iteration in [(0, 0), (1, 373), (2, 746), (3, 746), (6, 1119)]:
+        now[0] = elapsed
+        runtime.iteration.value = iteration
+        # Reference the existing five-second estimator, including paused updates.
+        shown_iteration = iteration or 373
+        samples.append((shown_iteration, elapsed))
+        samples = [(i, t) for i, t in samples if elapsed - t <= 5.0]
+        dt = samples[-1][1] - samples[0][1]
+        expected = (samples[-1][0] - samples[0][0]) / dt if dt > 0 else 0.0
+        assert status() == (
+            f"status.iteration {shown_iteration:,} ({expected:.1f} training_panel.iters_per_sec)"
+        )
