@@ -1369,6 +1369,18 @@ set_tests_properties(lichtfeld.python.gpu PROPERTIES
     TIMEOUT 60
 )
 
+add_test(NAME lichtfeld.python.dataset_load_training
+    COMMAND ${Python_EXECUTABLE} -m pytest -q
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mcp_dataset_load_training.py
+)
+set_tests_properties(lichtfeld.python.dataset_load_training PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    LABELS "gpu;integration"
+    TIMEOUT 240
+    RUN_SERIAL TRUE
+    ENVIRONMENT "LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR};LFS_EXECUTABLE=$<TARGET_FILE:${PROJECT_NAME}>"
+)
+
 # Custom targets for convenience
 add_custom_target(run_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -L fast
